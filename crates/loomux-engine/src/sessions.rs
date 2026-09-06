@@ -1413,9 +1413,7 @@ pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<
         // skipped rather than returned -- and the walk CONTINUES, because the
         // plain sibling of this very session may still be on disk during the
         // publish window `walk_codex_session_files` documents.
-        if codex_rollout_is_compressed(path) {
-            return None;
-        }
+
         // Header wins when it READS, and the name is the only source when it
         // does not -- C2's rule, and here it is what stops a transiently torn
         // first line making a live session report no usage forever.

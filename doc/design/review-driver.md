@@ -2279,12 +2279,33 @@ text:
   `drive_review(reset_counters: true)` re-arms it explicitly — the counter
   values cannot see a spent round on their own, since a reset puts them back
   where the previous hold found them.
+  **Two reasons are never suppressed however equal their key**
+  (`reviewdrive::repeat_carries_new_information`): `state-stalled` and
+  `drive-stalled` interpolate a DURATION, and the duration is exactly what has
+  changed — `advance` re-stamps `state_since_ms` on the arc out of `held`, so a
+  second one means the drive sat out its bound all over again. For those two
+  the repeat is news, not repetition.
 
 **What the diet does NOT do is drop a wake nobody else gives.** Every
 suppression above rides a caller that already has the fact, or a record the
 orchestrator can read on demand and is told about; a `held` drive is listed by
 `review_drive_status()` whatever its notice did, and every audit row carries
 the full text of the line it replaced.
+
+**One residual is shipped with the tool-cancel demotion, and it is stated here
+rather than discovered later** (rev-std round 1 premortem). The demotion rests
+on the caller holding the synchronous result, so the one case it does not cover
+is a caller that never consumes it: an orchestrator that crashes or is compacted
+between issuing `cancel_review_drive` and reading its answer learns of the
+cancel from no prompt at all. Under #1857 the owed notice would have been
+re-attempted on the next tick's flush. What is left is `review_drive_status()`
+— which a compacted orchestrator is already told to read, in the tool's own
+description, precisely to recover which PRs it is driving — plus the
+`rd-notice-demoted` row carrying the line verbatim. It is bounded by being one
+drive rather than the record: the entry is gone either way, and a fresh
+`drive_review` starts a new drive. Not closed, and deliberately not closed by
+re-owing the notice, which would put the byte back for every cancel to cover a
+crash in a window of milliseconds.
 
 The same shape carries every other `held` reason from §2.2, each naming the one
 fact that decides what the orchestrator does next — the stalled lane's pane, the

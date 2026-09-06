@@ -2925,7 +2925,9 @@ you, synchronously, with the panes it released, so a prompt arriving afterwards 
 wake-up about something you are holding. A cancel orrerix decided on its own — it saw the PR
 closed or merged — still lands in your pane, because nothing else would tell you. And a hold that
 repeats one the drive has already announced — same reason, same commit, same counters spent, which
-is what a resume that changed nothing produces — is not sent a second time. Both are on the audit
+is what a resume that changed nothing produces — is not sent a second time. The two holds whose line
+reports how LONG the drive sat (`state-stalled`, `drive-stalled`) are the exception and always reach
+you: a second one means it sat out the whole bound again, so the repeat is news. Both are on the audit
 log with the full text of the line (`rd-notice-demoted`, `rd-hold-repeated`), and a parked drive is
 listed by `review_drive_status` whatever its notice did. A hold at a NEW commit always announces:
 the head is part of what makes two holds the same hold, so a resume after your worker pushed is a

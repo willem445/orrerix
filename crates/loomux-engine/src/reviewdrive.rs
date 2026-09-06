@@ -562,6 +562,42 @@ pub fn transition(from: DriveState, to: DriveState) -> Result<DriveState, Invali
 /// revision of the same argument. One string rather than a tuple so the entry
 /// persists it as one JSON value that an older build round-trips through
 /// `extra` untouched (§11.2).
+/// **The two reasons whose notice says something new every time it fires, and
+/// so are never suppressed as repeats** (#3040 N1, rev-std round 1).
+///
+/// The dedup rests on a claim — that a hold with the same reason at the same
+/// head with the same counters spent says exactly what the last one said — and
+/// for `state-stalled` and `drive-stalled` that claim is FALSE. Their lines
+/// carry a DURATION (`state_clause`, and `drive-stalled`'s own bound
+/// sentence), and a duration is precisely the thing that has changed: `advance`
+/// re-stamps `state_since_ms` on the arc out of `held`, and a resetting resume
+/// re-stamps `started_ms`, so a SECOND time hold means the drive sat out its
+/// bound all over again. Suppressing it would hide a fresh stall behind an old
+/// one, which is the opposite of what the diet is for — the notice is not
+/// repetition, it is news.
+///
+/// Named as a closed match over the enum rather than as a `matches!` on the
+/// two, so a sixteenth reason has to decide: a reason whose notice interpolates
+/// anything the key does not carry belongs on the `true` side.
+pub fn repeat_carries_new_information(reason: HeldReason) -> bool {
+    match reason {
+        HeldReason::StateStalled | HeldReason::DriveStalled => true,
+        HeldReason::Escalate
+        | HeldReason::ReviewLimit
+        | HeldReason::CiLimit
+        | HeldReason::RebaseLimit
+        | HeldReason::LaneStalled
+        | HeldReason::FixStalled
+        | HeldReason::RoutingUnaccountable
+        | HeldReason::GateUnreadable
+        | HeldReason::WorkerBlocked
+        | HeldReason::WorkerUnresumable
+        | HeldReason::CapRefused
+        | HeldReason::CapFull
+        | HeldReason::Messaged => false,
+    }
+}
+
 pub fn hold_key(reason: HeldReason, head: &str, counters: &Counters) -> String {
     format!(
         "{}|{}|{}|{}|{}|{}",
@@ -2001,6 +2037,12 @@ pub struct DriveEntry {
     /// observe (same reason, same head, same counters spent), the second line
     /// tells the orchestrator nothing the first did not.
     ///
+    /// **That sentence is not true of every reason, and the exceptions are
+    /// named rather than assumed** (rev-std round 1):
+    /// [`repeat_carries_new_information`] carries the two whose line
+    /// interpolates a DURATION the key cannot see, so a second identical key
+    /// still means a fresh stall and still announces.
+    ///
     /// **The head is in the key and is what makes the suppression safe.** A
     /// resume after the worker pushed is a hold about a different revision, so
     /// it announces; that is the case an orchestrator most needs to see, and
@@ -2076,15 +2118,17 @@ impl DriveEntry {
     ///
     /// **It stamps on the announce and not on the hold**, so a notice the
     /// caller decides not to build cannot silence the next one. See
-    /// [`last_hold_key`](DriveEntry::last_hold_key) for why the key is what
-    /// it is.
+    /// [`last_hold_key`](DriveEntry::last_hold_key) for why the key is what it
+    /// is, and [`repeat_carries_new_information`] for the two reasons this
+    /// never suppresses, however equal their key.
     pub fn announce_hold(&mut self, reason: HeldReason) -> bool {
         let key = hold_key(reason, &self.head, &self.counters);
-        if self.last_hold_key.as_deref() == Some(key.as_str()) {
-            return false;
-        }
+        // **The stamp happens whatever the answer**, so the NEXT hold compares
+        // against the one that really just fired rather than against an older
+        // one a time-bound hold happened to skip past.
+        let seen = self.last_hold_key.as_deref() == Some(key.as_str());
         self.last_hold_key = Some(key);
-        true
+        !seen || repeat_carries_new_information(reason)
     }
 
     /// **Forget which hold was last announced, so the next one is** (#3040

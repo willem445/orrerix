@@ -9788,3 +9788,88 @@ fn starve_again(
     );
     reg.rd_drive_group_with(group, gh, resumed_at + 2_000 + reviewdrive::CAP_HOLD_MS)
 }
+
+/// **A time-bound hold announces every time, because its line says something
+/// new every time** (rev-std round 1 on #3040 N1).
+///
+/// The dedup rests on a claim — a hold with the same reason at the same head
+/// with the same counters spent says exactly what the last one said — and for
+/// `state-stalled` and `drive-stalled` that claim is false. Their notices carry
+/// a DURATION, and the duration is precisely what changed: `advance` re-stamps
+/// `state_since_ms` on the arc out of `held`, so a second one means the drive
+/// sat out its whole bound again. Suppressing it would hide a fresh stall
+/// behind an old one.
+///
+/// **The key really is identical**, and that is asserted rather than assumed —
+/// otherwise this test would pass under a dedup that simply never fired here,
+/// which is the thing it is meant to discriminate.
+#[test]
+fn a_time_bound_hold_announces_every_time_because_its_line_carries_the_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    // CI that never resolves — the wait `ci-wait` is for.
+    gh.set_checks(r#"[{"name":"build","state":"IN_PROGRESS","link":"x"}]"#);
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let (group, session) = driven(&reg, &repo, &gh);
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(&reg, &orch.id, 7001);
+
+    let bound =
+        reviewdrive::state_bound_ms(reviewdrive::DriveState::CiWait, &DriveLimits::default(), 0)
+            .expect("a working state has a bound");
+    let first = reg.rd_drive_group_with(&group, &gh, bound);
+    assert_eq!(status_state(&reg, &group), "held", "the fixture's premise: it parked");
+    assert_eq!(
+        reg.review_drive_status(&group)["drives"][0]["held_reason"],
+        json!("state-stalled"),
+        "…on the state clock"
+    );
+    assert_eq!(
+        first.notices.iter().filter(|n| n.contains("HELD")).count(),
+        1,
+        "the first hold is announced: {:?}",
+        first.notices
+    );
+
+    // A plain resume: no reset, no push. The drive goes back to waiting on the
+    // same never-resolving checks, at the same head, and parks again.
+    let resumed_at = bound + 1_000;
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", resumed_at);
+    assert_eq!(out["driving"], json!(true), "the resume must succeed: {out}");
+    let second = reg.rd_drive_group_with(&group, &gh, resumed_at + bound);
+    assert_eq!(status_state(&reg, &group), "held", "it parked a second time");
+
+    let held = audit_details(&reg, &group, "rd-held");
+    assert_eq!(held.len(), 2, "two holds: {held:?}");
+    assert_eq!(held[0]["reason"], json!("state-stalled"));
+    assert_eq!(held[1]["reason"], json!("state-stalled"));
+    assert_eq!(
+        held[0]["head"], held[1]["head"],
+        "the discriminator: the KEY is identical across the two, so a dedup that saw only \
+         the key would suppress the second — this test is about the exception, not about \
+         a dedup that never fired: {held:?}"
+    );
+
+    assert_eq!(
+        second.notices.iter().filter(|n| n.contains("HELD")).count(),
+        1,
+        "…and it is announced anyway, because the line carries a duration the key cannot \
+         see: {:?}",
+        second.notices
+    );
+    assert!(
+        audit_details(&reg, &group, "rd-hold-repeated").is_empty(),
+        "nothing was suppressed"
+    );
+    let n = second
+        .notices
+        .iter()
+        .find(|n| n.contains("HELD"))
+        .expect("the second hold's own line");
+    assert!(
+        n.contains("It was in ci-wait for"),
+        "and that duration is what it says: {n}"
+    );
+}

@@ -1446,6 +1446,10 @@ pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<
         let name = path.file_name().and_then(|s| s.to_str())?;
         let plain = codex_plain_rollout_name(name)?;
         let (ts, rollout) = codex_rollout_name_parts(plain, session_id.as_str())?;
+        // [scratch] filter compressed candidates BEFORE the choice.
+        if codex_rollout_is_compressed(path) {
+            return None;
+        }
         // Header wins when it READS, and the name is the only source when it
         // does not -- C2's rule, and here it is what stops a transiently torn
         // first line making a live session report no usage forever. A
@@ -1471,9 +1475,7 @@ pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<
         None
     });
     let (_, _, path) = newest?;
-    // Unreadable content is no usage at all. Deliberately AFTER the choice: see
-    // the doc above on why an older readable file must not inherit the answer.
-    (!codex_rollout_is_compressed(&path)).then_some(path)
+    Some(path)
 }
 
 /// Is candidate `(timestamp, rollout id)` NEWER than the incumbent?

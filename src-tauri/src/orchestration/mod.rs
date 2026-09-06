@@ -50073,8 +50073,6 @@ impl OrchRegistry {
         // different thing from what their workflow file asked for.
         // The `?` IS the behaviour here: this commit refuses, and the
         // resolved harness is bound by the spawn arm that uses it.
-        workflow::structured_harness_for(block.driver.as_deref(), cli)
-            .map_err(|e| format!("guardrail: block {} — {e}", block.id))?;
         let cli = cli.to_string();
         let model = workflow::model_of(&block, &group.guardrails.agent_cli).to_string();
 

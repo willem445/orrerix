@@ -1462,9 +1462,8 @@ pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<
         // by different keys -- the defect the first push of this fix carried,
         // caught by the compiler only because the types happened to differ.
         let rollout = rollout.to_ascii_lowercase();
-        let better = newest
-            .as_ref()
-            .is_none_or(|(t, r, _)| ts > t.as_str() || (ts == t.as_str() && rollout > *r));
+        // [scratch] first-walked wins, the pre-review behaviour.
+        let better = newest.is_none();
         if better {
             newest = Some((ts.to_string(), rollout, path.to_path_buf()));
         }

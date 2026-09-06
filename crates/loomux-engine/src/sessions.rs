@@ -1464,7 +1464,7 @@ pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<
         let rollout = rollout.to_ascii_lowercase();
         let better = newest
             .as_ref()
-            .is_none_or(|(t, r, _)| ts > t.as_str() || (ts == t.as_str() && rollout > *r));
+            .is_none_or(|(t, r, _)| codex_rollout_is_newer((ts, &rollout), (t, r)));
         if better {
             newest = Some((ts.to_string(), rollout, path.to_path_buf()));
         }
@@ -1474,6 +1474,32 @@ pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<
     // Unreadable content is no usage at all. Deliberately AFTER the choice: see
     // the doc above on why an older readable file must not inherit the answer.
     (!codex_rollout_is_compressed(&path)).then_some(path)
+}
+
+/// Is candidate `(timestamp, rollout id)` NEWER than the incumbent?
+///
+/// The vendor's comparator, extracted as a pure function so the decision has a
+/// CALLABLE SURFACE. Inside the walk closure it is reachable only through a
+/// directory whose read order belongs to the filesystem -- ext4 hashes rather
+/// than sorts -- so a mutation that drops the tie-break half leaves an
+/// end-to-end test passing or failing by luck rather than by the property.
+/// #2515 C3 review round 1 measured exactly that: the round cut for the
+/// tie-break reddened NOTHING, on a build where the behaviour was plainly gone.
+///
+/// Timestamp first, rollout id only to break a tie --
+/// `find_thread_path_by_id_from_filenames` at `rust-v0.153.4`: "Rollout
+/// filenames only encode timestamps to second precision, so use the UUIDv7
+/// rollout ID as a deterministic tie-breaker when multiple files are created in
+/// the same second."
+///
+/// Both halves are compared as strings, and a caller must pass both sides in ONE
+/// case: the timestamp is fixed-width and zero-padded, so lexicographic order is
+/// chronological order, and a canonical lowercase UUIDv7's hex orders like its
+/// integer value. [`find_codex_session_file`] case-folds before calling.
+#[doc(hidden)] // pub for integration tests
+pub fn codex_rollout_is_newer(candidate: (&str, &str), incumbent: (&str, &str)) -> bool {
+    let ((cand_ts, cand_id), (cur_ts, cur_id)) = (candidate, incumbent);
+    cand_ts > cur_ts || (cand_ts == cur_ts && cand_id > cur_id)
 }
 
 /// The `(timestamp, rollout id)` of a canonical plain rollout name whose THREAD

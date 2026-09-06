@@ -793,7 +793,11 @@ which is also what shows the move in the test below is the timer firing rather
 than a lookup on every tick.
 
 Pinned by `the_newest_of_a_threads_rollouts_is_the_one_read`,
-`two_rollouts_in_the_same_second_are_ordered_by_the_rollout_id` and
+`the_rollout_id_breaks_a_tie_between_two_rollouts_of_the_same_second` (against
+the extracted comparator `codex_rollout_is_newer` rather than through the store:
+a directory read order is the filesystem's, so an end-to-end fixture pins this
+half by luck  review round 1 measured a tie-break round reddening nothing),
+`a_reverted_rollout_of_the_same_second_is_the_one_the_store_serves` and
 `a_compressed_newest_rollout_does_not_fall_back_to_an_older_readable_one`,
 and `a_reverted_thread_moves_the_cursor_to_the_new_rollout_on_revalidation`
 (#2515 C3 review round 1, finding 1).

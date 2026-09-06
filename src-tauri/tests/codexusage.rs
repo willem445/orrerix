@@ -42,7 +42,7 @@ use loomux_lib::usage::{
 // engine's own — so importing them here asserts the production arm and this
 // test are looking at ONE store resolver rather than two spellings of it.
 use loomux_engine::pathseg::PathSegment;
-use loomux_engine::sessions::{codex_sessions_root, find_codex_session_file};
+use loomux_engine::sessions::{codex_rollout_is_newer, codex_sessions_root, find_codex_session_file};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -560,12 +560,53 @@ fn the_newest_of_a_threads_rollouts_is_the_one_read() {
 }
 
 #[test]
-fn two_rollouts_in_the_same_second_are_ordered_by_the_rollout_id() {
+fn the_rollout_id_breaks_a_tie_between_two_rollouts_of_the_same_second() {
     // The vendor's tie-breaker, and its stated reason: "Rollout filenames only
     // encode timestamps to second precision, so use the UUIDv7 rollout ID as a
     // deterministic tie-breaker when multiple files are created in the same
-    // second" (`find_thread_path_by_id_from_filenames`). Without it the answer
-    // for this fixture is directory order.
+    // second" (`find_thread_path_by_id_from_filenames`).
+    //
+    // **Asserted against the comparator, not through the store**, and that is
+    // the whole point of this test's shape. An end-to-end fixture reaches this
+    // decision only through a directory read, whose order belongs to the
+    // filesystem — ext4 HASHES rather than sorts — so with the tie-break gone
+    // the walk keeps whichever entry it happened to see first and the
+    // end-to-end assertion is a coin flip. Review round 1 measured that: the
+    // round cut for this behaviour reddened NOTHING on a build where the
+    // tie-break was plainly deleted. A pure comparator has no such luck in it.
+    let earlier = ("2026-09-03T14-00-00", "019ff1a2-0000-7d5e-8f60-000000000001");
+    let later_ts = ("2026-09-03T15-00-00", "019ff1a2-0000-7d5e-8f60-000000000001");
+    let same_ts_higher_id = ("2026-09-03T14-00-00", "019ff1a2-0000-7d5e-8f60-000000000002");
+
+    // Timestamp decides when it differs, in both directions.
+    assert!(codex_rollout_is_newer(later_ts, earlier));
+    assert!(!codex_rollout_is_newer(earlier, later_ts));
+
+    // Equal timestamps: the rollout id decides, in both directions. THIS is the
+    // half a `ts > cur_ts`-only comparator loses, and losing it makes both of
+    // these false — so the second assertion is not a restatement of the first.
+    assert!(codex_rollout_is_newer(same_ts_higher_id, earlier));
+    assert!(!codex_rollout_is_newer(earlier, same_ts_higher_id));
+
+    // Not strictly-greater against itself: the incumbent is kept on a true tie,
+    // so a re-walk of the same store cannot flip the answer between ticks.
+    assert!(!codex_rollout_is_newer(earlier, earlier));
+
+    // And the timestamp OUTRANKS the id — an older file with a higher rollout
+    // id must not win, which a comparator that compared the id first would get
+    // backwards while still passing every assertion above.
+    let old_high_id = ("2026-09-03T14-00-00", "019ff1a2-0000-7d5e-8f60-000000000009");
+    let new_low_id = ("2026-09-03T15-00-00", "019ff1a2-0000-7d5e-8f60-000000000001");
+    assert!(codex_rollout_is_newer(new_low_id, old_high_id));
+    assert!(!codex_rollout_is_newer(old_high_id, new_low_id));
+}
+
+#[test]
+fn a_reverted_rollout_of_the_same_second_is_the_one_the_store_serves() {
+    // The end-to-end companion to the comparator test above. It is kept because
+    // it is the only thing asserting that the lookup FEEDS the comparator the
+    // right two halves off a real file name — but it is deliberately not the
+    // pin for the tie-break itself, for the read-order reason given there.
     let seam = seam();
     let plain = Usage { input: 700, output: 70, ..Usage::default() };
     let reverted = Usage { input: 40, output: 4, ..Usage::default() };

@@ -1445,6 +1445,17 @@ list since:
   `lane_stall_anchor` is that choice,
   made in one place, and `a_dead_panes_replacement_inherits_the_stall_anchor_and_a_new_round_does_not`
   pins all six of its cases.
+  **The unit table pins the function; the seam pins the wiring** (#2194). The
+  anchor re-arms on a moved digest only because `rd_open_lane` threads the
+  LIVE body digest into it — a call site that passed `None` ("we could not
+  check", which `lane_open_for` reads as still-open) or the lane's own
+  RECORDED digest would reinstate the inheritance while every engine-unit row
+  stayed green, because those rows call the function directly.
+  `a_moved_digest_re_arms_the_stall_clock_on_both_the_dead_pane_and_live_pane_paths`
+  drives the real tick over the `RdRunner` seam — same head, digest moved, once
+  with the lane's pane dead and once with it live — and asserts both re-briefs
+  read the live body and write the re-brief time as the anchor: one event, two
+  paths, one clock.
 - **`briefed_head` and `briefed_digest`** (per lane) — the revision that lane
   was last *briefed* at, as **one key**. It is the same `(head, digest)` key a
   verdict binds to, which is what arc 4 already names: "the last required lane

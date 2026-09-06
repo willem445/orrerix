@@ -29,7 +29,7 @@ use loomux_lib::orchestration::reviewdrive::{
     MAX_ROUNDS_CEILING, NOTICE_RETENTION_MS,
 };
 
-use loomux_lib::orchestration::workflow::{ReviewVerdict, Verdict};
+use loomux_lib::orchestration::workflow::{ReviewVerdict, Verdict, body_digest};
 use loomux_lib::orchestration::mqdriver::CmdOut;
 use loomux_lib::orchestration::rddrive::RdRunner;
 use loomux_lib::orchestration::mcp::dispatch;
@@ -7213,6 +7213,101 @@ fn a_dead_lane_pane_is_re_opened_next_tick_and_a_live_one_is_left_alone() {
         "each row is (arm, panes opened on the tick after, `rd-lane-reopened` rows). A `0` on \
          the dead arm is the drive waiting on a verdict nothing can produce until \
          `lane-stalled` an hour later; a `1` on the live arm is a second reviewer per tick."
+    );
+}
+
+// ── #2194: one event — a digest move at an unchanged head — one clock ───────
+
+/// **#2194.** A BODY-ONLY fix re-briefs a lane through two different arms: a
+/// LIVE pane is re-briefed where it sits (§8's body-changed row), a DEAD pane's
+/// lane is re-opened on its own session (#2163). One event, two paths — and
+/// both must write the SAME `lane-stalled` anchor: the re-brief time. If the
+/// re-open path inherited the anchor the ORIGINAL brief set, the same body-only
+/// fix would hand a reviewer that has read nothing a truncated stall window
+/// while the identical fix under a live pane got the full one — two clocks for
+/// one event, decided by whether a pane happened to die.
+///
+/// The pure rule is pinned in the engine crate
+/// (`a_dead_panes_replacement_inherits_the_stall_anchor_and_a_new_round_does_not`),
+/// and it is BLIND to the wiring this test exists for: `lane_stall_anchor`
+/// re-arms on a moved digest only because `rd_open_lane` threads the LIVE
+/// digest into it. A call site that passed `None` — "we could not check", which
+/// `lane_open_for` reads as still-open — or the lane's own RECORDED digest
+/// would silently reinstate the inheritance, and every engine-unit row would
+/// stay green, because those rows call the function directly. Reading the
+/// anchor off the persisted lane record through the real tick is the only
+/// instrument that sees that seam.
+#[test]
+fn a_moved_digest_re_arms_the_stall_clock_on_both_the_dead_pane_and_live_pane_paths() {
+    type Row = (&'static str, u64);
+    let mut observed: Vec<Row> = Vec::new();
+
+    for arm in ["live", "dead"] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, _orch, lane) = lane_round_one(&reg, &repo, &gh);
+
+        // The premise, read off the record rather than assumed: round one's
+        // brief anchored the clock at the tick that sent it, and recorded the
+        // digest of the body as it stood THEN — so the rows below measure a
+        // re-arm against a real prior anchor at a real prior revision.
+        let before = live_lanes(&reg, &group);
+        assert_eq!(before.len(), 1, "{arm}: one lane on the record");
+        assert_eq!(
+            before[0]["spawned_ms"],
+            json!(20_000),
+            "{arm}: round one anchored the clock at its own tick"
+        );
+        assert_eq!(
+            before[0]["briefed_digest"],
+            json!(body_digest("b")),
+            "{arm}: round one briefed at the body as it stood then"
+        );
+
+        // The body-only fix: the digest moves, the head does not. The ONE axis
+        // both arms share; the only difference between them is the pane.
+        gh.set_body("b2");
+        if arm == "dead" {
+            assert!(
+                reg.mark_agent_dead_for_test(&lane),
+                "{arm}: the fixture's own premise"
+            );
+        }
+
+        let again = reg.rd_drive_group_with(&group, &gh, 40_000);
+        assert_eq!(
+            again.lanes_opened.len(),
+            1,
+            "{arm}: a moved digest re-briefs the lane whether the pane is live or dead"
+        );
+        let lanes = live_lanes(&reg, &group);
+        let rec = lanes
+            .iter()
+            .find(|l| l["block"] == json!("rev-std"))
+            .expect("the re-briefed lane is on the record");
+        assert_eq!(
+            rec["briefed_head"],
+            json!(HEAD_A),
+            "{arm}: the head did not move, so this is one round, not a new one"
+        );
+        assert_eq!(
+            rec["briefed_digest"],
+            json!(body_digest("b2")),
+            "{arm}: the re-brief binds to the body as it stands NOW"
+        );
+        observed.push((arm, rec["spawned_ms"].as_u64().unwrap()));
+    }
+
+    let expected: Vec<Row> = vec![("live", 40_000), ("dead", 40_000)];
+    assert_eq!(
+        observed, expected,
+        "each row is (arm, the `lane-stalled` anchor the re-brief wrote). A `20_000` on the \
+         dead arm is the replacement inheriting the clock the ORIGINAL brief set — a \
+         reviewer that has read nothing gets only the minutes the dead pane left, while \
+         the same body-only fix under a live pane re-arms to full. An anchor other than \
+         the re-brief tick on either arm is two clocks for one event."
     );
 }
 

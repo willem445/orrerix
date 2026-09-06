@@ -808,7 +808,7 @@ impl Decoder {
             // The block-boundary deltas. Known and carrying nothing a pane
             // event needs, so they draw nothing and are not `Unknown`.
             Some("text_start") | Some("text_end") | Some("thinking_start")
-            | Some("thinking_end") | Some("toolcall_start") | Some("toolcall_delta") => Vec::new(),
+            | Some("thinking_end") => Vec::new(),
             _ => vec![Decoded::Unknown(raw.to_string())],
         }
     }

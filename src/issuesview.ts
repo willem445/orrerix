@@ -638,11 +638,22 @@ export class IssuesView {
     this.busy.add(issue.number);
     this.renderList();
     try {
-      // The same `group` the vocabulary was resolved with, so the button and the
-      // backend allow-list cannot disagree (#2663).
+      // The group the vocabulary was RESOLVED with — `vocabScope.group`, not a
+      // fresh `host.getGroupId()` (rev round 2). The two can differ: this pane
+      // can gain a group between the refresh that resolved `holdLabel` and this
+      // click (#407's in-place promotion), and asking again here would send the
+      // NEW group's scope with the OLD group's spelling — the backend would
+      // resolve an allow-list this button was never checked against, which is
+      // exactly the disagreement #2663 exists to remove. Reading the captured
+      // pair keeps the button and the allow-list one resolution by construction
+      // rather than by timing.
+      //
+      // `vocabScope.repo` is `this.repoRoot` whenever a refresh completed: a repo
+      // change always makes `scopeChanged` true, so the pair moves together or
+      // not at all. The next refresh re-resolves and the button follows.
       await ghIssueSetLabels(
         this.repoRoot,
-        this.host.getGroupId(),
+        this.vocabScope.group,
         issue.number,
         delta.add,
         delta.remove

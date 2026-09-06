@@ -695,6 +695,7 @@ pub mod mqloop;
 pub mod notify;
 pub mod obs;
 pub mod pathseg;
+pub mod plandoc;
 pub mod profiles;
 pub mod published;
 pub mod queue;

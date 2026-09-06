@@ -367,7 +367,7 @@ pub fn ui_response_line(req: &RequestId, answer: &UiAnswer) -> String {
 /// One JSONL record: the compact JSON plus the single `\n` the protocol names
 /// as its only delimiter (`docs/rpc.md:30`).
 fn line(v: &Value) -> String {
-    format!("{v}\n")
+    format!("{}\n", serde_json::to_string_pretty(v).unwrap_or_default())
 }
 
 // ── the decoder ─────────────────────────────────────────────────────────────

@@ -509,6 +509,23 @@ As an authoring agent you cannot invoke either directly, so:
    turning the advanced-orchestrator toggle on (or off-then-on if it's
    already on) — that's what actually runs `parse_workflow` and shows the
    resolved roster/errors as warnings before anything spawns.
+4. **A repo may declare SEVERAL workflows, and the group picks one.**
+   `.orrerix/workflow.yml` is the workflow named `default`; every
+   `<name>.yml` under `.orrerix/workflows/` is the workflow `<name>`, in
+   this same format. A name is letters, digits, `-` and `_` only. So when
+   you author an alternative roster — a review-heavy variant, a cheap
+   solo lane — write it as its own file under `workflows/` rather than
+   rewriting the one the human's groups are already running. Which one a
+   group runs is chosen at launch and recorded with the group.
+5. **Editing a file does NOT change a group that is already running it.**
+   The group keeps the roster it pinned at launch; the lifecycle panel
+   shows a *drift* chip saying the file has changed, and the human adopts
+   the edit by re-applying that workflow from the panel's picker, which
+   shows them a diff first. So when you edit a live repo's workflow, say
+   which groups are affected and tell the human that adopting it is a
+   deliberate click — never that the change "takes effect". A running
+   orchestrator can read its own live roster back with `list_blocks`,
+   which is what it will believe over anything a file says.
 
 ## Step 6 — PITFALLS
 

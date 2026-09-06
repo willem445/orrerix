@@ -3067,7 +3067,9 @@ the last directory row by name.
   D2's; slice B ships the payload they are built from
   (`WorkflowSwitchPreview`) and the wrappers in `orchestration.ts`. D2 must
   disable **Review & apply** while `workflow_status.advanced` is false and say
-  why, rather than offering an action the backend will refuse.
+  why, rather than offering an action the backend will refuse. D2 has landed:
+  see *Switching a running group's workflow from its header* below, where the
+  disabled-not-hidden choice is argued.
 - **No `list_blocks`.** The orchestrator's read-back of its own roster was slice
   C's — it landed with the tool and the teaching paragraph in the workflow
   section above.
@@ -3228,8 +3230,9 @@ the first one gets written.
 ### What slice D1 deliberately did not do
 
 - **No group-header picker, no drift chip, no Review & apply.** Those are slice
-  D2's, built on the `WorkflowSwitchPreview` payload slice B ships. D1 touches
-  the launcher and the designer only; nothing here can change a *running* group's
+  D2's, built on the `WorkflowSwitchPreview` payload slice B ships — see
+  *Switching a running group's workflow from its header* below. D1 touches the
+  launcher and the designer only; nothing in D1 can change a *running* group's
   workflow.
 - **No case-collision fix.** A repo declaring `Default.yml` beside
   `.orrerix/workflow.yml` now shows two picker rows for what is one file on
@@ -3237,6 +3240,179 @@ the first one gets written.
   significant* above, where the residual is recorded.
 - **No `PromoteConfig` field.** A promote is a right-click on a running pane, not
   the launcher; slice A's reasoning is unchanged.
+
+## Switching a running group's workflow from its header (#1689 slice D2)
+
+Slice B made `apply_workflow` a consent-preserving action with a diff and a
+confirmation. This is the surface a human reaches it through, and the last slice
+of the epic: the group lifecycle panel's workflow row grows a picker, a drift
+chip, *Review & apply* and *Edit…*.
+
+Every decision the surface makes lives in `src/workflowswitch.ts`, DOM-free —
+which options exist, which is selected, whether the control may be used, and what
+the confirmation says — for the reason `roster.ts`'s launch-time picker is
+DOM-free: this is a consent surface, and a consent surface tested by clicking is
+a consent surface nobody tests. `groupview.ts` paints it and owns the two IPC
+calls, and nothing between them re-derives a sentence.
+
+### Disabled, not hidden, while the toggle is off
+
+The toggle is the consent — whether a repo-authored roster runs at all — and slice
+B made an apply on a group with workflow mode OFF a refusal that names the fix.
+The picker could therefore have been hidden entirely there, the way the launcher's
+own picker is hidden under an unticked toggle. It is disabled instead, and the two
+surfaces differ because their neighbours do.
+
+In the launcher the toggle and the picker are one form the human is filling in
+top to bottom; a control that changes nothing about this launch is noise in a
+form they are already reading carefully. In the group panel the toggle is a
+button in the same panel, six rows down, and the human arrives at it *later* —
+after the group exists, often to fix something. A hidden picker there teaches
+nothing: a human who has just turned workflow mode on has no reason to suspect
+that choosing between several declared files is possible. A disabled one whose
+title says *turn workflow mode on first — the toggle is the consent for running a
+repo-authored roster; this picker only chooses which file* teaches the two-step in
+the place the second step is taken.
+
+The disablement is real and not cosmetic: `resolveSwitchPicker` reports
+`enabled: false` and the click handler returns on it before reading anything, so
+the guard is not the `disabled` attribute alone. The backend refuses the apply
+anyway (slice B), which is what makes this a UI courtesy rather than the
+enforcement.
+
+*Edit…* is deliberately **not** gated on the toggle at all. Reading and writing a
+workflow file is the designer's business and needs no consent from the group; the
+human whose toggle is off is exactly the one who may want to read the file before
+turning it on.
+
+### The active workflow is always an option
+
+`workflow_status` reports `workflow` (what the group pinned) and `available` (a
+names-only walk of what the repo declares now), and those two can disagree: delete
+or rename the file under a running group and the group keeps running the roster it
+pinned — deliberately (#222 rev-11 F2). A picker built from `available` alone would
+then select some *other* name and describe a group that does not exist.
+
+So the running workflow is synthesized into the options when `available` has lost
+it, marked `(running — file is gone)`. The human reads the true state and can still
+navigate to it, which is the same rule the launcher's listing follows when it
+carries an unparseable file rather than dropping it: a workflow that vanishes from
+the picker the moment something is wrong with it is one nobody can navigate back to
+in order to fix it.
+
+The fallback for a held name the status no longer offers is the ACTIVE workflow,
+where the launcher's resolver falls back to `default`. The surfaces are answering
+different questions. A launch has no workflow yet and `default` is the file every
+repo can have; a running group already has one right answer, and arming *Review &
+apply* for a switch nobody asked for is the direction that costs something.
+
+### The row is shown for drift even when there is only one workflow
+
+`show` is `options.length > 1 || drift !== null`. One option and no drift is every
+repo that has not opted into named workflows, and a picker with a single option is
+a control that cannot be used. But re-applying the ACTIVE name is the *only* way to
+adopt an edited file (*Drift became a badge as well as an audit row*, above), so
+hiding the control in the drifted single-workflow case would hide the fix for
+exactly what the chip beside it is complaining about.
+
+The chip's text is the backend's own `note`, word for word with the
+`workflow-changed-since-launch` audit row, so the badge and the trail cannot say
+different things about one divergence. Its title adds the sentence the audit row
+has no reason to carry: what the human can do about it.
+
+### Painting may lag; DECIDING may not — reached without an await
+
+D1's rule holds here and is met differently. The launcher's picker is resolved
+from an IPC listing behind a 250 ms debounce, so its decisions have to `await`
+`settledWorkflowPicker`. The group header's picker is resolved from
+`WorkflowStatus`, which the panel already holds — so *Review & apply* re-runs
+`resolveSwitchPicker` synchronously at click time and takes `selected` from the
+result, never from `this.workflowSel.value`.
+
+That is not a weaker guarantee, it is the same one against a different hazard.
+The panel re-renders on every 2 s poll and after every control action, so the
+`<select>` a click reads back is a control the last render rebuilt; and the
+resolver is also what refuses a held name the group's status has stopped offering.
+The selection is held in `workflowChoice` and written on `change` — CLAUDE.md's
+in-list-editor rule, reached through a panel that genuinely re-renders under the
+human's hand rather than through a list.
+
+One read here *is* asynchronous, and it is the one D1 already argued: *Edit…*
+needs the workflow's FILE, which `available` does not carry, so it reads
+`workflow_list` (memoized per panel) and looks the name up in it. The path comes
+from the listing rather than being derived from the name for D1's reason — a repo
+on the legacy `.loomux/` spelling must open the file it really has, and the pane
+CREATES a missing file, so a derived path could save a workflow the repo never
+declared.
+
+That last clause is why the miss path **refuses** rather than degrading, which it did
+not do when this section was first written (review round 1, finding 1). Sending no
+`file` is the pane's signal to fall back to the repo's DEFAULT workflow path — right
+for `default`, and a silent wrong-file write for anything else: a pane titled `b`
+opened `.orrerix/workflow.yml`, and because the designer creates and saves a missing
+file, an edit there rewrote the default workflow other groups may be running. The
+trigger is a state this slice itself builds UI for — delete the file behind a running
+workflow, watch the drift chip appear, click *Edit…* to recreate it.
+
+So `resolveEditTarget` (the pure module, because it is a decision) answers `open` with
+a real path or `refuse` with a sentence, and a named workflow never reaches the
+fallback. The two misses are different facts and get different sentences, because the
+human's next move differs: an entry the listing does not carry means the file is GONE
+(the listing never drops a workflow for failing to parse, so absence is absence), while
+no listing at all means the read failed and retrying is the fix. The refusal says so,
+which is also why the listing is memoized on SUCCESS only — latching the rejection
+would make "try again in a moment" a lie, and turn one transient IPC failure into a
+permanently degraded *Edit…* for the life of the panel (round 1, finding 2).
+
+### The confirmation says every consequence, or offers no button
+
+`switchConfirm` turns the preview into the sentences a human decides on. Each axis
+of the diff is skipped when empty, so a one-key model change reads as one line
+rather than six headings with five "none"s under them. Three states get no apply
+button at all, and the modal still opens for all three — a bare refusal that names
+neither the diff nor the reason is worse than one that explains:
+
+- **`refusal`** — a change no live switch can make (today, only the orchestrator
+  block's `cli`, because that pane is already running a program). The diff is shown
+  beside it, which is why slice B returns them together.
+- **`empty`** — nothing would change. Asking a human to authorize nothing is not a
+  confirmation. The cost of this is stated as a residual below.
+- **`digest === null`** — loomux could not fingerprint the file. `apply_workflow`
+  *accepts* a null digest and audits it as a caller with no confirmation to honour,
+  which is precisely the wrong row to write for an apply a human has just read a
+  diff and clicked through: the trail would say nobody confirmed while somebody
+  did. Declining is the consent-preserving direction, and the line says so.
+
+The digest the apply is given is the one the preview returned, never a fresh read —
+that binding is slice B's, and re-reading it here would defeat it.
+
+Two lines are said that the diff does not itself carry. *Agents already running
+keep the block they were spawned under* is true of every apply and is the reason a
+switch is safe to make on a group with agents live in it. And an unsatisfiable gate
+is reported whenever the gate the switch would leave armed is unsatisfiable — not
+only when `gate_changed` — because the same gate becomes unsatisfiable when the
+ROSTER moves under it, and a human who was not told finds out from a merge that
+bounces. The gate's own sentence comes from `gateLine`, lifted out of
+`gateSummaryLine` so the modal and the lifecycle row read one definition of what a
+gate requires.
+
+### What slice D2 deliberately did not do
+
+- **No apply for an empty diff.** The no-op re-apply is slice B's instruction-file
+  retry path (*The no-op re-apply is the retry path*), and this surface will not
+  reach it: a preview that reports `empty` gets a Close button. A human whose
+  `<id>.md` sweep failed can still edit the file and apply, or toggle off and on.
+  Wiring a "reconcile anyway" button would be a second action with a first action's
+  confirmation, and nobody has needed it yet.
+- **No per-file errors in the picker.** `available` is a names-only walk and the
+  panel does not read every workflow per poll (#2658's bound). A file that will not
+  parse is refused by the preview, with the backend's own message, at the moment a
+  human asks for it — which is later than the launcher's `(has errors)` marker and
+  costs one click.
+- **No hand-test of the wiring beyond reading it.** The DOM half is hand-validated
+  per the repo's convention; D1 recorded the limit of that convention (a defect
+  living in the timing between two individually correct reads), and the answer here
+  is the same one: the decisions are in the pure module and the module is tested.
 
 ## Still to come
 

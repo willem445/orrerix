@@ -4021,6 +4021,29 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
 }
 .group-workflow-warn[hidden] { display: none; }
 
+/* -- the header workflow picker (#1689 slice D2): which workflow this group
+   runs, Review & apply, Edit…, and the drift chip. Wraps rather than
+   overflowing — the panel is an OVERLAY over the terminal and nothing here may
+   change its width (CLAUDE.md constraint 1). */
+.group-workflow-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.group-workflow-pick[hidden] { display: none; }
+.group-workflow-sel {
+  font: inherit; font-size: 11px; padding: 2px 4px; max-width: 220px;
+  color: var(--ink); background: var(--surface-1);
+  border: 1px solid var(--surface-2); border-radius: 4px;
+}
+.group-workflow-sel:disabled { opacity: 0.55; cursor: not-allowed; }
+/* A badge, not an alarm: the pinned roster is what RUNS and that is deliberate
+   (#222 rev-11 F2), so this says "the file moved" in the warning colour without
+   the danger box `-warn` above uses for a gate that will actually bounce. */
+.group-workflow-drift {
+  font-size: 10.5px; line-height: 1.3; color: var(--state-attention);
+  background: color-mix(in srgb, var(--state-attention) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--state-attention) 35%, transparent); border-radius: 5px;
+  padding: 2px 6px;
+}
+.group-workflow-drift[hidden] { display: none; }
+
 /* -- merge queue (#581 slice F) -- read-only chrome: target + in-flight batch
    on the header line, one line per entry, and the truncation note. Same
    density as the workflow row above it; it sits in the same overlay and never

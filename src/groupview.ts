@@ -27,15 +27,20 @@ import {
   setMaxAgents,
   setNotify,
   setSpawnExpanded,
+  applyWorkflow,
+  workflowList,
   workflowPreview,
+  workflowSwitchPreview,
   type AutonomyState,
   type GroupSummary,
   type GroupUsage,
   type GroupWatch,
   type LockState,
   type MergeQueueStatus,
+  type WorkflowListing,
   type WorkflowStatus,
 } from "./orchestration";
+import { driftChip, resolveEditTarget, resolveSwitchPicker, switchConfirm } from "./workflowswitch.ts";
 import {
   needsViewTierRetry,
   staleState,
@@ -67,7 +72,7 @@ import { compactionStatusLabel, compactionStatusTitle, contextUsageLabel } from 
 import { roleLabel } from "./orchbadge";
 import { managerAbsenceNotice } from "./group";
 import { getDefaultAgent } from "./agents";
-import { confirmModal } from "./modal";
+import { confirmModal, modal } from "./modal";
 import { PollGate } from "./pollgate";
 import { RefreshGate } from "./refreshgate";
 
@@ -212,6 +217,25 @@ export class GroupView {
   private workflowToggleBtn: HTMLButtonElement;
   private workflow: WorkflowStatus | null = null;
   private workflowBusy = false;
+  // The group header's workflow picker (#1689 slice D2): which workflow this
+  // group runs, which others the repo declares, and the two actions on them.
+  private workflowPickRow: HTMLElement;
+  private workflowSel: HTMLSelectElement;
+  private workflowApplyBtn: HTMLButtonElement;
+  private workflowEditBtn: HTMLButtonElement;
+  private workflowDriftEl: HTMLElement;
+  /** The picker's selection, held HERE and not on the `<select>` (CLAUDE.md's
+   *  in-list-editor rule): this panel re-renders on every 2 s poll, so an
+   *  element read back at click time is read off a control the last render
+   *  rebuilt. `null` until the human picks something, which means "whatever is
+   *  running" — see `resolveSwitchPicker`, which resolves a held name against
+   *  the live status rather than trusting it. */
+  private workflowChoice: string | null = null;
+  /** The repo's workflow listing, memoized — the ONLY thing it is read for is
+   *  the FILE path *Edit…* opens, which `workflow_status.available` (a
+   *  names-only walk) deliberately does not carry. `null` on any failure, the
+   *  same way the launcher's own listing degrades. */
+  private workflowListing: Promise<WorkflowListing | null> | null = null;
   // Merge-queue chrome (#581 slice F): read-only. There is no control here and
   // deliberately so — the queue is host-run (doc/design/merge-queue.md §3) and
   // this panel's job is to say what it is doing, not to drive it.
@@ -301,6 +325,7 @@ export class GroupView {
    *  clamp and keep every control on-screen. */
   private onResize?: () => void;
   private getRepo?: () => string | null;
+  private onEditWorkflow?: (opts: { name: string; root: string; file?: string }) => void;
   private staleEl: HTMLElement;
   private embedBtn: HTMLButtonElement;
   private closeBtn: HTMLButtonElement;
@@ -316,11 +341,17 @@ export class GroupView {
        *  degrades that preview to a generic description — the toggle itself
        *  doesn't need it (the backend resolves the repo from the group). */
       getRepo?: () => string | null;
+      /** Open a workflow file in a designer pane (#1689 slice D2) — the same
+       *  call the launcher's *Edit workflow…* and the file browser's *Open in
+       *  workflow pane* make. Absent just disables the button's effect; the
+       *  picker itself does not need it. */
+      onEditWorkflow?: (opts: { name: string; root: string; file?: string }) => void;
       onEmbedMenu?: (anchor: HTMLElement) => void;
     }
   ) {
     this.onResize = opts.onResize;
     this.getRepo = opts.getRepo;
+    this.onEditWorkflow = opts.onEditWorkflow;
     this.el = el("div", "group-view");
 
     const head = el("div", "group-head");
@@ -389,7 +420,37 @@ export class GroupView {
     this.workflowLineEl = el("span", "group-workflow-line");
     this.workflowWarnEl = el("div", "group-workflow-warn");
     this.workflowWarnEl.hidden = true;
-    this.workflowRow.append(this.workflowLineEl, this.workflowWarnEl);
+
+    // The picker (#1689 slice D2). Chrome inside the lifecycle overlay — a row
+    // in a panel that already floats over the terminal, so nothing here reaches
+    // a PTY resize (CLAUDE.md constraint 1).
+    //
+    // The whole row is DISABLED, not hidden, while the advanced-orchestrator
+    // toggle is off: the toggle is the consent and sits in this same panel, so
+    // a disabled control whose title names it teaches the two-step, where a
+    // hidden one would leave a human who has just turned workflow mode on with
+    // no way to discover that choosing between files is possible at all.
+    this.workflowPickRow = el("div", "group-workflow-pick");
+    this.workflowSel = document.createElement("select");
+    this.workflowSel.className = "group-workflow-sel";
+    // Written on `change`, never read at submit — see `workflowChoice`.
+    this.workflowSel.addEventListener("change", () => {
+      this.workflowChoice = this.workflowSel.value;
+      this.renderWorkflow();
+    });
+    this.workflowApplyBtn = el("button", "group-btn", "Review & apply") as HTMLButtonElement;
+    this.workflowApplyBtn.addEventListener("click", () => void this.reviewAndApplyWorkflow());
+    this.workflowEditBtn = el("button", "group-btn", "Edit…") as HTMLButtonElement;
+    this.workflowEditBtn.addEventListener("click", () => void this.editSelectedWorkflow());
+    this.workflowDriftEl = el("span", "group-workflow-drift");
+    this.workflowDriftEl.hidden = true;
+    this.workflowPickRow.append(
+      this.workflowSel,
+      this.workflowApplyBtn,
+      this.workflowEditBtn,
+      this.workflowDriftEl
+    );
+    this.workflowRow.append(this.workflowLineEl, this.workflowPickRow, this.workflowWarnEl);
 
     // Merge-queue row (#581 slice F): the queue's target, its in-flight batch,
     // and one line per entry. Chrome inside an overlay that already floats over
@@ -1503,6 +1564,166 @@ export class GroupView {
     this.workflowToggleBtn.title = w.advanced
       ? "Turn off workflow mode — clears the merge gate and returns future spawns to the built-in roster"
       : "Turn on workflow mode — arms this repo's declared merge gate and swaps future spawns to its roster";
+
+    this.renderWorkflowPicker();
+  }
+
+  /** The header picker, drift chip and its two actions (#1689 slice D2). Every
+   *  string and every enabled/hidden decision comes from
+   *  `resolveSwitchPicker`/`driftChip` (workflowswitch.ts) and is never
+   *  re-derived here — the same split `renderWorkflow` keeps with
+   *  `workflowstatus.ts`.
+   *
+   *  The `<select>` is REBUILT from the resolved options and its value WRITTEN
+   *  from `picker.selected`; nothing reads it back. That is what makes it safe
+   *  for this panel to re-render under the human's hand every 2 s, and it is
+   *  also what makes a held name the repo has stopped declaring resolve to the
+   *  workflow the group is actually running rather than staying held. */
+  private renderWorkflowPicker(): void {
+    const picker = resolveSwitchPicker(this.workflow, this.workflowChoice, this.workflowBusy);
+    this.workflowPickRow.hidden = !picker.show;
+    // Write the RESOLVED name back into view state, so a selection that is no
+    // longer offered stops being held and the element, the state and the button
+    // agree about which workflow an apply would send.
+    this.workflowChoice = picker.selected;
+    this.workflowSel.replaceChildren(
+      ...picker.options.map((o) => {
+        const opt = document.createElement("option");
+        opt.value = o.name;
+        opt.textContent = o.label;
+        return opt;
+      })
+    );
+    this.workflowSel.value = picker.selected;
+    this.workflowSel.disabled = !picker.enabled;
+    this.workflowSel.title =
+      picker.disabledReason ??
+      "Which workflow file this group runs. Choosing one here changes nothing until you Review & apply it.";
+    this.workflowApplyBtn.disabled = !picker.enabled;
+    this.workflowApplyBtn.title =
+      picker.disabledReason ??
+      "Show what switching to the selected workflow would change, then apply it";
+    // Edit… is NOT gated on the toggle: reading and writing a workflow file is
+    // the designer's job and needs no consent from the group, and a human whose
+    // toggle is off is exactly the one who may want to look at the file before
+    // turning it on.
+    this.workflowEditBtn.disabled = false;
+    this.workflowEditBtn.title = `Open ${picker.selected} in a workflow designer pane`;
+
+    const chip = driftChip(this.workflow);
+    this.workflowDriftEl.hidden = chip === null;
+    this.workflowDriftEl.textContent = chip?.text ?? "";
+    this.workflowDriftEl.title = chip?.title ?? "";
+  }
+
+  /** Review & apply (#1689 slice D2): read the backend's preview for the
+   *  SELECTED workflow, show it as a confirmation, and apply only what the
+   *  human confirmed.
+   *
+   *  The name is taken from `resolveSwitchPicker` at click time, not from the
+   *  `<select>`: a poll landing between the human's last change and this click
+   *  rebuilds that element, and the resolver is also what refuses a held name
+   *  the group's status no longer offers. Painting may lag; deciding may not —
+   *  the same split `settledWorkflowPicker` states in the launcher, reached
+   *  here without an await because the status this decides from is already in
+   *  hand.
+   *
+   *  `workflowBusy` is shared with the toggle deliberately: both change the
+   *  roster future spawns resolve against, and two of them in flight at once
+   *  would race for `group.json`. */
+  private async reviewAndApplyWorkflow(): Promise<void> {
+    if (this.workflowBusy) return;
+    const picker = resolveSwitchPicker(this.workflow, this.workflowChoice, this.workflowBusy);
+    if (!picker.enabled) return;
+    const name = picker.selected;
+    this.workflowBusy = true;
+    this.renderWorkflow();
+    try {
+      const preview = await workflowSwitchPreview(this.groupId, name);
+      const confirm = switchConfirm(preview);
+      const ok = await modal<boolean>((resolve) => ({
+        title: confirm.title,
+        body: confirm.lines[0] ?? "",
+        bodyLines: confirm.lines.slice(1),
+        buttons: confirm.canApply
+          ? [
+              { label: "Cancel", value: false },
+              { label: confirm.affirm, value: true, kind: "primary" as const },
+            ]
+          : [{ label: "Close", value: false }],
+        onKey: (k: string) => (k === "Escape" ? resolve(false) : undefined),
+      }));
+      if (!ok) return;
+      // The digest the human's confirmation was BUILT on, never a fresh read:
+      // it is what binds this apply to the diff they just read, so a file
+      // edited between the two is refused rather than silently applied.
+      await applyWorkflow(this.groupId, name, preview.digest);
+    } catch (err) {
+      this.toast(String(err));
+    } finally {
+      // Cleared AND repainted in the same frame. The trailing `load()` below
+      // repaints too, but it is reached only when nothing threw — and the flag
+      // is what disables the picker and the button, so a throw anywhere above
+      // would otherwise leave both dead, saying "a workflow change is already
+      // in flight", until the next 2 s poll happened to land (rev-final round
+      // 3, premortem 2). Bounded before, but bounded by a timer rather than by
+      // the code that owns the flag, which is the shape `.orrerix/lessons.md`
+      // calls out.
+      this.workflowBusy = false;
+      this.renderWorkflow();
+    }
+    await this.load();
+  }
+
+  /** Open the SELECTED workflow in a designer pane (#1689 slice D2).
+   *
+   *  The file comes from the LISTING, not from the name: `workflow_status`
+   *  carries names only, and deriving a path from a name here would guess the
+   *  config-dir spelling — a repo still on `.loomux/` would open (and, since the
+   *  pane creates a missing file, could SAVE) a workflow it never declared. A
+   *  lookup that misses REFUSES rather than falling back — `resolveEditTarget`
+   *  is where that is decided and why. */
+  private async editSelectedWorkflow(): Promise<void> {
+    const picker = resolveSwitchPicker(this.workflow, this.workflowChoice, this.workflowBusy);
+    const name = picker.selected;
+    const repo = this.getRepo?.() ?? null;
+    if (!repo) {
+      // Names what is wrong, not where else to go (rev-final round 3, premortem
+      // 1). Defensive rather than reachable in the shipped wiring — `pane.ts`
+      // always supplies `getRepo`, returning the orchestrator pane's cwd — but a
+      // message that redirects without saying why is the one thing a human
+      // cannot act on, and this arm exists precisely for the case nobody
+      // predicted.
+      this.toast(
+        "loomux doesn't know which repo this group is in, so it can't find its workflow files. " +
+          "Open the workflow file from the file browser instead."
+      );
+      return;
+    }
+    const target = resolveEditTarget(name, await this.listing(repo));
+    if (target.kind === "refuse") {
+      this.toast(target.reason);
+      return;
+    }
+    this.onEditWorkflow?.({ name: target.paneName, root: repo, file: target.file });
+  }
+
+  /** The repo's workflow listing, memoized **on success only** (review round 1,
+   *  finding 2).
+   *
+   *  Caching the rejection would turn one transient IPC failure into a
+   *  permanently degraded *Edit…* for the life of this panel — and since the
+   *  refusal above is worded "try again in a moment", a latched `null` would
+   *  make that sentence a lie. A failed read declines this click and is not
+   *  remembered, so the next one really does retry. */
+  private listing(repo: string): Promise<WorkflowListing | null> {
+    if (!this.workflowListing) {
+      this.workflowListing = workflowList(repo).catch(() => {
+        this.workflowListing = null;
+        return null;
+      });
+    }
+    return this.workflowListing;
   }
 
   /** The lock-resource section (#858). Hidden entirely for a repo that

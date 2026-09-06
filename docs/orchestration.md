@@ -1518,6 +1518,16 @@ From the lifecycle panel you can:
   changed: …` notice so it can adjust its spawn/review strategy mid-session.
   Agents already running keep the role they were spawned under; only new
   spawns pick up the swapped roster.
+- **Workflow picker** — when the repo declares more than one workflow, pick
+  another and **Review & apply** it without relaunching: you get a diff of what
+  would change first, and nothing applies until you confirm it. A **drift** chip
+  appears beside it when the file the group was launched from has been edited
+  since — the group keeps running the roster it pinned, and applying the same
+  workflow again is how you adopt the edit. **Edit…** opens the selected
+  workflow in the visual designer. The picker is greyed out while the
+  advanced-orchestrator toggle above is off: that toggle is the consent for
+  running a repo-authored roster at all, and the picker only chooses which file.
+  See [switching a running group's workflow](#switching-a-running-group-to-another-workflow).
 
 ## Custom agent workflows
 
@@ -1584,6 +1594,53 @@ workflow, it is called `default`, and nothing under `workflows/` is ever opened.
 If you have *both* a `workflow.yml` and a `workflows/default.yml`, the plain
 `workflow.yml` is the one that is read — rename the other rather than leaving
 two files claiming one name.
+
+### Switching a running group to another workflow
+
+A group does not have to be relaunched to change workflow. The lifecycle panel
+(`Alt+O`) has a **workflow picker** beside its workflow row: choose another of
+the repo's workflows and click **Review & apply**.
+
+You get a diff before anything happens — which blocks the switch would add and
+remove, which ones change and in what (`cli`, `model`, `prompt`, …), the merge
+gate it would arm, and whether the switch changes the intake label vocabulary
+your own `hold` veto uses. Nothing applies until you confirm that diff. If the
+file is edited between the diff and your click, the apply is refused and asks
+you to re-open it, so what lands is what you read.
+
+What a switch does *not* do is re-personae anybody. **Agents already running
+keep the block they were spawned under** — a switch changes the roster future
+spawns resolve against, not the panes in front of you. A pane whose block the
+new workflow drops keeps running; what is refused afterwards is a bare *resume*
+of its session, because the group can no longer spawn that block.
+
+Two things a switch will refuse outright, and it tells you which:
+
+- **A change to the orchestrator block's CLI.** That pane is already running a
+  program and cannot change it mid-session. You still see the full diff and the
+  reason — end the group and relaunch on the new workflow if that is the change
+  you want.
+- **A switch on a group whose *Advanced orchestrator* toggle is off.** The
+  toggle is the consent for running a repo-authored roster at all; the picker
+  only answers which file. Turn workflow mode on — which arms the workflow the
+  group already has pinned — and then apply.
+
+**Drift.** If the workflow file is edited on disk after the group launched, the
+group keeps running the roster it pinned. That is deliberate: a file appearing
+or changing never re-rosters a live group behind your back. A **drift** chip
+appears in the panel saying so, and applying the same workflow again is how you
+adopt the edit — the same confirmed action, with the edit as its diff. The chip
+also appears when the file has been deleted or has stopped validating, and in
+that case the picker still lists the workflow the group is running, marked as
+having no file, rather than quietly showing you a different one — and **Edit…**
+tells you the file is gone rather than opening a different workflow under its
+name. To bring it back, write the file itself — `workflows/<name>.yml` under the
+config directory this repo uses, in any editor. Once it exists, both pickers
+list it again, the file browser's *Open in workflow pane* opens it in the
+designer, and *Edit…* works from the group panel. Don't reach for the setup
+pane's *Edit workflow…* for this: its dropdown is built from the same listing,
+so a workflow whose file is gone can't be selected there either, and the button
+would open the repo's **default** workflow instead.
 
 **The orchestrator's read-back (`list_blocks`).** Switching a running group to
 another workflow is confirmed by the human before anything applies; when a

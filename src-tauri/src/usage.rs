@@ -1455,7 +1455,8 @@ impl TranscriptCursors {
         // per-harness path-refresh policy would be one more thing to keep in
         // step. The other harnesses simply re-resolve to the path they already
         // had.
-        let remembered = if due { None } else { slot.as_ref().map(|c| c.path.clone()) };
+        // [scratch] re-resolve on every tick, dropping the timer's bound.
+        let remembered: Option<PathBuf> = None;
         let (path, meta) = match remembered.and_then(|p| {
             let m = fs::metadata(&p).ok()?;
             m.is_file().then_some((p, m))

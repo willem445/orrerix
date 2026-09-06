@@ -277,6 +277,45 @@ pub fn is_native_executable(path: &Path) -> bool {
     }
 }
 
+/// How to actually START a resolved program, as `(program, prefix_args)`.
+///
+/// [`resolve_program`] answers WHICH file; this answers whether
+/// `CreateProcessW` can run it. On Windows an npm-installed CLI is a `.cmd`
+/// shim, [`is_native_executable`] excludes it deliberately, and
+/// `std::process::Command` is `CreateProcessW` and nothing else — so a `.cmd`
+/// has to be reached through `cmd.exe /c`. The prefix is returned rather than
+/// applied because the caller owns the `Command`: the structured pane driver
+/// feeds it to `harness::pi::PiPane::spawn_with`, whose own argv stays the
+/// adapter's to build.
+///
+/// **Off Windows this is always `(path, [])`** — every resolved file is
+/// directly executable there, which is what [`is_native_executable`] already
+/// says, so no platform gets a shell it did not need.
+///
+/// **The quoting risk is real and is closed by a test, not by this comment.**
+/// `cmd.exe` re-parses the command line `CreateProcessW` hands it, and
+/// `gh_shim_git_plumbing`'s own prose in `src-tauri` warns that no batch
+/// quoting fixes argument mangling in general. What makes THIS shape safe is
+/// narrow: the shim path is one `/c`-following token, so Rust's own argument
+/// quoting produces `cmd.exe /c "C:dir with spacepi.cmd" --mode rpc ...`,
+/// which is the form `cmd` parses correctly. A path containing a space is the
+/// case that breaks first, so the integration test spawns its fake pi from a
+/// directory whose name has one rather than asserting the claim here.
+pub fn launch_form(resolved: &Path) -> (PathBuf, Vec<String>) {
+    if is_native_executable(resolved) {
+        return (resolved.to_path_buf(), Vec::new());
+    }
+    // Reached on Windows only: off Windows `is_native_executable` is `true`
+    // for everything that resolved, so the early return above is the only
+    // path. `ComSpec` rather than a literal, for the reason `launch_path`
+    // reads the environment instead of hard-coding a Windows directory.
+    let comspec = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string());
+    (
+        PathBuf::from(comspec),
+        vec!["/c".to_string(), resolved.display().to_string()],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

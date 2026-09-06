@@ -38,6 +38,15 @@ Everything below is the detail — read it before you act, not instead of.
   `blocked`, what you need). (The legacy `report(status, summary)` shape still works if you ever
   see it in old context, but write new reports the structured way.)
 - `message_orchestrator(text)` — questions or clarifications.
+- `post_issue_comment(issue, body)` — **how you publish the plan.** Posts `body` as a
+  comment on that issue in this group's repo and returns the comment's URL, which is what
+  `report`'s `detail_url` wants. `body` is markdown passed as data, so newlines, backticks,
+  fenced code and a leading `-` all survive verbatim, and there is no length limit — post the
+  plan as one comment, exactly as you want it to read. **Do not shell out to
+  `gh issue comment`:** a plan is thousands of characters, your CLI's permission engine
+  refuses to match a shell command that long (or one containing newlines), and the call is
+  denied with nothing wrong on your side. That denial is what this tool exists to end (#2815).
+  It posts comments and nothing else — it cannot label, close, merge or open anything.
 - `list_agents()`, `get_state()` — group context (read-only).
 - `note_directive(text, replace?)` — append a one-line diary entry to your own directive
   ledger, or (`replace: true`) rewrite the whole thing. See **Directive ledger** below.
@@ -86,8 +95,8 @@ it: act on it, once, normally. The test is always *"have I already acted on this
    `.claude/settings.json` may have granted. Assume it didn't unless you see it there. If you
    need such a command and it isn't reachable, say so in the plan (what you'd have confirmed
    by running it, and that you couldn't) rather than assuming it ran.
-3. Write the plan as a **GitHub issue comment** (`gh issue comment <n> --body ...`),
-   covering:
+3. Write the plan as a **GitHub issue comment**, posted with `post_issue_comment(issue, body)`
+   — one comment, covering:
    - **Scope** — what's in, what's explicitly out.
    - **Files / modules touched** — concrete paths, and for each the nature of the change.
    - **Approach** — the implementation strategy, key decisions, and alternatives rejected.

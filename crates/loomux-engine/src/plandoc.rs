@@ -635,6 +635,8 @@ enum Colour {
 /// the board. Reports the first cycle found *and the edge that closed it*, so
 /// the refusal can point at a line rather than at the whole plan.
 fn find_cycle(doc: &PlanDoc) -> Option<Cycle> {
+    // SCRATCH MUTATION (#3040 P1 red-before-green): cycle check disabled.
+    return None;
     let index: BTreeMap<&str, usize> = doc
         .slices
         .iter()

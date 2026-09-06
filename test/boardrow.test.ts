@@ -57,13 +57,18 @@ test("the compact row carries the name, the id, issue/PR and progress — and no
   assert.deepEqual([...rowLayout(false).compact], ["id", "title", "issue", "pr", "status", "children"]);
 });
 
-test("collapsing a row hides every tier-4 field and nothing above tier 4", () => {
-  for (const f of ROW_FIELDS) {
-    assert.equal(
-      rowShows(f, false),
-      rowFieldTier(f) < 4,
-      `${f} (tier ${rowFieldTier(f)}) renders collapsed: ${rowShows(f, false)}`
-    );
+test("collapsing a row hides the chrome and keeps the four things that matter", () => {
+  // Named fields, not `rowFieldTier(f) < 4` — asking the ladder to agree with
+  // itself passes under any ladder at all, the flat one this issue replaces
+  // included. These are the human's own words in #2937 turned into two lists.
+  for (const f of ["id", "title", "issue", "pr", "status", "children"] as const) {
+    assert.equal(rowShows(f, false), true, `${f} is hidden on a collapsed row`);
+  }
+  for (const f of NEVER_COMPACT) {
+    assert.equal(rowShows(f, false), false, `${f} still renders on a collapsed row`);
+  }
+  for (const f of ["activeBadge", "marker", "cleared", "ready", "nest", "delete"] as const) {
+    assert.equal(rowShows(f, false), false, `${f} still renders on a collapsed row`);
   }
 });
 

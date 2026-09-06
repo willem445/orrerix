@@ -3211,14 +3211,27 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
 .task-btn.notes { font-size: 10px; height: 18px; }
 .task-btn.danger:hover { color: var(--state-danger); }
 .task-main { flex: 1; min-width: 0; }
-.task-top { display: flex; align-items: center; gap: 7px; min-height: 22px; }
+/* The compact line (#2937). WRAPPING, and the wrap point is the ladder's: the
+   line is built id → name → issue/PR → status → progress → expand, so the first
+   thing a narrow pane pushes onto a second line is everything ranked below the
+   name. That is the whole fix — in a normal-width pane docked to the left the
+   name used to be the ONLY flexible item on a line of `flex: none` chrome, so
+   it was the only thing that could give ground, and it gave all of it.
+   `baseline` rather than `center` because the name now wraps to two or three
+   lines: the id has to sit on the name's FIRST line, not halfway down it. */
+.task-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 7px; min-height: 22px; }
 .task-id {
   flex: none; font-family: var(--font-mono);
   font-size: 10px; color: var(--ink-dim);
 }
+/* Tier 1 with the id, and the reason this issue exists: never truncated, never
+   `nowrap`. `overflow-wrap: anywhere` rather than `break-word` so a long
+   unbroken token (a path, a branch name) breaks instead of forcing the row
+   wider than the pane. The flex-basis is a WANT, not a floor — it is what makes
+   the chips ranked below it wrap away first when the pane is narrow. */
 .task-title {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; color: var(--ink); cursor: default;
+  flex: 1 1 40%; min-width: 0; white-space: normal; overflow-wrap: anywhere;
+  line-height: 1.4; color: var(--ink); cursor: default;
 }
 .task-title-input { flex: 1; min-width: 0; padding: 2px 7px; font-size: 12px; }
 .task-status {
@@ -3370,6 +3383,35 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
    already gold, so its hover deepens a colour the button already owns. */
 .task-collapse:hover { background: color-mix(in srgb, var(--ink) 27%, transparent); color: var(--ink); }
 .task-collapse-spacer { flex: none; width: 18px; }
+/* The per-row expand (#2937) — the one control left on the compact line, and
+   the way back to everything the ladder moved off it. `margin-left: auto` pins
+   it to the right edge of whichever line it lands on, so it is always the last
+   thing on the row rather than drifting in beside the progress chip. Quieter
+   than `.task-collapse`: that one is STRUCTURE (there is work inside this row)
+   and this one is chrome, so it recedes until the row is hovered or it is what
+   has focus. */
+.task-expand {
+  flex: none; margin-left: auto; width: 18px; height: 18px; padding: 0;
+  background: none; border: none; border-radius: 4px;
+  color: var(--ink-dim); font-size: 11px; line-height: 1; cursor: pointer;
+  opacity: 0.55; transition: opacity 90ms ease-out;
+}
+.task-row:hover .task-expand, .task-expand:focus-visible { opacity: 1; }
+.task-expand:hover { background: color-mix(in srgb, var(--ink) 27%, transparent); color: var(--ink); opacity: 1; }
+.task-expand[aria-expanded="true"] { opacity: 1; color: var(--ink); }
+@media (prefers-reduced-motion: reduce) {
+  .task-expand { transition: none; }
+}
+/* Everything the ladder withheld (#2937), revealed in place under the compact
+   line. Board chrome only — the row grows downward inside the overlay and
+   nothing about the layout or the PTY moves (constraint 1). Indented to the
+   name's left edge (18px chevron gutter + the 7px column gap) so the detail
+   reads as belonging to the row above it rather than as a row of its own. */
+.task-detail {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px;
+  margin: 3px 0 1px 25px; padding-top: 4px;
+  border-top: 1px solid var(--surface-2);
+}
 /* The Agile level (#1156: enforced, and the authority on what a row is — the
    id prefix only says where it started). Purple → blue → cyan → dim reads as
    epic → feature → story → task, reusing the palette the status chips already

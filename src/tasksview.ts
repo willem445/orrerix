@@ -99,6 +99,13 @@ import { CoalescingRefresh } from "./refreshgate";
 import { WakeGate } from "./wakegate";
 import { approveWillMerge, gateExitsMessage } from "./workflowstatus";
 import { wipChips } from "./wipchips";
+import {
+  expandTitle,
+  isExpandToggleKey,
+  rowLayout,
+  toggleExpandedRow,
+  type RowField,
+} from "./boardrow.ts";
 import { BoardPrefsStore } from "./boardprefs.ts";
 import { loadBoardPrefs, saveBoardPrefs } from "./pty.ts";
 
@@ -299,6 +306,26 @@ export class TasksView {
    *  of the same kind two lines apart with different housekeeping rules is how
    *  they come to disagree about what a live row is. */
   private expandedLinks = new Set<string>();
+  /** Task ids whose row is opened to its FULL detail (#2937) — the third set of
+   *  this kind, and the one that decides how much of a row competes for the
+   *  compact line at all.
+   *
+   *  Its own set for the same reason `expandedLinks` is not a second meaning
+   *  for `expanded`: the three answer different questions ("show me the
+   *  chrome" / "what governs this" / "what was said about this") and a human
+   *  who opened one is routinely not done with it when they shut another. The
+   *  notes and grounding sections are therefore NOT gated on this one — they
+   *  are full-width blocks below the line, so they cost the name no horizontal
+   *  room, and gating them here would also make a row's presence in
+   *  `withNotes` disagree with what is on screen (#1317).
+   *
+   *  VIEW state, never DOM state: the board re-renders on every `write_tasks`,
+   *  so reading "is this row open" back off an element would lose it the first
+   *  time an agent wrote to the board. Per-session like `expanded` above
+   *  rather than persisted like `collapsed` — it says how you are reading the
+   *  board right now, not how you want it set up. Pruned to live rows on every
+   *  refresh beside the other two, so a deleted row's id cannot accumulate. */
+  private expandedRows = new Set<string>();
   /** The half-typed grounding link per row (#1273 N1), so a re-render never
    *  eats what the human is in the middle of writing.
    *
@@ -978,6 +1005,10 @@ export class TasksView {
     // come to disagree about what a live row is.
     this.expanded = retainExisting(this.expanded, this.tasks);
     this.expandedLinks = retainExisting(this.expandedLinks, this.tasks);
+    // #2937: frontend-only like expandedLinks above, and pruned for the same
+    // reason — an id whose row has gone names nothing and would sit in the set
+    // for the rest of the session.
+    this.expandedRows = retainExisting(this.expandedRows, this.tasks);
     this.render();
   }
 
@@ -2552,6 +2583,23 @@ export class TasksView {
 
     const main = el("div", "task-main");
     const top = el("div", "task-top");
+    // The priority ladder (#2937). Every field below is built exactly as it
+    // always was and then HANDED to `place`, which files it under its ladder
+    // slot instead of appending it; the two loops at the bottom of this method
+    // are what put the slots on screen, in `rowLayout`'s order.
+    //
+    // Filing rather than appending is what keeps `boardrow.ts` load-bearing
+    // rather than a second, testable description of an order this method really
+    // decides. It also means the name can never be pushed right by something
+    // ranked below it: the line's order is the ladder's, whatever order the
+    // code happens to construct things in.
+    const rowExpanded = this.expandedRows.has(t.id);
+    const slots = new Map<RowField, HTMLElement[]>();
+    const place = (f: RowField, node: HTMLElement) => {
+      const at = slots.get(f);
+      if (at) at.push(node);
+      else slots.set(f, [node]);
+    };
     // Collapse chevron (#958), leftmost so every row's text starts at the same
     // place whether or not it contains anything. Containers only — a leaf gets
     // an inert spacer of the same width rather than a button that does
@@ -2588,7 +2636,7 @@ export class TasksView {
       // boardUsesHierarchy. A flat board renders exactly the row it always has.
       top.appendChild(el("span", "task-collapse-spacer"));
     }
-    top.appendChild(el("span", "task-id", t.id));
+    place("id", el("span", "task-id", t.id));
 
     // Unmistakable, not just a tint — but it sits AFTER the id, not in front of
     // it (#1152, human beta feedback). `.task-top` is a flex row, so a badge in
@@ -2602,7 +2650,7 @@ export class TasksView {
     if (activity === "active") {
       const badge = el("span", "task-active-badge", `● ACTIVE — ${t.assignee}`);
       badge.title = `${t.assignee} is actively working on this right now`;
-      top.appendChild(badge);
+      place("activeBadge", badge);
     }
 
     // Board marker + deep-link (#1091 slice G): an obvious chip on a row
@@ -2628,7 +2676,7 @@ export class TasksView {
           this.toast("The NEEDS-YOU panel isn't available on this pane.");
         }
       });
-      top.appendChild(chip);
+      place("marker", chip);
     }
 
     // Archived (#1152) — the row's own stamp, so it appears on every rendered
@@ -2638,7 +2686,7 @@ export class TasksView {
     if (boardRow.cleared) {
       const chip = el("span", "task-chip cleared", "📥 cleared");
       chip.title = `Cleared from the working list on ${fmtTime(t.cleared_ms ?? 0)} — still on the board, nothing was deleted`;
-      top.appendChild(chip);
+      place("cleared", chip);
     }
 
     // The Agile level (#958). Enforced since #1156 — where this row may sit is
@@ -2650,7 +2698,7 @@ export class TasksView {
       kind.title = known
         ? `Agile level: ${t.kind} — ${levelRuleText(t.kind)}`
         : `${t.kind} is not one of ${KINDS.join(" | ")} — only a hand-edited tasks.json can hold it`;
-      top.appendChild(kind);
+      place("kind", kind);
     }
 
     // The sprint badge (#1272). Metadata like the level beside it: nothing
@@ -2669,7 +2717,7 @@ export class TasksView {
           : current !== null && t.sprint < current
             ? `Sprint ${t.sprint} — an earlier sprint than the current one (${current})`
             : `Sprint ${t.sprint} — a later sprint${current === null ? "" : ` than the current one (${current})`}, so it waits behind it`;
-      top.appendChild(chip);
+      place("sprint", chip);
     }
 
     const status = document.createElement("select");
@@ -2684,7 +2732,7 @@ export class TasksView {
     status.addEventListener("change", () =>
       void this.mutate(invoke("orch_upsert_task", { groupId: this.groupId, id: t.id, status: status.value }))
     );
-    top.appendChild(status);
+    place("status", status);
 
     // Title: double-click to edit in place.
     const title = el("span", "task-title", t.title);
@@ -2714,7 +2762,7 @@ export class TasksView {
       });
       input.addEventListener("blur", () => commit(true));
     });
-    top.appendChild(title);
+    place("title", title);
 
     // Meta chips: issue / PR / assignee / resumable session. Issue and PR
     // refs are clickable — they open in the browser (see openRef).
@@ -2726,7 +2774,7 @@ export class TasksView {
       const chip = el("button", `task-chip ${cls} link`, label) as HTMLButtonElement;
       chip.title = `Open ${kind === "issue" ? "issue" : "PR"} ${label} in browser`;
       chip.addEventListener("click", () => this.openRef(kind, label));
-      top.appendChild(chip);
+      place(cls, chip);
     }
     // The assignee chip is LIVE or HISTORY (#339 refinement) — an old
     // assignee from a killed/resumed/reassigned session must read as past,
@@ -2737,12 +2785,12 @@ export class TasksView {
       chip.title = isLive
         ? "Currently live agent"
         : "Assigned in a past session — this agent is not currently live";
-      top.appendChild(chip);
+      place("assignee", chip);
     }
     if (t.session) {
       const chip = el("span", "task-chip session", `⟲ ${t.session.slice(0, 8)}`);
       chip.title = `Resumable session ${t.session} — the orchestrator can reopen this task's agent for follow-ups`;
-      top.appendChild(chip);
+      place("session", chip);
     }
 
     // Child rollup (#958). DIRECT children only, because these are the same
@@ -2767,7 +2815,7 @@ export class TasksView {
         (withheld > 0
           ? ` — ${withheld} not on screen (${boardRow.collapsed ? "this row is folded up" : "hidden by the filter"})`
           : "");
-      top.appendChild(chip);
+      place("children", chip);
       // The nudge (#958): everything underneath is finished but this row's own
       // status hasn't caught up. A PROMPT, never a write — a derived status
       // write-back is exactly the wedge that keeping `ready` derived avoids,
@@ -2779,7 +2827,7 @@ export class TasksView {
         nudge.title =
           `Every task under ${t.id} is done, but ${t.id} itself is ${t.status}. ` +
           `Nothing has been changed — set its status yourself if that's right.`;
-        top.appendChild(nudge);
+        place("rollupDone", nudge);
       }
     }
     // A container that names no row on the board (#958) — only reachable by
@@ -2791,7 +2839,7 @@ export class TasksView {
       chip.title =
         `${t.parent} names no task on this board, so this row shows at the top level. ` +
         `Re-nest it with ⤵, or move it to the top level from the same picker.`;
-      top.appendChild(chip);
+      place("parentMissing", chip);
     }
 
     // "ready" (#582): this queued item's dependencies are all done, so it can
@@ -2803,7 +2851,7 @@ export class TasksView {
         (t.deps?.length ?? 0) > 0
           ? "Every task this depends on is done — this one can start now"
           : "Nothing blocks this one — it can start now";
-      top.appendChild(ready);
+      place("ready", ready);
     }
 
     // Start: the human's nudge to begin a queued item now. Delivers a prompt
@@ -2822,7 +2870,7 @@ export class TasksView {
         start.disabled = true;
         void this.mutate(invoke("orch_start_task", { groupId: this.groupId, id: t.id }));
       });
-      top.appendChild(start);
+      place("start", start);
     }
 
     // Merge-gate actions: the human's approve / request-changes touchpoints,
@@ -2856,7 +2904,8 @@ export class TasksView {
       const changes = el("button", "task-btn changes", "✎ Changes") as HTMLButtonElement;
       changes.title = "Request changes — send findings back to the orchestrator";
       changes.addEventListener("click", () => this.requestChanges(t));
-      top.append(approve, changes);
+      place("approve", approve);
+      place("changes", changes);
     }
 
     // Proceed: the human's promote verdict on a prototype (#147). Flips the item
@@ -2878,7 +2927,7 @@ export class TasksView {
           }, 2500);
         }
       });
-      top.appendChild(proceed);
+      place("proceed", proceed);
     }
 
     // Add a dependency (#582): toggles the picker on the links line below.
@@ -2888,7 +2937,7 @@ export class TasksView {
     const linkBtn = el("button", "task-btn deplink", "🔗") as HTMLButtonElement;
     linkBtn.title = "Add a dependency — this task waits until the one you pick is done";
     linkBtn.addEventListener("click", () => this.togglePicker(t.id, "dep"));
-    top.appendChild(linkBtn);
+    place("depPicker", linkBtn);
 
     // Nest (#958): put this row inside another one, or take it back to the top
     // level. Containment, not ordering — deliberately a separate control from
@@ -2898,7 +2947,7 @@ export class TasksView {
       ? `Move this task into a different container, or back to the top level (it is in ${t.parent})`
       : "Move this task inside another one — grouping only, it changes nothing about what blocks it";
     nestBtn.addEventListener("click", () => this.togglePicker(t.id, "parent"));
-    top.appendChild(nestBtn);
+    place("nest", nestBtn);
 
     // Set kind (#958 slice K): the Agile-level picker. Always present, like
     // 🔗/⤵ above — one entry point in the same place whether or not the row
@@ -2909,7 +2958,7 @@ export class TasksView {
       ? `Change this row's Agile level (currently ${t.kind}) — ${levelRuleText(t.kind)}`
       : "Set this row's Agile level — epic (top level) ⊃ feature ⊃ story ⊃ task; a row with no level may sit anywhere";
     kindBtn.addEventListener("click", () => this.togglePicker(t.id, "kind"));
-    top.appendChild(kindBtn);
+    place("kindPicker", kindBtn);
 
     // Set sprint (#1272): the fourth picker, in the same place as the three
     // above and present on every row for the same reason — the badge is absent
@@ -2921,7 +2970,7 @@ export class TasksView {
         ? `Move this item to another sprint, or back to the backlog (it is in sprint ${t.sprint})`
         : "Put this item in a sprint — a numbered batch that says what gets picked up first; it changes nothing else about the item";
     sprintBtn.addEventListener("click", () => this.togglePicker(t.id, "sprint"));
-    top.appendChild(sprintBtn);
+    place("sprintPicker", sprintBtn);
 
     // Grounding links (#1273): the fifth per-row entry point, in the same slot
     // as the four above and present on every row for the same reason the 🎯
@@ -2949,7 +2998,7 @@ export class TasksView {
       else this.expandedLinks.add(t.id);
       this.render();
     });
-    top.appendChild(groundBtn);
+    place("ground", groundBtn);
 
     // `note_count`, never `notes.length` (#1317): a collapsed row carries no
     // bodies, so the array is the wrong thing to count and would read 0.
@@ -2978,7 +3027,7 @@ export class TasksView {
       this.render();
       if (opening) this.refresh();
     });
-    top.appendChild(notesBtn);
+    place("notes", notesBtn);
 
     // Per-row un-archive (#1152). No confirm: it puts a row back into a list,
     // which is the reversible direction of a reversible action.
@@ -2990,7 +3039,7 @@ export class TasksView {
           invoke("orch_restore_cleared_tasks", { groupId: this.groupId, ids: [t.id] })
         )
       );
-      top.appendChild(restore);
+      place("restore", restore);
     }
 
     // Delete with a two-click confirm, mirroring the git view's pattern.
@@ -3008,10 +3057,59 @@ export class TasksView {
         }, 2500);
       }
     });
-    top.appendChild(del);
+    place("delete", del);
+
+    // Put the slots on screen (#2937). The compact line first, in the ladder's
+    // order — so the name and the id lead it whatever order the code above
+    // happened to build things in — then the expand control, then the detail
+    // block, which is ATTACHED only when this row is open.
+    const layout = rowLayout(rowExpanded);
+    for (const f of layout.compact) for (const node of slots.get(f) ?? []) top.appendChild(node);
+
+    // The detail block is always BUILT, so the control can say how much it is
+    // hiding without a second pass over the row. `rowLayout(true).detail` is
+    // the full order rather than `layout.detail` (empty while collapsed) — the
+    // block is what gets withheld, not the fields inside it.
+    const detail = el("div", "task-detail");
+    let hidden = 0;
+    for (const f of rowLayout(true).detail) {
+      const nodes = slots.get(f) ?? [];
+      if (nodes.length > 0) hidden += 1;
+      for (const node of nodes) detail.appendChild(node);
+    }
+
+    const expand = el(
+      "button",
+      "task-expand",
+      rowExpanded ? "⌃" : "⌄"
+    ) as HTMLButtonElement;
+    expand.setAttribute("aria-expanded", rowExpanded ? "true" : "false");
+    expand.title = expandTitle(rowExpanded, hidden);
+    expand.addEventListener("click", () => {
+      this.expandedRows = toggleExpandedRow(this.expandedRows, t.id);
+      this.render();
+    });
+    // Enter and Space are the `<button>`'s OWN activation, and this handler
+    // deliberately does not toggle: it only keeps an app-level shortcut from
+    // swallowing the keystroke before the button gets it. Toggling here as
+    // well would fire twice and leave the row exactly where it started, and
+    // `preventDefault` would cancel the Space activation outright (a button
+    // acts on Space at keyup) — see `isExpandToggleKey`.
+    expand.addEventListener("keydown", (e) => {
+      if (isExpandToggleKey(e.key)) e.stopPropagation();
+    });
+    top.appendChild(expand);
     main.appendChild(top);
 
-    const links = this.renderLinks(t);
+    if (rowExpanded) main.appendChild(detail);
+
+    // The deps / see-also chips and the four pickers live on their own line
+    // below, and they are detail (#2937) — but a picker the human has just
+    // opened must never become unreachable, so an open picker keeps the line
+    // whichever way the row is folded. Nothing can open one from a collapsed
+    // row (every trigger is in the detail block), so this is the transient
+    // case only: open a picker, then fold the row.
+    const links = rowExpanded || this.picking?.id === t.id ? this.renderLinks(t) : null;
     if (links) main.appendChild(links);
 
     // The grounding detail (#1273) sits between the dep chips and the notes:

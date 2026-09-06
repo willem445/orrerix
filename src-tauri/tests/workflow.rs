@@ -3905,9 +3905,16 @@ fn compile(reg: &OrchRegistry, g: &loomux_lib::orchestration::GroupInfo, block_i
     let inject = reg.persona_inject(&g.id, b, cli, persona.as_ref(), &contract);
     let cfg = PathBuf::from("C:/x/cfg.json");
     let gdir = PathBuf::from("C:/data/group");
-    let cmd = reg.build_agent_command(
+    // The `_ex` builders with the block's OWN knobs, mirroring the real spawn
+    // path (`spawn_agent_ex`'s `build_agent_command_ex(…, block.knobs(), …)`).
+    // The knob-less wrappers compile `ModelKnobs::default()` — a block that
+    // declares `effort:` would silently lose it here, and the dogfood pin on
+    // pi's `--thinking` (#2817) would test the helper, not the product. Every
+    // block in this file that declares no knob compiles identically either way.
+    let cmd = reg.build_agent_command_ex(
         cli,
         workflow::model_of(b, &g.guardrails.agent_cli),
+        b.knobs(),
         false,
         &cfg,
         None,
@@ -3917,10 +3924,13 @@ fn compile(reg: &OrchRegistry, g: &loomux_lib::orchestration::GroupInfo, block_i
         false,
         b.kind.containment(),
         &inject,
+        Role::Worker,
+        None,
     );
-    let argv = reg.build_agent_argv(
+    let argv = reg.build_agent_argv_ex(
         cli,
         workflow::model_of(b, &g.guardrails.agent_cli),
+        b.knobs(),
         false,
         &cfg,
         None,
@@ -3930,6 +3940,8 @@ fn compile(reg: &OrchRegistry, g: &loomux_lib::orchestration::GroupInfo, block_i
         false,
         b.kind.containment(),
         &inject,
+        Role::Worker,
+        None,
     );
     (cmd, argv, inject.kickoff)
 }

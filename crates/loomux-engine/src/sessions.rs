@@ -1493,7 +1493,7 @@ fn codex_rollout_name_parts<'a>(plain_name: &'a str, thread: &str) -> Option<(&'
     }
     let ts = core.get(..19)?;
     let ids = core.get(20..)?;
-    let (t, rollout) = ids.split_once('_').unwrap_or((ids, ids));
+    let (t, rollout) = (ids, ids);
     (!t.is_empty() && t == thread).then_some((ts, rollout))
 }
 

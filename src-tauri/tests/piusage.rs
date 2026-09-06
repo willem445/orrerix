@@ -730,6 +730,7 @@ fn rails_second_worker_block_is_pi() -> Guardrails {
         effort: String::new(),
         context: String::new(),
         remote: None,
+        driver: None,
     });
     g
 }

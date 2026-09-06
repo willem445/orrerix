@@ -17182,6 +17182,7 @@ fn advisor_hinted_planner_auto_closes_on_report_done() {
         effort: String::new(),
         context: String::new(),
         remote: None,
+        driver: None,
     });
     let g = reg.create_group("C:/tmp/repo", g_rails).unwrap();
     let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
@@ -17676,6 +17677,7 @@ fn a_liaison_is_never_taken_by_the_idle_reaper() {
         effort: String::new(),
         context: String::new(),
         remote: None,
+        driver: None,
     });
     let g = reg.create_group("C:/tmp/repo", g_rails).unwrap();
     let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
@@ -36443,6 +36445,7 @@ fn rails_two_worker_blocks_cheap_first() -> Guardrails {
         effort: String::new(),
         context: String::new(),
         remote: None,
+        driver: None,
     });
     g
 }
@@ -36618,6 +36621,7 @@ fn rails_with_process_block() -> Guardrails {
         effort: String::new(),
         context: String::new(),
         remote: None,
+        driver: None,
     });
     g
 }
@@ -52176,6 +52180,7 @@ fn clamped_drops_a_knob_the_resolved_cli_cannot_honor() {
         effort: effort.into(),
         context: context.into(),
         remote: None,
+        driver: None,
     };
     let resolve = |agent_cli: &str, b: workflow::Block| -> workflow::Block {
         let g = Guardrails {

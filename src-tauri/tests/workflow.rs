@@ -1023,6 +1023,7 @@ fn a_manager_block_never_carries_a_persona_even_from_a_hand_edited_group_json() 
         effort: String::new(),
         context: String::new(),
         remote: None,
+        driver: None,
     };
     assert!(!workflow::persona_allowed(&manager), "a manager block may never carry a persona");
     // The control, on an otherwise identical block: the predicate is about the
@@ -2947,6 +2948,7 @@ fn the_four_class_names_are_reserved_ids_for_their_own_class() {
                 effort: String::new(),
                 context: String::new(),
                 remote: None,
+                driver: None,
             },
             workflow::Block {
                 id: "worker".into(),
@@ -2961,6 +2963,7 @@ fn the_four_class_names_are_reserved_ids_for_their_own_class() {
                 effort: String::new(),
                 context: String::new(),
                 remote: None,
+                driver: None,
             },
             workflow::Block {
                 id: "worker".into(), // duplicate
@@ -2975,6 +2978,7 @@ fn the_four_class_names_are_reserved_ids_for_their_own_class() {
                 effort: String::new(),
                 context: String::new(),
                 remote: None,
+                driver: None,
             },
         ],
         ..Guardrails::default()
@@ -5148,6 +5152,7 @@ fn a_repo_file_can_never_author_the_orchestrators_persona() {
                     effort: String::new(),
                     context: String::new(),
                     remote: None,
+                    driver: None,
                 }],
                 ..rails()
             },
@@ -7193,6 +7198,7 @@ fn block(id: &str, kind: Role) -> workflow::Block {
         effort: String::new(),
         context: String::new(),
         remote: None,
+        driver: None,
     }
 }
 
@@ -11069,5 +11075,106 @@ fn orch_workflow_preview_without_a_name_is_what_it_always_was() {
             .all(|e| !e.as_str().unwrap().contains("../escaped")),
         "nor into the errors: {:?}",
         bad["errors"]
+    );
+}
+
+// ───────────────────── #2850 S3a: the `driver:` block key ───────────────────
+//
+// `driver: structured` says HOW loomux drives the block's agent: over the
+// CLI's structured-protocol surface (harness adapters) instead of a scraped
+// PTY. The VALUE is loomux's own closed vocabulary (`workflow::DRIVER_MODES`);
+// whether the block's CLI can carry it is capability data
+// (`CliCaps::structured_driver`). Both refusals are parse errors — the same
+// load-time posture `cli_can_host` established for the containment question,
+// so a repo learns from its own file rather than from a spawn that fails
+// hours later.
+
+/// One worker block on `cli`, with the optional `driver:` key.
+fn driver_block(cli: &str, mode: Option<&str>) -> String {
+    let mut text = format!("version: 1\nblocks:\n  - id: w\n    kind: worker\n    cli: {cli}\n");
+    if let Some(mode) = mode {
+        text.push_str(&format!("    driver: {mode}\n"));
+    }
+    text
+}
+
+#[test]
+fn driver_structured_parses_on_a_cli_whose_row_carries_a_driver() {
+    let parsed = workflow::parse_workflow(&driver_block("pi", Some("structured")))
+        .expect("pi is the one CLI with a structured driver — the key must parse");
+    let w = parsed.blocks.iter().find(|b| b.id == "w").unwrap();
+    assert_eq!(
+        w.driver.as_deref(),
+        Some("structured"),
+        "the normalized value reaches the parsed block"
+    );
+
+    // The negative control: a block WITHOUT the key is the absent behavior —
+    // a PTY pane — and parses exactly as it did before the key existed.
+    let parsed = workflow::parse_workflow(&driver_block("pi", None)).unwrap();
+    let w = parsed.blocks.iter().find(|b| b.id == "w").unwrap();
+    assert_eq!(w.driver, None, "no driver: key is a PTY pane");
+}
+
+#[test]
+fn driver_structured_is_refused_on_a_cli_whose_row_carries_none() {
+    // Every CLI whose `structured_driver` is None — claude's decoder exists
+    // but its spawn wiring is #84's R2, so its row (and this loop) refuse it
+    // today. R2 flips its row and amends this loop in the same PR.
+    for cli in ["opencode", "claude", "codex", "copilot", "gemini"] {
+        let text = driver_block(cli, Some("structured"));
+        let errs = workflow::parse_workflow(&text).err().unwrap_or_else(|| {
+            panic!("{cli}: a CLI with no structured driver must refuse the key")
+        });
+        assert!(
+            errs.iter()
+            .any(|e| e.contains("w") && e.contains(cli) && e.contains("no structured driver")),
+            "{cli}: the refusal must name the block and the CLI: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn driver_unknown_value_is_refused_before_the_cli_question() {
+    // The vocabulary is loomux's own, so a value outside it is refused even on
+    // the CLI that HAS a driver — the same order `validate_knob` checks in,
+    // and the same "a typo is never coerced" posture.
+    let text = driver_block("pi", Some("pty"));
+    let errs = workflow::parse_workflow(&text)
+        .err()
+        .expect("an unknown driver value must be refused");
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("unknown driver") && e.contains("pty") && e.contains("structured")),
+        "the refusal names the value and the closed set: {errs:?}"
+    );
+}
+
+#[test]
+fn list_blocks_rows_carry_the_driver_key() {
+    let wf = "version: 1\nname: driven\n\
+              blocks:\n\
+              \x20 - id: w\n    kind: worker\n    cli: pi\n    driver: structured\n\
+              \x20 - id: p\n    kind: worker\n";
+    let repo = Repo::new().workflow(wf);
+    let (reg, _dir) = test_registry();
+    let g = reg.create_group(&repo.path(), rails()).unwrap();
+
+    let v = reg.list_blocks(&g.id);
+    let rows = v["blocks"].as_array().unwrap();
+    let w = rows.iter().find(|b| b["id"] == json!("w")).unwrap();
+    assert_eq!(
+        w["driver"],
+        json!("structured"),
+        "the declared value is on the row: {v}"
+    );
+
+    // Additive, in both directions: a block without the key still carries the
+    // KEY (null), so a reader can tell "no driver" from "a build that never
+    // heard of the key".
+    let p = rows.iter().find(|b| b["id"] == json!("p")).unwrap();
+    assert!(
+        p.as_object().unwrap().contains_key("driver"),
+        "the key is present even on a block that omits it: {p}"
     );
 }

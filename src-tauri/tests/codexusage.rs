@@ -865,6 +865,7 @@ fn rails_second_worker_block_is_codex() -> Guardrails {
         effort: String::new(),
         context: String::new(),
         remote: None,
+        driver: None,
     });
     g
 }

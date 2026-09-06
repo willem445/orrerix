@@ -1064,6 +1064,25 @@ fn lead_prepare_refuses_a_non_argv_seam_cli() {
         .expect("an argv-seam CLI must be accepted");
 }
 
+/// **A codex lead is refused by name, naming its follow-up** (#2833).
+///
+/// codex clears the seam gate above (`mcp_argv_seam: true`, #2515 C1) and
+/// would then die inside `lead_prepare` at the empty `lead_mcp_args` arm with
+/// a message calling itself a loomux bug. Until the lead path writes a codex
+/// profile, the refusal is deliberate and says so - this pins that it fires
+/// BEFORE the repo is validated (a bogus path still gets the codex message, so
+/// the gate is the CLI, not the repo).
+#[test]
+fn a_codex_lead_is_refused_naming_its_follow_up() {
+    let (reg, _d) = test_registry();
+    let err = reg
+        .lead_prepare("codex", std::path::Path::new("Z:/not/a/repo"), "l", 4, false, 5, 0, 5)
+        .expect_err("a codex lead must be refused");
+    assert!(err.contains("codex cannot host a lead pane yet"), "{err}");
+    assert!(err.contains("#2833") && err.contains("lead-pane.md"), "{err}");
+    assert!(!err.contains("loomux bug"), "the refusal is deliberate, not the empty-arm fallback: {err}");
+}
+
 /// **Every argv-seam CLI has a lead arm**, and the arm really carries the MCP
 /// wiring.
 ///
@@ -1078,7 +1097,12 @@ fn every_argv_seam_cli_has_a_lead_mcp_arm() {
         seam.contains(&"pi") && seam.contains(&"copilot"),
         "this test is vacuous unless the table really has more than claude as a seam CLI: {seam:?}"
     );
-    for cli in seam {
+    // codex is argv-seam by the letter (#2515 C1) and has no lead arm yet:
+    // refused by name in `lead_prepare` and pinned by
+    // `a_codex_lead_is_refused_naming_its_follow_up` below, not iterated here.
+    // Drop this filter when #2833 lands the arm.
+    assert!(seam.contains(&"codex"), "the carve-out below is dead unless codex is a seam CLI: {seam:?}");
+    for cli in seam.into_iter().filter(|c| *c != "codex") {
         let (reg, _d, _repo, _gid, _agent_id, out) = prepared_lead(cli, 4);
         let args = out["mcp_args"].as_str().unwrap_or_default();
         assert!(

@@ -38222,6 +38222,19 @@ impl OrchRegistry {
                  seam to carry environment pairs is the follow-up that lifts this."
             ));
         }
+        // codex passes the seam gate by the letter of `mcp_argv_seam` (its
+        // identity rides `-p <profile>`, one indirection out - #2515 C1) but
+        // `lead_mcp_args` has no codex arm and `write_mcp_config`'s codex branch
+        // was built for the solo path, so a codex lead would launch as a lead in
+        // name only. Refused here, by name, until the lead path grows the
+        // profile arm (#2833). A behaviour gate, not a mistyped identity: the
+        // string never becomes a name.
+        if cli == "codex" {
+            return Err(
+                "codex cannot host a lead pane yet: its MCP identity rides a profile file the lead path does not write. See doc/design/lead-pane.md - the codex lead arm is the follow-up (#2833) that lifts this."
+                    .into(),
+            );
+        }
         validate_group_repo(cwd)?;
 
         // Every roster loomux synthesizes on a group's behalf pins no model

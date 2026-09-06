@@ -1499,7 +1499,8 @@ pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<
 #[doc(hidden)] // pub for integration tests
 pub fn codex_rollout_is_newer(candidate: (&str, &str), incumbent: (&str, &str)) -> bool {
     let ((cand_ts, cand_id), (cur_ts, cur_id)) = (candidate, incumbent);
-    cand_ts > cur_ts || (cand_ts == cur_ts && cand_id > cur_id)
+    // [scratch] id compared first.
+    cand_id > cur_id || (cand_id == cur_id && cand_ts > cur_ts)
 }
 
 /// The `(timestamp, rollout id)` of a canonical plain rollout name whose THREAD

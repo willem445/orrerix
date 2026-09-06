@@ -11292,7 +11292,6 @@ pub struct AgentEntry {
     /// holding both would put a reserved id where every PTY-side lookup
     /// expects a real one. A structured pane keeps `pty_id: None` for its
     /// whole life; that is the guard, not a check.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<u32>,
     /// What kind of pane was spawned — `None` (absent) means `pty`, so every
     /// roster written before #2850 reads correctly.
@@ -11300,7 +11299,10 @@ pub struct AgentEntry {
     /// A RECORD of what was spawned, not a control: nothing reads it to decide
     /// how to drive a pane, only to render it and to answer `PaneKind` for a
     /// pane this process did not spawn (`harness-adapters.md` section 2.4).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Persisted by `persist_agent_record`, which builds its JSON by hand --
+    /// this struct derives no serde, so a field reaches `agents.json` only by
+    /// being written there.
     pub pane_kind: Option<String>,
     pub task: String,
     /// The board task this spawn was bound to (#1273), when the orchestrator
@@ -13882,6 +13884,15 @@ pub struct AgentRecord {
     /// Additive: absent on a pre-#1 roster row.
     #[serde(default)]
     pub branch: Option<String>,
+    /// What KIND of pane was spawned (#2850) — `"structured"`, or absent
+    /// for the PTY pane every roster written before this key carried.
+    ///
+    /// A record, never a control: nothing reads it to decide how to DRIVE a
+    /// pane (this process knows that from its own registry), only to render
+    /// it and to answer the question for a pane this process did not spawn
+    /// — which is exactly the case a persisted roster exists for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_kind: Option<String>,
 }
 
 /// Durable per-agent usage snapshot (`usage.json` per group). Keyed by the CLI
@@ -33531,6 +33542,7 @@ impl OrchRegistry {
             updated_ms: now_ms(),
             task: entry.task.clone(),
             branch: entry.branch.clone(),
+            pane_kind: entry.pane_kind.clone(),
         };
         // Match by (id, session). Since #524 an id is never re-minted, so a
         // bare-id match can no longer overwrite a DIFFERENT run's record —
@@ -34030,6 +34042,12 @@ impl OrchRegistry {
                 updated_ms: v["ts_ms"].as_u64().unwrap_or(0),
                 task,
                 branch,
+                // The spawn audit does not record the pane kind, and this
+                // rebuild is reconstructing a roster from it. `None` is the
+                // honest answer — absent means `pty`, which is what every
+                // agent this path can see was, since a structured pane is
+                // #2850 and newer than every audit line it reads.
+                pane_kind: None,
             };
             match out.iter_mut().find(|r| r.id == record.id && r.session == record.session) {
                 Some(r) => *r = record,
@@ -59686,6 +59704,11 @@ pub async fn orch_apply_workflow(
 /// An agent that could settle its own dialog would have a gate that is
 /// theatre, which is the `questions.json` boundary and its reason.
 ///
+/// `value` carries a `select`/`input`/`editor` answer, `confirmed` a
+/// `confirm` one, and neither means a cancel. Exactly one of the two may be
+/// set; both together is a refusal rather than a precedence rule, because a
+/// caller that supplied both did not know which dialog it was answering.
+///
 /// `async`, so constraint 10 does not apply the way it does to a sync command:
 /// the work runs on the blocking pool through `run_blocking`, not inline on
 /// the webview thread.
@@ -59695,9 +59718,7 @@ pub async fn orch_answer_pane_ui(
     group_id: String,
     agent_id: String,
     request: String,
-    /// `select`/`input`/`editor` answer text, or `None` for a cancel.
     value: Option<String>,
-    /// `confirm` answer, or `None` when the dialog is not a confirm.
     confirmed: Option<bool>,
 ) -> Result<(), String> {
     let reg = reg_of(&app);

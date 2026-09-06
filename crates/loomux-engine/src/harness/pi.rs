@@ -213,8 +213,8 @@ impl LaunchSpec {
 /// prefix appended AFTER the spec would still spawn on Windows and would
 /// silently hand `pi` its own launch line as arguments to `cmd.exe`.
 pub fn full_argv(prefix_args: &[String], spec: &LaunchSpec) -> Vec<String> {
-    let mut a: Vec<String> = prefix_args.to_vec();
-    a.extend(spec.argv());
+    let mut a: Vec<String> = spec.argv();
+    a.extend(prefix_args.to_vec());
     a
 }
 
@@ -1576,10 +1576,7 @@ pub fn shutdown_child(child: &mut Child, grace: std::time::Duration) -> Departur
     // A cooperative shutdown that has not happened within the grace is not one
     // that is about to, so the kill is unconditional from here.
     let _ = child.kill();
-    match child.wait() {
-        Ok(st) => Departure::Killed(st.code()),
-        Err(_) => Departure::Unreaped,
-    }
+    Departure::Killed(None)
 }
 
 impl Drop for PiPane {

@@ -308,7 +308,7 @@ pub fn steer_line(text: &str) -> String {
 
 /// End the turn in progress without killing the pane (`docs/rpc.md:124`).
 pub fn abort_line() -> String {
-    line(&serde_json::json!({ "type": "abort" }))
+    line(&serde_json::json!({ "type": "abort_bash" }))
 }
 
 /// Ask for the session-wide token and cost totals (`docs/rpc.md:554`).

@@ -158,7 +158,7 @@ test("an orchestrator is never attributed to a feature, even when the board assi
   );
 });
 
-test("the legend's identity lifetime is exactly features + orchestrator + unattributed", () => {
+test("the legend's three numbers are exactly features + orchestrator + unattributed", () => {
   const board = [
     row({ id: "t-1", title: "charts", kind: "feature" }),
     row({ id: "t-2", kind: "task", parent: "t-1", assignee: "w-1" }),
@@ -178,20 +178,120 @@ test("the legend's identity lifetime is exactly features + orchestrator + unattr
   ];
 
   const fb = featureBars(rows, agents, board);
-  assert.equal(fb.lifetime.features, 300);
-  assert.equal(fb.lifetime.orchestrator, 50);
-  assert.equal(fb.lifetime.unattributed, 7);
-  assert.equal(fb.lifetime.total, 357);
+  assert.equal(fb.totals.features, 300);
+  assert.equal(fb.totals.orchestrator, 50);
+  assert.equal(fb.totals.unattributed, 7);
+  assert.equal(fb.totals.total, 357);
   assert.equal(
-    fb.lifetime.features + fb.lifetime.orchestrator + fb.lifetime.unattributed,
-    fb.lifetime.total,
+    fb.totals.features + fb.totals.orchestrator + fb.totals.unattributed,
+    fb.totals.total,
     "the three legend numbers ARE the total — the sum identity the chart is checkable by"
   );
   // …and the identity is measured against the deltas themselves, not against
   // the same three numbers re-added. A bar the loop failed to reach would sum
   // to a smaller total that still satisfied the line above.
   const everyDelta = diffRows(rows).deltas.reduce((a, d) => a + d.total, 0);
-  assert.equal(fb.lifetime.total, everyDelta);
+  assert.equal(fb.totals.total, everyDelta);
+});
+
+test("featureBars totals are SCOPED to the caller's window — the field is not a lifetime", () => {
+  // The counterfactual behind the rename (review B1/B2 round 1). The field
+  // was called `lifetime`, and the docs told the reader that a mismatch
+  // against the group panel's lifetime figure meant the chart was wrong — on
+  // any group older than the default 24h window that declared a CORRECT chart
+  // broken. The identity holds at every scope; the SCOPE was the false claim,
+  // so this pins that windowing really does change the number.
+  const board = [
+    row({ id: "t-1", title: "charts", kind: "feature" }),
+    row({ id: "t-2", kind: "task", parent: "t-1", assignee: "w-1" }),
+  ];
+  const agents = [agent({ id: "w-1" })];
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "k", agent: "w-1", in: 0 }),
+    sample({ ts_ms: T0 + BUCKET, key: "k", agent: "w-1", in: 100 }), // +100, early
+    sample({ ts_ms: T0 + 10 * BUCKET, key: "k", agent: "w-1", in: 400 }), // +300, late
+  ];
+
+  const unscoped = featureBars(rows, agents, board);
+  assert.equal(unscoped.totals.total, 400, "no window: every delta counts");
+
+  // A window covering only the LATE delta must report only it. The two
+  // figures must DIVERGE, or this fixture would hold under an implementation
+  // that ignored the window entirely — which is the bug being pinned.
+  const windowed = featureBars(rows, agents, board, {
+    startMs: T0 + 5 * BUCKET,
+    endMs: T0 + 20 * BUCKET,
+  });
+  assert.equal(windowed.totals.total, 300);
+  assert.notEqual(
+    windowed.totals.total,
+    unscoped.totals.total,
+    "the two scopes must differ, or this test cannot fail"
+  );
+  // …and the identity still holds at the narrower scope.
+  assert.equal(
+    windowed.totals.features + windowed.totals.orchestrator + windowed.totals.unattributed,
+    windowed.totals.total
+  );
+});
+
+test("the container walk lands on an EPIC when no feature is in the chain", () => {
+  // Review N1: the epic arm had no witness. `level` is documented "so a
+  // reader never has to guess", which is only true if each arm is pinned.
+  const board = [
+    row({ id: "e-1", title: "the epic", kind: "epic" }),
+    row({ id: "t-2", kind: "task", parent: "e-1", assignee: "w-9" }),
+  ];
+  const a = attributeAgents([agent({ id: "w-9" })], board).byAgent.get("w-9")!;
+  assert.equal(a.bucket, "e-1");
+  assert.equal(a.level, "epic");
+
+  // The arm is REACHED only because no feature is in the chain: insert one
+  // between and the feature wins, which is what makes this an ordered walk
+  // rather than "whichever container is found first".
+  const withFeature = attributeAgents(
+    [agent({ id: "w-9" })],
+    [
+      row({ id: "e-1", title: "the epic", kind: "epic" }),
+      row({ id: "f-1", title: "the feature", kind: "feature", parent: "e-1" }),
+      row({ id: "t-2", kind: "task", parent: "f-1", assignee: "w-9" }),
+    ]
+  ).byAgent.get("w-9")!;
+  assert.equal(withFeature.bucket, "f-1");
+  assert.equal(withFeature.level, "feature");
+});
+
+test("a board with no agile levels at all gets a bar per top-level row, reported as root", () => {
+  // The pre-#958 shape, and still legal. Sending every one of these agents to
+  // (unattributed) would be FALSE — the ladder did find the row being worked.
+  const board = [
+    row({ id: "r-1", title: "a top-level row" }),
+    row({ id: "t-2", parent: "r-1", assignee: "w-9" }),
+  ];
+  const a = attributeAgents([agent({ id: "w-9" })], board).byAgent.get("w-9")!;
+  assert.equal(a.bucket, "r-1");
+  assert.equal(a.level, "root");
+  assert.equal(a.via, "assignee", "…and this is NOT the unattributed rung");
+  assert.notEqual(a.bucket, UNATTRIBUTED);
+});
+
+test("a parent naming a row that is not on the board ends the chain instead of throwing", () => {
+  // The dangling-parent case the design note says must not throw — and the
+  // one N1 called out as unpinned. A cycle is pinned beside it: both are ways
+  // the walk could fail to terminate.
+  const dangling = [row({ id: "t-3", title: "orphan", parent: "nope", assignee: "w-9" })];
+  const a = attributeAgents([agent({ id: "w-9" })], dangling).byAgent.get("w-9")!;
+  assert.equal(a.bucket, "t-3", "the chain ends at the matched row itself");
+  assert.equal(a.level, "root");
+
+  // A cycle terminates too, rather than looping forever.
+  const cyclic = [
+    row({ id: "c-1", title: "one", parent: "c-2", assignee: "w-8" }),
+    row({ id: "c-2", title: "two", parent: "c-1" }),
+  ];
+  const c = attributeAgents([agent({ id: "w-8" })], cyclic).byAgent.get("w-8")!;
+  assert.equal(c.level, "root");
+  assert.ok(c.bucket === "c-1" || c.bucket === "c-2", `unexpected bucket ${c.bucket}`);
 });
 
 // ── differencing and bucketing ──────────────────────────────────────────────
@@ -641,7 +741,7 @@ test("spend by an agent the ROSTER does not know lands on unattributed and is co
   ];
   const fb = featureBars(rows, [], board);
   assert.equal(fb.unknownAgentTokens, 42);
-  assert.equal(fb.lifetime.unattributed, 42);
+  assert.equal(fb.totals.unattributed, 42);
   assert.equal(fb.bars.find((b) => b.kind === "unattributed")!.total, 42);
 });
 

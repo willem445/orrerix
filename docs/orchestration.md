@@ -1213,9 +1213,12 @@ discover:
   where its real spend is visible.
 - **Spend the chart cannot place goes to `(unattributed)`** — the first bar,
   and never hidden. The legend prints the identity the whole chart is
-  checkable by: *features + orchestrator + unattributed = lifetime*. If those
-  three do not add up to your group panel's figure, the chart is wrong and you
-  can see that it is.
+  checkable by: *features + orchestrator + unattributed = total*, and the
+  total says its own scope (`total (24h)`, `total (all time)`). Those three
+  always add up, at whatever window you have selected. **Comparing them with
+  the group panel's lifetime figure only makes sense under the `all`
+  preset** — every other window is a slice, so a smaller number there is the
+  window doing its job, not a broken chart.
 - **History starts when this feature was deployed.** The series is sampled
   from what loomux already computes each tick; nothing is rebuilt from your
   agents' transcripts. So the panel prints the instant its history begins

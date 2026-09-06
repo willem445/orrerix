@@ -363,9 +363,20 @@ board does not", since the roster is group-wide and includes exited agents, so
 a miss there is a real hole rather than an unlabelled one.
 
 The legend prints the identity the chart is checkable by:
-`features + orchestrator + unattributed = lifetime`. Its test asserts the sum
+`features + orchestrator + unattributed = total`. Its test asserts the sum
 against the DELTAS themselves and not against the same three numbers re-added,
 because a bar the loop failed to reach would satisfy the weaker form.
+
+**That total is scoped to the caller's range, and the field is named `totals`
+rather than `lifetime` for exactly that reason.** `featureBars` filters on
+`opts.startMs`/`endMs` and the panel passes its selected window (24 h by
+default), so only an unwindowed call — or the panel's `all` preset — produces
+a group lifetime. The earlier name invited a comparison with the group panel's
+`lifetime_tokens`, which is the whole series: following it on any group older
+than the default window declared a CORRECT chart wrong. The legend now carries
+its scope in the label, and `featureBars totals are SCOPED to the caller's
+window` pins the divergence so the claim cannot go quietly false again
+(review round 1, B2).
 
 ### Differencing, and why the grid is dense
 

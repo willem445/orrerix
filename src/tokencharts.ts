@@ -519,7 +519,7 @@ export function diffRows(rows: readonly SeriesRowLike[]): DiffResult {
   return { deltas, baselineOnlyKeys, resets };
 }
 
-// ── the series keys (the legend's identity lifetime) ────────────────────────
+// ── the series keys (the legend's identity axis) ────────────────────────────
 
 export interface SeriesKeyInfo {
   /** `block/cli`, or just `block` when the CLI split is collapsed. */
@@ -1018,10 +1018,20 @@ export interface FeatureBar {
 
 export interface FeatureBars {
   bars: FeatureBar[];
-  /** The legend's three numbers, plus the total they must sum to. The identity
-   *  `features + orchestrator + unattributed === total` is what makes the
-   *  chart checkable against the group panel's own lifetime figure. */
-  lifetime: { features: number; orchestrator: number; unattributed: number; total: number };
+  /** The legend's three numbers, plus the total they must sum to.
+   *
+   *  **Scoped to the range the CALLER asked for**, which is why this is not
+   *  called `lifetime`. `opts.startMs`/`endMs` filter the deltas that reach
+   *  these figures, and the panel passes its selected window (24 h by
+   *  default) — so only an unwindowed call, or the panel's `all` preset,
+   *  produces a group lifetime. Naming it `lifetime` made a windowed figure
+   *  look comparable with the group panel's `lifetime_tokens`, which is the
+   *  whole series, and a reader following that comparison would declare a
+   *  correct chart wrong on any group older than the default window.
+   *
+   *  The identity `features + orchestrator + unattributed === total` holds
+   *  at every scope and is what the chart is internally checkable by. */
+  totals: { features: number; orchestrator: number; unattributed: number; total: number };
   attribution: Attribution;
   /** Tokens on deltas whose agent is on NO roster row at all — folded into
    *  `(unattributed)` and counted separately, because "the roster does not know
@@ -1157,7 +1167,7 @@ export function featureBars(
 
   return {
     bars: ordered,
-    lifetime: {
+    totals: {
       features,
       orchestrator,
       unattributed,

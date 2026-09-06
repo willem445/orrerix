@@ -456,12 +456,29 @@ export class TokenChartsView {
 
   /** The window the presets resolve to, against the data rather than the
    *  clock alone: "all" spans the series itself, and every preset is clamped
-   *  so a window wider than the history does not draw a mile of empty grid. */
+   *  so a window wider than the history does not draw a mile of empty grid.
+   *
+   *  **The extent is FOLDED, never spread.** `Math.min(...rows)` is a spread
+   *  onto the call stack and throws `RangeError` past ~125k elements
+   *  (measured on this repo's Node: 124,000 fine, 125,000 throws). This runs
+   *  at the top of every `render()`, before any guard, over a file that is
+   *  append-only and never rotated — so the spread form was not a slow path,
+   *  it was a date on which the panel freezes permanently and never recovers,
+   *  because the file cannot shrink back under the limit. `scorecardColumns`
+   *  folds its own floor for exactly this reason and says so; this is the
+   *  same operation and takes the same shape. */
   private resolveWindow(rows: readonly UsageSeriesRow[]): { startMs: number; endMs: number } {
     const now = Date.now();
-    const stamps = rows.map((r) => r.ts_ms).filter((t) => Number.isFinite(t));
-    const oldest = stamps.length > 0 ? Math.min(...stamps) : now - DEFAULT_BUCKET_MS;
-    const newest = stamps.length > 0 ? Math.max(...stamps) : now;
+    let lo: number | null = null;
+    let hi: number | null = null;
+    for (const r of rows) {
+      const t = r.ts_ms;
+      if (!Number.isFinite(t)) continue;
+      if (lo === null || t < lo) lo = t;
+      if (hi === null || t > hi) hi = t;
+    }
+    const oldest = lo ?? now - DEFAULT_BUCKET_MS;
+    const newest = hi ?? now;
     const preset = WINDOWS.find((w) => w.id === this.windowId) ?? WINDOWS[0];
     if (preset.spanMs === null) return { startMs: oldest, endMs: Math.max(newest, oldest) };
     const endMs = Math.max(newest, now);
@@ -543,8 +560,14 @@ export class TokenChartsView {
   }
 
   /** The legend, which is ALWAYS present for two or more series — identity is
-   *  never carried by colour alone — and which prints the three-number
-   *  lifetime identity beside it. */
+   *  never carried by colour alone — and which prints the three-number split
+   *  beside it.
+   *
+   *  The total carries its own SCOPE in its label. These figures cover the
+   *  selected window, not the group's lifetime, and the two are only the
+   *  same under the `all` preset — so the label says which, rather than
+   *  leaving a reader to compare a 24 h figure against the group panel's
+   *  lifetime one and conclude the chart is broken. */
   private renderLegend(bars: FeatureBars, series: BucketedSeries): void {
     this.legendEl.replaceChildren();
     if (series.keys.length === 0) return;
@@ -556,17 +579,28 @@ export class TokenChartsView {
       s.append(el("span", "tokens-lifetime-value", fmtTokens(v)));
       return s;
     };
-    totals.append(num("features", bars.lifetime.features, "features"));
+    totals.append(num("features", bars.totals.features, "features"));
     totals.append(el("span", "tokens-lifetime-op", "+"));
-    totals.append(num("orchestrator", bars.lifetime.orchestrator, "orchestrator"));
+    totals.append(num("orchestrator", bars.totals.orchestrator, "orchestrator"));
     totals.append(el("span", "tokens-lifetime-op", "+"));
-    totals.append(num("unattributed", bars.lifetime.unattributed, "unattributed"));
+    totals.append(num("unattributed", bars.totals.unattributed, "unattributed"));
     totals.append(el("span", "tokens-lifetime-op", "="));
-    totals.append(num("lifetime", bars.lifetime.total, "total"));
+    // The scope is IN the label, because the figure is only a lifetime under
+    // the `all` preset and a reader has no other way to tell.
+    const allWindow = this.windowId === "all";
+    const scopeLabel = allWindow
+      ? "all time"
+      : (WINDOWS.find((w) => w.id === this.windowId)?.label ?? this.windowId);
+    totals.append(num(`total (${scopeLabel})`, bars.totals.total, "total"));
     totals.title =
-      "Every token in this window, split three ways. An orchestrator's spend is " +
-      "group-wide by construction — there is no per-turn PR attribution for one — " +
-      "and unattributed is what no rung of the ladder could place.";
+      `Every token in the ${scopeLabel} window, split three ways. An orchestrator's ` +
+      "spend is group-wide by construction — there is no per-turn PR attribution " +
+      "for one — and unattributed is what no rung of the ladder could place." +
+      (allWindow
+        ? " This is the whole series, so it is the figure the group panel's own " +
+          "lifetime total is comparable with."
+        : " This is the SELECTED WINDOW, not the group's lifetime — switch to " +
+          "'all' before comparing it with the group panel's lifetime total.");
     this.legendEl.append(totals);
 
     const keys = el("div", "tokens-legend-keys");
@@ -815,10 +849,15 @@ export class TokenChartsView {
   /** The stacked bars: one row per feature, plus the two group-wide bars. */
   private renderBars(bars: FeatureBars): void {
     this.barsEl.replaceChildren();
-    if (bars.lifetime.total === 0) return;
+    if (bars.totals.total === 0) return;
 
     this.barsEl.append(el("div", "tokens-section-title", "tokens per feature"));
-    const max = Math.max(...bars.bars.map((b) => b.total), 1);
+    // Folded, not spread, for the same reason `resolveWindow` is: the bar
+    // list is one entry per BOARD feature plus two, so it is caller data with
+    // no ceiling of its own. Cheaper to fold than to argue about how big a
+    // task board may get.
+    let max = 1;
+    for (const b of bars.bars) if (b.total > max) max = b.total;
 
     for (const bar of bars.bars) {
       const rowEl = el("div", `tokens-bar-row kind-${bar.kind}`);

@@ -50666,6 +50666,23 @@ impl OrchRegistry {
                 block.id, SUPPORTED_CLIS.join(", ")
             ));
         }
+        // #2850 S3b: the SECOND ask of the `driver:` rule, against the cli
+        // `cli_of` just resolved rather than the one the block spelled.
+        //
+        // `parse_workflow` cannot make this check for a block with no `cli:`
+        // of its own: `caps` is `None` there, so `driver: structured` under a
+        // workflow-level `cli: claude` parses CLEAN and arrives here. That is
+        // the trigger this check exists for — not a hand-edited group.json,
+        // though it catches one of those too, the same way `cli_can_host` and
+        // the SUPPORTED_CLIS guard above are each asked twice.
+        //
+        // Refusing is the honest outcome: a structured block that spawned a
+        // PTY pane anyway would be the app quietly giving the human a
+        // different thing from what their workflow file asked for.
+        // The `?` IS the behaviour here: this commit refuses, and the
+        // resolved harness is bound by the spawn arm that uses it.
+        workflow::structured_harness_for(block.driver.as_deref(), cli)
+            .map_err(|e| format!("guardrail: block {} — {e}", block.id))?;
         let cli = cli.to_string();
         let model = workflow::model_of(&block, &group.guardrails.agent_cli).to_string();
 

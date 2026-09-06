@@ -1959,9 +1959,9 @@ loomux-cheap-tier`), five persona files, two workers and two reviewer lanes:
 
 | block | kind | cli | model | what it is for |
 |---|---|---|---|---|
-| `worker-std` | worker | opencode | `openrouter/z-ai/glm-5.3-flash` | the DEFAULT worker: briefs the orchestrator can write literally — exact files, commands and acceptance checks. Not for work whose deliverable is evidence about itself |
+| `worker-std` | worker | pi | `openrouter/z-ai/glm-5.3-flash` (thinking `medium`) | the DEFAULT worker: briefs the orchestrator can write literally — exact files, commands and acceptance checks. Not for work whose deliverable is evidence about itself |
 | `worker-adv` | worker | claude | opus | from the start on a design-shaped issue, on work whose deliverable is EVIDENCE ABOUT ITSELF (a sweep and its population, a coverage or residual claim), or after `worker-std` failed the same finding twice |
-| `rev-std` | reviewer | opencode | `openrouter/z-ai/glm-5.3-flash` | EVERY round: every finding carries a repro; iterates with the worker to PASS on a final body |
+| `rev-std` | reviewer | pi | `openrouter/z-ai/glm-5.3-flash` (thinking `high`) | EVERY round: every finding carries a repro; iterates with the worker to PASS on a final body |
 | `rev-final` | reviewer | claude | opus | ONCE, last, after `rev-std` passed: validates the work **and** the review |
 | `process` | worker (`role_hint: process`) | claude | opus | the post-merge process-pro |
 

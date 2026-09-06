@@ -65,13 +65,16 @@ test("the roster is the one the repo means to run", () => {
   // excluded from this default-tier pin.
   const tiers = workflow.blocks.filter((b) => b.kind === "worker" && !b.role_hint);
   assert.deepEqual(
-    tiers.map((b) => [b.id, b.cli, b.model]),
+    tiers.map((b) => [b.id, b.cli, b.model, b.effort ?? ""]),
     [
-      ["worker-std", "opencode", "openrouter/z-ai/glm-5.3-flash"],
-      ["worker-adv", "claude", "opus"],
+      ["worker-std", "pi", "openrouter/z-ai/glm-5.3-flash", "medium"],
+      ["worker-adv", "claude", "opus", ""],
     ],
     "the tiers are the demo: a cheap default worker, and a strong one for work with judgment in it"
   );
+  // `effort` rides beside the model (#2817) because the thinking level is the
+  // load-bearing axis the cheap tier gained on pi; `""` reads as "the CLI's own
+  // default" for a block that declares none (worker-adv on claude has none).
   // process (#324): role_hint pairs with the kind it requires — the worker-side
   // half of that rule is exercised end to end by this real file. (The
   // planner-side half — role_hint: advisor — moved to the synthetic fixture
@@ -87,10 +90,10 @@ test("the roster is the one the repo means to run", () => {
   // does.
   const reviewers = workflow.blocks.filter((b) => b.kind === "reviewer");
   assert.deepEqual(
-    reviewers.map((b) => [b.id, b.cli, b.model]),
+    reviewers.map((b) => [b.id, b.cli, b.model, b.effort ?? ""]),
     [
-      ["rev-std", "opencode", "openrouter/z-ai/glm-5.3-flash"],
-      ["rev-final", "claude", "opus"],
+      ["rev-std", "pi", "openrouter/z-ai/glm-5.3-flash", "high"],
+      ["rev-final", "claude", "opus", ""],
     ],
     "the every-round lane is declared first; the strong final validator runs once, last"
   );
@@ -100,18 +103,25 @@ test("the roster is the one the repo means to run", () => {
     "a bare spawn_agent(kind: \"reviewer\") must reach the lane that runs every round"
   );
   // The model id is pinned in FULL on purpose, and the loop below covers every
-  // opencode block (both tiers of it — the default worker AND the every-round
-  // reviewer), not just the reviewers. `default_model("opencode", …)` is
-  // deliberately empty — opencode has no vendor-neutral alias, its ids are
-  // `provider_id/model_id` — so a block that dropped the `openrouter/` half would
-  // spawn against a model that does not exist. This asserts the `/` specifically,
-  // which is the character #722 had to widen `sanitize_model` to admit; the
-  // pattern allows a second one because this provider's own model ids carry it
-  // (`openrouter` + `z-ai/glm-5.3-flash`).
-  const viaOpencode = workflow.blocks.filter((b) => b.cli === "opencode");
-  assert.ok(viaOpencode.length > 0, "the cheap tier is the point of this roster — it must have opencode blocks");
-  for (const b of viaOpencode) {
-    assert.match(b.model ?? "", /^[a-z0-9-]+\/[a-z0-9./-]+$/, `${b.id}: an opencode model id names its provider`);
+  // pi block (both tiers of it — the default worker AND the every-round
+  // reviewer), not just the reviewers. pi's `--model` takes `provider/id`
+  // (doc/design/pi.md, the launch line), so a block that dropped the
+  // `openrouter/` half would spawn against a model that does not exist. This
+  // asserts the `/` survives the parser; the pattern allows a second one
+  // because this provider's own model ids carry it (`openrouter` +
+  // `z-ai/glm-5.3-flash`).
+  //
+  // The roster has NO opencode block since #2817, and it is a specimen of what
+  // the repo actually runs, not a second home for a CLI the cheap tier left —
+  // so the "must have opencode blocks" positive control re-expresses on pi
+  // rather than being kept vacuously. opencode's own id-shape rules keep their
+  // coverage in the synthetic fixtures (`test/modelnames.test.ts`,
+  // `test/modelcatalog.test.ts`, #722); the file's header comment still names
+  // `.orrerix/workflow.yml.orig`, but that file is not in the tree.
+  const viaPi = workflow.blocks.filter((b) => b.cli === "pi");
+  assert.ok(viaPi.length > 0, "the cheap tier is the point of this roster — it must have pi blocks");
+  for (const b of viaPi) {
+    assert.match(b.model ?? "", /^[a-z0-9-]+\/[a-z0-9./-]+$/, `${b.id}: a pi model id names its provider`);
   }
 
   const processPro = workflow.blocks.find((b) => b.id === "process");

@@ -136,6 +136,28 @@ silently joining a report class, and a new human phrasing lands in `other`.
 A wake counts toward a PR when it names that PR (§3) **and** falls inside the PR
 window.
 
+The same population carries a second histogram, the **orchestrator prompt classes**
+(S0, plan-2504 §3): the brief's classes instead of the wake ones, because the two
+answer different questions — the wake classes say what WOKE the orchestrator, these
+say what the review drive COST its pane. First match wins:
+
+| Class | Shape |
+| --- | --- |
+| `driver-gate-satisfied` | `^\[orrerix\] review drive PR #\d+: GATE SATISFIED\b` |
+| `driver-held` | `^\[orrerix\] review drive PR #\d+: HELD\b` |
+| `driver-cancelled` | `^\[orrerix\] review drive PR #\d+: CANCELLED\b` |
+| `run-completed` | `^\[orrerix\] run \d+: completed\b` |
+| `delegate-report` | `^\[orrerix\] \S+ reports (progress\|done\|approved\|request_changes\|blocked)\b` — the wake classes' report shapes, pooled: for the S0 question a reviewer's pass and a worker's done are both one delegation turn |
+| `other` | everything else — a human typing, a system notice. Reported, never dropped: an unrecognised shape surfacing here is how the next class gets added |
+
+Per PR, a class counts the same population the wakes do (names the PR, inside the
+PR window), on the card as `orchestrator.prompt_classes`. Per FILE, `group.files[]`
+carries `orch_prompt_total` + `orch_prompt_classes` over EVERY prompt row to an
+orchestrator pane — the whole-file figure the plan's §1 totals ("prompt rows into
+the orchestrator pane | 126") are checked against, and a different population from
+the per-PR one: a run-completed check names no PR and lands in the file census
+only.
+
 ### 4.2 Loop notices
 
 Two numbers, and the difference between them is a correction to #1778's S5 table.
@@ -178,12 +200,24 @@ one of them is inside it; the `--pr-meta` merge time is what a late row can fall
 | `lane_spawns` | `rd-lane-spawned` | |
 | `hand_backs` | `rd-handback` | |
 | `refused` + `refused_by_reason` | `rd-refused` | keyed on `detail.reason` |
+| `refused_cap` | `rd-refused` | the slice whose row says `cap: true` — the live-delegate-cap shape; other refusals (`already-driven`, `worker-unresumable`) stay out of it. `starved_ms_max` / `starved_ms_sum` ride the same rows; the max is `null` where no refusal measured a starvation, because "nothing measured" and "measured 0 ms" differ |
 | `held` + `held_by_reason` | `rd-held` | keyed on `detail.reason` |
 | `cancelled`, `consumed`, `satisfied`, `ci_green`, `resumed`, `pruned` | the matching `rd-*` | |
+| `lane_scope` + `lane_scope_triples` | `rd-lane-spawned` | the whole-diff / delta / body-only histogram, DEDUPED on `(pr, block, round)` — a replaced lane pane (the same block and round spawned again on a new agent after a refusal) is ONE review round, not two, so the triple counts once, under the FIRST row's scope. `lane_spawns` keeps counting rows, so rows − triples is exactly the replaced panes. An unrecognised `detail.scope` is its own `other` bucket, never folded into a known one |
+| `handback_ratio` | `rd-handback`, `rd-worker-released` | `hand_backs / workers_released`; `null`, never 0, where nothing was released — a zero would read as "no hand-backs" when the fact is "no worker pane was ever released", the exact figure plan-2504 §1's finding (b) turns on |
+| `kills_by_initiator` | `agent-kill` | the row's own `detail.initiator` (`driver-release`, `orchestrator`), keyed as written. The row carries no `pr`, so a kill reaches a card only through the agent→PR attribution (§5), and only when that attribution is a SINGLE PR; every other kill is counted once in the group's `driver_totals`, which reconciles the two: `kills_total = kills_in_cards + kills_not_in_cards`, with the agents the cards could not take named in `kills_agents_not_in_cards` |
 
 Any `rd-*` action not in that list is still counted, under its own action name, so a
 new row in the driver's vocabulary (`review-driver.md` §5.4) cannot go missing —
 it appears in the card rather than being dropped.
+
+The per-PR values pool into a top-level `driver_totals` block (`--format table`
+renders it as a total row under the per-PR one). It is the shape the S0 baseline
+table quotes, and it carries the reconciliation the cards cannot: the kill totals
+count rows, the cards count attributed single-PR kills, and both operands are
+reported. It exists because the plan-2504 §1 hand tally (issue #2811, comment
+5562317136) is quoted as session totals, and a table that cannot add up to the
+figure it is checked against is not a table — it is a quiz.
 
 ### 4.5 Orchestrator tokens
 
@@ -570,7 +604,12 @@ today is not reproducible tomorrow without a bound. `--cut <ms|iso>` drops every
 audit row and every transcript turn after an instant, which is what makes an earlier
 figure checkable: the plan's part-1 census names both its cut (`ts_ms`
 `1788315192783`) and its row count (6337), and `--cut 1788315192783` reproduces that
-row set exactly.
+row set exactly. `--from <ms|iso>` is the other end — it drops every row BEFORE an
+instant, symmetric with `--cut`, so a window with two ends is one command. The
+plan-2504 §1 session (issue #2811, comment 5562317136) is
+`--from 1788706648042 --cut 1788729593887`. Like `--cut`, `--from` cannot rewind a
+cumulative `usage.json` row; both bounds are echoed on the run as
+`inputs.from_ms` / `inputs.cut_ms`.
 
 Group-wide totals (`group.files[]`) are reported per audit file rather than pooled,
 because a generation boundary is where a rotation happened and pooling two
@@ -632,20 +671,29 @@ side_cli_disagreements[] | null, confounders[] }`.
 
 ```
 {
-  generated_ms, inputs: { audit[], usage, agents, transcript[], pr_meta, tail_min, cut_ms,
+  generated_ms, inputs: { audit[], usage, agents, transcript[], pr_meta, tail_min, cut_ms, from_ms,
                           claude_projects, backfill },
-  group:    { files: [ { path, rows, span_h, orchestrator_wakes, wakes_by_kind, ... } ] },
+  group:    { files: [ { path, rows, span_h, orchestrator_wakes, wakes_by_kind,
+                        orch_prompt_total, orch_prompt_classes, agent_kills,
+                        agent_kills_by_initiator, ... } ] },
+  driver_totals: { drives, satisfied, held, cancelled, refused, refused_cap,
+                   starved_ms_max, starved_ms_sum, lane_scope, lane_scope_rows,
+                   lane_scope_triples, hand_backs, workers_released, handback_ratio,
+                   kills_total, kills_by_initiator, kills_in_cards, kills_not_in_cards,
+                   kills_agents_not_in_cards[], orch_prompt_total, orch_prompt_classes },
   prs:      [ {
     pr, build, issue, outcome, merged_at, wall_clock_h,
     windows:      { pr: { start_ms, end_ms, end_source, tail_ms, span_h } | null,
                     loop: { start_ms, end_ms, tail_ms, span_h } | null },
-    orchestrator: { wakes_total, wakes_by_kind, loop_notices, loop_notices_any_pane_s5,
+    orchestrator: { wakes_total, wakes_by_kind, prompt_classes, loop_notices, loop_notices_any_pane_s5,
                     wake_share: { pr_wakes, window_wakes, share },
                     tokens_window, tokens_attributed },
     review:       { rounds, by_block: { <block>: { <verdict>: n } },
                     lanes: { <block>: { rounds, pass, fail, verdicts_other,
                                        rounds_to_pass, fail_rate } } },
-    driver:       { drives, lane_spawns, hand_backs, refused, held, ...,
+    driver:       { drives, lane_spawns, hand_backs, refused, refused_cap, held, ...,
+                    starved_ms_max, starved_ms_sum, lane_scope, lane_scope_triples,
+                    handback_ratio, kills_by_initiator,
                     refused_by_reason, held_by_reason },
     delegates:    { count, tokens,
                     by_block_cli: { "<block>/<cli>": { block, cli, tokens, tokens_credited, count } },
@@ -699,7 +747,18 @@ with neither a session key nor an `agent_id`.
 The #2167 backfill (§4.6) has its own corpus, `test/fixtures/orchscorecard/backfill/`,
 rather than an extra row in the shared one: the shared corpus's counters are pinned
 to the digit and a new session would move several of them for a reason unrelated to
-what those tests are about. It is the shared corpus with ONE change — `ses-13`
+what those tests are about.
+
+The S0 counters (§4.4, the prompt classes in §4.1) have their own corpus too,
+`test/fixtures/orchscorecard/s0/` — and it is the one corpus here built from REAL
+rows: audit rows lifted verbatim from this group's beta9 session, the same window
+the plan-2504 §1 hand tally was taken on. The synthetic corpora prove the SHAPE of
+a counter; the s0 corpus proves the counter reads the real row — `cap: true`,
+`starved_ms`, `scope: delta since <sha>`, the driver notice texts — exactly as the
+app writes them. Its README maps every counter to the rows that witness it, and
+the replaced-pane rows pin the dedup rule the brief asks for: two
+`rd-lane-spawned` rows on one `(pr, block, round)` triple, different scopes, one
+histogram cell under the first row's scope.It is the shared corpus with ONE change — `ses-13`
 (`w-13`, attributed to #900) carries the row the broken collector wrote, four zero
 counters under `source: "statusline"` — and its transcript sits under a
 WORKTREE-cwd project folder (`C--Projects-loomux-worktrees-agent-rev-1919`). That

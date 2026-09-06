@@ -1,0 +1,15 @@
+[
+  {
+    "id": "orch-2385",
+    "role": "orchestrator",
+    "block": "orchestrator",
+    "name": "orchestrator",
+    "name_source": "default",
+    "session": "863408c2-26ab-4a6f-8c82-43bb79776c0b",
+    "cwd": "C:\\Projects\\loomux",
+    "status": "running",
+    "updated_ms": 1788706648063,
+    "task": "",
+    "branch": null
+  }
+]

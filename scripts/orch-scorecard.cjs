@@ -87,6 +87,73 @@ function emptyWakeCounts() {
 }
 
 // ---------------------------------------------------------------------------
+// Orchestrator prompt classes — the S0 histogram (plan-2504 §3 S0, board t-769).
+//
+// The wake classes above answer "what woke the orchestrator"; these answer "what
+// did the review drive COST the orchestrator's pane", which is the row the
+// plan's §1 hand tally quotes ("prompt rows into the orchestrator pane | 126;
+// driver GATE/HELD/CANCELLED 29"). Same population — a `prompt` row whose `to`
+// is an orchestrator pane — classified by the LEADING shape of `detail.text`,
+// first match wins:
+//
+//   driver-gate-satisfied / driver-held / driver-cancelled
+//       the driver's own notices ("review drive PR #N: <state>") — the traffic
+//       the driver exists to keep OFF the orchestrator, counted separately so
+//       the before/after number for each driver change is one column.
+//   delegate-report
+//       the same "X reports …" shapes the wake classes use, pooled: for the S0
+//       question a reviewer's `reports approved` and a worker's `reports done`
+//       are both one delegation turn.
+//   run-completed
+//       a `gh run` check notice ("run <id>: completed"), the CI arm of the pane.
+//   other
+//       everything else — human-typed lines and system notices. Reported, never
+//       silently dropped: the class list is the brief's, and an unrecognised
+//       shape surfacing here is how the next class gets added.
+// ---------------------------------------------------------------------------
+
+const ORCH_PROMPT_KINDS = [
+  'driver-gate-satisfied', 'driver-held', 'driver-cancelled',
+  'delegate-report', 'run-completed', 'other',
+];
+
+const ORCH_PROMPT_SHAPES = [
+  ['driver-gate-satisfied', /^\[orrerix\] review drive PR #\d+: GATE SATISFIED\b/],
+  ['driver-held', /^\[orrerix\] review drive PR #\d+: HELD\b/],
+  ['driver-cancelled', /^\[orrerix\] review drive PR #\d+: CANCELLED\b/],
+  ['run-completed', /^\[orrerix\] run \d+: completed\b/],
+  ['delegate-report', /^\[orrerix\] \S+ reports (?:progress|done|approved|request_changes|blocked)\b/],
+];
+
+function classifyOrchPrompt(text) {
+  const t = typeof text === 'string' ? text : '';
+  for (const [kind, re] of ORCH_PROMPT_SHAPES) if (re.test(t)) return kind;
+  return 'other';
+}
+
+function emptyOrchPromptCounts() {
+  const out = {};
+  for (const k of ORCH_PROMPT_KINDS) out[k] = 0;
+  return out;
+}
+
+// The lane-scope bucket of an `rd-lane-spawned` row. The row writes the scope as
+// a rendered string ("scope: whole-diff", "scope: delta since <sha>", "scope:
+// body-only"), so the bucket is decided by the leading token after the prefix —
+// a delta's SHA is payload, not class. Anything unrecognised is `other`.
+function laneScopeBucket(scope) {
+  const t = String(scope || '').replace(/^scope: /, '');
+  if (t.startsWith('whole-diff')) return 'whole_diff';
+  if (t.startsWith('delta')) return 'delta';
+  if (t.startsWith('body-only')) return 'body_only';
+  return 'other';
+}
+
+function emptyLaneScope() {
+  return { whole_diff: 0, delta: 0, body_only: 0, other: 0 };
+}
+
+// ---------------------------------------------------------------------------
 // "Does this row name PR N?"
 //
 // Structural first: `detail.pr === N` is what every `rd-*` and `review-verdict` row
@@ -463,6 +530,7 @@ function scorePr(ctx, pr) {
   const re = prTokenRe(pr);
 
   const wakes = emptyWakeCounts();
+  const promptClasses = emptyOrchPromptCounts();
   let wakesTotal = 0;
   let windowWakes = 0; // every orchestrator wake in the window, this PR's or not
   let loopNotices = 0;
@@ -488,9 +556,24 @@ function scorePr(ctx, pr) {
     // earning its keep — a grace that fires and then parks anyway cost a round
     // for nothing, and only `rounds_grace` beside `held.review-limit` shows it.
     rounds_grace: 0,
+    // S0 (plan-2504 §3): the cap-refusal cost and the lane-scope mix, per PR.
+    // `refused_cap` is the slice of `refused` whose row says `cap: true` — the
+    // live-delegate-cap shape the plan's §1 counts; other refusals
+    // (`already-driven`, `worker-unresumable`) stay out of it. `starved_ms`
+    // rides the same rows: max and sum, `null` max where no refusal measured a
+    // starvation, because "nothing measured" and "measured 0 ms" differ.
+    refused_cap: 0, starved_ms_max: null, starved_ms_sum: 0,
+    // The lane-scope mix over `rd-lane-spawned`, DEDUPED on (pr, block, round):
+    // a replaced lane pane (the same block and round spawned again on a new
+    // agent after a refusal) is ONE review round, not two, so the histogram
+    // counts the triple once — under the FIRST row's scope. `lane_spawns` above
+    // keeps counting rows, so rows − triples is exactly the replaced panes.
+    lane_scope: emptyLaneScope(), lane_scope_triples: 0,
+    kills_by_initiator: {},
   };
   const refusedByReason = {};
   const heldByReason = {};
+  const laneScopeSeen = new Set();
   const unclassified = {};
   let rowsClassified = 0;
   // A `review-verdict` or `rd-*` row is matched STRUCTURALLY on `detail.pr`, so it is
@@ -504,6 +587,21 @@ function scorePr(ctx, pr) {
     const d = row.detail;
     const isWake = row.action === 'prompt' && d && orchIds.has(d.to);
     if (isWake && inWindow(row.ts_ms, win.pr)) windowWakes += 1;
+    // An `agent-kill` carries no `pr`, so it can only reach a card through the
+    // agent→PR attribution (§5). Kills of agents attributed to exactly one PR
+    // are that PR's; every other kill (unattributed, or split across PRs) is
+    // counted once in the group's `driver_totals`, which reconciles the two
+    // (`kills_total = kills_in_cards + kills_not_in_cards`). The initiator is
+    // the row's own field, keyed as written — an unknown initiator gets its own
+    // bucket rather than collapsing into a known one.
+    if (row.action === 'agent-kill' && d && typeof d.agent === 'string') {
+      const att = attribution.get(d.agent);
+      if (att && att.prs.size === 1 && att.prs.has(pr)) {
+        const init = typeof d.initiator === 'string' && d.initiator ? d.initiator : 'unknown';
+        driver.kills_by_initiator[init] = (driver.kills_by_initiator[init] || 0) + 1;
+      }
+      continue;
+    }
     if (!rowNamesPr(row, pr, re)) continue;
 
     // An `[orrerix]`-prefixed prompt naming the PR inside the LOOP window, delivered
@@ -518,6 +616,7 @@ function scorePr(ctx, pr) {
     if (isWake) {
       if (!inWindow(row.ts_ms, win.pr)) continue;
       wakes[classifyWake(d.text)] += 1;
+      promptClasses[classifyOrchPrompt(d.text)] += 1;
       wakesTotal += 1;
       rowsClassified += 1;
       if (inWindow(row.ts_ms, win.loop) && /^\[orrerix\]/.test(d.text || '')) loopNotices += 1;
@@ -539,10 +638,24 @@ function scorePr(ctx, pr) {
       rowsClassified += 1;
       switch (row.action) {
         case 'rd-started': driver.drives += 1; break;
-        case 'rd-lane-spawned': driver.lane_spawns += 1; break;
+        case 'rd-lane-spawned': {
+          driver.lane_spawns += 1;
+          const triple = (d.block || 'unknown') + '|' + String(d.round ?? 'unknown');
+          if (!laneScopeSeen.has(triple)) {
+            laneScopeSeen.add(triple);
+            driver.lane_scope[laneScopeBucket(d.scope)] += 1;
+            driver.lane_scope_triples += 1;
+          }
+          break;
+        }
         case 'rd-handback': driver.hand_backs += 1; break;
         case 'rd-refused':
           driver.refused += 1;
+          if (d.cap === true) driver.refused_cap += 1;
+          if (typeof d.starved_ms === 'number' && Number.isFinite(d.starved_ms)) {
+            driver.starved_ms_max = driver.starved_ms_max === null ? d.starved_ms : Math.max(driver.starved_ms_max, d.starved_ms);
+            driver.starved_ms_sum += d.starved_ms;
+          }
           refusedByReason[d.reason || 'unknown'] = (refusedByReason[d.reason || 'unknown'] || 0) + 1;
           break;
         case 'rd-held':
@@ -668,6 +781,9 @@ function scorePr(ctx, pr) {
     orchestrator: {
       wakes_total: wakesTotal,
       wakes_by_kind: wakes,
+      // The S0 prompt-class histogram: same population as `wakes_by_kind`, the
+      // brief's classes instead of the wake ones (see classifyOrchPrompt).
+      prompt_classes: promptClasses,
       loop_notices: loopNotices,
       loop_notices_any_pane_s5: loopNoticesAnyPane,
       wake_share: { pr_wakes: wakesTotal, window_wakes: windowWakes, share: round2(wakeShare) },
@@ -675,7 +791,14 @@ function scorePr(ctx, pr) {
       tokens_attributed: orchTokensAttributed,
     },
     review: { rounds: verdictsTotal, by_block: verdicts, lanes: laneStats(verdictSeq) },
-    driver: { ...driver, refused_by_reason: refusedByReason, held_by_reason: heldByReason },
+    driver: {
+      ...driver,
+      // `null`, never 0, where nothing was released: a zero would read as "no
+      // hand-backs" when the fact is "no worker pane was ever released" — the
+      // exact figure the plan's finding (b) turns on.
+      handback_ratio: driver.workers_released > 0 ? round2(driver.hand_backs / driver.workers_released) : null,
+      refused_by_reason: refusedByReason, held_by_reason: heldByReason,
+    },
     delegates: { count: delegates.length, tokens: delegateTokens, by_block_cli: byBlockCli, agents: delegates },
     share: {
       orchestrator_pct_raw: pct(orchTokens.total, orchTokens.total + delegateTokens.total),
@@ -699,8 +822,12 @@ function pct(part, whole) {
 function groupTotals(files, orchIds) {
   return files.map((f) => {
     const wakes = emptyWakeCounts();
+    const promptClasses = emptyOrchPromptCounts();
     let total = 0;
+    let orchPromptTotal = 0;
     let typed = 0;
+    let agentKills = 0;
+    const killsByInitiator = {};
     let tsFirst = null;
     let tsLast = null;
     for (const row of f.rows) {
@@ -709,8 +836,19 @@ function groupTotals(files, orchIds) {
         if (tsLast === null || row.ts_ms > tsLast) tsLast = row.ts_ms;
       }
       const d = row.detail;
+      if (row.action === 'agent-kill' && d && typeof d.agent === 'string') {
+        const init = typeof d.initiator === 'string' && d.initiator ? d.initiator : 'unknown';
+        killsByInitiator[init] = (killsByInitiator[init] || 0) + 1;
+        agentKills += 1;
+        continue;
+      }
       if (!d || !orchIds.has(d.to)) continue;
-      if (row.action === 'prompt') { wakes[classifyWake(d.text)] += 1; total += 1; }
+      if (row.action === 'prompt') {
+        wakes[classifyWake(d.text)] += 1;
+        promptClasses[classifyOrchPrompt(d.text)] += 1;
+        orchPromptTotal += 1;
+        total += 1;
+      }
       else if (row.action === 'prompt-typed') typed += 1;
     }
     return {
@@ -723,15 +861,129 @@ function groupTotals(files, orchIds) {
       orchestrator_wakes: total,
       prompt_typed_to_orchestrator: typed,
       wakes_by_kind: wakes,
+      // S0: the whole-file census the §1 control's totals come from. The prompt
+      // classes count every prompt row to an orchestrator pane (not the per-PR
+      // naming subset the cards use), and the kill census counts every
+      // `agent-kill` row by initiator — attribution-free, so it is the figure
+      // the per-PR cards must reconcile against.
+      orch_prompt_total: orchPromptTotal,
+      orch_prompt_classes: promptClasses,
+      agent_kills: agentKills,
+      agent_kills_by_initiator: killsByInitiator,
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Driver S0 totals (plan-2504 §3 S0: "per PR and as totals").
+//
+// The per-PR values pool over the cards; the kill and prompt figures pool over
+// the ROWS, because the cards see only a subset (a kill needs a single-PR
+// attribution; a per-PR prompt must name the PR) and the control table the
+// baseline is checked against counts rows. The reconciliation is part of the
+// block: kills_total = kills_in_cards + kills_not_in_cards, and the agents the
+// cards could not take are named. `--from`/`--cut` bound all of it — the
+// plan-2504 §1 session is reproducible as
+// `--from 1788706648042 --cut 1788729593887`.
+// ---------------------------------------------------------------------------
+
+function driverTotals(cards, files, rows, attribution) {
+  const t = {
+    drives: 0, satisfied: 0, held: 0, cancelled: 0, refused: 0,
+    refused_cap: 0, starved_ms_max: null, starved_ms_sum: 0,
+    lane_scope: emptyLaneScope(), lane_scope_rows: 0, lane_scope_triples: 0,
+    hand_backs: 0, workers_released: 0, handback_ratio: null,
+    kills_total: 0, kills_by_initiator: {}, kills_in_cards: 0, kills_not_in_cards: 0,
+    kills_agents_not_in_cards: [],
+    orch_prompt_total: 0, orch_prompt_classes: emptyOrchPromptCounts(),
+  };
+  for (const c of cards) {
+    const d = c.driver;
+    t.drives += d.drives;
+    t.satisfied += d.satisfied;
+    t.held += d.held;
+    t.cancelled += d.cancelled;
+    t.refused += d.refused;
+    t.refused_cap += d.refused_cap;
+    if (d.starved_ms_max !== null && (t.starved_ms_max === null || d.starved_ms_max > t.starved_ms_max)) {
+      t.starved_ms_max = d.starved_ms_max;
+    }
+    t.starved_ms_sum += d.starved_ms_sum;
+    for (const k of Object.keys(t.lane_scope)) t.lane_scope[k] += d.lane_scope[k];
+    t.lane_scope_rows += d.lane_spawns;
+    t.lane_scope_triples += d.lane_scope_triples;
+    t.hand_backs += d.hand_backs;
+    t.workers_released += d.workers_released;
+    for (const v of Object.values(d.kills_by_initiator)) t.kills_in_cards += v;
+  }
+  t.handback_ratio = t.workers_released > 0 ? round2(t.hand_backs / t.workers_released) : null;
+  const notIn = new Set();
+  for (const row of rows) {
+    if (row.action !== 'agent-kill' || !row.detail || typeof row.detail.agent !== 'string') continue;
+    const init = typeof row.detail.initiator === 'string' && row.detail.initiator ? row.detail.initiator : 'unknown';
+    t.kills_by_initiator[init] = (t.kills_by_initiator[init] || 0) + 1;
+    t.kills_total += 1;
+    const att = attribution.get(row.detail.agent);
+    if (!(att && att.prs.size === 1)) notIn.add(row.detail.agent);
+  }
+  t.kills_not_in_cards = t.kills_total - t.kills_in_cards;
+  t.kills_agents_not_in_cards = [...notIn].sort();
+  for (const f of files) {
+    t.orch_prompt_total += f.orch_prompt_total;
+    for (const k of Object.keys(t.orch_prompt_classes)) t.orch_prompt_classes[k] += f.orch_prompt_classes[k];
+  }
+  return t;
+}
+
+function renderDriverTable(cards, totals) {
+  const lines = [
+    '| PR | drives | satisfied | held | refused (cap) | starved max ms | starved sum ms | scope whole/delta/body | rows→triples | hand-backs | worker-released | hb:rel | kills dr/orch | prompts G/H/C |',
+    '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+  ];
+  for (const c of cards) {
+    const d = c.driver;
+    const k = d.kills_by_initiator;
+    const p = c.orchestrator.prompt_classes;
+    lines.push('| #' + c.pr
+      + ' | ' + d.drives
+      + ' | ' + d.satisfied
+      + ' | ' + d.held
+      + ' | ' + d.refused + ' (' + d.refused_cap + ')'
+      + ' | ' + (d.starved_ms_max === null ? '—' : d.starved_ms_max)
+      + ' | ' + (d.starved_ms_sum === 0 && d.starved_ms_max === null ? '—' : d.starved_ms_sum)
+      + ' | ' + d.lane_scope.whole_diff + '/' + d.lane_scope.delta + '/' + d.lane_scope.body_only
+      + ' | ' + d.lane_spawns + '→' + d.lane_scope_triples
+      + ' | ' + d.hand_backs
+      + ' | ' + d.workers_released
+      + ' | ' + (d.handback_ratio === null ? '—' : d.handback_ratio)
+      + ' | ' + (k['driver-release'] || 0) + '/' + (k.orchestrator || 0)
+      + ' | ' + p['driver-gate-satisfied'] + '/' + p['driver-held'] + '/' + p['driver-cancelled']
+      + ' |');
+  }
+  const kc = (k) => (k['driver-release'] || 0) + '/' + (k.orchestrator || 0);
+  const pc = (p) => p['driver-gate-satisfied'] + '/' + p['driver-held'] + '/' + p['driver-cancelled'];
+  lines.push('| **total** | ' + totals.drives
+    + ' | ' + totals.satisfied
+    + ' | ' + totals.held
+    + ' | ' + totals.refused + ' (' + totals.refused_cap + ')'
+    + ' | ' + (totals.starved_ms_max === null ? '—' : totals.starved_ms_max)
+    + ' | ' + totals.starved_ms_sum
+    + ' | ' + totals.lane_scope.whole_diff + '/' + totals.lane_scope.delta + '/' + totals.lane_scope.body_only
+    + ' | ' + totals.lane_scope_rows + '→' + totals.lane_scope_triples
+    + ' | ' + totals.hand_backs
+    + ' | ' + totals.workers_released
+    + ' | ' + (totals.handback_ratio === null ? '—' : totals.handback_ratio)
+    + ' | ' + kc(totals.kills_by_initiator)
+    + ' | ' + pc(totals.orch_prompt_classes)
+    + ' |');
+  return lines.join('\n');
 }
 
 // ---------------------------------------------------------------------------
 // Loading.
 // ---------------------------------------------------------------------------
 
-function readJsonl(pathname, cutMs) {
+function readJsonl(pathname, cutMs, fromMs) {
   const rows = [];
   let parseErrors = 0;
   const text = fs.readFileSync(pathname, 'utf8');
@@ -739,13 +991,14 @@ function readJsonl(pathname, cutMs) {
     if (!line.trim()) continue;
     let row;
     try { row = JSON.parse(line); } catch { parseErrors += 1; continue; }
+    if (fromMs !== null && fromMs !== undefined && typeof row.ts_ms === 'number' && row.ts_ms < fromMs) continue;
     if (cutMs !== null && typeof row.ts_ms === 'number' && row.ts_ms > cutMs) continue;
     rows.push(row);
   }
   return { path: pathname, rows, parseErrors };
 }
 
-async function readTranscript(pathname, cutMs) {
+async function readTranscript(pathname, cutMs, fromMs) {
   const entries = [];
   const rl = readline.createInterface({
     input: fs.createReadStream(pathname, { encoding: 'utf8' }),
@@ -773,6 +1026,7 @@ async function readTranscript(pathname, cutMs) {
   }
   const deduped = dedupeTranscriptTurns(entries);
   if (cutMs !== null) deduped.turns = deduped.turns.filter((t) => t.ts_ms <= cutMs);
+  if (fromMs !== null && fromMs !== undefined) deduped.turns = deduped.turns.filter((t) => t.ts_ms >= fromMs);
   return { path: pathname, lines, assistant_usage_lines: entries.length, ...deduped };
 }
 
@@ -1607,7 +1861,7 @@ const HEURISTICS = [
 function parseArgs(argv) {
   const opts = {
     audit: [], transcript: [], usage: null, agents: null, prMeta: null,
-    prs: [], all: false, tailMin: DEFAULT_TAIL_MIN, format: 'json', cut: null, help: false,
+    prs: [], all: false, tailMin: DEFAULT_TAIL_MIN, format: 'json', cut: null, from: null, help: false,
     claudeProjects: null, backfill: true, splitAt: null, splitLabel: null, sides: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -1639,6 +1893,10 @@ function parseArgs(argv) {
       }
       case '--split-at': opts.splitAt = /^\d+$/.test(String(argv[i + 1])) ? Number(next()) : Date.parse(next()); break;
       case '--cut': opts.cut = /^\d+$/.test(String(argv[i + 1])) ? Number(next()) : Date.parse(next()); break;
+      // Symmetric with --cut: bounds the log BACKWARD, so a historical window
+      // with two ends is one command (plan-2504 §1's session is
+      // --from 1788706648042 --cut 1788729593887).
+      case '--from': opts.from = /^\d+$/.test(String(argv[i + 1])) ? Number(next()) : Date.parse(next()); break;
       case '--help': case '-h': opts.help = true; break;
       default: throw new Error('unknown argument: ' + a);
     }
@@ -1652,7 +1910,7 @@ const USAGE_TEXT = `orch-scorecard — per-PR orchestration cost from existing l
       --usage <usage.json> --agents <agents.json>
       [--transcript <session.jsonl>]... [--pr-meta <meta.json>]
       (--pr <n> [--pr <n>]... | --all)
-      [--tail-min 10] [--cut <ms|iso>] [--format json|table|both|cli-table]
+      [--tail-min 10] [--cut <ms|iso>] [--from <ms|iso>] [--format json|table|both|cli-table]
       [--split-at <ms|iso>] [--split-label <text>] [--sides <before>:<after>]
       [--claude-projects <dir>] [--no-backfill]
 
@@ -1661,6 +1919,10 @@ const USAGE_TEXT = `orch-scorecard — per-PR orchestration cost from existing l
                without merged_at a PR window ends at its last rd row (coverage says so).
   --cut        drop audit rows and transcript turns after this instant; reproduces a
                historical measurement on a log that has since grown.
+  --from       drop audit rows and transcript turns BEFORE this instant — the other
+               end of --cut, so a window with two ends (the plan-2504 §1 session:
+               --from 1788706648042 --cut 1788729593887) is one command. Like --cut
+               it cannot rewind a cumulative usage.json row.
   --claude-projects
                where Claude Code keeps its per-project transcript folders
                (default ~/.claude/projects). A usage.json row with four zero
@@ -1693,8 +1955,9 @@ async function main(argv) {
   if (!opts.usage || !opts.agents) throw new Error('--usage and --agents are required');
 
   const cut = Number.isFinite(opts.cut) ? opts.cut : null;
+  const from = Number.isFinite(opts.from) ? opts.from : null;
   const tailMs = opts.tailMin * 60000;
-  const files = opts.audit.map((p) => readJsonl(p, cut));
+  const files = opts.audit.map((p) => readJsonl(p, cut, from));
   const rows = files.flatMap((f) => f.rows).sort((a, b) => (a.ts_ms || 0) - (b.ts_ms || 0));
   const agents = JSON.parse(fs.readFileSync(opts.agents, 'utf8'));
   const rawUsage = JSON.parse(fs.readFileSync(opts.usage, 'utf8'));
@@ -1713,7 +1976,7 @@ async function main(argv) {
   const sessionAgents = indexSessionAgents(agents);
 
   const transcripts = [];
-  for (const p of opts.transcript) transcripts.push(await readTranscript(p, cut));
+  for (const p of opts.transcript) transcripts.push(await readTranscript(p, cut, from));
   const transcriptTurns = transcripts.flatMap((t) => t.turns).sort((a, b) => a.ts_ms - b.ts_ms);
 
   let prs = opts.prs.slice();
@@ -1758,7 +2021,7 @@ async function main(argv) {
     generated_ms: Date.now(),
     inputs: {
       audit: opts.audit, usage: opts.usage, agents: opts.agents,
-      transcript: opts.transcript, pr_meta: opts.prMeta, tail_min: opts.tailMin, cut_ms: cut,
+      transcript: opts.transcript, pr_meta: opts.prMeta, tail_min: opts.tailMin, cut_ms: cut, from_ms: from,
       claude_projects: projectsRoot, backfill: opts.backfill,
     },
     group: { files: groupTotals(files, orchIds) },
@@ -1786,10 +2049,11 @@ async function main(argv) {
       heuristics: HEURISTICS,
     },
   };
+  out.driver_totals = driverTotals(cards, out.group.files, rows, attribution);
 
   if (opts.format === 'json' || opts.format === 'both') process.stdout.write(JSON.stringify(out, null, 2) + '\n');
   if (opts.format === 'table' || opts.format === 'both') {
-    process.stdout.write('\n' + renderPrTable(cards) + '\n\n' + renderGroupTable(out.group.files) + '\n');
+    process.stdout.write('\n' + renderPrTable(cards) + '\n\n' + renderDriverTable(cards, out.driver_totals) + '\n\n' + renderGroupTable(out.group.files) + '\n');
   }
   if (opts.format === 'cli-table') {
     if (!Number.isFinite(opts.splitAt)) throw new Error('--format cli-table needs --split-at <ms|iso>');
@@ -1809,6 +2073,8 @@ module.exports = {
   resolveDelegateCli, indexCliConflicts, blockCliKey, laneStats, MEDIAN_MIN_N, medianOf, statCell,
   laneCliOf, creditedFor, cliTable, renderCliTable, cliAxisCoverage, coverageFloor,
   CLI_TABLE_COLUMNS, CONFOUNDERS,
+  ORCH_PROMPT_KINDS, classifyOrchPrompt, emptyOrchPromptCounts,
+  laneScopeBucket, emptyLaneScope, driverTotals, renderDriverTable,
   claudeTranscriptIndex, backfillZeroUsageRows, defaultClaudeProjectsRoot,
   DEFAULT_TAIL_MIN, main,
 };

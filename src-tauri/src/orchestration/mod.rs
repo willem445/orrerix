@@ -44037,8 +44037,8 @@ impl OrchRegistry {
             // Set HERE, in the initializer, and not on each arm's way out:
             // this function has an early `return snap` per source, so a
             // per-arm assignment is a field the next arm forgets (#2011).
-            block: entry.block.clone(),
-            cli: cli.to_string(),
+            block: String::new(),
+            cli: String::new(),
             input_tokens: 0,
             output_tokens: 0,
             cache_creation_tokens: 0,

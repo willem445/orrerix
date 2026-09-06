@@ -833,18 +833,51 @@ test('cli: two rows disagreeing under one key resolve to `mixed`, never to the l
 
 test('cli: the spawn-row rung answers only where the source did not, and says so', () => {
   const spawnOnly = { get: (a: string) => (a === 'w-1' ? 'opencode' : undefined) };
-  // Rung 1 wins outright: a usage source that resolved is never second-guessed
-  // by a spawn row, which records what was LAUNCHED rather than what ran.
-  assert.deepEqual(sc.resolveDelegateCli('pi', 'w-1', spawnOnly),
+  // The usage source wins outright on an UNSHARED session: it names the record
+  // the collector actually folded, where the spawn row names only what was
+  // launched.
+  assert.deepEqual(sc.resolveDelegateCli('pi', 'w-1', spawnOnly, false),
     { cli: 'pi', cli_via: 'usage-source' });
-  // Rung 2 fires only on `unknown`.
-  assert.deepEqual(sc.resolveDelegateCli('unknown', 'w-1', spawnOnly),
+  // The spawn-row rung fires only on `unknown`.
+  assert.deepEqual(sc.resolveDelegateCli('unknown', 'w-1', spawnOnly, false),
     { cli: 'opencode', cli_via: 'spawn-row' });
-  // And the third outcome is REPORTED, never a guess filled in from a roster.
-  assert.deepEqual(sc.resolveDelegateCli('unknown', 'w-2', spawnOnly),
+  // And the last outcome is REPORTED, never a guess filled in from a roster.
+  assert.deepEqual(sc.resolveDelegateCli('unknown', 'w-2', spawnOnly, false),
     { cli: 'unknown', cli_via: null });
-  assert.deepEqual(sc.resolveDelegateCli(undefined, 'w-2', spawnOnly),
+  assert.deepEqual(sc.resolveDelegateCli(undefined, 'w-2', spawnOnly, false),
     { cli: 'unknown', cli_via: null });
+});
+
+test('cli: on a session shared across CLIs the PER-AGENT spawn row wins, and says which', () => {
+  const spawn = { get: (a: string) => (a === 'w-1' ? 'opencode' : undefined) };
+  // A per-session `source` cannot be right for two CLIs at once, so where the
+  // occupants disagree the per-agent record is preferred — and it is its own
+  // rung, never folded into either of the others.
+  assert.deepEqual(sc.resolveDelegateCli('claude', 'w-1', spawn, true),
+    { cli: 'opencode', cli_via: 'spawn-row-session-conflict' });
+  // NEGATIVE CONTROL: the SAME inputs without the conflict answer 'claude'. If
+  // this were equal to the line above, the flag would be doing nothing.
+  assert.deepEqual(sc.resolveDelegateCli('claude', 'w-1', spawn, false),
+    { cli: 'claude', cli_via: 'usage-source' });
+  // A conflicted session with no spawn row for THIS agent falls through the
+  // normal ladder rather than inventing an answer.
+  assert.deepEqual(sc.resolveDelegateCli('claude', 'w-2', spawn, true),
+    { cli: 'claude', cli_via: 'usage-source' });
+});
+
+test('cli: `indexCliConflicts` finds only the sessions whose occupants disagree', () => {
+  const spawn = new Map([['a1', 'claude'], ['a2', 'opencode'], ['b1', 'pi'], ['b2', 'pi'], ['c1', 'claude']]);
+  const conflicts = sc.indexCliConflicts([
+    { id: 'a1', session: 's-a' }, { id: 'a2', session: 's-a' },   // disagree
+    { id: 'b1', session: 's-b' }, { id: 'b2', session: 's-b' },   // agree
+    { id: 'c1', session: 's-c' },                                  // alone
+    { id: 'd1', session: 's-d' },                                  // no spawn row
+    { id: 'e1' },                                                  // no session
+  ], spawn);
+  // POSITIVE CONTROL plus the negative one in a single assertion: exactly the
+  // disagreeing session, and none of the four that do not.
+  assert.deepEqual([...conflicts.keys()], ['s-a']);
+  assert.deepEqual([...conflicts.get('s-a').entries()].sort(), [['a1', 'claude'], ['a2', 'opencode']]);
 });
 
 test('cli: `indexSpawnCli` reads the delegate site and counts the rows that carry none', () => {
@@ -1112,7 +1145,10 @@ test('coverage: the cli axis reports its own population, counted per delegate sl
   // A slot is a delegate ON A CARD, so `rev-12` — attributed to both #900 and
   // #901 — is two slots. That is the point of counting at the verified site:
   // the axis is used once per slot, not once per agent.
-  assert.deepEqual(cov.by_rung, { 'usage-source': 3, 'spawn-row': 1, none: 2 });
+  assert.deepEqual(cov.by_rung, { 'usage-source': 3, 'spawn-row': 1, 'spawn-row-session-conflict': 0, none: 2 });
+  // The shared corpus has no cross-CLI session, so this is the empty reading —
+  // the populated one is pinned on the clitable corpus below.
+  assert.deepEqual(cov.sessions_with_conflicting_clis, []);
   assert.deepEqual(cov.by_cli, { pi: 2, unknown: 2, claude: 1, opencode: 1 });
   assert.equal(cov.unknown, 2);
   // The rungs partition the slots — a slot cannot be answered by two rungs, and
@@ -1127,4 +1163,39 @@ test('coverage: H10 is declared with a statement and its structural fix', () => 
   assert.match(h10.what, /source/);
   assert.match(h10.what, /statusline/);
   assert.match(h10.fix, /UsageSnapshot/);
+});
+
+test('cli: a pane recycled across CLIs keeps #800 on the opencode side', () => {
+  // #800's `worker-std` pane shares its session with a claude `worker-adv` one,
+  // and the row's source is `transcript`. Rung 1 alone would call that worker
+  // claude, #800's lanes would stop resolving to one cli, and the opencode side
+  // would fall to n=2 — where every cell reads null. So this is what makes the
+  // conflict rung load-bearing rather than decorative.
+  const w800 = cliCard(800).delegates.agents.find((a: any) => a.agent === 'w-800');
+  assert.equal(w800.cli, 'opencode');
+  assert.equal(w800.cli_via, 'spawn-row-session-conflict');
+  // The other occupant of that same session resolves the other way, off its own
+  // spawn row — one session, two answers, which is the whole point.
+  const wadv = cliCard(800).delegates.agents.find((a: any) => a.agent === 'wadv-800');
+  assert.equal(wadv.cli, 'claude');
+  assert.equal(wadv.cli_via, 'spawn-row-session-conflict');
+  // Coverage names the session and the split, so the defect is surfaced rather
+  // than silently repaired.
+  assert.deepEqual(CLI_REPORT.coverage.cli_axis.sessions_with_conflicting_clis,
+    [{ session: 'ses-w-800', agents: ['w-800=opencode', 'wadv-800=claude'] }]);
+  // …and the side really does collapse without it.
+  const blinded = JSON.parse(JSON.stringify(CLI_REPORT.prs));
+  for (const c of blinded) {
+    for (const d of c.delegates.agents) {
+      if (d.agent !== 'w-800') continue;
+      d.cli = 'claude';                       // what rung 1 alone would have said
+      const b = c.delegates.by_block_cli['worker-std/opencode'];
+      delete c.delegates.by_block_cli['worker-std/opencode'];
+      b.cli = 'claude';
+      c.delegates.by_block_cli['worker-std/claude'] = b;
+    }
+  }
+  const t = sc.cliTable(blinded, Date.parse(SPLIT_AT));
+  assert.deepEqual(t.rows.find((r: any) => r.key === 'opencode (pre-2817)').prs, [801, 802]);
+  assert.equal(t.rows.find((r: any) => r.key === 'opencode (pre-2817)').cells.wall_clock_h.median, null);
 });

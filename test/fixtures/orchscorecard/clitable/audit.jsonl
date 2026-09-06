@@ -1,7 +1,9 @@
-{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-800","block":"worker-std","role":"worker","task":"work #800"},"ts_ms":1788307200000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"wadv-800","block":"worker-adv","cli":"claude","role":"worker","task":"earlier occupant of #800"},"ts_ms":1788307199999}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-800","block":"worker-std","role":"worker","task":"work #800","cli":"opencode"},"ts_ms":1788307200000}
 {"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-800","block":"rev-std","cli":"opencode","role":"reviewer","task":"review #800"},"ts_ms":1788307200000}
 {"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-800","block":"rev-final","role":"reviewer","task":"work #800"},"ts_ms":1788307200000}
 {"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":800,"agent":"w-800","block":"worker-std"},"ts_ms":1788307200001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":800,"agent":"wadv-800","block":"worker-adv"},"ts_ms":1788307200001}
 {"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":800,"agent":"rev-800","block":"rev-std"},"ts_ms":1788307200001}
 {"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":800,"agent":"revf-800","block":"rev-final"},"ts_ms":1788307200001}
 {"action":"review-verdict","actor":"rev-800","detail":{"pr":800,"block":"rev-std","verdict":"fail"},"ts_ms":1788307260002}

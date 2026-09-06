@@ -14,6 +14,13 @@
     "session": "ses-w-800"
   },
   {
+    "id": "wadv-800",
+    "role": "worker",
+    "block": "worker-adv",
+    "name": "worker-adv #800",
+    "session": "ses-w-800"
+  },
+  {
     "id": "rev-800",
     "role": "reviewer",
     "block": "rev-std",

@@ -19,7 +19,7 @@
     "agent_id": "w-800",
     "name": "worker #800",
     "role": "worker",
-    "source": "session-db",
+    "source": "transcript",
     "input_tokens": 100000,
     "output_tokens": 20000,
     "cache_creation_tokens": 80000,

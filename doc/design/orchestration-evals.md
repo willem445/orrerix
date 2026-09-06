@@ -313,8 +313,20 @@ guess about which CLI a block runs:
 | `codex-transcript` | `codex` |
 | `statusline`, `none`, absent, anything else | `unknown` |
 
-**A ladder of two rungs, and `unknown` is the third outcome, never a guess.**
+**A ladder, and `unknown` is the last outcome, never a guess.**
 
+0. `spawn-row-session-conflict` — first, and **only** where the session's own
+   occupants did not all run one CLI. A `usage.json` row is keyed by CLI
+   session, so its `source` answers for **every** agent that occupied that
+   session — and this group's store has panes recycled onto a different block
+   running a different CLI: sessions `358b100f…` and `e81c5d8a…` are each
+   shared by a `worker-adv` (claude) and a `worker-std` (opencode) agent
+   (audit generations 1+2, read 2026-09-06). One label cannot be right for two
+   CLIs, so the **per-agent** `agent-spawn` record wins there. It is its own
+   rung rather than a silent correction, and
+   `coverage.cli_axis.sessions_with_conflicting_clis` names every session it
+   fired on with the split — the defect is SURFACED here, not repaired: the
+   structural fix is H10's own, a `cli` on `UsageSnapshot`.
 1. `usage-source` — the map above, where it resolves.
 2. `spawn-row` — where it does not (a `statusline` scrape says a CLI printed a
    dollar figure, never which one), the `cli` on that agent's `agent-spawn` row.
@@ -332,6 +344,13 @@ guess about which CLI a block runs:
 `cli_via` says which rung answered, per delegate. Two rows disagreeing under one
 key resolve to `mixed` rather than to whichever was folded last — the session
 index sees one row per key, but the `agent_id` fallback index can see several.
+
+**A residual the ladder does not close**, stated because a reader would
+otherwise assume it does: a cross-CLI session whose occupants have **no**
+`agent-spawn` `cli` (a spawn site that never wrote one) still takes the row's
+single `source` label for every occupant, and nothing distinguishes that from a
+correct reading. It cannot happen on today's two spawn sites — the delegate one
+always writes `cli` — which is what bounds it, not anything in this script.
 
 This is heuristic **H10**, and `coverage.cli_axis` is its population control:
 `delegate_slots`, `by_rung`, `by_cli` and `unknown`, counted once per delegate
@@ -480,7 +499,7 @@ The script emits this list in every run, under `coverage.heuristics`, and it **i
 | H6 | `usage.json` is cumulative, so a delegate's whole life counts against its PR. | A windowed usage series, or accepting the approximation. |
 | H7 | The PR window ends at `merged_at` passed in by the caller. | A loomux row for a human merge (#388). |
 | H8 | A `usage.json` row is keyed by CLI **session**; a session carried to a new agent id names only its last occupant, so the row is split evenly across every agent that occupied it. | An `agent_id` (or `block` + `pr`) on **every** `UsageSnapshot`, not just the latest — the same missing field as H4. |
-| H10 | A delegate's CLI is read off the `source` label of the `usage.json` row carrying its tokens (§4.8); a row whose source names no CLI (`statusline`, `none`) falls back to the `cli` on that agent's `agent-spawn` row, and to `unknown` — reported, never filled in from the block's declared CLI — when neither answers. | A `cli` field on `UsageSnapshot`, and one on the orchestrator `agent-spawn` site, which unlike the delegate site carries none — t-664's family, the same missing-field fix as H4/H8. |
+| H10 | A delegate's CLI is read off the `source` label of the `usage.json` row carrying its tokens (§4.8); a row whose source names no CLI (`statusline`, `none`) falls back to the `cli` on that agent's `agent-spawn` row, and to `unknown` — reported, never filled in from the block's declared CLI — when neither answers. That label is per **session**, so where one session's occupants ran different CLIs the per-agent spawn row is preferred instead and the session is named in coverage. | A `cli` field on `UsageSnapshot`, and one on the orchestrator `agent-spawn` site, which unlike the delegate site carries none — t-664's family, the same missing-field fix as H4/H8. |
 | H9 | A zero row backfilled from its transcript (§4.6) is **unpriced** — it keeps whatever `cost_usd` the collector recorded, so its tokens are right and its dollars are not — and does not honour `--cut`, because `--cut` cannot rewind an ordinary `usage.json` row either. | The collector recording the row correctly, which #2167 does: after it, `rows` reads 0 on any store written by a fixed build. |
 
 A run that adds a heuristic adds a row here in the same commit. The test suite
@@ -571,7 +590,8 @@ side_cli_disagreements[], confounders[] }`.
               agents_split_across_prs, usage_rows_unusable, usage_sessions_indexed,
               usage_sessions_shared_by_more_than_one_agent,
               cli_axis: { delegate_slots, by_rung, by_cli, unknown,
-                          spawn_rows_with_cli, spawn_rows_without_cli },
+                          spawn_rows_with_cli, spawn_rows_without_cli,
+                          sessions_with_conflicting_clis[] },
               usage_rows_backfilled_from_transcript: {
                 claude_projects_root, scanned, projects_scanned, transcripts_indexed,
                 zero_rows_considered, rows, tokens,

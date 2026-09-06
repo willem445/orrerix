@@ -331,11 +331,48 @@ function indexSpawnCli(rows) {
   return { byAgent, spawn_rows_with_cli: withCli, spawn_rows_without_cli: withoutCli };
 }
 
-// The two rungs, in order, with the rung that answered reported alongside.
-// Never falls through to a guess: the third outcome is `unknown`, `cli_via: null`.
-function resolveDelegateCli(usageCli, agent, spawnCliByAgent) {
-  if (usageCli && usageCli !== CLI_UNKNOWN) return { cli: usageCli, cli_via: 'usage-source' };
+// Sessions whose occupants did not all run the SAME CLI.
+//
+// MEASURED, NOT HYPOTHETICAL. A `usage.json` row is keyed by CLI session, and
+// `agents.json` carries one `session` per agent — so H8 already splits a shared
+// row across its occupants. What H8 never contemplated is a pane recycled onto
+// a DIFFERENT BLOCK running a DIFFERENT CLI, which this group's own store does:
+// sessions `358b100f…` and `e81c5d8a…` are each shared by `worker-adv` (claude)
+// and `worker-std` (opencode) agents (audit generations 1+2, read 2026-09-06).
+//
+// A per-session label cannot be right for two CLIs at once, so where the spawn
+// rows disagree the PER-AGENT record wins: `agent-spawn` names what loomux
+// actually launched for THAT id, while `source` names the record the collector
+// folded for the whole session. The outcome is reported as its own rung
+// (`spawn-row-session-conflict`) rather than folded into either of the other
+// two, and coverage lists every session it fired on — this is a defect being
+// SURFACED, not repaired: the structural fix is H10's, a `cli` on the snapshot.
+function indexCliConflicts(agents, spawnCliByAgent) {
+  const bySession = new Map();
+  for (const a of agents) {
+    if (!a || typeof a.session !== 'string' || !a.session || typeof a.id !== 'string') continue;
+    const cli = spawnCliByAgent.get(a.id);
+    if (!cli) continue;
+    if (!bySession.has(a.session)) bySession.set(a.session, new Map());
+    bySession.get(a.session).set(a.id, cli);
+  }
+  const conflicted = new Map(); // session -> { agent -> cli }
+  for (const [session, byAgent] of bySession) {
+    if (new Set(byAgent.values()).size > 1) conflicted.set(session, byAgent);
+  }
+  return conflicted;
+}
+
+// The rungs, in order, with the one that answered reported alongside. Never
+// falls through to a guess: the last outcome is `unknown`, `cli_via: null`.
+function resolveDelegateCli(usageCli, agent, spawnCliByAgent, sessionConflicted) {
   const spawned = spawnCliByAgent && spawnCliByAgent.get(agent);
+  // Rung 0 — only where the session's own occupants disagree, which is the one
+  // case rung 1 provably cannot answer for every agent on the row.
+  if (sessionConflicted && typeof spawned === 'string' && spawned) {
+    return { cli: spawned, cli_via: 'spawn-row-session-conflict' };
+  }
+  if (usageCli && usageCli !== CLI_UNKNOWN) return { cli: usageCli, cli_via: 'usage-source' };
   if (typeof spawned === 'string' && spawned) return { cli: spawned, cli_via: 'spawn-row' };
   return { cli: CLI_UNKNOWN, cli_via: null };
 }
@@ -405,7 +442,7 @@ function attributeAgents(rows, prs, windowsByPr) {
 // ---------------------------------------------------------------------------
 
 function scorePr(ctx, pr) {
-  const { rows, orchIds, tailMs, transcriptTurns, usageBySession, usageByAgent, sessionAgents, agentsById, attribution, prMeta, spawnCliByAgent } = ctx;
+  const { rows, orchIds, tailMs, transcriptTurns, usageBySession, usageByAgent, sessionAgents, agentsById, attribution, prMeta, spawnCliByAgent, cliConflicts } = ctx;
   const meta = (prMeta && prMeta[String(pr)]) || {};
   const mergedMs = meta.merged_at ? Date.parse(meta.merged_at) : null;
   const win = computeWindows(rows, pr, Number.isFinite(mergedMs) ? mergedMs : null, tailMs);
@@ -551,7 +588,10 @@ function scorePr(ctx, pr) {
       usage = usageByAgent.get(agent);
       usageKey = usage ? 'agent_id' : null;
     }
-    const { cli, cli_via: cliVia } = resolveDelegateCli(usage && usage.cli, agent, spawnCliByAgent);
+    const { cli, cli_via: cliVia } = resolveDelegateCli(
+      usage && usage.cli, agent, spawnCliByAgent,
+      Boolean(session && cliConflicts && cliConflicts.has(session)),
+    );
     const prWeight = 1 / att.prs.size;
     const sessionWeight = 1 / sessionAgentCount;
     const weight = prWeight * sessionWeight;
@@ -1350,8 +1390,8 @@ function renderCliTable(t) {
 // Counted at the VERIFIED site — one entry per delegate ON A CARD, which is
 // where a cli is actually used — not at the usage rows scanned, which would
 // certify coverage the table never received.
-function cliAxisCoverage(cards, spawnCli) {
-  const byRung = { 'usage-source': 0, 'spawn-row': 0, none: 0 };
+function cliAxisCoverage(cards, spawnCli, cliConflicts) {
+  const byRung = { 'usage-source': 0, 'spawn-row': 0, 'spawn-row-session-conflict': 0, none: 0 };
   const byCli = {};
   let slots = 0;
   for (const card of cards) {
@@ -1368,6 +1408,16 @@ function cliAxisCoverage(cards, spawnCli) {
     unknown: byCli[CLI_UNKNOWN] || 0,
     spawn_rows_with_cli: spawnCli.spawn_rows_with_cli,
     spawn_rows_without_cli: spawnCli.spawn_rows_without_cli,
+    // Every session whose occupants did not all run one CLI, with the split.
+    // A non-empty list here means H8's even split is crossing a CLI boundary on
+    // this store and the per-session `source` label is answering for panes it
+    // does not describe.
+    sessions_with_conflicting_clis: [...(cliConflicts || new Map()).entries()]
+      .map(([session, byAgent]) => ({
+        session,
+        agents: [...byAgent.entries()].sort().map(([a, c]) => a + '=' + c),
+      }))
+      .sort((a, b) => (a.session < b.session ? -1 : 1)),
   };
 }
 
@@ -1500,7 +1550,8 @@ async function main(argv) {
   const attribution = attributeAgents(rows, prs, windowsByPr);
 
   const spawnCli = indexSpawnCli(rows);
-  const ctx = { rows, orchIds, tailMs, transcriptTurns, usageBySession, usageByAgent, sessionAgents, agentsById, attribution, prMeta, spawnCliByAgent: spawnCli.byAgent };
+  const cliConflicts = indexCliConflicts(agents, spawnCli.byAgent);
+  const ctx = { rows, orchIds, tailMs, transcriptTurns, usageBySession, usageByAgent, sessionAgents, agentsById, attribution, prMeta, spawnCliByAgent: spawnCli.byAgent, cliConflicts };
   const cards = prs.map((pr) => scorePr(ctx, pr));
 
   const spawnedInWindow = new Set();
@@ -1544,7 +1595,7 @@ async function main(argv) {
       // The cli axis's own coverage (H10): how many delegates each rung answered
       // for, and how many are `unknown`. A run whose `unknown` count is high has
       // a cli table built on a thin population, and this is where that shows.
-      cli_axis: cliAxisCoverage(cards, spawnCli),
+      cli_axis: cliAxisCoverage(cards, spawnCli, cliConflicts),
       heuristics: HEURISTICS,
     },
   };
@@ -1566,7 +1617,7 @@ module.exports = {
   indexUsage, indexSessionAgents, renderPrTable, renderGroupTable, parseArgs, HEURISTICS,
   usageRowTokens, isZeroUsageRow, isAgentKeyedRow, reconcileBackfill,
   SOURCE_TO_CLI, CLI_UNKNOWN, cliForSource, resolveCli, indexSpawnCli,
-  resolveDelegateCli, blockCliKey, laneStats, MEDIAN_MIN_N, medianOf, statCell,
+  resolveDelegateCli, indexCliConflicts, blockCliKey, laneStats, MEDIAN_MIN_N, medianOf, statCell,
   laneCliOf, creditedFor, cliTable, renderCliTable, cliAxisCoverage,
   CLI_TABLE_COLUMNS, CONFOUNDERS, SPLIT_COMMIT,
   claudeTranscriptIndex, backfillZeroUsageRows, defaultClaudeProjectsRoot,

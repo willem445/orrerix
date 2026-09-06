@@ -31,7 +31,7 @@ const T0 = Date.parse('2026-09-01T00:00:00Z');
 
 // pr -> { cli, workerCli?, revCli?, spanH, revSeq, finalSeq, workerTok, revTok, mergedOffsetH }
 const PRS = [
-  { pr: 800, worker: 'opencode', rev: 'opencode', spanH: 2, revSeq: ['fail', 'pass'], finalSeq: ['pass'], workerTok: 1000000, revTok: 400000 },
+  { pr: 800, worker: 'opencode', rev: 'opencode', crossCliSession: true, spanH: 2, revSeq: ['fail', 'pass'], finalSeq: ['pass'], workerTok: 1000000, revTok: 400000 },
   { pr: 801, worker: 'opencode', rev: 'opencode', spanH: 4, revSeq: ['fail', 'fail', 'pass'], finalSeq: ['fail', 'pass'], workerTok: 2000000, revTok: 800000 },
   { pr: 802, worker: 'opencode', rev: 'opencode', spanH: 6, revSeq: ['pass'], finalSeq: ['pass'], workerTok: 3000000, revTok: 1200000 },
   // Merged BEFORE the split but its lanes are pi: the side/cli cross-check fires.
@@ -90,7 +90,24 @@ for (const p of PRS) {
     addAgent(id, role, block, cli, tokens, p.pr, start, withSpawnCli);
     audit.push({ action: 'rd-lane-spawned', actor: 'orrerix', detail: { pr: p.pr, agent: id, block }, ts_ms: start + 1 });
   };
-  mk('w-' + p.pr, 'worker', 'worker-std', p.worker, p.workerTok, false);
+  mk('w-' + p.pr, 'worker', 'worker-std', p.worker, p.workerTok, Boolean(p.crossCliSession));
+  if (p.crossCliSession) {
+    // A PANE RECYCLED ACROSS CLIs — measured on the live store, not invented:
+    // `agents.json` sessions 358b100f… and e81c5d8a… are each shared by a
+    // `worker-adv` (claude) and a `worker-std` (opencode) agent. The usage row
+    // is keyed by that one session, so its `source` label answers for BOTH, and
+    // rung 1 alone would call this opencode worker a claude one.
+    //
+    // Here the row is `transcript` (claude) and the worker-std pane is opencode,
+    // so #800 leaves the opencode side unless the conflict rung fires — and the
+    // side falls to n=2, where every cell reads null.
+    const shared = 'ses-w-' + p.pr;
+    agents.push({ id: 'wadv-' + p.pr, role: 'worker', block: 'worker-adv', name: 'worker-adv #' + p.pr, session: shared });
+    audit.push({ action: 'agent-spawn', actor: 'orrerix', detail: { agent: 'wadv-' + p.pr, block: 'worker-adv', cli: 'claude', role: 'worker', task: 'earlier occupant of #' + p.pr }, ts_ms: start - 1 });
+    audit.push({ action: 'rd-lane-spawned', actor: 'orrerix', detail: { pr: p.pr, agent: 'wadv-' + p.pr, block: 'worker-adv' }, ts_ms: start + 1 });
+    const row = usage.find((u) => u.key === shared);
+    row.source = 'transcript';
+  }
   if (p.workerSecond) mk('w2-' + p.pr, 'worker', 'worker-std', p.workerSecond, p.workerTok, false);
   // The rev-std pane's usage row is `statusline` on #802 alone, so the SPAWN-ROW
   // rung carries one selected PR: a table that only ever read the usage source

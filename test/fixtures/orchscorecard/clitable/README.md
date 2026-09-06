@@ -12,7 +12,7 @@ constant (CLAUDE.md, the non-discriminating-fixture rule):
 | PR | window | worker-std | rev-std | why it is here |
 | --- | --- | --- | --- | --- |
 | #800 | pre-2817 | opencode | opencode | its `worker-std` pane **shares a session with a claude `worker-adv` one** and the row's source is `transcript`, so it stays opencode only via the **cross-CLI conflict rung** — the shape measured on the live store's `358b100f…` and `e81c5d8a…` |
-| #801 | pre-2817 | opencode | opencode | |
+| #801 | pre-2817 | opencode | opencode | its `worker-std` delegate's **`agent-spawn` row is dropped** the way a rotation drops it, while the `rd-lane-spawned` row crediting it survives — the **straddling window** whose start is *after* the coverage floor, which is why `start_ms <= ts_first` cannot see it |
 | #802 | pre-2817 | opencode | opencode (`statusline` row) | its cli comes from the **spawn-row rung**, so the opencode side is n=3 only if that rung works |
 | #803 | pre-2817 | pi | pi | merged before the split but resolves to pi — the **side/cli disagreement** |
 | #810 | post-2817 | pi | pi | |

@@ -10,7 +10,6 @@
 {"action":"review-verdict","actor":"rev-800","detail":{"pr":800,"block":"rev-std","verdict":"pass"},"ts_ms":1788307320002}
 {"action":"review-verdict","actor":"revf-800","detail":{"pr":800,"block":"rev-final","verdict":"pass"},"ts_ms":1788307380002}
 {"action":"rd-satisfied","actor":"orrerix","detail":{"pr":800},"ts_ms":1788314400000}
-{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-801","block":"worker-std","role":"worker","task":"work #801"},"ts_ms":1788393600000}
 {"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-801","block":"rev-std","cli":"opencode","role":"reviewer","task":"review #801"},"ts_ms":1788393600000}
 {"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-801","block":"rev-final","role":"reviewer","task":"work #801"},"ts_ms":1788393600000}
 {"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":801,"agent":"w-801","block":"worker-std"},"ts_ms":1788393600001}

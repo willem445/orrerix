@@ -32,7 +32,8 @@ const T0 = Date.parse('2026-09-01T00:00:00Z');
 // pr -> { cli, workerCli?, revCli?, spanH, revSeq, finalSeq, workerTok, revTok, mergedOffsetH }
 const PRS = [
   { pr: 800, worker: 'opencode', rev: 'opencode', crossCliSession: true, spanH: 2, revSeq: ['fail', 'pass'], finalSeq: ['pass'], workerTok: 1000000, revTok: 400000 },
-  { pr: 801, worker: 'opencode', rev: 'opencode', spanH: 4, revSeq: ['fail', 'fail', 'pass'], finalSeq: ['fail', 'pass'], workerTok: 2000000, revTok: 800000 },
+  // #801 straddles the coverage floor (see `truncatedSpawnOf`).
+  { pr: 801, worker: 'opencode', rev: 'opencode', truncatedSpawnOf: 'w-801', spanH: 4, revSeq: ['fail', 'fail', 'pass'], finalSeq: ['fail', 'pass'], workerTok: 2000000, revTok: 800000 },
   { pr: 802, worker: 'opencode', rev: 'opencode', spanH: 6, revSeq: ['pass'], finalSeq: ['pass'], workerTok: 3000000, revTok: 1200000 },
   // Merged BEFORE the split but its lanes are pi: the side/cli cross-check fires.
   { pr: 803, worker: 'pi', rev: 'pi', spanH: 8, revSeq: ['fail', 'pass'], finalSeq: ['pass'], workerTok: 4000000, revTok: 1600000 },
@@ -89,6 +90,15 @@ for (const p of PRS) {
   const mk = (id, role, block, cli, tokens, withSpawnCli) => {
     addAgent(id, role, block, cli, tokens, p.pr, start, withSpawnCli);
     audit.push({ action: 'rd-lane-spawned', actor: 'orrerix', detail: { pr: p.pr, agent: id, block }, ts_ms: start + 1 });
+    // The straddler: drop this delegate's `agent-spawn` row, as a rotation
+    // would have. The `rd-lane-spawned` row that credits it stays, so the PR
+    // is scored with a window that begins AFTER the floor and counters that
+    // are silently short.
+    if (p.truncatedSpawnOf === id) {
+      const i = audit.findIndex((r) => r.action === 'agent-spawn' && r.detail.agent === id);
+      if (i === -1) throw new Error('no agent-spawn row to truncate for ' + id);
+      audit.splice(i, 1);
+    }
   };
   mk('w-' + p.pr, 'worker', 'worker-std', p.worker, p.workerTok, Boolean(p.crossCliSession));
   if (p.crossCliSession) {

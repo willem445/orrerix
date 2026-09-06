@@ -588,10 +588,35 @@ the §4.9 table read **32,943 rows across two generations and selected 20 PRs**;
 a rotation at **2026-09-06T17:14Z** discarded the older generation, and the same
 command with the same `--cut` then read **16,351 rows and selected 10**. Both
 runs were correct about the log they could see; only the floor moved. `--format
-cli-table` therefore prints its coverage floor under the table
-(`coverage_floor`: the span, the row and generation counts, and any PR whose
-window starts AT the floor and whose counters are therefore a lower bound), and
-two runs of this script are comparable only after their floors are.
+cli-table` therefore prints its coverage floor under the table, and two runs of
+this script are comparable only after their floors are.
+
+**Which PRs the floor names, and why the obvious test is nearly useless.**
+`windows.pr.start_ms` is `namedFirst` — the first row naming the PR that
+*survived* the read — so a PR whose rows **straddle** the rotation has a
+post-floor start **by construction**, and `start_ms <= ts_first` can only ever
+catch the one PR whose first surviving row is the log's oldest. Testing that
+alone would contradict the floor's own rationale. So the straddle is decided on
+a signal that survives truncation: an `agent-spawn` row is written once, when a
+delegate is created, and always before the `rd-*` / `review-verdict` rows that
+attribute it to a PR — so a PR credited with a delegate whose `agent-spawn` row
+is **not** in the surviving log has provably lost rows.
+
+`coverage_floor.windows_touching_the_floor` reports both, each with its reason,
+because a reader must be able to tell one from the other:
+
+| `why` | means |
+| --- | --- |
+| `spawn-row-missing` | **proven** truncated — a credited delegate has no surviving spawn row, so the counters are a lower bound |
+| `window-at-floor` | **possibly** truncated — the window begins at the oldest surviving row, so nothing rules out earlier rows |
+
+A PR matching both is reported under the stronger reason, never twice.
+
+**The residual, stated rather than implied:** a PR that lost rows but kept every
+delegate's `agent-spawn` row, and whose window starts after the floor, is
+detected by neither — and nothing in a truncated log could detect it, because
+the evidence is the part that was deleted. The render says so on a clean run
+rather than issuing a clean bill of health.
 
 ---
 

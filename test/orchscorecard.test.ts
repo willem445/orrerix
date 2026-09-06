@@ -27,6 +27,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -791,6 +792,15 @@ const SIDES = { before: 'opencode', after: 'pi' };
 const TABLE_OPTS = { sides: SIDES, label: SPLIT_LABEL };
 const table = (prs: any = CLI_REPORT.prs, opts: any = TABLE_OPTS) =>
   sc.cliTable(prs, Date.parse(SPLIT_AT), opts);
+// Every agent with a surviving `agent-spawn` row in the clitable corpus, read
+// OFF the fixture rather than retyped, so a regeneration cannot leave it stale
+// and the straddler test cannot pass because a literal went out of date.
+const SPAWNED: Set<string> = new Set(
+  readFileSync(path.join(CLI_TABLE, 'audit.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((l: string) => JSON.parse(l))
+    .filter((r: any) => r.action === 'agent-spawn')
+    .map((r: any) => r.detail.agent as string),
+);
 
 function runCliTable(extraArgs: string[] = []): string {
   return execFileSync(process.execPath, [
@@ -1310,14 +1320,14 @@ test('lanes: an escalate BEFORE a pass is not counted as a round to pass', () =>
 
 test('cli-table: the coverage floor travels with the table', () => {
   // The instrument's own blind spot, made visible. `--cut` bounds the log
-  // forward (§8) but cannot recover a row a ROTATION discarded, and a PR whose
-  // window predates the oldest surviving row is not scored AND does not appear
-  // in `excluded` — nothing in the log names it. Measured, not hypothetical:
-  // the first posting of this table read 32,943 rows and selected 20 PRs; a
-  // rotation at 2026-09-06T17:14Z discarded the older generation and the same
-  // command with the same `--cut` then read 16,351 and selected 10.
+  // forward (§8) but cannot recover a row a ROTATION discarded, and a PR below
+  // the floor is not scored AND does not appear in `excluded` — nothing in the
+  // log names it. Measured, not hypothetical: the first posting of this table
+  // read 32,943 rows and selected 20 PRs; a rotation at 2026-09-06T17:14Z
+  // discarded the older generation and the same command with the same `--cut`
+  // then read 16,351 and selected 10.
   const files = CLI_REPORT.group.files;
-  const t = table(CLI_REPORT.prs, { sides: SIDES, label: SPLIT_LABEL, groupFiles: files });
+  const t = table(CLI_REPORT.prs, { sides: SIDES, label: SPLIT_LABEL, groupFiles: files, spawnedAgents: SPAWNED });
   assert.equal(t.coverage_floor.rows, files.reduce((n: number, f: any) => n + f.rows, 0));
   assert.equal(t.coverage_floor.generations, files.length);
   assert.equal(t.coverage_floor.ts_first, Math.min(...files.map((f: any) => f.ts_first)));
@@ -1334,17 +1344,95 @@ test('cli-table: the coverage floor travels with the table', () => {
   assert.doesNotMatch(sc.renderCliTable(noFloor), /Coverage floor/);
 });
 
-test('coverageFloor: a window starting at the floor is named as a lower bound', () => {
+test('coverageFloor: a window STRADDLING the floor is named, though its start is after it', () => {
+  // rev-std round 2. `windows.pr.start_ms` is the first SURVIVING row naming
+  // the PR, so a straddling window has a post-floor start BY CONSTRUCTION and
+  // `start_ms <= ts_first` can only ever catch the log's oldest PR. #801 is
+  // built for exactly this: its `agent-spawn` row is dropped the way a rotation
+  // would drop it, while the `rd-lane-spawned` row that credits the delegate
+  // survives.
+  const files = CLI_REPORT.group.files;
+  const t = table(CLI_REPORT.prs, { sides: SIDES, label: SPLIT_LABEL, groupFiles: files, spawnedAgents: SPAWNED });
+  const at = (pr: number) => t.coverage_floor.windows_touching_the_floor.find((w: any) => w.pr === pr);
+
+  // THE POINT OF THE FIXTURE, asserted rather than assumed: #801's window
+  // begins strictly AFTER the floor, so the old rule was blind to it. If this
+  // ever stopped holding, the assertion below would pass for the wrong reason.
+  assert.ok(cliCard(801).windows.pr.start_ms > t.coverage_floor.ts_first,
+    'the straddler must start after the floor, or it is not testing the straddle');
+  assert.equal(at(801).why, 'spawn-row-missing');
+  assert.match(at(801).detail, /w-801/);
+
+  // …and the other rule still fires, on a DIFFERENT PR, so the two are not one
+  // rule wearing two labels.
+  assert.equal(at(800).why, 'window-at-floor');
+  assert.notEqual(at(801).why, at(800).why);
+
+  // NEGATIVE CONTROL: not every scored PR is flagged.
+  const flagged = t.coverage_floor.windows_touching_the_floor.map((w: any) => w.pr);
+  assert.ok(flagged.length < CLI_REPORT.prs.length, 'flagging everything would be vacuous');
+  assert.equal(flagged.includes(802), false);
+
+  // Both classes are rendered, and named apart — a reader must be able to tell
+  // "this one lost rows" from "this one might have".
+  const rendered = sc.renderCliTable(t);
+  assert.match(rendered, /Counters PROVEN to be a lower bound[^\n]*#801/);
+  assert.match(rendered, /Counters POSSIBLY a lower bound[^\n]*#800/);
+});
+
+test('coverageFloor: the proof is the missing spawn ROW, not the missing cli field', () => {
   const files = [{ ts_first: 1000, ts_last: 9000, rows: 7 }];
-  const at = { pr: 1, windows: { pr: { start_ms: 1000 } } };   // exactly at it
-  const under = { pr: 2, windows: { pr: { start_ms: 500 } } };  // begins before it
-  const over = { pr: 3, windows: { pr: { start_ms: 5000 } } };  // safely inside
-  const none = { pr: 4, windows: { pr: null } };                // no window at all
-  const f = sc.coverageFloor([at, under, over, none], files);
-  // POSITIVE and NEGATIVE control in one assertion: the two at-or-below the
-  // floor are named, the one safely inside and the one with no window are not.
-  assert.deepEqual(f.prs_touching_the_floor, [1, 2]);
+  const card = (pr: number, startMs: number, agents: string[]) => ({
+    pr,
+    windows: { pr: { start_ms: startMs } },
+    delegates: { agents: agents.map((a) => ({ agent: a })) },
+  });
+  const spawned = new Set(['a', 'b']);
+  const f = sc.coverageFloor([
+    card(1, 5000, ['a', 'b']),       // intact, safely inside -> not flagged
+    card(2, 5000, ['a', 'ghost']),   // straddler             -> PROVEN
+    card(3, 1000, ['a']),            // at the floor          -> POSSIBLY
+    card(4, 500, ['a']),             // below the floor       -> POSSIBLY
+    card(5, 1000, ['ghost2']),       // BOTH: proof outranks
+    { pr: 6, windows: { pr: null }, delegates: { agents: [] } }, // no window
+  ], files, spawned);
+  assert.deepEqual(f.windows_touching_the_floor.map((w: any) => [w.pr, w.why]), [
+    [2, 'spawn-row-missing'],
+    [3, 'window-at-floor'],
+    [4, 'window-at-floor'],
+    // A PR that is both is reported under the STRONGER reason, never twice.
+    [5, 'spawn-row-missing'],
+  ]);
   assert.equal(f.ts_first, 1000);
   assert.equal(f.rows, 7);
   assert.equal(f.generations, 1);
+
+  // POSITIVE CONTROL on the whole mechanism: with every agent spawned and every
+  // window inside, nothing is flagged — so the list is not a constant.
+  const clean = sc.coverageFloor([card(1, 5000, ['a', 'b'])], files, spawned);
+  assert.deepEqual(clean.windows_touching_the_floor, []);
+  // …and the render says so WITH the residual, rather than issuing a clean bill.
+  const rendered = sc.renderCliTable({
+    ...table(CLI_REPORT.prs, { sides: SIDES, label: SPLIT_LABEL }),
+    coverage_floor: clean,
+  });
+  assert.match(rendered, /No selected PR is detectably truncated/);
+  assert.match(rendered, /the evidence is the part that was deleted/);
+});
+
+test('indexSpawnCli: `spawned` counts the ROW, a `cli` field on it or not', () => {
+  // The floor's truncation proof reads existence, not the field — an
+  // orchestrator spawn carries no `cli` and is still a surviving row.
+  const idx = sc.indexSpawnCli([
+    { action: 'agent-spawn', detail: { agent: 'w-1', cli: 'opencode' }, ts_ms: 1 },
+    { action: 'agent-spawn', detail: { agent: 'orch-1', role: 'orchestrator' }, ts_ms: 2 },
+    { action: 'rd-lane-spawned', detail: { agent: 'w-9' }, ts_ms: 3 },
+  ]);
+  assert.deepEqual([...idx.spawned].sort(), ['orch-1', 'w-1']);
+  // The cli index and the spawned set disagree on `orch-1`, which is the whole
+  // distinction: it has a row and no cli.
+  assert.equal(idx.byAgent.has('orch-1'), false);
+  assert.equal(idx.spawned.has('orch-1'), true);
+  // A non-spawn row is not a spawn record however it is shaped.
+  assert.equal(idx.spawned.has('w-9'), false);
 });

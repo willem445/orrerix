@@ -328,16 +328,21 @@ function resolveCli(clis) {
 // the one that wrote the tokens being read.
 function indexSpawnCli(rows) {
   const byAgent = new Map();
+  // EVERY agent with a surviving `agent-spawn` row, whether or not it carried
+  // `cli`. This is the coverage floor's truncation proof (§8), so it must count
+  // the row's existence and not the field.
+  const spawned = new Set();
   let withCli = 0;
   let withoutCli = 0;
   for (const row of rows) {
     if (row.action !== 'agent-spawn') continue;
     const d = row.detail;
     if (!d || typeof d !== 'object' || typeof d.agent !== 'string') continue;
+    spawned.add(d.agent);
     if (typeof d.cli === 'string' && d.cli) { byAgent.set(d.agent, d.cli); withCli += 1; }
     else withoutCli += 1;
   }
-  return { byAgent, spawn_rows_with_cli: withCli, spawn_rows_without_cli: withoutCli };
+  return { byAgent, spawned, spawn_rows_with_cli: withCli, spawn_rows_without_cli: withoutCli };
 }
 
 // Sessions whose occupants did not all run the SAME CLI.
@@ -1319,25 +1324,75 @@ const CONFOUNDERS = [
 // So the floor travels with the table. A reader comparing two runs of this
 // script must compare their floors first — an n that shrank between them is a
 // fact about the log, not about the CLIs.
-function coverageFloor(cards, groupFiles) {
+//
+// WHICH PRS ARE AFFECTED, and why the obvious test is nearly useless.
+// `windows.pr.start_ms` is `namedFirst` — the first row naming the PR that
+// SURVIVED the read. A PR whose rows straddle the rotation therefore has a
+// post-floor start BY CONSTRUCTION: the truncation is invisible in the very
+// field you would test, and `start_ms <= ts_first` can only ever catch the one
+// PR whose first surviving row happens to be the log's oldest row (rev-std
+// round 2). Testing that alone contradicts the floor's own rationale.
+//
+// So the straddle is decided on a signal that SURVIVES truncation: an
+// `agent-spawn` row is written once, when a delegate is created, and always
+// before the `rd-*` and `review-verdict` rows that attribute it to a PR. If a
+// PR is credited with a delegate whose `agent-spawn` row is NOT in the
+// surviving log, then rows for that PR were discarded — proof, not a threshold,
+// and it does not care where the window appears to start.
+//
+// The two rules answer different questions and BOTH are reported, each with its
+// reason, because a reader must be able to tell "this one lost rows" from "this
+// one might have":
+//
+//   spawn-row-missing — PROVEN truncated: a credited delegate has no surviving
+//                       spawn row, so its counters are a lower bound.
+//   window-at-floor   — POSSIBLY truncated: the window begins at the oldest
+//                       surviving row, so nothing rules out earlier rows.
+//
+// Neither is exhaustive, and the residual is stated rather than implied: a PR
+// that lost rows but kept every delegate's spawn row, and whose window starts
+// after the floor, is not detected by either. Nothing in a truncated log can
+// detect that — the evidence is the part that was deleted.
+function coverageFloor(cards, groupFiles, spawnedAgents) {
   let first = null;
   let last = null;
   for (const f of groupFiles) {
     if (typeof f.ts_first === 'number' && (first === null || f.ts_first < first)) first = f.ts_first;
     if (typeof f.ts_last === 'number' && (last === null || f.ts_last > last)) last = f.ts_last;
   }
-  // A PR whose window STARTS at the floor may have had earlier rows discarded,
-  // so its counters are a lower bound. Named, not silently averaged in.
-  const atFloor = cards
-    .filter((c) => c.windows.pr && first !== null && c.windows.pr.start_ms <= first)
-    .map((c) => c.pr)
-    .sort((a, b) => a - b);
+  const spawned = spawnedAgents || new Set();
+  const touching = [];
+  for (const c of cards) {
+    if (!c.windows.pr) continue;
+    // Proof first, so a PR that is BOTH is reported under the stronger reason.
+    const orphans = c.delegates.agents
+      .map((d) => d.agent)
+      .filter((a) => !spawned.has(a))
+      .sort();
+    if (orphans.length) {
+      touching.push({
+        pr: c.pr,
+        why: 'spawn-row-missing',
+        detail: orphans.length + ' credited delegate(s) with no surviving agent-spawn row: ' + orphans.join(', '),
+      });
+      continue;
+    }
+    if (first !== null && c.windows.pr.start_ms <= first) {
+      touching.push({
+        pr: c.pr,
+        why: 'window-at-floor',
+        detail: 'window begins at the oldest surviving row',
+      });
+    }
+  }
+  touching.sort((a, b) => a.pr - b.pr);
   return {
     ts_first: first,
     ts_last: last,
     rows: groupFiles.reduce((n, f) => n + f.rows, 0),
     generations: groupFiles.length,
-    prs_touching_the_floor: atFloor,
+    // Every PR whose counters are, or may be, a lower bound — with the reason.
+    windows_touching_the_floor: touching,
   };
 }
 
@@ -1346,7 +1401,9 @@ function coverageFloor(cards, groupFiles) {
 // the two cannot describe different splits.
 function cliTable(cards, splitMs, opts) {
   const sides = (opts && opts.sides) || null;
-  const floor = (opts && opts.groupFiles) ? coverageFloor(cards, opts.groupFiles) : null;
+  const floor = (opts && opts.groupFiles)
+    ? coverageFloor(cards, opts.groupFiles, opts.spawnedAgents)
+    : null;
   const label = (opts && opts.label) || new Date(splitMs).toISOString();
   const sideName = (which) => (which === 'before' ? 'pre-' : 'post-') + label;
   const selected = [];
@@ -1433,11 +1490,23 @@ function renderCliTable(t) {
       + '** to **' + new Date(f.ts_last).toISOString() + '**. A PR whose window predates that '
       + 'floor is not scored and does not appear in the exclusions either — nothing in the log '
       + 'names it. `--cut` bounds the log forward; it cannot recover rows a rotation discarded, '
-      + 'so **compare two runs\' floors before comparing their n**.'
-      + (f.prs_touching_the_floor.length
-        ? ' Windows starting at the floor, whose counters are therefore a lower bound: '
-          + f.prs_touching_the_floor.map((n) => '#' + n).join(', ') + '.'
-        : ''));
+      + 'so **compare two runs\' floors before comparing their n**.');
+    const proven = f.windows_touching_the_floor.filter((w) => w.why === 'spawn-row-missing');
+    const maybe = f.windows_touching_the_floor.filter((w) => w.why === 'window-at-floor');
+    if (proven.length) {
+      lines.push('');
+      lines.push('**Counters PROVEN to be a lower bound** — each is credited with a delegate whose `agent-spawn` row did not survive, so rows for it were discarded: '
+        + proven.map((w) => '#' + w.pr).join(', ') + '.');
+    }
+    if (maybe.length) {
+      lines.push('');
+      lines.push('**Counters POSSIBLY a lower bound** — window begins at the oldest surviving row, so nothing rules out earlier rows: '
+        + maybe.map((w) => '#' + w.pr).join(', ') + '.');
+    }
+    if (!proven.length && !maybe.length) {
+      lines.push('');
+      lines.push('No selected PR is detectably truncated — which is not a guarantee of completeness: a PR that lost rows but kept every delegate\'s spawn row, and whose window starts after the floor, is undetectable, because the evidence is the part that was deleted.');
+    }
   }
   lines.push('');
   for (const r of t.rows) lines.push('- **' + r.key + '** — ' + r.prs.map((n) => '#' + n).join(', '));
@@ -1667,6 +1736,7 @@ async function main(argv) {
   const attribution = attributeAgents(rows, prs, windowsByPr);
 
   const spawnCli = indexSpawnCli(rows);
+  const spawnedAgentIds = spawnCli.spawned;
   const cliConflicts = indexCliConflicts(agents, spawnCli.byAgent);
   const ctx = { rows, orchIds, tailMs, transcriptTurns, usageBySession, usageByAgent, sessionAgents, agentsById, attribution, prMeta, spawnCliByAgent: spawnCli.byAgent, cliConflicts };
   const cards = prs.map((pr) => scorePr(ctx, pr));
@@ -1724,7 +1794,8 @@ async function main(argv) {
   if (opts.format === 'cli-table') {
     if (!Number.isFinite(opts.splitAt)) throw new Error('--format cli-table needs --split-at <ms|iso>');
     process.stdout.write('\n' + renderCliTable(cliTable(cards, opts.splitAt,
-      { sides: opts.sides, label: opts.splitLabel, groupFiles: out.group.files })) + '\n');
+      { sides: opts.sides, label: opts.splitLabel, groupFiles: out.group.files,
+        spawnedAgents: spawnedAgentIds })) + '\n');
   }
   return 0;
 }

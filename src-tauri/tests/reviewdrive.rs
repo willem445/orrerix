@@ -7260,8 +7260,11 @@ fn a_moved_digest_re_arms_the_stall_clock_on_both_the_dead_pane_and_live_pane_pa
             // End the reviewer's turn so the pane is idle and ready — the
             // state §8's body-changed re-brief is delivered into. No verdict
             // file is written: the lane must still be OUTSTANDING for the
-            // digest move to re-brief it.
+            // digest move to re-brief it. Readiness is a CONFIRMED last
+            // delivery on the pty (#2089) — a pty with no delivery record is
+            // `no-record`, which the reuse arm declines.
             with_pane(&reg, &lane, 7401);
+            make_pane_ready(&reg, 7401, true);
             report_as(&reg, &group, &lane, Role::Reviewer, "approved");
         }
 

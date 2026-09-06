@@ -249,7 +249,7 @@ impl Renderer {
             // the transcript of what the agent did, and #2891 asks for it to be
             // quietable, which a VT stream cannot offer. Rendering it here would
             // also put the highest-volume thing pi produces into a thumbnail.
-            HarnessEvent::Thinking { .. } => {}
+            HarnessEvent::Thinking { delta, .. } => self.text(&mut out, delta),
             // `ToolOutput` is the same argument by volume: a `ToolCall` line and
             // its `  ok`/`  failed` are what this projection has always shown for
             // a tool, on BOTH harnesses, and streaming a tool's bytes into the

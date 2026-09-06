@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>orrerix — structured agent pane (S0 mock, #2891)</title>
+<!-- Pre-paint ground, the same trick src/index.html uses: the app's own
+     surface colour is set before the stylesheet loads so the page never
+     flashes white on a dark desktop. -->
+<style>html{background:#111111;color-scheme:dark}</style>
+<link rel="stylesheet" href="pane.css">
+</head>
+<body>
+
+<div class="stage" data-motion="on">
+
+  <!-- Demo scaffolding. Not part of the pane design — S2/S4 inherit .pane. -->
+  <header class="stagebar">
+    <span class="stagebar-title">structured agent pane · S0 mock · #2891</span>
+
+    <span class="ctl-group">
+      <button class="ctl" type="button" data-a="play"></button>
+      <button class="ctl" type="button" data-a="restart">Restart</button>
+    </span>
+
+    <span class="ctl-group">
+      <span class="ctl-label">speed</span>
+      <button class="ctl" type="button" data-speed="0.5">0.5×</button>
+      <button class="ctl" type="button" data-speed="1" aria-pressed="true">1×</button>
+      <button class="ctl" type="button" data-speed="3">3×</button>
+      <button class="ctl" type="button" data-speed="8">8×</button>
+    </span>
+
+    <span class="ctl-group">
+      <span class="ctl-label">stream</span>
+      <select class="ctl" data-a="fixture">
+        <option value="session">session — a worker taking a delivery</option>
+        <option value="storm">storm — heavy output, 461 calls</option>
+      </select>
+    </span>
+
+    <span class="stagebar-spacer"></span>
+    <span class="ctl-label"><span data-f="progress" class="num">0%</span></span>
+    <button class="ctl" type="button" data-a="motion" aria-pressed="false"><span>Motion on</span></button>
+  </header>
+
+  <main class="grid">
+
+    <!-- ============================ pane 1 — live ============================ -->
+    <!-- The pane occupies the cell a terminal would (CLAUDE.md constraint 1).
+         There is no PTY behind it and no code path here can resize one. -->
+    <section class="pane" data-state="idle" aria-label="agent w-2392">
+
+      <header class="phead">
+        <span class="pdot"></span>
+        <span class="pname">w-2392</span>
+        <span class="pcli" data-cli="pi">pi</span>
+        <span class="pmeta">
+          <span class="val" data-f="model">—</span>
+          <span class="sep">·</span>
+          <span>think</span> <span class="val" data-f="think">—</span>
+          <span class="sep">·</span>
+          <span class="val" data-f="session">—</span>
+        </span>
+        <span class="phead-spacer"></span>
+        <span class="ctxmeter" data-pressure="ok">
+          <span class="ctxmeter-track"><span class="ctxmeter-fill"></span></span>
+          <span class="num" data-f="ctx">0%</span>
+        </span>
+      </header>
+
+      <div class="scroll">
+        <div class="transcript"></div>
+      </div>
+
+      <footer class="ticker">
+        <span class="tk"><span class="tk-k">in</span><span class="tk-v num" data-f="tin">—</span></span>
+        <span class="tk"><span class="tk-k">out</span><span class="tk-v num" data-f="tout">—</span></span>
+        <span class="tk"><span class="tk-k">cache</span><span class="tk-v num" data-f="cache">—</span></span>
+        <span class="tk"><span class="tk-k">cost</span><span class="tk-v money num" data-f="cost">—</span></span>
+        <span class="grow"></span>
+        <span class="queue" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8H3"/><path d="M21 12H9"/><path d="M21 16H3"/></svg>
+          <span></span>
+        </span>
+      </footer>
+
+      <!-- #43's compose strip is the input for a structured pane: write_pty is
+           refused (§5.5), so Turn::Human is the only keyboard path in. Disabled
+           here — S0 is a mock and the wiring is S4's. -->
+      <div class="compose">
+        <input class="compose-in" type="text" disabled
+               placeholder="Message w-2392 — the compose strip is the input path (write_pty is refused on a structured pane)">
+      </div>
+    </section>
+
+    <!-- ========================= pane 2 — the tiling ========================= -->
+    <!-- A second pane, paused partway through the storm stream. It is here for
+         one reason: the warp only resolves into a picture when the panes
+         carrying it are tiled, and one pane cannot show that. -->
+    <section class="pane" data-state="idle" aria-label="agent w-2401">
+      <header class="phead">
+        <span class="pdot"></span>
+        <span class="pname">w-2401</span>
+        <span class="pcli" data-cli="pi">pi</span>
+        <span class="pmeta">
+          <span class="val" data-f="model">—</span>
+          <span class="sep">·</span>
+          <span>think</span> <span class="val" data-f="think">—</span>
+          <span class="sep">·</span>
+          <span class="val" data-f="session">—</span>
+        </span>
+        <span class="phead-spacer"></span>
+        <span class="ctxmeter" data-pressure="ok">
+          <span class="ctxmeter-track"><span class="ctxmeter-fill"></span></span>
+          <span class="num" data-f="ctx">0%</span>
+        </span>
+      </header>
+
+      <div class="scroll">
+        <div class="transcript"></div>
+      </div>
+
+      <footer class="ticker">
+        <span class="tk"><span class="tk-k">in</span><span class="tk-v num" data-f="tin">—</span></span>
+        <span class="tk"><span class="tk-k">out</span><span class="tk-v num" data-f="tout">—</span></span>
+        <span class="tk"><span class="tk-k">cache</span><span class="tk-v num" data-f="cache">—</span></span>
+        <span class="tk"><span class="tk-k">cost</span><span class="tk-v money num" data-f="cost">—</span></span>
+        <span class="grow"></span>
+        <span class="queue" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8H3"/><path d="M21 12H9"/><path d="M21 16H3"/></svg>
+          <span></span>
+        </span>
+      </footer>
+
+      <div class="compose">
+        <input class="compose-in" type="text" disabled placeholder="Message w-2401">
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>

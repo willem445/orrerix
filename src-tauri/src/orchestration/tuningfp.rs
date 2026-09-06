@@ -183,14 +183,19 @@ pub fn fingerprint(repo: &Path) -> Fingerprint {
 
     components.insert("version".to_string(), env!("CARGO_PKG_VERSION").to_string());
 
-    for (name, rel) in [
-        ("workflow", ".orrerix/workflow.yml"),
-        ("claude_md", "CLAUDE.md"),
-        ("lessons", ".orrerix/lessons.md"),
-    ] {
+    let mut shared = Sha256::new();
+    for rel in [".orrerix/workflow.yml", "CLAUDE.md"] {
         let (digest, skipped) = hash_file(&repo.join(rel));
         partial |= skipped;
-        components.insert(name.to_string(), digest);
+        shared.update(digest.as_bytes());
+    }
+    let shared = hex(&shared.finalize());
+    components.insert("workflow".to_string(), shared.clone());
+    components.insert("claude_md".to_string(), shared);
+    {
+        let (digest, skipped) = hash_file(&repo.join(".orrerix/lessons.md"));
+        partial |= skipped;
+        components.insert("lessons".to_string(), digest);
     }
 
     let agents_dir = repo.join(".github").join("agents");

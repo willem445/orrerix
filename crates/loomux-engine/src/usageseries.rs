@@ -193,9 +193,6 @@ pub fn should_sample(prev: Option<&Sample>, now: &Sample, bucket_ms: u64) -> boo
     let Some(prev) = prev else {
         return now.total() > 0;
     };
-    if !prev.counters_differ(now) {
-        return false;
-    }
     now.ts_ms < prev.ts_ms || now.ts_ms.saturating_sub(prev.ts_ms) >= bucket_ms
 }
 

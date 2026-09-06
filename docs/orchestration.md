@@ -1632,7 +1632,10 @@ appears in the panel saying so, and applying the same workflow again is how you
 adopt the edit — the same confirmed action, with the edit as its diff. The chip
 also appears when the file has been deleted or has stopped validating, and in
 that case the picker still lists the workflow the group is running, marked as
-having no file, rather than quietly showing you a different one.
+having no file, rather than quietly showing you a different one — and **Edit…**
+tells you the file is gone rather than opening a different workflow under its
+name. (Recreate the file from the setup pane's *Edit workflow…*, which is where
+a workflow that does not exist yet gets written.)
 
 **The orchestrator's read-back (`list_blocks`).** Switching a running group to
 another workflow is confirmed by the human before anything applies; when a

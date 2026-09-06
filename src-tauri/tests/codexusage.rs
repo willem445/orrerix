@@ -181,40 +181,75 @@ fn write_rollout(root: &Path, body: &str) -> PathBuf {
 
 #[test]
 fn token_usage_records_are_summed_per_response_not_read_off_the_cumulative_thread_total() {
-    // The fixture's whole point: the per-response figures and the running
-    // totals on the same lines DISAGREE, so an implementation reading
-    // `turn_token_usage` or `thread_token_usage` cannot accidentally agree with
-    // one summing `usage`. Two responses, 300 and 700 fresh input.
+    // There are FOUR readings of this file that are not "sum each record's own
+    // `usage`", and a fixture only pins the rule if every one of them lands on a
+    // different number. Two shapes are what make that possible, and both are
+    // codex's own rather than invented here:
+    //
+    // - **the thread is RESUMED**, so `thread_token_usage` opens at a non-zero
+    //   baseline. `codex resume` continues one thread into a NEW rollout file,
+    //   and the thread running total carries the earlier file's spend with it.
+    //   Without this the last `thread_token_usage` EQUALS the sum of `usage` by
+    //   construction, and that reading is indistinguishable arithmetically —
+    //   which is why the fold's doc refuses it on the cursor's incremental
+    //   contract instead;
+    // - **two TURNS**, so `turn_token_usage` resets between them and its last
+    //   value is not the whole file's spend either.
+    //
+    // Turn 1 is two responses (300 + 700), turn 2 is one (500). The thread
+    // arrives carrying 4_000 input from the rollout this one resumed.
     let r1 = Usage { input: 300, output: 30, ..Usage::default() };
     let r2 = Usage { input: 700, output: 70, ..Usage::default() };
-    // What codex itself writes alongside them: the turn/thread running totals,
-    // i.e. the PREFIX sums.
-    let after1 = Usage { input: 300, output: 30, ..Usage::default() };
-    let after2 = Usage { input: 1_000, output: 100, ..Usage::default() };
+    let r3 = Usage { input: 500, output: 50, ..Usage::default() };
+    // `turn_token_usage` after each response: the turn's own prefix sums.
+    let turn1 = Usage { input: 300, output: 30, ..Usage::default() };
+    let turn2 = Usage { input: 1_000, output: 100, ..Usage::default() };
+    let turn3 = Usage { input: 500, output: 50, ..Usage::default() };
+    // `thread_token_usage` after each: the thread's prefix sums, on top of the
+    // 4_000/400 this resumed thread began with.
+    let thread1 = Usage { input: 4_300, output: 430, ..Usage::default() };
+    let thread2 = Usage { input: 5_000, output: 500, ..Usage::default() };
+    let thread3 = Usage { input: 5_500, output: 550, ..Usage::default() };
 
     let text = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         header(THREAD, "C:/tmp/codex-repo"),
-        usage_line(r1, after1, after1),
-        usage_line(r2, after2, after2),
+        usage_line(r1, turn1, thread1),
+        usage_line(r2, turn2, thread2),
+        usage_line(r3, turn3, thread3),
     );
     let u = parse_codex_transcript(&text);
 
-    assert_eq!(u.tokens.input_tokens, 1_000, "the two responses' own `usage`, summed");
-    assert_eq!(u.tokens.output_tokens, 100);
-    // The discriminating assertion. Summing the CUMULATIVE column instead
-    // yields 300 + 1000 = 1300 — the prefix-sum defect, which looks entirely
-    // plausible on a real thread and is what this fixture exists to catch.
-    assert_ne!(
-        u.tokens.input_tokens, 1_300,
-        "summing `thread_token_usage` sums a series of prefixes: N responses report \
-         roughly N times the real spend, and nothing about the number looks wrong"
-    );
-    assert_ne!(u.tokens.input_tokens, 1_300 - 300, "nor `turn_token_usage`'s last value alone");
+    assert_eq!(u.tokens.input_tokens, 1_500, "the three responses' own `usage`, summed");
+    assert_eq!(u.tokens.output_tokens, 150);
+
+    // The discriminating half: all four other readings, each landing somewhere
+    // else. Written as a loop so a fixture edit that made any two of them
+    // collide — which is exactly the defect this test shipped with in review
+    // round 0 — fails HERE rather than quietly stopping the assertions below
+    // from discriminating anything.
+    let wrong = [
+        ("summing `thread_token_usage` — a series of prefixes", 4_300 + 5_000 + 5_500u64),
+        ("reading the LAST `thread_token_usage`", 5_500),
+        ("summing `turn_token_usage`", 300 + 1_000 + 500),
+        ("reading the LAST `turn_token_usage`", 500),
+    ];
+    for (reading, figure) in wrong {
+        assert_ne!(
+            figure, 1_500,
+            "fixture: {reading} must land on a DIFFERENT number from the right answer, or the \
+             assertion below pins nothing"
+        );
+        assert_ne!(
+            u.tokens.input_tokens, figure,
+            "{reading} would report {figure}: N responses report roughly N times the real \
+             spend, and nothing about the number looks wrong"
+        );
+    }
 
     // And the identity the mapping is designed around: loomux's four disjoint
     // buckets sum to codex's own `total_tokens` for the same responses.
-    assert_eq!(u.tokens.total(), r1.total() + r2.total());
+    assert_eq!(u.tokens.total(), r1.total() + r2.total() + r3.total());
 }
 
 #[test]

@@ -8775,6 +8775,218 @@ fn the_worker_pane_is_released_on_a_done_report_and_kept_on_a_blocked_one() {
     }
 }
 
+/// **The worker pane is released on the tick that consumes its report even when
+/// that tick is in `ci-wait`** (#2811 S1) — the ordinary push-then-report round,
+/// which is 15 of the 20 hand-backs the measured session produced and every one
+/// of the ones that held a slot for a whole review round.
+///
+/// The test above is the same rule on the OTHER route: a body-only fix, where
+/// there is nothing to push, so the report lands while the drive is still in
+/// `fix-wait`. That route was the only one #2501 covered, and it is exactly the
+/// 5 releases the audit recorded — which is how a rule that never fired for
+/// three quarters of its subjects stayed green for a month.
+///
+/// Both arms here PUSH; they differ in the word the worker then reports, which
+/// is the axis that decides. `blocked` in `ci-wait` is INVARIANT 3 territory
+/// just as it is in `fix-wait`, so the pane the hold hands to the orchestrator
+/// must still be there.
+#[test]
+fn the_worker_pane_is_released_when_its_report_lands_in_ci_wait_after_a_push() {
+    // The third head this file needs: the hand-back is at HEAD_B and the fix is
+    // pushed on top of it, so arc 7 has a head move to see.
+    const HEAD_C: &str = "cc33dd44ee55ff6677889900aabbccddeeff0011";
+    for (arm, outcome, released) in [("done", "done", true), ("blocked", "blocked", false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, _lane) = briefed(&reg, &repo, &gh);
+        let session_before = driven_worker_session(&reg, &group);
+
+        // Red checks at a new head take the drive to `fix-wait` and hand back.
+        gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+        gh.set_facts("OPEN", HEAD_B);
+        reg.rd_drive_group_with(&group, &gh, 30_000);
+        let handed = reg.rd_drive_group_with(&group, &gh, 40_000);
+        assert_eq!(status_state(&reg, &group), "fix-wait", "{arm}");
+        let (_pr, worker) =
+            handed.handbacks.first().cloned().expect("the hand-back resumed a worker");
+
+        // **The worker PUSHES.** The head moves under `fix-wait`, which is arc 7,
+        // and the drive goes back to `ci-wait` to watch the new matrix. The
+        // report has not arrived yet, so this tick must release nothing — the
+        // negative control that keeps the assertion below about the REPORT.
+        //
+        // The new matrix is GREEN, which is what lets arc 2 be taken once the
+        // report lands. An empty check list is not green — it is "no checks
+        // reported", which `ci-wait` waits on — so the payload is the one
+        // `FakeGh::green` uses.
+        gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+        gh.set_facts("OPEN", HEAD_C);
+        let pushed = reg.rd_drive_group_with(&group, &gh, 50_000);
+        assert_eq!(status_state(&reg, &group), "ci-wait", "{arm}: arc 7 puts it back in ci-wait");
+        assert!(
+            pushed.released.is_empty(),
+            "{arm}: a push is not a report — released {:?}",
+            pushed.released
+        );
+
+        report_as(&reg, &group, &worker, Role::Worker, outcome);
+        let report = reg.rd_drive_group_with(&group, &gh, 60_000);
+
+        let got: Vec<String> = report.released.iter().map(|(_, _, a)| a.clone()).collect();
+        let rows = audit_details(&reg, &group, "rd-worker-released");
+        let dead = reg.agent(&worker).map(|a| a.status == AgentStatus::Dead).unwrap_or(false);
+
+        assert_eq!(got, if released { vec![worker.clone()] } else { vec![] }, "{arm}");
+        assert_eq!(rows.len(), usize::from(released), "{arm}: rows {rows:?}");
+        assert_eq!(dead, released, "{arm}: the worker pane's liveness");
+        if released {
+            let row = &rows[0];
+            assert_eq!(row["agent"], json!(worker), "{arm}: {row}");
+            assert_eq!(row["reason"], json!("report-consumed"), "{arm}: {row}");
+            assert_eq!(row["session"], json!(session_before), "{arm}: {row}");
+            // **At the PUSHED head**, which is what says the release belongs to
+            // this round rather than to the hand-back that preceded it — the
+            // audit shape §1(b) used to tell the two apart, and the one that
+            // showed all five pre-#2811 S1 releases were body-only fixes.
+            assert_eq!(row["head"], json!(HEAD_C), "{arm}: {row}");
+            assert_eq!(
+                status_state(&reg, &group),
+                "review-wait",
+                "{arm}: …and the same tick took arc 2, so the release rides the arc that \
+                 consumed the report rather than a tick of its own"
+            );
+        } else {
+            assert_eq!(
+                status_state(&reg, &group),
+                "held",
+                "{arm}: a blocked worker parks the drive, and the pane the orchestrator is \
+                 about to speak to must still be there"
+            );
+        }
+    }
+}
+
+/// **A TERMINAL step releases the panes it is finished with BEFORE the exit
+/// notice is built** (#2811 S1) — so the notice names what is really left, and the
+/// orchestrator is not handed a list of panes to kill by hand.
+///
+/// §1(f) measured what that hand-off cost: the orchestrator killed the reporting
+/// worker in the same second it started 4 of one session's 16 drives, and each
+/// following hand-back then resumed the session into a FRESH pane. The pane was
+/// resumable the whole time; nobody was going to speak to it again.
+///
+/// # The fixture, and why each step of it is the one that reaches this rule
+///
+/// A satisfied drive normally has no worker pane left — the rule above releases
+/// it on the tick that consumes its report — so the route here is the one that
+/// genuinely arrives at a terminal step still holding one: the worker reported
+/// `blocked`, which parks the drive and KEEPS the pane (INVARIANT 3), the
+/// orchestrator dispositioned it and resumed, and the drive then finished
+/// without ever asking that worker for anything again. Arc 11 clears the arc-7
+/// anchor, so no hand-back is outstanding at the exit and the pane is the
+/// drive's to release.
+///
+/// The lane is kept to the exit the other way: `review_verdict` does not end a
+/// turn (`idle_since_ms` is stamped by `report`), so the release barrier refuses
+/// it on the `review-wait` tick, and it reports only afterwards. Both panes are
+/// therefore live, idle and owned at the tick that satisfies the gate — which is
+/// the state pre-#2811 S1 released nothing in.
+#[test]
+fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _lane0) = briefed(&reg, &repo, &gh);
+    let session = driven_worker_session(&reg, &group);
+    reg.set_pr_body_override(Some("b".to_string()));
+
+    // Red at a new head: hand-back, and the worker answers `blocked`.
+    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    gh.set_facts("OPEN", HEAD_B);
+    reg.set_pr_head_override(Some(HEAD_B.to_string()));
+    reg.rd_drive_group_with(&group, &gh, 30_000);
+    let handed = reg.rd_drive_group_with(&group, &gh, 40_000);
+    let (_pr, worker) = handed.handbacks.first().cloned().expect("the hand-back resumed a worker");
+    report_as(&reg, &group, &worker, Role::Worker, "blocked");
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+    assert_eq!(
+        status_state(&reg, &group),
+        "held",
+        "the fixture's premise: a blocked worker parks the drive"
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status != AgentStatus::Dead),
+        "…and its pane is KEPT, which is what makes it available at the exit"
+    );
+
+    // The orchestrator dispositions and resumes; CI is green at the same head.
+    gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 60_000);
+    assert_eq!(out["driving"], json!(true), "the resume was refused: {out}");
+    // Two ticks, as `briefed` takes: arc 11 re-enters `ci-wait`, the first tick
+    // reads green and advances to `review-wait`, the second opens the lane.
+    reg.rd_drive_group_with(&group, &gh, 65_000);
+    let reopened = reg.rd_drive_group_with(&group, &gh, 70_000);
+    let lane = reopened
+        .lanes_opened
+        .first()
+        .cloned()
+        .map(|(_, _, a)| a)
+        .unwrap_or_else(|| panic!("the resumed drive briefs its lane: {reopened:?}"));
+
+    // The lane answers but does not end its turn, so the `review-wait` tick's
+    // release is refused and the pane survives into `gate-check`.
+    record_pass_for(&reg, &group, &lane);
+    let to_gate = reg.rd_drive_group_with(&group, &gh, 80_000);
+    assert_eq!(status_state(&reg, &group), "gate-check");
+    assert!(
+        to_gate.released.is_empty(),
+        "the control: a lane mid-turn is not released, so what happens below is the \
+         TERMINAL rule and not condition 2 firing early: {:?}",
+        to_gate.released
+    );
+    report_as(&reg, &group, &lane, Role::Reviewer, "done");
+
+    let before = audit_actions(&reg, &group).len();
+    let end = reg.rd_drive_group_with(&group, &gh, 90_000);
+    let actions: Vec<String> = audit_actions(&reg, &group).split_off(before);
+
+    let pos = |a: &str| actions.iter().position(|x| x == a);
+    let sat = pos("rd-satisfied").unwrap_or_else(|| panic!("the drive must satisfy: {actions:?}"));
+    let lane_row =
+        pos("rd-lane-released").unwrap_or_else(|| panic!("the lane must be released: {actions:?}"));
+    let worker_row = pos("rd-worker-released")
+        .unwrap_or_else(|| panic!("the worker must be released: {actions:?}"));
+    assert!(lane_row < sat, "the lane's release precedes the satisfied row: {actions:?}");
+    assert!(worker_row < sat, "…and so does the worker's: {actions:?}");
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert!(released.contains(&lane), "the lane pane went: {released:?}");
+    assert!(released.contains(&worker), "the worker pane went: {released:?}");
+    assert_eq!(
+        audit_details(&reg, &group, "rd-worker-released")[0]["reason"],
+        json!("drive-ended"),
+        "the reason is not `report-consumed`: no report was consumed on this path, and an \
+         audit reason is a claim"
+    );
+
+    // **The notice, which is the whole point of doing this before it is built.**
+    let notice = end
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("a satisfied drive owes a notice: {:?}", end.notices));
+    assert!(!notice.contains(&lane), "a released pane is not named as still running: {notice}");
+    assert!(!notice.contains(&worker), "…nor is the worker: {notice}");
+    assert!(
+        notice.contains(&format!("worker session {session} resumes with spawn_agent(resume:)")),
+        "…and what replaces it is the handle that still works: {notice}"
+    );
+}
+
 /// **A released lane comes back on its own session** — the claim the whole
 /// narrowing rests on, performed rather than asserted.
 ///

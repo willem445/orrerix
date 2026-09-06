@@ -786,7 +786,7 @@ impl CodexFold {
         };
         match v.get("type").and_then(Value::as_str) {
             Some("token_usage_record") => {
-                let Some(usage) = v.pointer("/payload/usage") else { return };
+                let Some(usage) = v.pointer("/payload/thread_token_usage") else { return };
                 let t = codex_tokens(usage);
                 self.totals.input_tokens += t.input_tokens;
                 self.totals.output_tokens += t.output_tokens;

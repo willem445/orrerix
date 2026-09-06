@@ -51,6 +51,9 @@ use loomux_lib::orchestration::{
     CompactionStatus,
     auto_compact_banner_detected, compact_nudge_poll_interval, compaction_confirmed, copilot_compaction_marker_detected, directive_ledger_embed, ledger_capped,
     human_typed_compact_detected, copilot_autopilot_prompt_detected, create_orchestration_group,
+    // #1689 D1: the launcher's own create path, so a test can vary the workflow
+    // name the way the form does rather than hand-building `Guardrails`.
+    create_orchestration_sync, SpawnRequest,
     // #1020 item 5: how many idle workers a launch opens, and what an unasked
     // count resolves to.
     starter_workers,
@@ -63590,4 +63593,182 @@ fn a_pi_session_header_is_read_correctly_from_a_bounded_prefix() {
         pi_session_cwd_in_dir(&dir, "small").unwrap().as_deref(),
         Some("C:/small")
     );
+}
+
+// ── #1689 slice D1: the launcher pins WHICH workflow a group runs ───────────
+
+/// A repo declaring two workflows: `default` (`.orrerix/workflow.yml`) and one named
+/// file under `.orrerix/workflows/`. Each declares a reviewer block nothing else
+/// declares, so which file was read is decided by the roster rather than by a name
+/// that could have been copied around without the file ever being opened.
+fn repo_with_two_workflows(repo: &Path) -> String {
+    let cfg = repo.join(".orrerix");
+    fs::create_dir_all(cfg.join("workflows")).unwrap();
+    fs::write(
+        cfg.join("workflow.yml"),
+        "version: 1\nblocks:\n  - id: rev-from-default\n    kind: reviewer\n",
+    )
+    .unwrap();
+    fs::write(
+        cfg.join("workflows").join("b.yml"),
+        "version: 1\nblocks:\n  - id: rev-from-b\n    kind: reviewer\n",
+    )
+    .unwrap();
+    repo.to_string_lossy().replace('\\', "/")
+}
+
+/// `create_orchestration`'s argument list with everything but the two fields under test
+/// held at the launcher's own defaults, so a call site reads as the one thing it varies.
+#[allow(clippy::too_many_arguments)]
+fn launch_with_workflow(
+    reg: &Arc<OrchRegistry>,
+    repo: &str,
+    advanced: bool,
+    workflow: Option<&str>,
+) -> Result<SpawnRequest, String> {
+    create_orchestration_sync(
+        reg,
+        repo.to_string(),
+        None,
+        2,
+        "claude".into(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        false,
+        0,
+        0,
+        0,
+        advanced,
+        workflow.map(str::to_string),
+        None,
+    )
+}
+
+#[test]
+fn the_launcher_pins_which_workflow_a_group_runs_and_persists_the_name() {
+    use std::sync::Arc;
+    // The consent moment is the launch, and #1689 gives the human a second thing to
+    // consent to: not only "run this repo's roster" but "run THIS ONE of its rosters".
+    // The pin has to reach both the live roster and `group.json`, or a resume comes back
+    // on a different workflow than the one that was launched.
+    let state = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo_with_two_workflows(repo.path());
+    let reg = Arc::new(relaunch_registry(state.path()));
+
+    let launched = launch_with_workflow(&reg, &repo_path, true, Some("b")).expect("launch");
+    let gid = launched.group_id.clone();
+    let rails = reg.group(&gid).unwrap().guardrails;
+    assert!(
+        rails.block("rev-from-b").is_some(),
+        "the named file is the one that was read"
+    );
+    assert!(
+        rails.block("rev-from-default").is_none(),
+        "and the default file is NOT — a pin that reads both files pins nothing"
+    );
+    assert_eq!(rails.workflow.as_str(), "b");
+
+    // Persisted beside the roster it produced, in the same write, so a resume cannot come
+    // back on a name that disagrees with the blocks.
+    let disk: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(reg.state_root().join(gid.as_str()).join("group.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(disk["guardrails"]["workflow"], serde_json::json!("b"));
+}
+
+#[test]
+fn a_launch_that_names_no_workflow_runs_default_exactly_as_it_always_did() {
+    use std::sync::Arc;
+    // The whole compatibility claim, as a test: an omitted argument is `default`, which is
+    // `.orrerix/workflow.yml` — the pre-#1689 launch, for every caller that has not learned
+    // to ask and for every repo that declares one file.
+    let state = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo_with_two_workflows(repo.path());
+    let reg = Arc::new(relaunch_registry(state.path()));
+
+    let launched = launch_with_workflow(&reg, &repo_path, true, None).expect("launch");
+    let rails = reg.group(&launched.group_id).unwrap().guardrails;
+    assert!(rails.block("rev-from-default").is_some(), "no name means the default file");
+    assert!(rails.block("rev-from-b").is_none());
+    assert_eq!(rails.workflow.as_str(), "default");
+
+    // Explicitly naming `default` is the SAME answer, not a second code path — the
+    // property that makes the omission a default rather than a special case.
+    let state2 = tempfile::tempdir().unwrap();
+    let reg2 = Arc::new(relaunch_registry(state2.path()));
+    let named = launch_with_workflow(&reg2, &repo_path, true, Some("default")).expect("launch");
+    let rails2 = reg2.group(&named.group_id).unwrap().guardrails;
+    assert!(rails2.block("rev-from-default").is_some());
+    assert_eq!(rails2.workflow.as_str(), "default");
+}
+
+#[test]
+fn a_workflow_name_that_is_not_one_refuses_the_launch_and_creates_nothing() {
+    use std::sync::Arc;
+    // CLAUDE.md constraint 6: the name becomes `<name>.yml` under a directory, so it is a
+    // path component and is validated as one — refused, never rewritten. Refused rather
+    // than defaulted, too: a LAUNCH has a human in front of it, and silently running some
+    // other workflow than the one they picked is the failure this check exists to avoid.
+    let state = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo_with_two_workflows(repo.path());
+    let reg = Arc::new(relaunch_registry(state.path()));
+
+    for bad in ["../b", "a/b", "CON", "-b", "", "b.yml"] {
+        let err = launch_with_workflow(&reg, &repo_path, true, Some(bad))
+            .expect_err(&format!("{bad:?} must be refused"));
+        assert!(
+            err.contains("not a usable workflow name"),
+            "{bad:?} refused with the wrong message: {err}"
+        );
+    }
+
+    // The negative control the refusal is worth nothing without: nothing was created. A
+    // group dir would mean the check ran BELOW the point where state is minted, which is
+    // the shape a later refactor could reintroduce without any assertion above noticing.
+    let created: Vec<String> = fs::read_dir(reg.state_root())
+        .map(|d| {
+            d.flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(created.is_empty(), "a refused launch created {created:?}");
+
+    // …and the positive control for THAT: the same call with a usable name does create one,
+    // so "creates nothing" cannot pass by the launch never working at all.
+    launch_with_workflow(&reg, &repo_path, true, Some("b")).expect("a usable name still launches");
+    assert!(fs::read_dir(reg.state_root()).unwrap().flatten().any(|e| e.path().is_dir()));
+}
+
+#[test]
+fn the_workflow_name_is_recorded_with_the_toggle_off_and_is_inert_until_it_is_on() {
+    use std::sync::Arc;
+    // The two are different questions and the docs say so: the toggle is the CONSENT to run
+    // a repo-authored roster at all, the name answers only WHICH file. Recording the name
+    // with the toggle off is what makes turning it on live come back to the workflow the
+    // human chose at launch rather than to `default`.
+    let state = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo_with_two_workflows(repo.path());
+    let reg = Arc::new(relaunch_registry(state.path()));
+
+    let launched = launch_with_workflow(&reg, &repo_path, false, Some("b")).expect("launch");
+    let rails = reg.group(&launched.group_id).unwrap().guardrails;
+    assert_eq!(rails.workflow.as_str(), "b", "the name is recorded");
+    assert!(
+        rails.block("rev-from-b").is_none(),
+        "and is inert: the toggle is off, so no repo-authored roster runs"
+    );
+    assert!(rails.block("orchestrator").is_some(), "the built-in roster runs instead");
 }

@@ -13870,7 +13870,6 @@ pub struct UsageSnapshot {
     /// deserializes to the empty string, which reads as "unknown block" rather
     /// than being guessed from `role`. Empty is a real answer and is rendered
     /// as one.
-    #[serde(default)]
     pub block: String,
     /// The CLI that block runs (`claude`, `opencode`, `pi`, `codex`, …), as
     /// `Guardrails::cli_for_block` resolves it at the moment of the snapshot.

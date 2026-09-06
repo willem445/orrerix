@@ -410,6 +410,51 @@ export function computeWindow(
 }
 
 /**
+ * The window for a view that is FOLLOWING THE LIVE END — anchored to the last
+ * row rather than to a scroll offset.
+ *
+ * WHY NOT `computeWindow` AT A DERIVED SCROLLTOP. A pinned view could ask for
+ * `total - viewport` off the height array, and today that does produce
+ * `padBottom === 0` — but only as a CONSEQUENCE of `computeWindow`'s loop bound
+ * (`total + overscan` is past the last row, so the scan never breaks early),
+ * and only while `total` is summed the same way the caller derived the
+ * scrollTop. Nothing states it and no test asks for it, so it is one overscan
+ * tweak or one arithmetic change away from silently becoming false.
+ *
+ * That property is worth stating because of what rests on it. `total` is
+ * ESTIMATES for every row not yet measured, while the browser's own
+ * `scrollHeight` is the REAL laid-out height; the renderer follows the live end
+ * by setting `scrollTop = scrollHeight`, which is the browser's number, not
+ * ours. If a pinned window ever ended short of the last row, that scroll would
+ * land inside `padBottom` and the viewport would show a SPACER — a blank pane,
+ * no error, nothing red, and self-correcting only once the burst stopped
+ * bringing unmeasured rows.
+ *
+ * So this function makes it a property rather than a side effect: `padBottom`
+ * is zero BY CONSTRUCTION, the end of the content IS the last row whatever the
+ * estimates say, and estimate error survives only in `padTop`, where its whole
+ * effect is a scrollbar thumb that sits slightly wrong. The test named "a
+ * pinned window always ends at the last row" is what keeps it true.
+ */
+export function bottomWindow(
+  heights: readonly number[],
+  viewportHeight: number,
+  overscanPx: number = OVERSCAN_PX,
+): WindowSpec {
+  const need = Math.max(0, viewportHeight) + overscanPx;
+  let total = 0;
+  for (let i = 0; i < heights.length; i += 1) total += Math.max(0, heights[i] ?? 0);
+
+  let filled = 0;
+  let start = heights.length;
+  while (start > 0 && filled < need) {
+    start -= 1;
+    filled += Math.max(0, heights[start] ?? 0);
+  }
+  return { start, end: heights.length, padTop: total - filled, padBottom: 0, total };
+}
+
+/**
  * Is the view following the live end?
  *
  * The gap is measured in pixels rather than by `scrollTop === scrollHeight -

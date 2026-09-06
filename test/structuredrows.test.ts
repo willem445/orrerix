@@ -27,6 +27,7 @@ import {
   actionsFor,
   answerWasRefusal,
   argLine,
+  bottomWindow,
   isOpen,
   chipFor,
   computeWindow,
@@ -135,6 +136,43 @@ test("scrolled past every row the window is empty, not the last row", () => {
 test("an empty transcript produces an empty window with no height", () => {
   const w = computeWindow([], 0, 600);
   assert.deepEqual(w, { start: 0, end: 0, padTop: 0, padBottom: 0, total: 0 });
+});
+
+test("a pinned window always ends at the last row, with NOTHING below it", () => {
+  // WHAT RESTS ON THIS. The renderer follows the live end with `scrollTop =
+  // scrollHeight` — the BROWSER's number, off the real laid-out height — while
+  // the window it built came from the height array, which is ESTIMATES for
+  // every row not yet measured. If a pinned window ever ended short of the last
+  // row, that scroll would land inside `padBottom` and the viewport would show
+  // a spacer: a blank pane, no error, nothing red, self-correcting only once
+  // the burst stopped bringing unmeasured rows.
+  //
+  // `computeWindow` at a derived scrollTop happens to give `padBottom === 0`
+  // today, as a consequence of its loop bound rather than as anything stated.
+  // This is the stated version, and this test is what keeps it stated.
+  const heights = Array.from({ length: 500 }, (_, i) => 20 + (i % 7) * 15);
+  const w = bottomWindow(heights, 600, 600);
+  assert.equal(w.end, heights.length, "the window ends at the last row");
+  assert.equal(w.padBottom, 0, "and there is nothing below it to land in");
+  assert.ok(w.start < w.end, "positive control: the window is not empty");
+
+  let inWindow = 0;
+  for (let i = w.start; i < w.end; i += 1) inWindow += heights[i]!;
+  assert.equal(w.padTop + inWindow, w.total, "the spacer and the window are the whole height");
+  assert.ok(
+    inWindow >= 600 + 600,
+    `the window holds ${inWindow}px, less than the viewport plus overscan it must fill`,
+  );
+  assert.ok(w.end - w.start < heights.length / 4, "and it is still a small slice of 500 rows");
+});
+
+test("a pinned window on a transcript shorter than the viewport is the whole thing", () => {
+  const w = bottomWindow([30, 30, 30], 600, 600);
+  assert.deepEqual(w, { start: 0, end: 3, padTop: 0, padBottom: 0, total: 90 });
+});
+
+test("a pinned window on an empty transcript is empty, not a negative slice", () => {
+  assert.deepEqual(bottomWindow([], 600), { start: 0, end: 0, padTop: 0, padBottom: 0, total: 0 });
 });
 
 test("pinnedAtBottom tolerates sub-pixel layout, and lets go when the human scrolls up", () => {

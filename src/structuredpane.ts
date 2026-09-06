@@ -79,7 +79,9 @@ import type {
 import {
   OVERSCAN_PX,
   actionsFor,
+  answerWasRefusal,
   argLine,
+  bottomWindow,
   chipFor,
   computeWindow,
   diffOf,
@@ -329,13 +331,14 @@ export class StructuredPaneView {
     const heights = rows.map((r) => this.heights.get(r.key) ?? r.estimate);
 
     const viewport = this.scrollEl.clientHeight || 0;
-    // Following the live end means "the window is the bottom of the list",
-    // which is decided from the model rather than by scrolling first and
-    // reading where we landed.
-    let total = 0;
-    for (const h of heights) total += h;
-    const scrollTop = this.pinned ? Math.max(0, total - viewport) : this.scrollEl.scrollTop;
-    const win = computeWindow(heights, scrollTop, viewport, OVERSCAN_PX);
+    // Following the live end is a DIFFERENT window, not the same one at a
+    // derived scrollTop. A pinned view is anchored to the last row, so
+    // `padBottom` is zero and the `scrollTop = scrollHeight` below cannot land
+    // in a spacer however wrong the unmeasured rows' estimates are —
+    // `bottomWindow`'s note has why that is worth stating rather than deriving.
+    const win = this.pinned
+      ? bottomWindow(heights, viewport, OVERSCAN_PX)
+      : computeWindow(heights, this.scrollEl.scrollTop, viewport, OVERSCAN_PX);
 
     // --- writes -------------------------------------------------------------
     const wanted = new Set<string>();
@@ -468,6 +471,18 @@ export class StructuredPaneView {
     el.dataset.seg = row.segment;
     el.dataset.key = row.key;
     if (row.live) el.dataset.live = "1";
+    // ROW ARRIVAL IS A PROPERTY OF THE BLOCK, NOT OF THE NODE. A node is
+    // rebuilt whenever its signature moves — three times over a tool card's
+    // life, once per delta for the open text block — and an arrival that
+    // restarted on each rebuild would re-fade a row that has been on screen for
+    // a minute. The animation reports "something new", so it is owed once per
+    // BLOCK; seen as flicker on the replay page under the storm.
+    //
+    // `heights` is the honest "has this block been on screen" set: an entry
+    // lands only after a successful MEASUREMENT — the frame after the block's
+    // first build, and never for a row measured at zero in a hidden pane — and
+    // it is pruned with the projection.
+    if (this.heights.has(row.key)) el.dataset.arrived = "1";
     switch (b.kind) {
       case "text":
         el.appendChild(this.buildText(b, row));
@@ -689,7 +704,12 @@ export class StructuredPaneView {
     if (b.settled) {
       const chip = document.createElement("span");
       chip.className = "spane-chip";
-      chip.dataset.status = el.dataset.seg === "danger" ? "error" : "ok";
+      // ASK THE ONE PREDICATE, never re-derive it. An earlier cut read
+      // `el.dataset.seg` — which is set on the ROW, not on this card — so it was
+      // `undefined` on every card and every settlement, denials included, drew
+      // the OK chip. `answerWasRefusal` is exported precisely so the chip and
+      // the gutter segment cannot answer the same question two ways.
+      chip.dataset.status = answerWasRefusal(b.settled.answer) ? "error" : "ok";
       chip.innerHTML = `<span class="spane-dotmark"></span>`;
       chip.append(document.createTextNode(settlementLine(b) ?? ""));
       acts.appendChild(chip);

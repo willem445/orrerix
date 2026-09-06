@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>orrerix — structured pane, fixture replay</title>
+    <!-- Pre-paint the app's ground so the page never flashes white before the
+         bundle arrives, exactly as index.html does. -->
+    <style>
+      html, body { height: 100%; margin: 0; background: #111111; }
+      #host { position: fixed; inset: 0; display: flex; flex-direction: column; }
+      #bar {
+        flex: none; display: flex; gap: 8px; align-items: center;
+        padding: 6px 10px; border-bottom: 1px solid #2a2a2a;
+        font: 11.5px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+        color: #a3a3a3;
+      }
+      #bar button {
+        padding: 2px 8px; border: 1px solid #393939; border-radius: 6px;
+        background: none; color: #d2d2d2; font: inherit; cursor: pointer;
+      }
+      #bar .grow { flex: 1; }
+      #bar code { font-family: Consolas, monospace; color: #6d6d6d; }
+      #pane { flex: 1; min-height: 0; display: flex; }
+    </style>
+  </head>
+  <body>
+    <div id="host">
+      <div id="bar">
+        <button id="session">replay session fixture</button>
+        <button id="storm">storm (2500 blocks)</button>
+        <button id="dim">dim thinking</button>
+        <button id="reset">reset</button>
+        <span class="grow"></span>
+        <code id="stat"></code>
+      </div>
+      <div id="pane"></div>
+    </div>
+    <script type="module" src="./structured-replay.ts"></script>
+  </body>
+</html>

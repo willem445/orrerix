@@ -6007,13 +6007,23 @@ button.wf-finding:hover { background: var(--surface-2); }
   animation: spane-warp-pulse 1.9s var(--ease) infinite;
 }
 
-/* Row arrival: a one-shot, 3px rise. Nothing here loops. */
+/* Row arrival: a one-shot, 3px rise. Nothing here loops.
+
+   Scoped to a row that has NOT been on screen before (`data-arrived`), because a
+   node is rebuilt whenever its content changes and an arrival that restarts on
+   every rebuild never finishes: under a burst every row sits at opacity 0 and
+   the pane renders blank with a full, correctly-positioned node count. */
 @keyframes spane-row-in {
   from { opacity: 0; transform: translateY(3px); }
   to { opacity: 1; transform: none; }
 }
 
-.spane-row { animation: spane-row-in var(--dur-fast) var(--ease) both; }
+/* NO `animation-fill-mode`, deliberately. `both` holds the from-state
+   (opacity 0) before the animation starts and after it ends, so the row's
+   RESTING appearance would depend on an animation having run. Without a fill
+   mode the resting state is the row's own and the fade is a 120ms decoration on
+   top of it — which is what a decoration should be. */
+.spane-row:not([data-arrived="1"]) { animation: spane-row-in var(--dur-fast) var(--ease); }
 
 /* ---- the model's answer ------------------------------------------------ */
 
@@ -6327,7 +6337,8 @@ button.wf-finding:hover { background: var(--surface-2); }
   overflow: hidden;
 }
 
-.spane-ask[data-open="pending"] { animation: spane-ask-in var(--dur-base) var(--ease) both; }
+/* No fill mode, for the reason the row-arrival rule states. */
+.spane-ask[data-open="pending"] { animation: spane-ask-in var(--dur-base) var(--ease); }
 
 @keyframes spane-ask-in {
   from { opacity: 0; transform: translateY(4px); }
@@ -6586,7 +6597,7 @@ button.wf-finding:hover { background: var(--surface-2); }
   .spane-row::before,
   .spane-spin,
   .spane-caret,
-  .spane-row,
+  .spane-row:not([data-arrived="1"]),
   .spane-ask[data-open="pending"],
   .spane-tk-v.bumped {
     animation: none !important;

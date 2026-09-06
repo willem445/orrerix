@@ -51,7 +51,13 @@ import { planWebglRetry } from "./webglretry";
 import { showToast } from "./toast";
 import { isAppShortcut } from "./shortcuts";
 import { attentionPresentation, attentionDismiss, attentionChanged } from "./attention";
-import { dismissStranded, endGroup, notifyPaneDisposed, seedMailUnread } from "./orchestration";
+import {
+  dismissStranded,
+  endGroup,
+  notifyPaneDisposed,
+  registerStructuredPane,
+  seedMailUnread,
+} from "./orchestration";
 import { heldPresentation } from "./heldbadge";
 import { queuePresentation, type QueueDepthReading } from "./queuebadge";
 import { mailboxPresentation } from "./mailboxbadge";
@@ -2820,7 +2826,7 @@ export class Pane implements VoiceTargetPane {
       if (!opts.groupId || !opts.agentId) {
         throw new Error("a structured pane needs both groupId and agentId");
       }
-      this.structuredPaneView = new StructuredPaneView({
+      const view = new StructuredPaneView({
         groupId: opts.groupId,
         agentId: opts.agentId,
         cli: opts.cli ?? null,
@@ -2831,7 +2837,12 @@ export class Pane implements VoiceTargetPane {
           opts.answer ??
           (() => Promise.reject(new Error("this structured pane has no answer channel"))),
       });
-      return this.structuredPaneView;
+      this.structuredPaneView = view;
+      // Bind the view to its agent so `orch-pane-event` can reach it in O(1). The
+      // matching unregister rides `notifyPaneDisposed`, which `dispose()` already
+      // calls — one lifecycle, not two.
+      registerStructuredPane(opts.agentId, view);
+      return view;
     }
 
     if (opts.kind === "workflow") {
@@ -2890,6 +2901,15 @@ export class Pane implements VoiceTargetPane {
    *  no PTY, ever. The kind itself stays private: nothing outside needs to know WHICH
    *  surface it is, and the moment something does, it should ask a question about the
    *  behavior it cares about rather than switch on the kind. */
+  /** This pane's structured transcript view (#2891), or null on every other kind.
+   *  Exposed for ONE reader — `orchestration.ts`'s registry, which drops its entry
+   *  by identity when the pane is disposed. The kind itself stays private, as
+   *  `isContent`'s note below says it must: nothing else needs to know WHICH
+   *  surface this is. */
+  get structuredView(): StructuredPaneView | null {
+    return this.structuredPaneView;
+  }
+
   get isContent(): boolean {
     return this.contentKind !== null;
   }

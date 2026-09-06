@@ -21,5 +21,11 @@
     // e2e/tsconfig.json's own "types" override is unaffected by this.
     "types": []
   },
-  "include": ["src"]
+  // `dev` is the fixture-replay page (#2891 S4) — a dev-only entry that drives the
+  // REAL `StructuredPaneView` off a checked-in fixture so the DOM wiring can be
+  // validated by hand, which is this repo's rule for DOM code. It is typechecked
+  // here on purpose: a dev harness nothing compiles is a dev harness that has
+  // already rotted the next time somebody reaches for it. `vite build` bundles
+  // `index.html` alone, so nothing under `dev/` reaches `dist/`.
+  "include": ["src", "dev"]
 }

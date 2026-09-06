@@ -6,13 +6,14 @@
 {"kind":"text","turn":1,"delta":"Looking at the resume path "}
 {"kind":"text","turn":1,"delta":"for the roster row.\n"}
 {"kind":"tool_call","turn":1,"id":"t1","name":"Grep","input":{"pattern":"pane_kind","path":"src-tauri/src"}}
-{"kind":"tool_output","turn":1,"id":"t1","delta":"src-tauri/src/orchestration/mod.rs:24674:","is_error":false}
-{"kind":"tool_output","turn":1,"id":"t1","delta":"    let pane_kind = row.pane_kind;\n","is_error":false}
+{"kind":"tool_output","turn":1,"id":"t1","delta":"src-tauri/src/orchestration/mod.rs:24674:","is_error":false,"replaces":false}
+{"kind":"tool_output","turn":1,"id":"t1","delta":"    let pane_kind = row.pane_kind;\n","is_error":false,"replaces":false}
 {"kind":"tool_result","turn":1,"id":"t1","ok":true}
 {"kind":"text","turn":1,"delta":"The roster row is rebuilt without the model field."}
 {"kind":"queue_changed","steering":[],"follow_up":["review the fix once CI is green"]}
 {"kind":"tool_call","turn":1,"id":"t2","name":"Bash","input":{"command":"npm test"}}
-{"kind":"tool_output","turn":1,"id":"t2","delta":"1 test failed\n","is_error":true}
+{"kind":"tool_output","turn":1,"id":"t2","delta":"1 test failed\n","is_error":true,"replaces":false}
+{"kind":"tool_output","turn":1,"id":"t2","delta":"npm test\n1 test failed\n","is_error":true,"replaces":true}
 {"kind":"tool_result","turn":1,"id":"t2","ok":false}
 {"kind":"permission_request","id":"r1","tool":"Bash","input":{"command":"git push --force"}}
 {"kind":"permission_settled","id":"r1","decision":"deny","by":"policy"}

@@ -123,6 +123,79 @@ test("duration comes from the caller's clock, and is null without one", () => {
   assert.equal(only(t, "tool")[0]!.durationMs, null);
 });
 
+test("replaces:true SUPERSEDES the held output instead of appending it", () => {
+  // The non-prefix restatement. Without the flag a consumer cannot tell this
+  // from an ordinary delta, and the card shows the output twice — which is
+  // exactly why the adapter marks it rather than leaving it to be inferred.
+  const s = run([
+    { kind: "tool_call", turn: 1, id: "t1", name: "Bash", input: {} },
+    { kind: "tool_output", turn: 1, id: "t1", delta: "line one\n", is_error: false, replaces: false },
+    { kind: "tool_output", turn: 1, id: "t1", delta: "line two\n", is_error: false, replaces: false },
+    { kind: "tool_output", turn: 1, id: "t1", delta: "THE WHOLE VALUE\n", is_error: false, replaces: true },
+  ]);
+  const card = only(s, "tool")[0]!;
+  assert.equal(card.output, "THE WHOLE VALUE\n");
+  assert.equal(card.outputBytes, utf8Bytes("THE WHOLE VALUE\n"));
+  // The duplication the field exists to prevent, named so the assertion above
+  // is read as the thing it is testing.
+  assert.doesNotMatch(card.output, /line one/, "the superseded value is gone, not prefixed");
+  assert.equal(card.output.includes("THE WHOLE VALUE"), true);
+});
+
+test("replaces defaults to APPEND — absent and false behave identically", () => {
+  // The additive promise: a producer that never sets the field, and one that
+  // sets it false, must land in the same place. Reading `undefined` as truthy
+  // anywhere here would silently erase output for every pre-field harness.
+  const batch = (replaces: boolean | undefined): ProjectionInput[] => [
+    { kind: "tool_call", turn: 1, id: "t1", name: "Bash", input: {} },
+    { kind: "tool_output", turn: 1, id: "t1", delta: "aaa", is_error: false, replaces: false },
+    ...(replaces === undefined
+      ? [{ kind: "tool_output" as const, turn: 1, id: "t1", delta: "bbb", is_error: false }]
+      : [{ kind: "tool_output" as const, turn: 1, id: "t1", delta: "bbb", is_error: false, replaces }]),
+  ];
+  const absent = only(run(batch(undefined)), "tool")[0]!;
+  const explicit = only(run(batch(false)), "tool")[0]!;
+  assert.equal(absent.output, "aaabbb");
+  assert.equal(explicit.output, "aaabbb");
+  // Positive control: the flag DOES do something on this same fixture, so the
+  // equality above is not two spellings of an inert field.
+  const replaced = only(run(batch(true)), "tool")[0]!;
+  assert.equal(replaced.output, "bbb");
+});
+
+test("a replaces:true on the FIRST output has nothing to supersede", () => {
+  const s = run([
+    { kind: "tool_call", turn: 1, id: "t1", name: "Bash", input: {} },
+    { kind: "tool_output", turn: 1, id: "t1", delta: "whole", is_error: false, replaces: true },
+  ]);
+  const card = only(s, "tool")[0]!;
+  assert.equal(card.output, "whole");
+  assert.equal(card.outputDroppedBytes, 0);
+});
+
+test("a supersede resets the card's dropped-byte figure but not the pane's", () => {
+  // The two counters answer different questions: the card's describes what was
+  // trimmed from the value it is SHOWING (and that value is gone), the pane's
+  // is a session-lifetime total. Rewinding the second would make a monotonic
+  // counter go backwards.
+  const chunk = "z".repeat(64 * 1024);
+  const s = emptyState();
+  project(s, [{ kind: "tool_call", turn: 1, id: "t1", name: "Bash", input: {} }]);
+  for (let i = 0; i < 5; i += 1) {
+    project(s, [{ kind: "tool_output", turn: 1, id: "t1", delta: chunk, is_error: false, replaces: false }]);
+  }
+  const before = only(s, "tool")[0]!;
+  assert.ok(before.outputDroppedBytes > 0, "positive control: the ceiling really fired first");
+  const paneTotal = s.droppedBytes;
+  assert.ok(paneTotal > 0);
+
+  project(s, [{ kind: "tool_output", turn: 1, id: "t1", delta: "fresh", is_error: false, replaces: true }]);
+  const after = only(s, "tool")[0]!;
+  assert.equal(after.output, "fresh");
+  assert.equal(after.outputDroppedBytes, 0, "the card is showing an untrimmed value");
+  assert.equal(s.droppedBytes, paneTotal, "the pane's session total does not rewind");
+});
+
 test("an orphan ToolResult does not throw, and its name is null rather than a sentinel", () => {
   const s = run([{ kind: "tool_result", turn: 1, id: "ghost", ok: true }]);
   const cards = only(s, "tool");
@@ -621,7 +694,7 @@ function readFixture(): ProjectionInput[] {
 
 test("the fixture session projects to the block catalogue, with nothing unknown", () => {
   const events = readFixture();
-  assert.equal(events.length, 27, "the fixture is 27 events; a silent truncation would pass otherwise");
+  assert.equal(events.length, 28, "the fixture is 28 events; a silent truncation would pass otherwise");
   const s = run(events, { nowMs: 10_000 });
 
   assert.equal(s.unknownEvents, 0, "every kind in the fixture is one this build reads");
@@ -658,6 +731,10 @@ test("the fixture session projects to the block catalogue, with nothing unknown"
     ["Bash", "error", true],
   ]);
   assert.match(tools[0]!.output, /pane_kind/);
+  // t2's second output RESTATES the whole value (replaces:true), so the card
+  // shows it ONCE — the duplication the flag exists to prevent.
+  assert.equal(tools[1]!.output, "npm test\n1 test failed\n");
+  assert.equal((tools[1]!.output.match(/1 test failed/g) || []).length, 1, "not shown twice");
 
   const requests = only(s, "request");
   assert.deepEqual(requests.map((b) => b.channel), ["permission", "ui"]);

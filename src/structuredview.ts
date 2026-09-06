@@ -97,7 +97,20 @@ export type HarnessEventLike =
   | { kind: "text"; turn: TurnId; delta: string }
   | { kind: "thinking"; turn: TurnId; delta: string }
   | { kind: "tool_call"; turn: TurnId; id: ToolUseId; name: string; input: unknown }
-  | { kind: "tool_output"; turn: TurnId; id: ToolUseId; delta: string; is_error: boolean }
+  | {
+      kind: "tool_output";
+      turn: TurnId;
+      id: ToolUseId;
+      delta: string;
+      is_error: boolean;
+      /** `false` on every ordinary delta: APPEND. `true`: `delta` is the whole
+       *  current output for this `ToolUseId` and SUPERSEDES everything held for
+       *  it. See the `tool_output` arm for why this is carried rather than
+       *  inferred. Absent is read as `false` — a consumer that ignores the
+       *  field is exactly where it was before the field existed, which is what
+       *  makes it additive. */
+      replaces?: boolean;
+    }
   | { kind: "tool_result"; turn: TurnId; id: ToolUseId; ok: boolean }
   | { kind: "permission_request"; id: RequestId; tool: string; input: unknown }
   | { kind: "permission_settled"; id: RequestId; decision: string; by: DecisionSource }
@@ -123,9 +136,16 @@ export type HarnessEventLike =
        *  a made-up fact in the field a renderer groups by (§1.3). */
       turn: TurnId | null;
       /** The inner field is `note`, not `kind`: the outer enum's serde tag is
-       *  `kind`, so a variant field of that name emits a duplicate key and does
-       *  not round trip (#2850 S1b caught it on
-       *  `every_event_variant_survives_a_json_round_trip`). */
+       *  `kind`, so a variant field of that name is REFUSED BY THE DERIVE: `variant field name \`kind\` conflicts with
+       *  internal tag`, so it never compiles (#2850 S1b, run 34046263686).
+       *
+       *  The reason to record that here is the OTHER fix. Silencing the derive
+       *  with a `rename` keeps the field and ships the collision, and THAT
+       *  version reaches this module as a duplicate `kind` key — where
+       *  `JSON.parse` keeps the last one, so every note would arrive spelled
+       *  `"retry"`, match no arm, and be filed as an unrecognised event with
+       *  nothing red on either side. The compiler stops the shape; nothing
+       *  would stop the rename. */
       note: NoteKind;
       text: string;
     };
@@ -482,17 +502,19 @@ function reduce(state: State, ev: ProjectionInput, now: number | null): void {
       // pi's accumulated `partialResult` "because the conversion only goes one
       // way cheaply" — the ADAPTER holds the previous value and subtracts, a
       // consumer does not. So this APPENDS; it never replaces. If it ever
-      // starts replacing, pi's suffix subtraction has moved here and every
-      // other harness pays for it.
+      // starts replacing UNASKED, pi's suffix subtraction has moved here and
+      // every other harness pays for it.
       //
-      // KNOWN RESIDUAL, and it is not fixable here. pi's subtraction assumes
-      // each `partialResult` extends the last; on a NON-PREFIX restatement the
-      // decoder emits the whole new value instead of a wrong suffix (#2850
-      // S1b). Nothing on the wire marks that event, so this appends it and the
-      // card shows the output twice — visibly duplicated, which is the failure
-      // worth having, since the alternative is a heuristic ("does this delta
-      // restate what I hold?") that would silently eat legitimately repeating
-      // output. Closing it needs a flag on the event, not a guess here.
+      // `replaces` is the one case where it does replace, and it is READ, never
+      // inferred. pi's subtraction has a precondition — each accumulation
+      // extends the last — and where that fails the adapter emits the whole
+      // value. A consumer cannot tell that from a legitimate delta that happens
+      // to repeat earlier bytes, and any heuristic for it ("does this restate
+      // what I hold?") silently eats genuinely repeating output, which is worse
+      // than the duplication it fixes. So the adapter marks it (#2850 S1b), by
+      // the same argument that put the subtraction in the adapter to begin
+      // with.
+      if (ev.replaces === true) supersedeToolOutput(b);
       appendToolOutput(state, b, ev.delta);
       return;
     }
@@ -779,6 +801,19 @@ function appendText(state: State, b: TextBlock | ThinkingBlock, delta: string): 
   b.droppedBytes += cut.dropped;
   b.bytes = cut.bytes;
   state.droppedBytes += cut.dropped;
+}
+
+/** Drop everything held for a card, because a `replaces` output supersedes it.
+ *
+ *  `outputDroppedBytes` resets: it describes what was trimmed from the value
+ *  the card is SHOWING, and that value is gone. `State.droppedBytes` does NOT
+ *  reset — it is a session-lifetime figure ("how much has this pane elided"),
+ *  and rewinding it would make a monotonic counter go backwards. The asymmetry
+ *  is deliberate; the two answer different questions. */
+function supersedeToolOutput(b: ToolBlock): void {
+  b.output = "";
+  b.outputBytes = 0;
+  b.outputDroppedBytes = 0;
 }
 
 function appendToolOutput(state: State, b: ToolBlock, delta: string): void {

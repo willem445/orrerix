@@ -74,16 +74,23 @@ one way cheaply: the adapter holds the previous value and subtracts, a consumer
 does not. If this module ever starts replacing, pi's suffix subtraction has
 moved into every renderer instead of living once in `pi.rs`.
 
-> **Residual, and it is not closable here.** pi's subtraction assumes each
-> `partialResult` extends the last; on a non-prefix restatement S1b's decoder
-> emits the whole new value rather than a wrong suffix, and logs that it did.
-> Nothing on the wire marks that event, so this module appends it and the card
-> shows the output twice. That is the failure worth having: the alternative is a
-> heuristic ("does this delta restate what I already hold?") which would
-> silently eat legitimately repeating output, and a visible duplication is
-> debuggable where a silent elision is not. Closing it needs a flag on the
-> event — a `replaces: bool`, or the decoder emitting a distinct event — which
-> is a contract change and neither S1b's nor S2's to make alone.
+**The one case where it does replace is READ, never inferred.** pi's
+subtraction has a precondition — each accumulation extends the last — and where
+that fails the adapter emits the whole value instead of a wrong suffix. A
+consumer cannot tell that from a legitimate delta that happens to repeat
+earlier bytes, and any heuristic for it ("does this restate what I hold?")
+silently eats genuinely repeating output, which is a worse failure than the
+duplication it fixes. So `ToolOutput` carries `replaces: bool` (#2850 S1b):
+`false` on every ordinary delta and on a call's first output, `true` when
+`delta` is the whole current value and supersedes everything held for that
+`ToolUseId`. It is the same argument that put the subtraction in the adapter
+rather than in every renderer, applied one step further.
+
+> This shipped as a stated residual first — unmarked on the wire, duplicated on
+> the card — and S1b added the field after S2 argued the fact could not be
+> recovered downstream. Recorded because the reasoning, not the field, is what
+> a later harness adapter needs: a fact a consumer cannot infer is one the
+> producer has to carry.
 
 ## 4. The one input that is not a `HarnessEvent`
 
@@ -109,8 +116,15 @@ Three things about it the projection is built around:
 
 - **The inner field is `note`, not `kind`.** The outer enum is
   `#[serde(tag = "kind")]`, so a variant field of that name emits a duplicate
-  key and does not round trip. S1b caught it on
-  `every_event_variant_survives_a_json_round_trip`.
+  key, which `serde_derive` REFUSES outright — `variant field name `kind`
+  conflicts with internal tag`, so the colliding shape never compiled (#2850
+  S1b, run 34046263686). What matters downstream is the other fix: silencing
+  the derive with a `rename` keeps the field and ships the collision, and a JS
+  consumer then sees `JSON.parse` keep the LAST duplicate key — every note
+  arrives spelled `"retry"`, matches no arm, and is filed as an unrecognised
+  event with nothing red on either side. The compiler stops the shape; nothing
+  stops the rename, which is why the argument is written down rather than left
+  to the build.
 - **`turn` is a real `Option`.** A retry begins before a turn reopens and an
   extension can throw at boot. `null` is carried through as `null`; the open
   turn is never substituted, because that would invent an attribution in the

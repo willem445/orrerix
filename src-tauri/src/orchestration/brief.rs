@@ -52,7 +52,7 @@ pub fn dod_body() -> &'static str {
 /// Named once here so [`dod_trailer`] cannot drift from the templates: the
 /// test named in the module docs asserts this framing reproduces `worker.md`'s
 /// rendered section byte for byte.
-const DOD_HEADING: &str = "## Definition of done";
+const DOD_HEADING: &str = "## Definition of Done";
 
 /// The definition-of-done trailer appended to a spawned worker's brief.
 ///

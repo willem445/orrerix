@@ -237,3 +237,5 @@ Write that temp file **inside your own worktree** (`./.scratch/review.md`), neve
 ones everybody picks: two agents wrote `/tmp/body.md` seconds apart and one PR's body was
 published with the other's text (#625) — no error, no warning, caught only by luck. A path
 only you can own costs nothing.
+
+A test nobody has seen fail is a decoration, and this is a deliberate second copy.

@@ -684,7 +684,9 @@
 //! because it is `serde_json` plus `std` and because it is the arithmetic that
 //! has to be right — a delta that can go negative, a first row charged as if it
 //! were an interval, a torn line that costs the whole file. The **writer** (the
-//! sampler on the publisher tick) and the **fingerprint** stay in `src-tauri`
+//! sampler on the usage tick, which runs on any of three threads, one of them
+//! the polled publisher; see `OrchRegistry::series_sample`) and the
+//! **fingerprint** stay in `src-tauri`
 //! beside the usage collector they read; only the shape and the maths live
 //! here, which is also what `crates/loomux-server` will need when
 //! `group_metrics` reads this file.

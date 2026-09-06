@@ -246,9 +246,11 @@ pub fn fingerprint(repo: &Path) -> Fingerprint {
 
     let agents_dir = repo.join(".github").join("agents");
     let mut agent_files: Vec<PathBuf> = Vec::new();
-    // Flat by contract (`.github/agents/*.md`), so depth starts at MAX_DEPTH-1:
-    // a nested directory there is not part of the surface and must not silently
-    // widen the walk.
+    // Flat by contract (`.github/agents/*.md`), so the walk STARTS at the depth
+    // cap: a nested directory there is not part of the surface, and entering it
+    // would silently widen the walk. Starting AT MAX_DEPTH (not below it) is what
+    // makes the recursion cap immediately on any subdirectory and set `partial`,
+    // rather than descending one more level first.
     partial |= walk(
         &agents_dir,
         MAX_DEPTH,

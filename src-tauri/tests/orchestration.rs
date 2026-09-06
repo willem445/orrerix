@@ -64452,3 +64452,42 @@ fn an_mcp_group_usage_call_is_a_writer_to_the_series() {
         "a non-publisher caller of group_usage appends to the series"
     );
 }
+
+#[test]
+fn the_coverage_floor_is_the_oldest_ts_not_the_first_row_appended() {
+    // #2941 review round 2 premortem. Rows land in WRITE order, and
+    // `should_sample` deliberately treats a backwards clock as "elapsed" so a
+    // wall-clock correction cannot wedge a key — so after one correction the
+    // first row in the file is not the oldest one in it. The floor is a claim
+    // about how far back the history goes ("series since …"), so reading it off
+    // the first row would print a floor LATER than the panel's own data, which
+    // is the one thing that number exists to prevent.
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let dir = reg.state_root().join(g.id.as_str());
+    fs::create_dir_all(&dir).unwrap();
+    let row = |ts: u64| {
+        json!({"ts_ms":ts,"kind":"sample","key":"s1","agent":"w-1","block":"worker",
+               "cli":"claude","role":"worker","in":ts,"out":0,"cache_w":0,"cache_r":0,
+               "cost_usd":null,"estimated":false,"source":"transcript","model":null})
+        .to_string()
+    };
+    // Written in this order; the clock went backwards between the first and the
+    // second, which is exactly the case `should_sample` keeps sampling through.
+    fs::write(
+        dir.join("usage-series.jsonl"),
+        format!("{}\n{}\n{}\n", row(5_000), row(1_000), row(9_000)),
+    )
+    .unwrap();
+
+    let view = reg.usage_series(&g.id, 0);
+    assert_eq!(
+        view["first_ts_ms"].as_u64(),
+        Some(1_000),
+        "the floor is the oldest ts in the file, not the first row appended: {view}"
+    );
+    // The discriminating control: the first row's ts is a DIFFERENT value, so
+    // this cannot pass under an implementation that reads `all.first()`.
+    assert_ne!(view["first_ts_ms"].as_u64(), Some(5_000));
+    assert_eq!(view["rows"].as_array().unwrap().len(), 3, "and nothing is dropped");
+}

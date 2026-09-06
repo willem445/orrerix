@@ -713,6 +713,139 @@ is a signal that a session STARTED, which codex does not offer on the TUI path.
 Raised as a premortem in review round 1 and recorded here rather than left in a
 review comment nobody re-reads.
 
+## Usage
+
+`source: "codex-transcript"`, `estimated: true`. The snapshot arm keys on
+`sessions::codex_sessions_root()` plus the pane's bound thread id — and, because
+codex does not premint one, it is **idle until the store watcher binds it**
+(opencode's shape, not claude's or pi's). Until then the row falls through to
+the statusline fallback, which is the honest state: guessing an id in a store
+several panes share would charge this pane somebody else's conversation.
+
+### The path is a lookup, not a join
+
+A rollout is `rollout-<ts>-<thread>[_<rollout>].jsonl` under a `YYYY/MM/DD`
+tree, so no `format!("{id}.jsonl")` could ever name it: the timestamp is not
+derivable from the id, and the revert suffix is not predictable. `usage.rs`'s
+`transcript_path` therefore has a codex arm that WALKS the store
+(`sessions::find_codex_session_file`, the same walk the browser and
+`find_codex_session_cwd` use, so the three cannot disagree) and the answer is
+remembered on the cursor exactly as claude's project-folder scan result is.
+
+A consequence worth stating because it is the shape a reviewer looks for: no
+caller joins a session id onto a path here, so `pathseg.rs`'s filename-
+interpolation scan gains no row for this slice. The type still guards the input
+— `find_codex_session_file` takes a `&PathSegment`, never a `&str`.
+
+### Compressed rollouts report no usage
+
+Codex compresses a rollout to `.jsonl.zst` about seven days after its last write
+(see *A rollout older than a week is compressed in place*, above). C2 could
+degrade to "found, workspace unknown" because the by-id CWD lookup has a
+distinct empty answer. **Usage has no such rung**: a total assembled from part of
+a file would be a WRONG number, and a wrong number is the one failure this meter
+refuses. So a compressed rollout answers `None` — no usage — which is the answer
+a pane whose session has not been identified yet already gets, and it is not an
+error.
+
+Decompressing instead would mean a zstd dependency in `src-tauri` and its
+getrandom audit (constraint 2), refused for C2's single metadata line and
+refused again here for a whole file of records.
+
+**Residual, plainly.** Live panes are unaffected: a session is compressed seven
+days after its last write, and a live pane writes. What a human loses is the
+LIFETIME figure for a session nobody snapshotted before the compressor ran —
+`mark_dead` snapshots on exit, so this bites a session whose agent died with the
+app rather than through the normal path. If that ever stops being acceptable the
+fix is the zstd dependency and the audit that comes with it, not a partial read.
+
+### The buckets are not codex's buckets
+
+Read at `rust-v0.153.4`, `codex-api/src/sse/responses.rs`:
+
+```rust
+impl From<ResponseCompletedUsage> for TokenUsage {
+    fn from(val: ResponseCompletedUsage) -> Self {
+        let input_tokens_details = val.input_tokens_details.unwrap_or_default();
+        TokenUsage {
+            input_tokens: val.input_tokens,
+            cached_input_tokens: input_tokens_details.cached_tokens,
+            cache_write_input_tokens: input_tokens_details.cache_write_tokens,
+            output_tokens: val.output_tokens,
+            reasoning_output_tokens: val
+                .output_tokens_details
+                .map(|d| d.reasoning_tokens)
+                .unwrap_or(0),
+            total_tokens: val.total_tokens,
+```
+
+Both cache figures are fields of `input_tokens_details` and the reasoning figure
+of `output_tokens_details` — **details of** those numbers, not additions to
+them. The vendor's own test pins the arithmetic:
+
+```rust
+"input_tokens": 100,
+"input_tokens_details": { "cached_tokens": 40, "cache_write_tokens": 60 },
+"output_tokens": 10,
+"output_tokens_details": { "reasoning_tokens": 5 },
+"total_tokens": 110,
+```
+
+110 is input + output, with both cache figures already inside the input half.
+
+loomux's four buckets are Claude-shaped and DISJOINT — `TokenUsage::total()`
+sums all four — so mapping `input_tokens` across whole would report 210 for a
+turn codex itself calls 110. `usage::codex_tokens` therefore maps:
+
+| loomux | codex |
+| --- | --- |
+| `input_tokens` | `input_tokens` − `cached_input_tokens` − `cache_write_input_tokens` |
+| `cache_read_tokens` | `cached_input_tokens` |
+| `cache_creation_tokens` | `cache_write_input_tokens` |
+| `output_tokens` | `output_tokens` (reasoning NOT added) |
+
+The identity that falls out is the one to check a fixture against: the mapped
+`total()` equals codex's own `total_tokens`.
+
+The subtraction is a **correction to the slice plan**, which named the two cache
+mappings and was silent on it (#2515, D8). It is `saturating_sub`, and that is
+what bounds the residual: were a future codex to make `cache_write_input_tokens`
+genuinely disjoint from `input_tokens`, this under-reports fresh input rather
+than underflowing to a colossal number. Failing toward a smaller figure is the
+right direction for a meter whose one refusal is a wrong total.
+
+`reasoning_output_tokens` is not folded into output for the same reason the
+cache figures are subtracted — it is already inside `output_tokens`. That is
+pi's rule on codex's facts, and the opposite of the OpenCode mapping, whose
+fifth bucket is genuinely disjoint.
+
+### Per record, never the running totals
+
+A `token_usage_record` line carries THREE `TokenUsage` objects
+(`protocol/src/protocol.rs`, `struct TokenUsageRecord`): `usage` (this one
+response's), `turn_token_usage` and `thread_token_usage` (running totals). The
+fold sums `usage`.
+
+Summing either running total sums a series of prefixes: a thread of N responses
+would report something on the order of N times its real spend, and it would look
+entirely plausible. Reading the LAST `thread_token_usage` instead of summing
+would be arithmetically right and is still refused — it would break the
+incremental cursor's contract, which is that folding an appended region onto a
+partial total gives the same answer as folding the file whole, and only a
+per-record sum has that property. `event_msg`/`token_count`'s
+`info.total_token_usage` is ignored for the same reason: it is the same
+cumulative figure, written for the TUI's own display.
+
+### No dollars, and none invented
+
+codex records tokens only. `cost_usd` comes from `usage::price_for`, whose table
+is dated Anthropic rates and holds no codex model, so today the figure is `None`
+and a codex row is tokens-only with `estimated: true`. An honest blank beats an
+undated OpenAI price column invented here; the `estimated` label is what keeps a
+group total that mixes codex with claude describable
+(`usage_cost_basis`). If codex models are ever priced, adding rows to
+`price_for` is the whole change — this arm reads that table already.
+
 ## Readiness
 
 `ready_marker: None`. A row gets a marker when a pane on it is caught

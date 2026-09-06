@@ -115,6 +115,51 @@ residual (an edit below the anchor window on a still-appending file, bounded by
 `CURSOR_REVALIDATE_AFTER`) reachable for pi where it is close to theoretical for
 claude. The id is preminted, so unlike OpenCode this source is live from spawn.
 
+### codex — transcript token records, priced HERE (#2515)
+
+codex writes one JSONL rollout per thread into the HUMAN's own store
+(`CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread>[_<rollout>].jsonl`), not
+a per-group one — a per-agent `CODEX_HOME` would relocate `auth.json` and boot
+every pane logged out, which [codex.md](codex.md) argues under *Deliberately not
+done*. The fold is `usage::CodexFold`: `payload.usage` off every
+`token_usage_record` line, plus the model off the latest `turn_context`.
+`source` is `codex-transcript`.
+
+**The dollars are OURS, and today there are none.** codex records tokens and no
+cost at all, so this is the CLAUDE posture rather than pi's and OpenCode's:
+`estimated` is `true`. No codex model sits in the price table below — which is
+dated Anthropic rates — so `cost_usd` is `None` and the row is tokens-only. An
+honest blank beats an undated OpenAI price column invented here, and the
+`estimated` label is what keeps a group total mixing codex with claude
+describable.
+
+**Three mapping decisions**, all argued in [codex.md](codex.md) under *Usage*.
+codex's buckets are not disjoint and loomux's are: `input_tokens` is the whole
+prompt count with `cached_input_tokens` and `cache_write_input_tokens` as
+DETAILS of it, so fresh input is `input_tokens` minus both, and the identity to
+check a fixture against is that the mapped `total()` equals codex's own
+`total_tokens`. `reasoning_output_tokens` is likewise a detail of
+`output_tokens` and is NOT added — pi's rule, on codex's facts. And the sum is
+over each record's own `usage`, never the `turn_token_usage` or
+`thread_token_usage` running totals that sit on the same line: summing a series
+of prefixes would report roughly N times a thread's real spend, plausibly.
+
+**Limits, and both are shapes no other arm here has.** The rollout's PATH cannot
+be spelled from a session id — the file name carries a timestamp nobody can
+re-derive and an optional `_<rollout>` revert suffix — so `transcript_path`'s
+codex arm is a LOOKUP over the store
+(`sessions::find_codex_session_file`), remembered on the cursor exactly as
+claude's scan result is. And a rollout older than about seven days is
+zstd-compressed in place by codex's own background worker, at which point it
+reports **no usage at all**: decompressing means a new `src-tauri` dependency
+and its getrandom audit (constraint 2), which C2 refused for one metadata line
+and C3 refuses again for a whole file of records. It is not an error and not a
+partial total — a partial total would be a WRONG number, the one failure this
+meter refuses — it is the same answer an unidentified pane already gets. Live
+panes are unaffected; what a human loses is the lifetime figure for a session
+nobody snapshotted before the compressor ran. The id is NOT preminted (codex has
+no public pre-mint flag), so this arm is idle until the store watcher binds one.
+
 ### Copilot CLI — no readable token record today (fallback only)
 
 Copilot keeps only `session-state/<id>/workspace.yaml`, which records no token
@@ -195,7 +240,7 @@ panes actually running. See doc/design/polled-payload-shapes.md §1. Each total'
 is `estimated` (all token-derived), `reported` (all CLI statusline), `mixed`, or
 `null` — so a total that blends estimated and reported dollars is never hidden
 under one label. Each agent row carries its token breakdown, `source`
-(`transcript`/`pi-transcript`/`session-db`/`statusline`/`none`), `model`,
+(`transcript`/`pi-transcript`/`codex-transcript`/`session-db`/`statusline`/`none`), `model`,
 `cost_usd`, and an `estimated` flag.
 
 `transcript-backfill` is a FOURTH `source` value, and loomux never writes it:

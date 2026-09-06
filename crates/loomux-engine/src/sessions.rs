@@ -1370,6 +1370,65 @@ fn find_codex_session_cwd(root: &Path, session_id: &PathSegment) -> Result<Optio
     }))
 }
 
+/// The rollout FILE a codex thread's records are in, when they are readable at
+/// all -- the usage reader's locator (#2515 C3), and the reason [`TranscriptKind::Codex`]
+/// needs no `format!("{id}.jsonl")` anywhere.
+///
+/// A codex rollout's name is `rollout-<ts>-<thread>[_<rollout>].jsonl`, so the
+/// path cannot be built from the id: the timestamp is not derivable and the
+/// revert suffix is not predictable. This is a LOOKUP over the same walk the
+/// browser and [`find_codex_session_cwd`] use, which is what keeps the three
+/// from ever disagreeing about which file is a session's -- and it means no
+/// caller joins a session id onto a path at all, so `pathseg.rs`'s filename
+/// scan gains no row here.
+///
+/// **A COMPRESSED rollout answers `None`, and that is a decision rather than a
+/// gap.** `.jsonl.zst` is zstd, and decompressing it means a new `src-tauri`
+/// dependency and its getrandom audit (constraint 2) -- refused for C2's
+/// metadata line, and refused again here where the payload is every
+/// `token_usage_record` in the file. The by-id CWD lookup can degrade to
+/// "found, workspace unknown" because it has a distinct empty answer; usage has
+/// no such rung -- a partial total would be a WRONG number, which is the one
+/// failure the meter refuses -- so a compressed rollout reports no usage, the
+/// same answer a pane whose session has not been identified yet already gets.
+/// It is not an error: nothing is broken, and codex compresses on a seven-day
+/// schedule, so it is the ordinary end state of every session a group has
+/// finished with. `doc/design/codex.md` §Usage carries the residual.
+///
+/// **The file name proposes and the header disposes**, exactly as in
+/// [`find_codex_session_cwd`]: a name that matches is confirmed against
+/// `payload.id` when the header reads, and a header naming a different thread
+/// disqualifies the file whatever its name says.
+pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<PathBuf> {
+    if !root.exists() {
+        return None; // codex has never run here
+    }
+    walk_codex_session_files(root, |path| {
+        let name = path.file_name().and_then(|s| s.to_str())?;
+        let plain = codex_plain_rollout_name(name)?;
+        if codex_rollout_thread_id(plain)? != session_id.as_str() {
+            return None;
+        }
+        // Unreadable content is no usage at all, so a compressed match is
+        // skipped rather than returned -- and the walk CONTINUES, because the
+        // plain sibling of this very session may still be on disk during the
+        // publish window `walk_codex_session_files` documents.
+        if codex_rollout_is_compressed(path) {
+            return None;
+        }
+        // Header wins when it READS, and the name is the only source when it
+        // does not -- C2's rule, and here it is what stops a transiently torn
+        // first line making a live session report no usage forever.
+        if let Some(v) = codex_header(path) {
+            let id = v.pointer("/payload/id").and_then(Value::as_str);
+            if id.is_some_and(|id| id != session_id.as_str()) {
+                return None;
+            }
+        }
+        Some(path.to_path_buf())
+    })
+}
+
 /// What one codex rollout's head-scan yielded -- the codex twin of
 /// [`PiSessionHead`], and a named struct for the same reason: four positions of
 /// mostly-`String` is three transpositions any caller can make with nothing red

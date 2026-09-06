@@ -759,6 +759,16 @@ impl Decoder {
         // every delta — so adding it up would multiply one message's tokens by
         // its delta count. `message_end` is the once-per-message figure, and
         // that is what `message_end` sums.
+        if let Some(u) = v.get("usage") {
+            self.saw_turn_usage = true;
+            let t = self.turn_tokens;
+            self.turn_tokens = Tokens {
+                input: t.input.saturating_add(u64_at(Some(u), "input")),
+                output: t.output.saturating_add(u64_at(Some(u), "output")),
+                cache_read: t.cache_read.saturating_add(u64_at(Some(u), "cacheRead")),
+                cache_creation: t.cache_creation.saturating_add(u64_at(Some(u), "cacheWrite")),
+            };
+        }
         match ev.get("type").and_then(Value::as_str) {
             Some("text_delta") => {
                 let Some(d) = str_at(ev, "delta").filter(|d| !d.is_empty()) else {

@@ -1100,7 +1100,7 @@ fn codex_rollout_thread_id(plain_name: &str) -> Option<&str> {
         return None;
     }
     let ids = core.get(20..)?;
-    let thread = ids.split_once('_').map_or(ids, |(thread, _)| thread);
+    let thread = ids;
     (!thread.is_empty()).then_some(thread)
 }
 

@@ -1595,6 +1595,41 @@ If you have *both* a `workflow.yml` and a `workflows/default.yml`, the plain
 `workflow.yml` is the one that is read — rename the other rather than leaving
 two files claiming one name.
 
+### Moving between workflows inside the designer
+
+Once the workflow pane is open you do not have to leave it to work on another of
+the repo's workflows. **The file name in the pane's header is a button.** Click
+it for the list of every workflow the repo declares — the same listing the
+launch-time dropdown and the group header read — with a tick beside the one you
+are editing, and **New workflow…** at the bottom.
+
+Choosing another one opens it in the same pane: its own canvas, its own node
+positions from its own layout file, its own findings. The pane renames itself
+after the file (unless you have renamed the pane yourself), and the file it is
+on is remembered with your layout, so a restored pane comes back on the workflow
+you were last editing rather than on `default`.
+
+A workflow whose file will not parse is in this list too, marked `(has errors)`
+with the first finding as its tooltip — it is the file you opened the designer
+to repair, so it is never hidden. If the pane is on some other `.yml` (the file
+browser's *Open in workflow pane* takes any of them), the list says so at the
+top rather than ticking a workflow you are not looking at.
+
+**Unsaved edits are never carried across.** Switch with edits outstanding and
+the pane asks first, with three answers: cancel, save them into the file you are
+leaving and then switch, or discard them. Nothing is written to the file you are
+switching *to* — the edits belong to the file they were typed against, and the
+one thing the pane will not do is quietly move them.
+
+**New workflow…** asks for a name, creates `workflows/<name>.yml` scaffolded
+from orrerix's built-in roster, and opens it. The name is checked as you type,
+against the same rule the rest of orrerix uses: letters, digits, `_` and `-`,
+not `default` (that name belongs to the repo's own `workflow.yml`), and not a
+name already taken. It is also refused when it differs from an existing
+workflow only by capitalisation — `Review` beside `review` — because on Windows
+and macOS those are one file, and a repo carrying both has a workflow whose
+identity depends on which machine reads it.
+
 ### Switching a running group to another workflow
 
 A group does not have to be relaunched to change workflow. The lifecycle panel

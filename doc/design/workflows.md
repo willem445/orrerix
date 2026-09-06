@@ -3414,6 +3414,102 @@ gate requires.
   living in the timing between two individually correct reads), and the answer here
   is the same one: the decisions are in the pure module and the module is tested.
 
+## The pane picks its own file (#2944)
+
+D1 gave the repo several workflows and a launch-time picker; D2 gave a running
+group's header a switch. Both hand the *designer* a `file` and stop there, so once
+the pane was open the only way to another workflow was to leave and come back
+through a button that already knew the answer. #2944 puts the question inside the
+pane: the header's path is a button, and it opens every workflow the repo declares
+plus *New workflow…*.
+
+The decisions are `src/workflowfilepicker.ts`, DOM-free, for the reason both the
+other pickers are: this one can write to the wrong file, and a control tested by
+clicking is one nobody tests. It is a SECOND resolver rather than a flag on
+`resolveWorkflowPicker`, because the two answer different questions. The
+launcher's is keyed by NAME — what a launch pins — and hides itself for a repo
+with one workflow, since a single-option control cannot be used. This one is keyed
+by PATH — what a save writes — and must show for a repo with one workflow, because
+*New workflow…* is how a repo gets its second. The LISTING is shared
+(`orch_workflow_list`, #2603); nothing here is a second discovery.
+
+### An unsaved buffer belongs to the file it was typed against
+
+`save()` writes `this.rel`, and `this.rel` is whatever the picker last set. So a
+switch that retargets first and asks afterwards arms the next Ctrl+S to write one
+workflow's text over another workflow's file — no conflict, no dialog, an ordinary
+hash-guarded write of the wrong bytes. Every branch of `openFile` therefore settles
+the buffer BEFORE `retarget`, and `switchPlan` is what states that as a rule rather
+than as an ordering the next editor of the method has to notice.
+
+The close guard's two answers become three, because a switch can offer what a close
+cannot: the file you are leaving is still there to be saved into. Cancel, save-then-
+switch, discard. A save that does not LAND (a conflict, a claimed path, a write
+error) leaves the buffer dirty and the switch is abandoned rather than completed —
+the human asked to keep those edits, and carrying on would drop exactly what they
+said to keep.
+
+`same-file` is a third outcome and not a special case of `open`, which is a
+distinction a boolean loses: clicking the option you are already on is the
+commonest click a marked-current list gets, and treating it as an open re-reads the
+file, which discards the buffer, for a gesture that asked for nothing.
+
+The per-file layout sidecar (D1's `layoutFileFor`) is what keeps two workflows'
+canvases apart across a switch, and the property is only fail-able against a
+fixture whose two files COLLIDE on their block ids — which is most real pairs,
+since `orchestrator` and `worker` are in nearly all of them. A sidecar keyed by
+block id would merge exactly there and pass a disjoint-id fixture; the test uses
+the colliding one.
+
+### Which option is current: exact first, case second
+
+Paths are compared with separators normalised, because a restored pane record and
+the backend's listing need not spell them the same way. Case is compared only as a
+FALLBACK: `.orrerix/Workflows/x.yml` and `.orrerix/workflows/x.yml` are one file on
+the platforms this ships on, but `Default.yml` beside `default.yml` is precisely
+the #2892 collision, and folding first would tick whichever of the pair came first
+— the human then edits the other file believing they are editing this one. An exact
+match wins outright; the fold is consulted only when nothing matched exactly.
+
+A `null` listing is "we do not know", never "this repo has no workflows". It offers
+no options and does not report the open file as off-listing, because a control that
+has not managed to list anything must not tell the human their file is not there.
+
+### Creation closes half of #2892
+
+`canCreateWorkflow` refuses a name that differs from an existing one only by
+capitalisation. That is the half a creation path can close: on Windows and macOS
+the two are one file, so the second create either clobbers the first or leaves a
+repo whose workflow identity depends on which machine reads it. What it does NOT
+close is a pair already on disk — that is still a `scan_workflows` change and still
+#2892 — but orrerix has stopped being the thing that makes one. `default` is
+refused for the same shape from the other end: that name belongs to the repo's own
+`workflow.yml`.
+
+A `null` listing REFUSES a create. There is nothing to check the collision against,
+and a create that cannot rule one out is the create the rule exists to stop.
+
+Nothing new writes: the create goes through the pane's existing
+`ensureConfigDir` → `claimFile` → guarded-write path, so a name the listing said was
+free but which was taken between the dialog and the write is a refusal rather than
+an overwrite. `ensureConfigDir` did have to learn to build more than one level:
+`fm_new_folder` takes a parent `rel` plus a SINGLE validated `name` and its
+`validate_name` refuses a `/` outright, so the old single call with
+`.orrerix/workflows` could never have worked. It never had to — until this, nothing
+in the pane created a file two levels down.
+
+### What is not in scope
+
+- **Renaming or deleting a workflow file.** A file-manager job, and the file
+  manager already does it.
+- **Applying a workflow to a running group.** That is the group header's *Review &
+  apply* (D2); this pane edits files.
+- **The rest of #2892.** Discovery still lists both spellings of a pair that is
+  already on disk.
+- **No hand-test of the wiring beyond reading it.** The DOM half is hand-validated
+  per the repo's convention; the decisions are in the pure module and the module is
+  tested.
+
 ## Still to come
 
 - **`no-live-agents-on-pr`** (#197 Scope A.1) — "no agent tied to this PR is still

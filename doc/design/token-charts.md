@@ -224,6 +224,13 @@ lock, an antivirus scan — is treated as capped: `absent` for its digest, and
 arm distinguishes "does not exist" (a real answer, not capped) from "exists and
 could not be read" (capped).
 
+The trigger is **transience, not ignorance**. Only a failure that can clear on
+the next bucket flips a component back and makes the false mark a *pair*; a
+stable answer, however unhelpful — a path that is a directory where a file
+belongs — hashes the same way every bucket, cannot flip, and is deliberately not
+flagged. Widening `fp_partial` to cover it would flag such a repo forever and
+teach a reader to ignore the flag.
+
 The `fp_partial` half is the load-bearing one, and the reason is not a
 slightly-wrong hash. `absent` compares equal to a genuinely missing surface, so
 one locked read flips a component to absent for one bucket and back on the next:

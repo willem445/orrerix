@@ -57,10 +57,19 @@
 //! a tuning change that never happened**, on a chart whose entire purpose is
 //! lining spend up against real changes. `partial` is the one signal a reader
 //! has that a `changed` list may be an artefact of a failed read rather than an
-//! edit, so every arm that cannot see a surface it can prove exists must set
-//! it. `hash_file`'s `Err` arm and `walk`'s `read_dir` `Err` arm both do;
+//! edit.
+//!
+//! **What triggers it is TRANSIENCE, not ignorance.** A failure that can clear
+//! on the next bucket is what flips a component back and makes the false mark a
+//! PAIR, so those arms set `partial`: `hash_file`'s `Err` arm (the read itself
+//! failed) and `walk`'s `read_dir` `Err` arm on a directory that exists. A
+//! STABLE answer does not, however unhelpful it is — a path that is a directory
+//! where a file belongs hashes as absent on every bucket, so it cannot flip and
+//! cannot manufacture a mark. Widening `partial` to cover it would flag every
+//! fingerprint of such a repo forever and teach a reader to ignore the flag.
 //! `the_walk_cap_sets_fp_partial` and
-//! `an_unreadable_surface_is_capped_not_silently_absent` pin them.
+//! `an_unreadable_surface_is_capped_not_silently_absent` pin both directions,
+//! the stable case included.
 //!
 //! What this does NOT do is suppress the false marks. Distinguishing "gone"
 //! from "locked" well enough to hold the previous digest would mean carrying

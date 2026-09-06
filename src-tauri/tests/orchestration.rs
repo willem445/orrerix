@@ -64317,8 +64317,8 @@ fn an_unreadable_surface_is_capped_not_silently_absent() {
     // component to absent for one bucket and back on the next: two mark rows
     // asserting a tuning change that never happened. `fp_partial` is the only
     // signal a reader has that a `changed` list may be a failed read rather
-    // than an edit, so every arm that cannot see a surface it can prove exists
-    // must set it.
+    // than an edit, so every arm that TRANSIENTLY cannot see a surface must set
+    // it. Stably-not-there is a different case and is pinned at the end.
     //
     // The unreadable DIRECTORY is provoked portably by putting a regular file
     // where the walk expects a directory: `read_dir` fails on it everywhere,
@@ -64349,13 +64349,26 @@ fn an_unreadable_surface_is_capped_not_silently_absent() {
     );
     assert_eq!(absent.components["skills"], tuningfp::ABSENT);
 
-    // And the same for a file arm, so the two are not one accident: a
-    // directory where a FILE is expected makes `fs::read` fail with the path
-    // present.
+    // **The boundary of the rule, pinned so nobody widens it by symmetry.**
+    // What forces `partial` is a TRANSIENT failure — one that can clear on the
+    // next bucket and flip the component back, which is what makes a false
+    // mark PAIR. A path that exists and is stably not a file (a directory
+    // where `lessons.md` belongs) hashes as absent and is NOT capped: the
+    // answer is the same on every bucket, so it cannot flip and cannot
+    // manufacture a mark. Asserting `partial` here instead would be asserting
+    // a behaviour the code is right not to have.
     let f = tempfile::tempdir().unwrap();
     fs::create_dir_all(f.path().join(".orrerix").join("lessons.md")).unwrap();
-    let locked_file = tuningfp::fingerprint(f.path());
-    assert!(locked_file.partial, "an unreadable FILE is a cap too");
+    let not_a_file = tuningfp::fingerprint(f.path());
+    assert_eq!(not_a_file.components["lessons"], tuningfp::ABSENT);
+    assert!(
+        !not_a_file.partial,
+        "a STABLE non-file is a real answer, not a cap — only a transient \
+         failure can flip a component and produce a false mark pair"
+    );
+    // And it really is stable: the same input answers the same way twice, which
+    // is the property the sentence above rests on.
+    assert_eq!(tuningfp::fingerprint(f.path()).components, not_a_file.components);
 }
 
 #[test]

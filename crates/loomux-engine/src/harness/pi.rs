@@ -297,7 +297,7 @@ pub fn prompt_line(seq: u64, turn: &Turn) -> String {
         "id": format!("{PROMPT_ID_PREFIX}{seq}"),
         "type": "prompt",
         "message": turn.text(),
-        "streamingBehavior": "followUp",
+        "streamingBehavior": "steer",
     }))
 }
 

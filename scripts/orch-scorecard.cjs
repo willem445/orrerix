@@ -252,6 +252,153 @@ function dedupeTranscriptTurns(entries) {
 }
 
 // ---------------------------------------------------------------------------
+// The CLI axis (#2011 A, heuristic H10).
+//
+// WHICH CLI produced a delegate's tokens is not a field loomux writes. It is
+// READ OFF the `source` label of the `usage.json` row that carries those tokens,
+// because that label names the RECORD the collector folded — and the record is
+// per-CLI: a Claude Code transcript, an OpenCode session DB, a pi session file,
+// a codex rollout (`group-cost-tracking.md`, the per-CLI sections). So the map
+// below is not a guess about which CLI a block runs; it is the inverse of the
+// collector's own arm selection.
+//
+// `transcript-backfill` maps to claude for the same reason: it is this script's
+// own label for a row it rebuilt by folding a Claude Code transcript off disk
+// (§4.6), so the record that produced those tokens is a claude one. Leaving it
+// out would file every #2167-repaired row under `unknown`.
+//
+// EVERYTHING ELSE IS `unknown`, AND `unknown` IS REPORTED, NEVER GUESSED.
+// `statusline` is the last-resort scrape that runs when no transcript arm
+// matched, so it says only that a CLI printed a dollar figure — never which
+// one. `none` says even less. A block's declared CLI in the workflow file is
+// NOT consulted to fill those in: a pane can be recycled onto a block whose
+// roster line has since changed, and the whole point of the axis is to measure
+// what actually ran.
+// ---------------------------------------------------------------------------
+
+const SOURCE_TO_CLI = {
+  transcript: 'claude',
+  'transcript-backfill': 'claude',
+  'pi-transcript': 'pi',
+  'session-db': 'opencode',
+  'codex-transcript': 'codex',
+};
+
+const CLI_UNKNOWN = 'unknown';
+
+function cliForSource(source) {
+  if (typeof source !== 'string') return CLI_UNKNOWN;
+  return SOURCE_TO_CLI[source] || CLI_UNKNOWN;
+}
+
+// Resolve the clis a usage accumulator saw into ONE label. A `usage.json` row is
+// unique per session key, so the session index sees exactly one source per key;
+// the `agent_id` fallback index can see several rows under one agent, and if
+// those disagree the answer is `mixed` — a fourth outcome, not a coin toss.
+function resolveCli(clis) {
+  const real = [...clis].filter((c) => c !== CLI_UNKNOWN);
+  if (real.length === 0) return CLI_UNKNOWN;
+  if (real.length === 1) return real[0];
+  return 'mixed';
+}
+
+// agent id -> the cli loomux LAUNCHED that pane with, from its `agent-spawn`
+// row. This is the fallback rung, used only where the usage source resolved to
+// `unknown` (a zero/statusline row), and `cli_via` says which rung answered.
+//
+// WHICH SPAWN SITES CARRY IT, verified rather than assumed. THE LOAD-BEARING
+// FACT IS THE TWO SITES, not any count: there are exactly two `agent-spawn`
+// `json!` sites in `src-tauri/src/orchestration/mod.rs`, and the DELEGATE site
+// carries `cli` (and `block`) while the ORCHESTRATOR site carries neither. So
+// every row without `cli` is an orchestrator spawn, and an orchestrator is
+// excluded from the delegate side anyway (§4.6) — which makes the rung cover
+// every agent it is ever asked about.
+//
+// The store is LIVE and its counts decay by the hour, so a ratio here is an
+// ILLUSTRATION and is dated rather than quoted as a standing figure: over this
+// group's two audit generations, 628 of 637 spawn rows carried `cli` when read
+// on 2026-09-06, and 629 of 638 on a re-read the same day. Re-derive it, do not
+// cite it. `coverage.cli_axis.spawn_rows_with_cli`/`_without_cli` is that
+// re-derivation, emitted by every run.
+//
+// None of this is a guarantee: a third spawn site that omitted `cli` would land
+// its agents in `unknown`, reported.
+//
+// The LAST row wins: a recycled pane is respawned, and the live pane's CLI is
+// the one that wrote the tokens being read.
+function indexSpawnCli(rows) {
+  const byAgent = new Map();
+  // EVERY agent with a surviving `agent-spawn` row, whether or not it carried
+  // `cli`. This is the coverage floor's truncation proof (§8), so it must count
+  // the row's existence and not the field.
+  const spawned = new Set();
+  let withCli = 0;
+  let withoutCli = 0;
+  for (const row of rows) {
+    if (row.action !== 'agent-spawn') continue;
+    const d = row.detail;
+    if (!d || typeof d !== 'object' || typeof d.agent !== 'string') continue;
+    spawned.add(d.agent);
+    if (typeof d.cli === 'string' && d.cli) { byAgent.set(d.agent, d.cli); withCli += 1; }
+    else withoutCli += 1;
+  }
+  return { byAgent, spawned, spawn_rows_with_cli: withCli, spawn_rows_without_cli: withoutCli };
+}
+
+// Sessions whose occupants did not all run the SAME CLI.
+//
+// MEASURED, NOT HYPOTHETICAL. A `usage.json` row is keyed by CLI session, and
+// `agents.json` carries one `session` per agent — so H8 already splits a shared
+// row across its occupants. What H8 never contemplated is a pane recycled onto
+// a DIFFERENT BLOCK running a DIFFERENT CLI, which this group's own store does:
+// sessions `358b100f…` and `e81c5d8a…` are each shared by `worker-adv` (claude)
+// and `worker-std` (opencode) agents (audit generations 1+2, read 2026-09-06).
+//
+// A per-session label cannot be right for two CLIs at once, so where the spawn
+// rows disagree the PER-AGENT record wins: `agent-spawn` names what loomux
+// actually launched for THAT id, while `source` names the record the collector
+// folded for the whole session. The outcome is reported as its own rung
+// (`spawn-row-session-conflict`) rather than folded into either of the other
+// two, and coverage lists every session it fired on — this is a defect being
+// SURFACED, not repaired: the structural fix is H10's, a `cli` on the snapshot.
+function indexCliConflicts(agents, spawnCliByAgent) {
+  const bySession = new Map();
+  for (const a of agents) {
+    if (!a || typeof a.session !== 'string' || !a.session || typeof a.id !== 'string') continue;
+    const cli = spawnCliByAgent.get(a.id);
+    if (!cli) continue;
+    if (!bySession.has(a.session)) bySession.set(a.session, new Map());
+    bySession.get(a.session).set(a.id, cli);
+  }
+  const conflicted = new Map(); // session -> { agent -> cli }
+  for (const [session, byAgent] of bySession) {
+    if (new Set(byAgent.values()).size > 1) conflicted.set(session, byAgent);
+  }
+  return conflicted;
+}
+
+// The rungs, in order, with the one that answered reported alongside. Never
+// falls through to a guess: the last outcome is `unknown`, `cli_via: null`.
+function resolveDelegateCli(usageCli, agent, spawnCliByAgent, sessionConflicted) {
+  const spawned = spawnCliByAgent && spawnCliByAgent.get(agent);
+  // Rung 0 — only where the session's own occupants disagree, which is the one
+  // case rung 1 provably cannot answer for every agent on the row.
+  if (sessionConflicted && typeof spawned === 'string' && spawned) {
+    return { cli: spawned, cli_via: 'spawn-row-session-conflict' };
+  }
+  if (usageCli && usageCli !== CLI_UNKNOWN) return { cli: usageCli, cli_via: 'usage-source' };
+  if (typeof spawned === 'string' && spawned) return { cli: spawned, cli_via: 'spawn-row' };
+  return { cli: CLI_UNKNOWN, cli_via: null };
+}
+
+// `block/cli` as written on the rows — never a hardcoded roster (CLAUDE.md's
+// per-CLI-identity rule). A delegate with no `agents.json` entry has no block,
+// and reads as `unknown/<cli>` rather than being dropped.
+function blockCliKey(block, cli) {
+  return (block || CLI_UNKNOWN) + '/' + (cli || CLI_UNKNOWN);
+}
+
+// ---------------------------------------------------------------------------
 // Agent -> PR attribution.
 //
 // Two tiers, and which tier carried an agent is reported per agent, because the
@@ -309,7 +456,7 @@ function attributeAgents(rows, prs, windowsByPr) {
 // ---------------------------------------------------------------------------
 
 function scorePr(ctx, pr) {
-  const { rows, orchIds, tailMs, transcriptTurns, usageBySession, usageByAgent, sessionAgents, agentsById, attribution, prMeta } = ctx;
+  const { rows, orchIds, tailMs, transcriptTurns, usageBySession, usageByAgent, sessionAgents, agentsById, attribution, prMeta, spawnCliByAgent, cliConflicts } = ctx;
   const meta = (prMeta && prMeta[String(pr)]) || {};
   const mergedMs = meta.merged_at ? Date.parse(meta.merged_at) : null;
   const win = computeWindows(rows, pr, Number.isFinite(mergedMs) ? mergedMs : null, tailMs);
@@ -321,6 +468,10 @@ function scorePr(ctx, pr) {
   let loopNotices = 0;
   let loopNoticesAnyPane = 0;
   const verdicts = {};
+  // The same rows as `verdicts`, kept in ARRIVAL ORDER per block, because
+  // `rounds_to_pass` is a question about the sequence and the bucket above has
+  // thrown the order away. `rows` is ts-sorted by `main` before it gets here.
+  const verdictSeq = {};
   let verdictsTotal = 0;
   const driver = {
     drives: 0, lane_spawns: 0, hand_backs: 0, refused: 0, held: 0,
@@ -378,6 +529,7 @@ function scorePr(ctx, pr) {
       const verdict = String(d.verdict || 'unknown').toLowerCase();
       verdicts[block] = verdicts[block] || {};
       verdicts[block][verdict] = (verdicts[block][verdict] || 0) + 1;
+      (verdictSeq[block] = verdictSeq[block] || []).push(verdict);
       verdictsTotal += 1;
       rowsClassified += 1;
       continue;
@@ -432,6 +584,9 @@ function scorePr(ctx, pr) {
 
   const delegateTokens = emptyTokens();
   const delegates = [];
+  // `<block>/<cli>` -> credited + raw tokens. Keys are READ OFF the rows (a block
+  // the roster no longer declares still gets a bucket), never a hardcoded list.
+  const byBlockCli = {};
   for (const [agent, att] of attribution) {
     if (!att.prs.has(pr)) continue;
     const info = agentsById.get(agent);
@@ -447,6 +602,10 @@ function scorePr(ctx, pr) {
       usage = usageByAgent.get(agent);
       usageKey = usage ? 'agent_id' : null;
     }
+    const { cli, cli_via: cliVia } = resolveDelegateCli(
+      usage && usage.cli, agent, spawnCliByAgent,
+      Boolean(session && cliConflicts && cliConflicts.has(session)),
+    );
     const prWeight = 1 / att.prs.size;
     const sessionWeight = 1 / sessionAgentCount;
     const weight = prWeight * sessionWeight;
@@ -459,10 +618,19 @@ function scorePr(ctx, pr) {
     delegateTokens.output += t.output * weight;
     delegateTokens.total += t.total * weight;
     delegateTokens.turns += 1;
+    const bck = blockCliKey(info && info.block, cli);
+    const bucket = byBlockCli[bck] || (byBlockCli[bck] = { block: (info && info.block) || CLI_UNKNOWN, cli, tokens: 0, tokens_credited: 0, count: 0 });
+    bucket.tokens += t.total;
+    bucket.tokens_credited += t.total * weight;
+    bucket.count += 1;
     delegates.push({
       agent,
       block: info ? info.block : null,
       role: info ? info.role : null,
+      // Which CLI produced these tokens, and which rung said so (H10). `unknown`
+      // with `cli_via: null` is a REPORTED outcome, never a filled-in guess.
+      cli,
+      cli_via: cliVia,
       tier: att.tier,
       weight: round2(weight),
       pr_weight: round2(prWeight),
@@ -482,6 +650,7 @@ function scorePr(ctx, pr) {
   for (const k of ['input', 'cache_read', 'cache_creation', 'output', 'total']) {
     delegateTokens[k] = Math.round(delegateTokens[k]);
   }
+  for (const b of Object.values(byBlockCli)) b.tokens_credited = Math.round(b.tokens_credited);
   delegates.sort((a, b) => b.tokens - a.tokens || (a.agent < b.agent ? -1 : 1));
 
   return {
@@ -489,7 +658,13 @@ function scorePr(ctx, pr) {
     build: meta.build || null,
     issue: meta.issue || null,
     outcome: meta.outcome || null,
+    merged_at: meta.merged_at || null,
     windows: win,
+    // The PR window's own untailed span, lifted to the top of the card because it
+    // is one of the four columns the cli table compares. `null`, never 0, when no
+    // audit row names the PR at all — "no window" and "an instantaneous PR" are
+    // different facts.
+    wall_clock_h: win.pr ? win.pr.span_h : null,
     orchestrator: {
       wakes_total: wakesTotal,
       wakes_by_kind: wakes,
@@ -499,9 +674,9 @@ function scorePr(ctx, pr) {
       tokens_window: orchTokens,
       tokens_attributed: orchTokensAttributed,
     },
-    review: { rounds: verdictsTotal, by_block: verdicts },
+    review: { rounds: verdictsTotal, by_block: verdicts, lanes: laneStats(verdictSeq) },
     driver: { ...driver, refused_by_reason: refusedByReason, held_by_reason: heldByReason },
-    delegates: { count: delegates.length, tokens: delegateTokens, agents: delegates },
+    delegates: { count: delegates.length, tokens: delegateTokens, by_block_cli: byBlockCli, agents: delegates },
     share: {
       orchestrator_pct_raw: pct(orchTokens.total, orchTokens.total + delegateTokens.total),
       orchestrator_pct_attributed: pct(orchTokensAttributed.total, orchTokensAttributed.total + delegateTokens.total),
@@ -636,7 +811,10 @@ function indexUsage(usage) {
   const bySession = new Map();
   const byAgent = new Map();
   let unusable = 0;
-  const blank = () => ({ input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, cost_usd: 0, rows: 0 });
+  // `clis` is a SET, not a scalar: the session index sees one row per key, but the
+  // `agent_id` fallback index can see several rows under one agent, and two rows that
+  // disagree resolve to `mixed` rather than to whichever was folded last (#2011 A).
+  const blank = () => ({ input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, cost_usd: 0, rows: 0, clis: new Set() });
   const add = (map, key, u) => {
     const acc = map.get(key) || blank();
     acc.input += num(u.input_tokens);
@@ -646,6 +824,8 @@ function indexUsage(usage) {
     acc.cost_usd += num(u.cost_usd);
     acc.rows += 1;
     acc.total = acc.input + acc.cache_read + acc.cache_creation + acc.output;
+    acc.clis.add(cliForSource(u.source));
+    acc.cli = resolveCli(acc.clis);
     map.set(key, acc);
   };
   for (const u of usage) {
@@ -923,6 +1103,488 @@ function renderGroupTable(files) {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Per-lane review statistics (§4.8).
+//
+// A "lane" is a review BLOCK (`rev-std`, `rev-final`), and the two questions the
+// cli comparison asks of it are how many rounds it took to say `pass` and how
+// often it said `fail`:
+//
+//   rounds_to_pass — the 1-based position of the FIRST `pass` in that block's
+//                    pass/fail sequence. `null` — never 0 and never the round
+//                    count — where the block never passed: a lane still in
+//                    review has no answer yet, and reporting the rounds so far
+//                    would read as a lane that passed on its last round.
+//                    A later `fail` (a re-review on a new head) does not lower
+//                    it, and a re-`pass` is not a second answer.
+//   fail_rate      — `fail / (pass + fail)` over the WHOLE sequence, so those
+//                    later rounds do count here. `null` when the lane recorded
+//                    neither, because 0 would claim a clean lane where there is
+//                    no lane at all.
+//
+// Verdicts other than `pass`/`fail` are excluded from BOTH (the live vocabulary
+// is exactly those two; `verdicts_other` reports anything else rather than
+// letting an unrecognised value shift an index silently).
+// ---------------------------------------------------------------------------
+
+function laneStats(verdictSeq) {
+  const out = {};
+  for (const [block, seq] of Object.entries(verdictSeq)) {
+    const decided = seq.filter((v) => v === 'pass' || v === 'fail');
+    const firstPass = decided.indexOf('pass');
+    const fail = decided.filter((v) => v === 'fail').length;
+    const pass = decided.length - fail;
+    out[block] = {
+      rounds: seq.length,
+      pass,
+      fail,
+      verdicts_other: seq.length - decided.length,
+      rounds_to_pass: firstPass === -1 ? null : firstPass + 1,
+      fail_rate: decided.length === 0 ? null : round2(fail / decided.length),
+    };
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Medians (§4.9).
+//
+// MEDIANS, NEVER TOTALS. The two windows hold different PRs doing different
+// work, and a total is then a statement about the task mix rather than about
+// the CLI. The median plus the inter-quartile range plus n says what a total
+// hides: whether the middle moved and whether the spread swamps the move.
+//
+// A CELL BELOW `MEDIAN_MIN_N` IS `null`, not a number. Three points is already
+// a thin claim; two is an average of a pair, and one is an anecdote wearing a
+// statistic's clothes. `n` is reported at every size — including 0 — so a null
+// cell is legible as "not enough data" rather than as a missing measurement.
+//
+// Quartiles use the exclusive-median (Tukey hinge) convention: the halves
+// exclude the middle element on an odd-length sample. Stated because there are
+// several conventions and a reader re-deriving an IQR by hand needs to know
+// which one produced the number.
+// ---------------------------------------------------------------------------
+
+const MEDIAN_MIN_N = 3;
+
+function medianOf(sorted) {
+  if (sorted.length === 0) return null;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// The five-number cell every comparison column is made of. Non-numeric and
+// null inputs are DROPPED and counted, so a lane with no answer (a `null`
+// `rounds_to_pass`) shrinks n rather than being read as a zero.
+function statCell(values) {
+  const xs = values.filter((v) => typeof v === 'number' && Number.isFinite(v)).sort((a, b) => a - b);
+  const dropped = values.length - xs.length;
+  const cell = { n: xs.length, dropped, median: null, q1: null, q3: null, iqr: null, min: null, max: null };
+  if (xs.length < MEDIAN_MIN_N) return cell;
+  const mid = Math.floor(xs.length / 2);
+  const lower = xs.slice(0, mid);
+  const upper = xs.length % 2 ? xs.slice(mid + 1) : xs.slice(mid);
+  cell.median = round2(medianOf(xs));
+  cell.q1 = round2(medianOf(lower));
+  cell.q3 = round2(medianOf(upper));
+  cell.iqr = round2(cell.q3 - cell.q1);
+  cell.min = xs[0];
+  cell.max = xs[xs.length - 1];
+  return cell;
+}
+
+// ---------------------------------------------------------------------------
+// The opencode-vs-pi comparison (§4.9).
+//
+// SELECTION, and why each bound is there:
+//
+//   merged   — the PR must have a `merged_at` in `--pr-meta`. An open PR has no
+//              wall clock and its review lanes have not finished.
+//   one cli  — every delegate of a compared block must resolve to the SAME cli,
+//              and that cli must not be `unknown` or `mixed`. A PR whose
+//              worker-std panes were half opencode and half pi measures the
+//              switch, not either side of it, and is EXCLUDED and listed.
+//   side     — `merged_at` against `--split-at` (the #2817 merge instant), so
+//              the window a PR belongs to is a fact about the clock rather than
+//              about the cli that was read off it.
+//
+// The cli and the side are resolved INDEPENDENTLY, and cross-checked ONLY when
+// the caller declares what to expect (`--sides <before>:<after>`). A PR whose
+// lanes resolve to the other side's cli is then reported under
+// `side_cli_disagreements` — the instrument telling on itself, surfaced rather
+// than reconciled away. WITHOUT that flag there is no expectation and the field
+// is `null`, which is NOT the same fact as `[]`: "nobody said what to expect"
+// and "an expectation was checked and nothing disagreed" are different, and a
+// table that conflated them would report a clean cross-check it never ran.
+//
+// NOTHING HERE KNOWS WHICH CLI RAN ON WHICH SIDE, and that is now true of the
+// whole function rather than of row construction alone (rev-final round 2).
+// Rows are one per `(cli, side)` pair the selected PRs produced; the side
+// LABELS come from `--split-label`; the expected pair, if any, comes from
+// `--sides`. An earlier revision hardcoded `pre-2817 ? opencode : pi`, which
+// made the cross-check fire on 100% of PRs under any other `--split-at` — a
+// stale roster wearing the costume of a finding.
+// ---------------------------------------------------------------------------
+
+// The clis a block's delegates on one card resolve to. Returns the single cli,
+// or `null` plus the reason it could not be reduced to one.
+function laneCliOf(card, block) {
+  const clis = new Set();
+  for (const d of card.delegates.agents) {
+    if (d.block !== block) continue;
+    clis.add(d.cli);
+  }
+  if (clis.size === 0) return { cli: null, reason: 'no ' + block + ' delegate' };
+  if (clis.size > 1) return { cli: null, reason: block + ' split across ' + [...clis].sort().join('+') };
+  const only = [...clis][0];
+  if (only === CLI_UNKNOWN || only === 'mixed') return { cli: null, reason: block + ' cli ' + only };
+  return { cli: only, reason: null };
+}
+
+function creditedFor(card, block, cli) {
+  let total = 0;
+  let found = false;
+  for (const b of Object.values(card.delegates.by_block_cli)) {
+    if (b.block !== block || b.cli !== cli) continue;
+    total += b.tokens_credited;
+    found = true;
+  }
+  return found ? total : null;
+}
+
+// The columns, as one list, so the JSON, the GFM header and the cell order are
+// three readings of ONE declaration rather than three hand-kept lists that drift.
+const CLI_TABLE_COLUMNS = [
+  { key: 'worker_tokens', label: 'worker-std tokens', kind: 'tokens' },
+  { key: 'rev_tokens', label: 'rev-std tokens', kind: 'tokens' },
+  { key: 'rev_rounds_to_pass', label: 'rev-std rounds to pass', kind: 'plain' },
+  { key: 'rev_fail_rate', label: 'rev-std fail rate', kind: 'plain' },
+  { key: 'wall_clock_h', label: 'wall clock h', kind: 'plain' },
+  // The CONTROL. `rev-final` is Claude on both sides of the split, so a column
+  // that moves here is measuring something other than the worker/reviewer CLI —
+  // the task mix, the driver changes, the roster's other edits. A control that
+  // moves as much as the treatment columns is the table refuting itself.
+  { key: 'rev_final_rounds_to_pass', label: 'rev-final rounds to pass (control)', kind: 'plain' },
+];
+
+const WORKER_BLOCK = 'worker-std';
+const REVIEW_BLOCK = 'rev-std';
+const CONTROL_BLOCK = 'rev-final';
+
+// Printed UNDER the table by the script itself, so a table pasted into a comment
+// cannot arrive without the reasons not to over-read it. Every entry names the
+// issue a reader can check, and none of them is closed by anything in this run.
+const CONFOUNDERS = [
+  {
+    id: 'effective-thinking-level',
+    what: 'The roster switch declared `medium` for worker-std and `high` for rev-std, but #2938 reports pi running `high` where `medium` was declared. Until that resolves, the pi side is at an UNKNOWN effective level and a token or round difference may be the level rather than the CLI.',
+    issue: 2938,
+    // Read off the issue when it lands; never guessed here. `unknown` is the
+    // honest value and it prints as such.
+    effective_level: 'unknown',
+  },
+  {
+    id: 'task-mix',
+    what: 'The two windows hold different PRs. Nothing matched them for size, difficulty or lane count — which is why every cell is a MEDIAN with an IQR and an n, and why a total appears nowhere in this table.',
+    issue: 2011,
+  },
+  {
+    id: 'driver-waste-changes',
+    what: 'The review driver changed between the windows: #2501 (panes released per side), #2507, #2508 and #2509 (the one-shot body-only round grace). Those moved ROUNDS and PANE COUNT for reasons that have nothing to do with which CLI a lane ran, and they land on the pre-switch side.',
+    issue: 2501,
+    also: [2507, 2508, 2509],
+  },
+  {
+    id: 'driver-waste-measurement',
+    what: 'The size of that driver-waste move is #2812. Cite its figures beside this table rather than attributing the residual to the CLI.',
+    issue: 2812,
+  },
+  {
+    id: 'cumulative-usage-rows',
+    what: 'Delegate tokens come from `usage.json`, which is cumulative per session and cannot be windowed (H6), and a shared session is split evenly across its occupants (H8). Both bound the precision of the token columns on BOTH sides equally.',
+    issue: 2011,
+  },
+];
+
+// THE COVERAGE FLOOR, and why the table carries it.
+//
+// `--cut` bounds the log FORWARD (§8) and that is all it can do: it cannot
+// recover a row a ROTATION has discarded. This group keeps two audit
+// generations and rotates at 8 MB, so a PR whose window predates the oldest
+// surviving row is not "excluded" — it is not scored at all, and it drops out
+// of the selection with no line in `excluded` to say so, because nothing in
+// the log names it any more.
+//
+// That is not hypothetical: the first posting of this table read 32,943 rows
+// across two generations and selected 20 PRs. A rotation at
+// 2026-09-06T17:14Z discarded the older generation, and the same command with
+// the same `--cut` then read 16,351 rows and selected 10. Both runs were
+// correct about the log they could see; only the FLOOR moved.
+//
+// So the floor travels with the table. A reader comparing two runs of this
+// script must compare their floors first — an n that shrank between them is a
+// fact about the log, not about the CLIs.
+//
+// WHICH PRS ARE AFFECTED, and why the obvious test is nearly useless.
+// `windows.pr.start_ms` is `namedFirst` — the first row naming the PR that
+// SURVIVED the read. A PR whose rows straddle the rotation therefore has a
+// post-floor start BY CONSTRUCTION: the truncation is invisible in the very
+// field you would test, and `start_ms <= ts_first` can only ever catch the one
+// PR whose first surviving row happens to be the log's oldest row (rev-std
+// round 2). Testing that alone contradicts the floor's own rationale.
+//
+// So the straddle is decided on a signal that SURVIVES truncation: an
+// `agent-spawn` row is written once, when a delegate is created, and always
+// before the `rd-*` and `review-verdict` rows that attribute it to a PR. If a
+// PR is credited with a delegate whose `agent-spawn` row is NOT in the
+// surviving log, then rows for that PR were discarded — proof, not a threshold,
+// and it does not care where the window appears to start.
+//
+// The two rules answer different questions and BOTH are reported, each with its
+// reason, because a reader must be able to tell "this one lost rows" from "this
+// one might have":
+//
+//   spawn-row-missing — PROVEN truncated: a credited delegate has no surviving
+//                       spawn row, so its counters are a lower bound.
+//   window-at-floor   — POSSIBLY truncated: the window begins at the oldest
+//                       surviving row, so nothing rules out earlier rows.
+//
+// Neither is exhaustive, and the residual is stated rather than implied: a PR
+// that lost rows but kept every delegate's spawn row, and whose window starts
+// after the floor, is not detected by either. Nothing in a truncated log can
+// detect that — the evidence is the part that was deleted.
+function coverageFloor(cards, groupFiles, spawnedAgents) {
+  let first = null;
+  let last = null;
+  for (const f of groupFiles) {
+    if (typeof f.ts_first === 'number' && (first === null || f.ts_first < first)) first = f.ts_first;
+    if (typeof f.ts_last === 'number' && (last === null || f.ts_last > last)) last = f.ts_last;
+  }
+  const spawned = spawnedAgents || new Set();
+  const touching = [];
+  for (const c of cards) {
+    if (!c.windows.pr) continue;
+    // Proof first, so a PR that is BOTH is reported under the stronger reason.
+    const orphans = c.delegates.agents
+      .map((d) => d.agent)
+      .filter((a) => !spawned.has(a))
+      .sort();
+    if (orphans.length) {
+      touching.push({
+        pr: c.pr,
+        why: 'spawn-row-missing',
+        detail: orphans.length + ' credited delegate(s) with no surviving agent-spawn row: ' + orphans.join(', '),
+      });
+      continue;
+    }
+    if (first !== null && c.windows.pr.start_ms <= first) {
+      touching.push({
+        pr: c.pr,
+        why: 'window-at-floor',
+        detail: 'window begins at the oldest surviving row',
+      });
+    }
+  }
+  touching.sort((a, b) => a.pr - b.pr);
+  return {
+    ts_first: first,
+    ts_last: last,
+    rows: groupFiles.reduce((n, f) => n + f.rows, 0),
+    generations: groupFiles.length,
+    // Every PR whose counters are, or may be, a lower bound — with the reason.
+    windows_touching_the_floor: touching,
+  };
+}
+
+// `sides` is `{ before, after }` or null. `label` names the split for the row
+// keys and the footer; it is the caller's word for the instant it passed, so
+// the two cannot describe different splits.
+function cliTable(cards, splitMs, opts) {
+  const sides = (opts && opts.sides) || null;
+  const floor = (opts && opts.groupFiles)
+    ? coverageFloor(cards, opts.groupFiles, opts.spawnedAgents)
+    : null;
+  const label = (opts && opts.label) || new Date(splitMs).toISOString();
+  const sideName = (which) => (which === 'before' ? 'pre-' : 'post-') + label;
+  const selected = [];
+  const excluded = [];
+  const disagreements = [];
+  for (const card of cards) {
+    const mergedMs = card.merged_at ? Date.parse(card.merged_at) : NaN;
+    if (!Number.isFinite(mergedMs)) { excluded.push({ pr: card.pr, why: 'no merged_at in --pr-meta' }); continue; }
+    const w = laneCliOf(card, WORKER_BLOCK);
+    const r = laneCliOf(card, REVIEW_BLOCK);
+    if (!w.cli || !r.cli) { excluded.push({ pr: card.pr, why: [w.reason, r.reason].filter(Boolean).join('; ') }); continue; }
+    if (w.cli !== r.cli) { excluded.push({ pr: card.pr, why: 'worker-std ' + w.cli + ' but rev-std ' + r.cli }); continue; }
+    const which = mergedMs < splitMs ? 'before' : 'after';
+    const side = sideName(which);
+    // Only where the caller declared one. No flag, no expectation, no check.
+    const expected = sides ? sides[which] : null;
+    if (expected && w.cli !== expected) disagreements.push({ pr: card.pr, side, cli: w.cli, expected });
+    const lanes = card.review.lanes || {};
+    selected.push({
+      pr: card.pr,
+      side,
+      cli: w.cli,
+      merged_at: card.merged_at,
+      worker_tokens: creditedFor(card, WORKER_BLOCK, w.cli),
+      rev_tokens: creditedFor(card, REVIEW_BLOCK, r.cli),
+      rev_rounds_to_pass: lanes[REVIEW_BLOCK] ? lanes[REVIEW_BLOCK].rounds_to_pass : null,
+      rev_fail_rate: lanes[REVIEW_BLOCK] ? lanes[REVIEW_BLOCK].fail_rate : null,
+      wall_clock_h: card.wall_clock_h,
+      rev_final_rounds_to_pass: lanes[CONTROL_BLOCK] ? lanes[CONTROL_BLOCK].rounds_to_pass : null,
+    });
+  }
+  const groups = new Map();
+  for (const s of selected) {
+    const key = s.cli + ' (' + s.side + ')';
+    if (!groups.has(key)) groups.set(key, { key, cli: s.cli, side: s.side, prs: [], cells: {} });
+    groups.get(key).prs.push(s.pr);
+  }
+  for (const g of groups.values()) {
+    const mine = selected.filter((s) => s.cli === g.cli && s.side === g.side);
+    for (const col of CLI_TABLE_COLUMNS) g.cells[col.key] = statCell(mine.map((s) => s[col.key]));
+    g.prs.sort((a, b) => a - b);
+  }
+  return {
+    split_at_ms: splitMs,
+    split_label: label,
+    coverage_floor: floor,
+    // What the caller declared, echoed back so a reader of the JSON knows which
+    // expectation produced (or did not produce) the disagreement list.
+    sides_declared: sides,
+    min_n: MEDIAN_MIN_N,
+    columns: CLI_TABLE_COLUMNS.map((c) => ({ key: c.key, label: c.label })),
+    rows: [...groups.values()].sort((a, b) => (a.key < b.key ? -1 : 1)),
+    per_pr: selected.sort((a, b) => a.pr - b.pr),
+    excluded: excluded.sort((a, b) => a.pr - b.pr),
+    // `null` — not `[]` — when no expectation was declared.
+    side_cli_disagreements: sides ? disagreements.sort((a, b) => a.pr - b.pr) : null,
+    confounders: CONFOUNDERS,
+  };
+}
+
+function fmtCell(cell, kind) {
+  if (!cell || cell.median === null) return 'null (n=' + (cell ? cell.n : 0) + ')';
+  const f = kind === 'tokens' ? fmtTokens : (v) => String(round2(v));
+  return f(cell.median) + ' (IQR ' + f(cell.q1) + '–' + f(cell.q3) + ', n=' + cell.n + ')';
+}
+
+function renderCliTable(t) {
+  const lines = [];
+  lines.push('| lane CLI (window) | PRs | ' + CLI_TABLE_COLUMNS.map((c) => c.label).join(' | ') + ' |');
+  lines.push('|' + '---|'.repeat(CLI_TABLE_COLUMNS.length + 2));
+  for (const r of t.rows) {
+    lines.push('| ' + r.key + ' | ' + r.prs.length
+      + ' | ' + CLI_TABLE_COLUMNS.map((c) => fmtCell(r.cells[c.key], c.kind)).join(' | ') + ' |');
+  }
+  lines.push('');
+  lines.push('Median (IQR q1–q3, n) per PR. A cell reads `null` below n=' + t.min_n
+    + '. Split at ' + new Date(t.split_at_ms).toISOString()
+    + ' (`--split-label ' + t.split_label + '`).');
+  if (t.coverage_floor && t.coverage_floor.ts_first !== null) {
+    const f = t.coverage_floor;
+    lines.push('');
+    lines.push('**Coverage floor** — the audit log read here holds ' + f.rows + ' rows across '
+      + f.generations + ' generation(s), covering **' + new Date(f.ts_first).toISOString()
+      + '** to **' + new Date(f.ts_last).toISOString() + '**. A PR whose window predates that '
+      + 'floor is not scored and does not appear in the exclusions either — nothing in the log '
+      + 'names it. `--cut` bounds the log forward; it cannot recover rows a rotation discarded, '
+      + 'so **compare two runs\' floors before comparing their n**.');
+    const proven = f.windows_touching_the_floor.filter((w) => w.why === 'spawn-row-missing');
+    const maybe = f.windows_touching_the_floor.filter((w) => w.why === 'window-at-floor');
+    if (proven.length) {
+      lines.push('');
+      lines.push('**Counters PROVEN to be a lower bound** — each is credited with a delegate whose `agent-spawn` row did not survive, so rows for it were discarded: '
+        + proven.map((w) => '#' + w.pr).join(', ') + '.');
+    }
+    if (maybe.length) {
+      lines.push('');
+      lines.push('**Counters POSSIBLY a lower bound** — window begins at the oldest surviving row, so nothing rules out earlier rows: '
+        + maybe.map((w) => '#' + w.pr).join(', ') + '.');
+    }
+    if (!proven.length && !maybe.length) {
+      lines.push('');
+      lines.push('No selected PR is detectably truncated — which is not a guarantee of completeness: a PR that lost rows but kept every delegate\'s spawn row, and whose window starts after the floor, is undetectable, because the evidence is the part that was deleted.');
+    }
+  }
+  lines.push('');
+  for (const r of t.rows) lines.push('- **' + r.key + '** — ' + r.prs.map((n) => '#' + n).join(', '));
+  if (t.excluded.length) {
+    lines.push('');
+    lines.push('Excluded (selection is stated, never silent):');
+    lines.push('');
+    for (const e of t.excluded) lines.push('- #' + e.pr + ' — ' + e.why);
+  }
+  lines.push('');
+  if (!t.sides_declared) {
+    // Said out loud, because a MISSING disagreement list and an EMPTY one look
+    // identical to a reader and mean opposite things.
+    lines.push('**No side/CLI cross-check was run** — `--sides <before>:<after>` was not passed, so the table declares no expectation about which CLI ran on which side of the split.');
+  } else {
+    lines.push('Expected per `--sides`: **' + t.sides_declared.before + '** before the split, **'
+      + t.sides_declared.after + '** after.');
+    if (t.side_cli_disagreements.length) {
+      lines.push('');
+      lines.push('**Side/CLI disagreements** — the declared expectation and the resolved CLI do not agree here:');
+      lines.push('');
+      for (const d of t.side_cli_disagreements) lines.push('- #' + d.pr + ' — ' + d.side + ' but resolved ' + d.cli + ' (expected ' + d.expected + ')');
+    } else {
+      lines.push('');
+      lines.push('Every selected PR matched that expectation.');
+    }
+  }
+  lines.push('');
+  lines.push('**Confounders** — read before the table:');
+  lines.push('');
+  for (const c of t.confounders) {
+    lines.push('- **' + c.id + '** (#' + c.issue
+      + (c.also ? ', ' + c.also.map((n) => '#' + n).join(', ') : '') + ') — ' + c.what
+      + (c.effective_level ? ' Effective level as read today: `' + c.effective_level + '`.' : ''));
+  }
+  return lines.join('\n');
+}
+
+// The cli axis's own coverage. The population control for H10: `by_rung` says
+// which rung answered for how many delegate slots, and `unknown` is the count
+// the axis could not answer at all. A cli table read off a run whose `unknown`
+// is a large share of `delegate_slots` is a table about a thin population, and
+// nothing else in the output would say so.
+//
+// Counted at the VERIFIED site — one entry per delegate ON A CARD, which is
+// where a cli is actually used — not at the usage rows scanned, which would
+// certify coverage the table never received.
+function cliAxisCoverage(cards, spawnCli, cliConflicts) {
+  const byRung = { 'usage-source': 0, 'spawn-row': 0, 'spawn-row-session-conflict': 0, none: 0 };
+  const byCli = {};
+  let slots = 0;
+  for (const card of cards) {
+    for (const d of card.delegates.agents) {
+      slots += 1;
+      byRung[d.cli_via === null ? 'none' : d.cli_via] += 1;
+      byCli[d.cli] = (byCli[d.cli] || 0) + 1;
+    }
+  }
+  return {
+    delegate_slots: slots,
+    by_rung: byRung,
+    by_cli: byCli,
+    unknown: byCli[CLI_UNKNOWN] || 0,
+    spawn_rows_with_cli: spawnCli.spawn_rows_with_cli,
+    spawn_rows_without_cli: spawnCli.spawn_rows_without_cli,
+    // Every session whose occupants did not all run one CLI, with the split.
+    // A non-empty list here means H8's even split is crossing a CLI boundary on
+    // this store and the per-session `source` label is answering for panes it
+    // does not describe.
+    sessions_with_conflicting_clis: [...(cliConflicts || new Map()).entries()]
+      .map(([session, byAgent]) => ({
+        session,
+        agents: [...byAgent.entries()].sort().map(([a, c]) => a + '=' + c),
+      }))
+      .sort((a, b) => (a.session < b.session ? -1 : 1)),
+  };
+}
+
 // The heuristics this reader has to use. This list IS #2011 B2's scope — every row
 // is a place where one structural field would replace a guess.
 const HEURISTICS = [
@@ -935,6 +1597,7 @@ const HEURISTICS = [
   { id: 'H7', what: 'A PR window ends at `merged_at` supplied via `--pr-meta`; without it the end falls back to the last `rd-*` row, then to the last naming row — which is days late, because a merged PR stays cited.', fix: 'A loomux row for a human merge (plan part 2, A4 / #388).' },
   { id: 'H8', what: "A `usage.json` row is keyed by CLI SESSION, and a session carried to a new agent id names only its LAST occupant. The row is therefore split evenly across every agent that occupied that session — a guess about how a shared session's spend divided, self-correcting where the whole lineage is attributed to one PR and a fraction where it is not.", fix: 'An `agent_id` (or `block` + `pr`) on every `UsageSnapshot`, not just the latest — the same missing field as H4.' },
   { id: 'H9', what: "A zero-token `usage.json` row whose Claude transcript is on disk is backfilled by summing that transcript, which is UNCUT and UNPRICED: `--cut` cannot rewind a `usage.json` row either (a row is cumulative-to-now with no history), so cutting a backfilled row and not its neighbours would make the two kinds disagree about what instant the table describes; and no dollar figure is derived, so a backfilled row keeps the `cost_usd` it had — its tokens are right and its cost is still whatever the collector recorded.", fix: "The collector recording the row correctly in the first place (#2167's own fix, shipped alongside this) — after which nothing is backfilled and `rows` reads 0." },
+  { id: 'H10', what: "A delegate's CLI is READ OFF the `source` label of the `usage.json` row carrying its tokens (`transcript`/`transcript-backfill` -> claude, `pi-transcript` -> pi, `session-db` -> opencode, `codex-transcript` -> codex), because that label names the per-CLI record the collector folded. A row whose source is `statusline` or `none` says only that some CLI printed a figure, so it falls back to the `cli` on that agent's `agent-spawn` row, and to `unknown` when neither answers — reported as `unknown` with `cli_via: null`, never filled in from the block's declared CLI, since a pane can be recycled onto a block whose roster line has since changed. `cli_via` says which rung answered.", fix: 'A `cli` field on `UsageSnapshot` (and on the orchestrator `agent-spawn` site, which unlike the delegate site carries none) — t-664\'s family, the same missing-field fix as H4/H8.' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -945,7 +1608,7 @@ function parseArgs(argv) {
   const opts = {
     audit: [], transcript: [], usage: null, agents: null, prMeta: null,
     prs: [], all: false, tailMin: DEFAULT_TAIL_MIN, format: 'json', cut: null, help: false,
-    claudeProjects: null, backfill: true,
+    claudeProjects: null, backfill: true, splitAt: null, splitLabel: null, sides: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -962,6 +1625,19 @@ function parseArgs(argv) {
       case '--all': opts.all = true; break;
       case '--tail-min': opts.tailMin = Number(next()); break;
       case '--format': opts.format = next(); break;
+      case '--split-label': opts.splitLabel = next(); break;
+      // `<before>:<after>`, e.g. `opencode:pi`. Both halves required, so a
+      // half-declared expectation cannot silently check one side only.
+      case '--sides': {
+        const raw = String(next());
+        const parts = raw.split(':');
+        if (parts.length !== 2 || !parts[0] || !parts[1]) {
+          throw new Error('--sides wants <before-cli>:<after-cli>, got: ' + raw);
+        }
+        opts.sides = { before: parts[0], after: parts[1] };
+        break;
+      }
+      case '--split-at': opts.splitAt = /^\d+$/.test(String(argv[i + 1])) ? Number(next()) : Date.parse(next()); break;
       case '--cut': opts.cut = /^\d+$/.test(String(argv[i + 1])) ? Number(next()) : Date.parse(next()); break;
       case '--help': case '-h': opts.help = true; break;
       default: throw new Error('unknown argument: ' + a);
@@ -976,7 +1652,8 @@ const USAGE_TEXT = `orch-scorecard — per-PR orchestration cost from existing l
       --usage <usage.json> --agents <agents.json>
       [--transcript <session.jsonl>]... [--pr-meta <meta.json>]
       (--pr <n> [--pr <n>]... | --all)
-      [--tail-min 10] [--cut <ms|iso>] [--format json|table|both]
+      [--tail-min 10] [--cut <ms|iso>] [--format json|table|both|cli-table]
+      [--split-at <ms|iso>] [--split-label <text>] [--sides <before>:<after>]
       [--claude-projects <dir>] [--no-backfill]
 
   --all        every PR that any rd-* row names (the driven set).
@@ -991,6 +1668,23 @@ const USAGE_TEXT = `orch-scorecard — per-PR orchestration cost from existing l
                (#2167); coverage says how many rows and from which files.
   --no-backfill
                leave zero rows at zero. Coverage still reports how many there are.
+  --split-at   the instant that divides the two comparison windows. Required by
+               --format cli-table; a PR's window is decided by its merged_at
+               against this, independently of the CLI read off its rows.
+               For the #2817 roster switch: 2026-09-06T10:36:55Z, commit
+               93d51cc9 — passed in, never assumed by this script.
+  --split-label
+               what to call that split in the row keys and the footer
+               (e.g. "2817"). Defaults to the instant's ISO form, so the label
+               and the instant can never describe two different splits.
+  --sides      <before-cli>:<after-cli>, e.g. "opencode:pi" — the expectation
+               the side/CLI cross-check is measured against. WITHOUT it no
+               cross-check runs and side_cli_disagreements is null, because
+               this script knows nothing about which CLI ran when.
+  --format cli-table
+               the CLI comparison (#2011 A): median + IQR + n per column per
+               (cli, window), null below n=3, rev-final rounds as the
+               Claude-both-sides control, and the confounder block.
 `;
 
 async function main(argv) {
@@ -1041,7 +1735,10 @@ async function main(argv) {
   }
   const attribution = attributeAgents(rows, prs, windowsByPr);
 
-  const ctx = { rows, orchIds, tailMs, transcriptTurns, usageBySession, usageByAgent, sessionAgents, agentsById, attribution, prMeta };
+  const spawnCli = indexSpawnCli(rows);
+  const spawnedAgentIds = spawnCli.spawned;
+  const cliConflicts = indexCliConflicts(agents, spawnCli.byAgent);
+  const ctx = { rows, orchIds, tailMs, transcriptTurns, usageBySession, usageByAgent, sessionAgents, agentsById, attribution, prMeta, spawnCliByAgent: spawnCli.byAgent, cliConflicts };
   const cards = prs.map((pr) => scorePr(ctx, pr));
 
   const spawnedInWindow = new Set();
@@ -1082,6 +1779,10 @@ async function main(argv) {
       agents_attributed: attribution.size,
       agents_unattributed_spawned_in_window: unattributed,
       agents_split_across_prs: split,
+      // The cli axis's own coverage (H10): how many delegates each rung answered
+      // for, and how many are `unknown`. A run whose `unknown` count is high has
+      // a cli table built on a thin population, and this is where that shows.
+      cli_axis: cliAxisCoverage(cards, spawnCli, cliConflicts),
       heuristics: HEURISTICS,
     },
   };
@@ -1089,6 +1790,12 @@ async function main(argv) {
   if (opts.format === 'json' || opts.format === 'both') process.stdout.write(JSON.stringify(out, null, 2) + '\n');
   if (opts.format === 'table' || opts.format === 'both') {
     process.stdout.write('\n' + renderPrTable(cards) + '\n\n' + renderGroupTable(out.group.files) + '\n');
+  }
+  if (opts.format === 'cli-table') {
+    if (!Number.isFinite(opts.splitAt)) throw new Error('--format cli-table needs --split-at <ms|iso>');
+    process.stdout.write('\n' + renderCliTable(cliTable(cards, opts.splitAt,
+      { sides: opts.sides, label: opts.splitLabel, groupFiles: out.group.files,
+        spawnedAgents: spawnedAgentIds })) + '\n');
   }
   return 0;
 }
@@ -1098,6 +1805,10 @@ module.exports = {
   dedupeTranscriptTurns, attributeAgents, scorePr, groupTotals, indexAgents,
   indexUsage, indexSessionAgents, renderPrTable, renderGroupTable, parseArgs, HEURISTICS,
   usageRowTokens, isZeroUsageRow, isAgentKeyedRow, reconcileBackfill,
+  SOURCE_TO_CLI, CLI_UNKNOWN, cliForSource, resolveCli, indexSpawnCli,
+  resolveDelegateCli, indexCliConflicts, blockCliKey, laneStats, MEDIAN_MIN_N, medianOf, statCell,
+  laneCliOf, creditedFor, cliTable, renderCliTable, cliAxisCoverage, coverageFloor,
+  CLI_TABLE_COLUMNS, CONFOUNDERS,
   claudeTranscriptIndex, backfillZeroUsageRows, defaultClaudeProjectsRoot,
   DEFAULT_TAIL_MIN, main,
 };

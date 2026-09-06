@@ -599,7 +599,7 @@ impl Decoder {
             self.last_prompt_ack = Some((id.to_string(), success));
         }
 
-        if id == BOOT_ID && command == "get_state" {
+        if command == "get_state" {
             if !success {
                 // A failed boot query is not a `Booted` with empty fields:
                 // synthesizing one would report a session that never answered.

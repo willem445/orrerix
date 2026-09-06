@@ -151,6 +151,7 @@ import {
   resolveWorkflowFilePicker,
   canCreateWorkflow,
   switchPlan,
+  layoutWriteAllowed,
   type WorkflowFilePicker,
 } from "./workflowfilepicker";
 import { workflowList } from "./orchestration";
@@ -254,7 +255,7 @@ export class WorkflowView {
    *  — the same statement pair `launcher.ts` keeps for its own picker, for the same reason: a
    *  pane that is re-rooted must not offer the previous repo's files. */
   private listingRoot: string | null = null;
-  /** Which load is current. Two clicks in the file menu start two s, and they may
+  /** Which load is current. Two clicks in the file menu start two `load()`s, and they may
    *  resolve in either order — the later-RESOLVING one would otherwise win `text`/`savedHash`
    *  while `this.rel` names the file the human clicked LAST, i.e. the buffer of one workflow
    *  under the path of another (rev-std round 1, N3). The hash guard bounded that to a
@@ -1159,13 +1160,30 @@ export class WorkflowView {
     // WHAT MAY BE FORGOTTEN is a rule (`workflowpane.layoutPruneIds`), not a flag: on a save the
     // roster on disk and the roster in memory are the same, so pruning against it is safe; on a
     // drag they are not, so the union of the two is what survives.
+    // WHICH FILE these positions belong to, captured BEFORE any await (#2944, rev-final round
+    // 2). Everything below was pruned against the roster of the file the pane is showing right
+    // now, but the destination used to be re-derived from `this.rel` after two awaits — so a
+    // switch landing in that window sent one workflow's node positions into the OTHER
+    // workflow's sidecar. That is this pane's own "never written to the other file" rule
+    // broken through the layout instead of the buffer, where the unsaved-buffer guard cannot
+    // see it and the conflict machinery does not apply (the layout is written with a null
+    // hash, because nothing else writes it).
+    const computedFor = this.rel;
     const saved = this.savedText.trim() ? parseWorkflow(this.savedText).workflow : null;
     const next = pruneLayout(this.layout, layoutPruneIds(saved, this.analysis.workflow, when));
     this.layout = next;
     if (layoutEquals(next, this.savedLayout)) return;
     try {
       await this.ensureConfigDir();
-      await ftWriteFile(this.root, layoutFileFor(this.rel), serializeLayout(next), null);
+      // DROPPED, not redirected to `computedFor`: positions belong to the roster they were
+      // pruned against and the pane has moved on, so re-aiming them would write a stale
+      // picture. A layout is never anyone's work — it comes back computed — so losing one
+      // costs a drag, while writing it into the wrong file corrupts a workflow the human was
+      // not even editing. `savedLayout` is deliberately NOT advanced here: the write did not
+      // happen, and claiming it did would suppress the next honest attempt.
+      if (!layoutWriteAllowed(computedFor, this.rel)) return;
+      await ftWriteFile(this.root, layoutFileFor(computedFor), serializeLayout(next), null);
+      if (!layoutWriteAllowed(computedFor, this.rel)) return; // it moved while we wrote
       this.savedLayout = next;
     } catch {
       // A layout we couldn't save is a picture that comes back computed instead. Not worth a

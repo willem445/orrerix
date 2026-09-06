@@ -16,6 +16,7 @@ import {
   canCreateWorkflow,
   resolveWorkflowFilePicker,
   switchPlan,
+  layoutWriteAllowed,
   type CreateVerdict,
 } from "../src/workflowfilepicker.ts";
 import type { WorkflowEntry, WorkflowListing } from "../src/roster.ts";
@@ -339,4 +340,34 @@ test("two workflows that COLLIDE on a block id still keep their canvas layouts a
   // And the switch between them is a `switchPlan`, so nothing of A's is in memory when B's
   // sidecar is next written.
   assert.equal(switchPlan({ current: wfA.file, dirty: false }, wfB.file).kind, "open");
+});
+
+test("a layout write whose file moved under it is DROPPED, not redirected (rev-final r2)", () => {
+  // The same colliding fixture, because this is the same non-interference property reached
+  // through the other door. `saveLayout` prunes the positions against the roster it can see,
+  // then awaits twice (config dir, then write) — and the destination used to be re-derived
+  // from `this.rel` at the END. A switch landing inside that window sent A's node positions
+  // into B's sidecar: this pane's own "never written to the other file" rule, broken through
+  // the LAYOUT rather than the buffer, where the unsaved-buffer guard cannot see it.
+  //
+  // The ids must collide for the fixture to witness anything, exactly as above: positions are
+  // keyed by block id, so with `orchestrator`/`worker` on both sides the misdirected write
+  // lands on real keys in the wrong file and silently moves that workflow's boxes. Disjoint
+  // ids would leave two harmless orphan entries and the test would pass against the defect.
+  const shared = ["orchestrator", "worker"];
+  const wfA = { file: A, blocks: shared };
+  const wfB = { file: B, blocks: shared };
+  assert.deepEqual(wfA.blocks, wfB.blocks, "the fixture's whole point: the ids really do collide");
+
+  // Computed for A, pane still on A: the ordinary case, and the one that must keep working —
+  // a guard that refused everything would pass every assertion but the next one.
+  assert.equal(layoutWriteAllowed(wfA.file, wfA.file), true);
+  // Computed for A, pane switched to B while the write was in flight: dropped.
+  assert.equal(layoutWriteAllowed(wfA.file, wfB.file), false);
+  assert.equal(layoutWriteAllowed(wfB.file, wfA.file), false);
+  // Separator spelling is not a move — the same normalisation every other comparison uses.
+  assert.equal(layoutWriteAllowed(B, ".orrerix\\workflows\\review-heavy.yml"), true);
+  // And the two sidecars really are distinct, so "dropped" is what stops the collision and
+  // not something else further down.
+  assert.notEqual(layoutFileFor(wfA.file), layoutFileFor(wfB.file));
 });

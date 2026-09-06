@@ -271,3 +271,27 @@ export function switchPlan(
   if (samePath(state.current, target)) return { kind: "same-file" };
   return state.dirty ? { kind: "ask", file: target } : { kind: "open", file: target };
 }
+
+/** May a layout write that was COMPUTED for `computedFor` still land, now that the pane is
+ *  showing `showingNow`?
+ *
+ *  The other half of the rule `switchPlan` states, and the half that is easy to miss because
+ *  it is not about the buffer (rev-final round 2). `saveLayout` reads the node positions and
+ *  prunes them against the roster of the file it is looking at, and only THEN awaits — the
+ *  config-dir check, then the write. A switch landing inside that window retargets the pane,
+ *  and the write's destination is re-derived from `this.rel` at the end: `layoutFileFor` then
+ *  names the sidecar of the file the human just moved TO, and one workflow's node positions
+ *  are written into another workflow's `.layout.json`.
+ *
+ *  That is precisely the failure this PR's own headline rule forbids — "never written to the
+ *  other file" — arrived at through the layout rather than through the buffer, so the buffer's
+ *  guard could not see it and the workflow-save conflict machinery does not apply (the layout
+ *  is written unguarded, with a null hash, because nothing else writes it).
+ *
+ *  The answer is to DROP the write, not to redirect it to `computedFor`. Positions belong to
+ *  the roster they were pruned against, and the pane has already moved on; a layout is never
+ *  anyone's work — it is a picture that comes back computed — so losing one costs a drag,
+ *  while writing it into the wrong file corrupts a workflow the human was not even editing. */
+export function layoutWriteAllowed(computedFor: string, showingNow: string): boolean {
+  return samePath(computedFor, showingNow);
+}

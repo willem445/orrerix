@@ -15,7 +15,7 @@ this file first.
 
 Amends: `doc/design/engine-extraction.md` §2 (what `PaneHost` hands back) and
 `doc/design/remote-engine-protocol.md` §4 (two additive events, one roster
-field). Amended by #2850/#2891: five additive `HarnessEvent` variants (§1.2),
+field). Amended by #2850/#2891: six additive `HarnessEvent` variants (§1.2),
 extension-UI dialogs (§3.5), and §5's two projections. Reads on: `doc/design/opencode.md` (how a harness is driven today),
 `doc/design/session-id-learning.md` (#440), `doc/design/human-questions.md`
 (#946), `doc/design/needs-you-items.md` (#1151),
@@ -103,22 +103,25 @@ pub enum HarnessEvent {
     Exited { code: Option<i32> },
     Observed(ObservedEvent),
 
-    // additive (#2850) — see "The five additive variants" below
+    // additive (#2850) — see "The six additive variants" below
     Thinking { turn: TurnId, delta: String },
-    ToolOutput { turn: TurnId, id: ToolUseId, delta: String, is_error: bool },
+    ToolOutput { turn: TurnId, id: ToolUseId, delta: String, is_error: bool,
+                 replaces: bool },
     UiRequest { id: RequestId, method: UiMethod, title: Option<String>,
                 message: Option<String>, options: Vec<String>,
                 timeout_ms: Option<u64> },
     UiSettled { id: RequestId, answer: UiAnswer, by: DecisionSource },
     QueueChanged { steering: Vec<String>, follow_up: Vec<String> },
+    Note { turn: Option<TurnId>, note: NoteKind, text: String },
 }
 
 pub enum ObservedEvent { QuestionSuspected { .. }, ReadyMarker, Quiet, Painted }
 pub enum UiMethod { Select, Confirm, Input, Editor }
 pub enum UiAnswer { Value(String), Confirmed(bool), Cancelled }
+pub enum NoteKind { Retry, Error, Ui }
 ```
 
-**The five additive variants (#2850).** Each carries something a harness
+**The six additive variants (#2850).** Each carries something a harness
 REPORTS and the human requires visible (#2891), and none of them is a fact any
 pane can infer — so none of them is spelled `Observed(..)`, and §1.3's rule is
 unchanged. Additive means the same thing here as in
@@ -128,10 +131,11 @@ compiling and keeps working, minus what it does not read.
 | variant | what it says | decoder source |
 |---|---|---|
 | `Thinking{turn, delta}` | streamed reasoning, which is NOT assistant text and must never be concatenated into it — a renderer that quiets thinking (#2891) cannot do so if the two share a variant | pi: `message_update` whose `assistantMessageEvent.type` is `thinking_delta`; claude: the equivalent reasoning delta, R2's to bind |
-| `ToolOutput{turn, id, delta, is_error}` | a tool's output as it streams, keyed to the `ToolUseId` of the `ToolCall` it belongs to. `ToolResult{ok}` still fires once at the end and still carries the verdict; `ToolOutput` carries the bytes, which `ToolResult` never did | pi: `tool_execution_update` (`partialResult`) and `tool_execution_end` (`result`, `isError`) — **accumulated, not incremental; see below** |
+| `ToolOutput{turn, id, delta, is_error, replaces}` | a tool's output as it streams, keyed to the `ToolUseId` of the `ToolCall` it belongs to. `ToolResult{ok}` still fires once at the end and still carries the verdict; `ToolOutput` carries the bytes, which `ToolResult` never did. `replaces` says whether `delta` appends or supersedes — **see below** | pi: `tool_execution_update` (`partialResult`) and `tool_execution_end` (`result`, `isError`) — accumulated, not incremental |
 | `UiRequest{id, method, title, message, options, timeout_ms}` | the harness is asking a HUMAN a question and is blocked on the answer. It is not a `PermissionRequest`: a permission request is a policy decision `permissions.json` may settle without anyone (§3.2), and conflating the two would put an arbitrary extension prompt through a ladder written for tool policy | pi: `extension_ui_request` whose `method` is a dialog method (`select`, `confirm`, `input`, `editor`); the fire-and-forget methods are a `Note`, never this |
 | `UiSettled{id, answer, by}` | that question is closed, by whom, and with what. `by: DecisionSource` is the same field `PermissionSettled` carries, for the same reason: an audit that records the answer and not the answerer records nothing worth keeping | the driver's own reply, or the harness self-resolving its own `timeout` (`by: Policy`) |
 | `QueueChanged{steering, follow_up}` | what the harness has accepted but not yet run. orrerix's `queue` is the front door and stays so; this is the harness's own downstream queue, and without it a delivered turn that is merely QUEUED is indistinguishable from one being worked | pi: `queue_update` (`steering[]`, `followUp[]`) |
+| `Note{turn, note, text}` | something the harness reported that is not a turn, a tool or a question, and that a human still has to be able to SEE. `turn` is an `Option` because these genuinely happen BETWEEN turns, and §1.3's rule is that an absent fact is `None` | pi: `auto_retry_*` and a compaction that did not compact → `Retry`/`Error`; `extension_error` → `Error`; the fire-and-forget UI methods (`notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`) → `Ui` |
 
 **`timeout_ms` is descriptive, not a control.** It reports a deadline the
 HARNESS is keeping, so a renderer can show one; orrerix never starts a timer
@@ -151,10 +155,35 @@ renderer instead, and there is more than one.
 So the pi decoder subtracts: it keeps the last `partialResult` per
 `ToolUseId` and emits the suffix. Its precondition is that each update is a
 PREFIX-extension of the last, which is what "simply replace their display"
-implies but does not promise — so **S1b owes the failure case as a test, not as
-an assumption**: an update that is not an extension of its predecessor emits
-the whole new value and records that it did, rather than emitting a silently
-wrong suffix.
+implies but does not promise.
+
+**`replaces` is that precondition's failure carried rather than inferred, and
+S1b added it.** When an update does NOT extend its predecessor the adapter
+emits the whole new value, and a consumer appending deltas would then show the
+output TWICE. That cannot be closed downstream: a consumer cannot tell a
+restatement from a legitimate delta that happens to repeat earlier bytes, and
+any heuristic for it ("does this restate what I hold?") silently eats
+genuinely repeating output, which is a worse failure than the one it fixes. So
+the fact travels on the event, by the same reasoning that put the subtraction
+in the adapter. `false` on every ordinary delta means **append**; `true` means
+`delta` is the whole current output for that `ToolUseId` and **replaces**
+everything held for it. A consumer that ignores the field is no worse off than
+before it existed, which is what makes the addition additive.
+
+**`Note` is the sixth variant, and it exists because the decoder table needed
+somewhere to put three things.** Retries, extension errors and the
+fire-and-forget UI methods were all routed to "a Note" before one existed on
+this enum — only `LogBody::Note`, a log record that reaches no consumer. The
+consequence was concrete: a pane spending four minutes in an API retry loop
+showed a human nothing at all, and an extension that threw was invisible
+outside a file nobody opens. `NoteKind` is the closed set a decoder may
+produce (`Retry`, `Error`, `Ui`).
+
+**It is not a channel for everything the stream says.** Protocol bookkeeping —
+message boundaries, turn-internal events, settle events, command
+acknowledgements — stays log-only: it is per-message volume with nothing for a
+human to do about it, and an event stream carrying it would drown the three
+kinds this variant exists for. The decoder is where that judgement lives.
 
 ### 1.3 How a PTY pane maps onto it — and how "unknown" is spelled
 
@@ -183,11 +212,23 @@ for every feature that reads panes.
 | `ToolCall` / `ToolResult` | `tool_use` / `tool_result` blocks | **never** |
 | `PermissionRequest` / `PermissionSettled` | the permission-prompt tool call and its answer | **never** — a suspected question is `Observed(QuestionSuspected{..})` |
 | `TurnEnded{usage, cost}` | the `result` message (§7) | **never** — usage is polled out of band, not evented |
-| `Compacted` | `system` / `compact_boundary` (`SDKCompactBoundaryMessage`, documented on the Agent SDK surface only — the CLI capture that confirms it on the wire is §9 item 7) | **never** — today's marker hooks stay, and they drive the existing detector, not this event |
+| `Compacted` | claude: `system` / `compact_boundary` (`SDKCompactBoundaryMessage`, documented on the Agent SDK surface only — the CLI capture that confirms it on the wire is §9 item 7). pi: `compaction_end`, **not** `compaction_start` — see below | **never** — today's marker hooks stay, and they drive the existing detector, not this event |
 | `Exited` | child exit | child exit — the one variant both kinds emit identically |
 | `Thinking` / `ToolOutput` / `QueueChanged` | pi: §1.2's decoder sources; claude: R2's to bind | **never** — a PTY pane has no reasoning stream, no per-tool output channel, and no view of the harness's own queue |
+| `Note` | pi: retries, a failed compaction and `extension_error` (`Retry`/`Error`), fire-and-forget UI methods (`Ui`); claude: R2's to bind | **never** — a PTY pane's equivalent is bytes on the screen, which is what `Observed(..)` covers |
 | `UiRequest` / `UiSettled` | pi: `extension_ui_request` and its reply (§3.5) | **never** — a dialog painted in a TUI is at most `Observed(QuestionSuspected{..})` |
 | `Observed(..)` | **never emitted** | readiness marker, question grid, quiet/painted evidence |
+
+**`Compacted` is emitted when a compaction FINISHES, and that is a
+correction to plan-2386's decoder row (S1b).** Two facts the start event
+cannot supply: `compaction_start` carries only `reason`, so a `Compacted`
+built from it has `pre_tokens: None` always and the field is dead, while
+`compaction_end.result.tokensBefore` is the real figure; and a compaction can
+abort or fail, so emitting on the start event reports a compaction that never
+happened with nothing later retracting it. A compaction that did not complete
+is a `Note{Error}` — a human whose pane is about to hit its context window
+needs to see that, and the symptom otherwise is a pane that stops working for
+no visible reason. Exactly one `Compacted` per successful compaction.
 
 **The two "never emitted" columns are the contract, not an omission.** A feature
 that needs `ToolCall` is a feature that works on structured panes and degrades
@@ -486,21 +527,31 @@ decisions. It gets, per pane:
 - `Exited`.
 
 It does **not** get assistant text, tool results, `stream_event` deltas,
-`Booted` detail, or any of `Thinking`, `ToolOutput` and `QueueChanged` —
-those three are per-pane, and `Thinking` most of all: reasoning prose in the
+`Booted` detail, or any of `Thinking`, `ToolOutput`, `QueueChanged` and
+`Note` — those four are per-pane. A `Note` is not a decision anybody made: a
+retry is the harness coping, not a choice, and the audit log is for choices.
+`Thinking` most of all: reasoning prose in the
 file a human reads to reconstruct decisions is the drowning this section
 exists to prevent, at the highest volume the stream produces. Those stay in the
 per-pane log. A transcript in the audit log
 would drown the decisions the log exists for, and would put model prose in the
 file a human reads to reconstruct what happened.
 
-**The decision-grade set is therefore five of the sixteen variants**
-(`ToolCall`, `PermissionRequest`/`PermissionSettled`,
-`UiRequest`/`UiSettled`, `TurnEnded`, `Exited` — seven names, five
-decisions), and it is enforced rather than described: the population test over
-`HarnessEvent` **will** move from 11 to 16 variants and pin which of them are
-decision-grade, in the slice that adds the variants (#2850 S1b). Until that
-slice lands, the count above is this note's claim and nothing checks it.
+**The decision-grade set is seven of the seventeen variants** — `ToolCall`,
+`PermissionRequest`, `PermissionSettled`, `UiRequest`, `UiSettled`,
+`TurnEnded` and `Exited` — and it is enforced rather than described.
+`HarnessEvent::is_decision_grade` is the one place the split is expressed, and
+the population test over the enum pins both numbers: that the two lists
+together cover all **17** variants, so a variant somebody adds cannot be
+silently unclassified, and that exactly **7** of them are decision-grade, so a
+variant folded into the wrong half keeps the total right and still fails.
+
+#2850 moved that set from five to seven by adding `UiRequest`/`UiSettled` — a
+dialog is a question a human answered, which is what this log is for — and
+kept `Thinking`, `ToolOutput`, `QueueChanged` and `Note` out of it. The
+population went 11 → 17: five variants in the contract as first written, plus
+`Note`, which S1b added on discovering the decoder had three things to report
+and nowhere to put them.
 
 ### 4.4 Relationship to the remote protocol's H4
 

@@ -716,7 +716,8 @@ fn codex_tokens(usage: &Value) -> TokenUsage {
         input_tokens: u64_field(usage, "input_tokens")
             .saturating_sub(cache_read)
             .saturating_sub(cache_write),
-        output_tokens: u64_field(usage, "output_tokens"),
+        output_tokens: u64_field(usage, "output_tokens")
+            + u64_field(usage, "reasoning_output_tokens"),
         cache_creation_tokens: cache_write,
         cache_read_tokens: cache_read,
     }

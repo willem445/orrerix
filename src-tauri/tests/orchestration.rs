@@ -63794,7 +63794,7 @@ fn the_workflow_name_is_recorded_with_the_toggle_off_and_is_inert_until_it_is_on
 // ===================================================================
 
 /// Rails with `n` agents allowed and an extra worker block running `cli`.
-fn rails_with_second_worker_cli(max_agents: usize, block_id: &str, cli: &str) -> Guardrails {
+fn rails_with_second_worker_cli(max_agents: u32, block_id: &str, cli: &str) -> Guardrails {
     let mut r = rails();
     r.max_agents = max_agents;
     let mut extra = r

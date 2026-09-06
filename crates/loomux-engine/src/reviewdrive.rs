@@ -2451,9 +2451,33 @@ impl DriveEntry {
     /// `fix-wait` is not answered again after it pushes. The same round, the
     /// same answer, once.
     pub fn kickback_owed(&self) -> bool {
-        let handed_back = self.state == DriveState::FixWait
-            || (self.state == DriveState::CiWait && self.fix_pushed());
-        handed_back && self.fix_kickback_ms < self.fix_handback_ms
+        self.handback_outstanding() && self.fix_kickback_ms < self.fix_handback_ms
+    }
+
+    /// **This drive has handed a round to its worker and is still waiting on
+    /// it** — the one predicate, asked wherever that question comes up.
+    ///
+    /// Since #2168 E1 the wait spans TWO states and not one: `fix-wait`, and
+    /// `ci-wait` on a head that arrived by arc 7, where the worker has pushed
+    /// and the drive is waiting for the `report(done)` that says the matrix was
+    /// read. [`kickback_owed`](DriveEntry::kickback_owed) already had to say
+    /// that, and [`releasable`] has to say exactly the same thing to know whose
+    /// report it is consuming — so it is spelled ONCE here rather than twice at
+    /// two call sites that would then be free to drift. Two readings of "is a
+    /// hand-back outstanding" is the asymmetry `CLAUDE.md` names ("a guard
+    /// reads every one of its inputs by one rule"), and the measured cost of
+    /// the drift when `releasable` carried the narrower one is #2811 S1: 15 of 20
+    /// hand-backs in one session pushed, so their report was consumed in
+    /// `ci-wait`, so the release condition and its consumer never met and the
+    /// worker pane held a live-delegate slot until an orchestrator killed it by
+    /// hand.
+    ///
+    /// It is deliberately about the STATE and not about a signal: "we asked and
+    /// have not been answered" is a property of the drive, and what the worker
+    /// has said is a separate input each caller reads for itself.
+    pub fn handback_outstanding(&self) -> bool {
+        self.state == DriveState::FixWait
+            || (self.state == DriveState::CiWait && self.fix_pushed())
     }
 
     /// Record that this drive answered its worker at `now_ms` — see
@@ -3908,25 +3932,30 @@ fn decide_gate_check(facts: &DriveFacts) -> DriveStep {
     }
 }
 
-/// Why a driven pane is no longer needed — the **closed set** of two, and the
-/// whole of what #2501 narrowed §3.1 item 5 to.
+/// Why a driven pane is no longer needed — the **closed set** of three, and the
+/// whole of what #2501 and #2811 S1 narrowed §3.1 item 5 to.
 ///
 /// The note's item 5 was a closed sentence ("the driver may never kill a pane")
 /// and it named its own reopening condition: *"a later measurement shows drives
 /// starving on panes nothing frees"*. #2501 is that measurement — 12 driven PRs,
 /// 20 `rd-refused` rows on one of them, five `held(cap-refused)` exits, and about
-/// 25 orchestrator wakes spent doing by hand exactly what these two variants do.
-/// So the item is narrowed rather than deleted, and the narrowing is this enum:
-/// anything not spelled here is still a pane the driver may not touch.
+/// 25 orchestrator wakes spent doing by hand exactly what these variants do. So
+/// the item is narrowed rather than deleted, and the narrowing is this enum:
+/// anything not spelled here is still a pane the driver may not touch. #2811 S1 is
+/// the SECOND such measurement — 15 of 20 hand-backs in one 6.4-hour session
+/// held a slot the whole round, 33 kills by hand — and it adds
+/// [`DriveEnded`](ReleaseReason::DriveEnded) rather than loosening either of the
+/// two that were already here.
 ///
-/// **What makes exactly these two safe is not that they are idle.** The idle
+/// **What makes exactly these safe is not that they are idle.** The idle
 /// reaper's demotion argument ("no task in flight, nothing to lose") is half of
-/// it; the other half is that in both states the pane's OUTPUT is already on
+/// it; the other half is that in each case the pane's OUTPUT is already on
 /// durable record — a verdict file the gate re-reads, or a `report` the drive has
-/// consumed and acted on — and the CONVERSATION survives, because the driver
-/// resumes lanes and workers by session and has done since #2109. A release
-/// therefore destroys nothing: not work, not a decision, not a reviewer's memory
-/// of the PR.
+/// consumed and acted on, or (at a terminal step) a drive with nothing left to
+/// ask for at all — and the CONVERSATION survives, because the driver resumes
+/// lanes and workers by session and has done since #2109. A release therefore
+/// destroys nothing: not work, not a decision, not a reviewer's memory of the
+/// PR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReleaseReason {
     /// A reviewer lane whose verdict is recorded **at the revision now on the
@@ -3944,6 +3973,23 @@ pub enum ReleaseReason {
     /// [`DriveEntry::worker_session`] rather than the pane — so the pane's only
     /// remaining function was to hold a slot.
     ReportConsumed,
+    /// **The drive is OVER** — this tick's step is `satisfied` or `cancelled`,
+    /// and the worker pane is a slot held for a drive that will never ask it
+    /// anything again (#2811 S1).
+    ///
+    /// It is a third variant rather than a reuse of [`ReportConsumed`] because
+    /// the audit reason is a claim: a drive can reach a terminal step by a path
+    /// on which no report was ever consumed (resumed out of
+    /// `held(fix-stalled)`, then green), and labelling that release
+    /// `report-consumed` would be a false row on the one surface §5.4 asks a
+    /// reader to count from. The two variants also carry different SAFETY
+    /// arguments: `ReportConsumed` rests on the report being on durable record,
+    /// this one on there being nothing left to wait for at all.
+    ///
+    /// The guard that keeps it honest is [`DriveEntry::handback_outstanding`]:
+    /// a drive cancelled while its worker is mid-round is still waiting on that
+    /// worker, and releases nothing.
+    DriveEnded,
 }
 
 impl ReleaseReason {
@@ -3951,6 +3997,7 @@ impl ReleaseReason {
         match self {
             ReleaseReason::VerdictRecorded => "verdict-recorded",
             ReleaseReason::ReportConsumed => "report-consumed",
+            ReleaseReason::DriveEnded => "drive-ended",
         }
     }
 }
@@ -3979,14 +4026,27 @@ pub struct ReleaseCandidate {
 ///
 /// # The three conditions, and what each excludes
 ///
-/// **1. The step must leave the drive LIVE.** An `Advance` into `held`,
-/// `satisfied` or `cancelled` releases nothing, and that is not caution — it is
-/// what keeps §6's exit notices true. A parked drive's notice says its panes are
-/// "still running" and that a `drive_review` resume speaks to them again
-/// ([`PaneStanding::Owned`](crate::rddrive::PaneStanding::Owned)); a terminal
-/// one hands them to the orchestrator to dispose of. A lane released on an
-/// EARLIER tick is simply not in [`DriveEntry::owned_panes`] any more, so the
-/// notice keeps naming exactly the panes that are still there.
+/// **1. The step must not PARK the drive.** An `Advance` into `held` releases
+/// nothing, and that is not caution — it is what keeps §6's hold notices true: a
+/// parked drive's notice says its panes are "still running" and that a
+/// `drive_review` resume speaks to them again
+/// ([`PaneStanding::Owned`](crate::rddrive::PaneStanding::Owned)), which is a
+/// promise about panes the drive still means to use.
+///
+/// **A TERMINAL step is the opposite case and releases MORE, not less** (#2811 S1).
+/// It used to be folded in with `held` here, on the reading that a terminal
+/// notice "hands the panes to the orchestrator to dispose of". Measured, that
+/// hand-off is a bill: the orchestrator killed the reporting worker in the same
+/// second it started 4 of one session's 16 drives, and the next hand-back then
+/// resumed the session into a FRESH pane — a spawn per round that a released
+/// pane would not have needed. Nothing is being waited for at a terminal step by
+/// definition, so both rules below are evaluated and their panes go; what the
+/// notice then names is whatever the barrier refused, which is exactly the list
+/// an orchestrator still has something to do about.
+///
+/// A lane released on an EARLIER tick is simply not in
+/// [`DriveEntry::owned_panes`] any more, so the notice keeps naming exactly the
+/// panes that are still there.
 ///
 /// **This is a condition on the STEP, and the drive can still end the tick
 /// parked despite it** (rev-final W1). The step is what `decide` proposed; the
@@ -4010,33 +4070,65 @@ pub struct ReleaseCandidate {
 /// be read is empty, `lane_verdict_is_current` is false for it, and the tick
 /// releases nothing at all: "we could not check" is not "it has answered".
 ///
-/// **3. The worker must have REPORTED, into a drive that is in `fix-wait`.**
-/// `WorkerSignal::Done` and no other word: `Blocked` is INVARIANT 3 territory
-/// and parks the drive for the orchestrator, which is a pane a human is about to
-/// talk to. `Silent` has reported nothing at all. And the state condition is
-/// what makes "the driver has consumed the report" a fact rather than a
-/// description — the signal is one-shot, cleared when the arc it fed is durable,
-/// so the tick that sees `Done` in `fix-wait` is the tick that consumed it.
+/// **3. The worker must have REPORTED into a drive that is waiting on it — or
+/// the drive must be over.** `WorkerSignal::Done` and no other word: `Blocked`
+/// is INVARIANT 3 territory and parks the drive for the orchestrator, which is a
+/// pane a human is about to talk to. `Silent` has reported nothing at all. And
+/// the state condition is what makes "the driver has consumed the report" a fact
+/// rather than a description — the signal is one-shot, cleared when the arc it
+/// fed is durable, so the tick that sees `Done` while a hand-back is
+/// outstanding is the tick that consumed it.
+///
+/// **"Waiting on it" is [`DriveEntry::handback_outstanding`], which since #2168
+/// E1 spans TWO states** (#2811 S1). This condition used to read `fix-wait` alone,
+/// and E1 moved the report's consumption into `ci-wait` for the ordinary
+/// push-then-report ordering — so for every hand-back that actually pushed code,
+/// the condition and its consumer never met. Measured on one 6.4-hour session:
+/// all 5 releases were body-only fixes, the other 15 of 20 hand-backs held a
+/// live-delegate slot through ci-wait and the next review round, and 33 of the
+/// orchestrator's pane kills were doing this by hand. The predicate is asked
+/// once, on `DriveEntry`, because [`DriveEntry::kickback_owed`] needs the same
+/// answer and two spellings of it is how the first drift happened.
+///
+/// **At a terminal step the word is not read at all** and the reason is
+/// [`ReleaseReason::DriveEnded`]: nothing is outstanding, so there is no report
+/// to consume and no wait to end. What is checked there is the mirror image —
+/// that a hand-back is NOT outstanding, so a `cancelled` that arrives while the
+/// worker is mid-round leaves that pane alone.
 ///
 /// # What this deliberately does NOT release
 ///
 /// A lane that has been briefed and has not answered; a lane whose verdict binds
-/// to an older revision; a worker that reported `blocked` or has said nothing; a
-/// pane belonging to a drive whose STEP parks or ends it this tick (see
-/// condition 1 for why that is not the same as "a drive that parks"); and every
-/// pane in the group that is not this drive's. The orchestrator's kill authority is
+/// to an older revision; a worker that reported `blocked` or has said nothing;
+/// a worker still owed a round by a drive that is being `cancelled` under it;
+/// a pane belonging to a drive whose STEP parks it this tick (see condition 1
+/// for why that is not the same as "a drive that parks"); and every pane in the
+/// group that is not this drive's. The orchestrator's kill authority is
 /// untouched by all of it — this narrows what the DRIVER may do, and adds
 /// nothing anywhere else.
 ///
 /// # The residual, stated because a narrowing must state one
 ///
-/// The worker rule fires on ONE tick — the arc out of `fix-wait` — and the
-/// caller's own half of the decision can refuse it there: a pane still finishing
-/// its turn is not idle, and an idle check that says "no" is not retried,
-/// because the next tick is no longer in `fix-wait` and the fact has expired.
-/// That case costs exactly what it cost before #2501 (the pane holds its slot
-/// until the next hand-back reuses it, per #1960), so the failure direction is
-/// the old behaviour rather than anything new.
+/// The worker rule still fires on ONE tick — the arc out of the wait, from
+/// either of its two states — and the caller's own half of the decision can
+/// refuse it there: a pane still finishing its turn is not idle, and an idle
+/// check that says "no" is not retried, because the next tick is no longer
+/// waiting on that worker and the fact has expired. What #2811 S1 changes is only
+/// WHICH tick that is, not that there is one. The refused case costs exactly
+/// what it cost before #2501 (the pane holds its slot until the next hand-back
+/// reuses it, per #1960) — and now, additionally, until the drive ENDS, where
+/// the terminal rule asks once more without the report's help. So the failure
+/// direction is the old behaviour, bounded one exit sooner than it used to be.
+///
+/// **The tool cancel is not a terminal STEP and is outside all of this.**
+/// `cancel_review_drive` ends a drive without a tick, so no `decide` runs, no
+/// `releasable` is asked, and its notice names every owned pane as
+/// [`PaneStanding::Released`] exactly as it always did. That is deliberate
+/// rather than an oversight: the orchestrator that called the tool is the party
+/// disposing of the panes, it is awake in the turn that called it, and the
+/// notice it gets back is the list. The measured cost this slice is about is
+/// paid by drives the DRIVER ends while the orchestrator is doing something
+/// else.
 ///
 /// **A worker session two drives share is the one case where a release reaches a
 /// pane that is not only this drive's**, and it is disclosed rather than guarded
@@ -4069,25 +4161,37 @@ pub fn releasable(
     facts: &DriveFacts,
     step: &DriveStep,
 ) -> Vec<ReleaseCandidate> {
-    // Condition 1. A STEP that parks or ends the drive releases nothing — which
-    // is not the same as "a drive that parks": the arm can refuse and park after
-    // this has answered. See the doc above (rev-final W1).
+    // Condition 1, and since #2811 S1 it is about PARKING alone — which is not the
+    // same as "a drive that parks": the arm can refuse and park after this has
+    // answered. See the doc above (rev-final W1).
+    let mut terminal = false;
     if let DriveStep::Advance { to, .. } = step {
-        if to.is_parked() || to.is_terminal() {
+        if to.is_parked() {
             return Vec::new();
         }
+        terminal = to.is_terminal();
     }
     let mut out: Vec<ReleaseCandidate> = Vec::new();
     // Condition 3, first, so the list reads worker-first exactly as
     // `owned_panes` does.
-    if entry.state() == DriveState::FixWait
-        && facts.worker == WorkerSignal::Done
-        && !entry.worker_agent.is_empty()
-    {
-        out.push(ReleaseCandidate {
-            role: DrivenRole::Worker,
-            reason: ReleaseReason::ReportConsumed,
-        });
+    if !entry.worker_agent.is_empty() {
+        if terminal {
+            // The drive is over. The only thing that keeps its worker pane is a
+            // round still outstanding — a `cancelled` that arrived while the
+            // worker was mid-fix — and `handback_outstanding` is the same
+            // question asked the same way one branch down.
+            if !entry.handback_outstanding() {
+                out.push(ReleaseCandidate {
+                    role: DrivenRole::Worker,
+                    reason: ReleaseReason::DriveEnded,
+                });
+            }
+        } else if entry.handback_outstanding() && facts.worker == WorkerSignal::Done {
+            out.push(ReleaseCandidate {
+                role: DrivenRole::Worker,
+                reason: ReleaseReason::ReportConsumed,
+            });
+        }
     }
     // Condition 2. `required_lanes` is `None` in the states that do not read it
     // and when the routing could not be computed at all; both are "we do not
@@ -7556,15 +7660,17 @@ mod tests {
         assert!(releasable(&e, &f, &LIVE).is_empty(), "not a candidate a second time");
     }
 
-    /// **A step that parks or ends the drive releases nothing**, which is what
-    /// keeps §6's exit notices true: they say the panes they name are still
-    /// running and are the orchestrator's to resume or dispose of.
+    /// **A step that PARKS the drive releases nothing**, which is what keeps
+    /// §6's hold notices true: they say the panes they name are still running
+    /// and that a `drive_review` resume speaks to them again.
     ///
-    /// Driven over every terminal and parked target, and over a live one as the
-    /// positive control — otherwise "released nothing" is indistinguishable from
-    /// a fixture that was never releasable at all.
+    /// The live arc is the positive control — otherwise "released nothing" is
+    /// indistinguishable from a fixture that was never releasable at all — and
+    /// the TERMINAL test below is the other half of the discrimination this pair
+    /// needs after #2811 S1: park and end now diverge, so a `releasable` that
+    /// treated them alike (in either direction) is red in one of the two.
     #[test]
-    fn a_parking_or_terminal_step_releases_nothing() {
+    fn a_parking_step_releases_nothing() {
         let mut f = facts_at("h1");
         f.required_lanes = Some(vec![lane_fact("rev-std", Some(Verdict::Pass), "h1", "d1")]);
         assert_eq!(
@@ -7572,18 +7678,15 @@ mod tests {
             1,
             "the positive control: these facts DO release under a live step"
         );
-        for (to, reason) in [
-            (DriveState::Held, Some(HeldReason::Escalate)),
-            (DriveState::Satisfied, None),
-            (DriveState::Cancelled, None),
-        ] {
-            let step = DriveStep::Advance { to, held_reason: reason, bump: None };
-            assert!(
-                releasable(&lane_open_at("h1"), &f, &step).is_empty(),
-                "a step into {} must release nothing",
-                to.as_str()
-            );
-        }
+        let step = DriveStep::Advance {
+            to: DriveState::Held,
+            held_reason: Some(HeldReason::Escalate),
+            bump: None,
+        };
+        assert!(
+            releasable(&lane_open_at("h1"), &f, &step).is_empty(),
+            "a step into held must release nothing"
+        );
         let live = DriveStep::Advance {
             to: DriveState::GateCheck,
             held_reason: None,
@@ -7596,25 +7699,119 @@ mod tests {
         );
     }
 
-    /// **The worker rule: `fix-wait` plus `Done`, and nothing else.**
+    /// **A TERMINAL step releases the lane whose verdict is current AND the
+    /// worker, because there is nothing left to wait for** (#2811 S1).
+    ///
+    /// The pre-#2811 S1 behaviour is the failing side of every row: it released
+    /// nothing at all here, so the orchestrator was handed the panes in the exit
+    /// notice and killed them by hand — 33 kills in the measured session, and a
+    /// fresh spawn on the next hand-back for want of a pane that was resumable
+    /// all along.
+    ///
+    /// The last loop is the one guard on it: a `cancelled` that lands while the
+    /// worker still owes this drive a round leaves that pane alone, so "the
+    /// drive is over" is not read as "nobody is working".
+    #[test]
+    fn a_terminal_step_releases_the_lane_and_the_worker_it_is_finished_with() {
+        for (label, to) in
+            [("satisfied", DriveState::Satisfied), ("cancelled", DriveState::Cancelled)]
+        {
+            let mut e = lane_open_at("h1");
+            e.advance(DriveState::GateCheck, None, None, 1_000).unwrap();
+            e.record_worker_pane("w-1");
+            let mut f = facts_at("h1");
+            f.required_lanes = Some(vec![lane_fact("rev-std", Some(Verdict::Pass), "h1", "d1")]);
+            let step = DriveStep::Advance { to, held_reason: None, bump: None };
+            let got = releasable(&e, &f, &step);
+            assert_eq!(got.len(), 2, "{label}: releasable said {got:?}");
+            assert_eq!(
+                got[0].role,
+                DrivenRole::Worker,
+                "{label}: worker-first, as owned_panes reads"
+            );
+            assert_eq!(got[0].reason, ReleaseReason::DriveEnded, "{label}");
+            assert_eq!(got[1].role, DrivenRole::Lane("rev-std".into()), "{label}");
+            assert_eq!(got[1].reason, ReleaseReason::VerdictRecorded, "{label}");
+        }
+
+        // A lane whose verdict does NOT bind here is still not released, so the
+        // terminal rule widened WHEN condition 2 is asked and not what it says.
+        let mut e = lane_open_at("h1");
+        e.advance(DriveState::GateCheck, None, None, 1_000).unwrap();
+        let mut f = facts_at("h1");
+        f.required_lanes = Some(vec![lane_fact("rev-std", Some(Verdict::Pass), "h0", "d1")]);
+        let step = DriveStep::Advance { to: DriveState::Satisfied, held_reason: None, bump: None };
+        assert!(
+            releasable(&e, &f, &step).is_empty(),
+            "a stale verdict is stale at a terminal step too"
+        );
+
+        // The guard: cancelled while the worker still owes this drive a round.
+        for pushed in [false, true] {
+            let mut e = entry_at(DriveState::FixWait);
+            if pushed {
+                e.advance(DriveState::CiWait, None, None, 1_000).unwrap();
+                assert!(e.fix_pushed(), "arc 7 is what makes this ci-wait a wait on the worker");
+            }
+            e.head = "h1".to_string();
+            e.record_worker_pane("w-1");
+            let mut f = facts_at("h1");
+            f.worker = WorkerSignal::Silent;
+            let step =
+                DriveStep::Advance { to: DriveState::Cancelled, held_reason: None, bump: None };
+            assert!(
+                releasable(&e, &f, &step).is_empty(),
+                "pushed={pushed}: a worker mid-round is not released by the drive being cancelled"
+            );
+        }
+    }
+
+    /// **The worker rule: a hand-back outstanding plus `Done`, and nothing
+    /// else** (#2501, corrected by #2811 S1).
     ///
     /// Every other worker signal is a row here, because each is a different
     /// reason to keep the pane: `Blocked` parks the drive for the orchestrator,
     /// which is about to talk to that pane; `Silent` has said nothing;
-    /// `Unresumable` has already gone. And the state condition is a row too —
-    /// the same `Done` in `ci-wait` is a report about a hand-back this drive has
-    /// already consumed, so it may not release a second time.
+    /// `Unresumable` has already gone.
+    ///
+    /// **The two `ci-wait` `Done` rows are the correction, and the arc-7 anchor
+    /// is their only moving part** — same state, same signal, same pane.
+    /// Before #2811 S1 this table said `(ci-wait, Done) => false` outright,
+    /// reasoning that such a report was about a hand-back already consumed;
+    /// #2168 E1 had moved the consumption there, so the row was describing the
+    /// very tick that consumes it, and 15 of one session's 20 hand-backs paid a
+    /// held slot for the whole round. The `ci-wait`-without-a-push row keeps the
+    /// original claim, which is still true of it: no hand-back is outstanding
+    /// there, so a `Done` is not this drive's to consume.
     #[test]
     fn the_worker_is_released_only_on_the_tick_that_consumes_its_done_report() {
-        for (state, signal, owed) in [
-            (DriveState::FixWait, WorkerSignal::Done, true),
-            (DriveState::FixWait, WorkerSignal::Blocked, false),
-            (DriveState::FixWait, WorkerSignal::Silent, false),
-            (DriveState::FixWait, WorkerSignal::Unresumable, false),
-            (DriveState::CiWait, WorkerSignal::Done, false),
-            (DriveState::ReviewWait, WorkerSignal::Done, false),
+        for (state, pushed, signal, owed) in [
+            (DriveState::FixWait, false, WorkerSignal::Done, true),
+            (DriveState::FixWait, false, WorkerSignal::Blocked, false),
+            (DriveState::FixWait, false, WorkerSignal::Silent, false),
+            (DriveState::FixWait, false, WorkerSignal::Unresumable, false),
+            (DriveState::CiWait, true, WorkerSignal::Done, true),
+            (DriveState::CiWait, true, WorkerSignal::Blocked, false),
+            (DriveState::CiWait, true, WorkerSignal::Silent, false),
+            (DriveState::CiWait, true, WorkerSignal::Unresumable, false),
+            (DriveState::CiWait, false, WorkerSignal::Done, false),
+            (DriveState::ReviewWait, false, WorkerSignal::Done, false),
         ] {
-            let mut e = entry_at(state);
+            // Walked through the arcs rather than stamped, so no fixture here
+            // can encode a `fix_pushed_ms` the machine would not have written.
+            let mut e = if pushed {
+                let mut e = entry_at(DriveState::FixWait);
+                e.advance(DriveState::CiWait, None, None, 1_000).unwrap();
+                e
+            } else {
+                entry_at(state)
+            };
+            assert_eq!(e.state(), state, "the fixture is in the state the row names");
+            assert_eq!(
+                e.fix_pushed(),
+                pushed,
+                "…and carries the arc-7 anchor iff the row says so"
+            );
             e.head = "h1".to_string();
             e.record_worker_pane("w-1");
             let mut f = facts_at("h1");
@@ -7623,7 +7820,7 @@ mod tests {
             assert_eq!(
                 got.len(),
                 usize::from(owed),
-                "{}/{signal:?} released {got:?}",
+                "{}/pushed={pushed}/{signal:?} released {got:?}",
                 state.as_str()
             );
             if owed {
@@ -7631,6 +7828,36 @@ mod tests {
                 assert_eq!(got[0].reason, ReleaseReason::ReportConsumed);
             }
         }
+    }
+
+    /// **One predicate, two callers** (#2811 S1) — `kickback_owed` and
+    /// `releasable` ask "is a hand-back outstanding" through
+    /// [`DriveEntry::handback_outstanding`] and not through two spellings of it,
+    /// which is how the #2811 S1 drift happened in the first place.
+    ///
+    /// Pinned as a property of the ENTRY over every live state, so a later edit
+    /// that re-inlines either reading diverges from this table rather than from
+    /// the other caller silently.
+    #[test]
+    fn a_handback_is_outstanding_in_fix_wait_and_in_a_pushed_ci_wait_only() {
+        for state in DriveState::ALL {
+            if state.is_terminal() || state.is_parked() {
+                continue;
+            }
+            let e = entry_at(state);
+            assert_eq!(
+                e.handback_outstanding(),
+                state == DriveState::FixWait,
+                "{} without a push",
+                state.as_str()
+            );
+        }
+        let mut e = entry_at(DriveState::FixWait);
+        e.advance(DriveState::CiWait, None, None, 1_000).unwrap();
+        assert!(e.handback_outstanding(), "arc 7 keeps the wait alive in ci-wait");
+        // Arc 2 ends it, and that is the tick the release rides.
+        e.advance(DriveState::ReviewWait, None, None, 1_000).unwrap();
+        assert!(!e.handback_outstanding(), "…and the arc out of it ends the wait");
     }
 
     /// **A release refuses when the conversation cannot be named.** Killing the

@@ -18855,10 +18855,11 @@ pub enum ExitInitiator {
     /// no task in flight, nothing to lose — which is what makes it safe to
     /// demote alongside an orchestrator-initiated kill.
     IdleTimeout,
-    /// The review driver releasing a pane it no longer needs (#2501) — a
-    /// reviewer lane whose verdict is recorded at the drive's current head, or a
+    /// The review driver releasing a pane it no longer needs (#2501, #2811 S1) — a
+    /// reviewer lane whose verdict is recorded at the drive's current head, a
     /// worker that reported and went idle once the drive had consumed the
-    /// report. `reviewdrive::releasable` is the closed rule and
+    /// report, or either of them at the step that ENDS the drive.
+    /// `reviewdrive::releasable` is the closed rule and
     /// `OrchRegistry::release_driven_pane` is the only thing that stamps this.
     DriverRelease,
     /// The LEAD pane of this delegate's group, by dying (#2519). A lead group
@@ -18914,13 +18915,15 @@ pub enum ExitNoticeRoute {
 /// "kill to reclaim a slot" case that sentence turns away** (#2501). That
 /// case is a reaper choosing a victim to make room; this is a drive
 /// disposing of a pane whose work it has already taken delivery of, in one
-/// of two states `reviewdrive::releasable` closes over: a lane whose
-/// verdict is recorded at the drive's current head, or a worker whose
-/// `report` the drive has consumed. Both carry `IdleTimeout`'s own
-/// property — the pane is idle, so nothing is in flight — and add the one
-/// it does not: the output is already durable (a verdict file, a consumed
-/// report) and the conversation is resumable by session, so nothing is
-/// lost rather than merely nothing in progress.
+/// of the states `reviewdrive::releasable` closes over: a lane whose
+/// verdict is recorded at the drive's current head, a worker whose
+/// `report` the drive has consumed, or — since #2811 S1 — either of them at
+/// the step that ends the drive, where there is nothing left to wait for.
+/// All carry `IdleTimeout`'s own property — the pane is idle, so nothing
+/// is in flight — and add the one it does not: the output is already
+/// durable (a verdict file, a consumed report) and the conversation is
+/// resumable by session, so nothing is lost rather than merely nothing in
+/// progress.
 ///
 /// The orchestrator can reconstruct it, which is the actual test this
 /// function applies: `rd-lane-released` / `rd-worker-released` name the

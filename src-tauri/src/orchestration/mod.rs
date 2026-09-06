@@ -44059,7 +44059,7 @@ impl OrchRegistry {
                         snap.cache_creation_tokens = u.tokens.cache_creation_tokens;
                         snap.cache_read_tokens = u.tokens.cache_read_tokens;
                         snap.cost_usd = u.cost_usd;
-                        snap.estimated = true; // token-derived, and unpriced today
+                        snap.estimated = false;
                         snap.model = u.model;
                         return snap;
                     }

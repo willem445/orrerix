@@ -828,7 +828,7 @@ event.
 So a driver that waited for one would wait forever. `Booted` is instead
 synthesized: the driver sends `get_state` as its first command, and the reply's
 `data` carries `model`, `thinkingLevel`, `sessionId` and `sessionFile`
-(`docs/rpc.md:193-218`) — enough to fill `Booted{session, model, capabilities}`
+(`docs/rpc.md:193-216`) — enough to fill `Booted{session, model, capabilities}`
 with a REPORTED fact rather than a scraped one. There is no readiness marker to
 scrape and none is wanted: §"Readiness"'s painted-and-quiet gate is a PTY
 mechanism and does not apply to a pane with no PTY.

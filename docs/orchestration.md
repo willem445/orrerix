@@ -2284,8 +2284,38 @@ the whole file when the block's `cli:` has no structured driver, naming the bloc
 the CLIs that can take the key — and in this release only `pi` does, so a structured block
 needs `cli: pi`. (Claude's stream-json decoder exists, but its spawn-path wiring is a later
 slice of [#84](https://github.com/willem445/orrerix/issues/84), so its row refuses until
-then.) The key is otherwise inert in this release: a block that declares it spawns exactly as
-it does today, and the spawn path that acts on it lands with #2850's remaining slices.
+then.)
+
+A block that asks for a driver its CLI cannot provide is refused **twice**: once when the
+workflow file is parsed, and again at spawn against the CLI the block actually resolved to.
+The second check is not a belt-and-braces repeat — a block that inherits its `cli:` from the
+workflow-level default has no CLI the parser can judge, so that case reaches the spawn path
+having passed a check that could not see it.
+
+**What changes when a block is driven.** The pane has no terminal. orrerix talks to the agent
+over its protocol instead of typing at it, which means turns are delivered as messages rather
+than pasted and submitted, the agent's tool calls, reasoning and token usage are reported
+rather than inferred from the screen, and there is nothing to scrape — so the interactive-
+question detector and the readiness wait do not run for such a pane, because it can be asked
+directly instead of watched.
+
+Typing into a driven pane is refused, and says so: a delivery goes through the queue like any
+other, and a dialog is answered from the pane itself.
+
+**Dialogs land in NEEDS-YOU.** A driven agent can raise a prompt of its own — a choice, a
+confirmation, a piece of text — and it *blocks* until someone answers. orrerix never answers
+one for you and never lets a timer answer one either: an auto-answer is a decision nobody
+made, recorded as though somebody had. Instead the ask appears in your NEEDS-YOU queue, and
+the pane waits. Two exceptions, both deliberate: an **orchestrator or manager** pane never
+waits — its dialog is cancelled at once and the ask still reaches your queue, because machine
+progress must not stop on human absence — and a pane that has piled up more than a few
+unanswered dialogs has the surplus cancelled the same way.
+
+**In this release the driven pane has no pane cell yet.** It runs, takes deliveries, logs, and
+reports its usage and its dialogs; what it does not yet have is the rendered view of that
+stream in the grid, which lands with [#2891](https://github.com/willem445/orrerix/issues/2891).
+Until then a driven block is visible on the board and in NEEDS-YOU rather than as a pane you
+can watch.
 
 ### A manager pane — the human's own interface
 

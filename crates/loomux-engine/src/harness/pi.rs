@@ -2144,10 +2144,25 @@ mod tests {
         ] {
             let all = d.decode_line(&line.to_string());
             assert!(
-                events(&all).is_empty(),
+                !events(&all)
+                    .iter()
+                    .any(|e| matches!(e, HarnessEvent::Compacted { .. })),
                 "a compaction that did not compact must not be reported as one: {all:?}"
             );
-            assert_eq!(notes(&all).len(), 1, "{all:?}");
+            // It is not SILENT either, and that is the other half: a compaction
+            // that failed on quota leaves the pane about to hit its context
+            // window, and a human whose pane then stops working for no visible
+            // reason has been told nothing.
+            assert!(
+                matches!(
+                    events(&all).as_slice(),
+                    [HarnessEvent::Note {
+                        note: NoteKind::Error,
+                        ..
+                    }]
+                ),
+                "{all:?}"
+            );
         }
     }
 
@@ -2210,8 +2225,9 @@ mod tests {
         assert_eq!(u1.this_turn_main_loop.expect("turn 1").output, 9);
         assert_eq!(
             u0.this_turn_main_loop.expect("turn 0").cache_creation,
-            5,
-            "cacheWrite maps to cache_creation"
+            10,
+            "cacheWrite maps to cache_creation, SUMMED over the turn's two \
+             messages (5 + 5) — the same summation the output figure above shows"
         );
         // The accumulator RESETS between turns; without that, turn 1 reads 21.
         assert!(u1.this_turn_main_loop.expect("turn 1").output < u0.this_turn_main_loop.expect("t0").output + 9);

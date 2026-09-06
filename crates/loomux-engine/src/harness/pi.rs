@@ -226,7 +226,7 @@ impl LaunchSpec {
 /// `get_state` echoes back has not been observed, so the first real session is
 /// what confirms this compare never fires spuriously.
 pub fn session_ids_match(asked: &str, reported: &str) -> bool {
-    asked.trim() == reported.trim()
+    asked.trim().eq_ignore_ascii_case(reported.trim())
 }
 
 // ── command ids: the one contract between the driver and the decoder ────────

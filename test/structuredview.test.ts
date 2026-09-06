@@ -578,32 +578,52 @@ test("the head trim agrees with utf8Bytes on the kept tail", () => {
   for (const text of corpus) assert.ok(enc.encode(text).length > MAX_TEXT_BYTES_PER_BLOCK);
 });
 
-test("a saturated block trims in time proportional to the DELTA, not the block", () => {
-  // The shape of finding 4, pinned as a property rather than a wall-clock
-  // threshold (a timing assertion would flake on a loaded CI box). Feeding the
-  // same total in small deltas versus large ones must not change the work per
-  // byte by an order of magnitude; with the old full re-measure the small-delta
-  // run did ~16x the work of the large-delta one.
-  const TOTAL = 8 * 1024 * 1024;
-  const time = (deltaSize: number): number => {
-    const chunk = "x".repeat(deltaSize);
+test("a saturated block's trim cost scales with the DELTA, not the block", () => {
+  // The shape of round 1's finding 4, pinned DETERMINISTICALLY. A wall-clock
+  // ratio was the obvious test and it flaked: the first run of it under a
+  // loaded box reddened the mutation harness's own control row, which would
+  // have made every row in that table unattributable. So this counts the work
+  // instead of timing it — `charCodeAt` is the inner operation of both
+  // `utf8Bytes` and the trim loop, so its call count IS the cost model, and it
+  // is identical on every machine.
+  //
+  // Pre-fix, `trimHead` ended `utf8Bytes(kept)`, re-walking up to
+  // MAX_TEXT_BYTES_PER_BLOCK characters on every trim — and once a block is
+  // saturated, every delta trims. Post-fix the loop accumulates the widths it
+  // was already computing, so the count is proportional to what ARRIVED.
+  const TOTAL = 4 * 1024 * 1024;
+  const DELTA = 4 * 1024;
+  const real = String.prototype.charCodeAt;
+  let calls = 0;
+  // eslint-disable-next-line no-extend-native
+  String.prototype.charCodeAt = function (i: number): number {
+    calls += 1;
+    return real.call(this, i);
+  };
+  let saturatedBytes = 0;
+  try {
+    const chunk = "x".repeat(DELTA);
     const s = emptyState();
     project(s, [{ kind: "tool_call", turn: 1, id: "t1", name: "Bash", input: {} }]);
-    const t0 = process.hrtime.bigint();
-    for (let sent = 0; sent < TOTAL; sent += deltaSize) {
+    for (let sent = 0; sent < TOTAL; sent += DELTA) {
       project(s, [{ kind: "tool_output", turn: 1, id: "t1", delta: chunk, is_error: false }]);
     }
-    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    assert.equal(only(s, "tool")[0]!.outputBytes, MAX_TEXT_BYTES_PER_BLOCK, "saturated");
-    return ms;
-  };
-  const small = time(4 * 1024);
-  const large = time(64 * 1024);
-  // Generous bound: the point is the ORDER, not a number. The pre-fix code was
-  // ~12x here; anything under 4x means the per-trim cost is not the block size.
+    saturatedBytes = only(s, "tool")[0]!.outputBytes;
+  } finally {
+    String.prototype.charCodeAt = real;
+  }
+
+  assert.equal(saturatedBytes, MAX_TEXT_BYTES_PER_BLOCK, "positive control: the block really saturated");
+  assert.ok(calls > 0, "positive control: the counter really observed the work");
+
+  // Every arriving character is measured once by `utf8Bytes`, and each trim
+  // walks only the characters it drops — so the total is a small multiple of
+  // what arrived. The re-measuring version does ~`trims x 256Ki` on top:
+  // (4 MiB / 4 KiB) x 256Ki = about 268M extra, two orders above this bound.
+  const arrived = TOTAL;
   assert.ok(
-    small < Math.max(large, 1) * 4 + 250,
-    `small-delta run ${small.toFixed(0)}ms vs large-delta ${large.toFixed(0)}ms — trim looks O(block)`,
+    calls < arrived * 3,
+    `charCodeAt calls ${calls} vs ${arrived} bytes arrived — trim is re-reading the block`,
   );
 });
 

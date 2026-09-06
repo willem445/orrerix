@@ -778,7 +778,7 @@ impl Decoder {
                 };
                 let mut out = Vec::new();
                 let turn = self.ensure_turn(&mut out);
-                out.push(Decoded::Event(HarnessEvent::Thinking {
+                out.push(Decoded::Event(HarnessEvent::Text {
                     turn,
                     delta: d.to_string(),
                 }));

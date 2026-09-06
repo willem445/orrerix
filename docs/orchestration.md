@@ -2164,6 +2164,21 @@ setting that is in force.
 The full design note for remote roles lands with the rest of the feature
 ([#1462](https://github.com/willem445/orrerix/issues/1462)); the plan it is being
 built from is on [#1436](https://github.com/willem445/orrerix/issues/1436).
+
+### Driving a block over its structured protocol: `driver:` (pi only, in this release)
+
+A block can ask to be *driven* rather than scraped: `driver: structured` tells orrerix to run
+the block's agent over its CLI's structured-protocol surface — a JSON stream or RPC channel
+that reports turns, tool calls, usage and prompts-for-input as events — instead of reading
+them off a PTY. The value set is orrerix's own and closed (`structured` is the only one), and
+whether a CLI can carry the key is a per-CLI fact the capability table owns: the parse refuses
+the whole file when the block's `cli:` has no structured driver, naming the block, the CLI and
+the CLIs that can take the key — and in this release only `pi` does, so a structured block
+needs `cli: pi`. (Claude's stream-json decoder exists, but its spawn-path wiring is a later
+slice of [#84](https://github.com/willem445/orrerix/issues/84), so its row refuses until
+then.) The key is otherwise inert in this release: a block that declares it spawns exactly as
+it does today, and the spawn path that acts on it lands with #2850's remaining slices.
+
 ### A manager pane — the human's own interface
 
 Every block above is an agent doing work. A `kind: manager` block is not: it is

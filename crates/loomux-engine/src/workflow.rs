@@ -708,6 +708,15 @@ pub struct Block {
     /// the operator binding is #1458 and the spawn path #1459, so a block that
     /// declares it spawns exactly as it does today — locally.
     pub remote: Option<String>,
+    /// HOW loomux drives this block's agent (the `driver:` key, #2850) —
+    /// `Some("structured")` over the CLI's structured-protocol surface, or
+    /// `None` (the key absent or empty) for a scraped-PTY pane, which is
+    /// every pane today and every pane this build spawns: the spawn-path
+    /// wiring that reads this field is #2850 S3b. Normalized through
+    /// [`DRIVER_MODES`] like `role_hint` through its own closed set — an
+    /// unrecognized value never reaches here, and a CLI without a structured
+    /// driver never carries one (see the parse validation).
+    pub driver: Option<String>,
 }
 
 /// The per-block model knobs that reach a spawn alongside the model itself
@@ -1532,6 +1541,10 @@ pub fn default_roster_ex(pins: &[(Role, &str, &str, ModelKnobs<'_>)]) -> Vec<Blo
             // LOCAL. A remote block can only come from a repo's workflow file,
             // which is the only surface the operator opted a label into.
             remote: None,
+            // Same shape: a structured driver can only come from a repo's
+            // workflow file — the built-in roster is the pre-#2850 behavior,
+            // PTY panes throughout.
+            driver: None,
         })
         .collect()
 }
@@ -2046,6 +2059,15 @@ struct RawBlock {
     /// (the reasoning [`RawMergeQueue::max_batch`] states).
     #[serde(default)]
     remote: Option<String>,
+    /// #2850. HOW loomux drives this block's agent — `structured` over the
+    /// CLI's structured-protocol surface instead of a scraped PTY. `Option`
+    /// for the same reason `remote` is: "omitted" (a PTY pane, every file
+    /// written before this key existed) and "written empty" stay
+    /// distinguishable, and `deny_unknown_fields` keeps a build that predates
+    /// the key refusing a file that declares it rather than silently
+    /// spawning a structured-intended block as a PTY pane.
+    #[serde(default)]
+    driver: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2153,6 +2175,7 @@ pub fn workflow_schema_keys() -> BTreeMap<String, Vec<String>> {
         effort: "high".into(),
         context: "1m".into(),
         remote: Some("buildbox".into()),
+        driver: Some("structured".into()),
     };
     let edge = RawEdge { from: "a".into(), to: OneOrMany::One("b".into()) };
     let gate = RawGate {
@@ -2329,6 +2352,7 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
     fact("block.cli", "values", json!(cli_values));
     fact("block.kind", "values", json!(names(kind_names())));
     fact("block.role_hint", "values", json!(names(role_hint_names())));
+    fact("block.driver", "values", json!(DRIVER_MODES));
     let mut sources = vec![String::new()]; // `intake_source_from_str`: "" is the default source
     sources.extend(names(intake_source_names()));
     fact("intake.source", "values", json!(sources));
@@ -2591,6 +2615,27 @@ pub fn is_spawnable_block(b: &Block) -> bool {
 /// The role hints a workflow file may name, for error messages.
 pub fn role_hint_names() -> String {
     "advisor, process, liaison".to_string()
+}
+
+/// The closed vocabulary of a block's `driver:` key (#2850) — HOW loomux
+/// drives the block's agent, as opposed to `cli:`, which says which program
+/// runs. `structured` means: over the CLI's structured-protocol surface (a
+/// JSON stream or RPC channel, through the `harness` adapters), instead of a
+/// scraped PTY.
+///
+/// This is loomux's vocabulary, not one CLI's — the same split `role_hint`
+/// makes between the value set (closed, here) and who can carry it
+/// (capability data, [`crate::model::CliCaps::structured_driver`]): a value
+/// outside the set is a parse error whatever the CLI, and `structured` on a
+/// CLI whose row carries no driver is a parse error naming both. A block
+/// WITHOUT the key is a PTY pane — every pane this build spawns, until the
+/// spawn-path wiring (#2850 S3b) starts reading it.
+pub const DRIVER_MODES: &[&str] = &["structured"];
+
+/// The mode names, for error messages and the schema manifest — one table,
+/// so a second mode cannot appear in one and not the other.
+pub fn driver_mode_names() -> String {
+    DRIVER_MODES.join(", ")
 }
 
 /// Validate one block model knob — `effort:` or `context:` (#687).
@@ -2978,6 +3023,57 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 continue;
             }
         };
+        // `driver:` (#2850) — HOW loomux drives this block's agent. A
+        // VALUE-SET pick like `effort:`/`context:` above — it authors no text
+        // and pre-approves no tool — so it is legal on an orchestrator block
+        // too. Two checks, in the same order and the same postures as the
+        // knobs: the value must be in loomux's closed vocabulary (rejected,
+        // never coerced), and — when the block names an explicit `cli:` —
+        // that CLI's [`CliCaps::structured_driver`] row must carry a driver.
+        // The CLI half is checked only for an explicit `cli:`, exactly like
+        // `cli_can_host` above: an inherited CLI is resolved at launch,
+        // unknowable here, and re-checked at spawn.
+        //
+        // The refusal names the block (this prefix), the CLI, and the CLIs
+        // that CAN take the key — derived from the table, the same remedy
+        // shape `validate_knob` gives the knobs.
+        let driver = match rb.driver.as_deref() {
+            None => None,
+            Some(raw) => {
+                let want = raw.trim().to_ascii_lowercase();
+                if want.is_empty() {
+                    // A bare `driver:` line means the absent key — a PTY
+                    // pane — rather than a refusal about nothing (the
+                    // reasoning `RawBlock::remote` states for `Option`).
+                    None
+                } else if !DRIVER_MODES.contains(&want.as_str()) {
+                    errs.push(format!(
+                        "blocks[{i}] ({id}): unknown driver {raw:?} — must be one of {}",
+                        driver_mode_names()
+                    ));
+                    continue;
+                } else {
+                    if let Some(caps) = caps {
+                        if caps.structured_driver.is_none() {
+                            let with_driver: Vec<&str> = crate::model::CLI_CAPS
+                                .iter()
+                                .filter(|c| c.structured_driver.is_some())
+                                .map(|c| c.cli)
+                                .collect();
+                            errs.push(format!(
+                                "blocks[{i}] ({id}): cli {cli:?} has no structured driver — \
+                                 driver: {want} needs a CLI loomux drives over its structured \
+                                 protocol. Fix: drop the key (the block runs as a PTY pane), or \
+                                 give this block a cli: that has one — {}",
+                                with_driver.join(", ")
+                            ));
+                            continue;
+                        }
+                    }
+                    Some(want)
+                }
+            }
+        };
         // `remote:` (#1457) — the label that says this block's agent CLI runs
         // on another machine over SSH. THREE refusals, all parse errors, all
         // fail-closed on purpose: this is the one block key whose eventual
@@ -3079,6 +3175,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
             effort,
             context,
             remote,
+            driver,
         });
     }
 
@@ -3910,6 +4007,7 @@ fn changed_fields(agent_cli: &str, a: &Block, b: &Block) -> Vec<String> {
         effort: a_effort,
         context: a_context,
         remote: a_remote,
+        driver: a_driver,
     } = a;
     let Block {
         id: b_id,
@@ -3924,6 +4022,7 @@ fn changed_fields(agent_cli: &str, a: &Block, b: &Block) -> Vec<String> {
         effort: b_effort,
         context: b_context,
         remote: b_remote,
+        driver: b_driver,
     } = b;
     debug_assert_eq!(a_id, b_id, "changed_fields compares two rows for ONE block id");
     let mut out: Vec<String> = Vec::new();
@@ -3943,6 +4042,7 @@ fn changed_fields(agent_cli: &str, a: &Block, b: &Block) -> Vec<String> {
     push(a_effort != b_effort, "effort");
     push(a_context != b_context, "context");
     push(a_remote != b_remote, "remote");
+    push(a_driver != b_driver, "driver");
     out.sort();
     out
 }

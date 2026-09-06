@@ -5278,6 +5278,10 @@ fn roster_json(blocks: &[workflow::Block]) -> Value {
             "cli": b.cli,
             "model": b.model,
             "persona": b.has_persona(),
+            // #2850: additive to every row the launcher preview and the MCP
+            // `list_blocks` read-back publish, so a structured-intended block
+            // is visible in both places without a second vocabulary.
+            "driver": b.driver,
         }))
         .collect::<Vec<_>>())
 }
@@ -11111,6 +11115,19 @@ fn read_blocks(g: &Value) -> Vec<workflow::Block> {
                             && s(b, "cli") == "claude")
                             .then(|| raw.to_string())
                     }),
+                    // #2850, defense in depth exactly like `role_hint` above: a
+                    // hand-edited group.json never meets `parse_workflow`, so a
+                    // driver value outside loomux's closed vocabulary is DROPPED
+                    // here rather than resurrected — there is no human to show a
+                    // parse error to at this layer. The per-CLI half (does this
+                    // block's CLI actually carry a structured driver?) is the
+                    // same question `effort`'s comment above defers: the block's
+                    // effective CLI is not resolvable from one array element, so
+                    // only the vocabulary is checked here.
+                    driver: b["driver"].as_str().and_then(|raw| {
+                        let want = raw.trim().to_ascii_lowercase();
+                        workflow::DRIVER_MODES.contains(&want.as_str()).then_some(want)
+                    }),
                 })
             })
             .collect();
@@ -11150,6 +11167,7 @@ fn blocks_json(blocks: &[workflow::Block]) -> Value {
                     "effort": b.effort,
                     "context": b.context,
                     "remote": b.remote,
+                    "driver": b.driver,
                 })
             })
             .collect(),

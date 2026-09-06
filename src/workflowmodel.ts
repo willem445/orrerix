@@ -727,6 +727,14 @@ export interface WorkflowBlock {
    *  the operator binding (#1458) and the spawn path (#1459) are what make it do
    *  anything. */
   remote?: string;
+  /** HOW loomux drives this block's agent (#2850) — `"structured"` over the
+   *  CLI's structured-protocol surface instead of a scraped PTY, or absent
+   *  (every block today: the spawn path that reads the key is S3b). The
+   *  VALUE is loomux's closed vocabulary (`DRIVER_MODES`' mirror); whether
+   *  the block's CLI can carry it is capability data the backend owns
+   *  (`CliCaps.structured_driver`), so this field is just the file's text,
+   *  exactly like `effort` and `context`. */
+  driver?: string;
   /** Keys this build doesn't know, preserved verbatim across a round-trip. */
   extra?: Record<string, YamlValue>;
 }
@@ -1836,6 +1844,8 @@ function emitBlockLines(b: WorkflowBlock, markerIndent = 2): string[] {
   // #1457: only when declared — a block that named no remote serializes byte for
   // byte as it did before the key existed.
   if (b.remote !== undefined) out.push(`${field}remote: ${emitScalar(b.remote)}`);
+  // #2850: only when declared — same byte-for-byte posture as `remote`.
+  if (b.driver !== undefined) out.push(`${field}driver: ${emitScalar(b.driver)}`);
   out.push(...extraLines(b.extra, field));
   if (b.prompt !== undefined) out.push(...emitBlockScalar("prompt", b.prompt, field));
   return out;
@@ -2705,6 +2715,7 @@ export const KNOWN_BLOCK = new Set([
   "effort",
   "context",
   "remote",
+  "driver",
 ]);
 /** `gates:` is a MAP keyed by gate name, not a fixed struct: the engine reads it as
  *  `BTreeMap<String, RawGate>`, so a `release:` gate parses fine — loomux simply
@@ -3057,6 +3068,13 @@ function readBlock(raw: YamlValue, index: number, findings: Finding[]): Workflow
   // say if you asked it.
   const remote = asString(r.remote);
   if (remote !== null) block.remote = remote;
+  // #2850. Read as written, like `remote` above: the VALUE is closed on the
+  // engine side (`DRIVER_MODES`) and whether the block's CLI can carry it is
+  // capability data, so the pane's job here is to show and re-emit the file's
+  // text, not to second-guess it. A bare `driver:` line is YAML null — the
+  // absent key, which is what the engine reads it as too.
+  const driver = asString(r.driver);
+  if (driver !== null) block.driver = driver;
   return block;
 }
 

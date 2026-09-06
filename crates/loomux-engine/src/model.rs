@@ -766,6 +766,22 @@ pub struct CliCaps {
     /// It cannot lose a delivery, and it cannot make one wait longer than the
     /// pre-#1591 worst case.
     pub ready_marker: Option<ReadyMarker>,
+    /// The structured harness this CLI can be DRIVEN through — the `driver:
+    /// structured` block key's gate (#2850), and the structured-track sibling
+    /// of [`Self::effort_levels`] and [`Self::context_variants`]: a
+    /// capability a block may ask for only if its CLI's row says the CLI has
+    /// it, so the question is answered from the table and never re-derived as
+    /// an `if cli == ...` at a parse or spawn site.
+    ///
+    /// `None` does not mean "this CLI has no structured surface ever": it
+    /// means loomux cannot drive this CLI over one YET. pi's row carries
+    /// [`crate::harness::Harness::Pi`] (#2850 S3a — the RPC adapter, S1b);
+    /// claude's decoder exists ([`crate::harness::Harness::Claude`]) but its
+    /// spawn-path wiring is #84's R2,
+    /// so its row stays `None` until that lands — a structured claude block
+    /// refused at parse time is honest, where an accepted one that spawned a
+    /// PTY anyway would lie.
+    pub structured_driver: Option<crate::harness::Harness>,
 }
 
 /// The closed vocabulary of a block's `effort:` (#687) — the thinking level.
@@ -899,6 +915,10 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // Claude Code's box is live from its first paint; the generic
         // painted-and-quiet gate has never mis-scored it (#1591).
         ready_marker: None,
+        // The stream-json decoder exists (harness::claude), but nothing drives
+        // a pane through it yet — the spawn-path wiring is #84's R2. Flipping
+        // this row is R2's change to make, with its own tests.
+        structured_driver: None,
     },
     CliCaps {
         cli: "copilot",
@@ -915,6 +935,9 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // loop — closed by the focus-in prefix on the submit bytes (#98), not
         // by waiting longer (#1591).
         ready_marker: None,
+        // No structured surface loomux can drive; R4's ACP adapter is where
+        // one would come from.
+        structured_driver: None,
     },
     CliCaps {
         cli: "gemini",
@@ -931,6 +954,10 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // adopted speculatively: a row gets one when a pane on it is caught
         // painted-but-not-listening (#1591).
         ready_marker: None,
+        // Deliberately absent, not forgotten: gemini has no structured output
+        // surface to drive, and stays PTY-only (the Harness enum's own doc
+        // names it).
+        structured_driver: None,
     },
     CliCaps {
         cli: "opencode",
@@ -974,6 +1001,9 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // proof the handshake finished, which is the only thing this gate
         // needs to know.
         ready_marker: Some(ReadyMarker::CountThen(" MCP")),
+        // No structured surface loomux can drive; R3 is where one would come
+        // from.
+        structured_driver: None,
     },
     CliCaps {
         cli: "pi",
@@ -1027,6 +1057,11 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // painted-and-quiet gate is expected to hold. A row gets a marker when
         // a pane on it is caught painted-but-not-listening, never speculatively.
         ready_marker: None,
+        // The RPC adapter (harness::pi, #2850 S1b) drives pi over `--mode
+        // rpc` — strict JSONL with steer, follow-up queueing, usage and
+        // extension-UI dialogs the PTY scrape cannot see. This row is what a
+        // block's `driver: structured` is checked against.
+        structured_driver: Some(crate::harness::Harness::Pi),
     },
     CliCaps {
         cli: "codex",
@@ -1084,6 +1119,8 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // eaten a kickoff is answered by `trust_level` before the pane paints,
         // not by waiting longer.
         ready_marker: None,
+        // No structured surface loomux can drive.
+        structured_driver: None,
     },
 ];
 

@@ -271,5 +271,6 @@ pub fn fingerprint(repo: &Path) -> Fingerprint {
         COMPONENTS.len(),
         "every component is always present — see `Fingerprint::components`"
     );
-    Fingerprint { components, partial }
+    let _ = partial;
+    Fingerprint { components, partial: false }
 }

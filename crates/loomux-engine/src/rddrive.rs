@@ -673,6 +673,14 @@ pub mod refusal {
     /// drive time from two files; left unanswered it becomes
     /// `held(lane-stalled)` an hour later instead of an immediate refusal.
     pub const GATE_NAMES_NO_SUCH_BLOCK: &str = "gate-names-no-such-block";
+    /// `drive_review` refusing at the CALL a worker session whose block cannot
+    /// take a hand-back (#2819 (g)): the block is the group's orchestrator or
+    /// manager, or the session's roster record names a block this group no
+    /// longer declares. The same name as the [`HeldReason::WorkerUnresumable`]
+    /// hold the failure used to surface as, because it is the same fact learned
+    /// one call earlier; the refusal's `detail` carries the sentence the hold
+    /// would have quoted.
+    pub const WORKER_UNRESUMABLE: &str = "worker-unresumable";
     /// `cancel_review_drive` only: this PR has no entry, or only a terminal one.
     pub const NOT_DRIVEN: &str = "not-driven";
 
@@ -697,7 +705,7 @@ pub mod refusal {
 
     /// Every name above, so a test can assert the set rather than iterate a
     /// list someone has to remember to extend.
-    pub const ALL: [&str; 15] = [
+    pub const ALL: [&str; 16] = [
         DRIVER_DISABLED,
         PR_NOT_OPEN,
         PR_UNVERIFIABLE,
@@ -708,6 +716,7 @@ pub mod refusal {
         IN_MERGE_QUEUE,
         GATE_NOT_CONFIGURED,
         GATE_NAMES_NO_SUCH_BLOCK,
+        WORKER_UNRESUMABLE,
         NOT_DRIVEN,
         STATE_UNREADABLE,
         STATE_UNWRITABLE,

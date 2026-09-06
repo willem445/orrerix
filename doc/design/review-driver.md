@@ -295,7 +295,7 @@ own delivery arrives by its own path; §7.)
 | `held(routing-unaccountable)` | `route_reviewers` returned `None` — the changed-file list could not be shown complete, so *which reviewers are required* is unknown |
 | `held(gate-unreadable)` | the gate file is present and orrerix cannot use it — an I/O error, **or** contents `parse_gate_file` refuses. **Not** `gate-not-configured`, which means the file is genuinely absent. *S3 widened this row from "an I/O error" alone: the `gh` shim refuses every merge on a malformed gate, so a drive that announced satisfied over one would be §3.1's "bypass with better telemetry" — and this enum has no third reason to give it* |
 | `held(worker-blocked)` | the worker reported `blocked` |
-| `held(worker-unresumable)` | **the fix could not be handed back to the worker.** Three causes, and the notice quotes which (`HeldFacts::refusal`) rather than diagnosing one: the recorded session no longer resolves; the block that session was minted under is no longer declared in this group's roster, so the class it must resume under cannot be established (#1961 — the driver refuses rather than degrading to the class default, which is what the session browser's rejoin does, because there a human is present and losing the persona beats losing the session); or the pane the driver DID resume exited in `fix-wait` before reporting anything, which is the resume that "worked" and then died on `Invalid session ID`. Reporting all three as the first is what sent an orchestrator after a replacement session for a session that was fine |
+| `held(worker-unresumable)` | **the fix could not be handed back to the worker.** Three causes, and the notice quotes which (`HeldFacts::refusal`) rather than diagnosing one: the recorded session no longer resolves; the block that session was minted under is no longer declared in this group's roster, so the class it must resume under cannot be established (#1961 — the driver refuses rather than degrading to the class default, which is what the session browser's rejoin does, because there a human is present and losing the persona beats losing the session); or the pane the driver DID resume exited in `fix-wait` before reporting anything, which is the resume that "worked" and then died on `Invalid session ID`. Reporting all three as the first is what sent an orchestrator after a replacement session for a session that was fine. **A second identical failure — same session, same failure line — prefixes `second time` onto the quoted refusal** (#2555 item 2, S7), because the first notice's remedy ("a session that resolves") is the one action that just failed: the repeated hold reads as a decision to re-point or cancel rather than an invitation to resume again. Counted in-process (`rd_handback_fails`), cleared by a hand-back that succeeds and by a fresh drive on the PR; a restart between the two failures loses the count, which degrades to one hold per resume — never to a wrong claim |
 | `held(cap-refused)` | this group’s **live-delegate cap** refused the pane a hand-back needed (#1960). Its own reason because its own REMEDY: the recorded session resolves fine and what is exhausted is a slot, so “re-point the drive at another session” — which is what `worker-unresumable` tells the orchestrator — is the one action that does not help. Free a slot and resume. A **lane** spawn refused by the cap does not reach here at all: `review-wait` backs off and retries (§8’s live-delegate-cap row), because a lane can be opened on any later tick while `fix-wait` has already taken its arc and spent its round. A lane refusal that does **not** clear is `held(cap-full)`, the row below, and never this one |
 | `held(cap-full)` | this group's **live-delegate cap** has refused this drive's next reviewer lane continuously for `CAP_HOLD_MS` (15 minutes), so no lane is open and none can be opened (#2109). Its own reason rather than `cap-refused`, and the argument is a DURATION rather than a remedy: the two share a remedy, and what one spelling cannot say is how long. `cap-refused` is a single hand-back refusal held on the spot with a round already spent; this is a refusal RUN. The measured incident is exactly that difference — PR #2105's drive sat in `review-wait` with `lanes: []` for about three hours (`since_ms` 11,083,045 at the read), emitting one `rd-refused` row per tick and no notice at all, and an orchestrator reading `cap-refused` on tick one would have learned something that was true and harmless thirty-seven ticks earlier. §6's own rule — every notice names the tool that acts on it, and `held(escalate)` already had to be widened to name the remedy that CLEARS it rather than merely the tool — is what makes these two different lines rather than one. The grace period is deliberate in both directions: a capped lane usually clears itself within a back-off, so holding on the FIRST refusal would spend an orchestrator turn on nothing, which is the opposite defect. **A run cannot straddle a restart** (#2135): §2.4's reconcile drops the stamp, because no tick observed the cap across the gap and after a restart every pane the cap was counting is gone — see §5.2's `cap_starved_since_ms` for why nothing is charged for that interval and for the in-process residual it leaves. **And under a strict ALTERNATION of cap and non-cap refusals this hold never fires at all**, which is the full price of the clear that makes "continuously" true rather than a defect in it: what bounds such a drive is `state-stalled` above, at close to twice its nominal `review-wait` bound, because #2110's accumulators forgive every ended cap run and the alternation makes those runs half the timeline. Measured rather than asserted, by `alternating_cap_and_non_cap_refusals_postpone_the_park_by_a_bounded_factor` |
 | `held(messaged)` | a driven delegate called `message_orchestrator` (that call is never intercepted; see §7) |
@@ -1185,11 +1185,11 @@ double-gated per §3.2.
 ```
 drive_review(pr: number, worker_session: string,
              reset_counters?: boolean, rounds_already_spent?: number)
-  -> { driving: true, state: "ci-wait" } | { refused: "<reason>" }
+  -> { driving: true, state: "ci-wait" } | { refused: "<reason>", detail?: "<sentence>" }
   declines:      driver-disabled | pr-not-open | pr-unverifiable
                | resume-not-found | resume-ambiguous | resume-session-empty
                | already-driven | in-merge-queue | gate-not-configured
-               | gate-names-no-such-block
+               | gate-names-no-such-block | worker-unresumable
   orrerix failed: rd-state-unreadable | rd-state-unwritable | rd-unavailable
                | gate-unreadable
 
@@ -1293,6 +1293,23 @@ Four are new, and each closes a case that would otherwise have no answer:
 - **`gate-names-no-such-block`.** A gate requiring a reviewer the roster does
   not declare is answerable at drive time from two files, and left unanswered it
   becomes `held(lane-stalled)` sixty minutes later instead of an immediate one.
+- **`worker-unresumable`** (#2819 (g), S7): the session's own block cannot take
+  a hand-back — it is the group's orchestrator or manager block, or the roster
+  record the session resolves to names a block this group no longer declares.
+  The hand-back resolves the block from that same record on every fix round
+  (#1961), so a session in this class fails on EVERY resume; #2819 measured the
+  acceptance as three `held(worker-unresumable)` rows and three orchestrator
+  turns for a PR that could never be handed back. So the block is resolved at
+  the call, by the same resolution `rd_handback` performs, and refused there —
+  one refusal instead of three holds. **The refusal quotes the hold's own
+  sentence** rather than diagnosing one: the four sentences it can carry are
+  the spawn guards' own (`orchestrator_block_refusal`, `manager_block_refusal`,
+  `unknown_block_refusal`, `no_default_block_message`), shared with
+  `spawn_agent_bound` rather than re-spelled, so the wording cannot drift
+  between the spawn it refuses and the call that pre-empts it. `detail` on the
+  reply carries the sentence; the `rd-refused` row carries the same pair.
+  The record-less passthrough arm (below) is NOT this refusal — there is no
+  roster record to read a block off, and it stays accepted.
 
 **A fifth is `in-merge-queue`, and §8.1's mutual refusal turned out to be
 half-unimplemented in BOTH directions.** §8.1 states it as a pair — "a driven PR
@@ -1336,14 +1353,18 @@ while `route_reviewers` returning `None` is usually a transient `gh` failure —
 and refusing a tool call on a transient just makes `drive_review` flaky.) *(The
 plan on #1778 listed it in both places; this note keeps it in one.)*
 
-**Two `drive_review` inputs are deliberately accepted and fail later.** A full,
-well-shaped session id this group never recorded takes
-`resolve_session_ref`'s passthrough arm and is accepted, so its unresumability
-surfaces at the first hand-back as `held(worker-unresumable)`, possibly hours
-on. That defers a check that `resolve_resume_cwd` could make eagerly, and the
-deferral is stated rather than left as an oversight, because §3.2 argues at
-length for resolving once — the honest position is that resolving is not the
-same as *proving resumable*, and v1 does not prove it.
+**One `drive_review` input is deliberately accepted and fails later** — narrowed
+from two by `worker-unresumable` above, which took the roster-visible half of
+this deferral to the call. A full, well-shaped session id this group never
+recorded takes `resolve_session_ref`'s passthrough arm and is accepted, so its
+unresumability surfaces at the first hand-back as `held(worker-unresumable)`,
+possibly hours on. That defers a check that `resolve_resume_cwd` could make
+eagerly, and the deferral is stated rather than left as an oversight, because
+§3.2 argues at length for resolving once — the honest position is that resolving
+is not the same as *proving resumable*. What bounds it is the second-failure
+park: a hand-back that fails the same way twice (same session, same failure
+line) prefixes `second time` onto the quoted refusal, so the resume the first
+notice invites cannot silently become #2819's reflex of one hold per turn.
 
 `review_drive_status()` joins the re-sync list the idle-tick notice already
 names (`list_tasks`, `list_agents`, `get_state`), and the session-start

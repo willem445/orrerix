@@ -8594,6 +8594,36 @@ pub fn is_live_cap_refusal(err: &str) -> bool {
     err.contains(LIVE_CAP_MARKER)
 }
 
+/// The sentence `spawn_agent_bound` refuses a NAMED orchestrator block with —
+/// a group has exactly one orchestrator, opened at launch — written in one
+/// place for [`live_cap_refusal`]'s reason: the review driver quotes the SAME
+/// sentence at the `drive_review` call (#2819 (g), S7), where it refuses a
+/// worker session whose block is one of these, so one wording cannot drift
+/// between the spawn it refuses and the hold that would have carried it.
+pub(crate) fn orchestrator_block_refusal(id: &str) -> String {
+    format!(
+        "block {id:?} is an orchestrator block — a group has exactly one orchestrator, opened at launch"
+    )
+}
+
+/// [`orchestrator_block_refusal`]'s manager twin (#1161 M3, S7).
+pub(crate) fn manager_block_refusal(id: &str) -> String {
+    format!(
+        "block {id:?} is this group's manager — the human's own interface, declared in the \
+         repo's workflow file and opened for them at launch, never spawned by an agent. \
+         That includes resuming its session: a manager pane comes back through the \
+         session browser, not through spawn_agent. To put something to the human, use \
+         ask_human; to send them status, use message_manager.",
+    )
+}
+
+/// The sentence `spawn_agent_bound` refuses an unknown block id with, shared
+/// with the review driver's call-time check (#2819 (g), S7) for the same
+/// one-wording reason.
+pub(crate) fn unknown_block_refusal(id: &str, known: &[&str]) -> String {
+    format!("unknown block {id:?}. Blocks in this group: {}", known.join(", "))
+}
+
 /// Whether a queued `orch-spawn-request` has expired and must be dropped
 /// unserviced (#106). The backend stamps each request with the wall-clock
 /// deadline of its own `bind` wait (`now + BIND_TIMEOUT`); a frontend that was
@@ -15368,6 +15398,17 @@ pub struct OrchRegistry {
     /// Driven delegates' events, between the MCP arm that consumed one (§7) and
     /// the tick that acts on it. In memory; `rd_ingest` carries why.
     rd_signals: Arc<TrackedMutex<HashMap<(GroupId, u64), RdSignal>>>,
+    /// The last hand-back failure of each drive — the session it failed FOR and
+    /// the failure line — so a SECOND identical failure (#2555 item 2) can be
+    /// told apart from the first and said so: the hold's quoted refusal gains
+    /// "second time", turning another resume into a decision rather than a
+    /// reflex. In memory like [`rd_signals`](Self::rd_signals), and with the
+    /// same bounded consequence: a restart between the two failures loses the
+    /// count, which degrades to the one-hold-per-resume behaviour the bound
+    /// replaced, never to a wrong claim — the second failure after a restart is
+    /// simply counted from the restart. Cleared on a fresh drive and on a
+    /// hand-back that succeeds; never cleared on a resume, which is the point.
+    rd_handback_fails: Arc<TrackedMutex<HashMap<(GroupId, u64), (String, String)>>>,
     /// Groups whose persisted drives have been reconciled this process (§2.4).
     /// Once-only, like `merge_queue_reconcile_with`'s own guard.
     rd_reconciled: Arc<TrackedMutex<HashSet<GroupId>>>,
@@ -29481,6 +29522,7 @@ impl OrchRegistry {
             rd_service_ms: Arc::new(TrackedMutex::new("rd_service_ms", HashMap::new())),
             rd_runner_override: TrackedMutex::new("rd_runner_override", None),
             rd_signals: Arc::new(TrackedMutex::new("rd_signals", HashMap::new())),
+            rd_handback_fails: Arc::new(TrackedMutex::new("rd_handback_fails", HashMap::new())),
             rd_reconciled: Arc::new(TrackedMutex::new("rd_reconciled", HashSet::new())),
             queue_draining: Arc::new(queuestate::DrainerRegistry::new()),
             drainer_gen: Arc::new(AtomicU64::new(0)),
@@ -50535,7 +50577,7 @@ impl OrchRegistry {
             Some(id) => group.guardrails.block(id).cloned().ok_or_else(|| {
                 let known: Vec<&str> =
                     group.guardrails.blocks.iter().map(|b| b.id.as_str()).collect();
-                format!("unknown block {id:?}. Blocks in this group: {}", known.join(", "))
+                unknown_block_refusal(id, &known)
             })?,
             None => group
                 .guardrails
@@ -50562,10 +50604,7 @@ impl OrchRegistry {
         // `kind: worker` and would otherwise be promoted by `role = block.kind`.
         //
         if block.kind == Role::Orchestrator && named.is_some() {
-            return Err(format!(
-                "block {:?} is an orchestrator block — a group has exactly one orchestrator, opened at launch",
-                block.id
-            ));
+            return Err(orchestrator_block_refusal(&block.id));
         }
         // #1161 M3: the manager's twin of the guard above, in the SAME shape
         // for the same reason. A NAMED block is a caller choosing this class by
@@ -50589,14 +50628,7 @@ impl OrchRegistry {
         // all. `mcp.rs` keeps its own refusal on the resolved block for the
         // SENTENCE (#243's double gate); this one is the enforcement.
         if block.kind == Role::Manager && named.is_some() {
-            return Err(format!(
-                "block {:?} is this group's manager — the human's own interface, declared in the \
-                 repo's workflow file and opened for them at launch, never spawned by an agent. \
-                 That includes resuming its session: a manager pane comes back through the \
-                 session browser, not through spawn_agent. To put something to the human, use \
-                 ask_human; to send them status, use message_manager.",
-                block.id
-            ));
+            return Err(manager_block_refusal(&block.id));
         }
         let role = block.kind;
 

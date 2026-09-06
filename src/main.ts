@@ -2084,9 +2084,14 @@ async function handleWelcomeSubmit(
     // git, #222 workflow). Synchronous — there is no process to start, so no await, no
     // PTY, nothing to reap. The root was confirmed for real by the form before it fired
     // this: a readable directory for files/editor/workflow, a git work tree for git. The
-    // workflow pane takes no `file` here — the welcome flow means the repo's
-    // default workflow path.
-    pane.startContent({ kind: result.kind, name: result.name, root: result.root });
+    // workflow pane's `file` (#1689) says WHICH workflow — absent, for every other kind
+    // and for the repo's default workflow, means the pane's own default path.
+    pane.startContent({
+      kind: result.kind,
+      name: result.name,
+      root: result.root,
+      ...(result.kind === "workflow" && result.file ? { file: result.file } : {}),
+    });
     // Converted in place — no grid open/close fired, so notify explicitly (this is
     // what re-renders the tab strip and re-persists the layout), same as terminal.
     onGridChanged();

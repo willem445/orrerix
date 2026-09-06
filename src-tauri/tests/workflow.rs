@@ -5903,16 +5903,16 @@ const PRE222: [(&str, &str); 5] = [
 ///   make them look for something that is correctly absent.
 /// - **"has a template drifted from what a human last blessed?"** — this, paired
 ///   against `LIVE` below. That question is about the TEMPLATE and is asked of
-///   all five equally, which is why `manager.md` gets the same re-bless gate as
+///   all of them equally, which is why `manager.md` gets the same re-bless gate as
 ///   the other four rather than a weaker one.
-const GOLDENS: [(&str, &str); 7] = [
+const GOLDENS: [(&str, &str); 8] = [
     PRE222[0],
     PRE222[1],
     PRE222[2],
     PRE222[3],
     ("manager.md", include_str!("fixtures/pre222/manager.md")),
     // #1683. The playbook is what a default group reads, so it joins the
-    // golden pairing like the other five — but it is NOT the "one exception"
+    // golden pairing like the other role files — but it is NOT the "one exception"
     // manager.md is: default groups DO read it, which is why it sits in
     // `PRE222` above and in both default-group pins.
     PRE222[4],
@@ -5925,6 +5925,19 @@ const GOLDENS: [(&str, &str); 7] = [
     // dir and the two default-group pins would be looking for something
     // correctly absent.
     ("lead.md", include_str!("fixtures/pre222/lead.md")),
+    // #3040 P2, and it RESTORES a gate rather than adding one. Before the DoD
+    // became one copy, editing it moved `pre222/worker.md` and needed a human
+    // re-bless; afterwards the rule text lives in `dod.md`, both goldens that
+    // carry it carry the literal `{{DOD}}`, and `render_with_legacy_vars`
+    // substitutes the SAME `dod_body()` on both sides of every comparison — so
+    // an edit to the definition of done every worker reads would have moved
+    // nothing and reddened nothing. This row is what keeps that edit a red.
+    //
+    // Not in `PRE222`, for `manager.md`'s and `lead.md`'s reason: `dod.md` is
+    // never WRITTEN into a group dir. It is substituted into two files that
+    // are, so the "what does a DEFAULT group read?" pins reach its bytes
+    // through them and would be looking for a file that is correctly absent.
+    ("dod.md", include_str!("fixtures/pre222/dod.md")),
 ];
 
 /// The live templates, with the placeholder(s) each must carry. Each element of the
@@ -5937,7 +5950,7 @@ const GOLDENS: [(&str, &str); 7] = [
 /// `{{BLOCK_NOTE}}{{ADVISOR_CONSULT_NOTE}}`), they stay a single contiguous-string key
 /// — same reasoning `block.md`'s `{{PERSONA_NOTE}}{{LANE_NOTE}}{{GATE_NOTE}}` already
 /// relies on.
-const LIVE: [(&str, &str, &[&str]); 7] = [
+const LIVE: [(&str, &str, &[&str]); 8] = [
     // #1683: the merge-gate and re-sync sections moved to the playbook, and
     // their two workflow-conditional fragments with them — the orchestrator
     // core's key list shrinks to `{{WORKFLOW}}` and `{{LOCKS_ORCH}}`.
@@ -5991,6 +6004,11 @@ const LIVE: [(&str, &str, &[&str]); 7] = [
     // `HOLD_LABEL`'s class, not this list's — so the golden keeps them literal
     // and the pin bites on the prose around them.
     ("lead.md", loomux_lib::orchestration::LEAD_TPL, &[]),
+    // #3040 P2. An EMPTY key list like `lead.md`'s, and for the same kind of
+    // reason: `dod.md` carries no placeholder of its own — it IS a placeholder's
+    // value — so nothing is stripped and its golden is the live template byte
+    // for byte.
+    ("dod.md", loomux_lib::orchestration::brief::DOD_TPL, &[]),
 ];
 
 /// Render a template with the plain per-group VALUE variables `render_template`

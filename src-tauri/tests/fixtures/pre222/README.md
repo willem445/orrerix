@@ -1325,8 +1325,20 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   needing no re-bless on both.
 
 - **#3040 P2, the definition of done becomes ONE copy** — `orchestrator.md`, `worker.md`,
-  `planner.md` and `orchestrator-playbook.md`. `reviewer.md`, `manager.md` and `lead.md` did
-  not move.
+  `planner.md` and `orchestrator-playbook.md` move, and **`dod.md` JOINS this directory** as
+  its eighth file. `reviewer.md`, `manager.md` and `lead.md` did not move.
+
+  **`dod.md` is in `GOLDENS` and `LIVE` but NOT `PRE222`**, and its row RESTORES a gate rather
+  than adding one. Before this change, editing the definition of done moved `pre222/worker.md`
+  and needed a human re-bless. Afterwards the rule text lives in `dod.md`; both goldens that
+  carry it carry the literal `{{DOD}}`, and `render_with_legacy_vars` substitutes the SAME
+  `dod_body()` on both sides of every comparison — so an edit to the text every worker reads
+  would have moved no golden and reddened no test. The eighth row is what keeps that edit a
+  red. It is absent from `PRE222` for `manager.md`'s and `lead.md`'s reason: `dod.md` is never
+  WRITTEN into a group dir, only substituted into two files that are, so the two
+  default-group pins reach its bytes through them and would otherwise be looking for a file
+  that is correctly absent. Its `LIVE` key list is empty — it carries no placeholder of its
+  own, because it IS a placeholder's value.
 
   The DoD used to live twice: the full `## Definition of done` section in `worker.md`, and a
   compressed one-sentence recap in `orchestrator.md`'s **Delegation protocol** ("tests +

@@ -2182,13 +2182,6 @@ fn delegate_templates_forbid_blocking_a_turn_on_ci() {
 // same reason as #590's pair above: the golden fails as "re-bless me", which
 // names no rule and teaches nobody which one went missing.
 
-/// The rule has to be a *procedure*, not "keep the body accurate". These three
-/// are what make a citation checkable rather than trusted: the command that
-/// lists a run with its commit, the field that carries that commit
-/// (`headSha` — the whole point, since a run id alone says nothing about which
-/// tree it ran on), and the local head to compare it against (`rev-parse`).
-/// Prose may be rewritten freely; a version missing any of them no longer
-/// tells a worker how to tell a live citation from a dead one.
 /// `worker.md` as a worker actually reads it — the template with `{{DOD}}`
 /// substituted (#3040 P2).
 ///
@@ -2214,6 +2207,13 @@ fn worker_contract_text() -> String {
     composed
 }
 
+/// The rule has to be a *procedure*, not "keep the body accurate". These three
+/// are what make a citation checkable rather than trusted: the command that
+/// lists a run with its commit, the field that carries that commit
+/// (`headSha` — the whole point, since a run id alone says nothing about which
+/// tree it ran on), and the local head to compare it against (`rev-parse`).
+/// Prose may be rewritten freely; a version missing any of them no longer
+/// tells a worker how to tell a live citation from a dead one.
 #[test]
 fn worker_template_requires_re_deriving_run_citations_after_a_push() {
     let tpl = worker_contract_text();

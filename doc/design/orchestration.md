@@ -13225,11 +13225,21 @@ phrase that lived only in the deleted recap. Each now pins the core's *pointer* 
 carries the DoD verbatim; where that one copy is) and the playbook section's *evidence
 duty*. The specimen followed the rule to the surface that carries it.
 
-**Public contracts introduced**: the template set's seventh fixture-pinned surface is
-unchanged in count (`dod.md` is not itself golden-pinned — it is pinned transitively, as the
-substituted content of two goldens that are), one new playbook section id
-(`definition-of-done`) on the `read_playbook` vocabulary, and `orchestration::brief`'s two
-functions.
+**The re-bless gate had to follow the text, and the first draft of this note got that wrong.**
+It argued `dod.md` needed no golden of its own because it was pinned *transitively*, as the
+substituted content of two goldens that are. That is false, and review round 1's premortem is
+what surfaced it: both goldens carrying the DoD carry the literal `{{DOD}}`, and
+`render_with_legacy_vars` substitutes the same `dod_body()` on **both** sides of every
+comparison — so an edit to the definition of done every worker reads would have moved no
+golden and reddened no test. Before this change that edit moved `pre222/worker.md` and needed
+a human re-bless; the PR would have removed the gate while claiming only to relocate the text.
+`dod.md` is therefore `GOLDENS`/`LIVE`'s eighth row, with an empty key list (it carries no
+placeholder of its own — it IS a placeholder's value) and deliberately absent from `PRE222`,
+since it is never written into a group dir.
+
+**Public contracts introduced**: `dod.md` as an eighth fixture-pinned template, one new
+playbook section id (`definition-of-done`) on the `read_playbook` vocabulary, and
+`orchestration::brief`'s two public functions.
 
 ## Risks / limitations
 

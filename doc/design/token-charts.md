@@ -422,17 +422,32 @@ observed" is not "unchanged". A mark no block's CLI moved across falls back to
 its component list, and `fp_partial` rides through to the view so a reader is
 told when an unchanged component is not proof that nothing under it moved.
 
-**That flag means TRANSIENT, and the projection must not oversell it.** Slice
-B's own `fp_partial` section above is the contract: only a failure that can
-clear on the next bucket sets it, because only such a failure produces the
-false-mark *pair* the flag exists to explain. A **stable** unreadable answer —
-a directory where a file belongs — hashes identically every bucket, cannot
-flip, and is deliberately never flagged. So an UNSET flag is not proof that
-every surface was read either, and the view's wording says "could not be read
-this round" rather than the narrower "hit a cap" it carried before slice B
-settled this (`c3ae9819`, which landed after slice C forked and reached it
-only at the rebase onto main — the re-read that caught it is the one every
-sibling slice owes its own prose).
+**The projection must not oversell that flag, in either direction.**
+`tuningfp.rs` sets `partial` from four conditions, and it is worth naming
+them because two are **stable properties of the repo**, not passing failures:
+
+| condition | site | stable? |
+| --- | --- | --- |
+| file over `MAX_FILE_BYTES` | `hash_file` | **yes** — flags every bucket while the file is oversized |
+| `std::fs::read` fails | `hash_file` | maybe — a lock or a scan clears; a permission does not |
+| tree deeper than `MAX_DEPTH` | `walk` | **yes** — flags every bucket while the tree is deep |
+| `read_dir` fails and the directory is not provably absent | `walk` | maybe |
+
+What is deliberately NOT flagged is narrower than "stable": a surface that
+genuinely does not exist, and a path that is not a file (`!meta.is_file()`),
+both hash as `absent` with the flag clear — a real answer rather than a cap.
+
+So neither direction is proof. An UNSET flag does not mean every surface was
+read; a SET flag does not promise the condition is temporary, and under a size
+or depth cap it will appear on every mark until the repo changes. The view's
+tooltip says exactly that.
+
+(This paragraph claimed "transient failures only" until rev-final's B1: slice
+B's own §`fp_partial` argues the transient case at length because that is the
+case the flag was *designed* around, and I generalised its argument into a
+rule the code never had. The lesson is the one this repo already writes down —
+a design note's rationale is not a substitute for reading the function, and a
+claim about a sibling slice's code has to be checked against that code.)
 
 `beforeAfter` is `null` below `k` buckets on a side — **never `0`**. A mark
 two buckets after the series began has no "before", and printing `0` there

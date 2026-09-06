@@ -822,10 +822,21 @@ export interface ChartMark {
   /** The label the vertical carries: the roster diff where there is one
    *  (`worker-std: opencode → pi`), else the component list. */
   label: string;
-  /** A component could not be read this round, so an UNCHANGED component is
-   *  not proof that nothing under it moved. Carried through so the view can
-   *  say so. Transient failures only — an unset flag is not proof that every
-   *  surface was read (slice B's `fp_partial` contract). */
+  /** A component could not be read IN FULL when this mark was written, so an
+   *  UNCHANGED component is not proof that nothing under it moved. Carried
+   *  through so the view can say so.
+   *
+   *  Set by four conditions in `tuningfp.rs`, and TWO of them are stable
+   *  properties of the repo rather than passing failures: a file over
+   *  `MAX_FILE_BYTES`, and a tree deeper than `MAX_DEPTH`. Both flag on
+   *  every bucket for as long as they hold. The other two are a failed file
+   *  read and a failed directory enumerate, which may be transient or not.
+   *
+   *  What is NOT flagged is narrower than "stable": a surface that genuinely
+   *  does not exist, or a path that is not a file, hashes as `absent` with
+   *  the flag clear — a real answer, not a cap. So an unset flag is not proof
+   *  every surface was read, and a set flag does not promise the condition
+   *  will clear. */
   fpPartial: boolean;
 }
 

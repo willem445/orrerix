@@ -746,8 +746,10 @@ export class TokenChartsView {
         `${fmtTime(m.tsMs)} — ${m.label}\n` +
         `fingerprint components changed: ${m.changed.length > 0 ? m.changed.join(", ") : "(none recorded)"}` +
         (m.fpPartial
-          ? "\nA component could not be read this round, so an unchanged component is " +
-            "not proof that nothing under it moved."
+          ? "\nA component could not be read in full when this mark was written " +
+            "(a file over the size cap, a tree past the depth cap, or a read that " +
+            "failed), so an unchanged component here is not proof that nothing " +
+            "under it moved. A cap can persist, so this may show on every mark."
           : "") +
         "\nClick for the before/after readout.";
       g.append(title);

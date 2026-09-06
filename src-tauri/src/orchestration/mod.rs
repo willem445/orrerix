@@ -57035,7 +57035,8 @@ pub fn create_orchestration_sync(
     // other than the one they picked. Nothing is created — this is above
     // `create_orchestration_group`'s own checks, so the refusal costs no state.
     let workflow = match workflow.as_deref() {
-        None => workflow::WorkflowName::default_name(),
+        // [scratch] round 3: an omitted name no longer means `default`.
+        None => return Err("that is not a usable workflow name: identifier is empty".into()),
         Some(raw) => workflow::WorkflowName::parse(raw)
             .map_err(|e| format!("that is not a usable workflow name: {e}"))?,
     };

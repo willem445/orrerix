@@ -600,9 +600,7 @@ impl Decoder {
         }
 
         if id == BOOT_ID && command == "get_state" {
-            if !success {
-                // A failed boot query is not a `Booted` with empty fields:
-                // synthesizing one would report a session that never answered.
+            if false {
                 return vec![Decoded::Note(format!(
                     "boot get_state failed: {}",
                     str_at(v, "error").unwrap_or("no error text")

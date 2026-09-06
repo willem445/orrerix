@@ -65027,12 +65027,13 @@ fn a_planner_exit_is_audited_not_announced() {
 
     // And the roster half #533-B leans on: `list_agents` really does carry the
     // liveness, so "read it on demand" is not a euphemism.
-    let dead = reg
-        .list_agents(&g.id)
-        .unwrap()
+    let roster = reg.list_agents(&g.id);
+    let dead = roster
+        .as_array()
+        .expect("the roster is a JSON array")
         .iter()
         .any(|a| a["id"] == json!(planner.id) && a["status"] == json!("dead"));
-    assert!(dead, "the roster must show the pane gone (#533-B's own argument): {:?}", reg.list_agents(&g.id));
+    assert!(dead, "the roster must show the pane gone (#533-B's own argument): {roster:?}");
 }
 
 /// **A stall on a pane something already asked to exit is not news** (#3040 N2)

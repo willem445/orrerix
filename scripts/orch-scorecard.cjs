@@ -306,14 +306,23 @@ function resolveCli(clis) {
 // row. This is the fallback rung, used only where the usage source resolved to
 // `unknown` (a zero/statusline row), and `cli_via` says which rung answered.
 //
-// WHICH SPAWN SITES CARRY IT, verified rather than assumed. There are exactly
-// two `agent-spawn` `json!` sites in `src-tauri/src/orchestration/mod.rs`: the
-// DELEGATE site carries `cli` (and `block`), the ORCHESTRATOR site carries
-// neither. On this group's own two audit generations that is 628 of 637 rows;
-// the nine without are all `role: "orchestrator"` resumes, and an orchestrator
-// is excluded from the delegate side anyway (§4.6). So the rung covers every
-// agent it is ever asked about — which is a fact about today's two sites, not a
-// guarantee: a third site that omits `cli` would land in `unknown`, reported.
+// WHICH SPAWN SITES CARRY IT, verified rather than assumed. THE LOAD-BEARING
+// FACT IS THE TWO SITES, not any count: there are exactly two `agent-spawn`
+// `json!` sites in `src-tauri/src/orchestration/mod.rs`, and the DELEGATE site
+// carries `cli` (and `block`) while the ORCHESTRATOR site carries neither. So
+// every row without `cli` is an orchestrator spawn, and an orchestrator is
+// excluded from the delegate side anyway (§4.6) — which makes the rung cover
+// every agent it is ever asked about.
+//
+// The store is LIVE and its counts decay by the hour, so a ratio here is an
+// ILLUSTRATION and is dated rather than quoted as a standing figure: over this
+// group's two audit generations, 628 of 637 spawn rows carried `cli` when read
+// on 2026-09-06, and 629 of 638 on a re-read the same day. Re-derive it, do not
+// cite it. `coverage.cli_axis.spawn_rows_with_cli`/`_without_cli` is that
+// re-derivation, emitted by every run.
+//
+// None of this is a guarantee: a third spawn site that omitted `cli` would land
+// its agents in `unknown`, reported.
 //
 // The LAST row wins: a recycled pane is respawned, and the live pane's CLI is
 // the one that wrote the tokens being read.
@@ -1194,14 +1203,22 @@ function statCell(values) {
 //              the window a PR belongs to is a fact about the clock rather than
 //              about the cli that was read off it.
 //
-// The cli and the side are resolved INDEPENDENTLY and then cross-checked: a PR
-// whose lanes resolve to pi before the switch, or opencode after it, is
-// reported under `side_cli_disagreements`. That is the instrument telling on
-// itself — pre-switch pi panes would mean the split instant is wrong or a lane
-// was hand-run — and it is surfaced rather than reconciled away.
+// The cli and the side are resolved INDEPENDENTLY, and cross-checked ONLY when
+// the caller declares what to expect (`--sides <before>:<after>`). A PR whose
+// lanes resolve to the other side's cli is then reported under
+// `side_cli_disagreements` — the instrument telling on itself, surfaced rather
+// than reconciled away. WITHOUT that flag there is no expectation and the field
+// is `null`, which is NOT the same fact as `[]`: "nobody said what to expect"
+// and "an expectation was checked and nothing disagreed" are different, and a
+// table that conflated them would report a clean cross-check it never ran.
 //
-// ROWS are read off the data: one per `(cli, side)` pair that any selected PR
-// produced. Nothing here knows that opencode ran before and pi after.
+// NOTHING HERE KNOWS WHICH CLI RAN ON WHICH SIDE, and that is now true of the
+// whole function rather than of row construction alone (rev-final round 2).
+// Rows are one per `(cli, side)` pair the selected PRs produced; the side
+// LABELS come from `--split-label`; the expected pair, if any, comes from
+// `--sides`. An earlier revision hardcoded `pre-2817 ? opencode : pi`, which
+// made the cross-check fire on 100% of PRs under any other `--split-at` — a
+// stale roster wearing the costume of a finding.
 // ---------------------------------------------------------------------------
 
 // The clis a block's delegates on one card resolve to. Returns the single cli,
@@ -1249,8 +1266,6 @@ const WORKER_BLOCK = 'worker-std';
 const REVIEW_BLOCK = 'rev-std';
 const CONTROL_BLOCK = 'rev-final';
 
-const SPLIT_COMMIT = '93d51cc9';
-
 // Printed UNDER the table by the script itself, so a table pasted into a comment
 // cannot arrive without the reasons not to over-read it. Every entry names the
 // issue a reader can check, and none of them is closed by anything in this run.
@@ -1286,7 +1301,13 @@ const CONFOUNDERS = [
   },
 ];
 
-function cliTable(cards, splitMs) {
+// `sides` is `{ before, after }` or null. `label` names the split for the row
+// keys and the footer; it is the caller's word for the instant it passed, so
+// the two cannot describe different splits.
+function cliTable(cards, splitMs, opts) {
+  const sides = (opts && opts.sides) || null;
+  const label = (opts && opts.label) || new Date(splitMs).toISOString();
+  const sideName = (which) => (which === 'before' ? 'pre-' : 'post-') + label;
   const selected = [];
   const excluded = [];
   const disagreements = [];
@@ -1297,9 +1318,11 @@ function cliTable(cards, splitMs) {
     const r = laneCliOf(card, REVIEW_BLOCK);
     if (!w.cli || !r.cli) { excluded.push({ pr: card.pr, why: [w.reason, r.reason].filter(Boolean).join('; ') }); continue; }
     if (w.cli !== r.cli) { excluded.push({ pr: card.pr, why: 'worker-std ' + w.cli + ' but rev-std ' + r.cli }); continue; }
-    const side = mergedMs < splitMs ? 'pre-2817' : 'post-2817';
-    const expected = side === 'pre-2817' ? 'opencode' : 'pi';
-    if (w.cli !== expected) disagreements.push({ pr: card.pr, side, cli: w.cli, expected });
+    const which = mergedMs < splitMs ? 'before' : 'after';
+    const side = sideName(which);
+    // Only where the caller declared one. No flag, no expectation, no check.
+    const expected = sides ? sides[which] : null;
+    if (expected && w.cli !== expected) disagreements.push({ pr: card.pr, side, cli: w.cli, expected });
     const lanes = card.review.lanes || {};
     selected.push({
       pr: card.pr,
@@ -1327,13 +1350,17 @@ function cliTable(cards, splitMs) {
   }
   return {
     split_at_ms: splitMs,
-    split_commit: SPLIT_COMMIT,
+    split_label: label,
+    // What the caller declared, echoed back so a reader of the JSON knows which
+    // expectation produced (or did not produce) the disagreement list.
+    sides_declared: sides,
     min_n: MEDIAN_MIN_N,
     columns: CLI_TABLE_COLUMNS.map((c) => ({ key: c.key, label: c.label })),
     rows: [...groups.values()].sort((a, b) => (a.key < b.key ? -1 : 1)),
     per_pr: selected.sort((a, b) => a.pr - b.pr),
     excluded: excluded.sort((a, b) => a.pr - b.pr),
-    side_cli_disagreements: disagreements.sort((a, b) => a.pr - b.pr),
+    // `null` — not `[]` — when no expectation was declared.
+    side_cli_disagreements: sides ? disagreements.sort((a, b) => a.pr - b.pr) : null,
     confounders: CONFOUNDERS,
   };
 }
@@ -1354,8 +1381,8 @@ function renderCliTable(t) {
   }
   lines.push('');
   lines.push('Median (IQR q1–q3, n) per PR. A cell reads `null` below n=' + t.min_n
-    + '. Split at `' + t.split_commit + '` (#2817), '
-    + new Date(t.split_at_ms).toISOString() + '.');
+    + '. Split at ' + new Date(t.split_at_ms).toISOString()
+    + ' (`--split-label ' + t.split_label + '`).');
   lines.push('');
   for (const r of t.rows) lines.push('- **' + r.key + '** — ' + r.prs.map((n) => '#' + n).join(', '));
   if (t.excluded.length) {
@@ -1364,11 +1391,23 @@ function renderCliTable(t) {
     lines.push('');
     for (const e of t.excluded) lines.push('- #' + e.pr + ' — ' + e.why);
   }
-  if (t.side_cli_disagreements.length) {
-    lines.push('');
-    lines.push('**Side/CLI disagreements** — the split instant and the resolved CLI do not agree here:');
-    lines.push('');
-    for (const d of t.side_cli_disagreements) lines.push('- #' + d.pr + ' — ' + d.side + ' but resolved ' + d.cli + ' (expected ' + d.expected + ')');
+  lines.push('');
+  if (!t.sides_declared) {
+    // Said out loud, because a MISSING disagreement list and an EMPTY one look
+    // identical to a reader and mean opposite things.
+    lines.push('**No side/CLI cross-check was run** — `--sides <before>:<after>` was not passed, so the table declares no expectation about which CLI ran on which side of the split.');
+  } else {
+    lines.push('Expected per `--sides`: **' + t.sides_declared.before + '** before the split, **'
+      + t.sides_declared.after + '** after.');
+    if (t.side_cli_disagreements.length) {
+      lines.push('');
+      lines.push('**Side/CLI disagreements** — the declared expectation and the resolved CLI do not agree here:');
+      lines.push('');
+      for (const d of t.side_cli_disagreements) lines.push('- #' + d.pr + ' — ' + d.side + ' but resolved ' + d.cli + ' (expected ' + d.expected + ')');
+    } else {
+      lines.push('');
+      lines.push('Every selected PR matched that expectation.');
+    }
   }
   lines.push('');
   lines.push('**Confounders** — read before the table:');
@@ -1444,7 +1483,7 @@ function parseArgs(argv) {
   const opts = {
     audit: [], transcript: [], usage: null, agents: null, prMeta: null,
     prs: [], all: false, tailMin: DEFAULT_TAIL_MIN, format: 'json', cut: null, help: false,
-    claudeProjects: null, backfill: true, splitAt: null,
+    claudeProjects: null, backfill: true, splitAt: null, splitLabel: null, sides: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -1461,6 +1500,18 @@ function parseArgs(argv) {
       case '--all': opts.all = true; break;
       case '--tail-min': opts.tailMin = Number(next()); break;
       case '--format': opts.format = next(); break;
+      case '--split-label': opts.splitLabel = next(); break;
+      // `<before>:<after>`, e.g. `opencode:pi`. Both halves required, so a
+      // half-declared expectation cannot silently check one side only.
+      case '--sides': {
+        const raw = String(next());
+        const parts = raw.split(':');
+        if (parts.length !== 2 || !parts[0] || !parts[1]) {
+          throw new Error('--sides wants <before-cli>:<after-cli>, got: ' + raw);
+        }
+        opts.sides = { before: parts[0], after: parts[1] };
+        break;
+      }
       case '--split-at': opts.splitAt = /^\d+$/.test(String(argv[i + 1])) ? Number(next()) : Date.parse(next()); break;
       case '--cut': opts.cut = /^\d+$/.test(String(argv[i + 1])) ? Number(next()) : Date.parse(next()); break;
       case '--help': case '-h': opts.help = true; break;
@@ -1477,7 +1528,8 @@ const USAGE_TEXT = `orch-scorecard — per-PR orchestration cost from existing l
       [--transcript <session.jsonl>]... [--pr-meta <meta.json>]
       (--pr <n> [--pr <n>]... | --all)
       [--tail-min 10] [--cut <ms|iso>] [--format json|table|both|cli-table]
-      [--split-at <ms|iso>] [--claude-projects <dir>] [--no-backfill]
+      [--split-at <ms|iso>] [--split-label <text>] [--sides <before>:<after>]
+      [--claude-projects <dir>] [--no-backfill]
 
   --all        every PR that any rd-* row names (the driven set).
   --pr-meta    {"2104": {"merged_at": "...", "build": "beta5", "issue": 2010}} —
@@ -1491,14 +1543,23 @@ const USAGE_TEXT = `orch-scorecard — per-PR orchestration cost from existing l
                (#2167); coverage says how many rows and from which files.
   --no-backfill
                leave zero rows at zero. Coverage still reports how many there are.
-  --split-at   the instant that divides the two comparison windows — the #2817
-               merge commit 93d51cc9, 2026-09-06T10:36:55Z. Required by
+  --split-at   the instant that divides the two comparison windows. Required by
                --format cli-table; a PR's window is decided by its merged_at
                against this, independently of the CLI read off its rows.
+               For the #2817 roster switch: 2026-09-06T10:36:55Z, commit
+               93d51cc9 — passed in, never assumed by this script.
+  --split-label
+               what to call that split in the row keys and the footer
+               (e.g. "2817"). Defaults to the instant's ISO form, so the label
+               and the instant can never describe two different splits.
+  --sides      <before-cli>:<after-cli>, e.g. "opencode:pi" — the expectation
+               the side/CLI cross-check is measured against. WITHOUT it no
+               cross-check runs and side_cli_disagreements is null, because
+               this script knows nothing about which CLI ran when.
   --format cli-table
-               the opencode-vs-pi comparison (#2011 A): median + IQR + n per
-               column per (cli, window), null below n=3, rev-final rounds as
-               the Claude-both-sides control, and the confounder block.
+               the CLI comparison (#2011 A): median + IQR + n per column per
+               (cli, window), null below n=3, rev-final rounds as the
+               Claude-both-sides control, and the confounder block.
 `;
 
 async function main(argv) {
@@ -1606,7 +1667,7 @@ async function main(argv) {
   }
   if (opts.format === 'cli-table') {
     if (!Number.isFinite(opts.splitAt)) throw new Error('--format cli-table needs --split-at <ms|iso>');
-    process.stdout.write('\n' + renderCliTable(cliTable(cards, opts.splitAt)) + '\n');
+    process.stdout.write('\n' + renderCliTable(cliTable(cards, opts.splitAt, { sides: opts.sides, label: opts.splitLabel })) + '\n');
   }
   return 0;
 }
@@ -1619,7 +1680,7 @@ module.exports = {
   SOURCE_TO_CLI, CLI_UNKNOWN, cliForSource, resolveCli, indexSpawnCli,
   resolveDelegateCli, indexCliConflicts, blockCliKey, laneStats, MEDIAN_MIN_N, medianOf, statCell,
   laneCliOf, creditedFor, cliTable, renderCliTable, cliAxisCoverage,
-  CLI_TABLE_COLUMNS, CONFOUNDERS, SPLIT_COMMIT,
+  CLI_TABLE_COLUMNS, CONFOUNDERS,
   claudeTranscriptIndex, backfillZeroUsageRows, defaultClaudeProjectsRoot,
   DEFAULT_TAIL_MIN, main,
 };

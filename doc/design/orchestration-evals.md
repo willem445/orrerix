@@ -330,13 +330,19 @@ guess about which CLI a block runs:
 1. `usage-source` — the map above, where it resolves.
 2. `spawn-row` — where it does not (a `statusline` scrape says a CLI printed a
    dollar figure, never which one), the `cli` on that agent's `agent-spawn` row.
-   Verified rather than assumed: there are exactly two `agent-spawn` `json!`
-   sites in `src-tauri/src/orchestration/mod.rs`, and the **delegate** one
-   carries `cli` and `block` while the **orchestrator** one carries neither. On
-   this group's two audit generations that is 628 of 637 rows; the nine without
-   are all orchestrator resumes, and an orchestrator is excluded from the
-   delegate side anyway (§4.6). A third site that omitted `cli` would land in
-   `unknown` — reported, not silently filled in.
+   Verified rather than assumed, and **the load-bearing fact is the two sites,
+   not any count**: there are exactly two `agent-spawn` `json!` sites in
+   `src-tauri/src/orchestration/mod.rs`, and the **delegate** one carries `cli`
+   and `block` while the **orchestrator** one carries neither. Every row without
+   `cli` is therefore an orchestrator spawn, and an orchestrator is excluded
+   from the delegate side anyway (§4.6), so the rung covers every agent it is
+   asked about. A ratio is only an illustration and decays by the hour on a live
+   store, so it is dated rather than quoted as standing: 628 of 637 spawn rows
+   carried `cli` when this group was read on 2026-09-06, and 629 of 638 on a
+   re-read the same day. `coverage.cli_axis.spawn_rows_with_cli` /
+   `_without_cli` re-derives it on every run — read that, do not cite these.
+   A third site that omitted `cli` would land in `unknown` — reported, not
+   silently filled in.
 3. `unknown`, with `cli_via: null`. The block's **declared** CLI is deliberately
    not consulted: a pane can be recycled onto a block whose roster line has since
    changed, and the whole point of the axis is to measure what actually ran.
@@ -375,8 +381,15 @@ one bucket, which is exactly the case a switch produces.
   rounds do count here. `null` when the lane recorded neither: `0` would claim a
   clean lane where there is no lane at all.
 - `verdicts_other` — anything that is neither `pass` nor `fail` (the live
-  vocabulary is exactly those two), excluded from both figures rather than
-  allowed to shift an index silently.
+  vocabulary is exactly those two: 0 `escalate` rows across 451
+  `review-verdict` rows in this group's two audit generations, read
+  2026-09-06), excluded from both figures rather than allowed to shift an index
+  silently. **The consequence, stated because it biases a compared column:** a
+  lane that escalates and then passes reports `rounds_to_pass: 1` beside
+  `rounds: 2`, so the first lane to use `escalate` — a first-class verdict in
+  `review_verdict`'s own enum — makes this column read low. Pinned by
+  `lanes: an escalate BEFORE a pass is not counted as a round to pass`, so the
+  disclosure cannot go stale with nothing red to say so.
 
 **Per PR, `wall_clock_h`** is the PR window's own untailed span (`windows.pr.span_h`),
 lifted to the top of the card because it is one of the compared columns. `null`,
@@ -399,20 +412,34 @@ convention: on an odd-length sample the halves exclude the middle element.
 | merged | the PR must have a `merged_at` in `--pr-meta` — an open PR has no wall clock and its lanes have not finished |
 | one cli | every delegate of a compared block must resolve to the **same** cli, and it must not be `unknown` or `mixed`; a PR whose `worker-std` panes were half opencode and half pi measures the switch rather than either side of it |
 | both lanes agree | `worker-std` and `rev-std` must resolve to the same cli |
-| side | `merged_at` against `--split-at` (the #2817 merge instant, `93d51cc9`, 2026-09-06T10:36:55Z) |
+| side | `merged_at` against `--split-at`, an instant the CALLER passes — for the #2817 roster switch, commit `93d51cc9`, 2026-09-06T10:36:55Z |
 
 Every refusal is listed under `excluded` with the bound that refused it — the
 selection is stated, never silent, and `per_pr` plus `excluded` is every PR the
 run scored.
 
-**The side and the cli are resolved independently, then cross-checked.** A PR
-whose lanes resolve to pi before the split, or opencode after it, appears under
-`side_cli_disagreements` rather than being reconciled away: it means the split
-instant is wrong or a lane was hand-run, and that is the instrument telling on
-itself.
+**The side and the cli are resolved independently, and cross-checked only
+against an expectation the CALLER declares** — `--sides <before>:<after>`, e.g.
+`opencode:pi`. A PR whose lanes resolve to the other side's cli then appears
+under `side_cli_disagreements` rather than being reconciled away: it means the
+split instant is wrong or a lane was hand-run, and that is the instrument
+telling on itself.
 
-**Rows are read off the data** — one per `(cli, window)` pair any selected PR
-produced. Nothing in the script knows that opencode ran before and pi after.
+**Without `--sides` there is no expectation and no check**, and
+`side_cli_disagreements` is **`null`** — not `[]`. "Nobody declared what to
+expect" and "an expectation was checked and nothing disagreed" are different
+facts; rendering them the same would report a clean cross-check that never ran,
+so the table says in words that no cross-check was run.
+
+**Nothing in the script knows which cli ran on which side.** Rows are one per
+`(cli, window)` pair any selected PR produced; the window LABELS come from
+`--split-label` (defaulting to the split instant's own ISO form, so a label
+cannot describe a different split from the instant beside it); the expected
+pair, when there is one, comes from `--sides`. An earlier revision of this
+section claimed that while `cliTable` hardcoded `pre-2817 ? 'opencode' : 'pi'`,
+which made the cross-check fire on **every** selected PR under any other
+`--split-at` — a stale roster wearing the costume of a finding. The claim now
+holds of the whole function rather than of row construction alone.
 
 **Columns**: `worker-std` credited tokens, `rev-std` credited tokens, `rev-std`
 `rounds_to_pass`, `rev-std` `fail_rate`, `wall_clock_h`, and — the **control** —
@@ -499,8 +526,8 @@ The script emits this list in every run, under `coverage.heuristics`, and it **i
 | H6 | `usage.json` is cumulative, so a delegate's whole life counts against its PR. | A windowed usage series, or accepting the approximation. |
 | H7 | The PR window ends at `merged_at` passed in by the caller. | A loomux row for a human merge (#388). |
 | H8 | A `usage.json` row is keyed by CLI **session**; a session carried to a new agent id names only its last occupant, so the row is split evenly across every agent that occupied it. | An `agent_id` (or `block` + `pr`) on **every** `UsageSnapshot`, not just the latest — the same missing field as H4. |
-| H10 | A delegate's CLI is read off the `source` label of the `usage.json` row carrying its tokens (§4.8); a row whose source names no CLI (`statusline`, `none`) falls back to the `cli` on that agent's `agent-spawn` row, and to `unknown` — reported, never filled in from the block's declared CLI — when neither answers. That label is per **session**, so where one session's occupants ran different CLIs the per-agent spawn row is preferred instead and the session is named in coverage. | A `cli` field on `UsageSnapshot`, and one on the orchestrator `agent-spawn` site, which unlike the delegate site carries none — t-664's family, the same missing-field fix as H4/H8. |
 | H9 | A zero row backfilled from its transcript (§4.6) is **unpriced** — it keeps whatever `cost_usd` the collector recorded, so its tokens are right and its dollars are not — and does not honour `--cut`, because `--cut` cannot rewind an ordinary `usage.json` row either. | The collector recording the row correctly, which #2167 does: after it, `rows` reads 0 on any store written by a fixed build. |
+| H10 | A delegate's CLI is read off the `source` label of the `usage.json` row carrying its tokens (§4.8); a row whose source names no CLI (`statusline`, `none`) falls back to the `cli` on that agent's `agent-spawn` row, and to `unknown` — reported, never filled in from the block's declared CLI — when neither answers. That label is per **session**, so where one session's occupants ran different CLIs the per-agent spawn row is preferred instead and the session is named in coverage. | A `cli` field on `UsageSnapshot`, and one on the orchestrator `agent-spawn` site, which unlike the delegate site carries none — t-664's family, the same missing-field fix as H4/H8. |
 
 A run that adds a heuristic adds a row here in the same commit. The test suite
 asserts every emitted heuristic has an id, a statement and a named fix, so an
@@ -555,10 +582,11 @@ generations hides it.
 
 One JSON object. `--format table` renders the per-PR GFM table instead;
 `--format both` prints each. `--format cli-table` renders the §4.9 comparison
-(and needs `--split-at`); its own shape is `{ split_at_ms, split_commit, min_n,
-columns[], rows: [ { key, cli, side, prs[], cells: { <column>: { n, dropped,
-median, q1, q3, iqr, min, max } } } ], per_pr[], excluded[],
-side_cli_disagreements[], confounders[] }`.
+(and needs `--split-at`; `--split-label` and `--sides` are optional); its own
+shape is `{ split_at_ms, split_label, sides_declared, min_n, columns[],
+rows: [ { key, cli, side, prs[], cells: { <column>: { n, dropped, median, q1,
+q3, iqr, min, max } } } ], per_pr[], excluded[],
+side_cli_disagreements[] | null, confounders[] }`.
 
 ```
 {

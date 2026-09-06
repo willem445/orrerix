@@ -784,6 +784,13 @@ test('the CLI prints usage instead of throwing when given nothing', () => {
 
 const CLI_TABLE = path.join(fixtures, 'clitable');
 const SPLIT_AT = '2026-09-06T10:36:55Z';
+// The label and the expected pair are the CALLER's, exactly as a real run
+// passes them — nothing in the script supplies either (rev-final round 2).
+const SPLIT_LABEL = '2817';
+const SIDES = { before: 'opencode', after: 'pi' };
+const TABLE_OPTS = { sides: SIDES, label: SPLIT_LABEL };
+const table = (prs: any = CLI_REPORT.prs, opts: any = TABLE_OPTS) =>
+  sc.cliTable(prs, Date.parse(SPLIT_AT), opts);
 
 function runCliTable(extraArgs: string[] = []): string {
   return execFileSync(process.execPath, [
@@ -1015,7 +1022,7 @@ test('statCell: a median needs n>=3, and `n` is reported at every size', () => {
 });
 
 test('cli-table: the pi side is null below n=3 while the opencode side resolves', () => {
-  const t = sc.cliTable(CLI_REPORT.prs, Date.parse(SPLIT_AT));
+  const t = table();
   const row = (k: string) => t.rows.find((r: any) => r.key === k);
   assert.deepEqual(row('opencode (pre-2817)').prs, [800, 801, 802]);
   assert.deepEqual(row('pi (post-2817)').prs, [810, 811]);
@@ -1038,7 +1045,7 @@ test('cli-table: #802 is on the opencode side ONLY because the spawn-row rung an
   const rev802 = cliCard(802).delegates.agents.find((a: any) => a.agent === 'rev-802');
   assert.equal(rev802.cli_via, 'spawn-row');
   assert.equal(rev802.cli, 'opencode');
-  const t = sc.cliTable(CLI_REPORT.prs, Date.parse(SPLIT_AT));
+  const t = table();
   assert.equal(t.rows.find((r: any) => r.key === 'opencode (pre-2817)').prs.length, 3);
   // …and with that one delegate's cli erased, the side really does collapse.
   const blinded = JSON.parse(JSON.stringify(CLI_REPORT.prs));
@@ -1049,14 +1056,14 @@ test('cli-table: #802 is on the opencode side ONLY because the spawn-row rung an
       d.cli_via = null;
     }
   }
-  const t2 = sc.cliTable(blinded, Date.parse(SPLIT_AT));
+  const t2 = table(blinded);
   assert.equal(t2.rows.find((r: any) => r.key === 'opencode (pre-2817)').prs.length, 2);
   assert.equal(t2.rows.find((r: any) => r.key === 'opencode (pre-2817)').cells.wall_clock_h.median, null);
   assert.ok(t2.excluded.some((e: any) => e.pr === 802));
 });
 
 test('cli-table: selection is stated, and every exclusion says which bound refused it', () => {
-  const t = sc.cliTable(CLI_REPORT.prs, Date.parse(SPLIT_AT));
+  const t = table();
   const why = (pr: number) => (t.excluded.find((e: any) => e.pr === pr) || {}).why;
   assert.match(why(820), /worker-std split across opencode\+pi/);
   assert.match(why(821), /no merged_at/);
@@ -1067,7 +1074,7 @@ test('cli-table: selection is stated, and every exclusion says which bound refus
 });
 
 test('cli-table: the side and the cli are resolved independently, and a disagreement is reported', () => {
-  const t = sc.cliTable(CLI_REPORT.prs, Date.parse(SPLIT_AT));
+  const t = table();
   // #803 merged BEFORE the split and its lanes resolve to pi. The table does not
   // reconcile that away — it files the PR by the clock and flags the mismatch.
   assert.deepEqual(t.side_cli_disagreements,
@@ -1092,16 +1099,20 @@ test('cli-table: the rows are read off the data, not off a hardcoded opencode/pi
       c.delegates.by_block_cli[b.block + '/fictional-cli'] = b;
     }
   }
-  const t = sc.cliTable(relabelled, Date.parse(SPLIT_AT));
+  const t = table(relabelled);
   assert.deepEqual(t.rows.map((r: any) => r.key).sort(),
     ['fictional-cli (post-2817)', 'fictional-cli (pre-2817)']);
-  // …and every one of them disagrees with the expected side, which is the
-  // cross-check firing rather than staying quiet on an unfamiliar label.
+  // …and because THIS run declared `opencode:pi`, every one of them disagrees.
+  // That is the declared expectation being wrong for a relabelled world, not
+  // the script holding an opinion about which cli ran when: the same relabel
+  // with no `--sides` produces no disagreement list at all (asserted below).
   assert.equal(t.side_cli_disagreements.length, t.per_pr.length);
+  assert.equal(table(relabelled, { label: SPLIT_LABEL }).side_cli_disagreements, null);
 });
 
 test('cli-table: the confounder block is printed by the script, not left to the poster', () => {
-  const rendered = runCliTable(['--format', 'cli-table', '--split-at', SPLIT_AT]);
+  const rendered = runCliTable(['--format', 'cli-table', '--split-at', SPLIT_AT,
+    '--split-label', SPLIT_LABEL, '--sides', 'opencode:pi']);
   // The measurement is worthless without the reasons not to over-read it, so
   // they travel with the table rather than being remembered into a comment.
   for (const id of ['effective-thinking-level', 'task-mix', 'driver-waste-changes',
@@ -1114,18 +1125,18 @@ test('cli-table: the confounder block is printed by the script, not left to the 
   }
   // #2938's effective level is REPORTED as unknown, never guessed at a value.
   assert.match(rendered, /Effective level as read today: `unknown`/);
-  assert.ok(rendered.includes('93d51cc9'), 'the split commit is named');
   assert.ok(rendered.includes('2026-09-06T10:36:55'), 'the split instant is named');
 });
 
 test('cli-table: the GFM renders one row per group with the header cell count', () => {
-  const rendered = runCliTable(['--format', 'cli-table', '--split-at', SPLIT_AT]);
+  const rendered = runCliTable(['--format', 'cli-table', '--split-at', SPLIT_AT,
+    '--split-label', SPLIT_LABEL, '--sides', 'opencode:pi']);
   const lines = rendered.split('\n').filter((l) => l.startsWith('|'));
   const cells = (l: string) => l.split('|').length;
   // A row that disagrees with the header renders as a broken table on
   // github.com and fails nowhere else.
   for (const l of lines) assert.equal(cells(l), cells(lines[0]));
-  assert.equal(lines.length, 2 + sc.cliTable(CLI_REPORT.prs, Date.parse(SPLIT_AT)).rows.length);
+  assert.equal(lines.length, 2 + table().rows.length);
   assert.match(lines[1], /^\|(-{3}\|)+$/);
   // A resolved cell shows median, IQR and n; a refused one shows null and n.
   assert.match(rendered, /\(IQR .+?, n=3\)/);
@@ -1195,7 +1206,104 @@ test('cli: a pane recycled across CLIs keeps #800 on the opencode side', () => {
       c.delegates.by_block_cli['worker-std/claude'] = b;
     }
   }
-  const t = sc.cliTable(blinded, Date.parse(SPLIT_AT));
+  const t = table(blinded);
   assert.deepEqual(t.rows.find((r: any) => r.key === 'opencode (pre-2817)').prs, [801, 802]);
   assert.equal(t.rows.find((r: any) => r.key === 'opencode (pre-2817)').cells.wall_clock_h.median, null);
+});
+
+// ---------------------------------------------------------------------------
+// Review round 1 (rev-std finding 1, rev-final finding 1, one root): the
+// split's INSTANT was a free parameter while its LABELS — the commit in the
+// footer and the expected cli per side — were hardcoded. Both are now the
+// caller's, and these pin that the script holds no opinion of its own.
+// ---------------------------------------------------------------------------
+
+test('cli-table: with no `--sides` there is NO cross-check, and null says so', () => {
+  const t = table(CLI_REPORT.prs, { label: SPLIT_LABEL });
+  // `null`, never `[]`: "nobody declared an expectation" and "an expectation was
+  // checked and nothing disagreed" are different facts, and a table that
+  // rendered them the same would report a clean check it never ran.
+  assert.equal(t.side_cli_disagreements, null);
+  assert.equal(t.sides_declared, null);
+  // POSITIVE CONTROL: the selection itself is untouched, so this is not the
+  // vacuous "nothing was measured" reading.
+  assert.equal(t.per_pr.length, 6);
+  assert.deepEqual(t.rows.find((r: any) => r.key === 'opencode (pre-2817)').prs, [800, 801, 802]);
+  // And the render says it out loud rather than leaving a silent absence.
+  const rendered = sc.renderCliTable(t);
+  assert.match(rendered, /No side\/CLI cross-check was run/);
+  assert.doesNotMatch(rendered, /disagreements/);
+});
+
+test('cli-table: `--sides` is the ONLY source of the expected pair', () => {
+  // Declared the real way round: #803 merged pre-split but ran pi.
+  const asRun = table(CLI_REPORT.prs, { sides: { before: 'opencode', after: 'pi' }, label: SPLIT_LABEL });
+  assert.deepEqual(asRun.side_cli_disagreements,
+    [{ pr: 803, side: 'pre-2817', cli: 'pi', expected: 'opencode' }]);
+  assert.deepEqual(asRun.sides_declared, { before: 'opencode', after: 'pi' });
+
+  // Declared the OTHER way round on the SAME data. If the script held its own
+  // opinion about which cli ran when, this could not change — and the flip is
+  // total, which is what proves the pair is read from the flag and nowhere else.
+  const flipped = table(CLI_REPORT.prs, { sides: { before: 'pi', after: 'opencode' }, label: SPLIT_LABEL });
+  assert.deepEqual(flipped.side_cli_disagreements.map((d: any) => d.pr), [800, 801, 802, 810, 811]);
+  assert.equal(flipped.side_cli_disagreements.find((d: any) => d.pr === 800).expected, 'pi');
+  // #803 is the one PR that AGREES under the flipped declaration, so neither
+  // reading is "everything disagrees".
+  assert.equal(flipped.side_cli_disagreements.some((d: any) => d.pr === 803), false);
+
+  // A pair naming clis nothing ran flags every selected PR, and the rendered
+  // footer echoes the declaration rather than a roster of the script's own.
+  const alien = table(CLI_REPORT.prs, { sides: { before: 'zig', after: 'zag' }, label: SPLIT_LABEL });
+  assert.equal(alien.side_cli_disagreements.length, alien.per_pr.length);
+  assert.match(sc.renderCliTable(alien), /Expected per `--sides`: \*\*zig\*\* before the split, \*\*zag\*\* after\./);
+});
+
+test('cli-table: the footer and the row keys carry the CALLER’s label, never a baked-in commit', () => {
+  // The finding: a footer that printed `93d51cc9 (#2817)` beside whatever
+  // instant `--split-at` supplied could describe a split that commit never made.
+  const other = table(CLI_REPORT.prs, { sides: SIDES, label: 'some-other-split' });
+  const rendered = sc.renderCliTable(other);
+  assert.doesNotMatch(rendered, /93d51cc9/, 'no commit may be printed that the caller did not pass');
+  assert.doesNotMatch(rendered, /#2817/);
+  assert.match(rendered, /`--split-label some-other-split`/);
+  assert.ok(other.rows.every((r: any) => /\((pre|post)-some-other-split\)$/.test(r.key)),
+    'the row keys take the label too, so a key cannot outlive the split it names');
+  // The instant is always printed beside it, so label and instant travel together.
+  assert.ok(rendered.includes(new Date(Date.parse(SPLIT_AT)).toISOString()));
+});
+
+test('cli-table: with no label the split names itself by its own instant', () => {
+  // The default cannot drift from the instant, because it IS the instant.
+  const t = table(CLI_REPORT.prs, { sides: SIDES });
+  assert.equal(t.split_label, new Date(Date.parse(SPLIT_AT)).toISOString());
+  assert.ok(t.rows.every((r: any) => r.key.includes(t.split_label)));
+});
+
+test('cli-table: a half-declared `--sides` is refused, not silently half-applied', () => {
+  const bad = (v: string) => () => runCliTable(['--format', 'cli-table', '--split-at', SPLIT_AT, '--sides', v]);
+  for (const v of ['opencode', 'opencode:', ':pi', 'a:b:c', '']) {
+    assert.throws(bad(v), /--sides wants <before-cli>:<after-cli>/, `"${v}" must be refused`);
+  }
+  // POSITIVE CONTROL: the well-formed one runs.
+  assert.match(
+    runCliTable(['--format', 'cli-table', '--split-at', SPLIT_AT, '--sides', 'opencode:pi']),
+    /Expected per `--sides`/,
+  );
+});
+
+test('lanes: an escalate BEFORE a pass is not counted as a round to pass', () => {
+  // Disclosed rather than left implicit (rev-final round 2's premortem): only
+  // pass/fail rows are positions, so `escalate, pass` reports 1, not 2. The
+  // live vocabulary is pass/fail only, but `escalate` is a first-class verdict
+  // and the first lane that uses one biases this exact column downward — so the
+  // behaviour is PINNED here rather than merely described in §4.8.
+  assert.deepEqual(sc.laneStats({ a: ['escalate', 'pass'] }).a, {
+    rounds: 2, pass: 1, fail: 0, verdicts_other: 1, rounds_to_pass: 1, fail_rate: 0,
+  });
+  // The suite already pinned escalate-ONLY; this is the mixed case it did not.
+  // `rounds` still counts it, so the two figures disagree on purpose and a
+  // reader can see the gap rather than being told there is none.
+  assert.notEqual(sc.laneStats({ a: ['escalate', 'pass'] }).a.rounds,
+    sc.laneStats({ a: ['escalate', 'pass'] }).a.rounds_to_pass);
 });

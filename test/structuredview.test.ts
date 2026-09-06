@@ -458,6 +458,35 @@ test("a fold is keyed by id, not by position, so an eviction cannot move it", ()
   assert.ok(isCollapsed(view, still!), "the fold moved with it");
 });
 
+test("ids stay UNIQUE across an eviction, so a new block cannot inherit a live fold", () => {
+  // This is what the counter buys over the obvious alternative. Keying an id on
+  // the block's position (`blocks.length` at creation) is indistinguishable
+  // until an eviction shortens the list — after which the NEXT block created is
+  // handed an id a surviving block already holds, and the human's fold on the
+  // survivor silently appears on a stranger. Nothing throws; the ids simply
+  // collide.
+  const s = emptyState();
+  const notes = (n: number): ProjectionInput[] =>
+    Array.from({ length: n }, () => ({ kind: "note", level: "info", tag: "n", text: "x" }) as const);
+
+  project(s, notes(MAX_BLOCKS + 100));
+  assert.ok(s.evicted > 0, "positive control: an eviction really happened");
+
+  const before = s.blocks.map((b) => b.id);
+  assert.equal(new Set(before).size, before.length, "no two live blocks share an id");
+
+  // Fold every survivor, then keep projecting. A fresh block must not arrive
+  // already folded.
+  const view = emptyViewState();
+  for (const id of before) toggleCollapsed(view, id);
+  project(s, [{ kind: "text", turn: 1, delta: "brand new" }]);
+  const fresh = only(s, "text").at(-1)!;
+  assert.equal(before.includes(fresh.id), false, "the new block's id is not a recycled one");
+  assert.equal(isCollapsed(view, fresh), false, "so it did not inherit a stranger's fold");
+  const after = s.blocks.map((b) => b.id);
+  assert.equal(new Set(after).size, after.length, "and the list is still collision-free");
+});
+
 test("pruneViewState drops folds for blocks that are gone, and keeps live ones", () => {
   const s = emptyState();
   project(s, [{ kind: "note", level: "info", tag: "a", text: "first" }]);

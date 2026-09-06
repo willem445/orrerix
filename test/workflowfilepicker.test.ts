@@ -215,6 +215,30 @@ test("a repo on the legacy config dir gets its new workflow there — the spelli
   assert.equal(created(canCreateWorkflow("solo", legacy)), ".loomux/workflows/solo.yml");
 });
 
+test("a MIXED listing creates under the preferred dir, not whichever entry sorts first (rev-std r3 N3)", () => {
+  // A repo part-way through the `.loomux/` -> `.orrerix/` migration. Reading `workflows[0]`
+  // alone put every new workflow in the DEPRECATED directory on the strength of one leftover
+  // file — and the listing is sorted by NAME, so which spelling leads is an accident of what
+  // the workflows happen to be called.
+  const mixed = listing([
+    entry({ name: "aged", path: ".loomux/workflows/aged.yml" }),
+    entry({ name: "fresh", path: ".orrerix/workflows/fresh.yml" }),
+  ]);
+  assert.equal(created(canCreateWorkflow("solo", mixed)), ".orrerix/workflows/solo.yml");
+  // The legacy-first ORDER is the fixture's whole point: under the old rule this case — and
+  // only this case — came back `.loomux/`, so an `.orrerix/`-first fixture would pass either
+  // way and pin nothing.
+  assert.ok(mixed.workflows[0].path.startsWith(".loomux/"), "the legacy entry must lead");
+  // Unanimity is still honoured in both directions, so this is not "always prefer .orrerix".
+  const allLegacy = listing([
+    entry({ name: "aged", path: ".loomux/workflows/aged.yml" }),
+    entry({ name: "older", path: ".loomux/workflows/older.yml" }),
+  ]);
+  assert.equal(created(canCreateWorkflow("solo", allLegacy)), ".loomux/workflows/solo.yml");
+  // An empty listing has no spelling to read, so it gets the preferred one.
+  assert.equal(created(canCreateWorkflow("solo", listing([]))), ".orrerix/workflows/solo.yml");
+});
+
 test("a name differing only by CASE from one already there is REFUSED, not created (#2892)", () => {
   // The half of #2892 a creation path can close. On Windows and macOS `Review.yml` and
   // `review.yml` are one file, so creating the second either clobbers the first or produces a

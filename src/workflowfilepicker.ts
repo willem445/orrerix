@@ -214,8 +214,16 @@ export function canCreateWorkflow(name: string, listing: WorkflowListing | null)
  *  than guessed — the same rule `workflowRelFor`'s doc states. A repo with nothing listed at
  *  all gets the preferred spelling, which is where a new workflow belongs. */
 function usesLegacyConfigDir(listing: WorkflowListing): boolean {
-  const first = listing.workflows[0];
-  return !!first && normPath(first.path).startsWith(`${LEGACY_CONFIG_DIR}/`);
+  const legacy = (p: string): boolean => normPath(p).startsWith(`${LEGACY_CONFIG_DIR}/`);
+  // UNANIMITY, not the first entry (rev-std round 3, N3). Reading `workflows[0]` alone sent
+  // every create to whichever spelling happened to sort first, which for a repo part-way
+  // through the `.loomux/` → `.orrerix/` migration means a new workflow lands in the
+  // DEPRECATED directory on the strength of one leftover file. A mixed listing is precisely
+  // the state where the answer is not obvious, and the safe reading of "not obvious" is the
+  // preferred spelling: a repo that has started migrating is heading to `.orrerix/`, and a
+  // file written there is where the next reader looks. Only a listing that is entirely legacy
+  // — a repo that has not begun — gets the legacy dir, which is the case this exists for.
+  return listing.workflows.length > 0 && listing.workflows.every((e) => legacy(e.path));
 }
 
 /** Which of the name rules `name` broke, in the words that name it. One message per rule

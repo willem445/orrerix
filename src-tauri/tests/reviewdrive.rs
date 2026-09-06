@@ -7237,6 +7237,14 @@ fn a_dead_lane_pane_is_re_opened_next_tick_and_a_live_one_is_left_alone() {
 /// stay green, because those rows call the function directly. Reading the
 /// anchor off the persisted lane record through the real tick is the only
 /// instrument that sees that seam.
+///
+/// **The live arm's pane has ENDED ITS TURN, and that is the fixture's
+/// premise, not decoration.** A reviewer still writing the review it was
+/// briefed for is refused, not re-briefed (#2109's duplicate guard) — that is
+/// a different, separately bounded path. §8's body-changed re-brief is
+/// delivered into a pane that is idle and ready, which is what a `report`
+/// stamps (`idle_since_ms`), plus a pty so the reuse arm has somewhere to
+/// type it.
 #[test]
 fn a_moved_digest_re_arms_the_stall_clock_on_both_the_dead_pane_and_live_pane_paths() {
     type Row = (&'static str, u64);
@@ -7248,6 +7256,14 @@ fn a_moved_digest_re_arms_the_stall_clock_on_both_the_dead_pane_and_live_pane_pa
         let repo = Repo::new();
         let gh = FakeGh::green(HEAD_A);
         let (group, _orch, lane) = lane_round_one(&reg, &repo, &gh);
+        if arm == "live" {
+            // End the reviewer's turn so the pane is idle and ready — the
+            // state §8's body-changed re-brief is delivered into. No verdict
+            // file is written: the lane must still be OUTSTANDING for the
+            // digest move to re-brief it.
+            with_pane(&reg, &lane, 7401);
+            report_as(&reg, &group, &lane, Role::Reviewer, "approved");
+        }
 
         // The premise, read off the record rather than assumed: round one's
         // brief anchored the clock at the tick that sent it, and recorded the
@@ -7287,6 +7303,17 @@ fn a_moved_digest_re_arms_the_stall_clock_on_both_the_dead_pane_and_live_pane_pa
             .iter()
             .find(|l| l["block"] == json!("rev-std"))
             .expect("the re-briefed lane is on the record");
+        if arm == "live" {
+            assert_eq!(
+                again.lanes_opened[0].2, lane,
+                "{arm}: the re-brief went INTO the live pane (#1960's reuse), not a second one"
+            );
+        } else {
+            assert_ne!(
+                again.lanes_opened[0].2, lane,
+                "{arm}: the re-open cannot reuse a dead pane — the replacement is its own"
+            );
+        }
         assert_eq!(
             rec["briefed_head"],
             json!(HEAD_A),

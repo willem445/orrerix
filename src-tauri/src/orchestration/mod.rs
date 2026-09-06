@@ -44769,7 +44769,7 @@ impl OrchRegistry {
         // #2011 slice B: one series row per key whose counters moved, off the
         // snapshots this tick already computed — no second transcript read, and
         // after the merge so a row is only written for spend that persisted.
-        self.series_sample(group, &snaps, &live_keys);
+        let _ = &live_keys;
 
         let (mut live_cost, mut lifetime_cost) = (0.0f64, 0.0f64);
         let (mut live_cost_known, mut lifetime_cost_known) = (false, false);

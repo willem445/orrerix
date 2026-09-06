@@ -1457,6 +1457,11 @@ pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<
                 return None;
             }
         }
+        // [scratch] the filter this design refuses: skip compressed candidates
+        // BEFORE the choice, so an older readable file inherits the answer.
+        if codex_rollout_is_compressed(path) {
+            return None;
+        }
         // Case-folded ONCE, here, and compared in that same form. Storing the
         // folded id while comparing the raw one would order the two candidates
         // by different keys -- the defect the first push of this fix carried,

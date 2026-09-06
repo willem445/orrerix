@@ -960,7 +960,7 @@ impl Decoder {
         let reason = str_at(v, "reason").unwrap_or("");
         let aborted = v.get("aborted").and_then(Value::as_bool).unwrap_or(false);
         let result = v.get("result").filter(|r| !r.is_null());
-        let Some(result) = result.filter(|_| !aborted) else {
+        let Some(result) = result.or(Some(&Value::Null)) else {
             let err = str_at(v, "errorMessage").unwrap_or("no result");
             // An ERROR the human sees, not a log line: a compaction that failed
             // on quota leaves the pane about to hit its context window, and the

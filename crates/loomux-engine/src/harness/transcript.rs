@@ -405,7 +405,7 @@ impl Renderer {
                 out.push_str(NEWLINE);
                 self.col = 0;
             }
-            out.push(if c.is_control() { ' ' } else { c });
+            out.push(c);
             self.col += 1;
         }
     }

@@ -1406,7 +1406,8 @@ pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<
     walk_codex_session_files(root, |path| {
         let name = path.file_name().and_then(|s| s.to_str())?;
         let plain = codex_plain_rollout_name(name)?;
-        if codex_rollout_thread_id(plain)? != session_id.as_str() {
+        // [scratch] compare the WHOLE id segment, suffix included.
+        if plain.strip_prefix("rollout-")?.strip_suffix(".jsonl")?.get(20..)? != session_id.as_str() {
             return None;
         }
         // Unreadable content is no usage at all, so a compressed match is

@@ -843,6 +843,44 @@ there as an on-state, the same class as the task board's own filter chip.
   `agent-cli-reference` sweep `doc/design/side-dock.md` describes, and the two
   buttons plus the tablist cover the gesture.
 
+## Nesting a lead's helpers (#2519)
+
+A pane launched with the *orrerix subagents* toggle is a **lead**: it owns a
+lightweight orchestration group and opens `worker` panes into it. Those helpers
+are rendered **indented under it**, with a `↳`.
+
+**The relationship is (same group, same tab), and both halves are load-bearing.**
+Group alone would cross tabs — the list is already scoped to one tab block, so an
+indent matched across tabs would point at a parent that is not on screen. Tab
+alone would hand a worker of an ordinary *orchestration* group to an unrelated
+lead that happens to share its tab. `parentKey` (`agentrows.ts`) reads exactly
+the fields `PaneFacts` already projects, so no caller-side filtering of leads is
+needed and none should be added.
+
+**The index is built once per render, over the WHOLE reading.** `parentKey`'s
+per-row form is a linear scan; `agentRows` calls `leadIndex` once and then
+`parentKeyIn` per row, which is the same rule in two shapes rather than two
+rules — every fixture in the corpus is asserted through both, so they cannot
+drift. The index is built from the facts the caller handed in, *before*
+`isAgentPane` filters which panes get a row: membership is a question about rows,
+not about which panes may be a parent. Today the two agree (an orchestration
+identity is `isAgentPane`'s widest arm, so a lead is always a row) and the code
+does not lean on it — that agreement is pinned as its own test, so narrowing the
+membership rule reddens something instead of silently orphaning every helper.
+
+Two leads sharing a group *and* a tab is forbidden by the backend's
+one-root-per-group invariant and cannot arise; `leadIndex` still answers for it,
+keeping the FIRST, because a projection must be total and "total" here means
+answering what the scan it replaced would have.
+
+**The indent is only an indent.** It does not change the order — helpers sort
+with everything else, most-wants-you first — and it does not group or collapse
+them, so a helper that needs attention still rises to the top of its tab's block.
+It is one CSS class toggled on the row, written after the state block rather than
+inside it: that block rewrites `className` wholesale and only runs when the state
+changed, so a child-ness that arrived on a tick where the state did not would be
+painted and then wiped.
+
 ## Reveal, not focus (#2365)
 
 A row click used to be three steps — switch to the pane's tab, `Grid.setActive`,

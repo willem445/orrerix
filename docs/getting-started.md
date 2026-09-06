@@ -236,6 +236,14 @@ its dropdown (newest first) instead of browsing again. The field still accepts
 any path — type one, or use **Browse…** — and every launch or Browse… pick is
 recorded for the dropdown's list (the most recent 8 are kept).
 
+The **orrerix subagents** checkbox (off by default) makes this pane a **lead**:
+its helpers open as orrerix panes, in their own worktrees, where you can read and
+steer them, instead of running invisibly inside the CLI's own process. Ticking it
+also shows the four guardrail numbers that will govern those helpers. It is
+offered for claude, copilot and pi, and only on a tab that does not already run
+an orchestration project — [orrerix subagents](features/orrerix-subagents.html)
+has the whole story, including what a restart does and does not bring back.
+
 The **Autopilot — pre-approve all tools** checkbox (on by default) launches the
 agent with tools pre-approved so it stops prompting you to approve each edit or
 command — Claude Code's native Auto mode plus pre-approved `git`/`gh`, or, for

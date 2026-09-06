@@ -1134,6 +1134,11 @@ These deserve their own detail — see:
   GitHub, a window filter (12 hours by default), and click-through to the raw
   record. Read-only, and it states its own coverage boundaries — what it is
   *not* showing is printed under the chart rather than left to look like quiet.
+- **Token charts** (`Alt+K` or the column-chart icon) — what this group has
+  spent, and on what: tokens over time with one line per block and CLI, and a
+  stacked bar per feature on your board, with a labelled mark wherever the
+  fleet's configuration changed. Read-only, and honest about its own limits
+  the same way the timeline is. [Full description below.](#token-charts)
 - **Delivery queue.** If a pane is busy — an interactive question on screen, or a
   human's own line still sitting in its input box — orrerix holds a prompt
   delivery rather than typing over it. A hold that never clears **queues** the
@@ -1183,6 +1188,75 @@ These deserve their own detail — see:
   8-deep cap it's reporting on — so it can never pile up behind the backlog it
   describes. The orchestrator's own pane gets it the same way as the notices
   above: riding back on its next tool call.
+
+### Token charts
+
+`Alt+K`, or the column-chart icon in an orchestration pane's header. Two
+pictures on one panel, answering *what has this group spent, and on what* —
+and, once you have changed something, *did that change help*.
+
+**Tokens over time.** One line per **block and CLI** — `worker-std/pi`,
+`rev-lead/claude`, and so on. Colour is the block; the line style is the CLI,
+so one block running two different CLIs is two distinguishable lines rather
+than one averaged one. The chips above the plot pick the counter: all tokens,
+input, output, cache read, cache write, or cost in dollars. *merge CLIs*
+collapses each block's split back into a single line, and *changes nothing
+else* — it is a regrouping, not a filter, so the totals stay put.
+
+**Tokens per feature.** A stacked bar per feature on your task board, split by
+the same block/CLI keys and in the same order on every bar, so two features
+can be compared segment by segment. Which feature an agent's spend lands on
+is decided by the first of these that answers: a board row assigned to that
+agent; a row carrying its session; an issue or PR number named in its brief
+that a board row also carries. Whatever that finds, the chart then walks
+*up* the board to the feature the row sits inside.
+
+**Change marks.** Whenever the repo's agent-facing configuration moves — your
+workflow file, a persona, a skill, `CLAUDE.md`, `.orrerix/lessons.md`, or the
+loomux version itself — a dashed vertical is stamped on the plot and labelled
+with what changed. Where the change was a **roster switch**, the label names
+it directly (`worker-std: opencode → pi`), read from the CLI each block was
+actually sampled with either side of the mark rather than from the
+configuration file, so it reflects what the fleet really ran.
+
+Click a mark for the **before/after** table: mean spend per five-minute bucket
+for the hour before against the hour after, per series and in total. That is
+the "did this help?" number. It reads **n/a**, never zero, when there is not a
+full hour on one side — the chart will not invent a comparison it cannot make.
+
+#### What it is deliberately honest about
+
+All of these are printed under the charts rather than left for you to
+discover:
+
+- **An orchestrator's spend is group-wide, and is never charged to a
+  feature.** A long-lived orchestrator session has no per-turn PR
+  attribution, so billing its whole lifetime to whichever task it happened to
+  be holding would be a made-up number. It gets its own bar and its own line,
+  where its real spend is visible.
+- **Spend the chart cannot place goes to `(unattributed)`** — the first bar,
+  and never hidden. The legend prints the identity the whole chart is
+  checkable by: *features + orchestrator + unattributed = total*, and the
+  total says its own scope (`total (24h)`, `total (all time)`). Those three
+  always add up, at whatever window you have selected. **Comparing them with
+  the group panel's lifetime figure only makes sense under the `all`
+  preset** — every other window is a slice, so a smaller number there is the
+  window doing its job, not a broken chart.
+- **History starts when this feature was deployed.** The series is sampled
+  from what loomux already computes each tick; nothing is rebuilt from your
+  agents' transcripts. So the panel prints the instant its history begins
+  instead of drawing a flat line where there is simply no data.
+- **A quiet stretch draws along the floor, not as a slope.** Joining two
+  distant samples with a straight line would show an hour of steady spend
+  that never happened — and would look more plausible than the truth.
+- **A counter that goes backwards is clamped and counted, not drawn as a
+  cliff.** That happens routinely when an agent's transcript rotates.
+- **Costs say whether they were reported or estimated.** A dollar figure with
+  no provenance is claiming a precision it has not got, and a bar whose cost
+  cannot be known reads *n/a* rather than `$0.00`.
+
+Follow re-reads every 30 seconds. The underlying series only advances every
+five minutes, so there is nothing to gain by looking harder.
 
 ## CI watches (agent notifications)
 

@@ -79,6 +79,7 @@ import { AuditView } from "./auditview";
 import { AuditStore } from "./auditstore";
 import type { AuditEntry } from "./auditsummary";
 import { TimelineView } from "./timelineview";
+import { TokenChartsView } from "./tokenchartsview";
 import { GroupView } from "./groupview";
 import { clampOverlayHeight, OVERLAY_MIN_H } from "./overlaysize";
 import {
@@ -140,6 +141,9 @@ const GIT_ICON = icon("git-graph", ICON_BTN_PX);
 const ISSUES_ICON = icon("circle-dot", ICON_BTN_PX);
 // Progress timeline (#608): the audit log's chart sibling.
 const TIMELINE_ICON = icon("chart-gantt", ICON_BTN_PX);
+// Token charts (#2011): spend over time and per feature — the audit log's
+// cost sibling, so a chart glyph distinct from the timeline's gantt.
+const TOKENS_ICON = icon("chart-column", ICON_BTN_PX);
 // Audit viewer: a clock/history glyph for the group's audit-log timeline.
 const AUDIT_ICON = icon("clock-fading", ICON_BTN_PX);
 const GROUP_ICON = icon("users", ICON_BTN_PX);
@@ -516,6 +520,7 @@ type EmbedKind =
   | "group"
   | "editor"
   | "timeline"
+  | "tokens"
   | "decisions";
 
 /** #1042: compile-time pin that every view `embedtoggle.ts` lets declare the
@@ -535,6 +540,7 @@ const EMBED_KINDS: readonly EmbedKind[] = [
   "group",
   "editor",
   "timeline",
+  "tokens",
 ];
 
 /** The subset of `EmbedKind`s whose embed preference is captured for a whole-
@@ -569,11 +575,24 @@ const RESTORABLE_EMBED_KINDS: readonly EmbedKind[] = [
   // its own window/category selection, the same way a restored audit log does
   // not restore its filters.
   "timeline",
+  // The token charts (#2011) are group-scoped and gated exactly like the
+  // audit log they read beside, so they restore on the same terms — the
+  // DOCK preference only, never the window/metric selection, the same way a
+  // restored timeline does not restore its own window or categories.
+  "tokens",
 ];
 
 function isRestorableEmbedKind(
   kind: EmbedKind
-): kind is "tasks" | "decisions" | "audit" | "group" | "git" | "editor" | "timeline" {
+): kind is
+  | "tasks"
+  | "decisions"
+  | "audit"
+  | "group"
+  | "git"
+  | "editor"
+  | "timeline"
+  | "tokens" {
   return (RESTORABLE_EMBED_KINDS as readonly string[]).includes(kind);
 }
 
@@ -585,6 +604,7 @@ const EMBED_TOGGLE_LABEL: Record<EmbedKind, string> = {
   issues: "The issues view",
   audit: "The audit log",
   timeline: "The progress timeline",
+  tokens: "The token charts",
   group: "The group lifecycle panel",
   editor: "The file editor",
   decisions: "The needs-you panel",
@@ -600,6 +620,7 @@ const EMBED_TOGGLE_TITLE: Record<EmbedKind, string> = {
   issues: "GitHub issues (Alt+I)",
   audit: "Audit log (Alt+A)",
   timeline: "Progress timeline (Alt+W)",
+  tokens: "Token charts (Alt+K)",
   group: "Group lifecycle (Alt+O)",
   editor: "File editor (Alt+F)",
   decisions: "Needs you — decisions & demos (Alt+Q)",
@@ -748,6 +769,13 @@ export class Pane implements VoiceTargetPane {
   private timelineView: TimelineView | null = null;
   private timelineOverlay: HTMLElement | null = null;
   private timelineBtn: HTMLButtonElement;
+
+  /** Token charts (#2011) — the group's persisted usage series, plotted.
+   *  Shares the pane's ONE `orch_audit` read with the audit viewer and the
+   *  timeline (#1317); its own series read is a separate command. */
+  private tokensView: TokenChartsView | null = null;
+  private tokensOverlay: HTMLElement | null = null;
+  private tokensBtn: HTMLButtonElement;
   /** Group lifecycle panel (orchestrator panes only), same mechanics. */
   private groupView: GroupView | null = null;
   private groupOverlay: HTMLElement | null = null;
@@ -1256,6 +1284,17 @@ export class Pane implements VoiceTargetPane {
     });
     header.appendChild(this.timelineBtn);
 
+    this.tokensBtn = document.createElement("button");
+    this.tokensBtn.className = "pane-btn";
+    this.tokensBtn.innerHTML = TOKENS_ICON;
+    this.tokensBtn.title = EMBED_TOGGLE_TITLE.tokens;
+    this.tokensBtn.hidden = true; // shown for orchestration panes in start()
+    this.tokensBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.toggleTokensView();
+    });
+    header.appendChild(this.tokensBtn);
+
     this.groupBtn = document.createElement("button");
     this.groupBtn.className = "pane-btn";
     this.groupBtn.innerHTML = GROUP_ICON;
@@ -1447,6 +1486,7 @@ export class Pane implements VoiceTargetPane {
       { id: "decisions", el: this.decisionsBtn, priority: false },
       { id: "audit", el: this.auditBtn, priority: false },
       { id: "timeline", el: this.timelineBtn, priority: false },
+      { id: "tokens", el: this.tokensBtn, priority: false },
       { id: "group", el: this.groupBtn, priority: false },
       { id: "group-min", el: this.groupMinBtn, priority: false },
       { id: "editor", el: editorBtn, priority: false },
@@ -2245,6 +2285,9 @@ export class Pane implements VoiceTargetPane {
     // The progress timeline reads the same per-group log (plus gh), and is
     // read-only in exactly the same sense — gated identically (#608).
     this.timelineBtn.hidden = false;
+    // The token charts read the same per-group series and audit log, and are
+    // read-only in exactly the same sense — gated identically (#2011).
+    this.tokensBtn.hidden = false;
     // Group lifecycle controls (pause / end orchestration) live on the
     // orchestrator's pane, alongside the task board.
     this.groupBtn.hidden = opts.orchRole !== "orchestrator";
@@ -4646,6 +4689,8 @@ export class Pane implements VoiceTargetPane {
         return this.auditBtn;
       case "timeline":
         return this.timelineBtn;
+      case "tokens":
+        return this.tokensBtn;
       case "group":
         return this.groupBtn;
       case "git":
@@ -4838,6 +4883,10 @@ export class Pane implements VoiceTargetPane {
           if (this.timelineBtn.hidden) continue;
           this.ensureTimelineView();
           break;
+        case "tokens":
+          if (this.tokensBtn.hidden) continue;
+          this.ensureTokensView();
+          break;
         case "group":
           if (this.groupBtn.hidden) continue;
           this.ensureGroupView();
@@ -4959,6 +5008,48 @@ export class Pane implements VoiceTargetPane {
       // from #648 until then, which is most of why three later views missed it.
       hide: () => this.timelineView!.hide(),
       setPanelActive: (active) => this.timelineView!.setPanelActive(active),
+      floorPx: () => EMBED_MIN_PANEL_PX,
+    });
+  }
+
+  /** Toggle the token-charts overlay (#2011, any orchestration pane).
+   *  Same no-resize overlay mechanics as the timeline it sits beside: it
+   *  floats over the terminal, and docking it goes through the shared #361
+   *  embed path — no ConPTY resize is introduced by this view (constraint 1). */
+  toggleTokensView(): void {
+    if (!this.orchGroup || this.tokensBtn.hidden) return;
+    this.ensureTokensView();
+    this.toggleView("tokens");
+  }
+
+  /** Lazily construct the token charts and register them into
+   *  `embedRegistry` (#361). */
+  private ensureTokensView(): void {
+    if (this.tokensView) return;
+    this.tokensView = new TokenChartsView(this.orchGroup!, {
+      onClose: () => this.toggleTokensView(),
+      onEmbedMenu: (anchor) => this.showEmbedMenu("tokens", anchor),
+      store: this.ensureAuditStore(),
+      // Read live, never snapshotted — the same contract every other view
+      // here takes on a pane-owned answer.
+      isBoardVisible: () => this.isViewVisible("tasks"),
+    });
+    this.tokensOverlay = document.createElement("div");
+    this.tokensOverlay.className = "git-overlay";
+    this.tokensOverlay.hidden = true;
+    this.tokensOverlay.append(
+      this.tokensView.el,
+      this.makeOverlayDivider(() => this.tokensOverlay!)
+    );
+    this.el.appendChild(this.tokensOverlay);
+    this.embedRegistry.set("tokens", {
+      overlayEl: this.tokensOverlay,
+      viewEl: this.tokensView.el,
+      show: () => this.tokensView!.show(),
+      // Stops the 30 s follow poll on close/eviction — the leak #361 rev-38
+      // found on the group panel, and the rule `EmbedEntry.hide` carries.
+      hide: () => this.tokensView!.hide(),
+      setPanelActive: (active) => this.tokensView!.setPanelActive(active),
       floorPx: () => EMBED_MIN_PANEL_PX,
     });
   }

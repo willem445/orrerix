@@ -5578,3 +5578,223 @@ button.wf-finding:hover { background: var(--surface-2); }
 .sidedock.resizing .fileedit-tree {
   content-visibility: hidden;
 }
+
+/* ── token charts (#2011 slice C) ─────────────────────────────────────────
+   Colour carries the BLOCK; the CLI is carried by line style and bar hatch,
+   so two CLIs of one block are told apart in greyscale, in print and by a
+   reader with a colour-vision deficiency. That second channel is not a
+   nicety here: the identity octet's azure/violet pair is ΔE 5.7 in normal
+   vision, so colour alone is never allowed to be the only difference.
+
+   The hue classes are ordered by the MEASURED categorical sequence
+   (tokencharts.ts's HUE_ORDER), not by theme.ts's declaration order — see
+   that constant for the search and the figures. */
+.tokens-view {
+  display: flex; flex-direction: column; height: 100%; min-height: 0;
+  background: var(--surface-1); color: var(--ink);
+}
+.tokens-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line);
+}
+.tokens-head .pane-btn { opacity: 1; }
+.tokens-title { font-weight: 600; font-size: 12px; flex: none; }
+.tokens-group {
+  font-size: 10px; color: var(--ink-dim); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
+}
+.tokens-count { flex: none; color: var(--ink-dim); font-size: 10px; }
+.tokens-follow {
+  flex: none; font-size: 10px; padding: 2px 7px; border-radius: 4px;
+  border: 1px solid var(--line); background: transparent; color: var(--ink-dim); cursor: pointer;
+}
+.tokens-follow:hover { color: var(--ink); }
+.tokens-follow.on {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* Filters in ONE row above the charts. */
+.tokens-controls {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 6px 12px; border-bottom: 1px solid var(--line);
+}
+.tokens-windows, .tokens-metrics { display: flex; gap: 4px; flex-wrap: wrap; }
+.tokens-chip {
+  font-size: 10px; padding: 2px 7px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--line); background: transparent; color: var(--ink-dim);
+}
+.tokens-chip:hover { color: var(--ink); }
+.tokens-chip.on {
+  background: var(--selection); color: var(--accent); border-color: var(--line-strong);
+}
+.tokens-chip.collapse { margin-left: auto; }
+
+.tokens-body { flex: 1; overflow-y: auto; padding: 8px 0 12px; min-height: 0; }
+.tokens-body::-webkit-scrollbar { width: 9px; }
+.tokens-body::-webkit-scrollbar-thumb {
+  background: var(--surface-2); border-radius: 5px;
+}
+.tokens-section-title {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-faint); padding: 10px 12px 4px;
+}
+.tokens-empty { padding: 18px 16px; color: var(--ink-dim); line-height: 1.5; }
+.tokens-hint { padding: 6px 12px; color: var(--ink-faint); font-size: 10.5px; }
+
+/* The legend. Always present for two or more series — identity is never
+   carried by colour alone. */
+.tokens-legend { padding: 0 12px 6px; display: flex; flex-direction: column; gap: 6px; }
+.tokens-lifetime {
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  font-size: 10.5px; color: var(--ink-dim);
+}
+.tokens-lifetime-item { display: inline-flex; align-items: baseline; gap: 4px; }
+.tokens-lifetime-label { color: var(--ink-faint); }
+/* Values wear TEXT tokens, never a series colour — a number is text. */
+.tokens-lifetime-value { color: var(--ink); font-variant-numeric: tabular-nums; }
+.tokens-lifetime-item.total .tokens-lifetime-value { font-weight: 600; }
+.tokens-lifetime-op { color: var(--ink-faint); }
+.tokens-legend-keys { display: flex; gap: 10px; flex-wrap: wrap; }
+.tokens-legend-key { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; }
+.tokens-swatch { flex: none; }
+.tokens-legend-label { color: var(--ink); font-family: var(--font-mono); }
+.tokens-legend-total { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+/* The plot. Recessive grid and axes; the data is the only thing with weight. */
+.tokens-plot { padding: 0 4px; }
+.tokens-svg { display: block; }
+.tokens-grid { stroke: color-mix(in srgb, var(--ink) 6%, transparent); stroke-width: 1; }
+.tokens-tick { stroke: color-mix(in srgb, var(--ink) 4%, transparent); stroke-width: 1; }
+.tokens-tick-label, .tokens-y-label { fill: var(--ink-faint); font-size: 9.5px; }
+.tokens-y-label { font-variant-numeric: tabular-nums; }
+.tokens-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.tokens-direct-label { font-size: 9.5px; font-family: var(--font-mono); }
+
+/* The change marks. Under the lines, so a vertical never hides a point. */
+.tokens-mark {
+  stroke: var(--state-attention); stroke-width: 1; stroke-dasharray: 3 3;
+}
+.tokens-mark-label {
+  fill: var(--state-attention); font-size: 9.5px; font-family: var(--font-mono);
+}
+.tokens-mark-hit { fill: transparent; cursor: pointer; }
+.tokens-mark-g.selected .tokens-mark { stroke-width: 2; stroke-dasharray: none; }
+.tokens-mark-g:hover .tokens-mark { stroke-width: 2; }
+
+/* The hover layer. A line chart without one is a picture. */
+.tokens-crosshair {
+  stroke: color-mix(in srgb, var(--ink) 30%, transparent); stroke-width: 1; pointer-events: none;
+}
+.tokens-hover-hit { fill: transparent; }
+
+/* The stacked bars. */
+.tokens-bars { padding: 0 12px; }
+.tokens-bar-row {
+  display: flex; align-items: center; gap: 8px; height: 26px; font-size: 10.5px;
+}
+.tokens-bar-label {
+  flex: 0 0 30%; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--ink);
+}
+/* The two group-wide bars read as chrome rather than as features — they are
+   a different KIND of row, not a smaller one. */
+.tokens-bar-row.kind-unattributed .tokens-bar-label,
+.tokens-bar-row.kind-orchestrator .tokens-bar-label {
+  color: var(--ink-dim); font-style: italic;
+}
+.tokens-bar-track { flex: 1; min-width: 0; }
+.tokens-bar-svg { display: block; width: 100%; }
+.tokens-seg { stroke: none; }
+.tokens-bar-value {
+  flex: none; min-width: 48px; text-align: right;
+  color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.tokens-bar-cost {
+  flex: none; min-width: 62px; text-align: right;
+  color: var(--ink-faint); font-variant-numeric: tabular-nums;
+}
+/* An estimated or mixed cost is marked, never printed as though it were a
+   bill. Colour is not the only channel: the title attribute says which. */
+.tokens-bar-cost.cost-estimated, .tokens-bar-cost.cost-mixed { font-style: italic; }
+
+/* The before/after readout — the table view the chart's key numbers also
+   exist in, not only as marks. */
+.tokens-readout { padding: 8px 12px 0; }
+.tokens-readout-head {
+  display: flex; align-items: baseline; gap: 8px;
+  padding-bottom: 4px; border-bottom: 1px solid var(--surface-2);
+}
+.tokens-readout-title { flex: none; font-size: 11px; color: var(--ink); }
+.tokens-readout-scope { flex: 1; min-width: 0; font-size: 10px; color: var(--ink-faint); }
+.tokens-table { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-top: 4px; }
+.tokens-table th {
+  text-align: left; font-weight: 500; color: var(--ink-faint);
+  padding: 3px 6px; border-bottom: 1px solid var(--surface-2);
+}
+.tokens-table td { padding: 3px 6px; color: var(--ink-dim); }
+.tokens-row-total td { color: var(--ink); font-weight: 600; }
+.tokens-cell-key { font-family: var(--font-mono); }
+.tokens-cell-num { text-align: right; font-variant-numeric: tabular-nums; }
+/* Direction is a STATE (is this better or worse), so it takes state dyes —
+   never an identity hue, which would mix two channels in one position. */
+.tokens-cell-num.up { color: var(--state-attention); }
+.tokens-cell-num.down { color: var(--state-ok); }
+
+/* Coverage honesty. These sentences are the feature's own guard against a
+   chart that looks complete when it isn't — styled as content, not as a
+   dismissible warning. */
+.tokens-notes { padding: 8px 12px 0; display: flex; flex-direction: column; gap: 3px; }
+.tokens-note {
+  color: var(--ink-dim); font-size: 10.5px; line-height: 1.45;
+  padding-left: 12px; position: relative; user-select: text;
+}
+.tokens-note::before { content: "·"; position: absolute; left: 3px; }
+
+/* The categorical hues, in HUE_ORDER. Identity channel throughout: these
+   answer "which block is this", never "how is it doing". */
+.tokens-line.tok-hue-jade,   .tokens-direct-label.tok-hue-jade   { stroke: var(--id-jade);   fill: var(--id-jade); }
+.tokens-line.tok-hue-violet, .tokens-direct-label.tok-hue-violet { stroke: var(--id-violet); fill: var(--id-violet); }
+.tokens-line.tok-hue-amber,  .tokens-direct-label.tok-hue-amber  { stroke: var(--id-amber);  fill: var(--id-amber); }
+.tokens-line.tok-hue-cyan,   .tokens-direct-label.tok-hue-cyan   { stroke: var(--id-cyan);   fill: var(--id-cyan); }
+.tokens-line.tok-hue-rose,   .tokens-direct-label.tok-hue-rose   { stroke: var(--id-rose);   fill: var(--id-rose); }
+.tokens-line.tok-hue-azure,  .tokens-direct-label.tok-hue-azure  { stroke: var(--id-azure);  fill: var(--id-azure); }
+.tokens-line.tok-hue-lime,   .tokens-direct-label.tok-hue-lime   { stroke: var(--id-lime);   fill: var(--id-lime); }
+.tokens-line.tok-hue-orchid, .tokens-direct-label.tok-hue-orchid { stroke: var(--id-orchid); fill: var(--id-orchid); }
+/* A ninth block. The neutral ramp, NOT a recycled hue — a repeated colour
+   would be a false claim that two blocks are one. */
+.tokens-line.tok-hue-neutral, .tokens-direct-label.tok-hue-neutral { stroke: var(--ink-dim); fill: var(--ink-dim); }
+
+.tokens-seg.tok-hue-jade   { fill: var(--id-jade); }
+.tokens-seg.tok-hue-violet { fill: var(--id-violet); }
+.tokens-seg.tok-hue-amber  { fill: var(--id-amber); }
+.tokens-seg.tok-hue-cyan   { fill: var(--id-cyan); }
+.tokens-seg.tok-hue-rose   { fill: var(--id-rose); }
+.tokens-seg.tok-hue-azure  { fill: var(--id-azure); }
+.tokens-seg.tok-hue-lime   { fill: var(--id-lime); }
+.tokens-seg.tok-hue-orchid { fill: var(--id-orchid); }
+.tokens-seg.tok-hue-neutral { fill: var(--ink-dim); }
+
+/* The CLI channel: line style on the plot, opacity-as-hatch on the bars.
+   Deliberately NOT spelled `.cli-<name>` — that is the agent mark's dye
+   class, which theme.test.ts holds to `--cli-<name>`, and nothing here
+   paints a CLI hue. These rules carry no colour token at all, which is the
+   point: the second channel has to survive greyscale. */
+.tokens-line.tok-cli-all      { stroke-dasharray: none; }
+.tokens-line.tok-cli-claude   { stroke-dasharray: none; }
+.tokens-line.tok-cli-pi       { stroke-dasharray: 6 3; }
+.tokens-line.tok-cli-opencode { stroke-dasharray: 2 3; }
+.tokens-line.tok-cli-copilot  { stroke-dasharray: 9 3 2 3; }
+.tokens-line.tok-cli-codex    { stroke-dasharray: 1 3; }
+.tokens-line.tok-cli-gemini   { stroke-dasharray: 12 4; }
+.tokens-line.tok-cli-hermes   { stroke-dasharray: 4 2 1 2; }
+.tokens-line.tok-cli-ante     { stroke-dasharray: 8 2 8 6; }
+/* A CLI with no rule of its own still draws, solid — an unknown CLI is a
+   real value on this wire (`unknown`), and it must not be invisible. */
+
+/* Docked/floating resize: suppress the chart body mid-drag, exactly as the
+   timeline's does, so a divider drag is not N SVG relayouts. */
+.pane-embed-panel.resizing .tokens-body,
+.git-overlay.resizing .tokens-body {
+  content-visibility: hidden;
+}

@@ -22,6 +22,7 @@ export type ShortcutAction =
   | "toggle-decisions"
   | "toggle-audit"
   | "toggle-timeline"
+  | "toggle-tokens"
   | "toggle-group"
   | "focus-compose"
   | "voice-ptt"
@@ -127,6 +128,30 @@ export function matchShortcut(e: KeyboardEvent): ShortcutAction | null {
       // leaves `\ew` unbound (`\eW` is only do-lowercase-version), and Alt+W
       // is not a WebView2 accelerator the way Ctrl+W is.
       case "KeyW": return "toggle-timeline";
+      // Alt+K (#2011) — the token charts, the audit log's cost sibling.
+      //
+      // CHECKED against every CLI this repo spawns, per the
+      // agent-cli-reference discipline, and this one is NOT free — it is the
+      // first loomux Alt binding to land on a documented collision, so the
+      // reasoning is recorded rather than left for a later reader to redo:
+      //   - Claude Code's interactive-mode reference documents Alt+B/D/F/M/
+      //     O/P/T/V/Y and the arrows; no Alt+K.
+      //   - Copilot CLI's command reference documents Alt+Enter and Alt+V
+      //     only; no Alt+K.
+      //   - opencode's keybinds reference spells its only `alt+k` as
+      //     `ctrl+alt+k` (which_key_toggle), which the `!e.ctrlKey` guard on
+      //     this block excludes.
+      //   - Readline in this repo's bash leaves `\ek` unbound (`\eK` is only
+      //     do-lowercase-version), the same shape Alt+W relies on, and Alt+K
+      //     is not a WebView2 accelerator.
+      //   - **pi DOES bind it**: `"tui.editor.cursorUp": ["up", "alt+k"]`.
+      // That last one is a real collision and is taken deliberately. It costs
+      // a REDUNDANT alias — pi binds the same action to plain `up`, which
+      // loomux does not intercept — and pi's Alt space is vim-shaped
+      // (h/j/k/l/w/q/f/d/…), so subtracting it, readline and loomux's twelve
+      // existing Alt keys leaves NO free letter at all. There is no better
+      // choice to migrate to, which is why this is a decision and not a miss.
+      case "KeyK": return "toggle-tokens";
       case "KeyO": return "toggle-group";
       case "KeyP": return "focus-compose";
       // Alt+S (voice / "speak"). NOT Alt+V: that's Claude Code's paste-image

@@ -150,6 +150,7 @@ export type IconName =
   | "list-checks"
   | "circle-dot"
   | "chart-gantt"
+  | "chart-column"
   | "clock-fading"
   | "hand"
   | "trash-2"
@@ -203,6 +204,12 @@ export const ICON_ROLE: Record<IconName, IconRole> = {
   "list-checks": "board",
   "circle-dot": "board",
   "chart-gantt": "board",
+  // The token charts (#2011). Same `board` role as the panels it sits
+  // beside: the identity channel answers "which surface is this", and this
+  // is one of the pane's embedded panels like the rest. A COLUMN chart
+  // rather than the timeline's gantt, so two adjacent header buttons are not
+  // the same glyph.
+  "chart-column": "board",
   "clock-fading": "board",
   // The NEEDS-YOU panel (#1091). A raised hand, not a question mark: the panel
   // is not offering help, it is asking for the human's — and its demo tier
@@ -253,6 +260,7 @@ const BODY: Record<IconName, string> = {
   "list-checks": `<path d="M13 5h8" /><path d="M13 12h8" /><path d="M13 19h8" /><path d="m3 17 2 2 4-4" /><path d="m3 7 2 2 4-4" />`,
   "circle-dot": `<circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="1" />`,
   "chart-gantt": `<path d="M10 6h8" /><path d="M12 16h6" /><path d="M3 3v16a2 2 0 0 0 2 2h16" /><path d="M8 11h7" />`,
+  "chart-column": `<path d="M3 3v16a2 2 0 0 0 2 2h16" /><rect x="15" y="5" width="4" height="12" rx="1" /><rect x="7" y="8" width="4" height="9" rx="1" />`,
   "clock-fading": `<path d="M12 2a10 10 0 0 1 7.38 16.75" /><path d="M12 6v6l4 2" /><path d="M2.5 8.875a10 10 0 0 0-.5 3" /><path d="M2.83 16a10 10 0 0 0 2.43 3.4" /><path d="M4.636 5.235a10 10 0 0 1 .891-.857" /><path d="M8.644 21.42a10 10 0 0 0 7.631-.38" />`,
   hand: `<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" /><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" /><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" /><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />`,
   "trash-2": `<path d="M10 11v6" /><path d="M14 11v6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />`,

@@ -201,7 +201,8 @@ export type PersistedEmbedView =
   | "group"
   | "git"
   | "editor"
-  | "timeline";
+  | "timeline"
+  | "tokens";
 
 /** Which edge of the terminal a docked view sits on (#361) — mirrors
  *  `pane.ts`'s own `EmbedSide`, kept local for the same reason
@@ -359,6 +360,8 @@ const EMBED_VIEWS: readonly PersistedEmbedView[] = [
   "timeline",
   // #1091's NEEDS-YOU panel, on the same additive terms.
   "decisions",
+  // #2011's token charts, likewise.
+  "tokens",
 ];
 const EMBED_SIDES: readonly PersistedEmbedSide[] = ["left", "right", "bottom"];
 

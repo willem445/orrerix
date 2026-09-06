@@ -59,10 +59,18 @@ import {
   MERGE_QUEUE_MAX_BATCH_MIN,
   WORKFLOW_VERSION,
   roleHintRequires,
+  WORKFLOWS_DIR,
+  LEGACY_WORKFLOWS_DIR,
+  DEFAULT_WORKFLOW_NAME,
+  WORKFLOW_NAME_MAX,
+  isWorkflowName,
+  workflowRelFor,
+  workflowNameOf,
   type Workflow,
   type Finding,
   type FindingCode,
 } from "../src/workflowmodel.ts";
+import { readFileSync } from "node:fs";
 import { knobState, type CliKnobs } from "../src/selectorknobs.ts";
 
 /** The schema sketch from the #222 investigation (§4), verbatim in spirit: the file the
@@ -3346,4 +3354,96 @@ test("a liaison on the WRONG kind is still refused, and draws no advisory", () =
   ).workflow;
   const role = codes(validateWorkflow(w)).filter((c) => c.startsWith("role-hint"));
   assert.deepEqual(role, ["role-hint-wrong-kind"]);
+});
+
+// ---------- named workflows: the name rule mirrors the engine (#1689 slice D1) ----------
+
+// The engine is the authority: `loomux_engine::pathseg::check_segment` decides whether a
+// name can become `<name>.yml`, and a backend that refuses one the picker offered would make
+// the launcher advertise a workflow no launch can run. These read the engine's own source
+// rather than restating its rules in prose, so a change there fails HERE rather than in a
+// repo six months later. Each extraction asserts it found something first — a regex that
+// stops matching would otherwise "pin" an empty set, which is the vacuity every absence-only
+// assertion in this repo owes a control for.
+const PATHSEG_SRC = readFileSync(new URL("../crates/loomux-engine/src/pathseg.rs", import.meta.url), "utf8");
+
+test("the frontend's workflow-name length cap is the engine's MAX_SEGMENT_LEN", () => {
+  const m = /pub const MAX_SEGMENT_LEN: usize = (\d+);/.exec(PATHSEG_SRC);
+  assert.ok(m, "MAX_SEGMENT_LEN not found in pathseg.rs — the pin is reading nothing");
+  assert.equal(WORKFLOW_NAME_MAX, Number(m[1]));
+  // …and it is really enforced, in both directions, so the constant is not decoration.
+  assert.equal(isWorkflowName("a".repeat(WORKFLOW_NAME_MAX)), true);
+  assert.equal(isWorkflowName("a".repeat(WORKFLOW_NAME_MAX + 1)), false);
+});
+
+test("the frontend refuses every Windows device name the engine reserves", () => {
+  const block = /RESERVED_DEVICE_NAMES: &\[&str\] = &\[([\s\S]*?)\];/.exec(PATHSEG_SRC);
+  assert.ok(block, "RESERVED_DEVICE_NAMES not found in pathseg.rs — the pin is reading nothing");
+  const names = [...block[1]!.matchAll(/"([a-z0-9]+)"/g)].map((m) => m[1]!);
+  assert.ok(names.length >= 22, `expected the full device list, read ${names.length}`);
+  for (const n of names) {
+    assert.equal(isWorkflowName(n), false, `${n} is a device name and must be refused`);
+    assert.equal(isWorkflowName(n.toUpperCase()), false, `${n} is reserved case-insensitively`);
+  }
+  // The positive control for the loop above: a name of the same SHAPE that is not on the
+  // list is accepted, so "refuses everything" cannot pass this test.
+  assert.equal(isWorkflowName("com10"), true);
+  assert.equal(isWorkflowName("console"), true);
+});
+
+test("the frontend's alphabet is the engine's, and the refusals are refusals, not rewrites", () => {
+  // The alphabet, quoted from the engine's own predicate so a widening there is visible here.
+  assert.match(PATHSEG_SRC, /c\.is_ascii_alphanumeric\(\) \|\| \*c == '-' \|\| \*c == '_'/);
+  for (const ok of ["default", "review-heavy", "solo_fast", "a", "A9", "x-9_z"]) {
+    assert.equal(isWorkflowName(ok), true, ok);
+  }
+  for (const bad of ["", "..", "../x", "a/b", "a.b", "a b", "-x", "CON", "nul", "a:b", "café"]) {
+    assert.equal(isWorkflowName(bad), false, bad);
+  }
+  // REFUSED, never rewritten (the `pathseg` rule): a bad name yields null, not a sanitized
+  // path. Two strings that normalize to one name are two files claiming one workflow.
+  assert.equal(workflowRelFor("../x"), null);
+  assert.equal(workflowRelFor("a/b"), null);
+  assert.equal(workflowRelFor("CON"), null);
+  assert.equal(workflowRelFor("-x"), null);
+});
+
+test("a name resolves to the file the engine would read, in either config-dir spelling", () => {
+  assert.equal(workflowRelFor(DEFAULT_WORKFLOW_NAME), WORKFLOW_FILE);
+  assert.equal(workflowRelFor(DEFAULT_WORKFLOW_NAME, { legacy: true }), LEGACY_WORKFLOW_FILE);
+  assert.equal(workflowRelFor("review-heavy"), `${WORKFLOWS_DIR}/review-heavy.yml`);
+  assert.equal(workflowRelFor("review-heavy", { legacy: true }), `${LEGACY_WORKFLOWS_DIR}/review-heavy.yml`);
+  // The directories are the config dirs' own children — never a third spelling.
+  assert.equal(WORKFLOWS_DIR, `${CONFIG_DIR}/workflows`);
+  assert.equal(LEGACY_WORKFLOWS_DIR, `${LEGACY_CONFIG_DIR}/workflows`);
+});
+
+test("a path names a workflow only when it really is one of this repo's workflow files", () => {
+  assert.equal(workflowNameOf(WORKFLOW_FILE), DEFAULT_WORKFLOW_NAME);
+  assert.equal(workflowNameOf(LEGACY_WORKFLOW_FILE), DEFAULT_WORKFLOW_NAME);
+  assert.equal(workflowNameOf(`${WORKFLOWS_DIR}/review-heavy.yml`), "review-heavy");
+  assert.equal(workflowNameOf(`${LEGACY_WORKFLOWS_DIR}/solo_fast.yml`), "solo_fast");
+  // Round-trips with its inverse for every name the picker can hold.
+  for (const n of [DEFAULT_WORKFLOW_NAME, "review-heavy", "solo_fast"]) {
+    assert.equal(workflowNameOf(workflowRelFor(n)!), n);
+    assert.equal(workflowNameOf(workflowRelFor(n, { legacy: true })!), n);
+  }
+  // Windows separators are the same paths — the pane is handed either.
+  assert.equal(workflowNameOf(".orrerix\\workflows\\a.yml"), "a");
+  // And everything else has NO name, which is the honest answer: a pane showing an
+  // arbitrary file is showing a FILE, and calling it `default` would tell the human it is
+  // the workflow their group runs.
+  for (const notOne of [
+    "workflow.yml",
+    "teams/api/.orrerix/workflow.yml",
+    ".orrerix/workflows/nested/a.yml",
+    ".orrerix/workflows/a.yaml",
+    ".orrerix/other/a.yml",
+    ".orrerix/workflows/CON.yml",
+    ".orrerix/workflows/-x.yml",
+    ".orrerix/workflows/.yml",
+    "",
+  ]) {
+    assert.equal(workflowNameOf(notOne), null, notOne);
+  }
 });

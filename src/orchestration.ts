@@ -15,7 +15,7 @@ import { isSpawnRequestExpired, spawnsForGroup } from "./spawnexpiry";
 import { sessionIdFromCommand } from "./panerestore";
 import type { AutonomyState } from "./autonomy";
 import type { NeedsYouView, OrchQuestion } from "./decisions";
-import type { WorkflowPreview } from "./roster";
+import type { WorkflowEntry, WorkflowListing, WorkflowPreview } from "./roster";
 import type { GroupViewMeta, ViewMeta } from "./viewstale";
 import { showToast } from "./toast";
 import { showContextMenu } from "./contextmenu";
@@ -38,7 +38,7 @@ import { mailboxPanes, type MailboxChanged } from "./mailboxbadge";
 import type { RecordedOrchestration } from "./orchlist";
 
 export type { AutonomyState };
-export type { WorkflowPreview };
+export type { WorkflowEntry, WorkflowListing, WorkflowPreview };
 
 export type { OrchRole };
 export type { RecordedOrchestration };
@@ -113,6 +113,20 @@ export interface OrchestratorConfig {
    *  per-role picks above then apply only as the CLI a block inherits when it
    *  names none). A launch choice, persisted with the group. */
   advancedOrchestrator: boolean;
+  /** WHICH of the repo's workflows this group runs (#1689) — a name from
+   *  {@link workflowList}, or omitted for `default` (`.orrerix/workflow.yml`).
+   *
+   *  Separate from {@link advancedOrchestrator}, which is the CONSENT: the
+   *  toggle decides whether a repo-authored roster runs at all, and this decides
+   *  only which file it comes from. A name sent with the toggle off is recorded
+   *  and inert, exactly as the roster it names is — so turning the toggle on
+   *  later comes back to the file the human chose rather than to `default`.
+   *
+   *  Optional, and the omission is the message: an absent key is the backend's
+   *  `None`, which resolves to `default` — the pre-#1689 call unchanged, for
+   *  every repo that declares one workflow and for every caller that has not
+   *  learned to ask. */
+  workflow?: string;
   /** Per-role thinking level / context window (#687), as ONE optional object —
    *  the backend's `RoleKnobs`, camelCase, every field optional. Empty (or the
    *  whole object omitted) means "no knob on any role", which is today's group
@@ -1420,6 +1434,11 @@ export async function launchOrchestrator(
     maxSpawnsPerHour: config.maxSpawnsPerHour,
     watchdogStallMinutes: config.watchdogStallMinutes,
     advancedOrchestrator: config.advancedOrchestrator,
+    // #1689: same omission rule as `roleKnobs` below — an absent key is the
+    // backend's `None`, which is `default`. The launcher sends a name only when
+    // the human picked one, so a repo with a single workflow launches on the
+    // pre-#1689 payload byte for byte.
+    ...(config.workflow === undefined ? {} : { workflow: config.workflow }),
     // #687: omitted when the launcher collected nothing, because a MISSING key
     // for the backend's `Option<RoleKnobs>` argument is exactly `None` — the
     // pre-#687 call, unchanged.
@@ -1803,9 +1822,34 @@ export const endGroup = (groupId: string, cleanupWorktrees: boolean): Promise<En
  *  The backend resolves this through the same load-and-clamp path `create_group`
  *  uses, so the preview cannot drift from the launch. It never rejects: a missing
  *  or broken file is a described outcome, not an error. `agentCli` is the group's
- *  default CLI, which a block with no `cli:` of its own inherits. */
-export const workflowPreview = (repo: string, agentCli: string): Promise<WorkflowPreview> =>
-  invoke<WorkflowPreview>("orch_workflow_preview", { repo, agentCli });
+ *  default CLI, which a block with no `cli:` of its own inherits.
+ *
+ *  **`name`** (#1689) picks which of the repo's workflows to preview. Omitted is
+ *  `default` — `.orrerix/workflow.yml`, and the same answer, byte for byte, that
+ *  every caller written before named workflows got. A name the repo does not
+ *  declare previews as absent; a name that is not a usable one previews as a
+ *  validation error, and is never echoed back into `path`. */
+export const workflowPreview = (
+  repo: string,
+  agentCli: string,
+  name?: string
+): Promise<WorkflowPreview> =>
+  // `name` is passed only when there is one: an omitted key is the backend's
+  // `None`, which is the pre-#1689 call unchanged. Sending `null` would be a
+  // different wire shape for the same meaning.
+  invoke<WorkflowPreview>(
+    "orch_workflow_preview",
+    name === undefined ? { repo, agentCli } : { repo, agentCli, name }
+  );
+
+/** Every workflow `repo` declares (#1689) — the launcher's picker reads this.
+ *
+ *  Read-only and repo-scoped: it creates nothing and persists nothing. A repo
+ *  with only `.orrerix/workflow.yml` answers with the single `default` row it has
+ *  always effectively had; a repo with neither answers with an empty list, which
+ *  is not an error but how you start before you write a file. */
+export const workflowList = (repo: string): Promise<WorkflowListing> =>
+  invoke<WorkflowListing>("orch_workflow_list", { repo });
 
 // ---------- the manager mailbox, human side (#1161 M5) ----------
 

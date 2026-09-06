@@ -23,7 +23,7 @@
 // a second parser is a second set of answers, and the only answer that matters is
 // the engine's.
 
-import { WORKFLOW_FILE } from "./workflowmodel.ts";
+import { DEFAULT_WORKFLOW_NAME, WORKFLOW_FILE } from "./workflowmodel.ts";
 import type { OrchRole } from "./orchbadge";
 
 export type { OrchRole };
@@ -472,4 +472,144 @@ export function orchestratorCliOf(roster: ResolvedRoster, groupCli: string): str
   const block = roster.blocks.find((b) => b.kind === "orchestrator");
   if (!block) return null;
   return block.cli.trim() || groupCli.trim() || null;
+}
+
+// ---------- which workflow a launch runs (#1689 slice D1) ----------
+//
+// A repo may declare several workflows, so the launcher grows a picker. The DECISION —
+// which options exist, which one is selected, whether the control is worth showing at all,
+// and which FILE "Edit workflow…" opens — is here, DOM-free, for the same reason
+// `resolveRoster` is: it is what the human consents to before a group spawns, and a
+// consent surface tested by clicking is a consent surface nobody tests.
+//
+// The selection lives in the LAUNCHER'S VIEW STATE, not on the `<select>` element, and
+// `resolveWorkflowPicker` is what makes that possible: it takes the name the view is
+// holding and returns the name that is actually selectable, so the element is always
+// rendered FROM the view rather than read back at submit. Repointing the form at another
+// repo changes the option set under a held name, and a name that no longer exists must
+// not be what a launch sends.
+
+/** One workflow a repo declares, as `orch_workflow_list` reports it.
+ *
+ *  Lives here rather than in `orchestration.ts` for the same reason
+ *  {@link WorkflowPreview} does: it is a shape this module reasons ABOUT, and the wrapper
+ *  module re-exports it so callers still read one vocabulary. */
+export interface WorkflowEntry {
+  /** The name — the file's stem, and what a group pins. `default` is
+   *  `.orrerix/workflow.yml`. */
+  name: string;
+  /** The repo-relative file it resolves to, from the BACKEND, so the picker and the launch
+   *  cannot disagree about which file a name means — including which of the two config-dir
+   *  spellings this repo uses. */
+  path: string;
+  /** The file's own `name:` — human prose, and "" when the file will not parse. */
+  display_name: string;
+  /** Whether it parsed and validated. */
+  valid: boolean;
+  /** Every validation finding, not just the first. Empty when `valid`. */
+  errors: string[];
+}
+
+/** Every workflow a repo declares, as `orch_workflow_list` reports it. */
+export interface WorkflowListing {
+  /** Sorted by name. A file that will not parse is HERE, carrying its errors — never
+   *  dropped: a workflow that vanishes from the picker the moment it gets a syntax error is
+   *  one the human cannot navigate back to in order to fix it. */
+  workflows: WorkflowEntry[];
+  /** What the LISTING could not make sense of, as opposed to what one file could not parse:
+   *  `default` declared twice, a stem that is not a usable name, more files than the listing
+   *  will carry. Advisory — nothing here blocks a launch. */
+  findings: string[];
+}
+
+/** One option in the launcher's workflow picker. */
+export interface WorkflowChoice {
+  /** The workflow's name — what a launch pins and what `group.json` records. */
+  name: string;
+  /** The repo-relative file it resolves to, as the BACKEND resolved it. Carried
+   *  rather than re-derived so "Edit workflow…" opens the file the launch would
+   *  read, including for a repo on the legacy `.loomux/` spelling. */
+  path: string;
+  /** What the option reads on screen: the name, its `name:` prose when that adds
+   *  anything, and a marker when the file will not parse. */
+  label: string;
+  /** Whether the file parsed and validated. An invalid workflow is STILL an
+   *  option — a workflow that vanishes from the picker the moment it gets a
+   *  syntax error is one the human cannot navigate back to in order to fix it,
+   *  and "Edit workflow…" is exactly the fix. */
+  valid: boolean;
+}
+
+/** The picker's whole state, resolved. */
+export interface WorkflowPicker {
+  /** The options, in the listing's order (the backend sorts by name). */
+  options: WorkflowChoice[];
+  /** The name a launch would send — always one of `options`, or
+   *  {@link DEFAULT_WORKFLOW_NAME} when there are none. */
+  selected: string;
+  /** Whether the control is worth showing. FALSE for a repo with one workflow or
+   *  none, which is every repo that has not opted into named workflows: a picker
+   *  with a single option is a control that cannot be used, and the form it sits
+   *  in is one a first-time human is already reading carefully. */
+  show: boolean;
+  /** The file "Edit workflow…" opens: the selected option's own path, or the
+   *  default workflow's path when the repo declares nothing yet — which is the
+   *  file the designer would CREATE, and the reason that button works at all in
+   *  a repo with no workflow. */
+  file: string;
+  /** What the listing itself could not make sense of (a `default` declared
+   *  twice, a stem that is not a usable name). Advisory: none of it blocks a
+   *  launch, and none of it is a per-file error — those ride on the option. */
+  findings: string[];
+}
+
+/** Resolve the launcher's workflow picker from the backend's listing and the name the
+ *  form is currently holding.
+ *
+ *  `want` is the view's held selection, not a value read off an element — see this
+ *  section's header. It is honoured only when the listing still offers it; otherwise the
+ *  selection falls back to `default` when that is on offer and to the first option when it
+ *  is not. Falling back rather than keeping the name is the point: the alternative is a
+ *  launch that pins a workflow the repo does not declare, which the backend would resolve
+ *  to an absent file and run the built-in roster for — silently disagreeing with the
+ *  roster box the human just read.
+ *
+ *  A `null` listing (the read failed, or none has been made yet) is not an empty repo: it
+ *  is "we do not know". Both answer with no options and the default name, because both
+ *  mean the form has nothing better to offer than what a pre-#1689 launcher sent — but
+ *  only the empty-repo case can ever be shown, since `show` is false for both. */
+export function resolveWorkflowPicker(
+  listing: WorkflowListing | null,
+  want: string | null
+): WorkflowPicker {
+  const entries = listing?.workflows ?? [];
+  const options: WorkflowChoice[] = entries.map((e) => ({
+    name: e.name,
+    path: e.path,
+    label: workflowChoiceLabel(e),
+    valid: e.valid,
+  }));
+  const has = (n: string | null): boolean => !!n && options.some((o) => o.name === n);
+  const selected = has(want)
+    ? want!
+    : has(DEFAULT_WORKFLOW_NAME)
+      ? DEFAULT_WORKFLOW_NAME
+      : (options[0]?.name ?? DEFAULT_WORKFLOW_NAME);
+  return {
+    options,
+    selected,
+    show: options.length > 1,
+    file: options.find((o) => o.name === selected)?.path ?? WORKFLOW_FILE,
+    findings: listing?.findings ?? [],
+  };
+}
+
+/** One option's on-screen text. The name is the identity, so it leads; the file's own
+ *  `name:` follows only when it says something the name does not (a file called
+ *  `review-heavy.yml` whose `name:` is "review-heavy" would otherwise read twice). An
+ *  unparseable file is marked rather than hidden — see {@link WorkflowChoice.valid}. */
+function workflowChoiceLabel(e: WorkflowEntry): string {
+  const prose = e.display_name.trim();
+  const head = prose && prose !== e.name ? `${e.name} — ${prose}` : e.name;
+  return e.valid ? head : `${head} (has errors)`;
 }

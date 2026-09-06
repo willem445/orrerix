@@ -338,6 +338,108 @@ export function legacyFallbackFor(tried: string): string | null {
   return tried === WORKFLOW_FILE ? LEGACY_WORKFLOW_FILE : null;
 }
 
+// ---------- named workflows (#1689): a repo may declare several ----------
+//
+// `.orrerix/workflow.yml` is the workflow named `default` and is unchanged in every
+// respect. `.orrerix/workflows/<name>.yml` is the workflow named `<name>`, same schema,
+// same parser, its own layout sidecar (`workflowlayout.ts`). A repo that has never made
+// the directory behaves byte-for-byte as it did before, because nothing here opens it.
+//
+// The NAME RULE below mirrors the engine's, and mirroring is the whole of its job: the
+// backend refuses a name `loomux_engine::pathseg::check_segment` rejects, so a frontend
+// that accepted more would offer the human a workflow no launch could ever run, and one
+// that accepted less would hide a file that is on disk and valid. Pinned against the
+// engine's own alphabet in `test/workflowmodel.test.ts`, the way `workflowschema.test.ts`
+// pins the schema manifest.
+
+/** Where a repo's NAMED workflows live, relative to the repo root. */
+export const WORKFLOWS_DIR = `${CONFIG_DIR}/workflows`;
+
+/** The pre-#1153 spelling of {@link WORKFLOWS_DIR}, read when `.orrerix/workflows/` is
+ *  absent — the same rule {@link LEGACY_WORKFLOW_FILE} rides, and never renamed for the
+ *  user. */
+export const LEGACY_WORKFLOWS_DIR = `${LEGACY_CONFIG_DIR}/workflows`;
+
+/** The name `.orrerix/workflow.yml` is listed under, and the workflow a group runs when
+ *  nothing says otherwise — including every group launched before named workflows existed,
+ *  whose `group.json` carries no name at all. */
+export const DEFAULT_WORKFLOW_NAME = "default";
+
+/** Longest accepted workflow name — `MAX_SEGMENT_LEN` in the engine. */
+export const WORKFLOW_NAME_MAX = 64;
+
+/** Windows device names, which are not filenames at all: a path naming one opens a device.
+ *  Reserved with any extension, so `con.yml` is out too — which is why the check below is on
+ *  the NAME rather than on the assembled filename. */
+const RESERVED_DEVICE_NAMES: readonly string[] = [
+  "con", "prn", "aux", "nul",
+  "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+  "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/** Is `v` a usable workflow name?
+ *
+ *  `[A-Za-z0-9_-]`, non-empty, at most {@link WORKFLOW_NAME_MAX} bytes, no leading `-`, and
+ *  not a Windows device name. Refused, NEVER rewritten — the engine's rule verbatim, and
+ *  rewriting is the specific thing it forbids, because two spellings that normalize to one
+ *  name are two files claiming one workflow.
+ *
+ *  The alphabet is what makes the path-shaped attacks unspellable rather than enumerated:
+ *  no `.` (so `..` cannot be written), no `/` or `\` (so a name is one component), no `:`
+ *  (so no drive letter and no NTFS stream). The two rules that do not fall out of it are a
+ *  leading `-` — path-safe, but an option to any command line the name reaches — and the
+ *  device names above. */
+export function isWorkflowName(v: string): boolean {
+  if (!v || v.length > WORKFLOW_NAME_MAX) return false;
+  if (!/^[A-Za-z0-9_-]+$/.test(v)) return false;
+  if (v.startsWith("-")) return false;
+  return !RESERVED_DEVICE_NAMES.includes(v.toLowerCase());
+}
+
+/** The repo-relative file one workflow name resolves to, or `null` when the name is not a
+ *  usable one — which is a refusal, not a path to be sanitized into existence.
+ *
+ *  `default` is `.orrerix/workflow.yml`, the file that has always been there; `legacy` picks
+ *  the `.loomux/` spelling for a repo that uses it. WHICH spelling a repo uses is a fact
+ *  about the disk, so the caller passes it (the backend's listing reports the resolved path
+ *  per entry) rather than this module guessing from a name.
+ *
+ *  Note the asymmetry with the backend for `default`: the engine also tolerates
+ *  `workflows/default.yml` when there is no plain file. This function always names the plain
+ *  file, because its callers are the ones that OPEN a file for editing or CREATE a missing
+ *  one, and `.orrerix/workflow.yml` is where a repo's default workflow belongs. A repo that
+ *  really has only `workflows/default.yml` reaches its file through the listing's own
+ *  `path`, which is the value the picker carries. */
+export function workflowRelFor(name: string, opts?: { legacy?: boolean }): string | null {
+  if (!isWorkflowName(name)) return null;
+  const legacy = opts?.legacy === true;
+  if (name === DEFAULT_WORKFLOW_NAME) return legacy ? LEGACY_WORKFLOW_FILE : WORKFLOW_FILE;
+  return `${legacy ? LEGACY_WORKFLOWS_DIR : WORKFLOWS_DIR}/${name}.yml`;
+}
+
+/** The workflow name a repo-relative path denotes, or `null` when the path is not one of
+ *  this repo's workflow files.
+ *
+ *  The inverse of {@link workflowRelFor}, and deliberately strict: it answers only for the
+ *  two shapes that path really can be — a `workflow.yml` directly under a config dir, and a
+ *  `<name>.yml` directly under a workflows dir. Anything else (a workflow opened from an
+ *  arbitrary path, a nested directory, a `.yaml` spelling the repo may still parse) has no
+ *  name, and saying so is the honest answer: a pane showing such a file is showing a FILE,
+ *  and calling it `default` would tell the human it is the one their group runs. */
+export function workflowNameOf(rel: string): string | null {
+  const parts = rel.split(/[\\/]/).filter((p) => p !== "" && p !== ".");
+  const file = parts.pop();
+  if (!file) return null;
+  const dir = parts.join("/");
+  if (file === "workflow.yml") {
+    return dir === CONFIG_DIR || dir === LEGACY_CONFIG_DIR ? DEFAULT_WORKFLOW_NAME : null;
+  }
+  if (dir !== WORKFLOWS_DIR && dir !== LEGACY_WORKFLOWS_DIR) return null;
+  if (!file.endsWith(".yml")) return null;
+  const name = file.slice(0, -".yml".length);
+  return isWorkflowName(name) ? name : null;
+}
+
 /** What a `merge` gate can require of its reviewers. `all-pass` = every named reviewer
  *  recorded PASS; `threshold` = at least N of them did. These are the CANONICAL
  *  spellings — what the pane offers and what it writes. */

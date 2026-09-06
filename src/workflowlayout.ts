@@ -18,21 +18,48 @@
 
 import type { WorkflowGraph } from "./workflowmodel";
 
-/** The layout file's name. Sits BESIDE the workflow, is not part of it. */
+/** The DEFAULT workflow's layout file name — `.orrerix/workflow.yml`'s sibling, and what
+ *  {@link layoutFileFor} derives for any workflow file whose stem is `workflow`. Not the
+ *  answer for every workflow, though it was until #1689: see {@link layoutFileFor}. */
 export const LAYOUT_BASENAME = "workflow.layout.json";
 
-/** The layout file for a given workflow file — its sibling, always.
+/** What a workflow file's own stem gains to become its layout file's name. */
+export const LAYOUT_SUFFIX = ".layout.json";
+
+/** The layout file for a given workflow file: its sibling, named after ITS OWN STEM.
  *
- *  DERIVED rather than a constant (#1153 phase 4), and that is a fix as much as a rename:
- *  a repo may declare its workflow at `.orrerix/workflow.yml` or at the legacy
- *  `.loomux/workflow.yml`, and the pane can also be opened on an explicit path — so a
- *  hard-coded layout path would write the canvas positions for `.loomux/workflow.yml` into
- *  `.orrerix/`, i.e. into a directory the repo may not even have. Deriving it means the two
- *  files cannot separate, whichever spelling the repo uses. */
+ *  Two properties, and the second is what named workflows needed.
+ *
+ *  **A sibling** (#1153 phase 4), which was a fix as much as a rename: a repo may declare its
+ *  workflow at `.orrerix/workflow.yml` or at the legacy `.loomux/workflow.yml`, and the pane
+ *  can also be opened on an explicit path — so a hard-coded layout path would write the canvas
+ *  positions for `.loomux/workflow.yml` into `.orrerix/`, i.e. into a directory the repo may
+ *  not even have.
+ *
+ *  **Per FILE, not per directory** (#1689 slice D1). A repo with named workflows keeps
+ *  `workflows/a.yml` and `workflows/b.yml` in ONE directory, so a fixed basename made both
+ *  canvases write `workflows/workflow.layout.json`: opening `b` restores `a`'s node positions
+ *  by block id, and saving `b` overwrites them. Silently, too — a layout is never anyone's
+ *  work, so an unreadable or wrong one is recomputed and nothing reports a loss. Deriving the
+ *  name from the stem gives every workflow its own sidecar and leaves the default file's
+ *  answer exactly what it was: `workflow.yml`'s stem IS `workflow`, so it still resolves to
+ *  {@link LAYOUT_BASENAME} and no existing repo's layout file moves.
+ *
+ *  Only the LAST extension is dropped, so `.yml` and `.yaml` are both handled without
+ *  enumerating them and `a.b.yml` keeps its dot (`a.b.layout.json`). A name with no extension
+ *  is all stem. A DOTFILE is all stem too (`.workflow` → `.workflow.layout.json`): its leading
+ *  dot hides the file rather than naming an extension, and stripping it would give every such
+ *  workflow in a directory the same `.layout.json` — the collision again, in the one shape a
+ *  "drop everything after the first dot" rule would reintroduce. */
 export function layoutFileFor(workflowRel: string): string {
   const parts = workflowRel.split(/[\\/]/);
-  parts.pop();
-  return [...parts, LAYOUT_BASENAME].join("/");
+  const base = parts.pop() ?? "";
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  // An empty stem has nothing to name a sidecar after — it is not a workflow path at all.
+  // Falling back to the default basename keeps the return a usable relative path rather than
+  // a bare `.layout.json` that would collide with every other empty answer in the directory.
+  return [...parts, stem ? `${stem}${LAYOUT_SUFFIX}` : LAYOUT_BASENAME].join("/");
 }
 
 export const LAYOUT_VERSION = 1;

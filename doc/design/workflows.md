@@ -3067,7 +3067,9 @@ the last directory row by name.
   D2's; slice B ships the payload they are built from
   (`WorkflowSwitchPreview`) and the wrappers in `orchestration.ts`. D2 must
   disable **Review & apply** while `workflow_status.advanced` is false and say
-  why, rather than offering an action the backend will refuse.
+  why, rather than offering an action the backend will refuse. D2 has landed:
+  see *Switching a running group's workflow from its header* below, where the
+  disabled-not-hidden choice is argued.
 - **No `list_blocks`.** The orchestrator's read-back of its own roster was slice
   C's — it landed with the tool and the teaching paragraph in the workflow
   section above.
@@ -3228,8 +3230,9 @@ the first one gets written.
 ### What slice D1 deliberately did not do
 
 - **No group-header picker, no drift chip, no Review & apply.** Those are slice
-  D2's, built on the `WorkflowSwitchPreview` payload slice B ships. D1 touches
-  the launcher and the designer only; nothing here can change a *running* group's
+  D2's, built on the `WorkflowSwitchPreview` payload slice B ships  see
+  *Switching a running group's workflow from its header* below. D1 touches the
+  launcher and the designer only; nothing in D1 can change a *running* group's
   workflow.
 - **No case-collision fix.** A repo declaring `Default.yml` beside
   `.orrerix/workflow.yml` now shows two picker rows for what is one file on

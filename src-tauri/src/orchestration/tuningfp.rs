@@ -170,7 +170,7 @@ fn walk(dir: &Path, depth: usize, keep: &dyn Fn(&Path) -> bool, out: &mut Vec<Pa
         // `exists()` is itself a fallible probe, so a failure to answer it
         // counts as capped too: the honest reading of "I could not tell" is
         // the same as "I could not look".
-        return !matches!(dir.try_exists(), Ok(false));
+        return false;
     };
     let mut kids: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
     kids.sort();

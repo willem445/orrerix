@@ -8729,6 +8729,51 @@ pub fn watchdog_should_notify(
     now_ms.saturating_sub(silent_since_ms) >= (threshold_min as u64) * 60_000
 }
 
+/// The `why` on a `watchdog-suppressed` audit row: the agent holds a live
+/// `notify_when` watch, so it is plausibly waiting on its own CI check (#852).
+pub const WATCHDOG_SUPPRESS_LIVE_WATCH: &str = "live-watch";
+/// The `why` on a `watchdog-suppressed` audit row: a LIVE review drive owns
+/// this pane (#3040 N2).
+pub const WATCHDOG_SUPPRESS_DRIVEN_LANE: &str = "driven-lane";
+/// The `why` on a `watchdog-suppressed` audit row: this pane's termination was
+/// already asked for by something in this process (#3040 N2).
+pub const WATCHDOG_SUPPRESS_EXIT_INITIATED: &str = "exit-initiated";
+
+/// **Is a stall that has passed the threshold still NEWS?** (#3040 N2.)
+///
+/// A watchdog nudge is a wake-up signal, and #3040's census found two shapes
+/// where it wakes the orchestrator with something it already knows or can do
+/// nothing about — 16 of the 25 stall notices in that census were the first of
+/// them. `Some(why)` demotes the stall to a `watchdog-suppressed` audit row
+/// carrying that word; `None` announces it exactly as before.
+///
+/// - **`exit-initiated`.** Something in this process already asked for this
+///   pane to end and the pty has not caught up yet. Routed through
+///   [`exit_notice_route`] rather than by listing initiators here, so the two
+///   answers cannot drift: an exit whose notice #533-B judged not worth a turn
+///   cannot have a stall notice about the same pane that is. A `None`
+///   initiator — a crash, a human closing the pane, nobody in this process
+///   asking — routes to `Prompt` there and announces here.
+/// - **`driven-lane`.** A LIVE review drive owns the pane, so the driver is
+///   already watching it on its own tick and answers a stuck lane with a
+///   `lane-stalled` HOLD, which is the decision-grade signal; the watchdog
+///   nudge arrives beside it saying the same thing with no remedy. `is_driven`
+///   is a closure because answering it costs a file read under another lock —
+///   only asked once the cheaper reason has not already decided.
+///
+/// Deliberately NOT a reason: a paused group, an idle pane, and a fixture role
+/// are all excluded upstream in `watchdog_tick`, before the stall clock is even
+/// consulted. Folding them in here would give one rule two homes.
+pub fn watchdog_suppress_reason(
+    killed_by: Option<ExitInitiator>,
+    is_driven: impl FnOnce() -> bool,
+) -> Option<&'static str> {
+    if exit_notice_route(killed_by) == ExitNoticeRoute::AuditOnly {
+        return Some(WATCHDOG_SUPPRESS_EXIT_INITIATED);
+    }
+    is_driven().then_some(WATCHDOG_SUPPRESS_DRIVEN_LANE)
+}
+
 /// Compose the watchdog stall notice delivered to the orchestrator. Split out
 /// of `watchdog_tick` (the `watch_fired_notice`-style idiom from notify.rs) so
 /// it's unit-testable with no registry/app needed.
@@ -18876,6 +18921,23 @@ pub enum ExitInitiator {
     /// death caused the exit, so a `Prompt` here is a delivery whose only
     /// possible outcome is a dropped notice.
     LeadExit,
+    /// A PLANNER closing itself after its `report(done)` (#203, demoted by
+    /// #3040 N2). `OrchRegistry::close_completed_planner` is the only thing
+    /// that stamps this.
+    ///
+    /// Its own variant rather than a reuse of `Orchestrator`, on the
+    /// instruction in [`exit_notice_route`]'s doc: nothing in this process
+    /// asked for it in the sense that variant means — the planner's own final
+    /// report is what triggers it — so recording it as an orchestrator kill
+    /// would put a false initiator on the audit row that exists to make the
+    /// demotion readable.
+    ///
+    /// Demoted for the reason that doc applies to `IdleTimeout`, plus one it
+    /// does not have: nothing is in flight (the planner's contract is one plan
+    /// → one report → exit, and the report has landed), the output is durable
+    /// (the plan is on GitHub and the report is the previous prompt in the
+    /// recipient's own pane), and the roster carries the liveness half.
+    PlannerCompleted,
 }
 
 impl ExitInitiator {
@@ -18885,6 +18947,7 @@ impl ExitInitiator {
             ExitInitiator::IdleTimeout => "idle-timeout",
             ExitInitiator::DriverRelease => "driver-release",
             ExitInitiator::LeadExit => "lead-exit",
+            ExitInitiator::PlannerCompleted => "planner-completed",
         }
     }
 }
@@ -18940,7 +19003,8 @@ pub fn exit_notice_route(initiator: Option<ExitInitiator>) -> ExitNoticeRoute {
         Some(ExitInitiator::Orchestrator)
         | Some(ExitInitiator::IdleTimeout)
         | Some(ExitInitiator::DriverRelease)
-        | Some(ExitInitiator::LeadExit) => ExitNoticeRoute::AuditOnly,
+        | Some(ExitInitiator::LeadExit)
+        | Some(ExitInitiator::PlannerCompleted) => ExitNoticeRoute::AuditOnly,
         // Crash, watchdog-driven death, an agent quitting unexpectedly, a
         // human closing the pane — nobody in this process asked for it.
         None => ExitNoticeRoute::Prompt,
@@ -35781,10 +35845,15 @@ impl OrchRegistry {
     /// clock and the anti-nag latch. An agent silent (no output, no report)
     /// past its group's `watchdog_stall_minutes` earns exactly one audited
     /// `[orrerix]` nudge to the orchestrator suggesting get_output + re-send —
-    /// UNLESS it holds a live `notify_when` watch (#852): that stall is
-    /// SUPPRESSED instead (audited as `watchdog-suppressed`, never delivered),
-    /// because the agent is plausibly waiting on its own registered CI check,
-    /// not stuck. Paused groups are skipped entirely — delivery is suppressed
+    /// UNLESS the stall is not NEWS, in which case it is SUPPRESSED instead
+    /// (audited as `watchdog-suppressed` carrying a `why`, never delivered).
+    /// There are three such reasons and they are decided in two places: a live
+    /// `notify_when` watch (#852, `live-watch`) is read from `has_watch` under
+    /// the lock below, because the same read drives the latch transition; the
+    /// other two (`exit-initiated`, `driven-lane`) are
+    /// [`watchdog_suppress_reason`]'s, applied on the lock-free second pass
+    /// because one of them costs a file read under another lock. Paused groups
+    /// are skipped entirely — delivery is suppressed
     /// there anyway, so we must not spend the one-notice budget while paused.
     /// Returns the notified (never suppressed) agent ids. Split from the pty
     /// read (`agent_output_totals`) so the stall / anti-nag / pause / watch
@@ -35821,8 +35890,16 @@ impl OrchRegistry {
         // First pass under the agents lock: refresh counters and pick who to
         // nudge or suppress. Delivery (which types into a pane and can block)
         // happens after the lock is released.
-        let mut to_notify: Vec<(String, GroupId, String, u32)> = Vec::new();
-        let mut to_suppress: Vec<(String, GroupId, String, u32, Vec<String>)> = Vec::new();
+        // `to_notify` carries the recorded exit initiator so the second, LOCK-FREE
+        // pass can finish the suppression decision (#3040 N2). Two of the three
+        // reasons a stall is not news are decided there rather than here: `rd_owner`
+        // reads a file under its own state lock, and taking that while holding
+        // `agents` would nest the pair in a direction nothing else in this file uses
+        // (`lock-order.md` §2). The initiator rides along because it is an `agents`
+        // field and copying it is free.
+        let mut to_notify: Vec<(String, GroupId, String, u32, Option<ExitInitiator>)> = Vec::new();
+        let mut to_suppress: Vec<(String, GroupId, String, u32, Vec<String>, &'static str)> =
+            Vec::new();
         {
             let mut agents = self.agents.lock_safe();
             for a in agents.values_mut() {
@@ -35898,23 +35975,49 @@ impl OrchRegistry {
                             a.name.clone(),
                             minutes,
                             watch_ids.cloned().unwrap_or_default(),
+                            WATCHDOG_SUPPRESS_LIVE_WATCH,
                         ));
                     } else {
+                        // The anti-nag latch is set on BOTH paths, including the one
+                        // the second pass may still divert to suppression: whichever
+                        // way this stall ends up, it is spoken about once.
                         a.watchdog_notified = true;
-                        to_notify.push((a.id.clone(), a.group.clone(), a.name.clone(), minutes));
+                        to_notify.push((
+                            a.id.clone(),
+                            a.group.clone(),
+                            a.name.clone(),
+                            minutes,
+                            a.killed_by,
+                        ));
                     }
                 }
             }
         }
 
-        for (id, group, name, minutes, watch_ids) in to_suppress {
+        let mut still_news: Vec<(String, GroupId, String, u32)> = Vec::new();
+        // The second pass, lock-free: finish the decision, then audit every
+        // suppression through the one row (#3040 N2). `why` is what makes that row
+        // readable now that it carries three different facts — #852's "it holds a
+        // live watch" is no longer the only way a stall stops being news.
+        for (id, group, name, minutes, killed_by) in to_notify {
+            match watchdog_suppress_reason(
+                killed_by,
+                || self.rd_owner(&group, &id).is_some(),
+            ) {
+                Some(why) => to_suppress.push((id, group, name, minutes, Vec::new(), why)),
+                None => still_news.push((id, group, name, minutes)),
+            }
+        }
+
+        for (id, group, name, minutes, watch_ids, why) in to_suppress {
             self.audit(&group, brand::AUDIT_ACTOR, "watchdog-suppressed", json!({
                 "agent": id, "name": name, "silent_minutes": minutes, "watch_ids": watch_ids,
+                "why": why,
             }));
         }
 
         let mut notified = Vec::new();
-        for (id, group, name, minutes) in to_notify {
+        for (id, group, name, minutes) in still_news {
             // #852 review finding 2: `has_live_watch` dropped — by
             // construction an agent reaching this branch (not `to_suppress`
             // above) never holds a live watch, so the field was a constant
@@ -46072,9 +46175,10 @@ impl OrchRegistry {
                      (#850). Your full analysis belongs in the review you post on the PR; the \
                      summary is the gate's record — enough for the orchestrator to route on \
                      (what class of finding, how bad, what has to happen next). loomux types a \
-                     courtesy copy of it into the orchestrator's pane and **caps it there**, \
-                     pointing at `list_verdicts` and the PR for the rest, so a long summary does \
-                     not arrive in full anyway. Then your `report(...)` is **one line — outcome, \
+                     courtesy POINTER into the orchestrator's pane — who recorded what on which \
+                     PR, and `list_verdicts` for the rest — so no part of your summary arrives \
+                     there at all, and length buys nothing in that pane (#3040 N2). Then your \
+                     `report(...)` is **one line — outcome, \
                      `ref`, `detail_url`, findings count — and never a restatement of the \
                      summary**: the orchestrator has just read the notice, and a second copy of \
                      the same prose becomes resident context it pays for on every turn that \
@@ -56656,14 +56760,36 @@ impl OrchRegistry {
         }
         // Atomic claim: only the winner of the live→dead transition proceeds, so
         // a concurrent double `done` delivers one notice and one kill (see doc).
+        // Stamped BEFORE the claim so the snapshot carries it: the same field
+        // `on_pty_exit` routes on, so the pty's own later exit cannot re-promote
+        // this to a prompt.
+        self.record_exit_initiator(agent_id, ExitInitiator::PlannerCompleted);
         let Some(snapshot) = self.mark_dead(agent_id, Some(0)) else { return };
-        let _ = self.deliver_to_orchestrator(
+        // AUDIT-ONLY (#3040 N2), on #533-B's argument verbatim rather than a new
+        // one: an exit the orchestrator's own delegate caused, and that it can
+        // read back from the roster on demand, is not worth a turn. This one is
+        // the clearest case of the class — the planner's `report(done)` is the
+        // IMMEDIATELY PRECEDING prompt in that same pane (the ordering is a
+        // guarantee, pinned by
+        // `planner_done_report_closes_pane_and_reports_before_exit`), so the
+        // notice tells the orchestrator a second time what it has just read.
+        // The census on #3040 found it acted on zero times out of ten.
+        //
+        // The one edge worth naming, because it is the reason this is a
+        // demotion and not a deletion: PR #209 edge (a), where the report paste
+        // was aborted by a human's unsubmitted line and never landed. Nothing
+        // is lost even then — the plan is durable on GitHub, `list_agents`
+        // shows the pane gone, and the full notice text is on the audit log
+        // under `agent-exit-notice`, which is what makes "read it on demand" a
+        // real path rather than a euphemism for "it was dropped".
+        self.audit_demoted_exit_notice(
             &snapshot.group,
+            &snapshot.id,
+            snapshot.killed_by,
             &format!(
                 "[orrerix] planner {} ({}) posted its plan and exited — its delegate slot is free.",
                 snapshot.name, snapshot.id
             ),
-            brand::AUDIT_ACTOR,
         );
         // Terminate the actual CLI pane. Best-effort: unit tests run without an
         // app handle or a bound pty.

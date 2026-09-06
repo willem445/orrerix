@@ -691,13 +691,16 @@ languages. §5.1 names that risk and assigns the control to the slice that build
 the DOM renderer. This is it.
 
 **It is a table, not an equality.** The obvious control — "both projections draw
-the same set of kinds" — is false by design. The VT renderer deliberately draws
-nothing for `Thinking` and `ToolOutput`, and argues why at each arm: thinking is
-meant to be quietable, which a VT stream cannot offer, and streaming a pi tool's
-bytes into the ring would put the highest-volume thing pi produces into every
-thumbnail *and* make one session look different by harness for no reported
-difference. An equality assertion would have to be weakened until it caught
-nothing.
+the same set of kinds" — is false by design, in **three** places over this log.
+The VT renderer draws nothing for `Thinking` or `ToolOutput`, and argues why at
+each arm: thinking is meant to be quietable, which a VT stream cannot offer, and
+streaming a pi tool's bytes into the ring would put the highest-volume thing pi
+produces into every thumbnail *and* make one session look different by harness
+for no reported difference. And it has **no turn row at all** — a boundary there
+is a blank line, emitted only where the previous event left the cursor mid-line,
+with the turn number deliberately unprinted because it is loomux's own counter.
+The DOM projection draws all three, because it can afford what a byte stream
+cannot. An equality assertion would have to be weakened until it caught nothing.
 
 So the record is **per kind**, and every divergence carries its reason:
 
@@ -716,7 +719,10 @@ So the record is **per kind**, and every divergence carries its reason:
 
 "Draws" is the same question of both: *did this projection show the human
 anything about this event* — non-empty bytes on the VT side, a changed `State`
-on the DOM side. A **new** divergence cannot be added silently, and an existing
+on the DOM side — asked **per kind**, meaning "at least once over this log".
+Both sides run ONE projection over the log in order, because the VT renderer is
+stateful in exactly the way that decides this: a fresh renderer per event would
+report a fact about the instrument rather than about the projection. A **new** divergence cannot be added silently, and an existing
 one cannot be closed without editing the record.
 
 **And the record has to be the wire, not a re-declaration of it.** The DOM

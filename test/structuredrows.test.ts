@@ -862,7 +862,7 @@ test("the DOM projection draws exactly what the parity record says it does", () 
 
 test("every divergence in the parity record carries an argument", () => {
   // A divergence between the two projections is allowed — the VT renderer
-  // deliberately draws nothing for thinking or tool output — but an UNARGUED
+  // draws nothing for thinking, for tool output, or for a turn boundary — but an UNARGUED
   // one is exactly the drift §5.1 warns about. Both halves check this; a reason
   // that only one side demanded is a reason the other side could delete.
   const record = JSON.parse(
@@ -872,7 +872,7 @@ test("every divergence in the parity record carries an argument", () => {
   const diverging = Object.entries(record.kinds).filter(([, r]) => r.dom !== r.vt);
   assert.deepEqual(
     diverging.map(([k]) => k).sort(),
-    ["thinking", "tool_output"],
+    ["thinking", "tool_output", "turn_started"],
     "the set of divergences moved — that is a design change, not a test fix",
   );
   for (const [kind, row] of diverging) {

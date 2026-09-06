@@ -1154,20 +1154,36 @@ mod tests {
     #[test]
     fn the_two_projections_diverge_only_where_the_record_says_they_do() {
         // The parity control §5.1 asks for. NOT an equality: this projection
-        // deliberately draws nothing for `Thinking` and `ToolOutput` — the arms
-        // above carry the argument — so a "both draw the same set" assertion
-        // would have to be weakened until it caught nothing. The record is
-        // per-kind, every divergence carries its reason, and both sides assert
-        // against it, so a NEW divergence cannot appear silently and an
-        // existing one cannot be closed without saying so in the record.
+        // deliberately draws nothing for several kinds — the arms above carry
+        // the argument for each — so a "both draw the same set" assertion would
+        // have to be weakened until it caught nothing. The record is per-kind,
+        // every divergence carries its reason, and both sides assert against
+        // it, so a NEW divergence cannot appear silently and an existing one
+        // cannot be closed without saying so in the record.
+        //
+        // ONE RENDERER, IN FIXTURE ORDER, because that is how this projection
+        // is really driven — and because it is stateful in a way that decides
+        // this very question. `Renderer::newline` is a no-op at column 0, so
+        // `TurnStarted` (whose whole output is two of them) emits bytes only
+        // when the previous event left the cursor mid-line. A fresh renderer
+        // per event would answer "does this kind draw" with a fact about the
+        // instrument rather than about the projection. The DOM half runs one
+        // `State` over the same lines in the same order, which is what makes
+        // the two columns comparable at all.
+        //
+        // The whole table is built BEFORE anything is asserted, so one run
+        // reports every wrong row instead of stopping at the first.
         let record: serde_json::Value =
             serde_json::from_str(PARITY_RECORD).expect("parity.json must be valid JSON");
         let kinds = record["kinds"]
             .as_object()
             .expect("parity.json must carry a `kinds` object");
 
+        let mut renderer = Renderer::new(80);
+        // (kind, drew) in first-seen order. A kind that appears twice must
+        // agree with itself, which is asserted rather than last-write-wins.
+        let mut actual: Vec<(String, bool)> = Vec::new();
         let mut drew_something = false;
-        let mut seen: Vec<String> = Vec::new();
         for (i, line) in fixture_lines().iter().enumerate() {
             if is_local(line) {
                 continue;
@@ -1179,35 +1195,52 @@ mod tests {
             let ev: HarnessEvent = serde_json::from_str(line)
                 .unwrap_or_else(|e| panic!("fixture line {} is not a HarnessEvent: {e}", i + 1));
 
-            // A fresh renderer per event: this test asks "does this KIND draw",
-            // and a shared one would let a previous event's open line decide it.
-            let bytes = Renderer::new(80).render(&ev);
-            let drew = !bytes.is_empty();
+            let drew = !renderer.render(&ev).is_empty();
             if drew {
                 drew_something = true;
             }
-            if !seen.contains(&tag) {
-                seen.push(tag.clone());
+            match actual.iter_mut().find(|(k, _)| *k == tag) {
+                // `drew` may legitimately differ between two events of one kind
+                // (a `TurnStarted` at column 0 draws nothing, one mid-line
+                // does), so the record's claim is "this kind draws AT LEAST
+                // ONCE over this log" — the honest reading of a conditional
+                // separator, and it is stated in parity.json's own header.
+                Some((_, seen)) => *seen |= drew,
+                None => actual.push((tag, drew)),
             }
+        }
 
-            let row = kinds
-                .get(&tag)
-                .unwrap_or_else(|| panic!("parity.json has no row for kind `{tag}`"));
-            let expected = row["vt"]
-                .as_bool()
-                .unwrap_or_else(|| panic!("parity.json row `{tag}` has no boolean `vt`"));
-            assert_eq!(
-                drew, expected,
-                "the VT projection {} for `{tag}`, and parity.json says it {}",
-                if drew { "DRAWS" } else { "draws nothing" },
-                if expected { "does" } else { "does not" }
-            );
-            if !expected {
+        let mut wrong: Vec<String> = Vec::new();
+        for (tag, drew) in &actual {
+            match kinds.get(tag).and_then(|r| r["vt"].as_bool()) {
+                None => wrong.push(format!("  {tag}: parity.json has no boolean `vt` row for it")),
+                Some(expected) if expected != *drew => wrong.push(format!(
+                    "  {tag}: the VT projection {}, parity.json says it {}",
+                    if *drew { "DRAWS" } else { "draws nothing" },
+                    if expected { "does" } else { "does not" }
+                )),
+                Some(_) => {}
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "the two projections no longer diverge where the record says they do:\n{}\n\
+             \nThe record is `test/fixtures/structuredview/parity.json`. A row that moved is a \
+             DESIGN change (this projection started or stopped drawing a kind), not a test fix — \
+             update the record and say why in its `why`.",
+            wrong.join("\n")
+        );
+
+        // Every divergence carries an argument. A divergence is allowed; an
+        // UNARGUED one is the drift §5.1 warns about.
+        for (tag, _) in &actual {
+            let row = &kinds[tag];
+            if row["vt"].as_bool() != row["dom"].as_bool() {
                 let why = row["why"].as_str().unwrap_or("");
                 assert!(
                     why.len() > 40,
                     "`{tag}` diverges between the two projections and parity.json gives no reason \
-                     worth the name — a divergence without an argument is the drift §5.1 warns about"
+                     worth the name"
                 );
             }
         }
@@ -1219,15 +1252,15 @@ mod tests {
             "positive control: no event drew anything, so the renderer never ran"
         );
         assert_eq!(
-            seen.len(),
+            actual.len(),
             16,
             "the fixture covers 16 of the 17 HarnessEvent kinds (all but `observed`, which is \
              PTY-only) — it now covers {}, so the scan above is narrower than it reads",
-            seen.len()
+            actual.len()
         );
         assert_eq!(
             kinds.len(),
-            seen.len(),
+            actual.len(),
             "parity.json describes kinds the fixture does not exercise, so those rows are \
              asserted by nothing"
         );

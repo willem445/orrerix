@@ -235,30 +235,47 @@ export function decode(line, state) {
  * folded in. Adding it would double-count every thinking token in the bill.
  */
 function usageOf(u) {
-  const input = u.input ?? 0, output = u.output ?? 0;
-  const cacheRead = u.cacheRead ?? 0, cacheWrite = u.cacheWrite ?? 0;
+  const f = tokenFields(u);
   return {
-    usage: {
-      input, output, cacheRead, cacheWrite,
-      reasoning: u.reasoning ?? 0,
-      total: u.totalTokens ?? input + output + cacheRead + cacheWrite,
-    },
+    usage: { ...f, total: u.totalTokens ?? sumPresent(f) },
     cost: u.cost ?? null,
   };
 }
 
 function statsOf(d) {
   const t = (d && d.tokens) || {};
+  const f = tokenFields(t);
   return {
-    usage: {
-      input: t.input ?? 0, output: t.output ?? 0,
-      cacheRead: t.cacheRead ?? 0, cacheWrite: t.cacheWrite ?? 0,
-      reasoning: t.reasoning ?? 0,
-      total: t.total ?? 0,
-    },
+    usage: { ...f, total: t.total ?? sumPresent(f) },
     cost: d ? d.cost ?? null : null,
     context: d ? d.contextUsage ?? null : null,
   };
+}
+
+/**
+ * Token fields, preserving ABSENCE. Rule 1 at the top of this file — "a fact
+ * the pane does not have is null, never a sentinel" — applies to numbers too,
+ * and defaulting an absent field to `0` breaks it in the direction that reads
+ * as data: a pi build that drops or renames `input` would render a confident
+ * `0 in` rather than an honest `—`, and nobody would know to look. The renderer
+ * already spells null as an em dash (`fmtTok`), so absence has somewhere to go.
+ *
+ * This matters past the mock: S1b copies this mapping into `pi.rs`, and a
+ * silent zero in a usage figure is a silent zero in a COST figure.
+ */
+function tokenFields(t) {
+  const n = (v) => (typeof v === "number" ? v : null);
+  return {
+    input: n(t.input), output: n(t.output),
+    cacheRead: n(t.cacheRead), cacheWrite: n(t.cacheWrite),
+    reasoning: n(t.reasoning),
+  };
+}
+
+/** Sum only what is present; if nothing is, the total is unknown, not zero. */
+function sumPresent(f) {
+  const parts = [f.input, f.output, f.cacheRead, f.cacheWrite].filter((v) => v != null);
+  return parts.length ? parts.reduce((a, b) => a + b, 0) : null;
 }
 
 /** pi hands back content blocks; the renderer wants the text they carry. */

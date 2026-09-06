@@ -7,8 +7,8 @@
 // COALESCING IS MODELLED, NOT FAKED. §5.3 holds the ring's rules for renderer
 // output too — at most one emit per pane per 16 ms. So the player drains on
 // animation frames and applies every event whose timestamp has passed in one
-// batch, which is what makes the storm fixture stay smooth: 460 tool calls
-// arriving in a burst become a handful of frames, not 460 layout passes.
+// batch, which is what makes the storm fixture stay smooth: its 461 tool calls
+// arrive in a burst and become a handful of frames, not 461 layout passes.
 
 import { decode } from "./decode.js";
 import { PaneView } from "./render.js";
@@ -16,7 +16,7 @@ import { icon } from "./icons.js";
 
 const FIXTURES = {
   session: { file: "fixtures/session.jsonl", label: "a worker taking a delivery" },
-  storm: { file: "fixtures/storm.jsonl", label: "storm — heavy output, 460 calls" },
+  storm: { file: "fixtures/storm.jsonl", label: "storm — heavy output, 461 calls" },
 };
 
 class Player {
@@ -87,7 +87,7 @@ class Player {
     this.clock += dt * this.speed;
 
     // Drain every line whose time has come, in ONE batch — the coalescer's
-    // shape. A burst of 460 events is one frame's work, not 460 frames.
+    // shape. A burst of 461 events is one frame's work, not 461 frames.
     let applied = 0;
     while (this.i < this.lines.length && this.lines[this.i].at <= this.clock) {
       const line = this.lines[this.i++];

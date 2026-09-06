@@ -59,11 +59,12 @@ shows the reduced-motion reading without touching an OS setting.
 | `?at=27` | that request settled, a human steer arriving, a retry, and a select dialog |
 | `?at=40` | the turn receipt and the compaction seam |
 
-Then switch the stream to **storm** and let it run. That fixture exists to show
-what happens under load rather than to describe it: one command emits ~140 KiB
-and the card states the 90,994 bytes it dropped from the head; the transcript
-passes 400 rows and states how many rolled out of the pane buffer. Both numbers
-are on screen.
+Then switch the stream to **storm** and let it run — 461 tool calls, of which
+one heavy `cargo check` and 460 rapid reads and greps. That fixture exists to
+show what happens under load rather than to describe it: the `cargo check` card
+emits 156,530 bytes and states the 90,994 it dropped from the head; the
+transcript passes 400 rows and states how many rolled out of the pane buffer.
+Both numbers are on screen.
 
 Two panes are shown side by side on purpose. The signature element only
 resolves into a picture when panes are tiled — one pane cannot show it.
@@ -94,11 +95,13 @@ the xterm ring** and rejected a DOM transcript, because a DOM view would break
 designed surface … not an xterm emulation of a chat log", which a VT renderer
 cannot give you — it cannot draw a fold or a button.
 
-**S1a settled it** (#2850, PR #2942): §5.1 is now *"Two projections, one log"* —
-the VT projection keeps feeding the ring so all four consumers are untouched,
-and the human gets a DOM renderer in the same grid cell fed by
-`orch-pane-event`. The rejection of a DOM view "was right about the consequence
-and wrong to treat ring-versus-DOM as a choice."
+**S1a settles it** in PR #2942 — *not merged yet*, so `main`'s §5.1 still
+carries R1's text and this paragraph is dated to that PR. As #2942 writes it,
+§5.1 becomes *"Two projections, one log"*: the VT projection keeps feeding the
+ring so all four consumers are untouched, and the human gets a DOM renderer in
+the same grid cell fed by `orch-pane-event`. Its argument, in the design note's
+own words — "keeping the ring and putting the human on a DOM surface are not
+alternatives, because the ring is fed from the log rather than from the screen."
 
 So this mock is the DOM projection, and `projectText()` in `render.js` is the
 text one — both derived from the same event log, which is what makes them agree

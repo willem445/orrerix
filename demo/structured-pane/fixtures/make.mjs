@@ -293,8 +293,11 @@ z.at(200).say("Sweeping the tree.\n\n", 20, 12);
 // One enormous build log. It has to CLEAR the renderer's 64 KiB per-card cap,
 // not approach it: a storm fixture that stays under every limit demonstrates
 // nothing, which is exactly what the first cut of this file did (900 lines,
-// ~52 KiB, no elision, no ring drop). 2400 lines is ~140 KiB, so the head is
-// dropped and the elision notice has to appear.
+// ~52 KiB, no elision, no ring drop). These 2400 lines are 156,493 chars, and
+// the card's whole output including the trailing `Finished` line is 156,530 —
+// 152.9 KiB, comfortably over the cap, so the head is dropped and the card
+// states the 90,994 bytes it lost (156,530 - 65,536, and the file is pure
+// ASCII so chars are bytes).
 const bigLog = [];
 for (let i = 1; i <= 2400; i++) {
   bigLog.push(`   Compiling crate-${String(i).padStart(4, "0")} v0.${i % 30}.${i % 7} (/c/Projects/loomux/crates/c${i})\n`);
@@ -315,6 +318,13 @@ const FILES = [
 ];
 // Enough calls to overrun the renderer's 400-row ring, so the "rolled out of
 // the pane buffer" notice is on screen rather than merely implemented.
+//
+// THE FIXTURE'S TOOL-CALL COUNT IS 461, NOT 460: this loop emits s1..s460 and
+// the `cargo check` call above it is `s0`, which is a tool call too. Every
+// surface that quotes a number quotes 461 (index.html's option label, main.js,
+// render.js's follow() comment, DESIGN.md §7, README.md). If you change this
+// bound, re-derive that figure rather than editing the loop alone —
+// `grep -c '"type":"tool_execution_start"' storm.jsonl` is the check.
 for (let i = 0; i < 460; i++) {
   const f = FILES[i % FILES.length];
   const bad = i % 17 === 16;

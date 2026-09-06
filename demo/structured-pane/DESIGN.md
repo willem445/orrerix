@@ -166,10 +166,21 @@ Two ceilings, both visible in the storm fixture:
 An elision the reader cannot see is a transcript that lies. Both numbers are
 rendered, not logged.
 
+**What these two do NOT cap, and S4 must.** The row ring bounds the number of
+rows and `OUT_CAP` bounds one *tool card's* output, but an assistant `Text` or
+`Thinking` block is a single uncapped text node — `onText`/`onThinking` append
+every delta forever, with no ceiling and no elision notice. The storm fixture
+stresses tool output only, so nothing here would catch it. One long turn
+streaming tens of MB of deltas holds the whole string in the DOM and says
+nothing about it, which is the same silent-lie failure §7 exists to prevent, one
+block type over. Left unbuilt in S0 deliberately — a third ceiling is renderer
+work, not mock work — and named here so S4 inherits it as a known gap rather
+than discovering it in production.
+
 The storm fixture found a real defect that reading the code did not: following
 the live end read `scrollHeight` on **every appended row**, which forces a
 synchronous layout per row and is O(n²) in the size of a burst — it froze the
-tab outright on 460 calls. The follow is now coalesced to one scroll per frame.
+tab outright on 461 calls. The follow is now coalesced to one scroll per frame.
 That is the same argument §5.3's coalescer makes one level down: **a producer
 may not make the consumer pay per event.** S4 inherits the constraint, not just
 the fix.
@@ -184,13 +195,23 @@ breaks all five. #2891 then raised the bar above that floor: "a designed surface
 … not an xterm emulation of a chat log", and **a VT renderer cannot draw a
 collapsible card, a fold animation, or a button.**
 
-This mock was built while that tension was open, and **S1a has since settled it**
-(#2850, PR #2942). §5.1 is now *"Two projections, one log"*: the
+This mock was built while that tension was open, and **S1a settles it** — in
+**PR #2942, which is not merged yet**, so until it lands `main`'s §5.1 still
+carries R1's text and everything in this section is dated to that PR rather than
+to the contract. Re-check it when #2942 merges; if the section changed in
+review, this one changes with it.
+
+As #2942 writes §5.1, it becomes *"Two projections, one log"*: the
 `transcript::Renderer` VT projection keeps feeding the ring, so the ring
 consumers are untouched, and the human gets a DOM renderer in the same grid cell
 fed by `orch-pane-event` — which replaces the never-emitted
-`orch-pane-transcript`. In S1a's own words, the rejection of a DOM view "was
-right about the consequence and wrong to treat ring-versus-DOM as a choice."
+`orch-pane-transcript`. Its own argument, quoted from the design-note text the
+PR adds rather than from the PR's summary of itself:
+
+> The rejection was right about the CONSEQUENCE and wrong about the CHOICE it
+> was forced into: keeping the ring and putting the human on a DOM surface are
+> not alternatives, because the ring is fed from the log rather than from the
+> screen.
 
 **What that means for this design:** it is the shape the mock was already built
 as, so nothing here changes. The consequences worth carrying forward:

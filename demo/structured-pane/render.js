@@ -105,7 +105,7 @@ export class PaneView {
    * Follow the live end — COALESCED TO ONE SCROLL PER FRAME.
    *
    * Reading `scrollHeight` forces a synchronous layout, so doing it once per
-   * appended row is O(n^2) in the size of the burst: the storm fixture's 460
+   * appended row is O(n^2) in the size of the burst: the storm fixture's 461
    * tool calls froze the tab outright until this was scheduled instead of run
    * inline. That is the same argument §5.3's coalescer makes about the output
    * ring one level down — a producer may not make the consumer pay per event —

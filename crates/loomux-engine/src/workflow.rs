@@ -6624,6 +6624,14 @@ mod tests {
                 lane_timeout_minutes: _,
                 fix_timeout_minutes: _,
                 drive_timeout_minutes: _,
+                // #3040: the plan driver's three, under the same inventory
+                // rule and with the sharper version of its reason — this
+                // schema's second switch can turn on a driver that SPAWNS A
+                // PLANNER and turns its output into work, so a key added
+                // beside it must be a visible change here.
+                plan_enabled: _,
+                plan_review_minutes: _,
+                planner_timeout_minutes: _,
             } = v;
         }
         // Referenced, never called — the compiler still type-checks (and

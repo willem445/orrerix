@@ -27,7 +27,7 @@ use super::{
     OrchRegistry, Role,
 };
 
-use plandrive::{
+use super::plandrive::{
     Consent, PdEntry, PdFacts, PdHeldReason, PdLimits, PlanDriveState, PlannerSignal,
 };
 
@@ -1076,7 +1076,7 @@ impl OrchRegistry {
             runner_failed |= obs.runner_failed;
             let signal = self.pd_signal(group, issue);
 
-            let (advanced, on_behalf, action, reason) = {
+            let (on_behalf, action, reason) = {
                 let _state_guard = self.pd_state_lock.lock_safe();
                 let Ok(mut state) = plandrive::load_state(&dir) else { continue };
                 let Some(entry) = state.entry_mut(issue) else { continue };
@@ -1133,19 +1133,12 @@ impl OrchRegistry {
                 }
                 let reason = step.held.map(|h| h.as_str()).unwrap_or("");
                 let _ = plandrive::store_state(&dir, &state);
-                (true, on_behalf, action, reason)
+                (on_behalf, action, reason)
             };
-            if advanced {
-                report.advanced.push(issue);
-                self.pd_clear_signal(group, issue);
-                if !action.is_empty() {
-                    self.pd_audit(
-                        group,
-                        &on_behalf,
-                        action,
-                        json!({ "issue": issue, "reason": reason }),
-                    );
-                }
+            report.advanced.push(issue);
+            self.pd_clear_signal(group, issue);
+            if !action.is_empty() {
+                self.pd_audit(group, &on_behalf, action, json!({ "issue": issue, "reason": reason }));
             }
         }
 

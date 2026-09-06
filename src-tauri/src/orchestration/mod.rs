@@ -57086,7 +57086,8 @@ pub fn create_orchestration_sync(
             agent_cli,
             blocks,
             advanced_orchestrator,
-            workflow,
+            // [scratch] round 1: the pin is dropped — every launch runs `default`.
+            workflow: workflow::WorkflowName::default_name(),
             auto_ops,
             idle_kill_minutes,
             max_spawns_per_hour,

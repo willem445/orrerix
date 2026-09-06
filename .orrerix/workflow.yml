@@ -85,10 +85,15 @@
 #    entry is at the bottom of this file. The routing rules above are carried
 #    by the block NAMES the orchestrator sees in its roster, by the edges, and
 #    by the gate.
-#  * OpenRouter auth is the human's: `opencode auth login` -> OpenRouter, once,
-#    on this machine. loomux passes `--model openrouter/z-ai/glm-5.3-flash`
-#    (verified against https://openrouter.ai/api/v1/models on 2026-08-29:
-#    id `z-ai/glm-5.3-flash`, 1.3M ctx, $0.075/M in, $0.25/M out).
+#  * OpenRouter auth is the human's, and it is PER CLI: pi reads its own
+#    `auth.json` under pi's config dir (relocatable via `PI_CODING_AGENT_DIR`,
+#    kept separate from `OPENCODE_CONFIG_DIR`; doc/design/pi.md). Configure
+#    OpenRouter auth for pi before launching the cheap tier, and confirm with
+#    `pi --list-models` - it prints only models whose auth is configured, so
+#    an unauthed pi silently offers nothing. loomux passes
+#    `--model openrouter/z-ai/glm-5.3-flash` (verified against
+#    https://openrouter.ai/api/v1/models on 2026-08-29: id
+#    `z-ai/glm-5.3-flash`, 1.3M ctx, $0.075/M in, $0.25/M out).
 #  * effort:/context: are not settable on opencode blocks (CLI_CAPS); on the
 #    claude blocks they are left at the CLI default.
 #  * "Once" is a routing intent, not a mechanism: a verdict is bound to the

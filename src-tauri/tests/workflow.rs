@@ -8371,7 +8371,7 @@ fn the_repos_own_workflow_runs_its_worker_tiers_on_the_models_it_declares() {
             "{block}: the persona must reach pi by file on --append-system-prompt: {cmd}"
         );
         assert!(
-            !cmd.contains("--agent "),
+            !cmd.contains(" --agent "),
             "{block}: pi carries its contract by file, not by agent handle: {cmd}"
         );
         // …and NOT through the kickoff, which is the fallback `persona_inject` takes

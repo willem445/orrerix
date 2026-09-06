@@ -36546,13 +36546,25 @@ impl OrchRegistry {
     /// that matters; refusing the number would cost a second round trip per post
     /// to buy nothing. `doc/design/orchestration.md` carries the same statement.
     ///
+    /// **The body travels as a FILE, not as an argument** — see
+    /// [`crate::gh::comment_file_argv`] for the two limits that forces: Windows'
+    /// 32,767-character command-line cap, which would ceiling a plan at about the
+    /// size plans already are, and Rust's refusal to pass an unescapable argument
+    /// to a `.cmd` shim, which fails a multi-line body before `gh` runs at all.
+    /// The file is written into the group's own state directory and removed once
+    /// `gh` has read it, whether or not the post succeeded.
+    ///
+    /// `actor` is a [`PathSegment`] (#925) for the same reason
+    /// [`Self::ledger_path`]'s is: it becomes a file name, so it must be proven a
+    /// single component before it gets there.
+    ///
     /// `repo` is resolved from the caller's own group, never from an argument —
     /// the same server-side resolution [`Self::gh_capture`] documents — so the
     /// group-id path seam (#904) is not engaged here.
     pub fn post_issue_comment(
         &self,
         group: &GroupId,
-        actor: &str,
+        actor: &PathSegment,
         issue: u64,
         body: &str,
     ) -> Result<String, String> {
@@ -36560,9 +36572,21 @@ impl OrchRegistry {
             .group(group.as_str())
             .map(|g| g.repo)
             .ok_or_else(|| "unknown group".to_string())?;
-        let args = crate::gh::comment_argv("issue", issue, body)?;
+        crate::gh::reject_empty_comment(body)?;
+        let dir = self.group_dir(group);
+        fs::create_dir_all(&dir).map_err(|e| format!("cannot prepare the comment body: {e}"))?;
+        let body_path = dir.join(format!("{actor}-comment-body.md"));
+        fs::write(&body_path, body)
+            .map_err(|e| format!("cannot write the comment body: {e}"))?;
+        let args =
+            crate::gh::comment_file_argv("issue", issue, &body_path.to_string_lossy());
         let argv: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = self.gh_capture(&repo, &argv)?;
+        let captured = self.gh_capture(&repo, &argv);
+        // Best-effort, and deliberately not `?`: the post has already happened
+        // or already failed, and a leftover scratch file is not a reason to
+        // report either outcome differently.
+        let _ = fs::remove_file(&body_path);
+        let out = captured?;
         // `gh issue comment` prints the new comment's URL, and prints it LAST:
         // take the final non-empty line rather than the whole capture, so a
         // future banner or deprecation notice on stdout cannot become the "URL"
@@ -36576,7 +36600,7 @@ impl OrchRegistry {
             .to_string();
         self.audit(
             group,
-            actor,
+            actor.as_str(),
             "issue-comment",
             json!({ "issue": issue, "bytes": body.len(), "url": url }),
         );

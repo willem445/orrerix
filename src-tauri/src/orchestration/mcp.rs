@@ -323,6 +323,7 @@ pub const READ_TOOLS: &[&str] = &[
     "session_digest",
     "merge_queue_status",
     "review_drive_status",
+    "plan_drive_status",
     "channel_status",
     // #1683: a pure group-dir read — validates the section id, slices the
     // rendered playbook, writes one audit line. Nothing mutates.
@@ -1682,6 +1683,29 @@ fn tool_defs(
                 "Stop driving a PR. Works on any drive that has not already finished, held ones included; the entry is dropped and its counters go with it, so a later drive_review on that PR starts fresh. Use it when the PR needs something the driver cannot do — a conflict you want to resolve by hand, a change of plan, a PR you have decided to review yourself. Refuses `driver-disabled` if this repo has not enabled the driver at all, and `not-driven` if that PR has no live drive. `rd-state-unreadable` is DIFFERENT and means orrerix cannot read its drive record at all, so it cannot tell you whether that PR is driven — which is not the same as saying it isn't; `rd-state-unwritable` means the cancel was computed and could not be saved, so it did not happen. Neither should appear in a running build.",
                 json!({ "pr": { "type": "string", "description": "PR number, #n, or URL — the driven PR to stop." } }),
                 &["pr"]),
+            // The plan driver (#3040 §5.1). The same gate as the three above and
+            // one more: off unless the repo ALSO declares `driver: plan_enabled:
+            // true`, in which case every call refuses `plan-driver-disabled`.
+            // Orchestrator-only and re-checked in `call_tool` — this listing is
+            // cosmetic, the dispatch check is the gate.
+            tool("drive_plan",
+                "Hand ONE labelled issue's PLANNING to orrerix, so you stop spending a turn on reading a plan and boarding it. orrerix spawns a planner from your roster, briefs it, and validates the plan block it posts BEFORE anything reaches GitHub: an invalid block comes back to the planner as a tool error with line numbers, nothing is published, and it fixes it inside the same turn - which costs you no turn at all. A valid block is stored with the comment's URL. CONSENT IS THE LABEL, and it is re-read rather than remembered: `agent-ready` means build it, `agent-investigation` means the plan IS the deliverable and no worker is ever spawned off it, and withdrawing the label mid-drive stops the drive with a notice. THIS BUILD STOPS AT THE PLAN: an `agent-investigation` issue completes, and an `agent-ready` one parks on `held(awaiting-p3b)` with its plan on the issue and its slices in plan_drive_status - the rows and the briefs are still yours until #3040 P3b lands, and the hold says so in your pane rather than leaving you to notice. It never merges, never edits an issue or a PR, never writes a verdict, and never kills a pane. While a drive is live, that planner's report goes to the driver instead of appearing here; its message_orchestrator lines still reach you unchanged. Refuses `plan-driver-disabled`, `issue-not-open`, `issue-unverifiable` (orrerix could not read the issue - unknown is never treated as safe), `issue-not-labelled` (neither consent label is on it), `already-driven`, `no-planner-block` (this roster declares no kind: planner block, or the one you named is not one), `planner-unspawnable` (the pane could not be opened - the reason is in `detail`, usually a delegate cap). Three further reasons mean ORRERIX ITSELF FAILED rather than that the driver declined you: `pd-state-unreadable` (orrerix cannot read its own plan-drive record, which is NOT 'nothing is driven'), `pd-state-unwritable` (the drive was computed and could not be saved, so it did not happen), and `pd-unavailable`. Report one of those rather than working around it.",
+                json!({
+                    "issue": { "type": "integer", "description": "Issue number in this group's repo — the bare number, not '#12' or a URL." },
+                    "planner_block": { "type": "string", "description": "OPTIONAL. Which kind: planner block in your roster to spawn. Default: the roster's FIRST planner block, which is the roster's own 'the first block of a class is the default one' rule. A block that is not a planner is refused, never coerced." },
+                    "review_minutes": { "type": "number", "description": "OPTIONAL, 0..=120, default from the repo's driver.plan_review_minutes. How long a posted plan waits before the drive acts on it, so you can veto. 0 means no window — the label already said go. THIS BUILD RECORDS IT AND SPENDS IT ON NOTHING: the drive stops at the plan either way, so a window buys nothing yet." },
+                    "base": { "type": "string", "description": "OPTIONAL. The branch slices are to be cut from, passed through to the planner's brief. Recorded for the spawns that land in #3040 P3b." },
+                }),
+                &["issue"]),
+            tool("plan_drive_status", "Where this group's plan drives stand: {enabled, drives:[{issue, state, held_reason?, held_state?, consent, planner, planner_block, comment_url, invalid_count, last_invalid, review_minutes, slices?, since_ms, state_ms}]}. States are planning | plan-posted | boarding | held. `held` is PARKED, not finished - it comes back with resume_plan_drive, or stops with cancel_plan_drive - and `held_reason` says which of the seven it is; `awaiting-p3b` is the expected end of an `agent-ready` drive in this build, not a fault. `slices` is the planner's own plan, once one is stored: id, title, branch, block, deps and hold per slice, with `task_id` null until #3040 P3b boards them. Terminal drives are not listed. Read this after a compaction: it is how you recover which issues orrerix is planning for you, and where each one got to. `refused: pd-state-unreadable` means orrerix cannot read its own record, which is NOT 'nothing is driven'. Read-only: calling this never changes anything.", json!({}), &[]),
+            tool("cancel_plan_drive",
+                "Stop driving an issue's plan. Works on any drive that has not already finished, held ones included; the entry goes terminal and a later drive_plan on that issue starts fresh. IT KILLS NOTHING: a planner pane that is still open keeps running under you, and its reports start reaching this pane again the moment the drive stops being live - cancelling releases OWNERSHIP, and ending a pane is your own kill_agent, unchanged. Use it when the issue needs something the driver cannot do, or when you have decided to plan it yourself. Refuses `plan-driver-disabled` and `not-driven` (that issue has no live or held drive). `pd-state-unreadable` is DIFFERENT and means orrerix cannot read its record at all, so it cannot tell you whether that issue is driven - which is not the same as saying it isn't; `pd-state-unwritable` means the cancel was computed and could not be saved, so it did not happen.",
+                json!({ "issue": { "type": "integer", "description": "Issue number in this group's repo — the bare number." } }),
+                &["issue"]),
+            tool("resume_plan_drive",
+                "Restart a PARKED plan drive, back into whatever it was doing when it parked - not into the beginning. Use it once you have dealt with what the hold named: re-briefed the planner, fixed the issue's labels, decided the plan is good enough. It also clears the refused-block counter, so a planner you have re-briefed gets a fresh three attempts rather than resuming straight back onto the bound; that is a visible decision, and it is audited. Refuses `plan-driver-disabled`, `not-driven` (no entry, or a finished one) and `not-held` (the drive is live - there is nothing to resume, which is a different fact from it not being there). `pd-state-unreadable` and `pd-state-unwritable` mean orrerix itself failed.",
+                json!({ "issue": { "type": "integer", "description": "Issue number in this group's repo — the bare number." } }),
+                &["issue"]),
         ]);
         // The manager mailbox's WRITE half (#1161 M2), and the ONE tool on this
         // surface whose listing depends on the group's roster rather than on the
@@ -2805,6 +2829,54 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             Ok(serde_json::to_string(&out).unwrap_or_default())
         }
 
+        // The plan driver's four (#3040 §5.1). The issue is a bare integer
+        // rather than `pr_number`'s three spellings, matching
+        // `post_issue_comment`: what an agent typed as "#12" is a string it
+        // built, and the one place this group resolves a number from is the
+        // tool argument itself.
+        "drive_plan" => {
+            require_orchestrator(caller)?;
+            let issue = args
+                .get("issue")
+                .and_then(Value::as_u64)
+                .ok_or("issue required (a bare number)")?;
+            let block = arg_str(args, "planner_block");
+            // Clamped by `PdLimits::new`, which is where the range is enforced
+            // rather than here — a clamp at the shim would be a second bound to
+            // keep in step with the first.
+            let review_minutes = args
+                .get("review_minutes")
+                .and_then(Value::as_u64)
+                .map(|v| v.min(u32::MAX as u64) as u32);
+            let base = arg_str(args, "base");
+            let out =
+                reg.drive_plan(&caller.group, issue, block, review_minutes, base, &caller.agent_id);
+            Ok(serde_json::to_string(&out).unwrap_or_default())
+        }
+        "plan_drive_status" => {
+            require_orchestrator(caller)?;
+            let out = reg.plan_drive_status(&caller.group);
+            Ok(serde_json::to_string(&out).unwrap_or_default())
+        }
+        "cancel_plan_drive" => {
+            require_orchestrator(caller)?;
+            let issue = args
+                .get("issue")
+                .and_then(Value::as_u64)
+                .ok_or("issue required (a bare number)")?;
+            let out = reg.cancel_plan_drive(&caller.group, issue, &caller.agent_id);
+            Ok(serde_json::to_string(&out).unwrap_or_default())
+        }
+        "resume_plan_drive" => {
+            require_orchestrator(caller)?;
+            let issue = args
+                .get("issue")
+                .and_then(Value::as_u64)
+                .ok_or("issue required (a bare number)")?;
+            let out = reg.resume_plan_drive(&caller.group, issue, &caller.agent_id);
+            Ok(serde_json::to_string(&out).unwrap_or_default())
+        }
+
         "queue_merge" => {
             require_orchestrator(caller)?;
             let raw = arg_str(args, "pr").ok_or("pr required")?;
@@ -3752,6 +3824,27 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // `deliver_relayed_to_root`, a different method from the one
             // `review_verdict` calls, and naming only the other would leave
             // `report` still delivering under a live drive.
+            // #3040 §2(b) step 4: **a driven PLANNER reports to its plan drive**,
+            // the same interception §7 makes for a review drive's delegates and
+            // for the same reason — the orchestrator's visible prompt is the
+            // drive's own notice, and every consumed event is audited so traffic
+            // that stopped arriving as a prompt is still on the record.
+            //
+            // Resolved before the `match` and answered in an arm below it, so a
+            // caller that is BOTH — which nothing produces today, because a
+            // review drive only ever spawns workers and reviewer lanes — would
+            // reach the review driver's arm. That ordering is stated rather than
+            // relied on: the plan driver's own `pd_owner` is keyed on the agent
+            // id it minted at spawn, so the two sets are disjoint by
+            // construction, not by precedence.
+            //
+            // Only asked for a PLANNER caller, so every other report pays one
+            // comparison rather than a file read.
+            let pd_issue = if caller.role == Role::Planner {
+                reg.pd_owner(&caller.group, &caller.agent_id)
+            } else {
+                None
+            };
             match reg.rd_owner(&caller.group, &caller.agent_id) {
                 Some((pr, pane)) => {
                     // **WHICH side of the drive reported decides what the signal
@@ -3860,6 +3953,27 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 // finds no board to read and returns `NoteOutcome::Unreadable`
                 // rather than claiming a note it did not write — the same
                 // answer a board-less orchestration group already gave.
+                // #3040: consumed by the PLAN driver. `progress` carries no
+                // signal — a plan drive advances on the plan block the hook
+                // stored and on the issue's own labels, never on a planner
+                // saying it is still writing — but it is still CONSUMED and
+                // audited, because a driven planner's traffic reaching this pane
+                // is the leak the interception exists to stop.
+                None if pd_issue.is_some() => {
+                    let issue = pd_issue.unwrap_or_default();
+                    let event = match status {
+                        "done" => Some(super::PdEvent::PlannerDone),
+                        "blocked" => Some(super::PdEvent::PlannerBlocked),
+                        _ => None,
+                    };
+                    reg.pd_consume(
+                        &caller.group,
+                        issue,
+                        &caller.agent_id,
+                        &format!("report:planner:{status}"),
+                        event,
+                    );
+                }
                 None if report::reaches_orchestrator_pane(status) => {
                     reg.deliver_relayed_to_root(&caller.group, &message, &caller.agent_id)?;
                 }

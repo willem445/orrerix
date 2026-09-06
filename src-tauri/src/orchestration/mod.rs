@@ -451,6 +451,18 @@ pub use rdtick::{
     RdDriveReport, RdEvent, RdSignal, DRIVER_DELTA_TPL, DRIVER_FIX_TPL, DRIVER_REVIEW_TPL,
 };
 
+// The plan driver's pure core (#3040 P1/P3a) — the plan block's parser and the
+// drive's state machine, record and per-tick decision. Re-exported for
+// `reviewdrive`'s reason, and the split is the same one: `plandrive::decide`
+// makes every decision, and what stays HERE is the wiring.
+pub use loomux_engine::{plandoc, plandrive};
+
+// The plan driver's registry wiring (#3040 P3a), in a file of its own — for
+// `rdtick`'s reason above, which is a FILE being a scope a rename cannot step
+// over. `tests/plandrive.rs` default-denies the whole of it.
+mod pdtick;
+pub use pdtick::{PdDriveReport, PdEvent, PdPlanCheck, PdSignal, PD_MAX_GH_PER_TICK};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cell::Cell;
@@ -15371,6 +15383,23 @@ pub struct OrchRegistry {
     /// Groups whose persisted drives have been reconciled this process (§2.4).
     /// Once-only, like `merge_queue_reconcile_with`'s own guard.
     rd_reconciled: Arc<TrackedMutex<HashSet<GroupId>>>,
+    /// #3040: the PLAN driver's four, each the twin of the `rd_` field above it
+    /// and holding for that field's stated reason. There is deliberately no
+    /// `pd_runner_override`: the plan driver reads through the SAME `gh` seam,
+    /// so one override is one statement about a test's whole tick.
+    ///
+    /// Serialises the read-modify-write of `plan_drives.json`. In P3a nothing
+    /// spawns or delivers under it — `pd_drive_group_with` carries what that
+    /// narrower claim covers, and what P3b owes when it widens it.
+    pd_state_lock: Arc<TrackedMutex<()>>,
+    /// Earliest wall-clock at which the plan driver may service each group
+    /// again. Absent = now. In memory, for `rd_service_ms`'s reason.
+    pd_service_ms: Arc<TrackedMutex<HashMap<GroupId, u64>>>,
+    /// Driven planners' events, between the MCP arm that consumed one and the
+    /// tick that acts on it. In memory; `pd_ingest` carries why.
+    pd_signals: Arc<TrackedMutex<HashMap<(GroupId, u64), PdSignal>>>,
+    /// Groups whose persisted plan drives have been reconciled this process.
+    pd_reconciled: Arc<TrackedMutex<HashSet<GroupId>>>,
     /// #560: each pane's open hold EPISODE — when it began, and what has
     /// already been said about it. Keyed by `pty_id`, in memory only (see
     /// [`HoldEpisode`] for the restart argument).
@@ -29482,6 +29511,10 @@ impl OrchRegistry {
             rd_runner_override: TrackedMutex::new("rd_runner_override", None),
             rd_signals: Arc::new(TrackedMutex::new("rd_signals", HashMap::new())),
             rd_reconciled: Arc::new(TrackedMutex::new("rd_reconciled", HashSet::new())),
+            pd_state_lock: Arc::new(TrackedMutex::new("pd_state_lock", ())),
+            pd_service_ms: Arc::new(TrackedMutex::new("pd_service_ms", HashMap::new())),
+            pd_signals: Arc::new(TrackedMutex::new("pd_signals", HashMap::new())),
+            pd_reconciled: Arc::new(TrackedMutex::new("pd_reconciled", HashSet::new())),
             queue_draining: Arc::new(queuestate::DrainerRegistry::new()),
             drainer_gen: Arc::new(AtomicU64::new(0)),
             queue_still_notified: Arc::new(TrackedMutex::new("queue_still_notified", HashSet::new())),
@@ -37082,6 +37115,14 @@ impl OrchRegistry {
         // poll, on the same cadence, and a second `gh`-calling thread re-opens
         // the coupling that loop closed.
         let rd_serviced = self.rd_driver_tick(now);
+        // #3040 §2.4: the PLAN driver, a SIXTH step, and deliberately AFTER the
+        // review driver rather than beside it. Both spend `gh` round trips on
+        // this one loop, and running the plan driver second means it can only
+        // ever take what the review driver left — which is how "the plan driver
+        // holds, never starves the review driver" is structural instead of a
+        // budget nobody can check. Its serviced group is not reported: nothing
+        // routes on it, and `GhPollTick` is a shape the frontend reads.
+        self.pd_driver_tick(now);
         GhPollTick { fired, intake_scanned, mq_serviced, rd_serviced }
     }
 

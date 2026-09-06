@@ -13908,16 +13908,20 @@ pub struct UsageSnapshot {
     /// `statusline` (last-resort parse of the CLI's own dollar figure), or
     /// `none` (nothing available yet).
     ///
-    /// **Seven values, on FIVE surfaces that must move together**: this doc,
+    /// **Seven values, on SIX surfaces that must move together**: this doc,
     /// `AgentUsage.source`'s union in `src/orchestration.ts`, the enumeration
     /// in `doc/design/group-cost-tracking.md`, the `source`→`cli` table in
-    /// `doc/design/orchestration-evals.md`, and `SOURCE_TO_CLI` in
-    /// `scripts/orch-scorecard.cjs` (whose test pins it).
+    /// `doc/design/orchestration-evals.md`, and TWO in
+    /// `scripts/orch-scorecard.cjs`: `SOURCE_TO_CLI` (whose test pins it) and
+    /// the H10 hazard entry, which states the same mapping in prose.
     ///
-    /// This paragraph said THREE until #2850 added the seventh value and the
-    /// grep it prescribes returned five — the scorecard pair was never in the
-    /// list. That is the count being wrong in the direction that matters: a
-    /// surface nobody knows about is a surface nobody updates.
+    /// This paragraph said THREE until #2850 added the seventh value, and the
+    /// count was wrong TWICE on the way to six. The first sweep found five —
+    /// the scorecard pair was never in the list. The second, re-run after a
+    /// rebase and with `--include=*.cjs` actually in the pattern, found H10 as
+    /// well. Both misses are the same shape: a surface nobody knows about is a
+    /// surface nobody updates, and a sweep is only as wide as the globs it was
+    /// run with and only valid for the base it was run on.
     ///
     /// The frontend's is a declared TYPE for a value that crosses the IPC seam
     /// untyped, so `tsc` cannot catch a value outside it and a narrowing

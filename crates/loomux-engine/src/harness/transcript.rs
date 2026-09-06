@@ -237,24 +237,38 @@ impl Renderer {
             // ── #2850: the additive variants ────────────────────────────
             //
             // Two of the five draw NOTHING here, and that is a decision with a
-            // reason rather than an omission. §5.1 makes this the **ring**
-            // projection — the one behind `get_output`, replay, thumbnails and
-            // `last_exit_tail` — while the human's surface is the DOM renderer
-            // fed the events themselves. The ring is a collapsed record of what
-            // the agent DID; the streaming bulk belongs to the projection built
-            // to show it, and to the event log, which has both either way.
+            // reason rather than an omission.
+            //
+            // **Where the streamed bulk IS visible today, stated plainly: the
+            // per-pane event log and machine consumers, and no human surface.**
+            // This renderer is the only human surface a structured pane has
+            // (§5.1) — an earlier draft of this comment justified the silence by
+            // pointing at a DOM renderer of `HarnessEvent`, and no such thing
+            // exists in this repo. That paragraph was written against #2850
+            // S1a's PROPOSED "two projections" amendment, which is unmerged; on
+            // `main`, §5.1 rejects a DOM transcript view outright. The decision
+            // below stands on its own grounds; the projection it appealed to did
+            // not exist.
             //
             // `Thinking` follows the rule the Claude decoder already applies to a
             // `thinking` block (`claude::Decoder::assistant`): reasoning is not
-            // the transcript of what the agent did, and #2891 asks for it to be
-            // quietable, which a VT stream cannot offer. Rendering it here would
+            // the transcript of what the agent did. #2891 asks for it to be
+            // quietable, which a VT stream cannot offer — so the choice is
+            // between always showing it and never showing it, and never is the
+            // one that matches every other pane in the app. Rendering it would
             // also put the highest-volume thing pi produces into a thumbnail.
             HarnessEvent::Thinking { .. } => {}
-            // `ToolOutput` is the same argument by volume: a `ToolCall` line and
-            // its `  ok`/`  failed` are what this projection has always shown for
-            // a tool, on BOTH harnesses, and streaming a tool's bytes into the
-            // ring on pi alone would make the same session look different by
-            // harness for no reported difference.
+            // `ToolOutput` is the same argument by volume, and by parity: a
+            // `ToolCall` line and its `  ok`/`  failed` are what this projection
+            // has always shown for a tool on BOTH harnesses — #2850 asks for tool
+            // executions as collapsed blocks, which is what that already is — and
+            // streaming a tool's bytes into the ring on pi alone would make the
+            // same session look different by harness for no reported difference.
+            //
+            // The cost is real and is not hidden: a pi tool's streamed output has
+            // no human surface today. Giving it one is a rendering decision for
+            // the slice that owns the human surface, and it has the event log to
+            // build from.
             HarnessEvent::ToolOutput { .. } => {}
 
             // The other three DO draw, because each is something a human
@@ -890,11 +904,15 @@ mod tests {
 
     #[test]
     fn reasoning_and_tool_bytes_stay_out_of_the_ring_and_the_other_three_do_not() {
-        // §5.1 splits the two projections: this one is the RING, behind
-        // `get_output`, replay and thumbnails, and the streaming bulk belongs to
-        // the DOM projection built to show it. The pair matters — an assertion
-        // that only checked the two silent variants would pass just as well on a
-        // renderer that drew nothing at all, which is the vacuity control here.
+        // This is the RING — behind `get_output`, replay and thumbnails, and
+        // (§5.1) the only human surface a structured pane has. `Thinking` and
+        // `ToolOutput` are deliberately silent in it; see the render arms for the
+        // grounds, and for the fact that their bulk therefore reaches the event
+        // log and machine consumers but no human surface today.
+        //
+        // The pair matters — an assertion that only checked the two silent
+        // variants would pass just as well on a renderer that drew nothing at
+        // all, which is the vacuity control here.
         let silent = render_all(
             200,
             &[

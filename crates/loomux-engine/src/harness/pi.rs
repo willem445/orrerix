@@ -589,6 +589,22 @@ impl Decoder {
     fn response(&mut self, v: &Value, raw: &str) -> Vec<Decoded> {
         let id = str_at(v, "id").unwrap_or("");
         let command = str_at(v, "command").unwrap_or("");
+        // **An absent `success` is read as a REJECTION**, and that is a choice
+        // rather than a default falling out of `unwrap_or`. Every response shape
+        // in `docs/rpc.md:39-1397` carries the field, so this should be
+        // unreachable; what makes the direction the safe one is what each error
+        // costs. Read as success, a rejected prompt is recorded as delivered and
+        // the pane waits forever for a turn that will never come. Read as
+        // failure, a benign response manufactures one visible `NoteKind::Error`
+        // and `last_error` entry, which a human can see is spurious.
+        //
+        // Whether pi 0.85.1 can emit a response without `success` was NOT
+        // verified against the running CLI (constraint 3), and is not claimed
+        // either way here. It is a live-validation item for #2850, recorded on
+        // #2986 (review round 1, finding 4) — deliberately NOT filed against
+        // `doc/design/pi.md`'s live-items list, which is #2850 S1a's and is not
+        // on `main` yet; pointing a reader at a section that does not exist is
+        // the defect the same review round raised as blocking.
         let success = v.get("success").and_then(Value::as_bool).unwrap_or(false);
 
         if !success {
@@ -1298,14 +1314,34 @@ impl PiPane {
             .stderr(Stdio::inherit())
             .spawn()?;
         let mut stdin = child.stdin.take();
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "no stdout pipe"))?;
+
+        // **Every failure from here on kills the child first.** `?` would return
+        // before `PiPane` is constructed, so nothing would ever own this `Child`
+        // — and `std::process::Child` does NOT kill on drop, so a pi that started
+        // and then wedged (stdout pipe missing, stdin closed under us) would be
+        // left running unowned, holding the session directory and the model.
+        // The reap is `kill` THEN `wait`: without the wait it becomes a zombie on
+        // Unix instead of a live process, which is quieter and still a leak.
+        let reap = |mut child: Child, e: std::io::Error| -> std::io::Error {
+            let _ = child.kill();
+            let _ = child.wait();
+            e
+        };
+
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                return Err(reap(
+                    child,
+                    std::io::Error::new(std::io::ErrorKind::Other, "no stdout pipe"),
+                ))
+            }
+        };
 
         if let Some(w) = stdin.as_mut() {
-            w.write_all(boot_line().as_bytes())?;
-            w.flush()?;
+            if let Err(e) = w.write_all(boot_line().as_bytes()).and_then(|()| w.flush()) {
+                return Err(reap(child, e));
+            }
         }
         let stdin: SharedStdin = std::sync::Arc::new(Mutex::new(stdin));
 

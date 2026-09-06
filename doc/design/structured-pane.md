@@ -116,8 +116,7 @@ Three things about it the projection is built around:
 
 - **The inner field is `note`, not `kind`.** The outer enum is
   `#[serde(tag = "kind")]`, so a variant field of that name emits a duplicate
-  key, which `serde_derive` REFUSES outright — `variant field name `kind`
-  conflicts with internal tag`, so the colliding shape never compiled (#2850
+  key, which `serde_derive` REFUSES outright — ``variant field name `kind` conflicts with internal tag``, so the colliding shape never compiled (#2850
   S1b, run 34046263686). What matters downstream is the other fix: silencing
   the derive with a `rename` keeps the field and ships the collision, and a JS
   consumer then sees `JSON.parse` keep the LAST duplicate key — every note

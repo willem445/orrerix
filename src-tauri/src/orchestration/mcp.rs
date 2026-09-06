@@ -1402,7 +1402,7 @@ fn tool_defs(
     // own positive enumeration.
     //
     // `call_tool` re-checks the role — this filter is cosmetic, not the gate.
-    if matches!(role, Role::Orchestrator | Role::Worker | Role::Planner) {
+    if matches!(role, Role::Orchestrator | Role::Worker | Role::Planner | Role::Reviewer) {
         tools.push(tool(
             "post_issue_comment",
             "Post a comment on a GitHub issue in this group's repo, and get the new comment's URL back. THIS IS HOW A PLANNER DELIVERS ITS PLAN: write the plan, post it here, then report — do not shell out to `gh issue comment`, which cannot carry a document (a Bash command over 10,000 characters, or one containing newlines, matches no permission rule and is denied outright in a planner's pane). `body` is full GitHub-flavoured markdown, passed as data — a leading `-`, quotes, backticks, fenced code and newlines all survive verbatim, so paste the comment exactly as you want it to read. There is no length limit here beyond the MCP request itself. The repo is resolved from YOUR OWN group; you cannot name one. COMMENTS ONLY: this tool cannot label, close, reopen, merge, review, or create anything — those are not arguments it refuses, they are verbs it does not have. Note that GitHub numbers issues and pull requests in one namespace, so an `issue` that is really a PR number posts to that PR's conversation; it still cannot do anything to it but comment. An empty or whitespace-only body is rejected before anything is posted. Every call is audited as an `issue-comment` row carrying the issue, the body size and the resulting URL, so the human can see what was posted without reading your pane.",
@@ -3490,11 +3490,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // never listed. A reviewer is refused in its own terms, not with
             // the generic message: it has a recorded route to a PR already.
             match caller.role {
-                Role::Orchestrator | Role::Worker | Role::Planner => {}
-                Role::Reviewer => {
-                    return Err("permission denied: a reviewer posts through its review, not through a free-standing issue comment — record findings with review_verdict and leave them on the PR you are reviewing, so the merge gate can see them"
-                        .into())
-                }
+                Role::Orchestrator | Role::Worker | Role::Planner | Role::Reviewer => {}
                 _ => return Err("permission denied: post_issue_comment is not on your surface".into()),
             }
             let issue = args

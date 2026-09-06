@@ -36447,19 +36447,7 @@ impl OrchRegistry {
         let _ = fs::remove_file(&body_path);
         let out = match captured {
             Ok(out) => out,
-            Err(e) => {
-                // Audited BEFORE the early return: a failed post the human cannot
-                // see is indistinguishable from one that was never attempted, and
-                // "every post leaves a row" is a claim this branch has to honour
-                // too (review round 1).
-                self.audit(
-                    group,
-                    actor.as_str(),
-                    "issue-comment",
-                    json!({ "issue": issue, "bytes": body.len(), "error": e }),
-                );
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         };
         // `gh issue comment` prints the new comment's URL, and prints it LAST:
         // take the final non-empty line rather than the whole capture, so a

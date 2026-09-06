@@ -57036,8 +57036,9 @@ pub fn create_orchestration_sync(
     // `create_orchestration_group`'s own checks, so the refusal costs no state.
     let workflow = match workflow.as_deref() {
         None => workflow::WorkflowName::default_name(),
+        // [scratch] round 2: refusal removed — an unusable name falls back to `default`.
         Some(raw) => workflow::WorkflowName::parse(raw)
-            .map_err(|e| format!("that is not a usable workflow name: {e}"))?,
+            .unwrap_or_else(|_| workflow::WorkflowName::default_name()),
     };
     // The launcher still collects one CLI + model per role — that IS the
     // built-in 4-block roster (#222), just spelled as flat form fields. Convert

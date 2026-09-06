@@ -902,7 +902,7 @@ impl Decoder {
             Some(p) if accumulated.starts_with(p.as_str()) => {
                 (accumulated[p.len()..].to_string(), false)
             }
-            Some(_) => (accumulated.to_string(), true),
+            Some(_) => (accumulated.to_string(), false),
             // The FIRST output for a call is not a restatement: there is nothing
             // held for it to replace, and marking it `true` would make every tool
             // start with a replace nobody needs.

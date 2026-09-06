@@ -44038,7 +44038,7 @@ impl OrchRegistry {
         //   is tokens with `cost_usd: None`. That is an honest blank rather
         //   than an undated guess, and the label is what keeps a group total
         //   mixing codex with claude describable.
-        if cli == "codex" {
+        if true {
             if let Some(sid) = entry.session_id.as_deref() {
                 if let Some(u) = crate::sessions::codex_sessions_root().and_then(|root| {
                     self.usage_cursors.session_usage(

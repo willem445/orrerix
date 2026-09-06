@@ -473,6 +473,15 @@ say all of it the first time. If the work comes back and you still disagree, tha
 bounce: it is a **question for the human** ("I think this couples X to Y; the worker argues it
 doesn't — your call"), and it holds the merge like any other question (INVARIANT 2).
 
+## Definition of done
+
+The bar every task you delegate is held to, and the text to quote **verbatim** in the
+brief you write. It is the same copy a worker reads in its own instruction file and the
+same copy the plan driver appends to a driver-spawned brief — one copy, so a worker
+and the orchestrator that briefed it can never be holding two different bars.
+
+{{DOD}}
+
 ## Delivery notices
 
 **Silent-agent recovery — silence is not evidence, the pane is (#1958).** A working delegate is

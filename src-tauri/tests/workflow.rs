@@ -4424,9 +4424,23 @@ fn red_before_green_is_demanded_evidenced_and_verified_across_every_surface() {
     // The orchestrator treats an unevidenced `done` as not done — otherwise the duty is
     // advice, and advice is what the DoD already was.
     let o = flat(&orch);
-    pinned("the worker brief", &o, "**red-before-green evidence**",
-        "the brief must ask for the evidence up front — a bar the worker first hears about at the \
-         completion check is a round-trip nobody needed");
+    // #3040 P2 relocated this pin rather than relaxing it. The core used to carry a
+    // COMPRESSED recap of the DoD beside the full section in worker.md — two copies of
+    // one rule, and this anchor lived in the recap. There is now ONE copy
+    // (`templates/dod.md`): the core says quote it verbatim and where to read it, and
+    // the playbook serves it. Each anchor follows its specimen (CLAUDE.md: a test's
+    // specimen must stay a member of the class it witnesses), never widened to fit.
+    pinned("the worker brief", &o, "definition of done, quoted verbatim",
+        "the brief must carry the DoD itself, not a paraphrase — a compressed recap in the brief \
+         is a second copy that drifts, which is the whole of #3040 P2");
+    pinned("the worker brief", &o, "read_playbook(\"definition-of-done\")",
+        "…and must say WHERE that one copy is, or \"quote it verbatim\" has no referent and the \
+         orchestrator writes the recap back from memory");
+    let pb_dod_flat = flat(&instructions_lf(&reg, &g.id, "orchestrator-playbook.md"));
+    let pb_dod = section(&pb_dod_flat, "## definition of done", "## delivery notices");
+    pinned("the playbook's DoD", pb_dod, "the failure line it printed",
+        "the surface the brief points at must carry the evidence duty up front — a bar the worker \
+         first hears about at the completion check is a round-trip nobody needed");
     let check = section(&o, "4. do your own **high-level** completion check", "5. confirm the pr's ci");
     pinned("the completion check", check, "is **not done**",
         "the completion check must reject a `done` whose PR shows no test failing on the base \
@@ -5894,16 +5908,16 @@ const PRE222: [(&str, &str); 5] = [
 ///   make them look for something that is correctly absent.
 /// - **"has a template drifted from what a human last blessed?"** — this, paired
 ///   against `LIVE` below. That question is about the TEMPLATE and is asked of
-///   all five equally, which is why `manager.md` gets the same re-bless gate as
+///   all of them equally, which is why `manager.md` gets the same re-bless gate as
 ///   the other four rather than a weaker one.
-const GOLDENS: [(&str, &str); 7] = [
+const GOLDENS: [(&str, &str); 8] = [
     PRE222[0],
     PRE222[1],
     PRE222[2],
     PRE222[3],
     ("manager.md", include_str!("fixtures/pre222/manager.md")),
     // #1683. The playbook is what a default group reads, so it joins the
-    // golden pairing like the other five — but it is NOT the "one exception"
+    // golden pairing like the other role files — but it is NOT the "one exception"
     // manager.md is: default groups DO read it, which is why it sits in
     // `PRE222` above and in both default-group pins.
     PRE222[4],
@@ -5916,6 +5930,19 @@ const GOLDENS: [(&str, &str); 7] = [
     // dir and the two default-group pins would be looking for something
     // correctly absent.
     ("lead.md", include_str!("fixtures/pre222/lead.md")),
+    // #3040 P2, and it RESTORES a gate rather than adding one. Before the DoD
+    // became one copy, editing it moved `pre222/worker.md` and needed a human
+    // re-bless; afterwards the rule text lives in `dod.md`, both goldens that
+    // carry it carry the literal `{{DOD}}`, and `render_with_legacy_vars`
+    // substitutes the SAME `dod_body()` on both sides of every comparison — so
+    // an edit to the definition of done every worker reads would have moved
+    // nothing and reddened nothing. This row is what keeps that edit a red.
+    //
+    // Not in `PRE222`, for `manager.md`'s and `lead.md`'s reason: `dod.md` is
+    // never WRITTEN into a group dir. It is substituted into two files that
+    // are, so the "what does a DEFAULT group read?" pins reach its bytes
+    // through them and would be looking for a file that is correctly absent.
+    ("dod.md", include_str!("fixtures/pre222/dod.md")),
 ];
 
 /// The live templates, with the placeholder(s) each must carry. Each element of the
@@ -5928,7 +5955,7 @@ const GOLDENS: [(&str, &str); 7] = [
 /// `{{BLOCK_NOTE}}{{ADVISOR_CONSULT_NOTE}}`), they stay a single contiguous-string key
 /// — same reasoning `block.md`'s `{{PERSONA_NOTE}}{{LANE_NOTE}}{{GATE_NOTE}}` already
 /// relies on.
-const LIVE: [(&str, &str, &[&str]); 7] = [
+const LIVE: [(&str, &str, &[&str]); 8] = [
     // #1683: the merge-gate and re-sync sections moved to the playbook, and
     // their two workflow-conditional fragments with them — the orchestrator
     // core's key list shrinks to `{{WORKFLOW}}` and `{{LOCKS_ORCH}}`.
@@ -5982,6 +6009,11 @@ const LIVE: [(&str, &str, &[&str]); 7] = [
     // `HOLD_LABEL`'s class, not this list's — so the golden keeps them literal
     // and the pin bites on the prose around them.
     ("lead.md", loomux_lib::orchestration::LEAD_TPL, &[]),
+    // #3040 P2. An EMPTY key list like `lead.md`'s, and for the same kind of
+    // reason: `dod.md` carries no placeholder of its own — it IS a placeholder's
+    // value — so nothing is stripped and its golden is the live template byte
+    // for byte.
+    ("dod.md", loomux_lib::orchestration::brief::DOD_TPL, &[]),
 ];
 
 /// Render a template with the plain per-group VALUE variables `render_template`
@@ -5997,7 +6029,7 @@ const LIVE: [(&str, &str, &[&str]); 7] = [
 /// So the golden carries the literal `{{HOLD_LABEL}}` and this renders it, which
 /// keeps the pin biting on the prose AROUND it.
 fn render_with_legacy_vars(tpl: &str, g: &loomux_lib::orchestration::GroupInfo) -> String {
-    let vars: [(&str, String); 8] = [
+    let vars: [(&str, String); 9] = [
         ("REPO", g.repo.clone()),
         ("GROUP_ID", g.id.to_string()),
         ("MAX_AGENTS", g.guardrails.max_agents.to_string()),
@@ -6010,6 +6042,11 @@ fn render_with_legacy_vars(tpl: &str, g: &loomux_lib::orchestration::GroupInfo) 
         // literal `{{LESSONS_PATH}}` and this renders it — which keeps the
         // pin biting on the prose around it.
         ("LESSONS_PATH", loomux_lib::orchestration::lessons::lessons_path(&g.repo).to_string()),
+        // #3040 P2. HOLD_LABEL's class again: the definition of done resolves
+        // to the same text for every group, so the golden keeps the literal
+        // `{{DOD}}` and this renders it — which keeps the pin biting on the
+        // prose AROUND it, and on the heading it is served under.
+        ("DOD", loomux_lib::orchestration::brief::dod_body().to_string()),
     ];
     let mut out = tpl.to_string();
     for (k, v) in vars {

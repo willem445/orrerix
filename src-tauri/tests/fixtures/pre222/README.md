@@ -1323,3 +1323,70 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   Both also gained `manager.md`, which is a CORRECTION rather than part of this slice — it
   has been in `GOLDENS` since #1161 and neither surface named it, so an edit to it read as
   needing no re-bless on both.
+
+- **#3040 P2, the definition of done becomes ONE copy** — `orchestrator.md`, `worker.md`,
+  `planner.md` and `orchestrator-playbook.md` move, and **`dod.md` JOINS this directory** as
+  its eighth file. `reviewer.md`, `manager.md` and `lead.md` did not move.
+
+  **`dod.md` is in `GOLDENS` and `LIVE` but NOT `PRE222`**, and its row RESTORES a gate rather
+  than adding one. Before this change, editing the definition of done moved `pre222/worker.md`
+  and needed a human re-bless. Afterwards the rule text lives in `dod.md`; both goldens that
+  carry it carry the literal `{{DOD}}`, and `render_with_legacy_vars` substitutes the SAME
+  `dod_body()` on both sides of every comparison — so an edit to the text every worker reads
+  would have moved no golden and reddened no test. The eighth row is what keeps that edit a
+  red. It is absent from `PRE222` for `manager.md`'s and `lead.md`'s reason: `dod.md` is never
+  WRITTEN into a group dir, only substituted into two files that are, so the two
+  default-group pins reach its bytes through them and would otherwise be looking for a file
+  that is correctly absent. Its `LIVE` key list is empty — it carries no placeholder of its
+  own, because it IS a placeholder's value.
+
+  The DoD used to live twice: the full `## Definition of done` section in `worker.md`, and a
+  compressed one-sentence recap in `orchestrator.md`'s **Delegation protocol** ("tests +
+  docs + PR + green CI + red-before-green evidence"). Two copies of a rule an agent executes
+  literally is drift with nothing red to announce it — an edit lands on one, and every reader
+  of the other surface keeps being told to do the old thing. The rule text now lives once, in
+  the new `templates/dod.md`, substituted as `{{DOD}}`.
+
+  **`{{DOD}}` is a per-group VALUE, not one of `LIVE`'s keys**, so nothing is stripped for it
+  and the goldens carry the literal `{{DOD}}` — `HOLD_LABEL` and `LESSONS_PATH`'s class
+  exactly. It resolves to the same real text for every group; stripping it would bless a
+  golden with a hole where the definition of done goes. It is registered in
+  `InstructionVars::pairs` and in `render_with_legacy_vars`.
+
+  **`worker.md`'s golden moved and what a worker READS did not.** The section is replaced by
+  `{{DOD}}` under its own unchanged `## Definition of done` heading, and the substitution
+  restores the old bytes exactly — proven by round-trip before the split was committed. So
+  this file's diff on `worker.md` is a template change with no change to the instructions, and
+  that is the whole of it.
+
+  **The orchestrator's copy went to the PLAYBOOK rather than into the resident core, and the
+  reason is measured.** Inlining `{{DOD}}` into `orchestrator.md` would have added the DoD's
+  5,779 bytes to a file that was **44,990 B** against `RESIDENT_CORE_BUDGET`'s 45,000 — ten
+  bytes of margin — and the orchestrator pays that file on every model call. It would also
+  have blinded the budget test, which measures `ORCHESTRATOR_TPL.len()`: a 7-byte placeholder
+  passes while the rendered file is 5.7 KB over. This is the same argument #2565 already made
+  on this surface, for the same 10-byte margin. So the playbook gains a `## Definition of done`
+  section carrying `{{DOD}}` (id `definition-of-done`, added to `PLAYBOOK_SECTION_IDS`), and
+  the core's Delegation-protocol sentence becomes a pointer: quote the definition of done
+  **verbatim**, `read_playbook("definition-of-done")`. The core got 35 bytes SHORTER.
+
+  **`planner.md` gains the plan-drive output contract.** A planner spawned by a plan drive must
+  post a comment carrying exactly one fenced `orrerix-plan` code block — the drive spawns from
+  that block and from nothing else — and the summary of its shape sits in step 3 beside the
+  worker split it formalises. Outside a plan drive the block is recommended, not required. The
+  full schema WILL live in `doc/design/plan-driver.md` (#3040 P1, unmerged at this re-bless),
+  and the tense says so. Step 3's posting instruction moves from `gh issue comment` to
+  `post_issue_comment` (#2815, also unmerged at this re-bless — again in WILL tense, with the
+  `gh` form named as what to use until it lands).
+
+  Three `worker_template_*` pins in `tests/orchestration.rs` read `WORKER_TPL` rather than the
+  rendered file, and their subjects all live in the DoD — they now read
+  `worker_contract_text()`, the const with `{{DOD}}` substituted, carrying a vacuity control
+  so an unregistered placeholder cannot make them pass against a contract with no DoD in it.
+
+  Two prose pins were **relocated, not relaxed**: `red_before_green_is_demanded_evidenced_...`
+  (in both `tests/prompts.rs` and `tests/workflow.rs`) anchored on
+  `**red-before-green evidence**`, a phrase that lived in the deleted recap. Each now pins the
+  core's *pointer* (that the brief carries the DoD verbatim, and where that one copy is) and
+  the playbook section's *evidence duty* — the specimen followed the rule to the surface that
+  now carries it.

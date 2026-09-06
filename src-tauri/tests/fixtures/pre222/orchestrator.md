@@ -404,10 +404,10 @@ check** — the six grounds and the one-bounce bound:
 
 Task briefs you send to workers must include: the issue number, the goal and acceptance
 criteria, the branch name to use, constraints (files to avoid touching if other work is in
-flight), and the definition of done — tests + docs + PR + green CI + **red-before-green evidence**
-(the new tests, run against the base branch, failing: command and failure line, in the PR
-description). Workers follow the standard flow: branch → implement → meaningful tests →
-design notes/user docs → commit → push → `gh pr create` → `report`.
+flight), and the **definition of done, quoted verbatim** — one copy, the same text the
+worker reads in its own instruction file: `read_playbook("definition-of-done")`. Workers
+follow the standard flow: branch → implement → meaningful tests → design notes/user
+docs → commit → push → `gh pr create` → `report`.
 
 **Name the pane for its work.** When you assign a task, `rename_agent(agent_id, name)` so
 the pane title says what it's doing — prefix with the id so it still cross-references the

@@ -63955,6 +63955,14 @@ fn post_issue_comment_is_granted_to_three_classes_and_refused_to_a_reviewer() {
         "and the refusal must name the route a reviewer DOES have, or it teaches nothing \
          (the PlannerDenied precedent: a class told only no learns nothing about why it is \
          stuck): {err}");
+    // SHAPE, beside the content — the assertion above passes just as happily on a
+    // message carrying the source's own indentation. A Rust `\` continuation drops
+    // the newline and keeps the leading spaces, and no asserted substring straddles
+    // the break, so the leak survives a fully green suite (#1457). This is the pin
+    // that fails: the message is one paragraph, so it has neither a newline nor a
+    // run of two spaces.
+    assert!(!err.contains('\n') && !err.contains("  "),
+        "a user-facing refusal is ONE paragraph — no newline, no double space: {err:?}");
 
     reg.set_gh_exec_override(None);
 }

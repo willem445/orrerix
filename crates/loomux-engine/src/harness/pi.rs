@@ -658,10 +658,10 @@ impl Decoder {
     /// extension that throws at boot, would otherwise manufacture a turn nobody
     /// prompted and shift every later `TurnId` by one. `None` is the honest
     /// answer there, and §1.3 says so.
-    fn note(&self, kind: NoteKind, text: String) -> Vec<Decoded> {
+    fn note(&self, note: NoteKind, text: String) -> Vec<Decoded> {
         vec![Decoded::Event(HarnessEvent::Note {
             turn: self.open_turn,
-            kind,
+            note,
             text,
         })]
     }
@@ -849,11 +849,15 @@ impl Decoder {
     /// Its precondition — each update is a PREFIX-extension of the last — is
     /// what "simply replace their display" implies but does **not** promise, so
     /// the failure case is handled rather than assumed: an update that is not an
-    /// extension of its predecessor emits the **whole new value** and records
-    /// that it restated, instead of emitting a silently wrong suffix. A
-    /// consumer that appends deltas then shows the output twice, which is
-    /// visibly wrong, rather than showing a fragment sliced at an offset that
-    /// means nothing, which is invisibly wrong.
+    /// extension of its predecessor emits the **whole new value**, marked
+    /// [`HarnessEvent::ToolOutput`]`.replaces`.
+    ///
+    /// **The mark is the point, and an earlier version of this module did not
+    /// have it.** Emitting the whole value unmarked left a consumer appending it
+    /// to what it already held, showing the output twice; #2891 S2 established
+    /// that this cannot be closed downstream, because no consumer can tell a
+    /// restatement from a legitimate delta that repeats earlier bytes. The
+    /// adapter can, so the adapter says so.
     fn tool_execution_update(&mut self, v: &Value) -> Vec<Decoded> {
         let Some(id) = str_at(v, "toolCallId") else {
             return vec![Decoded::Note("tool_execution_update without a toolCallId".into())];
@@ -895,8 +899,13 @@ impl Decoder {
     fn emit_tool_output(&mut self, id: &str, accumulated: &str, is_error: bool) -> Vec<Decoded> {
         let previous = self.tool_output.get(id);
         let (delta, restated) = match previous {
-            Some(p) if accumulated.starts_with(p.as_str()) => (accumulated[p.len()..].to_string(), false),
+            Some(p) if accumulated.starts_with(p.as_str()) => {
+                (accumulated[p.len()..].to_string(), false)
+            }
             Some(_) => (accumulated.to_string(), true),
+            // The FIRST output for a call is not a restatement: there is nothing
+            // held for it to replace, and marking it `true` would make every tool
+            // start with a replace nobody needs.
             None => (accumulated.to_string(), false),
         };
         self.tool_output
@@ -918,6 +927,7 @@ impl Decoder {
             id: ToolUseId(id.to_string()),
             delta,
             is_error,
+            replaces: restated,
         }));
         out
     }
@@ -1870,22 +1880,28 @@ mod tests {
         let outs: Vec<_> = events(&all)
             .into_iter()
             .filter_map(|e| match e {
-                HarnessEvent::ToolOutput { delta, is_error, .. } => Some((delta, is_error)),
+                HarnessEvent::ToolOutput {
+                    delta,
+                    is_error,
+                    replaces,
+                    ..
+                } => Some((delta, is_error, replaces)),
                 _ => None,
             })
             .collect();
         assert_eq!(
             outs,
             vec![
-                ("total 48\n".to_string(), false),
-                ("drwx\n".to_string(), false),
-                ("ls: no\n".to_string(), true),
+                ("total 48\n".to_string(), false, false),
+                ("drwx\n".to_string(), false, false),
+                ("ls: no\n".to_string(), true, false),
             ],
-            "each update must yield only what is NEW since the last one"
+            "each update must yield only what is NEW since the last one, and a \
+             well-behaved stream never asks a consumer to replace anything"
         );
         // Concatenating the deltas reconstructs the accumulation, which is the
         // property a consumer relies on and the one an off-by-one would break.
-        let joined: String = outs.iter().map(|(d, _)| d.as_str()).collect();
+        let joined: String = outs.iter().map(|(d, _, _)| d.as_str()).collect();
         assert_eq!(joined, "total 48\ndrwx\nls: no\n");
 
         // The verdict still arrives once, separately, and after the bytes.
@@ -1919,35 +1935,47 @@ mod tests {
         // twice, which is visibly wrong, rather than a fragment sliced at an
         // offset that means nothing, which is invisibly wrong.
         let mut d = Decoder::new();
-        let all = decode_all(
-            &mut d,
-            &tool_stream(&["aaaaaaaa", "bb"], "bb", false),
-        );
+        let all = decode_all(&mut d, &tool_stream(&["aaaaaaaa", "bb"], "bb", false));
         let outs: Vec<_> = events(&all)
             .into_iter()
             .filter_map(|e| match e {
-                HarnessEvent::ToolOutput { delta, .. } => Some(delta),
+                HarnessEvent::ToolOutput {
+                    delta, replaces, ..
+                } => Some((delta, replaces)),
                 _ => None,
             })
             .collect();
         assert_eq!(
             outs,
-            vec!["aaaaaaaa".to_string(), "bb".to_string()],
-            "the whole new value, never a suffix taken at the old length"
+            vec![
+                ("aaaaaaaa".to_string(), false),
+                // The whole new value, never a suffix taken at the old length —
+                // and MARKED, which is the half a consumer needs. Unmarked, a
+                // renderer appending deltas shows the output twice, and #2891 S2
+                // established it cannot tell this from a legitimate repeat.
+                ("bb".to_string(), true),
+            ]
         );
         assert!(
             notes(&all).iter().any(|n| n.contains("not an extension")),
-            "the restatement must be RECORDED, not silent: {:?}",
+            "and it is recorded for a human too: {:?}",
             notes(&all)
         );
-        // The discriminating control: the same shapes that ARE extensions record
-        // nothing, so the note above is not written on every update.
+        // The discriminating control: the same shapes that ARE extensions neither
+        // set the flag nor record the note, so neither is written on every update.
         let mut d = Decoder::new();
         let clean = decode_all(&mut d, &tool_stream(&["aa", "aabb"], "aabb", false));
         assert!(
             !notes(&clean).iter().any(|n| n.contains("not an extension")),
             "{:?}",
             notes(&clean)
+        );
+        assert!(
+            events(&clean).iter().all(|e| !matches!(
+                e,
+                HarnessEvent::ToolOutput { replaces: true, .. }
+            )),
+            "{clean:?}"
         );
     }
 
@@ -2036,7 +2064,7 @@ mod tests {
                 events(&all),
                 vec![HarnessEvent::Note {
                     turn: None,
-                    kind: NoteKind::Ui,
+                    note: NoteKind::Ui,
                     text: "Command blocked by user".into(),
                 }],
                 "{name} must be seen but never asked"
@@ -2658,7 +2686,7 @@ mod tests {
             let got: Vec<_> = events(&all)
                 .into_iter()
                 .filter_map(|e| match e {
-                    HarnessEvent::Note { kind, .. } => Some(kind),
+                    HarnessEvent::Note { note, .. } => Some(note),
                     _ => None,
                 })
                 .collect();
@@ -2707,7 +2735,7 @@ mod tests {
             events(&before),
             vec![HarnessEvent::Note {
                 turn: None,
-                kind: NoteKind::Error,
+                note: NoteKind::Error,
                 text: "extension /x.ts failed on boot: boom".into(),
             }],
             "no turn is open, so the turn is not known"
@@ -2879,7 +2907,7 @@ mod tests {
         let note_texts: Vec<_> = evs
             .iter()
             .filter_map(|e| match e {
-                HarnessEvent::Note { kind, text, .. } => Some((*kind, text.as_str())),
+                HarnessEvent::Note { note, text, .. } => Some((*note, text.as_str())),
                 _ => None,
             })
             .collect();

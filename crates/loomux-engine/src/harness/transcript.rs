@@ -327,8 +327,8 @@ impl Renderer {
             // rare, and each is something a human staring at a stalled pane needs
             // to see. A retry loop that drew nothing is the failure this variant
             // was added for (#2850 S1b).
-            HarnessEvent::Note { kind, text, .. } => {
-                let tag = match kind {
+            HarnessEvent::Note { note, text, .. } => {
+                let tag = match note {
                     NoteKind::Retry => "retry",
                     NoteKind::Error => "error",
                     NoteKind::Ui => "note",
@@ -907,6 +907,7 @@ mod tests {
                     id: ToolUseId("t".into()),
                     delta: "total 48".into(),
                     is_error: false,
+                    replaces: false,
                 },
                 HarnessEvent::QueueChanged {
                     steering: vec![],
@@ -988,6 +989,7 @@ mod tests {
                     id: ToolUseId("t".into()),
                     delta: "\r\x1b[2Kwiped".into(),
                     is_error: true,
+                    replaces: true,
                 },
                 HarnessEvent::UiRequest {
                     id: RequestId("u".into()),

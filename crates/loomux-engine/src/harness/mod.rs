@@ -502,11 +502,31 @@ pub enum HarnessEvent {
     /// consumer accumulates deltas with no state, while recovering a delta from
     /// an accumulation needs the previous value, which the ADAPTER already holds
     /// and a renderer does not. There is more than one renderer.
+    ///
+    /// **`replaces` is that same argument finished, and #2850 S1b added it.** The
+    /// subtraction has a precondition — each accumulation extends the last — that
+    /// "simply replace their display" implies and does not promise. When it does
+    /// not hold, the adapter emits the whole new value, and a consumer appending
+    /// deltas would then show the output TWICE.
+    ///
+    /// The first shape of this shipped the restatement unmarked, and #2891 S2
+    /// established why that cannot be closed downstream: a consumer cannot tell a
+    /// restatement from a legitimate delta that happens to repeat earlier bytes,
+    /// and any heuristic for it ("does this restate what I hold?") silently eats
+    /// genuinely repeating output — a worse failure than the one it fixes. So the
+    /// fact is carried rather than inferred, by exactly the reasoning that put
+    /// the subtraction in the adapter in the first place.
+    ///
+    /// `false` on every ordinary delta: **append**. `true`: `delta` is the whole
+    /// current output for this [`ToolUseId`] and **replaces** everything held for
+    /// it. A consumer that ignores the field is no worse off than before it
+    /// existed, which is what makes the addition additive.
     ToolOutput {
         turn: TurnId,
         id: ToolUseId,
         delta: String,
         is_error: bool,
+        replaces: bool,
     },
     /// The harness is asking a HUMAN a question and is blocked on the answer.
     ///
@@ -575,9 +595,29 @@ pub enum HarnessEvent {
     ///
     /// **Per-pane, never decision-grade** (§4.3): a retry is not a decision
     /// anybody made, and the audit log is for decisions.
+    ///
+    /// **The field is `note` and not `kind`, and that is load-bearing.** This
+    /// enum is `#[serde(tag = "kind")]`, and `serde_derive` REFUSES a variant
+    /// field of the same name outright:
+    ///
+    /// ```text
+    /// error: variant field name `kind` conflicts with internal tag
+    /// ```
+    ///
+    /// The first shape of this variant used `kind`, and the build broke on it
+    /// (#2850 S1b, run 34046263686, all three platforms). That is the good
+    /// outcome and it is worth writing down WHY it is good, because the obvious
+    /// "fix" — keeping the field and silencing the derive with a `rename` — is
+    /// the one to refuse. Serde would then emit the key twice, and the failure
+    /// stops being loud: `JSON.parse` keeps the LAST duplicate, so
+    /// `{"kind":"note",…,"kind":"retry"}` reaches a JS consumer as
+    /// `kind === "retry"`, matches no variant arm, and is filed as an
+    /// unrecognized event with nothing red on either side to say so (#2891 S2's
+    /// reading of what the compiler is protecting here). Keep the names
+    /// distinct instead.
     Note {
         turn: Option<TurnId>,
-        kind: NoteKind,
+        note: NoteKind,
         text: String,
     },
 }
@@ -1059,6 +1099,7 @@ mod tests {
                 id: ToolUseId("t".into()),
                 delta: "total 48".into(),
                 is_error: false,
+                replaces: false,
             },
             HarnessEvent::QueueChanged {
                 steering: vec!["focus on errors".into()],
@@ -1069,7 +1110,7 @@ mod tests {
             // SEE on the pane.
             HarnessEvent::Note {
                 turn: None,
-                kind: NoteKind::Retry,
+                note: NoteKind::Retry,
                 text: "529 overloaded".into(),
             },
         ];
@@ -1178,6 +1219,9 @@ mod tests {
                 id: ToolUseId("t".into()),
                 delta: "out".into(),
                 is_error: true,
+                // Both settings round trip: a `bool` that only ever appeared as
+                // `false` would leave the arm a restatement takes untested.
+                replaces: true,
             },
             HarnessEvent::UiRequest {
                 id: RequestId("u".into()),
@@ -1212,17 +1256,17 @@ mod tests {
             // of them round trips.
             HarnessEvent::Note {
                 turn: None,
-                kind: NoteKind::Retry,
+                note: NoteKind::Retry,
                 text: "529 overloaded".into(),
             },
             HarnessEvent::Note {
                 turn: Some(TurnId(2)),
-                kind: NoteKind::Error,
+                note: NoteKind::Error,
                 text: "extension threw".into(),
             },
             HarnessEvent::Note {
                 turn: Some(TurnId(2)),
-                kind: NoteKind::Ui,
+                note: NoteKind::Ui,
                 text: "Command blocked by user".into(),
             },
         ];

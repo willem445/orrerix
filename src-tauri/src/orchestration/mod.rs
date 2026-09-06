@@ -44718,7 +44718,6 @@ impl OrchRegistry {
             .map(|r| {
                 let (block, cli) = live
                     .get(&r.id)
-                    .or_else(|| from_rows.get(&r.id))
                     .cloned()
                     .unwrap_or_else(|| (r.block.clone(), String::new()));
                 json!({

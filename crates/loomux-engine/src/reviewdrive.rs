@@ -581,7 +581,7 @@ pub fn transition(from: DriveState, to: DriveState) -> Result<DriveState, Invali
 /// anything the key does not carry belongs on the `true` side.
 pub fn repeat_carries_new_information(reason: HeldReason) -> bool {
     match reason {
-        HeldReason::StateStalled | HeldReason::DriveStalled => true,
+        HeldReason::StateStalled | HeldReason::DriveStalled => false,
         HeldReason::Escalate
         | HeldReason::ReviewLimit
         | HeldReason::CiLimit

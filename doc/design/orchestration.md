@@ -13206,6 +13206,18 @@ distinctive sentence, and requires exactly one — it never looks at a name, so 
 the same predicate over a corpus with a deliberate second copy and requires it to see both:
 an `== 1` assertion passes just as well against a scanner that can only ever return 0 or 1.
 
+**Pins that read the TEMPLATE CONST had to compose it.** Three
+`worker_template_*` pins in `tests/orchestration.rs` assert on `WORKER_TPL` rather than on
+the rendered file, and their subjects (`gh run list`/`headSha`/`rev-parse`, `Closes #N` vs
+`Part of #N`, the context-blind keyword scan) all live in the DoD — so after the split they
+were reading worker.md *minus its definition of done*. `worker_contract_text()` composes the
+const with `brief::dod_body()` substituted, which is the same move
+`every_role_template_names_the_ci_watch_and_the_conflicting_case` already makes for the
+orchestrator's core + playbook: a pin whose subject moved behind a substitution reads the
+text the agent is held to, not the file that happens to hold most of it. Its `assert!` is a
+vacuity control — an unregistered or renamed placeholder would otherwise return the template
+unchanged and every pin below it would pass or fail for the wrong reason.
+
 **Two prose pins were relocated, not relaxed.**
 `red_before_green_is_demanded_evidenced_verified_and_bounded_by_its_exemption` (in both
 `tests/prompts.rs` and `tests/workflow.rs`) anchored on `**red-before-green evidence**`, a

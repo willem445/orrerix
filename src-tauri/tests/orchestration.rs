@@ -2189,16 +2189,42 @@ fn delegate_templates_forbid_blocking_a_turn_on_ci() {
 /// tree it ran on), and the local head to compare it against (`rev-parse`).
 /// Prose may be rewritten freely; a version missing any of them no longer
 /// tells a worker how to tell a live citation from a dead one.
+/// `worker.md` as a worker actually reads it — the template with `{{DOD}}`
+/// substituted (#3040 P2).
+///
+/// The definition of done is ONE copy (`templates/dod.md`) and `worker.md`
+/// carries a placeholder where the section used to be, so `WORKER_TPL` alone is
+/// no longer the worker's contract: it is the contract minus its DoD. Same
+/// composition `every_role_template_names_the_ci_watch_and_the_conflicting_case`
+/// above already does for the orchestrator's core + playbook, and for the same
+/// reason — a pin whose subject moved behind a substitution must read the text
+/// the agent is held to, never the source file that happens to hold most of it.
+///
+/// The `assert!` is the vacuity control, and it is not decoration: without it a
+/// renamed or unregistered placeholder makes this return the template unchanged,
+/// and every pin below then passes or fails for a reason that has nothing to do
+/// with the rule it names.
+fn worker_contract_text() -> String {
+    let composed = WORKER_TPL.replace("{{DOD}}", loomux_lib::orchestration::brief::dod_body());
+    assert!(
+        !composed.contains("{{DOD}}") && composed.len() > WORKER_TPL.len(),
+        "the DoD substitution did not happen — these pins would be reading worker.md WITHOUT \
+         its definition of done, which is the one section they are about"
+    );
+    composed
+}
+
 #[test]
 fn worker_template_requires_re_deriving_run_citations_after_a_push() {
+    let tpl = worker_contract_text();
     for concept in ["gh run list", "headSha", "rev-parse"] {
         assert!(
-            WORKER_TPL.contains(concept),
+            tpl.contains(concept),
             "worker.md no longer names `{concept}` — without the command and the field that \
              tie a run to a commit, 're-derive your citations' is a wish, not a procedure (#596)"
         );
     }
-    let lower = WORKER_TPL.to_lowercase();
+    let lower = tpl.to_lowercase();
     assert!(
         lower.contains("stale"),
         "worker.md must say what a citation BECOMES after a push (stale) — a rule that only \
@@ -2214,15 +2240,16 @@ fn worker_template_requires_re_deriving_run_citations_after_a_push() {
 /// which is exactly how #569 and #590 got closed.
 #[test]
 fn worker_template_reserves_closes_for_a_pr_that_finishes_the_issue() {
+    let tpl = worker_contract_text();
     for concept in ["Closes #N", "Part of #N"] {
         assert!(
-            WORKER_TPL.contains(concept),
+            tpl.contains(concept),
             "worker.md no longer offers `{concept}` — a partial-scope PR with no keyword of \
              its own goes on writing `Closes` and auto-closing live issues (#596)"
         );
     }
     assert!(
-        WORKER_TPL.to_lowercase().contains("squash merge"),
+        tpl.to_lowercase().contains("squash merge"),
         "worker.md must name the squash merge as the mechanism that honors `Closes` whatever \
          the scope — unstated, the keyword choice reads as a style preference (#596)"
     );
@@ -2258,7 +2285,7 @@ fn worker_template_reserves_closes_for_a_pr_that_finishes_the_issue() {
 /// these is telling a worker to be careful, which #615's author already was.
 #[test]
 fn worker_template_says_the_closing_keyword_scan_is_context_blind() {
-    let lower = WORKER_TPL.to_lowercase();
+    let lower = worker_contract_text().to_lowercase();
     for concept in ["context-blind", "commit message", "grep", "git log"] {
         assert!(
             lower.contains(concept),

@@ -1367,6 +1367,11 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   `post_issue_comment` (#2815, also unmerged at this re-bless — again in WILL tense, with the
   `gh` form named as what to use until it lands).
 
+  Three `worker_template_*` pins in `tests/orchestration.rs` read `WORKER_TPL` rather than the
+  rendered file, and their subjects all live in the DoD — they now read
+  `worker_contract_text()`, the const with `{{DOD}}` substituted, carrying a vacuity control
+  so an unregistered placeholder cannot make them pass against a contract with no DoD in it.
+
   Two prose pins were **relocated, not relaxed**: `red_before_green_is_demanded_evidenced_...`
   (in both `tests/prompts.rs` and `tests/workflow.rs`) anchored on
   `**red-before-green evidence**`, a phrase that lived in the deleted recap. Each now pins the

@@ -64102,14 +64102,22 @@ fn the_series_read_labels_its_agents_and_a_dead_ones_cli_survives_in_its_rows() 
     assert_eq!(entry["task"], "brief text");
     assert_eq!(entry["session"], w.session_id.as_deref().unwrap());
 
+    // **The discriminating half needs a RESTART, not a kill.** `mark_dead`
+    // leaves the entry in the in-memory agent map with a dead STATUS, so the
+    // live lookup still answers for it and the row fallback is never reached.
+    // (Measured: the round-13 scratch mutation, which deletes that fallback,
+    // came back GREEN against a kill alone.) A fresh registry over the same
+    // state root has no agent map at all, and the rows the agent wrote while
+    // alive are then the only surviving record of which CLI it ran.
     reg.mark_dead(&w.id, Some(0));
-    let after = reg.usage_series(&g.id, 0);
+    let reg2 = relaunch_registry(_d.path());
+    let after = reg2.usage_series(&g.id, 0);
     let gone = after["agents"]
         .as_array()
         .unwrap()
         .iter()
         .find(|a| a["id"] == w.id.as_str())
-        .expect("a dead agent is still on the roster")
+        .expect("a restarted process still lists the agent, off the persisted roster")
         .clone();
     assert_eq!(gone["cli"], "claude", "recovered from the rows it wrote while alive");
     assert_eq!(gone["block"], "worker");

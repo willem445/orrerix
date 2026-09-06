@@ -37860,6 +37860,18 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
         // checked against that by this scan alone, so a reader re-checking it
         // reads `lead.rs`'s `relaunch_registry` itself.
         ("lead.rs", 1),           // relaunch_registry (#2519 slice A)
+        // #3040 P3a, the plan driver's twin of the `reviewdrive.rs` row above.
+        // Its own binary for that row's two reasons (helpers do not cross
+        // integration-test targets, and CLAUDE.md constraint 4 makes the target
+        // KIND what matters), and therefore its own helper.
+        //
+        // **The proof this row names**, so it can go stale rather than merely be
+        // trusted: `tests/plandrive.rs`'s own
+        // `its_registry_helper_applies_every_override_this_allowlist_row_assumes`
+        // asserts the helper really does apply all four agent/hook dir
+        // overrides. If it ever stops applying one, that test fails in its own
+        // binary and this row's premise is gone with it.
+        ("plandrive.rs", 1),      // test_registry (#3040 P3a) — see above
         // #2515 C3, the codex twin of the `piusage.rs` row above. Same reason it
         // is its own binary (helpers do not cross integration-test targets),
         // and it carries the #1778 row convention: its own

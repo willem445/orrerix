@@ -156,6 +156,62 @@ fn test_registry() -> (OrchRegistry, tempfile::TempDir) {
     (reg, dir)
 }
 
+/// **The premise of this file's #464 allowlist row**, checked here rather than
+/// asserted there (`tests/orchestration.rs`,
+/// `only_the_sanctioned_helpers_construct_a_registry`).
+///
+/// That row permits exactly one raw `OrchRegistry::new` in this file, on the
+/// stated grounds that it is [`test_registry`] and that [`test_registry`]
+/// redirects every generated-agent-file destination away from the real
+/// `~/.claude` / `~/.copilot`. A helper that quietly stopped applying one of
+/// those overrides would leave the row true about the COUNT and false about the
+/// property, and nothing over there could tell.
+#[test]
+fn its_registry_helper_applies_every_override_this_allowlist_row_assumes() {
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/plandrive.rs"),
+    )
+    .expect("this file reads itself");
+
+    // The helper's body: from its signature to the first line that closes it at
+    // column 0 — narrow enough that an override applied by some OTHER function
+    // in this file cannot satisfy the assertions below.
+    let start = src
+        .find("fn test_registry() -> (OrchRegistry, tempfile::TempDir) {")
+        .expect("the sanctioned helper must exist, under the name the row names");
+    let body = &src[start..];
+    let end = body.find("\n}").expect("the helper must terminate") + 2;
+    let body = &body[..end];
+
+    for needed in [
+        "set_claude_agents_dir_override",
+        "set_copilot_agents_dir_override",
+        "set_compact_hook_dir_override",
+        "set_copilot_hooks_dir_override",
+    ] {
+        assert!(
+            body.contains(needed),
+            "the #464 allowlist row for tests/plandrive.rs assumes this helper applies every \
+             override; it no longer applies {needed}, so a registry built through it can reach \
+             the real agent dirs and the row's premise is gone"
+        );
+    }
+
+    // The population control: the extraction really did isolate the helper, so
+    // the four assertions above are about ITS body and not about the whole file
+    // — which contains those same names in prose.
+    assert!(
+        body.len() < 1_200,
+        "the helper's body extraction ran away ({} chars); the assertions above would then be \
+         satisfied by any other function in this file",
+        body.len()
+    );
+    assert!(
+        !body.contains("#[test]"),
+        "the extraction swallowed a test, so it is no longer reading only the helper"
+    );
+}
+
 /// The canned `gh`, keyed on WHAT was asked rather than on call order, with the
 /// call log a test asserts the "no round trip for the plan" claim against.
 struct FakeGh {

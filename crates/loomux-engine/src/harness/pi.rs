@@ -193,10 +193,8 @@ impl LaunchSpec {
             a.push("--exclude-tools".into());
             a.push(x.clone());
         }
-        if !self.model.is_empty() {
-            a.push("--model".into());
-            a.push(self.model.clone());
-        }
+        a.push("--model".into());
+        a.push(self.model.clone());
         if !self.thinking.is_empty() {
             a.push("--thinking".into());
             a.push(self.thinking.clone());

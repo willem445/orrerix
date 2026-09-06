@@ -63808,6 +63808,7 @@ fn echoing_gh(dir: &Path, name: &str) -> std::path::PathBuf {
             format!("{name}.cmd"),
             "@echo off\r\n\
              if not \"%~5\"==\"\" copy /y \"%~5\" \"%~dp0body-seen.txt\" >NUL\r\n\
+             if not \"%~5\"==\"\" echo %~5>>\"%~dp0paths-seen.txt\"\r\n\
              echo https://example.invalid/c/%~1-%~2-%~3\r\n"
                 .to_string(),
         )
@@ -63815,7 +63816,8 @@ fn echoing_gh(dir: &Path, name: &str) -> std::path::PathBuf {
         (
             name.to_string(),
             "#!/bin/sh\n\
-             if [ -n \"$5\" ]; then cat \"$5\" > \"$(dirname \"$0\")/body-seen.txt\"; fi\n\
+             d=$(dirname \"$0\")\n\
+             if [ -n \"$5\" ]; then cat \"$5\" > \"$d/body-seen.txt\"; echo \"$5\" >> \"$d/paths-seen.txt\"; fi\n\
              printf '%s\\n' \"https://example.invalid/c/$1-$2-$3\"\n"
                 .to_string(),
         )
@@ -63899,7 +63901,7 @@ fn a_planner_posts_a_plan_longer_than_the_shell_could_carry_and_gets_the_url() {
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with("-comment-body.md"))
+        .filter(|n| n.contains("-comment-body-") && n.ends_with(".md"))
         .collect();
     assert!(leftovers.is_empty(), "the staged body must be cleaned up, found: {leftovers:?}");
 
@@ -64026,4 +64028,97 @@ fn neither_comment_argv_has_a_verb_a_caller_can_reach() {
             "and the shared guard agrees: {empty:?}");
     }
     assert!(reject_empty_comment("x").is_ok(), "a non-empty body is not refused");
+}
+
+/// Two posts by ONE agent must not share a staging path (review round 1).
+///
+/// The race is real rather than theoretical: a CLI is free to issue independent
+/// tool calls in a single message, so one pane can have two posts in flight. With
+/// the path keyed on the agent id alone, the second write truncates the file the
+/// first is still handing to `gh`, and the first post publishes the second's text
+/// or a torn prefix of it — with nothing failing, which is what makes it worth a
+/// test rather than a comment.
+///
+/// It is pinned on the OBSERVABLE consequence, not on the naming scheme: the fake
+/// `gh` records the `--body-file` path it was actually handed, and the assertion
+/// is that the two differ. A test that asserted the filename format would pass on
+/// any scheme that merely looked unique.
+#[test]
+fn two_posts_by_one_agent_get_distinct_staging_files() {
+    let _serial = capture_lock();
+    let (reg, _d) = test_registry();
+    let repo = tempfile::tempdir().unwrap();
+    let g = reg
+        .create_group(&repo.path().to_string_lossy(), Guardrails { max_agents: 8, ..rails() })
+        .unwrap();
+    reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let planner = reg.spawn_agent(&g.id, Role::Planner, "plan", "plan #7", false, None).unwrap();
+    let cp = reg.resolve_token(&planner.token).unwrap();
+    reg.set_gh_exec_override(Some((echoing_gh(repo.path(), "echoing_gh"), Duration::from_secs(20))));
+
+    post_comment(&reg, &cp, json!({ "issue": 7, "body": "first" })).unwrap();
+    post_comment(&reg, &cp, json!({ "issue": 7, "body": "second" })).unwrap();
+
+    let seen = fs::read_to_string(repo.path().join("paths-seen.txt")).unwrap();
+    let paths: Vec<&str> = seen.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    assert_eq!(paths.len(), 2, "both posts must have reached gh: {paths:?}");
+    assert_ne!(paths[0], paths[1],
+        "the same agent's two posts must stage to DIFFERENT files, or one truncates the \
+         other mid-flight and publishes the wrong text: {paths:?}");
+
+    reg.set_gh_exec_override(None);
+}
+
+/// A post that FAILED still leaves an audit row, carrying the error (review
+/// round 1).
+///
+/// Without this the audit is a record of successes only, and a failed post is
+/// indistinguishable in the log from one that was never attempted — which is the
+/// worse of the two for a human asking "did that pane publish anything?". It is
+/// also what makes the claim on the tool description and the docs page true as
+/// written rather than nearly true.
+#[test]
+fn a_failed_post_is_audited_too_and_says_why() {
+    let _serial = capture_lock();
+    let (reg, _d) = test_registry();
+    let repo = tempfile::tempdir().unwrap();
+    let g = reg
+        .create_group(&repo.path().to_string_lossy(), Guardrails { max_agents: 8, ..rails() })
+        .unwrap();
+    reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let planner = reg.spawn_agent(&g.id, Role::Planner, "plan", "plan #7", false, None).unwrap();
+    let cp = reg.resolve_token(&planner.token).unwrap();
+
+    // A `gh` that cannot be spawned at all: the failure is real and needs no
+    // script, and it lands in the same place a network or auth failure would.
+    reg.set_gh_exec_override(Some((
+        repo.path().join("no-such-gh-binary"),
+        Duration::from_secs(20),
+    )));
+
+    let err = post_comment(&reg, &cp, json!({ "issue": 7, "body": "a plan" })).unwrap_err();
+    assert!(!err.is_empty(), "the caller must be told the post failed");
+
+    let row = reg.audit_log(&g.id).into_iter()
+        .find(|e| e.action == "issue-comment")
+        .expect("a FAILED post must leave an issue-comment row too — absent reads as \
+                 'never attempted', which is a different thing");
+    assert_eq!(row.detail["issue"], 7);
+    assert_eq!(row.detail["bytes"], 6, "the size it tried to post");
+    assert!(row.detail.get("url").is_none(),
+        "no URL on a failure — a row that carried an empty one would read as a post that \
+         worked and lost its link: {row:?}");
+    assert!(row.detail["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "and the reason, so the human need not re-run it to find out: {row:?}");
+
+    // The staged body is cleaned up on the failing path too.
+    let leftovers = fs::read_dir(reg.state_root().join(g.id.as_str()))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("-comment-body-") && n.ends_with(".md"))
+        .count();
+    assert_eq!(leftovers, 0, "a failed post must not leave its staging file behind");
+
+    reg.set_gh_exec_override(None);
 }

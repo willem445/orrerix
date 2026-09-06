@@ -279,9 +279,12 @@ sub-commands, so a plan — thousands of characters, many lines — matched no r
 and was denied outright in a read-only pane even with `gh` fully pre-approved.
 Passing the plan as a tool argument sidesteps both limits, and works the same way
 whatever CLI the planner block names. The tool posts comments and nothing else:
-it cannot label, close, merge, review, or create anything, and every call leaves
-an `issue-comment` row in the group's audit log with the issue, the size and the
-resulting comment URL. It is available to the orchestrator and workers too;
+it cannot label, close, merge, review, or create anything. Every post leaves an
+`issue-comment` row in the group's audit log with the issue, the body size and the
+outcome — the comment URL when it worked, the error when it did not, so a failed
+post is visible rather than simply absent. (A call refused before `gh` runs at all,
+such as an empty body, is argument validation rather than a post, and writes no
+row.) It is available to the orchestrator and workers too;
 reviewers are excluded, since a review is the recorded route to a PR.
 
 One thing worth knowing: GitHub numbers issues and pull requests in a single

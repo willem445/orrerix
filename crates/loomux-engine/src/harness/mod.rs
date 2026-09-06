@@ -644,8 +644,7 @@ impl HarnessEvent {
             HarnessEvent::ToolCall { .. }
                 | HarnessEvent::PermissionRequest { .. }
                 | HarnessEvent::PermissionSettled { .. }
-                | HarnessEvent::UiRequest { .. }
-                | HarnessEvent::UiSettled { .. }
+
                 | HarnessEvent::TurnEnded { .. }
                 | HarnessEvent::Exited { .. }
         )

@@ -1053,15 +1053,7 @@ impl Decoder {
         if let Some(t) = self.open_turn {
             return t;
         }
-        if let Some(pending) = self.pending_stats.take() {
-            out.push(Decoded::Event(HarnessEvent::TurnEnded {
-                turn: pending.turn,
-                usage: None,
-                cost: None,
-                stop: StopReason::Completed,
-            }));
-            self.reset_turn_usage();
-        }
+        self.pending_stats = None;
         let t = TurnId(self.next_turn);
         self.next_turn += 1;
         self.open_turn = Some(t);

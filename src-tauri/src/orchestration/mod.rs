@@ -36444,7 +36444,6 @@ impl OrchRegistry {
         // Best-effort, and deliberately not `?`: the post has already happened
         // or already failed, and a leftover scratch file is not a reason to
         // report either outcome differently.
-        let _ = fs::remove_file(&body_path);
         let out = match captured {
             Ok(out) => out,
             Err(e) => {

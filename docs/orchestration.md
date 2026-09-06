@@ -1188,10 +1188,18 @@ JSON.
 The internal watchdog stall check knows about a live watch too: an agent silent past its
 group's stall window while it holds one is **not** nudged to the orchestrator — it's plausibly
 waiting on its own CI check, not stuck — and the suppression itself is audited
-(`watchdog-suppressed`) so it stays diagnosable. Once that watch resolves (fires, expires, or
-is cancelled), the agent earns a fresh full stall window from that moment; only silence through
-*that* window is treated as a real stall and nudges the orchestrator (`watchdog-stall`).
-A stalled agent holding no watch behaves exactly as before.
+(`watchdog-suppressed`, carrying a `why`) so it stays diagnosable. Once that watch resolves
+(fires, expires, or is cancelled), the agent earns a fresh full stall window from that moment;
+only silence through *that* window is treated as a real stall and nudges the orchestrator
+(`watchdog-stall`).
+
+Two more stalls are suppressed the same way, for the same reason — the notice would carry no
+decision. A pane something in this process has **already asked to end** (an orchestrator kill,
+an idle reap, a driver release) is on its way out, so its silence is expected
+(`why: exit-initiated`); and a reviewer lane a **live review drive owns** is already being
+watched by the driver, which answers a stuck lane with a hold that names the PR and what to do
+about it (`why: driven-lane`). A stalled agent that is none of these behaves exactly as before,
+and every suppression is one audit row per stall, not one per tick.
 
 The suppression is bounded by the watch's own TTL (5–240 min, default 60 — see "capped ...
 and time-bounded" above), never open-ended: a genuinely hung agent holding a watch is
@@ -1871,15 +1879,24 @@ Two things to know before you adopt it:
 The workflow pane shows your rules and preserves them across edits, but does not
 offer a control for adding one yet — edit `.orrerix/workflow.yml` directly.
 
-**Verdict notices are short on purpose.** Recording a verdict also types a
+**Verdict notices are a pointer, on purpose.** Recording a verdict also types a
 courtesy notice into the orchestrator's pane, so it learns the review landed
-without polling for it. That notice carries the verdict, the PR, and only the
-**first ~400 characters** of the reviewer's summary, followed by a pointer to
-the rest — pane text becomes that agent's resident context and is re-sent on
-every turn it takes afterwards, so a full copy of every summary is paid for
-repeatedly. Nothing is lost: the whole summary stays in the verdict record (the
-orchestrator reads it with `list_verdicts`, which is also what the merge gate
-reads) and in the review posted on the PR itself.
+without polling for it. That notice carries the routing facts and nothing else —
+which reviewer block recorded which verdict on which PR, the gate's current
+status, and the `list_verdicts("<pr>")` call that returns the summary:
+
+```
+[orrerix] rev-9 (rev-std) recorded verdict PASS on PR #12 — list_verdicts("12")
+```
+
+Pane text becomes that agent's resident context and is re-sent on every turn it
+takes afterwards, so a copy of every summary is paid for repeatedly — and the
+summary is not what the orchestrator decides on. Nothing is lost: the whole
+summary stays in the verdict record (the orchestrator reads it with
+`list_verdicts`, which is also what the merge gate reads) and in the review
+posted on the PR itself. Under a **review drive** you will not see this notice at
+all — the driver takes delivery of its own lanes' verdicts and reports them in
+its own notice instead.
 
 **Opt-in, every time.** A workflow file arrives with a `git clone` — the
 **advanced orchestrator** toggle is what makes a repo's workflow take effect;

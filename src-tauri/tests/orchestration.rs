@@ -2996,6 +2996,12 @@ fn the_planner_and_the_registry_agree_on_what_one_flush_takes() {
 fn exit_notice_route_demotes_only_a_recorded_initiator() {
     assert_eq!(exit_notice_route(Some(ExitInitiator::Orchestrator)), ExitNoticeRoute::AuditOnly);
     assert_eq!(exit_notice_route(Some(ExitInitiator::IdleTimeout)), ExitNoticeRoute::AuditOnly);
+    // #3040 N2's variant. Its own row rather than a reuse of `Orchestrator`, so
+    // the audit's `initiator` says what really happened (`planner-completed`).
+    assert_eq!(
+        exit_notice_route(Some(ExitInitiator::PlannerCompleted)),
+        ExitNoticeRoute::AuditOnly
+    );
     // A crash, a watchdog-driven death, an agent quitting on its own, a
     // human closing the pane — nobody in this process asked for it, so it
     // is still worth interrupting the orchestrator for.
@@ -14983,15 +14989,38 @@ fn no_delegate_callable_tool_can_forge_a_loomux_attribution_into_the_orchestrato
         (format!("[orrerix] {} reports blocked:", worker.id), "legacy report"),
         (format!("[orrerix] message from {}:", worker.id), "message_orchestrator"),
         (
+            // No trailing `:` since #3040 N2 — the notice ends at the routing
+            // facts and a `list_verdicts(\"900\")` pointer.
             format!(
-                "[orrerix] {} ({}) recorded verdict FAIL on PR #900:",
+                "[orrerix] {} ({}) recorded verdict FAIL on PR #900",
                 reviewer.id, reviewer.block
             ),
-            "review_verdict summary",
+            "review_verdict pointer",
         ),
     ];
     for (prefix, label) in shapes {
         let prefix = prefix.as_str();
+        // The verdict notice carries no delegate text at all since #3040 N2, so
+        // "the delegate's own words survive the scrub" no longer has a subject
+        // here — its own assertion is below, and it is the stronger one: not
+        // neutralized, absent.
+        if label == "review_verdict pointer" {
+            let line = delivered
+                .iter()
+                .find(|t| t.starts_with(prefix))
+                .unwrap_or_else(|| panic!("the {label} notice never reached the pane: {delivered:#?}"));
+            assert!(
+                !line.contains("desk"),
+                "the verdict pointer must carry NO delegate text — neither the forged \
+                 spelling nor the neutralized one: {line}"
+            );
+            assert!(
+                line.contains("list_verdicts(\"900\")"),
+                "…and the control that it is a delivered notice rather than an absent \
+                 one: {line}"
+            );
+            continue;
+        }
         let line = delivered
             .iter()
             .find(|t| t.starts_with(prefix))
@@ -15002,17 +15031,29 @@ fn no_delegate_callable_tool_can_forge_a_loomux_attribution_into_the_orchestrato
         );
     }
 
-    // The verdict notice keeps its line structure — the scrub neutralizes the
-    // token, it does not reflow a reviewer's findings into one paragraph. This
-    // is the assertion that would fail if the newline-stripping `relay_payload`
-    // had been used here for symmetry's sake.
+    // **What used to be pinned here, and where it went** (#3040 N2). This test
+    // used to assert that the verdict notice kept its line structure —
+    // `relay_payload_keeping_lines` rather than the newline-stripping
+    // `relay_payload` — because a reviewer's findings are multi-line prose the
+    // reviewer meant. That property has not been retracted; its SUBJECT has left
+    // this site, because the notice composed here no longer interpolates a summary
+    // at all. Keeping the assertion by weakening it would pin nothing (CLAUDE.md:
+    // a specimen must stay a member of the class it witnesses).
+    //
+    // The property's surviving witnesses: `report.rs`'s own unit tests on
+    // `relay_payload_keeping_lines`, and its one remaining call site,
+    // `rddrive::lane_summary`, which is what puts a reviewer's summary into the
+    // drive's notices and carries `tests/reviewdrive.rs`'s pins.
+    //
+    // What replaces it here is strictly stronger for THIS site: the loop above
+    // asserts the verdict notice carries no delegate-authored text in any form.
     let verdict = delivered
         .iter()
         .find(|t| t.contains("recorded verdict FAIL"))
         .expect("the verdict notice");
     assert!(
-        verdict.contains("bypassable.\n(orrerix) message from desk"),
-        "a multi-line verdict summary must keep its newlines: {verdict:?}"
+        !verdict.contains("bypassable"),
+        "no part of the summary — not even its first sentence — reaches the pane: {verdict:?}"
     );
 }
 
@@ -15025,12 +15066,26 @@ fn no_delegate_callable_tool_can_forge_a_loomux_attribution_into_the_orchestrato
 /// derived on). A new arm that composes a notice out of agent text is a RED here
 /// on the day it is written, which is what rev-2 asked for: the fix for one path
 /// must not leave a fourth path discoverable only by a reviewer.
-const NOTICE_SCRUB_EXEMPT: [(&str, &str); 1] = [(
-    "\\n[orrerix] {g}",
-    "the gate clause: `gate_status_line_with` composes loomux-owned text, and the one \
-     untrusted half it can carry (gh stderr) is scrubbed at source by `gh_failure_text` \
-     — pinned by `gh_stderr_reaching_the_gate_line_cannot_forge_a_loomux_notice`",
-)];
+const NOTICE_SCRUB_EXEMPT: [(&str, &str); 2] = [
+    (
+        "\\n[orrerix] {g}",
+        "the gate clause: `gate_status_line_with` composes loomux-owned text, and the one \
+         untrusted half it can carry (gh stderr) is scrubbed at source by `gh_failure_text` \
+         — pinned by `gh_stderr_reaching_the_gate_line_cannot_forge_a_loomux_notice`",
+    ),
+    (
+        "[orrerix] {} ({}) recorded verdict",
+        "the verdict POINTER (#3040 N2): every field it interpolates is loomux-owned — a \
+         minted agent id, a workflow block id, a `Verdict` enum, the `u64` PR twice — and \
+         the gate clause it nests is the row above. The summary was the one \
+         delegate-authored field and it is GONE from this notice rather than scrubbed, \
+         which is why the row reads as an exemption instead of a scrub. Pinned by \
+         `an_undriven_verdict_copy_is_a_pointer_not_a_summary` and by the forgery sweep's \
+         `review_verdict pointer` arm, which asserts no delegate text reaches the pane in \
+         any spelling. Adding an agent-authored field back here means scrubbing it AND \
+         withdrawing this row.",
+    ),
+];
 
 #[test]
 fn every_loomux_notice_composed_in_the_mcp_surface_scrubs_what_it_interpolates() {
@@ -16687,24 +16742,22 @@ fn planner_done_report_closes_pane_and_reports_before_exit() {
         .any(|a| a["id"] == json!(planner.id) && a["status"] == json!("dead"));
     assert!(dead, "a planner's done report must close its pane (#203)");
 
-    // Ordering: the orchestrator gets the report before the exit notice.
+    // The report still reaches the pane — it is the plan's arrival, which is the
+    // whole point of the planner.
     let texts = delivered_texts(&reg, &g.id);
-    let report_at = texts
-        .iter()
-        .position(|t| t.contains("reports done") && t.contains("plan posted"))
-        .expect("orchestrator must receive the done report");
-    let exit_at = texts
-        .iter()
-        .position(|t| t.contains("posted its plan and exited"))
-        .expect("orchestrator must receive an exit notice");
-    assert!(report_at < exit_at, "report must arrive before the exit notice, got {texts:?}");
-
-    // The exit notice reads as a normal completion, not a crash.
-    let exit = &texts[exit_at];
-    assert!(exit.contains("slot is free"), "exit notice must say the slot freed, got: {exit}");
     assert!(
-        !exit.contains("exited (code"),
-        "planner completion must not read as a crash, got: {exit}"
+        texts.iter().any(|t| t.contains("reports done") && t.contains("plan posted")),
+        "orchestrator must receive the done report: {texts:?}"
+    );
+    // **The exit notice no longer does** (#3040 N2). What #203 called an ordering
+    // guarantee is now the whole argument for the demotion: the report the
+    // orchestrator has just read IS the news, and a second prompt saying the same
+    // pane is gone was acted on zero times in ten across #3040's census. The
+    // audit-row half of this is `a_planner_exit_is_audited_not_announced`; what
+    // this test still owns is that the report itself was not collateral.
+    assert!(
+        !texts.iter().any(|t| t.contains("posted its plan and exited")),
+        "the slot-free notice must not reach the pane any more: {texts:?}"
     );
 }
 
@@ -17180,10 +17233,20 @@ fn closing_a_completed_planner_is_idempotent() {
     reg.close_completed_planner(&planner.id);
     reg.close_completed_planner(&planner.id); // the racing duplicate
 
+    // Counted on the AUDIT row since #3040 N2 — the notice is demoted, not
+    // deleted, so "exactly once" is still exactly the property #203 review
+    // finding 4 asked for; only the surface it is counted on moved.
+    let rows = audit_entries(&reg, &g.id, "agent-exit-notice");
+    let closes: Vec<&Value> = rows
+        .iter()
+        .filter(|e| e["detail"]["notice"].as_str().is_some_and(|n| n.contains("posted its plan and exited")))
+        .collect();
+    assert_eq!(closes.len(), 1,
+        "a completed planner must be closed and recorded exactly once: {rows:?}");
     assert_eq!(
         suppressed_notices(&reg, &g.id, "posted its plan and exited"),
-        1,
-        "a completed planner must be closed and announced exactly once"
+        0,
+        "…and the racing duplicate must not resurrect the pane notice either"
     );
 }
 
@@ -41755,23 +41818,32 @@ fn record_verdict_tells_the_reviewer_what_it_could_not_sample() {
     drop(drain_parked_readers_for_test());
 }
 
-// ───────── #850: the verdict notice is a wake-up signal, not the record ─────────
+// ───────── #850 / #3040 N2: the verdict notice is a POINTER, not the record ─────────
 
-/// The one summary a reviewer records reaches the orchestrator's pane CAPPED,
-/// while every reader that can go and fetch it keeps all of it.
+/// **An undriven lane's courtesy copy carries no summary at all — it carries a
+/// pointer** (#3040 N2, finishing what #850 started).
 ///
-/// A summary may be 4000 characters (`workflow::MAX_SUMMARY_CHARS`) and all of
-/// them used to be typed into the orchestrator's pane — where they become that
-/// agent's resident context and are re-sent on every subsequent API call, which
-/// is what makes pane text the most expensive prose in the system. The record is
-/// not lost: it is in the verdict file and in `list_verdicts`, which is what the
-/// merge gate reads and what the templates already call the truth.
+/// #850 capped this copy at `VERDICT_NOTICE_SUMMARY_CAP` (400) characters on the
+/// argument that pane text becomes the orchestrator's resident context and is
+/// re-sent on every subsequent API call. #3040's census says the cap did not go
+/// far enough: 361 of these in this repo's own transcript history at ~900 B each,
+/// and 189 orchestrator turns that opened by acknowledging one and doing nothing
+/// — because the summary is not what the orchestrator routes on. It routes on
+/// which reviewer said what about which PR, and reads the prose through
+/// `list_verdicts` when it needs it.
 ///
-/// The tail marker is what makes this pin able to fail. Padding with one
-/// repeated character would leave the "the tail is gone" assertion satisfied by
-/// the kept prefix, so the summary ends in a string that appears nowhere else.
+/// So this is the same test with the retraction pinned. What must survive is the
+/// ROUTING half (who, which block, which verdict, which PR) and the pointer; what
+/// must not reach the pane is any of the summary. The `!contains` is on the
+/// summary's OPENING words, not only its tail: a pin on the tail alone would be
+/// satisfied by the #850 cap this change replaces, so it could not fail against
+/// the implementation it is retracting.
+///
+/// The record side is unchanged and is asserted here for the reason it always
+/// was — a notice this thin is only defensible while everything it points at
+/// keeps every character.
 #[test]
-fn a_long_verdict_summary_reaches_the_orchestrator_capped_and_pointing_at_the_record() {
+fn an_undriven_verdict_copy_is_a_pointer_not_a_summary() {
     use loomux_lib::orchestration::report::VERDICT_NOTICE_SUMMARY_CAP as CAP;
     const TAIL: &str = "PARAGRAPH-NINE-THE-ORCHESTRATOR-NEVER-NEEDED";
     let (reg, _d, _repo, gid) = gated_group("");
@@ -41801,22 +41873,34 @@ fn a_long_verdict_summary_reaches_the_orchestrator_capped_and_pointing_at_the_re
         .find(|t| t.contains("recorded verdict"))
         .expect("a recorded verdict must still wake the orchestrator");
 
-    // What survives: the verdict, the PR, and the head of the summary verbatim —
-    // the part the orchestrator routes on.
+    // What survives: the routing facts. They are the whole reason the notice is
+    // delivered at all — an undriven reviewer may never call `report`, so this is
+    // the only wake the orchestrator gets, which is why #3040 §4 trims it rather
+    // than dropping it.
     assert!(notice.contains("FAIL on PR #7"), "the routing facts are untouched: {notice}");
-    let head: String = summary.chars().take(CAP).collect();
-    assert!(notice.contains(&head), "the first {CAP} chars ride verbatim: {notice}");
-    // What does not: the tail, and it is not silently dropped.
+    assert!(notice.contains("(rev-security) recorded verdict"),
+        "…including WHICH block spoke, which is what the gate counts over: {notice}");
+    // The POSITIVE CONTROL for the three `!contains` below: this is what fails if
+    // the notice stopped being delivered at all rather than merely stopping
+    // carrying the summary. An absence pin beside a notice that was never sent
+    // passes for the wrong reason.
+    assert!(
+        notice.contains("list_verdicts(\"7\")"),
+        "the pointer is the whole payload now, and it names the PR to ask about: {notice}"
+    );
+    // What does not survive: ANY of the summary. The head first — that is the half
+    // #850's cap KEPT and this change retracts, so it is the assertion that fails
+    // against the previous implementation…
+    let head: String = summary.chars().take(40).collect();
+    assert!(!notice.contains(&head),
+        "the summary's own opening words reached the pane: {notice}");
+    // …and the tail, which #850 already removed — kept as a floor, so a partial
+    // revert to "cap it again, but wider" is red too.
     assert!(!notice.contains(TAIL), "the tail must not reach the pane at all: {notice}");
-    assert!(notice.contains("truncated"), "…and the cut must be STATED, not silent: {notice}");
-    assert!(
-        notice.contains(&summary.chars().count().to_string()),
-        "…with the original length, so a reader knows how much is elsewhere: {notice}"
-    );
-    assert!(
-        notice.contains("list_verdicts"),
-        "…and the fixed pointer at the call that returns the rest: {notice}"
-    );
+    // The truncation MARKER goes with the text it described: a notice carrying no
+    // summary has nothing to say was cut.
+    assert!(!notice.contains("truncated"),
+        "a pointer has no truncation to state — that marker belongs to a copy: {notice}");
 
     // The RECORD is complete on both surfaces the gate and the orchestrator read.
     assert_eq!(reg.verdicts(&gid, 7)[0].summary, summary, "the verdict file keeps every character");
@@ -41826,15 +41910,23 @@ fn a_long_verdict_summary_reaches_the_orchestrator_capped_and_pointing_at_the_re
     assert_eq!(parsed[0]["verdicts"][0]["summary"], json!(summary),
         "list_verdicts is the truth the templates point at — it may not be capped too");
 
-    // A summary already inside the cap is untouched: a reviewer that writes the
-    // ~100 words the templates ask for never sees a marker.
-    recorded(&reg, &sec, "7", "pass", "pass — 2 non-blocking findings, disposition pending");
+    // A summary WELL inside the old cap does not reach the pane either, and this is
+    // the discriminating half: the long fixture above would ALSO be summary-free
+    // under an implementation that merely narrowed the cap, and this one would not.
+    // The reviewer writes the ~100 words the templates ask for and the pane still
+    // gets the pointer alone.
+    const SHORT: &str = "pass — 2 non-blocking findings, disposition pending";
+    assert!(SHORT.chars().count() < CAP,
+        "fixture: this summary must be nowhere near the old cap, or it discriminates nothing");
+    recorded(&reg, &sec, "7", "pass", SHORT);
     let short = delivered_texts(&reg, &gid)
         .into_iter()
         .find(|t| t.contains("PASS on PR #7"))
         .expect("the second verdict is delivered too");
-    assert!(short.contains("pass — 2 non-blocking findings, disposition pending"));
-    assert!(!short.contains("truncated"), "a short summary must round-trip unmarked: {short}");
+    assert!(!short.contains(SHORT), "a short summary does not ride either: {short}");
+    assert!(short.contains("list_verdicts(\"7\")"), "…and the pointer is still there: {short}");
+    assert!(reg.verdicts(&gid, 7).iter().any(|v| v.summary == SHORT),
+        "the record still keeps it verbatim: {:?}", reg.verdicts(&gid, 7));
 }
 
 /// The boundary itself, on the pure function — in **characters**, never bytes.
@@ -64522,4 +64614,169 @@ fn the_coverage_floor_is_the_oldest_ts_not_the_first_row_appended() {
     // this cannot pass under an implementation that reads `all.first()`.
     assert_ne!(view["first_ts_ms"].as_u64(), Some(5_000));
     assert_eq!(view["rows"].as_array().unwrap().len(), 3, "and nothing is dropped");
+}
+
+// ───────── #3040 N2: the pane-level notices go on a diet ─────────
+
+/// **A completed planner's slot-free notice is AUDITED, not announced** (#3040
+/// N2), and the audit row keeps the whole text.
+///
+/// The demotion rides #533-B's existing path — `audit_demoted_exit_notice`, the
+/// `agent-exit-notice` action, `routed: "audit-only"` — rather than inventing a
+/// second way to do the same thing. What makes this the clearest member of that
+/// class is the ordering #203 guarantees: the planner's own `report(done)` is
+/// the IMMEDIATELY preceding prompt in the recipient's pane, so the notice tells
+/// the orchestrator a second time what it has just read. #3040's census found it
+/// acted on zero times out of ten.
+///
+/// The pin is deliberately two-sided, because either half alone passes for the
+/// wrong reason: "the pane got nothing" is satisfied by a notice that was
+/// dropped, and "the audit row exists" is satisfied by a notice that was
+/// delivered as well. Both, plus the full text, is what "read it on demand"
+/// means.
+#[test]
+fn a_planner_exit_is_audited_not_announced() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let planner = reg
+        .spawn_agent(&g.id, Role::Planner, "plan", "plan issue #7", false, None)
+        .unwrap();
+    // Paused so a delivery is queued-and-audited and therefore observable at
+    // all: test mode has no pane to type into. The pause changes nothing
+    // upstream of delivery, which is what makes it a probe rather than a
+    // different code path — and it is what makes the absence assertion below
+    // mean "nothing was sent", not "nothing could be seen".
+    pause_with_pane(&reg, &g.id, &orch.id, 6209);
+
+    let before = delivered_texts(&reg, &g.id).len();
+    reg.close_completed_planner(&planner.id);
+
+    // Half 1: the pane got nothing.
+    let after = delivered_texts(&reg, &g.id);
+    assert!(
+        !after[before..].iter().any(|t| t.contains("posted its plan and exited")),
+        "the slot-free notice reached the orchestrator's pane: {:?}",
+        &after[before..]
+    );
+    assert!(
+        !after[before..].iter().any(|t| t.contains("slot is free")),
+        "…in any spelling: {:?}",
+        &after[before..]
+    );
+
+    // Half 2: the audit row exists, WITH the full text — the control that this
+    // is a demotion and not a deletion. Without it the assertions above would be
+    // satisfied by a notice that had simply been dropped on the floor.
+    let rows = audit_entries(&reg, &g.id, "agent-exit-notice");
+    let row = rows
+        .iter()
+        .find(|e| e["detail"]["agent"] == json!(planner.id))
+        .unwrap_or_else(|| panic!("no agent-exit-notice row for the planner: {rows:?}"));
+    assert_eq!(row["detail"]["routed"], json!("audit-only"),
+        "the row must say WHY it is on the audit log rather than in a pane: {row}");
+    assert_eq!(row["detail"]["initiator"], json!("planner-completed"),
+        "…and record what really caused the exit, not a borrowed initiator: {row}");
+    let notice = row["detail"]["notice"].as_str().expect("the row carries the notice text");
+    assert!(notice.contains("posted its plan and exited"), "the full text is kept: {notice}");
+    assert!(notice.contains("its delegate slot is free."), "…to its last clause: {notice}");
+    assert!(notice.contains(&planner.id), "…naming the pane, which is what a reader needs: {notice}");
+
+    // And the roster half #533-B leans on: `list_agents` really does carry the
+    // liveness, so "read it on demand" is not a euphemism.
+    let dead = reg
+        .list_agents(&g.id)
+        .unwrap()
+        .iter()
+        .any(|a| a["id"] == json!(planner.id) && a["status"] == json!("dead"));
+    assert!(dead, "the roster must show the pane gone (#533-B's own argument): {:?}", reg.list_agents(&g.id));
+}
+
+/// **A stall on a pane something already asked to exit is not news** (#3040 N2)
+/// — it is suppressed, with the reason on the audit row.
+///
+/// The decision is routed through `exit_notice_route` rather than by listing
+/// initiators here, so the two answers cannot drift: an EXIT whose notice #533-B
+/// judged not worth the orchestrator's turn cannot have a STALL notice about the
+/// same pane that is. The pane is still `Running` at this point — a kill request
+/// is recorded before the pty catches up — which is exactly the window in which
+/// the watchdog would otherwise fire about a pane that is on its way out.
+#[test]
+fn a_stall_on_a_pane_already_told_to_exit_is_suppressed_with_a_reason() {
+    let (reg, _d, gid, wid) = watchdog_setup(5);
+    reg.record_exit_initiator(&wid, ExitInitiator::Orchestrator);
+
+    let notified = reg.watchdog_tick(FAR, &HashMap::new(), &HashMap::new());
+    assert!(notified.is_empty(), "a pane on its way out must not be announced: {notified:?}");
+
+    let rows = audit_entries(&reg, &gid, "watchdog-suppressed");
+    assert_eq!(rows.len(), 1, "the suppression must be diagnosable, not silent: {rows:?}");
+    assert_eq!(rows[0]["detail"]["agent"], json!(wid));
+    assert_eq!(rows[0]["detail"]["why"], json!("exit-initiated"),
+        "the row must say WHICH of the three reasons this was: {}", rows[0]);
+    // No stall notice was audited either — the two rows are alternatives, and a
+    // run that wrote both would mean the stall was announced after all.
+    assert!(audit_entries(&reg, &gid, "watchdog-stall").is_empty(),
+        "a suppressed stall must not also be audited as a delivered one");
+
+    // The anti-nag latch is set on this path too: a suppression is spoken about
+    // once per stall, exactly as a notice is. Without this the audit log grows a
+    // row every 30-second tick for the whole life of the stall.
+    let _ = reg.watchdog_tick(FAR + 60_000, &HashMap::new(), &HashMap::new());
+    assert_eq!(audit_entries(&reg, &gid, "watchdog-suppressed").len(), 1,
+        "one suppression per stall, not one per tick");
+}
+
+/// The CONTROL for the two suppression tests: an ordinary stall on a pane nobody
+/// has asked to exit and no drive owns still announces, and is audited as a
+/// stall rather than a suppression.
+///
+/// It is what makes the `is_empty()` assertions above mean something. A change
+/// that suppressed EVERY stall — the failure mode a diet invites — satisfies
+/// both of them and fails this one.
+#[test]
+fn a_stall_on_an_undriven_pane_still_announces() {
+    let (reg, _d, gid, wid) = watchdog_setup(5);
+    assert_eq!(reg.watchdog_tick(FAR, &HashMap::new(), &HashMap::new()), vec![wid.clone()],
+        "an ordinary stall is still the orchestrator's business");
+
+    // Observed on the audit row rather than through `delivered_texts`, because
+    // `watchdog_setup` binds no pane: the `watchdog-stall` row is written on the
+    // delivery path and nowhere else, so its presence is the same fact.
+    assert_eq!(audit_entries(&reg, &gid, "watchdog-stall").len(), 1,
+        "…and the delivery path really ran");
+    assert!(audit_entries(&reg, &gid, "watchdog-suppressed").is_empty(),
+        "nothing suppressed this one");
+}
+
+/// The pure decision, at every crossing of its two inputs (#3040 N2).
+///
+/// `watchdog_suppress_reason` is the only place the two new reasons are decided,
+/// and the ORDER matters for more than tidiness: `is_driven` costs a file read
+/// under another lock, so it must not be consulted once the cheaper answer has
+/// already decided. That is asserted here by a closure that PANICS — the one
+/// shape that can fail if the short-circuit is ever removed.
+#[test]
+fn the_watchdog_suppression_reason_covers_every_crossing_of_its_two_inputs() {
+    use loomux_lib::orchestration::watchdog_suppress_reason as why;
+
+    // Nobody asked for this pane to end, and no drive owns it: NEWS.
+    assert_eq!(why(None, || false), None);
+    // A drive owns it: the driver's own `lane-stalled` hold is the real signal.
+    assert_eq!(why(None, || true), Some("driven-lane"));
+    // Something in this process asked for it to end — and every initiator
+    // `exit_notice_route` demotes is demoted here too, by construction rather
+    // than by a second list.
+    for init in [
+        ExitInitiator::Orchestrator,
+        ExitInitiator::IdleTimeout,
+        ExitInitiator::DriverRelease,
+        ExitInitiator::LeadExit,
+        ExitInitiator::PlannerCompleted,
+    ] {
+        assert_eq!(why(Some(init), || panic!("is_driven must not be consulted once the initiator has decided")),
+            Some("exit-initiated"), "{init:?}");
+        assert_eq!(exit_notice_route(Some(init)), ExitNoticeRoute::AuditOnly,
+            "fixture: {init:?} must be one exit_notice_route demotes, or this row proves nothing");
+    }
 }

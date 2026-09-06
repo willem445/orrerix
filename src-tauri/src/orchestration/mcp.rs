@@ -3874,13 +3874,27 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // instant later (#791). Empty means the body was unreadable, which
             // is what `None` means here too.
             //
-            // …and the summary rides in CAPPED (#850). The notice is a wake-up
-            // signal; the record is the verdict file, `list_verdicts` and the
-            // review on the PR, all of which keep every character. What made
-            // this worth a cap rather than a guideline is that the pane text
-            // becomes the orchestrator's resident context — paid for again on
-            // every later API call — and the reviewer's own `report(...)` was
-            // arriving right behind it with the same prose a second time.
+            // …and the summary does not ride in AT ALL (#3040 N2, finishing what
+            // #850 started). #850 capped this copy at 400 characters on the
+            // argument that pane text becomes the orchestrator's resident context,
+            // paid for again on every later API call. The census on #3040 says the
+            // cap did not go far enough: over this repo's own transcript history
+            // the courtesy copy is 361 deliveries of ~900 B, and 189 orchestrator
+            // turns opened by acknowledging one and doing nothing — because the
+            // summary is not what the orchestrator routes on. It routes on which
+            // reviewer said pass or fail about which PR, and reads the prose
+            // through `list_verdicts` when it needs it.
+            //
+            // So what is left is a POINTER: the routing facts, and the call that
+            // returns everything else. The prefix through `on PR #{n}` is kept
+            // verbatim — the eval classifier (`orchestration-evals.md` §4.1) and
+            // `a_driven_lanes_verdict_is_consumed_and_the_same_lanes_undriven_one_is_delivered`
+            // both key on it — and only the `: <summary>` tail becomes the pointer.
+            //
+            // This is the only site that still delivered the copy at all: the
+            // driven half below has intercepted it since #1778 §7. The CAP itself
+            // is not dead — `rddrive::lane_summary` still applies it to the lane
+            // summaries inside the drive's own notices.
             let gate = reg.gate_status_line_with(
                 &caller.group,
                 rec.pr,
@@ -3907,26 +3921,22 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             let _ = reg.deliver_to_orchestrator(
                 &caller.group,
                 &format!(
-                    "[orrerix] {} ({}) recorded verdict {} on PR #{}: {}{}",
+                    "[orrerix] {} ({}) recorded verdict {} on PR #{} — list_verdicts(\"{}\"){}",
                     caller.agent_id,
                     rec.block,
                     rec.verdict.as_str().to_uppercase(),
                     rec.pr,
-                    // #891 rev-2 F1b: the summary is the third delegate-authored
-                    // field that reaches this pane, and it was the one left raw —
-                    // `sanitize_summary` (at the durable write) keeps newlines by
-                    // design and never touched brackets, so a reviewer's summary
-                    // could carry a forged `[orrerix] …` line into the pane that
-                    // `{{LIAISON_NOTE}}` tells to read such lines as the human.
-                    // The gate clause beside it has been scrubbed at source since
-                    // #791 (`gh_failure_text`), which is what made this asymmetry
-                    // two arguments of one `format!`.
-                    //
-                    // `_keeping_lines`, and scrubbed BEFORE the truncation: a
-                    // verdict summary is multi-line prose the reviewer meant, and
-                    // `verdict_notice_summary`'s own marker carries brackets that
-                    // a later scrub would neutralize.
-                    report::verdict_notice_summary(&report::relay_payload_keeping_lines(&rec.summary)),
+                    // The PR again, inside the pointer. #891 rev-2 F1b scrubbed the
+                    // summary here because it was the one delegate-authored field
+                    // that reached this pane raw; #3040 N2 removes the field
+                    // instead, which closes that door rather than guarding it. What
+                    // is left is loomux-owned: a minted agent id, a workflow block
+                    // id, a `Verdict` enum, a `u64` PR number, and the gate clause
+                    // (scrubbed at source since #791, `gh_failure_text`). That is
+                    // the reason this site is on `NOTICE_SCRUB_EXEMPT` — add a
+                    // delegate-authored field back here and it must be scrubbed and
+                    // the exemption withdrawn.
+                    rec.pr,
                     gate.as_deref().map(|g| format!("\n[orrerix] {g}")).unwrap_or_default(),
                 ),
                 &caller.agent_id,

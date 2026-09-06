@@ -667,24 +667,53 @@ all. The failure mode to watch is the one that fails UPWARD: a section always pr
 always filled with restatements of what the suite already covers satisfies every surface here,
 and only a human reading premortems against what later broke would ever notice.
 
-### The verdict notice is a signal; the record is elsewhere (#850)
+### The verdict notice is a signal; the record is elsewhere (#850, #3040 N2)
 
 Text typed into a pane is not a message an agent reads once. It joins that agent's
 conversation and is re-sent with every subsequent request, so a paragraph delivered to the
 orchestrator is paid for again on every turn it takes afterwards — which makes pane text the
 most expensive prose in the system, and the orchestrator's pane the most expensive pane. A
 reviewer's verdict used to arrive there **twice in full**: once as the `[orrerix] … recorded
-verdict …` courtesy notice, carrying the whole summary (up to `MAX_SUMMARY_CHARS`, 4000), and
-once more as the reviewer's own `report(...)` restating it. Measured over one review round of
-eight verdict events: ≈15k duplicated tokens, resident.
+verdict …` courtesy notice, carrying the whole summary (`workflow::MAX_SUMMARY_CHARS`, 4000
+characters), and once more as the reviewer's own `report(...)` restating it. Measured over one
+review round of eight verdict events: ≈15k duplicated tokens, resident.
 
-Both halves are fixed where they can actually be enforced. The notice's copy of the summary is
-capped **in the tool** (`report::verdict_notice_summary`, 400 characters plus a fixed pointer
-at `list_verdicts` and the PR) — a cap the code applies, not a length a template asks for,
-which is the same argument `truncate_note` already makes for a structured report's `note`. The
-truncation is *stated*, with the original length, so a reader can tell that there is more and
-where to get it. Nothing else is touched: the verdict file and `list_verdicts` keep every
-character, and the gate reads the file — so the cap can never change what merges. (The
+Both halves are fixed where they can actually be enforced, and the first half was fixed
+**twice**. #850 capped the notice's copy of the summary in the tool, at
+`report::VERDICT_NOTICE_SUMMARY_CAP` (400 characters) plus a fixed pointer at `list_verdicts`
+and the PR — a cap the code applies rather than a length a template asks for, which is the same
+argument `truncate_note` already makes for a structured report's `note`.
+
+**#3040 N2 removes the copy entirely.** The census on #3040 measured what the cap left: 361 of
+these notices in this repo's own transcript history at ~900 B each, and **189 orchestrator
+turns that opened by acknowledging one and doing nothing** — the largest single class in the
+whole history, and the one with the lowest acted-on rate. The reason is not the size, it is the
+CONTENT: the orchestrator routes on which reviewer said what about which PR, and reads the
+prose through `list_verdicts` when it needs it, so 400 characters of analysis is 400 characters
+of resident context that changes no decision. What the `mcp.rs` `review_verdict` arm delivers
+now is a pointer —
+
+```
+[orrerix] rev-9 (rev-std) recorded verdict PASS on PR #12 — list_verdicts("12")
+[orrerix] <the gate status line>
+```
+
+— about 160 bytes, with the prefix through `on PR #{n}` kept verbatim because the eval
+classifier (`orchestration-evals.md` §4.1) and `tests/reviewdrive.rs`'s undriven-delivery pin
+both key on it. It is TRIMMED rather than dropped for one reason worth stating: an undriven
+reviewer may never call `report`, so this is the only wake that flow gets.
+
+Two consequences of the removal rather than of the cap. The truncation MARKER goes with the
+text it described — a pointer has nothing to say was cut — and the `[orrerix]` scrub that #891
+rev-2 F1b added at this site is no longer guarding anything, because the summary was the one
+delegate-authored field in the notice; the site is on `NOTICE_SCRUB_EXEMPT` with that as its
+reason, and adding an agent-authored field back means scrubbing it and withdrawing the row.
+`VERDICT_NOTICE_SUMMARY_CAP` is not dead: `rddrive::lane_summary` still applies it to the lane
+summaries inside the review driver's own notices, which is where a capped summary still earns
+its place (`review-driver.md` §6).
+
+Nothing else is touched: the verdict file and `list_verdicts` keep every character, and the
+gate reads the file — so neither the cap nor its removal can change what merges. (The
 `review-verdict` audit line is the one place that was already lossy, and stays exactly as it
 was: it has always recorded the summary's first 500 characters, which is a record of the event,
 not the record of the review.)
@@ -9675,7 +9704,11 @@ indistinguishable there. Routing on it would have demoted exits the orchestrator
 **Approach.** The initiator is RECORDED, at the call site, before the pty is touched:
 `AgentEntry::killed_by: Option<ExitInitiator>`, stamped by `kill_agent_as` (first-writer-wins —
 whoever actually caused the exit got there first). `exit_notice_route` (pure) reads only that:
-`Orchestrator` and `IdleTimeout` route to the audit log, everything else prompts. The demoted
+every RECORDED initiator routes to the audit log and only `None` — a crash, a watchdog-driven
+death, a human closing the pane, an agent quitting on its own — prompts. The variants and the
+argument for each are on `ExitInitiator` itself rather than listed here, because a list in prose
+goes stale silently: it said "`Orchestrator` and `IdleTimeout`" through the additions of
+`DriverRelease` (#2501), `LeadExit` (#2519) and `PlannerCompleted` (#3040 N2). The demoted
 notice is audited in full (`agent-exit-notice`, with `routed: "audit-only"`, the initiator, and
 the complete notice text), so "the orchestrator reads it on demand" is a real path rather than a
 euphemism for dropping it.

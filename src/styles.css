@@ -3231,8 +3231,13 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
    the chips ranked below it wrap away first when the pane is narrow. */
 .task-title {
   flex: 1 1 40%; min-width: 0; white-space: normal; overflow-wrap: anywhere;
-  line-height: 1.4; color: var(--ink); cursor: default;
+  line-height: 1.4; color: var(--ink); font-weight: 500; cursor: default;
 }
+/* The row-level `font-weight: 600` on an active row is set on `.task-row`, so
+   the rule above — which targets the element — would out-specify it and an
+   active row's name would come out LIGHTER than a quiet row's was meant to be
+   heavy. Keep the escalation: quiet 400 chrome, 500 name, 700 on live work. */
+.task-row.task-row-active .task-title { font-weight: 700; }
 .task-title-input { flex: 1; min-width: 0; padding: 2px 7px; font-size: 12px; }
 .task-status {
   flex: none; font: inherit; font-size: 10px; font-weight: 600;

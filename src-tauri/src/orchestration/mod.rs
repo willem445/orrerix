@@ -36472,12 +36472,6 @@ impl OrchRegistry {
             .next_back()
             .unwrap_or("")
             .to_string();
-        self.audit(
-            group,
-            actor.as_str(),
-            "issue-comment",
-            json!({ "issue": issue, "bytes": body.len(), "url": url }),
-        );
         Ok(url)
     }
 

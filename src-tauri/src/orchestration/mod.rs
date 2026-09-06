@@ -44539,12 +44539,7 @@ impl OrchRegistry {
                 // baseline rather than writing a mark: every restart would
                 // otherwise stamp a "everything changed" vertical onto a plot
                 // where nothing had.
-                self.series_state
-                    .lock_safe()
-                    .entry(group.clone())
-                    .or_default()
-                    .fp = Some(fp.components);
-                return;
+                usageseries::Fp::new()
             }
         };
         let changed = usageseries::fp_changed(&prev, &fp.components);

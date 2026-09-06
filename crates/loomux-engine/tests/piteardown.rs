@@ -87,33 +87,54 @@ fn a_child_that_overstays_is_killed_and_then_collected() {
     // `try_wait` is NOT the discriminating observation and is not used as one:
     // a killed-but-unreaped child answers `Ok(Some(_))` there too, because the
     // process really has exited. The only place the difference is visible is
-    // the OS process table.
+    // the OS process table, and Linux is where this test can look at it.
     //
-    // Linux is where this test can actually look. `/proc/<pid>` survives a
-    // kill for exactly as long as nobody has collected the child, with state
-    // `Z`; after the reap the entry is gone. So this assertion FAILS if the
-    // `wait` in `shutdown_child` is deleted, which is the whole point of
-    // #3067 item 2 — and it is a real check rather than a restatement of the
-    // return value.
+    // **Reading /proc once, straight after `shutdown_child` returns, does not
+    // work** — and the first version of this test did exactly that, asserting
+    // the state was not `Z`. `kill` only SENDS the signal; the child needs a
+    // moment to die, so an immediate read catches it still running (`R`/`S`)
+    // rather than the zombie it is about to become, and "not Z" is then true
+    // whether or not anything ever reaped it. That version passed against the
+    // mutation which deletes the `wait` — a test for the reap that could not
+    // see the reap missing.
+    //
+    // The observation that DOES discriminate is that the entry disappears:
+    // /proc drops it only once the child has been collected.
+    //
+    //   reaped     -> gone within milliseconds
+    //   not reaped -> sits at `Z` for as long as orrerix lives
     //
     // Residual, stated rather than papered over: Windows and macOS have no
-    // equally cheap observation, so on those platforms the reap rests on
+    // equally cheap observation, so there the reap rests on
     // `Departure::Killed` being unproducible without a successful `wait`.
-    // Linux is in the CI matrix, so the property is covered there on every
-    // run.
+    // That is weaker, and it is the reason this assertion is not merely a
+    // restatement of the returned value.
     #[cfg(target_os = "linux")]
     {
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"));
-        if let Ok(stat) = stat {
-            // `comm` can itself contain spaces, so the state field is read
-            // after the LAST ")" rather than by splitting on whitespace.
-            let after = stat.rsplit_once(')').map(|(_, r)| r.trim()).unwrap_or("");
-            let state = after.split_whitespace().next().unwrap_or("");
-            assert_ne!(
-                state, "Z",
-                "the killed child is a ZOMBIE — shutdown_child did not reap it (#3067 item 2)"
-            );
+        let mut gone = false;
+        let mut last = String::from("(never read)");
+        for _ in 0..200 {
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                // The entry is gone, which on Linux means collected.
+                Err(_) => {
+                    gone = true;
+                    break;
+                }
+                Ok(stat) => {
+                    // `comm` can itself contain spaces and parentheses, so the
+                    // state field is read after the LAST ")" rather than by
+                    // splitting the whole line on whitespace.
+                    let after = stat.rsplit_once(')').map(|(_, r)| r.trim()).unwrap_or("");
+                    last = after.split_whitespace().next().unwrap_or("").to_string();
+                }
+            }
+            std::thread::sleep(Duration::from_millis(25));
         }
+        assert!(
+            gone,
+            "the killed child is still in /proc after 5s (state {last:?}) — \
+             shutdown_child never reaped it, which is the zombie #3067 item 2 is about"
+        );
     }
     #[cfg(not(target_os = "linux"))]
     let _ = pid;

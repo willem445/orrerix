@@ -2292,7 +2292,6 @@ mod tests {
                 HarnessEvent::TurnEnded { usage, .. } => usage,
                 _ => None,
             })
-            .expect("a usage")
             .expect("stats answered, so there IS a cumulative figure");
         assert_eq!(usage.call_cumulative.input, 7);
         assert_eq!(

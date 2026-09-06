@@ -15,6 +15,7 @@ import {
   subagentsFromStored,
   getSubagents,
   setSubagents,
+  subagentsToggleState,
 } from "../src/agents.ts";
 
 test("autopilot defaults ON when nothing is stored", () => {
@@ -143,4 +144,82 @@ test("a throwing read degrades to OFF; a throwing write is swallowed", () => {
       assert.doesNotThrow(() => setSubagents(true), "a refused write must not crash the caller");
     },
   );
+});
+
+// ---------- the toggle's launcher GATE (#2519 C2) ----------
+//
+// `subagentsToggleState` decides three outcomes, and the two that are not
+// "hidden" are the ones worth pinning: a control that is SHOWN AND DISABLED
+// teaches the human what to do next, and a control that is shown and enabled is
+// a launch that will mint a real group. Every field the gate reads has a
+// fixture that varies it (the #1182 rule), and each of the four gates below is
+// varied ALONE, from the one enabled baseline — so a gate deleted from the
+// implementation reddens exactly its own row.
+
+const LEAD_OK = {
+  kind: "agent",
+  program: "claude",
+  isCustom: false,
+  mcpArgvSeam: true,
+  tabOwnsGroup: false,
+} as const;
+
+test("the toggle is offered for a plain claude agent launch (#2519)", () => {
+  assert.deepEqual(subagentsToggleState(LEAD_OK), { hidden: false, disabled: false, reason: null });
+});
+
+test("the toggle is HIDDEN wherever it does not apply, one field at a time (#2519)", () => {
+  const hidden = { hidden: true, disabled: false, reason: null };
+  assert.deepEqual(subagentsToggleState({ ...LEAD_OK, kind: "orchestrator" }), hidden, "another pane kind");
+  assert.deepEqual(subagentsToggleState({ ...LEAD_OK, isCustom: true }), hidden, "the human's own command line");
+  assert.deepEqual(subagentsToggleState({ ...LEAD_OK, program: null }), hidden, "no program named");
+  assert.deepEqual(
+    subagentsToggleState({ ...LEAD_OK, mcpArgvSeam: false }),
+    hidden,
+    "a CLI whose MCP config cannot ride the command line (opencode, codex)"
+  );
+});
+
+test("a tab that already owns a group DISABLES the toggle with a reason, never hides it (#2519)", () => {
+  // The distinction is the point: hiding teaches nothing, and the human's next
+  // move (a new tab) is only obvious if something says so. The reason is
+  // asserted for CONTENT, not just for presence — a disabled control whose
+  // explanation is an empty string is the failure this is guarding against.
+  const state = subagentsToggleState({ ...LEAD_OK, tabOwnsGroup: true });
+  assert.equal(state.hidden, false, "shown");
+  assert.equal(state.disabled, true, "and disabled");
+  assert.match(state.reason ?? "", /already runs an orchestration group/);
+  assert.match(state.reason ?? "", /new tab/, "and it names the way out");
+});
+
+test("hidden always beats disabled — a tab-owned group on a custom line stays hidden (#2519)", () => {
+  // Order matters and is not arbitrary: the applicability gates run first, so a
+  // form state that could never mint a lead at all does not explain to the
+  // human why it will not. `reason` is null exactly when `disabled` is false,
+  // which is the invariant a caller renders against.
+  const state = subagentsToggleState({ ...LEAD_OK, isCustom: true, tabOwnsGroup: true });
+  assert.deepEqual(state, { hidden: true, disabled: false, reason: null });
+});
+
+test("a reason is present exactly when the control is disabled (#2519)", () => {
+  // Swept over every combination the gate's five inputs can take, so the
+  // invariant is a property of the FUNCTION rather than of the rows above.
+  let disabledSeen = 0;
+  for (const kind of ["agent", "orchestrator", "terminal"]) {
+    for (const program of ["claude", null]) {
+      for (const isCustom of [false, true]) {
+        for (const mcpArgvSeam of [false, true]) {
+          for (const tabOwnsGroup of [false, true]) {
+            const s = subagentsToggleState({ kind, program, isCustom, mcpArgvSeam, tabOwnsGroup });
+            assert.equal(s.reason !== null, s.disabled, `reason<->disabled for ${JSON.stringify({ kind, program, isCustom, mcpArgvSeam, tabOwnsGroup })}`);
+            if (s.disabled) disabledSeen++;
+          }
+        }
+      }
+    }
+  }
+  // The sweep's positive control: it really did reach the disabled branch, so a
+  // gate that could never disable anything would fail here rather than pass
+  // vacuously over 24 rows that were all `hidden`.
+  assert.equal(disabledSeen, 1, "exactly one of the 24 combinations is the disabled one");
 });

@@ -910,7 +910,11 @@ async function remintSoloIdentity(
   orch?: { group: string; agentId: string };
   bind: (ptyId: number) => void;
 }> {
-  const stripped = stripSoloMcpFlags(command, argv);
+  // `lead` reaches the STRIP as well as the branch below it (#2519 C2): the
+  // claude arm excises loomux's `--disallowedTools Agent` marker only for a pane
+  // that really was a lead, so a SOLO pane whose human typed that same flag
+  // themselves keeps it across a restore (C1 review F2, closed here).
+  const stripped = stripSoloMcpFlags(command, argv, lead);
   if (lead) return remintLeadIdentity(name, cwd, stripped);
   if (!stripped.cli) return { command: stripped.command, argv: stripped.argv, bind: () => {} };
   try {

@@ -382,11 +382,17 @@ export function toAgentRow(facts: PaneFacts, notes: number | null = null): Agent
  *  parameter no caller supplies is a claim about a caller that does not
  *  exist. `toAgentRow` still takes one for the caller that will. */
 export function agentRows(facts: readonly PaneFacts[]): AgentRow[] {
-  // THE FULL READING, not the filtered list, and the order matters: `isAgentPane`
-  // is a membership rule about which panes get a ROW, not about which panes can
-  // be a PARENT. Indexing the filtered list would drop a lead the filter
-  // excluded and orphan every child under it — the #2519 C1 review's standing
-  // instruction, held here by construction rather than by a comment.
+  // THE FULL READING, not the filtered list (#2519 C1 review's standing
+  // instruction). `isAgentPane` is a membership rule about which panes get a
+  // ROW; the index's question is which panes can be a PARENT, and the two are
+  // not the same question even where they happen to agree.
+  //
+  // TODAY THEY DO AGREE, and this does not lean on it: a lead pane carries an
+  // orchestration identity, which is `isAgentPane`'s first and widest arm, so
+  // no lead can currently be filtered out here. That coincidence is a fact
+  // about `isAgentPane`, pinned as one in `test/agentrows.test.ts`
+  // ("a lead pane is always a row"), so narrowing that rule reddens a test
+  // instead of silently orphaning every child under a lead.
   const index = leadIndex(facts);
   return facts.filter(isAgentPane).map((f) => ({ ...toAgentRow(f), parent: parentKeyIn(f, index) }));
 }

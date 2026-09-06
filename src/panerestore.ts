@@ -1011,16 +1011,16 @@ const CODEX_SOLO_PROFILE_RE = new RegExp(
  *  `claude --disallowedTools Agent` is a human's own permission decision and
  *  comes back byte-identical (`cli: null`, the no-mutation contract above).
  *
- *  **Owned residual (review F2, #2678): the gate cannot tell a minted lead
- *  line from a SOLO line a human gave their own `--disallowedTools Agent` to**
- *  — the two are byte-shape-identical, so the excision takes the human's flag
- *  on restore and a solo re-prepare re-appends no Agent flag, silently
- *  re-enabling claude's own subagent tool. Disambiguating needs the persisted
- *  pane record's role (the tabstore `lead` field and launch path — #2519
- *  slices B/C2), which v1 does not thread into this function. Pinned by the
- *  test that performs the edit (`…indistinguishable from a minted lead
- *  line…`), not by this prose alone. */
-const LEAD_AGENT_DISALLOW_RE = /(^|\s)--disallowedTools\s+Agent(?=\s|$)/;
+ *  **C1's owned residual (review F2, #2678) is CLOSED here (#2519 C2).** The
+ *  gate alone could not tell a minted lead line from a SOLO line a human gave
+ *  their own `--disallowedTools Agent` to — byte-shape-identical, so the
+ *  excision took the human's flag and the solo re-prepare re-appended none,
+ *  silently re-enabling claude's own subagent tool. C1 named what would close
+ *  it: "the persisted pane record's role". That record exists now
+ *  (`PersistedPane.lead`), and `stripSoloMcpFlags` takes it as its `lead`
+ *  argument, so the excision is gated on the block AND on the pane really
+ *  having been a lead. A solo pane's own flag now survives the round trip. */
+export const LEAD_AGENT_DISALLOW_RE = /(^|\s)--disallowedTools\s+Agent(?=\s|$)/;
 
 /** Excise ONE `--disallowedTools Agent` pair from a claude command the MCP
  *  arm has already matched (#2519 C1). That launch path (#2519 slice B,
@@ -1056,11 +1056,11 @@ function stripLeadAgentFlagArgv(argv: string[]): string[] {
  *  mistaken for one; it only has to tolerate the path containing whitespace,
  *  which the quoted-path regex above does.
  *
- *  A claude line identified by the block additionally has loomux's lead
- *  marker `--disallowedTools Agent` excised beside it (#2519 C1) — see
- *  `LEAD_AGENT_DISALLOW_RE` for why the excision is gated on the block, why a
- *  human's own `--disallowedTools` value survives, and the one indistinguishable
- *  case that is owned residual rather than handled.
+ *  A claude line identified by the block has loomux's lead marker
+ *  `--disallowedTools Agent` excised beside it (#2519 C1) when `lead` says the
+ *  pane really was one — see `LEAD_AGENT_DISALLOW_RE` for why the excision is
+ *  gated on the block AND the role, and why a human's own `--disallowedTools`
+ *  value survives either way.
  *
  *  Returns which CLI's flags were found (null when the command carried none
  *  — nothing to re-mint) alongside the command/argv with that group excised.
@@ -1075,16 +1075,19 @@ function stripLeadAgentFlagArgv(argv: string[]): string[] {
  *  a fresh launch). */
 export function stripSoloMcpFlags(
   command: string | null | undefined,
-  argv: string[] | null | undefined
+  argv: string[] | null | undefined,
+  // #2519 C2: was this pane a LEAD? Defaulted `false`, so every pre-existing
+  // caller reads unchanged; the restore path passes `PersistedPane.lead`.
+  lead = false
 ): { cli: SoloCli | null; command?: string; argv?: string[] } {
   if (command) {
     const claude = CLAUDE_SOLO_MCP_RE.exec(command);
     if (claude) {
       return {
         cli: "claude",
-        command: stripLeadAgentFlag(
-          command.slice(0, claude.index) + command.slice(claude.index + claude[0].length)
-        ),
+        command: lead
+          ? stripLeadAgentFlag(command.slice(0, claude.index) + command.slice(claude.index + claude[0].length))
+          : command.slice(0, claude.index) + command.slice(claude.index + claude[0].length),
       };
     }
     const copilot = COPILOT_SOLO_MCP_RE.exec(command);
@@ -1132,7 +1135,9 @@ export function stripSoloMcpFlags(
       ) {
         return {
           cli: "claude",
-          argv: stripLeadAgentFlagArgv([...argv.slice(0, i), ...argv.slice(i + 5)]),
+          argv: lead
+            ? stripLeadAgentFlagArgv([...argv.slice(0, i), ...argv.slice(i + 5)])
+            : [...argv.slice(0, i), ...argv.slice(i + 5)],
         };
       }
       if (argv[i] === "--additional-mcp-config" && argv[i + 2] === "--allow-tool" && (MCP_SERVERS as readonly string[]).includes(argv[i + 3])) {

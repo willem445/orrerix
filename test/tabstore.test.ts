@@ -976,3 +976,46 @@ test("sshProfileId is null on every non-ssh leaf (nothing else grew a connection
   assert.ok(leaf?.kind === "leaf");
   assert.equal(leaf.pane.sshProfileId, null);
 });
+
+// ---------- the lead flag (#2519 C2) ----------
+
+test("a lead pane's flag round-trips, and only an exact `true` is one", () => {
+  // Default-OFF with the same polarity as the launcher toggle that mints one
+  // (`subagentsFromStored`), and for the same reason: a corrupted or
+  // hand-edited snapshot must not silently mint a real orchestration group,
+  // with a cap's worth of live agents, on the next boot. Every value that is
+  // not the boolean `true` reads false — including the STRING "true", which is
+  // what a hand-edit is most likely to write.
+  const leaf = (lead: unknown) => ({
+    kind: "leaf",
+    weight: 1,
+    pane: {
+      paneKind: "agent",
+      name: "lead",
+      cwd: "/repo",
+      command: "claude",
+      argv: null,
+      shellKind: null,
+      sessionId: "s-1",
+      role: null,
+      groupId: null,
+      file: null,
+      sshProfileId: null,
+      lead,
+      embeds: [],
+    },
+  });
+  const decode = (lead: unknown) => {
+    const back = decodeTabs(
+      JSON.stringify({ tabs: [{ name: "t", color: null, groupId: null, layout: leaf(lead) }], activeIndex: 0 })
+    );
+    const node = back?.tabs[0].layout;
+    assert.equal(node?.kind, "leaf", "the leaf decoded at all (positive control)");
+    return node?.kind === "leaf" ? node.pane.lead : undefined;
+  };
+  assert.equal(decode(true), true, "a real lead comes back as one");
+  assert.equal(decode(false), false);
+  assert.equal(decode(undefined), false, "every pre-#2519 snapshot");
+  assert.equal(decode("true"), false, "a hand-edited string is not a lead");
+  assert.equal(decode(1), false);
+});

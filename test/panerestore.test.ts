@@ -2,6 +2,7 @@
 // Pins the adopted hybrid: agents auto-resume via a recorded session id, groups
 // stay dormant, terminals re-spawn — and the ordered rebuild sequence for a
 // nested layout.
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -21,6 +22,7 @@ import {
   sessionCliFromCommand,
   SOLO_MCP_CLIS,
   isSoloMcpCli,
+  LEAD_AGENT_DISALLOW_RE,
   shouldWatchCopilotOnRestore,
   AUTO_RESUME_AGENTS,
   type RestoreAction,
@@ -1041,7 +1043,10 @@ test("stripSoloMcpFlags removes the lead's --disallowedTools Agent beside the so
   assert.deepEqual(
     stripSoloMcpFlags(
       'claude --model opus --mcp-config "C:/Users/w/AppData/Roaming/loomux/orchestration/lead-groups/configs/orrerix-1.json" --strict-mcp-config --allowedTools mcp__orrerix --disallowedTools Agent --resume abc',
-      null
+      null,
+      // #2519 C2: the record says this pane WAS a lead, which is what licenses
+      // excising loomux's own marker (C1 review F2's close).
+      true
     ),
     { cli: "claude", command: "claude --model opus --resume abc" }
   );
@@ -1050,7 +1055,7 @@ test("stripSoloMcpFlags removes the lead's --disallowedTools Agent beside the so
 test("a persisted lead line round-trips through strip + re-append without duplicating flags", () => {
   const persisted =
     'claude --mcp-config "C:/Users/w/AppData/Roaming/loomux/orchestration/lead-groups/configs/orrerix-1.json" --strict-mcp-config --allowedTools mcp__orrerix --disallowedTools Agent';
-  const { cli, command } = stripSoloMcpFlags(persisted, null);
+  const { cli, command } = stripSoloMcpFlags(persisted, null, true);
   assert.equal(cli, "claude");
   assert.ok(command, "a stripped line leaves a command to re-append to");
   // The shape the C2 restore path builds: strip → leadPrepare → append fresh
@@ -1089,23 +1094,29 @@ test("a human's own --disallowedTools Agent with NO loomux identity comes back b
   assert.deepEqual(stripSoloMcpFlags(cmd, null), { cli: null, command: cmd });
 });
 
-test("a human's own --disallowedTools Agent on an identity-bearing SOLO line is indistinguishable from a minted lead line — and IS stripped", () => {
-  // The owned residual (review F2, #2678), pinned by performing the edit, per
-  // the repo's disclose-the-blind-spot rule: a human who disabled claude's own
-  // subagent tool on their SOLO pane wrote the exact byte shape a minted lead
-  // line has, and this function cannot tell the two apart — it strips the
-  // human's flag, and a solo re-prepare re-appends no Agent flag, silently
-  // re-enabling the tool. Disambiguation needs the persisted pane record's
-  // role (tabstore `lead` field / launch path, #2519 slices B/C2), which does
-  // not reach this function in v1. This test is GREEN by construction — that
-  // is the point: it fails the moment anyone claims the residual is closed
-  // without a role record to close it with.
-  const soloWithOwnAgentFlag =
+test("a human's own --disallowedTools Agent on an identity-bearing SOLO line SURVIVES (C1 residual F2, closed in C2)", () => {
+  // C1's owned residual (review F2, #2678), and this test is where it closes.
+  // A human who disabled claude's own subagent tool on their SOLO pane wrote
+  // the exact byte shape a minted lead line has; C1 could not tell the two
+  // apart and stripped the human's flag, so a solo re-prepare re-appended none
+  // and silently re-enabled the tool. C1 named what would close it — "the
+  // persisted pane record's role" — and C2 threads exactly that in.
+  //
+  // BOTH POLARITIES on one fixture, which is what makes either mean anything:
+  // the byte-identical line strips the marker when the record says lead, and
+  // keeps it when it does not.
+  const withOwnAgentFlag =
     'claude --disallowedTools Agent --mcp-config "C:/configs/solo-6.json" --strict-mcp-config --allowedTools mcp__orrerix';
-  assert.deepEqual(stripSoloMcpFlags(soloWithOwnAgentFlag, null), {
-    cli: "claude",
-    command: "claude",
-  });
+  assert.deepEqual(
+    stripSoloMcpFlags(withOwnAgentFlag, null, false),
+    { cli: "claude", command: "claude --disallowedTools Agent" },
+    "a SOLO pane's own permission decision survives the round trip"
+  );
+  assert.deepEqual(
+    stripSoloMcpFlags(withOwnAgentFlag, null, true),
+    { cli: "claude", command: "claude" },
+    "…while the identical line from a LEAD pane's record has loomux's marker excised"
+  );
 });
 
 test("the lead flag pair is excised in the argv form too, a human's pair surviving", () => {
@@ -1119,7 +1130,7 @@ test("the lead flag pair is excised in the argv form too, a human's pair survivi
       "mcp__orrerix",
       "--disallowedTools",
       "Agent",
-    ]),
+    ], true),
     { cli: "claude", argv: ["claude"] }
   );
   assert.deepEqual(
@@ -2016,4 +2027,80 @@ test("a short root flag after `resume` is a flag, not a session id (#2515 C2 rev
   assert.deepEqual(agentResumeCommand(null, ["codex", "resume", "-m", "gpt-5"], "cx"), {
     argv: ["codex", "-m", "gpt-5", "resume", "cx"],
   });
+});
+
+// ---------- #2519 C2: the strip grammar, pinned against the EMITTER ----------
+
+test("the lead marker this module strips is the one the backend actually emits (#2519)", () => {
+  // C1 shipped `LEAD_AGENT_DISALLOW_RE` against a HAND-WRITTEN marker string,
+  // and said so in its own premortem: if slice B's emitter spelled the flag any
+  // other way, the round-trip would silently duplicate flags and nothing on this
+  // side could catch it. B has landed, so the string is checkable — read it out
+  // of the Rust that produces it rather than restating it here, which is the
+  // same edit-one-place discipline every other cross-language pin in this repo
+  // keeps.
+  //
+  // The subject is `lead_mcp_args`'s claude arm, the ONE function that builds a
+  // lead's command-line flags. A positive control comes first: if the extraction
+  // finds nothing (the function renamed, the file moved), the test must FAIL
+  // rather than pass over an empty string.
+  const rust = readFileSync(new URL("../src-tauri/src/orchestration/mod.rs", import.meta.url), "utf8");
+  const fn = rust.slice(rust.indexOf("fn lead_mcp_args("));
+  assert.ok(fn.startsWith("fn lead_mcp_args("), "lead_mcp_args must still exist — this pin has no subject otherwise");
+  const claudeArm = fn.slice(fn.indexOf('"claude" =>'), fn.indexOf('"copilot" =>'));
+  assert.ok(claudeArm.includes("--mcp-config"), "the claude arm was found, not an empty slice (positive control)");
+
+  // The emitted marker, as the emitter spells it.
+  // `([A-Za-z]+)` rather than a non-space run: the flag sits inside a Rust
+  // format! string, so a greedy one swallows the literal's own closing bytes.
+  // The alphabet is what the token may CONTAIN, never what may follow it (#1297).
+  const emitted = /--disallowedTools\s+([A-Za-z]+)/.exec(claudeArm);
+  assert.ok(emitted, "the claude arm must still emit --disallowedTools — if it stopped, this strip is dead code");
+  assert.equal(emitted[1], "Agent", "the VALUE grammar the strip's regex is built for: a bare token, not a list");
+
+  // …and the regex really does match a line carrying it. Not a re-derivation of
+  // the string above: the point is that the two agree.
+  const line = `claude --mcp-config "C:/x/configs/lead-1.json" --strict-mcp-config --allowedTools mcp__orrerix --disallowedTools ${emitted[1]}`;
+  assert.match(line, LEAD_AGENT_DISALLOW_RE, "the emitted flag matches the pattern this module strips");
+});
+
+test("a lead's own launch line round-trips through strip + re-append (#2519 C2)", () => {
+  // The acceptance shape for a RESTORE: `remintLeadIdentity` strips the recorded
+  // line, mints a fresh group, and appends the new `mcp_args`. What must not
+  // happen is a second copy of any flag — the restored pane would then carry two
+  // MCP configs, one of them pointing at a config its own exit deleted.
+  const recorded =
+    'claude --session-id s-1 --mcp-config "C:/g/configs/lead-1.json" --strict-mcp-config ' +
+    "--allowedTools mcp__orrerix --disallowedTools Agent";
+  const stripped = stripSoloMcpFlags(recorded, undefined, true);
+  assert.equal(stripped.cli, "claude", "a lead line carries loomux's own MCP identity, so the strip claims it");
+  assert.equal(stripped.command, "claude --session-id s-1", "every minted flag is gone, the human's own line is not");
+  const fresh =
+    'claude --session-id s-1 --mcp-config "C:/g/configs/lead-2.json" --strict-mcp-config ' +
+    "--allowedTools mcp__orrerix --disallowedTools Agent";
+  assert.equal(
+    appendSoloMcpArgs(
+      stripped.command,
+      stripped.argv,
+      '--mcp-config "C:/g/configs/lead-2.json" --strict-mcp-config --allowedTools mcp__orrerix --disallowedTools Agent'
+    ).command,
+    fresh,
+    "re-appending yields exactly one of each flag"
+  );
+});
+
+test("a persisted lead plans an agent restore that says it is one (#2519 C2)", () => {
+  // `lead` rides the AGENT actions, and all three of them: which one a lead
+  // lands on is decided by its session id exactly as for any other agent pane,
+  // and the re-mint has to happen on whichever it is.
+  const rec = (over: Partial<PersistedPane>) =>
+    pane({ paneKind: "agent", name: "lead", cwd: "/repo", command: "claude", lead: true, ...over });
+  assert.equal(planPaneRestore(rec({ sessionId: "s-1" })).lead, true, "resume-agent");
+  assert.equal(planPaneRestore(rec({ sessionId: "s-1" }), () => false).lead, true, "fresh-agent");
+  assert.equal(planPaneRestore(rec({ sessionId: null })).lead, true, "dormant-agent");
+  // …and the negative control, which is what makes the three above mean
+  // anything: the same records without the flag plan the same actions, NOT as
+  // leads. Without this, an action type that hard-coded `lead: true` would pass.
+  assert.equal(planPaneRestore(rec({ sessionId: "s-1", lead: false })).lead, false, "an ordinary resume");
+  assert.equal(planPaneRestore(rec({ sessionId: null, lead: false })).lead, false, "an ordinary dormant Start");
 });

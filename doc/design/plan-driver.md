@@ -266,7 +266,17 @@ argument itself.
 
 **Ordering in the tick.** `pd_driver_tick` is the sixth step of `gh_poll_tick`,
 after `rd_driver_tick`, one group per wake, at most `PD_MAX_GH_PER_TICK` (4)
-`gh` round trips. Running second is the bound rather than a preference: the plan
+`gh` round trips on a **steady-state** wake.
+
+**One wake per process is not steady-state**, and the bound does not cover it:
+the once-per-group restart reconcile runs before that loop and reads one issue
+per live entry, so the first wake after a restart spends
+`live + min(live, 4)` round trips. That is bounded by how many issues an
+orchestrator chose to drive, and it is a startup cost paid once. It is stated
+rather than fixed because a reconcile that serviced only four entries would
+leave the rest unreconciled with nothing scheduled to finish the job.
+`a_tick_services_at_most_four_drives` measures both figures, so this paragraph
+cannot go quietly false. Running second is the bound rather than a preference: the plan
 driver can only ever take the budget the review driver left, which makes "the
 plan driver holds, never starves the review driver" structural instead of a
 counter nobody can check.

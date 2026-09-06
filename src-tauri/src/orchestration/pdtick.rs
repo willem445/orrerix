@@ -51,6 +51,18 @@ const PD_FACT_CAP: usize = 2_000;
 /// A group with more live drives than this services the rest on the next wake;
 /// nothing is dropped, and the entries are walked in the file's own order so
 /// the same drive cannot be starved twice running by an unstable sort.
+///
+/// **It bounds the STEADY-STATE wake, and one wake per process is not one.**
+/// [`pd_reconcile_with`](OrchRegistry::pd_reconcile_with) runs once per group
+/// per process, before this loop, and reads one issue per live entry without
+/// consulting this figure — so the first wake after a restart spends
+/// `live + min(live, PD_MAX_GH_PER_TICK)` round trips rather than four. That is
+/// bounded by the number of live drives, which is bounded by how many issues an
+/// orchestrator chose to drive, and it is a startup cost paid once; it is stated
+/// here rather than fixed because a reconcile that serviced only four entries
+/// would leave the rest unreconciled with nothing scheduled to finish the job.
+/// `a_tick_services_at_most_four_drives` measures BOTH figures, so this
+/// paragraph cannot go quietly false.
 pub const PD_MAX_GH_PER_TICK: usize = 4;
 
 /// What a driven planner's traffic told the drive, between the MCP arm that

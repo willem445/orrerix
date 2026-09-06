@@ -55,12 +55,16 @@ blocks:
   - id: orch
     kind: orchestrator
   - id: plan-lead
+    name: The planner
     kind: planner
   - id: worker-adv
     kind: worker
+  - id: rev-std
+    kind: reviewer
 gates:
   merge:
     require: all-pass
+    reviewers: [rev-std]
 driver:
   enabled: true
 "#;
@@ -73,9 +77,12 @@ blocks:
     kind: orchestrator
   - id: worker-adv
     kind: worker
+  - id: rev-std
+    kind: reviewer
 gates:
   merge:
     require: all-pass
+    reviewers: [rev-std]
 driver:
   enabled: true
   plan_enabled: true
@@ -133,6 +140,67 @@ impl Repo {
     fn path(&self) -> String {
         self.repo.to_string_lossy().replace('\\', "/")
     }
+}
+
+/// **Every fixture workflow in this file must PARSE**, and this is not
+/// housekeeping — it is the control for every "the driver is off" assertion
+/// below.
+///
+/// `pd_policy` answers OFF for a file it cannot read, which is exactly the
+/// answer those tests assert. So a fixture that stops parsing turns them all
+/// vacuous with nothing red to say so, and that is not hypothetical: the two
+/// reduced rosters here declared `require: all-pass` with no `kind: reviewer`
+/// block, the whole file was refused, and
+/// `a_repo_with_no_plan_driver_block_is_byte_for_byte_unchanged` and
+/// `every_plan_tool_is_orchestrator_only_and_off_by_default` passed against a
+/// file the engine never read. Each fixture now varies exactly ONE thing from
+/// [`WORKFLOW`], and this test is what keeps that true.
+#[test]
+fn every_fixture_workflow_parses() {
+    for (name, yaml) in [
+        ("WORKFLOW", WORKFLOW),
+        ("WORKFLOW_NO_PLAN_DRIVER", WORKFLOW_NO_PLAN_DRIVER),
+        ("WORKFLOW_NO_PLANNER", WORKFLOW_NO_PLANNER),
+    ] {
+        let parsed = loomux_lib::orchestration::workflow::parse_workflow(yaml);
+        assert!(
+            parsed.is_ok(),
+            "{name} does not parse, so every 'the driver is off' assertion measured against it \
+             is vacuous: {:?}",
+            parsed.err()
+        );
+    }
+
+    // The three fixtures differ from each other in exactly the axes they are
+    // named for, and nothing else — the population control for the sentence
+    // above. A fixture that quietly grew a second difference would make its
+    // test a statement about two things at once.
+    let full = loomux_lib::orchestration::workflow::parse_workflow(WORKFLOW).unwrap();
+    let no_plan = loomux_lib::orchestration::workflow::parse_workflow(WORKFLOW_NO_PLAN_DRIVER)
+        .unwrap();
+    let no_planner =
+        loomux_lib::orchestration::workflow::parse_workflow(WORKFLOW_NO_PLANNER).unwrap();
+
+    assert!(full.driver.plan_enabled, "WORKFLOW is the one with the plan driver ON");
+    assert!(!no_plan.driver.plan_enabled, "WORKFLOW_NO_PLAN_DRIVER varies exactly that switch");
+    assert!(
+        no_plan.driver.enabled,
+        "…and nothing else: the REVIEW driver is still on, so a test using it is about \
+         plan_enabled rather than about the driver block being absent"
+    );
+    assert!(
+        full.blocks.iter().any(|b| b.kind == Role::Planner),
+        "WORKFLOW has a planner block"
+    );
+    assert!(
+        !no_planner.blocks.iter().any(|b| b.kind == Role::Planner),
+        "WORKFLOW_NO_PLANNER varies exactly that block"
+    );
+    assert!(
+        no_planner.driver.plan_enabled,
+        "…and nothing else: the plan driver is still ON, so `no-planner-block` is what that \
+         test can possibly be measuring"
+    );
 }
 
 fn rails() -> Guardrails {
@@ -430,7 +498,18 @@ fn an_investigation_issue_never_boards() {
     assert_eq!(out["driving"], json!(true), "{out}");
     let doc = plandrive::validate_for_drive(&in_comment(PLAN), 3040, &roster()).unwrap();
     reg2.pd_store_posted_plan_at(&g2, 3040, doc, "https://example/c/1", 1_100);
+    // TWO ticks, and the second one is the point: `decide` answers ONE step per
+    // entry per tick — the review driver's own shape — so `plan-posted` →
+    // `boarding` and `boarding` → `held(awaiting-p3b)` are two of them. The
+    // intermediate state is real and a status read can catch it.
     reg2.pd_drive_group_with(&g2, &gh2, 1_200);
+    assert_eq!(
+        drive_state(&reg2, &g2),
+        "boarding",
+        "the first tick reaches boarding: {}",
+        status(&reg2, &g2)
+    );
+    reg2.pd_drive_group_with(&g2, &gh2, 1_300);
     assert_eq!(
         held_reason(&reg2, &g2),
         PdHeldReason::AwaitingP3b.as_str(),
@@ -779,11 +858,24 @@ fn a_closed_issue_reconciles_to_cancelled() {
     let (group, _orch, _planner) = driven(&reg, &repo, &gh);
 
     gh.set_state("CLOSED");
-    let report = reg.pd_drive_group_with(&group, &gh, 1_200);
+    reg.pd_drive_group_with(&group, &gh, 1_200);
     let file = read_record(&reg, &group);
     assert_eq!(file["entries"][0]["state"], json!("cancelled"), "{file}");
-    assert!(report.notices >= 1, "a drive that stops owes the orchestrator one notice");
-    assert!(audit_actions(&reg, &group).contains(&plandrive::audit_action::NOTICE.to_string()));
+    // The notice is asserted on the AUDIT ROW rather than on the tick's return
+    // value, and the difference is a real one: the once-per-process reconcile
+    // runs FIRST, cancels the entry itself, and flushes its own notice — so
+    // `report.notices` (which counts only the tick's own later flush) is
+    // legitimately 0 on exactly the wake this test is about.
+    assert!(
+        audit_actions(&reg, &group).contains(&plandrive::audit_action::NOTICE.to_string()),
+        "a drive that stops owes the orchestrator one notice: {:?}",
+        audit_actions(&reg, &group)
+    );
+    assert!(
+        audit_actions(&reg, &group).contains(&plandrive::audit_action::RECOVERED.to_string()),
+        "and the reconcile is what recorded it: {:?}",
+        audit_actions(&reg, &group)
+    );
 }
 
 /// **A torn record refuses the tick loudly and repairs nothing.**
@@ -844,31 +936,30 @@ fn every_plan_tool_is_orchestrator_only_and_off_by_default() {
     let (group, orch) = grouped(&reg, &repo);
     let worker = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).unwrap();
 
+    // A role denial is an MCP-level tool ERROR, not a transport one: dispatch
+    // answers `Ok` with `isError: true` and the message as content. Reading it
+    // as `Err` was wrong in the direction that matters — every one of these
+    // four would have "passed" on a tool that answered normally.
+    let denied = |v: &Value| -> bool {
+        v["isError"] == json!(true)
+            && v["content"][0]["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("orchestrator-only"))
+    };
     let mut refused_for_a_worker = 0;
     for (name, _) in TOOLS {
         let c = caller(&group, &worker.id, Role::Worker);
-        let out = dispatch(
-            &reg,
-            &c,
-            "tools/call",
-            &json!({ "name": name, "arguments": args(name) }),
-        );
-        assert!(out.is_err(), "{name} must refuse a worker: {out:?}");
+        let out = dispatch(&reg, &c, "tools/call", &json!({ "name": name, "arguments": args(name) }))
+            .expect("dispatch itself must not fail");
+        assert!(denied(&out), "{name} must refuse a worker: {out}");
         refused_for_a_worker += 1;
-        // The control: the SAME call from the orchestrator is not refused for a
-        // ROLE reason, which is what makes the four assertions above statements
-        // about the role rather than about the arguments.
+        // The control, and it is what makes the assertion above a statement
+        // about the ROLE rather than about the arguments: the SAME call from the
+        // orchestrator is not denied.
         let c = caller(&group, &orch, Role::Orchestrator);
-        let out = dispatch(
-            &reg,
-            &c,
-            "tools/call",
-            &json!({ "name": name, "arguments": args(name) }),
-        );
-        assert!(
-            out.is_ok(),
-            "{name} must reach the registry for an orchestrator: {out:?}"
-        );
+        let out = dispatch(&reg, &c, "tools/call", &json!({ "name": name, "arguments": args(name) }))
+            .expect("dispatch itself must not fail");
+        assert!(!denied(&out), "{name} must reach the registry for an orchestrator: {out}");
     }
     assert_eq!(refused_for_a_worker, 4, "every one of the four was exercised");
 
@@ -1037,15 +1128,29 @@ fn a_tick_services_at_most_four_drives() {
         let out = reg.drive_plan_with(&group, &gh, issue, None, None, None, &orch, 1_000);
         assert_eq!(out["driving"], json!(true), "#{issue}: {out}");
     }
+    // The FIRST tick also runs the once-per-process reconcile, which reads one
+    // issue per live entry and is NOT under this bound — see
+    // `PD_MAX_GH_PER_TICK`'s own doc, which says so. Drain it here, and pin its
+    // shape, so the steady-state figure below is measured on a steady-state
+    // wake rather than on the one wake that is different.
+    let reconcile_from = gh.issue_views();
+    reg.pd_drive_group_with(&group, &gh, 1_050);
+    assert_eq!(
+        gh.issue_views() - reconcile_from,
+        5 + PD_MAX_GH_PER_TICK,
+        "the reconcile reads every live entry once, and the tick then spends its own bound: {:?}",
+        gh.calls()
+    );
+
     let before = gh.issue_views();
     let report = reg.pd_drive_group_with(&group, &gh, 1_100);
     assert_eq!(
         gh.issue_views() - before,
         PD_MAX_GH_PER_TICK,
-        "the tick spends exactly its bound, not one call more: {:?}",
+        "a steady-state wake spends exactly the bound, not one call more: {:?}",
         gh.calls()
     );
-    assert_eq!(report.deferred, vec![5], "the drive it could not reach is NAMED, not dropped");
+    assert_eq!(report.deferred.len(), 1, "the drive it could not reach is NAMED, not dropped");
 }
 
 // ── helpers that touch the record itself ────────────────────────────────────

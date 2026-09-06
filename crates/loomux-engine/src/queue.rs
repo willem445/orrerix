@@ -2533,6 +2533,120 @@ mod tests {
     }
 
     #[test]
+    fn the_coalesced_header_is_one_line() {
+        // #3040 N3. Every notice byte is resident in every later API call
+        // until the pane compacts, so framing prose is charged once at
+        // delivery and again on every turn after it. The header is a wake-up
+        // LABEL, not the record: count, why, order, chunking.
+        //
+        // The retired sentence ("they are itemized below ... nothing was
+        // reordered or dropped. Treat each item as its own message.") said in
+        // prose what the surviving framing already shows structurally --
+        // "oldest first" IS the order claim, and the per-item
+        // `----- k/N · from <agent>` banner IS what makes them N messages
+        // rather than one paste.
+        let items = [
+            FlushConstituent { id: 1, from: "w-2", enqueued_ms: 0, coalesced: 0, text: "x" },
+            FlushConstituent { id: 2, from: "w-3", enqueued_ms: 0, coalesced: 0, text: "y" },
+        ];
+        let out = coalesced_flush_text(&items, 0, 0, FlushCause::PaneBlocked);
+
+        // Positive control FIRST: a header that was never emitted at all would
+        // pass every `!contains` below on its own.
+        assert_eq!(
+            out.lines().next().expect("a flush always has a header"),
+            "[orrerix] 2 deliveries queued while this pane was blocked, oldest first:",
+            "the header is emitted, and this is its whole text: {out}"
+        );
+        // ONE line, which is the point. Both payloads here are single-line, so
+        // the flush is exactly header + 2 x (blank, banner, payload). A header
+        // that grew a second row lands as an 8th line and reddens here --
+        // asserting on `lines().next()` alone never could, since `lines()`
+        // splits the extra row off and hands back a one-line prefix either way.
+        assert_eq!(out.lines().count(), 7, "header is one row, not two: {out}");
+
+        // ...and the retired prose is really gone.
+        assert!(!out.contains("Treat each item"), "{out}");
+        assert!(!out.contains("nothing was reordered"), "{out}");
+        assert!(!out.contains("itemized below"), "{out}");
+
+        // The chunk clause and the dedup clause stay ON that one line rather
+        // than each earning a row of their own.
+        let chunked = coalesced_flush_text(&items, 4, 0, FlushCause::PaneBlocked);
+        assert_eq!(
+            chunked.lines().next().unwrap(),
+            "[orrerix] 2 deliveries queued while this pane was blocked, oldest first (4 more follow):",
+            "{chunked}"
+        );
+        assert_eq!(chunked.lines().count(), 7, "{chunked}");
+        let deduped = [
+            FlushConstituent { id: 1, from: "w-2", enqueued_ms: 0, coalesced: 2, text: "x" },
+            FlushConstituent { id: 2, from: "w-3", enqueued_ms: 0, coalesced: 0, text: "y" },
+        ];
+        let d = coalesced_flush_text(&deduped, 0, 0, FlushCause::PaneBlocked);
+        assert_eq!(
+            d.lines().next().unwrap(),
+            concat!(
+                "[orrerix] 2 deliveries queued while this pane was blocked, oldest first",
+                " — 2 byte-identical repeat(s) were folded in at admission:"
+            ),
+            "{d}"
+        );
+        assert_eq!(d.lines().count(), 7, "{d}");
+    }
+
+    #[test]
+    fn the_constituent_banner_is_marker_led_and_carries_only_what_a_reader_acts_on() {
+        // #3040 N3 trims the banner, and #632 bounds how far it may be
+        // trimmed: `mask_loomux_notices` claims a framing row by its LEADING
+        // marker only (never a block form -- that is the #621 hole), so
+        // `[orrerix] ` must stay FIRST, ahead of the dashes, or every
+        // constituent leaves an unmasked row of loomux prose in the pane tail.
+        // `unmaskable_framing_rows` (mod.rs) is the live binding to the real
+        // mask; this pins the literal the engine emits.
+        //
+        // What LEFT: `queued ` before the age, and `(id 12, t=...)`. The id and
+        // the enqueue epoch are recoverable from the audit `delivery-dequeued`
+        // row, which carries `id` and `queued_ms` (`OrchRegistry::pop_dequeued`).
+        let now = 600_000u64;
+        let items = [FlushConstituent {
+            id: 12,
+            from: "w-7",
+            enqueued_ms: now - 252_000,
+            coalesced: 0,
+            text: "BODY",
+        }];
+        let out = coalesced_flush_text(&items, 0, now, FlushCause::PaneBlocked);
+        let banner = out.lines().nth(2).expect("header, blank, banner");
+        assert_eq!(banner, "[orrerix] ----- 1/1 · from w-7 · 4m12s ago -----", "{out}");
+        assert!(banner.starts_with("[orrerix] -----"), "marker leads the dashes (#632): {banner}");
+
+        // The per-constituent repeat count is the one optional clause, and it
+        // sits INSIDE the dashes so the whole row still masks as one.
+        let repeated = [FlushConstituent {
+            id: 12,
+            from: "w-7",
+            enqueued_ms: now - 252_000,
+            coalesced: 3,
+            text: "BODY",
+        }];
+        assert_eq!(
+            coalesced_flush_text(&repeated, 0, now, FlushCause::PaneBlocked).lines().nth(2).unwrap(),
+            "[orrerix] ----- 1/1 · from w-7 · 4m12s ago · +3 identical repeats coalesced -----",
+        );
+    }
+
+    #[test]
+    fn scratch_only_the_header_carries_no_itemization_prose() {
+        let items = [
+            FlushConstituent { id: 1, from: "w-2", enqueued_ms: 0, coalesced: 0, text: "x" },
+            FlushConstituent { id: 2, from: "w-3", enqueued_ms: 0, coalesced: 0, text: "y" },
+        ];
+        let out = coalesced_flush_text(&items, 0, 0, FlushCause::PaneBlocked);
+        assert!(!out.contains("Treat each item"), "{out}");
+    }
+
+    #[test]
     fn coalesced_flush_text_announces_a_further_chunk_when_one_remains() {
         let items = [FlushConstituent { id: 1, from: SENDER, enqueued_ms: 0, coalesced: 0, text: "b" }];
         let out = coalesced_flush_text(&items, 3, 1_000, FlushCause::PaneBlocked);

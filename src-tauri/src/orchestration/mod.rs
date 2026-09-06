@@ -38368,7 +38368,7 @@ impl OrchRegistry {
             auto_ops || containment.forces_unattended(),
             // Empty on purpose: `knobs` is read by `write_mcp_config`'s codex
             // branch alone (#2515 C1), and `lead_prepare`'s CLI gate above has already
-            // refused codex for a lead pane  a lead's effort is argv-borne on
+            // refused codex for a lead pane - a lead's effort is argv-borne on
             // the launcher's own command line, never config-borne here.
             workflow::ModelKnobs { effort: "", context: "" },
             &PersonaInject::default(),

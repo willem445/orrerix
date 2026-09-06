@@ -1,0 +1,89 @@
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-800","block":"worker-std","role":"worker","task":"work #800"},"ts_ms":1788307200000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-800","block":"rev-std","cli":"opencode","role":"reviewer","task":"review #800"},"ts_ms":1788307200000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-800","block":"rev-final","role":"reviewer","task":"work #800"},"ts_ms":1788307200000}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":800,"agent":"w-800","block":"worker-std"},"ts_ms":1788307200001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":800,"agent":"rev-800","block":"rev-std"},"ts_ms":1788307200001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":800,"agent":"revf-800","block":"rev-final"},"ts_ms":1788307200001}
+{"action":"review-verdict","actor":"rev-800","detail":{"pr":800,"block":"rev-std","verdict":"fail"},"ts_ms":1788307260002}
+{"action":"review-verdict","actor":"rev-800","detail":{"pr":800,"block":"rev-std","verdict":"pass"},"ts_ms":1788307320002}
+{"action":"review-verdict","actor":"revf-800","detail":{"pr":800,"block":"rev-final","verdict":"pass"},"ts_ms":1788307380002}
+{"action":"rd-satisfied","actor":"orrerix","detail":{"pr":800},"ts_ms":1788314400000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-801","block":"worker-std","role":"worker","task":"work #801"},"ts_ms":1788393600000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-801","block":"rev-std","cli":"opencode","role":"reviewer","task":"review #801"},"ts_ms":1788393600000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-801","block":"rev-final","role":"reviewer","task":"work #801"},"ts_ms":1788393600000}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":801,"agent":"w-801","block":"worker-std"},"ts_ms":1788393600001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":801,"agent":"rev-801","block":"rev-std"},"ts_ms":1788393600001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":801,"agent":"revf-801","block":"rev-final"},"ts_ms":1788393600001}
+{"action":"review-verdict","actor":"rev-801","detail":{"pr":801,"block":"rev-std","verdict":"fail"},"ts_ms":1788393660002}
+{"action":"review-verdict","actor":"rev-801","detail":{"pr":801,"block":"rev-std","verdict":"fail"},"ts_ms":1788393720002}
+{"action":"review-verdict","actor":"rev-801","detail":{"pr":801,"block":"rev-std","verdict":"pass"},"ts_ms":1788393780002}
+{"action":"review-verdict","actor":"revf-801","detail":{"pr":801,"block":"rev-final","verdict":"fail"},"ts_ms":1788393840002}
+{"action":"review-verdict","actor":"revf-801","detail":{"pr":801,"block":"rev-final","verdict":"pass"},"ts_ms":1788393900002}
+{"action":"rd-satisfied","actor":"orrerix","detail":{"pr":801},"ts_ms":1788408000000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-802","block":"worker-std","role":"worker","task":"work #802"},"ts_ms":1788480000000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-802","block":"rev-std","cli":"opencode","role":"reviewer","task":"review #802"},"ts_ms":1788480000000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-802","block":"rev-final","role":"reviewer","task":"work #802"},"ts_ms":1788480000000}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":802,"agent":"w-802","block":"worker-std"},"ts_ms":1788480000001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":802,"agent":"rev-802","block":"rev-std"},"ts_ms":1788480000001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":802,"agent":"revf-802","block":"rev-final"},"ts_ms":1788480000001}
+{"action":"review-verdict","actor":"rev-802","detail":{"pr":802,"block":"rev-std","verdict":"pass"},"ts_ms":1788480060002}
+{"action":"review-verdict","actor":"revf-802","detail":{"pr":802,"block":"rev-final","verdict":"pass"},"ts_ms":1788480120002}
+{"action":"rd-satisfied","actor":"orrerix","detail":{"pr":802},"ts_ms":1788501600000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-803","block":"worker-std","role":"worker","task":"work #803"},"ts_ms":1788566400000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-803","block":"rev-std","cli":"pi","role":"reviewer","task":"review #803"},"ts_ms":1788566400000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-803","block":"rev-final","role":"reviewer","task":"work #803"},"ts_ms":1788566400000}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":803,"agent":"w-803","block":"worker-std"},"ts_ms":1788566400001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":803,"agent":"rev-803","block":"rev-std"},"ts_ms":1788566400001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":803,"agent":"revf-803","block":"rev-final"},"ts_ms":1788566400001}
+{"action":"review-verdict","actor":"rev-803","detail":{"pr":803,"block":"rev-std","verdict":"fail"},"ts_ms":1788566460002}
+{"action":"review-verdict","actor":"rev-803","detail":{"pr":803,"block":"rev-std","verdict":"pass"},"ts_ms":1788566520002}
+{"action":"review-verdict","actor":"revf-803","detail":{"pr":803,"block":"rev-final","verdict":"pass"},"ts_ms":1788566580002}
+{"action":"rd-satisfied","actor":"orrerix","detail":{"pr":803},"ts_ms":1788595200000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-810","block":"worker-std","role":"worker","task":"work #810"},"ts_ms":1789123015000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-810","block":"rev-std","cli":"pi","role":"reviewer","task":"review #810"},"ts_ms":1789123015000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-810","block":"rev-final","role":"reviewer","task":"work #810"},"ts_ms":1789123015000}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":810,"agent":"w-810","block":"worker-std"},"ts_ms":1789123015001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":810,"agent":"rev-810","block":"rev-std"},"ts_ms":1789123015001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":810,"agent":"revf-810","block":"rev-final"},"ts_ms":1789123015001}
+{"action":"review-verdict","actor":"rev-810","detail":{"pr":810,"block":"rev-std","verdict":"pass"},"ts_ms":1789123075002}
+{"action":"review-verdict","actor":"revf-810","detail":{"pr":810,"block":"rev-final","verdict":"pass"},"ts_ms":1789123135002}
+{"action":"rd-satisfied","actor":"orrerix","detail":{"pr":810},"ts_ms":1789126615000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-811","block":"worker-std","role":"worker","task":"work #811"},"ts_ms":1789209415000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-811","block":"rev-std","cli":"pi","role":"reviewer","task":"review #811"},"ts_ms":1789209415000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-811","block":"rev-final","role":"reviewer","task":"work #811"},"ts_ms":1789209415000}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":811,"agent":"w-811","block":"worker-std"},"ts_ms":1789209415001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":811,"agent":"rev-811","block":"rev-std"},"ts_ms":1789209415001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":811,"agent":"revf-811","block":"rev-final"},"ts_ms":1789209415001}
+{"action":"review-verdict","actor":"rev-811","detail":{"pr":811,"block":"rev-std","verdict":"fail"},"ts_ms":1789209475002}
+{"action":"review-verdict","actor":"rev-811","detail":{"pr":811,"block":"rev-std","verdict":"pass"},"ts_ms":1789209535002}
+{"action":"review-verdict","actor":"revf-811","detail":{"pr":811,"block":"rev-final","verdict":"pass"},"ts_ms":1789209595002}
+{"action":"rd-satisfied","actor":"orrerix","detail":{"pr":811},"ts_ms":1789220215000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-820","block":"worker-std","role":"worker","task":"work #820"},"ts_ms":1789295815000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w2-820","block":"worker-std","role":"worker","task":"work #820"},"ts_ms":1789295815000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-820","block":"rev-std","cli":"pi","role":"reviewer","task":"review #820"},"ts_ms":1789295815000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-820","block":"rev-final","role":"reviewer","task":"work #820"},"ts_ms":1789295815000}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":820,"agent":"w-820","block":"worker-std"},"ts_ms":1789295815001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":820,"agent":"w2-820","block":"worker-std"},"ts_ms":1789295815001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":820,"agent":"rev-820","block":"rev-std"},"ts_ms":1789295815001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":820,"agent":"revf-820","block":"rev-final"},"ts_ms":1789295815001}
+{"action":"review-verdict","actor":"rev-820","detail":{"pr":820,"block":"rev-std","verdict":"pass"},"ts_ms":1789295875002}
+{"action":"review-verdict","actor":"revf-820","detail":{"pr":820,"block":"rev-final","verdict":"pass"},"ts_ms":1789295935002}
+{"action":"rd-satisfied","actor":"orrerix","detail":{"pr":820},"ts_ms":1789313815000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-821","block":"worker-std","role":"worker","task":"work #821"},"ts_ms":1789382215000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-821","block":"rev-std","cli":"pi","role":"reviewer","task":"review #821"},"ts_ms":1789382215000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-821","block":"rev-final","role":"reviewer","task":"work #821"},"ts_ms":1789382215000}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":821,"agent":"w-821","block":"worker-std"},"ts_ms":1789382215001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":821,"agent":"rev-821","block":"rev-std"},"ts_ms":1789382215001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":821,"agent":"revf-821","block":"rev-final"},"ts_ms":1789382215001}
+{"action":"review-verdict","actor":"rev-821","detail":{"pr":821,"block":"rev-std","verdict":"pass"},"ts_ms":1789382275002}
+{"action":"review-verdict","actor":"revf-821","detail":{"pr":821,"block":"rev-final","verdict":"pass"},"ts_ms":1789382335002}
+{"action":"rd-satisfied","actor":"orrerix","detail":{"pr":821},"ts_ms":1789400215000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"w-822","block":"worker-std","role":"worker","task":"work #822"},"ts_ms":1789468615000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"rev-822","block":"rev-std","cli":"opencode","role":"reviewer","task":"review #822"},"ts_ms":1789468615000}
+{"action":"agent-spawn","actor":"orrerix","detail":{"agent":"revf-822","block":"rev-final","role":"reviewer","task":"work #822"},"ts_ms":1789468615000}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":822,"agent":"w-822","block":"worker-std"},"ts_ms":1789468615001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":822,"agent":"rev-822","block":"rev-std"},"ts_ms":1789468615001}
+{"action":"rd-lane-spawned","actor":"orrerix","detail":{"pr":822,"agent":"revf-822","block":"rev-final"},"ts_ms":1789468615001}
+{"action":"review-verdict","actor":"rev-822","detail":{"pr":822,"block":"rev-std","verdict":"pass"},"ts_ms":1789468675002}
+{"action":"review-verdict","actor":"revf-822","detail":{"pr":822,"block":"rev-final","verdict":"pass"},"ts_ms":1789468735002}
+{"action":"rd-satisfied","actor":"orrerix","detail":{"pr":822},"ts_ms":1789486615000}

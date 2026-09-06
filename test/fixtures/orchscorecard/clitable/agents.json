@@ -1,0 +1,205 @@
+[
+  {
+    "id": "orch-80",
+    "role": "orchestrator",
+    "block": "orchestrator",
+    "name": "orchestrator",
+    "session": "ses-orch-80"
+  },
+  {
+    "id": "w-800",
+    "role": "worker",
+    "block": "worker-std",
+    "name": "worker #800",
+    "session": "ses-w-800"
+  },
+  {
+    "id": "rev-800",
+    "role": "reviewer",
+    "block": "rev-std",
+    "name": "rev-std #800",
+    "session": "ses-rev-800"
+  },
+  {
+    "id": "revf-800",
+    "role": "reviewer",
+    "block": "rev-final",
+    "name": "reviewer #800",
+    "session": "ses-revf-800"
+  },
+  {
+    "id": "w-801",
+    "role": "worker",
+    "block": "worker-std",
+    "name": "worker #801",
+    "session": "ses-w-801"
+  },
+  {
+    "id": "rev-801",
+    "role": "reviewer",
+    "block": "rev-std",
+    "name": "rev-std #801",
+    "session": "ses-rev-801"
+  },
+  {
+    "id": "revf-801",
+    "role": "reviewer",
+    "block": "rev-final",
+    "name": "reviewer #801",
+    "session": "ses-revf-801"
+  },
+  {
+    "id": "w-802",
+    "role": "worker",
+    "block": "worker-std",
+    "name": "worker #802",
+    "session": "ses-w-802"
+  },
+  {
+    "id": "rev-802",
+    "role": "reviewer",
+    "block": "rev-std",
+    "name": "rev-std #802",
+    "session": "ses-rev-802"
+  },
+  {
+    "id": "revf-802",
+    "role": "reviewer",
+    "block": "rev-final",
+    "name": "reviewer #802",
+    "session": "ses-revf-802"
+  },
+  {
+    "id": "w-803",
+    "role": "worker",
+    "block": "worker-std",
+    "name": "worker #803",
+    "session": "ses-w-803"
+  },
+  {
+    "id": "rev-803",
+    "role": "reviewer",
+    "block": "rev-std",
+    "name": "rev-std #803",
+    "session": "ses-rev-803"
+  },
+  {
+    "id": "revf-803",
+    "role": "reviewer",
+    "block": "rev-final",
+    "name": "reviewer #803",
+    "session": "ses-revf-803"
+  },
+  {
+    "id": "w-810",
+    "role": "worker",
+    "block": "worker-std",
+    "name": "worker #810",
+    "session": "ses-w-810"
+  },
+  {
+    "id": "rev-810",
+    "role": "reviewer",
+    "block": "rev-std",
+    "name": "rev-std #810",
+    "session": "ses-rev-810"
+  },
+  {
+    "id": "revf-810",
+    "role": "reviewer",
+    "block": "rev-final",
+    "name": "reviewer #810",
+    "session": "ses-revf-810"
+  },
+  {
+    "id": "w-811",
+    "role": "worker",
+    "block": "worker-std",
+    "name": "worker #811",
+    "session": "ses-w-811"
+  },
+  {
+    "id": "rev-811",
+    "role": "reviewer",
+    "block": "rev-std",
+    "name": "rev-std #811",
+    "session": "ses-rev-811"
+  },
+  {
+    "id": "revf-811",
+    "role": "reviewer",
+    "block": "rev-final",
+    "name": "reviewer #811",
+    "session": "ses-revf-811"
+  },
+  {
+    "id": "w-820",
+    "role": "worker",
+    "block": "worker-std",
+    "name": "worker #820",
+    "session": "ses-w-820"
+  },
+  {
+    "id": "w2-820",
+    "role": "worker",
+    "block": "worker-std",
+    "name": "worker #820",
+    "session": "ses-w2-820"
+  },
+  {
+    "id": "rev-820",
+    "role": "reviewer",
+    "block": "rev-std",
+    "name": "rev-std #820",
+    "session": "ses-rev-820"
+  },
+  {
+    "id": "revf-820",
+    "role": "reviewer",
+    "block": "rev-final",
+    "name": "reviewer #820",
+    "session": "ses-revf-820"
+  },
+  {
+    "id": "w-821",
+    "role": "worker",
+    "block": "worker-std",
+    "name": "worker #821",
+    "session": "ses-w-821"
+  },
+  {
+    "id": "rev-821",
+    "role": "reviewer",
+    "block": "rev-std",
+    "name": "rev-std #821",
+    "session": "ses-rev-821"
+  },
+  {
+    "id": "revf-821",
+    "role": "reviewer",
+    "block": "rev-final",
+    "name": "reviewer #821",
+    "session": "ses-revf-821"
+  },
+  {
+    "id": "w-822",
+    "role": "worker",
+    "block": "worker-std",
+    "name": "worker #822",
+    "session": "ses-w-822"
+  },
+  {
+    "id": "rev-822",
+    "role": "reviewer",
+    "block": "rev-std",
+    "name": "rev-std #822",
+    "session": "ses-rev-822"
+  },
+  {
+    "id": "revf-822",
+    "role": "reviewer",
+    "block": "rev-final",
+    "name": "reviewer #822",
+    "session": "ses-revf-822"
+  }
+]

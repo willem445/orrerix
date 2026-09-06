@@ -294,6 +294,121 @@ never rewritten from disk however its source reads.
 (`orchestrator_pct_attributed`). Both are `null` when the denominator is zero, never
 `0` — "no data" and "the orchestrator spent nothing" are different facts.
 
+### 4.8 The CLI axis, and the per-lane columns
+
+Which **CLI** produced a delegate's tokens is not a field loomux writes anywhere.
+It is **read off** the `source` label of the `usage.json` row carrying those
+tokens, because that label names the per-CLI record the collector folded — a
+Claude Code transcript, an OpenCode session DB, a pi session file, a codex
+rollout ([group-cost-tracking.md](group-cost-tracking.md), the per-CLI sections).
+The map is therefore the inverse of the collector's own arm selection, not a
+guess about which CLI a block runs:
+
+| `source` | `cli` |
+| --- | --- |
+| `transcript` | `claude` |
+| `transcript-backfill` | `claude` — this script's own label for a row it rebuilt by folding a Claude transcript off disk (§4.6) |
+| `pi-transcript` | `pi` |
+| `session-db` | `opencode` |
+| `codex-transcript` | `codex` |
+| `statusline`, `none`, absent, anything else | `unknown` |
+
+**A ladder of two rungs, and `unknown` is the third outcome, never a guess.**
+
+1. `usage-source` — the map above, where it resolves.
+2. `spawn-row` — where it does not (a `statusline` scrape says a CLI printed a
+   dollar figure, never which one), the `cli` on that agent's `agent-spawn` row.
+   Verified rather than assumed: there are exactly two `agent-spawn` `json!`
+   sites in `src-tauri/src/orchestration/mod.rs`, and the **delegate** one
+   carries `cli` and `block` while the **orchestrator** one carries neither. On
+   this group's two audit generations that is 628 of 637 rows; the nine without
+   are all orchestrator resumes, and an orchestrator is excluded from the
+   delegate side anyway (§4.6). A third site that omitted `cli` would land in
+   `unknown` — reported, not silently filled in.
+3. `unknown`, with `cli_via: null`. The block's **declared** CLI is deliberately
+   not consulted: a pane can be recycled onto a block whose roster line has since
+   changed, and the whole point of the axis is to measure what actually ran.
+
+`cli_via` says which rung answered, per delegate. Two rows disagreeing under one
+key resolve to `mixed` rather than to whichever was folded last — the session
+index sees one row per key, but the `agent_id` fallback index can see several.
+
+This is heuristic **H10**, and `coverage.cli_axis` is its population control:
+`delegate_slots`, `by_rung`, `by_cli` and `unknown`, counted once per delegate
+**on a card** — the site where a cli is actually used — rather than once per
+usage row scanned, which would certify coverage the table never received.
+
+**Per PR, `delegates.by_block_cli`** buckets the credited tokens by
+`<block>/<cli>`, keys read off the rows and never off a roster. Keying on the
+block alone would fold a PR whose `worker-std` panes ran two different CLIs into
+one bucket, which is exactly the case a switch produces.
+
+**Per lane** (`review.lanes[<block>]`), beside §4.3's verdict buckets:
+
+- `rounds_to_pass` — the 1-based position of the **first** `pass` in that
+  block's `pass`/`fail` sequence. `null` where the block never passed — never 0
+  and never the round count, because a lane still in review has no answer yet
+  and the round count would read as a lane that passed on its last round. A
+  later `fail` (a re-review on a new head) does not lower it, and a re-`pass` is
+  not a second answer. This is a question about the **sequence**, which §4.3's
+  bucket has thrown away.
+- `fail_rate` — `fail / (pass + fail)` over the whole sequence, so those later
+  rounds do count here. `null` when the lane recorded neither: `0` would claim a
+  clean lane where there is no lane at all.
+- `verdicts_other` — anything that is neither `pass` nor `fail` (the live
+  vocabulary is exactly those two), excluded from both figures rather than
+  allowed to shift an index silently.
+
+**Per PR, `wall_clock_h`** is the PR window's own untailed span (`windows.pr.span_h`),
+lifted to the top of the card because it is one of the compared columns. `null`,
+never 0, where no audit row names the PR.
+
+### 4.9 The CLI comparison table (`--format cli-table`)
+
+**Medians, never totals.** The two windows hold different PRs doing different
+work, so a total is a statement about the task mix rather than about the CLI.
+Every cell is a median with an inter-quartile range and an `n`, and a cell below
+`MEDIAN_MIN_N` (3) reads **`null`** — `n` is still reported at every size,
+including 0, so a null cell is legible as "not enough data" rather than as a
+missing measurement. Quartiles use the exclusive-median (Tukey hinge)
+convention: on an odd-length sample the halves exclude the middle element.
+
+**Selection**, and why each bound is there:
+
+| bound | rule |
+| --- | --- |
+| merged | the PR must have a `merged_at` in `--pr-meta` — an open PR has no wall clock and its lanes have not finished |
+| one cli | every delegate of a compared block must resolve to the **same** cli, and it must not be `unknown` or `mixed`; a PR whose `worker-std` panes were half opencode and half pi measures the switch rather than either side of it |
+| both lanes agree | `worker-std` and `rev-std` must resolve to the same cli |
+| side | `merged_at` against `--split-at` (the #2817 merge instant, `93d51cc9`, 2026-09-06T10:36:55Z) |
+
+Every refusal is listed under `excluded` with the bound that refused it — the
+selection is stated, never silent, and `per_pr` plus `excluded` is every PR the
+run scored.
+
+**The side and the cli are resolved independently, then cross-checked.** A PR
+whose lanes resolve to pi before the split, or opencode after it, appears under
+`side_cli_disagreements` rather than being reconciled away: it means the split
+instant is wrong or a lane was hand-run, and that is the instrument telling on
+itself.
+
+**Rows are read off the data** — one per `(cli, window)` pair any selected PR
+produced. Nothing in the script knows that opencode ran before and pi after.
+
+**Columns**: `worker-std` credited tokens, `rev-std` credited tokens, `rev-std`
+`rounds_to_pass`, `rev-std` `fail_rate`, `wall_clock_h`, and — the **control** —
+`rev-final` `rounds_to_pass`. `rev-final` is Claude on both sides of the split,
+so a column that moves there is measuring something other than the
+worker/reviewer CLI, and a control that moves as much as the treatment columns
+is the table refuting itself.
+
+**The confounder block is printed by the script**, under the table, so a table
+pasted into a comment cannot arrive without the reasons not to over-read it:
+the effective thinking level (#2938 — reported as `unknown` until that lands,
+never guessed at a value), the task mix, the driver-waste changes that land on
+the pre-switch side (#2501, #2507, #2508, #2509) and their measurement (#2812),
+and the cumulative-usage bounds H6/H8 carry equally on both sides.
+
 ---
 
 ## 5. Attribution: agent → PR
@@ -365,6 +480,7 @@ The script emits this list in every run, under `coverage.heuristics`, and it **i
 | H6 | `usage.json` is cumulative, so a delegate's whole life counts against its PR. | A windowed usage series, or accepting the approximation. |
 | H7 | The PR window ends at `merged_at` passed in by the caller. | A loomux row for a human merge (#388). |
 | H8 | A `usage.json` row is keyed by CLI **session**; a session carried to a new agent id names only its last occupant, so the row is split evenly across every agent that occupied it. | An `agent_id` (or `block` + `pr`) on **every** `UsageSnapshot`, not just the latest — the same missing field as H4. |
+| H10 | A delegate's CLI is read off the `source` label of the `usage.json` row carrying its tokens (§4.8); a row whose source names no CLI (`statusline`, `none`) falls back to the `cli` on that agent's `agent-spawn` row, and to `unknown` — reported, never filled in from the block's declared CLI — when neither answers. | A `cli` field on `UsageSnapshot`, and one on the orchestrator `agent-spawn` site, which unlike the delegate site carries none — t-664's family, the same missing-field fix as H4/H8. |
 | H9 | A zero row backfilled from its transcript (§4.6) is **unpriced** — it keeps whatever `cost_usd` the collector recorded, so its tokens are right and its dollars are not — and does not honour `--cut`, because `--cut` cannot rewind an ordinary `usage.json` row either. | The collector recording the row correctly, which #2167 does: after it, `rows` reads 0 on any store written by a fixed build. |
 
 A run that adds a heuristic adds a row here in the same commit. The test suite
@@ -419,7 +535,11 @@ generations hides it.
 ## 9. Output shape
 
 One JSON object. `--format table` renders the per-PR GFM table instead;
-`--format both` prints each.
+`--format both` prints each. `--format cli-table` renders the §4.9 comparison
+(and needs `--split-at`); its own shape is `{ split_at_ms, split_commit, min_n,
+columns[], rows: [ { key, cli, side, prs[], cells: { <column>: { n, dropped,
+median, q1, q3, iqr, min, max } } } ], per_pr[], excluded[],
+side_cli_disagreements[], confounders[] }`.
 
 ```
 {
@@ -427,16 +547,20 @@ One JSON object. `--format table` renders the per-PR GFM table instead;
                           claude_projects, backfill },
   group:    { files: [ { path, rows, span_h, orchestrator_wakes, wakes_by_kind, ... } ] },
   prs:      [ {
-    pr, build, issue, outcome,
+    pr, build, issue, outcome, merged_at, wall_clock_h,
     windows:      { pr: { start_ms, end_ms, end_source, tail_ms, span_h } | null,
                     loop: { start_ms, end_ms, tail_ms, span_h } | null },
     orchestrator: { wakes_total, wakes_by_kind, loop_notices, loop_notices_any_pane_s5,
                     wake_share: { pr_wakes, window_wakes, share },
                     tokens_window, tokens_attributed },
-    review:       { rounds, by_block: { <block>: { <verdict>: n } } },
+    review:       { rounds, by_block: { <block>: { <verdict>: n } },
+                    lanes: { <block>: { rounds, pass, fail, verdicts_other,
+                                       rounds_to_pass, fail_rate } } },
     driver:       { drives, lane_spawns, hand_backs, refused, held, ...,
                     refused_by_reason, held_by_reason },
-    delegates:    { count, tokens, agents: [ { agent, block, role, tier, weight, pr_weight,
+    delegates:    { count, tokens,
+                    by_block_cli: { "<block>/<cli>": { block, cli, tokens, tokens_credited, count } },
+                    agents: [ { agent, block, role, cli, cli_via, tier, weight, pr_weight,
                     session_weight, shared_session_agents, tokens, tokens_credited,
                     usage_key, has_usage_row } ] },
     share:        { orchestrator_pct_raw, orchestrator_pct_attributed },
@@ -446,6 +570,8 @@ One JSON object. `--format table` renders the per-PR GFM table instead;
               agents_attributed, agents_unattributed_spawned_in_window,
               agents_split_across_prs, usage_rows_unusable, usage_sessions_indexed,
               usage_sessions_shared_by_more_than_one_agent,
+              cli_axis: { delegate_slots, by_rung, by_cli, unknown,
+                          spawn_rows_with_cli, spawn_rows_without_cli },
               usage_rows_backfilled_from_transcript: {
                 claude_projects_root, scanned, projects_scanned, transcripts_indexed,
                 zero_rows_considered, rows, tokens,

@@ -772,3 +772,359 @@ test('the CLI prints usage instead of throwing when given nothing', () => {
   assert.match(out, /--audit/);
   assert.match(out, /--transcript/);
 });
+
+// ---------------------------------------------------------------------------
+// #2011 A — the CLI axis, the per-lane columns, and the opencode-vs-pi table.
+//
+// The axis is READ off the `usage.json` row's `source`, with the `agent-spawn`
+// row's `cli` as a second rung and `unknown` as the third outcome. Everything
+// below pins that it is read and never guessed: no assertion here is satisfied
+// by a scorecard that fills a blank in from a block's declared CLI.
+// ---------------------------------------------------------------------------
+
+const CLI_TABLE = path.join(fixtures, 'clitable');
+const SPLIT_AT = '2026-09-06T10:36:55Z';
+
+function runCliTable(extraArgs: string[] = []): string {
+  return execFileSync(process.execPath, [
+    scriptPath,
+    '--audit', path.join(CLI_TABLE, 'audit.jsonl'),
+    '--usage', path.join(CLI_TABLE, 'usage.json'),
+    '--agents', path.join(CLI_TABLE, 'agents.json'),
+    '--pr-meta', path.join(CLI_TABLE, 'pr-meta.json'),
+    '--all', '--no-backfill',
+    ...extraArgs,
+  ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+}
+
+const CLI_REPORT = JSON.parse(runCliTable());
+const cliCard = (pr: number) => CLI_REPORT.prs.find((c: any) => c.pr === pr);
+
+test('cli: the source label decides, one map, and everything else is `unknown`', () => {
+  // The four labels loomux writes per CLI (group-cost-tracking.md), plus the
+  // script's own backfill label, which names a CLAUDE transcript folded off disk.
+  assert.equal(sc.cliForSource('transcript'), 'claude');
+  assert.equal(sc.cliForSource('transcript-backfill'), 'claude');
+  assert.equal(sc.cliForSource('pi-transcript'), 'pi');
+  assert.equal(sc.cliForSource('session-db'), 'opencode');
+  assert.equal(sc.cliForSource('codex-transcript'), 'codex');
+  // The two labels that name no CLI, and the three shapes of absence. A
+  // statusline scrape says a CLI printed a dollar figure, never which one.
+  assert.equal(sc.cliForSource('statusline'), 'unknown');
+  assert.equal(sc.cliForSource('none'), 'unknown');
+  assert.equal(sc.cliForSource(undefined), 'unknown');
+  assert.equal(sc.cliForSource(null), 'unknown');
+  assert.equal(sc.cliForSource('a-source-that-does-not-exist-yet'), 'unknown');
+  // NEGATIVE CONTROL for the whole map: it is not a function that answers
+  // `claude` to everything, and `unknown` is not a value it never returns.
+  assert.equal(new Set(Object.values(sc.SOURCE_TO_CLI)).size, 4);
+  assert.equal(sc.CLI_UNKNOWN, 'unknown');
+});
+
+test('cli: two rows disagreeing under one key resolve to `mixed`, never to the last one folded', () => {
+  assert.equal(sc.resolveCli(new Set(['claude'])), 'claude');
+  assert.equal(sc.resolveCli(new Set(['unknown'])), 'unknown');
+  assert.equal(sc.resolveCli(new Set([])), 'unknown');
+  // An `unknown` beside a real one does not make the answer ambiguous — nothing
+  // was learned from it.
+  assert.equal(sc.resolveCli(new Set(['unknown', 'pi'])), 'pi');
+  assert.equal(sc.resolveCli(new Set(['pi', 'opencode'])), 'mixed');
+});
+
+test('cli: the spawn-row rung answers only where the source did not, and says so', () => {
+  const spawnOnly = { get: (a: string) => (a === 'w-1' ? 'opencode' : undefined) };
+  // Rung 1 wins outright: a usage source that resolved is never second-guessed
+  // by a spawn row, which records what was LAUNCHED rather than what ran.
+  assert.deepEqual(sc.resolveDelegateCli('pi', 'w-1', spawnOnly),
+    { cli: 'pi', cli_via: 'usage-source' });
+  // Rung 2 fires only on `unknown`.
+  assert.deepEqual(sc.resolveDelegateCli('unknown', 'w-1', spawnOnly),
+    { cli: 'opencode', cli_via: 'spawn-row' });
+  // And the third outcome is REPORTED, never a guess filled in from a roster.
+  assert.deepEqual(sc.resolveDelegateCli('unknown', 'w-2', spawnOnly),
+    { cli: 'unknown', cli_via: null });
+  assert.deepEqual(sc.resolveDelegateCli(undefined, 'w-2', spawnOnly),
+    { cli: 'unknown', cli_via: null });
+});
+
+test('cli: `indexSpawnCli` reads the delegate site and counts the rows that carry none', () => {
+  const idx = sc.indexSpawnCli([
+    { action: 'agent-spawn', detail: { agent: 'w-1', cli: 'opencode' }, ts_ms: 1 },
+    // A respawn: the LAST row wins, because the live pane wrote the tokens.
+    { action: 'agent-spawn', detail: { agent: 'w-1', cli: 'pi' }, ts_ms: 2 },
+    // The orchestrator site carries no `cli` at all — counted, never invented.
+    { action: 'agent-spawn', detail: { agent: 'orch-1', role: 'orchestrator' }, ts_ms: 3 },
+    { action: 'prompt', detail: { agent: 'w-9', cli: 'claude' }, ts_ms: 4 },
+  ]);
+  assert.equal(idx.byAgent.get('w-1'), 'pi');
+  assert.equal(idx.byAgent.has('orch-1'), false);
+  // A non-spawn row carrying a `cli` is not a spawn record and is not read.
+  assert.equal(idx.byAgent.has('w-9'), false);
+  assert.equal(idx.spawn_rows_with_cli, 2);
+  assert.equal(idx.spawn_rows_without_cli, 1);
+});
+
+test('cli: every delegate on the shared corpus carries a cli and the rung that answered', () => {
+  const byAgent = new Map<string, any>();
+  for (const c of REPORT.prs) for (const d of c.delegates.agents) byAgent.set(d.agent, d);
+  // All three rungs have a subject, so no assertion here passes on a corpus
+  // where one rung is unreachable.
+  assert.deepEqual(
+    [...byAgent.entries()].sort().map(([a, d]) => [a, d.cli, d.cli_via]),
+    [
+      ['rev-11', 'pi', 'usage-source'],          // `pi-transcript`
+      ['rev-11-prev', 'pi', 'usage-source'],     // same session, same row
+      ['rev-12', 'unknown', null],               // `statusline`, and no spawn row
+      ['w-13', 'claude', 'usage-source'],        // `transcript`
+      ['w-14', 'opencode', 'spawn-row'],         // `statusline`, spawn row says opencode
+    ],
+  );
+});
+
+test('cli: a `statusline` row lands in `unknown`, never in a CLI, when no spawn row answers', () => {
+  const rev12 = card(900).delegates.agents.find((a: any) => a.agent === 'rev-12');
+  assert.equal(rev12.cli, 'unknown');
+  assert.equal(rev12.cli_via, null);
+  // It still carries its tokens: an unknown CLI is an unknown AXIS, not a
+  // dropped delegate — the tokens are real and are counted somewhere.
+  assert.ok(rev12.tokens > 0);
+  assert.equal(card(900).delegates.by_block_cli['rev-final/unknown'].tokens, rev12.tokens);
+  // NEGATIVE CONTROL: `unknown` is not what this corpus answers for everything.
+  assert.equal(card(900).delegates.agents.find((a: any) => a.agent === 'w-13').cli, 'claude');
+});
+
+test('by_block_cli: one bucket per `block/cli`, keyed off the rows and not a roster', () => {
+  assert.deepEqual(card(900).delegates.by_block_cli, {
+    'rev-std/pi': { block: 'rev-std', cli: 'pi', tokens: 2140, tokens_credited: 1070, count: 2 },
+    'rev-final/unknown': { block: 'rev-final', cli: 'unknown', tokens: 2140, tokens_credited: 1070, count: 1 },
+    'worker-adv/claude': { block: 'worker-adv', cli: 'claude', tokens: 3210, tokens_credited: 3210, count: 1 },
+  });
+  // The buckets re-sum to the card's own delegate total, so the split cannot
+  // lose or duplicate a delegate's credit.
+  const sum = Object.values(card(900).delegates.by_block_cli)
+    .reduce((n: number, b: any) => n + b.tokens_credited, 0);
+  assert.equal(sum, card(900).delegates.tokens.total);
+  // NEGATIVE CONTROL: the PR named by nothing has no buckets at all.
+  assert.deepEqual(card(902).delegates.by_block_cli, {});
+});
+
+test('by_block_cli: two clis in ONE block on ONE PR stay apart', () => {
+  // #820's two `worker-std` panes ran different CLIs. Keying on the block alone
+  // would fold them into one bucket and the switch would be invisible.
+  const b = cliCard(820).delegates.by_block_cli;
+  assert.equal(b['worker-std/opencode'].count, 1);
+  assert.equal(b['worker-std/pi'].count, 1);
+  assert.notEqual(b['worker-std/opencode'].tokens_credited, 0);
+  assert.equal(b['worker-std/opencode'].block, b['worker-std/pi'].block);
+});
+
+test('lanes: `rounds_to_pass` is the first pass, and `null` where the lane never passed', () => {
+  // #801's rev-std went fail, fail, pass.
+  assert.deepEqual(cliCard(801).review.lanes['rev-std'], {
+    rounds: 3, pass: 1, fail: 2, verdicts_other: 0, rounds_to_pass: 3, fail_rate: 0.67,
+  });
+  // A lane that passed first time is 1, not 0 — the count is 1-based rounds.
+  assert.equal(cliCard(802).review.lanes['rev-std'].rounds_to_pass, 1);
+  assert.equal(cliCard(802).review.lanes['rev-std'].fail_rate, 0);
+  // #901's only verdict is `escalate`: neither a pass nor a fail, so
+  // `rounds_to_pass` is null (never the round count) and `fail_rate` is null
+  // (never 0 — "a clean lane" and "no lane" are different facts).
+  assert.deepEqual(card(901).review.lanes['rev-final'], {
+    rounds: 1, pass: 0, fail: 0, verdicts_other: 1, rounds_to_pass: null, fail_rate: null,
+  });
+});
+
+test('lanes: the sequence is read in order, so a later fail cannot lower rounds_to_pass', () => {
+  // Built directly rather than through a fixture, because the point is the
+  // ORDER and the audit corpus would fix one ordering forever.
+  assert.deepEqual(sc.laneStats({ a: ['fail', 'pass', 'fail', 'pass'] }).a, {
+    rounds: 4, pass: 2, fail: 2, verdicts_other: 0, rounds_to_pass: 2, fail_rate: 0.5,
+  });
+  // Reversed, the same multiset answers 1 — so the function reads the sequence
+  // and not the bucket, which is exactly what `review.by_block` cannot tell you.
+  assert.equal(sc.laneStats({ a: ['pass', 'fail', 'fail', 'pass'] }).a.rounds_to_pass, 1);
+  assert.equal(sc.laneStats({ a: ['fail', 'fail'] }).a.rounds_to_pass, null);
+  assert.equal(sc.laneStats({ a: [] }).a.fail_rate, null);
+});
+
+test('wall_clock_h is the PR window span, and `null` — never 0 — with no window', () => {
+  assert.equal(card(900).wall_clock_h, card(900).windows.pr.span_h);
+  assert.equal(cliCard(801).wall_clock_h, 4);
+  assert.equal(cliCard(803).wall_clock_h, 8);
+  // The negative control: #902 is named by nothing, so it has no window at all.
+  assert.equal(card(902).wall_clock_h, null);
+  assert.equal(card(902).windows.pr, null);
+});
+
+test('statCell: a median needs n>=3, and `n` is reported at every size', () => {
+  assert.equal(sc.MEDIAN_MIN_N, 3);
+  // Below the floor the cell is null and n still says how thin it was.
+  for (const xs of [[], [1], [1, 2]]) {
+    const c = sc.statCell(xs);
+    assert.equal(c.median, null, `n=${xs.length} must not produce a median`);
+    assert.equal(c.q1, null);
+    assert.equal(c.iqr, null);
+    assert.equal(c.n, xs.length);
+  }
+  // At the floor it resolves. Odd n: the middle element is excluded from both
+  // halves (the Tukey-hinge convention the comment states).
+  assert.deepEqual(sc.statCell([1, 2, 3]),
+    { n: 3, dropped: 0, median: 2, q1: 1, q3: 3, iqr: 2, min: 1, max: 3 });
+  // Even n: the median is the mean of the middle pair.
+  assert.equal(sc.statCell([1, 2, 3, 4]).median, 2.5);
+  // Unsorted input sorts; a null or non-numeric input is DROPPED and counted,
+  // so a lane with no answer shrinks n instead of reading as a zero.
+  assert.equal(sc.statCell([9, 1, 5]).median, 5);
+  const dropped = sc.statCell([1, 2, 3, null, undefined, NaN]);
+  assert.equal(dropped.n, 3);
+  assert.equal(dropped.dropped, 3);
+  assert.equal(dropped.median, 2, 'a null must not be read as 0 and drag the median down');
+});
+
+test('cli-table: the pi side is null below n=3 while the opencode side resolves', () => {
+  const t = sc.cliTable(CLI_REPORT.prs, Date.parse(SPLIT_AT));
+  const row = (k: string) => t.rows.find((r: any) => r.key === k);
+  assert.deepEqual(row('opencode (pre-2817)').prs, [800, 801, 802]);
+  assert.deepEqual(row('pi (post-2817)').prs, [810, 811]);
+  // The floor bites per CELL on the thin side and nowhere on the thick one, so
+  // this is not the vacuous "everything is null" reading.
+  for (const c of t.columns) {
+    assert.equal(row('pi (post-2817)').cells[c.key].median, null, c.key + ' must be null at n=2');
+    assert.equal(row('pi (post-2817)').cells[c.key].n, 2);
+    assert.notEqual(row('opencode (pre-2817)').cells[c.key].median, null, c.key + ' must resolve at n=3');
+  }
+  assert.equal(row('opencode (pre-2817)').cells.wall_clock_h.median, 4);
+  assert.equal(row('opencode (pre-2817)').cells.rev_rounds_to_pass.median, 2);
+});
+
+test('cli-table: #802 is on the opencode side ONLY because the spawn-row rung answered', () => {
+  // Its rev-std usage row is `statusline`. Without rung 2 its rev-std lane would
+  // resolve to `unknown`, the PR would be excluded, and the opencode side would
+  // fall to n=2 — where every cell reads null. This is what makes the fallback
+  // load-bearing rather than decorative.
+  const rev802 = cliCard(802).delegates.agents.find((a: any) => a.agent === 'rev-802');
+  assert.equal(rev802.cli_via, 'spawn-row');
+  assert.equal(rev802.cli, 'opencode');
+  const t = sc.cliTable(CLI_REPORT.prs, Date.parse(SPLIT_AT));
+  assert.equal(t.rows.find((r: any) => r.key === 'opencode (pre-2817)').prs.length, 3);
+  // …and with that one delegate's cli erased, the side really does collapse.
+  const blinded = JSON.parse(JSON.stringify(CLI_REPORT.prs));
+  for (const c of blinded) {
+    for (const d of c.delegates.agents) {
+      if (d.agent !== 'rev-802') continue;
+      d.cli = 'unknown';
+      d.cli_via = null;
+    }
+  }
+  const t2 = sc.cliTable(blinded, Date.parse(SPLIT_AT));
+  assert.equal(t2.rows.find((r: any) => r.key === 'opencode (pre-2817)').prs.length, 2);
+  assert.equal(t2.rows.find((r: any) => r.key === 'opencode (pre-2817)').cells.wall_clock_h.median, null);
+  assert.ok(t2.excluded.some((e: any) => e.pr === 802));
+});
+
+test('cli-table: selection is stated, and every exclusion says which bound refused it', () => {
+  const t = sc.cliTable(CLI_REPORT.prs, Date.parse(SPLIT_AT));
+  const why = (pr: number) => (t.excluded.find((e: any) => e.pr === pr) || {}).why;
+  assert.match(why(820), /worker-std split across opencode\+pi/);
+  assert.match(why(821), /no merged_at/);
+  assert.match(why(822), /worker-std pi but rev-std opencode/);
+  // Selected plus excluded is every PR the run scored: nothing leaves silently.
+  assert.equal(t.per_pr.length + t.excluded.length, CLI_REPORT.prs.length);
+  assert.ok(t.per_pr.length > 0, 'positive control: the selection is not empty');
+});
+
+test('cli-table: the side and the cli are resolved independently, and a disagreement is reported', () => {
+  const t = sc.cliTable(CLI_REPORT.prs, Date.parse(SPLIT_AT));
+  // #803 merged BEFORE the split and its lanes resolve to pi. The table does not
+  // reconcile that away — it files the PR by the clock and flags the mismatch.
+  assert.deepEqual(t.side_cli_disagreements,
+    [{ pr: 803, side: 'pre-2817', cli: 'pi', expected: 'opencode' }]);
+  assert.equal(t.per_pr.find((p: any) => p.pr === 803).side, 'pre-2817');
+  assert.equal(t.per_pr.find((p: any) => p.pr === 803).cli, 'pi');
+  // NEGATIVE CONTROL: the other five agree, so the list is not everything.
+  assert.equal(t.per_pr.length, 6);
+});
+
+test('cli-table: the rows are read off the data, not off a hardcoded opencode/pi pair', () => {
+  // Rewrite every cli to one nothing in this script knows about. A table with a
+  // built-in roster would render two empty named rows; this one renders one row
+  // called what the rows say.
+  const relabelled = JSON.parse(JSON.stringify(CLI_REPORT.prs));
+  for (const c of relabelled) {
+    for (const d of c.delegates.agents) if (d.cli !== 'unknown') d.cli = 'fictional-cli';
+    for (const [k, b] of Object.entries<any>(c.delegates.by_block_cli)) {
+      if (b.cli === 'unknown') continue;
+      delete c.delegates.by_block_cli[k];
+      b.cli = 'fictional-cli';
+      c.delegates.by_block_cli[b.block + '/fictional-cli'] = b;
+    }
+  }
+  const t = sc.cliTable(relabelled, Date.parse(SPLIT_AT));
+  assert.deepEqual(t.rows.map((r: any) => r.key).sort(),
+    ['fictional-cli (post-2817)', 'fictional-cli (pre-2817)']);
+  // …and every one of them disagrees with the expected side, which is the
+  // cross-check firing rather than staying quiet on an unfamiliar label.
+  assert.equal(t.side_cli_disagreements.length, t.per_pr.length);
+});
+
+test('cli-table: the confounder block is printed by the script, not left to the poster', () => {
+  const rendered = runCliTable(['--format', 'cli-table', '--split-at', SPLIT_AT]);
+  // The measurement is worthless without the reasons not to over-read it, so
+  // they travel with the table rather than being remembered into a comment.
+  for (const id of ['effective-thinking-level', 'task-mix', 'driver-waste-changes',
+    'driver-waste-measurement', 'cumulative-usage-rows']) {
+    assert.ok(rendered.includes(id), `the ${id} confounder must print under the table`);
+  }
+  // Every issue the plan names as a confounder is cited.
+  for (const n of [2938, 2501, 2507, 2508, 2509, 2812]) {
+    assert.match(rendered, new RegExp('#' + n + '(?![0-9])'), `#${n} must be cited`);
+  }
+  // #2938's effective level is REPORTED as unknown, never guessed at a value.
+  assert.match(rendered, /Effective level as read today: `unknown`/);
+  assert.ok(rendered.includes('93d51cc9'), 'the split commit is named');
+  assert.ok(rendered.includes('2026-09-06T10:36:55'), 'the split instant is named');
+});
+
+test('cli-table: the GFM renders one row per group with the header cell count', () => {
+  const rendered = runCliTable(['--format', 'cli-table', '--split-at', SPLIT_AT]);
+  const lines = rendered.split('\n').filter((l) => l.startsWith('|'));
+  const cells = (l: string) => l.split('|').length;
+  // A row that disagrees with the header renders as a broken table on
+  // github.com and fails nowhere else.
+  for (const l of lines) assert.equal(cells(l), cells(lines[0]));
+  assert.equal(lines.length, 2 + sc.cliTable(CLI_REPORT.prs, Date.parse(SPLIT_AT)).rows.length);
+  assert.match(lines[1], /^\|(-{3}\|)+$/);
+  // A resolved cell shows median, IQR and n; a refused one shows null and n.
+  assert.match(rendered, /\(IQR .+?, n=3\)/);
+  assert.match(rendered, /null \(n=2\)/);
+});
+
+test('cli-table: --format cli-table refuses to run without a split instant', () => {
+  assert.throws(() => runCliTable(['--format', 'cli-table']), /--split-at/);
+  // …and a bad one is refused too, rather than silently filing every PR on one
+  // side (Date.parse of nonsense is NaN, and NaN comparisons are all false).
+  assert.throws(() => runCliTable(['--format', 'cli-table', '--split-at', 'not-a-date']), /--split-at/);
+});
+
+test('coverage: the cli axis reports its own population, counted per delegate slot', () => {
+  const cov = REPORT.coverage.cli_axis;
+  assert.equal(cov.delegate_slots, REPORT.prs.reduce((n: number, c: any) => n + c.delegates.agents.length, 0));
+  // A slot is a delegate ON A CARD, so `rev-12` — attributed to both #900 and
+  // #901 — is two slots. That is the point of counting at the verified site:
+  // the axis is used once per slot, not once per agent.
+  assert.deepEqual(cov.by_rung, { 'usage-source': 3, 'spawn-row': 1, none: 2 });
+  assert.deepEqual(cov.by_cli, { pi: 2, unknown: 2, claude: 1, opencode: 1 });
+  assert.equal(cov.unknown, 2);
+  // The rungs partition the slots — a slot cannot be answered by two rungs, and
+  // one answered by none is exactly the `unknown` count.
+  assert.equal(Object.values<number>(cov.by_rung).reduce((a, b) => a + b, 0), cov.delegate_slots);
+  assert.equal(cov.by_rung.none, cov.unknown);
+});
+
+test('coverage: H10 is declared with a statement and its structural fix', () => {
+  const h10 = REPORT.coverage.heuristics.find((h: any) => h.id === 'H10');
+  assert.ok(h10, 'the cli axis is a guess and must be declared as one');
+  assert.match(h10.what, /source/);
+  assert.match(h10.what, /statusline/);
+  assert.match(h10.fix, /UsageSnapshot/);
+});

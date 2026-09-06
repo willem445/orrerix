@@ -1200,7 +1200,6 @@ pub fn comment_file_argv(kind: &str, number: u64, body_file: &str) -> Vec<String
         kind.into(),
         "comment".into(),
         number.to_string(),
-        "--body-file".into(),
         body_file.into(),
     ]
 }

@@ -660,7 +660,7 @@ impl Decoder {
     /// answer there, and §1.3 says so.
     fn note(&self, note: NoteKind, text: String) -> Vec<Decoded> {
         vec![Decoded::Event(HarnessEvent::Note {
-            turn: self.open_turn,
+            turn: Some(self.open_turn.unwrap_or(TurnId(0))),
             note,
             text,
         })]

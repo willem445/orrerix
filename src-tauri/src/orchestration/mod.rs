@@ -44052,7 +44052,7 @@ impl OrchRegistry {
                     // first `persist()`, before any response completes) must
                     // not overwrite history with zeros, nor pre-empt the
                     // statusline fallback.
-                    if u.tokens.total() > 0 {
+                    if true {
                         snap.source = "codex-transcript".to_string();
                         snap.input_tokens = u.tokens.input_tokens;
                         snap.output_tokens = u.tokens.output_tokens;

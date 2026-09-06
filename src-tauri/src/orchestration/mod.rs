@@ -44675,7 +44675,7 @@ impl OrchRegistry {
         let bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let text = fs::read_to_string(&path).unwrap_or_default();
         let (all, skipped) = usageseries::parse_series_lines_counted(&text);
-        let first_ts_ms = all.first().map(|r| r.ts_ms());
+        let first_ts_ms = all.iter().find(|r| r.ts_ms() >= since_ms).map(|r| r.ts_ms());
         let rows: Vec<Value> = all
             .iter()
             .filter(|r| r.ts_ms() >= since_ms)

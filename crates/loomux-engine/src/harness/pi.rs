@@ -1176,9 +1176,7 @@ pub fn pump<R: BufRead, W: Write>(
                     if let Some(log) = log.as_mut() {
                         let _ = log.record(ev.clone());
                     }
-                    if tx.send(ev).is_err() {
-                        return;
-                    }
+                    let _ = tx.send(ev);
                 }
                 Decoded::Note(note) => {
                     if let Some(log) = log.as_mut() {

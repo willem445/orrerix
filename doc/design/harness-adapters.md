@@ -683,6 +683,72 @@ a rename of an unimplemented contract, not a wire break. It carries
 No new **frame kind**: both ride the existing `{"t":"ev","name":…}` shape. A
 client that does not know them ignores them, which is §4.4's rule doing its job.
 
+### 5.7 The parity record (#2891 S4)
+
+Two projections of one log can disagree, and nothing about having one log stops
+them: they are separate code, written at different times, in different
+languages. §5.1 names that risk and assigns the control to the slice that builds
+the DOM renderer. This is it.
+
+**It is a table, not an equality.** The obvious control — "both projections draw
+the same set of kinds" — is false by design. The VT renderer deliberately draws
+nothing for `Thinking` and `ToolOutput`, and argues why at each arm: thinking is
+meant to be quietable, which a VT stream cannot offer, and streaming a pi tool's
+bytes into the ring would put the highest-volume thing pi produces into every
+thumbnail *and* make one session look different by harness for no reported
+difference. An equality assertion would have to be weakened until it caught
+nothing.
+
+So the record is **per kind**, and every divergence carries its reason:
+
+- `test/fixtures/structuredview/parity.json` — the record.
+- `test/fixtures/structuredview/session.harness.jsonl` — the log both
+  projections are run over; 28 events covering 16 of the 17 `HarnessEvent`
+  kinds (all but `Observed`, which is PTY-only) plus one `delivery`, which is
+  not a `HarnessEvent` at all.
+- `the_two_projections_diverge_only_where_the_record_says_they_do`
+  (`crates/loomux-engine/src/harness/transcript.rs`) asserts the VT column.
+- `the DOM projection draws exactly what the parity record says it does`
+  (`test/structuredrows.test.ts`) asserts the DOM column, and
+  `every divergence in the parity record carries an argument` pins the set of
+  divergences from that side too — a reason only one side demanded is a reason
+  the other side could delete.
+
+"Draws" is the same question of both: *did this projection show the human
+anything about this event* — non-empty bytes on the VT side, a changed `State`
+on the DOM side. A **new** divergence cannot be added silently, and an existing
+one cannot be closed without editing the record.
+
+**And the record has to be the wire, not a re-declaration of it.** The DOM
+projection re-declares this crate's vocabulary in TypeScript, and the fixture
+claims to be "`HarnessEvent` as it serializes". Nothing checked either claim
+until this slice, and **four lines were wrong**: a `ui_settled` answer spelled
+`{"Value":…}` where `UiAnswer` carries `rename_all = "snake_case"`; the frontend
+type that agreed with it; a `compacted` trigger of `"threshold"`, which is not a
+`CompactTrigger`; and a tool call's `input` written in source order, where
+`serde_json` without `preserve_order` emits a `Value` object's keys sorted.
+Every reader of a settled dialog matched the capitalised keys, so a real
+settlement would have rendered as "cancelled" on every dialog — under a green
+suite on both sides, because the fixture carried the same error and the frontend
+read it through an unchecked `as` cast.
+
+Two mechanisms close that class rather than those four lines:
+
+1. `the_frontend_fixture_is_byte_for_byte_what_serde_emits` round-trips every
+   fixture line through `serde` in **this** crate. A serde attribute changed
+   here reddens the file the frontend runs on, and the round trip pins the key
+   spelling *and* the field order without a second hand-written copy of the
+   sequence to drift.
+2. `decodeProjectionInput` (`src/structuredview.ts`) replaces the cast at every
+   reader — the fixture readers, the replay page, and the `orch-pane-event`
+   listener. It refuses a payload spelling this contract does not allow, while
+   an unknown **`kind`** still passes through untouched: those are different
+   unknowns. An additive variant is §1.2's contract and must not cost a batch;
+   a value nothing may emit is a fact nobody reported, and rendering it is the
+   failure. In the listener a refusal drops that event and logs it, never the
+   batch it rode in on.
+
+
 ---
 
 ## 6. Session id and resume for Claude Code under stream-json

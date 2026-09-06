@@ -219,6 +219,38 @@ reported. It exists because the plan-2504 §1 hand tally (issue #2811, comment
 5562317136) is quoted as session totals, and a table that cannot add up to the
 figure it is checked against is not a table — it is a quiz.
 
+#### The §1 control, reconciled (measured 2026-09-06, head 4638ae3f)
+
+The baseline run (`--all --from 1788706648042 --cut 1788729593887` over both
+audit generations, 5,024 rows; posted on #2812 as "beta9 baseline (S0)") against
+the plan-2504 §1 hand tally, figure by figure:
+
+| Figure | §1 (hand) | S0 (mechanical) | Verdict |
+| --- | --- | --- | --- |
+| drives | 26 (15 PRs, 9 re-drives) | 26 / 15 / 9 | reproduces |
+| held | 3 | 3 | reproduces |
+| refused (cap) + max starved_ms | 22 / 689,089 | 22 / 689,089 | reproduces, all three quoted per-PR maxima included |
+| worker-released / round-grace | 5 / 0 | 5 / 0 | reproduces |
+| orchestrator prompt rows / driver G+H+C | 126 / 29 | 126 / 29 | reproduces |
+| satisfied | 20 | 23 rows | unit: rows vs drive outcomes — six PRs emitted >1 `rd-satisfied` because a satisfied drive was re-driven (the §1(d) re-drives); 26 = 20 satisfied + 3 held + 3 cancelled holds as drive outcomes |
+| hand-backs | 20 | 21 rows | unit: one hand-back was written twice (#3038's w-2460, after the orchestrator kill and again after the recovery — §1(c)); 21 − 1 double-written event = 20 |
+| lane-released | 67 | 66 at the stated cut, 67 uncut | §1's grep ran on a log ~15 min past its own stated last row — the window, not the count, moved |
+| lane scope W/D/B | 30 / 19 / 7 (56) | 42 / 16 / 6 (64 triples; 68 raw rows) | unreconstructable: 56 is below the raw row count, and no dedup variant on these rows yields 30/19/7 — a finding about the hand tally's unit or population |
+| agent-kill dr/orch | 65 / 33 | 71 / 45 | §1's stated instrument (ripgrep on `on_behalf_of`) cannot have produced it: 0 of the window's 116 `agent-kill` rows carry that field. The decomposition is per generation — 65/33 is exactly `audit.jsonl`'s census; `audit.1.jsonl` holds the other 6 dr / 12 orch |
+
+Two residuals the reconciliation surfaced, stated rather than buried:
+
+- **16 of the 116 kills belong to no review drive** (`plan-2386`/`2387`/`2446`
+  panes and 13 workers the attribution cannot tie to one PR — the workers whose
+  report the drive never consumed, §1(b)'s panes). A "session drive cost"
+  reading must quote the reconciled pair (`kills_in_cards` 100 +
+  `kills_not_in_cards` 16), never the raw 116.
+- **The dedup key trusts `round`.** `(pr, block, round)` collapses a spawn row
+  with no `round` field into its block's single triple, which would undercount
+  historical rounds. Measured across BOTH audit generations (318 spawn rows):
+  0 lack `round`; a future generation that omits it would undercount, and
+  `lane_scope_rows − lane_scope_triples` is where such a collapse would show.
+
 ### 4.5 Orchestrator tokens
 
 The sum of `input`, `cache_read`, `cache_creation` and `output` over every deduped
@@ -758,7 +790,9 @@ a counter; the s0 corpus proves the counter reads the real row — `cap: true`,
 app writes them. Its README maps every counter to the rows that witness it, and
 the replaced-pane rows pin the dedup rule the brief asks for: two
 `rd-lane-spawned` rows on one `(pr, block, round)` triple, different scopes, one
-histogram cell under the first row's scope.It is the shared corpus with ONE change — `ses-13`
+histogram cell under the first row's scope.
+
+The backfill corpus itself is the shared corpus with ONE change — `ses-13`
 (`w-13`, attributed to #900) carries the row the broken collector wrote, four zero
 counters under `source: "statusline"` — and its transcript sits under a
 WORKTREE-cwd project folder (`C--Projects-loomux-worktrees-agent-rev-1919`). That

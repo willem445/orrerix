@@ -358,7 +358,7 @@ pub fn ui_response_line(req: &RequestId, answer: &UiAnswer) -> String {
             o.insert("confirmed".into(), Value::Bool(*b));
         }
         UiAnswer::Cancelled => {
-            o.insert("cancelled".into(), Value::Bool(true));
+            o.insert("confirmed".into(), Value::Bool(false));
         }
     }
     line(&Value::Object(o))

@@ -795,7 +795,7 @@ impl CodexFold {
             }
             Some("turn_context") => {
                 if let Some(m) = v.pointer("/payload/model").and_then(Value::as_str) {
-                    if !m.is_empty() {
+                    if !m.is_empty() && self.last_model.is_none() {
                         self.last_model = Some(m.to_string());
                     }
                 }

@@ -4,7 +4,7 @@
 # advanced orchestrator on (or off-then-on) in the launcher and READ THE
 # RESOLVED-ROSTER PREVIEW before anything spawns.
 #
-# Shape: opencode + OpenRouter GLM 5.3 Flash is the default worker and the
+# Shape: pi + OpenRouter GLM 5.3 Flash (thinking medium for workers, high for reviewers; #2817) is the default worker and the
 # iterating reviewer; Claude Code Opus is the worker for judgment-shaped issues
 # and the final validator. Orchestrator = Claude Opus, planner = Claude Fable.
 #
@@ -129,10 +129,11 @@ blocks:
 
   # -- workers: classified at intake (rule 3) ---------------------------------
   - id: worker-std
-    name: "Standard worker (DEFAULT - GLM Flash; briefs the orchestrator can write literally: files, commands, checks. NOT for work whose deliverable is evidence about itself)"
+    name: "Standard worker (DEFAULT - pi + GLM Flash; briefs the orchestrator can write literally: files, commands, checks. NOT for work whose deliverable is evidence about itself)"
     kind: worker
-    cli: opencode
+    cli: pi
     model: openrouter/z-ai/glm-5.3-flash
+    effort: medium
     profile: .github/agents/worker-std.md
 
   - id: worker-adv
@@ -144,10 +145,11 @@ blocks:
 
   # -- reviewers: rev-std runs every round; rev-final ONCE, last, code PRs only
   - id: rev-std
-    name: "Standard review (EVERY ROUND - GLM Flash; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
+    name: "Standard review (EVERY ROUND - pi + GLM Flash; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
     kind: reviewer
-    cli: opencode
+    cli: pi
     model: openrouter/z-ai/glm-5.3-flash
+    effort: high
     profile: .github/agents/rev-std.md
 
   - id: rev-final

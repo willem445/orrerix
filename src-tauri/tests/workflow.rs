@@ -7732,9 +7732,10 @@ fn gate_missing_blocks_reports_a_block_named_by_id_but_not_kind_reviewer() {
 //
 // The repo dogfoods the feature (#222): `.orrerix/workflow.yml` at the root declares
 // loomux's own roster — the CHEAP-TIER one: two worker tiers and two reviewer lanes,
-// with the standard worker and the every-round reviewer on `cli: opencode` and the
-// judgment-shaped worker and the once-last final validator on Opus, each with a
-// persona in `.github/agents/` — and the tests below are what keep that file honest.
+// with the standard worker and the every-round reviewer on `cli: pi` (thinking
+// medium / high, #2817) and the judgment-shaped worker and the once-last final
+// validator on Opus, each with a persona in `.github/agents/` — and the tests below
+// are what keep that file honest.
 // The pane's half of the same pin lives in `test/workflowdogfood.test.ts`.
 
 /// The loomux repo root (the crate's manifest dir is `src-tauri/`).
@@ -7780,47 +7781,62 @@ fn the_repos_own_workflow_file_parses_clean_against_the_real_parser() {
     // request landing on it would spend the expensive lane first AND break the sequencing
     // the roster is built around. Stated as an ordered list rather than as a set, so a
     // reordering edit fails HERE rather than silently changing what a bare spawn does.
-    let reviewers: Vec<(&str, &str, &str, &str)> = wf
+    let reviewers: Vec<(&str, &str, &str, &str, &str)> = wf
         .blocks
         .iter()
         .filter(|b| b.kind == Role::Reviewer)
         .map(|b| {
-            (b.id.as_str(), b.cli.as_str(), b.model.as_str(), b.profile.as_deref().unwrap_or(""))
+            (
+                b.id.as_str(),
+                b.cli.as_str(),
+                b.model.as_str(),
+                b.effort.as_str(),
+                b.profile.as_deref().unwrap_or(""),
+            )
         })
         .collect();
     assert_eq!(
         reviewers,
         [
-            ("rev-std", "opencode", "openrouter/z-ai/glm-5.3-flash", ".github/agents/rev-std.md"),
-            ("rev-final", "claude", "opus", ".github/agents/rev-final.md")
+            ("rev-std", "pi", "openrouter/z-ai/glm-5.3-flash", "high", ".github/agents/rev-std.md"),
+            ("rev-final", "claude", "opus", "", ".github/agents/rev-final.md")
         ],
         "the every-round lane is declared first; the strong final validator runs once, last"
     );
 
-    // The model id is pinned in FULL on purpose, and this checks EVERY opencode block —
-    // the default worker as well as the reviewer, since both tiers of the cheap roster
-    // run on it. `default_model("opencode", …)` is deliberately EMPTY — opencode has no
-    // vendor-neutral alias, its ids are `provider_id/model_id` against a catalog of dozens
-    // of providers — so a block that dropped the `openrouter/` half would name a model that
-    // does not exist, handed over with no error (doc/design/opencode.md, the pre-#722
-    // `sanitize_model` bug). This asserts the `/` survives the parser, which is the
-    // character #722 had to widen it to admit. The provider is not hardcoded, and a second
-    // `/` is allowed, because this provider's own model ids carry one
-    // (`openrouter` + `z-ai/glm-5.3-flash`).
-    let via_opencode: Vec<&workflow::Block> =
-        wf.blocks.iter().filter(|b| b.cli == "opencode").collect();
-    assert!(!via_opencode.is_empty(), "the cheap tier is the point of this roster");
-    for b in &via_opencode {
+    // The model id is pinned in FULL on purpose, and this checks EVERY pi block —
+    // the default worker as well as the reviewer, since both tiers of the cheap
+    // roster run on it (#2817). pi's `--model` takes `provider/id`
+    // (doc/design/pi.md, the launch line), so a block that dropped the
+    // `openrouter/` half would name a model that does not exist. This asserts the
+    // `/` survives the parser. The provider is not hardcoded, and a second `/` is
+    // allowed, because this provider's own model ids carry one (`openrouter` +
+    // `z-ai/glm-5.3-flash`). Each pi block's thinking level is pinned beside it —
+    // the load-bearing axis #2817 added — and a pi block whose effort is not in
+    // the map fails loudly, so a future roster edit cannot add an unpinned axis.
+    // The roster has NO opencode block since #2817: opencode's own id-shape rules
+    // keep their coverage in the #722 `sanitize_model` specimens in this same file
+    // (`a_declared_block_model_survives_both_clis_and_a_resume` and neighbours).
+    let via_pi: Vec<&workflow::Block> = wf.blocks.iter().filter(|b| b.cli == "pi").collect();
+    assert!(!via_pi.is_empty(), "the cheap tier is the point of this roster");
+    let pi_efforts: &[(&str, &str)] = &[("worker-std", "medium"), ("rev-std", "high")];
+    for b in &via_pi {
         let (provider, rest) = b
             .model
             .split_once('/')
-            .unwrap_or_else(|| panic!("{}: an opencode model id names its provider, got {:?}", b.id, b.model));
+            .unwrap_or_else(|| panic!("{}: a pi model id names its provider, got {:?}", b.id, b.model));
         assert!(
             !provider.is_empty() && !rest.is_empty(),
-            "{}: an opencode model id names its provider, got {:?}",
+            "{}: a pi model id names its provider, got {:?}",
             b.id,
             b.model
         );
+        let want = pi_efforts
+            .iter()
+            .find(|(id, _)| *id == b.id)
+            .map(|(_, effort)| *effort)
+            .unwrap_or_else(|| panic!("{}: pin this pi block's thinking level beside it", b.id));
+        assert_eq!(&b.effort, want, "{}: the thinking level #2817 pinned on pi", b.id);
     }
 
     // And every one of them is a class this CLI may actually host — the containment
@@ -8262,33 +8278,35 @@ fn the_repos_own_workflow_runs_its_worker_tiers_on_the_models_it_declares() {
     // "honored" and "flattened" produced identical argv for it and only the strictly
     // weaker carriage claim (model + persona reach the CLI) was assertable of it. The
     // cheap-tier roster has no such block: every claude block declares `fable` or
-    // `opus` against picks of `opus`/`sonnet`, and the two opencode blocks differ in
-    // `cli` as well, so every specimen left distinguishes. Nothing was relaxed to fit
+    // `opus` against picks of `opus`/`sonnet`, and the two pi blocks differ from the
+    // picks in `cli` (and in `effort`, #2817's axis) besides, so every specimen left
+    // distinguishes. Nothing was relaxed to fit
     // that — the loop above is the full-strength claim, and the day a block whose model
     // equals its role's pick returns to the roster, its weaker carriage-only claim goes
     // back here rather than being folded into the loop above (#689's rule: a converged
     // case gets its own explicitly-labelled weaker assertion, never a loosened shared
     // one).
 
-    // THE OPENCODE LANES, end to end (#1388, and now both tiers of the cheap roster —
-    // the DEFAULT worker as well as the every-round reviewer). These are the strongest
-    // anti-flattening witnesses in this file: the launcher's picks say `claude` with
-    // `sonnet` for both roles, so a roster that flattened either field would emit a
-    // claude command line with `--model sonnet`, and there is no fallback anywhere that
-    // could produce `openrouter/z-ai/glm-5.3-flash` by accident. This is also the pin
-    // behind the DOGFOOD pin, not the general guard — say which, because the distinction
-    // is the difference between evidence and a comfortable assumption. opencode's
-    // `--agent` carriage is ALREADY policed upstream by
-    // `an_opencode_spawn_delivers_its_config_and_containment_by_env` (tests/
+    // THE PI LANES, end to end (#1388; #2817 moved both tiers of the cheap roster —
+    // the DEFAULT worker as well as the every-round reviewer — here from opencode).
+    // These are the strongest anti-flattening witnesses in this file: the launcher's
+    // picks say `claude` with `sonnet` for both roles, so a roster that flattened
+    // either field would emit a claude command line with `--model sonnet`, and there
+    // is no fallback anywhere that could produce `openrouter/z-ai/glm-5.3-flash` by
+    // accident. This is also the pin behind the DOGFOOD pin, not the general guard —
+    // say which, because the distinction is the difference between evidence and a
+    // comfortable assumption. pi's contract carriage is ALREADY policed upstream by
+    // `a_pi_spawn_carries_its_contract_by_file_on_append_system_prompt` (tests/
     // orchestration.rs), which asserts the emitted command line directly; a mutation
-    // removing the handle reddens THERE, in an earlier binary, and cargo stops before
+    // removing the file reddens THERE, in an earlier binary, and cargo stops before
     // this file runs. So what this loop adds is not the property — it is that THIS
-    // REPO'S OWN declared blocks carry their declared model and persona through the
-    // real load + clamp, the opencode analogue of the worker-tier pin above.
-    for block in ["worker-std", "rev-std"] {
+    // REPO'S OWN declared blocks carry their declared model, persona AND thinking
+    // level through the real load + clamp, the pi analogue of the worker-tier pin
+    // above.
+    for (block, effort) in [("worker-std", "medium"), ("rev-std", "high")] {
         let (cmd, argv, kickoff) = compile(&reg, &g, block);
         assert!(
-            cmd.starts_with("opencode "),
+            cmd.starts_with("pi "),
             "{block}: the declared cli must reach the launch line, not the launcher pick: {cmd}"
         );
         assert!(
@@ -8304,8 +8322,24 @@ fn the_repos_own_workflow_runs_its_worker_tiers_on_the_models_it_declares() {
             "{block}: a launcher per-role pick must never flatten a declared block model: {cmd}"
         );
         assert!(
-            cmd.contains(&format!("--agent loomux-{}-{block}", g.id)),
-            "{block}: the persona must reach opencode natively, by handle: {cmd}"
+            cmd.contains(&format!("--thinking {effort}")),
+            "{block}: the declared thinking level must reach pi's --thinking flag: {cmd}"
+        );
+        assert!(
+            argv.windows(2).any(|w| w == ["--thinking", effort]),
+            "{block}: the argv path must agree on the thinking level: {argv:?}"
+        );
+        // The contract rides `--append-system-prompt` BY FILE (never argv text —
+        // #417's command-line limit is the why), and never `--agent`: pi has no
+        // native agent-handle carriage, so an `--agent` on a pi line would mean the
+        // opencode/claude arm answered for a pi block.
+        assert!(
+            cmd.contains("--append-system-prompt \""),
+            "{block}: the persona must reach pi by file on --append-system-prompt: {cmd}"
+        );
+        assert!(
+            !cmd.contains("--agent "),
+            "{block}: pi carries its contract by file, not by agent handle: {cmd}"
         );
         // …and NOT through the kickoff, which is the fallback `persona_inject` takes
         // only when the group dir is unwritable. A kickoff here would mean the durable

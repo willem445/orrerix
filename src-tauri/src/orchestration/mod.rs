@@ -44682,7 +44682,7 @@ impl OrchRegistry {
         // The floor is a claim about how far back the history goes, so it has
         // to be the oldest ts the file actually holds, or the panel prints a
         // floor later than its own data (#2941 review round 2 premortem).
-        let first_ts_ms = all.iter().map(|r| r.ts_ms()).min();
+        let first_ts_ms = all.first().map(|r| r.ts_ms());
         let rows: Vec<Value> = all
             .iter()
             .filter(|r| r.ts_ms() >= since_ms)

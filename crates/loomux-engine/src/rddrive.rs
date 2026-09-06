@@ -1339,11 +1339,12 @@ pub fn panes_clause(panes: &[(String, DrivenRole)], standing: PaneStanding) -> S
     // what decides whether a `drive_review` resume speaks to the pane again.
     //
     // **A LIST, not a paragraph** (#3040 N1). Everything the two sentences
-    // used to spell out is playbook content the orchestrator already has
-    // (`orchestrator-playbook.md` 505-524, and #338/#359 is ground INVARIANT 3
-    // stands on): that the panes are still running, that the driver killed
-    // none of them, that worker panes sharing a session share a worktree, that
-    // disposing of them is the orchestrator's. What is NOT in the playbook —
+    // used to spell out is content the orchestrator already has:
+    // `orchestrator-playbook.md`'s INVARIANT 10 paragraph is where
+    // disposing of a settled pane is made the orchestrator's ("once a worker's
+    // PR is settled, kill_agent it"), and `orchestrator.md`'s worktree-defaults
+    // paragraph is where #338/#359 is stated. Cited by SYMBOL rather than by
+    // line, which goes stale on the next edit to either file. What is NOT there —
     // and is the whole reason #1871 B3 added this clause — is WHICH panes, so
     // that is what survives. The standing is still stated, in the two words
     // that tell the halves apart at a glance: a parked drive still OWNED them,

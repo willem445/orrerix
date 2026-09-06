@@ -2250,8 +2250,10 @@ things changed, and each is a rule rather than a trim:
 - **The panes clause is a list.** Everything the old paragraph spelled out —
   the panes are still running, the driver killed none of them, worker panes
   sharing a session share a worktree, disposal is the orchestrator's — is
-  playbook content (`orchestrator-playbook.md` 505-524) and INVARIANT 3's own
-  ground. WHICH panes is the fact #1871 B3 added the clause for, and it is what
+  already the orchestrator's own ground: `orchestrator-playbook.md`'s
+  INVARIANT 10 paragraph makes disposing of a settled pane its call, and
+  `orchestrator.md`'s worktree-defaults paragraph states #338/#359.
+  WHICH panes is the fact #1871 B3 added the clause for, and it is what
   survives; the standing survives as one word, `RELEASED` or `still OWNED`.
 - **A hold's reason and remedy are untouched**, because they are the decision.
   The capped summary stays on `escalate` alone, which is the one hold whose

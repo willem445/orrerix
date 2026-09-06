@@ -163,10 +163,7 @@ impl Renderer {
             } => {
                 let model = model.as_deref().unwrap_or("model unknown");
                 let session = session.as_deref().unwrap_or("session not yet known");
-                let who = match self.harness {
-                    Some(h) => format!("{} · ", h.as_str()),
-                    None => String::new(),
-                };
+                let who = "claude · ".to_string();
                 self.meta(&mut out, &format!("{who}{model} · {session}"));
             }
             HarnessEvent::TurnStarted { .. } => {

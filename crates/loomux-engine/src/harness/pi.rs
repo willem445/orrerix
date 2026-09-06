@@ -595,9 +595,7 @@ impl Decoder {
             let err = str_at(v, "error").unwrap_or("no error text");
             self.last_error = Some(format!("{command}: {err}"));
         }
-        if command == "prompt" {
-            self.last_prompt_ack = Some((id.to_string(), success));
-        }
+
 
         if id == BOOT_ID && command == "get_state" {
             if !success {

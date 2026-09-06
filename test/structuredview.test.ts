@@ -289,6 +289,85 @@ test("an ORPHAN card interrupts the text run too — the reconnect case", () => 
   assert.deepEqual(kinds(think), ["thinking", "tool", "thinking"]);
 });
 
+test("a REQUEST card interrupts the open run too — the twin of the orphan case", () => {
+  // Round 3 blocking finding. Round 1's fix put `closeRuns` in `toolBlock`'s
+  // creation path, arguing it was "the ONE place that can say so for every
+  // path". True of tool cards, false of the module: `requestBlock` is the same
+  // factory for a different card and had no close at all, so a card created by
+  // a `*_settled` with no preceding request let following text append to the
+  // paragraph ABOVE it.
+  for (const settle of [
+    { kind: "permission_settled", id: "r1", decision: "allow", by: "policy" } as const,
+    { kind: "ui_settled", id: "u1", answer: "Cancelled", by: "human" } as const,
+  ]) {
+    const s = run([
+      { kind: "turn_started", turn: 1 },
+      { kind: "text", turn: 1, delta: "before" },
+      settle,
+      { kind: "text", turn: 1, delta: "after" },
+    ]);
+    assert.deepEqual(kinds(s), ["turn", "text", "request", "text"], settle.kind);
+    assert.deepEqual(only(s, "text").map((b) => b.text), ["before", "after"], settle.kind);
+    assert.notEqual(only(s, "text")[0]!.text, "beforeafter", "the defect this pins");
+  }
+});
+
+test("that path is reachable with NO reconnect at all — eviction opens it", () => {
+  // The route that makes the finding a live defect rather than a replay corner:
+  // `forgetBlock` drops the `byRequest` key when a request card is evicted, so
+  // a late `*_settled` for it takes the create path in an ordinary long
+  // session.
+  const s = emptyState();
+  project(s, [{ kind: "permission_request", id: "r9", tool: "Bash", input: {} }]);
+  const filler: ProjectionInput[] = Array.from({ length: MAX_BLOCKS + 50 }, () => ({
+    kind: "note" as const,
+    turn: null,
+    note: "ui" as const,
+    text: "x",
+  }));
+  project(s, filler);
+  assert.ok(s.evicted > 0, "positive control: the request card really was evicted");
+  assert.equal(
+    s.blocks.filter((b) => b.kind === "request").length,
+    0,
+    "positive control: and it is gone from the list, so the settle must re-create it",
+  );
+
+  project(s, [
+    { kind: "text", turn: 1, delta: "before" },
+    { kind: "permission_settled", id: "r9", decision: "allow", by: "policy" },
+    { kind: "text", turn: 1, delta: "after" },
+  ]);
+  assert.deepEqual(kinds(s).slice(-3), ["text", "request", "text"]);
+  assert.deepEqual(only(s, "text").map((b) => b.text), ["before", "after"]);
+});
+
+test("every non-run block kind interrupts the open run, by construction", () => {
+  // The generalised property, because the finding was that stating it per
+  // factory is how it gets missed twice. One case per non-run block kind that a
+  // single event can produce; each must land as its own block with the text
+  // that follows it in a NEW block, never appended to the one above.
+  const cases: Array<[string, ProjectionInput]> = [
+    ["turn", { kind: "turn_started", turn: 2 }],
+    ["tool", { kind: "tool_output", turn: 1, id: "tz", delta: "o", is_error: false }],
+    ["request", { kind: "ui_settled", id: "uz", answer: "Cancelled", by: "human" }],
+    ["delivery", { kind: "delivery", via: "human", from: null, text: "hi", ts: null }],
+    ["notice", { kind: "note", turn: null, note: "ui", text: "n" }],
+    ["notice", { kind: "compacted", trigger: "auto", pre_tokens: 1 }],
+    ["notice", { kind: "exited", code: 0 }],
+    ["notice", { kind: "observed", observed: "quiet" }],
+  ];
+  for (const [expected, ev] of cases) {
+    const s = run([
+      { kind: "text", turn: 1, delta: "before" },
+      ev,
+      { kind: "text", turn: 1, delta: "after" },
+    ]);
+    assert.deepEqual(kinds(s), ["text", expected, "text"], `${ev.kind} -> ${expected}`);
+    assert.deepEqual(only(s, "text").map((b) => b.text), ["before", "after"], ev.kind);
+  }
+});
+
 test("a tool card interrupts the text run, so the next delta is a new block", () => {
   // Appending after the card would put the paragraph's second half ABOVE the
   // card that arrived between its halves.

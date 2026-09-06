@@ -58,9 +58,18 @@ attaching mid-session gets on its first batch — produces a card whose `name` i
 
 **Thinking is not text.** They are separate blocks because a renderer that
 quiets thinking (#2891's dim switch) cannot do so if they share one. Anything
-that is not another delta of the same kind closes the open run, so a tool card
+that is not another delta of the same kind closes the open run, so a card
 arriving mid-paragraph does not get the paragraph's second half rendered above
 it.
+
+That last sentence is enforced **structurally**, at `pushBlock` — the single
+place every non-run block is appended — rather than restated in each factory.
+The distinction is not cosmetic: this defect shipped twice, once for tool cards
+created off a path that was not `tool_call`, and again for request cards after
+the first fix was applied to the named site and not to its twin factory. Both
+were reachable without any reconnect, the second by eviction dropping a card's
+join key so a later settle re-creates it. A guard that has to be remembered per
+factory is one a sixth block kind will be added without.
 
 **An unknown event kind is recorded, not fatal.** `HarnessEvent` is an additive
 enum, and §1.2's promise is that "a consumer that does not match them keeps

@@ -6,9 +6,8 @@
 `{"kind":"tool_call","turn":1,"id":"t1",…}`. **One** line is the single local
 input `structuredview.ts` documents as deliberately NOT a `HarnessEvent`:
 `delivery`, which is orrerix narrating its own action rather than anything a
-harness reported. The `note` line is not local — `Note` is a `HarnessEvent`
-variant (#2850 S1b), and this sentence said otherwise until review round 1
-caught the twin.
+harness reported. The `note` line is not local: `Note` is a `HarnessEvent`
+variant (#2850).
 
 **It is synthesized, and it will be swapped.** No pi process has run here
 (`CLAUDE.md` constraint 3 forbids spawning a real agent CLI to produce one),

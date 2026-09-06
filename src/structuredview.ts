@@ -432,7 +432,6 @@ function reduce(state: State, ev: ProjectionInput, now: number | null): void {
 
     case "turn_started": {
       state.currentTurn = ev.turn;
-      closeRuns(state);
       const b: TurnBlock = {
         id: nextId(state),
         kind: "turn",
@@ -444,7 +443,7 @@ function reduce(state: State, ev: ProjectionInput, now: number | null): void {
         durationMs: null,
       };
       state.byTurn.set(ev.turn, b.id);
-      push(state, b);
+      pushBlock(state, b);
       if (now !== null) state.turnStartedAt.set(ev.turn, now);
       return;
     }
@@ -533,7 +532,6 @@ function reduce(state: State, ev: ProjectionInput, now: number | null): void {
       const b = requestBlock(state, ev.id, "permission");
       b.tool = ev.tool;
       b.input = ev.input;
-      closeRuns(state);
       return;
     }
 
@@ -552,7 +550,6 @@ function reduce(state: State, ev: ProjectionInput, now: number | null): void {
       // Descriptive, not a control: it reports a deadline the HARNESS keeps,
       // and orrerix starts no timer of its own against it (§1.2).
       b.timeoutMs = ev.timeout_ms ?? null;
-      closeRuns(state);
       return;
     }
 
@@ -597,8 +594,7 @@ function reduce(state: State, ev: ProjectionInput, now: number | null): void {
       return;
 
     case "delivery": {
-      closeRuns(state);
-      push(state, {
+      pushBlock(state, {
         id: nextId(state),
         kind: "delivery",
         turn: state.currentTurn,
@@ -615,8 +611,7 @@ function reduce(state: State, ev: ProjectionInput, now: number | null): void {
       // that says it belongs to no turn belongs to no turn, and substituting
       // the open one would invent the attribution §1.3 refuses.
       const level = ev.note === "error" ? "error" : ev.note === "retry" ? "warn" : "info";
-      closeRuns(state);
-      push(state, {
+      pushBlock(state, {
         id: nextId(state),
         kind: "notice",
         turn: ev.turn ?? null,
@@ -649,14 +644,38 @@ function push(state: State, b: Block): void {
   state.blocks.push(b);
 }
 
+/**
+ * Append a block that is NOT a streaming run, ending whatever run was open.
+ *
+ * This exists because the rule "anything that is not another delta of the same
+ * kind interrupts the run" is a property of EVERY such block, and stating it
+ * once per factory is how it gets missed. It was: round 1 of review found
+ * `tool_call` closing the run and the orphan paths not; the fix moved the close
+ * into `toolBlock`'s creation path on the argument that it was "the ONE place
+ * that can say so for every path" — which was true of tool cards and false of
+ * the module, because `requestBlock` is the same factory for a different card
+ * and still did not close. Round 3 found that twin: `permission_settled` /
+ * `ui_settled` create a card on a path with no close, reachable both by a
+ * reconnect and — with no reconnect at all — by eviction dropping the
+ * `byRequest` key so a late settle re-creates the card.
+ *
+ * So the guard lives at the one place every non-run block is appended, and a
+ * sixth block kind added later inherits it instead of re-deriving it. Runs
+ * themselves (`openRun`) do not come through here: they manage the pointer they
+ * are setting.
+ */
+function pushBlock(state: State, b: Block): void {
+  closeRuns(state);
+  push(state, b);
+}
+
 function pushNotice(
   state: State,
   level: "info" | "warn" | "error",
   tag: string,
   text: string,
 ): void {
-  closeRuns(state);
-  push(state, {
+  pushBlock(state, {
     id: nextId(state),
     kind: "notice",
     turn: state.currentTurn,
@@ -720,7 +739,6 @@ function toolBlock(state: State, id: ToolUseId, turn: TurnId): ToolBlock {
   // reconnect case rather than a corner: a client attaching mid-session replays
   // a rotated log and rejoins mid-tool, so `tool_output` without its
   // `tool_call` is the NORMAL first event for that card.
-  closeRuns(state);
   const b: ToolBlock = {
     id: nextId(state),
     kind: "tool",
@@ -737,7 +755,7 @@ function toolBlock(state: State, id: ToolUseId, turn: TurnId): ToolBlock {
     orphan: true,
   };
   state.byTool.set(id, b.id);
-  push(state, b);
+  pushBlock(state, b);
   return b;
 }
 
@@ -768,7 +786,7 @@ function requestBlock(
     settled: null,
   };
   state.byRequest.set(id, b.id);
-  push(state, b);
+  pushBlock(state, b);
   return b;
 }
 

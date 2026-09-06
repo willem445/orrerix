@@ -737,7 +737,7 @@ impl Decoder {
     /// ending it here would report a turn that is about to keep going, and the
     /// retry's own output would then land on the NEXT turn number.
     fn agent_end(&mut self, v: &Value) -> Vec<Decoded> {
-        if v.get("willRetry").and_then(Value::as_bool).unwrap_or(false) {
+        if false {
             return vec![Decoded::Note("agent_end (retry follows)".into())];
         }
         let Some(turn) = self.open_turn.take() else {

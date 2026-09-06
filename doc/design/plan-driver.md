@@ -1,11 +1,19 @@
 # The plan driver (#3040)
 
-**Status: a stub.** Slice P1 has landed the `orrerix-plan` block — contract 1
-below, and that section is written in the present tense because it describes
-code in the tree (`crates/loomux-engine/src/plandoc.rs`). Everything else here
-is WILL-tense: it names a contract #3040's later slices are to land, and no line
-of it is shipped yet. Do not act on a WILL-tense section as though it described
-the build you are looking at.
+**Status: the drive runs as far as a plan.** Contracts 1–5 and 7 are in the
+present tense because they describe code in the tree; 6 and 8 are WILL-tense,
+and so is every paragraph below marked WILL. Do not act on a WILL-tense section
+as though it described the build you are looking at.
+
+**Where the drive stops in this build**, stated once here because every section
+below assumes it: P3a spawns the planner, validates and stores the plan, and
+then stops. An `agent-investigation` issue reaches `complete` — the plan IS its
+deliverable, so that is the drive finishing, not a shortfall. An `agent-ready`
+issue reaches `boarding` and parks on `held(awaiting-p3b)`, with one notice in
+the orchestrator's pane: the board rows, the worker spawns and the hand-off to
+the review driver land in P3b. A named, audited, notice-bearing park is the
+whole point of that hold — a drive that quietly did nothing would be worse than
+one that never started.
 
 The full design is the plan comment on #3040. This note exists so each contract
 gets a durable home as its slice lands, rather than living only in an issue
@@ -90,44 +98,277 @@ reason degrades to `plan block: slices[i].deps[j]: …` — the index addressing
 `workflow::parse_workflow` uses — rather than inventing a line. The module doc
 in `plandoc.rs` is the reference for this.
 
-## 2. `<group-dir>/plan_drives.json` v1 — WILL (P3a)
+## 2. `<group-dir>/plan_drives.json` v1 (P3a — shipped)
 
-The drive record will be a v1 JSON file under the group directory, written
-atomically under its own lock, preserving unknown fields, and refusing rather
-than repairing an unparseable file. See #3040.
+One file per group, beside `review_drives.json`, holding one entry per driven
+issue. `crates/loomux-engine/src/plandrive.rs` owns its shape; the group
+directory is built by `group_dir_at`, the only place a group id becomes a path.
 
-## 3. `driver:` block keys — WILL (P3a)
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "issue": 3040,
+      "state": "plan-posted",
+      "held_reason": null,
+      "held_from": null,
+      "on_behalf_of": "orch-1",
+      "planner_block": "plan-lead",
+      "planner_agent": "a-7",
+      "planner_session": "…",
+      "consent": "agent-ready",
+      "base": null,
+      "review_minutes": 0,
+      "started_ms": 0,
+      "state_since_ms": 0,
+      "spawned_ms": 0,
+      "invalid_count": 0,
+      "last_invalid": [],
+      "plan": { "version": 1, "issue": 3040, "slices": [], "risks": [] },
+      "comment_url": "https://github.com/…#issuecomment-…",
+      "posted_ms": 0,
+      "slice_tasks": {},
+      "owed": null
+    }
+  ]
+}
+```
 
-`plan_enabled`, `plan_review_minutes` and `planner_timeout_minutes` will join
-the workflow `driver:` block, refused outside their ranges like the existing
-review-driver keys. See #3040.
+**The four properties this record is written for**, each the review driver's own
+and each carried rather than re-argued:
 
-## 4. The four MCP tools — WILL (P3a)
+*Atomic, through `fsatomic::atomic_write`.* A disk-full `fs::write` is what
+truncated `tasks.json` and destroyed a live board in #133, and this file has the
+same "losing it loses in-flight work" property — the planner's whole output is
+in it.
 
-`drive_plan`, `plan_drive_status`, `cancel_plan_drive` and `resume_plan_drive`
-will be orchestrator-only tools behind the driver gate. See #3040.
+*Unknown fields are preserved; an unknown SCHEMA is refused.* A key a newer
+build wrote survives a read/write cycle by an older one. A `version` this build
+does not understand is not acted on at all: the fields it recognises may no
+longer mean what it thinks.
 
-## 5. `post_issue_comment` for a driven planner — WILL (P3a)
+*Unparseable is loud, and nothing is repaired.* The tick audits
+`pd-state-unreadable`, backs off, and leaves the file exactly as it found it.
+Every tool answers `pd-state-unreadable` rather than `not-driven`, because
+"orrerix cannot read the record" is not "there is nothing in it".
 
-When the caller is the planner of a live plan drive, the comment body will be
-validated with `plandoc` **before** posting, and an invalid or missing block
-will be a tool error with nothing posted. A planner not spawned by a drive will
-be unaffected. See #3040.
+*Times are ABSOLUTE.* `started_ms`, `state_since_ms`, `spawned_ms` and
+`posted_ms` are wall-clock stamps; every age in `plan_drive_status` is derived
+from them at read time. A stored elapsed figure is stale the instant it is
+written and meaningless across a restart.
+
+**`slice_tasks` is empty in this build** and is persisted anyway: P3b fills it
+with the slice-id → board-row map, and shipping the field now means the record's
+shape does not change under a running fleet.
+
+### The states
+
+| state | meaning | leaves for |
+| --- | --- | --- |
+| `planning` | a planner pane is open; waiting for a plan block | `plan-posted`, `held`, `cancelled` |
+| `plan-posted` | a valid block is stored, with the comment it was posted as | `boarding`, `complete`, `held`, `cancelled` |
+| `boarding` | the plan is being turned into rows — **P3a parks here** | `held`, `cancelled` |
+| `complete` | terminal: the drive did everything it was going to | — |
+| `cancelled` | terminal: cancelled by tool, or the issue is positively closed | — |
+| `held` | **parked**, carrying a reason | back to the state it came from, or `cancelled` |
+
+One parked state carrying a closed reason, rather than seven states: a reader
+asking "is this drive parked" asks one question, and the reason travels in the
+notice and the audit row instead of being inferred from which field is set.
+
+**A resume returns to the state the hold came FROM**, which is why `held` has
+three outgoing working arcs. A drive parked on `planner-stalled` and one parked
+on `awaiting-p3b` resume into different work, and a single `held → planning`
+arc would silently re-open a planner for a plan that is already posted.
+
+### The hold reasons
+
+| reason | what happened |
+| --- | --- |
+| `plan-invalid` | three plan blocks refused; the last reasons are on the record |
+| `plan-missing` | the planner finished, or its pane went, without posting |
+| `planner-stalled` | neither a post nor a report inside `planner_timeout_minutes` |
+| `planner-blocked` | the planner reported `blocked` |
+| `consent-withdrawn` | the issue's label was withdrawn while the drive was live |
+| `awaiting-p3b` | the plan is posted and this build has no executor for it |
+| `drive-stalled` | the whole drive outran `drive_timeout_minutes` |
+
+P3b extends both vocabularies. An older build reading a newer file refuses it
+through the `version` check above rather than acting on a word it cannot read,
+which is why adding a state word is a schema question and not a free one.
+
+## 3. `driver:` block keys (P3a — shipped)
+
+Three keys join the workflow `driver:` block. `docs/orchestration.md` carries
+the user-facing table; what belongs here is why each is shaped the way it is.
+
+| key | range | default | outside the range |
+| --- | --- | --- | --- |
+| `plan_enabled` | — | `false` | — |
+| `plan_review_minutes` | 0–120 | `0` | **refuse** |
+| `planner_timeout_minutes` | 15–180 | `60` | **refuse** |
+
+**`plan_enabled` is a SECOND switch, not a widening of `enabled`**, and it is
+read UNDER it: the plan driver is off wherever the review driver is. The
+separation is the consent. A repo that turned the review driver on consented to
+orrerix running a review loop it already had an orchestrator for; it did not
+consent to orrerix spawning a **planner** and turning that planner's output into
+work. Nothing about the review driver's own gate expressed that difference, so a
+widening would have granted the second on the strength of the first.
+
+**Both minute keys are REFUSED outside their range, not clamped**, which puts
+them with the counters rather than with the two lane/fix backstops. The
+backstops are the notify-TTL family — one bounded wait on one fallible signal —
+and these are not: a repo asking for a five-minute planner timeout has
+misunderstood what a planner does, and quietly handing it fifteen would leave
+the misunderstanding in place while the behaviour changed underneath it. That is
+`merge_queue.max_batch`'s own argument.
+
+**`plan_review_minutes` is recorded and spent on nothing in this build.** The
+review window is P3b's, and the key lands in P3a so that the repo key, the
+record field, the tool argument and the status view are one contract rather than
+four separate landings. `drive_timeout_minutes` is the review driver's own knob,
+**reused rather than duplicated**: it bounds the same quantity, a whole drive's
+age.
+
+## 4. The four MCP tools (P3a — shipped)
+
+All four are `require_orchestrator`-only, listed only for an orchestrator, and
+re-checked in `call_tool` — the #243 double gate, where the listing is cosmetic
+and the dispatch check is the gate. All four refuse `plan-driver-disabled`
+unless the repo declares both switches.
+
+- **`drive_plan(issue, planner_block?, review_minutes?, base?)`** — reads the
+  issue once through `gh`, opens the planner, writes the entry. The refusal
+  vocabulary is closed: `plan-driver-disabled`, `issue-not-open`,
+  `issue-unverifiable`, `issue-not-labelled`, `already-driven`,
+  `no-planner-block`, `planner-unspawnable`, plus the three that mean orrerix
+  itself failed (`pd-state-unreadable`, `pd-state-unwritable`,
+  `pd-unavailable`).
+- **`plan_drive_status()`** — read-only; the state, the hold, the consent, the
+  planner, the comment URL, the refusal count and the plan's own slices.
+- **`cancel_plan_drive(issue)`** — works in any non-terminal state, **and it
+  kills nothing**: the planner pane keeps running under the orchestrator, and
+  its traffic reaches that pane again the moment the entry stops being live.
+  Cancel releases ownership; ending a pane is the orchestrator's own
+  `kill_agent`, unchanged.
+- **`resume_plan_drive(issue)`** — moves a parked drive back to the state the
+  hold came from, and clears the refused-block counter so a re-briefed planner
+  gets a fresh three rather than resuming onto the bound. A LIVE drive answers
+  `not-held`, which is deliberately a different word from `not-driven`: the two
+  want different things from the orchestrator.
+
+**The issue is a bare integer**, matching `post_issue_comment` rather than
+`drive_review`'s three-spelling `pr_number`. What an agent typed as `#12` is a
+string it built, and the one place this group resolves a number from is the tool
+argument itself.
+
+**Ordering in the tick.** `pd_driver_tick` is the sixth step of `gh_poll_tick`,
+after `rd_driver_tick`, one group per wake, at most `PD_MAX_GH_PER_TICK` (4)
+`gh` round trips. Running second is the bound rather than a preference: the plan
+driver can only ever take the budget the review driver left, which makes "the
+plan driver holds, never starves the review driver" structural instead of a
+counter nobody can check.
+
+## 5. `post_issue_comment` for a driven planner (P3a — shipped)
+
+When the caller is the planner of a **live** drive on that issue and the drive
+is in `planning`, the body is extracted, parsed and drive-validated **before
+`gh` is run at all**. An invalid or missing block is the tool answering `Err`
+with the line-numbered reasons, and **nothing is posted**. A valid block is
+posted, and the document plus the new comment's URL are stored into the record
+in the same call.
+
+**Why a hook rather than a `gh issue view` after the fact.** The plan reaches
+orrerix in the tool call's own payload, so a refusal costs one tool call inside
+the planner's own turn: no round trip, no orchestrator turn, and nothing
+published that a human then has to read and discount. A second comment carrying
+a fence — a reviewer quoting the plan back — would also make a read-back
+ambiguous, and the payload is not.
+
+**The bound.** Three refusals park the drive on `held(plan-invalid)` carrying
+the last reasons. The planner is still inside its own turn for each of them, so
+a fix is cheap; three is the point past which it is not going to converge on its
+own, and a human gets one notice instead of an unbounded loop.
+
+**Four things this hook does NOT do**, each stated because a reader will look
+for it. It does not fire for a caller that is nobody's planner — the product
+default, and indistinguishable from the hook not existing, which is what keeps
+#2815 unregressed. It does not fire once a plan is stored: a planner adding a
+note to the issue afterwards is doing what any agent with this tool may do. It
+does not fire for a **parked** drive, because a held entry owns nobody. And it
+does not store the plan before `gh` has answered — a record saying a plan lives
+at a URL that does not exist is worse than one saying nothing.
+
+**The drive-level checks the parser cannot make.** `plandoc` judges the
+document; `plandrive::validate_for_drive` adds the two questions that need the
+drive's context: the block's `issue:` must be the issue being driven (refused,
+never retargeted), and every slice's `block:` must name a `kind: worker` block
+**in the roster the group was launched with**. A plan naming a reviewer is
+refused at post time — a slice is work, and work is a worker's; anything else
+would have the drive spawn a capability class the plan invented for itself. The
+roster is the launched one, never `.orrerix/workflow.yml` re-read, because
+consent to a roster is given at launch.
 
 ## 6. `templates/dod.md` and `{{DOD}}` — WILL (P2)
 
 The Definition of Done will exist in exactly one file, quoted into both the
 orchestrator template and every driver-composed brief. See #3040.
 
-## 7. The `pd-*` audit vocabulary — WILL (P3a/P3b)
+## 7. The `pd-*` audit vocabulary (P3a — shipped for the plan phase)
 
-A `pd-*` family beside the review driver's `rd-*`, every row carrying
-`on_behalf_of`. See #3040.
+Thirteen actions beside the review driver's `rd-*`, every row written with
+`brand::AUDIT_ACTOR` as the actor and `on_behalf_of` as a detail key — so it is
+the KEY, not the actor, that distinguishes a driver action, and an audit reader
+filters on it. The prefix is what separates the two drivers when a reader wants
+one rather than both.
+
+`pd-started`, `pd-refused`, `pd-planner-spawned`, `pd-plan-invalid`,
+`pd-plan-posted`, `pd-planner-consumed`, `pd-held`, `pd-resumed`,
+`pd-cancelled`, `pd-complete`, `pd-notice`, `pd-recovered`,
+`pd-state-unreadable`.
+
+**`pd-plan-invalid` is its own action rather than a detail on
+`pd-plan-posted`**, and `pd-held` is its own rather than a state detail, for
+`rd-ci-red`'s reason: a reader counting the thing that happened must not have to
+match the rows where it did not.
+
+**`pd-planner-consumed` is the one that makes the interception accountable.** A
+driven planner's `report` goes to the drive instead of the orchestrator's pane —
+the same narrowing the review driver's §7 makes, keyed on the agent id orrerix
+minted at spawn rather than on anything the caller can type. "Consumed" is a
+different word from "dropped", and every consumed event is on the record with
+its kind, its agent and its issue, so traffic that stopped arriving as a prompt
+is still attributable. `message_orchestrator` is never intercepted.
+
+WILL (P3b): `pd-boarded`, `pd-slice-spawned`, `pd-slice-cap-refused`,
+`pd-slice-blocked`, `pd-slice-pr`, `pd-review-driven`, `pd-slice-merged`,
+`pd-slice-closed`.
 
 ## 8. The planner's output contract — WILL (P2/P4)
 
 `planner.md` will state that the `orrerix-plan` block is mandatory when the
 planner was spawned by a drive, and recommended otherwise. See #3040.
+
+## What P3a deliberately does not do
+
+Named here rather than left to be discovered, because each is a thing a reader
+will look for in the code and not find.
+
+- **No board rows and no worker spawns.** That is P3b, and `held(awaiting-p3b)`
+  is where the drive says so.
+- **No review window.** `plan_review_minutes` is recorded and spent on nothing;
+  the `plan-review` state and its one notice are P3b's.
+- **No consent re-check before a spawn**, because there is no spawn. Consent IS
+  re-read every tick, and a withdrawn label parks the drive — what P3b adds is
+  the check immediately before each slice spawn.
+- **No `git` of any kind.** The plan driver reads through the review driver's
+  `RdRunner`, a `gh`-only view with no `git` method at all, so "never merges,
+  never pushes" is structural rather than a promise.
+- **No `#[tauri::command]`.** The four tools are MCP tools dispatched off the
+  MCP thread, so CLAUDE.md constraint 10's GUI-thread unwind hazard is not
+  engaged; a later frontend surface for plan drives would owe that argument.
 
 ## Related
 

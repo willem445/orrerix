@@ -2421,6 +2421,45 @@ exists until an orchestrator makes its own role-gated `drive_review` call naming
 (The workflow pane edits this block too: an enable-toggle whose state is the `enabled:`
 line, plus number fields bounded to the ranges shown above - #1869.)
 
+### The plan driver
+
+The second switch in that block, `plan_enabled`, turns on a different driver
+that shares its record and tick discipline. Where the review driver takes one PR
+through review and CI, the plan driver takes one **labelled issue** through
+planning: your orchestrator calls `drive_plan(issue)`, and orrerix spawns a
+planner from your roster, briefs it, and reads the plan it writes.
+
+**The plan arrives as a fenced `orrerix-plan` block** in the planner's issue
+comment, and orrerix validates it *before anything is posted*. An invalid block
+comes back to the planner as a tool error with line numbers, nothing reaches the
+issue, and the planner fixes it inside the same turn — which costs your
+orchestrator no turn at all. Three refused blocks park the drive with the last
+reasons, so a planner that will not converge stops costing tool calls and starts
+costing you one notice. Nothing is ever repaired: an id, a branch or a
+dependency orrerix refuses is refused, never rewritten.
+
+**Consent is the label, and it is re-read rather than remembered.**
+`agent-ready` means build it; `agent-investigation` means the plan *is* the
+deliverable and no worker is ever spawned off it. Take the label off mid-drive
+and the drive stops with a notice. There is no repo setting that turns that off,
+and `drive_plan` on an unlabelled issue is refused.
+
+**In this release the drive stops at the plan.** An `agent-investigation` issue
+completes — that is the drive finishing, not falling short. An `agent-ready` one
+parks on `held(awaiting-p3b)` with its plan on the issue and its slices in
+`plan_drive_status`: the board rows and the worker spawns are still yours, and
+the hold says so in your orchestrator's pane rather than leaving you to notice.
+
+`plan_drive_status` is how you recover a drive after a compaction, and
+`cancel_plan_drive` stops one. **Cancelling kills nothing**: a planner pane that
+is still open keeps running under your orchestrator, and its reports start
+reaching that pane again the moment the drive stops being live. Ending a pane is
+`kill_agent`, unchanged. `resume_plan_drive` restarts a parked drive from
+whatever it was doing when it parked, and gives a re-briefed planner a fresh
+three attempts rather than resuming straight onto the bound.
+
+The design note is `doc/design/plan-driver.md`.
+
 ### Setting up a cross-model reviewer
 
 `cli:` accepts `claude`, `copilot`, `gemini`, `opencode`, `pi`, or `codex`. So a workflow

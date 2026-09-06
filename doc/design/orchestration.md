@@ -6302,7 +6302,7 @@ this to every consumer" means naming the list:
 | `held_escalation`'s `held_since_ms` | the ten-minute escalation clock | **migrated** to the episode |
 | `delivery-held-in-queue`'s `held_ms` | how long the pane has been held | **migrated** (same clock, or the number contradicts the decision beside it) |
 | `should_fire_still_queued_notice` | the 30-minute still-queued notice | **migrated**, via `undelivered_since` — see below |
-| `coalesced_flush_text`'s per-constituent age | "queued 4m ago" in the flush banner | kept: a fact about that payload |
+| `coalesced_flush_text`'s per-constituent age | "4m00s ago" in the flush banner | kept: a fact about that payload |
 | `pop_front_dequeued` / `pop_batch_dequeued`'s `queued_ms` | per-entry latency accounting | kept: a fact about that payload |
 | `queue_orphans`'s `queued_minutes_ago`, `queue-recovered`/`delivery-recovered`'s `queued_ms` | how old a recovered entry is | kept: a fact about that payload |
 | `readmit_recovered`'s `oldest_ms` (the recovery notice's "queued N minutes ago") | how old the recovered backlog is | kept: a fact about those payloads — and it is already a `min` over all of them, never the front |
@@ -7033,7 +7033,9 @@ attention chips read:
   to `PAUSE_SUPPRESSION_LIST_MAX` bounded previews of arbitrary agent payloads, plus an elision
   row and a truncation caveat row.
 - `queue::coalesced_flush_text` (#533-A) — the flush **is** the prompt, and each constituent is
-  introduced by a `----- 3/5 · from w-7 · queued 4m12s ago (id 12, t=…) -----` banner.
+  introduced by a `----- 3/5 · from w-7 · 4m12s ago -----` banner. (#3040 trimmed that banner:
+  it carried `queued 4m12s ago (id 12, t=…)` when #632 made it marker-led. The marker rule below
+  is what survives and is what this section is about.)
 
 Both are more exposed than #624's relay ever was: that block rides an MCP tool result and only
 reaches a pane if an orchestrator quotes it back, whereas these two are written to a pane by
@@ -9034,8 +9036,10 @@ for it N times.
 takes the pane's queue oldest-first and returns what this pass submits — a batch of ids, the ids
 that drop out first, and how many entries remain for the next flush.
 `queue::coalesced_flush_text` renders the batch as ONE prompt: the flush header, then each
-constituent behind a banner naming its position, origin (`from`), queue age, queue id, and any
-byte-identical repeats `admit` folded in at admission. `run_queue_drainer` pastes that once.
+constituent behind a banner naming its position, origin (`from`), queue age, and any
+byte-identical repeats `admit` folded in at admission. (The queue id and raw `t=` were dropped
+by #3040 as framing the reader never acted on; the audit's `delivery-dequeued` row is the
+joinable record.) `run_queue_drainer` pastes that once.
 
 Four constraints shape it, and each is a rule in the planner rather than a convention:
 

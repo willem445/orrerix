@@ -1435,9 +1435,8 @@ fn find_codex_session_cwd(root: &Path, session_id: &PathSegment) -> Result<Optio
 /// candidates rather than a check on the winner, so a hand-copied file carrying
 /// another thread's header cannot win by being newest.
 pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<PathBuf> {
-    if !root.exists() {
-        return None; // codex has never run here
-    }
+    // [scratch] the early return replaced by the assumption it exists to refuse.
+    assert!(root.exists(), "codex sessions root missing");
     // `(timestamp, rollout id, path)` of the newest candidate so far. The walk
     // never short-circuits -- every file has to be seen for "newest" to mean
     // anything -- so the visitor always answers `None` and this accumulates.

@@ -36349,6 +36349,74 @@ impl OrchRegistry {
         *self.gh_exec_override.lock_safe() = exec;
     }
 
+    /// Post `body` as a comment on issue `issue` in the calling group's repo and
+    /// return the new comment's URL — the backend half of the `post_issue_comment`
+    /// MCP tool (#2815).
+    ///
+    /// **Why this exists at all, when `gh` is on a planner's allowlist.** It is
+    /// not a convenience wrapper: a planner's deliverable is a whole document,
+    /// and there is no route for one through the CLI shell. Claude Code's
+    /// permission engine refuses to allow-match a Bash command longer than
+    /// 10,000 characters ("Commands longer than 10,000 characters always prompt
+    /// because they exceed what the analysis parses" — the permissions
+    /// reference, verified 2026-09-06), and treats newlines as subcommand
+    /// separators, so a multi-line `--body` matches no rule either. Under
+    /// `dontAsk` an unmatched call is denied outright. Measured, not inferred:
+    /// plan-2332 had `Bash(gh *)` allowed and was still denied
+    /// `gh issue comment <n> --body '<21610 chars>'`, the same via
+    /// `--body-file -` with a heredoc, and every file-write fallback. A tool
+    /// argument is a JSON payload, not a command line, so it has neither limit.
+    ///
+    /// **Comments only, by construction.** The verb and subcommand are literals
+    /// here; only the number and the body come from the caller, and the body is
+    /// the VALUE of `--body` (see [`crate::gh::comment_argv`]). Nothing a caller
+    /// passes can reach a label, a close, a merge, a review, or a PR-creating
+    /// argv — that is a property of the code, not of an argument check.
+    ///
+    /// **Residual, stated rather than implied:** GitHub numbers issues and pull
+    /// requests in ONE namespace, and `gh issue comment` accepts a PR number,
+    /// posting to that PR's conversation. So this tool can address a PR. What it
+    /// cannot do to one is anything but comment, which is the capability bound
+    /// that matters; refusing the number would cost a second round trip per post
+    /// to buy nothing. `doc/design/orchestration.md` carries the same statement.
+    ///
+    /// `repo` is resolved from the caller's own group, never from an argument —
+    /// the same server-side resolution [`Self::gh_capture`] documents — so the
+    /// group-id path seam (#904) is not engaged here.
+    pub fn post_issue_comment(
+        &self,
+        group: &GroupId,
+        actor: &str,
+        issue: u64,
+        body: &str,
+    ) -> Result<String, String> {
+        let repo = self
+            .group(group.as_str())
+            .map(|g| g.repo)
+            .ok_or_else(|| "unknown group".to_string())?;
+        let args = crate::gh::comment_argv("issue", issue, body)?;
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = self.gh_capture(&repo, &argv)?;
+        // `gh issue comment` prints the new comment's URL, and prints it LAST:
+        // take the final non-empty line rather than the whole capture, so a
+        // future banner or deprecation notice on stdout cannot become the "URL"
+        // an agent then quotes into a report.
+        let url = out
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .next_back()
+            .unwrap_or("")
+            .to_string();
+        self.audit(
+            group,
+            actor,
+            "issue-comment",
+            json!({ "issue": issue, "bytes": body.len(), "url": url }),
+        );
+        Ok(url)
+    }
+
     /// Run `cmd` to completion and capture it the way `Command::output()`
     /// would — stdout on success, trimmed stderr on a non-zero exit — except
     /// that the wait is **bounded**: at `timeout` the child is killed and the

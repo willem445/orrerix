@@ -1379,6 +1379,40 @@ fn tool_defs(
         tools.push(group_usage_tool());
         return tools;
     }
+    // POSTING A COMMENT ON AN ISSUE (#2815) — the planner's whole deliverable,
+    // and the reason this is a TOOL rather than a line in an allowlist.
+    //
+    // A planner writes a plan and posts it as an issue comment. Every route
+    // from the model to `gh` runs through the CLI's shell, and a plan does not
+    // fit down one: Claude Code refuses to allow-match a Bash command over
+    // 10,000 characters and splits a command on newlines, so a multi-line
+    // `--body` matches no allow rule and `dontAsk` denies it. Measured on
+    // plan-2332 (#2815): `Bash(gh *)` was allowed and a 21,610-character
+    // `gh issue comment` was denied anyway, as were `--body-file -` with a
+    // heredoc and every file-write fallback. No allowlist entry fixes that; a
+    // JSON tool argument has neither limit, and it is CLI-independent — a
+    // planner block may name pi or opencode, whose permission models differ.
+    //
+    // ROLE-GATED to orchestrator, worker and planner. A reviewer is excluded
+    // deliberately, not by oversight: its verdict has its own recorded surface
+    // (`review_verdict`), and its findings belong on the PR through the review
+    // it is already authorized to leave — a second, unrecorded route to the
+    // same conversation would be a route the merge gate cannot see. A manager,
+    // lead and solo pane never reach here at all: each returns above from its
+    // own positive enumeration.
+    //
+    // `call_tool` re-checks the role — this filter is cosmetic, not the gate.
+    if matches!(role, Role::Orchestrator | Role::Worker | Role::Planner) {
+        tools.push(tool(
+            "post_issue_comment",
+            "Post a comment on a GitHub issue in this group's repo, and get the new comment's URL back. THIS IS HOW A PLANNER DELIVERS ITS PLAN: write the plan, post it here, then report — do not shell out to `gh issue comment`, which cannot carry a document (a Bash command over 10,000 characters, or one containing newlines, matches no permission rule and is denied outright in a planner's pane). `body` is full GitHub-flavoured markdown, passed as data — a leading `-`, quotes, backticks, fenced code and newlines all survive verbatim, so paste the comment exactly as you want it to read. There is no length limit here beyond the MCP request itself. The repo is resolved from YOUR OWN group; you cannot name one. COMMENTS ONLY: this tool cannot label, close, reopen, merge, review, or create anything — those are not arguments it refuses, they are verbs it does not have. Note that GitHub numbers issues and pull requests in one namespace, so an `issue` that is really a PR number posts to that PR's conversation; it still cannot do anything to it but comment. An empty or whitespace-only body is rejected before anything is posted. Every call is audited as an `issue-comment` row carrying the issue, the body size and the resulting URL, so the human can see what was posted without reading your pane.",
+            json!({
+                "issue": { "type": "integer", "description": "Issue number in this group's repo — the bare number, not '#12' or a URL." },
+                "body": { "type": "string", "description": "The comment, as markdown. Sent as data, never as a command line: newlines, backticks and a leading '-' are all safe." },
+            }),
+            &["issue", "body"],
+        ));
+    }
     // Notification backend (#243): self-addressed — there is no `agent_id`
     // parameter, and a notice can only ever land in the caller's own pane, so
     // this belongs in the shared tier, not the orchestrator-only one. Denied
@@ -3448,6 +3482,28 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             let text = arg_str(args, "text").ok_or("text required")?;
             let replace = args.get("replace").and_then(Value::as_bool).unwrap_or(false);
             reg.note_directive(&caller.agent_id, text, replace)
+        }
+
+        "post_issue_comment" => {
+            // The REAL gate; `tool_defs`'s filter above is cosmetic (#243's
+            // double-gate shape), since a caller can dispatch a name it was
+            // never listed. A reviewer is refused in its own terms, not with
+            // the generic message: it has a recorded route to a PR already.
+            match caller.role {
+                Role::Orchestrator | Role::Worker | Role::Planner => {}
+                Role::Reviewer => {
+                    return Err("permission denied: a reviewer posts through its review, not                          through a free-standing issue comment — record findings with                          review_verdict and leave them on the PR you are reviewing, so the                          merge gate can see them"
+                        .into())
+                }
+                _ => return Err("permission denied: post_issue_comment is not on your surface".into()),
+            }
+            let issue = args
+                .get("issue")
+                .and_then(Value::as_u64)
+                .ok_or("issue required (a bare number)")?;
+            let body = arg_str(args, "body").ok_or("body required")?;
+            reg.post_issue_comment(&caller.group, &caller.agent_id, issue, body)
+                .map(|url| format!("posted comment on #{issue}: {url}"))
         }
 
         "notify_when" => {

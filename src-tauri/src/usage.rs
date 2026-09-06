@@ -793,6 +793,15 @@ impl CodexFold {
                 self.totals.cache_creation_tokens += t.cache_creation_tokens;
                 self.totals.cache_read_tokens += t.cache_read_tokens;
             }
+            Some("event_msg") => {
+                if let Some(usage) = v.pointer("/payload/info/total_token_usage") {
+                    let t = codex_tokens(usage);
+                    self.totals.input_tokens += t.input_tokens;
+                    self.totals.output_tokens += t.output_tokens;
+                    self.totals.cache_creation_tokens += t.cache_creation_tokens;
+                    self.totals.cache_read_tokens += t.cache_read_tokens;
+                }
+            }
             Some("turn_context") => {
                 if let Some(m) = v.pointer("/payload/model").and_then(Value::as_str) {
                     if !m.is_empty() {

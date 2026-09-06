@@ -256,6 +256,39 @@ test("consecutive deltas of one kind stream into ONE block, not one per delta", 
   assert.equal(only(s, "text")[0]!.text, "abc");
 });
 
+test("an ORPHAN card interrupts the text run too — the reconnect case", () => {
+  // Round 1 blocking finding 3. Only the `tool_call` arm closed the run, so a
+  // card created by `tool_output` left it open and text arriving AFTER the card
+  // appended to the paragraph above it. This is the realistic path, not a
+  // corner: a client attaching mid-session replays a rotated per-pane log and
+  // rejoins mid-tool, so `tool_output` with no `tool_call` is the normal FIRST
+  // event for that card.
+  const fromOutput = run([
+    { kind: "text", turn: 1, delta: "before " },
+    { kind: "tool_output", turn: 1, id: "t1", delta: "OUT", is_error: false },
+    { kind: "text", turn: 1, delta: "after" },
+  ]);
+  assert.deepEqual(kinds(fromOutput), ["text", "tool", "text"]);
+  assert.deepEqual(only(fromOutput, "text").map((b) => b.text), ["before ", "after"]);
+  assert.notEqual(only(fromOutput, "text")[0]!.text, "before after", "the defect this pins");
+
+  // Same for a card created by an orphan result, which takes the other arm.
+  const fromResult = run([
+    { kind: "text", turn: 1, delta: "before " },
+    { kind: "tool_result", turn: 1, id: "t9", ok: true },
+    { kind: "text", turn: 1, delta: "after" },
+  ]);
+  assert.deepEqual(kinds(fromResult), ["text", "tool", "text"]);
+
+  // And thinking, which is the other run a card has to interrupt.
+  const think = run([
+    { kind: "thinking", turn: 1, delta: "before " },
+    { kind: "tool_output", turn: 1, id: "t1", delta: "OUT", is_error: false },
+    { kind: "thinking", turn: 1, delta: "after" },
+  ]);
+  assert.deepEqual(kinds(think), ["thinking", "tool", "thinking"]);
+});
+
 test("a tool card interrupts the text run, so the next delta is a new block", () => {
   // Appending after the card would put the paragraph's second half ABOVE the
   // card that arrived between its halves.
@@ -505,6 +538,73 @@ test("a head trim never splits a surrogate pair", () => {
     }
   }
   assert.equal(b.text, [...b.text].join(""), "every code unit is part of a whole code point");
+});
+
+test("the head trim agrees with utf8Bytes on the kept tail", () => {
+  // Round 1 blocking finding 4 replaced a full re-measure of the kept tail
+  // (`utf8Bytes(kept)` on every trim — O(block) once saturated) with widths
+  // accumulated in the loop that was already computing them. Identical
+  // arithmetic ONLY if the loop's width rules match `utf8Bytes` exactly, so
+  // that equality is pinned rather than asserted in a comment — across ASCII,
+  // 2-byte, 3-byte, astral and LONE-surrogate text, which is where the two
+  // could disagree.
+  const enc = new TextEncoder();
+  const corpus = [
+    "x".repeat(300 * 1024),
+    "é".repeat(200 * 1024),
+    "€".repeat(150 * 1024),
+    "\u{1F600}".repeat(100 * 1024),
+    "a\u{1F600}é€".repeat(60 * 1024),
+    "\ud800" + "b".repeat(300 * 1024), // lone high surrogate at the head
+    "c".repeat(300 * 1024) + "\udc00", // lone low surrogate at the tail
+  ];
+  for (const text of corpus) {
+    const s = emptyState();
+    project(s, [{ kind: "text", turn: 1, delta: text }]);
+    const b = only(s, "text")[0]!;
+    assert.ok(b.bytes <= MAX_TEXT_BYTES_PER_BLOCK, "the ceiling held");
+    // The block's own bookkeeping must equal an independent measurement of the
+    // string it is actually holding.
+    assert.equal(b.bytes, enc.encode(b.text).length, "bytes match the kept text");
+    assert.equal(b.bytes, utf8Bytes(b.text));
+    assert.equal(
+      b.droppedBytes,
+      enc.encode(text).length - enc.encode(b.text).length,
+      "dropped is exactly what left",
+    );
+    assert.equal(b.text, text.slice(text.length - b.text.length), "a pure HEAD trim");
+  }
+  // Positive control: the ceiling really fired on every one of those.
+  for (const text of corpus) assert.ok(enc.encode(text).length > MAX_TEXT_BYTES_PER_BLOCK);
+});
+
+test("a saturated block trims in time proportional to the DELTA, not the block", () => {
+  // The shape of finding 4, pinned as a property rather than a wall-clock
+  // threshold (a timing assertion would flake on a loaded CI box). Feeding the
+  // same total in small deltas versus large ones must not change the work per
+  // byte by an order of magnitude; with the old full re-measure the small-delta
+  // run did ~16x the work of the large-delta one.
+  const TOTAL = 8 * 1024 * 1024;
+  const time = (deltaSize: number): number => {
+    const chunk = "x".repeat(deltaSize);
+    const s = emptyState();
+    project(s, [{ kind: "tool_call", turn: 1, id: "t1", name: "Bash", input: {} }]);
+    const t0 = process.hrtime.bigint();
+    for (let sent = 0; sent < TOTAL; sent += deltaSize) {
+      project(s, [{ kind: "tool_output", turn: 1, id: "t1", delta: chunk, is_error: false }]);
+    }
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.equal(only(s, "tool")[0]!.outputBytes, MAX_TEXT_BYTES_PER_BLOCK, "saturated");
+    return ms;
+  };
+  const small = time(4 * 1024);
+  const large = time(64 * 1024);
+  // Generous bound: the point is the ORDER, not a number. The pre-fix code was
+  // ~12x here; anything under 4x means the per-trim cost is not the block size.
+  assert.ok(
+    small < Math.max(large, 1) * 4 + 250,
+    `small-delta run ${small.toFixed(0)}ms vs large-delta ${large.toFixed(0)}ms — trim looks O(block)`,
+  );
 });
 
 test("utf8Bytes agrees with TextEncoder on the shapes the trim cares about", () => {

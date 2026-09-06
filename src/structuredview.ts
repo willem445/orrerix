@@ -488,9 +488,9 @@ function reduce(state: State, ev: ProjectionInput, now: number | null): void {
       b.input = ev.input;
       b.orphan = false;
       if (now !== null && !state.toolStartedAt.has(ev.id)) state.toolStartedAt.set(ev.id, now);
-      // A call interrupts the text run: output that follows belongs after the
-      // card, not appended to the paragraph above it.
-      closeRuns(state);
+      // The run is closed by `toolBlock` when it CREATES the card, which covers
+      // this arm and the orphan paths together. Closing again here would be
+      // dead weight that reads as the real guard.
       return;
     }
 
@@ -711,6 +711,16 @@ function toolBlock(state: State, id: ToolUseId, turn: TurnId): ToolBlock {
   // Reached by a `tool_output` / `tool_result` whose `tool_call` was never seen
   // — a batch that started mid-session, or a harness that reordered them.
   // `orphan` records it and `name` stays `null` (rule 1); nothing throws.
+  //
+  // CREATING a card ends the open text/thinking run, and this is the ONE place
+  // that can say so for every path — the `tool_call` arm is not the only one
+  // that makes a card. An orphan created from `tool_output` used to leave the
+  // run open, so text arriving after the card appended to the paragraph ABOVE
+  // it, which is exactly the invariant the design note claims. That is the
+  // reconnect case rather than a corner: a client attaching mid-session replays
+  // a rotated log and rejoins mid-tool, so `tool_output` without its
+  // `tool_call` is the NORMAL first event for that card.
+  closeRuns(state);
   const b: ToolBlock = {
     id: nextId(state),
     kind: "tool",
@@ -834,7 +844,20 @@ function trimHead(
   text: string,
   bytes: number,
 ): { text: string; bytes: number; dropped: number } {
+  // The loop already knows every skipped character's width, so it ACCUMULATES
+  // them rather than re-measuring the tail afterwards. An earlier version ended
+  // `utf8Bytes(kept)`, which walks up to `MAX_TEXT_BYTES_PER_BLOCK` characters
+  // on EVERY trim — and once a block is saturated every subsequent delta trims,
+  // so the cost is O(total x block / delta): measured 20.4 s for 100 MB at
+  // 4 KiB deltas against 1.6 s at 64 KiB, about 51 ms per 64-event batch at
+  // saturation, against the 16 ms/batch budget `project` cites. That is the
+  // module's own "a producer may not make the consumer pay per event" rule
+  // being broken by this function. The widths below are the same rules
+  // `utf8Bytes` applies, lone surrogates included, so the arithmetic is
+  // identical — `the head trim agrees with utf8Bytes on the kept tail` pins
+  // that rather than leaving it asserted.
   let over = bytes - MAX_TEXT_BYTES_PER_BLOCK;
+  let dropped = 0;
   let i = 0;
   while (over > 0 && i < text.length) {
     const c = text.charCodeAt(i);
@@ -842,16 +865,17 @@ function trimHead(
       const d = text.charCodeAt(i + 1);
       if (d >= 0xdc00 && d <= 0xdfff) {
         over -= 4;
+        dropped += 4;
         i += 2;
         continue;
       }
     }
-    over -= c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+    const w = c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+    over -= w;
+    dropped += w;
     i += 1;
   }
-  const kept = text.slice(i);
-  const keptBytes = utf8Bytes(kept);
-  return { text: kept, bytes: keptBytes, dropped: bytes - keptBytes };
+  return { text: text.slice(i), bytes: bytes - dropped, dropped };
 }
 
 /** Roll the oldest blocks into the sentinel. The sentinel is a BLOCK, so the

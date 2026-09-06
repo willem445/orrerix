@@ -1525,49 +1525,78 @@ impl AgentPane for PiPane {
     }
 }
 
+/// How a pane's child actually left, as [`shutdown_child`] observed it.
+///
+/// Returned rather than discarded because it is the only EVIDENCE the reap
+/// happened: an exit status can be obtained in exactly one way, by waiting for
+/// it, so a caller holding one of these is holding proof the child was
+/// collected. That is what makes the reap testable without libc, `/proc`, or a
+/// second look at the process table — delete the `wait` and this cannot be
+/// produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Departure {
+    /// Left on its own before the grace ran out, and was collected there.
+    Graceful(Option<i32>),
+    /// Had to be killed, and was collected after the kill.
+    Killed(Option<i32>),
+    /// The child could not be collected — `try_wait` and `wait` both failed.
+    /// Kept as a variant rather than folded into `Killed` so "we could not
+    /// reap" stays distinguishable from "we reaped a killed child".
+    Unreaped,
+}
+
+/// Close a pi child down: wait out `grace`, then kill, and **collect it either
+/// way**.
+///
+/// Split out of [`PiPane::drop`] so the teardown can be exercised against a
+/// real short-lived child. That is not the constraint-3 prohibition: the rule
+/// is never to spawn a real AGENT CLI, and `src-tauri/tests/direct_spawn.rs`
+/// already drives process spawning the same way.
+///
+/// A killed child is not a REAPED one. `Child::kill` signals and returns;
+/// without the `wait` the OS keeps the process-table entry (a zombie on Unix)
+/// and the handle on Windows until orrerix exits, so a group that spawns and
+/// kills panes all day accumulates them. `src-tauri`'s own post-spawn failure
+/// paths already kill AND wait; this matches them rather than inventing a
+/// second convention (#3067 item 2).
+pub fn shutdown_child(child: &mut Child, grace: std::time::Duration) -> Departure {
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        match child.try_wait() {
+            // Already collected by `try_wait` itself — that IS the reap.
+            Ok(Some(st)) => return Departure::Graceful(st.code()),
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    // A cooperative shutdown that has not happened within the grace is not one
+    // that is about to, so the kill is unconditional from here.
+    let _ = child.kill();
+    match child.wait() {
+        Ok(st) => Departure::Killed(st.code()),
+        Err(_) => Departure::Unreaped,
+    }
+}
+
 impl Drop for PiPane {
     /// End the turn, then the process: `abort`, close stdin, wait
     /// [`SHUTDOWN_GRACE`], kill, reap.
     ///
     /// The graceful path exists here and not on the Claude side because pi has
-    /// the command that makes it graceful. The kill is still unconditional after
-    /// the wait: a cooperative shutdown that has not happened in two seconds is
-    /// not one that is about to.
+    /// the command that makes it graceful. The teardown itself is
+    /// [`shutdown_child`], which is where its reasoning and its test live; a
+    /// `Drop` body cannot return anything a test could read.
     fn drop(&mut self) {
         let _ = self.write_line(&abort_line());
         *self.stdin.lock_safe() = None;
-        let deadline = std::time::Instant::now() + SHUTDOWN_GRACE;
-        loop {
-            let mut child = self.child.lock_safe();
-            match child.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) => {}
-                Err(_) => break,
-            }
-            drop(child);
-            if std::time::Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-        // The kill is not the end of it: a killed child is not a REAPED one.
-        // `Child::kill` sends the signal and returns; without a `wait` the OS
-        // keeps the process table entry (a zombie on Unix) and the handle
-        // (on Windows) until this process exits — so a group that spawns and
-        // kills panes all day accumulates them. `src-tauri`'s own post-spawn
-        // failure paths already kill AND wait; this matches them rather than
-        // inventing a second convention (#3067 item 2).
-        //
-        // Unconditional, and after the loop's `break` paths too: the graceful
-        // exit above `return`s, so anything reaching here either timed out or
-        // failed `try_wait`, and both leave a child to collect. `wait` cannot
-        // block for long on a process that has just been killed, and on the
-        // `try_wait`-errored path it is the only call left that can report.
-        let mut child = self.child.lock_safe();
-        let _ = child.kill();
-        let _ = child.wait();
+        let _ = shutdown_child(&mut self.child.lock_safe(), SHUTDOWN_GRACE);
     }
 }
+
 
 #[cfg(test)]
 mod tests {

@@ -1,0 +1,30 @@
+{"id":"boot","type":"response","command":"get_state","success":true,"data":{"model":{"id":"z-ai/glm-5.3-flash","name":"GLM 5.3 Flash","provider":"openrouter","contextWindow":200000},"thinkingLevel":"medium","isStreaming":false,"isCompacting":false,"steeringMode":"all","followUpMode":"one-at-a-time","sessionFile":"/g/pi/abc123.jsonl","sessionId":"abc123","messageCount":0,"pendingMessageCount":0}}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"assistant","content":[]}}
+{"type":"message_update","usage":{"input":100,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":101},"assistantMessageEvent":{"type":"thinking_start","contentIndex":0}}
+{"type":"message_update","usage":{"input":100,"output":8,"cacheRead":0,"cacheWrite":0,"totalTokens":108},"assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"the user wants a listing"}}
+{"type":"message_update","usage":{"input":100,"output":9,"cacheRead":0,"cacheWrite":0,"totalTokens":109},"assistantMessageEvent":{"type":"thinking_end","contentIndex":0}}
+{"type":"message_update","usage":{"input":100,"output":12,"cacheRead":0,"cacheWrite":0,"totalTokens":112},"assistantMessageEvent":{"type":"text_start","contentIndex":1}}
+{"type":"message_update","usage":{"input":100,"output":15,"cacheRead":0,"cacheWrite":0,"totalTokens":115},"assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"Listing now"}}
+{"type":"message_update","usage":{"input":100,"output":16,"cacheRead":0,"cacheWrite":0,"totalTokens":116},"assistantMessageEvent":{"type":"text_end","contentIndex":1,"content":"Listing now"}}
+{"type":"message_update","usage":{"input":100,"output":20,"cacheRead":0,"cacheWrite":0,"totalTokens":120},"assistantMessageEvent":{"type":"toolcall_start","contentIndex":2,"id":"call_abc123","toolName":"bash"}}
+{"type":"message_update","usage":{"input":100,"output":24,"cacheRead":0,"cacheWrite":0,"totalTokens":124},"assistantMessageEvent":{"type":"toolcall_delta","contentIndex":2,"delta":"{\"comm"}}
+{"type":"message_update","usage":{"input":100,"output":28,"cacheRead":0,"cacheWrite":0,"totalTokens":128},"assistantMessageEvent":{"type":"toolcall_end","contentIndex":2,"toolCall":{"type":"toolCall","id":"call_abc123","name":"bash","arguments":{"command":"ls -la"}}}}
+{"type":"tool_execution_start","toolCallId":"call_abc123","toolName":"bash","args":{"command":"ls -la"}}
+{"type":"tool_execution_update","toolCallId":"call_abc123","toolName":"bash","args":{"command":"ls -la"},"partialResult":{"content":[{"type":"text","text":"total 48\n"}],"details":{"truncation":null,"fullOutputPath":null}}}
+{"type":"tool_execution_update","toolCallId":"call_abc123","toolName":"bash","args":{"command":"ls -la"},"partialResult":{"content":[{"type":"text","text":"total 48\ndrwxr-xr-x .\n"}],"details":{"truncation":null,"fullOutputPath":null}}}
+{"type":"tool_execution_end","toolCallId":"call_abc123","toolName":"bash","result":{"content":[{"type":"text","text":"total 48\ndrwxr-xr-x .\nls: cannot access 'x'\n"}],"details":{}},"isError":true}
+{"type":"queue_update","steering":[],"followUp":["After that, summarize the result"]}
+{"type":"message_end","message":{"role":"assistant","model":"z-ai/glm-5.3-flash","content":[{"type":"text","text":"Listing now"}],"usage":{"input":100,"output":28,"cacheRead":10,"cacheWrite":5,"cost":{"input":0.0003,"output":0.00075,"cacheRead":0,"cacheWrite":0,"total":0.00105}},"stopReason":"toolUse","timestamp":1733234567890}}
+{"type":"turn_end","message":{"role":"assistant"},"toolResults":[]}
+{"type":"something_pi_added_later","v":1}
+{"type":"extension_ui_request","id":"uuid-5","method":"notify","message":"Command blocked by user","notifyType":"warning"}
+{"type":"extension_ui_request","id":"uuid-1","method":"select","title":"Allow dangerous command?","options":["Allow","Block"],"timeout":10000}
+{"type":"compaction_start","reason":"threshold"}
+{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":false,"result":{"summary":"Summary of conversation...","firstKeptEntryId":"abc123","tokensBefore":150000,"estimatedTokensAfter":32000,"details":{}}}
+{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"529 overloaded_error: Overloaded"}
+{"type":"auto_retry_end","success":true,"attempt":2}
+{"type":"agent_end","messages":[],"willRetry":false}
+{"type":"agent_settled"}
+{"id":"stats-0","type":"response","command":"get_session_stats","success":true,"data":{"sessionFile":"/g/pi/abc123.jsonl","sessionId":"abc123","userMessages":1,"assistantMessages":1,"toolCalls":1,"toolResults":1,"totalMessages":4,"tokens":{"input":50000,"output":10000,"cacheRead":40000,"cacheWrite":5000,"total":105000},"cost":0.45,"contextUsage":{"tokens":60000,"contextWindow":200000,"percent":30}}}

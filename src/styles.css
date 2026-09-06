@@ -2455,6 +2455,13 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
   margin-top: 6px; max-height: 260px; overflow-y: auto;
 }
 .roster-preview:empty { display: none; }
+/* The workflow picker (#1689): [Workflow] [select], between the toggle and the roster
+   box it changes. `align-items: center` because the label is a bare span rather than a
+   field's own stacked caption, and the select carries the row's height. Hidden entirely
+   for a repo with one workflow — the row's `hidden` does that, not this. */
+.workflow-pick { align-items: center; margin-top: 6px; }
+.workflow-pick > .dlg-label { flex: 0 0 auto; }
+.workflow-pick > .dlg-select { flex: 1; min-width: 0; }
 .roster-summary { font-size: 11.5px; line-height: 1.5; color: var(--ink-dim); }
 /* A DECLARED roster is the one thing here the human has to actually read. */
 .roster-declared { color: var(--ink); }

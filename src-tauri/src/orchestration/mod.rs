@@ -57029,6 +57029,17 @@ pub async fn create_orchestration(
     // repo's `.loomux/workflow.yml` and runs the roster below, exactly as loomux
     // did before workflows existed.
     advanced_orchestrator: bool,
+    // WHICH of the repo's workflows this group runs (#1689 slice D1). Omitted —
+    // every caller written before named workflows, and the launcher's own form in
+    // a repo that declares one file — is `default`, i.e. `.orrerix/workflow.yml`,
+    // which is the pre-#1689 launch byte for byte.
+    //
+    // Separate from `advanced_orchestrator`, which is the CONSENT: the toggle
+    // decides whether a repo-authored roster runs at all, this decides only which
+    // file it comes from. A name arriving with the toggle off is recorded and
+    // inert, exactly as the roster it names is, so turning the toggle on live
+    // comes back to the file the human chose rather than to `default`.
+    workflow: Option<String>,
     // Per-role thinking level / context window (#687). Omitted = no knob on any
     // role, i.e. today's group byte for byte — see `RoleKnobs`.
     role_knobs: Option<RoleKnobs>,
@@ -57038,7 +57049,7 @@ pub async fn create_orchestration(
         &reg, repo, initial_workers, max_agents, agent_cli, orchestrator_cli, worker_cli,
         reviewer_cli, planner_cli, worker_model, reviewer_model, orchestrator_model,
         planner_model, auto_ops, idle_kill_minutes, max_spawns_per_hour,
-        watchdog_stall_minutes, advanced_orchestrator, role_knobs,
+        watchdog_stall_minutes, advanced_orchestrator, workflow, role_knobs,
     ))
     .await
 }
@@ -57047,7 +57058,8 @@ pub async fn create_orchestration(
 /// itself is the thin delegation `performance.md` §2 P1 asks for rather than a
 /// nineteen-argument closure.
 #[allow(clippy::too_many_arguments)] // it is `create_orchestration`'s argument list, verbatim
-fn create_orchestration_sync(
+#[doc(hidden)] // pub for integration tests
+pub fn create_orchestration_sync(
     reg: &Arc<OrchRegistry>,
     repo: String,
     initial_workers: Option<u32>,
@@ -57066,8 +57078,24 @@ fn create_orchestration_sync(
     max_spawns_per_hour: u32,
     watchdog_stall_minutes: u32,
     advanced_orchestrator: bool,
+    workflow: Option<String>,
     role_knobs: Option<RoleKnobs>,
 ) -> Result<SpawnRequest, String> {
+    // #1689: parse at the BOUNDARY, so the value that reaches `Guardrails` is a
+    // `WorkflowName` and the compiler — not a scan — is what stops a webview
+    // string reaching `workflow_path_named` (CLAUDE.md constraint 6).
+    //
+    // REFUSED, not defaulted, and that is the launch/load asymmetry stated on
+    // `Guardrails::workflow`: `load_group_file` falls back to `default` for an
+    // unusable persisted name because a group must stay rejoinable, while a
+    // LAUNCH has a human in front of it and no reason to silently run a workflow
+    // other than the one they picked. Nothing is created — this is above
+    // `create_orchestration_group`'s own checks, so the refusal costs no state.
+    let workflow = match workflow.as_deref() {
+        None => workflow::WorkflowName::default_name(),
+        Some(raw) => workflow::WorkflowName::parse(raw)
+            .map_err(|e| format!("that is not a usable workflow name: {e}"))?,
+    };
     // The launcher still collects one CLI + model per role — that IS the
     // built-in 4-block roster (#222), just spelled as flat form fields. Convert
     // it here, at the boundary, so the launcher's wire shape is untouched and
@@ -57115,6 +57143,7 @@ fn create_orchestration_sync(
             agent_cli,
             blocks,
             advanced_orchestrator,
+            workflow,
             auto_ops,
             idle_kill_minutes,
             max_spawns_per_hour,
@@ -57168,10 +57197,6 @@ fn create_orchestration_sync(
             // so the backoff is on by default for every new group; hand-edit
             // group.json to pin it to the base (no backoff).
             idle_tick_fallback_max_minutes: 0,
-            // #1689: the launcher has no workflow picker yet (slice D1), so a
-            // launcher group runs `default` — which resolves to
-            // `.orrerix/workflow.yml`, exactly the file it has always read.
-            workflow: workflow::WorkflowName::default_name(),
         },
         SessionOrigin::Fresh,
         None,

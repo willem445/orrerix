@@ -29,8 +29,13 @@ import {
   rosterNeedsReview,
   type RolePick,
   type RosterBlock,
+  resolveWorkflowPicker,
+  workflowNoticeLines,
   type WorkflowPreview,
+  type WorkflowEntry,
+  type WorkflowListing,
 } from "../src/roster.ts";
+import { DEFAULT_WORKFLOW_NAME, WORKFLOW_FILE } from "../src/workflowmodel.ts";
 
 const PICKS: RolePick[] = [
   { key: "orchestrator", cli: "claude", model: "opus" },
@@ -692,4 +697,156 @@ test("a roster naming no orchestrator answers null rather than guessing", () => 
   // ...and an empty group default cannot rescue it into an empty-string "answer" either.
   const noCli = preview({ blocks: [block({ id: "orchestrator", kind: "orchestrator", cli: "" })] });
   assert.equal(orchestratorCliOf(resolveRoster(true, noCli, PICKS, "  "), "  "), null);
+});
+
+// ---------- the launcher's workflow picker (#1689 slice D1) ----------
+
+const entry = (o: Partial<WorkflowEntry> & { name: string }): WorkflowEntry => ({
+  path: `.orrerix/workflows/${o.name}.yml`,
+  display_name: "",
+  valid: true,
+  errors: [],
+  ...o,
+});
+const listing = (workflows: WorkflowEntry[], findings: string[] = []): WorkflowListing => ({
+  workflows,
+  findings,
+});
+const DEFAULT_ENTRY = entry({ name: "default", path: ".orrerix/workflow.yml" });
+
+test("a repo with one workflow shows no picker — the control would have nothing to pick", () => {
+  // Every repo that has not opted into named workflows lands here, so this is the form a
+  // first-time human sees: exactly the pre-#1689 one.
+  const p = resolveWorkflowPicker(listing([DEFAULT_ENTRY]), null);
+  assert.equal(p.show, false);
+  assert.equal(p.selected, "default");
+  assert.equal(p.file, ".orrerix/workflow.yml");
+});
+
+test("a repo with no workflows still answers `default` — that is the file Edit… would create", () => {
+  for (const l of [listing([]), null]) {
+    const p = resolveWorkflowPicker(l, null);
+    assert.equal(p.show, false);
+    assert.equal(p.selected, DEFAULT_WORKFLOW_NAME);
+    assert.equal(p.options.length, 0);
+    // The button has to work in a repo with no workflow at all: that is how the first one
+    // gets written.
+    assert.equal(p.file, WORKFLOW_FILE);
+  }
+});
+
+test("several workflows show the picker, and the held selection is honoured", () => {
+  const l = listing([DEFAULT_ENTRY, entry({ name: "review-heavy" }), entry({ name: "solo_fast" })]);
+  assert.equal(resolveWorkflowPicker(l, null).selected, "default");
+  const p = resolveWorkflowPicker(l, "review-heavy");
+  assert.equal(p.show, true);
+  assert.equal(p.selected, "review-heavy");
+  assert.equal(p.file, ".orrerix/workflows/review-heavy.yml");
+  assert.deepEqual(
+    p.options.map((o) => o.name),
+    ["default", "review-heavy", "solo_fast"]
+  );
+});
+
+test("a held name the repo no longer declares falls back — a launch never pins a missing file", () => {
+  // The form is repointed at another repo while `review-heavy` is held. Keeping the name
+  // would launch a group pinned to a workflow that does not exist there: the backend would
+  // resolve it to an absent file and run the built-in roster, silently disagreeing with the
+  // roster box the human just read.
+  const other = listing([DEFAULT_ENTRY, entry({ name: "a" })]);
+  assert.equal(resolveWorkflowPicker(other, "review-heavy").selected, "default");
+  // With no `default` on offer either, the first option is the honest answer — never a name
+  // that is not in `options`.
+  const noDefault = listing([entry({ name: "a" }), entry({ name: "b" })]);
+  const p = resolveWorkflowPicker(noDefault, "review-heavy");
+  assert.equal(p.selected, "a");
+  assert.ok(p.options.some((o) => o.name === p.selected));
+  assert.equal(p.file, ".orrerix/workflows/a.yml");
+});
+
+test("an unparseable workflow stays in the picker, marked — it is the one you must open to fix", () => {
+  const broken = entry({ name: "broken", valid: false, errors: ["block 2: unknown kind"] });
+  const p = resolveWorkflowPicker(listing([DEFAULT_ENTRY, broken]), "broken");
+  const opt = p.options.find((o) => o.name === "broken")!;
+  assert.equal(opt.valid, false);
+  assert.match(opt.label, /has errors/);
+  // …and selecting it still points Edit… at the file, which is the whole reason it is here.
+  assert.equal(p.selected, "broken");
+  assert.equal(p.file, ".orrerix/workflows/broken.yml");
+});
+
+test("an option reads its name, and its prose only when the prose adds something", () => {
+  const p = resolveWorkflowPicker(
+    listing([
+      entry({ name: "a", display_name: "Review-heavy lane" }),
+      // A file whose `name:` merely repeats the stem would otherwise read twice.
+      entry({ name: "b", display_name: "b" }),
+      entry({ name: "c", display_name: "  " }),
+    ]),
+    null
+  );
+  assert.deepEqual(
+    p.options.map((o) => o.label),
+    ["a — Review-heavy lane", "b", "c"]
+  );
+});
+
+test("the picker carries the BACKEND's path, so a legacy-spelled repo edits the right file", () => {
+  // The frontend could derive `.orrerix/workflows/a.yml` from the name — and would be wrong
+  // for every repo still on `.loomux/`. The listing resolved the file; the picker carries it.
+  const p = resolveWorkflowPicker(
+    listing([entry({ name: "a", path: ".loomux/workflows/a.yml" })]),
+    "a"
+  );
+  assert.equal(p.file, ".loomux/workflows/a.yml");
+});
+
+test("listing findings ride through, and are not confused with a file's own errors", () => {
+  const p = resolveWorkflowPicker(
+    listing([DEFAULT_ENTRY], ["'default' is declared twice — .orrerix/workflow.yml is the one that is read"]),
+    null
+  );
+  assert.equal(p.findings.length, 1);
+  assert.match(p.findings[0]!, /declared twice/);
+  // The entry itself is fine: a listing finding is about the LISTING, and neither blocks a
+  // launch nor marks a file.
+  assert.equal(p.options[0]!.valid, true);
+  assert.equal(p.options[0]!.label, "default");
+});
+
+// ---------- listing findings reach a surface (#1689 D1, rev-std round 1 finding 2) ----------
+
+test("listing findings are shown with the toggle ON — they were write-only before", () => {
+  // The defect: `findings` rode through the picker, a test pinned that it did, and NOTHING
+  // in src/ ever read it. A pinned value with no consumer is a pin on a pipe to nowhere.
+  const p = resolveWorkflowPicker(
+    listing([DEFAULT_ENTRY], ["'default' is declared twice — .orrerix/workflow.yml is the one that is read"]),
+    null
+  );
+  const lines = workflowNoticeLines(p, true);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /declared twice/);
+});
+
+test("listing findings are silent with the toggle OFF — no file is opened, so none applies", () => {
+  // With advanced mode off no workflow file is read at all, so a warning about which files
+  // exist describes nothing this launch will do: the form would be volunteering a problem
+  // in a feature the human has not turned on.
+  const p = resolveWorkflowPicker(listing([DEFAULT_ENTRY], ["'default' is declared twice"]), null);
+  assert.deepEqual(workflowNoticeLines(p, false), []);
+});
+
+test("a repo with nothing wrong says nothing, and a single option does not suppress a finding", () => {
+  // The empty case, and the gate that is deliberately ABSENT: findings are not gated on
+  // `show`. A repo whose only fault is declaring `default` twice still offers one usable
+  // option, and the finding is exactly what explains why it is one option and not two.
+  assert.deepEqual(workflowNoticeLines(resolveWorkflowPicker(listing([DEFAULT_ENTRY]), null), true), []);
+  const oneOption = resolveWorkflowPicker(listing([DEFAULT_ENTRY], ["'default' is declared twice"]), null);
+  assert.equal(oneOption.show, false, "one option — the picker row stays hidden");
+  assert.equal(workflowNoticeLines(oneOption, true).length, 1, "and the finding is still said");
+});
+
+test("a blank finding is not rendered as an empty line", () => {
+  const p = resolveWorkflowPicker(listing([DEFAULT_ENTRY], ["", "   ", "a real one"]), null);
+  assert.deepEqual(workflowNoticeLines(p, true), ["a real one"]);
 });

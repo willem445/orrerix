@@ -429,3 +429,51 @@ test("an explicitly-opened workflow keeps its layout beside IT, at any depth or 
   // leading "/" that would escape the root.
   assert.equal(layoutFileFor("workflow.yml"), LAYOUT_BASENAME);
 });
+
+// ---------- one layout file PER WORKFLOW, not per directory (#1689 slice D1) ----------
+
+test("two named workflows in one directory get two layout files, not one", () => {
+  // The defect a fixed basename had once a repo could declare several workflows: `a` and `b`
+  // live in the SAME directory, so both canvases wrote `workflows/workflow.layout.json`.
+  // Opening `b` restored `a`'s node positions by block id and saving `b` overwrote them —
+  // and silently, because a layout that makes no sense is recomputed, never reported.
+  const a = layoutFileFor(".orrerix/workflows/a.yml");
+  const b = layoutFileFor(".orrerix/workflows/b.yml");
+  assert.equal(a, ".orrerix/workflows/a.layout.json");
+  assert.equal(b, ".orrerix/workflows/b.layout.json");
+  assert.notEqual(a, b);
+  // Still siblings of the file they belong to — the #1153 property, unchanged.
+  assert.equal(layoutFileFor(".loomux/workflows/a.yml"), ".loomux/workflows/a.layout.json");
+});
+
+test("the DEFAULT workflow's layout file does not move — no repo's positions are lost", () => {
+  // `workflow.yml`'s stem IS `workflow`, so the derived name is the constant it always was.
+  // This is what makes the per-file rule a pure addition rather than a migration.
+  assert.equal(layoutFileFor(".orrerix/workflow.yml"), `.orrerix/${LAYOUT_BASENAME}`);
+  assert.equal(layoutFileFor(".loomux/workflow.yml"), `.loomux/${LAYOUT_BASENAME}`);
+  assert.equal(layoutFileFor("workflow.yml"), LAYOUT_BASENAME);
+});
+
+test("only the last extension is dropped, and a dotfile is all stem", () => {
+  // `.yaml` costs no second rule: the rule is "drop the extension", not "drop `.yml`".
+  assert.equal(layoutFileFor(".orrerix/workflows/a.yaml"), ".orrerix/workflows/a.layout.json");
+  // A dotted name keeps its dots — `a.b` and `a` are different workflows and must not
+  // collide.
+  assert.equal(layoutFileFor("workflows/a.b.yml"), "workflows/a.b.layout.json");
+  assert.notEqual(layoutFileFor("workflows/a.b.yml"), layoutFileFor("workflows/a.yml"));
+  // No extension at all: the whole basename is the stem.
+  assert.equal(layoutFileFor("workflows/a"), "workflows/a.layout.json");
+  // A DOTFILE's leading dot hides the file, it does not name an extension. Stripping it
+  // would hand every dotfile in a directory the same `.layout.json` — the collision this
+  // change exists to remove, reintroduced by a "cut at the first dot" rule.
+  assert.equal(layoutFileFor("workflows/.hidden"), "workflows/.hidden.layout.json");
+  assert.notEqual(layoutFileFor("workflows/.hidden"), layoutFileFor("workflows/.other"));
+});
+
+test("a path with no basename falls back to the default layout name, never a bare suffix", () => {
+  // Not reachable from the pane (a workflow pane always has a file), but the alternative
+  // return for an empty stem is `.layout.json` — a hidden file every empty answer in a
+  // directory would share, i.e. the collision again in the one shape nobody would look for.
+  assert.equal(layoutFileFor(""), LAYOUT_BASENAME);
+  assert.equal(layoutFileFor("workflows/"), `workflows/${LAYOUT_BASENAME}`);
+});

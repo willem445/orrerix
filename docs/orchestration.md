@@ -271,6 +271,23 @@ then exits. A planner's read-only contract is enforced at the CLI level where
 possible: it never gets a worktree, and its file-editing tools plus `git
 commit`/`git push` are denied.
 
+It posts that plan with the `post_issue_comment(issue, body)` orrerix tool, not by
+shelling out to `gh`. The reason is a limit in the CLI rather than a preference:
+Claude Code will not match a Bash command longer than 10,000 characters against
+your permission rules, and it treats newlines in a command as separators between
+sub-commands, so a plan — thousands of characters, many lines — matched no rule
+and was denied outright in a read-only pane even with `gh` fully pre-approved.
+Passing the plan as a tool argument sidesteps both limits, and works the same way
+whatever CLI the planner block names. The tool posts comments and nothing else:
+it cannot label, close, merge, review, or create anything, and every call leaves
+an `issue-comment` row in the group's audit log with the issue, the size and the
+resulting comment URL. It is available to the orchestrator and workers too;
+reviewers are excluded, since a review is the recorded route to a PR.
+
+One thing worth knowing: GitHub numbers issues and pull requests in a single
+namespace, so a number that is really a PR posts to that PR's conversation. It
+still cannot do anything to it except comment.
+
 What it *is* pre-approved for, since a planner runs with no human in its pane to
 approve anything: read-only shell and `git`, `gh` (it reads the issue and posts
 its plan through it), the orrerix tools, and — so it can ground a plan in a

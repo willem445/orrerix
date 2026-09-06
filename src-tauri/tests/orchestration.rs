@@ -64523,3 +64523,199 @@ fn the_coverage_floor_is_the_oldest_ts_not_the_first_row_appended() {
     assert_ne!(view["first_ts_ms"].as_u64(), Some(5_000));
     assert_eq!(view["rows"].as_array().unwrap().len(), 3, "and nothing is dropped");
 }
+
+// ───────── #2815: a planner can post its own plan (`post_issue_comment`) ─────────
+//
+// The defect these pin, stated as the mechanism rather than as "gh was denied":
+// a planner's deliverable is a whole document, and no route existed for one
+// through the CLI shell. Claude Code refuses to allow-match a Bash command over
+// 10,000 characters and treats newlines as subcommand separators, so a
+// multi-line `--body` matches no permission rule and `dontAsk` denies it —
+// with `Bash(gh *)` allowed the whole time. Measured on plan-2332: a
+// 21,610-character `gh issue comment` denied, the `--body-file -` heredoc form
+// denied, every file-write fallback denied. A tool argument is a JSON payload
+// rather than a command line, so it has neither limit.
+
+/// A stand-in `gh` that answers immediately and reports the first three
+/// arguments it was given, by folding them into the URL it prints.
+///
+/// Echoing them into the URL is what makes the VERB checkable end-to-end: the
+/// tool hands its caller only the URL, so an argv assertion made anywhere else
+/// would be a claim about a helper rather than about the spawn the registry
+/// actually performs. `gh issue comment` prints the comment URL last, and this
+/// prints exactly one line, which is the shape `post_issue_comment` parses.
+fn echoing_gh(dir: &Path, name: &str) -> std::path::PathBuf {
+    let (file, script) = if cfg!(windows) {
+        (
+            format!("{name}.cmd"),
+            "@echo off\r\necho https://example.invalid/c/%~1-%~2-%~3\r\n".to_string(),
+        )
+    } else {
+        (
+            name.to_string(),
+            "#!/bin/sh\nprintf '%s\\n' \"https://example.invalid/c/$1-$2-$3\"\n".to_string(),
+        )
+    };
+    let path = dir.join(file);
+    fs::write(&path, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    path
+}
+
+fn post_comment(reg: &OrchRegistry, c: &Caller, args: Value) -> Result<String, String> {
+    let r = dispatch(reg, c, "tools/call",
+        &json!({ "name": "post_issue_comment", "arguments": args })).unwrap();
+    let text = r["content"][0]["text"].as_str().unwrap().to_string();
+    if r["isError"] == true { Err(text) } else { Ok(text) }
+}
+
+fn listed_tool_names(reg: &OrchRegistry, c: &Caller) -> Vec<String> {
+    dispatch(reg, c, "tools/list", &Value::Null).unwrap()["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The whole point: a plan too long to be a shell command posts anyway, and the
+/// planner gets the URL back.
+///
+/// **The body is 15,000 characters DELIBERATELY.** A short body would pass
+/// under the broken world too — the denial being fixed is keyed on length, not
+/// on content — so a fixture under the 10,000-character ceiling would be a test
+/// of the plumbing that cannot fail for the reason this change exists. It stays
+/// under Windows' own 32,767-character command-line limit so that what is
+/// demonstrated is the absence of the CLI permission engine's ceiling, not the
+/// presence of the operating system's.
+#[test]
+fn a_planner_posts_a_plan_longer_than_the_shell_could_carry_and_gets_the_url() {
+    let _serial = capture_lock();
+    let (reg, _d) = test_registry();
+    let repo = tempfile::tempdir().unwrap();
+    let g = reg
+        .create_group(&repo.path().to_string_lossy(), Guardrails { max_agents: 8, ..rails() })
+        .unwrap();
+    reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let planner = reg.spawn_agent(&g.id, Role::Planner, "plan", "plan #7", false, None).unwrap();
+    let cp = reg.resolve_token(&planner.token).unwrap();
+
+    reg.set_gh_exec_override(Some((echoing_gh(repo.path(), "echoing_gh"), Duration::from_secs(20))));
+
+    let body = format!("## Plan\n\n{}\n\n- step one\n", "x".repeat(15_000));
+    assert!(
+        body.len() > 10_000 && body.contains('\n'),
+        "the fixture must be BOTH over the 10,000-character ceiling and multi-line — those are \
+         the two independent reasons the shell route is denied, and a fixture missing either \
+         cannot witness this change"
+    );
+    let out = post_comment(&reg, &cp, json!({ "issue": 7, "body": body })).unwrap();
+
+    assert!(out.contains("https://example.invalid/c/issue-comment-7"),
+        "the URL must come back to the planner (it is `report`'s detail_url), and the argv the \
+         registry really spawned must be `issue comment 7` — the fake folds its first three \
+         arguments into the URL precisely so this is one assertion, not two claims: {out}");
+
+    // The human's record of what a pane published, without reading the pane.
+    let row = reg.audit_log(&g.id).into_iter()
+        .find(|e| e.action == "issue-comment")
+        .expect("a post must leave an `issue-comment` audit row");
+    assert_eq!(row.actor, cp.agent_id, "attributed to the pane that posted");
+    assert_eq!(row.detail["issue"], 7);
+    assert_eq!(row.detail["bytes"], body.len(), "the size posted, so an empty-looking plan shows");
+    assert!(row.detail["url"].as_str().unwrap().contains("example.invalid"),
+        "and the URL, so the row is followable: {row:?}");
+
+    reg.set_gh_exec_override(None);
+}
+
+/// The grant and the refusal are ONE test, so neither half can pass vacuously:
+/// a `post_issue_comment` that refused everybody would satisfy the reviewer
+/// assertions alone, and one that refused nobody would satisfy the other three.
+#[test]
+fn post_issue_comment_is_granted_to_three_classes_and_refused_to_a_reviewer() {
+    let _serial = capture_lock();
+    let (reg, _d) = test_registry();
+    let repo = tempfile::tempdir().unwrap();
+    let g = reg
+        .create_group(&repo.path().to_string_lossy(), Guardrails { max_agents: 8, ..rails() })
+        .unwrap();
+    reg.set_gh_exec_override(Some((echoing_gh(repo.path(), "echoing_gh"), Duration::from_secs(20))));
+
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let worker = reg.spawn_agent(&g.id, Role::Worker, "w", "do #7", false, None).unwrap();
+    let planner = reg.spawn_agent(&g.id, Role::Planner, "plan", "plan #7", false, None).unwrap();
+    let reviewer = reg.spawn_agent(&g.id, Role::Reviewer, "rev", "review #7", false, None).unwrap();
+
+    for (what, token) in [("orchestrator", &orch.token), ("worker", &worker.token),
+                          ("planner", &planner.token)] {
+        let c = reg.resolve_token(token).unwrap();
+        assert!(listed_tool_names(&reg, &c).iter().any(|t| t == "post_issue_comment"),
+            "a {what} must SEE the tool");
+        post_comment(&reg, &c, json!({ "issue": 7, "body": "ok" }))
+            .unwrap_or_else(|e| panic!("a {what} must be able to post: {e}"));
+    }
+
+    // A reviewer: absent from the listing AND refused on dispatch — the #243
+    // double gate, whose cosmetic half a caller can walk straight past by
+    // naming the tool it was never shown.
+    let cr = reg.resolve_token(&reviewer.token).unwrap();
+    assert!(!listed_tool_names(&reg, &cr).iter().any(|t| t == "post_issue_comment"),
+        "a reviewer must not see the tool");
+    let err = post_comment(&reg, &cr, json!({ "issue": 7, "body": "ok" })).unwrap_err();
+    assert!(err.contains("permission denied"), "got: {err}");
+    assert!(err.contains("review_verdict"),
+        "and the refusal must name the route a reviewer DOES have, or it teaches nothing \
+         (the PlannerDenied precedent: a class told only no learns nothing about why it is \
+         stuck): {err}");
+
+    reg.set_gh_exec_override(None);
+}
+
+/// Comments-only is a property of the CODE, not an argument check — so this
+/// pins the argv builder every caller goes through and asserts the dangerous
+/// verbs are unreachable for ANY input, not merely absent from a happy path.
+#[test]
+fn the_comment_argv_has_no_verb_a_caller_can_reach() {
+    use loomux_lib::gh::comment_argv;
+
+    assert_eq!(
+        comment_argv("issue", 7, "hi").unwrap(),
+        vec!["issue", "comment", "7", "--body", "hi"],
+        "the verb and subcommand are literals in position 0 and 1; only the number and the \
+         body come from a caller"
+    );
+
+    // Bodies chosen to be exactly what would escape if the body were ever
+    // interpolated into a command line rather than passed as the VALUE of
+    // `--body`: a leading `-` (read as a flag), and the verbs this tool must
+    // never reach.
+    for hostile in [
+        "-not a flag",
+        "--json state",
+        "x\n--add-label wontfix",
+        "close\nmerge\n--delete-branch",
+        "$(gh pr merge 7)",
+    ] {
+        let argv = comment_argv("issue", 7, hostile).unwrap();
+        assert_eq!(argv.len(), 5, "a body can never ADD an argument: {argv:?}");
+        assert_eq!(&argv[..4], &["issue", "comment", "7", "--body"],
+            "and can never displace the four that precede it: {argv:?}");
+        assert_eq!(argv[4], hostile, "it arrives verbatim, as data: {argv:?}");
+        for verb in ["edit", "close", "reopen", "merge", "create", "review", "delete"] {
+            assert!(!argv[..4].iter().any(|a| a == verb),
+                "no input may put `{verb}` in the argv's command position: {argv:?}");
+        }
+    }
+
+    // Rejected before any spawn: `gh` with no `--body` value opens an
+    // interactive editor, which in an agent pane is a hang, not an error.
+    for empty in ["", "   ", "\n\t \r\n"] {
+        assert_eq!(comment_argv("issue", 7, empty).unwrap_err(), "empty comment",
+            "whitespace-only is empty too: {empty:?}");
+    }
+}

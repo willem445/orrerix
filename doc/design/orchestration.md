@@ -143,6 +143,7 @@ pane stays open showing the status).
 | `channel_send(text)` | ✓ | orchestrator/worker/reviewer (✗ planner) |
 | `channel_status()` | ✓ | orchestrator/worker/reviewer (✗ planner) |
 | `session_digest(task? \| agent? \| pr?)` | ✗ | `process`-hinted worker blocks only (✗ plain worker, ✗ reviewer, ✗ planner) |
+| `post_issue_comment(issue, body)` | ✓ | worker/planner only (✗ reviewer) |
 
 `session_digest` (#250/#324 slice B, gate tightened in slice D) reads a
 session's transcript — Claude `.jsonl` or Copilot `session-state`, normalized

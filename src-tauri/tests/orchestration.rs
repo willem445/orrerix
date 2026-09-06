@@ -26,6 +26,10 @@ use loomux_lib::orchestration::mergeq;
 use loomux_lib::orchestration::report;
 use loomux_lib::orchestration::reviewdrive;
 use loomux_lib::orchestration::workflow;
+// #2011 slice B: the tuning fingerprint behind the series' marks, and the
+// engine's pure core the sampler writes through.
+use loomux_lib::orchestration::tuningfp;
+use loomux_lib::orchestration::usageseries;
 use loomux_lib::orchestration::GroupId;
 use loomux_lib::orchestration::{
     add_trusted_folder, autonomy_budget_exhausted, bracketed_paste, box_occupancy_delta,
@@ -17945,6 +17949,8 @@ fn seed_usage(reg: &OrchRegistry, group: &GroupId, key: &str, tokens: u64) {
         name: key.to_string(),
         role: "worker".to_string(),
         source: "transcript".to_string(),
+        block: "worker".to_string(),
+        cli: "claude".to_string(),
         input_tokens: tokens,
         output_tokens: 0,
         cache_creation_tokens: 0,
@@ -36228,6 +36234,8 @@ fn usage_snap(key: &str, agent_id: &str, cost: f64, input: u64, output: u64) -> 
         name: agent_id.to_string(),
         role: "worker".to_string(),
         source: "transcript".to_string(),
+        block: "worker".to_string(),
+        cli: "claude".to_string(),
         input_tokens: input,
         output_tokens: output,
         cache_creation_tokens: 0,
@@ -63778,4 +63786,494 @@ fn the_workflow_name_is_recorded_with_the_toggle_off_and_is_inert_until_it_is_on
         "and is inert: the toggle is off, so no repo-authored roster runs"
     );
     assert!(rails.block("orchestrator").is_some(), "the built-in roster runs instead");
+}
+
+// ===================================================================
+// #2011 slice B — the persisted usage series, its sampler, its read
+// command and the tuning fingerprint behind the marks.
+// ===================================================================
+
+/// Rails with `n` agents allowed and an extra worker block running `cli`.
+fn rails_with_second_worker_cli(max_agents: usize, block_id: &str, cli: &str) -> Guardrails {
+    let mut r = rails();
+    r.max_agents = max_agents;
+    let mut extra = r
+        .blocks
+        .iter()
+        .find(|b| b.kind == Role::Worker)
+        .expect("the built-in roster has a worker")
+        .clone();
+    extra.id = block_id.to_string();
+    extra.name = block_id.to_string();
+    extra.cli = cli.to_string();
+    r.blocks.push(extra);
+    r
+}
+
+/// Write a Claude transcript for `sid` under `proj`, with those token counts.
+fn write_claude_transcript(proj: &Path, sid: &str, input: u64, output: u64) {
+    let encoded = proj.join("C--tmp-repo");
+    fs::create_dir_all(&encoded).unwrap();
+    let text = format!(
+        "{}\n{}\n",
+        json!({"type":"user","message":{"content":"hi"}}),
+        json!({"type":"assistant","message":{"id":format!("m{input}-{output}"),
+            "model":"claude-opus-4-8",
+            "usage":{"input_tokens":input,"output_tokens":output,
+                     "cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}),
+    );
+    fs::write(encoded.join(format!("{sid}.jsonl")), text).unwrap();
+}
+
+fn series_lines(reg: &OrchRegistry, g: &GroupId) -> Vec<String> {
+    let p = reg.state_root().join(g.as_str()).join("usage-series.jsonl");
+    fs::read_to_string(p)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.to_string())
+        .collect()
+}
+
+#[test]
+fn a_usage_tick_appends_one_series_row_per_moved_key() {
+    // The whole sampler, driven through the real tick: `group_usage` refreshes
+    // each live agent's snapshot, merges it, and samples. Nothing here calls
+    // the sampler directly — a test that did would pass with the call site
+    // deleted, which is the one defect that matters most about a hook on a
+    // hot path.
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    // A zero bucket means "the spacing has always elapsed", so the MOVED half
+    // of the predicate is the only one left deciding — which is exactly what
+    // this test is about. The spacing half is pinned in the engine's own unit
+    // tests, where five minutes can pass for free.
+    reg.set_series_bucket_ms(0);
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    let sid = w.session_id.clone().unwrap();
+
+    // Tick 1: nothing has been counted yet, so there is no data point.
+    reg.group_usage(&g.id);
+    assert!(
+        series_lines(&reg, &g.id).is_empty(),
+        "a zero-usage agent must not seed the series with a row"
+    );
+
+    // Tick 2: the transcript now has usage.
+    write_claude_transcript(proj.path(), &sid, 1000, 500);
+    reg.group_usage(&g.id);
+    let after_first = series_lines(&reg, &g.id);
+    assert_eq!(after_first.len(), 1, "exactly one row for the one moved key: {after_first:?}");
+    let row: serde_json::Value = serde_json::from_str(&after_first[0]).unwrap();
+    assert_eq!(row["kind"], "sample");
+    assert_eq!(row["key"], sid.as_str(), "keyed by the CLI session, as usage.json is");
+    assert_eq!(row["agent"], w.id.as_str());
+    assert_eq!(row["block"], "worker", "the block, not just the capability class");
+    assert_eq!(row["cli"], "claude");
+    assert_eq!(row["in"].as_u64(), Some(1000));
+    assert_eq!(row["out"].as_u64(), Some(500));
+    assert_eq!(row["source"], "transcript");
+
+    // Tick 3: nothing moved. The bucket has elapsed (it is zero), so ONLY the
+    // moved half can refuse this row — and it must.
+    reg.group_usage(&g.id);
+    assert_eq!(
+        series_lines(&reg, &g.id).len(),
+        1,
+        "an idle tick must append nothing, however long the bucket has been up"
+    );
+
+    // Tick 4: it moved again. Cumulative, not a delta — a reader differences
+    // them, so a row that never landed costs resolution and never spend.
+    write_claude_transcript(proj.path(), &sid, 4000, 900);
+    reg.group_usage(&g.id);
+    let rows = series_lines(&reg, &g.id);
+    assert_eq!(rows.len(), 2, "the moved tick appends: {rows:?}");
+    let second: serde_json::Value = serde_json::from_str(&rows[1]).unwrap();
+    assert_eq!(second["in"].as_u64(), Some(4000), "cumulative, not the 3000 delta");
+    assert_eq!(second["out"].as_u64(), Some(900));
+}
+
+#[test]
+fn a_dead_agents_frozen_snapshot_is_never_resampled() {
+    // `merge_usage_snapshots` returns live AND historical rows, so the sampler
+    // is handed snapshots whose counters can never move again. Without the
+    // live-key filter each of those would look "moved" to a fresh process
+    // (there is no previous row in memory) and write one duplicate row per app
+    // restart, forever.
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    reg.set_series_bucket_ms(0);
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    let sid = w.session_id.clone().unwrap();
+    write_claude_transcript(proj.path(), &sid, 1000, 500);
+    reg.group_usage(&g.id);
+    assert_eq!(series_lines(&reg, &g.id).len(), 1, "the live tick sampled");
+
+    reg.mark_dead(&w.id, Some(0));
+    // The snapshot survives in usage.json — that is the #42 guarantee — and is
+    // still returned by the merge on every later tick.
+    let usage = reg.group_usage(&g.id);
+    assert_eq!(usage["lifetime_tokens"].as_u64(), Some(1500), "the spend is still counted");
+    assert_eq!(
+        series_lines(&reg, &g.id).len(),
+        1,
+        "but it is not re-sampled: a frozen counter is not a new data point"
+    );
+}
+
+#[test]
+fn a_row_written_before_block_existed_loads_with_empty_block_and_cli() {
+    // The additive half of the schema change, and the reason it is additive:
+    // a `usage.json` written by an older build must keep counting, and the two
+    // new fields must read as UNKNOWN rather than being guessed from `role` —
+    // which cannot tell `worker-std` from `worker-adv` and would therefore
+    // file real spend under a block that never spent it.
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let legacy = json!([{
+        "key": "sess-legacy",
+        "agent_id": "w-legacy",
+        "name": "w",
+        "role": "worker",
+        "source": "transcript",
+        "input_tokens": 1200u64,
+        "output_tokens": 300u64,
+        "cache_creation_tokens": 0u64,
+        "cache_read_tokens": 0u64,
+        "cost_usd": 0.25f64,
+        "estimated": true,
+        "model": "claude-opus-4-8",
+        "updated_ms": 1u64,
+    }]);
+    let dir = reg.state_root().join(g.id.as_str());
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("usage.json"), serde_json::to_string(&legacy).unwrap()).unwrap();
+
+    let usage = reg.group_usage(&g.id);
+    let row = usage["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "w-legacy")
+        .expect("the legacy row still loads");
+    assert_eq!(row["block"], "", "unknown, deliberately not guessed from role");
+    assert_eq!(row["cli"], "");
+    assert_eq!(
+        usage["lifetime_tokens"].as_u64(),
+        Some(1500),
+        "and the spend it carries is not lost by the schema change"
+    );
+}
+
+#[test]
+fn two_worker_blocks_on_different_clis_are_labelled_by_block_not_by_role() {
+    // `role` is the capability CLASS — four values — so it cannot tell two
+    // worker blocks apart, and every cost question here is about exactly that
+    // split. The second half is the one a shortcut would get wrong: `cli` is
+    // NOT derivable from `source`, because a block with no readable usage yet
+    // reports `source: "none"`, off which no CLI can be read at all.
+    let (reg, _d) = test_registry();
+    let proj = tempfile::tempdir().unwrap();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    let g = reg
+        .create_group("C:/tmp/repo", rails_with_second_worker_cli(4, "worker-oc", "opencode"))
+        .unwrap();
+
+    let a = reg
+        .spawn_agent_ex(&g.id, Role::Worker, None, "wa", "t", false, None, None, None, None, None)
+        .unwrap();
+    let b = reg
+        .spawn_agent_ex(
+            &g.id,
+            Role::Worker,
+            Some("worker-oc".to_string()),
+            "wb",
+            "t",
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    write_claude_transcript(proj.path(), a.session_id.as_deref().unwrap(), 1000, 500);
+
+    let usage = reg.group_usage(&g.id);
+    let rows = usage["agents"].as_array().unwrap();
+    let ra = rows.iter().find(|r| r["id"] == a.id.as_str()).expect("block worker");
+    let rb = rows.iter().find(|r| r["id"] == b.id.as_str()).expect("block worker-oc");
+
+    assert_eq!(ra["role"], rb["role"], "one capability class, which is the point");
+    assert_eq!(ra["block"], "worker");
+    assert_eq!(rb["block"], "worker-oc", "the blocks are what tell them apart");
+    assert_eq!(ra["cli"], "claude");
+    assert_eq!(
+        rb["cli"], "opencode",
+        "resolved from the block's own cli, per cli_for_block"
+    );
+    assert_eq!(
+        rb["source"], "none",
+        "and that agent has no readable usage yet — the fixture that makes the next \
+         assertion discriminating"
+    );
+    assert_ne!(
+        rb["cli"], rb["source"],
+        "so `cli` cannot have been read off `source`"
+    );
+}
+
+#[test]
+fn the_series_read_filters_by_since_ms_and_reports_its_coverage_floor() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let dir = reg.state_root().join(g.id.as_str());
+    fs::create_dir_all(&dir).unwrap();
+
+    // An absent file is an empty series, never an error: a group that has not
+    // spent yet is a normal state, and the floor for it is `null` rather than
+    // a fabricated timestamp.
+    let empty = reg.usage_series(&g.id, 0);
+    assert_eq!(empty["rows"].as_array().unwrap().len(), 0);
+    assert!(empty["first_ts_ms"].is_null(), "no rows, no floor: {empty}");
+    assert_eq!(empty["skipped"].as_u64(), Some(0));
+
+    let row = |ts: u64, key: &str| {
+        json!({"ts_ms":ts,"kind":"sample","key":key,"agent":"w-1","block":"worker",
+               "cli":"claude","role":"worker","in":ts,"out":0,"cache_w":0,"cache_r":0,
+               "cost_usd":null,"estimated":false,"source":"transcript","model":null})
+        .to_string()
+    };
+    fs::write(
+        dir.join("usage-series.jsonl"),
+        format!("{}\n{}\n{{ not json\n{}\n", row(100, "s1"), row(200, "s1"), row(300, "s1")),
+    )
+    .unwrap();
+
+    let all = reg.usage_series(&g.id, 0);
+    assert_eq!(all["rows"].as_array().unwrap().len(), 3, "{all}");
+    assert_eq!(all["skipped"].as_u64(), Some(1), "the bad line is COUNTED, not hidden");
+
+    let since = reg.usage_series(&g.id, 200);
+    let rows = since["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "since_ms is inclusive of its own bucket: {since}");
+    assert_eq!(rows[0]["ts_ms"].as_u64(), Some(200));
+    assert_eq!(
+        since["first_ts_ms"].as_u64(),
+        Some(100),
+        "the coverage floor is the file's own oldest row, NOT the filtered window's — \
+         it is what tells the panel how far back the history really goes"
+    );
+}
+
+#[test]
+fn the_series_read_labels_its_agents_and_a_dead_ones_cli_survives_in_its_rows() {
+    // The `agents` half of the payload: the projection attributes rows by
+    // agent, so a row whose agent has since exited must still label. The CLI
+    // for a dead agent is read off the ROWS it wrote, never reversed out of its
+    // persisted role string — `workflow::kind_from_str` is a capability
+    // vocabulary with no arm for two of the classes, so that reversal is both
+    // lossy and a widening of a grant.
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    reg.set_series_bucket_ms(0);
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "brief text", false, None).unwrap();
+    write_claude_transcript(proj.path(), w.session_id.as_deref().unwrap(), 1000, 500);
+    reg.group_usage(&g.id);
+
+    let live = reg.usage_series(&g.id, 0);
+    let entry = live["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == w.id.as_str())
+        .expect("the live agent is listed")
+        .clone();
+    assert_eq!(entry["block"], "worker");
+    assert_eq!(entry["cli"], "claude");
+    assert_eq!(entry["role"], "worker");
+    assert_eq!(entry["task"], "brief text");
+    assert_eq!(entry["session"], w.session_id.as_deref().unwrap());
+
+    reg.mark_dead(&w.id, Some(0));
+    let after = reg.usage_series(&g.id, 0);
+    let gone = after["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == w.id.as_str())
+        .expect("a dead agent is still on the roster")
+        .clone();
+    assert_eq!(gone["cli"], "claude", "recovered from the rows it wrote while alive");
+    assert_eq!(gone["block"], "worker");
+}
+
+#[test]
+fn changing_one_byte_of_workflow_yml_changes_only_that_component() {
+    let repo = tempfile::tempdir().unwrap();
+    fs::create_dir_all(repo.path().join(".orrerix")).unwrap();
+    fs::write(repo.path().join(".orrerix").join("workflow.yml"), "blocks: []\n").unwrap();
+    fs::write(repo.path().join("CLAUDE.md"), "rules\n").unwrap();
+    fs::create_dir_all(repo.path().join(".github").join("agents")).unwrap();
+    fs::write(repo.path().join(".github").join("agents").join("worker.md"), "persona\n").unwrap();
+
+    let before = tuningfp::fingerprint(repo.path());
+    assert!(!before.partial, "nothing here trips a cap");
+    fs::write(repo.path().join(".orrerix").join("workflow.yml"), "blocks: [ ]\n").unwrap();
+    let after = tuningfp::fingerprint(repo.path());
+
+    assert_eq!(
+        usageseries::fp_changed(&before.components, &after.components),
+        vec!["workflow".to_string()],
+        "one edit, one component: before={:?} after={:?}",
+        before.components,
+        after.components
+    );
+    // The discriminating control: an unrelated edit moves a DIFFERENT single
+    // component, so "only workflow" above is not just "workflow is the only
+    // one this ever reports".
+    fs::write(repo.path().join(".github").join("agents").join("worker.md"), "persona2\n").unwrap();
+    let third = tuningfp::fingerprint(repo.path());
+    assert_eq!(
+        usageseries::fp_changed(&after.components, &third.components),
+        vec!["agents".to_string()]
+    );
+}
+
+#[test]
+fn an_absent_surface_hashes_as_absent_not_empty() {
+    // "The file is gone" and "the file is empty" are different events, and a
+    // fingerprint that conflates them draws no vertical for a deleted
+    // lessons.md. The key is always PRESENT either way — a missing key would
+    // read to `fp_changed` as a component the other build did not know about.
+    let repo = tempfile::tempdir().unwrap();
+    let absent = tuningfp::fingerprint(repo.path());
+    for name in tuningfp::COMPONENTS {
+        assert!(
+            absent.components.contains_key(*name),
+            "component {name} must always be present: {:?}",
+            absent.components
+        );
+    }
+    assert_eq!(absent.components["lessons"], tuningfp::ABSENT);
+    assert_eq!(absent.components["workflow"], tuningfp::ABSENT);
+    assert_eq!(absent.components["skills"], tuningfp::ABSENT);
+    assert_eq!(
+        absent.components["version"],
+        env!("CARGO_PKG_VERSION"),
+        "the build's own version stands in for the templates compiled into it"
+    );
+
+    fs::create_dir_all(repo.path().join(".orrerix")).unwrap();
+    fs::write(repo.path().join(".orrerix").join("lessons.md"), "").unwrap();
+    let empty = tuningfp::fingerprint(repo.path());
+    assert_ne!(
+        empty.components["lessons"],
+        tuningfp::ABSENT,
+        "an EMPTY file hashes to its own digest, which is not the absent sentinel"
+    );
+    assert_eq!(
+        usageseries::fp_changed(&absent.components, &empty.components),
+        vec!["lessons".to_string()],
+        "so creating it is a mark"
+    );
+    assert!(!empty.partial);
+}
+
+#[test]
+fn the_walk_cap_sets_fp_partial() {
+    // A repo is caller-supplied, so the walk is capped in two directions and
+    // each cap is DISCLOSED rather than silently narrowing what a mark means.
+    let repo = tempfile::tempdir().unwrap();
+    let skills = repo.path().join(".claude").join("skills");
+    fs::create_dir_all(&skills).unwrap();
+    fs::write(skills.join("a.md"), "small\n").unwrap();
+    let shallow = tuningfp::fingerprint(repo.path());
+    assert!(!shallow.partial, "the control: a small shallow tree is complete");
+
+    // Depth: one directory past the cap.
+    let mut deep = skills.clone();
+    for i in 0..(tuningfp::MAX_DEPTH + 2) {
+        deep = deep.join(format!("d{i}"));
+    }
+    fs::create_dir_all(&deep).unwrap();
+    fs::write(deep.join("b.md"), "deep\n").unwrap();
+    let capped_depth = tuningfp::fingerprint(repo.path());
+    assert!(capped_depth.partial, "a tree deeper than the cap is a PARTIAL answer");
+
+    // Size: one file over the cap, in an otherwise shallow tree.
+    let repo2 = tempfile::tempdir().unwrap();
+    fs::create_dir_all(repo2.path().join(".orrerix")).unwrap();
+    let big = vec![b'x'; (tuningfp::MAX_FILE_BYTES + 1) as usize];
+    fs::write(repo2.path().join(".orrerix").join("lessons.md"), &big).unwrap();
+    let capped_size = tuningfp::fingerprint(repo2.path());
+    assert!(capped_size.partial, "a file over the size cap is a PARTIAL answer");
+    assert_eq!(
+        capped_size.components["lessons"],
+        tuningfp::ABSENT,
+        "a skipped file is not hashed, and says so with the same sentinel"
+    );
+}
+
+#[test]
+fn a_mark_is_written_when_the_repo_tuning_changes_and_not_before() {
+    // The mark half of the sampler, driven through the real tick. The first
+    // look SEEDS rather than marks: every app restart would otherwise stamp an
+    // "everything changed" vertical onto a plot where nothing had.
+    let proj = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    fs::create_dir_all(repo.path().join(".orrerix")).unwrap();
+    fs::write(repo.path().join(".orrerix").join("workflow.yml"), "blocks: []\n").unwrap();
+
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    reg.set_series_bucket_ms(0);
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "t", false, None).unwrap();
+    let sid = w.session_id.clone().unwrap();
+    // The transcript lives under the encoded-cwd folder the reader scans; the
+    // folder name is irrelevant to it.
+    write_claude_transcript(proj.path(), &sid, 1000, 500);
+
+    reg.group_usage(&g.id); // seeds the fingerprint, samples one row
+    reg.group_usage(&g.id); // unchanged tuning, unchanged counters
+    let quiet = series_lines(&reg, &g.id);
+    assert!(
+        quiet.iter().all(|l| !l.contains("\"kind\":\"mark\"")),
+        "an unchanged repo writes no mark: {quiet:?}"
+    );
+
+    fs::write(repo.path().join(".orrerix").join("workflow.yml"), "blocks: [ ]\n").unwrap();
+    reg.group_usage(&g.id);
+    let marks: Vec<serde_json::Value> = series_lines(&reg, &g.id)
+        .iter()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v["kind"] == "mark")
+        .collect();
+    assert_eq!(marks.len(), 1, "exactly one mark for one change: {marks:?}");
+    assert_eq!(
+        marks[0]["changed"].as_array().unwrap(),
+        &vec![json!("workflow")],
+        "and it names what moved"
+    );
+    assert_eq!(marks[0]["fp_partial"], false);
+    assert_ne!(
+        marks[0]["prev"]["workflow"], marks[0]["fp"]["workflow"],
+        "the row carries both sides, so a reader can diff them without the file"
+    );
+
+    // And it does not repeat on every later tick.
+    reg.group_usage(&g.id);
+    let again = series_lines(&reg, &g.id)
+        .iter()
+        .filter(|l| l.contains("\"kind\":\"mark\""))
+        .count();
+    assert_eq!(again, 1, "a mark is written on the CHANGE, not on the state");
 }

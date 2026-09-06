@@ -1495,6 +1495,19 @@ export interface AgentUsage {
     | "session-db"
     | "statusline"
     | "none";
+  /** The workflow block this agent was spawned from (`worker-std`,
+   *  `rev-final`, …) — #2011 slice B, closing the `block` half of t-664.
+   *  `role` above is the capability CLASS (four values), so it cannot tell
+   *  `worker-std` from `worker-adv`, which is the split every cost question is
+   *  actually about. Empty string on a `usage.json` row written before the
+   *  field existed: unknown, deliberately never guessed from `role`. */
+  block: string;
+  /** The CLI that block runs, as the group's guardrails resolved it at the
+   *  moment of the snapshot. Never derivable from `source` and never derived
+   *  from it — `source` takes `statusline`/`none` values off which no CLI can
+   *  be read at all. Empty string on a pre-field row, on the same terms as
+   *  `block`. */
+  cli: string;
   /** Model the cost was priced against, or null. */
   model: string | null;
   /** Dollar cost, or null when only tokens are known (unknown model / no data). */
@@ -1556,6 +1569,92 @@ export const groupPaused = (groupId: string): Promise<boolean> =>
 /** Aggregate per-pane session cost into one group summary. */
 export const groupUsage = (groupId: string): Promise<GroupUsage | null> =>
   invoke<GroupUsage | null>("orch_group_usage", { groupId });
+
+// ---------- the persisted usage time series (#2011 slice B) ----------
+
+/** One row of `<group>/usage-series.jsonl`, as `orch_usage_series` returns it.
+ *
+ *  A **persisted schema** — `doc/design/token-charts.md` is its contract, and
+ *  these declarations are the frontend half of it. The union is discriminated
+ *  by `kind`, exactly as the file is. */
+export type UsageSeriesRow = UsageSeriesSample | UsageSeriesMark;
+
+/** A usage sample, with **cumulative** counters as of `ts_ms` — not the delta
+ *  since the previous row. Differencing is the reader's job, which is what
+ *  makes a lost row cost resolution instead of correctness. */
+export interface UsageSeriesSample {
+  kind: "sample";
+  ts_ms: number;
+  /** The usage key: the CLI session id, else `agent:<id>`. */
+  key: string;
+  /** The agent occupying that key **at write time** — `usage.json` keeps the
+   *  last occupant only, the series keeps every one. */
+  agent: string;
+  /** Workflow block; `""` on a row written before the field existed. */
+  block: string;
+  /** The CLI that block runs; `""` on a pre-field row. Never derived from
+   *  `source` — see `AgentUsage.cli`. */
+  cli: string;
+  role: string;
+  in: number;
+  out: number;
+  cache_w: number;
+  cache_r: number;
+  cost_usd: number | null;
+  estimated: boolean;
+  source: AgentUsage["source"];
+  model: string | null;
+}
+
+/** A tuning mark: the repo's agent-facing configuration changed at `ts_ms`. */
+export interface UsageSeriesMark {
+  kind: "mark";
+  ts_ms: number;
+  /** Component names whose hash moved, sorted. */
+  changed: string[];
+  /** Component name -> sha256 hex, plus a literal `version`. */
+  fp: Record<string, string>;
+  /** The previous mark's fingerprint; `{}` for a group's first mark. */
+  prev: Record<string, string>;
+  /** The fingerprint walk hit a cap, so an UNCHANGED component is not proof
+   *  that nothing under it moved. A change it did see is still real. */
+  fp_partial: boolean;
+}
+
+/** The `orch_usage_series` payload. */
+export interface UsageSeries {
+  group: string;
+  since_ms: number;
+  /** The oldest row in the whole file, before `since_ms` filtering — the
+   *  **coverage floor** the panel prints ("series since …"). `null` when the
+   *  file is empty or absent: history starts when the build that writes it
+   *  first ran against this group, and nothing rebuilds it. */
+  first_ts_ms: number | null;
+  /** Lines that would not parse. Surfaced, never folded into a shorter
+   *  chart — a corrupt file must not read as a quiet period. */
+  skipped: number;
+  rows: UsageSeriesRow[];
+  /** The agent dimension the projection attributes by, roster-wide (a dead
+   *  agent's rows still label). `cli` is `""` where nothing recorded one. */
+  agents: {
+    id: string;
+    block: string;
+    cli: string;
+    role: string;
+    session: string | null;
+    task: string;
+  }[];
+}
+
+/** Read a group's persisted usage series from `sinceMs` forward.
+ *
+ *  `null` when the group id did not validate or the read was refused; an
+ *  absent series file is a normal empty payload, not a null. */
+export const usageSeries = (
+  groupId: string,
+  sinceMs: number,
+): Promise<UsageSeries | null> =>
+  invoke<UsageSeries | null>("orch_usage_series", { groupId, sinceMs });
 
 // ---------- CI watches (#243/#248): the group view's "⏳ waiting on …" indicator ----------
 

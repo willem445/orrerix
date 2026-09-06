@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-orch-usage-series"
+description = "Enables the orch_usage_series command without any pre-configured scope."
+commands.allow = ["orch_usage_series"]
+
+[[permission]]
+identifier = "deny-orch-usage-series"
+description = "Denies the orch_usage_series command without any pre-configured scope."
+commands.deny = ["orch_usage_series"]

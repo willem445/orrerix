@@ -295,6 +295,8 @@ fn restored_group_on_disk(reg: &OrchRegistry, dir: &std::path::Path, id: &str, c
             name: "w".to_string(),
             role: "worker".to_string(),
             source: "transcript".to_string(),
+            block: "worker".to_string(),
+            cli: "claude".to_string(),
             input_tokens: 1_000,
             output_tokens: 234,
             cache_creation_tokens: 0,

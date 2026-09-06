@@ -676,6 +676,18 @@
 //! [`harness::AgentPane`] therefore **refuse** rather than pretend —
 //! [`harness::claude::permission_answer_unavailable`] and
 //! [`harness::claude::interrupt_unavailable`] each name what would lift them.
+//!
+//! [`usageseries`] (#2011 slice B) is the pure core of the persisted usage time
+//! series the token time-plot reads: the row schema, the sampling predicate,
+//! the fault-tolerant parser and the differencing that turns cumulative
+//! counters into per-interval spend. It is here rather than in `src-tauri`
+//! because it is `serde_json` plus `std` and because it is the arithmetic that
+//! has to be right — a delta that can go negative, a first row charged as if it
+//! were an interval, a torn line that costs the whole file. The **writer** (the
+//! sampler on the publisher tick) and the **fingerprint** stay in `src-tauri`
+//! beside the usage collector they read; only the shape and the maths live
+//! here, which is also what `crates/loomux-server` will need when
+//! `group_metrics` reads this file.
 
 pub mod brand;
 pub mod budget;
@@ -708,5 +720,6 @@ pub mod sessions;
 pub mod subproc;
 pub mod termgrid;
 pub mod text;
+pub mod usageseries;
 pub mod winpath;
 pub mod workflow;

@@ -84,6 +84,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "resume_orch_session",
     "orch_tasks",
     "orch_audit",
+    "orch_usage_series",
     "orch_merge_queue",
     "orch_steer",
     "orch_save_attachment",

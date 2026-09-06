@@ -20,6 +20,10 @@ pub mod e2ehold;
 pub mod humanq;
 pub mod mcp;
 pub mod needsyou;
+/// The repo tuning fingerprint behind the time-plot's marks (#2011 slice B).
+/// Walks and hashes the agent-facing config; runs on the publisher thread, at
+/// most once per series bucket, never the GUI thread — see the module doc.
+pub mod tuningfp;
 pub mod views;
 
 // MOVED to the `loomux-engine` crate (#888 slice A2), re-exported here under
@@ -32,6 +36,10 @@ pub mod views;
 // crates/loomux-engine/src/. See doc/design/engine-extraction.md.
 pub use loomux_engine::report;
 pub use loomux_engine::termgrid;
+/// The persisted usage time series' pure core (#2011 slice B): the row schema,
+/// the sampling predicate, the fault-tolerant parser and the differencing. The
+/// WRITER lives here, in `src-tauri`, beside the usage collector it samples.
+pub use loomux_engine::usageseries;
 
 // `self` keeps the module path `orchestration::groupid` alive alongside the two
 // types, so nothing that spells either form has to move. `GroupId` living in
@@ -13852,6 +13860,26 @@ pub struct UsageSnapshot {
     /// (`grep -rn session-db --include=*.ts --include=*.rs --include=*.md`),
     /// not three guesses.
     pub source: String,
+    /// The workflow block this agent was spawned from (#2011 slice B, closing
+    /// the `block` half of t-664). `role` above is the capability CLASS — four
+    /// values — so it cannot tell `worker-std` from `worker-adv`, which is
+    /// exactly the split every cost question here is actually about.
+    ///
+    /// Additive: a `usage.json` row written before this field existed
+    /// deserializes to the empty string, which reads as "unknown block" rather
+    /// than being guessed from `role`. Empty is a real answer and is rendered
+    /// as one.
+    #[serde(default)]
+    pub block: String,
+    /// The CLI that block runs (`claude`, `opencode`, `pi`, `codex`, …), as
+    /// `Guardrails::cli_for_block` resolves it at the moment of the snapshot.
+    ///
+    /// Deliberately NOT derivable from `source` and never derived from it: the
+    /// two answer different questions, and `source` takes `statusline` and
+    /// `none` values off which no CLI can be read at all. Additive on the same
+    /// terms as `block`.
+    #[serde(default)]
+    pub cli: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
@@ -13864,6 +13892,29 @@ pub struct UsageSnapshot {
     pub estimated: bool,
     pub model: Option<String>,
     pub updated_ms: u64,
+}
+
+/// What the usage-series sampler remembers about one group between ticks
+/// (#2011 slice B).
+///
+/// In-memory only, and deliberately so. Everything here is a *decision input*
+/// — "have I already written this row" — never data. A restart forgets it and
+/// the next tick writes one fresh row per key, which is exactly right: the
+/// file is the record, this is only what stops the app rewriting it once a
+/// second.
+#[derive(Default)]
+struct SeriesState {
+    /// The last sample WRITTEN, per usage key. Written, not computed: the
+    /// bucket is measured from the row that actually landed, so a failed
+    /// append does not silently start a five-minute hole.
+    last: HashMap<String, usageseries::Sample>,
+    /// The last fingerprint a mark was written for, or `None` before the first
+    /// mark of this process's life for this group.
+    fp: Option<usageseries::Fp>,
+    /// Unix-ms the fingerprint was last COMPUTED (not last changed). The walk
+    /// is bounded but not free, so it runs at most once per bucket — which is
+    /// also the resolution a mark is worth to the plot.
+    fp_checked_ms: u64,
 }
 
 /// A recorded session's orchestration identity, for the session browser.
@@ -15533,6 +15584,24 @@ pub struct OrchRegistry {
     /// clone per poll. Two cells would let the two drift onto different
     /// windows; a projection computed per caller would put the allocation back.
     usage_memo: TrackedMutex<HashMap<GroupId, Arc<TrackedMutex<Option<(std::time::Instant, Value, Value)>>>>>,
+    /// Everything the usage-SERIES sampler needs to remember between ticks
+    /// (#2011 slice B) — see [`SeriesState`].
+    ///
+    /// **Never held across another lock.** The sampler runs inside
+    /// `compute_group_usage`, which has already released `usage_lock` by then;
+    /// this lock is taken, the decision is made, it is released, and only then
+    /// is the append performed. Unranked for that reason: it participates in no
+    /// ordering because it is never one of two.
+    ///
+    /// Bound: one small entry per group this process has sampled, holding one
+    /// [`usageseries::Sample`] per live usage key — the same population and the
+    /// same process lifetime as [`Self::usage_memo`]'s map, and bounded by the
+    /// same fact, that a human opens single digits of groups in one session.
+    series_state: TrackedMutex<HashMap<GroupId, SeriesState>>,
+    /// Test-only override of [`usageseries::SERIES_BUCKET_MS`], so a test can
+    /// drive real ticks without sleeping five minutes. `None` in production.
+    /// Mirrors `claude_projects_dir`.
+    series_bucket_override: TrackedMutex<Option<u64>>,
     /// Per-REPO memo for the display-only default-branch name (#743 S4a),
     /// keyed by repo path so two groups on one repo share the answer.
     ///
@@ -17498,6 +17567,30 @@ fn append_ledger_line(path: &Path, line: &str) -> std::io::Result<()> {
     buf.push('\n');
     let mut f = fs::OpenOptions::new().create(true).append(true).open(path)?;
     f.write_all(&buf.into_bytes())
+}
+
+/// The usage series' file name inside a group directory (#2011 slice B).
+///
+/// A **persisted schema** — `doc/design/token-charts.md` is its contract. It is
+/// append-only, has exactly one writer (the view publisher thread's usage
+/// tick), is **never rotated** and is **never rebuilt** from `audit.jsonl` or a
+/// transcript. Rotation is what the audit log needs and what this file must not
+/// have: a rotated series loses the baseline every reader differences against,
+/// and the whole point of cumulative rows is that a reader can lose one and
+/// still be right.
+pub const USAGE_SERIES_FILE: &str = "usage-series.jsonl";
+
+/// Append one row to a group's `usage-series.jsonl`.
+///
+/// Delegates to [`append_ledger_line`] rather than reimplementing its
+/// single-`write_all` append: the properties are the same and the reasons are
+/// the same. One writer, no rotation, so no `AUDIT_LOCK`-style serialization —
+/// see that function's doc for why that combination is what makes the append
+/// atomic without a lock.
+fn append_series_line(dir: &Path, row: &usageseries::SeriesRow) -> std::io::Result<()> {
+    let line = serde_json::to_string(row)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    append_ledger_line(&dir.join(USAGE_SERIES_FILE), &line)
 }
 
 /// One parsed audit-log line, for the in-app timeline viewer. Mirrors the
@@ -29327,6 +29420,8 @@ impl OrchRegistry {
             mailbox_lock: TrackedMutex::new_ranked("mailbox_lock", lockorder::MAILBOX, ()),
             usage_lock: TrackedMutex::new_ranked("usage_lock", lockorder::USAGE, ()),
             usage_memo: TrackedMutex::new("usage_memo", HashMap::new()),
+            series_state: TrackedMutex::new("series_state", HashMap::new()),
+            series_bucket_override: TrackedMutex::new("series_bucket_override", None),
             default_branch_memo: TrackedMutex::new("default_branch_memo", HashMap::new()),
             creation: TrackedMutex::new("creation", ()),
             marker_io: TrackedMutex::new_ranked("marker_io", lockorder::MARKER_IO, ()),
@@ -43901,6 +43996,11 @@ impl OrchRegistry {
             name: entry.name.clone(),
             role: role.to_string(),
             source: "none".to_string(),
+            // Set HERE, in the initializer, and not on each arm's way out:
+            // this function has an early `return snap` per source, so a
+            // per-arm assignment is a field the next arm forgets (#2011).
+            block: entry.block.clone(),
+            cli: cli.to_string(),
             input_tokens: 0,
             output_tokens: 0,
             cache_creation_tokens: 0,
@@ -44320,6 +44420,240 @@ impl OrchRegistry {
         self.usage_memo.lock_safe().remove(group);
     }
 
+    /// The series bucket in force, honouring the test seam.
+    fn series_bucket_ms(&self) -> u64 {
+        self.series_bucket_override
+            .lock_safe()
+            .unwrap_or(usageseries::SERIES_BUCKET_MS)
+    }
+
+    /// Shorten the series bucket so a test can drive real usage ticks without
+    /// sleeping five minutes. Test-only seam (see `series_bucket_override`).
+    #[doc(hidden)]
+    pub fn set_series_bucket_ms(&self, ms: u64) {
+        *self.series_bucket_override.lock_safe() = Some(ms);
+    }
+
+    /// Sample this tick's usage into `<group>/usage-series.jsonl` (#2011 slice
+    /// B) — the time plot's only source.
+    ///
+    /// Called once per tick from [`Self::compute_group_usage`], **after** the
+    /// merge, on the snapshots that tick already computed: there is no second
+    /// transcript read here and no second source of truth. `live_keys` is what
+    /// keeps a dead agent's frozen snapshot out — its counters cannot move, so
+    /// a row for it would be a duplicate of the last row it wrote while alive,
+    /// once per app restart forever.
+    ///
+    /// Two kinds of row, on the same tick:
+    ///
+    /// - a **sample** per key the bucket has elapsed for AND whose counters
+    ///   moved ([`usageseries::should_sample`]);
+    /// - a **mark** when the repo's tuning fingerprint differs from the last
+    ///   one this process wrote, checked at most once per bucket.
+    ///
+    /// **Nothing here fails the tick.** A write error is one missing row in a
+    /// cumulative series, which costs resolution and never correctness; a usage
+    /// panel that stops painting because a chart file could not be appended to
+    /// would be strictly worse. The sampler state is updated only on a
+    /// SUCCESSFUL append, so a failed write is retried on the next tick rather
+    /// than starting a silent five-minute hole.
+    fn series_sample(
+        &self,
+        group: &GroupId,
+        snaps: &[UsageSnapshot],
+        live_keys: &HashSet<String>,
+    ) {
+        let bucket = self.series_bucket_ms();
+        let dir = self.group_dir(group);
+        let now = now_ms();
+
+        // Decide under the lock; append outside it. The lock guards a decision
+        // table, and holding it across file I/O is how a per-second tick comes
+        // to serialise on a disk.
+        let mut to_write: Vec<usageseries::SeriesRow> = Vec::new();
+        {
+            let mut states = self.series_state.lock_safe();
+            let state = states.entry(group.clone()).or_default();
+            for s in snaps {
+                if !live_keys.contains(&s.key) {
+                    continue;
+                }
+                let sample = usageseries::Sample {
+                    ts_ms: now,
+                    key: s.key.clone(),
+                    agent: s.agent_id.clone(),
+                    block: s.block.clone(),
+                    cli: s.cli.clone(),
+                    role: s.role.clone(),
+                    input: s.input_tokens,
+                    output: s.output_tokens,
+                    cache_w: s.cache_creation_tokens,
+                    cache_r: s.cache_read_tokens,
+                    cost_usd: s.cost_usd,
+                    estimated: s.estimated,
+                    source: s.source.clone(),
+                    model: s.model.clone(),
+                };
+                if usageseries::should_sample(state.last.get(&s.key), &sample, bucket) {
+                    to_write.push(usageseries::SeriesRow::Sample(sample));
+                }
+            }
+        }
+
+        for row in &to_write {
+            if append_series_line(&dir, row).is_ok() {
+                if let usageseries::SeriesRow::Sample(s) = row {
+                    let mut states = self.series_state.lock_safe();
+                    states.entry(group.clone()).or_default().last.insert(s.key.clone(), s.clone());
+                }
+            }
+        }
+
+        self.series_mark(group, &dir, now, bucket);
+    }
+
+    /// Write a `mark` row when the repo's tuning fingerprint has changed.
+    ///
+    /// The walk is bounded (`tuningfp`'s caps) but not free, so it runs at most
+    /// once per bucket — which is also the finest resolution a mark is worth to
+    /// a plot bucketed at five minutes. It runs **on this tick's thread**, the
+    /// view publisher's, and never on the GUI thread: nothing reachable from a
+    /// synchronous `#[tauri::command]` calls it (CLAUDE.md constraint 10).
+    fn series_mark(&self, group: &GroupId, dir: &Path, now: u64, bucket: u64) {
+        {
+            let mut states = self.series_state.lock_safe();
+            let state = states.entry(group.clone()).or_default();
+            if state.fp_checked_ms != 0 && now.saturating_sub(state.fp_checked_ms) < bucket {
+                return;
+            }
+            state.fp_checked_ms = now;
+        }
+        let Some(info) = self.group(group) else { return };
+        let fp = tuningfp::fingerprint(Path::new(&info.repo));
+
+        let prev = { self.series_state.lock_safe().get(group).and_then(|s| s.fp.clone()) };
+        let prev = match prev {
+            Some(p) => p,
+            None => {
+                // First look of this process's life for this group. Seed the
+                // baseline rather than writing a mark: every restart would
+                // otherwise stamp a "everything changed" vertical onto a plot
+                // where nothing had.
+                self.series_state
+                    .lock_safe()
+                    .entry(group.clone())
+                    .or_default()
+                    .fp = Some(fp.components);
+                return;
+            }
+        };
+        let changed = usageseries::fp_changed(&prev, &fp.components);
+        if changed.is_empty() {
+            return;
+        }
+        let row = usageseries::SeriesRow::Mark(usageseries::Mark {
+            ts_ms: now,
+            changed,
+            fp: fp.components.clone(),
+            prev,
+            fp_partial: fp.partial,
+        });
+        if append_series_line(dir, &row).is_ok() {
+            self.series_state.lock_safe().entry(group.clone()).or_default().fp =
+                Some(fp.components);
+        }
+    }
+
+    /// Read a group's usage series for the time plot (#2011 slice B), from
+    /// `since_ms` forward.
+    ///
+    /// A pure read taking no lock: the file has one appender writing whole
+    /// lines, so a reader racing it sees at most a torn final line, which
+    /// [`usageseries::parse_series_lines_counted`] skips and COUNTS — the count
+    /// travels on the payload as `skipped` rather than silently shortening the
+    /// chart.
+    ///
+    /// `since_ms` filters, it does not seek: the file is read whole. That is
+    /// the honest shape while the writer is append-only and unrotated, and the
+    /// panel polls at 30 s rather than at the 1 s tiers, so this is not on a
+    /// hot path (`doc/design/polled-views.md`).
+    ///
+    /// `first_ts_ms` is the **coverage floor** — the oldest row in the file,
+    /// before filtering. History starts when this build first ran against the
+    /// group, and a panel that does not say so draws a flat line where there is
+    /// simply no data.
+    #[doc(hidden)] // pub for integration tests
+    pub fn usage_series(&self, group: &GroupId, since_ms: u64) -> Value {
+        let text = fs::read_to_string(self.group_dir(group).join(USAGE_SERIES_FILE))
+            .unwrap_or_default();
+        let (all, skipped) = usageseries::parse_series_lines_counted(&text);
+        let first_ts_ms = all.first().map(|r| r.ts_ms());
+        let rows: Vec<Value> = all
+            .iter()
+            .filter(|r| r.ts_ms() >= since_ms)
+            .filter_map(|r| serde_json::to_value(r).ok())
+            .collect();
+
+        // The agent dimension the projection attributes by. Read off the
+        // roster, so an agent whose pane is long gone still labels its rows.
+        // The guardrails are resolved BEFORE the agents lock is taken: taking
+        // the groups lock underneath it would put a second ordering edge into
+        // the graph for a display-only read.
+        let rails = self.group(group).map(|g| g.guardrails);
+        let live: HashMap<String, (String, String)> = self
+            .agents
+            .lock_safe()
+            .values()
+            .filter(|a| &a.group == group)
+            .map(|a| {
+                let cli = rails
+                    .as_ref()
+                    .map(|g| g.cli_for_block(&a.block, a.role).to_string())
+                    .unwrap_or_default();
+                (a.id.clone(), (a.block.clone(), cli))
+            })
+            .collect();
+        // A dead agent's CLI is not re-derived from its role string: that
+        // reversal is a capability vocabulary (`workflow::kind_from_str`) and
+        // has no arm for two of the classes. The rows themselves recorded the
+        // CLI at write time, so read it from the newest row that names the
+        // agent — and where nothing does, report empty rather than guess.
+        let mut from_rows: HashMap<String, (String, String)> = HashMap::new();
+        for r in &all {
+            if let usageseries::SeriesRow::Sample(s) = r {
+                from_rows.insert(s.agent.clone(), (s.block.clone(), s.cli.clone()));
+            }
+        }
+        let agents: Vec<Value> = self
+            .merged_records(group)
+            .into_iter()
+            .map(|r| {
+                let (block, cli) = live
+                    .get(&r.id)
+                    .or_else(|| from_rows.get(&r.id))
+                    .cloned()
+                    .unwrap_or_else(|| (r.block.clone(), String::new()));
+                json!({
+                    "id": r.id,
+                    "block": block,
+                    "cli": cli,
+                    "role": r.role,
+                    "session": r.session,
+                    "task": r.task,
+                })
+            })
+            .collect();
+
+        json!({
+            "group": group,
+            "since_ms": since_ms,
+            "first_ts_ms": first_ts_ms,
+            "skipped": skipped,
+            "rows": rows,
+            "agents": agents,
+        })
+    }
+
     /// Aggregate the group's usage into one summary with a **live vs lifetime**
     /// split. Live agents' snapshots are refreshed from their transcripts on
     /// each call; killed/recycled agents keep the snapshot captured when they
@@ -44432,6 +44766,11 @@ impl OrchRegistry {
         // store as it now sits on disk — live + historical (killed) snapshots.
         let snaps = self.merge_usage_snapshots(group, fresh);
 
+        // #2011 slice B: one series row per key whose counters moved, off the
+        // snapshots this tick already computed — no second transcript read, and
+        // after the merge so a row is only written for spend that persisted.
+        self.series_sample(group, &snaps, &live_keys);
+
         let (mut live_cost, mut lifetime_cost) = (0.0f64, 0.0f64);
         let (mut live_cost_known, mut lifetime_cost_known) = (false, false);
         let (mut live_tokens, mut lifetime_tokens) = (0u64, 0u64);
@@ -44473,6 +44812,10 @@ impl OrchRegistry {
                 "id": s.agent_id,
                 "name": s.name,
                 "role": s.role,
+                // #2011 slice B: the block/CLI split the four capability
+                // classes cannot express. Empty on a pre-field row.
+                "block": s.block,
+                "cli": s.cli,
                 "live": live,
                 "source": s.source,
                 "model": s.model,
@@ -60856,6 +61199,42 @@ pub async fn orch_audit(app: AppHandle, group_id: String) -> Vec<AuditEntry> {
     // a group with no rows does. See `command_group`.
     let Ok(group_id) = command_group(&group_id) else { return Vec::new() };
     run_blocking(move || reg.audit_log(&group_id)).await
+}
+
+/// The group's persisted usage time series, for the token time-plot (#2011
+/// slice B) — read-only, and a **command signature**:
+/// `doc/design/token-charts.md` carries its contract beside the file schema.
+///
+/// `since_ms` is a filter, not a seek, and is optional: a webview bundle older
+/// than this field degrades to the whole series rather than failing the read.
+/// The payload is `{group, since_ms, first_ts_ms, skipped, rows, agents}` —
+/// `first_ts_ms` is the coverage floor the panel prints ("series since …"), and
+/// `skipped` is how many lines would not parse, surfaced rather than folded
+/// into a shorter chart.
+///
+/// #904: `group_id` is parsed at the boundary by `command_group`, exactly as
+/// every sibling `orch_*` command parses it.
+///
+/// Off-thread (#743 S4c) through [`run_blocking`]: it reads and parses a whole
+/// JSONL file. It is polled at 30 s by the chart panel and is deliberately not
+/// on the 1 s publisher tiers (`doc/design/polled-views.md`) — the series moves
+/// once per five-minute bucket, so a faster poll could only redraw the same
+/// picture.
+///
+/// **Reentrancy.** A pure read that takes no lock of its own; the
+/// [`OrchRegistry::read_command`] frame is the command-boundary barrier
+/// (CLAUDE.md constraint 10), and its degrade is `Null` — the same value a
+/// group with no series file yields, which is what `command_group` gives it no
+/// error channel to improve on.
+#[tauri::command]
+pub async fn orch_usage_series(app: AppHandle, group_id: String, since_ms: Option<u64>) -> Value {
+    let reg = reg_of(&app);
+    let Ok(group_id) = command_group(&group_id) else { return Value::Null };
+    let since = since_ms.unwrap_or(0);
+    run_blocking(move || {
+        OrchRegistry::read_command("orch_usage_series", || Value::Null, || reg.usage_series(&group_id, since))
+    })
+    .await
 }
 
 /// The group's merge queue for the lifecycle chrome (#581 slice F) —

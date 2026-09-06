@@ -542,16 +542,18 @@ repo is; what a test can see is the decision, and the decision is not in the DOM
 The two lists answer different questions. `SOLO_MCP_CLIS` asks whether a CLI's
 MCP config can ride its command line (`CliCaps::mcp_argv_seam`); codex's can,
 through the `-p <profile>` naming a file loomux wrote (#2515 C2). `LEAD_CLIS`
-asks whether `lead_mcp_args` has a **flag string** for it, and it has arms for
-claude, copilot and pi only — its fallthrough returns an empty string, which
-`lead_prepare` turns into *"loomux has no lead command-line flags for codex —
-this is a loomux bug"*.
+asks whether the lead path can **serve** it, and for codex the backend answers no
+twice over: `lead_mcp_args` has arms for claude, copilot and pi only, and
+`lead_prepare` refuses codex **by name** before reaching them — *"its MCP
+identity rides a profile file the lead path does not write"* — naming #2833 as
+the follow-up that lifts it (#2819).
 
 Gating the launcher on the seam therefore offered a checkbox whose only possible
-outcome was an internal-error toast. `LEAD_CLIS` is the narrower set, and it is
-**checked rather than hand-maintained**: `test/panerestore.test.ts` reads
-`lead_mcp_args`'s own match arms out of the Rust and asserts the two sets are
-equal, so a codex arm added over there reddens here instead of leaving the toggle
+outcome was that refusal. `LEAD_CLIS` is the narrower set, and it is **checked
+rather than hand-maintained**: `test/panerestore.test.ts` reads the Rust and
+asserts this list is exactly `lead_mcp_args`'s match arms, that the named
+refusal and that arm set agree about codex, and that the launcher gate agrees
+with both. So #2833 landing reddens the frontend instead of leaving the toggle
 hidden for a CLI that now works.
 
 ### The guardrail row has two owners now, and stayed one row
@@ -662,5 +664,7 @@ polarities are pinned on one fixture.
   re-mint uses `LEAD_RESTORE_GUARDRAILS` (the launcher's defaults) rather than
   the numbers the launch was given. Widening the record to carry them is a
   schema change; the residual is stated on the docs page.
-- **codex as a lead.** Its MCP config can ride the command line, but
-  `lead_mcp_args` has no arm for it, so the toggle is not offered (`LEAD_CLIS`).
+- **codex as a lead — #2833.** Its MCP config can ride the command line, but its
+  identity is a profile file the lead path does not write, so `lead_prepare`
+  refuses it by name (#2819) and the launcher does not offer the toggle
+  (`LEAD_CLIS`). The two are pinned against each other.

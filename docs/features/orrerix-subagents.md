@@ -80,7 +80,7 @@ lever there is.
 | **copilot** | custom agents in a separate context | **instruction only** — Copilot documents no tool name to deny, so a determined model can still use its own |
 | **pi** | none — it ships without sub-agents | nothing to disable |
 | **opencode**, **gemini** | yes | not offered: their MCP config arrives through a file or the environment, which the launcher's spawn seam does not set |
-| **codex** | behind a config flag | not offered yet |
+| **codex** | behind a config flag | not offered yet — its orrerix identity is a profile file the lead launch does not write |
 
 The instruction itself is a short briefing typed into the pane when it opens. If
 you type your first message in the same instant the pane boots, the briefing can

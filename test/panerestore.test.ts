@@ -2132,4 +2132,18 @@ test("LEAD_CLIS is exactly the set `lead_mcp_args` has an arm for (#2519 C2)", (
   // the assertion above fails first and this line is the explanation.
   assert.ok(SOLO_MCP_CLIS.includes("codex" as never), "codex has an argv MCP seam");
   assert.equal(isLeadCli("codex"), false, "…and is still not lead-capable");
+
+  // TWO BACKEND STATEMENTS, and this list must agree with BOTH. The arm set
+  // above is one; #2819 added the other, a refusal of codex BY NAME inside
+  // `lead_prepare` (naming #2833 as the follow-up that lifts it). They can drift
+  // from each other — a codex arm added without deleting the refusal would be a
+  // lead that is refused despite having flags — so the frontend gate is checked
+  // against each, and the two are checked against one another here.
+  const refusesCodexByName = /if cli == "codex"/.test(rust) && /codex cannot host a lead pane yet/.test(rust);
+  assert.equal(
+    refusesCodexByName,
+    !arms.includes("codex"),
+    "the named refusal and the arm set say the same thing about codex"
+  );
+  assert.equal(refusesCodexByName, !isLeadCli("codex"), "…and the launcher gate says it too");
 });

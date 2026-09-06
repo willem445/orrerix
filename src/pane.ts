@@ -108,7 +108,7 @@ import { FileExplorerView } from "./fileexplorer";
 import { icon } from "./icons.ts";
 import { agentMark, type AgentMarkInput } from "./agenticons.ts";
 import { WorkflowView } from "./workflowview";
-import { WORKFLOW_FILE } from "./workflowmodel";
+import { WORKFLOW_FILE, workflowNameOf } from "./workflowmodel";
 import { persistedKindFor, type PersistedPane, type PersistedPaneKind } from "./tabstore";
 import type { TabPaneInfo } from "./tabcounts";
 import { adoptableSessionId, hasForkSession, sessionCliFromCommand } from "./panerestore";
@@ -2751,6 +2751,37 @@ export class Pane implements VoiceTargetPane {
       this.workflowPaneView = new WorkflowView({
         getRoot: () => this.contentRoot,
         getFile: () => this.contentFile ?? WORKFLOW_FILE,
+        // The pane's own in-header picker moved to another workflow (#2944). Three things
+        // follow the file and none of them follows on its own: `contentFile` (what a
+        // re-`show()` re-opens), the pane's NAME (which is the file's tail, exactly as the
+        // file browser's "Open in workflow pane" set it), and the persisted record — which
+        // reads `openPathRel` and so is already right, but only gets WRITTEN when something
+        // says the record changed. Renaming is conditional on the name still being the one
+        // we gave it, the same `autoNamed` rule a re-root obeys: a pane the human has
+        // renamed keeps the name they chose.
+        onFileChanged: (rel) => {
+          // "Did WE name this pane, or did the human?" — the same question `adoptRoot` asks
+          // before renaming on a re-root, and it has to be asked against every derivation a
+          // workflow pane's name has ever come from, not just the one this pane happened to
+          // take: the launcher names a `default` pane after the REPO and a named one after
+          // the WORKFLOW, and the file browser names it after the FILE. Checking only the
+          // last would leave the other two stuck on a name for the file they left.
+          const auto = new Set(
+            [
+              pathTail(this.contentFile ?? ""),
+              workflowNameOf(this.contentFile ?? ""),
+              this.defaultContentName(this.contentRoot),
+              "workflow",
+            ].filter((n): n is string => !!n)
+          );
+          const autoNamed = auto.has(this.name);
+          this.contentFile = rel;
+          // Named after the WORKFLOW where the file is one of the repo's — the launcher's own
+          // convention, and the thing a human is looking for in a tab strip — and after the
+          // file otherwise, which is all an arbitrary `.yml` has.
+          if (autoNamed) this.setName(workflowNameOf(rel) || pathTail(rel) || "workflow");
+          this.events.onRecordChanged(this);
+        },
         onClose: () => {}, // never called — see the editor's note above
         embedded: true,
       });

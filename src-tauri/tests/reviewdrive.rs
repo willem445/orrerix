@@ -9054,6 +9054,92 @@ fn a_terminal_release_the_barrier_refuses_leaves_that_pane_named_and_alive() {
     assert!(!notice.contains(&worker), "…but not by a pane id that is gone: {notice}");
 }
 
+/// **A terminal tick whose WORKER release is refused still releases the lane**
+/// (#2811 S1) — the other refusal cell, and the one that makes the pair
+/// discriminate on more than one mutation operator.
+///
+/// The test above refuses the LANE, and `releasable` pushes the worker candidate
+/// FIRST ("Condition 3, first, so the list reads worker-first exactly as
+/// `owned_panes` does"), so there the worker's release is already done before
+/// the refusal is reached. That fixture therefore cannot see a release loop that
+/// `break`s at the first `Err` instead of `continue`ing — it produces identical
+/// output. rev-std round 2 caught the overclaim; this is the fixture that closes
+/// it rather than a reworded sentence.
+///
+/// Here the refusal comes FIRST. A `break` releases nothing and fails
+/// `released == vec![lane]`; an all-or-nothing pre-check fails it the same way;
+/// only the shipped per-candidate `continue` passes. Between the two tests, both
+/// orderings of {refused, released} are covered.
+///
+/// The worker is made busy the way the product makes any delegate busy — the
+/// orchestrator sends it a prompt, which stamps `idle_since_ms = None` before
+/// the delivery (`mcp.rs`'s `send_prompt` arm) — rather than by reaching into
+/// the registry, so the fixture is a state the running app really produces.
+#[test]
+fn a_terminal_tick_whose_worker_release_is_refused_still_releases_the_lane() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, worker, lane, session) = at_gate_check_holding_both_panes(&reg, &repo, &gh);
+
+    // The lane ends its turn; the worker is put back to work by its
+    // orchestrator, so the barrier will refuse it and take the lane instead.
+    report_as(&reg, &group, &lane, Role::Reviewer, "done");
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(&reg, &orch.id, 7001);
+    // The delivery itself may fail in a headless test; `idle_since_ms` is
+    // cleared BEFORE it either way, which is the fact this fixture needs and is
+    // the product's own ordering ("the intent to assign counts regardless of
+    // delivery timing").
+    let _ = dispatch(
+        &reg,
+        &Caller {
+            agent_id: orch.id.clone(),
+            group: group.clone(),
+            role: Role::Orchestrator,
+            role_hint: None,
+        },
+        "tools/call",
+        &json!({ "name": "send_prompt", "arguments": {
+            "agent_id": worker.clone(), "text": "one more thing while I have you" } }),
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.idle_since_ms.is_none()),
+        "the fixture's premise: the worker is working again, so the barrier must refuse it"
+    );
+
+    let end = reg.rd_drive_group_with(&group, &gh, 90_000);
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(
+        released,
+        vec![lane.clone()],
+        "the lane goes even though the candidate BEFORE it was refused"
+    );
+    assert!(
+        audit_details(&reg, &group, "rd-worker-released").is_empty(),
+        "and no row claims a worker release that did not happen"
+    );
+    assert_eq!(
+        reg.agent(&worker).map(|a| a.status == AgentStatus::Dead),
+        Some(false),
+        "a worker mid-turn is not killed by its drive ending, at a terminal step either"
+    );
+
+    let notice = end
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("a satisfied drive owes a notice: {:?}", end.notices));
+    assert!(notice.contains(&worker), "the refused worker pane is named: {notice}");
+    assert!(!notice.contains(&lane), "…and the released lane is not: {notice}");
+    assert!(
+        !notice.contains(&format!("worker session {session} resumes")),
+        "…and no resume clause is offered for a pane that is still running: {notice}"
+    );
+}
+
 /// **A released lane comes back on its own session** — the claim the whole
 /// narrowing rests on, performed rather than asserted.
 ///

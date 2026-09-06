@@ -548,6 +548,32 @@ pub fn transition(from: DriveState, to: DriveState) -> Result<DriveState, Invali
     }
 }
 
+/// **What makes two holds the same hold** (#3040 N1): the reason, the head it
+/// fired at, and the counters the drive had spent when it fired.
+///
+/// Not the PR, which is the entry the key is stored on and so cannot differ,
+/// and not the wording — a key built from the rendered notice would make a
+/// change to the prose look like a new hold, which is the class of "the test
+/// pins the implementation" this repo already refuses.
+///
+/// Every counter is in it rather than only the one the reason bounds, because
+/// a drive that spent a CI attempt between two `escalate` holds HAS moved, and
+/// a key that could not see that would suppress a line about a different
+/// revision of the same argument. One string rather than a tuple so the entry
+/// persists it as one JSON value that an older build round-trips through
+/// `extra` untouched (§11.2).
+pub fn hold_key(reason: HeldReason, head: &str, counters: &Counters) -> String {
+    format!(
+        "{}|{}|{}|{}|{}|{}",
+        reason.as_str(),
+        head,
+        counters.review_rounds,
+        counters.ci_attempts,
+        counters.rebase_attempts,
+        counters.body_only_grace,
+    )
+}
+
 // ── §2.3 the counters, and the bounds they run against ──────────────────────
 //
 // INVARIANT 9 in `templates/orchestrator.md` reads: *three CI attempts, three
@@ -1963,6 +1989,37 @@ pub struct DriveEntry {
     /// starvation already excluded — see that field.
     #[serde(default)]
     pub held_after_ms: u64,
+    /// **The key of the last hold this entry ANNOUNCED** (#3040 N1) — the
+    /// reason, the head and the counters it was spent at, as
+    /// [`hold_key`] renders them.
+    ///
+    /// A hold can only ever repeat after a resume: `transition` refuses a
+    /// `held` -> `held` self-arc, so the drive must come back through arc 11
+    /// and park again. That is exactly the shape the notice census found —
+    /// three `worker-unresumable` holds on one PR, each preceded by its own
+    /// `rd-resumed` — and where the resume changed nothing the drive can
+    /// observe (same reason, same head, same counters spent), the second line
+    /// tells the orchestrator nothing the first did not.
+    ///
+    /// **The head is in the key and is what makes the suppression safe.** A
+    /// resume after the worker pushed is a hold about a different revision, so
+    /// it announces; that is the case an orchestrator most needs to see, and
+    /// it is the one a key of (pr, reason) alone would swallow.
+    ///
+    /// **The counter VALUES cannot see a spent round on their own**, which is
+    /// why [`DriveEntry::rearm_hold_notice`] exists: `reset_counters: true`
+    /// puts `review_rounds` back to zero and the next `review-limit` hold
+    /// fires at the same bound, so the key would read identical across a round
+    /// the orchestrator paid for. `drive_review` clears this on a resetting
+    /// resume, and the hold is announced again.
+    ///
+    /// Absent is the resting state, so it is not serialized when absent —
+    /// `owed_notice`'s reason, unchanged. An older build reads it as an
+    /// unknown key into `extra` and writes it back verbatim (§11.2), and a
+    /// build that predates it simply announces every hold, which is the
+    /// pre-#3040 behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_hold_key: Option<String>,
     /// Preserved unknown fields — see [`ReviewDrivesState`].
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -2003,8 +2060,43 @@ impl DriveEntry {
             starved_state_ms: 0,
             held_from: None,
             held_after_ms: 0,
+            last_hold_key: None,
             extra: BTreeMap::new(),
         }
+    }
+
+    /// **Announce this hold, or say it repeats one already announced**
+    /// (#3040 N1) — the whole of the dedup decision, on the entry that owns
+    /// the record, so the tick cannot get half of it right.
+    ///
+    /// Answers `true` when the notice is to be delivered, and stamps the key
+    /// as it does. Answers `false` when this drive already announced a hold
+    /// with this exact key and nothing it can observe has changed since — the
+    /// tick then writes `rd-hold-repeated` instead of a line into the pane.
+    ///
+    /// **It stamps on the announce and not on the hold**, so a notice the
+    /// caller decides not to build cannot silence the next one. See
+    /// [`last_hold_key`](DriveEntry::last_hold_key) for why the key is what
+    /// it is.
+    pub fn announce_hold(&mut self, reason: HeldReason) -> bool {
+        let key = hold_key(reason, &self.head, &self.counters);
+        if self.last_hold_key.as_deref() == Some(key.as_str()) {
+            return false;
+        }
+        self.last_hold_key = Some(key);
+        true
+    }
+
+    /// **Forget which hold was last announced, so the next one is** (#3040
+    /// N1) — `drive_review(reset_counters: true)`, and nothing else.
+    ///
+    /// The counters in the key cannot see this on their own: a reset puts
+    /// `review_rounds` back to zero and the next `review-limit` hold fires at
+    /// the same bound, so the key would read identical across a round the
+    /// orchestrator deliberately paid for. A plain resume is left alone on
+    /// purpose — that is the repeat this exists to suppress.
+    pub fn rearm_hold_notice(&mut self) {
+        self.last_hold_key = None;
     }
 
     pub fn state(&self) -> DriveState {

@@ -3311,7 +3311,25 @@ impl OrchRegistry {
                         detail["refusal"] = Value::String(refusal);
                     }
                     out.audits.push((rddrive::audit_action::HELD, detail));
-                    out.notices.push(n);
+                    // **The hold is recorded either way; only the LINE is
+                    // conditional** (#3040 N1). A hold can repeat only after a
+                    // resume — `transition` refuses a `held` -> `held`
+                    // self-arc — and where that resume changed nothing the
+                    // drive can observe, the second line says exactly what the
+                    // first did. `announce_hold` owns the comparison and the
+                    // stamp together, so a notice that is not built cannot
+                    // silence the next one; `rd-held` above is written
+                    // whatever it answers, because the hold HAPPENED and §5.4
+                    // is a record of what happened, not of what was said.
+                    if entry.announce_hold(r) {
+                        out.notices.push(n);
+                    } else {
+                        out.audits.push((
+                            rddrive::audit_action::HOLD_REPEATED,
+                            json!({ "pr": pr, "reason": r.as_str(), "head": entry.head, "notice": n }),
+                        ));
+                    }
+                    out.changed = true;
                 }
                 (reviewdrive::DriveState::Cancelled, _) => {
                     out.audits.push((rddrive::audit_action::CANCELLED, json!({ "pr": pr })));
@@ -3515,6 +3533,15 @@ impl OrchRegistry {
                 };
                 if reset_counters {
                     entry.counters = reviewdrive::Counters::seeded(rounds_already_spent);
+                    // **And the hold-notice dedup is re-armed with them**
+                    // (#3040 N1). A resetting resume buys the drive a fresh
+                    // budget, so the next hold at the same bound is a hold
+                    // about a round the orchestrator paid for — and the key
+                    // cannot see that, because the counters are back at the
+                    // values the previous hold carried. Only THIS resume
+                    // clears it: a plain one changes nothing the drive can
+                    // observe, and its re-hold is the repeat N1 suppresses.
+                    entry.rearm_hold_notice();
                 }
                 // Read BEFORE `advance`, which clears `held_reason` on the way
                 // out of `held`. Used by the lane re-open below.
@@ -3758,19 +3785,28 @@ impl OrchRegistry {
     /// reason (#1857).
     ///
     /// **A bound measured against a clock a test cannot set is a bound no test
-    /// can perform.** This function stamps [`OwedNotice::owed_ms`], and the
-    /// retention ceiling is measured from it by a tick running on the caller's
-    /// `now`. With the wall clock hard-coded here, a test driving the tick on a
-    /// synthetic clock compared a small `now` against a wall-clock anchor,
-    /// `saturating_sub` answered zero, and the ceiling could never fire on this
-    /// path — so the one thing the ceiling promises was, for the tool-cancel
-    /// producer, a documented counterfactual rather than a pinned one. #1841's
-    /// B2 shipped out of the same shape one function over: "the clock is the
-    /// caller's, and that is what makes the age bound testable at all".
+    /// can perform.** This function used to stamp [`OwedNotice::owed_ms`] with
+    /// the wall clock while the retention ceiling was measured from it by a
+    /// tick running on the caller's `now`, so a test on a synthetic clock
+    /// compared a small `now` against a wall-clock anchor, `saturating_sub`
+    /// answered zero, and the ceiling could never fire on this path — the one
+    /// thing the ceiling promises, a documented counterfactual rather than a
+    /// pinned one. #1841's B2 shipped out of the same shape one function over:
+    /// "the clock is the caller's, and that is what makes the age bound
+    /// testable at all".
+    ///
+    /// **Since #3040 N1 this path owes no notice at all**, so the ceiling has
+    /// nothing to fire on here and the seam earns its keep for the other half
+    /// of what it always did: `now` is what the flush below prunes and audits
+    /// on. The ceiling itself is pinned on the `PrGone` producer, which still
+    /// owes one.
     ///
     /// The only production caller passes `now_ms()`, so nothing about live
-    /// behaviour changes; what changes is that
-    /// `the_ceiling_fires_on_a_tool_cancelled_notice_too` can exist.
+    /// behaviour changes; what it buys is that a test can drive this tool and
+    /// the tick on one clock — which is what
+    /// `a_tool_cancel_audits_and_delivers_nothing` needs to assert the prune,
+    /// as `the_ceiling_fires_on_a_tool_cancelled_notice_too` needed it to
+    /// assert the ceiling before N1 took this path's notice away.
     #[doc(hidden)] // pub for integration tests
     pub fn cancel_review_drive_with(
         &self,
@@ -3790,6 +3826,9 @@ impl OrchRegistry {
         // the notice, and this tool's own return value, which is what an
         // orchestrator acts on without waiting for a prompt to arrive.
         let panes: Vec<(String, reviewdrive::DrivenRole)>;
+        // The notice this cancel will AUDIT rather than deliver (#3040 N1),
+        // built inside the lock where the panes are and written outside it.
+        let demoted: Option<String>;
         {
             let _state_guard = self.rd_state_lock.lock_safe();
             let mut state = match reviewdrive::load_state(&dir) {
@@ -3815,18 +3854,32 @@ impl OrchRegistry {
             // needs the panes out before the lock drops, and #1857 needs the
             // notice built and owed before the store.
             panes = entry.owned_panes();
-            // Owed BEFORE the store, so the obligation is on disk in the same
-            // write as the cancellation itself (#1857). The delivery is
-            // attempted below, outside the lock; if it fails, the entry keeps
-            // owing and the next tick's flush re-sends it. Before this, the
-            // notice was built after the write and handed to a `let _ =`, so a
-            // cancel into a pane that was down was a drive that vanished with no
-            // line and nothing to reproduce one from.
-            // Empty for the reason `releasable`'s residual states: a tool cancel
-            // is not a tick, so no step is decided, nothing is released, and the
-            // orchestrator that called it is the party disposing of the panes.
+            // **DEMOTED to the audit log, not owed to a pane** (#3040 N1).
+            // This is the one cancel the orchestrator ASKED for: it is holding
+            // this call's return value, which carries the panes and the
+            // cancellation, so a prompt arriving later says nothing it does
+            // not already have. That is #533-B's `exit_notice_route` test
+            // exactly — an event this process was asked to perform is audited,
+            // one nobody asked for still interrupts — and `CancelCause::PrGone`
+            // (reconcile, or a tick finding the PR closed) is still announced,
+            // still owed on the entry, and still bounded by the retention
+            // ceiling.
+            //
+            // The notice is still RENDERED, and the row carries it, because
+            // "read it on demand" is only a real path if the text exists to
+            // read (#1857's whole argument, kept). What #1857 bought on this
+            // path — an obligation that survives a pane that is down — is not
+            // lost so much as no longer needed: nothing can fail to deliver a
+            // line that is not delivered, and the audit write is the same
+            // durable record its retry existed to protect.
+            //
+            // **The released-worker session stays empty, and that is #2811 S1's
+            // reason rather than this one's**: a tool cancel is not a tick, so
+            // no step is decided, nothing is released, and the orchestrator
+            // that called it is the party disposing of the panes. The demotion
+            // changes where the line goes, never what it says.
             let notice = rddrive::cancelled_notice(pr, rddrive::CancelCause::Tool, &panes, "");
-            entry.owe_notice(&notice, now);
+            demoted = Some(notice);
             if reviewdrive::store_state(&dir, &state).is_err() {
                 return self.rd_refuse(group, pr, r::STATE_UNWRITABLE);
             }
@@ -3838,25 +3891,39 @@ impl OrchRegistry {
             rddrive::audit_action::CANCELLED,
             json!({ "pr": pr, "panes": panes.iter().map(|(a, _)| a.as_str()).collect::<Vec<_>>() }),
         );
+        // **The demoted notice, written where it can be read on demand**
+        // (#3040 N1) — after the store, because the row is a claim about a
+        // cancel that HAPPENED, and outside the lock, because the audit sink
+        // is not this lock's subject.
+        if let Some(notice) = demoted {
+            self.rd_audit(
+                group,
+                on_behalf_of,
+                rddrive::audit_action::NOTICE_DEMOTED,
+                json!({ "pr": pr, "reason": "tool-cancel", "notice": notice }),
+            );
+        }
         // The same flush the tick runs, so this tool has exactly one delivery
         // path rather than a second one that would have to be kept in step. It
-        // also prunes: a cancel whose notice lands is an entry that leaves here,
-        // which is what §5.2 already promised. The notice itself was built and
-        // owed above, inside the lock (#1857).
+        // also prunes: a cancel whose notice lands is an entry that leaves
+        // here, which is what §5.2 already promised. Since #3040 N1 this path
+        // owes NO notice, so what the flush does here is the prune — and it
+        // still runs the same one function the tick does, which is the point.
         //
         // `now`, not `now_ms()`: the flush runs the retention ceiling, and a
         // ceiling measured against a different clock from the anchor above is
         // the untestable bound this seam exists to close (#1857).
         let _ = self.rd_flush_notices(group, &dir, now);
-        // **The panes ride in the RESULT as well as in the notice.** #1871 B3
-        // argued this from "a notice whose delivery fails is lost (nothing here
-        // recovers it — #1857)", and that premise is no longer true: the notice
-        // is owed on the entry and re-sent until it lands or the retention
-        // ceiling drops it with an audit line. The conclusion still holds on a
-        // narrower reason — this is the one exit whose caller is holding a
-        // return value at the moment the panes stop being anyone's, and a
-        // return value is synchronous where a notice is a prompt that arrives
-        // whenever the pane next drains.
+        // **The panes ride in the RESULT, and since #3040 N1 that is the ONLY
+        // place this cancel puts them in front of its caller.** #1871 B3
+        // argued the result from "a notice whose delivery fails is lost", and
+        // #1857 answered that by owing the notice on the entry; N1 then
+        // demoted this path's notice to the audit log altogether, on the
+        // ground the result makes true — this is the one exit whose caller is
+        // holding a return value at the moment the panes stop being anyone's,
+        // synchronously, where a notice is a prompt that arrives whenever the
+        // pane next drains. `CancelCause::PrGone` has no such caller and is
+        // still announced.
         json!({
             "cancelled": true,
             "panes": panes

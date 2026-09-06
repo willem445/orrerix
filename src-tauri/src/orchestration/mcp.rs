@@ -3492,7 +3492,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             match caller.role {
                 Role::Orchestrator | Role::Worker | Role::Planner => {}
                 Role::Reviewer => {
-                    return Err("permission denied: a reviewer posts through its review, not                          through a free-standing issue comment — record findings with                          review_verdict and leave them on the PR you are reviewing, so the                          merge gate can see them"
+                    return Err("permission denied: a reviewer posts through its review, not through a free-standing issue comment — record findings with review_verdict and leave them on the PR you are reviewing, so the merge gate can see them"
                         .into())
                 }
                 _ => return Err("permission denied: post_issue_comment is not on your surface".into()),

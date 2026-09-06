@@ -3157,13 +3157,32 @@ resolves to `null`, which the resolver reads as "we do not know" and answers wit
 failing toward the file every repo has beats failing toward a name this one may not declare.
 
 The picker's repo is recorded *with* the picker, in one statement pair, so the two cannot
-come to disagree about which repo the answer is about. Nothing outside
-`settledWorkflowPicker` reads the held picker at all.
+come to disagree about which repo the answer is about. And the held picker is read in
+exactly one place — inside `settledWorkflowPicker` — which is a fact about the code rather
+than a rule the next author is asked to remember: anything else that needs what the listing
+said is handed the derived value at paint time (`workflowNotices`), never the picker.
+
+That last sentence was written before it was true, and the round that wrote it is the round
+that falsified it: the same commit added a second, display-only read in `paintRoster`. The
+property it names was never in danger — a display read decides no launch and opens no file —
+but an absolute claim with a counter-example in its own diff is a claim that will be trusted
+by the next person to add a reader. Hence the construction rather than a scoped restatement
+(rev-std round 2, finding 1). The rule generalises past this field: when a doc sentence and
+the code disagree and the sentence describes the better design, move the code.
 
 This is a defect no read of the DOM wiring can find — both reads are individually correct
 and it lives in the timing between them — which is worth recording as the limit of the
 "hand-validate the wiring" convention rather than as a lapse in applying it (rev-std round 1,
 finding 1).
+
+**One staleness is accepted and not fixed.** The roster box can show the previous repo's
+listing findings for a beat, because `paintRoster` renders the lines it was last given while
+a repaint is in flight — and two of its call sites (the max-agents input, the capacity Raise
+button) re-render in place without repainting the picker at all, so the lines they show can
+be one repaint behind the toggle state they read. That is the same deliberate class the box already documents for its
+own prose — advisory text that lingers a beat reads as stale, where a *decision* taken on
+stale input is wrong — and the decision half is what `settledWorkflowPicker` closes. No test
+covers it (rev-std round 2, premortem 2).
 
 ### The listing's own findings reach the roster box
 

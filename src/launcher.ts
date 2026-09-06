@@ -443,6 +443,29 @@ export class WelcomeForm {
    *  through {@link settledWorkflowPicker}, which compares this against the field and
    *  re-resolves when they disagree. Painting is allowed to lag; deciding is not. */
   private workflowPickerRepo: string | null = null;
+  /** The listing's own findings, as the lines the roster box renders — computed when the
+   *  picker is painted, beside the row it belongs to, rather than derived from the held
+   *  picker at render time (rev-std round 2, finding 1).
+   *
+   *  Both are "what the listing says", so painting them together is the honest shape; but
+   *  the reason it is a FIELD is narrower than that. `paintRoster` has four call sites and
+   *  is display-only, so reading `workflowPicker` there was harmless — and it made the
+   *  design note's "nothing outside `settledWorkflowPicker` reads the held picker" false
+   *  the moment it was written, in the same commit. A property worth stating is worth
+   *  making true by construction: with the lines stored here, `workflowPicker` really is
+   *  read in exactly one place, and a future decision-shaped read of it is a visible
+   *  addition to that one place rather than a second reader nobody counts.
+   *
+   *  **Two `paintRoster` call sites do NOT repaint the picker first** — the max-agents
+   *  input and the capacity Raise button, both of which re-render the box in place — so
+   *  these lines can be one repaint behind the `advanced` those sites read. The window is
+   *  the async gap inside `refreshRoster`: tick the toggle, then type in max-agents before
+   *  the listing resolves, and the box shows no notice lines for a beat. Advisory text
+   *  lagging a beat is the class the roster box already accepts; a *decision* taken on
+   *  stale input is the class `settledWorkflowPicker` closes, and no decision reads this.
+   *  Stated rather than smoothed over, because "every path repaints the picker first" is
+   *  the kind of reassuring sentence this field exists because of. */
+  private workflowNotices: string[] = [];
   /** One backend listing per repo, memoized for the form's life, exactly as `previews` is
    *  and cleared on the same gestures. */
   private listings = new Map<string, Promise<WorkflowListing | null>>();
@@ -1460,6 +1483,9 @@ export class WelcomeForm {
     // Recorded WITH the picker, in one statement pair, so the two cannot disagree about
     // which repo the answer is about — see `workflowPickerRepo`.
     this.workflowPickerRepo = repo;
+    // Painted WITH the row, from the picker in hand — see `workflowNotices` for why the
+    // roster box is handed lines rather than the picker itself.
+    this.workflowNotices = workflowNoticeLines(picker, advanced);
     this.workflowRow.hidden = !advanced || !picker.show;
     this.workflowSel.replaceChildren(
       ...picker.options.map((o) => {
@@ -1615,9 +1641,10 @@ export class WelcomeForm {
       for (const err of r.errors) rows.push(line("roster-error", err));
       // #1689: what the LISTING could not make sense of, as opposed to what the selected
       // file could not parse (`r.errors`, above). Advisory — nothing here blocks a launch —
-      // so it reads as a note rather than an error, and `workflowNoticeLines` is what
-      // decides whether there is anything to say at all.
-      for (const note of workflowNoticeLines(this.workflowPicker, advanced)) {
+      // so it reads as a note rather than an error, and `workflowNoticeLines` (which
+      // computed these when the picker was painted) is what decides whether there is
+      // anything to say at all.
+      for (const note of this.workflowNotices) {
         rows.push(line("roster-note", note));
       }
       const actions = document.createElement("div");

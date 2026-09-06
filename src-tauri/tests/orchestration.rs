@@ -31296,7 +31296,7 @@ fn every_framing_row_of_a_coalesced_flush_is_maskable_but_the_payload_is_left_al
     let masked = mask_loomux_notices(&out);
     assert!(!masked.contains("-----"), "and genuinely masked: {masked}");
     assert!(!masked.contains("from orchestrator"), "framing prose goes with them: {masked}");
-    assert!(!masked.contains("further queued deliveries follow"), "header too: {masked}");
+    assert!(!masked.contains("more follow"), "header too: {masked}");
     // ...and every payload row must have SURVIVED, including the second row of
     // a multi-row constituent. A mask that swallowed these would be the
     // over-mask #621 rejected, reached from a row an agent can forge.

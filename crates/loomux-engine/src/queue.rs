@@ -829,10 +829,7 @@ fn constituent_banner(pos: usize, total: usize, c: &FlushConstituent, now_ms: u6
     } else {
         String::new()
     };
-    format!(
-        "[orrerix] ----- {pos}/{total} · from {} · queued {age} (id {}, t={}){repeats} -----",
-        c.from, c.id, c.enqueued_ms
-    )
+    format!("[orrerix] ----- {pos}/{total} · from {} · {age}{repeats} -----", c.from)
 }
 
 /// "3m12s ago" / "just now" — a queue age for a human/agent reader. Pure
@@ -891,25 +888,19 @@ pub fn coalesced_flush_text(
 ) -> String {
     let n = items.len();
     let more = if remaining > 0 {
-        let d = if remaining == 1 { "delivery" } else { "deliveries" };
-        format!(" ({remaining} further queued {d} follow in the next flush)")
+        format!(" ({remaining} more follow)")
     } else {
         String::new()
     };
     let total_coalesced: u32 = items.iter().map(|c| c.coalesced).sum();
     let dedup = if total_coalesced > 0 {
-        format!(" {total_coalesced} byte-identical repeat(s) were folded in at admission.")
+        format!(" — {total_coalesced} byte-identical repeat(s) were folded in at admission")
     } else {
         String::new()
     };
     let count = if n == 1 { "1 delivery".to_string() } else { format!("{n} deliveries") };
-    let verb = if n == 1 { "is" } else { "are" };
     let why = flush_cause_clause(cause);
-    let mut out = format!(
-        "[orrerix] {count} {why} {verb} being delivered TOGETHER, \
-         as this one prompt, oldest first{more} — they are itemized below with their origin and \
-         queue time; nothing was reordered or dropped.{dedup} Treat each item as its own message.",
-    );
+    let mut out = format!("[orrerix] {count} {why}, oldest first{more}{dedup}:");
     for (i, c) in items.iter().enumerate() {
         out.push_str("\n\n");
         out.push_str(&constituent_banner(i + 1, n, c, now_ms));
@@ -2298,15 +2289,24 @@ mod tests {
         assert!(flush_header_text(2, 0, blocked).contains("2 deliveries queued"), "{}", flush_header_text(2, 0, blocked));
         assert!(flush_header_text(2, 0, blocked).contains("blocked are now delivering"), "{}", flush_header_text(2, 0, blocked));
         assert!(flush_header_text(1, 1, blocked).contains("coalesced) is now"), "{}", flush_header_text(1, 1, blocked));
+        // #3040 N3: the COALESCED header has no verb left to agree — it is a
+        // label ("N deliveries queued ..., oldest first:") rather than a
+        // sentence. So the count is pinned where it sits, and the retired
+        // verb clause is pinned ABSENT, so a revert cannot bring back the
+        // construction this test was written for without reddening.
         let one = [FlushConstituent { id: 1, from: "w-2", enqueued_ms: 0, coalesced: 0, text: "x" }];
-        assert!(coalesced_flush_text(&one, 0, 0, blocked).contains("1 delivery queued while this pane was blocked is being"),
+        assert!(coalesced_flush_text(&one, 0, 0, blocked)
+            .contains("1 delivery queued while this pane was blocked, oldest first:"),
             "{}", coalesced_flush_text(&one, 0, 0, blocked));
         let two = [
             FlushConstituent { id: 1, from: "w-2", enqueued_ms: 0, coalesced: 0, text: "x" },
             FlushConstituent { id: 2, from: "w-3", enqueued_ms: 0, coalesced: 0, text: "y" },
         ];
-        assert!(coalesced_flush_text(&two, 0, 0, blocked).contains("2 deliveries queued while this pane was blocked are being"),
+        assert!(coalesced_flush_text(&two, 0, 0, blocked)
+            .contains("2 deliveries queued while this pane was blocked, oldest first:"),
             "{}", coalesced_flush_text(&two, 0, 0, blocked));
+        assert!(!coalesced_flush_text(&two, 0, 0, blocked).contains("being delivered TOGETHER"),
+            "the verb clause is retired, not reworded: {}", coalesced_flush_text(&two, 0, 0, blocked));
     }
 
     #[test]
@@ -2337,7 +2337,7 @@ mod tests {
             FlushConstituent { id: 2, from: "w-3", enqueued_ms: 0, coalesced: 0, text: "y" },
         ];
         let c = coalesced_flush_text(&items, 0, 0, paused);
-        assert!(c.contains("2 deliveries queued while this group was paused are being"), "got: {c}");
+        assert!(c.contains("2 deliveries queued while this group was paused, oldest first:"), "got: {c}");
         assert!(!c.contains("pane was blocked"), "got: {c}");
     }
 
@@ -2528,17 +2528,125 @@ mod tests {
         assert!(out.contains("from w-7"), "origin must survive: {out}");
         assert!(out.contains("5m00s ago"), "queue time must survive: {out}");
         assert!(out.contains("45s ago"), "queue time must survive: {out}");
-        assert!(out.contains("id 11") && out.contains("id 12"), "audit-joinable ids: {out}");
-        assert!(out.contains("nothing was reordered or dropped"), "{out}");
+        // #3040 N3: the queue id and the raw `t=` epoch left the banner.
+        // They were framing nobody acted on; the audit `delivery-dequeued`
+        // row (`id` + `queued_ms`, `OrchRegistry::pop_dequeued`) is the
+        // joinable record, and it always was. Pinned ABSENT so the fat
+        // form cannot come back silently.
+        assert!(!out.contains("id 11") && !out.contains("t="), "trimmed banner: {out}");
+    }
+
+    #[test]
+    fn the_coalesced_header_is_one_line() {
+        // #3040 N3. Every notice byte is resident in every later API call
+        // until the pane compacts, so framing prose is charged once at
+        // delivery and again on every turn after it. The header is a wake-up
+        // LABEL, not the record: count, why, order, chunking.
+        //
+        // The retired sentence ("they are itemized below ... nothing was
+        // reordered or dropped. Treat each item as its own message.") said in
+        // prose what the surviving framing already shows structurally --
+        // "oldest first" IS the order claim, and the per-item
+        // `----- k/N · from <agent>` banner IS what makes them N messages
+        // rather than one paste.
+        let items = [
+            FlushConstituent { id: 1, from: "w-2", enqueued_ms: 0, coalesced: 0, text: "x" },
+            FlushConstituent { id: 2, from: "w-3", enqueued_ms: 0, coalesced: 0, text: "y" },
+        ];
+        let out = coalesced_flush_text(&items, 0, 0, FlushCause::PaneBlocked);
+
+        // Positive control FIRST: a header that was never emitted at all would
+        // pass every `!contains` below on its own.
+        assert_eq!(
+            out.lines().next().expect("a flush always has a header"),
+            "[orrerix] 2 deliveries queued while this pane was blocked, oldest first:",
+            "the header is emitted, and this is its whole text: {out}"
+        );
+        // ONE line, which is the point. Both payloads here are single-line, so
+        // the flush is exactly header + 2 x (blank, banner, payload). A header
+        // that grew a second row lands as an 8th line and reddens here --
+        // asserting on `lines().next()` alone never could, since `lines()`
+        // splits the extra row off and hands back a one-line prefix either way.
+        assert_eq!(out.lines().count(), 7, "header is one row, not two: {out}");
+
+        // ...and the retired prose is really gone.
+        assert!(!out.contains("Treat each item"), "{out}");
+        assert!(!out.contains("nothing was reordered"), "{out}");
+        assert!(!out.contains("itemized below"), "{out}");
+
+        // The chunk clause and the dedup clause stay ON that one line rather
+        // than each earning a row of their own.
+        let chunked = coalesced_flush_text(&items, 4, 0, FlushCause::PaneBlocked);
+        assert_eq!(
+            chunked.lines().next().unwrap(),
+            "[orrerix] 2 deliveries queued while this pane was blocked, oldest first (4 more follow):",
+            "{chunked}"
+        );
+        assert_eq!(chunked.lines().count(), 7, "{chunked}");
+        let deduped = [
+            FlushConstituent { id: 1, from: "w-2", enqueued_ms: 0, coalesced: 2, text: "x" },
+            FlushConstituent { id: 2, from: "w-3", enqueued_ms: 0, coalesced: 0, text: "y" },
+        ];
+        let d = coalesced_flush_text(&deduped, 0, 0, FlushCause::PaneBlocked);
+        assert_eq!(
+            d.lines().next().unwrap(),
+            concat!(
+                "[orrerix] 2 deliveries queued while this pane was blocked, oldest first",
+                " — 2 byte-identical repeat(s) were folded in at admission:"
+            ),
+            "{d}"
+        );
+        assert_eq!(d.lines().count(), 7, "{d}");
+    }
+
+    #[test]
+    fn the_constituent_banner_is_marker_led_and_carries_only_what_a_reader_acts_on() {
+        // #3040 N3 trims the banner, and #632 bounds how far it may be
+        // trimmed: `mask_loomux_notices` claims a framing row by its LEADING
+        // marker only (never a block form -- that is the #621 hole), so
+        // `[orrerix] ` must stay FIRST, ahead of the dashes, or every
+        // constituent leaves an unmasked row of loomux prose in the pane tail.
+        // `unmaskable_framing_rows` (mod.rs) is the live binding to the real
+        // mask; this pins the literal the engine emits.
+        //
+        // What LEFT: `queued ` before the age, and `(id 12, t=...)`. The id and
+        // the enqueue epoch are recoverable from the audit `delivery-dequeued`
+        // row, which carries `id` and `queued_ms` (`OrchRegistry::pop_dequeued`).
+        let now = 600_000u64;
+        let items = [FlushConstituent {
+            id: 12,
+            from: "w-7",
+            enqueued_ms: now - 252_000,
+            coalesced: 0,
+            text: "BODY",
+        }];
+        let out = coalesced_flush_text(&items, 0, now, FlushCause::PaneBlocked);
+        let banner = out.lines().nth(2).expect("header, blank, banner");
+        assert_eq!(banner, "[orrerix] ----- 1/1 · from w-7 · 4m12s ago -----", "{out}");
+        assert!(banner.starts_with("[orrerix] -----"), "marker leads the dashes (#632): {banner}");
+
+        // The per-constituent repeat count is the one optional clause, and it
+        // sits INSIDE the dashes so the whole row still masks as one.
+        let repeated = [FlushConstituent {
+            id: 12,
+            from: "w-7",
+            enqueued_ms: now - 252_000,
+            coalesced: 3,
+            text: "BODY",
+        }];
+        assert_eq!(
+            coalesced_flush_text(&repeated, 0, now, FlushCause::PaneBlocked).lines().nth(2).unwrap(),
+            "[orrerix] ----- 1/1 · from w-7 · 4m12s ago · +3 identical repeats coalesced -----",
+        );
     }
 
     #[test]
     fn coalesced_flush_text_announces_a_further_chunk_when_one_remains() {
         let items = [FlushConstituent { id: 1, from: SENDER, enqueued_ms: 0, coalesced: 0, text: "b" }];
         let out = coalesced_flush_text(&items, 3, 1_000, FlushCause::PaneBlocked);
-        assert!(out.contains("3 further queued deliveries follow"), "chunking must be stated: {out}");
+        assert!(out.contains("(3 more follow)"), "chunking must be stated: {out}");
         let none = coalesced_flush_text(&items, 0, 1_000, FlushCause::PaneBlocked);
-        assert!(!none.contains("follow in the next flush"), "no phantom chunk clause: {none}");
+        assert!(!none.contains("more follow"), "no phantom chunk clause: {none}");
     }
 
     #[test]

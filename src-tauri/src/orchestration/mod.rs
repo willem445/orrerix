@@ -13902,18 +13902,35 @@ pub struct UsageSnapshot {
     /// in the human's own store — exact tokens, dollars ESTIMATED here because
     /// codex records none, #2515), `session-db` (opencode's own
     /// `session` row — exact tokens AND its own dollar figure, #722),
+    /// `stream` (a STRUCTURED pane, #2850 — the figures the harness REPORTED
+    /// over its own protocol, which is why it is distinguishable from every
+    /// scrape above rather than folded into one of them),
     /// `statusline` (last-resort parse of the CLI's own dollar figure), or
     /// `none` (nothing available yet).
     ///
-    /// **Six values, on three surfaces that must move together**: this doc,
-    /// `AgentUsage.source`'s union in `src/orchestration.ts`, and the
-    /// enumeration in `doc/design/group-cost-tracking.md` (which carries the
-    /// same list twice — the per-CLI sections and the payload shape). The frontend's is a
-    /// declared TYPE for a value that crosses the IPC seam untyped, so `tsc`
-    /// cannot catch a value outside it and a narrowing written against a stale
-    /// union is silently wrong. Adding a seventh means one entity grep
-    /// (`grep -rn session-db --include=*.ts --include=*.rs --include=*.md`),
-    /// not three guesses.
+    /// **Seven values, on FIVE surfaces that must move together**: this doc,
+    /// `AgentUsage.source`'s union in `src/orchestration.ts`, the enumeration
+    /// in `doc/design/group-cost-tracking.md`, the `source`→`cli` table in
+    /// `doc/design/orchestration-evals.md`, and `SOURCE_TO_CLI` in
+    /// `scripts/orch-scorecard.cjs` (whose test pins it).
+    ///
+    /// This paragraph said THREE until #2850 added the seventh value and the
+    /// grep it prescribes returned five — the scorecard pair was never in the
+    /// list. That is the count being wrong in the direction that matters: a
+    /// surface nobody knows about is a surface nobody updates.
+    ///
+    /// The frontend's is a declared TYPE for a value that crosses the IPC seam
+    /// untyped, so `tsc` cannot catch a value outside it and a narrowing
+    /// written against a stale union is silently wrong. The scorecard's is a
+    /// LOOKUP, and a missing key there degrades to `unknown` rather than
+    /// failing — quiet in a different way. Adding an eighth means one entity
+    /// grep (`grep -rn session-db --include=*.ts --include=*.rs --include=*.md
+    /// --include=*.cjs`), not five guesses.
+    ///
+    /// **`stream` is deliberately absent from `SOURCE_TO_CLI`.** It names a
+    /// transport, not a CLI: it is pi alone today only because pi is the only
+    /// CLI with a structured driver, so mapping it would read a per-CLI
+    /// identity off the wrong axis and go false when claude gains one.
     pub source: String,
     /// The workflow block this agent was spawned from (#2011 slice B, closing
     /// the `block` half of t-664). `role` above is the capability CLASS — four

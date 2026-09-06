@@ -63621,7 +63621,7 @@ fn repo_with_two_workflows(repo: &Path) -> String {
 /// held at the launcher's own defaults, so a call site reads as the one thing it varies.
 #[allow(clippy::too_many_arguments)]
 fn launch_with_workflow(
-    reg: &Arc<OrchRegistry>,
+    reg: &std::sync::Arc<OrchRegistry>,
     repo: &str,
     advanced: bool,
     workflow: Option<&str>,

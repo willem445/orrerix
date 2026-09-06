@@ -588,12 +588,21 @@ not cosmetic.
 bottom: a model with no `off` entry cannot be asked to stop reasoning, so the
 cheapest reachable level is what it gets.
 
-**The one live caveat, and it is a caveat rather than an absence.** The
-bundled catalogue is a snapshot that moves when the package version moves, and
-a provider may change a model's map between releases. So this table is a fact
-about 0.85.1, re-derived when the pin row moves — not a fact about
-`glm-5.3-flash` for all time. What it is NOT is unknowable without a live
-run, which is what an earlier draft of this section wrongly said.
+**What this costs a workflow block, in the workflow's own vocabulary:** a
+block declaring `effort: medium` on that model runs every turn at `high`
+(#2938). The knob reaches pi correctly; pi resolves it upward.
+
+**The one live caveat, and it is a caveat rather than an absence.** Two things
+can move the map out from under this table. The bundled catalogue is a
+snapshot that changes when the package version does, and a provider may change
+a model's entry between releases; and pi ALSO keeps a per-provider runtime
+store, `~/.pi/agent/models-store.json` (`FileModelsStore`'s default is
+`join(getAgentDir(), "models-store.json")`, `DIST`
+`bundle/chunks/chunk-JVUZSMYM.js`), refreshed from the provider's own catalog.
+So this table is a fact about 0.85.1 with an empty or matching store —
+re-derived when the pin row moves, not a fact about `glm-5.3-flash` for all
+time. What it is NOT is unknowable without a live run, which is what an
+earlier draft of this section wrongly said.
 
 `context_variants` is empty: pi's `--list-models` REPORTS a context column,
 and no flag, setting or session control selects a variant.

@@ -100,6 +100,7 @@ import {
   getSubagents,
   setSubagents,
   subagentsToggleState,
+  subagentsLaunchDecision,
   leadLaunchCount,
   setCustomCommand,
   setDefaultAgent,
@@ -382,12 +383,23 @@ export class WelcomeForm {
   private subagentsField: HTMLElement;
   private subagentsInput: HTMLInputElement;
   private subagentsHint: HTMLElement;
-  /** Whether the tab this pane would open in already owns an orchestration
-   *  group (#2519). Read ONCE, at construction, from the host that knows — a
-   *  welcome form is created per pane and submitted within one gesture, and the
-   *  binding it asks about only changes when a group is launched, which is
-   *  itself a submit of one of these forms. */
-  private tabOwnsGroup: boolean;
+  /** Does the tab this pane would open in already own an orchestration group
+   *  (#2519)? An ACCESSOR, asked afresh every time the answer is used — never a
+   *  boolean snapshot, and that is a correctness requirement rather than a
+   *  style choice (review round 1, B1).
+   *
+   *  A welcome form is NOT short-lived enough to cache it. `onSplit` opens a
+   *  second welcome form in the same tab, so two can be open at once: submit
+   *  form B as a lead and its group binds to the tab, while form A is still
+   *  sitting there with a construction-time `false` and a visibly enabled
+   *  toggle. Submitting A then minted a SECOND group into that tab — the exact
+   *  state this gate exists to prevent, and the one the change's own rationale
+   *  calls a UI that misreports itself. A group can also arrive under an open
+   *  form from a session restore, which no form gesture is involved in at all.
+   *
+   *  The form still owns no knowledge of tabs: the host passes the question, the
+   *  form asks it. */
+  private tabOwnsGroup: () => boolean;
   // Orchestrator guardrails.
   private orchFields: HTMLElement;
   /** The four numeric guardrails (#1020 item 3), in their own container since
@@ -490,8 +502,8 @@ export class WelcomeForm {
    *  one is splitting from (or the tab's active pane), so a file explorer opened
    *  beside an agent defaults to THAT agent's worktree rather than to whatever repo
    *  was last used app-wide (#214). Falls back to the most recent repo, as before. */
-  constructor(defaultFolder?: string, opts?: { tabOwnsGroup?: boolean }) {
-    this.tabOwnsGroup = opts?.tabOwnsGroup ?? false;
+  constructor(defaultFolder?: string, opts?: { tabOwnsGroup?: () => boolean }) {
+    this.tabOwnsGroup = opts?.tabOwnsGroup ?? (() => false);
     this.el = document.createElement("div");
     this.el.className = "welcome-form";
 
@@ -1184,7 +1196,7 @@ export class WelcomeForm {
       program,
       isCustom: this.agentSel.value === "custom",
       leadCapableCli: isLeadCli(this.agentSel.value),
-      tabOwnsGroup: this.tabOwnsGroup,
+      tabOwnsGroup: this.tabOwnsGroup(),
     });
     this.subagentsField.hidden = state.hidden;
     this.subagentsInput.disabled = state.disabled;
@@ -2324,10 +2336,19 @@ export class WelcomeForm {
       program,
       isCustom: plan.isCustom,
       leadCapableCli: isLeadCli(this.agentSel.value),
-      tabOwnsGroup: this.tabOwnsGroup,
+      // ASKED AT SUBMIT, not read off a field set at construction (B1). This is
+      // the reading that decides whether a group is minted, and the tab may have
+      // acquired one since this form opened.
+      tabOwnsGroup: this.tabOwnsGroup(),
     });
-    const subagentsEnabled =
-      !subagentsGate.hidden && !subagentsGate.disabled && this.subagentsInput.checked && program !== null;
+    // The launch decision is `subagentsLaunchDecision` (pure, pinned in
+    // `test/autopilot.test.ts`), not a condition spelled out here: a ticked box
+    // the live gate now refuses must be REPORTED rather than silently dropped,
+    // and that is the rule review round 1 B1 found missing. `program !== null`
+    // is re-asserted for the compiler — the gate already required it.
+    const decision = subagentsLaunchDecision(subagentsGate, this.subagentsInput.checked);
+    const subagentsEnabled = decision.mint && program !== null;
+    const subagentsRefused = decision.refusal ?? undefined;
 
     this.setBusy(true, "Creating worktree…");
     this.hideError();
@@ -2413,6 +2434,7 @@ export class WelcomeForm {
         // what that toggle is about.
         let lead: { group: string; agentId: string } | undefined;
         let leadError: string | undefined;
+        if (subagentsRefused) leadError = subagentsRefused;
         if (subagentsEnabled) {
           try {
             const prepared = await leadPrepare(program, cwd ?? "", name, {

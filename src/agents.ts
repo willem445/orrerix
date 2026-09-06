@@ -217,6 +217,39 @@ export interface SubagentsToggleState {
   readonly reason: string | null;
 }
 
+/** What a submit does with the subagents checkbox, given the gate's answer AT
+ *  SUBMIT TIME (#2519, review round 1 B1). Three outcomes, and the middle one is
+ *  the finding this function exists for.
+ *
+ *  The DOM is painted when the form opens and the gate's answer can change
+ *  under it: `onSplit` puts a second welcome form in the same tab, so form B
+ *  can launch a lead — binding a group to that tab — while form A sits there
+ *  with an enabled checkbox, and a session restore can bind one with no form
+ *  gesture at all. Deciding from the checkbox alone then minted a SECOND group
+ *  into one tab; deciding from the live gate alone would silently drop a box the
+ *  human ticked. So the refusal is a value, not a `return`:
+ *
+ *   - `mint` — go ahead: the gate allows it and the box is ticked.
+ *   - `refusal` — the box is ticked and the gate now says no. The launch
+ *     proceeds WITHOUT a lead group (the human still gets their agent pane) and
+ *     the caller surfaces this text, on the same channel a failed mint uses.
+ *   - neither — the box is not ticked, or the toggle does not apply here at
+ *     all, which is not something to tell anyone about.
+ *
+ *  A HIDDEN gate never refuses out loud: it covers form states where the control
+ *  is not on screen (another kind, a custom line, a CLI with no lead flags), so
+ *  a ticked-but-hidden box is a stale preference from a previous launch rather
+ *  than a request the human just made. Only `disabled` — shown, ticked, and
+ *  newly impossible — is worth a word. */
+export function subagentsLaunchDecision(
+  gate: SubagentsToggleState,
+  checked: boolean
+): { mint: boolean; refusal: string | null } {
+  if (!checked || gate.hidden) return { mint: false, refusal: null };
+  if (gate.disabled) return { mint: false, refusal: gate.reason };
+  return { mint: true, refusal: null };
+}
+
 /** How many panes a launch opens once the subagents toggle is applied (#2519).
  *
  *  ONE, always, for a lead launch. The fan-out field means "open N of this

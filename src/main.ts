@@ -977,8 +977,13 @@ async function remintLeadIdentity(
       argv: withArgs.argv,
       orch: { group: prepared.group_id, agentId: prepared.agent_id },
       bind: (ptyId: number) => {
-        void leadBind(prepared.agent_id, ptyId).catch(() => {
-          /* best-effort — the pane is open and typable; only its kickoff is lost */
+        void leadBind(prepared.agent_id, ptyId).catch((err) => {
+          // The pane is open and typable, so this is not a launch failure — but
+          // the kickoff is what tells a lead it IS one, so a swallowed failure
+          // here leaves a pane holding a live group and fleet tools with no idea
+          // it has them (review round 1, premortem). Said, not silent, on the
+          // same channel the launch path uses.
+          showToast(`"${name}" restored as a lead, but its briefing didn't arrive: ${String(err)}`, "error");
         });
       },
     };
@@ -2192,7 +2197,7 @@ function openWelcomeIn(
   // that already has one. Read here rather than inside the form: `tabs` is the
   // host's, and the form is a DOM component that knows nothing about tabs.
   const form = new WelcomeForm(context?.workdir ?? undefined, {
-    tabOwnsGroup: tabs.groupForWorkspace(ws.id) !== null,
+    tabOwnsGroup: () => tabs.groupForWorkspace(ws.id) !== null,
   });
   const pane = ws.grid.openWelcomePane(eventsFor(ws), form.el, dir, relativeTo, policy);
   form.onSubmit = (result) => void handleWelcomeSubmit(ws, pane, form, result);

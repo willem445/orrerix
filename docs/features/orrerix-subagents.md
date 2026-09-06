@@ -98,11 +98,17 @@ claim each other's helpers.
 
 ## Closing a lead
 
-Closing a lead pane ends its whole group — every helper closes with it and their
-agents are killed. Because that is not what closing a pane means anywhere else,
-the ✕ **asks first**: the first click arms it (the button turns red and says how
-many helpers it is about to end), a second click within four seconds does it, and
-anything else disarms it.
+Closing a lead pane ends its whole group: every helper's agent is killed and its
+pane closes with the lead. The one exception is a helper pane holding **unsaved
+edits** in its own file editor — its agent is ended like every other, but the
+pane stays open so the edits are not thrown away, and a toast says how many
+stayed.
+
+Because ending a group is not what closing a pane means anywhere else, the ✕
+**asks first**: the first click arms it (the button turns red and says how many
+helpers it is about to end), and a second click within four seconds does it. The
+arming lapses on its own after four seconds; clicking elsewhere does not cancel
+it, so if you change your mind, simply wait.
 
 The helpers' **worktrees are left on disk**. Ending the group kills the agents,
 not the work: the branches and their changes are still there in the Git view and

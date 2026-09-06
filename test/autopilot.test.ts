@@ -16,6 +16,7 @@ import {
   getSubagents,
   setSubagents,
   subagentsToggleState,
+  subagentsLaunchDecision,
   leadLaunchCount,
 } from "../src/agents.ts";
 
@@ -236,4 +237,29 @@ test("a lead launch opens exactly one pane, whatever the fan-out field says (#25
   // makes the assertions above about leads rather than about clamping.
   assert.equal(leadLaunchCount(4, false), 4);
   assert.equal(leadLaunchCount(1, false), 1);
+});
+
+test("a ticked box the live gate now refuses is REPORTED, not silently dropped (#2519 B1)", () => {
+  // The finding this pins: the gate's answer can change while a form sits open
+  // (a second welcome form in the same tab launches a lead; a session restore
+  // binds a group), so deciding from the checkbox alone minted a second group
+  // into one tab. Deciding from the gate alone would be the opposite defect —
+  // the human ticks a box and nothing happens, with no word about it.
+  const disabled = subagentsToggleState({ ...LEAD_OK, tabOwnsGroup: true });
+  const refused = subagentsLaunchDecision(disabled, true);
+  assert.equal(refused.mint, false, "no group is minted into a tab that has one");
+  assert.match(refused.refusal ?? "", /already runs an orchestration group/, "…and the human is told why");
+});
+
+test("the launch decision's other three outcomes (#2519 B1)", () => {
+  const ok = subagentsToggleState(LEAD_OK);
+  const hidden = subagentsToggleState({ ...LEAD_OK, isCustom: true });
+  const disabled = subagentsToggleState({ ...LEAD_OK, tabOwnsGroup: true });
+  assert.deepEqual(subagentsLaunchDecision(ok, true), { mint: true, refusal: null }, "ticked and allowed");
+  assert.deepEqual(subagentsLaunchDecision(ok, false), { mint: false, refusal: null }, "not ticked");
+  // A ticked-but-HIDDEN box is a stale preference from a previous launch, not a
+  // request just made, so it is silent — the distinction from the disabled case
+  // above is the whole point, and asserting only one of them would not hold it.
+  assert.deepEqual(subagentsLaunchDecision(hidden, true), { mint: false, refusal: null }, "ticked but not applicable");
+  assert.equal(subagentsLaunchDecision(disabled, false).refusal, null, "not ticked, so nothing to report");
 });

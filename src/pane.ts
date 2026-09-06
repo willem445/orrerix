@@ -2889,17 +2889,27 @@ export class Pane implements VoiceTargetPane {
    *  a human closing the pane they were helping in has not asked for that to be
    *  deleted. The Git view and `git worktree list` still find them.
    *
-   *  A FAILED end still closes the pane, because the human said close and the
-   *  alternative is a pane that refuses to. The group is then left as the
-   *  backend has it, and the error is surfaced by the caller's own toast path.  */
+   *  **A FAILED end still closes the pane, and SAYS SO** (review round 1, B2).
+   *  The pane closes because the human said close and the alternative is a pane
+   *  that refuses to — but what is left behind when `orch_end_group` rejects is
+   *  a group whose child agents are still running, with the pane that could
+   *  steer them gone. On this feature's own default guardrails (`0 = off` for
+   *  idle-kill and spawn rate) those helpers run unbounded, so a silent swallow
+   *  here would strand live processes with nothing anywhere saying it happened.
+   *  The toast names the group, which is what a human needs to end it by hand
+   *  from another pane. Same standard, and the same channel, as a failed mint on
+   *  the launch and restore paths. */
   private endLeadGroup(): void {
     const group = this.orchGroup;
     if (!group) {
       this.events.onCloseRequest(this);
       return;
     }
-    void endGroup(group, false).catch(() => {
-      /* best-effort: fall through to the ordinary close below */
+    void endGroup(group, false).catch((err) => {
+      showToast(
+        `Couldn't end group ${group}: ${String(err)}. Its agents may still be running — end it from another pane.`,
+        "error"
+      );
     }).finally(() => {
       // The group-ended event normally disposed this pane already; this is the
       // path where it did not (the call failed, or the event was lost).

@@ -3230,7 +3230,7 @@ the first one gets written.
 ### What slice D1 deliberately did not do
 
 - **No group-header picker, no drift chip, no Review & apply.** Those are slice
-  D2's, built on the `WorkflowSwitchPreview` payload slice B ships  see
+  D2's, built on the `WorkflowSwitchPreview` payload slice B ships — see
   *Switching a running group's workflow from its header* below. D1 touches the
   launcher and the designer only; nothing in D1 can change a *running* group's
   workflow.
@@ -3347,12 +3347,12 @@ declared.
 
 That last clause is why the miss path **refuses** rather than degrading, which it did
 not do when this section was first written (review round 1, finding 1). Sending no
-`file` is the pane's signal to fall back to the repo's DEFAULT workflow path  right
+`file` is the pane's signal to fall back to the repo's DEFAULT workflow path — right
 for `default`, and a silent wrong-file write for anything else: a pane titled `b`
 opened `.orrerix/workflow.yml`, and because the designer creates and saves a missing
 file, an edit there rewrote the default workflow other groups may be running. The
-trigger is a state this slice itself builds UI for  delete the file behind a running
-workflow, watch the drift chip appear, click *Edit&* to recreate it.
+trigger is a state this slice itself builds UI for — delete the file behind a running
+workflow, watch the drift chip appear, click *Edit…* to recreate it.
 
 So `resolveEditTarget` (the pure module, because it is a decision) answers `open` with
 a real path or `refuse` with a sentence, and a named workflow never reaches the
@@ -3360,9 +3360,9 @@ fallback. The two misses are different facts and get different sentences, becaus
 human's next move differs: an entry the listing does not carry means the file is GONE
 (the listing never drops a workflow for failing to parse, so absence is absence), while
 no listing at all means the read failed and retrying is the fix. The refusal says so,
-which is also why the listing is memoized on SUCCESS only  latching the rejection
+which is also why the listing is memoized on SUCCESS only — latching the rejection
 would make "try again in a moment" a lie, and turn one transient IPC failure into a
-permanently degraded *Edit&* for the life of the panel (round 1, finding 2).
+permanently degraded *Edit…* for the life of the panel (round 1, finding 2).
 
 ### The confirmation says every consequence, or offers no button
 

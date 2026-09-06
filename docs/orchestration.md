@@ -1634,8 +1634,13 @@ also appears when the file has been deleted or has stopped validating, and in
 that case the picker still lists the workflow the group is running, marked as
 having no file, rather than quietly showing you a different one — and **Edit…**
 tells you the file is gone rather than opening a different workflow under its
-name. (Recreate the file from the setup pane's *Edit workflow…*, which is where
-a workflow that does not exist yet gets written.)
+name. To bring it back, write the file itself — `workflows/<name>.yml` under the
+config directory this repo uses, in any editor. Once it exists, both pickers
+list it again, the file browser's *Open in workflow pane* opens it in the
+designer, and *Edit…* works from the group panel. Don't reach for the setup
+pane's *Edit workflow…* for this: its dropdown is built from the same listing,
+so a workflow whose file is gone can't be selected there either, and the button
+would open the repo's **default** workflow instead.
 
 **The orchestrator's read-back (`list_blocks`).** Switching a running group to
 another workflow is confirmed by the human before anything applies; when a

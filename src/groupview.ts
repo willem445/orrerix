@@ -1661,7 +1661,16 @@ export class GroupView {
     } catch (err) {
       this.toast(String(err));
     } finally {
+      // Cleared AND repainted in the same frame. The trailing `load()` below
+      // repaints too, but it is reached only when nothing threw — and the flag
+      // is what disables the picker and the button, so a throw anywhere above
+      // would otherwise leave both dead, saying "a workflow change is already
+      // in flight", until the next 2 s poll happened to land (rev-final round
+      // 3, premortem 2). Bounded before, but bounded by a timer rather than by
+      // the code that owns the flag, which is the shape `.orrerix/lessons.md`
+      // calls out.
       this.workflowBusy = false;
+      this.renderWorkflow();
     }
     await this.load();
   }
@@ -1679,7 +1688,16 @@ export class GroupView {
     const name = picker.selected;
     const repo = this.getRepo?.() ?? null;
     if (!repo) {
-      this.toast("Can't tell which repo this group is in — open the workflow from its pane instead.");
+      // Names what is wrong, not where else to go (rev-final round 3, premortem
+      // 1). Defensive rather than reachable in the shipped wiring — `pane.ts`
+      // always supplies `getRepo`, returning the orchestrator pane's cwd — but a
+      // message that redirects without saying why is the one thing a human
+      // cannot act on, and this arm exists precisely for the case nobody
+      // predicted.
+      this.toast(
+        "loomux doesn't know which repo this group is in, so it can't find its workflow files. " +
+          "Open the workflow file from the file browser instead."
+      );
       return;
     }
     const target = resolveEditTarget(name, await this.listing(repo));

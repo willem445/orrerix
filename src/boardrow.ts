@@ -199,6 +199,36 @@ export function expandTitle(expanded: boolean, hidden: number): string {
     : `Show this row's details (${hidden} more fields, and the row's buttons)`;
 }
 
+/** Does this row's expand control take focus on this render, and what is left
+ *  pending afterwards? (#2937 review W1.)
+ *
+ *  Toggling the control re-renders the whole board, which destroys the button
+ *  the human just activated and drops focus to `<body>`. The renderer therefore
+ *  keeps a one-shot hook naming the ROW to re-focus — by id, because the element
+ *  does not survive the render the hook exists for.
+ *
+ *  The rule this pins is that it is a ONE-SHOT: it fires on the row it names and
+ *  is cleared as it fires, so the next render — routinely a background one, since
+ *  this board re-renders on every `write_tasks` — cannot yank focus back to a row
+ *  the human has since left. Every other row on the same render leaves it armed
+ *  and untouched, which is what makes the order rows are built in irrelevant. */
+export function consumeExpandFocus(
+  pending: string | null,
+  rowId: string
+): { focus: boolean; pending: string | null } {
+  return pending === rowId ? { focus: true, pending: null } : { focus: false, pending };
+}
+
+/** Drop a pending focus hook whose row is no longer on the board.
+ *
+ *  A row deleted between the toggle and the render would otherwise leave the hook
+ *  armed for a row that will never be built again — and it would then fire on
+ *  whatever row next carried that id, or sit there for the rest of the session.
+ *  The sibling of `retainExisting` for a single optional id. */
+export function pruneExpandFocus(pending: string | null, liveIds: ReadonlySet<string>): string | null {
+  return pending !== null && liveIds.has(pending) ? pending : null;
+}
+
 /** Is this key the one that toggles the focused expand control?
  *
  *  Enter and Space, per the issue's acceptance criterion — and the control is a

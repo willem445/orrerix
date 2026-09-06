@@ -10,11 +10,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  consumeExpandFocus,
   expandTitle,
   isExpandToggleKey,
   ROW_FIELDS,
   rowFieldTier,
   rowLayout,
+  pruneExpandFocus,
   rowShows,
   toggleExpandedRow,
   type RowField,
@@ -154,6 +156,57 @@ test("Enter and both spellings of Space toggle the focused chevron; nothing else
   for (const k of ["Tab", "Escape", "ArrowDown", "a", "Space", ""]) {
     assert.equal(isExpandToggleKey(k), false, k);
   }
+});
+
+test("the row that was toggled takes focus back after the re-render", () => {
+  // The defect: toggling re-renders the board, which destroys the button the
+  // human just pressed. Without the hook, Enter/Space on the chevron works once
+  // and then strands a keyboard user at the top of the board.
+  const { focus, pending } = consumeExpandFocus("t-7", "t-7");
+  assert.equal(focus, true);
+  assert.equal(pending, null, "the hook must be consumed as it fires");
+});
+
+test("the focus hook fires once and never on a later render", () => {
+  // This board re-renders on every agent write. A hook that survived its own
+  // firing would yank focus back to a row the human had already left.
+  let pending: string | null = "t-7";
+  const first = consumeExpandFocus(pending, "t-7");
+  pending = first.pending;
+  assert.equal(first.focus, true);
+  const second = consumeExpandFocus(pending, "t-7");
+  assert.equal(second.focus, false, "the hook fired twice");
+  assert.equal(second.pending, null);
+});
+
+test("every other row on the same render leaves the hook armed and untouched", () => {
+  // Rows are built in board order, so the row that was toggled is usually not
+  // the first one asked. If a non-matching row cleared the hook, the toggled row
+  // further down the board would never get focus.
+  let pending: string | null = "t-7";
+  for (const other of ["t-1", "t-2", "t-3"]) {
+    const r = consumeExpandFocus(pending, other);
+    assert.equal(r.focus, false, `${other} stole the focus`);
+    assert.equal(r.pending, "t-7", `${other} cleared the hook`);
+    pending = r.pending;
+  }
+  assert.equal(consumeExpandFocus(pending, "t-7").focus, true, "the toggled row never got it");
+});
+
+test("no pending hook means no row grabs focus on an ordinary refresh", () => {
+  for (const id of ["t-1", "t-7"]) {
+    const r = consumeExpandFocus(null, id);
+    assert.equal(r.focus, false, `${id} took focus with nothing pending`);
+    assert.equal(r.pending, null);
+  }
+});
+
+test("a hook naming a row that has been deleted is dropped, and a live one is kept", () => {
+  const live = new Set(["t-1", "t-7"]);
+  assert.equal(pruneExpandFocus("t-7", live), "t-7");
+  assert.equal(pruneExpandFocus("t-9", live), null, "a hook for a deleted row survived the prune");
+  assert.equal(pruneExpandFocus(null, live), null);
+  assert.equal(pruneExpandFocus("t-1", new Set()), null, "an empty board kept a hook");
 });
 
 test("the expand tooltip counts what is actually hidden, and reads as English at one", () => {

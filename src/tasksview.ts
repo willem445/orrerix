@@ -100,8 +100,10 @@ import { WakeGate } from "./wakegate";
 import { approveWillMerge, gateExitsMessage } from "./workflowstatus";
 import { wipChips } from "./wipchips";
 import {
+  consumeExpandFocus,
   expandTitle,
   isExpandToggleKey,
+  pruneExpandFocus,
   rowLayout,
   toggleExpandedRow,
   type RowField,
@@ -326,6 +328,24 @@ export class TasksView {
    *  board right now, not how you want it set up. Pruned to live rows on every
    *  refresh beside the other two, so a deleted row's id cannot accumulate. */
   private expandedRows = new Set<string>();
+  /** The row whose expand control should take focus after the next render
+   *  (#2937 review W1) — the same one-shot hook as `linkFocus`/`pickingFocus`,
+   *  and it exists for the same reason they do.
+   *
+   *  Toggling the control calls `render()`, which does `listEl.replaceChildren()`
+   *  — so the button that was just activated is DESTROYED by its own handler and
+   *  focus falls to `<body>`. A keyboard user then re-tabs from the top of the
+   *  board to reach the row they were already on, twice per row, since folding it
+   *  back costs the same trip. #2937 asks for Enter/Space on this control by
+   *  name, so without this the criterion is met in the sense that the row toggles
+   *  and unmet in the sense that anyone would actually use it.
+   *
+   *  Keyed by ROW ID, never by element: the element does not survive the render
+   *  this hook exists for. One-shot — cleared as it is consumed — so a background
+   *  re-render (an agent's `write_tasks` lands, and this board re-renders on
+   *  every one) can never yank focus back to a row the human has since left. That
+   *  is the whole point of the idiom, not an incidental detail of it. */
+  private expandFocus: string | null = null;
   /** The half-typed grounding link per row (#1273 N1), so a re-render never
    *  eats what the human is in the middle of writing.
    *
@@ -1009,6 +1029,11 @@ export class TasksView {
     // reason — an id whose row has gone names nothing and would sit in the set
     // for the rest of the session.
     this.expandedRows = retainExisting(this.expandedRows, this.tasks);
+    // The pending focus hook names a row too (#2937 W1). A row deleted between
+    // the toggle and the render would leave it armed for a row that will never
+    // be built again, so it would sit there until the next expand consumed it —
+    // on the wrong row.
+    this.expandFocus = pruneExpandFocus(this.expandFocus, new Set(this.tasks.map((t) => t.id)));
     this.render();
   }
 
@@ -3091,6 +3116,9 @@ export class TasksView {
     expand.setAttribute("aria-label", expand.title);
     expand.addEventListener("click", () => {
       this.expandedRows = toggleExpandedRow(this.expandedRows, t.id);
+      // Arm BEFORE the render, since the render is what consumes it — and the
+      // control the human just used is the one rebuilt for this row.
+      this.expandFocus = t.id;
       this.render();
     });
     // Enter and Space are the `<button>`'s OWN activation, and this handler
@@ -3102,6 +3130,11 @@ export class TasksView {
     expand.addEventListener("keydown", (e) => {
       if (isExpandToggleKey(e.key)) e.stopPropagation();
     });
+    // Focus only on the render that FOLLOWS this row's own toggle, never on a
+    // background refresh — the one-shot rule `linkFocus` follows above.
+    const focusHook = consumeExpandFocus(this.expandFocus, t.id);
+    this.expandFocus = focusHook.pending;
+    if (focusHook.focus) window.setTimeout(() => expand.focus(), 0);
     top.appendChild(expand);
     main.appendChild(top);
 

@@ -282,7 +282,8 @@ impl EnqueueReason {
             | EnqueueReason::Recovered
             | EnqueueReason::GroupPaused
             | EnqueueReason::StrandedSelfHeal
-            | EnqueueReason::RefusalRoster => 0,
+            | EnqueueReason::RefusalRoster
+            | EnqueueReason::PaneSendFailed => 0,
         }
     }
 }
@@ -305,6 +306,7 @@ impl EnqueueReason {
             EnqueueReason::PauseLossNotice => "pause-loss-notice",
             EnqueueReason::StrandedSelfHeal => "stranded-self-heal",
             EnqueueReason::RefusalRoster => "refusal-roster",
+            EnqueueReason::PaneSendFailed => "pane-send-failed",
         }
     }
 }
@@ -616,6 +618,13 @@ pub fn queued_notice(agent_id: &str, reason: EnqueueReason) -> String {
         // queued. Spelled out rather than folded into a `_` arm so the next
         // variant added to this enum is still a compile error here.
         EnqueueReason::RefusalRoster => "it reports what this pane refused while full",
+        // #2850: REACHABLE, unlike the five above it. A structured pane whose
+        // `send` failed has a sender waiting to hear what happened, and the
+        // honest answer is that the pane is on its way out rather than that
+        // something is in the way — there is no box, no question and no queue
+        // ahead of it. "do NOT re-send" in the shared suffix stays true: the
+        // entry is still queued, and a pane that comes back drains it.
+        EnqueueReason::PaneSendFailed => "the pane did not accept it",
     };
     format!(
         "[orrerix] delivery to {agent_id} queued ({why}) — delivers automatically once clear; do NOT re-send"

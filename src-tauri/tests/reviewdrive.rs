@@ -7308,8 +7308,19 @@ fn a_moved_digest_re_arms_the_stall_clock_on_both_the_dead_pane_and_live_pane_pa
             .expect("the re-briefed lane is on the record");
         if arm == "live" {
             assert_eq!(
-                again.lanes_opened[0].2, lane,
-                "{arm}: the re-brief went INTO the live pane (#1960's reuse), not a second one"
+                again.lanes_opened[0].2,
+                lane,
+                "{arm}: the re-brief went INTO the live pane (#1960's reuse), not a second one. \
+                 Declined rows: {:?}; readiness: {:?}; lane agent: {:?}",
+                rows_for(&reg, &group, "rd-reuse-declined"),
+                reg.pane_readiness(7401),
+                reg.agent(&lane).map(|a| (
+                    a.idle_since_ms,
+                    a.pty_id,
+                    a.session_id.clone(),
+                    a.block.clone(),
+                    a.status
+                ))
             );
         } else {
             assert_ne!(

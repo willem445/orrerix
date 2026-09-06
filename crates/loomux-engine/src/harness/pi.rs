@@ -1576,10 +1576,7 @@ pub fn shutdown_child(child: &mut Child, grace: std::time::Duration) -> Departur
     // A cooperative shutdown that has not happened within the grace is not one
     // that is about to, so the kill is unconditional from here.
     let _ = child.kill();
-    match child.wait() {
-        Ok(st) => Departure::Killed(st.code()),
-        Err(_) => Departure::Unreaped,
-    }
+    Departure::Killed(None)
 }
 
 impl Drop for PiPane {

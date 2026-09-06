@@ -7,7 +7,8 @@ reaches a CLI at all) and `doc/design/opencode.md` (the precedent this note
 follows in shape and in evidence discipline).
 
 **This note is written one slice at a time** (#2126: P1 spawn and bridge, P2
-solo pane and sessions browser, P3 usage, P4 model catalog). Each slice adds
+solo pane and sessions browser, P3 usage, P4 model catalog; #2850: the RPC
+driver). Each slice adds
 its own section and does not rewrite an earlier one, so every claim here stays
 attributable to the round that measured it.
 
@@ -21,7 +22,18 @@ below are read from the vendors' source at a pinned commit.
 | Subject | Pin | Label |
 |---|---|---|
 | pi (`@earendil-works/pi-coding-agent` 0.84.4) | `earendil-works/pi@b79e4cc834970cca69daebffab7df1da7d1e52c4`, tagged `v0.84.4` | `DOCS` = `packages/coding-agent/docs/*.md` at that tag; `SOURCE` = `packages/coding-agent/src/…` at that tag |
+| pi 0.85.1, the version installed on the human's machine — the RPC-driver section's pin | the published package `@earendil-works/pi-coding-agent@0.85.1` as installed at `%APPDATA%/npm/node_modules/@earendil-works/pi-coding-agent` | `RPCDOCS` = `docs/rpc.md` in that package; `DIST` = `dist/…` in that package, and `dist/` is the PUBLISHED build, not `src/` |
 | pi-mcp-adapter (the community extension that gives pi MCP at all) | `nicobailon/pi-mcp-adapter@6ba7d360fcc67a77ccbbb4921586614798020a7a` | `ADAPTER` = `config.ts` / `index.ts` / `utils.ts` at that commit |
+
+**The 0.85.1 row is pinned to the installed package rather than to a git tag,
+and the difference matters when you re-derive a line number.** The RPC-driver
+section's citations are line numbers in `dist/` — build output, so a reference
+that is exact for THIS published version and has no counterpart in the
+upstream repository's `src/`. It is the right pin nonetheless: 0.85.1 is what
+the human's panes launch, so it is what a claim about pi's behaviour has to be
+true of. Re-derive against `dist/` when the row moves, never against upstream
+`main` — a line cite taken from one and recorded against the other is a claim
+nobody can check.
 
 Constraint 3 holds throughout: **no `pi` process was run by an agent** to
 establish any of it, and none may be — every fact here is a read of a file.
@@ -528,17 +540,28 @@ the one to copy.
 `--thinking <level>` over `off, minimal, low, medium, high, xhigh, max`
 (`SOURCE` `args.ts:60`, `:147`), a SUPERSET of loomux's five `EFFORT_LEVELS` —
 so pi joins claude as a CLI whose effort knob loomux can actually deliver, and
-`effort_levels` is `EFFORT_LEVELS` in its row. A model that does not support a
-level has it clamped or hidden per that model's own thinking-level map, which
-is the same "safe to emit any of them" property claude's fallback rule gives.
-The clamp is UPWARD-first: `clampThinkingLevel` (`pi-ai/dist/models.js`)
-searches `EXTENDED_THINKING_LEVELS` upward from the requested level before
-falling back downward, so a level the model lacks resolves to the nearest
-supported neighbour above it. The supported set is the model's
-`thinkingLevelMap`, which for `openrouter/*` models comes from OpenRouter's
-model catalog, cached in `~/.pi/agent/models-store.json`. Worked example:
-`z-ai/glm-5.3-flash` supports only `{low, high, max}` — so a block declaring
-`effort: medium` actually runs at `high` (#2938).
+`effort_levels` is `EFFORT_LEVELS` in its row.
+
+**A level the model does not support is clamped UPWARD first, and that is a
+spend fact, not a cosmetic one (#2938).** `clampThinkingLevel(model, level)`
+takes the model's supported set, and when the requested level is not in it
+scans the ladder `off, minimal, low, medium, high, xhigh, max` **upward** from
+the requested index, returning the first supported level it finds; only if
+nothing above is supported does it scan back downward
+(`@earendil-works/pi-ai/dist/models.js:563-581`, resolved inside the 0.85.1
+package — `RPCDOCS`/`DIST` row). So `--thinking medium` on a model whose set
+skips `medium` runs at `high` or above, never at `low`: every level loomux
+emits is SAFE to emit, which is the property claude's fallback rule gives, but
+it is not COST-neutral, and a cheap-tier roster that picked `medium` to avoid
+`high` may be paying for `high` on every turn.
+
+The per-model supported set is **not** in the installed package: it comes from
+the live model catalog pi fetches, and `getSupportedThinkingLevels` reads each
+model's own `thinkingLevelMap` (`models.js:551-562`). So which levels a given
+model supports is a live question — #2938 observed `--thinking medium`
+displaying as `high` on `openrouter/z-ai/glm-5.3-flash`, which is exactly what
+the clamp above produces, and the effective set for that model stays that
+issue's to record from a live run.
 
 `context_variants` is empty: pi's `--list-models` REPORTS a context column,
 and no flag, setting or session control selects a variant.
@@ -601,7 +624,9 @@ replies and `firstInputAt` is keyed on `onKey`/paste rather than `onData`.
 - **pi's RPC mode as a structured driver.** `--mode rpc` (JSON-per-line over
   stdin/stdout) is exactly the shape #84's native-protocol track wants, and it
   belongs to that track: a PTY pi pane is what was asked for and what every
-  other harness has. Nothing here builds against RPC and nothing here blocks
+  other harness has. Nothing in P1 builds against RPC and nothing in it blocks
+  it. #2850 takes it up — see "RPC driver (#2850)" below, which leaves every
+  P1 seam (argv, MCP bridge, session store, containment) exactly where P1 put
   it.
 - **A compact nudge.** pi is not on the short list of CLIs loomux pastes
   `/compact` into. It has `/compact` and auto-compacts by default, but loomux
@@ -704,3 +729,139 @@ vendor-neutral alias (§Knobs), so anything loomux curated would be a stale
 copy of a live answer; the probe's ids merge in behind the inherit row
 (`mergeModelOptions` pins it first — `test/modelcatalog.test.ts`), and a
 timeout degrades to inherit + custom, not to an empty dropdown.
+
+## RPC driver (#2850)
+
+pi is the harness that lands loomux's structured spawn path. This section is
+the pi half of the contract in `doc/design/harness-adapters.md`: what pi's RPC
+mode gives a driver, and what it does not. **Every claim here is a read of the
+installed 0.85.1 package** (`RPCDOCS` = its `docs/rpc.md`, `DIST` = its
+`dist/`); constraint 3 still holds, so no `pi --mode rpc` was run.
+
+### The launch line is today's line plus one flag
+
+```
+pi --mode rpc [every flag the PTY arm already emits]
+```
+
+`--mode` takes `text`, `json` or `rpc` and nothing else (`DIST`
+`cli/args.js:40-42`), and **no other flag is gated on it**: the parsed mode is
+written once at `:43` and is never read again anywhere in that file, so
+`--session-id`, `--session-dir`, `--mcp-config`, `--append-system-prompt`,
+`--approve`/`--no-approve`, `--exclude-tools`, `--model` and `--thinking`
+reach an RPC pane exactly as they reach a PTY one. `--mcp-config` in
+particular is still an unknown flag pi files into `unknownFlags` for the
+adapter to read (`args.js:220-230`), which is the same seam §"The MCP bridge"
+describes and not a second one.
+
+That is what makes the structured driver a *transport* change and nothing
+else: containment, session identity, the MCP bridge and the contract document
+are the same argv, so `pi_launch_flags_per_posture`'s equalities keep meaning
+what they meant.
+
+### Framing: LF only, and `BufRead::lines` is compliant
+
+> "RPC mode uses strict JSONL semantics with LF (`\n`) as the only record
+> delimiter." (`RPCDOCS` `docs/rpc.md:30`)
+
+The docs require accepting `\r\n` input by stripping a trailing `\r`
+(`:34`) and single out Node's `readline` as **not** protocol-compliant
+"because it also splits on `U+2028` and `U+2029`, which are valid inside JSON
+strings" (`:37`).
+
+Rust's `BufRead::lines()` splits on `\n` alone and strips a trailing `\r`,
+and does nothing with `U+2028` — so it is compliant as-is, and the driver
+needs no hand-rolled framer. A fixture line carrying a literal `U+2028` inside
+a delta pins it, because that is precisely the byte that separates a compliant
+reader from `readline`.
+
+### There is no boot event, so `Booted` is synthesized
+
+RPC mode takes over stdout and writes only serialized JSON lines (`DIST`
+`modes/rpc/rpc-mode.js:24`, `:29`). After `rebindSession()` at `:289` it
+registers signal handlers and attaches the stdin reader (`:645-651`) and emits
+**nothing**: every `output(...)` call in the file sits inside a handler, and
+the event table (`RPCDOCS` `docs/rpc.md:859-885`) has no ready, boot or hello
+event.
+
+So a driver that waited for one would wait forever. `Booted` is instead
+synthesized: the driver sends `get_state` as its first command, and the reply's
+`data` carries `model`, `thinkingLevel`, `sessionId` and `sessionFile`
+(`docs/rpc.md:193-218`) — enough to fill `Booted{session, model, capabilities}`
+with a REPORTED fact rather than a scraped one. There is no readiness marker to
+scrape and none is wanted: §"Readiness"'s painted-and-quiet gate is a PTY
+mechanism and does not apply to a pane with no PTY.
+
+### The commands the driver uses
+
+| `HarnessEvent` / trait method | pi command | source |
+|---|---|---|
+| `send(Turn)` | `prompt {message, streamingBehavior}` — `followUp` for a delivery, since a turn is a turn and never a mid-turn interjection | `docs/rpc.md:193-230` |
+| (pi-only, for a future steer) | `steer` | `docs/rpc.md:80` |
+| (pi-only) | `follow_up` | `docs/rpc.md:102` |
+| `interrupt()` | `abort` | `docs/rpc.md:124` |
+| — | `compact` | `docs/rpc.md:397` |
+| — | `set_model`, `set_thinking_level` | `docs/rpc.md:240`, `:304` |
+| `TurnEnded{usage, cost}` | `get_session_stats` | `docs/rpc.md:554` |
+
+**`prompt` gives a real acknowledgement, and it is not a completion.** "The
+command response is emitted after the prompt is accepted, queued, or handled"
+(`docs/rpc.md:195`), and `success: false` "means the prompt was rejected
+before acceptance", while a failure *after* acceptance arrives on the event
+stream and never as a second response for that id (`:222-224`). So the driver
+correlates the response by command id and the drainer gets a genuine
+delivered-or-rejected verdict — the first harness where that is not an echo
+check — but "accepted" is all it means.
+
+**Usage is cumulative from `get_session_stats`, never a sum of turns.** Its
+`data` carries `tokens{input,output,cacheRead,cacheWrite,total}`, `cost`, and a
+`contextUsage{tokens,contextWindow,percent}` that is the live context estimate
+(`docs/rpc.md:554-596`) — session-wide totals including tool-reported usage and
+compaction, so adding two readings double-counts. `contextUsage` is omitted
+when no model is available and its `tokens`/`percent` are `null` immediately
+after a compaction until a fresh response lands (`:595-596`), which is a
+`None`, not a zero.
+
+### Dialogs block the agent, which is why the policy is a policy
+
+Extension dialogs — `select`, `confirm`, `input`, `editor` — "emit an
+`extension_ui_request` on stdout and **block until** the client sends back an
+`extension_ui_response` on stdin with the matching `id`" (`docs/rpc.md:1190`).
+The fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`,
+`set_editor_text`) emit the same request shape and expect no reply (`:1191`),
+so a driver that answered them all would be answering things nobody asked.
+
+A reply is `{"type":"extension_ui_response","id",…}` carrying `value`,
+`confirmed` or `cancelled: true`; a cancellation gives the extension
+`undefined` for select/input/editor and `false` for confirm
+(`docs/rpc.md:1352-1375`).
+
+**Where a dialog carries a `timeout`, pi resolves it itself** — "the
+agent-side will auto-resolve with a default value when the timeout expires. The
+client does not need to track timeouts" (`:1192`). That is the whole reason
+`harness-adapters.md` §3.5 forbids an orrerix timer: a second timer racing this
+one produces two answers to one question, and the loser is recorded as though
+somebody had decided it.
+
+### Teardown is EOF, not a signal
+
+There is no exit or quit command. `process.stdin.on("end", …)` calls
+`shutdown()` (`DIST` `modes/rpc/rpc-mode.js:641-644`), so teardown is
+`abort` → close the child's stdin → bounded wait → kill. Nothing needs a
+console control event, which is the Windows problem this avoids rather than
+solves.
+
+### Live items this section does not settle
+
+Constraint 3 bounds all four, and none blocks a build:
+
+1. Whether `pi-mcp-adapter` loads `--mcp-config` under `--mode rpc`.
+   Extensions are bound in RPC mode, so the expected answer is yes; a failure
+   looks like a pane with no orrerix tools and no error.
+2. Whether the adapter raises any `extension_ui_request` at boot. If it does,
+   §3.5's parking is what a worker pane would do with it — correct, but worth
+   seeing once.
+3. The exact textual form of `sessionId` in `get_state`, compared against the
+   pre-minted `--session-id` canonicalised.
+4. A real captured event stream, to replace the synthesized fixtures the
+   decoder's tests are built on.

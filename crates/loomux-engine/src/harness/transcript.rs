@@ -3,15 +3,18 @@
 //!
 //! # Why a structured pane still writes to a terminal
 //!
-//! A structured pane has no PTY, so nothing produces bytes for its xterm surface
-//! on its own. loomux produces them: this module turns the event stream into VT
-//! output, and those bytes go into that pane's `OutputBuf` ring through the same
-//! coalescer that feeds `pty-output` today.
+//! A structured pane has no PTY, so nothing produces bytes for its `OutputBuf`
+//! ring on its own. loomux produces them: this module turns the event stream
+//! into VT output, and those bytes go into that ring through the same coalescer
+//! that feeds `pty-output` today.
 //!
-//! That choice is what keeps `get_output`, termgrid replay, thumbnails,
+//! That is what keeps `get_output`, termgrid replay, thumbnails,
 //! `last_exit_tail` and #888's replay-on-attach working with **no API change**.
-//! The alternative — a DOM transcript view beside the terminal — breaks all five
-//! for exactly the panes the feature is for, which is why §5.1 rejects it.
+//!
+//! **This is one of §5.1's two projections, and it is not the one the human
+//! looks at.** The visible surface is a DOM renderer fed the events themselves
+//! (#2891); the ring is fed from the same log, which is why serving those five
+//! consumers costs nothing there. Neither projection is derived from the other.
 //!
 //! # The one rule this module must not break
 //!

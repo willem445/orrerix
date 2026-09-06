@@ -68,7 +68,8 @@ against an empty crate:
 **`PaneHost` hands back a driver object, not a byte pipe (#84).**
 `request_pane` returns a `Box<dyn AgentPane>` — send a turn, answer a
 permission request, read an event stream, ask for the session id — so a PTY
-pane and a structured harness pane (Claude Code over `stream-json`) are two
+pane and a structured harness pane (pi over its RPC mode; Claude Code over
+`stream-json`) are two
 implementations of one trait rather than two seams. That is what keeps one
 spawn path, one delivery front door and one idle model across both kinds, and
 it is what the daemon-side `PaneHost` implements once instead of twice. The

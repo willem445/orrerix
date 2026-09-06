@@ -403,12 +403,21 @@ engine binding).
 - The compatibility window is stated in the user docs when D-track ships.
 
 **Structured panes are the first additive users of that rule (#84).** A pane
-driven through a harness adapter rather than a PTY emits no PTY frames at all:
-orrerix renders its event stream into that pane’s ring, and the wire carries two
-new *event* frames — `orch-pane-transcript` and `orch-pane-request` — under the
-existing `{"t":"ev","name":...}` shape, plus a `pane_kind` field on the roster.
-No new frame kind, no field repurposed, and a client that does not know either
-name discards it. Two consequences for this note: `write_pty` and `resize_pty`
+driven through a harness adapter rather than a PTY emits no PTY frames at all,
+and the wire carries two new *event* frames — `orch-pane-event` and
+`orch-pane-request` — under the existing `{"t":"ev","name":...}` shape, plus a
+`pane_kind` field on the roster. No new frame kind, no field repurposed, and a
+client that does not know either name discards it.
+
+`orch-pane-event` carries `{group_id, agent_id, events[]}` — the harness
+events themselves, coalesced by the backend to at most one emit per pane per
+16 ms carrying at most 64 events or 64 KiB. It is what a client renders the
+pane FROM (`harness-adapters.md` §5.1), and it is the reason a remote client
+gets a structured pane at all rather than a picture of one: orrerix also keeps
+a VT projection in that pane’s ring, but the ring serves `get_output`, replay
+and thumbnails, not the live surface. `orch-pane-request` stays a `lifecycle`
+event: one frame per permission request or extension-UI dialog, and one per
+settle. Two consequences for this note: `write_pty` and `resize_pty`
 against a structured pane are typed `invalid_argument` refusals rather than
 silent successes — both sit on §5.4’s wire roster, so a client will call them —
 and §10’s H4 reattach ceiling — the live screen plus a 256 KiB

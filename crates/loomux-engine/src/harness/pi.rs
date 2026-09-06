@@ -659,11 +659,8 @@ impl Decoder {
     /// prompted and shift every later `TurnId` by one. `None` is the honest
     /// answer there, and §1.3 says so.
     fn note(&self, note: NoteKind, text: String) -> Vec<Decoded> {
-        vec![Decoded::Event(HarnessEvent::Note {
-            turn: self.open_turn,
-            note,
-            text,
-        })]
+        let _ = note;
+        vec![Decoded::Note(text)]
     }
 
     /// The `get_session_stats` reply that closes a turn.

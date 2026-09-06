@@ -57140,10 +57140,6 @@ pub fn create_orchestration_sync(
             // so the backoff is on by default for every new group; hand-edit
             // group.json to pin it to the base (no backoff).
             idle_tick_fallback_max_minutes: 0,
-            // #1689: the launcher has no workflow picker yet (slice D1), so a
-            // launcher group runs `default` — which resolves to
-            // `.orrerix/workflow.yml`, exactly the file it has always read.
-            workflow: workflow::WorkflowName::default_name(),
         },
         SessionOrigin::Fresh,
         None,

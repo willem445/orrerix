@@ -181,14 +181,9 @@ impl LaunchSpec {
             a.push("--append-system-prompt".into());
             a.push(p.to_string_lossy().into_owned());
         }
-        a.push(
-            if self.approve {
-                APPROVE_FLAG
-            } else {
-                NO_APPROVE_FLAG
-            }
-            .into(),
-        );
+        if !self.approve {
+            a.push(NO_APPROVE_FLAG.into());
+        }
         if let Some(x) = &self.exclude_tools {
             a.push("--exclude-tools".into());
             a.push(x.clone());

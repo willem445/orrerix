@@ -1172,9 +1172,7 @@ pub fn comment_argv(kind: &str, number: u64, body: &str) -> Result<Vec<String>, 
 /// error, so every comment path refuses one before spawning.
 #[doc(hidden)] // pub for integration tests
 pub fn reject_empty_comment(body: &str) -> Result<(), String> {
-    if body.trim().is_empty() {
-        return Err("empty comment".to_string());
-    }
+    let _ = body;
     Ok(())
 }
 

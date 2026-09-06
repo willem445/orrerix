@@ -56342,14 +56342,19 @@ impl OrchRegistry {
     /// `review-driver.md` §3.1 item 5 was a closed guarantee — the driver may
     /// never kill a pane — enforced by a default-deny source scan over the
     /// driver's three files that denies `kill_agent` and the reaper entry
-    /// points. #2501 narrows the guarantee to two states, and the honest way to
-    /// narrow it is to give the driver exactly one named capability rather than
-    /// to let it reach a kill primitive by some other name: the scan keeps
-    /// denying `kill_agent`, `kill_agent_as`, `mark_dead` and
-    /// `reap_idle_agents` inside those files, and permits this one call, whose
-    /// site count it pins. A kill the driver reached any other way still fails
-    /// the scan, which is what makes "only these two states" reviewable instead
-    /// of merely intended.
+    /// points. #2501 narrows the guarantee to a lane whose verdict is recorded
+    /// at the drive's current head and a worker whose `report` the drive has
+    /// consumed; #2811 S1 adds either of them at the step that ENDS the drive.
+    /// The closed set is `reviewdrive::ReleaseReason` — three variants — and
+    /// naming the arity here rather than restating it was the mistake #2811 S1
+    /// had to correct on five other surfaces, so this doc points at the enum.
+    /// The honest way to narrow a guarantee is to give the driver exactly one
+    /// named capability rather than to let it reach a kill primitive by some
+    /// other name: the scan keeps denying `kill_agent`, `kill_agent_as`,
+    /// `mark_dead` and `reap_idle_agents` inside those files, and permits this
+    /// one call, whose site count it pins. A kill the driver reached any other
+    /// way still fails the scan, which is what makes "only the states
+    /// `ReleaseReason` spells" reviewable instead of merely intended.
     ///
     /// This function lives here, beside `kill_agent_as` and `mark_dead`, for the
     /// same reason: it is a lifecycle capability, and a barrier a caller must

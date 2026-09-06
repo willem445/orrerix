@@ -8868,52 +8868,44 @@ fn the_worker_pane_is_released_when_its_report_lands_in_ci_wait_after_a_push() {
     }
 }
 
-/// **A TERMINAL step releases the panes it is finished with BEFORE the exit
-/// notice is built** (#2811 S1) — so the notice names what is really left, and the
-/// orchestrator is not handed a list of panes to kill by hand.
+/// Drive to a `gate-check` tick that is **still holding both panes** — the one
+/// route that reaches #2811 S1's terminal rule with a worker to release.
 ///
-/// §1(f) measured what that hand-off cost: the orchestrator killed the reporting
-/// worker in the same second it started 4 of one session's 16 drives, and each
-/// following hand-back then resumed the session into a FRESH pane. The pane was
-/// resumable the whole time; nobody was going to speak to it again.
-///
-/// # The fixture, and why each step of it is the one that reaches this rule
-///
-/// A satisfied drive normally has no worker pane left — the rule above releases
-/// it on the tick that consumes its report — so the route here is the one that
-/// genuinely arrives at a terminal step still holding one: the worker reported
-/// `blocked`, which parks the drive and KEEPS the pane (INVARIANT 3), the
-/// orchestrator dispositioned it and resumed, and the drive then finished
+/// A satisfied drive normally has no worker pane left: the `ci-wait` rule
+/// releases it on the tick that consumes its report. So the worker here reported
+/// `blocked`, which parks the drive and KEEPS the pane (INVARIANT 3); the
+/// orchestrator dispositioned it and resumed; and the drive then finished
 /// without ever asking that worker for anything again. Arc 11 clears the arc-7
-/// anchor, so no hand-back is outstanding at the exit and the pane is the
-/// drive's to release.
+/// anchor, so no hand-back is outstanding at the exit.
 ///
-/// The lane is kept to the exit the other way: `review_verdict` does not end a
-/// turn (`idle_since_ms` is stamped by `report`), so the release barrier refuses
-/// it on the `review-wait` tick, and it reports only afterwards. Both panes are
-/// therefore live, idle and owned at the tick that satisfies the gate — which is
-/// the state pre-#2811 S1 released nothing in.
-#[test]
-fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
-    let dir = tempfile::tempdir().unwrap();
-    let reg = relaunch_registry(dir.path());
-    let repo = Repo::new();
-    let gh = FakeGh::green(HEAD_A);
-    let (group, _lane0) = briefed(&reg, &repo, &gh);
-    let session = driven_worker_session(&reg, &group);
+/// The lane is kept the other way: `review_verdict` does not end a turn
+/// (`idle_since_ms` is stamped by `report`), so the release barrier refuses it
+/// on the `review-wait` tick and the pane survives into `gate-check`.
+///
+/// Returns `(group, worker pane, lane pane, worker session)` with the drive in
+/// `gate-check`, one tick short of `satisfied`. Whether the lane then ENDS its
+/// turn is the caller's to decide, and it is the axis the two tests below
+/// differ on.
+fn at_gate_check_holding_both_panes(
+    reg: &OrchRegistry,
+    repo: &Repo,
+    gh: &FakeGh,
+) -> (GroupId, String, String, String) {
+    let (group, _lane0) = briefed(reg, repo, gh);
+    let session = driven_worker_session(reg, &group);
     reg.set_pr_body_override(Some("b".to_string()));
 
     // Red at a new head: hand-back, and the worker answers `blocked`.
     gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
     gh.set_facts("OPEN", HEAD_B);
     reg.set_pr_head_override(Some(HEAD_B.to_string()));
-    reg.rd_drive_group_with(&group, &gh, 30_000);
-    let handed = reg.rd_drive_group_with(&group, &gh, 40_000);
+    reg.rd_drive_group_with(&group, gh, 30_000);
+    let handed = reg.rd_drive_group_with(&group, gh, 40_000);
     let (_pr, worker) = handed.handbacks.first().cloned().expect("the hand-back resumed a worker");
-    report_as(&reg, &group, &worker, Role::Worker, "blocked");
-    reg.rd_drive_group_with(&group, &gh, 50_000);
+    report_as(reg, &group, &worker, Role::Worker, "blocked");
+    reg.rd_drive_group_with(&group, gh, 50_000);
     assert_eq!(
-        status_state(&reg, &group),
+        status_state(reg, &group),
         "held",
         "the fixture's premise: a blocked worker parks the drive"
     );
@@ -8924,12 +8916,12 @@ fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
 
     // The orchestrator dispositions and resumes; CI is green at the same head.
     gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
-    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 60_000);
+    let out = reg.drive_review_with(&group, gh, 1758, &session, false, 0, "orch-1", 60_000);
     assert_eq!(out["driving"], json!(true), "the resume was refused: {out}");
     // Two ticks, as `briefed` takes: arc 11 re-enters `ci-wait`, the first tick
     // reads green and advances to `review-wait`, the second opens the lane.
-    reg.rd_drive_group_with(&group, &gh, 65_000);
-    let reopened = reg.rd_drive_group_with(&group, &gh, 70_000);
+    reg.rd_drive_group_with(&group, gh, 65_000);
+    let reopened = reg.rd_drive_group_with(&group, gh, 70_000);
     let lane = reopened
         .lanes_opened
         .first()
@@ -8939,15 +8931,35 @@ fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
 
     // The lane answers but does not end its turn, so the `review-wait` tick's
     // release is refused and the pane survives into `gate-check`.
-    record_pass_for(&reg, &group, &lane);
-    let to_gate = reg.rd_drive_group_with(&group, &gh, 80_000);
-    assert_eq!(status_state(&reg, &group), "gate-check");
+    record_pass_for(reg, &group, &lane);
+    let to_gate = reg.rd_drive_group_with(&group, gh, 80_000);
+    assert_eq!(status_state(reg, &group), "gate-check");
     assert!(
         to_gate.released.is_empty(),
-        "the control: a lane mid-turn is not released, so what happens below is the \
-         TERMINAL rule and not condition 2 firing early: {:?}",
+        "the control: a lane mid-turn is not released, so what a caller observes at the \
+         terminal step is the TERMINAL rule and not condition 2 firing early: {:?}",
         to_gate.released
     );
+    (group, worker, lane, session)
+}
+
+/// **A TERMINAL step releases the panes it is finished with BEFORE the exit
+/// notice is built** (#2811 S1) — so the notice names what is really left, and
+/// the orchestrator is not handed a list of panes to kill by hand.
+///
+/// §1(f) measured what that hand-off cost: the orchestrator killed the reporting
+/// worker in the same second it started 4 of one session's 16 drives, and each
+/// following hand-back then resumed the session into a FRESH pane. The pane was
+/// resumable the whole time; nobody was going to speak to it again.
+#[test]
+fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, worker, lane, session) = at_gate_check_holding_both_panes(&reg, &repo, &gh);
+
+    // The lane ENDS its turn, so both panes are idle at the tick that satisfies.
     report_as(&reg, &group, &lane, Role::Reviewer, "done");
 
     let before = audit_actions(&reg, &group).len();
@@ -8985,6 +8997,61 @@ fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
         notice.contains(&format!("worker session {session} resumes with spawn_agent(resume:)")),
         "…and what replaces it is the handle that still works: {notice}"
     );
+}
+
+/// **A terminal release the BARRIER refuses leaves that pane exactly where it
+/// was — named in the notice, alive, and the orchestrator's** (#2811 S1) — the
+/// residual `releasable`'s doc discloses, pinned rather than described.
+///
+/// A disclosed residual is a counterfactual, and only a test that performs the
+/// edit pins one: without this, the suite covers the arms that work and the
+/// disclosure could go false with nothing red to say so. The one difference from
+/// the test above is that the lane never `report`s, so `idle_since_ms` is never
+/// stamped and `release_driven_pane` refuses it — the same refusal that protects
+/// a reviewer mid-review, arriving at an exit.
+///
+/// **The worker is still released in the same tick**, and that is the load-
+/// bearing half rather than a bonus: it says the two candidates are decided and
+/// applied per pane, so one refusal does not abandon the other release. An
+/// implementation that gave up on the whole terminal list at the first `Err`
+/// would pass every assertion in the test above and fail here.
+#[test]
+fn a_terminal_release_the_barrier_refuses_leaves_that_pane_named_and_alive() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, worker, lane, session) = at_gate_check_holding_both_panes(&reg, &repo, &gh);
+
+    // The lane does NOT end its turn. Everything else is the test above.
+    let end = reg.rd_drive_group_with(&group, &gh, 90_000);
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(released, vec![worker.clone()], "the worker goes, the busy lane does not");
+    assert!(
+        audit_details(&reg, &group, "rd-lane-released").is_empty(),
+        "a release row is written on the kill SUCCEEDING, never on the intent"
+    );
+    assert_eq!(
+        reg.agent(&lane).map(|a| a.status == AgentStatus::Dead),
+        Some(false),
+        "a lane mid-turn is not killed by its drive ending — the judgment §3 forbids"
+    );
+
+    let notice = end
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("a satisfied drive owes a notice: {:?}", end.notices));
+    assert!(
+        notice.contains(&lane),
+        "the refused pane is named, so the orchestrator can still dispose of it: {notice}"
+    );
+    assert!(
+        notice.contains(&format!("worker session {session} resumes with spawn_agent(resume:)")),
+        "…and the released worker is named by session in the same notice: {notice}"
+    );
+    assert!(!notice.contains(&worker), "…but not by a pane id that is gone: {notice}");
 }
 
 /// **A released lane comes back on its own session** — the claim the whole

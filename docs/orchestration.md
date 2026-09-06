@@ -363,6 +363,44 @@ PR chips are **clickable** and open in your browser.
 Statuses: `queued`, `in-progress`, `review`, `pr`, `human-testing`,
 `prototype`, `done`, `blocked`.
 
+### What a row shows, and what the `⌄` opens
+
+The board is usually read in a normal-width pane with the UI docked to the
+left, so a row spends its width on the four things you actually scan for and
+nothing else:
+
+1. **The task name and its id.** The name **wraps** — to two or three lines if
+   it needs them — and is never cut off behind chrome. Double-click it to edit
+   it in place, as before.
+2. **The issue / PR chips**, still clickable, still opening in your browser.
+3. **Progress** — the status control, and on a parent task the
+   `done/total` rollup of what is directly inside it.
+4. **`⌄`**, at the right-hand end of the row.
+
+Everything else is one click away behind that `⌄`: the assignee and session
+chips, the kind and sprint badges, the *ready* / *all inside done* / *cleared*
+markers, the ACTIVE badge and the *needs a decision* / *needs a look* deep
+link, the ▶ Start / ✓ Approve / ✎ Changes / ▶ Proceed buttons, the 🔗 ⤵ 🏷 🎯
+📎 🗨 buttons, ↩ restore and ✕ delete. It opens **in place**, under the row's
+own name — the terminals underneath never move.
+
+Two things worth knowing about how it behaves:
+
+- **A row you open stays open** while you work — through the board's own
+  refreshes and through anything an agent writes to it — until you shut it or
+  close the panel. It is how you are reading the board right now, so it is not
+  saved between sessions the way a folded-up parent is.
+- **A left accent still says what a row needs from you**, whether or not it is
+  open: amber for work only you can advance, a green glow and pulse for an
+  agent working on it right now. Those cost the name no room at all, which is
+  why the badges that repeat them sit behind the `⌄`.
+
+The 🗨 notes and 📎 grounding **sections** are unchanged: they open as
+full-width blocks below the row, so they never compete with the name, and a
+section you opened stays open whichever way you fold the row itself. The 🗨 and
+📎 **buttons** that open and shut them are behind the `⌄` like the rest, so a
+section left open under a folded row is shut by expanding the row again.
+
 ### What order the board is in
 
 The order you can drag is the **priority order** — top is next, and the

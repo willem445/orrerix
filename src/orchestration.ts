@@ -2338,3 +2338,69 @@ export const soloAdopt = (ptyId: number, name: string, cwd: string): Promise<{ a
  *  whether a channel identity (`soloBind`) was also minted for it. */
 export const confirmSoloCopilotAutopilot = (ptyId: number, cli: string): Promise<void> =>
   invoke("orch_confirm_solo_copilot_autopilot", { ptyId, cli });
+
+// ---------- lead panes (#2519) ----------
+//
+// A lead pane is a HUMAN's agent pane that owns a real, lightweight
+// orchestration group: the human types into it, and it spawns orrerix panes
+// as its helpers instead of the harness's own in-process subagents. The two
+// commands mirror `soloPrepare`/`soloBind` in shape — mint before the pane
+// boots so the MCP flags can go on its command line, bind once the pty is up —
+// and differ in what they mint: a whole group with the lead as its ROOT, not a
+// channel-scoped identity in the shared `__solo__` group. See
+// `doc/design/lead-pane.md`.
+
+/** What `orch_lead_prepare` returns: the group it just minted, the lead's own
+ *  agent id in it, and the exact per-CLI flag string to append to the launched
+ *  command line.
+ *
+ *  `mcp_args` is never empty here, unlike `SoloPrepared`'s: a lead with no
+ *  orrerix MCP server holds none of the tools the toggle grants, so the
+ *  backend REFUSES the prepare for a CLI whose MCP config cannot ride the
+ *  command line (opencode, codex) rather than returning a delivery-only pane.
+ *  The launcher hides the toggle for those CLIs too, so the refusal is a
+ *  backstop, not the normal path. */
+export interface LeadPrepared {
+  group_id: string;
+  agent_id: string;
+  mcp_args: string;
+}
+
+/** Mint a lead group and the lead's identity BEFORE its pane boots, so
+ *  `mcp_args` can be appended to its command line. Called once per lead
+ *  launch, from the launcher's agent-pane spawn path (and again on restore,
+ *  which re-mints rather than resuming — a lead group cannot be resumed).
+ *
+ *  The guardrails are the launcher's own numbers, threaded through unchanged:
+ *  they govern the lead's CHILDREN (cap, spawn rate, idle-kill, watchdog),
+ *  never the lead pane itself — a human pane is silent when the human is. */
+export const leadPrepare = (
+  cli: string,
+  cwd: string,
+  name: string,
+  guardrails: {
+    maxAgents: number;
+    autoOps: boolean;
+    idleKillMinutes: number;
+    maxSpawnsPerHour: number;
+    watchdogStallMinutes: number;
+  }
+): Promise<LeadPrepared> =>
+  invoke<LeadPrepared>("orch_lead_prepare", {
+    cli,
+    cwd,
+    name,
+    maxAgents: guardrails.maxAgents,
+    autoOps: guardrails.autoOps,
+    idleKillMinutes: guardrails.idleKillMinutes,
+    maxSpawnsPerHour: guardrails.maxSpawnsPerHour,
+    watchdogStallMinutes: guardrails.watchdogStallMinutes,
+  });
+
+/** Bind a just-spawned lead pane's pty to the `AgentEntry` `leadPrepare`
+ *  created, and let the backend type its kickoff. Call right after `spawnPty`
+ *  resolves, mirroring `soloBind` — with the one difference that this DELIVERS:
+ *  the kickoff is what tells the pane it is a lead, so a bind that never
+ *  happens leaves a pane holding the tools and knowing nothing about them. */
+export const leadBind = (agentId: string, ptyId: number): Promise<void> =>
+  invoke("orch_lead_bind", { agentId, ptyId });

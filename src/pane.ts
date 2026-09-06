@@ -51,7 +51,7 @@ import { planWebglRetry } from "./webglretry";
 import { showToast } from "./toast";
 import { isAppShortcut } from "./shortcuts";
 import { attentionPresentation, attentionDismiss, attentionChanged } from "./attention";
-import { dismissStranded, notifyPaneDisposed, seedMailUnread } from "./orchestration";
+import { dismissStranded, endGroup, notifyPaneDisposed, seedMailUnread } from "./orchestration";
 import { heldPresentation } from "./heldbadge";
 import { queuePresentation, type QueueDepthReading } from "./queuebadge";
 import { mailboxPresentation } from "./mailboxbadge";
@@ -440,6 +440,17 @@ export interface PaneEvents {
   onMinimize: (pane: Pane) => void;
   /** Toggle this pane to/from fullscreen over the grid. */
   onMaximize: (pane: Pane) => void;
+  /** How many LIVE children a lead pane's group currently holds (#2519), for
+   *  the close confirm's "this ends N subagents". Asked of the host for the
+   *  same reason `onOpenEditorPane` is: the answer is a walk over every tab's
+   *  panes, and a `Pane` holds no back-reference to the tab it is in.
+   *
+   *  OPTIONAL, and `null` is a real answer distinct from `0`: a host that does
+   *  not implement it (the grid's own test doubles) leaves the confirm saying
+   *  what it is about to do without a count, which is still the truth. `0` is
+   *  the different statement "a lead with no children right now" — the close
+   *  still ends its group. */
+  leadChildCount?: (pane: Pane) => number | null;
   /** Minimize (or restore) this pane's whole orchestration group's
    *  worker/reviewer panes at once (#46). No-op off an orchestrator pane. */
   onToggleGroupMinimize: (pane: Pane) => void;
@@ -1414,6 +1425,9 @@ export class Pane implements VoiceTargetPane {
       e.stopPropagation();
       this.requestClose();
     });
+    // Retained for the lead-pane close confirm (#2519), which repaints this
+    // button rather than opening a modal — see `requestClose`.
+    this.closeBtn = closeBtn;
     header.appendChild(closeBtn);
     this.el.appendChild(header);
 
@@ -2777,11 +2791,33 @@ export class Pane implements VoiceTargetPane {
    *  `hasUnsavedWork` / tabbar's arm-and-confirm). */
   requestClose(): void {
     if (this.closing || this.disposed) return;
+    // A LEAD pane (#2519) asks first, and asks the way this app already asks
+    // about something irreversible: ARM, then confirm. Closing one ends its
+    // whole group — every child pane it spawned, their agents killed — and that
+    // is not what "close this pane" means anywhere else in the app.
+    //
+    // Arm-and-confirm rather than the modal `confirmClose` uses, matching
+    // `tabbar.ts`'s destructive tab close and `groupview.ts`'s "End
+    // orchestration": the human has met this affordance, it is synchronous, and
+    // it says what is at stake in the button's own tooltip. The unsaved-edits
+    // modal still runs underneath — `confirmClose` is asked below either way,
+    // so a lead pane holding a dirty Alt+F buffer asks both questions, in the
+    // order the human meets them (the cheap one first).
+    if (this.isLead && this.leadCloseArmedAt === null) {
+      this.armLeadClose();
+      return;
+    }
+    this.disarmLeadClose();
     this.closing = true;
     void this.confirmClose().then(
       (ok) => {
         this.closing = false;
-        if (ok && !this.disposed) this.events.onCloseRequest(this);
+        if (!ok || this.disposed) return;
+        if (this.isLead) {
+          this.endLeadGroup();
+          return;
+        }
+        this.events.onCloseRequest(this);
       },
       () => {
         this.closing = false; // a failed dialog must not wedge the pane shut
@@ -2791,6 +2827,85 @@ export class Pane implements VoiceTargetPane {
 
   /** True while a close request is waiting on the human's answer. */
   private closing = false;
+
+  /** The pane's own — button, retained so the lead close confirm (#2519) can
+   *  repaint it into its armed state. */
+  private closeBtn: HTMLButtonElement | null = null;
+  /** When the lead close was armed, or null when it is not armed. A timestamp
+   *  rather than a boolean because the disarm TIMER is not the only thing that
+   *  can end the window, and a boolean would need a second field to say so. */
+  private leadCloseArmedAt: number | null = null;
+  private leadCloseTimer: number | null = null;
+
+  /** Arm the lead-pane close: repaint the — button as a confirm and start the
+   *  4 s auto-disarm, the same window `tabbar.ts` and `groupview.ts` use.
+   *
+   *  The COUNT is read at arm time and named in the tooltip, because "end 3
+   *  subagents" is the fact the human is actually deciding about and a bare
+   *  "are you sure" is not. It is a reading, not a subscription: a child that
+   *  spawns during the 4 s window is not re-counted, and the confirm still ends
+   *  the whole group — the tooltip is what the human was told, and `endGroup`
+   *  is what happens. */
+  private armLeadClose(): void {
+    this.disarmLeadClose();
+    this.leadCloseArmedAt = Date.now();
+    const n = this.events.leadChildCount?.(this) ?? null;
+    if (this.closeBtn) {
+      this.closeBtn.classList.add("confirm");
+      this.closeBtn.textContent = "✕?";
+      this.closeBtn.title =
+        n === null || n === 0
+          ? "Click again to close this lead pane and end its group"
+          : n === 1
+            ? "Click again — this ends 1 subagent"
+            : `Click again — this ends ${n} subagents`;
+    }
+    this.leadCloseTimer = window.setTimeout(() => this.disarmLeadClose(), 4000);
+  }
+
+  /** Put the — button back. Safe to call when nothing is armed (the ordinary
+   *  close path calls it unconditionally) and on a disposed pane. */
+  private disarmLeadClose(): void {
+    if (this.leadCloseTimer !== null) {
+      clearTimeout(this.leadCloseTimer);
+      this.leadCloseTimer = null;
+    }
+    if (this.leadCloseArmedAt === null) return;
+    this.leadCloseArmedAt = null;
+    if (this.closeBtn) {
+      this.closeBtn.classList.remove("confirm");
+      this.closeBtn.textContent = "✕";
+      this.closeBtn.title = "Close pane";
+    }
+  }
+
+  /** End the group this lead owns, which is what closes its panes — this one
+   *  included. The `orch-group-ended` event the backend emits is the ONE
+   *  teardown path (`orchestration.ts`'s listener closes every pane in the
+   *  group), so this deliberately does not also call `onCloseRequest` on the
+   *  way in: two teardowns for one gesture is how a pane gets disposed twice.
+   *
+   *  `cleanupWorktrees: false` — the children's worktrees hold their work, and
+   *  a human closing the pane they were helping in has not asked for that to be
+   *  deleted. The Git view and `git worktree list` still find them.
+   *
+   *  A FAILED end still closes the pane, because the human said close and the
+   *  alternative is a pane that refuses to. The group is then left as the
+   *  backend has it, and the error is surfaced by the caller's own toast path.  */
+  private endLeadGroup(): void {
+    const group = this.orchGroup;
+    if (!group) {
+      this.events.onCloseRequest(this);
+      return;
+    }
+    void endGroup(group, false).catch(() => {
+      /* best-effort: fall through to the ordinary close below */
+    }).finally(() => {
+      // The group-ended event normally disposed this pane already; this is the
+      // path where it did not (the call failed, or the event was lost).
+      if (!this.disposed) this.events.onCloseRequest(this);
+    });
+  }
 
   /** The view in this pane that owns unsaved work, if any — asked ONCE, here, so every
    *  guard (close, tab-close, app-quit, a dead process) sees the same set of holders and
@@ -5158,6 +5273,13 @@ export class Pane implements VoiceTargetPane {
       // see `PersistedPane.sshProfileId` for why the profile is what gets
       // re-derived and a captured argv would be actively wrong to replay.
       sshProfileId: kind === "ssh" ? this.sshProfileId : null,
+      // #2519. Recorded on the AGENT record this lead persists as (see
+      // `liveKind`), and the ONE thing restore needs beyond the command line:
+      // the group this pane owned is not coming back, a fresh one is minted for
+      // it. Gated on `kind === "agent"` as every other per-kind field is, so a
+      // pane that is somehow both cannot smuggle the flag onto another kind's
+      // record.
+      lead: kind === "agent" && this.isLead,
       // Every view CURRENTLY docked (#361), and at what side + share of the
       // split — up to three entries, one per occupied slot. Empty = nothing
       // embedded — every view opens as its floating overlay (the default).
@@ -5206,7 +5328,34 @@ export class Pane implements VoiceTargetPane {
   private liveKind(): PersistedPaneKind {
     if (this.contentKind !== null) return this.contentKind;
     if (this.isSshPane) return "ssh";
+    // A LEAD (#2519) carries an orchestration identity and is still an AGENT
+    // pane, and the ordering here is the whole restore contract for one.
+    //
+    // `orch` is what a pane persists as when its group is the thing that brings
+    // it back: the record drops the command line and comes back as a dormant
+    // placeholder that a whole-group RESUME re-inhabits. A lead group cannot be
+    // resumed — the backend refuses it, because the children's worktrees and
+    // sessions are gone and their panes are not restored — so a lead persisted
+    // that way would come back as a Resume button that can only ever fail, with
+    // the human's own command line thrown away to make it.
+    //
+    // What a lead needs instead is exactly what an agent pane records: its
+    // command line, its session id, its cwd. `capture()` marks it `lead: true`
+    // and the restore re-mints a FRESH group for it (see `PersistedPane.lead`).
+    if (this.isLead) return "agent";
     return this.orchGroup ? "orch" : this.launchedCommand ? "agent" : "terminal";
+  }
+
+  /** Is this pane a LEAD (#2519) — a human's agent pane that owns a lightweight
+   *  orchestration group and spawns orrerix panes as its helpers?
+   *
+   *  Read off the orchestration ROLE, which is the backend's own word for the
+   *  capability class (`Role::Lead`), and never off the toggle that launched it
+   *  or the CLI it runs: the role is what the registry, the audit log and the
+   *  Agents tab all key on, so anything else here would be a second answer to
+   *  one question. */
+  get isLead(): boolean {
+    return this.orchRoleName === "lead";
   }
 
   /** Hand this pane the roster's own idleness reading for its agent (#2122

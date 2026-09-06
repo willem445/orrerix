@@ -65,6 +65,12 @@ export type RestoreAction =
       argv: string[] | null;
       /** The recorded session id to --resume into (guaranteed present here). */
       sessionId: string;
+      /** This pane was a LEAD (#2519): re-mint it a FRESH lead group before it
+       *  boots, instead of the channel-scoped solo identity an ordinary agent
+       *  pane re-mints. See `PersistedPane.lead` for why a lead is re-minted
+       *  rather than resumed, and doc/design/lead-pane.md for what does NOT
+       *  come back with it (its children are not restored). */
+      lead: boolean;
     }
   | {
       // An agent whose recorded session id has NO resumable conversation on disk
@@ -78,6 +84,8 @@ export type RestoreAction =
       command: string | null;
       argv: string[] | null;
       sessionId: string;
+      /** As `resume-agent`'s (#2519). */
+      lead: boolean;
     }
   | {
       type: "dormant-agent";
@@ -85,6 +93,10 @@ export type RestoreAction =
       cwd: string | null;
       command: string | null;
       argv: string[] | null;
+      /** As `resume-agent`'s (#2519). Nothing is minted while the placeholder
+       *  sits there — a dormant pane has no process to hold a group — so this
+       *  is what the Start click reads when it finally spawns one. */
+      lead: boolean;
     }
   | {
       // The orchestration pane's whole group stays dormant; the human resumes it
@@ -271,6 +283,7 @@ export function planPaneRestore(pane: PersistedPane, resumable?: SessionResumabl
             command: pane.command,
             argv: pane.argv,
             sessionId: pane.sessionId,
+            lead: pane.lead,
           };
         }
         return {
@@ -280,6 +293,7 @@ export function planPaneRestore(pane: PersistedPane, resumable?: SessionResumabl
           command: pane.command,
           argv: pane.argv,
           sessionId: pane.sessionId,
+          lead: pane.lead,
         };
       }
       return {
@@ -288,6 +302,7 @@ export function planPaneRestore(pane: PersistedPane, resumable?: SessionResumabl
         cwd: pane.cwd,
         command: pane.command,
         argv: pane.argv,
+        lead: pane.lead,
       };
   }
 }

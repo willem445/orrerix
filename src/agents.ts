@@ -186,3 +186,83 @@ export function addRecentRepo(path: string): void {
     /* write failed (quota / security) — nothing to recover, same as before */
   }
 }
+
+/** What the launcher does with the "orrerix subagents" control for one form
+ *  state (#2519 C2). Pure so the gate can be pinned without a DOM — the DOM
+ *  wiring that reads it is hand-validated, per this repo's convention.
+ *
+ *  Three outcomes, and the difference between the last two is the whole point:
+ *
+ *   - **hidden** — the toggle does not APPLY. Another pane kind, a custom
+ *     command (the human owns that line; appending MCP flags to it could
+ *     collide with flags they typed), or a CLI whose MCP config cannot ride
+ *     the command line (`isSoloMcpCli` false — opencode and codex deliver
+ *     theirs through a file or the environment, and the launcher's spawn seam
+ *     sets neither). The same rule `applyChannelTools` uses, for the same
+ *     reason, so the two controls cannot disagree about which CLIs have a
+ *     command-line MCP seam.
+ *   - **disabled with a reason** — it applies, but not HERE: one tab owns at
+ *     most one orchestration group (`tabs.groupForWorkspace` is singular), and
+ *     a lead pane mints one of its own. Shown-and-explained rather than hidden,
+ *     because a control that vanishes teaches nothing: the human's next move is
+ *     a new tab, and the title says so.
+ *   - **enabled** — the launch may mint a lead group.
+ *
+ *  `reason` is non-null exactly when `disabled` is true, so a caller cannot
+ *  render a disabled control with no explanation. */
+export interface SubagentsToggleState {
+  readonly hidden: boolean;
+  readonly disabled: boolean;
+  readonly reason: string | null;
+}
+
+export function subagentsToggleState(form: {
+  /** The welcome form's chosen kind — only `"agent"` can be a lead. */
+  readonly kind: string;
+  /** The resolved program name, or null when the form names none. */
+  readonly program: string | null;
+  /** The human typed their own command line. */
+  readonly isCustom: boolean;
+  /** This CLI's MCP config can be appended to the command line
+   *  (`isSoloMcpCli`), passed in rather than computed so this module stays
+   *  free of that import cycle and the caller keeps ONE reading of it. */
+  readonly mcpArgvSeam: boolean;
+  /** The tab this pane would open in already owns an orchestration group. */
+  readonly tabOwnsGroup: boolean;
+}): SubagentsToggleState {
+  if (form.kind !== "agent" || form.isCustom || form.program === null || !form.mcpArgvSeam) {
+    return { hidden: true, disabled: false, reason: null };
+  }
+  if (form.tabOwnsGroup) {
+    return {
+      hidden: false,
+      disabled: true,
+      reason:
+        "This tab already runs an orchestration group — a lead pane needs a tab of its own. " +
+        "Open a new tab (Ctrl+Shift+T) and launch it there.",
+    };
+  }
+  return { hidden: false, disabled: false, reason: null };
+}
+
+/** The guardrails a RESTORED lead pane's re-minted group runs under (#2519 C2).
+ *
+ *  A restore re-mints a lead group rather than resuming one, and `lead_prepare`
+ *  takes the four numbers the launcher's guardrail row supplies — but the
+ *  persisted pane record carries a FLAG, not a configuration (`PersistedPane.lead`),
+ *  so the numbers the human set at launch are not on disk to read back. These are
+ *  the launcher's own defaults, named once here so the restore and the form cannot
+ *  drift into two different answers, and disclosed as a v1 residual in
+ *  `docs/features/orrerix-subagents.md`: a lead pane restored from a previous boot
+ *  comes back on the DEFAULT guardrails, not the ones its launch was given.
+ *
+ *  `autoOps` is deliberately `false` rather than a default read off anything: it
+ *  is the permissions posture, and the conservative answer is the only one a
+ *  restore may assume on the human's behalf. */
+export const LEAD_RESTORE_GUARDRAILS = {
+  maxAgents: 4,
+  autoOps: false,
+  idleKillMinutes: 0,
+  maxSpawnsPerHour: 0,
+  watchdogStallMinutes: 10,
+} as const;

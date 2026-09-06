@@ -381,6 +381,11 @@ test("toAgentRow carries the identity fields through and derives the state", () 
     notes: 3,
     tab: { id: "ws-1", title: "loomux", index: 0 },
     mark: { command: "claude", argv: null, knownCli: null, remote: false },
+    // #2519: null BY CONSTRUCTION here, and the assertion is the point rather
+    // than a shape update — one pane's facts cannot answer which lead it is
+    // under, so `toAgentRow` must not pretend to. `agentRows` is where the
+    // fleet is in scope and the parent is filled in (see the tests below it).
+    parent: null,
   });
 });
 

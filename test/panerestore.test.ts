@@ -40,6 +40,7 @@ const pane = (over: Partial<PersistedPane>): PersistedPane => ({
   groupId: null,
   file: null,
   sshProfileId: null,
+  lead: false,
   embeds: [],
   ...over,
 });
@@ -67,6 +68,9 @@ test("an agent WITH a session id auto-resumes (never replays a prompt)", () => {
     command: "claude",
     argv: ["claude"],
     sessionId: "abc-123",
+    // #2519: an ordinary agent pane is not a lead, and the action says so
+    // rather than omitting the field — the caller branches on it.
+    lead: false,
   });
 });
 
@@ -80,6 +84,7 @@ test("an agent WITHOUT a session id falls back to a dormant Start placeholder", 
     cwd: "/repo",
     command: "copilot",
     argv: null,
+    lead: false,
   });
 });
 
@@ -427,6 +432,7 @@ test("an agent whose session has NO conversation restores FRESH, keeping its ide
     command: "claude --session-id s2",
     argv: null,
     sessionId: "s2",
+    lead: false,
   });
 });
 
@@ -1605,6 +1611,7 @@ test("GUARDRAIL: a persisted ssh leaf can NEVER restore into an orchestration id
       paneKind: "ssh",
       name: "remote box",
       sshProfileId: "prof-1",
+      lead: false,
       sessionId: "s-1",
       role: "worker",
       groupId: "loomux-deadbeef",
@@ -1634,6 +1641,7 @@ test("a recorded ssh command line is NOT carried into the restore action", () =>
       paneKind: "ssh",
       name: "box",
       sshProfileId: "p1",
+      lead: false,
       command: "ssh host",
       argv: ["ssh", "-t", "host", "--", "claude --session-id s-1"],
     })

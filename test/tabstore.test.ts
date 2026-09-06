@@ -94,6 +94,7 @@ test("docked panes round-trip (captured outside the layout tree, #194 P4)", () =
             groupId: null,
             file: null,
             sshProfileId: null,
+            lead: false,
             embeds: [],
           },
         ],
@@ -214,6 +215,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
         groupId: null,
         file: null,
         sshProfileId: null,
+        lead: false,
         embeds: [],
       },
     },
@@ -237,6 +239,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             groupId: null,
             file: null,
             sshProfileId: null,
+            lead: false,
             embeds: [],
           },
         },
@@ -255,6 +258,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             groupId: null,
             file: null,
             sshProfileId: null,
+            lead: false,
             embeds: [],
           },
         },
@@ -275,6 +279,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             groupId: null,
             file: null,
             sshProfileId: null,
+            lead: false,
             embeds: [],
           },
         },
@@ -308,6 +313,7 @@ test("a files leaf round-trips its root — and needed NO new field or schema bu
     groupId: null,
     file: null,
     sshProfileId: null,
+    lead: false,
     embeds: [],
   };
   const state: PersistedTabs = {
@@ -379,6 +385,7 @@ test("editor and git leaves round-trip their root — and the editor's open FILE
     groupId: null,
     file,
     sshProfileId: null,
+    lead: false,
     embeds: [],
   });
   const state: PersistedTabs = {
@@ -516,6 +523,7 @@ test("malformed pane fields inside a valid leaf coerce to null, not a drop", () 
       groupId: null,
       file: null,
       sshProfileId: null,
+      lead: false,
       embeds: [],
     },
   });
@@ -536,6 +544,7 @@ test("embed preferences ({view, side, share}), one per docked edge, round-trip t
     groupId: null,
     file: null,
     sshProfileId: null,
+    lead: false,
     embeds: [
       { view: "group", side: "bottom", share: 0.42 },
       { view: "tasks", side: "left", share: 0.3 },
@@ -569,6 +578,7 @@ test("git and editor are valid embed views too (#361 scope increase), round-trip
     groupId: null,
     file: null,
     sshProfileId: null,
+    lead: false,
     embeds: [
       { view: "git", side: "left", share: 0.35 },
       { view: "editor", side: "right", share: 0.4 },
@@ -602,6 +612,7 @@ test("the progress timeline (#608) is a valid embed view and round-trips like an
     groupId: null,
     file: null,
     sshProfileId: null,
+    lead: false,
     embeds: [{ view: "timeline", side: "bottom", share: 0.45 }],
   };
   const state: PersistedTabs = {
@@ -880,6 +891,7 @@ test("an ssh leaf round-trips its connection + recorded session, and carries NO 
     groupId: null,
     file: null,
     sshProfileId: "prof-7",
+    lead: false,
     embeds: [],
   };
   const state: PersistedTabs = {

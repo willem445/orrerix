@@ -1048,6 +1048,12 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
 .pane:hover .pane-btn, .pane-btn:focus-visible { opacity: 1; }
 .pane-btn:hover { background: var(--surface-2); color: var(--ink); }
 .pane-btn.close:hover { color: var(--state-danger); }
+/* #2519: the lead pane's close, ARMED. Byte-consistent with `.tab-close.confirm`
+   above, which is the same gesture on the tab strip — the human meets one
+   affordance, not two that look different for no reason. */
+.pane-btn.close.confirm {
+  width: auto; padding: 0 5px; background: var(--state-danger); color: var(--surface-0); font-weight: 700;
+}
 /* #2116: a pane whose session already carries notes. The whole header button
    row is hover-revealed (`opacity: 0` above), so this cannot be an
    at-a-glance indicator and is not trying to be one — it tells you which
@@ -1806,6 +1812,18 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
   transition: background 0.14s var(--ease), border-color 0.14s var(--ease);
 }
 .agents-item:hover { background: var(--surface-2); border-color: var(--line); }
+/* #2519: a lead pane's child, nested under it. The indent is padding on the row
+   rather than a margin, so the whole button stays the full width of the list and
+   the hover/focus target does not shrink as a row becomes a child. The turnstile
+   is CSS-generated: it is decoration for a relationship the row's own text
+   already states (the identity line names the group), so it must not reach a
+   screen reader as content, and generating it here keeps the paint free of a
+   per-tick DOM write. */
+.agents-item.child { padding-left: 26px; position: relative; }
+.agents-item.child::before {
+  content: "\21B3"; position: absolute; left: 10px; top: 7px;
+  color: var(--ink-dim); font-size: 12px; line-height: 1.2;
+}
 .agents-top { display: flex; align-items: center; gap: 8px; }
 /* #2371: the agent-type mark. `flex: none` and a fixed line box so a row with a
    mark and one without agree on where the name starts; `agentsview.ts` HIDES it

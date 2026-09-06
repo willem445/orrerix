@@ -159,6 +159,23 @@ export interface PersistedPane {
    *  fresh launch uses (`sshReconnectArgv`). A profile deleted since is not
    *  guessed at: the dormant card says so and offers nothing. */
   sshProfileId: string | null;
+  /** This agent pane was a LEAD (#2519) — it owned a lightweight orchestration
+   *  group of its own and spawned orrerix panes as its helpers.
+   *
+   *  A flag rather than the group id, and that is the whole restore contract: a
+   *  lead group CANNOT be resumed (the backend refuses it — the children's
+   *  worktrees and sessions are gone, and their panes are not restored), so the
+   *  recorded group would name something that no longer exists. What restore
+   *  re-creates is a lead PANE: the same command line, with a FRESH group minted
+   *  for it. So the record has to say only "this was a lead", which is exactly
+   *  what re-minting needs.
+   *
+   *  Recorded on the AGENT kind, not `orch`: a lead pane carries an
+   *  orchestration identity but persists as the agent pane it is, because its
+   *  command line is its own and a whole-group resume must never sweep it up
+   *  (`Pane.liveKind`). Absent (every pre-#2519 snapshot, and every pane that
+   *  is not a lead) or malformed reads `false`. */
+  lead: boolean;
   /** Every view CURRENTLY docked to this "orch" pane (#361) — up to three
    *  entries, one per occupied edge (left/right/bottom), each naming which
    *  view and its share of that edge's split. Empty = nothing docked, every
@@ -394,6 +411,11 @@ function decodePane(v: unknown): PersistedPane | null {
     // as a dormant card that says it has no connection to reconnect to, which is
     // legible; failing the entry would take the whole tab's layout with it.
     sshProfileId: typeof r.sshProfileId === "string" && r.sshProfileId.trim() ? r.sshProfileId : null,
+    // #2519: only an exact `true` is a lead. Same default-OFF polarity as the
+    // launcher toggle that mints one (`subagentsFromStored`) and for the same
+    // reason: a corrupted or hand-edited snapshot must not silently mint a real
+    // group with a cap's worth of live agents on the next boot.
+    lead: r.lead === true,
     embeds: decodeEmbeds(r.embeds, r.embed, r.taskEmbed),
   };
 }

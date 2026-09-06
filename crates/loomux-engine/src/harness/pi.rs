@@ -1523,6 +1523,14 @@ impl AgentPane for PiPane {
     fn session_id(&self) -> Option<String> {
         self.session.lock_safe().clone()
     }
+
+    /// pi HAS a dialog channel, so this is the one implementation that does
+    /// not take the trait default. Delegates to the inherent
+    /// [`PiPane::answer_ui`], which is also reachable directly where the
+    /// caller holds a concrete pane.
+    fn answer_ui(&self, req: RequestId, answer: UiAnswer) -> Result<(), String> {
+        PiPane::answer_ui(self, req, answer)
+    }
 }
 
 /// How a pane's child actually left, as [`shutdown_child`] observed it.

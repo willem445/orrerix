@@ -231,6 +231,24 @@ pub struct OutputBuf {
     total: u64,
 }
 
+impl OutputBuf {
+    /// Append bytes and re-apply the ring cap.
+    ///
+    /// One copy of the arithmetic, because there were three and #2850 would
+    /// have made four: the reader thread, the test harness, and now the
+    /// structured drainer all grow this buffer, and a ring that saturated
+    /// differently depending on which of them wrote it would make the other
+    /// two prove nothing about production.
+    pub(crate) fn append(&mut self, bytes: &[u8]) {
+        self.total += bytes.len() as u64;
+        self.ring.extend(bytes);
+        let overflow = self.ring.len().saturating_sub(OUTPUT_RING_CAP);
+        if overflow > 0 {
+            self.ring.drain(..overflow);
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct PtyManager {
     ptys: Arc<Mutex<HashMap<u32, PtyHandle>>>,
@@ -245,6 +263,11 @@ pub struct PtyManager {
     /// `record_phantom_gate`/`phantom_gate_tick`. Cleaned up alongside
     /// `expected_exits` when a pty's waiter thread reaps it.
     neutral_gate_throttle: Arc<Mutex<HashMap<u32, (u64, Option<u64>)>>>,
+    /// Output rings for structured panes (#2850), which have no `PtyHandle`
+    /// because they have no ConPTY. Separate from `ptys` on purpose: an entry
+    /// here is NOT a pty, so every pty-side lookup (`write`, `resize`, `kill`)
+    /// misses it and a structured pane stays unreachable from all of them.
+    structured_rings: Arc<Mutex<HashMap<u32, Arc<Mutex<OutputBuf>>>>>,
 }
 
 /// The two pieces of [`PtyManager`] a write into a pane's stdin touches: the
@@ -783,6 +806,52 @@ impl PtyManager {
     /// looks identical and is not: it extends the lock over the syscall,
     /// which is exactly what `writer_handle`'s stated lock order forbids.
     /// `kill_all` above has the same shape for the same reason.
+    /// Reserve a pane id that no PTY will ever use.
+    ///
+    /// A structured pane (#2850) has no ConPTY behind it, but it still needs
+    /// an id: the delivery queue, the drainer and `deliver_now` are all keyed
+    /// by one, and giving structured panes a second keyspace would mean two
+    /// id kinds that look identical and can collide — a delivery routed to
+    /// the wrong pane, silently.
+    ///
+    /// So they come from THIS counter, the one `spawn_pty` mints from, which
+    /// makes uniqueness across both pane kinds a property of the allocator
+    /// rather than of an offset someone has to keep true. Nothing is inserted
+    /// into `ptys`, so every PTY-side lookup on a reserved id misses and the
+    /// pane is unreachable from `write_pty`, `resize_pty` and `kill` by
+    /// construction — which is the guard, not a check anyone can forget.
+    pub fn reserve_id(&self) -> u32 {
+        self.next_id.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Give a structured pane a ring, so the drainer has somewhere to render.
+    pub fn register_structured_ring(&self, id: u32) {
+        self.structured_rings
+            .lock_safe()
+            .insert(id, Arc::new(Mutex::new(OutputBuf::default())));
+    }
+
+    /// Append already-rendered VT bytes to a structured pane ring (#2850).
+    ///
+    /// A structured pane has no reader thread, so nothing feeds its ring on
+    /// its own — the drainer renders each `HarnessEvent` to bytes and calls
+    /// this. A pane with no ring registered is a no-op rather than an error:
+    /// the ring is a projection, and losing it must never fail a delivery.
+    pub fn append_structured_output(&self, id: u32, bytes: &[u8]) {
+        // Cloned out from under the map lock, then written — the lock order
+        // `writer_handle` states: never hold the registry lock across a
+        // buffer lock.
+        let ring = self.structured_rings.lock_safe().get(&id).cloned();
+        if let Some(buf) = ring {
+            buf.lock_safe().append(bytes);
+        }
+    }
+
+    /// Drop a structured pane ring when the pane goes.
+    pub fn drop_structured_ring(&self, id: u32) {
+        self.structured_rings.lock_safe().remove(&id);
+    }
+
     pub fn kill(&self, id: u32) {
         self.expected_exits.lock_safe().insert(id);
         let handle = self.ptys.lock_safe().remove(&id);
@@ -946,13 +1015,7 @@ impl PtyManager {
     pub fn append_fake_output_for_test(&self, id: u32, bytes: &[u8]) {
         let ptys = self.ptys.lock_safe();
         let Some(pty) = ptys.get(&id) else { return };
-        let mut out = pty.output.lock_safe();
-        out.total += bytes.len() as u64;
-        out.ring.extend(bytes);
-        let overflow = out.ring.len().saturating_sub(OUTPUT_RING_CAP);
-        if overflow > 0 {
-            out.ring.drain(..overflow);
-        }
+        pty.output.lock_safe().append(bytes);
     }
 
     /// Back-date this pane's keystroke-recency clock (#518, integration tests
@@ -1886,13 +1949,7 @@ fn spawn_pty_blocking(
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     {
-                        let mut out = output.lock_safe();
-                        out.total += n as u64;
-                        out.ring.extend(&buf[..n]);
-                        let overflow = out.ring.len().saturating_sub(OUTPUT_RING_CAP);
-                        if overflow > 0 {
-                            out.ring.drain(..overflow);
-                        }
+                        output.lock_safe().append(&buf[..n]);
                     }
                     // Send failure means the pump thread is gone (only on
                     // shutdown); stop reading rather than spin on a dead pipe.
@@ -2044,6 +2101,19 @@ pub async fn write_pty(
     data: String,
     human: Option<bool>,
 ) -> Result<(), String> {
+    // #2850 S3b: a structured pane is refused BY NAME, before the pty lookup.
+    //
+    // It would be refused anyway — nothing inserts a structured pane into
+    // `ptys`, so the lookup below misses and answers "pty not found" — and
+    // that missing entry IS the structural guarantee. This check exists only
+    // so the REASON reaches the caller: otherwise a client cannot tell "never
+    // had a terminal" from "its terminal has gone", and the two want opposite
+    // responses.
+    if let Some(reg) = app.try_state::<Arc<crate::orchestration::OrchRegistry>>() {
+        if reg.pane_id_is_structured(id) {
+            return Err(crate::orchestration::structured::WRITE_PTY_REFUSAL.to_string());
+        }
+    }
     let mut reply = {
         let state = app.try_state::<PtyManager>().ok_or("pty state unavailable")?;
         state.enqueue_frontend_write(id, data, human.unwrap_or(true))?

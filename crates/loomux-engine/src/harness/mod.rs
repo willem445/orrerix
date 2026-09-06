@@ -681,6 +681,23 @@ pub trait AgentPane: Send + Sync {
     fn events(&self) -> Option<EventRx>;
     /// `None` until the pane knows its id.
     fn session_id(&self) -> Option<String>;
+
+    /// Settle an extension-UI dialog (section 3.5).
+    ///
+    /// Defaulted to a refusal rather than left off the trait, because the
+    /// spawn path is harness-neutral: the drainer settles a dialog through
+    /// `Box<dyn AgentPane>` and cannot ask which harness it is holding. A
+    /// harness with no dialog channel says so; it does not silently drop the
+    /// answer, which would leave pi's own agent blocked for ever.
+    ///
+    /// **Who may CALL this is a property of the entry point, never of an
+    /// argument.** Every agent may be asked; no agent may ever answer. The
+    /// gate is `answer_pane_ui` in `src-tauri`, and this is the mechanism
+    /// under it.
+    fn answer_ui(&self, req: RequestId, answer: UiAnswer) -> Result<(), String> {
+        let _ = (req, answer);
+        Err("this harness has no extension-UI channel".to_string())
+    }
 }
 
 // ── the per-pane event log (§4) ─────────────────────────────────────────────

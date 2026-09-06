@@ -229,6 +229,21 @@ pub enum EnqueueReason {
     /// the marker drains (that is `drain_stranded_submit`'s press, identical
     /// for both pushes) and never a notice — see `queued_notice` below.
     StrandedSelfHeal,
+    /// #2850: a delivery to a STRUCTURED pane whose `AgentPane::send` failed.
+    ///
+    /// Its own variant for the audit-honesty rule every reason above follows.
+    /// None of the others is true here: nothing is occupying an input box, no
+    /// question is on screen, nothing is ahead in the queue, and there is no
+    /// box for text to strand in — a structured pane has no terminal at all.
+    /// Reusing one of them would put a PTY-shaped explanation on a failure
+    /// that has none, which is exactly the false audit claim this enum exists
+    /// to prevent.
+    ///
+    /// What it means concretely: the child stdin would not take the bytes, so
+    /// the pane is on its way out. The entry stays queued and the drainer
+    /// stops when the pane is torn down, rather than a delivery being lost to
+    /// an `Ok` nobody could check.
+    PaneSendFailed,
     /// #658: the drain-time roster naming deliveries this pane REFUSED while
     /// its queue was full (`announce_refusal_roster`).
     ///

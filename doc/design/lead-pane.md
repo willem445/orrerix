@@ -607,6 +607,23 @@ deliberately: the DOM tells the human what they are going to get before they
 submit, and the clamp is what decides, because a stale control is not a reason to
 mint four groups.
 
+### Closing: the pane asks, the tab already did
+
+`Pane.requestClose` arms on a lead and confirms on the second click, then calls
+`endGroup(group, cleanup=false)` — and deliberately does NOT also call
+`onCloseRequest`: the `orch-group-ended` event is the one teardown path, and two
+teardowns for one gesture is how a pane gets disposed twice. The worktrees are
+kept, because ending a group kills agents and a human closing the pane they were
+helping in has not asked for their work to be deleted.
+
+**The TAB close needed nothing.** `bindLeadTab` registers the lead's group
+against its tab, which is the same binding `tabbar.ts`'s `destructiveClose`
+reads — so a tab holding a lead already arms its own confirm and already says it
+will "end its agents". And the teardown itself is backend-side: `closeTab`
+disposes the panes, the lead's pty exits, and slice B's exit path takes the
+group's live delegates with it. One binding, three behaviours that would each
+otherwise have been a special case.
+
 ### C1's residual F2 is closed
 
 C1 could not tell a minted lead line from a solo line whose human had typed their

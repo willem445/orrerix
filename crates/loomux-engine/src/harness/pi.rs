@@ -1134,9 +1134,7 @@ fn strings_at(v: &Value, key: &str) -> Vec<String> {
 /// applied a decision to a request that cannot exist.
 pub fn permission_answer_unavailable(req: &RequestId, decision: Decision) -> String {
     format!(
-        "cannot settle {req:?} as {decision:?}: pi has no permission-prompt \
-         channel to settle one on — its questions arrive as UiRequest and are \
-         answered with answer_ui — see doc/design/harness-adapters.md §3.5"
+        "cannot settle {req:?} as {decision:?}: the permission channel lands in R2"
     )
 }
 

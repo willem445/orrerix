@@ -851,7 +851,7 @@ check — but "accepted" is all it means.
 (`docs/rpc.md:554-596`) — session-wide totals including tool-reported usage and
 compaction, so adding two readings double-counts. `contextUsage` is omitted
 when no model is available and its `tokens`/`percent` are `null` immediately
-after a compaction until a fresh response lands (`:595-596`), which is a
+after a compaction until a fresh response lands (`:595`), which is a
 `None`, not a zero.
 
 ### Dialogs block the agent, which is why the policy is a policy
@@ -870,7 +870,7 @@ A reply is `{"type":"extension_ui_response","id",…}` carrying `value`,
 
 **Where a dialog carries a `timeout`, pi resolves it itself** — "the
 agent-side will auto-resolve with a default value when the timeout expires. The
-client does not need to track timeouts" (`:1192`). That is the whole reason
+client does not need to track timeouts" (`:1193`). That is the whole reason
 `harness-adapters.md` §3.5 forbids an orrerix timer: a second timer racing this
 one produces two answers to one question, and the loser is recorded as though
 somebody had decided it.

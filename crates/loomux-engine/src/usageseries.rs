@@ -94,9 +94,7 @@ pub struct Sample {
     #[serde(default)]
     pub cli: String,
     pub role: String,
-    #[serde(rename = "in")]
     pub input: u64,
-    #[serde(rename = "out")]
     pub output: u64,
     pub cache_w: u64,
     pub cache_r: u64,

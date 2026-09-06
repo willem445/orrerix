@@ -164,11 +164,6 @@ pub fn fp_changed(prev: &Fp, now: &Fp) -> Vec<String> {
             out.push(k.clone());
         }
     }
-    for k in prev.keys() {
-        if !now.contains_key(k) {
-            out.push(k.clone());
-        }
-    }
     out.sort();
     out.dedup();
     out

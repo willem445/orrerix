@@ -717,7 +717,7 @@ impl Decoder {
     fn usage_from_stats(&self, data: &Value) -> Usage {
         let t = data.get("tokens");
         let call_cumulative = Tokens {
-            input: u64_at(t, "input"),
+            input: u64_at(t, "input") + self.turn_tokens.input,
             output: u64_at(t, "output"),
             cache_read: u64_at(t, "cacheRead"),
             cache_creation: u64_at(t, "cacheWrite"),

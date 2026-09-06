@@ -420,7 +420,19 @@ The cost of measuring it this way is stated rather than hidden: **a block
 observed on only one side of a mark contributes no row**, because "not
 observed" is not "unchanged". A mark no block's CLI moved across falls back to
 its component list, and `fp_partial` rides through to the view so a reader is
-told when an unchanged component is not proof nothing under it moved.
+told when an unchanged component is not proof that nothing under it moved.
+
+**That flag means TRANSIENT, and the projection must not oversell it.** Slice
+B's own `fp_partial` section above is the contract: only a failure that can
+clear on the next bucket sets it, because only such a failure produces the
+false-mark *pair* the flag exists to explain. A **stable** unreadable answer —
+a directory where a file belongs — hashes identically every bucket, cannot
+flip, and is deliberately never flagged. So an UNSET flag is not proof that
+every surface was read either, and the view's wording says "could not be read
+this round" rather than the narrower "hit a cap" it carried before slice B
+settled this (`c3ae9819`, which landed after slice C forked and reached it
+only at the rebase onto main — the re-read that caught it is the one every
+sibling slice owes its own prose).
 
 `beforeAfter` is `null` below `k` buckets on a side — **never `0`**. A mark
 two buckets after the series began has no "before", and printing `0` there

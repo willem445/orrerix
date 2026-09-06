@@ -1616,8 +1616,16 @@ export interface UsageSeriesMark {
   fp: Record<string, string>;
   /** The previous mark's fingerprint; `{}` for a group's first mark. */
   prev: Record<string, string>;
-  /** The fingerprint walk hit a cap, so an UNCHANGED component is not proof
-   *  that nothing under it moved. A change it did see is still real. */
+  /** A component could not be read this round, so an UNCHANGED component is
+   *  not proof that nothing under it moved. A change it DID see is still real.
+   *
+   *  **Transient failures only** (#2011 slice B, `c3ae9819`): the flag exists
+   *  to explain the false-mark PAIR a failure that clears next bucket
+   *  produces. A stable unreadable answer hashes the same way every bucket,
+   *  cannot flip, and is deliberately never flagged — so an unset flag is not
+   *  proof that every surface was read. This doc said "hit a cap" until that
+   *  commit narrowed the rule in the Rust and the design note; the wrapper was
+   *  the surface it did not reach. */
   fp_partial: boolean;
 }
 

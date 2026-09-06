@@ -699,7 +699,16 @@ export interface BucketedSeries {
 
 /** A hard ceiling on grid points, so a pathological window (a clock
  *  correction, a hand-typed `sinceMs`) cannot build an unbounded array on the
- *  render path. Ten thousand five-minute buckets is ~35 days. */
+ *  render path.
+ *
+ *  **100,000 five-minute buckets is ~347 days**, so the ceiling is far above
+ *  any window this panel offers — the widest preset is 7 d (2,016 buckets)
+ *  and `all` spans the series, which starts at deploy. It is a guard against
+ *  a nonsense range, not a display limit, and nothing normal approaches it.
+ *  (The comment here used to read "ten thousand … is ~35 days", which
+ *  described a constant ten times smaller than the one below it: true
+ *  arithmetic about the wrong number, which is the harder kind of wrong
+ *  comment to notice.) */
 const MAX_BUCKETS = 100_000;
 
 /**
@@ -813,8 +822,10 @@ export interface ChartMark {
   /** The label the vertical carries: the roster diff where there is one
    *  (`worker-std: opencode → pi`), else the component list. */
   label: string;
-  /** The fingerprint walk hit a cap, so an UNCHANGED component is not proof
-   *  that nothing under it moved. Carried through so the view can say so. */
+  /** A component could not be read this round, so an UNCHANGED component is
+   *  not proof that nothing under it moved. Carried through so the view can
+   *  say so. Transient failures only — an unset flag is not proof that every
+   *  surface was read (slice B's `fp_partial` contract). */
   fpPartial: boolean;
 }
 

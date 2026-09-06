@@ -746,7 +746,8 @@ export class TokenChartsView {
         `${fmtTime(m.tsMs)} — ${m.label}\n` +
         `fingerprint components changed: ${m.changed.length > 0 ? m.changed.join(", ") : "(none recorded)"}` +
         (m.fpPartial
-          ? "\nThe fingerprint walk hit a cap, so an unchanged component is not proof nothing under it moved."
+          ? "\nA component could not be read this round, so an unchanged component is " +
+            "not proof that nothing under it moved."
           : "") +
         "\nClick for the before/after readout.";
       g.append(title);

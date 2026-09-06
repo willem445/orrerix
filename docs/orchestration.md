@@ -3115,7 +3115,7 @@ the drive parks as `fix-stalled` with a line naming the pane to read. A worker t
 waited out. None of this applies to a drive that has not handed anything back yet — the first pass
 over a PR you drove after your worker already reported is unchanged.
 
-**A drive stops, it does not drift.** There are seventeen ways out and each produces exactly one
+**A drive stops, it does not drift.** There are seventeen ways out and each produces at most one
 line in the orchestrator's pane: the gate being satisfied, the drive being cancelled — by you, or
 by orrerix on its own when it sees the PR has been closed — or one of
 fifteen holds — a counter reaching INVARIANT 9's bound, a reviewer escalating, a lane or a worker going quiet past its timeout,
@@ -3134,6 +3134,24 @@ because its remedy is: the recorded session is fine and what is exhausted is a *
 one — `kill_agent` on an idle delegate, and the notice names which are idle — is what clears it,
 not re-pointing the drive at a different session. It is the one hold reason named here by its own
 word, because it is the one whose remedy is a different action from its neighbour's.
+
+**"At most one", because two of those exits are deliberately silent — and both are readable.**
+A drive *you* cancelled with `cancel_review_drive` is not announced: that call already answered
+you, synchronously, with the panes it released, so a prompt arriving afterwards would be a
+wake-up about something you are holding. A cancel orrerix decided on its own — it saw the PR
+closed or merged — still lands in your pane, because nothing else would tell you. And a hold that
+repeats one the drive has already announced — same reason, same commit, same counters spent, which
+is what a resume that changed nothing produces — is not sent a second time. Both are on the audit
+log with the full text of the line (`rd-notice-demoted`, `rd-hold-repeated`), and a parked drive is
+listed by `review_drive_status` whatever its notice did. A hold at a NEW commit always announces:
+the head is part of what makes two holds the same hold, so a resume after your worker pushed is a
+hold about different code and you hear about it.
+
+**The notices themselves are short on purpose.** The line that says a gate is satisfied names the
+lanes and their verdicts, what the drive spent, how many lanes left non-blocking findings, the
+panes it released, and `list_verdicts("<pr>")` — it does not re-send the reviewers' own summaries,
+because reading them is what that call is for and every byte in your pane is paid for again on
+every later turn until you compact.
 
 **A drive the cap starves says so, in fifteen minutes rather than hours.** A reviewer spawn
 refused by the live-delegate cap is normally nothing to act on — another drive's lane finishes, a

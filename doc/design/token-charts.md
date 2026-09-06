@@ -521,7 +521,21 @@ rather than presenting "2 review rounds" for a feature that had eleven. A
 `null` floor means *no rows were read*, which is "we have not looked" and
 never "there is no history".
 
-`scorecardColumns` ships here as the tested projection; slice D renders those
-columns beside the bars. Its fail-verdict vocabulary is ENUMERATED rather than
-"anything that is not a pass", so a verdict this build has not heard of lands
-in neither column instead of silently inflating the fail rate.
+`scorecardColumns` ships here as the tested projection; its floor renders in
+the pane's notes (§The coverage note), per bar, and its fail-verdict
+vocabulary is ENUMERATED rather than "anything that is not a pass", so a
+verdict this build has not heard of lands in neither column instead of
+silently inflating the fail rate. Slice D's table beside the bars is a
+DIFFERENT cut of the same log: `src/tokenscorecard.ts`, a DOM-free port of
+`scripts/orch-scorecard.cjs` — one row per `block/cli` lane with per-PR
+`rounds_to_pass` / `fail_rate` / wall-clock medians (`laneStats`,
+`computeWindows`, `statCell`, `laneCliOf` ported; the script stays the spec,
+and its `laneStats` decides pass|fail only, so an unheard-of verdict is
+counted as undecided, not folded into a column) — and, as its caption,
+`coverageFloor`'s spawn-row-missing half: a window credited with a delegate
+whose `agent-spawn` row did not survive the read has PROVEN truncation,
+stated even when empty so the caption is not vacuous. The port's stated
+residuals: the text-tier attribution (H2/H3) and the `merged_at` window arm
+are not ported — the pane has no `--pr-meta`, so the population is every PR
+the surviving log names structurally and `end_source` always says which
+fallback answered.

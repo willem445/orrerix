@@ -562,11 +562,10 @@ pub fn transition(from: DriveState, to: DriveState) -> Result<DriveState, Invali
 /// revision of the same argument. One string rather than a tuple so the entry
 /// persists it as one JSON value that an older build round-trips through
 /// `extra` untouched (§11.2).
-pub fn hold_key(reason: HeldReason, head: &str, counters: &Counters) -> String {
+pub fn hold_key(reason: HeldReason, _head: &str, counters: &Counters) -> String {
     format!(
-        "{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         reason.as_str(),
-        head,
         counters.review_rounds,
         counters.ci_attempts,
         counters.rebase_attempts,

@@ -24,7 +24,7 @@ import { reduceConnect, channelBadge, dropIfStale } from "./channel";
 import type { HeldReason } from "./heldbadge";
 import { modal } from "./modal";
 import { killPty, onPtyExit } from "./pty";
-import type { ProjectionInput } from "./structuredview";
+import { decodeBatch } from "./structuredview.ts";
 import type { StructuredPaneView } from "./structuredpane";
 import { withDeadline } from "./dirtystate";
 import {
@@ -880,7 +880,20 @@ export function initOrchestration(wiring: OrchWiring): void {
   // transcript of record is the per-pane event log on disk (§4.1), and a pane
   // opening later replays from that rather than from a backlog this window held.
   void listen<PaneEventBatch>("orch-pane-event", ({ payload }) => {
-    structuredPanes.get(payload.agent_id)?.apply(payload.events);
+    const view = structuredPanes.get(payload.agent_id);
+    if (!view) return;
+    // DECODE, never cast (#2891 S4). `decodeBatch` refuses a payload spelling
+    // this contract does not allow — the class of defect that shipped a
+    // `{"Value":…}` settlement nothing could read — and DROPS the offender
+    // rather than the batch: the other 63 events are fine and the transcript is
+    // what the human is watching. An unrecognised `kind` is not a refusal; it
+    // passes through and the projection files it as a notice (§1.2's additive
+    // rule), so a newer engine never loses a batch to this.
+    const { events, rejected } = decodeBatch(payload.events);
+    for (const e of rejected) {
+      console.warn(`[orrerix] dropped a malformed pane event for ${payload.agent_id}: ${e.message}`);
+    }
+    view.apply(events);
   });
 }
 
@@ -890,7 +903,11 @@ export function initOrchestration(wiring: OrchWiring): void {
 export interface PaneEventBatch {
   group_id: string;
   agent_id: string;
-  events: ProjectionInput[];
+  /** RAW, deliberately. Typing this `ProjectionInput[]` would be the same
+   *  unchecked assertion the `as` cast was — the wire is JSON and this build's
+   *  belief about its shape is what `decodeBatch` exists to stop taking on
+   *  faith. */
+  events: unknown[];
 }
 
 /** Live structured panes, by agent id.

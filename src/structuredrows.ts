@@ -119,9 +119,9 @@ export function answerWasRefusal(answer: UiAnswer | string): boolean {
     const s = answer.toLowerCase();
     return s === "cancelled" || s === "deny" || s === "denied" || s === "refuse";
   }
-  if ("Confirmed" in answer) return !answer.Confirmed;
-  if ("Value" in answer) {
-    const s = String(answer.Value).toLowerCase();
+  if ("confirmed" in answer) return !answer.confirmed;
+  if ("value" in answer) {
+    const s = String(answer.value).toLowerCase();
     return s === "deny" || s === "denied" || s === "no" || s === "cancel" || s === "cancelled";
   }
   return false;
@@ -820,12 +820,12 @@ export function settlementLine(b: RequestBlock): string | null {
   const what =
     typeof a === "string"
       ? a
-      : "Confirmed" in a
-        ? a.Confirmed
+      : "confirmed" in a
+        ? a.confirmed
           ? "allowed"
           : "denied"
-        : "Value" in a
-          ? a.Value
+        : "value" in a
+          ? a.value
           : "cancelled";
   return `${what} · by ${b.settled.by}`;
 }

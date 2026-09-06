@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { emptyState, emptyViewState, project } from "../src/structuredview.ts";
+import { decodeBatch, decodeProjectionInput, ProjectionDecodeError } from "../src/structuredview.ts";
 import type { ProjectionInput, RequestBlock, State, ToolBlock } from "../src/structuredview.ts";
 import {
   OVERSCAN_PX,
@@ -68,7 +69,9 @@ function readFixture(): ProjectionInput[] {
     .split("\n")
     .map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l))
     .filter((l) => l.length > 0)
-    .map((l) => JSON.parse(l) as ProjectionInput);
+    // DECODE, never cast. The `as` this replaces is why three wrong spellings
+    // sat in this fixture under a green suite (#2891 S4).
+    .map((l) => decodeProjectionInput(JSON.parse(l)));
 }
 
 function fixtureState(): State {
@@ -227,12 +230,12 @@ test("a delivery and a turn boundary are marked by form, never by a hue of their
 
 test("a refusal is read the same way wherever the answer shape came from", () => {
   assert.equal(answerWasRefusal("deny"), true);
-  assert.equal(answerWasRefusal("Cancelled"), true);
-  assert.equal(answerWasRefusal({ Confirmed: false }), true);
-  assert.equal(answerWasRefusal({ Value: "no" }), true);
+  assert.equal(answerWasRefusal("cancelled"), true);
+  assert.equal(answerWasRefusal({ confirmed: false }), true);
+  assert.equal(answerWasRefusal({ value: "no" }), true);
   assert.equal(answerWasRefusal("allow"), false);
-  assert.equal(answerWasRefusal({ Confirmed: true }), false);
-  assert.equal(answerWasRefusal({ Value: "fix/2214-resume-model" }), false);
+  assert.equal(answerWasRefusal({ confirmed: true }), false);
+  assert.equal(answerWasRefusal({ value: "fix/2214-resume-model" }), false);
 });
 
 // ── the row list ────────────────────────────────────────────────────────────
@@ -717,3 +720,187 @@ test("every segment name the row model can produce is one the stylesheet paints"
   const evicted: Segment = segmentOf({ id: "e", turn: null, kind: "evicted", blocks: 7 });
   assert.equal(evicted, "idle");
 });
+
+// ── the decoder: the cast, replaced ─────────────────────────────────────────
+
+test("the decoder refuses every spelling that shipped wrong, and the fixture carries none", () => {
+  // THE POSITIVE CONTROL FIRST. A refusal test that never refuses anything is
+  // the vacuity this repo has a rule about, so each of the three real defects
+  // (#2891 S4) is fed back in and must be REFUSED — with its own assertion, so
+  // one of them silently passing cannot hide behind the other two.
+  const refused: Array<[string, unknown]> = [
+    // The capitalised `UiAnswer` spellings. `rename_all = "snake_case"` renames
+    // the VARIANT, so the wire is `{value}` / `{confirmed}` / `"cancelled"`.
+    ["ui_settled Value", { kind: "ui_settled", id: "u1", answer: { Value: "x" }, by: "human" }],
+    ["ui_settled Confirmed", { kind: "ui_settled", id: "u1", answer: { Confirmed: true }, by: "human" }],
+    ["ui_settled Cancelled", { kind: "ui_settled", id: "u1", answer: "Cancelled", by: "human" }],
+    // `CompactTrigger` is `manual | auto`.
+    ["compacted threshold", { kind: "compacted", trigger: "threshold", pre_tokens: 1 }],
+    // And the neighbours of the same class, which nothing had checked either.
+    ["note kind", { kind: "note", turn: null, note: "lifecycle", text: "x" }],
+    ["ui_request method", { kind: "ui_request", id: "u", method: "Select", options: [] }],
+    ["settled by", { kind: "permission_settled", id: "r", decision: "allow", by: "Policy" }],
+    ["delivery via", { kind: "delivery", via: "handoff", from: null, text: "x", ts: null }],
+  ];
+  for (const [what, raw] of refused) {
+    assert.throws(
+      () => decodeProjectionInput(raw),
+      ProjectionDecodeError,
+      `${what} was ACCEPTED — the decoder does not refuse the spelling it exists for`,
+    );
+  }
+
+  // The accepted forms, so "refuse everything" cannot pass either.
+  for (const ok of [
+    { kind: "ui_settled", id: "u1", answer: { value: "x" }, by: "human" },
+    { kind: "ui_settled", id: "u1", answer: { confirmed: false }, by: "policy" },
+    { kind: "ui_settled", id: "u1", answer: "cancelled", by: "pane_exited" },
+    { kind: "compacted", trigger: "auto", pre_tokens: null },
+    { kind: "note", turn: null, note: "retry", text: "x" },
+  ]) {
+    assert.doesNotThrow(() => decodeProjectionInput(ok), `a valid event was refused: ${JSON.stringify(ok)}`);
+  }
+
+  // And the fixture itself, which is what the three defects were hiding in.
+  // `readFixture` already decodes, so this asserts the count rather than
+  // re-running it — a fixture that shrank to nothing would pass a bare loop.
+  assert.equal(readFixture().length, 28, "every one of the fixture's 28 lines decodes");
+});
+
+test("an unknown KIND passes through; an unknown payload spelling does not", () => {
+  // §1.2's additive rule and the refusal above are different questions, and
+  // conflating them would either drop a whole batch from a newer engine or
+  // believe a value nothing may emit.
+  const future = { kind: "something_the_engine_added_later", v: 1 };
+  assert.doesNotThrow(() => decodeProjectionInput(future));
+  // And the projection files it rather than throwing — rule 3, end to end.
+  const s = project(emptyState(), [decodeProjectionInput(future)]);
+  assert.equal(s.unknownEvents, 1, "positive control: the projection saw it and recorded it");
+  assert.equal(s.blocks.length, 1);
+  assert.equal(s.blocks[0]!.kind, "notice");
+});
+
+test("a batch drops what it refuses and keeps the rest", () => {
+  // One malformed event must not cost the batch it rode in on: the transcript
+  // is what the human is watching, and 63 good events are not collateral.
+  const { events, rejected } = decodeBatch([
+    { kind: "turn_started", turn: 1 },
+    { kind: "compacted", trigger: "threshold", pre_tokens: 1 },
+    { kind: "text", turn: 1, delta: "hello" },
+  ]);
+  assert.equal(events.length, 2, "the two good events survived");
+  assert.equal(rejected.length, 1, "positive control: one really was refused");
+  assert.equal(rejected[0]!.kind, "compacted");
+  assert.equal(rejected[0]!.field, "trigger");
+  assert.match(rejected[0]!.message, /threshold/, "the message names the value, not just the field");
+});
+
+// ── the parity record ───────────────────────────────────────────────────────
+
+test("the DOM projection draws exactly what the parity record says it does", () => {
+  // The TypeScript half of §5.1's parity control. The Rust half is
+  // `the_two_projections_diverge_only_where_the_record_says_they_do` in
+  // `crates/loomux-engine/src/harness/transcript.rs`, and both read THIS file
+  // and the fixture beside it — which is the whole point: a divergence between
+  // the two projections of one log is only visible where something compares
+  // them, and nothing did before this slice.
+  const record = JSON.parse(
+    readFileSync(fileURLToPath(new URL("./fixtures/structuredview/parity.json", import.meta.url)), "utf8"),
+  ) as {
+    events: number;
+    local_only: number;
+    kinds: Record<string, { dom: boolean; vt: boolean; why?: string }>;
+  };
+
+  const raw = readFileSync(FIXTURE, "utf8")
+    .split("\n")
+    .map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l))
+    .filter((l) => l.length > 0);
+  assert.equal(raw.length, record.events, "parity.json is dated to a different fixture");
+
+  const state = emptyState();
+  const seen = new Set<string>();
+  let locals = 0;
+  let drewSomething = false;
+  for (const line of raw) {
+    const ev = decodeProjectionInput(JSON.parse(line));
+    if (ev.kind === "delivery") locals += 1;
+    // "Did this projection show the human anything about this event" — a block
+    // created or updated, or a header/ticker fact set. The same question the
+    // Rust half asks of the VT bytes, which is what makes them comparable.
+    const before = snapshot(state);
+    project(state, [ev], { nowMs: 10_000 });
+    const drew = snapshot(state) !== before;
+    if (drew) drewSomething = true;
+    if (ev.kind === "delivery") continue;
+
+    seen.add(ev.kind);
+    const row = record.kinds[ev.kind];
+    assert.ok(row, `parity.json has no row for kind "${ev.kind}"`);
+    assert.equal(
+      drew,
+      row.dom,
+      `the DOM projection ${drew ? "DRAWS" : "draws nothing"} for "${ev.kind}", ` +
+        `and parity.json says it ${row.dom ? "does" : "does not"}`,
+    );
+  }
+
+  assert.ok(drewSomething, "positive control: nothing drew at all, so the projection never ran");
+  assert.equal(locals, record.local_only, "the local-event exemption grew without being written down");
+  assert.equal(
+    seen.size,
+    16,
+    `the fixture covers ${seen.size} of the 17 HarnessEvent kinds; it must cover 16 (all but ` +
+      "`observed`, which is PTY-only), or the scan above is narrower than it reads",
+  );
+  assert.equal(
+    Object.keys(record.kinds).length,
+    seen.size,
+    "parity.json describes kinds the fixture never exercises, so those rows assert nothing",
+  );
+});
+
+test("every divergence in the parity record carries an argument", () => {
+  // A divergence between the two projections is allowed — the VT renderer
+  // deliberately draws nothing for thinking or tool output — but an UNARGUED
+  // one is exactly the drift §5.1 warns about. Both halves check this; a reason
+  // that only one side demanded is a reason the other side could delete.
+  const record = JSON.parse(
+    readFileSync(fileURLToPath(new URL("./fixtures/structuredview/parity.json", import.meta.url)), "utf8"),
+  ) as { kinds: Record<string, { dom: boolean; vt: boolean; why?: string }> };
+
+  const diverging = Object.entries(record.kinds).filter(([, r]) => r.dom !== r.vt);
+  assert.deepEqual(
+    diverging.map(([k]) => k).sort(),
+    ["thinking", "tool_output"],
+    "the set of divergences moved — that is a design change, not a test fix",
+  );
+  for (const [kind, row] of diverging) {
+    assert.ok(
+      (row.why ?? "").length > 40,
+      `"${kind}" diverges and parity.json gives no reason worth the name`,
+    );
+  }
+});
+
+/** Everything about `State` a reader can see, as a comparable string. Used only
+ *  to answer "did this event change anything", which is what the parity record
+ *  means by `dom`. */
+function snapshot(s: State): string {
+  return JSON.stringify({
+    blocks: s.blocks,
+    session: s.session,
+    model: s.model,
+    capabilities: s.capabilities,
+    usage: s.usage,
+    cost: s.cost,
+    steering: s.steering,
+    followUp: s.followUp,
+    currentTurn: s.currentTurn,
+    exitCode: s.exitCode,
+    exited: s.exited,
+    evicted: s.evicted,
+    droppedBytes: s.droppedBytes,
+    unknownEvents: s.unknownEvents,
+  });
+}

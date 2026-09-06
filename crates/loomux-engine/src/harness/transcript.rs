@@ -1049,4 +1049,187 @@ mod tests {
             "a harness-supplied ESC reached the terminal: {stripped:?}"
         );
     }
+
+    // ── the two projections, kept honest against one record (#2891 S4) ──────
+    //
+    // `doc/design/harness-adapters.md` §5.1 makes the event log the record and
+    // gives it two projections: this one, into VT bytes for the pane's
+    // `OutputBuf` ring, and the DOM renderer the human actually reads
+    // (`src/structuredview.ts` -> `src/structuredpane.ts`). It states the risk
+    // that shape creates in one line — "two projections of one log can
+    // disagree" — and assigns the control to the slice that builds the DOM
+    // renderer. These two tests are the Rust half of it; the TypeScript half is
+    // `test/structuredrows.test.ts`, and both read the same two files.
+
+    /// The fixture the frontend's tests and its replay page run on, and this
+    /// crate's own path to it. It lives under `test/` because that is where the
+    /// frontend can reach it; the point of reading it from HERE is that the
+    /// contract it claims to encode is defined in THIS crate.
+    const FRONTEND_FIXTURE: &str =
+        include_str!("../../../../test/fixtures/structuredview/session.harness.jsonl");
+    const PARITY_RECORD: &str =
+        include_str!("../../../../test/fixtures/structuredview/parity.json");
+
+    /// Split on `\n` only and strip an optional trailing `\r` — pi's own framing
+    /// rule, and what makes this reader correct on a CRLF checkout, which this
+    /// file is (`git ls-files --eol` says `w/crlf`).
+    fn fixture_lines() -> Vec<&'static str> {
+        FRONTEND_FIXTURE
+            .split('\n')
+            .map(|l| l.strip_suffix('\r').unwrap_or(l))
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    /// The one line that is deliberately NOT a `HarnessEvent`: orrerix's own
+    /// delivery, which rides the same batch tagged distinctly so that a harness
+    /// cannot forge one (`structuredview.ts`'s `LocalEvent`).
+    fn is_local(line: &str) -> bool {
+        line.contains("\"kind\":\"delivery\"")
+    }
+
+    #[test]
+    fn the_frontend_fixture_is_byte_for_byte_what_serde_emits() {
+        // WHAT THIS CLOSES, and it is a CLASS rather than three instances.
+        // `test/fixtures/structuredview/session.harness.jsonl` calls itself
+        // "HarnessEvent as it serializes" and the frontend reads it through an
+        // unchecked `as` cast, so nothing on either side had ever checked the
+        // claim. Three lines were wrong when this test was written (#2891 S4):
+        // a `ui_settled` answer spelled `{"Value":…}` where `UiAnswer` carries
+        // `rename_all = "snake_case"` and the wire is `{"value":…}`, the
+        // frontend type that agreed with it, and a `compacted` trigger of
+        // `"threshold"`, which is not a `CompactTrigger` at all. Every reader
+        // of a settled dialog matched the capitalised keys, so a REAL
+        // settlement would have fallen through to "cancelled" on every dialog —
+        // with a green suite on both sides, because the fixture carried the
+        // same error.
+        //
+        // ROUND-TRIP RATHER THAN A HAND-BUILT SEQUENCE. The ask was for a test
+        // that serialises a representative sequence and compares it byte for
+        // byte. This does the same work over EVERY line instead of over the
+        // ones somebody chose, and it cannot drift from the fixture the way a
+        // second hand-written copy of it would: deserialize (which refuses an
+        // unknown variant spelling outright) and re-serialize (which pins the
+        // key spelling and the field ORDER, since serde emits declaration
+        // order). A serde attribute changed in this crate reddens here, and
+        // here is the file the frontend runs on.
+        //
+        // ONE CONSEQUENCE WORTH NAMING, because it caught a fourth wrong line.
+        // `serde_json` is built here without `preserve_order`, so a `Value`
+        // object is a `BTreeMap` and its keys come back SORTED. A tool call`s
+        // `input` is a `Value`, so the bytes the engine really emits for
+        // `Grep{pattern, path}` are `{"path":…,"pattern":…}` — which is not the
+        // order the fixture was written in, and not something any amount of
+        // reading the type would have told you.
+        let lines = fixture_lines();
+        assert_eq!(
+            lines.len(),
+            28,
+            "the fixture is 28 lines; a silent truncation would pass every assertion below"
+        );
+
+        let mut locals = 0;
+        let mut checked = 0;
+        for (i, line) in lines.iter().enumerate() {
+            if is_local(line) {
+                locals += 1;
+                continue;
+            }
+            let ev: HarnessEvent = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("fixture line {} is not a HarnessEvent: {e}\n{line}", i + 1));
+            let round = serde_json::to_string(&ev)
+                .expect("a HarnessEvent this crate just parsed must serialize");
+            assert_eq!(
+                round,
+                *line,
+                "fixture line {} is not what serde emits for the event it decodes to",
+                i + 1
+            );
+            checked += 1;
+        }
+        assert_eq!(locals, 1, "exactly one line is a local (non-HarnessEvent) event");
+        assert_eq!(checked, 27, "and the other 27 were really round-tripped");
+    }
+
+    #[test]
+    fn the_two_projections_diverge_only_where_the_record_says_they_do() {
+        // The parity control §5.1 asks for. NOT an equality: this projection
+        // deliberately draws nothing for `Thinking` and `ToolOutput` — the arms
+        // above carry the argument — so a "both draw the same set" assertion
+        // would have to be weakened until it caught nothing. The record is
+        // per-kind, every divergence carries its reason, and both sides assert
+        // against it, so a NEW divergence cannot appear silently and an
+        // existing one cannot be closed without saying so in the record.
+        let record: serde_json::Value =
+            serde_json::from_str(PARITY_RECORD).expect("parity.json must be valid JSON");
+        let kinds = record["kinds"]
+            .as_object()
+            .expect("parity.json must carry a `kinds` object");
+
+        let mut drew_something = false;
+        let mut seen: Vec<String> = Vec::new();
+        for (i, line) in fixture_lines().iter().enumerate() {
+            if is_local(line) {
+                continue;
+            }
+            let tag = serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .and_then(|v| v["kind"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| panic!("fixture line {} has no `kind`", i + 1));
+            let ev: HarnessEvent = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("fixture line {} is not a HarnessEvent: {e}", i + 1));
+
+            // A fresh renderer per event: this test asks "does this KIND draw",
+            // and a shared one would let a previous event's open line decide it.
+            let bytes = Renderer::new(80).render(&ev);
+            let drew = !bytes.is_empty();
+            if drew {
+                drew_something = true;
+            }
+            if !seen.contains(&tag) {
+                seen.push(tag.clone());
+            }
+
+            let row = kinds
+                .get(&tag)
+                .unwrap_or_else(|| panic!("parity.json has no row for kind `{tag}`"));
+            let expected = row["vt"]
+                .as_bool()
+                .unwrap_or_else(|| panic!("parity.json row `{tag}` has no boolean `vt`"));
+            assert_eq!(
+                drew, expected,
+                "the VT projection {} for `{tag}`, and parity.json says it {}",
+                if drew { "DRAWS" } else { "draws nothing" },
+                if expected { "does" } else { "does not" }
+            );
+            if !expected {
+                let why = row["why"].as_str().unwrap_or("");
+                assert!(
+                    why.len() > 40,
+                    "`{tag}` diverges between the two projections and parity.json gives no reason \
+                     worth the name — a divergence without an argument is the drift §5.1 warns about"
+                );
+            }
+        }
+
+        // The controls. An absence-only run over an empty fixture, or one whose
+        // every row happened to be `vt: false`, would pass everything above.
+        assert!(
+            drew_something,
+            "positive control: no event drew anything, so the renderer never ran"
+        );
+        assert_eq!(
+            seen.len(),
+            16,
+            "the fixture covers 16 of the 17 HarnessEvent kinds (all but `observed`, which is \
+             PTY-only) — it now covers {}, so the scan above is narrower than it reads",
+            seen.len()
+        );
+        assert_eq!(
+            kinds.len(),
+            seen.len(),
+            "parity.json describes kinds the fixture does not exercise, so those rows are \
+             asserted by nothing"
+        );
+    }
 }

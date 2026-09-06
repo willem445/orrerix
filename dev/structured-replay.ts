@@ -40,6 +40,7 @@
 
 import "../src/styles.css";
 import { StructuredPaneView } from "../src/structuredpane.ts";
+import { decodeProjectionInput } from "../src/structuredview.ts";
 import type { ProjectionInput } from "../src/structuredview.ts";
 
 const host = document.getElementById("pane")!;
@@ -70,7 +71,7 @@ function fresh(): StructuredPaneView {
       v.apply([
         channel === "permission"
           ? { kind: "permission_settled", id: requestId, decision: answer, by: "human" }
-          : { kind: "ui_settled", id: requestId, answer: { Value: answer }, by: "human" },
+          : { kind: "ui_settled", id: requestId, answer: { value: answer }, by: "human" },
       ]);
     },
   });
@@ -115,7 +116,9 @@ async function replaySession(): Promise<void> {
     .split("\n")
     .map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l))
     .filter((l) => l.length > 0)
-    .map((l) => JSON.parse(l) as ProjectionInput);
+    // Decoded, not cast — the same refusal the live listener applies, so this
+    // page cannot render a spelling the app would drop.
+    .map((l) => decodeProjectionInput(JSON.parse(l)));
 
   // One event every 90 ms, so the streaming caret, the spinner, the fold
   // animations and the ticker's digit lift are all visible AS motion rather

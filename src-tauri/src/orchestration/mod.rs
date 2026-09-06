@@ -44545,9 +44545,6 @@ impl OrchRegistry {
             let mut states = self.series_state.lock_safe();
             let state = states.entry(group.clone()).or_default();
             for s in snaps {
-                if !live_keys.contains(&s.key) {
-                    continue;
-                }
                 let sample = usageseries::Sample {
                     ts_ms: now,
                     key: s.key.clone(),

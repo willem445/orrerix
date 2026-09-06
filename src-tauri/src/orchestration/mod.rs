@@ -36571,16 +36571,34 @@ impl OrchRegistry {
     /// write truncates the file the first is still handing to `gh`, and the first
     /// post silently publishes the second's text or a torn prefix of it. Nothing
     /// fails, which is what makes it worth a counter rather than a comment. The
-    /// counter is process-wide and monotonic, so it separates concurrent calls; it
-    /// resets on restart, which is harmless because a stale leftover is only ever
-    /// truncated by a fresh write and removed after it.
+    /// counter is process-wide and monotonic, so it separates concurrent calls.
     ///
-    /// **Every post is audited, whichever way it goes.** The row is written after
-    /// `gh` has been run and carries the outcome — the URL on success, the error
-    /// on failure — so a post that failed is visible to the human rather than
-    /// absent, which reads identically to never having been attempted. Argument
-    /// validation that refuses BEFORE `gh` runs (an empty body, an unusable agent
-    /// id) is not a post and writes no row.
+    /// **What the counter does NOT fix, stated because the earlier draft of this
+    /// doc claimed otherwise** (review round 2's premortem). Before the counter,
+    /// a staging file orphaned by a kill between the write and the remove was
+    /// reclaimed by the next post from that agent, which reused the one name.
+    /// With a per-call name nothing ever reuses it, so an orphan is permanent
+    /// debris in the group dir until something enumerates and sweeps it. That is
+    /// a real trade the counter makes — a correctness fix bought with litter —
+    /// and it is not swept here because no surface enumerates the group dir yet.
+    ///
+    /// **Every post that reaches `gh` is audited, whichever way it goes.** The row
+    /// is written after `gh` has been run and carries the outcome — the URL on
+    /// success, the error on failure — so a post that failed is visible to the
+    /// human rather than absent, which reads identically to never having been
+    /// attempted.
+    ///
+    /// **What writes no row, enumerated rather than gestured at** (review round 2,
+    /// finding 3). Anything that returns BEFORE `gh` runs: an empty body, an
+    /// unusable agent id, an unknown group — and, the case the first wording
+    /// missed, a STAGING failure, where `create_dir_all` or `fs::write` cannot
+    /// produce the body file. The first three are argument validation and are not
+    /// posts; the last one is a genuine attempt that leaves no trace, and it is a
+    /// carve-out rather than a gap that got fixed for one reason: the audit log
+    /// lives in the very directory the staging write just failed to write into, so
+    /// a row recorded there is not reliably obtainable in exactly the case that
+    /// would need it. Naming the case is honest; pretending a row would appear
+    /// would not be.
     ///
     /// `repo` is resolved from the caller's own group, never from an argument —
     /// the same server-side resolution [`Self::gh_capture`] documents — so the

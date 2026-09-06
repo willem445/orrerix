@@ -282,9 +282,12 @@ whatever CLI the planner block names. The tool posts comments and nothing else:
 it cannot label, close, merge, review, or create anything. Every post leaves an
 `issue-comment` row in the group's audit log with the issue, the body size and the
 outcome — the comment URL when it worked, the error when it did not, so a failed
-post is visible rather than simply absent. (A call refused before `gh` runs at all,
-such as an empty body, is argument validation rather than a post, and writes no
-row.) It is available to the orchestrator and workers too;
+post is visible rather than simply absent. (Anything that returns before `gh` runs
+at all writes no row: an empty body, an unusable agent id, an unknown group — all
+argument validation rather than posts — and also a staging failure, where orrerix
+cannot write the body file at all. That last one is a real attempt that leaves no
+trace, and it stays a carve-out rather than a fixed gap because the audit log
+lives in the same directory the staging write just failed to write into.) It is available to the orchestrator and workers too;
 reviewers are excluded, since a review is the recorded route to a PR.
 
 One thing worth knowing: GitHub numbers issues and pull requests in a single

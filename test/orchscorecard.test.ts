@@ -1307,3 +1307,44 @@ test('lanes: an escalate BEFORE a pass is not counted as a round to pass', () =>
   assert.notEqual(sc.laneStats({ a: ['escalate', 'pass'] }).a.rounds,
     sc.laneStats({ a: ['escalate', 'pass'] }).a.rounds_to_pass);
 });
+
+test('cli-table: the coverage floor travels with the table', () => {
+  // The instrument's own blind spot, made visible. `--cut` bounds the log
+  // forward (§8) but cannot recover a row a ROTATION discarded, and a PR whose
+  // window predates the oldest surviving row is not scored AND does not appear
+  // in `excluded` — nothing in the log names it. Measured, not hypothetical:
+  // the first posting of this table read 32,943 rows and selected 20 PRs; a
+  // rotation at 2026-09-06T17:14Z discarded the older generation and the same
+  // command with the same `--cut` then read 16,351 and selected 10.
+  const files = CLI_REPORT.group.files;
+  const t = table(CLI_REPORT.prs, { sides: SIDES, label: SPLIT_LABEL, groupFiles: files });
+  assert.equal(t.coverage_floor.rows, files.reduce((n: number, f: any) => n + f.rows, 0));
+  assert.equal(t.coverage_floor.generations, files.length);
+  assert.equal(t.coverage_floor.ts_first, Math.min(...files.map((f: any) => f.ts_first)));
+  assert.equal(t.coverage_floor.ts_last, Math.max(...files.map((f: any) => f.ts_last)));
+  const rendered = sc.renderCliTable(t);
+  assert.match(rendered, /\*\*Coverage floor\*\*/);
+  assert.match(rendered, /compare two runs' floors before comparing their n/);
+  assert.ok(rendered.includes(String(t.coverage_floor.rows)));
+
+  // NEGATIVE CONTROL: without the group files there is no floor and no claim —
+  // an absent measurement is absent, never rendered as a clean one.
+  const noFloor = table(CLI_REPORT.prs, { sides: SIDES, label: SPLIT_LABEL });
+  assert.equal(noFloor.coverage_floor, null);
+  assert.doesNotMatch(sc.renderCliTable(noFloor), /Coverage floor/);
+});
+
+test('coverageFloor: a window starting at the floor is named as a lower bound', () => {
+  const files = [{ ts_first: 1000, ts_last: 9000, rows: 7 }];
+  const at = { pr: 1, windows: { pr: { start_ms: 1000 } } };   // exactly at it
+  const under = { pr: 2, windows: { pr: { start_ms: 500 } } };  // begins before it
+  const over = { pr: 3, windows: { pr: { start_ms: 5000 } } };  // safely inside
+  const none = { pr: 4, windows: { pr: null } };                // no window at all
+  const f = sc.coverageFloor([at, under, over, none], files);
+  // POSITIVE and NEGATIVE control in one assertion: the two at-or-below the
+  // floor are named, the one safely inside and the one with no window are not.
+  assert.deepEqual(f.prs_touching_the_floor, [1, 2]);
+  assert.equal(f.ts_first, 1000);
+  assert.equal(f.rows, 7);
+  assert.equal(f.generations, 1);
+});

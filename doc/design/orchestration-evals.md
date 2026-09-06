@@ -576,6 +576,23 @@ Group-wide totals (`group.files[]`) are reported per audit file rather than pool
 because a generation boundary is where a rotation happened and pooling two
 generations hides it.
 
+**`--cut` bounds the log FORWARD, and that is all it can do.** It cannot recover
+a row a **rotation** has discarded. This group keeps two audit generations and
+rotates at 8 MB, so there is a **coverage floor** below which a PR is not scored
+at all — and it does not appear in a selection's `excluded` list either, because
+nothing in the log names it any more. A run is reproducible only while its rows
+are still on disk.
+
+Measured, so this is not a caution about a hypothetical: the first posting of
+the §4.9 table read **32,943 rows across two generations and selected 20 PRs**;
+a rotation at **2026-09-06T17:14Z** discarded the older generation, and the same
+command with the same `--cut` then read **16,351 rows and selected 10**. Both
+runs were correct about the log they could see; only the floor moved. `--format
+cli-table` therefore prints its coverage floor under the table
+(`coverage_floor`: the span, the row and generation counts, and any PR whose
+window starts AT the floor and whose counters are therefore a lower bound), and
+two runs of this script are comparable only after their floors are.
+
 ---
 
 ## 9. Output shape

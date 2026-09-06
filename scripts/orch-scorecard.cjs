@@ -1301,11 +1301,52 @@ const CONFOUNDERS = [
   },
 ];
 
+// THE COVERAGE FLOOR, and why the table carries it.
+//
+// `--cut` bounds the log FORWARD (§8) and that is all it can do: it cannot
+// recover a row a ROTATION has discarded. This group keeps two audit
+// generations and rotates at 8 MB, so a PR whose window predates the oldest
+// surviving row is not "excluded" — it is not scored at all, and it drops out
+// of the selection with no line in `excluded` to say so, because nothing in
+// the log names it any more.
+//
+// That is not hypothetical: the first posting of this table read 32,943 rows
+// across two generations and selected 20 PRs. A rotation at
+// 2026-09-06T17:14Z discarded the older generation, and the same command with
+// the same `--cut` then read 16,351 rows and selected 10. Both runs were
+// correct about the log they could see; only the FLOOR moved.
+//
+// So the floor travels with the table. A reader comparing two runs of this
+// script must compare their floors first — an n that shrank between them is a
+// fact about the log, not about the CLIs.
+function coverageFloor(cards, groupFiles) {
+  let first = null;
+  let last = null;
+  for (const f of groupFiles) {
+    if (typeof f.ts_first === 'number' && (first === null || f.ts_first < first)) first = f.ts_first;
+    if (typeof f.ts_last === 'number' && (last === null || f.ts_last > last)) last = f.ts_last;
+  }
+  // A PR whose window STARTS at the floor may have had earlier rows discarded,
+  // so its counters are a lower bound. Named, not silently averaged in.
+  const atFloor = cards
+    .filter((c) => c.windows.pr && first !== null && c.windows.pr.start_ms <= first)
+    .map((c) => c.pr)
+    .sort((a, b) => a - b);
+  return {
+    ts_first: first,
+    ts_last: last,
+    rows: groupFiles.reduce((n, f) => n + f.rows, 0),
+    generations: groupFiles.length,
+    prs_touching_the_floor: atFloor,
+  };
+}
+
 // `sides` is `{ before, after }` or null. `label` names the split for the row
 // keys and the footer; it is the caller's word for the instant it passed, so
 // the two cannot describe different splits.
 function cliTable(cards, splitMs, opts) {
   const sides = (opts && opts.sides) || null;
+  const floor = (opts && opts.groupFiles) ? coverageFloor(cards, opts.groupFiles) : null;
   const label = (opts && opts.label) || new Date(splitMs).toISOString();
   const sideName = (which) => (which === 'before' ? 'pre-' : 'post-') + label;
   const selected = [];
@@ -1351,6 +1392,7 @@ function cliTable(cards, splitMs, opts) {
   return {
     split_at_ms: splitMs,
     split_label: label,
+    coverage_floor: floor,
     // What the caller declared, echoed back so a reader of the JSON knows which
     // expectation produced (or did not produce) the disagreement list.
     sides_declared: sides,
@@ -1383,6 +1425,20 @@ function renderCliTable(t) {
   lines.push('Median (IQR q1–q3, n) per PR. A cell reads `null` below n=' + t.min_n
     + '. Split at ' + new Date(t.split_at_ms).toISOString()
     + ' (`--split-label ' + t.split_label + '`).');
+  if (t.coverage_floor && t.coverage_floor.ts_first !== null) {
+    const f = t.coverage_floor;
+    lines.push('');
+    lines.push('**Coverage floor** — the audit log read here holds ' + f.rows + ' rows across '
+      + f.generations + ' generation(s), covering **' + new Date(f.ts_first).toISOString()
+      + '** to **' + new Date(f.ts_last).toISOString() + '**. A PR whose window predates that '
+      + 'floor is not scored and does not appear in the exclusions either — nothing in the log '
+      + 'names it. `--cut` bounds the log forward; it cannot recover rows a rotation discarded, '
+      + 'so **compare two runs\' floors before comparing their n**.'
+      + (f.prs_touching_the_floor.length
+        ? ' Windows starting at the floor, whose counters are therefore a lower bound: '
+          + f.prs_touching_the_floor.map((n) => '#' + n).join(', ') + '.'
+        : ''));
+  }
   lines.push('');
   for (const r of t.rows) lines.push('- **' + r.key + '** — ' + r.prs.map((n) => '#' + n).join(', '));
   if (t.excluded.length) {
@@ -1667,7 +1723,8 @@ async function main(argv) {
   }
   if (opts.format === 'cli-table') {
     if (!Number.isFinite(opts.splitAt)) throw new Error('--format cli-table needs --split-at <ms|iso>');
-    process.stdout.write('\n' + renderCliTable(cliTable(cards, opts.splitAt, { sides: opts.sides, label: opts.splitLabel })) + '\n');
+    process.stdout.write('\n' + renderCliTable(cliTable(cards, opts.splitAt,
+      { sides: opts.sides, label: opts.splitLabel, groupFiles: out.group.files })) + '\n');
   }
   return 0;
 }
@@ -1679,7 +1736,7 @@ module.exports = {
   usageRowTokens, isZeroUsageRow, isAgentKeyedRow, reconcileBackfill,
   SOURCE_TO_CLI, CLI_UNKNOWN, cliForSource, resolveCli, indexSpawnCli,
   resolveDelegateCli, indexCliConflicts, blockCliKey, laneStats, MEDIAN_MIN_N, medianOf, statCell,
-  laneCliOf, creditedFor, cliTable, renderCliTable, cliAxisCoverage,
+  laneCliOf, creditedFor, cliTable, renderCliTable, cliAxisCoverage, coverageFloor,
   CLI_TABLE_COLUMNS, CONFOUNDERS,
   claudeTranscriptIndex, backfillZeroUsageRows, defaultClaudeProjectsRoot,
   DEFAULT_TAIL_MIN, main,

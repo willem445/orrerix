@@ -560,6 +560,17 @@ export const DRIVER_MAX_REBASE_ATTEMPTS_MAX = 1;
  *  refused: outside this range is a warning here, not an error. */
 export const DRIVER_TIMEOUT_MIN = 5;
 export const DRIVER_TIMEOUT_MAX = 240;
+/** The PLAN driver's two minute knobs (#3040 §2(c)/(e)). Both are REFUSED
+ *  outside their range rather than clamped, so they sit with the counters above
+ *  rather than with the notify-TTL waits: a repo asking for a five-minute
+ *  planner timeout has misunderstood what a planner does, and silently handing
+ *  it fifteen would leave that misunderstanding in place while the behaviour
+ *  changed underneath it. 0 review minutes is legal and is the default - it is
+ *  "no window", which is a real answer rather than a missing one. */
+export const DRIVER_PLAN_REVIEW_MINUTES_MIN = 0;
+export const DRIVER_PLAN_REVIEW_MINUTES_MAX = 120;
+export const DRIVER_PLANNER_TIMEOUT_MINUTES_MIN = 15;
+export const DRIVER_PLANNER_TIMEOUT_MINUTES_MAX = 180;
 /** `drive_timeout_minutes` left that family in #2110 and carries its own range.
  *
  *  It stopped being the same quantity. The two above bound ONE wait on ONE
@@ -642,6 +653,14 @@ export const POLICY_BOUNDS: Readonly<Record<string, FieldBounds>> = {
   "driver.drive_timeout_minutes": {
     min: DRIVER_DRIVE_TIMEOUT_MIN,
     max: DRIVER_DRIVE_TIMEOUT_MAX,
+  },
+  "driver.plan_review_minutes": {
+    min: DRIVER_PLAN_REVIEW_MINUTES_MIN,
+    max: DRIVER_PLAN_REVIEW_MINUTES_MAX,
+  },
+  "driver.planner_timeout_minutes": {
+    min: DRIVER_PLANNER_TIMEOUT_MINUTES_MIN,
+    max: DRIVER_PLANNER_TIMEOUT_MINUTES_MAX,
   },
   "resource.slots": { min: RESOURCE_SLOTS_MIN, max: RESOURCE_SLOTS_MAX },
   "resource.max_hold_minutes": {
@@ -831,6 +850,12 @@ export interface WorkflowDriver {
   lane_timeout_minutes?: number;
   fix_timeout_minutes?: number;
   drive_timeout_minutes?: number;
+  /** The PLAN driver's three keys (#3040). `plan_enabled` is a second toggle,
+   *  not a widening of `enabled`: the engine reads it UNDER `enabled`, so the
+   *  plan driver is off wherever the review driver is. */
+  plan_enabled?: boolean;
+  plan_review_minutes?: number;
+  planner_timeout_minutes?: number;
   extra?: Record<string, YamlValue>;
 }
 
@@ -850,6 +875,9 @@ export const DRIVER_DEFAULTS: Readonly<{
   lane_timeout_minutes: number;
   fix_timeout_minutes: number;
   drive_timeout_minutes: number;
+  plan_enabled: boolean;
+  plan_review_minutes: number;
+  planner_timeout_minutes: number;
 }> = {
   enabled: false,
   max_review_rounds: 3,
@@ -858,6 +886,9 @@ export const DRIVER_DEFAULTS: Readonly<{
   lane_timeout_minutes: 60,
   fix_timeout_minutes: 60,
   drive_timeout_minutes: 720,
+  plan_enabled: false,
+  plan_review_minutes: 0,
+  planner_timeout_minutes: 60,
 };
 
 /** The driver form's enable-toggle write rule (#1869; narrowed by review round 3).
@@ -892,6 +923,9 @@ export function setDriverEnabled(
       d.lane_timeout_minutes !== undefined ||
       d.fix_timeout_minutes !== undefined ||
       d.drive_timeout_minutes !== undefined ||
+      d.plan_enabled !== undefined ||
+      d.plan_review_minutes !== undefined ||
+      d.planner_timeout_minutes !== undefined ||
       d.extra !== undefined;
     if (carriesMore || commentsInSection) {
       d.enabled = false;
@@ -1768,6 +1802,13 @@ function emitDriverLines(dv: WorkflowDriver, indent = ""): string[] {
   if (dv.drive_timeout_minutes !== undefined) {
     body.push(`${field}drive_timeout_minutes: ${dv.drive_timeout_minutes}`);
   }
+  if (dv.plan_enabled !== undefined) body.push(`${field}plan_enabled: ${dv.plan_enabled}`);
+  if (dv.plan_review_minutes !== undefined) {
+    body.push(`${field}plan_review_minutes: ${dv.plan_review_minutes}`);
+  }
+  if (dv.planner_timeout_minutes !== undefined) {
+    body.push(`${field}planner_timeout_minutes: ${dv.planner_timeout_minutes}`);
+  }
   body.push(...extraLines(dv.extra, field));
   return emitMappingSection("driver", indent, body);
 }
@@ -2121,6 +2162,9 @@ function driverDiffersOnlyInEnabled(a: WorkflowDriver, b: WorkflowDriver): boole
     lane_timeout_minutes: d.lane_timeout_minutes,
     fix_timeout_minutes: d.fix_timeout_minutes,
     drive_timeout_minutes: d.drive_timeout_minutes,
+    plan_enabled: d.plan_enabled,
+    plan_review_minutes: d.plan_review_minutes,
+    planner_timeout_minutes: d.planner_timeout_minutes,
     extra: d.extra,
   });
   return deepEqualValue(rest(a), rest(b));
@@ -2733,6 +2777,9 @@ const KNOWN_DRIVER = new Set([
   "lane_timeout_minutes",
   "fix_timeout_minutes",
   "drive_timeout_minutes",
+  "plan_enabled",
+  "plan_review_minutes",
+  "planner_timeout_minutes",
 ]);
 const KNOWN_RESOURCE = new Set(["slots", "max_hold_minutes"]);
 const KNOWN_BOARD = new Set(["wip", "enforce"]);
@@ -2849,6 +2896,14 @@ function readDriver(r: Record<string, YamlValue>, findings: Finding[]): Workflow
   if (fix !== undefined) dv.fix_timeout_minutes = fix;
   const drive = readNumberField(r, "drive_timeout_minutes", "driver", findings);
   if (drive !== undefined) dv.drive_timeout_minutes = drive;
+  if (r.plan_enabled !== undefined) {
+    if (typeof r.plan_enabled === "boolean") dv.plan_enabled = r.plan_enabled;
+    else findings.push(badValue("driver.plan_enabled", "true or false", r.plan_enabled));
+  }
+  const planReview = readNumberField(r, "plan_review_minutes", "driver", findings);
+  if (planReview !== undefined) dv.plan_review_minutes = planReview;
+  const plannerTimeout = readNumberField(r, "planner_timeout_minutes", "driver", findings);
+  if (plannerTimeout !== undefined) dv.planner_timeout_minutes = plannerTimeout;
   const extra = collectExtra(r, KNOWN_DRIVER);
   if (extra) dv.extra = extra;
   return dv;

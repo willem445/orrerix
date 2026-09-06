@@ -362,6 +362,14 @@ const FIELDS_WITH_AN_EDITOR = new Set<string>([
   "driver.lane_timeout_minutes",
   "driver.fix_timeout_minutes",
   "driver.drive_timeout_minutes",
+  // #3040. The plan driver's three keys arrived with controls in the same
+  // `driverForm` — a switch and two bounded numbers — rather than as pending
+  // rows, because the loop at the end of this test refuses a `driver.*` field
+  // that has no editor: the block's fields have been editable since #1869, and
+  // listing one as pending would be a silent retraction of that.
+  "driver.plan_enabled",
+  "driver.plan_review_minutes",
+  "driver.planner_timeout_minutes",
 ]);
 
 /** No control yet — every leaf field, as of slice A. */

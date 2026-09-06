@@ -402,8 +402,8 @@
       ]
     },
     "driver": {
-      "title": "Review driver",
-      "help": "Policy for the engine-driven review-loop driver (#1778 §5.3). Policy, not mechanism: nothing here names a PR or starts a drive — no drive exists until an orchestrator makes its own role-gated drive_review call naming one PR. The counters are INVARIANT 9's numbers, and a repo may run a tighter loop than they promise but never a looser one.",
+      "title": "Review and plan driver",
+      "help": "Policy for the engine-driven review-loop driver (#1778 §5.3), and for the plan driver that reuses its tick, record and backoff discipline (#3040). Policy, not mechanism: nothing here names a PR or starts a drive — no drive exists until an orchestrator makes its own role-gated drive_review call naming one PR. The counters are INVARIANT 9's numbers, and a repo may run a tighter loop than they promise but never a looser one.",
       "fields": [
         {
           "name": "enabled",
@@ -464,6 +464,30 @@
           "max": 1440,
           "on_out_of_range": "clamp",
           "help": "Last-resort backstop on the drive's whole age, under the four per-state bounds that do the work. Twelve hours, on its OWN range rather than the notify-TTL family the two waits above ride: a backstop measured in the same hours as those waits is the one clock a drive making steady progress can still trip. Time the live-delegate cap refused this drive a lane is excluded from it."
+        },
+        {
+          "name": "plan_enabled",
+          "type": "bool",
+          "default": false,
+          "help": "The PLAN driver (#3040), off by default. A SECOND key rather than a widening of enabled, and the separation is the consent: turning the review driver on consented to loomux running a review loop you already had an orchestrator for — not to loomux spawning a PLANNER and turning its output into work. Read under enabled as well, so the plan driver is off wherever the review driver is."
+        },
+        {
+          "name": "plan_review_minutes",
+          "type": "number",
+          "default": 0,
+          "min": 0,
+          "max": 120,
+          "on_out_of_range": "refuse",
+          "help": "How long a posted plan waits before the drive acts on it, so the orchestrator can veto it. 0 — the default — means no window: the human already pressed go with the label, and a window nobody is told about is unused. Any non-zero value costs exactly one orchestrator notice, which is the price of the window, stated."
+        },
+        {
+          "name": "planner_timeout_minutes",
+          "type": "number",
+          "default": 60,
+          "min": 15,
+          "max": 180,
+          "on_out_of_range": "refuse",
+          "help": "Backstop on a driven planner posting its plan, so a planner that stopped surfaces as held(planner-stalled) instead of silence. Refused rather than clamped, unlike the two waits above: a repo asking for a five-minute planner timeout has misunderstood what a planner does, and silently handing it fifteen would leave that misunderstanding in place."
         }
       ]
     },

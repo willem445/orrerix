@@ -11089,9 +11089,19 @@ fn orch_workflow_preview_without_a_name_is_what_it_always_was() {
 // so a repo learns from its own file rather than from a spawn that fails
 // hours later.
 
+/// The block id every `driver_block` fixture uses. Deliberately a string no
+/// refusal message could contain by accident — see the note in the helper.
+const DRIVER_BLOCK_ID: &str = "zephyr-drv";
+
 /// One worker block on `cli`, with the optional `driver:` key.
 fn driver_block(cli: &str, mode: Option<&str>) -> String {
-    let mut text = format!("version: 1\nblocks:\n  - id: w\n    kind: worker\n    cli: {cli}\n");
+    // A DISTINCTIVE id, not "w": the refusal text carries ordinary English
+    // ("loomux drives over its structured protocol"), so asserting the block
+    // id with `contains("w")` matched the prose rather than the id — it would
+    // have passed against a refusal that never named the block at all.
+    let mut text = format!(
+        "version: 1\nblocks:\n  - id: {DRIVER_BLOCK_ID}\n    kind: worker\n    cli: {cli}\n"
+    );
     if let Some(mode) = mode {
         text.push_str(&format!("    driver: {mode}\n"));
     }
@@ -11102,7 +11112,7 @@ fn driver_block(cli: &str, mode: Option<&str>) -> String {
 fn driver_structured_parses_on_a_cli_whose_row_carries_a_driver() {
     let parsed = workflow::parse_workflow(&driver_block("pi", Some("structured")))
         .expect("pi is the one CLI with a structured driver — the key must parse");
-    let w = parsed.blocks.iter().find(|b| b.id == "w").unwrap();
+    let w = parsed.blocks.iter().find(|b| b.id == DRIVER_BLOCK_ID).unwrap();
     assert_eq!(
         w.driver.as_deref(),
         Some("structured"),
@@ -11112,7 +11122,7 @@ fn driver_structured_parses_on_a_cli_whose_row_carries_a_driver() {
     // The negative control: a block WITHOUT the key is the absent behavior —
     // a PTY pane — and parses exactly as it did before the key existed.
     let parsed = workflow::parse_workflow(&driver_block("pi", None)).unwrap();
-    let w = parsed.blocks.iter().find(|b| b.id == "w").unwrap();
+    let w = parsed.blocks.iter().find(|b| b.id == DRIVER_BLOCK_ID).unwrap();
     assert_eq!(w.driver, None, "no driver: key is a PTY pane");
 }
 
@@ -11128,7 +11138,9 @@ fn driver_structured_is_refused_on_a_cli_whose_row_carries_none() {
         });
         assert!(
             errs.iter()
-            .any(|e| e.contains("w") && e.contains(cli) && e.contains("no structured driver")),
+            .any(|e| e.contains(DRIVER_BLOCK_ID)
+                && e.contains(cli)
+                && e.contains("no structured driver")),
             "{cli}: the refusal must name the block and the CLI: {errs:?}"
         );
     }
@@ -11176,5 +11188,158 @@ fn list_blocks_rows_carry_the_driver_key() {
     assert!(
         p.as_object().unwrap().contains_key("driver"),
         "the key is present even on a block that omits it: {p}"
+    );
+}
+
+#[test]
+fn driver_structured_is_refused_at_spawn_when_the_block_INHERITS_its_cli() {
+    // #2850 S3b, and the case `parse_workflow` structurally cannot reach.
+    //
+    // The block spells no `cli:` of its own, so the parser computes
+    // `caps: None` and skips the CLI half of the driver check entirely. The
+    // file is therefore ACCEPTED — asserted here, because if a later change
+    // made the parse refuse it, this test would pass for a different reason
+    // and stop covering the spawn path at all.
+    let (reg, _dir) = test_registry();
+    let repo = Repo::new().workflow(
+        "version: 1\nblocks:\n  - id: inherits\n    kind: worker\n    driver: structured\n",
+    );
+    // `rails()` carries `agent_cli: "claude"`, whose CliCaps row has no
+    // structured driver — so THAT is the inherited value that must be caught.
+    let g = reg
+        .create_group(&repo.path(), rails())
+        .expect("the parser cannot judge an inherited cli, so the file must parse");
+    assert_eq!(
+        g.guardrails.block("inherits").unwrap().driver.as_deref(),
+        Some("structured"),
+        "the key survived the parse — which is exactly why spawn has to ask again"
+    );
+
+    let err = reg
+        .spawn_agent_ex(
+            &g.id, Role::Worker, Some("inherits".into()), "", "t", false,
+            None, None, None, None, None,
+        )
+        .expect_err("a structured block on an inherited claude must be refused at spawn");
+    assert!(
+        err.contains("inherits") && err.contains("claude") && err.contains("no structured driver"),
+        "the spawn refusal must name the block and the RESOLVED cli: {err}"
+    );
+    // The remedy names a CLI that would work, derived from the table.
+    assert!(err.contains("pi"), "the refusal must name a CLI that has one: {err}");
+}
+
+#[test]
+fn an_inherited_cli_that_DOES_carry_a_driver_spawns() {
+    // The positive control for the test above, and the half that keeps it from
+    // passing by refusing everything: same file, same absent `cli:`, only the
+    // inherited value differs. Without this, "refuse every structured block"
+    // would satisfy that assertion just as well as "refuse the wrong CLI".
+    let (reg, _dir) = test_registry();
+    let repo = Repo::new().workflow(
+        "version: 1\nblocks:\n  - id: inherits\n    kind: worker\n    driver: structured\n",
+    );
+    let mut rails = rails();
+    rails.agent_cli = "pi".into();
+    let g = reg.create_group(&repo.path(), rails).unwrap();
+
+    reg.spawn_agent_ex(
+        &g.id, Role::Worker, Some("inherits".into()), "", "t", false,
+        None, None, None, None, None,
+    )
+    .expect("an inherited pi DOES carry a structured driver — this must spawn");
+}
+
+#[test]
+fn a_group_json_driver_outside_the_vocabulary_is_dropped_and_never_coerced() {
+    // The one input `parse_workflow` never sees, pinned at its CURRENT
+    // behaviour so a future change that starts COERCING a typo reddens here
+    // instead of silently spawning a structured pane the operator never asked
+    // for. `read_blocks` drops an out-of-vocabulary value because there is no
+    // human at that layer to show a parse error to.
+    let (reg, _dir) = test_registry();
+    let repo = Repo::new().workflow(
+        "version: 1\nblocks:\n  - id: typo\n    kind: worker\n    cli: pi\n    driver: structured\n",
+    );
+    let g = reg.create_group(&repo.path(), rails()).unwrap();
+    let path = reg.state_root().join(g.id.as_str()).join("group.json");
+
+    let mut edited: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    for b in edited["guardrails"]["blocks"].as_array_mut().unwrap() {
+        if b["id"] == "typo" {
+            // The operator meant `structured` and mistyped it.
+            b["driver"] = Value::String("structrued".into());
+        }
+    }
+    fs::write(&path, serde_json::to_string_pretty(&edited).unwrap()).unwrap();
+
+    let (_, back) = reg.load_group_file(&g.id).expect("the edited group file must still load");
+    assert_eq!(
+        back.block("typo").unwrap().driver,
+        None,
+        "a driver outside DRIVER_MODES must be DROPPED, never coerced to the near miss"
+    );
+    // The control that stops the assertion above passing for the wrong reason:
+    // the block is still there and still a worker. A dropped block would
+    // satisfy it just as well.
+    assert_eq!(back.block("typo").unwrap().kind, Role::Worker);
+    assert_eq!(back.block("typo").unwrap().cli, "pi");
+}
+
+#[test]
+fn a_bare_driver_key_is_the_absent_key_and_the_value_is_case_normalised() {
+    // Two of the deliberate-but-untested paths S3a shipped.
+    //
+    // A bare `driver:` line parses as an empty value, which means the absent
+    // key — a PTY pane — rather than a refusal about nothing.
+    let bare = workflow::parse_workflow(&format!(
+        "version: 1\nblocks:\n  - id: {DRIVER_BLOCK_ID}\n    kind: worker\n    cli: pi\n    driver:\n"
+    ))
+    .expect("a bare driver: key must parse, not refuse");
+    assert_eq!(
+        bare.blocks.iter().find(|b| b.id == DRIVER_BLOCK_ID).unwrap().driver,
+        None,
+        "a bare driver: is the absent key"
+    );
+
+    // And the value is normalised rather than matched literally, so a file
+    // written in caps is accepted and stored in ONE spelling.
+    for spelled in ["STRUCTURED", "Structured", "  structured  "] {
+        let parsed = workflow::parse_workflow(&driver_block("pi", Some(spelled)))
+            .unwrap_or_else(|e| panic!("{spelled:?} must normalise, got {e:?}"));
+        assert_eq!(
+            parsed.blocks.iter().find(|b| b.id == DRIVER_BLOCK_ID).unwrap().driver.as_deref(),
+            Some("structured"),
+            "{spelled:?} must reach the block in ONE normalised spelling"
+        );
+    }
+}
+
+#[test]
+fn the_driver_key_survives_a_group_json_round_trip() {
+    // `blocks_json` rewrites the whole roster on every change, so a field it
+    // forgot would vanish on the next resume with nothing to see — the same
+    // hazard `remote` is pinned against.
+    let (reg, _dir) = test_registry();
+    let repo = Repo::new().workflow(
+        "version: 1\nblocks:\n  - id: driven\n    kind: worker\n    cli: pi\n    driver: structured\n  - id: plain\n    kind: worker\n    cli: pi\n",
+    );
+    let g = reg.create_group(&repo.path(), rails()).unwrap();
+
+    let path = reg.state_root().join(g.id.as_str()).join("group.json");
+    let gj: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let on_disk = gj["guardrails"]["blocks"].as_array().unwrap();
+    assert_eq!(
+        on_disk.iter().find(|b| b["id"] == "driven").unwrap()["driver"],
+        json!("structured"),
+        "the value is on disk as a plain string"
+    );
+
+    let (_, back) = reg.load_group_file(&g.id).expect("the group file must load");
+    assert_eq!(back.block("driven").unwrap().driver.as_deref(), Some("structured"));
+    assert_eq!(
+        back.block("plain").unwrap().driver,
+        None,
+        "a block that never declared one must not acquire one on the way back"
     );
 }

@@ -295,10 +295,33 @@ const PANE_KINDS: readonly PersistedPaneKind[] = [
  *     command line discarded to make it. As `agent` it returns as itself, and
  *     `PersistedPane.lead` tells the restore to re-mint it a fresh group.
  *  4. **orch** — any other pane carrying a group.
- *  5. **agent** if something was launched, else a plain **terminal**. */
+ *  5. **agent** if something was launched, else a plain **terminal**.
+ *
+ *  **A STRUCTURED pane (#2891) is deliberately NOT a sixth content rung.** It is a
+ *  content pane in `pane.ts`'s sense — no PTY, a view filling the content box — but it
+ *  is an AGENT: it is a view of one agent's event log, created by the orchestration
+ *  spawn path, and what brings it back is a group resume, not a layout snapshot. Two
+ *  things follow, and each is the reason for the other:
+ *
+ *   - it persists as `agent` rather than as its own kind, so a DOWNGRADE costs nothing.
+ *     The comment on `PersistedPaneKind` above records what a new leaf really costs: an
+ *     older build's `decodePane` rejects the unknown kind and `decodeLayout`'s whole-tree
+ *     fail-safe collapses THAT TAB's entire layout to one welcome pane. Paying that for
+ *     a kind whose restore is a group resume either way buys nothing;
+ *   - it does not take the content rung, because the four content kinds restore from
+ *     their ROOT alone (`cwd`) and a structured pane cannot — a root without a group and
+ *     an agent id is not a transcript, and a slot restored that way would come back as an
+ *     empty pane claiming to watch an agent nobody named.
+ *
+ *  It is passed as its own flag rather than through `contentKind` for the reason the
+ *  `ssh` rung exists: a FALLTHROUGH gets it silently wrong, and a flag makes the
+ *  decision visible in the ladder instead of hiding it in a caller's ternary. */
 export function persistedKindFor(pane: {
-  /** The content kind this pane IS, or null for a process pane. */
+  /** The content kind this pane IS, or null for a process pane. A structured pane
+   *  passes `null` here and sets `structured` below — see the ladder's note. */
   readonly contentKind: PersistedPaneKind | null;
+  /** #2891: this pane is a structured agent transcript. */
+  readonly structured: boolean;
   readonly ssh: boolean;
   /** The pane's orchestration ROLE, or null — `"lead"` is the rung above. */
   readonly orchRole: string | null;
@@ -307,6 +330,7 @@ export function persistedKindFor(pane: {
   readonly launchedCommand: boolean;
 }): PersistedPaneKind {
   if (pane.contentKind !== null) return pane.contentKind;
+  if (pane.structured) return "agent";
   if (pane.ssh) return "ssh";
   if (pane.orchRole === "lead") return "agent";
   return pane.orchGroup ? "orch" : pane.launchedCommand ? "agent" : "terminal";

@@ -523,6 +523,73 @@ test("an overlay that covers live content paints a translucent wash, never an op
   );
 });
 
+test("the structured pane's three role positions each stay in their own channel", () => {
+  // #2891 S4. The pane below adds the app's densest colour surface, and the
+  // channel guard one test down is a GENERAL one: it compares a position's
+  // variants against EACH OTHER, so a position whose every variant reached for
+  // the same wrong channel would pass it clean. That is #1344's lesson — a
+  // guard's green is evidence about its POPULATION, not about its property —
+  // so the three role positions this surface introduces are named here and
+  // pinned to a channel by NAME rather than by internal agreement.
+  //
+  //  - the warp (pane edge) and the gutter segment answer "what is this agent
+  //    doing" — DESIGN.md §3: the gutter's vocabulary is the six state dyes AND
+  //    NOTHING ELSE, and an event that is not an agent state is marked by form;
+  //  - a tool card's family answers "which KIND of thing is this" — identity;
+  //  - the CLI chip answers "which PROGRAM runs here" — identity's sub-table.
+  const css = stripCssComments(read("../src/styles.css"));
+  const POSITIONS: Array<{ what: string; re: RegExp; want: "state" | "id" | "cli"; min: number }> = [
+    {
+      what: "the pane-edge warp",
+      re: /\.spane\[data-state="[a-z]+"\]\s*\{\s*--spane-warp:\s*var\((--[a-z0-9-]+)\)/g,
+      want: "state",
+      min: 6,
+    },
+    {
+      what: "the transcript gutter segment",
+      re: /\.spane-row\[data-seg="[a-z]+"\]\s*\{\s*--spane-seg:\s*var\((--[a-z0-9-]+)\)/g,
+      want: "state",
+      min: 6,
+    },
+    {
+      what: "a tool card's family",
+      re: /\.spane-tool\[data-family="[a-z]+"\]\s*\{\s*--spane-tool-hue:\s*var\((--[a-z0-9-]+)\)/g,
+      want: "id",
+      min: 5,
+    },
+    {
+      what: "the CLI chip",
+      re: /\.spane-cli\[data-cli="[a-z]+"\]\s*\{\s*--spane-cli-hue:\s*var\((--[a-z0-9-]+)\)/g,
+      want: "cli",
+      min: 8,
+    },
+  ];
+  const wrong: string[] = [];
+  for (const p of POSITIONS) {
+    const tokens = [...css.matchAll(p.re)].map((m) => m[1]!);
+    // The population control: a renamed class or a reshaped rule would make
+    // every one of these scans match nothing and report a clean surface.
+    assert.ok(
+      tokens.length >= p.min,
+      `${p.what}: found ${tokens.length} rules, expected at least ${p.min} — ` +
+        "the scan is blind, not the stylesheet clean"
+    );
+    for (const t of tokens) {
+      const ok =
+        p.want === "state" ? t.startsWith("--state-")
+        : p.want === "id" ? t.startsWith("--id-")
+        : t.startsWith("--cli-");
+      if (!ok) wrong.push(`${p.what} names ${t}, which is not the ${p.want} channel`);
+    }
+  }
+  assert.deepEqual(
+    wrong,
+    [],
+    "the structured pane crossed a channel — DESIGN.md §3 is the argument, and widening " +
+      "the gutter's vocabulary is an edit to doc/design/ui-redesign.md first:\n" + wrong.join("\n")
+  );
+});
+
 test("no position mixes the state and identity channels across its own variants", () => {
   // The rule `styles.css` states in its own token block: "No --id-* token may appear in a
   // state position." Enforcing that needs a definition of "position" a test can compute, and
@@ -1269,6 +1336,11 @@ test("the accent paints marks, never grounds — every gold background is argued
     ".restore-splash-btn.primary": "restore-the-session, on the splash",
     ".restore-splash-btn.primary:hover": "same button, hover",
     ".wf-btn-primary": "primary action in the workflow editor",
+    ".spane-btn-primary:hover":
+      "primary action in a structured pane's request card, hover — a 9% wash under gold ink",
+    // --- carets. theme.ts's own token comment names the caret as an accent position:
+    //     a caret's whole area IS the mark, and it is 7px wide.
+    ".spane-caret": "the structured pane's streaming caret — a 7px mark, not a surface",
     // --- on-states: the human turned this on, and the fill is the answer to "is it on?".
     ".issues-toggle.on": "filter toggle, on",
     ".issues-mode-tab.on, .sessions-mode-tab.on": "mode tab, on (Issues/PRs, and #2116's Mine/Orchestration)",

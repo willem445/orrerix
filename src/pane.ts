@@ -109,6 +109,8 @@ import { FileExplorerView } from "./fileexplorer";
 import { icon } from "./icons.ts";
 import { agentMark, type AgentMarkInput } from "./agenticons.ts";
 import { WorkflowView } from "./workflowview";
+import { StructuredPaneView } from "./structuredpane";
+import type { AnswerFn } from "./structuredpane";
 import { WORKFLOW_FILE, workflowNameOf } from "./workflowmodel";
 import { persistedKindFor, type PersistedPane, type PersistedPaneKind } from "./tabstore";
 import type { TabPaneInfo } from "./tabcounts";
@@ -393,7 +395,7 @@ export interface PaneOptions {
  *  a file manager (#214), the file editor, the git view (#217), or the workflow
  *  builder (#222) — rather than a process. They share every pane mechanic (split,
  *  dock, drag, maximize, restore) and differ only in which view fills the content box. */
-export type ContentPaneKind = "files" | "editor" | "git" | "workflow";
+export type ContentPaneKind = "files" | "editor" | "git" | "workflow" | "structured";
 
 /** What to CALL each content kind when a message has to name it ("the git view isn't
  *  available in a workflow pane"). A table rather than a ternary chain, so a fifth kind
@@ -403,6 +405,7 @@ const CONTENT_KIND_LABEL: Record<ContentPaneKind, string> = {
   editor: "file editor",
   git: "git",
   workflow: "workflow",
+  structured: "structured agent",
 };
 
 /** What a content pane needs: which surface, the root it is pointed at, and a name.
@@ -424,6 +427,23 @@ export interface ContentPaneOptions {
    *  the repo's own workflow path when absent — the welcome flow's case — and is set
    *  when the browser opens a *different* YAML as a workflow. */
   file?: string;
+  /** STRUCTURED kind (#2891): which agent's event stream fills this pane. Both are
+   *  required for that kind and meaningless for the other four  a structured pane is a
+   *  view of ONE agent's log, and there is no default agent to fall back to.
+   *
+   *  They are optional in the TYPE rather than split into a second options interface
+   *  because every other field here (`name`, `root`, `background`) means exactly what it
+   *  already meant, and `startContent` refuses the kind without them rather than building
+   *  a pane around an agent it cannot name. */
+  groupId?: string;
+  agentId?: string;
+  /** Which agent program runs in this pane, for the header chip. Read off the source and
+   *  never derived by branching on one CLI's name; absent renders no chip. */
+  cli?: string | null;
+  /** How an answered dialog leaves the pane (�3.5's trusted path). Supplied by the
+   *  caller so `pane.ts` never imports the orchestration bridge  and so a fixture
+   *  replay can hand in a local one. */
+  answer?: AnswerFn;
   /** Open without stealing keyboard focus (same contract as PaneOptions). */
   background?: boolean;
 }
@@ -1069,6 +1089,7 @@ export class Pane implements VoiceTargetPane {
   private editorPaneView: FileEditView | null = null;
   private gitPaneView: GitView | null = null;
   private workflowPaneView: WorkflowView | null = null;
+  private structuredPaneView: StructuredPaneView | null = null;
   /** True once the pane's process has exited but the pane was kept open to show
    *  its output (notifyExited). The counter must not count a dead agent as live
    *  (#194 P4 LOW-7). */
@@ -2785,6 +2806,32 @@ export class Pane implements VoiceTargetPane {
         onRootChanged: adoptRoot,
       });
       return this.editorPaneView;
+    }
+
+    if (opts.kind === "structured") {
+      // #2891: the pane cell holds a DOM transcript rather than a terminal. There is no
+      // PTY behind it, so constraint 1 holds by construction  nothing in this view
+      // measures or resizes one, and `.is-content` already hides the chrome that floats
+      // over a terminal.
+      //
+      // The two ids are required rather than defaulted: a structured pane is a view of ONE
+      // agent's event log, and a pane built around an agent nobody named would silently
+      // render an empty transcript forever.
+      if (!opts.groupId || !opts.agentId) {
+        throw new Error("a structured pane needs both groupId and agentId");
+      }
+      this.structuredPaneView = new StructuredPaneView({
+        groupId: opts.groupId,
+        agentId: opts.agentId,
+        cli: opts.cli ?? null,
+        // �3.5: every agent may be asked and NO AGENT MAY EVER ANSWER. The caller supplies
+        // the trusted path; refusing outright beats a silent no-op, which would look to
+        // the human exactly like an answer that went nowhere.
+        answer:
+          opts.answer ??
+          (() => Promise.reject(new Error("this structured pane has no answer channel"))),
+      });
+      return this.structuredPaneView;
     }
 
     if (opts.kind === "workflow") {
@@ -5468,7 +5515,10 @@ export class Pane implements VoiceTargetPane {
    *  READING of those fields, which is all a `Pane` is the authority on. */
   private liveKind(): PersistedPaneKind {
     return persistedKindFor({
-      contentKind: this.contentKind,
+      // A structured pane goes in as the flag, not as a content kind: it has no PTY but
+      // it is an agent, and a root alone cannot restore one. See the ladder's own note.
+      contentKind: this.contentKind === "structured" ? null : this.contentKind,
+      structured: this.contentKind === "structured",
       ssh: this.isSshPane,
       orchRole: this.orchRoleName,
       orchGroup: this.orchGroup,
@@ -5580,8 +5630,11 @@ export class Pane implements VoiceTargetPane {
       return { kind: kind === "orch" || kind === "ssh" ? kind : "agent", live: false };
     }
     // A content pane has no PTY by design, so `live` can't be derived from one; it is
-    // fully functional the moment it exists.
-    if (this.contentKind !== null) return { kind: this.contentKind, live: true };
+    // fully functional the moment it exists. Routed through `liveKind` rather than
+    // reporting `contentKind` raw, so a structured pane counts as the AGENT it is
+    // (#2891) — the four PTY-less surfaces still report themselves, unchanged, because
+    // that is the ladder's first rung.
+    if (this.contentKind !== null) return { kind: this.liveKind(), live: true };
     const kind = this.liveKind();
     return { kind, live: this.ptyId !== null && !this.exited, connectedChannel: this.channelId };
   }
@@ -6344,6 +6397,7 @@ export class Pane implements VoiceTargetPane {
     this.editorPaneView?.dispose();
     this.gitPaneView?.dispose();
     this.workflowPaneView?.dispose();
+    this.structuredPaneView?.dispose();
     // Drop anything the #720 throttle was holding. Cheap on its own, and it
     // matters exactly when something else has gone wrong: a pane that is still
     // reachable from somewhere should at least not be dragging its output

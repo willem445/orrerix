@@ -27,7 +27,7 @@ import {
   actionsFor,
   answerWasRefusal,
   argLine,
-  autoOpen,
+  isOpen,
   chipFor,
   computeWindow,
   diffOf,
@@ -44,14 +44,17 @@ import {
   pinnedAtBottom,
   requestPayload,
   requestTitle,
+  rowSignature,
   rowsFor,
   segmentOf,
   settlementLine,
   tickerFields,
+  toolMark,
   turnReceipt,
   wantsFreeText,
 } from "../src/structuredrows.ts";
 import type { Segment } from "../src/structuredrows.ts";
+import { MARK_NAMES } from "../src/structuredicons.ts";
 
 const FIXTURE = fileURLToPath(
   new URL("./fixtures/structuredview/session.harness.jsonl", import.meta.url),
@@ -224,14 +227,27 @@ test("the caret follows the open block, not the last one", () => {
   );
 });
 
-test("dimThinking folds every thinking row and touches nothing else", () => {
-  const s = fixtureState();
+test("dimThinking folds a STREAMING thinking row and touches nothing else", () => {
+  // The switch has to beat the streaming default, which is the only case where
+  // it has any work to do — a settled thinking block is folded already, so a
+  // fixture of finished turns cannot tell a working switch from a dead one.
+  const s = project(emptyState(), [
+    { kind: "turn_started", turn: 1 },
+    { kind: "tool_call", turn: 1, id: "t1", name: "Grep", input: { pattern: "x" } },
+    { kind: "tool_output", turn: 1, id: "t1", delta: "a match", is_error: false },
+    { kind: "thinking", turn: 1, delta: "still weighing it up" },
+  ]);
   const view = emptyViewState();
   const before = rowsFor(s, view);
   assert.ok(
     before.some((r) => r.kind === "thinking" && !r.collapsed),
-    "positive control: a thinking row starts open",
+    "positive control: a streaming thinking row starts open",
   );
+  assert.ok(
+    before.some((r) => r.kind === "tool" && !r.collapsed),
+    "positive control: an open row of another kind is present to be left alone",
+  );
+
   view.dimThinking = true;
   const after = rowsFor(s, view);
   for (let i = 0; i < after.length; i += 1) {
@@ -261,24 +277,166 @@ test("a failure opens itself, and a hand-fold keeps it shut", () => {
   ]);
   const card = s.blocks.find((b): b is ToolBlock => b.kind === "tool")!;
   const view = emptyViewState();
-  assert.equal(autoOpen(card, view), true, "a failed call opens itself");
+  assert.equal(isOpen(card, view, s), true, "a failed call opens itself");
   view.collapsed.add(card.id);
-  assert.equal(autoOpen(card, view), false, "a human's fold wins");
+  assert.equal(isOpen(card, view, s), false, "a human's fold wins");
 });
 
 test("a call streaming output opens itself; a queued one does not", () => {
   const view = emptyViewState();
-  const running = project(emptyState(), [
+  const sr = project(emptyState(), [
     { kind: "tool_call", turn: 1, id: "t1", name: "Bash", input: { command: "npm test" } },
     { kind: "tool_output", turn: 1, id: "t1", delta: "running...", is_error: false },
-  ]).blocks.find((b): b is ToolBlock => b.kind === "tool")!;
+  ]);
+  const running = sr.blocks.find((b): b is ToolBlock => b.kind === "tool")!;
   assert.equal(running.status, "running", "positive control: the projection marked it running");
-  assert.equal(autoOpen(running, view), true);
+  assert.equal(isOpen(running, view, sr), true);
 
-  const queued = project(emptyState(), [
+  const sq = project(emptyState(), [
     { kind: "tool_call", turn: 1, id: "t9", name: "Grep", input: { pattern: "x" } },
+  ]);
+  const queued = sq.blocks.find((b): b is ToolBlock => b.kind === "tool")!;
+  assert.equal(isOpen(queued, view, sq), false, "a queued call with no output stays folded");
+});
+
+test("the fold set is a FLIP of the default, not a set of folded blocks", () => {
+  // The property that makes a fold survive a default moving under the human's
+  // feet — and the one a naive "collapsed means folded" reading gets wrong.
+  const view = emptyViewState();
+  const mid = project(emptyState(), [
+    { kind: "tool_call", turn: 1, id: "t1", name: "Grep", input: { pattern: "x" } },
+    { kind: "tool_output", turn: 1, id: "t1", delta: "a match", is_error: false },
+  ]);
+  const card = () => mid.blocks.find((b): b is ToolBlock => b.kind === "tool")!;
+  assert.equal(isOpen(card(), view, mid), true, "open by default while it streams");
+
+  // The human folds it while it is running, then it succeeds — whose default is
+  // now "folded". A set read as "opened" would re-open it here.
+  view.collapsed.add(card().id);
+  const done = project(mid, [{ kind: "tool_result", turn: 1, id: "t1", ok: true }]);
+  assert.equal(card().status, "ok", "positive control: the default moved");
+  assert.equal(isOpen(card(), view, done), true, "flipping a now-folded default OPENS it");
+
+  // And the other direction: a card the human opened while queued stays open
+  // when it fails, rather than the failure's own auto-open cancelling the flip.
+  const v2 = emptyViewState();
+  const failed = project(emptyState(), [
+    { kind: "tool_call", turn: 1, id: "t2", name: "Grep", input: { pattern: "y" } },
+    { kind: "tool_result", turn: 1, id: "t2", ok: false },
+  ]);
+  const bad = failed.blocks.find((b): b is ToolBlock => b.kind === "tool")!;
+  assert.equal(isOpen(bad, v2, failed), true, "a failure opens itself");
+  v2.collapsed.add(bad.id);
+  assert.equal(isOpen(bad, v2, failed), false, "and the human may still fold it away");
+});
+
+test("thinking is open while it streams and folds itself once the model moves on", () => {
+  // §6: the one block the eye should be able to skip. Folding it WHILE it
+  // streams would hide the thing the caret is reporting.
+  const view = emptyViewState();
+  const open = project(emptyState(), [
+    { kind: "turn_started", turn: 1 },
+    { kind: "thinking", turn: 1, delta: "weighing it up" },
+  ]);
+  const think = () => open.blocks.find((b) => b.kind === "thinking")!;
+  assert.equal(isOpen(think(), view, open), true, "open while it streams");
+
+  const moved = project(open, [{ kind: "text", turn: 1, delta: "Here is the answer." }]);
+  assert.equal(isOpen(think(), view, moved), false, "folded once the model moved on");
+});
+
+// ── the row signature ───────────────────────────────────────────────────────
+
+test("every field a row draws moves the signature", () => {
+  // THE FAILURE THIS PINS. `project()` mutates blocks in place, so a renderer
+  // that compares by object identity never repaints. The signature is what
+  // stands in for identity — and a field it omits is a row that goes stale on
+  // screen with nothing red to say so. So each field is moved on its own.
+  const base = project(emptyState(), [
+    { kind: "tool_call", turn: 1, id: "t1", name: "Grep", input: { pattern: "x" } },
   ]).blocks.find((b): b is ToolBlock => b.kind === "tool")!;
-  assert.equal(autoOpen(queued, view), false, "a queued call with no output stays folded");
+  const sig = (over: Partial<ToolBlock>, collapsed = true) =>
+    rowSignature({ ...base, ...over }, collapsed);
+
+  const start = sig({});
+  for (const [what, over] of [
+    ["name", { name: "Glob" }],
+    ["status", { status: "running" as const }],
+    ["isError", { isError: true }],
+    ["output", { output: "hello" }],
+    ["outputDroppedBytes", { outputDroppedBytes: 99 }],
+    ["durationMs", { durationMs: 12 }],
+    ["orphan", { orphan: true }],
+  ] as const) {
+    assert.notEqual(sig(over), start, `${what} does not move the signature — a stale row`);
+  }
+  assert.notEqual(sig({}, false), start, "the fold does not move the signature");
+  assert.equal(sig({}), start, "positive control: an unchanged block is unchanged");
+});
+
+test("a text delta moves its row's signature", () => {
+  const s = project(emptyState(), [{ kind: "text", turn: 1, delta: "one" }]);
+  const before = rowSignature(s.blocks[0]!, false);
+  project(s, [{ kind: "text", turn: 1, delta: " two" }]);
+  assert.notEqual(rowSignature(s.blocks[0]!, false), before, "an append must repaint the row");
+});
+
+test("a turn's receipt landing moves its signature", () => {
+  const s = project(emptyState(), [{ kind: "turn_started", turn: 1 }]);
+  const before = rowSignature(s.blocks[0]!, false);
+  project(s, [
+    {
+      kind: "turn_ended",
+      turn: 1,
+      usage: {
+        call_cumulative: { input: 10, output: 2, cache_read: 0, cache_creation: 0 },
+        this_turn_main_loop: null,
+        per_model: [],
+      },
+      cost: { usd: 0.5, basis: "reported" },
+      stop: "end_turn",
+    },
+  ]);
+  assert.notEqual(rowSignature(s.blocks[0]!, false), before, "the receipt must repaint the rule");
+});
+
+test("a settlement moves a request row's signature", () => {
+  const s = project(emptyState(), [
+    { kind: "permission_request", id: "r1", tool: "Bash", input: { command: "rm -rf /" } },
+  ]);
+  const before = rowSignature(s.blocks[0]!, false);
+  project(s, [{ kind: "permission_settled", id: "r1", decision: "deny", by: "human" }]);
+  assert.notEqual(rowSignature(s.blocks[0]!, false), before, "a settled card must repaint");
+});
+
+// ── the tool's mark and family ──────────────────────────────────────────────
+
+test("a tool's family is an app icon role, and an unknown tool earns no hue", () => {
+  assert.deepEqual(toolMark("Grep"), { mark: "search", family: "workspace" });
+  assert.deepEqual(toolMark("bash"), { mark: "terminal", family: "source" });
+  assert.deepEqual(toolMark("mcp__orrerix__report"), { mark: "bolt", family: "fleet" });
+  assert.deepEqual(
+    toolMark("SomethingNobodyHasSeen"),
+    { mark: "box", family: null },
+    "an unknown tool draws in plain ink rather than taking a hue it has not earned",
+  );
+  assert.deepEqual(toolMark(null), { mark: "box", family: null }, "and so does an orphan card");
+});
+
+test("every mark the row model can name is one the icon module draws", () => {
+  // A mark the renderer asks for and `structuredicons.ts` does not have is a
+  // `undefined` spliced into the markup, which renders as nothing at all.
+  const names = new Set(MARK_NAMES as readonly string[]);
+  const asked = new Set<string>();
+  for (const t of ["Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Glob", "Grep", "LS",
+    "Bash", "BashOutput", "WebFetch", "WebSearch", "Task", "Agent", "TodoWrite", "git",
+    "mcp__x__y", "Unheard"]) {
+    asked.add(toolMark(t).mark);
+  }
+  asked.add(toolMark(null).mark);
+  assert.ok(asked.size >= 9, `positive control: the table asked for ${asked.size} distinct marks`);
+  const missing = [...asked].filter((m) => !names.has(m));
+  assert.deepEqual(missing, [], `the row model names marks the icon module does not draw`);
 });
 
 // ── the identifying argument ────────────────────────────────────────────────

@@ -187,7 +187,7 @@ function estimateText(text: string, lineHeight: number): number {
 export function rowsFor(state: State, view: ViewState): RowSpec[] {
   const rows: RowSpec[] = [];
   for (const b of state.blocks) {
-    const collapsed = view.collapsed.has(b.id) || (b.kind === "thinking" && view.dimThinking);
+    const collapsed = !isOpen(b, view, state);
     rows.push({
       key: b.id,
       kind: b.kind,
@@ -224,15 +224,89 @@ function isLive(b: Block, state: State): boolean {
   }
 }
 
-/** A card that opens itself: a failed call, and a call streaming output right
- *  now. Both are §6's "nobody should have to click to find out why something
- *  broke" — the second because a command producing bytes IS what the human is
- *  watching. Suppressed once the human has folded it by hand, which is why this
- *  takes the fold set rather than deciding alone. */
-export function autoOpen(b: Block, view: ViewState): boolean {
-  if (b.kind !== "tool") return false;
-  if (view.collapsed.has(b.id)) return false;
-  return b.status === "error" || b.isError || (b.status === "running" && b.output.length > 0);
+/**
+ * A cheap stamp of everything about a block a rendered row shows.
+ *
+ * THE PROBLEM THIS SOLVES. `project()` **mutates blocks in place** — that is
+ * the documented contract, and it is what keeps a batch from costing per
+ * event — so a renderer cannot ask "is this the same object?" to decide whether
+ * a cached DOM node is still correct: it always is the same object, and a row
+ * would never repaint. Comparing the block by VALUE would allocate; comparing
+ * by nothing repaints every row in the window every frame, which is the cost
+ * virtualisation exists to avoid one layer up.
+ *
+ * So the signature names every field a row DRAWS. `text.length` rather than
+ * `text` because a delta only ever appends and the length is what changes; the
+ * status, the fold and the settlement because those are what flip a card's
+ * shape. A field a row draws and this string omits is a row that goes stale on
+ * screen with nothing red to say so, which is why the tests pin the fields
+ * individually rather than asserting a fixed string.
+ */
+export function rowSignature(b: Block, collapsed: boolean): string {
+  const head = `${b.kind}|${collapsed ? 1 : 0}|${b.turn ?? "-"}`;
+  switch (b.kind) {
+    case "text":
+    case "thinking":
+      return `${head}|${b.text.length}|${b.droppedBytes}`;
+    case "tool":
+      return (
+        `${head}|${b.name ?? "-"}|${b.status}|${b.isError ? 1 : 0}|${b.output.length}` +
+        `|${b.outputDroppedBytes}|${b.durationMs ?? "-"}|${b.orphan ? 1 : 0}`
+      );
+    case "request":
+      return `${head}|${b.channel}|${b.settled ? settlementLine(b) : "pending"}`;
+    case "turn":
+      return `${head}|${b.ended ? 1 : 0}|${turnReceipt(b)}`;
+    case "notice":
+      return `${head}|${b.level}|${b.noteKind ?? "-"}|${b.text.length}`;
+    case "delivery":
+      return `${head}|${b.via}|${b.from ?? "-"}|${b.text.length}`;
+    case "evicted":
+      return `${head}|${b.blocks}`;
+  }
+}
+
+/**
+ * Whether a block is open BEFORE the human has said anything about it.
+ *
+ * Two blocks have a default that is not "open", and both defaults are §6's:
+ *
+ *  - a **tool card** opens itself when it FAILED ("nobody should have to click
+ *    to find out why something broke") or while it is streaming output ("a
+ *    command producing bytes IS what the human is watching"), and is folded
+ *    otherwise;
+ *  - **thinking** is open while it is streaming and folds itself once the model
+ *    has moved on — it is the one block the eye should be able to skip, and
+ *    leaving every one of them open buries the answer. Folding it *while* it
+ *    streams would hide the thing the caret is reporting, which is why this
+ *    reads the projection's open-block pointer rather than just the kind.
+ *    `dimThinking` is the human's own switch and folds it either way.
+ */
+export function defaultOpen(b: Block, view: ViewState, state: State): boolean {
+  switch (b.kind) {
+    case "tool":
+      return b.status === "error" || b.isError || (b.status === "running" && b.output.length > 0);
+    case "thinking":
+      return !view.dimThinking && b.id === state.openThinking;
+    default:
+      return true;
+  }
+}
+
+/**
+ * Whether a block is open ON SCREEN.
+ *
+ * `ViewState.collapsed` is a set of blocks whose DEFAULT the human flipped, not
+ * a set of folded blocks — which is the only shape that works when the default
+ * moves under the human's feet. A card the human opened while it was running
+ * must stay open when it succeeds (its default has just become "folded"), and a
+ * failure the human deliberately folded must stay folded. Reading the set as
+ * "folded" gets the first case wrong and reading it as "opened" gets the second
+ * wrong; a FLIP gets both, and `toggleCollapsed` is already exactly that
+ * operation.
+ */
+export function isOpen(b: Block, view: ViewState, state: State): boolean {
+  return defaultOpen(b, view, state) !== view.collapsed.has(b.id);
 }
 
 function estimateRow(b: Block, collapsed: boolean): number {
@@ -401,6 +475,55 @@ export function isEditTool(name: string | null): boolean {
   if (name === null) return false;
   const n = name.toLowerCase();
   return n === "edit" || n === "write" || n === "multiedit";
+}
+
+// ── the tool's mark and family ──────────────────────────────────────────────
+
+/** The families are the app's own icon roles (`src/icons.ts`'s `IconRole`), so
+ *  a tool card's hue answers the same question a file tree's does — WHICH KIND
+ *  OF THING this is — rather than inventing a fourth channel. Spelled as the
+ *  role names rather than as tokens: the stylesheet resolves a family to an
+ *  `--id-*`, and this module never learns a pigment. */
+export type ToolFamily = "workspace" | "source" | "content" | "vcs" | "fleet";
+
+export interface ToolMark {
+  mark: string;
+  /** `null` for a tool orrerix has never seen: it draws in plain ink rather
+   *  than being given a hue it has not earned, which is what keeps the identity
+   *  channel meaning something. */
+  family: ToolFamily | null;
+}
+
+/** Lower-cased tool name → its mark and family. Lower-cased for the harness
+ *  vocabulary reason `ARG_KEYS` states: `Bash` and `bash` are one tool, and no
+ *  arm here asks which CLI is running. */
+const TOOL_MARKS: Record<string, readonly [string, ToolFamily]> = {
+  read: ["file", "content"],
+  write: ["pencil", "content"],
+  edit: ["pencil", "content"],
+  multiedit: ["pencil", "content"],
+  notebookedit: ["pencil", "content"],
+  glob: ["search", "workspace"],
+  grep: ["search", "workspace"],
+  ls: ["search", "workspace"],
+  bash: ["terminal", "source"],
+  bashoutput: ["terminal", "source"],
+  webfetch: ["globe", "source"],
+  websearch: ["globe", "source"],
+  task: ["people", "fleet"],
+  agent: ["people", "fleet"],
+  todowrite: ["fold", "fleet"],
+  git: ["branch", "vcs"],
+};
+
+export function toolMark(name: string | null): ToolMark {
+  if (name === null) return { mark: "box", family: null };
+  const hit = TOOL_MARKS[name.toLowerCase()];
+  if (hit) return { mark: hit[0], family: hit[1] };
+  // An MCP tool is somebody's extension reaching into this pane — that is a
+  // fleet fact, and it is the one thing a name prefix can honestly tell us.
+  if (name.startsWith("mcp__")) return { mark: "bolt", family: "fleet" };
+  return { mark: "box", family: null };
 }
 
 // ── the chip ────────────────────────────────────────────────────────────────

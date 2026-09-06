@@ -621,16 +621,24 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
             "the reap path parses into `agent_seg` before removing",
             "if let Ok(agent_seg) = PathSegment::parse(agent_id) {",
         ),
-        // #2815. `post_issue_comment` stages the comment body in the group dir
-        // and hands `gh` the path, so the posting agent's id becomes a file
-        // name. Same argument as the four `agent_id: &PathSegment` rows above —
-        // the binding is proven a single component at the signature, and
-        // `mcp.rs` does the parse at the tool boundary rather than passing the
-        // raw `caller.agent_id` through. The second interpolation is a `u64`
+        // #2815. `post_issue_comment` stages the comment body and hands `gh`
+        // the path, so the posting agent's id becomes a file name. Same
+        // argument as the four `agent_id: &PathSegment` rows above — the
+        // binding is proven a single component at the signature, and `mcp.rs`
+        // does the parse at the tool boundary rather than passing the raw
+        // `caller.agent_id` through. The second interpolation is a `u64`
         // counter, which has no spelling that could carry a separator, so the
         // `PathSegment` at the signature remains the whole of the argument.
+        //
+        // **The receiver moved to a subdirectory** (#3040 P3a / #3061 residual
+        // 1), and the row moved with it — this scan matches the site's exact
+        // normalized text, so it went stale and RED rather than quietly
+        // watching nothing, which is what the row convention is for. The move
+        // strengthens the argument rather than changing it: `staging` is a
+        // directory this method owns, so even a hypothetical separator in the
+        // name could no longer reach a file any other subsystem writes.
         (
-            "let body_path = dir.join(format!(\"{actor}-comment-body-{seq}.md\"));",
+            "let body_path = staging.join(format!(\"{actor}-comment-body-{seq}.md\"));",
             "OrchRegistry::post_issue_comment(&GroupId, &PathSegment, u64, &str)",
             "actor: &PathSegment,",
         ),

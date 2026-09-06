@@ -810,10 +810,7 @@ pub async fn gh_issue_comment(repo: String, number: u64, body: String) -> Result
 }
 
 fn gh_issue_comment_sync(repo: String, number: u64, body: String) -> Result<(), String> {
-    if body.trim().is_empty() {
-        return Err("empty comment".to_string());
-    }
-    let args = comment_args("issue", number, &body);
+    let args = comment_argv("issue", number, &body)?;
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
     run_gh(Some(&repo), &argv).map(|_| ())
 }
@@ -873,10 +870,7 @@ pub async fn gh_pr_comment(repo: String, number: u64, body: String) -> Result<()
 }
 
 fn gh_pr_comment_sync(repo: String, number: u64, body: String) -> Result<(), String> {
-    if body.trim().is_empty() {
-        return Err("empty comment".to_string());
-    }
-    let args = comment_args("pr", number, &body);
+    let args = comment_argv("pr", number, &body)?;
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
     run_gh(Some(&repo), &argv).map(|_| ())
 }
@@ -1151,6 +1145,27 @@ fn comment_args(kind: &str, number: u64, body: &str) -> Vec<String> {
         "--body".into(),
         body.into(),
     ]
+}
+
+/// The whole non-spawning half of posting a comment: reject an empty body, then
+/// build the argv. Shared by this file's two `#[tauri::command]` wrappers and by
+/// the MCP orchestration path (`OrchRegistry::post_issue_comment`, #2815), so the
+/// empty-body guard and the discrete-`--body` shape have one definition rather
+/// than one per caller.
+///
+/// **The spawn is deliberately NOT shared.** `OrchRegistry::gh_capture` is "the one
+/// place the backend spawns `gh`" (#791) and the only one carrying
+/// `capture_with_timeout`'s bound; this file's [`run_gh`] is the unbounded
+/// webview-request path. An MCP tool routed through `run_gh` would put a second,
+/// unbounded `gh` spawn on an agent's request path — the exact shape #791 folded
+/// away, whose failure mode was a wedged MCP turn with no error — so the registry
+/// takes THIS function's argv and spawns it through its own bounded helper.
+#[doc(hidden)] // pub for the MCP orchestration path and integration tests
+pub fn comment_argv(kind: &str, number: u64, body: &str) -> Result<Vec<String>, String> {
+    if body.trim().is_empty() {
+        return Err("empty comment".to_string());
+    }
+    Ok(comment_args(kind, number, body))
 }
 
 /// Parse `gh {issue,pr} view --json …` into a `GhDetail`, flattening label and

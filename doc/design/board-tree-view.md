@@ -339,6 +339,15 @@ they cost the name no horizontal room — the complaint this issue is about is
 horizontal — and gating them here would make a row's presence in `withNotes`
 disagree with what is on screen, which is the wire invariant #1317 established.
 
+Their **buttons** are rung 4 like everything else, which is the one consequence
+worth stating rather than discovering: open a section, fold the row, and the
+section stays on screen while the control that shuts it does not. Re-expanding
+the row brings the button back, so nothing is stranded — but it is a round trip,
+and it is the price of not gating the sections. Gating them instead would trade
+this for the `withNotes` divergence above, which is the worse of the two: one
+costs a click, the other makes the board and the wire disagree about what a row
+is carrying.
+
 The deps / see-also line **is** rung 4, with one carve-out: an open picker keeps
 the line whichever way the row is folded, so a picker the human has just opened
 can never become unreachable. Nothing can open one from a collapsed row — every

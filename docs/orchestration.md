@@ -381,8 +381,8 @@ Everything else is one click away behind that `⌄`: the assignee and session
 chips, the kind and sprint badges, the *ready* / *all inside done* / *cleared*
 markers, the ACTIVE badge and the *needs a decision* / *needs a look* deep
 link, the ▶ Start / ✓ Approve / ✎ Changes / ▶ Proceed buttons, the 🔗 ⤵ 🏷 🎯
-📎 pickers, ↩ restore and ✕ delete. It opens **in place**, under the row's own
-name — the terminals underneath never move.
+📎 🗨 buttons, ↩ restore and ✕ delete. It opens **in place**, under the row's
+own name — the terminals underneath never move.
 
 Two things worth knowing about how it behaves:
 
@@ -395,9 +395,11 @@ Two things worth knowing about how it behaves:
   agent working on it right now. Those cost the name no room at all, which is
   why the badges that repeat them sit behind the `⌄`.
 
-The 🗨 notes and 📎 grounding sections are unchanged: they open as full-width
-blocks below the row, so they never compete with the name, and a section you
-opened stays open whichever way you fold the row itself.
+The 🗨 notes and 📎 grounding **sections** are unchanged: they open as
+full-width blocks below the row, so they never compete with the name, and a
+section you opened stays open whichever way you fold the row itself. The 🗨 and
+📎 **buttons** that open and shut them are behind the `⌄` like the rest, so a
+section left open under a folded row is shut by expanding the row again.
 
 ### What order the board is in
 

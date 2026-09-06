@@ -29560,6 +29560,8 @@ impl OrchRegistry {
             agents: TrackedMutex::new_ranked("agents", lockorder::AGENTS, HashMap::new()),
             by_token: TrackedMutex::new("by_token", HashMap::new()),
             by_pty: TrackedMutex::new_ranked("by_pty", lockorder::BY_PTY, HashMap::new()),
+            structured: structured::StructuredPanes::default(),
+            stream_usage: TrackedMutex::new("stream_usage", HashMap::new()),
             pending_binds: TrackedMutex::new("pending_binds", HashMap::new()),
             test_spawn_requests: TrackedMutex::new("test_spawn_requests", HashMap::new()),
             spawn_notices: TrackedMutex::new("spawn_notices", HashMap::new()),
@@ -51267,7 +51269,9 @@ impl OrchRegistry {
                 session_id.as_deref(),
                 &self.group_dir(group_id),
                 &cfg.path,
-                persona.pi_append_system_prompt_file.as_deref(),
+                persona
+                    .as_ref()
+                    .and_then(|p| p.pi_append_system_prompt_file.as_deref()),
                 role.containment(),
                 &model,
                 block.knobs().effort,

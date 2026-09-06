@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   encodeTabs,
   decodeTabs,
+  persistedKindFor,
   SCHEMA_VERSION,
   type PersistedTabs,
   type PersistedLayoutNode,
@@ -1018,4 +1019,51 @@ test("a lead pane's flag round-trips, and only an exact `true` is one", () => {
   assert.equal(decode(undefined), false, "every pre-#2519 snapshot");
   assert.equal(decode("true"), false, "a hand-edited string is not a lead");
   assert.equal(decode(1), false);
+});
+
+// ---------- `persistedKindFor`: what a live pane comes back AS (#2519 C2) ----------
+
+const LIVE = {
+  contentKind: null,
+  ssh: false,
+  orchRole: null,
+  orchGroup: null,
+  launchedCommand: false,
+} as const;
+
+test("a LEAD persists as the agent pane it is, never as a resumable orch placeholder", () => {
+  // The whole restore contract for a lead, and the reason it is a rung of its
+  // own: `orch` means "a member of a group a whole-group RESUME brings back",
+  // and a lead group cannot be resumed. Persisted that way it would return as a
+  // Resume button that can only fail, with the human's command line discarded.
+  const lead = { ...LIVE, orchRole: "lead", orchGroup: "g-lead", launchedCommand: true };
+  assert.equal(persistedKindFor(lead), "agent");
+  // The operands COLLIDE, which is what makes the assertion above fail-able:
+  // this pane really does carry a group, so a rung that read `orchGroup` first
+  // would answer "orch" for it. The control is the same pane one field over.
+  assert.equal(persistedKindFor({ ...lead, orchRole: "worker" }), "orch", "any OTHER role in a group is orch");
+});
+
+test("the persisted-kind ladder answers each rung, with the rung below it varied", () => {
+  // Fixture-per-rung (#1182): each row differs from the one that would win
+  // beneath it, so a rung deleted from the ladder reddens exactly its own row
+  // rather than being masked by an arm further down.
+  assert.equal(
+    persistedKindFor({ ...LIVE, contentKind: "editor", ssh: true, orchGroup: "g", launchedCommand: true }),
+    "editor",
+    "content outranks everything — it has no process at all"
+  );
+  assert.equal(
+    persistedKindFor({ ...LIVE, ssh: true, orchRole: "lead", orchGroup: "g" }),
+    "ssh",
+    "ssh outranks lead and orch (the #887/#888 boundary, belt: an ssh pane can hold neither)"
+  );
+  assert.equal(
+    persistedKindFor({ ...LIVE, ssh: true }),
+    "ssh",
+    "…and outranks terminal, which is the fallthrough it exists to prevent: an ssh pane launches an argv, so `launchedCommand` is false for it"
+  );
+  assert.equal(persistedKindFor({ ...LIVE, orchGroup: "g" }), "orch");
+  assert.equal(persistedKindFor({ ...LIVE, launchedCommand: true }), "agent");
+  assert.equal(persistedKindFor(LIVE), "terminal", "a bare shell");
 });

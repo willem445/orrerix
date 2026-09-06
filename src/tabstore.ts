@@ -274,6 +274,43 @@ const PANE_KINDS: readonly PersistedPaneKind[] = [
   ...CONTENT_KINDS,
   "ssh",
 ];
+/** Which kind a LIVE pane persists as — `Pane.liveKind`'s whole decision, as a
+ *  pure function (#2519 C2), so the one rule that decides what a pane comes
+ *  back AS is testable without a DOM.
+ *
+ *  It is a precedence ladder and every rung is load-bearing:
+ *
+ *  1. **content** (files / editor / git / workflow) — no process at all.
+ *  2. **ssh** (#887 S4) outranks the two below it because a FALLTHROUGH gets it
+ *     silently wrong: an ssh pane launches an argv rather than a command
+ *     string, so it would persist as a plain terminal and come back next boot
+ *     as a local shell wearing the remote host's name.
+ *  3. **lead** (#2519) — an agent pane that happens to own an orchestration
+ *     group. It must NOT fall through to `orch`: that kind means "a member of a
+ *     group a whole-group RESUME brings back", and a lead group cannot be
+ *     resumed (the backend refuses it; the children's worktrees and sessions
+ *     are gone and their panes are not restored). Persisted as `orch` it would
+ *     return as a Resume button that can only fail, with the human's own
+ *     command line discarded to make it. As `agent` it returns as itself, and
+ *     `PersistedPane.lead` tells the restore to re-mint it a fresh group.
+ *  4. **orch** — any other pane carrying a group.
+ *  5. **agent** if something was launched, else a plain **terminal**. */
+export function persistedKindFor(pane: {
+  /** The content kind this pane IS, or null for a process pane. */
+  readonly contentKind: PersistedPaneKind | null;
+  readonly ssh: boolean;
+  /** The pane's orchestration ROLE, or null — `"lead"` is the rung above. */
+  readonly orchRole: string | null;
+  readonly orchGroup: string | null;
+  /** A command/argv was launched here (an agent), as opposed to a bare shell. */
+  readonly launchedCommand: boolean;
+}): PersistedPaneKind {
+  if (pane.contentKind !== null) return pane.contentKind;
+  if (pane.ssh) return "ssh";
+  if (pane.orchRole === "lead") return "agent";
+  return pane.orchGroup ? "orch" : pane.launchedCommand ? "agent" : "terminal";
+}
+
 const SHELL_KINDS: readonly ShellKind[] = ["powershell", "gitbash", "cmd"];
 const RESTORE_PREFS: readonly RestorePref[] = ["ask", "restore", "fresh"];
 

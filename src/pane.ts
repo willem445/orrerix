@@ -109,7 +109,7 @@ import { icon } from "./icons.ts";
 import { agentMark, type AgentMarkInput } from "./agenticons.ts";
 import { WorkflowView } from "./workflowview";
 import { WORKFLOW_FILE } from "./workflowmodel";
-import type { PersistedPane, PersistedPaneKind } from "./tabstore";
+import { persistedKindFor, type PersistedPane, type PersistedPaneKind } from "./tabstore";
 import type { TabPaneInfo } from "./tabcounts";
 import { adoptableSessionId, hasForkSession, sessionCliFromCommand } from "./panerestore";
 // The reconciler's own CLI set, imported rather than re-spelled: `agentCli`
@@ -5313,38 +5313,29 @@ export class Pane implements VoiceTargetPane {
     return this.dormantRecord;
   }
 
-  /** This pane's persisted kind from its live launch state: a CONTENT kind (#214/#217,
-   *  no PTY at all) > ssh (#887) > orch (any orchestration role) > agent (launched a
-   *  command) > plain terminal. `capture()`'s per-kind ternaries above then null every
-   *  field a content pane doesn't have (command, argv, shellKind, sessionId, role),
-   *  leaving exactly {paneKind, name, cwd:=root} — all it needs to come back.
+  /** This pane's persisted kind from its live launch state — a CONTENT kind
+   *  (#214/#217, no PTY at all) > ssh (#887) > lead (#2519) > orch > agent >
+   *  plain terminal. `capture()`'s per-kind ternaries above then null every
+   *  field that kind doesn't have, leaving exactly what it needs to come back.
    *
-   *  ssh outranks the two below it because it is the only one of the three that a
-   *  FALLTHROUGH would get silently wrong: an ssh pane launches an argv rather than
-   *  a command string, so `launchedCommand` is false for it and it would persist as
-   *  a plain TERMINAL — coming back next boot as a local PowerShell wearing the
-   *  remote host's name. (It can never be `orch` — that combination is refused
-   *  before any process starts — so the ordering against that arm is belt only.) */
+   *  THE LADDER ITSELF LIVES IN `persistedKindFor` (`tabstore.ts`), which is
+   *  pure and carries the argument for each rung's position — including the one
+   *  that decides a lead's whole restore contract. It was extracted there
+   *  (#2519 C2) rather than left here because this method reads six private
+   *  fields off a live pane, so nothing could pin it without a DOM, and "an ssh
+   *  pane must not fall through to terminal" is exactly the kind of claim that
+   *  should not rest on someone re-reading the order. This method is now the
+   *  READING of those fields, which is all a `Pane` is the authority on. */
   private liveKind(): PersistedPaneKind {
-    if (this.contentKind !== null) return this.contentKind;
-    if (this.isSshPane) return "ssh";
-    // A LEAD (#2519) carries an orchestration identity and is still an AGENT
-    // pane, and the ordering here is the whole restore contract for one.
-    //
-    // `orch` is what a pane persists as when its group is the thing that brings
-    // it back: the record drops the command line and comes back as a dormant
-    // placeholder that a whole-group RESUME re-inhabits. A lead group cannot be
-    // resumed — the backend refuses it, because the children's worktrees and
-    // sessions are gone and their panes are not restored — so a lead persisted
-    // that way would come back as a Resume button that can only ever fail, with
-    // the human's own command line thrown away to make it.
-    //
-    // What a lead needs instead is exactly what an agent pane records: its
-    // command line, its session id, its cwd. `capture()` marks it `lead: true`
-    // and the restore re-mints a FRESH group for it (see `PersistedPane.lead`).
-    if (this.isLead) return "agent";
-    return this.orchGroup ? "orch" : this.launchedCommand ? "agent" : "terminal";
+    return persistedKindFor({
+      contentKind: this.contentKind,
+      ssh: this.isSshPane,
+      orchRole: this.orchRoleName,
+      orchGroup: this.orchGroup,
+      launchedCommand: this.launchedCommand,
+    });
   }
+
 
   /** Is this pane a LEAD (#2519) — a human's agent pane that owns a lightweight
    *  orchestration group and spawns orrerix panes as its helpers?

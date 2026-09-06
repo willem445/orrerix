@@ -63792,24 +63792,32 @@ fn the_workflow_name_is_recorded_with_the_toggle_off_and_is_inert_until_it_is_on
 // denied, every file-write fallback denied. A tool argument is a JSON payload
 // rather than a command line, so it has neither limit.
 
-/// A stand-in `gh` that answers immediately and reports the first three
-/// arguments it was given, by folding them into the URL it prints.
+/// A stand-in `gh` that answers immediately, records the body file it was
+/// handed, and reports its first three arguments by folding them into the URL
+/// it prints.
 ///
-/// Echoing them into the URL is what makes the VERB checkable end-to-end: the
-/// tool hands its caller only the URL, so an argv assertion made anywhere else
-/// would be a claim about a helper rather than about the spawn the registry
-/// actually performs. `gh issue comment` prints the comment URL last, and this
+/// Both halves are what make the end-to-end claim checkable rather than
+/// asserted about a helper: the URL carries the VERB the registry really
+/// spawned (`issue comment 7`), and `body-seen.txt` carries the bytes `gh`
+/// really received — which is the only way to show a 15,000-character plan
+/// arrived whole. `gh issue comment` prints the comment URL last, and this
 /// prints exactly one line, which is the shape `post_issue_comment` parses.
 fn echoing_gh(dir: &Path, name: &str) -> std::path::PathBuf {
     let (file, script) = if cfg!(windows) {
         (
             format!("{name}.cmd"),
-            "@echo off\r\necho https://example.invalid/c/%~1-%~2-%~3\r\n".to_string(),
+            "@echo off\r\n\
+             if not \"%~5\"==\"\" copy /y \"%~5\" \"%~dp0body-seen.txt\" >NUL\r\n\
+             echo https://example.invalid/c/%~1-%~2-%~3\r\n"
+                .to_string(),
         )
     } else {
         (
             name.to_string(),
-            "#!/bin/sh\nprintf '%s\\n' \"https://example.invalid/c/$1-$2-$3\"\n".to_string(),
+            "#!/bin/sh\n\
+             if [ -n \"$5\" ]; then cat \"$5\" > \"$(dirname \"$0\")/body-seen.txt\"; fi\n\
+             printf '%s\\n' \"https://example.invalid/c/$1-$2-$3\"\n"
+                .to_string(),
         )
     };
     let path = dir.join(file);
@@ -63838,16 +63846,18 @@ fn listed_tool_names(reg: &OrchRegistry, c: &Caller) -> Vec<String> {
         .collect()
 }
 
-/// The whole point: a plan too long to be a shell command posts anyway, and the
-/// planner gets the URL back.
+/// The whole point: a plan far too long to be a shell command reaches `gh`
+/// intact, and the planner gets the URL back.
 ///
 /// **The body is 15,000 characters DELIBERATELY.** A short body would pass
 /// under the broken world too — the denial being fixed is keyed on length, not
 /// on content — so a fixture under the 10,000-character ceiling would be a test
-/// of the plumbing that cannot fail for the reason this change exists. It stays
-/// under Windows' own 32,767-character command-line limit so that what is
-/// demonstrated is the absence of the CLI permission engine's ceiling, not the
-/// presence of the operating system's.
+/// of the plumbing that cannot fail for the reason this change exists. It is
+/// also over half of Windows' own 32,767-character command-line cap, which is
+/// what makes the `--body-file` staging (rather than a `--body` argv) the thing
+/// under test: an earlier draft passed the body as an argument and this test
+/// failed on Windows alone, with `Command` refusing an unescapable argument to a
+/// batch shim ("batch file arguments are invalid").
 #[test]
 fn a_planner_posts_a_plan_longer_than_the_shell_could_carry_and_gets_the_url() {
     let _serial = capture_lock();
@@ -63875,6 +63885,23 @@ fn a_planner_posts_a_plan_longer_than_the_shell_could_carry_and_gets_the_url() {
         "the URL must come back to the planner (it is `report`'s detail_url), and the argv the \
          registry really spawned must be `issue comment 7` — the fake folds its first three \
          arguments into the URL precisely so this is one assertion, not two claims: {out}");
+
+    // The BYTES gh received, not merely that the call returned. This is the
+    // assertion the change exists for: the whole plan crossed the process
+    // boundary, which is what no argv on this platform could have carried.
+    let seen = fs::read_to_string(repo.path().join("body-seen.txt"))
+        .expect("gh must have been handed a --body-file it could read");
+    assert_eq!(seen.trim_end_matches(['\r', '\n']), body.trim_end_matches(['\r', '\n']),
+        "the plan must arrive whole and unmodified (seen {} bytes, sent {})", seen.len(), body.len());
+
+    // The staging file is scratch, not an artifact: it must not survive the call.
+    let leftovers: Vec<String> = fs::read_dir(reg.state_root().join(g.id.as_str()))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with("-comment-body.md"))
+        .collect();
+    assert!(leftovers.is_empty(), "the staged body must be cleaned up, found: {leftovers:?}");
 
     // The human's record of what a pane published, without reading the pane.
     let row = reg.audit_log(&g.id).into_iter()
@@ -63933,17 +63960,27 @@ fn post_issue_comment_is_granted_to_three_classes_and_refused_to_a_reviewer() {
 }
 
 /// Comments-only is a property of the CODE, not an argument check — so this
-/// pins the argv builder every caller goes through and asserts the dangerous
-/// verbs are unreachable for ANY input, not merely absent from a happy path.
+/// pins BOTH argv builders and asserts the dangerous verbs are unreachable for
+/// any input, not merely absent from a happy path.
+///
+/// Both are pinned because they are two different channels: the webview's
+/// `--body` form and the MCP path's `--body-file` form. Pinning only the one
+/// this change happens to use would leave the other free to drift into a shape
+/// a body could steer.
 #[test]
-fn the_comment_argv_has_no_verb_a_caller_can_reach() {
-    use loomux_lib::gh::comment_argv;
+fn neither_comment_argv_has_a_verb_a_caller_can_reach() {
+    use loomux_lib::gh::{comment_argv, comment_file_argv, reject_empty_comment};
 
     assert_eq!(
         comment_argv("issue", 7, "hi").unwrap(),
         vec!["issue", "comment", "7", "--body", "hi"],
         "the verb and subcommand are literals in position 0 and 1; only the number and the \
          body come from a caller"
+    );
+    assert_eq!(
+        comment_file_argv("issue", 7, "/tmp/b.md"),
+        vec!["issue", "comment", "7", "--body-file", "/tmp/b.md"],
+        "and the file form differs from it in exactly one flag"
     );
 
     // Bodies chosen to be exactly what would escape if the body were ever
@@ -63957,21 +63994,28 @@ fn the_comment_argv_has_no_verb_a_caller_can_reach() {
         "close\nmerge\n--delete-branch",
         "$(gh pr merge 7)",
     ] {
-        let argv = comment_argv("issue", 7, hostile).unwrap();
-        assert_eq!(argv.len(), 5, "a body can never ADD an argument: {argv:?}");
-        assert_eq!(&argv[..4], &["issue", "comment", "7", "--body"],
-            "and can never displace the four that precede it: {argv:?}");
-        assert_eq!(argv[4], hostile, "it arrives verbatim, as data: {argv:?}");
-        for verb in ["edit", "close", "reopen", "merge", "create", "review", "delete"] {
-            assert!(!argv[..4].iter().any(|a| a == verb),
-                "no input may put `{verb}` in the argv's command position: {argv:?}");
+        for argv in [comment_argv("issue", 7, hostile).unwrap(),
+                     comment_file_argv("issue", 7, hostile)] {
+            assert_eq!(argv.len(), 5, "a body can never ADD an argument: {argv:?}");
+            assert_eq!(&argv[..3], &["issue", "comment", "7"],
+                "and can never displace the three that name the operation: {argv:?}");
+            assert_eq!(argv[4], hostile, "it arrives verbatim, as data: {argv:?}");
+            for verb in ["edit", "close", "reopen", "merge", "create", "review", "delete"] {
+                assert!(!argv[..4].iter().any(|a| a == verb),
+                    "no input may put `{verb}` in the argv's command position: {argv:?}");
+            }
         }
     }
 
-    // Rejected before any spawn: `gh` with no `--body` value opens an
-    // interactive editor, which in an agent pane is a hang, not an error.
+    // Rejected before any spawn: `gh` with no body value opens an interactive
+    // editor, which in an agent pane is a hang, not an error. The guard is
+    // shared, so the file path enforces it through `reject_empty_comment`
+    // rather than keeping a second copy that could drift.
     for empty in ["", "   ", "\n\t \r\n"] {
         assert_eq!(comment_argv("issue", 7, empty).unwrap_err(), "empty comment",
             "whitespace-only is empty too: {empty:?}");
+        assert_eq!(reject_empty_comment(empty).unwrap_err(), "empty comment",
+            "and the shared guard agrees: {empty:?}");
     }
+    assert!(reject_empty_comment("x").is_ok(), "a non-empty body is not refused");
 }

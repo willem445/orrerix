@@ -3502,7 +3502,12 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 .and_then(Value::as_u64)
                 .ok_or("issue required (a bare number)")?;
             let body = arg_str(args, "body").ok_or("body required")?;
-            reg.post_issue_comment(&caller.group, &caller.agent_id, issue, body)
+            // #925: the id becomes a file name inside the group dir, so it is
+            // parsed HERE, at the boundary, and threaded on as a type — the same
+            // discipline every other group-scoped path in this file follows.
+            let actor = super::PathSegment::parse(&caller.agent_id)
+                .map_err(|e| format!("unusable agent id: {e}"))?;
+            reg.post_issue_comment(&caller.group, &actor, issue, body)
                 .map(|url| format!("posted comment on #{issue}: {url}"))
         }
 

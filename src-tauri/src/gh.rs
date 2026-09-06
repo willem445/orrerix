@@ -1162,10 +1162,47 @@ fn comment_args(kind: &str, number: u64, body: &str) -> Vec<String> {
 /// takes THIS function's argv and spawns it through its own bounded helper.
 #[doc(hidden)] // pub for the MCP orchestration path and integration tests
 pub fn comment_argv(kind: &str, number: u64, body: &str) -> Result<Vec<String>, String> {
+    reject_empty_comment(body)?;
+    Ok(comment_args(kind, number, body))
+}
+
+/// The empty-body guard on its own, for a caller that does not put the body on
+/// the command line at all (`comment_file_argv`). `gh` with no `--body` value
+/// opens an interactive editor, which in an agent pane is a hang rather than an
+/// error, so every comment path refuses one before spawning.
+#[doc(hidden)] // pub for integration tests
+pub fn reject_empty_comment(body: &str) -> Result<(), String> {
     if body.trim().is_empty() {
         return Err("empty comment".to_string());
     }
-    Ok(comment_args(kind, number, body))
+    Ok(())
+}
+
+/// `gh <kind> comment <n> --body-file <path>`: the same comment, with the text
+/// read from a FILE instead of an argument.
+///
+/// **Why the MCP path needs this and the webview path does not.** A command line
+/// is a bounded, escaped channel and a plan is neither small nor quotable.
+/// Windows caps a whole command line at 32,767 characters, so a `--body` argv
+/// silently ceilings a plan at roughly that — plan-2332's was 21,610, close
+/// enough that the ceiling is a real limit rather than a theoretical one. Worse,
+/// Rust's `Command` REFUSES outright to pass an argument it cannot safely escape
+/// to a `.cmd`/`.bat` (the CVE-2024-24576 hardening), returning "batch file
+/// arguments are invalid" — so on a host where `gh` resolves to a batch shim, a
+/// multi-line plan fails on the argv before `gh` ever runs. A file has neither
+/// property: only the short path travels as an argument.
+///
+/// The path is built by the caller inside the group's own state directory, never
+/// from anything the caller passing the body can influence.
+#[doc(hidden)] // pub for the MCP orchestration path and integration tests
+pub fn comment_file_argv(kind: &str, number: u64, body_file: &str) -> Vec<String> {
+    vec![
+        kind.into(),
+        "comment".into(),
+        number.to_string(),
+        "--body-file".into(),
+        body_file.into(),
+    ]
 }
 
 /// Parse `gh {issue,pr} view --json …` into a `GhDetail`, flattening label and

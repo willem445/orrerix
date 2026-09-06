@@ -534,7 +534,7 @@ fn check_document(doc: &PlanDoc, text: &str, first_line: usize, errs: &mut Vec<S
     let mut branches: BTreeMap<String, (usize, &str)> = BTreeMap::new();
     for (i, s) in doc.slices.iter().enumerate() {
         let at = probe::line_of(text, probe::Target::SliceId(i));
-        match ids.get(&s.id.as_str().to_ascii_lowercase()) {
+        match ids.get(&s.id.as_str().to_string()) {
             Some(&(first, spelling)) if spelling == s.id.as_str() => errs.push(reason(
                 first_line,
                 at,
@@ -553,12 +553,12 @@ fn check_document(doc: &PlanDoc, text: &str, first_line: usize, errs: &mut Vec<S
                 ),
             )),
             None => {
-                ids.insert(s.id.as_str().to_ascii_lowercase(), (i, s.id.as_str()));
+                ids.insert(s.id.as_str().to_string(), (i, s.id.as_str()));
             }
         }
 
         let at = probe::line_of(text, probe::Target::Branch(i));
-        match branches.get(&s.branch.as_str().to_ascii_lowercase()) {
+        match branches.get(&s.branch.as_str().to_string()) {
             Some(&(first, spelling)) if spelling == s.branch.as_str() => errs.push(reason(
                 first_line,
                 at,
@@ -582,7 +582,7 @@ fn check_document(doc: &PlanDoc, text: &str, first_line: usize, errs: &mut Vec<S
             )),
             None => {
                 branches.insert(
-                    s.branch.as_str().to_ascii_lowercase(),
+                    s.branch.as_str().to_string(),
                     (i, s.branch.as_str()),
                 );
             }
@@ -698,7 +698,7 @@ fn reason(first_line: usize, block_line: Option<usize>, msg: &str) -> String {
 /// wrong verdict; that is still a reason to get it right, and
 /// `a_key_named_like_the_position_suffix_keeps_its_message` pins it.
 fn strip_yaml_position(s: &str) -> String {
-    match s.rfind(" at line ") {
+    match s.find(" at line ") {
         Some(i) => s[..i].trim_end().to_string(),
         None => s.to_string(),
     }

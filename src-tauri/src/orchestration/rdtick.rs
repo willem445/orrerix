@@ -1329,8 +1329,7 @@ impl OrchRegistry {
         let anchor = reviewdrive::lane_stall_anchor(
             entry.lane(block),
             &brief.head,
-            // [mutated] was: brief.body_digest_opt()
-            None,
+            brief.body_digest_opt(),
             pane_dead,
             now,
         );

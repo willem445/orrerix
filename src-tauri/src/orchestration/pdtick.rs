@@ -193,6 +193,18 @@ impl OrchRegistry {
         json!({ "refused": reason })
     }
 
+    /// Where this group's `plan_drives.json` lives — a TEST seam, and the only
+    /// way out of this crate to that path.
+    ///
+    /// Exposed rather than letting a test rebuild the path itself, for CLAUDE.md
+    /// constraint 6's reason: `group_dir_at` is the one place a group id becomes
+    /// a path, and a test that joined the group dir by hand would be a second
+    /// join — in a file the join scan does not read.
+    #[doc(hidden)]
+    pub fn pd_record_path_for_test(&self, group: &GroupId) -> std::path::PathBuf {
+        plandrive::state_path(&self.group_dir(group))
+    }
+
     /// Install (or clear) the canned `gh` this driver reads through.
     ///
     /// **There is no `pd_runner_override`** — this is `set_rd_runner_override`,

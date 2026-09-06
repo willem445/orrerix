@@ -18,7 +18,7 @@
 {"kind":"permission_settled","id":"r1","decision":"deny","by":"policy"}
 {"kind":"turn_ended","turn":1,"usage":{"call_cumulative":{"input":12300,"output":1100,"cache_read":400,"cache_creation":0},"this_turn_main_loop":{"input":900,"output":210,"cache_read":0,"cache_creation":0},"per_model":[{"model":"anthropic/claude-sonnet-4.5","tokens":{"input":12300,"output":1100,"cache_read":400,"cache_creation":0}}]},"cost":{"usd":0.42,"basis":"harness_estimate"},"stop":"completed"}
 {"kind":"compacted","trigger":"threshold","pre_tokens":141200}
-{"kind":"note","level":"warn","tag":"retry","text":"upstream 529 — retry 1/5 in 800ms"}
+{"kind":"note","turn":null,"note":"retry","text":"upstream 529 — retry 1/5 in 800ms"}
 {"kind":"turn_started","turn":2}
 {"kind":"ui_request","id":"u1","method":"select","title":"Which branch?","message":"Two branches match fix/2214.","options":["fix/2214-resume-model","fix/2214-old"],"timeout_ms":60000}
 {"kind":"ui_settled","id":"u1","answer":{"Value":"fix/2214-resume-model"},"by":"human"}

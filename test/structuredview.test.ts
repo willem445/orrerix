@@ -285,6 +285,44 @@ test("QueueChanged is state, not a block — an empty queue is not news", () => 
   assert.equal(s.blocks.length, 0, "no row is drawn for a queue update");
 });
 
+test("a Note keeps its own turn, and a null one is NOT bucketed into the open turn", () => {
+  // §1.3: a fact the pane does not have is null. A retry begins before a turn
+  // reopens and an extension can throw at boot, so `turn: null` is a real
+  // answer — and substituting `state.currentTurn` would invent the attribution
+  // in the very field a renderer groups by.
+  const s = run([
+    { kind: "turn_started", turn: 7 },
+    { kind: "note", turn: null, note: "retry", text: "upstream 529 — retry 1/5" },
+    { kind: "note", turn: 7, note: "error", text: "retries exhausted" },
+  ]);
+  const notes = only(s, "notice");
+  assert.equal(notes.length, 2);
+  assert.equal(notes[0]!.turn, null, "the harness said no turn, so the block says no turn");
+  assert.notEqual(notes[0]!.turn, 7, "the open turn is NOT substituted");
+  assert.notEqual(notes[0]!.turn, 0, "and it is not bucketed into turn 0 either");
+  assert.equal(notes[1]!.turn, 7, "positive control: an attributed note keeps its turn");
+});
+
+test("the three NoteKinds stay distinguishable, which level alone cannot do", () => {
+  // Each is meant to be drawn differently, and `noteKind` is what a renderer
+  // separates them by: `level` collapses a harness `ui` note into the same
+  // bucket as orrerix's own compaction row, and they are not the same thing.
+  const s = run([
+    { kind: "note", turn: 1, note: "retry", text: "retrying" },
+    { kind: "note", turn: 1, note: "error", text: "gave up" },
+    { kind: "note", turn: 1, note: "ui", text: "indexing…" },
+    { kind: "compacted", trigger: "auto", pre_tokens: 100 },
+  ]);
+  const notes = only(s, "notice");
+  assert.deepEqual(notes.map((b) => b.noteKind), ["retry", "error", "ui", null]);
+  assert.deepEqual(notes.map((b) => b.level), ["warn", "error", "info", "info"]);
+  // The point of carrying both: the last two share a level and must not share
+  // an identity.
+  assert.equal(notes[2]!.level, notes[3]!.level);
+  assert.notEqual(notes[2]!.noteKind, notes[3]!.noteKind);
+  assert.equal(notes[3]!.noteKind, null, "orrerix's own row is not a harness note");
+});
+
 test("an unknown event kind is recorded as a note, never thrown on", () => {
   const s = emptyState();
   assert.doesNotThrow(() => {
@@ -306,7 +344,7 @@ test("Observed evidence is drawn as a note, never promoted to a request", () => 
 test("MAX_BLOCKS eviction fires, is counted, and leaves a VISIBLE sentinel", () => {
   const batch: ProjectionInput[] = [];
   for (let i = 0; i < MAX_BLOCKS + 50; i += 1) {
-    batch.push({ kind: "note", level: "info", tag: "n", text: `n${i}` });
+    batch.push({ kind: "note", turn: null, note: "ui", text: `n${i}` });
   }
   const s = run(batch);
 
@@ -329,7 +367,7 @@ test("the sentinel accumulates across batches and is never itself evicted", () =
   const s = emptyState();
   const push = (n: number) => {
     const batch: ProjectionInput[] = [];
-    for (let i = 0; i < n; i += 1) batch.push({ kind: "note", level: "info", tag: "n", text: "x" });
+    for (let i = 0; i < n; i += 1) batch.push({ kind: "note", turn: null, note: "ui", text: "x" });
     project(s, batch);
   };
   push(MAX_BLOCKS + 10);
@@ -436,7 +474,7 @@ test("a fold is keyed by id, not by position, so an eviction cannot move it", ()
   // remaining block down and the human's fold silently lands on a stranger.
   const s = emptyState();
   const notes = (n: number): ProjectionInput[] =>
-    Array.from({ length: n }, () => ({ kind: "note", level: "info", tag: "n", text: "x" }) as const);
+    Array.from({ length: n }, () => ({ kind: "note", turn: null, note: "ui", text: "x" }) as const);
 
   // 100 blocks of history, then the card the human folds, then enough traffic
   // to evict some of that history but not the card itself.
@@ -467,7 +505,7 @@ test("ids stay UNIQUE across an eviction, so a new block cannot inherit a live f
   // collide.
   const s = emptyState();
   const notes = (n: number): ProjectionInput[] =>
-    Array.from({ length: n }, () => ({ kind: "note", level: "info", tag: "n", text: "x" }) as const);
+    Array.from({ length: n }, () => ({ kind: "note", turn: null, note: "ui", text: "x" }) as const);
 
   project(s, notes(MAX_BLOCKS + 100));
   assert.ok(s.evicted > 0, "positive control: an eviction really happened");
@@ -489,13 +527,13 @@ test("ids stay UNIQUE across an eviction, so a new block cannot inherit a live f
 
 test("pruneViewState drops folds for blocks that are gone, and keeps live ones", () => {
   const s = emptyState();
-  project(s, [{ kind: "note", level: "info", tag: "a", text: "first" }]);
+  project(s, [{ kind: "note", turn: null, note: "ui", text: "first" }]);
   const doomed = s.blocks[0]!.id;
   const view = emptyViewState();
   toggleCollapsed(view, doomed);
 
   const filler: ProjectionInput[] = [];
-  for (let i = 0; i < 60; i += 1) filler.push({ kind: "note", level: "info", tag: "n", text: "x" });
+  for (let i = 0; i < 60; i += 1) filler.push({ kind: "note", turn: null, note: "ui", text: "x" });
   for (let i = 0; i < 40; i += 1) project(s, filler);
   const live = s.blocks[s.blocks.length - 1]!.id;
   toggleCollapsed(view, live);

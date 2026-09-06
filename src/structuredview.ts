@@ -76,7 +76,21 @@ export type DecisionSource = "policy" | "human" | "pane_exited";
 export type UiMethod = "select" | "confirm" | "input" | "editor";
 export type UiAnswer = { Value: string } | { Confirmed: boolean } | "Cancelled";
 
-/** The contract's sixteen variants (§1.2's eleven plus S1a's five). */
+/** `harness::NoteKind` — the closed set a decoder may produce, three kinds a
+ *  renderer is meant to draw differently.
+ *
+ *  `retry` is transient and the harness is retrying itself; `error` is a
+ *  failure nothing is retrying, retries EXHAUSTED included; `ui` is something
+ *  the harness displayed and expects no answer (pi's fire-and-forget
+ *  `notify`/`setStatus`/`setWidget`/`setTitle`). A `Lifecycle` fourth was
+ *  considered and rejected as dead. */
+export type NoteKind = "retry" | "error" | "ui";
+
+/** The contract's seventeen variants (§1.2's eleven, S1a's five, and #2850's
+ *  `Note`). Seven are decision-grade — `ToolCall`, `PermissionRequest`,
+ *  `PermissionSettled`, `UiRequest`, `UiSettled`, `TurnEnded`, `Exited` — which
+ *  is an audit-log split, not a projection one: this module draws all
+ *  seventeen. */
 export type HarnessEventLike =
   | { kind: "booted"; session: string | null; model: string | null; capabilities: string[] }
   | { kind: "turn_started"; turn: TurnId }
@@ -101,30 +115,43 @@ export type HarnessEventLike =
   | { kind: "turn_ended"; turn: TurnId; usage: Usage | null; cost: Cost | null; stop: StopReason }
   | { kind: "compacted"; trigger: "manual" | "auto"; pre_tokens: number | null }
   | { kind: "exited"; code: number | null }
-  | { kind: "observed"; observed: string; matched?: string };
+  | { kind: "observed"; observed: string; matched?: string }
+  | {
+      kind: "note";
+      /** A real `Option`: a retry begins before a turn reopens and an extension
+       *  can throw at boot. `null` is NOT bucketed into turn 0 — that would be
+       *  a made-up fact in the field a renderer groups by (§1.3). */
+      turn: TurnId | null;
+      /** The inner field is `note`, not `kind`: the outer enum's serde tag is
+       *  `kind`, so a variant field of that name emits a duplicate key and does
+       *  not round trip (#2850 S1b caught it on
+       *  `every_event_variant_survives_a_json_round_trip`). */
+      note: NoteKind;
+      text: string;
+    };
 
 /**
- * The two inputs that are **not** `HarnessEvent`s, and are deliberately not
- * spelled as ones.
+ * The one input that is **not** a `HarnessEvent`, and is deliberately not
+ * spelled as one.
  *
- * A structured pane's transcript has to show two things no harness reports:
+ * A structured pane's transcript has to show something no harness reports:
  * what orrerix DELIVERED into the pane (`harness::Turn`'s four variants — the
- * one thing in the stream the agent did not produce, `DESIGN.md` §6), and
- * orrerix's own `[orrerix]` notices plus any adapter-level note (a retry, an
- * extension fault). Giving these a `HarnessEvent` variant would let a harness
- * FORGE a delivery, which is the same conflation §1.3 rule 2 refuses between
- * scraped and reported facts. They ride the same batch, tagged distinctly.
+ * one thing in the stream the agent did not produce, `DESIGN.md` §6). Giving
+ * that a `HarnessEvent` variant would let a harness FORGE a delivery, which is
+ * the same conflation §1.3 rule 2 refuses between scraped and reported facts.
+ * It rides the same batch, tagged distinctly.
+ *
+ * The harness's own asides are NOT here: #2850's `Note` variant is a reported
+ * fact and arrives above.
  */
-export type LocalEvent =
-  | {
-      kind: "delivery";
-      /** Mirrors `harness::Turn`'s four variants. */
-      via: "kickoff" | "prompt" | "notice" | "human";
-      from: string | null;
-      text: string;
-      ts: string | null;
-    }
-  | { kind: "note"; level: "info" | "warn" | "error"; tag: string; text: string };
+export type LocalEvent = {
+  kind: "delivery";
+  /** Mirrors `harness::Turn`'s four variants. */
+  via: "kickoff" | "prompt" | "notice" | "human";
+  from: string | null;
+  text: string;
+  ts: string | null;
+};
 
 export type ProjectionInput = HarnessEventLike | LocalEvent;
 
@@ -219,6 +246,15 @@ export interface NoticeBlock extends BlockBase {
   level: "info" | "warn" | "error";
   tag: string;
   text: string;
+  /** The harness's own `NoteKind` when this notice came from a `Note` event,
+   *  and `null` when orrerix generated it (a compaction marker, an exit, a
+   *  PTY `Observed(..)`, an unrecognised kind).
+   *
+   *  Carried BESIDE `level` rather than collapsed into it, because the three
+   *  kinds are each meant to be drawn differently and `level` cannot separate a
+   *  harness `ui` note from orrerix's own compaction row — both are
+   *  informational and they are not the same thing. */
+  noteKind: NoteKind | null;
 }
 
 /** The visible artifact of the `MAX_BLOCKS` ceiling. Always the first block
@@ -448,6 +484,15 @@ function reduce(state: State, ev: ProjectionInput, now: number | null): void {
       // consumer does not. So this APPENDS; it never replaces. If it ever
       // starts replacing, pi's suffix subtraction has moved here and every
       // other harness pays for it.
+      //
+      // KNOWN RESIDUAL, and it is not fixable here. pi's subtraction assumes
+      // each `partialResult` extends the last; on a NON-PREFIX restatement the
+      // decoder emits the whole new value instead of a wrong suffix (#2850
+      // S1b). Nothing on the wire marks that event, so this appends it and the
+      // card shows the output twice — visibly duplicated, which is the failure
+      // worth having, since the alternative is a heuristic ("does this delta
+      // restate what I hold?") that would silently eat legitimately repeating
+      // output. Closing it needs a flag on the event, not a guess here.
       appendToolOutput(state, b, ev.delta);
       return;
     }
@@ -543,9 +588,23 @@ function reduce(state: State, ev: ProjectionInput, now: number | null): void {
       return;
     }
 
-    case "note":
-      pushNotice(state, ev.level, ev.tag, ev.text);
+    case "note": {
+      // `turn` is taken from the EVENT, never from `state.currentTurn`: a note
+      // that says it belongs to no turn belongs to no turn, and substituting
+      // the open one would invent the attribution §1.3 refuses.
+      const level = ev.note === "error" ? "error" : ev.note === "retry" ? "warn" : "info";
+      closeRuns(state);
+      push(state, {
+        id: nextId(state),
+        kind: "notice",
+        turn: ev.turn ?? null,
+        level,
+        tag: ev.note,
+        text: ev.text,
+        noteKind: ev.note,
+      });
       return;
+    }
 
     default: {
       // Rule 3: additive enum, unknown kind recorded rather than thrown on.
@@ -575,7 +634,16 @@ function pushNotice(
   text: string,
 ): void {
   closeRuns(state);
-  push(state, { id: nextId(state), kind: "notice", turn: state.currentTurn, level, tag, text });
+  push(state, {
+    id: nextId(state),
+    kind: "notice",
+    turn: state.currentTurn,
+    level,
+    tag,
+    text,
+    // orrerix's own row, not the harness's: `noteKind` is what separates them.
+    noteKind: null,
+  });
 }
 
 /** End the open text/thinking runs. Anything that is not another delta of the

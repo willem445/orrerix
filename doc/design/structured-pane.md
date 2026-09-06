@@ -43,7 +43,7 @@ draw it from. Eight block kinds:
 | `delivery` | a local `delivery` input | — | what orrerix sent in |
 | `request` | `PermissionRequest` / `UiRequest` | its `*Settled`, on the same id | `channel` records which of the two |
 | `turn` | `TurnStarted` | its `TurnEnded` receipt | one rule per turn, not one per boundary event |
-| `notice` | `Compacted`, `Exited`, `Observed(..)`, a local `note`, an unknown kind | — | the harness talking about itself |
+| `notice` | `Note` (#2850), `Compacted`, `Exited`, `Observed(..)`, an unknown kind | — | the harness talking about itself; `noteKind` says whether it really was the harness |
 | `evicted` | the `MAX_BLOCKS` ceiling | further evictions | see §5 |
 
 `QueueChanged` is **state, not a block**: an empty queue is not news, and a row
@@ -74,23 +74,59 @@ one way cheaply: the adapter holds the previous value and subtracts, a consumer
 does not. If this module ever starts replacing, pi's suffix subtraction has
 moved into every renderer instead of living once in `pi.rs`.
 
-## 4. The two inputs that are not `HarnessEvent`s
+> **Residual, and it is not closable here.** pi's subtraction assumes each
+> `partialResult` extends the last; on a non-prefix restatement S1b's decoder
+> emits the whole new value rather than a wrong suffix, and logs that it did.
+> Nothing on the wire marks that event, so this module appends it and the card
+> shows the output twice. That is the failure worth having: the alternative is a
+> heuristic ("does this delta restate what I already hold?") which would
+> silently eat legitimately repeating output, and a visible duplication is
+> debuggable where a silent elision is not. Closing it needs a flag on the
+> event — a `replaces: bool`, or the decoder emitting a distinct event — which
+> is a contract change and neither S1b's nor S2's to make alone.
 
-A structured pane's transcript has to show two things no harness reports: what
-orrerix **delivered** into the pane (`harness::Turn`'s four variants — the one
-thing in the stream the agent did not produce) and orrerix's own `[orrerix]`
-notices or an adapter-level note (a retry, an extension fault).
+## 4. The one input that is not a `HarnessEvent`
 
-They are `LocalEvent`s, tagged `delivery` and `note`, riding the same batch but
-**not** spelled as `HarnessEvent` variants. Giving a harness a way to emit a
-`Delivery` would let it forge one — the same conflation §1.3 rule 2 refuses
-between a scraped fact and a reported one.
+A structured pane's transcript has to show something no harness reports: what
+orrerix **delivered** into the pane — `harness::Turn`'s four variants, the one
+thing in the stream the agent did not produce. That is a `LocalEvent`, tagged
+`delivery`, riding the same batch but **not** spelled as a `HarnessEvent`
+variant. Giving a harness a way to emit a `Delivery` would let it forge one —
+the same conflation §1.3 rule 2 refuses between a scraped fact and a reported
+one.
 
-> Open, for S1b/S3b: the plan's pi decoder maps `auto_retry_*` and
-> `extension_error` to a "Note", and §1.2's enum has no `Note` variant. Either
-> the enum grows one or those events are dropped at the adapter. This module
-> reads both a `note` local input and an unrecognised kind, so it is correct
-> under either resolution; the decision is not S2's.
+The harness's own asides are **not** local. This slice first shipped them as a
+second `LocalEvent` because §1.2 had no variant for them; #2850 S1b then added
+one, so a retry, a failure and a fire-and-forget extension display are reported
+facts and arrive as `Note`:
+
+```rust
+pub enum NoteKind { Retry, Error, Ui }
+HarnessEvent::Note { turn: Option<TurnId>, note: NoteKind, text: String }
+```
+
+Three things about it the projection is built around:
+
+- **The inner field is `note`, not `kind`.** The outer enum is
+  `#[serde(tag = "kind")]`, so a variant field of that name emits a duplicate
+  key and does not round trip. S1b caught it on
+  `every_event_variant_survives_a_json_round_trip`.
+- **`turn` is a real `Option`.** A retry begins before a turn reopens and an
+  extension can throw at boot. `null` is carried through as `null`; the open
+  turn is never substituted, because that would invent an attribution in the
+  field a renderer groups by. `TurnId` is a transparent newtype, so on the wire
+  this is a bare number or `null`.
+- **`NoteKind` is carried beside `level`, not collapsed into it.** The three
+  kinds are each meant to be drawn differently, and `level` cannot separate a
+  harness `ui` note from orrerix's own compaction row — both are informational
+  and they are not the same thing. `noteKind` is `null` exactly when orrerix
+  generated the row.
+
+Population is **11 → 17** and seven variants are decision-grade (`ToolCall`,
+`PermissionRequest`, `PermissionSettled`, `UiRequest`, `UiSettled`, `TurnEnded`,
+`Exited`). That split is an audit-log concern, not a projection one: this module
+draws all seventeen. Protocol bookkeeping — message boundaries, settle events,
+command acks — never reaches `events()` at all, so it never reaches here.
 
 ## 5. Two ceilings, both visible
 

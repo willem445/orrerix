@@ -1389,7 +1389,8 @@ group id becomes a path) beside `state.json`, `tasks.json` and
       "starved_total_ms": 0,
       "starved_state_ms": 0,
       "held_from": null,
-      "held_after_ms": 0 }
+      "held_after_ms": 0,
+      "last_hold_key": "cap-full|<sha>|1|0|0|false" }
   ]
 }
 ```
@@ -1693,8 +1694,11 @@ cleared with `worker_agent` when a resume re-points the drive at a DIFFERENT
 worker session, for `worker_agent`'s own reason — those panes belong to a worker
 this drive no longer owns.
 
-All of these — the five S3 added, the two #1871 B2 added beside them, and
-`owed_notice`, which #1857 adds and *Retention* below describes — are optional on
+All of these — the five S3 added, the two #1871 B2 added beside them,
+`owed_notice`, which #1857 adds and *Retention* below describes, and
+`last_hold_key` (#3040 N1, §6: the key of the last hold this entry ANNOUNCED,
+so a resume that changed nothing the drive can observe does not re-announce
+one) — are optional on
 read, so a file written against the shape as first published still parses. An
 entry predating `owed_notice` owes nothing, which is the direction that cannot
 retain a record forever. `counters` is **not** optional: an absent counter block
@@ -1905,7 +1909,7 @@ like `mq-*` and the rest:
 `rd-satisfied` · `rd-held` · `rd-resumed` · `rd-cancelled` · `rd-pruned` ·
 `rd-kickback` · `rd-recovered` · `rd-state-unreadable` · `rd-reuse-declined` ·
 `rd-lane-reopened` · `rd-lane-released` · `rd-worker-released` ·
-`rd-round-grace`
+`rd-round-grace` · `rd-hold-repeated` · `rd-notice-demoted`
 
 Every state transition, every spawn or resume, and every consumed delegate event
 (§7) appears here, each carrying `on_behalf_of`. `rd-started` carries
@@ -1929,6 +1933,17 @@ carries `pane`, `session`, `block` and a `reason` from the closed set
 reuse arm refused on readiness, for the same reason `rd-cancelled` names its
 panes: the refusal's only other visible effect is a fresh pane, which on this
 log is indistinguishable from there having been no candidate at all.
+
+**Two rows are #3040 N1's, and both say what was NOT said.** `rd-hold-repeated`
+is a hold whose notice was not delivered because this drive had already
+announced one with the same key — reason, head and counters spent; it carries
+`pr`, `reason`, `head` and the `notice` it withheld, and the hold itself is on
+`rd-held` either way, because §5.4 records what happened and not what was said.
+`rd-notice-demoted` is a notice routed to this log instead of a pane, with `pr`,
+a `reason` for the route and the full `notice`; its one producer today is
+`cancel_review_drive`, whose caller is holding the result already (§6). Both
+carry the text for `rd-notice-dropped`'s reason: a line no operator can get
+back is a line that was dropped, whatever the row is called.
 
 Three rows are #2109's, and the first two are that same argument reaching the
 two remaining ways a fresh pane can appear.
@@ -2183,38 +2198,29 @@ interpolates single-line facts and has no line breaks to keep.
 
 ```
 [orrerix] review drive PR #1758: GATE SATISFIED at df6a73d0 (body 3f1a..) —
-  rev-std PASS, rev-final PASS; 3 review rounds, 2 CI runs, 0 rebases.
-  Non-blocking findings left open — rev-std: "<capped summary>";
-  rev-final: "<capped summary>". Panes this drive has now
-  RELEASED, all still running and none of them killed: w-1715 (worker),
-  rev-1714 (rev-std) — nothing will speak to them again, and worker panes
-  sharing one session share one worktree (#338/#359), so disposing of them
-  is yours. Disposition is yours (INVARIANT 3);
-  full text: list_verdicts("1758").
+  rev-std PASS, rev-final PASS; 3 rounds, 2 CI, 0 rebases; 2 lanes carry
+  non-blocking findings. Panes RELEASED: w-1715 (worker), rev-1714
+  (rev-std). Disposition is yours (INVARIANT 3): list_verdicts("1758").
 
 [orrerix] review drive PR #1764: ESCALATE by rev-final at 306176c4 —
   "<capped summary>". Drive held on a JUDGMENT the driver may not make
   (INVARIANT 3): disposition the escalation first, then drive_review
   resumes it — a resume that leaves the verdict standing AT THIS HEAD
   re-holds on the next tick, while a resume after a push re-reviews.
-  cancel_review_drive stops it. Panes this drive still owns,
-  all still running: rev-1714 (rev-std) — a drive_review resume speaks to
-  them again, and kill_agent is yours if you would rather it did not.
+  cancel_review_drive stops it. Panes still OWNED: rev-1714 (rev-std).
 
 [orrerix] review drive PR #1758: HELD — review rounds 3/3 at bd1461af;
-  last rev-std FAIL "<capped summary>"; worker session cafb930d-….
+  last rev-std FAIL. worker session cafb930d-….
   drive_review(pr, session, reset_counters: true) to spend another three,
-  or take it by hand. Panes this drive still owns, all still
-  running: w-1715 (worker), rev-1714 (rev-std) — a drive_review resume
-  speaks to them again, and kill_agent is yours if you would rather it
-  did not.
+  or take it by hand. Panes still OWNED: w-1715 (worker),
+  rev-1714 (rev-std).
 
 [orrerix] review drive PR #2104: HELD — the drive stopped moving at
   df6a73d0. It was in ci-wait for 2h 31m. The bound for that state is
   2h 30m, and time the live-delegate cap refused it a lane is not counted
   against it. Nothing about the PR is asserted by this: read the state
   named above, then drive_review resumes it or cancel_review_drive stops
-  it. Panes this drive still owns, all still running: w-1715 (worker).
+  it. Panes still OWNED: w-1715 (worker).
 
 [orrerix] review drive PR #2105: HELD — the drive passed its total age
   bound of 12h. That is the BACKSTOP, so what it says is that the drive
@@ -2222,13 +2228,61 @@ interpolates single-line facts and has no line breaks to keep.
   state-stalled says. It was in ci-wait for 29m. Nothing about the PR is
   asserted by this: drive_review resumes it, cancel_review_drive stops it.
 
-[orrerix] review drive PR #1870: CANCELLED — cancel_review_drive. Its
-  counters are gone; a fresh drive_review starts a new drive. Panes this
-  drive has now RELEASED, all still running and none of them
-  killed: w-1715 (worker), w-1716 (worker), rev-1714 (rev-std) — nothing
-  will speak to them again, and worker panes sharing one session share one
-  worktree (#338/#359), so disposing of them is yours.
+[orrerix] review drive PR #1870: CANCELLED — the PR is closed or merged —
+  positively established, not inferred from a lookup that failed. Its
+  counters are gone; a fresh drive_review starts a new drive.
+  Panes RELEASED: w-1715 (worker), w-1716 (worker), rev-1714 (rev-std).
 ```
+
+**Since #3040 N1 these lines are a diet, and the diet is a measurement rather
+than a preference.** A census of every `[orrerix] …` prompt this project's own
+orchestration has delivered put `GATE SATISFIED` at a quarter of all notice
+bytes, and the largest part of it was two capped reviewer summaries that the
+orchestrator read back out of the record through `list_verdicts` on its very
+next turn. Every byte of a notice is also resident in every later API call
+until the next compact, so the size of a line is paid many times over. Three
+things changed, and each is a rule rather than a trim:
+
+- **The gate notice carries a COUNT of the lanes with non-blocking findings,
+  and a pointer.** It says which lanes answered, what the drive cost, that
+  there is something to disposition, and where the words are. What it does not
+  do is re-send text the orchestrator's next tool call fetches anyway.
+- **The panes clause is a list.** Everything the old paragraph spelled out —
+  the panes are still running, the driver killed none of them, worker panes
+  sharing a session share a worktree, disposal is the orchestrator's — is
+  playbook content (`orchestrator-playbook.md` 505-524) and INVARIANT 3's own
+  ground. WHICH panes is the fact #1871 B3 added the clause for, and it is what
+  survives; the standing survives as one word, `RELEASED` or `still OWNED`.
+- **A hold's reason and remedy are untouched**, because they are the decision.
+  The capped summary stays on `escalate` alone, which is the one hold whose
+  subject is a reviewer's argument rather than a counter or a clock.
+
+**Two of these notices are not delivered at all**, and both routes keep the
+text:
+
+- **`CANCELLED — cancel_review_drive` is audited, not announced**
+  (`rd-notice-demoted`, §5.4). It is the one exit whose caller is holding the
+  answer already: `cancel_review_drive` returns the panes and the cancellation
+  synchronously, so a prompt arriving afterwards is a wake-up for a fact its
+  own caller has in hand. This is #533-B's `exit_notice_route` test applied
+  here — an event this process was asked to perform is audited, one nobody
+  asked for still interrupts — and `CancelCause::PrGone`, which nobody asked
+  for, is still delivered and still owed on the entry.
+- **A hold repeating one this drive already announced is audited**
+  (`rd-hold-repeated`, §5.4). A hold can only recur after a resume, because
+  §2.1's arc list has no `held` -> `held` self-arc, so the repeat is a resume
+  that changed nothing the drive can observe: same reason, same head, same
+  counters spent. `DriveEntry::last_hold_key` (§11.2) is what remembers, the
+  head in the key is what keeps a hold about a NEW revision announcing, and
+  `drive_review(reset_counters: true)` re-arms it explicitly — the counter
+  values cannot see a spent round on their own, since a reset puts them back
+  where the previous hold found them.
+
+**What the diet does NOT do is drop a wake nobody else gives.** Every
+suppression above rides a caller that already has the fact, or a record the
+orchestrator can read on demand and is told about; a `held` drive is listed by
+`review_drive_status()` whatever its notice did, and every audit row carries
+the full text of the line it replaced.
 
 The same shape carries every other `held` reason from §2.2, each naming the one
 fact that decides what the orchestrator does next — the stalled lane's pane, the

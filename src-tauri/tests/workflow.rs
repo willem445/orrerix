@@ -11229,7 +11229,7 @@ fn list_blocks_rows_carry_the_driver_key() {
 }
 
 #[test]
-fn driver_structured_is_refused_at_spawn_when_the_block_INHERITS_its_cli() {
+fn driver_structured_is_refused_at_spawn_when_the_block_inherits_its_cli() {
     // #2850 S3b, and the case `parse_workflow` structurally cannot reach.
     //
     // The block spells no `cli:` of its own, so the parser computes
@@ -11267,7 +11267,7 @@ fn driver_structured_is_refused_at_spawn_when_the_block_INHERITS_its_cli() {
 }
 
 #[test]
-fn an_inherited_cli_that_DOES_carry_a_driver_spawns() {
+fn an_inherited_cli_that_does_carry_a_driver_spawns() {
     // The positive control for the test above, and the half that keeps it from
     // passing by refusing everything: same file, same absent `cli:`, only the
     // inherited value differs. Without this, "refuse every structured block"

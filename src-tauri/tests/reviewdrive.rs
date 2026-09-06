@@ -9667,9 +9667,7 @@ fn a_re_hold_on_the_same_reason_and_head_is_announced_once() {
     let resumed_at = at + reviewdrive::CAP_HOLD_MS + 1_000;
     let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", resumed_at);
     assert_eq!(out["driving"], json!(true), "the resume must succeed: {out}");
-    reg.rd_drive_group_with(&group, &gh, resumed_at + 1_000);
-    let second =
-        reg.rd_drive_group_with(&group, &gh, resumed_at + 1_000 + reviewdrive::CAP_HOLD_MS);
+    let second = starve_again(&reg, &group, &gh, resumed_at);
     assert_eq!(status_state(&reg, &group), "held", "it really did park a second time");
 
     assert!(
@@ -9731,9 +9729,7 @@ fn a_resume_re_arms_the_hold_notice() {
         let out =
             reg.drive_review_with(&group, &gh, 1758, &session, reset, 0, "orch-1", resumed_at);
         assert_eq!(out["driving"], json!(true), "{arm}: the resume must succeed: {out}");
-        reg.rd_drive_group_with(&group, &gh, resumed_at + 1_000);
-        let second =
-            reg.rd_drive_group_with(&group, &gh, resumed_at + 1_000 + reviewdrive::CAP_HOLD_MS);
+        let second = starve_again(&reg, &group, &gh, resumed_at);
         assert_eq!(status_state(&reg, &group), "held", "{arm}: it parked again");
 
         assert_eq!(
@@ -9767,4 +9763,28 @@ fn cap_starved_session(reg: &OrchRegistry, repo: &Repo, gh: &FakeGh) -> (GroupId
     let first = reg.rd_drive_group_with(&group, gh, 20_000); // lane spawn, refused
     assert!(first.lanes_opened.is_empty(), "the premise: the cap is full, so nothing spawned");
     (group, session)
+}
+
+/// Walk a RESUMED cap-starved drive back to its next `held(cap-full)`.
+///
+/// **Two ticks before the window, not one, and the refusal is asserted.** A
+/// resume lands the drive in `ci-wait`, so the first tick is arc 2 and the
+/// SECOND is the one that tries a lane and is refused — and the starvation run
+/// `cap-full` fires on is measured from that tick, because `advance` clears the
+/// stamp on the arc out of `held`. Counting from the resume instead left the
+/// drive in `review-wait` one tick short of its own bound, which reads as "the
+/// dedup swallowed the hold" and is nothing of the kind.
+fn starve_again(
+    reg: &OrchRegistry,
+    group: &GroupId,
+    gh: &FakeGh,
+    resumed_at: u64,
+) -> RdDriveReport {
+    reg.rd_drive_group_with(group, gh, resumed_at + 1_000); // ci-wait -> review-wait
+    let refused = reg.rd_drive_group_with(group, gh, resumed_at + 2_000); // spawn refused
+    assert!(
+        refused.lanes_opened.is_empty(),
+        "the premise: the cap is still full, so the starvation run really restarts here"
+    );
+    reg.rd_drive_group_with(group, gh, resumed_at + 2_000 + reviewdrive::CAP_HOLD_MS)
 }

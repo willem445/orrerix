@@ -1689,3 +1689,23 @@ test('--from bounds the log backward, and with --cut it windows the plan-2504 §
   const iso = JSON.parse(runScorecard(['--from', '2023-11-14T22:18:20.000Z']));
   assert.equal(iso.inputs.from_ms, 1700000300000);
 });
+
+test('driverTotals pools the pre-S0 release counters the §1 table quotes beside the new ones', () => {
+  // Built directly on the exported function: lanes_released and rounds_grace
+  // predate S0, but the §1 control quotes them as totals, so the totals block
+  // carries them pooled — one instrument for the whole comparison table.
+  const t = sc.driverTotals([
+    { driver: { drives: 1, satisfied: 1, held: 0, cancelled: 0, refused: 0, refused_cap: 0,
+      starved_ms_max: null, starved_ms_sum: 0, lane_spawns: 2, lane_scope: { whole_diff: 1, delta: 0, body_only: 0, other: 0 },
+      lane_scope_triples: 1, hand_backs: 1, workers_released: 0, lanes_released: 2, rounds_grace: 1,
+      kills_by_initiator: {} }, orchestrator: { prompt_classes: sc.emptyOrchPromptCounts() } },
+    { driver: { drives: 0, satisfied: 0, held: 0, cancelled: 0, refused: 0, refused_cap: 0,
+      starved_ms_max: null, starved_ms_sum: 0, lane_spawns: 0, lane_scope: { whole_diff: 0, delta: 0, body_only: 0, other: 0 },
+      lane_scope_triples: 0, hand_backs: 0, workers_released: 1, lanes_released: 3, rounds_grace: 0,
+      kills_by_initiator: {} }, orchestrator: { prompt_classes: sc.emptyOrchPromptCounts() } },
+  ], [], [], new Map());
+  assert.equal(t.lanes_released, 5);
+  assert.equal(t.rounds_grace, 1);
+  assert.equal(t.hand_backs, 1);
+  assert.equal(t.workers_released, 1);
+});

@@ -892,6 +892,10 @@ function driverTotals(cards, files, rows, attribution) {
     drives: 0, satisfied: 0, held: 0, cancelled: 0, refused: 0,
     refused_cap: 0, starved_ms_max: null, starved_ms_sum: 0,
     lane_scope: emptyLaneScope(), lane_scope_rows: 0, lane_scope_triples: 0,
+    // `lanes_released` and `rounds_grace` are the pre-S0 counters the §1 control
+    // table quotes beside the new ones ("rd-lane-released / rd-worker-released
+    // 67 / 5", "rd-round-grace 0") — pooled here so that table is one instrument.
+    lanes_released: 0, rounds_grace: 0,
     hand_backs: 0, workers_released: 0, handback_ratio: null,
     kills_total: 0, kills_by_initiator: {}, kills_in_cards: 0, kills_not_in_cards: 0,
     kills_agents_not_in_cards: [],
@@ -914,6 +918,8 @@ function driverTotals(cards, files, rows, attribution) {
     t.lane_scope_triples += d.lane_scope_triples;
     t.hand_backs += d.hand_backs;
     t.workers_released += d.workers_released;
+    t.lanes_released += d.lanes_released;
+    t.rounds_grace += d.rounds_grace;
     for (const v of Object.values(d.kills_by_initiator)) t.kills_in_cards += v;
   }
   t.handback_ratio = t.workers_released > 0 ? round2(t.hand_backs / t.workers_released) : null;

@@ -52,7 +52,8 @@
 //! itself.
 
 use super::{
-    CompactTrigger, Cost, Decision, DecisionSource, HarnessEvent, StopReason, Usage,
+    CompactTrigger, Cost, Decision, DecisionSource, Harness, HarnessEvent, NoteKind,
+    StopReason, UiAnswer, UiMethod, Usage,
 };
 
 /// How much of a tool call's arguments is drawn.
@@ -107,6 +108,7 @@ const RESET: &str = "\x1b[0m";
 pub struct Renderer {
     cols: usize,
     col: usize,
+    harness: Option<Harness>,
 }
 
 impl Renderer {
@@ -124,6 +126,28 @@ impl Renderer {
         Renderer {
             cols: (cols as usize).max(1),
             col: 0,
+            harness: None,
+        }
+    }
+
+    /// The same renderer, told which harness it is rendering.
+    ///
+    /// **This exists because #2850 made a literal false.** The `Booted` line
+    /// used to open `"claude · <model> · <session>"` — correct while there was
+    /// one harness, and a lie on the pi pane this slice adds. The fix is not a
+    /// branch at the render site: CLAUDE.md's rule is that a per-CLI identity
+    /// string is READ off the source and never branched on, because
+    /// `if claude { "claude" } else { "pi" }` hands the third harness the
+    /// else-branch and reports the wrong CLI with nothing red to say so. So the
+    /// name comes from [`Harness::as_str`], the one table.
+    ///
+    /// [`Renderer::new`] stays, and a renderer built that way names no CLI at
+    /// all rather than guessing one — the PTY adapter (#888 A4-18′) has no
+    /// [`Harness`] to give.
+    pub fn for_harness(harness: Harness, cols: u16) -> Self {
+        Renderer {
+            harness: Some(harness),
+            ..Renderer::new(cols)
         }
     }
 
@@ -139,7 +163,11 @@ impl Renderer {
             } => {
                 let model = model.as_deref().unwrap_or("model unknown");
                 let session = session.as_deref().unwrap_or("session not yet known");
-                self.meta(&mut out, &format!("claude · {model} · {session}"));
+                let who = match self.harness {
+                    Some(h) => format!("{} · ", h.as_str()),
+                    None => String::new(),
+                };
+                self.meta(&mut out, &format!("{who}{model} · {session}"));
             }
             HarnessEvent::TurnStarted { .. } => {
                 // A blank line between turns and nothing else. The turn number
@@ -205,6 +233,108 @@ impl Renderer {
             // heuristic on screen in the same style as a reported fact, which is
             // the confusion `ObservedEvent` exists to prevent.
             HarnessEvent::Observed(_) => {}
+
+            // ── #2850: the additive variants ────────────────────────────
+            //
+            // Two of the five draw NOTHING here, and that is a decision with a
+            // reason rather than an omission. §5.1 makes this the **ring**
+            // projection — the one behind `get_output`, replay, thumbnails and
+            // `last_exit_tail` — while the human's surface is the DOM renderer
+            // fed the events themselves. The ring is a collapsed record of what
+            // the agent DID; the streaming bulk belongs to the projection built
+            // to show it, and to the event log, which has both either way.
+            //
+            // `Thinking` follows the rule the Claude decoder already applies to a
+            // `thinking` block (`claude::Decoder::assistant`): reasoning is not
+            // the transcript of what the agent did, and #2891 asks for it to be
+            // quietable, which a VT stream cannot offer. Rendering it here would
+            // also put the highest-volume thing pi produces into a thumbnail.
+            HarnessEvent::Thinking { .. } => {}
+            // `ToolOutput` is the same argument by volume: a `ToolCall` line and
+            // its `  ok`/`  failed` are what this projection has always shown for
+            // a tool, on BOTH harnesses, and streaming a tool's bytes into the
+            // ring on pi alone would make the same session look different by
+            // harness for no reported difference.
+            HarnessEvent::ToolOutput { .. } => {}
+
+            // The other three DO draw, because each is something a human
+            // reading a pane has to see happen.
+            HarnessEvent::UiRequest {
+                method,
+                title,
+                message,
+                options,
+                ..
+            } => {
+                let m = match method {
+                    UiMethod::Select => "select",
+                    UiMethod::Confirm => "confirm",
+                    UiMethod::Input => "input",
+                    UiMethod::Editor => "editor",
+                };
+                let what = title
+                    .as_deref()
+                    .or(message.as_deref())
+                    .unwrap_or("(no title)");
+                let opts = if options.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", options.join(", "))
+                };
+                // Not dim, for `PermissionRequest`'s reason: this is a line the
+                // pane is BLOCKED on, and dimming it would put the thing a human
+                // has to answer in the least visible style on the screen.
+                self.newline(&mut out);
+                self.line(&mut out, &format!("[dialog {m}] {what}{opts}"));
+            }
+            HarnessEvent::UiSettled { answer, by, .. } => {
+                let a = match answer {
+                    UiAnswer::Value(v) => format!("answered {v:?}"),
+                    UiAnswer::Confirmed(true) => "confirmed".to_string(),
+                    UiAnswer::Confirmed(false) => "declined".to_string(),
+                    UiAnswer::Cancelled => "cancelled".to_string(),
+                };
+                let by = match by {
+                    DecisionSource::Policy => "by policy",
+                    DecisionSource::Human => "by the human",
+                    DecisionSource::PaneExited => "— the pane exited first",
+                };
+                self.meta(&mut out, &format!("  {a} {by}"));
+            }
+            // COUNTS, never the queued text. The strings are another pane's
+            // prompts and can be arbitrarily long; what a human needs from this
+            // event is that a delivered turn is waiting rather than running.
+            HarnessEvent::QueueChanged {
+                steering,
+                follow_up,
+            } => {
+                if steering.is_empty() && follow_up.is_empty() {
+                    // The queue draining to empty is the normal end of every
+                    // queued turn; a line for it would be one per delivery.
+                    return Vec::new();
+                }
+                self.meta(
+                    &mut out,
+                    &format!(
+                        "-- queued: {} steering, {} follow-up",
+                        steering.len(),
+                        follow_up.len()
+                    ),
+                );
+            }
+            // A note DOES draw here, unlike `Thinking` and `ToolOutput`, and the
+            // difference is volume against value: there are three kinds, each is
+            // rare, and each is something a human staring at a stalled pane needs
+            // to see. A retry loop that drew nothing is the failure this variant
+            // was added for (#2850 S1b).
+            HarnessEvent::Note { kind, text, .. } => {
+                let tag = match kind {
+                    NoteKind::Retry => "retry",
+                    NoteKind::Error => "error",
+                    NoteKind::Ui => "note",
+                };
+                self.meta(&mut out, &format!("-- [{tag}] {text}"));
+            }
         }
         out.into_bytes()
     }
@@ -719,5 +849,181 @@ mod tests {
             }],
         );
         assert_eq!(out, "abc\r\ndef");
+    }
+
+    // ── #2850 ───────────────────────────────────────────────────────────────
+
+    fn render_for(h: Harness, evs: &[HarnessEvent]) -> String {
+        let mut r = Renderer::for_harness(h, 200);
+        let mut s = Vec::new();
+        for e in evs {
+            s.extend(r.render(e));
+        }
+        String::from_utf8(s).unwrap()
+    }
+
+    #[test]
+    fn the_boot_line_names_the_harness_it_is_rendering_and_never_a_literal() {
+        // The regression #2850 would otherwise have shipped: this line read
+        // `"claude · {model} · {session}"` as a LITERAL, which was true while
+        // there was one harness and false on the pi pane this slice adds. No test
+        // pinned it, which is why it survived — so it is pinned now, on both
+        // harnesses at once so a name table with one right row cannot pass.
+        let booted = HarnessEvent::Booted {
+            session: Some("s-1".into()),
+            model: Some("m-1".into()),
+            capabilities: vec![],
+        };
+        let c = render_for(Harness::Claude, std::slice::from_ref(&booted));
+        let p = render_for(Harness::Pi, std::slice::from_ref(&booted));
+        assert!(c.contains("claude · m-1 · s-1"), "{c:?}");
+        assert!(p.contains("pi · m-1 · s-1"), "{p:?}");
+        assert!(!p.contains("claude"), "a pi pane must not name claude: {p:?}");
+
+        // And the constructor that has no harness to name: it names NONE rather
+        // than guessing one, because the PTY adapter has no `Harness` to give.
+        let plain = render_all(200, std::slice::from_ref(&booted));
+        assert!(plain.contains("m-1 · s-1"), "{plain:?}");
+        assert!(!plain.contains("claude"), "{plain:?}");
+        assert!(!plain.contains("pi ·"), "{plain:?}");
+    }
+
+    #[test]
+    fn reasoning_and_tool_bytes_stay_out_of_the_ring_and_the_other_three_do_not() {
+        // §5.1 splits the two projections: this one is the RING, behind
+        // `get_output`, replay and thumbnails, and the streaming bulk belongs to
+        // the DOM projection built to show it. The pair matters — an assertion
+        // that only checked the two silent variants would pass just as well on a
+        // renderer that drew nothing at all, which is the vacuity control here.
+        let silent = render_all(
+            200,
+            &[
+                HarnessEvent::Thinking {
+                    turn: TurnId(0),
+                    delta: "the user is asking about".into(),
+                },
+                HarnessEvent::ToolOutput {
+                    turn: TurnId(0),
+                    id: ToolUseId("t".into()),
+                    delta: "total 48".into(),
+                    is_error: false,
+                },
+                HarnessEvent::QueueChanged {
+                    steering: vec![],
+                    follow_up: vec![],
+                },
+            ],
+        );
+        assert_eq!(
+            silent, "",
+            "reasoning, tool bytes and an emptied queue draw nothing in the ring"
+        );
+
+        // The positive control: the renderer IS running, and the three variants
+        // that must draw do.
+        let drawn = render_all(
+            200,
+            &[
+                HarnessEvent::UiRequest {
+                    id: RequestId("u1".into()),
+                    method: UiMethod::Select,
+                    title: Some("Allow dangerous command?".into()),
+                    message: None,
+                    options: vec!["Allow".into(), "Block".into()],
+                    timeout_ms: Some(10_000),
+                },
+                HarnessEvent::UiSettled {
+                    id: RequestId("u1".into()),
+                    answer: UiAnswer::Value("Allow".into()),
+                    by: DecisionSource::Human,
+                },
+                HarnessEvent::QueueChanged {
+                    steering: vec!["focus on errors".into()],
+                    follow_up: vec!["then summarize".into(), "and stop".into()],
+                },
+            ],
+        );
+        assert!(
+            drawn.contains("[dialog select] Allow dangerous command? [Allow, Block]"),
+            "{drawn:?}"
+        );
+        assert!(drawn.contains("answered \"Allow\" by the human"), "{drawn:?}");
+        assert!(drawn.contains("queued: 1 steering, 2 follow-up"), "{drawn:?}");
+        // COUNTS, not the text: another pane's prompts are unbounded, and the
+        // ring is a fixed-size buffer.
+        assert!(
+            !drawn.contains("focus on errors"),
+            "the queued TEXT must not reach the ring: {drawn:?}"
+        );
+
+        // And the one line that is waiting for a human is NOT dimmed, for
+        // `PermissionRequest`'s reason.
+        let dialog_line = drawn
+            .lines()
+            .find(|l| l.contains("[dialog select]"))
+            .expect("the dialog line is there");
+        assert!(
+            !dialog_line.contains(DIM),
+            "the line the pane is blocked on must not be the dimmest on screen: \
+             {dialog_line:?}"
+        );
+    }
+
+    #[test]
+    fn no_additive_variant_can_rewrite_the_screen_either() {
+        // `no_output_can_rewrite_the_screen` above is scoped to the variants that
+        // existed when it was written, and #2850 added five — including two whose
+        // content is a harness-supplied string (a dialog title, a queued prompt)
+        // that can carry `CR` and `ESC` perfectly well. This runs the same ban
+        // over the new population, with the attacker-controlled bytes in it.
+        let out = render_all(
+            40,
+            &[
+                HarnessEvent::Thinking {
+                    turn: TurnId(0),
+                    delta: "\r\x1b[2Kwiped".into(),
+                },
+                HarnessEvent::ToolOutput {
+                    turn: TurnId(0),
+                    id: ToolUseId("t".into()),
+                    delta: "\r\x1b[2Kwiped".into(),
+                    is_error: true,
+                },
+                HarnessEvent::UiRequest {
+                    id: RequestId("u".into()),
+                    method: UiMethod::Confirm,
+                    title: Some("\r\x1b[2Kwiped".into()),
+                    message: None,
+                    options: vec!["\x1b[31mred".into()],
+                    timeout_ms: None,
+                },
+                HarnessEvent::UiSettled {
+                    id: RequestId("u".into()),
+                    answer: UiAnswer::Value("\r\x1b[2Kwiped".into()),
+                    by: DecisionSource::Policy,
+                },
+                HarnessEvent::QueueChanged {
+                    steering: vec!["\r\x1b[2K".into()],
+                    follow_up: vec![],
+                },
+            ],
+        );
+        let bytes = out.as_bytes();
+        for (i, b) in bytes.iter().enumerate() {
+            if *b == b'\r' {
+                assert_eq!(
+                    bytes.get(i + 1),
+                    Some(&b'\n'),
+                    "a bare CR returns the cursor without advancing: {out:?}"
+                );
+            }
+        }
+        // The ESC ban is on ESCs this module did not author. Every sequence it
+        // does author is `DIM`/`RESET`, so stripping those must leave none.
+        let stripped = out.replace(DIM, "").replace(RESET, "");
+        assert!(
+            !stripped.contains('\x1b'),
+            "a harness-supplied ESC reached the terminal: {stripped:?}"
+        );
     }
 }

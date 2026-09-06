@@ -64,6 +64,7 @@
 //!    [`ObservedEvent`] exists only so that asymmetry has a name.
 
 pub mod claude;
+pub mod pi;
 pub mod transcript;
 
 use std::fs;
@@ -78,12 +79,32 @@ use crate::pathseg::PathSegment;
 
 /// Which structured harness a pane is driven through.
 ///
-/// R1 has one variant. opencode (R3) and ACP/Copilot (R4) join it; `gemini` is
-/// deliberately absent because it has no structured surface and stays PTY-only.
+/// R1 shipped one variant; `Pi` is the second (#2850, the note's §1.1). opencode
+/// (R3) and ACP/Copilot (R4) join them; `gemini` is deliberately absent because
+/// it has no structured surface and stays PTY-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Harness {
     Claude,
+    Pi,
+}
+
+impl Harness {
+    /// This harness's name, as ONE table rather than a branch at each display
+    /// site.
+    ///
+    /// CLAUDE.md's rule that a per-CLI identity string is read off the source and
+    /// never branched on it: `if h == Harness::Claude { "claude" } else { "pi" }`
+    /// is correct only while there are exactly two, and the third variant
+    /// silently inherits the else-branch and reports the wrong CLI. The strings
+    /// match the `rename_all = "lowercase"` wire spelling, so a display name and
+    /// a serialized one cannot drift apart.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Harness::Claude => "claude",
+            Harness::Pi => "pi",
+        }
+    }
 }
 
 /// Which implementation of [`AgentPane`] a pane is.
@@ -187,6 +208,64 @@ pub enum DecisionSource {
     Human,
     /// The pane went away with the request still pending.
     PaneExited,
+}
+
+/// Which extension dialog a harness raised.
+///
+/// The four DIALOG methods, and only those. pi's fire-and-forget methods
+/// (`notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`) share the
+/// `extension_ui_request` envelope but "do not expect a response"
+/// (`docs/rpc.md:1191`, pi 0.85.1), so giving one a variant here would invite a
+/// consumer to answer a question nobody asked, and would put a status-bar update
+/// in front of a human as a decision. They are a log note instead; see
+/// [`pi::Decoder`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiMethod {
+    Select,
+    Confirm,
+    Input,
+    Editor,
+}
+
+/// What a [`HarnessEvent::UiRequest`] was answered with.
+///
+/// Three variants because the wire has three answer shapes and they are not
+/// interchangeable: `select`/`input`/`editor` answer with a `value`, `confirm`
+/// with a `confirmed` boolean, and any dialog may be dismissed with
+/// `cancelled: true`, where the extension receives `undefined` for the first
+/// three and `false` for `confirm` (`docs/rpc.md:1352-1375`, pi 0.85.1).
+///
+/// **`Cancelled` is not `Confirmed(false)`**, and folding them would lose the
+/// distinction the audit exists for: "a human declined" and "nobody answered,
+/// so this was cancelled" are different facts about who decided, which is the
+/// same reason [`DecisionSource`] is carried beside the answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiAnswer {
+    Value(String),
+    Confirmed(bool),
+    Cancelled,
+}
+
+/// What kind of thing a [`HarnessEvent::Note`] is, so a renderer can style it
+/// without matching on prose.
+///
+/// **Three variants, each of which a renderer draws differently**, and no
+/// fourth: a `Lifecycle` kind was considered and rejected because nothing would
+/// have constructed it — the protocol bookkeeping it would have carried
+/// (message boundaries, command acknowledgements, settle events) is log-only,
+/// for the reason [`HarnessEvent::Note`] states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteKind {
+    /// A transient failure the harness is retrying by itself.
+    Retry,
+    /// Something failed and nothing is retrying it.
+    Error,
+    /// The harness displayed something and expects no answer — pi's
+    /// fire-and-forget extension-UI methods.
+    Ui,
 }
 
 // ── what a pane reports ─────────────────────────────────────────────────────
@@ -393,6 +472,114 @@ pub enum HarnessEvent {
         code: Option<i32>,
     },
     Observed(ObservedEvent),
+
+    // ── additive (#2850) ───────────────────────────────────────────
+    //
+    // Each carries something a harness REPORTS, so none of them is spelled
+    // `Observed(..)` and §1.3's rule is unchanged. Additive means what it means
+    // in `remote-engine-protocol.md` §4.4: a consumer that does not match them
+    // keeps compiling and keeps working, minus what it does not read.
+    /// Streamed reasoning, which is **not** assistant text.
+    ///
+    /// A separate variant rather than a `Text` with a flag, because a renderer
+    /// that quiets thinking (#2891) cannot do so if the two share a constructor
+    /// — and a consumer that concatenated them would put reasoning prose into
+    /// the transcript of what the agent DID.
+    Thinking {
+        turn: TurnId,
+        delta: String,
+    },
+    /// A tool's output as it streams, keyed to the [`ToolUseId`] of the
+    /// [`HarnessEvent::ToolCall`] it belongs to.
+    ///
+    /// [`HarnessEvent::ToolResult`] still fires once at the end and still carries
+    /// the verdict; this carries the bytes, which `ToolResult` never did.
+    ///
+    /// **`delta` is a DELTA on every harness**, and one of them has to convert:
+    /// pi's `partialResult` "contains the accumulated output so far (not just the
+    /// delta)" (`docs/rpc.md:1055`, pi 0.85.1), so [`pi::Decoder`] subtracts. The
+    /// contract picks the delta because the conversion is one-way cheap — a
+    /// consumer accumulates deltas with no state, while recovering a delta from
+    /// an accumulation needs the previous value, which the ADAPTER already holds
+    /// and a renderer does not. There is more than one renderer.
+    ToolOutput {
+        turn: TurnId,
+        id: ToolUseId,
+        delta: String,
+        is_error: bool,
+    },
+    /// The harness is asking a HUMAN a question and is blocked on the answer.
+    ///
+    /// **Not a [`HarnessEvent::PermissionRequest`].** A permission request is a
+    /// policy decision `permissions.json` may settle without anyone; a dialog is
+    /// arbitrary extension text with an arbitrary option list, and there is no
+    /// rule language that could match it. Conflating the two would put an
+    /// arbitrary prompt through a ladder written for tool policy.
+    ///
+    /// `timeout_ms` is **descriptive, not a control**: it reports a deadline the
+    /// HARNESS is keeping, so a renderer can show one. orrerix never starts a
+    /// timer of its own against it — a second timer racing pi's own auto-resolve
+    /// produces two answers to one question, and the loser is recorded as though
+    /// somebody had decided it (the note's §3.5).
+    UiRequest {
+        id: RequestId,
+        method: UiMethod,
+        title: Option<String>,
+        message: Option<String>,
+        options: Vec<String>,
+        timeout_ms: Option<u64>,
+    },
+    /// That question is closed, by whom, and with what.
+    ///
+    /// `by` is the same [`DecisionSource`] [`HarnessEvent::PermissionSettled`]
+    /// carries, for the same reason: an audit that records the answer and not the
+    /// answerer records nothing worth keeping.
+    UiSettled {
+        id: RequestId,
+        answer: UiAnswer,
+        by: DecisionSource,
+    },
+    /// What the harness has accepted but has not yet run.
+    ///
+    /// orrerix's own `queue` is the front door and stays so; this is the
+    /// HARNESS's downstream queue. Without it, a turn that was delivered and
+    /// merely QUEUED is indistinguishable from one being worked.
+    QueueChanged {
+        steering: Vec<String>,
+        follow_up: Vec<String>,
+    },
+    /// Something the harness reported that is not a turn, a tool or a question,
+    /// and that a human still has to be able to SEE.
+    ///
+    /// The sixth additive variant, and the one #2850 S1b added rather than
+    /// inherited: plan-2386's decoder table routed retries, extension errors and
+    /// fire-and-forget UI methods to "a Note", and no `Note` existed on this
+    /// enum — only [`LogBody::Note`], which is a **log record** and reaches no
+    /// consumer. Without this, a pane that spent four minutes in an API retry
+    /// loop showed a human nothing at all, and an extension that threw was
+    /// invisible outside a file nobody opens.
+    ///
+    /// **It is not a channel for everything the stream says.** Protocol
+    /// bookkeeping — message boundaries, turn-internal events, settle events,
+    /// command acknowledgements — stays log-only, because it is per-message
+    /// volume with nothing for a human to do about it, and an event stream that
+    /// carried it would drown the three kinds this variant exists for. The
+    /// decoder that produces one is the place that judgement lives; [`NoteKind`]
+    /// is the closed set it may produce.
+    ///
+    /// `turn` is an [`Option`] because these genuinely happen between turns — a
+    /// retry begins before a turn reopens, an extension can throw at boot — and
+    /// §1.3's rule is that a fact the pane does not have is `None` and never a
+    /// sentinel. Attributing a boot-time extension error to turn 0 would be a
+    /// made-up fact in the field a renderer groups by.
+    ///
+    /// **Per-pane, never decision-grade** (§4.3): a retry is not a decision
+    /// anybody made, and the audit log is for decisions.
+    Note {
+        turn: Option<TurnId>,
+        kind: NoteKind,
+        text: String,
+    },
 }
 
 impl HarnessEvent {
@@ -403,12 +590,22 @@ impl HarnessEvent {
     /// reconstructing what happened. A transcript in it would drown the
     /// decisions it exists for, so assistant text, tool results, deltas and
     /// `Booted` detail stay in the per-pane log.
+    ///
+    /// #2850 adds [`HarnessEvent::UiRequest`]/[`HarnessEvent::UiSettled`] to the
+    /// set — a dialog is a question a human answered, which is exactly what this
+    /// log is for — and keeps [`HarnessEvent::Thinking`],
+    /// [`HarnessEvent::ToolOutput`] and [`HarnessEvent::QueueChanged`] out of it.
+    /// `Thinking` most of all: reasoning prose in the file a human reads to
+    /// reconstruct decisions is the drowning above, at the highest volume the
+    /// stream produces.
     pub fn is_decision_grade(&self) -> bool {
         matches!(
             self,
             HarnessEvent::ToolCall { .. }
                 | HarnessEvent::PermissionRequest { .. }
                 | HarnessEvent::PermissionSettled { .. }
+                | HarnessEvent::UiRequest { .. }
+                | HarnessEvent::UiSettled { .. }
                 | HarnessEvent::TurnEnded { .. }
                 | HarnessEvent::Exited { .. }
         )
@@ -805,6 +1002,21 @@ mod tests {
                 decision: Decision::Deny,
                 by: DecisionSource::Policy,
             },
+            // #2850: a dialog is a question a human answered, so both halves of
+            // it are decision-grade for the reason the permission pair is.
+            HarnessEvent::UiRequest {
+                id: RequestId("u".into()),
+                method: UiMethod::Select,
+                title: Some("Allow dangerous command?".into()),
+                message: None,
+                options: vec!["Allow".into(), "Block".into()],
+                timeout_ms: Some(10_000),
+            },
+            HarnessEvent::UiSettled {
+                id: RequestId("u".into()),
+                answer: UiAnswer::Value("Allow".into()),
+                by: DecisionSource::Human,
+            },
             HarnessEvent::TurnEnded {
                 turn: TurnId(1),
                 usage: None,
@@ -834,6 +1046,32 @@ mod tests {
                 pre_tokens: Some(1),
             },
             HarnessEvent::Observed(ObservedEvent::Quiet),
+            // #2850: the three per-pane additions. `Thinking` is the one the
+            // note argues hardest about — reasoning prose is the highest-volume
+            // thing the stream produces, and the audit log is the file a human
+            // reads to reconstruct decisions.
+            HarnessEvent::Thinking {
+                turn: TurnId(1),
+                delta: "the user wants...".into(),
+            },
+            HarnessEvent::ToolOutput {
+                turn: TurnId(1),
+                id: ToolUseId("t".into()),
+                delta: "total 48".into(),
+                is_error: false,
+            },
+            HarnessEvent::QueueChanged {
+                steering: vec!["focus on errors".into()],
+                follow_up: vec![],
+            },
+            // A retry is not a decision anybody made, so it is not something the
+            // audit log is for — even though it is exactly what a human wants to
+            // SEE on the pane.
+            HarnessEvent::Note {
+                turn: None,
+                kind: NoteKind::Retry,
+                text: "529 overloaded".into(),
+            },
         ];
         for e in &decision_grade {
             assert!(e.is_decision_grade(), "{e:?} must reach the audit log");
@@ -846,9 +1084,18 @@ mod tests {
         // checking a variant somebody adds.
         assert_eq!(
             decision_grade.len() + per_pane_only.len(),
-            11,
+            17,
             "HarnessEvent gained or lost a variant — classify it in §4.3 and \
              add it to one of these two lists"
+        );
+        // And the split itself, which the note states as a number and which no
+        // `matches!` arm can be read off: seven of the sixteen are decision-grade
+        // (#2850 moved it from five). A variant folded into the wrong half keeps
+        // the total at sixteen and fails here.
+        assert_eq!(
+            decision_grade.len(),
+            7,
+            "the decision-grade set is seven of seventeen"
         );
     }
 
@@ -917,6 +1164,67 @@ mod tests {
             HarnessEvent::Observed(ObservedEvent::QuestionSuspected {
                 matched: "?".into(),
             }),
+            // #2850. `UiSettled` is here three times because `UiAnswer` is the
+            // one enum in this module with a payload variant AND a unit variant,
+            // and an internally-tagged outer enum is exactly where a unit variant
+            // fails to round trip: round-tripping only `Value` would leave
+            // `Cancelled` — the arm a dialog nobody answered produces — untested.
+            HarnessEvent::Thinking {
+                turn: TurnId(1),
+                delta: "reasoning".into(),
+            },
+            HarnessEvent::ToolOutput {
+                turn: TurnId(1),
+                id: ToolUseId("t".into()),
+                delta: "out".into(),
+                is_error: true,
+            },
+            HarnessEvent::UiRequest {
+                id: RequestId("u".into()),
+                method: UiMethod::Editor,
+                title: None,
+                message: None,
+                options: vec![],
+                timeout_ms: None,
+            },
+            HarnessEvent::UiSettled {
+                id: RequestId("u".into()),
+                answer: UiAnswer::Value("Allow".into()),
+                by: DecisionSource::Human,
+            },
+            HarnessEvent::UiSettled {
+                id: RequestId("u".into()),
+                answer: UiAnswer::Confirmed(false),
+                by: DecisionSource::Human,
+            },
+            HarnessEvent::UiSettled {
+                id: RequestId("u".into()),
+                answer: UiAnswer::Cancelled,
+                by: DecisionSource::PaneExited,
+            },
+            HarnessEvent::QueueChanged {
+                steering: vec!["a".into()],
+                follow_up: vec!["b".into(), "c".into()],
+            },
+            // All three kinds, and both sides of the `Option<TurnId>`: an
+            // internally-tagged enum carrying an `Option` newtype is where a
+            // `None` and a `Some` can serialize differently enough that only one
+            // of them round trips.
+            HarnessEvent::Note {
+                turn: None,
+                kind: NoteKind::Retry,
+                text: "529 overloaded".into(),
+            },
+            HarnessEvent::Note {
+                turn: Some(TurnId(2)),
+                kind: NoteKind::Error,
+                text: "extension threw".into(),
+            },
+            HarnessEvent::Note {
+                turn: Some(TurnId(2)),
+                kind: NoteKind::Ui,
+                text: "Command blocked by user".into(),
+            },
         ];
         for ev in &all {
             let json = serde_json::to_string(ev)

@@ -1,4 +1,4 @@
-A task is done when ALL of these hold:
+A task is done when all of these hold:
 
 1. The change implements the brief's acceptance criteria — if the brief is ambiguous,
    ask the orchestrator (`message_orchestrator`) before guessing.

@@ -278,9 +278,14 @@ pub fn diff_series(rows: &[SeriesRow]) -> Vec<Delta> {
     let mut out: Vec<Delta> = Vec::new();
     for row in rows {
         let SeriesRow::Sample(s) = row else { continue };
-        let Some(p) = prev.insert(s.key.clone(), s.clone()) else {
-            continue; // baseline
-        };
+        let p = prev.insert(s.key.clone(), s.clone()).unwrap_or_else(|| {
+            let mut z = s.clone();
+            z.input = 0;
+            z.output = 0;
+            z.cache_w = 0;
+            z.cache_r = 0;
+            z
+        });
         let mut reset = false;
         let sub = |a: u64, b: u64, reset: &mut bool| -> u64 {
             if a < b {

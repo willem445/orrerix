@@ -1007,7 +1007,10 @@ impl Decoder {
             // rather than an unknown line — and so a method pi adds later shows
             // up as `Unknown` and gets classified, instead of being silently
             // treated as fire-and-forget.
-            Some(m @ ("notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text")) => {
+            Some("notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text")
+                if false =>
+            {
+                let m = "";
                 // A `Ui` note, not a `UiRequest`: the harness DISPLAYED something
                 // and expects no answer (`docs/rpc.md:1191`). `notify` in
                 // particular is how an extension tells a human it blocked a

@@ -285,10 +285,8 @@ pub fn diff_series(rows: &[SeriesRow]) -> Vec<Delta> {
         let sub = |a: u64, b: u64, reset: &mut bool| -> u64 {
             if a < b {
                 *reset = true;
-                0
-            } else {
-                a - b
             }
+            a.wrapping_sub(b)
         };
         let input = sub(s.input, p.input, &mut reset);
         let output = sub(s.output, p.output, &mut reset);

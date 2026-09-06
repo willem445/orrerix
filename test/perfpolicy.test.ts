@@ -559,6 +559,23 @@ const TIMERS: TimerRow[] = [
     overlapGate: null,
   },
   {
+    key: "src/tokenchartsview.ts@FOLLOW_MS",
+    cadenceMs: 30000,
+    policy: "gated",
+    reason:
+      "The token charts' follow toggle, same shape and same gate as auditview's and " +
+      "timelineview's: armed on toggle, cleared on toggle, on close (hide()) and on " +
+      "dispose, suppressed while the window is hidden (#743 S6). TWENTY TIMES the two " +
+      "follow cadences above it, and deliberately so: the series it reads advances once " +
+      "per SERIES_BUCKET_MS (5 min) by construction, so a faster tick could only redraw " +
+      "the same picture, and orch_usage_series reads a whole append-only file that grows " +
+      "without bound. This does not widen the publisher's 1 s tiers (polled-views.md). " +
+      "The AuditStore read a tick also takes is the pane's shared one (#1317), never a " +
+      "second orch_audit.",
+    debt: null,
+    overlapGate: null,
+  },
+  {
     key: "src/agentsview.ts@AGENTS_TICK_MS",
     cadenceMs: 1000,
     policy: "gated",

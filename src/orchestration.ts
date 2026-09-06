@@ -1665,6 +1665,47 @@ export const usageSeries = (
 ): Promise<UsageSeries | null> =>
   invoke<UsageSeries | null>("orch_usage_series", { groupId, sinceMs });
 
+/** One board row, as `orch_tasks` returns it — the subset a NON-board reader
+ *  needs (the token charts' attribution ladder, `tokencharts.ts`'s
+ *  `BoardRowLike`).
+ *
+ *  **Deliberately not the whole row.** `tasksview.ts`'s `OrchTask` is the
+ *  board's own, much wider, view of the same payload, and it stays there: a
+ *  field the board adds for its own rendering must not thereby become a wire
+ *  contract every consumer has to know about. The two descriptions are
+ *  structurally compatible where they overlap, which is what lets a real
+ *  `OrchTask[]` be passed to anything typed against this.
+ *
+ *  `kind`/`parent` and the link fields are optional because the backend omits
+ *  the key entirely when absent (`skip_serializing_if`): a pre-#958 board
+ *  arrives with no key at all, so a reader must never assume one is there. */
+export interface OrchTaskRow {
+  id: string;
+  title: string;
+  status: string;
+  kind?: string | null;
+  parent?: string | null;
+  assignee?: string | null;
+  session?: string | null;
+  issue?: string | null;
+  pr?: string | null;
+}
+
+/** Read a group's task board.
+ *
+ *  The typed wrapper constraint 5 asks for, which `orch_tasks` did not have:
+ *  `tasksview.ts` reaches the command through `transport.ts`'s `invoke`
+ *  directly, which passes `test/transport.test.ts` (no `@tauri-apps` import
+ *  escapes the seam) but leaves the capability with no declared shape. This is
+ *  that shape. The board is deliberately NOT migrated onto it in the same
+ *  change — it wants the wider `OrchTask` and its own `withNotes` paging, and
+ *  rewriting a working reader is not this slice's business (#2011 C).
+ *
+ *  Rejects rather than degrading, like the raw command: the caller decides
+ *  whether an unreadable board is a blank chart or the last good one. */
+export const orchTasks = (groupId: string): Promise<OrchTaskRow[]> =>
+  invoke<OrchTaskRow[]>("orch_tasks", { groupId });
+
 // ---------- CI watches (#243/#248): the group view's "⏳ waiting on …" indicator ----------
 
 /** One live `notify_when` watch, as surfaced across a whole group's agents —

@@ -3338,6 +3338,9 @@ document.addEventListener(
       case "toggle-timeline":
         activeGrid().activePane?.toggleTimelineView();
         break;
+      case "toggle-tokens":
+        activeGrid().activePane?.toggleTokensView();
+        break;
       case "toggle-group":
         activeGrid().activePane?.toggleGroupView();
         break;

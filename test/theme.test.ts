@@ -1277,6 +1277,7 @@ test("the accent paints marks, never grounds — every gold background is argued
     ".agents-chip.active": "Agents-tab state filter chip, on — same on-state as the board's",
     ".audit-follow.on": "follow-the-tail, on",
     ".timeline-follow.on": "follow-the-tail, on",
+    ".tokens-follow.on": "follow-the-tail, on — the same on-state, one view over",
     // --- search matches: highlighting the thing you searched for is the accent's job.
     ".fileedit-editor-host .cm-wsMatch, .fileedit-editor-host .cm-searchMatch":
       "occurrences of the query in the open file",

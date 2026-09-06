@@ -82,6 +82,18 @@ const VIEWS: ViewRow[] = [
     why: "the same 1.5 s follow toggle as the audit log's, and the view that had this wiring right first (#361 rev-38).",
   },
   {
+    kind: "tokens",
+    source: "src/tokenchartsview.ts",
+    woken: true,
+    why:
+      "a 30 s live-follow setInterval, the same opt-in follow toggle shape as the audit " +
+      "log's and the timeline's — armed by the toggle, cleared by the toggle, by a " +
+      "close/eviction (TokenChartsView.hide) and by dispose(), and gated behind a hidden " +
+      "window by PollGate. A tick is one orch_usage_series read of a file that only grows, " +
+      "plus one orch_tasks read; the shared AuditStore read it also takes is the pane's, " +
+      "not a second one (#1317).",
+  },
+  {
     kind: "group",
     source: "src/groupview.ts",
     woken: true,

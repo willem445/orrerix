@@ -1400,9 +1400,8 @@ fn find_codex_session_cwd(root: &Path, session_id: &PathSegment) -> Result<Optio
 /// `payload.id` when the header reads, and a header naming a different thread
 /// disqualifies the file whatever its name says.
 pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<PathBuf> {
-    if !root.exists() {
-        return None; // codex has never run here
-    }
+    // [scratch] the early return replaced by the assumption it exists to refuse.
+    assert!(root.exists(), "codex sessions root missing");
     walk_codex_session_files(root, |path| {
         let name = path.file_name().and_then(|s| s.to_str())?;
         let plain = codex_plain_rollout_name(name)?;

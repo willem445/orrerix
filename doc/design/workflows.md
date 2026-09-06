@@ -3539,6 +3539,17 @@ refused for the same shape from the other end: that name belongs to the repo's o
 A `null` listing REFUSES a create. There is nothing to check the collision against,
 and a create that cannot rule one out is the create the rule exists to stop.
 
+**Which config dir a new workflow lands in is decided by unanimity**, not by the
+listing's first row. The listing is sorted by NAME, so which of the two spellings
+appears first is an accident of what the workflows happen to be called — and a repo
+part-way through the `.loomux/` → `.orrerix/` migration therefore had every new
+workflow written into the DEPRECATED directory on the strength of one leftover file.
+Only an entirely-legacy listing now gets the legacy dir. A mixed one is exactly the
+state where the answer is not obvious, and the safe reading of "not obvious" is the
+preferred spelling: a repo that has begun migrating is heading there, and a file
+written there is where the next reader looks. It is a heuristic and nothing asks the
+human — a deliberate fail-toward-the-live-directory (rev-std round 3, N3).
+
 Nothing new writes: the create goes through the pane's existing
 `ensureConfigDir` → `claimFile` → guarded-write path, so a name the listing said was
 free but which was taken between the dialog and the write is a refusal rather than

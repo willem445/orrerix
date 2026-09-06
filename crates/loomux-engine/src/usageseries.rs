@@ -117,9 +117,6 @@ impl Sample {
 
     fn counters_differ(&self, other: &Sample) -> bool {
         self.input != other.input
-            || self.output != other.output
-            || self.cache_w != other.cache_w
-            || self.cache_r != other.cache_r
     }
 }
 

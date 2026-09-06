@@ -6317,6 +6317,12 @@ pub const CLAUDE_EDIT_DENY_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 /// own; see `claude_command_minimizes_init_approvals_without_bypass`.
 pub const CLAUDE_READONLY_DENY_GIT: &[&str] = &["Bash(git commit *)", "Bash(git push *)"];
 
+/// Per-call sequence for `post_issue_comment`'s staging file — see that method's
+/// doc for why the agent id alone is not a unique enough name. Process-wide
+/// rather than per-group: it only has to separate calls that are in flight at the
+/// same moment, and one counter does that for every group at once.
+static COMMENT_BODY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The blocking interactive-choice tool a Claude agent denies once its ROLE
 /// (not its [`Containment`] tier — see [`claude_denies_interactive_question`])
 /// warrants it — #946 Q4 / #1091 slice H. One entry: Claude Code's own
@@ -36558,6 +36564,24 @@ impl OrchRegistry {
     /// [`Self::ledger_path`]'s is: it becomes a file name, so it must be proven a
     /// single component before it gets there.
     ///
+    /// **The staging path carries a per-call sequence number, not just the agent
+    /// id** (review round 1). An agent is free to issue two tool calls at once —
+    /// Claude Code batches independent calls in one message — so two posts by ONE
+    /// pane would otherwise race on a single `<agent>-comment-body.md`: the second
+    /// write truncates the file the first is still handing to `gh`, and the first
+    /// post silently publishes the second's text or a torn prefix of it. Nothing
+    /// fails, which is what makes it worth a counter rather than a comment. The
+    /// counter is process-wide and monotonic, so it separates concurrent calls; it
+    /// resets on restart, which is harmless because a stale leftover is only ever
+    /// truncated by a fresh write and removed after it.
+    ///
+    /// **Every post is audited, whichever way it goes.** The row is written after
+    /// `gh` has been run and carries the outcome — the URL on success, the error
+    /// on failure — so a post that failed is visible to the human rather than
+    /// absent, which reads identically to never having been attempted. Argument
+    /// validation that refuses BEFORE `gh` runs (an empty body, an unusable agent
+    /// id) is not a post and writes no row.
+    ///
     /// `repo` is resolved from the caller's own group, never from an argument —
     /// the same server-side resolution [`Self::gh_capture`] documents — so the
     /// group-id path seam (#904) is not engaged here.
@@ -36575,7 +36599,8 @@ impl OrchRegistry {
         crate::gh::reject_empty_comment(body)?;
         let dir = self.group_dir(group);
         fs::create_dir_all(&dir).map_err(|e| format!("cannot prepare the comment body: {e}"))?;
-        let body_path = dir.join(format!("{actor}-comment-body.md"));
+        let seq = COMMENT_BODY_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let body_path = dir.join(format!("{actor}-comment-body-{seq}.md"));
         fs::write(&body_path, body)
             .map_err(|e| format!("cannot write the comment body: {e}"))?;
         let args =
@@ -36586,7 +36611,22 @@ impl OrchRegistry {
         // or already failed, and a leftover scratch file is not a reason to
         // report either outcome differently.
         let _ = fs::remove_file(&body_path);
-        let out = captured?;
+        let out = match captured {
+            Ok(out) => out,
+            Err(e) => {
+                // Audited BEFORE the early return: a failed post the human cannot
+                // see is indistinguishable from one that was never attempted, and
+                // "every post leaves a row" is a claim this branch has to honour
+                // too (review round 1).
+                self.audit(
+                    group,
+                    actor.as_str(),
+                    "issue-comment",
+                    json!({ "issue": issue, "bytes": body.len(), "error": e }),
+                );
+                return Err(e);
+            }
+        };
         // `gh issue comment` prints the new comment's URL, and prints it LAST:
         // take the final non-empty line rather than the whole capture, so a
         // future banner or deprecation notice on stdout cannot become the "URL"

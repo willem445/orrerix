@@ -16,6 +16,7 @@ import {
   getSubagents,
   setSubagents,
   subagentsToggleState,
+  leadLaunchCount,
 } from "../src/agents.ts";
 
 test("autopilot defaults ON when nothing is stored", () => {
@@ -222,4 +223,17 @@ test("a reason is present exactly when the control is disabled (#2519)", () => {
   // gate that could never disable anything would fail here rather than pass
   // vacuously over 24 rows that were all `hidden`.
   assert.equal(disabledSeen, 1, "exactly one of the 24 combinations is the disabled one");
+});
+
+test("a lead launch opens exactly one pane, whatever the fan-out field says (#2519)", () => {
+  // N leads is N orchestration groups minted into one tab from one gesture,
+  // which is what the toggle's own disabled reason says a tab cannot have. The
+  // field is disabled in the DOM AND the count is clamped here, because the DOM
+  // is not what decides.
+  assert.equal(leadLaunchCount(4, true), 1);
+  assert.equal(leadLaunchCount(1, true), 1);
+  // …and it changes NOTHING for an ordinary launch, which is the control that
+  // makes the assertions above about leads rather than about clamping.
+  assert.equal(leadLaunchCount(4, false), 4);
+  assert.equal(leadLaunchCount(1, false), 1);
 });

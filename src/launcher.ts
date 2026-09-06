@@ -100,6 +100,7 @@ import {
   getSubagents,
   setSubagents,
   subagentsToggleState,
+  leadLaunchCount,
   setCustomCommand,
   setDefaultAgent,
 } from "./agents";
@@ -1190,7 +1191,18 @@ export class WelcomeForm {
     this.subagentsHint.hidden = state.reason === null;
     this.subagentsHint.textContent = state.reason ?? "";
     if (this.kind === "orchestrator") return; // its own row, always on
-    this.guardFields.hidden = state.hidden || state.disabled || !this.subagentsInput.checked;
+    const on = !state.hidden && !state.disabled && this.subagentsInput.checked;
+    this.guardFields.hidden = !on;
+    // A lead launch opens exactly one pane (`leadLaunchCount`), so the fan-out
+    // field is disabled with that reason rather than silently overridden at
+    // submit — the human sees the 1 they are going to get.
+    this.countInput.disabled = on;
+    if (on) {
+      this.countInput.value = "1";
+      this.countInput.title = "A lead pane opens one at a time — it mints an orchestration group, and a tab holds one";
+    } else {
+      this.countInput.removeAttribute("title");
+    }
   }
 
   /** Show the autopilot toggle only where it applies — agent kind, a non-custom
@@ -2327,8 +2339,13 @@ export class WelcomeForm {
       // backend declares each one as it creates it, which is the only place that
       // knows the path it produced.
       if (plan.repo) await admitRoot(plan.repo);
+      // #2519: one pane for a lead launch, whatever the (disabled) fan-out field
+      // says — see `leadLaunchCount`. Clamped here as well as in the DOM because
+      // this is the value that decides, and a stale control is not a reason to
+      // mint N groups.
+      const paneCount = leadLaunchCount(plan.count, subagentsEnabled);
       const specs: AgentLaunchSpec[] = [];
-      for (let i = 1; i <= plan.count; i++) {
+      for (let i = 1; i <= paneCount; i++) {
         let cwd = plan.repo || undefined;
         if (plan.worktree) {
           // Fan out to isolated worktrees: fix-auth → fix-auth-1 … fix-auth-N.
@@ -2339,7 +2356,7 @@ export class WelcomeForm {
           // "Creating worktree…" state (N launches → N fetches). Acceptable for
           // the small fan-out counts this dialog produces; revisit with a
           // resolve-default-once step if it ever grows.
-          cwd = await gitWorktreeAdd(plan.repo, worktreeNameFor(plan.worktree, i, plan.count));
+          cwd = await gitWorktreeAdd(plan.repo, worktreeNameFor(plan.worktree, i, paneCount));
         }
         // Session-capable CLIs (Claude) get a pre-assigned session id (#194 P4)
         // so a restored pane can `--resume` the EXACT prior session — the tracked
@@ -2361,7 +2378,7 @@ export class WelcomeForm {
           sessionId = crypto.randomUUID();
           cmd = `${command} --session-id ${sessionId}`;
         }
-        const name = plan.count > 1 ? `${plan.baseName} ${i}` : plan.baseName;
+        const name = paneCount > 1 ? `${plan.baseName} ${i}` : plan.baseName;
         // #271 W3 addendum, part A2: mint a channel-scoped identity BEFORE this
         // pane boots — only for claude/copilot (the CLIs with an MCP config
         // seam), only for agent panes (this loop never runs for terminal/

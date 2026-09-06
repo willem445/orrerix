@@ -982,7 +982,13 @@ async function remintLeadIdentity(
         });
       },
     };
-  } catch {
+  } catch (err) {
+    // SURFACED, unlike the solo re-mint's silent fallback beside it, and for the
+    // reason the launch path gives: a pane that was a lead comes back as an
+    // ordinary agent pane, which is a capability the human had and no longer
+    // has. It still BOOTS — the alternative is a pane that refuses to open on a
+    // restart — but it does not do so quietly.
+    showToast(`"${name}" restored without its orrerix subagents: ${String(err)}`, "error");
     return { command: stripped.command, argv: stripped.argv, bind: () => {} };
   }
 }

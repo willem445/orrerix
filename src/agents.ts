@@ -217,6 +217,24 @@ export interface SubagentsToggleState {
   readonly reason: string | null;
 }
 
+/** How many panes a launch opens once the subagents toggle is applied (#2519).
+ *
+ *  ONE, always, for a lead launch. The fan-out field means "open N of this
+ *  pane", and N leads is N orchestration groups minted into one tab from one
+ *  gesture — which is the very thing the toggle's own disabled reason tells the
+ *  human a tab cannot have. Rather than let the form contradict itself, the
+ *  count is clamped and the field is disabled with that reason while the toggle
+ *  is on, so nothing is silently ignored: the human sees the 1 they are going to
+ *  get before they submit.
+ *
+ *  (A fan-out of leads is not incoherent in principle — `bindGroup` has held
+ *  several groups per tab since #485 — but the tab strip's chip and its
+ *  pause/resume act on the FIRST group only, so N of them in one tab is a UI
+ *  that misreports itself. A lead per tab is the shape this feature is for.) */
+export function leadLaunchCount(count: number, subagentsOn: boolean): number {
+  return subagentsOn ? 1 : count;
+}
+
 export function subagentsToggleState(form: {
   /** The welcome form's chosen kind — only `"agent"` can be a lead. */
   readonly kind: string;

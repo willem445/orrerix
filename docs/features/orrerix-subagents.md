@@ -50,6 +50,10 @@ orchestrator launch has always had, because they now govern the same thing:
 None of them apply to the lead pane itself. A human pane is silent when the
 human is.
 
+A lead launch opens **one** pane: the **Panes** fan-out field is disabled at 1
+while the toggle is on, because each lead mints an orchestration group and a tab
+runs one project. Two leads means two tabs.
+
 The toggle is off by default and stays where you left it.
 
 ## Where it is not offered

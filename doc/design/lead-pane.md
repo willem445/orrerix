@@ -593,6 +593,20 @@ nothing could hold it up without a DOM — and "an ssh pane must not fall throug
 to terminal", like "a lead must not fall through to orch", is exactly the kind of
 claim that should not rest on someone re-reading the order.
 
+### A lead launch opens one pane
+
+The Panes field fans a launch out to N panes. N leads is N orchestration groups
+minted into one tab from a single gesture — the very thing the toggle's own
+disabled reason tells the human a tab cannot have. (`bindGroup` has tolerated
+several groups per tab since #485, but the tab strip's chip and its pause/resume
+act on the FIRST only, so N of them in one tab is a UI that misreports itself.)
+
+So while the toggle is on, the Panes field is **disabled at 1 with that reason**
+and the count is clamped in the submit path as well (`leadLaunchCount`). Both,
+deliberately: the DOM tells the human what they are going to get before they
+submit, and the clamp is what decides, because a stale control is not a reason to
+mint four groups.
+
 ### C1's residual F2 is closed
 
 C1 could not tell a minted lead line from a solo line whose human had typed their

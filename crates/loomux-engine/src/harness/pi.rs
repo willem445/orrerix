@@ -576,7 +576,7 @@ impl Decoder {
                 let err = str_at(&v, "error").unwrap_or("?");
                 self.note(NoteKind::Error, format!("extension {path} failed on {event}: {err}"))
             }
-            _ => vec![Decoded::Unknown(line.to_string())],
+            _ => Vec::new(),
         }
     }
 

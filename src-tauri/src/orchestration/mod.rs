@@ -36419,7 +36419,6 @@ impl OrchRegistry {
         // Best-effort, and deliberately not `?`: the post has already happened
         // or already failed, and a leftover scratch file is not a reason to
         // report either outcome differently.
-        let _ = fs::remove_file(&body_path);
         let out = captured?;
         // `gh issue comment` prints the new comment's URL, and prints it LAST:
         // take the final non-empty line rather than the whole capture, so a

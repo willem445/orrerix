@@ -158,7 +158,7 @@ PREFIX-extension of the last, which is what "simply replace their display"
 implies but does not promise.
 
 **`replaces` is that precondition's failure carried rather than inferred, and
-S1b added it.** When an update does NOT extend its predecessor the adapter
+S1b adds it (#2986).** When an update does NOT extend its predecessor the adapter
 emits the whole new value, and a consumer appending deltas would then show the
 output TWICE. That cannot be closed downstream: a consumer cannot tell a
 restatement from a legitimate delta that happens to repeat earlier bytes, and
@@ -170,7 +170,7 @@ in the adapter. `false` on every ordinary delta means **append**; `true` means
 everything held for it. A consumer that ignores the field is no worse off than
 before it existed, which is what makes the addition additive.
 
-**`Note` is the sixth variant, and it exists because the decoder table needed
+**`Note` is the sixth variant, and it exists because the decoder table needs
 somewhere to put three things.** Retries, extension errors and the
 fire-and-forget UI methods were all routed to "a Note" before one existed on
 this enum — only `LogBody::Note`, a log record that reaches no consumer. The
@@ -220,7 +220,7 @@ for every feature that reads panes.
 | `Observed(..)` | **never emitted** | readiness marker, question grid, quiet/painted evidence |
 
 **`Compacted` is emitted when a compaction FINISHES, and that is a
-correction to plan-2386's decoder row (S1b).** Two facts the start event
+correction to plan-2386's decoder row (S1b, #2986).** Two facts the start event
 cannot supply: `compaction_start` carries only `reason`, so a `Compacted`
 built from it has `pre_tokens: None` always and the field is dead, while
 `compaction_end.result.tokensBefore` is the real figure; and a compaction can
@@ -541,16 +541,19 @@ file a human reads to reconstruct what happened.
 `PermissionRequest`, `PermissionSettled`, `UiRequest`, `UiSettled`,
 `TurnEnded` and `Exited` — and it is enforced rather than described.
 `HarnessEvent::is_decision_grade` is the one place the split is expressed, and
-the population test over the enum pins both numbers: that the two lists
-together cover all **17** variants, so a variant somebody adds cannot be
+the population test over the enum **will** pin both numbers — that the two
+lists together cover all **17** variants, so a variant somebody adds cannot be
 silently unclassified, and that exactly **7** of them are decision-grade, so a
 variant folded into the wrong half keeps the total right and still fails.
+Both are written and reviewed on `feat/2850-s1b-pi-rpc-core` (#2986, **open**
+at the time this note was last edited), so until that slice merges the counts
+here are this note's claim and nothing on `main` checks them.
 
 #2850 moved that set from five to seven by adding `UiRequest`/`UiSettled` — a
 dialog is a question a human answered, which is what this log is for — and
 kept `Thinking`, `ToolOutput`, `QueueChanged` and `Note` out of it. The
 population went 11 → 17: five variants in the contract as first written, plus
-`Note`, which S1b added on discovering the decoder had three things to report
+`Note`, which S1b adds on discovering the decoder has three things to report
 and nowhere to put them.
 
 ### 4.4 Relationship to the remote protocol's H4

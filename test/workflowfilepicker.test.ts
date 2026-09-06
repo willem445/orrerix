@@ -86,11 +86,10 @@ test("a backslash-spelled path still finds its option — a restored record and 
   assert.equal(p.offListing, false);
 });
 
-test("an EXACT path match wins over a case-folded one — the picker never chooses between a Default/default pair", () => {
-  // The #2892 collision, as the picker meets it: both files are on disk and both are listed,
-  // so folding first would mark whichever came first and the human would edit the other file
-  // believing they were editing this one. The fold exists for `Workflows/` vs `workflows/`
-  // (one directory on this platform), not for choosing between two real files.
+test("paths are compared EXACTLY — a Default/default pair is two files, and the picker marks the one it is on", () => {
+  // The #2892 collision, as the picker meets it: on Linux both files are genuinely on disk and
+  // both are listed, so a case-folding compare would mark whichever came first and the human
+  // would edit the other file believing they were editing this one.
   const lower = entry({ name: "default", path: ".orrerix/workflows/default.yml" });
   const upper = entry({ name: "Default", path: ".orrerix/workflows/Default.yml" });
   const p = resolveWorkflowFilePicker(listing([upper, lower]), ".orrerix/workflows/default.yml");
@@ -98,14 +97,41 @@ test("an EXACT path match wins over a case-folded one — the picker never choos
     p.options.filter((o) => o.current).map((o) => o.name),
     ["default"]
   );
+  // …and the other way round, which a "the exact match wins, then fold" rule would also pass
+  // while still being wrong for the test below.
+  const q = resolveWorkflowFilePicker(listing([upper, lower]), ".orrerix/workflows/Default.yml");
+  assert.deepEqual(
+    q.options.filter((o) => o.current).map((o) => o.name),
+    ["Default"]
+  );
 });
 
-test("a case-only difference in the DIRECTORY still resolves — one directory on the platforms this ships on", () => {
+test("a case-only difference is NOT the same file — Linux is a shipped platform (rev-std r1 B1)", () => {
+  // `release.yml` builds `ubuntu-22.04` and ships AppImage/deb/rpm, and Linux filesystems are
+  // case-sensitive. The premise this module was originally written on — "the platforms this
+  // ships on are case-insensitive" — was false, and folding on it declared two real files one.
+  //
+  // The failure that bought this test is in `switchPlan`, one assertion down: on a repo
+  // carrying the #2892 pair, clicking the sibling of the open file returned `same-file`, so
+  // the menu listed both and could never move between them. Forever, silently, on the exact
+  // navigation surface #2944 exists to add.
   const p = resolveWorkflowFilePicker(
     listing([entry({ name: "solo", path: ".orrerix/workflows/solo.yml" })]),
     ".orrerix/Workflows/solo.yml"
   );
-  assert.equal(p.currentPath, ".orrerix/workflows/solo.yml");
+  assert.equal(p.currentPath, null);
+  assert.equal(p.offListing, true);
+
+  const lower = ".orrerix/workflows/review.yml";
+  const upper = ".orrerix/workflows/Review.yml";
+  assert.deepEqual(switchPlan({ current: lower, dirty: false }, upper), {
+    kind: "open",
+    file: upper,
+  });
+  assert.deepEqual(switchPlan({ current: upper, dirty: true }, lower), {
+    kind: "ask",
+    file: lower,
+  });
 });
 
 test("a .yml that is not one of the repo's workflows is off the listing, and nothing is marked current", () => {

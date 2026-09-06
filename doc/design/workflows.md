@@ -3461,15 +3461,46 @@ since `orchestrator` and `worker` are in nearly all of them. A sidecar keyed by
 block id would merge exactly there and pass a disjoint-id fixture; the test uses
 the colliding one.
 
-### Which option is current: exact first, case second
+Settling the buffer is ONE method (`settleBuffer`), called by both the switch and
+the create, rather than the same eight lines written twice. That is not tidiness:
+it is the only thing standing between a switch and a save into the wrong file, so
+two copies means a later edit can fix one and leave the other path silently
+unguarded (rev-std round 1, N2).
+
+And every `await` in the load path re-checks a **generation counter**, not just
+`disposed`. Two clicks in the file menu start two `load()`s; they may resolve in
+either order, and the later-*resolving* one would otherwise install its `text` and
+`savedHash` while `this.rel` names the file clicked LAST — one workflow's buffer
+under another workflow's path. The hash guard bounded that to a conflict dialog
+rather than corruption, which is why it was raised as non-blocking; a counter
+removes it rather than bounding it (rev-std round 1, N3).
+
+### Which option is current: separators normalised, case never
 
 Paths are compared with separators normalised, because a restored pane record and
-the backend's listing need not spell them the same way. Case is compared only as a
-FALLBACK: `.orrerix/Workflows/x.yml` and `.orrerix/workflows/x.yml` are one file on
-the platforms this ships on, but `Default.yml` beside `default.yml` is precisely
-the #2892 collision, and folding first would tick whichever of the pair came first
-— the human then edits the other file believing they are editing this one. An exact
-match wins outright; the fold is consulted only when nothing matched exactly.
+the backend's listing need not spell them the same way. **Case is not compared at
+all**, and the round that established this is worth recording, because the first
+version of the module did fold case and argued for it.
+
+The argument was that `.orrerix/Workflows/x.yml` and `.orrerix/workflows/x.yml` are
+one file "on the platforms this ships on". That premise is false. `release.yml`
+builds `ubuntu-22.04` and ships AppImage, deb and rpm assets, and Linux filesystems
+are case-sensitive — so on a shipped platform `Review.yml` and `review.yml` are two
+files, which is exactly the #2892 pair *Case is significant* above says discovery
+still lists. A case-folding compare declares them one.
+
+In the resolver that would have ticked the wrong option whenever the open file was
+not itself listed. In `switchPlan` — which has no listing to consult, so it could
+not even apply the resolver's exact-match-first precedence — it was worse: clicking
+the sibling of the open file returned `same-file`, a permanent silent no-op on the
+navigation surface this whole section exists to add.
+
+The fold also could not have paid for itself. Every path either function compares is
+the BACKEND's own spelling out of the listing, on both sides, so the mixed-case
+directory it was written for cannot arise in any live path. Removing it makes the
+comparison exact on all three platforms, and a path that genuinely is not in the
+listing reports itself as off-listing — which is true, rather than guessed.
+(rev-std round 1, B1.)
 
 A `null` listing is "we do not know", never "this repo has no workflows". It offers
 no options and does not report the open file as off-listing, because a control that

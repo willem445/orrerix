@@ -61,17 +61,26 @@ export interface WorkflowFilePicker {
 }
 
 const normPath = (p: string): string => p.replace(/\\/g, "/").replace(/^\.\//, "");
-const foldPath = (p: string): string => normPath(p).toLowerCase();
 
 /** Two repo-relative paths naming the same FILE.
  *
- *  Separators are normalised because a restored pane record and the backend's listing need not
- *  spell them the same way. Case is compared only as a FALLBACK, and never to choose between
- *  two options: the platforms this ships on are case-insensitive, so `.orrerix/Workflows/x.yml`
- *  and `.orrerix/workflows/x.yml` are one file there — but `Default.yml` beside `default.yml`
- *  is precisely the collision #2892 is about, and picking one of those by case-folding would
- *  be the picker guessing. Hence: an exact match wins outright, and the fold is consulted only
- *  when nothing matched exactly. */
+ *  Separators are normalised, because a restored pane record and the backend's listing need
+ *  not spell them the same way. **Case is not**, and the reason is the whole of rev-std round
+ *  1's B1.
+ *
+ *  An earlier version of this module folded case as a fallback, on the stated premise that
+ *  "the platforms this ships on are case-insensitive". That premise is false: `release.yml`
+ *  builds `ubuntu-22.04` and ships AppImage/deb/rpm, and Linux filesystems are case-sensitive.
+ *  On such a machine `Review.yml` and `review.yml` are two files — exactly the #2892 pair this
+ *  change leaves standing in discovery — and a case-folding comparison declares them one. In
+ *  `switchPlan` that made clicking the sibling a permanent silent no-op, on the very
+ *  navigation surface #2944 exists to add.
+ *
+ *  Folding could not have paid for that. The case it was written for — `.orrerix/Workflows/`
+ *  against `.orrerix/workflows/` — cannot arise in any live path: every path compared here is
+ *  the BACKEND's own spelling from the listing, on both sides. So the comparison is exact, on
+ *  every platform, and a path that genuinely is not in the listing reports itself as
+ *  off-listing, which is true rather than guessed. */
 const samePath = (a: string, b: string): boolean => normPath(a) === normPath(b);
 
 /** Resolve the pane's file picker from the backend's listing and the file the pane is on.
@@ -88,8 +97,7 @@ export function resolveWorkflowFilePicker(
   currentRel: string
 ): WorkflowFilePicker {
   const entries = listing?.workflows ?? [];
-  const exact = entries.find((e) => samePath(e.path, currentRel));
-  const current = exact ?? entries.find((e) => foldPath(e.path) === foldPath(currentRel)) ?? null;
+  const current = entries.find((e) => samePath(e.path, currentRel)) ?? null;
   return {
     options: entries.map((e) => ({
       name: e.name,
@@ -256,8 +264,10 @@ export function switchPlan(
   state: { current: string; dirty: boolean },
   target: string
 ): SwitchPlan {
-  if (samePath(state.current, target) || foldPath(state.current) === foldPath(target)) {
-    return { kind: "same-file" };
-  }
+  // Exact, never case-folded — see `samePath`. Folding here made a click on the case-sibling
+  // of the open file a permanent silent no-op on Linux (rev-std round 1, B1), and it did so
+  // with no listing to consult at all, which is strictly worse than the resolver it was
+  // imitating: that one at least let an exact match win first.
+  if (samePath(state.current, target)) return { kind: "same-file" };
   return state.dirty ? { kind: "ask", file: target } : { kind: "open", file: target };
 }

@@ -254,6 +254,13 @@ export class WorkflowView {
    *  — the same statement pair `launcher.ts` keeps for its own picker, for the same reason: a
    *  pane that is re-rooted must not offer the previous repo's files. */
   private listingRoot: string | null = null;
+  /** Which load is current. Two clicks in the file menu start two s, and they may
+   *  resolve in either order — the later-RESOLVING one would otherwise win `text`/`savedHash`
+   *  while `this.rel` names the file the human clicked LAST, i.e. the buffer of one workflow
+   *  under the path of another (rev-std round 1, N3). The hash guard bounded that to a
+   *  conflict dialog rather than corruption, which is why it was non-blocking; a generation
+   *  counter removes it instead of bounding it. Every await in the load path re-checks. */
+  private loadGen = 0;
   private dirtyDot: HTMLElement;
   private saveBtn: HTMLButtonElement;
   private yamlBtn: HTMLButtonElement;
@@ -677,16 +684,20 @@ export class WorkflowView {
     // A fresh read is a different file (or a different version of one), so a rewrite the human
     // consented to earlier was consent about text that is no longer there.
     this.rewriteConfirmed = false;
+    // Claim this load. Anything that started earlier and resolves later is STALE and drops its
+    // result on the floor rather than writing it under whatever `this.rel` now says.
+    const gen = ++this.loadGen;
+    const stale = (): boolean => this.disposed || gen !== this.loadGen;
     try {
       const fr = await ftReadFile(this.root, this.rel);
-      if (this.disposed) return;
+      if (stale()) return;
       this.exists = true;
       this.loadError = null;
       this.savedHash = fr.hash;
       this.savedText = fr.content;
       this.text = fr.content;
     } catch (err) {
-      if (this.disposed) return;
+      if (stale()) return;
       const code = errorCode(err);
       // #1153 phase 4: the DEFAULT path missing is the one case that means
       // "maybe this repo still uses the old `.loomux/` spelling". Adopting it is
@@ -700,7 +711,7 @@ export class WorkflowView {
       const legacy = code === "not-found" ? legacyFallbackFor(this.rel) : null;
       if (legacy) {
         const found = await this.readLegacy(this.root, legacy);
-        if (this.disposed) return;
+        if (stale()) return;
         if (found) {
           this.retarget(legacy);
           this.exists = true;
@@ -709,6 +720,7 @@ export class WorkflowView {
           this.savedText = found.content;
           this.text = found.content;
           await this.loadLayout();
+          if (stale()) return;
           this.reanalyze();
           this.render();
           return;
@@ -728,6 +740,7 @@ export class WorkflowView {
             : `${errorMessage(err)}`;
     }
     await this.loadLayout();
+    if (stale()) return;
     this.reanalyze();
     this.render();
   }
@@ -843,16 +856,7 @@ export class WorkflowView {
   private async openFile(rel: string): Promise<void> {
     const plan = switchPlan({ current: this.rel, dirty: this.dirty }, rel);
     if (plan.kind === "same-file") return;
-    if (plan.kind === "ask") {
-      const choice = await this.confirmSwitch(plan.file);
-      if (choice === "cancel") return;
-      if (choice === "save") {
-        await this.save();
-        if (this.dirty) return; // the save did not land; the toast said why
-      } else {
-        this.setText(discardEdits(this.savedText));
-      }
-    }
+    if (plan.kind === "ask" && !(await this.settleBuffer(plan.file))) return;
     this.retarget(plan.file);
     this.host.onFileChanged?.(plan.file);
     // A different file is a different workflow: a selection into the old roster would address
@@ -862,6 +866,25 @@ export class WorkflowView {
     this.selection = { kind: "workflow" };
     this.setSurface("canvas");
     await this.load();
+  }
+
+  /** Settle the unsaved buffer that belongs to `this.rel` before the pane moves to `target`.
+   *  True = settled, the caller may retarget; false = the human cancelled, or a "save" did not
+   *  land and abandoning is the only way to keep what they asked to keep.
+   *
+   *  One method rather than the same eight lines in `openFile` and `newWorkflow` (rev-std
+   *  round 1, N2). That duplication is the shape this rule cannot afford: it is the ONLY thing
+   *  standing between a switch and a save into the wrong file, so a later edit that fixes one
+   *  copy and not the other would leave the second path silently unguarded. */
+  private async settleBuffer(target: string): Promise<boolean> {
+    const choice = await this.confirmSwitch(target);
+    if (choice === "cancel") return false;
+    if (choice === "save") {
+      await this.save();
+      return !this.dirty; // still dirty = the save did not land; the toast said why
+    }
+    this.setText(discardEdits(this.savedText));
+    return true;
   }
 
   /** The three answers a switch may get, which are the close guard's two plus the one a
@@ -921,17 +944,9 @@ export class WorkflowView {
       return;
     }
     // Settle the buffer we are leaving before anything is created — same rule as `openFile`,
-    // and the reason it runs first is that a create is a save into `this.rel`.
-    if (this.dirty) {
-      const choice = await this.confirmSwitch(verdict.path);
-      if (choice === "cancel") return;
-      if (choice === "save") {
-        await this.save();
-        if (this.dirty) return;
-      } else {
-        this.setText(discardEdits(this.savedText));
-      }
-    }
+    // through the same method, and the reason it runs first is that a create is a save into
+    // `this.rel`.
+    if (this.dirty && !(await this.settleBuffer(verdict.path))) return;
     this.retarget(verdict.path);
     this.host.onFileChanged?.(verdict.path);
     this.selection = { kind: "workflow" };

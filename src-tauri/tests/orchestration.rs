@@ -63924,6 +63924,30 @@ fn a_dead_agents_frozen_snapshot_is_never_resampled() {
         1,
         "but it is not re-sampled: a frozen counter is not a new data point"
     );
+
+    // **The discriminating half, and it needs a RESTART.** Within one process
+    // the sampler's in-memory `last` row already refuses the dead key, because
+    // its counters have not moved — so everything above holds with the
+    // live-key filter deleted (measured: that mutation came back GREEN against
+    // the assertions above alone). A fresh registry over the same state root
+    // has no `last` for that key, `usage.json` still hands it back on the
+    // merge, and the filter is then the ONLY thing between a dead agent and one
+    // duplicate row per app start, forever.
+    let reg2 = relaunch_registry(_d.path());
+    reg2.set_claude_projects_dir(proj.path().to_path_buf());
+    reg2.set_series_bucket_ms(0);
+    let after = reg2.group_usage(&g.id);
+    assert_eq!(
+        after["lifetime_tokens"].as_u64(),
+        Some(1500),
+        "the restarted process still reads the historical snapshot — the fixture that \
+         makes the next assertion discriminating rather than vacuous"
+    );
+    assert_eq!(
+        series_lines(&reg2, &g.id).len(),
+        1,
+        "and still appends nothing for it across a restart"
+    );
 }
 
 #[test]

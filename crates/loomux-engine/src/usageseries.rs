@@ -457,6 +457,24 @@ mod tests {
         assert_eq!(shrunk.cost_usd, Some(0.0));
         assert!(shrunk.reset, "and the clamp is LABELLED, not silent");
 
+        // `reset` has TWO independent sources — a shrunk COUNTER and a shrunk
+        // COST — and the fixture above trips both at once, so it cannot tell
+        // which one set the flag. This is the counter path on its own, with no
+        // dollar figure anywhere to cover for it. (Found by a scratch mutation
+        // that removed only the counter arm and came back GREEN.)
+        let mut ca = sample(1_000, "s2", 500);
+        ca.output = 50;
+        let mut cb = sample(2_000, "s2", 10);
+        cb.output = 1;
+        assert_eq!((ca.cost_usd, cb.cost_usd), (None, None), "no cost on either side");
+        let counters_only = diff_series(&[SeriesRow::Sample(ca), SeriesRow::Sample(cb)]);
+        assert_eq!((counters_only[0].input, counters_only[0].output), (0, 0));
+        assert!(
+            counters_only[0].reset,
+            "a shrunk COUNTER sets reset on its own, with no cost arm to do it"
+        );
+        assert_eq!(counters_only[0].cost_usd, None, "and unpriced stays unpriced");
+
         let grew = &deltas[1];
         assert_eq!((grew.input, grew.output), (30, 3));
         let cost = grew.cost_usd.expect("both endpoints priced");

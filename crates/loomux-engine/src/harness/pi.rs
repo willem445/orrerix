@@ -495,6 +495,7 @@ impl Decoder {
             // both events route through it.
             Some("agent_start") | Some("turn_start") => {
                 let mut out = Vec::new();
+                self.open_turn = None;
                 self.ensure_turn(&mut out);
                 out
             }

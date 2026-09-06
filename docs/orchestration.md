@@ -1532,20 +1532,38 @@ under `.orrerix/workflows/` is a workflow named `<name>`, in the same format:
     solo-fast.yml         # the workflow named "solo-fast"
 ```
 
-**Picking one per group lands with #1689 slice D1.** Today a group runs
-`default` — which is `.orrerix/workflow.yml` — unless its `group.json` pins a
-name by hand; the launcher has no workflow control yet. What is true now is
-everything below: the layout, the naming rule, and how a name resolves to a
-file.
+**Picking one at launch.** When a repo declares more than one workflow, the
+setup pane grows a **Workflow** dropdown under the *Advanced orchestrator*
+checkbox, listing every workflow the repo declares. Pick one and the roster box
+beneath repaints to that workflow's blocks — the same resolved roster the group
+will run, so what you consent to is what launches. The dropdown is not shown for
+a repo with one workflow or none: there would be nothing to pick, and the form
+is the one it has always been.
+
+The dropdown appears only while *Advanced orchestrator* is ticked, because the
+two are different questions. The checkbox is the consent — whether a
+repo-authored roster runs at all — and the dropdown answers only *which file*.
+Untick the checkbox and your choice is still remembered with the group, so
+turning workflow mode on later comes back to the workflow you picked rather than
+to `default`.
+
+**Editing them.** *Edit workflow…* opens whichever workflow the dropdown is
+showing, so a repo with several is edited one file at a time in the visual
+designer, each with its own canvas. Node positions are saved beside each file —
+`workflows/review-heavy.layout.json` next to `workflows/review-heavy.yml` — so
+arranging one workflow's blocks never disturbs another's. As before, the button
+turns *this* setup pane into the designer, so open a new pane to launch once the
+file is right.
 
 A name may use letters, digits, `-` and `_` only, and it is what the file is
 called — `review-heavy.yml` is the workflow `review-heavy`. Anything else (a dot
 in the name, a path separator, a leading `-`, a Windows device name like `CON`)
 is refused rather than quietly corrected: the file is simply not a workflow, and
 orrerix records why alongside the listing rather than dropping it without a
-word. (Nothing renders that listing for you yet — it reaches the screen with
-slice D1.) `.loomux/workflows/` is read when `.orrerix/workflows/` is absent,
-the same way `.loomux/workflow.yml` is.
+word. A workflow whose file has a *syntax* error stays in the dropdown, marked
+`(has errors)` — it is the one you need to open in order to fix it, and the
+roster box shows you every finding. `.loomux/workflows/` is read when
+`.orrerix/workflows/` is absent, the same way `.loomux/workflow.yml` is.
 
 The workflow a group runs is recorded with the group, next to the roster it
 produced, so a resumed orchestration comes back on the same file. A repo that

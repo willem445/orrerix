@@ -2610,8 +2610,14 @@ hazard rather than a decision.** `seen` is keyed by the exact stem and
 `.orrerix/workflow.yml` lists as a second, separate row and triggers no shadow
 finding — while on Windows it is the *same file* as `workflows/default.yml` and
 on Linux it is not. Advisory-only today, because nothing but a hand-edited
-`group.json` can pin either name; it becomes a picker showing a duplicate row in
-slice D1, which is where it should be closed (raised in #2603 review round 2).
+`group.json` could pin either name. Slice D1 shipped the picker and did NOT close
+it: the hazard is now user-visible (two rows, `Default` and `default`, naming one
+file on Windows) rather than merely latent. Closing it is a change to DISCOVERY,
+not to the picker — `scan_workflows` would have to fold case when keying `seen`,
+which makes `Default.yml` a shadow finding rather than a second workflow, and
+that is a semantics change to slice A's listing that D1's brief did not carry.
+Tracked as an open residual here (raised in #2603 review round 2, re-scoped in
+#2849).
 
 **Both `workflow.yml` and `workflows/default.yml` is possible, and the plain
 file wins.** `list_workflows` reports it as a *listing finding* naming both
@@ -2801,11 +2807,11 @@ sweep exists to stop.
 
 ### What slice A deliberately did not do
 
-- **No launcher argument, and `docs/orchestration.md` says so in its own tense.**
-  `create_orchestration`'s wire shape is unchanged;
-  `Guardrails.workflow` is how a caller pins a name, and the launcher's picker
-  is slice D1's. A `PromoteConfig` has no workflow field either — a fresh
-  promote runs `default`, a reattaching one restores what is on disk.
+- **No launcher argument.** Slice A left `create_orchestration`'s wire shape
+  unchanged and made `Guardrails.workflow` the only way a caller pins a name;
+  slice D1 added the optional argument and the picker above it (see *Choosing a
+  workflow at launch* below). A `PromoteConfig` still has no workflow field — a
+  fresh promote runs `default`, a reattaching one restores what is on disk.
 - **No switching.** Changing a live group's workflow was slice B, which ships
   `apply_workflow` — a consent-preserving action with a diff and a
   confirmation, not a side effect of this pin existing. See *Applying a
@@ -3065,6 +3071,106 @@ the last directory row by name.
 - **No `list_blocks`.** The orchestrator's read-back of its own roster was slice
   C's — it landed with the tool and the teaching paragraph in the workflow
   section above.
+
+## Choosing a workflow at launch, and designing several (#1689 slice D1)
+
+Slice A gave a group a workflow **name** and slice B gave a running group a way
+to change it. This is how a human picks one *before* the group exists, and how
+the visual designer stops assuming there is only one file to design.
+
+### The launch argument is optional, and refused rather than defaulted
+
+`create_orchestration` gains `workflow: Option<String>`, parsed into a
+`WorkflowName` at the boundary so the value that reaches `Guardrails` is a type
+`workflow_path_named` will accept and a raw webview string is not — the compiler,
+not a scan, is what holds constraint 6 here. An omitted argument is `default`,
+which is the pre-#1689 launch byte for byte: every caller that has not learned to
+ask, and every repo that declares one workflow, sends exactly what it always sent.
+
+An unusable name **refuses the launch**, and that is deliberately the opposite of
+`load_group_file`, which falls back to `default` for an unusable *persisted* name.
+The two are answering different questions. A persisted name is read on a resume,
+where the alternative to falling back is a group that can no longer be rejoined —
+so it degrades. A launch has a human in front of it who has just been shown a
+roster, and silently running some *other* workflow than the one they picked is the
+failure the check exists to prevent. The parse sits above
+`create_orchestration_group`, so a refusal creates nothing at all.
+
+### The picker is under the toggle because they are different questions
+
+The toggle is the consent — whether a repo-authored roster runs at all, which is
+the argument *Why it isn't just "a file that exists takes effect"* makes. The
+picker answers only *which file*, and it is shown only while the toggle is on and
+only when the repo declares more than one workflow. A control with a single
+option cannot be used, and one above an unticked toggle would offer a choice that
+changes nothing this launch does.
+
+The name is nonetheless **sent with the toggle off**, and recorded inert. That is
+what makes `set_advanced_orchestrator(true)` mid-session come back to the workflow
+the human chose at launch rather than to `default` — the interplay slice B's
+*toggle interplay* bullet states from the other end.
+
+### The selection lives in the launcher's view, not on the `<select>`
+
+`resolveWorkflowPicker` (`src/roster.ts`, DOM-free) takes the listing and the name
+the form is *holding* and returns the name that is actually selectable, plus the
+options, the file, and whether the row is worth showing. The launcher writes the
+element from that and never reads it back — CLAUDE.md's in-list-editor rule,
+reached here through a control that is genuinely re-rendered rather than through a
+list: the row is rebuilt on every repo, CLI and toggle change.
+
+Resolving rather than trusting is what closes the case the rule exists for.
+Repoint the form at another repo while `review-heavy` is held and the name is no
+longer one the repo declares; keeping it would launch a group pinned to a workflow
+that is not there, which the backend resolves to an absent file and runs the
+built-in roster for — silently disagreeing with the roster box the human just
+read. The resolver falls back to `default`, or to the first option when the repo
+declares no `default`, and writes that answer back into view state.
+
+The listing and the preview are read **in order, not in parallel**, because the
+second depends on the first: the listing decides which workflow is selected and
+the preview is of *that* workflow. The preview memo is keyed by
+`(repo, cli, name)` for the same reason — two workflows resolve to different
+rosters, so a memo keyed without the name would show `a`'s blocks under `b`'s.
+
+### One layout sidecar per workflow file
+
+`workflowlayout.ts` derived the canvas's layout file from the workflow file's
+DIRECTORY and a fixed `workflow.layout.json` basename. Named workflows live in one
+directory, so every workflow under `workflows/` shared one sidecar: opening `b`
+restored `a`'s node positions by block id, and saving `b` overwrote them. Silently,
+too — a layout is never anyone's *work*, so an unreadable or wrong one is
+recomputed and nothing reports a loss, which is exactly why this could not be left
+to be noticed.
+
+`layoutFileFor` now derives the name from the file's own STEM. `workflow.yml`'s
+stem is `workflow`, so the default file's answer is the constant it always was and
+no existing repo's layout moves — the change is an addition, not a migration. Only
+the last extension is dropped, which handles `.yml` and `.yaml` without
+enumerating them; a dotfile is all stem, because stripping a leading dot would
+hand every dotfile in a directory the same `.layout.json` — the collision again,
+in the one shape a "cut at the first dot" rule would reintroduce.
+
+*Edit workflow…* passes the selected workflow's `file` through to the pane, which
+has accepted one since #222 (the file browser's *Open in workflow pane* uses the
+same field). The path comes from the LISTING rather than being derived from the
+name, so a repo on the legacy `.loomux/` spelling opens the file it really has.
+`default` passes no `file` at all, which keeps two things: the pane's own default
+path, and its ability to CREATE a workflow in a repo that has none — that is how
+the first one gets written.
+
+### What slice D1 deliberately did not do
+
+- **No group-header picker, no drift chip, no Review & apply.** Those are slice
+  D2's, built on the `WorkflowSwitchPreview` payload slice B ships. D1 touches
+  the launcher and the designer only; nothing here can change a *running* group's
+  workflow.
+- **No case-collision fix.** A repo declaring `Default.yml` beside
+  `.orrerix/workflow.yml` now shows two picker rows for what is one file on
+  Windows. Closing it is a change to discovery, not to the picker — see *Case is
+  significant* above, where the residual is recorded.
+- **No `PromoteConfig` field.** A promote is a right-click on a running pane, not
+  the launcher; slice A's reasoning is unchanged.
 
 ## Still to come
 

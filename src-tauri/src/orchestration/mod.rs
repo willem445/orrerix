@@ -13,6 +13,7 @@
 //! human sees every prompt exactly as if they had written it, can steer any
 //! pane, and the audit log (`audit.jsonl`) records the full text.
 
+pub mod brief;
 pub mod digest;
 /// Test-only lock-hold injector for the E2E soak/liveness lane (#1603).
 /// Compiled to an empty `start` in a release build — see the module doc.
@@ -512,6 +513,14 @@ pub const PLAYBOOK_SECTION_IDS: &[&str] = &[
     "label-signals",
     "planning-and-scheduling",
     "engineering-standards",
+    // #3040 P2. The ONE copy of the definition of done
+    // (`templates/dod.md`, substituted as `{{DOD}}`), served here rather than
+    // inlined into the resident core: `orchestrator.md` was 44,990 B against
+    // `RESIDENT_CORE_BUDGET`'s 45,000, so the 5.7 KB of DoD text could not go
+    // there without the orchestrator paying it on every model call. The
+    // playbook is on demand and has no such budget — the same argument
+    // #2565 already made for a step it moved here.
+    "definition-of-done",
     "delivery-notices",
     "merge-gate",
     "squash-closes-issues",
@@ -29267,6 +29276,12 @@ impl InstructionVars {
             // last on purpose (see the comment there).
             ("MERGE_QUEUE", self.merge_queue_note.as_str()),
             ("REVIEW_DRIVER", self.review_driver_note.as_str()),
+            // #3040 P2. A per-group VALUE like HOLD_LABEL and LESSONS_PATH,
+            // NOT one of `LIVE`'s workflow-conditional keys: it resolves to the
+            // same real text for every group, so a golden fixture carries the
+            // literal `{{DOD}}` and this renders it. Stripping it instead would
+            // bless a golden with a hole where the definition of done goes.
+            ("DOD", brief::dod_body()),
             ("LOCKS", self.locks_note),
             ("LOCKS_ORCH", self.locks_orch_note),
             ("BLOCK_NOTE", ""),

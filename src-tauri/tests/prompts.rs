@@ -523,9 +523,26 @@ fn red_before_green_is_demanded_evidenced_verified_and_bounded_by_its_exemption(
          safety, because it turns 'there was nothing to test' into a reviewable claim instead of \
          an assertion nobody can check");
 
-    pinned("the worker brief", &o, "**red-before-green evidence**",
-        "the brief must ask for the evidence up front — a bar the worker first hears about at the \
-         completion check is a round-trip nobody needed");
+    // #3040 P2 relocated this pin rather than relaxing it. The core used to carry a
+    // COMPRESSED recap of the DoD ("tests + docs + PR + green CI + **red-before-green
+    // evidence**") beside the full section in worker.md — two copies of one rule, and
+    // the phrase this pin anchored on lived in the recap. The recap is gone: there is
+    // ONE copy (`templates/dod.md`), the core tells the orchestrator to quote it
+    // VERBATIM and where to read it, and the playbook serves it. So the rule splits
+    // across the two surfaces that now carry its halves, and each anchor follows its
+    // specimen (CLAUDE.md: a test's specimen must stay a member of the class it
+    // witnesses) instead of being weakened to fit today's text.
+    pinned("the worker brief", &o, "definition of done, quoted verbatim",
+        "the brief must carry the DoD itself, not a paraphrase of it — a compressed recap in the \
+         brief is a second copy that drifts, which is the whole of #3040 P2");
+    pinned("the worker brief", &o, "read_playbook(\"definition-of-done\")",
+        "…and must say WHERE that one copy is, or \"quote it verbatim\" is an instruction with no \
+         referent and the orchestrator writes the recap back from memory");
+    let pb = flat(&playbook_instructions());
+    let pb_dod = section(&pb, "## definition of done", "## delivery notices");
+    pinned("the playbook's DoD", pb_dod, "the failure line it printed",
+        "the surface the brief points at must carry the evidence duty up front — a bar the worker \
+         first hears about at the completion check is a round-trip nobody needed");
     let check = section(&o, "4. do your own **high-level** completion check", "5. confirm the pr's ci");
     pinned("the completion check", check, "is **not done**",
         "the orchestrator must REFUSE a `done` whose PR shows no test failing on the base branch — \
@@ -987,4 +1004,137 @@ fn every_review_carries_a_premortem() {
     pinned("the disposition step", disposition, "however the reviewer spelled the heading",
         "…and the orchestrator reads the section however it is spelled — the strict reading burns \
          a review round on punctuation, and neither reading is safe while the template says neither");
+}
+
+// ---------------------------------------------------------------------------------------------
+// #3040 P2 — the definition of done is ONE copy
+// ---------------------------------------------------------------------------------------------
+
+/// Every `.md` under `dir`, at any depth.
+///
+/// Recursive, and the population is the DIRECTORY rather than a list of consts:
+/// two template consts are private to the lib and unreachable from an
+/// integration test, and a template added tomorrow would be on no list at all.
+/// Same reasoning as `every_prompt_template_is_checked_out_with_lf_endings`
+/// (`tests/orchestration.rs`), for the same reason.
+fn template_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let entries =
+        fs::read_dir(dir).unwrap_or_else(|e| panic!("{} is not readable: {e}", dir.display()));
+    for entry in entries {
+        let path = entry.expect("a readable directory yields readable entries").path();
+        if path.is_dir() {
+            template_files(&path, out);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            out.push(path);
+        }
+    }
+}
+
+/// The definition of done exists in exactly ONE template file (#3040 P2).
+///
+/// It used to exist in two: the full `## Definition of done` section in
+/// `worker.md`, and a compressed one-sentence recap in `orchestrator.md`'s
+/// delegation protocol. Two copies of a rule an agent executes literally is
+/// drift waiting to happen — an edit lands on one, the other keeps instructing
+/// every reader of that surface to do the old thing, and nothing goes red.
+/// `templates/dod.md` is now the single copy; `worker.md` and
+/// `orchestrator-playbook.md` substitute `{{DOD}}` under their own heading, and
+/// `orchestrator.md` points at `read_playbook("definition-of-done")`.
+///
+/// **Decided on a shape, never on a file name.** The scan does not know which
+/// file is allowed to hold the rule and does not look at any name: it walks
+/// whatever `templates/` holds, counts the files carrying the sentence, and
+/// requires the count to be 1. Renaming `dod.md`, or moving the copy into a
+/// different template, changes nothing about what this asserts — which is the
+/// property a name-keyed guard would lose (`CLAUDE.md`, source-scanning
+/// guards). The anchor is whitespace-flattened because these are hard-wrapped
+/// markdown files and a re-wrap must not read as "you deleted the rule".
+#[test]
+fn the_dod_is_one_copy() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration/templates");
+    let mut files = Vec::new();
+    template_files(&dir, &mut files);
+
+    // Vacuity control #1: the walk found a real population. `!contains` and a
+    // count of 1 are both satisfied by an empty scan, and an empty scan is what
+    // a moved directory or an unreadable path produces. The floor is loose on
+    // purpose — 13 templates when this was written — so an ordinary add or
+    // removal does not touch this test.
+    assert!(
+        files.len() >= 10,
+        "only {} template(s) under {} — the scan is not looking at the templates",
+        files.len(),
+        dir.display()
+    );
+
+    // One sentence out of the DoD's red-before-green clause: distinctive enough
+    // that no neighbouring rule shares it, and load-bearing enough that a second
+    // copy of the DoD would carry it.
+    const DOD_SENTENCE: &str = "a test nobody has seen fail is a decoration";
+
+    let carriers: Vec<String> = files
+        .iter()
+        .filter(|p| flat(&fs::read_to_string(p).expect("a template must be readable")).contains(DOD_SENTENCE))
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+
+    assert_eq!(
+        carriers.len(),
+        1,
+        "the definition of done must live in exactly ONE template file — found it in {carriers:?}. \
+         A second copy is the drift #3040 P2 removed: an edit lands on one, the other keeps \
+         telling its readers to do the old thing, and nothing goes red. Substitute `{{{{DOD}}}}` \
+         instead."
+    );
+
+    // Vacuity control #2 — and it is the one that matters, because the
+    // assertion above passes just as well against a scanner that can only ever
+    // return 0 or 1. Run the SAME predicate over a population with a known
+    // second copy in it and require it to see BOTH: a scanner that cannot count
+    // past one cannot fail when the drift it exists to catch comes back.
+    let corpus: Vec<String> = files
+        .iter()
+        .map(|p| fs::read_to_string(p).expect("a template must be readable"))
+        .chain(std::iter::once(format!("## Definition of done\n\n{DOD_SENTENCE}, and\nthis is the second copy.\n")))
+        .collect();
+    let seen = corpus.iter().filter(|t| flat(t).contains(DOD_SENTENCE)).count();
+    assert_eq!(
+        seen, 2,
+        "positive control: the same predicate over a corpus carrying a deliberate SECOND copy \
+         must see both — it saw {seen}, so the assertion above is not evidence about anything"
+    );
+}
+
+/// The trailer P3b appends to a driver-spawned brief is the worker's own DoD
+/// section, byte for byte (#3040 P2).
+///
+/// This is what makes "the orchestrator's briefs and the driver's briefs quote
+/// the same bytes" a checkable claim instead of an assertion. `dod_trailer`
+/// frames the shared body with the heading the templates carry literally, so a
+/// heading edited on one surface and not the other fails HERE rather than
+/// shipping two subtly different bars.
+#[test]
+fn the_dod_trailer_is_the_workers_own_definition_of_done() {
+    let w = instructions("worker.md");
+    let start = w.find("## Definition of done").expect("worker.md must carry the DoD section");
+    let end = w.find("## Review findings").expect("worker.md must carry the section after it");
+    let section = &w[start..end];
+
+    let trailer = loomux_lib::orchestration::brief::dod_trailer();
+    assert_eq!(
+        section.trim_end(),
+        trailer.trim_end(),
+        "the brief trailer and worker.md's rendered DoD section have diverged — they are the same \
+         copy (`templates/dod.md`) under the same heading, so this can only mean the heading or \
+         the framing moved on one surface and not the other"
+    );
+
+    // Vacuity control: the section really was found, and is not an empty slice
+    // that would make any two `trim_end`ed strings compare equal.
+    assert!(
+        section.len() > 1_000,
+        "the extracted DoD section is {} bytes — the anchors matched something, but not the \
+         section, so the comparison above proves nothing",
+        section.len()
+    );
 }

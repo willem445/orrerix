@@ -4420,9 +4420,23 @@ fn red_before_green_is_demanded_evidenced_and_verified_across_every_surface() {
     // The orchestrator treats an unevidenced `done` as not done — otherwise the duty is
     // advice, and advice is what the DoD already was.
     let o = flat(&orch);
-    pinned("the worker brief", &o, "**red-before-green evidence**",
-        "the brief must ask for the evidence up front — a bar the worker first hears about at the \
-         completion check is a round-trip nobody needed");
+    // #3040 P2 relocated this pin rather than relaxing it. The core used to carry a
+    // COMPRESSED recap of the DoD beside the full section in worker.md — two copies of
+    // one rule, and this anchor lived in the recap. There is now ONE copy
+    // (`templates/dod.md`): the core says quote it verbatim and where to read it, and
+    // the playbook serves it. Each anchor follows its specimen (CLAUDE.md: a test's
+    // specimen must stay a member of the class it witnesses), never widened to fit.
+    pinned("the worker brief", &o, "definition of done, quoted verbatim",
+        "the brief must carry the DoD itself, not a paraphrase — a compressed recap in the brief \
+         is a second copy that drifts, which is the whole of #3040 P2");
+    pinned("the worker brief", &o, "read_playbook(\"definition-of-done\")",
+        "…and must say WHERE that one copy is, or \"quote it verbatim\" has no referent and the \
+         orchestrator writes the recap back from memory");
+    let pb_dod_flat = flat(&instructions_lf(&reg, &g.id, "orchestrator-playbook.md"));
+    let pb_dod = section(&pb_dod_flat, "## definition of done", "## delivery notices");
+    pinned("the playbook's DoD", pb_dod, "the failure line it printed",
+        "the surface the brief points at must carry the evidence duty up front — a bar the worker \
+         first hears about at the completion check is a round-trip nobody needed");
     let check = section(&o, "4. do your own **high-level** completion check", "5. confirm the pr's ci");
     pinned("the completion check", check, "is **not done**",
         "the completion check must reject a `done` whose PR shows no test failing on the base \
@@ -5992,7 +6006,7 @@ const LIVE: [(&str, &str, &[&str]); 7] = [
 /// So the golden carries the literal `{{HOLD_LABEL}}` and this renders it, which
 /// keeps the pin biting on the prose AROUND it.
 fn render_with_legacy_vars(tpl: &str, g: &loomux_lib::orchestration::GroupInfo) -> String {
-    let vars: [(&str, String); 8] = [
+    let vars: [(&str, String); 9] = [
         ("REPO", g.repo.clone()),
         ("GROUP_ID", g.id.to_string()),
         ("MAX_AGENTS", g.guardrails.max_agents.to_string()),
@@ -6005,6 +6019,11 @@ fn render_with_legacy_vars(tpl: &str, g: &loomux_lib::orchestration::GroupInfo) 
         // literal `{{LESSONS_PATH}}` and this renders it — which keeps the
         // pin biting on the prose around it.
         ("LESSONS_PATH", loomux_lib::orchestration::lessons::lessons_path(&g.repo).to_string()),
+        // #3040 P2. HOLD_LABEL's class again: the definition of done resolves
+        // to the same text for every group, so the golden keeps the literal
+        // `{{DOD}}` and this renders it — which keeps the pin biting on the
+        // prose AROUND it, and on the heading it is served under.
+        ("DOD", loomux_lib::orchestration::brief::dod_body().to_string()),
     ];
     let mut out = tpl.to_string();
     for (k, v) in vars {

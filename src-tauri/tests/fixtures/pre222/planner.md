@@ -86,8 +86,10 @@ it: act on it, once, normally. The test is always *"have I already acted on this
    `.claude/settings.json` may have granted. Assume it didn't unless you see it there. If you
    need such a command and it isn't reachable, say so in the plan (what you'd have confirmed
    by running it, and that you couldn't) rather than assuming it ran.
-3. Write the plan as a **GitHub issue comment** (`gh issue comment <n> --body ...`),
-   covering:
+3. Write the plan as a **GitHub issue comment**, posted with `post_issue_comment` — the
+   orrerix tool that posts as the group and hands the body to the machinery that reads it.
+   (#2815 WILL add that tool; until it lands, `gh issue comment <n> --body-file <file>`.)
+   The comment covers:
    - **Scope** — what's in, what's explicitly out.
    - **Files / modules touched** — concrete paths, and for each the nature of the change.
    - **Approach** — the implementation strategy, key decisions, and alternatives rejected.
@@ -121,6 +123,24 @@ it: act on it, once, normally. The test is always *"have I already acted on this
      explicitly per slice ("B waits on A", "C and D are independent"): the orchestrator
      encodes it as task-board `deps`, and a slice whose ordering you left implicit
      becomes prose it has to re-derive after its next compact.
+   - **The `orrerix-plan` block — the machine-readable half of the split above.** When you
+     were spawned by a **plan drive**, your comment MUST carry exactly one fenced
+     code block tagged `orrerix-plan`, because the drive spawns from that block and from
+     nothing else: a plan without one is refused and nothing is posted. It is YAML, with
+     `version: 1`, an `issue:` number, and a `slices:` list whose entries each carry an
+     `id`, a one-line `title`, the `branch` to cut, the roster `block` to spawn, the
+     `deps` (slice ids in this same block), the `brief` a worker is spawned with
+     **verbatim** (a block scalar, so write it as prose), and optionally `avoid_files`, a
+     `red_before_green` line, and `hold: true` for a slice carrying a design call the
+     orchestrator should brief by hand.
+     Nothing is guessed for you — an unknown dep, a duplicate id, a cycle or a missing
+     field is a refusal with the line number, never a repair. The full schema, field by
+     field, WILL live in `doc/design/plan-driver.md` (#3040 P1); read it there before you
+     write one.
+
+     Outside a plan drive the block is **recommended**, not required. The prose is what the
+     orchestrator reads either way, but a block it can also parse is the difference between
+     a delegation script and a structure it has to re-derive by hand.
 4. `report(outcome: "done", ref: "#<n>", detail_url: <comment link>, note: "<one-line summary of
    the recommended approach and the worker split>")`, then stop. The orchestrator turns your
    plan into worker briefs by reading the comment — the report is a pointer, not a re-statement

@@ -723,7 +723,10 @@ orchestrator a value system to match its operational one:
   without that evidence as **not done**; the reviewer verifies it rather than reading it (a quoted
   failure line is text, and text is not a red test). All four surfaces move together —
   `worker.md`, `mechanics_core(Worker)`, `orchestrator.md`, `reviewer.md` — because any one of
-  them dropping it restores the status quo.
+  them dropping it restores the status quo. (#3040 P2 moved the worker's and the
+  orchestrator's copies behind one `{{DOD}}` substitution: the rule text is
+  `templates/dod.md`, `worker.md` and `orchestrator-playbook.md` render it, and
+  `orchestrator.md` points at the playbook. Four surfaces still, one copy of the words.)
 - **Post-merge ownership.** Auto-merge, a one-time grant and supervised dangerous mode all let the
   orchestrator *land* code, and the prompt then went quiet — nothing told it to watch the default
   branch. A PR green on its own branch still breaks main (a semantic conflict with whatever landed
@@ -784,7 +787,8 @@ orchestrator a value system to match its operational one:
   - **Red-before-green needs an exemption, or it refuses the work it exists to enable.** Stated
     unconditionally, it bounces every PR that legitimately adds no test — including the two this
     very design prescribes: the learning loop's **docs PR** and a red main's **revert**. So the
-    exempt class is enumerated once, in `worker.md` (four members: docs/comment-only, a revert, a
+    exempt class is enumerated once, in the DoD itself (`templates/dod.md` since #3040 P2, which
+    `worker.md` renders — four members: docs/comment-only, a revert, a
     pure rename/move the suite already pins, a re-blessed golden), and it **costs one line**: the
     PR names which class it is and why, with the suite green. "There was nothing to test" is a
     claim like any other — stated, it is reviewable; unstated, it is indistinguishable from an
@@ -13153,6 +13157,67 @@ one "read this file" instruction the orchestrator already had was observed obeye
 post-compact notice (re-inverts #417 round 5's deliberate slimming); CLI-native skills
 (Claude-only, a third generated-file family, unobservable). All rejected; the plan
 (plan-1615 §2) carries the full arguments.
+
+## The definition of done is ONE copy (#3040 P2)
+
+The DoD lived twice: the full `## Definition of done` section in `templates/worker.md`, and
+a compressed one-sentence recap in `templates/orchestrator.md`'s **Delegation protocol**
+("tests + docs + PR + green CI + red-before-green evidence"). Two copies of a rule an agent
+executes *literally* is drift with nothing red to announce it — an edit lands on one, and
+every reader of the other surface keeps being told the old bar. The recap was also the
+weaker copy, so the orchestrator was briefing workers against a summary of the rule the
+worker was being held to.
+
+**One copy, substituted.** `templates/dod.md` holds the rule text — the section BODY, no
+heading of its own. `worker.md` and `orchestrator-playbook.md` each carry the literal
+`## Definition of done` heading with `{{DOD}}` under it; `orchestrator.md`'s delegation
+sentence becomes a pointer that says quote it **verbatim** and where the copy is
+(`read_playbook("definition-of-done")`). `orchestration::brief` owns the const and exposes
+`dod_body()` (the substitution value) and `dod_trailer()` (the framed section) — the latter
+is what the plan driver (#3040 P3b) appends under a planner's verbatim brief, so a
+driver-spawned worker and a hand-briefed one are held to the same bytes.
+
+**`{{DOD}}` is a per-group VALUE, not a workflow-conditional key.** It resolves to the same
+real text for every group, so it is registered in `InstructionVars::pairs` and in
+`render_with_legacy_vars` alongside `HOLD_LABEL` and `LESSONS_PATH`, and the golden fixtures
+carry the literal `{{DOD}}`. Registering it in `LIVE`'s strip list instead — which the plan
+proposed — would bless a golden with a hole where the definition of done goes.
+
+**Body-only, and the reason is the playbook's own id scan.**
+`every_playbook_heading_yields_a_unique_id_and_the_tool_enum_lists_exactly_them` derives the
+section ids from the *template* const, so a heading arriving inside a substitution is
+invisible to it and `PLAYBOOK_SECTION_IDS` could not name the section. The heading is
+therefore literal on both surfaces and only the rule text is shared. That is also the right
+line: what must not exist twice is the text an agent executes, not a two-word heading.
+
+**Why the playbook and not the resident core, measured.** The plan asked for the DoD inlined
+into `orchestrator.md`. It cannot go there: that template was **44,990 B** against
+`RESIDENT_CORE_BUDGET`'s 45,000 — ten bytes — and the DoD is 5,779. Worse, it would have
+inlined *silently*: `the_resident_core_is_under_the_byte_budget` measures
+`ORCHESTRATOR_TPL.len()`, so a 7-byte placeholder passes while the file the orchestrator
+actually reads on every model call is 5.7 KB over the budget. The playbook is on-demand and
+has no budget, which is the same argument #2565 made on this surface for this same margin.
+The core got 35 bytes shorter instead.
+
+**Its guard is a shape, not a file name.** `the_dod_is_one_copy` (`tests/prompts.rs`) walks
+whatever `templates/` holds, counts the files whose flattened text carries the DoD's
+distinctive sentence, and requires exactly one — it never looks at a name, so renaming
+`dod.md` or moving the copy changes nothing about what it asserts. Its positive control runs
+the same predicate over a corpus with a deliberate second copy and requires it to see both:
+an `== 1` assertion passes just as well against a scanner that can only ever return 0 or 1.
+
+**Two prose pins were relocated, not relaxed.**
+`red_before_green_is_demanded_evidenced_verified_and_bounded_by_its_exemption` (in both
+`tests/prompts.rs` and `tests/workflow.rs`) anchored on `**red-before-green evidence**`, a
+phrase that lived only in the deleted recap. Each now pins the core's *pointer* (the brief
+carries the DoD verbatim; where that one copy is) and the playbook section's *evidence
+duty*. The specimen followed the rule to the surface that carries it.
+
+**Public contracts introduced**: the template set's seventh fixture-pinned surface is
+unchanged in count (`dod.md` is not itself golden-pinned — it is pinned transitively, as the
+substituted content of two goldens that are), one new playbook section id
+(`definition-of-done`) on the `read_playbook` vocabulary, and `orchestration::brief`'s two
+functions.
 
 ## Risks / limitations
 

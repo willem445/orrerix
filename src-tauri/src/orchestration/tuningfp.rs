@@ -87,10 +87,10 @@ fn hex(bytes: &[u8]) -> String {
 /// exists and was skipped for size.
 fn hash_file(path: &Path) -> (String, bool) {
     let Ok(meta) = std::fs::metadata(path) else {
-        return (ABSENT.to_string(), false);
+        return (hex(&Sha256::new().finalize()), false);
     };
     if !meta.is_file() {
-        return (ABSENT.to_string(), false);
+        return (hex(&Sha256::new().finalize()), false);
     }
     if meta.len() > MAX_FILE_BYTES {
         return (ABSENT.to_string(), true);

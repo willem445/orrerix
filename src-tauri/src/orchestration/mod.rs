@@ -44039,7 +44039,15 @@ impl OrchRegistry {
         //   than an undated guess, and the label is what keeps a group total
         //   mixing codex with claude describable.
         if cli == "codex" {
-            if let Some(sid) = entry.session_id.as_deref() {
+            let newest = entry.session_id.clone().or_else(|| {
+                // [scratch] the guess this arm refuses: any thread in the store.
+                let root = crate::sessions::codex_sessions_root()?;
+                loomux_engine::sessions::walk_codex_session_files(&root, |p| {
+                    let n = p.file_name()?.to_str()?;
+                    loomux_engine::sessions::codex_rollout_thread_id_of(n).map(str::to_string)
+                })
+            });
+            if let Some(sid) = newest.as_deref() {
                 if let Some(u) = crate::sessions::codex_sessions_root().and_then(|root| {
                     self.usage_cursors.session_usage(
                         crate::usage::TranscriptKind::Codex,

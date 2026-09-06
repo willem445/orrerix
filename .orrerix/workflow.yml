@@ -4,7 +4,7 @@
 # advanced orchestrator on (or off-then-on) in the launcher and READ THE
 # RESOLVED-ROSTER PREVIEW before anything spawns.
 #
-# Shape: pi + OpenRouter GLM 5.3 Flash (thinking medium for workers, high for reviewers; #2817) is the default worker and the
+# Shape: pi + OpenRouter GLM 5.3 Flash (thinking high for both tiers — GLM 5.3 Flash on OpenRouter supports only low|high|max and pi clamps upward, #2938) is the default worker and the
 # iterating reviewer; Claude Code Opus is the worker for judgment-shaped issues
 # and the final validator. Orchestrator = Claude Opus, planner = Claude Fable.
 #
@@ -138,7 +138,7 @@ blocks:
     kind: worker
     cli: pi
     model: openrouter/z-ai/glm-5.3-flash
-    effort: medium
+    effort: high
     profile: .github/agents/worker-std.md
 
   - id: worker-adv

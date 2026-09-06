@@ -531,6 +531,14 @@ so pi joins claude as a CLI whose effort knob loomux can actually deliver, and
 `effort_levels` is `EFFORT_LEVELS` in its row. A model that does not support a
 level has it clamped or hidden per that model's own thinking-level map, which
 is the same "safe to emit any of them" property claude's fallback rule gives.
+The clamp is UPWARD-first: `clampThinkingLevel` (`pi-ai/dist/models.js`)
+searches `EXTENDED_THINKING_LEVELS` upward from the requested level before
+falling back downward, so a level the model lacks resolves to the nearest
+supported neighbour above it. The supported set is the model's
+`thinkingLevelMap`, which for `openrouter/*` models comes from OpenRouter's
+model catalog, cached in `~/.pi/agent/models-store.json`. Worked example:
+`z-ai/glm-5.3-flash` supports only `{low, high, max}` — so a block declaring
+`effort: medium` actually runs at `high` (#2938).
 
 `context_variants` is empty: pi's `--list-models` REPORTS a context column,
 and no flag, setting or session control selects a variant.

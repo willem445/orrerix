@@ -1464,10 +1464,18 @@ export interface AgentUsage {
    *  counts toward the lifetime total). */
   live: boolean;
   /** `transcript` (token-derived), `pi-transcript` (pi's own session file —
-   *  exact tokens AND pi's own dollar figure, #2126), `session-db` (opencode's
-   *  own session row, which carries its dollar figure too), `statusline`
-   *  (last-resort CLI parse), or `none` (nothing available yet). */
-  source: "transcript" | "pi-transcript" | "session-db" | "statusline" | "none";
+   *  exact tokens AND pi's own dollar figure, #2126), `codex-transcript` (a
+   *  codex rollout — exact tokens, dollars estimated here because codex
+   *  records none, #2515), `session-db` (opencode's own session row, which
+   *  carries its dollar figure too), `statusline` (last-resort CLI parse), or
+   *  `none` (nothing available yet). */
+  source:
+    | "transcript"
+    | "pi-transcript"
+    | "codex-transcript"
+    | "session-db"
+    | "statusline"
+    | "none";
   /** Model the cost was priced against, or null. */
   model: string | null;
   /** Dollar cost, or null when only tokens are known (unknown model / no data). */

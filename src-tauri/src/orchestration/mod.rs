@@ -13835,17 +13835,20 @@ pub struct UsageSnapshot {
     pub role: String,
     /// Where the figures came from: `transcript` (token-derived, exact tokens),
     /// `pi-transcript` (pi's own session file — exact tokens AND the dollar
-    /// figure pi computed itself, #2126), `session-db` (opencode's own
+    /// figure pi computed itself, #2126), `codex-transcript` (a codex rollout
+    /// in the human's own store — exact tokens, dollars ESTIMATED here because
+    /// codex records none, #2515), `session-db` (opencode's own
     /// `session` row — exact tokens AND its own dollar figure, #722),
     /// `statusline` (last-resort parse of the CLI's own dollar figure), or
     /// `none` (nothing available yet).
     ///
-    /// **Five values, on three surfaces that must move together**: this doc,
+    /// **Six values, on three surfaces that must move together**: this doc,
     /// `AgentUsage.source`'s union in `src/orchestration.ts`, and the
-    /// enumeration in `doc/design/group-cost-tracking.md`. The frontend's is a
+    /// enumeration in `doc/design/group-cost-tracking.md` (which carries the
+    /// same list twice — the per-CLI sections and the payload shape). The frontend's is a
     /// declared TYPE for a value that crosses the IPC seam untyped, so `tsc`
     /// cannot catch a value outside it and a narrowing written against a stale
-    /// union is silently wrong. Adding a sixth means one entity grep
+    /// union is silently wrong. Adding a seventh means one entity grep
     /// (`grep -rn session-db --include=*.ts --include=*.rs --include=*.md`),
     /// not three guesses.
     pub source: String,
@@ -44032,6 +44035,60 @@ impl OrchRegistry {
                         snap.cache_read_tokens = u.tokens.cache_read_tokens;
                         snap.cost_usd = u.cost_usd;
                         snap.estimated = false; // priced by pi, not by us
+                        snap.model = u.model;
+                        return snap;
+                    }
+                }
+            }
+        }
+
+        // codex writes a JSONL rollout per thread, like claude and pi -- but
+        // into the HUMAN's own store (`CODEX_HOME/sessions/YYYY/MM/DD/`), not a
+        // per-group one, because a per-agent `CODEX_HOME` would relocate
+        // `auth.json` and boot every pane logged out (`doc/design/codex.md`,
+        // "Deliberately not done"). Three consequences worth stating here,
+        // because they are what this arm's shape is:
+        //
+        // - **It is IDLE until the watcher binds an id.** codex has no public
+        //   pre-mint flag (`CliCaps::premints_session_id` is false), so the
+        //   thread id is learned from the store after the pane's first turn --
+        //   opencode's shape, not claude's or pi's. Until then there is nothing
+        //   to key on, and guessing (newest rollout, only rollout) would charge
+        //   this pane another pane's conversation in a store several panes
+        //   share.
+        // - **The store is keyed, not joined.** A rollout's file name carries a
+        //   timestamp nobody can re-derive plus an optional `_<rollout>` revert
+        //   suffix, so the file is FOUND by walking the store for the thread id
+        //   (`find_codex_session_file`), never spelled from it.
+        // - **The dollars are OURS, and today there are none.** codex records
+        //   tokens only, so this is the claude posture -- `estimated: true` --
+        //   rather than opencode's and pi's reported one. No codex model sits
+        //   in `price_for`'s table, which is dated Anthropic rates, so the row
+        //   is tokens with `cost_usd: None`. That is an honest blank rather
+        //   than an undated guess, and the label is what keeps a group total
+        //   mixing codex with claude describable.
+        if cli == "codex" {
+            if let Some(sid) = entry.session_id.as_deref() {
+                if let Some(u) = crate::sessions::codex_sessions_root().and_then(|root| {
+                    self.usage_cursors.session_usage(
+                        crate::usage::TranscriptKind::Codex,
+                        &root,
+                        sid,
+                    )
+                }) {
+                    // Same guard as every arm above: a rollout that exists but
+                    // has counted nothing yet (codex writes the header at the
+                    // first `persist()`, before any response completes) must
+                    // not overwrite history with zeros, nor pre-empt the
+                    // statusline fallback.
+                    if u.tokens.total() > 0 {
+                        snap.source = "codex-transcript".to_string();
+                        snap.input_tokens = u.tokens.input_tokens;
+                        snap.output_tokens = u.tokens.output_tokens;
+                        snap.cache_creation_tokens = u.tokens.cache_creation_tokens;
+                        snap.cache_read_tokens = u.tokens.cache_read_tokens;
+                        snap.cost_usd = u.cost_usd;
+                        snap.estimated = true; // token-derived, and unpriced today
                         snap.model = u.model;
                         return snap;
                     }

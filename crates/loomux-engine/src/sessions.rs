@@ -1370,6 +1370,159 @@ fn find_codex_session_cwd(root: &Path, session_id: &PathSegment) -> Result<Optio
     }))
 }
 
+/// The rollout FILE a codex thread's records are in, when they are readable at
+/// all -- the usage reader's locator (#2515 C3), and the reason [`TranscriptKind::Codex`]
+/// needs no `format!("{id}.jsonl")` anywhere.
+///
+/// A codex rollout's name is `rollout-<ts>-<thread>[_<rollout>].jsonl`, so the
+/// path cannot be built from the id: the timestamp is not derivable and the
+/// revert suffix is not predictable. This is a LOOKUP over the same walk the
+/// browser and [`find_codex_session_cwd`] use, which is what keeps the three
+/// from ever disagreeing about which file is a session's -- and it means no
+/// caller joins a session id onto a path at all, so `pathseg.rs`'s filename
+/// scan gains no row here.
+///
+/// **A thread can have SEVERAL rollout files, and the NEWEST is the live one.**
+/// This is the vendor's own rule, not a tie-break invented here.
+/// `find_thread_path_by_id_str` (`rollout/src/list.rs` at `rust-v0.153.4`):
+///
+/// > A thread normally has one rollout file. `thread/revert` keeps the thread ID
+/// > stable while creating a new rollout file and switching the thread to it, so
+/// > filesystem fallback matches the stable thread ID encoded before any
+/// > `_rollout-id` suffix and chooses the newest matching filename.
+///
+/// So the `_<rollout>` grammar [`codex_rollout_thread_id`] documents is exactly
+/// what makes several files share one thread id, and serving whichever the
+/// directory happened to yield first would freeze a reverted pane's usage at the
+/// SUPERSEDED file's spend -- a total assembled from one of a thread's several
+/// files, which is the same class of wrong number this function refuses for a
+/// partially-readable one. Summing them all is the other wrong answer: a revert
+/// UNDOES the pre-revert file's later records, so a blind sum double-counts work
+/// the thread threw away.
+///
+/// `newest` is `(timestamp, rollout id)`, the vendor's own comparator and in its
+/// order -- filenames carry only second precision, so the UUIDv7 rollout id
+/// breaks a tie between two files created in the same second. Both are compared
+/// as strings: the timestamp is fixed-width and zero-padded, so lexicographic
+/// order IS chronological order, and a canonical lowercase UUIDv7's hex orders
+/// like its integer value. **Residual:** a non-canonical (upper-case) rollout id
+/// would compare wrongly, and only against another file of the same thread in
+/// the same second. codex writes canonical lowercase; a name it did not write is
+/// outside what any of this can promise.
+///
+/// **A COMPRESSED winner answers `None`, and that is a decision rather than a
+/// gap.** `.jsonl.zst` is zstd, and decompressing it means a new `src-tauri`
+/// dependency and its getrandom audit (constraint 2) -- refused for C2's
+/// metadata line, and refused again here where the payload is every
+/// `token_usage_record` in the file. The by-id CWD lookup can degrade to
+/// "found, workspace unknown" because it has a distinct empty answer; usage has
+/// no such rung -- a partial total would be a WRONG number, which is the one
+/// failure the meter refuses -- so a compressed rollout reports no usage, the
+/// same answer a pane whose session has not been identified yet already gets.
+/// It is not an error: nothing is broken, and codex compresses on a seven-day
+/// schedule, so it is the ordinary end state of every session a group has
+/// finished with. `doc/design/codex.md` §Usage carries the residual.
+///
+/// The compression check is applied to the WINNER, never as a filter before the
+/// choice: skipping compressed candidates first would let an OLDER readable file
+/// win once the live one compresses, which is the freeze this function exists to
+/// avoid wearing a different hat.
+///
+/// **The file name proposes and the header disposes**, exactly as in
+/// [`find_codex_session_cwd`]: a name that matches is confirmed against
+/// `payload.id` when the header reads, and a header naming a different thread
+/// disqualifies the file whatever its name says. That is a FILTER on the
+/// candidates rather than a check on the winner, so a hand-copied file carrying
+/// another thread's header cannot win by being newest.
+pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<PathBuf> {
+    if !root.exists() {
+        return None; // codex has never run here
+    }
+    // `(timestamp, rollout id, path)` of the newest candidate so far. The walk
+    // never short-circuits -- every file has to be seen for "newest" to mean
+    // anything -- so the visitor always answers `None` and this accumulates.
+    let mut newest: Option<(String, String, PathBuf)> = None;
+    walk_codex_session_files(root, |path| -> Option<()> {
+        let name = path.file_name().and_then(|s| s.to_str())?;
+        let plain = codex_plain_rollout_name(name)?;
+        let (ts, rollout) = codex_rollout_name_parts(plain, session_id.as_str())?;
+        // Header wins when it READS, and the name is the only source when it
+        // does not -- C2's rule, and here it is what stops a transiently torn
+        // first line making a live session report no usage forever. A
+        // compressed candidate has no readable header and so is never
+        // disqualified here; whether it can be READ is decided on the winner.
+        if let Some(v) = codex_header(path) {
+            let id = v.pointer("/payload/id").and_then(Value::as_str);
+            if id.is_some_and(|id| id != session_id.as_str()) {
+                return None;
+            }
+        }
+        // Case-folded ONCE, here, and compared in that same form. Storing the
+        // folded id while comparing the raw one would order the two candidates
+        // by different keys -- the defect the first push of this fix carried,
+        // caught by the compiler only because the types happened to differ.
+        let rollout = rollout.to_ascii_lowercase();
+        let better = newest
+            .as_ref()
+            .is_none_or(|(t, r, _)| codex_rollout_is_newer((ts, &rollout), (t, r)));
+        if better {
+            newest = Some((ts.to_string(), rollout, path.to_path_buf()));
+        }
+        None
+    });
+    let (_, _, path) = newest?;
+    // Unreadable content is no usage at all. Deliberately AFTER the choice: see
+    // the doc above on why an older readable file must not inherit the answer.
+    (!codex_rollout_is_compressed(&path)).then_some(path)
+}
+
+/// Is candidate `(timestamp, rollout id)` NEWER than the incumbent?
+///
+/// The vendor's comparator, extracted as a pure function so the decision has a
+/// CALLABLE SURFACE. Inside the walk closure it is reachable only through a
+/// directory whose read order belongs to the filesystem -- ext4 hashes rather
+/// than sorts -- so a mutation that drops the tie-break half leaves an
+/// end-to-end test passing or failing by luck rather than by the property.
+/// #2515 C3 review round 1 measured exactly that: the round cut for the
+/// tie-break reddened NOTHING, on a build where the behaviour was plainly gone.
+///
+/// Timestamp first, rollout id only to break a tie --
+/// `find_thread_path_by_id_from_filenames` at `rust-v0.153.4`: "Rollout
+/// filenames only encode timestamps to second precision, so use the UUIDv7
+/// rollout ID as a deterministic tie-breaker when multiple files are created in
+/// the same second."
+///
+/// Both halves are compared as strings, and a caller must pass both sides in ONE
+/// case: the timestamp is fixed-width and zero-padded, so lexicographic order is
+/// chronological order, and a canonical lowercase UUIDv7's hex orders like its
+/// integer value. [`find_codex_session_file`] case-folds before calling.
+#[doc(hidden)] // pub for integration tests
+pub fn codex_rollout_is_newer(candidate: (&str, &str), incumbent: (&str, &str)) -> bool {
+    let ((cand_ts, cand_id), (cur_ts, cur_id)) = (candidate, incumbent);
+    cand_ts > cur_ts || (cand_ts == cur_ts && cand_id > cur_id)
+}
+
+/// The `(timestamp, rollout id)` of a canonical plain rollout name whose THREAD
+/// id is `thread`, or `None` when the name is not that thread's.
+///
+/// Splits [`codex_rollout_thread_id`]'s grammar into the two halves
+/// [`find_codex_session_file`]'s newest-wins comparator needs, rather than
+/// re-deriving the offsets at the call site: `core[..19]` is the timestamp,
+/// `core[20..]` the ids, and `ids.split_once('_')` separates thread from
+/// rollout -- with the vendor's `unwrap_or((ids, ids))`, so an un-reverted
+/// file's rollout id IS its thread id and the comparator has a real value to
+/// order on either way.
+fn codex_rollout_name_parts<'a>(plain_name: &'a str, thread: &str) -> Option<(&'a str, &'a str)> {
+    let core = plain_name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    if core.get(19..20)? != "-" {
+        return None;
+    }
+    let ts = core.get(..19)?;
+    let ids = core.get(20..)?;
+    let (t, rollout) = ids.split_once('_').unwrap_or((ids, ids));
+    (!t.is_empty() && t == thread).then_some((ts, rollout))
+}
+
 /// What one codex rollout's head-scan yielded -- the codex twin of
 /// [`PiSessionHead`], and a named struct for the same reason: four positions of
 /// mostly-`String` is three transpositions any caller can make with nothing red

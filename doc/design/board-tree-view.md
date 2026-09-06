@@ -246,6 +246,119 @@ a note about the view.
 the three rules that decide a row's fate (collapse, the archive, the filter), so
 it cannot disagree with what is actually on the screen.
 
+## The per-row priority ladder (#2937)
+
+The board is read in a normal-width pane with the UI docked to the left, and in
+that pane the one field a human needs from a row — its **name** — was the field
+that lost. `.task-top` was a single non-wrapping flex line; every chip, badge
+and button on it is `flex: none`; `.task-title` was the only flexible item on
+it. So the name was the only thing that *could* give ground under pressure, and
+it gave all of it. Reviewing what work was left meant hovering each row.
+
+The fix is not a narrower chip. It is deciding, once and in one place, that most
+of a row is **detail**, and putting that decision where it can be tested:
+`src/boardrow.ts`.
+
+### The ladder
+
+Four rungs, in the human's own words on #2937:
+
+| Rung | Fields | Where |
+| --- | --- | --- |
+| 1 | the task name, the task id | the compact line, always |
+| 2 | the issue and PR chips | the compact line, always |
+| 3 | the status control, a container's `children_done/children` | the compact line, always |
+| 4 | everything else | behind the row's `⌄` |
+
+Rung 4 is the long one: the assignee and session chips, the kind and sprint
+badges, the *ready*, *all inside done*, *in `<missing parent>`* and *cleared*
+markers, the ACTIVE badge and the *needs a decision* / *needs a look* deep link,
+▶ Start, ✓ Approve, ✎ Changes, ▶ Proceed, the 🔗 ⤵ 🏷 🎯 📎 🗨 controls, ↩
+restore and ✕ delete — plus the deps / see-also line and whichever picker is
+open on it.
+
+Two of those are the judgment calls, because #2937's own "everything else" list
+does not name them: the **ACTIVE badge** and the **needs-a-decision marker**.
+Both are rung 4, and the argument is that neither is the only carrier of its
+signal — the ROW says active with a left accent, a glow and a pulse
+(`.task-row-active`) and awaiting-human with its own left accent
+(`.awaiting-human`), and those cost the name no horizontal room at all. The chip
+names *who* and offers a deep link; the row already says *that*, which is what an
+eye scanning for "what is left" is reading.
+
+### The ladder is the render order, not a description of it
+
+`renderTask` does not append fields to the line. It **files** each one under its
+ladder slot — `place("title", node)` — and two loops at the end of the method
+put the slots on screen in `rowLayout`'s order. That is what keeps `boardrow.ts`
+load-bearing rather than a second, separately-tested description of an order a
+3000-line render method really decides; it also means the name can never be
+pushed right by something ranked below it, whatever order the code above happens
+to construct things in.
+
+`RowField` is an exhaustive union and the ladder is a `Record<RowField, RowTier>`
+over it, so a field added without a rung is a `tsc` error rather than a field
+that silently renders nowhere. What the compiler cannot see — a field given a
+rung and then left out of both render orders — is what
+`every field is placed exactly once, on exactly one rung` pins.
+
+### `.task-top` wraps, and the wrap point is the ladder's
+
+The line is built id → name → issue/PR → status → progress → `⌄`, and
+`flex-wrap: wrap` means the first thing a narrow pane pushes onto a second line
+is precisely what the ladder ranks below the name. `align-items: baseline`
+rather than `center`, because the name now wraps to two or three lines and the
+id has to sit on its **first** one. The title takes `overflow-wrap: anywhere` so
+a long unbroken token (a path, a branch name) breaks rather than forcing the row
+wider than the pane.
+
+### Expanded rows are per-session view state
+
+`TasksView.expandedRows` is the third `Set<string>` of its kind on this view,
+and deliberately not a new meaning for either of the other two: `expanded`
+(notes) and `expandedLinks` (groundings) answer different questions, and a human
+who opened one is routinely not done with it when they shut another.
+
+It is **view state, never DOM state.** The board re-renders on every
+`write_tasks`, so reading "is this row open" back off an element would lose it
+the first time an agent wrote to the board — the same rule the in-list editors
+follow, for the same reason. It is pruned to live rows on every refresh beside
+`selected`/`collapsed`/`expanded`, so a deleted row's id cannot accumulate for
+the rest of the session.
+
+Per-session rather than persisted in `boardprefs.json` like `collapsed`: an open
+row says how you are reading the board *right now*, not how you want it set up.
+The distinction the section above draws between board data and view state is
+unaffected either way — this never touches the task.
+
+### What is deliberately not gated on it
+
+The 🗨 **notes** and 📎 **grounding** sections keep rendering on their own sets,
+whichever way the row is folded. They are full-width blocks *below* the line, so
+they cost the name no horizontal room — the complaint this issue is about is
+horizontal — and gating them here would make a row's presence in `withNotes`
+disagree with what is on screen, which is the wire invariant #1317 established.
+
+The deps / see-also line **is** rung 4, with one carve-out: an open picker keeps
+the line whichever way the row is folded, so a picker the human has just opened
+can never become unreachable. Nothing can open one from a collapsed row — every
+trigger is inside the detail block — so that covers the transient case only.
+
+### Keyboard, and what the expand control is not
+
+The control is a native `<button>`, which already synthesizes a `click` for
+Enter and Space. So the key handler on it deliberately **does not toggle**:
+doing so as well would fire twice and leave the row where it started. What it
+does with an Enter or a Space is `stopPropagation()` and nothing more, so an
+app-level shortcut cannot swallow the keystroke before the button acts on it.
+It never calls `preventDefault()` — a button activates on Space at *keyup*, and
+cancelling the keydown cancels the activation this is here to protect.
+
+**Nothing here resizes a PTY.** The detail block is a child of `.task-main`,
+inside the row, inside the overlay the board already occupied; an expanded row
+grows downward and scrolls with the list. No sibling is added to `#grid-area`
+and nothing in the layout moves. Hard constraint 1.
+
 ## What is not here
 
 **Keyboard navigation of the tree** was on #1270's candidate list and is tracked

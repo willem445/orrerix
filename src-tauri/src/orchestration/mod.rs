@@ -51269,9 +51269,7 @@ impl OrchRegistry {
                 session_id.as_deref(),
                 &self.group_dir(group_id),
                 &cfg.path,
-                persona
-                    .as_ref()
-                    .and_then(|p| p.pi_append_system_prompt_file.as_deref()),
+                inject.pi_append_system_prompt_file.as_deref(),
                 role.containment(),
                 &model,
                 block.knobs().effort,

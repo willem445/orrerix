@@ -36002,7 +36002,7 @@ impl OrchRegistry {
         for (id, group, name, minutes, killed_by) in to_notify {
             match watchdog_suppress_reason(
                 killed_by,
-                || self.rd_owner(&group, &id).is_some(),
+                || { let _ = (&group, &id); false }, // RED EVIDENCE ONLY: never ask
             ) {
                 Some(why) => to_suppress.push((id, group, name, minutes, Vec::new(), why)),
                 None => still_news.push((id, group, name, minutes)),

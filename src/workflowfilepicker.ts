@@ -192,9 +192,12 @@ export function canCreateWorkflow(name: string, listing: WorkflowListing | null)
     };
   }
   const path = workflowRelFor(name, { legacy: usesLegacyConfigDir(listing) });
-  // Unreachable: `isWorkflowName` passed above and `workflowRelFor` refuses on exactly that
-  // predicate. Stated as a refusal rather than asserted, so a future divergence between the
-  // two is a "no" the human can read and not a `null` path handed to a write.
+  // Unreachable in this function as written: `isWorkflowName` passed above and `workflowRelFor`
+  // refuses on exactly that predicate. Stated as a refusal rather than asserted, so a future
+  // divergence between the two is a "no" the human can read and not a `null` path handed to a
+  // write. It is not, however, what makes the top-of-function check load-bearing: that is the
+  // ORDER (see `the alphabet rule is asked FIRST`), because reaching here means every
+  // collision branch was consulted first and one of them may have answered.
   if (!path) return { ok: false, reason: nameRuleFor(name) };
   return { ok: true, name, path };
 }

@@ -240,6 +240,28 @@ test("a name is never REWRITTEN into a usable one — two spellings that normali
   }
 });
 
+test("the alphabet rule is asked FIRST, and about the string as TYPED", () => {
+  // Both halves are invisible to a test that only asks "was it refused?", because the later
+  // collision check refuses these too — with a different, wrong reason. They are what makes
+  // the top-of-function `isWorkflowName` load-bearing rather than belt-and-braces:
+  //
+  //  * FIRST: `con` against a listing holding `Con` is a device name AND a case-clash. Drop
+  //    the alphabet check and the clash branch answers instead — telling the human to pick
+  //    another capitalisation for a name no capitalisation can rescue.
+  const order = canCreateWorkflow("con", listing([DEFAULT_ENTRY, entry({ name: "Con" })]));
+  assert.match(refusal(order), /reserved device name/);
+  assert.doesNotMatch(refusal(order), /capitalisation/);
+  //  * AS TYPED: ` solo` against a listing holding `Solo`. Trim before asking — the one
+  //    "harmless" relaxation — and a name with a leading space is accepted by the alphabet
+  //    rule and then refused as a capitalisation clash, which is a sentence about the wrong
+  //    problem. `promptModal` trims what it returns, so this function is asked about the
+  //    trimmed string in the app; being right about the untrimmed one is what keeps that a
+  //    property of the CALLER rather than a rule this module has quietly given up.
+  const typed = canCreateWorkflow(" solo", listing([DEFAULT_ENTRY, entry({ name: "Solo" })]));
+  assert.match(refusal(typed), /letters, digits/);
+  assert.doesNotMatch(refusal(typed), /capitalisation/);
+});
+
 test("no listing means no create — a create that cannot rule out a collision is the create this refuses", () => {
   const v = canCreateWorkflow("review-heavy", null);
   assert.equal(v.ok, false);

@@ -724,7 +724,7 @@ impl Decoder {
         };
         Usage {
             call_cumulative,
-            this_turn_main_loop: self.saw_turn_usage.then_some(self.turn_tokens),
+            this_turn_main_loop: Some(self.turn_tokens),
             per_model: Vec::new(),
         }
     }

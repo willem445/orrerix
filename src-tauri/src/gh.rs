@@ -1205,6 +1205,44 @@ pub fn comment_file_argv(kind: &str, number: u64, body_file: &str) -> Vec<String
     ]
 }
 
+/// The comment URL `gh <kind> comment` printed, or `None` if the last line it
+/// printed is not a URL at all (#3061 residual 4).
+///
+/// **The claim this closes.** `post_issue_comment` takes the final non-empty
+/// line of `gh`'s stdout and hands it back as "the comment's URL", and until
+/// this there was nothing between that line and an agent quoting it into a
+/// report. Taking the LAST line already defends against a banner printed
+/// BEFORE the URL; it defends against nothing printed after one, and against a
+/// `gh` that printed no URL at all — in which case the empty string was
+/// returned as though it were an address.
+///
+/// **What is checked, and why it is not more.** An absolute `http`/`https` URL
+/// with a non-empty host and no internal whitespace. Deliberately NOT
+/// `#issuecomment-`, which is what github.com happens to render: GitHub
+/// Enterprise is a different host, `gh`'s output shape is not a documented
+/// contract, and this repo's own `echoing_gh` fixture prints a URL without that
+/// fragment — a check that failed on the harness would be a check calibrated to
+/// one deployment rather than to the property.
+///
+/// **The residual, stated rather than implied**: a future `gh` that printed a
+/// documentation link AFTER the comment URL would satisfy this, because a
+/// docs link is also a URL. The last-line rule is what bounds that, and this
+/// function narrows the failure from "any text" to "some URL" rather than
+/// eliminating it.
+pub fn comment_url(stdout: &str) -> Option<&str> {
+    let last = stdout.lines().map(str::trim).filter(|l| !l.is_empty()).next_back()?;
+    if last.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let rest = last
+        .strip_prefix("https://")
+        .or_else(|| last.strip_prefix("http://"))?;
+    // A non-empty host: something before the first `/`, and it must not itself
+    // start the path.
+    let host = rest.split('/').next().unwrap_or("");
+    (!host.is_empty()).then_some(last)
+}
+
 /// Parse `gh {issue,pr} view --json …` into a `GhDetail`, flattening label and
 /// author objects to their names/logins. An empty author login (or absent
 /// author) becomes `None` rather than an empty string.

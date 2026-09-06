@@ -713,7 +713,81 @@ fn the_third_invalid_block_holds_the_drive() {
     assert_eq!(status(&reg, &group)["drives"][0]["invalid_count"], json!(0));
 }
 
+/// **The hook, through the real tool: an invalid block is refused and NOTHING
+/// is posted** (§2(b) step 3).
+///
+/// The two halves are one test so neither can pass vacuously, and the control is
+/// the sharp one: "nothing was posted" is an absence, and what makes it a
+/// statement rather than a coincidence is that the SAME tool call from a planner
+/// this drive does not own DOES reach `gh`. No `gh` fake is needed to see that —
+/// the registry audits an `issue-comment` row on the FAILURE path too, so that
+/// row's presence is the positive control for having reached the child, and its
+/// absence is the guarantee.
+#[test]
+fn an_invalid_block_is_refused_in_the_tool_and_nothing_is_posted() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, planner) = driven(&reg, &repo, &gh);
+
+    let post = |agent: &str, body: &str| -> Result<String, String> {
+        let c = caller(&group, agent, Role::Planner);
+        let r = dispatch(
+            &reg,
+            &c,
+            "tools/call",
+            &json!({ "name": "post_issue_comment",
+                     "arguments": { "issue": 3040, "body": body } }),
+        )
+        .expect("dispatch itself must not fail");
+        let text = r["content"][0]["text"].as_str().unwrap_or_default().to_string();
+        if r["isError"] == json!(true) {
+            Err(text)
+        } else {
+            Ok(text)
+        }
+    };
+    let comment_rows = || -> usize {
+        reg.audit_log(&group).into_iter().filter(|e| e.action == "issue-comment").count()
+    };
+
+    // (a) the drive's own planner, with no block in the body.
+    let err = post(&planner, "Some prose, and no plan block at all.\n")
+        .expect_err("a driven planner's invalid post must be refused");
+    assert!(
+        err.contains("NOT posted") && err.contains("orrerix-plan"),
+        "the refusal says nothing was posted and names what was wrong: {err}"
+    );
+    assert_eq!(
+        comment_rows(),
+        0,
+        "a refused post must not reach `gh` at all — there is no path from that arm to a child"
+    );
+    assert!(
+        audit_actions(&reg, &group).contains(&plandrive::audit_action::PLAN_INVALID.to_string()),
+        "…and the refusal is on the record: {:?}",
+        audit_actions(&reg, &group)
+    );
+
+    // (b) THE CONTROL. A planner in this group that this drive does not own
+    // takes the ordinary path, reaches `gh`, and leaves the row that proves it.
+    // Without this, (a)'s zero would be indistinguishable from a tool that never
+    // posts for anybody.
+    let other = reg
+        .spawn_agent(&group, Role::Planner, "p2", "", false, None)
+        .expect("a second planner");
+    assert_eq!(reg.pd_owner(&group, &other.id), None, "…and it really is unowned");
+    let _ = post(&other.id, "An ordinary comment with no plan block in it.\n");
+    assert_eq!(
+        comment_rows(),
+        1,
+        "an unowned planner's post takes the ordinary path — the hook is invisible to it, which \
+         is what keeps #2815 unregressed"
+    );
+}
+
 // ── §2(b) step 4 / §2(e): the planner's own end ─────────────────────────────
+
 
 /// **A planner that reports `done` without posting parks on `plan-missing`.**
 ///

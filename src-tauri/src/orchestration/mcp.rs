@@ -3598,8 +3598,53 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // discipline every other group-scoped path in this file follows.
             let actor = super::PathSegment::parse(&caller.agent_id)
                 .map_err(|e| format!("unusable agent id: {e}"))?;
-            reg.post_issue_comment(&caller.group, &actor, issue, body)
-                .map(|url| format!("posted comment on #{issue}: {url}"))
+
+            // #3040 §2(b) step 3: **the plan drive's hook, AFTER the auth checks
+            // above and BEFORE the `gh` call below.**
+            //
+            // If this caller is the planner of a live plan drive on this issue,
+            // the body's `orrerix-plan` block is extracted, parsed and
+            // drive-validated HERE — so an invalid one is this tool answering
+            // `Err` with line-numbered reasons and **nothing reaches GitHub**.
+            // The planner is still inside its own turn, so a fix costs it one
+            // tool call and the orchestrator no turn at all; that is the whole
+            // reason the plan is read from this payload rather than from a
+            // `gh issue view` afterwards.
+            //
+            // **A caller that is nobody's planner reaches `NotDriven` and this
+            // tool behaves exactly as it did before the hook existed** — which
+            // is the product default, and is what keeps #2815 unregressed. The
+            // tool's own description says so, so a refusal here cannot be read
+            // as that fix coming apart.
+            let plan = match reg.pd_plan_check(&caller.group, &caller.agent_id, issue, body) {
+                super::PdPlanCheck::NotDriven => None,
+                // Returned BEFORE `post_issue_comment` is called, so this arm
+                // is also the "nothing was posted" guarantee: there is no path
+                // from here to a `gh` child.
+                super::PdPlanCheck::Invalid(reasons) => {
+                    return Err(format!(
+                        // ONE paragraph, and it stays one line rather than
+                        // riding `\` continuations: a continuation that
+                        // collapses in an authoring path ships the source's
+                        // own indentation to the reader as a run of spaces,
+                        // with no `\n` to make it visible (CLAUDE.md's
+                        // one-paragraph rule, the #1457 shape). The reasons
+                        // below are a deliberate list and carry their own
+                        // newlines.
+                        "this comment was NOT posted: orrerix is driving the plan for #{issue} and your `orrerix-plan` block was refused. Fix it and call this tool again — nothing has reached the issue.\n  - {}",
+                        reasons.join("\n  - ")
+                    ))
+                }
+                super::PdPlanCheck::Valid(doc) => Some(doc),
+            };
+
+            let url = reg.post_issue_comment(&caller.group, &actor, issue, body)?;
+            // Stored only once `gh` has answered, so the record never claims a
+            // plan lives at a URL that does not exist.
+            if let Some(doc) = plan {
+                reg.pd_store_posted_plan(&caller.group, issue, *doc, &url);
+            }
+            Ok(format!("posted comment on #{issue}: {url}"))
         }
 
         "notify_when" => {

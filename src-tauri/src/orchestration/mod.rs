@@ -6335,6 +6335,67 @@ pub const CLAUDE_READONLY_DENY_GIT: &[&str] = &["Bash(git commit *)", "Bash(git 
 /// same moment, and one counter does that for every group at once.
 static COMMENT_BODY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The subdirectory of the group dir that `post_issue_comment` stages comment
+/// bodies in (#3061 residual 1).
+///
+/// A directory of its own because the group dir is ALSO where each roster
+/// block's instruction file lives as `<block id>.md`, and a block id is
+/// operator-authored — see `post_issue_comment`'s doc for the collision this
+/// separates. It is also what makes [`sweep_staged_comment_bodies`] safe to
+/// write: it enumerates a directory nothing else writes to.
+pub const COMMENT_BODY_DIR: &str = "comment-bodies";
+
+/// What `post_issue_comment` answers when the comment WAS posted and `gh` did
+/// not print a URL this build can read (#3061 residual 4).
+///
+/// A sentence rather than an empty string, and `Ok` rather than `Err`, because
+/// both of the obvious alternatives state something false. `Err` says the post
+/// did not happen — it did, and an agent that retried on it would double its
+/// plan onto the issue. An empty string is the unpinned shape this residual is
+/// about: it reads as an address and is not one. This reads as neither.
+pub const POSTED_URL_UNREADABLE: &str =
+    "(posted — orrerix could not read the comment's URL from gh's output; the audit row carries what gh printed)";
+
+/// How old a staged comment body must be before the sweep will delete it.
+///
+/// **Derived, not picked.** A staging file is live exactly as long as the `gh`
+/// child reading it can run, which [`GH_CAPTURE_TIMEOUT`] bounds; this is that
+/// timeout with a wide margin, so a file belonging to an in-flight post is never
+/// a sweep candidate. A sweep that raced a concurrent post would be a worse
+/// defect than the litter it cleans.
+pub const STAGING_ORPHAN_AGE: std::time::Duration =
+    std::time::Duration::from_secs(GH_CAPTURE_TIMEOUT.as_secs() * 10 + 600);
+
+/// Delete comment-body staging files old enough that no in-flight post can own
+/// them (#3061 residual 3).
+///
+/// **Best-effort throughout, and every failure is silence rather than an
+/// error**: this runs on the way into a post, and a directory orrerix cannot
+/// read is not a reason to refuse to publish a plan. An entry whose mtime
+/// cannot be read is treated as YOUNG and left alone — unknown is not a licence
+/// to delete.
+///
+/// `now` is the CALLER's clock, so the bound is one a test can actually
+/// perform — the same reason `cancel_review_drive_with` takes one. A bound
+/// measured against a clock a test cannot set is a bound no test can reach.
+pub fn sweep_staged_comment_bodies(staging: &Path, now: std::time::SystemTime) {
+    let Ok(entries) = fs::read_dir(staging) else { return };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else { continue };
+        // A file stamped in the FUTURE (a clock step, a copied mtime) yields
+        // `Err` here and is left alone, which is the young side — unknown is
+        // never a licence to delete.
+        let Ok(age) = now.duration_since(modified) else { continue };
+        if age >= STAGING_ORPHAN_AGE {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// The blocking interactive-choice tool a Claude agent denies once its ROLE
 /// (not its [`Containment`] tier — see [`claude_denies_interactive_question`])
 /// warrants it — #946 Q4 / #1091 slice H. One entry: Claude Code's own
@@ -36597,6 +36658,20 @@ impl OrchRegistry {
     /// [`Self::ledger_path`]'s is: it becomes a file name, so it must be proven a
     /// single component before it gets there.
     ///
+    /// **The staging files live in a SUBDIRECTORY, not in the group dir**
+    /// (#3061 residual 1), and that is a containment fix rather than tidiness.
+    /// The group dir is also where each roster block's instruction file lives,
+    /// as `<block id>.md` (`workflow::Block::instructions_file`). A block id is
+    /// operator-authored and only `sanitize_id`-checked, so a workflow
+    /// declaring a block called `a-7-comment-body-0` puts `a-7-comment-body-0.md`
+    /// in the very namespace this method writes `{actor}-comment-body-{seq}.md`
+    /// into — and the first post by agent `a-7` after a restart (the sequence
+    /// counter is process-wide and starts at 0) truncates that block's
+    /// instructions and then deletes the file. Nothing fails; the block simply
+    /// spawns with no instructions. Two namespaces that could collide are now
+    /// one directory apart, which is a property of the path rather than of an
+    /// id check.
+    ///
     /// **The staging path carries a per-call sequence number, not just the agent
     /// id** (review round 1). An agent is free to issue two tool calls at once —
     /// Claude Code batches independent calls in one message — so two posts by ONE
@@ -36606,14 +36681,24 @@ impl OrchRegistry {
     /// fails, which is what makes it worth a counter rather than a comment. The
     /// counter is process-wide and monotonic, so it separates concurrent calls.
     ///
-    /// **What the counter does NOT fix, stated because the earlier draft of this
-    /// doc claimed otherwise** (review round 2's premortem). Before the counter,
-    /// a staging file orphaned by a kill between the write and the remove was
-    /// reclaimed by the next post from that agent, which reused the one name.
-    /// With a per-call name nothing ever reuses it, so an orphan is permanent
-    /// debris in the group dir until something enumerates and sweeps it. That is
-    /// a real trade the counter makes — a correctness fix bought with litter —
-    /// and it is not swept here because no surface enumerates the group dir yet.
+    /// **The orphan the counter creates is now swept** (#3061 residual 3).
+    /// Before the counter, a staging file orphaned by a kill between the write
+    /// and the remove was reclaimed by the next post from that agent, which
+    /// reused the one name; with a per-call name nothing ever reuses it, so an
+    /// orphan was permanent debris. The subdirectory above is what makes a sweep
+    /// safe to write at all — it enumerates a directory this method OWNS, so it
+    /// cannot reach an instruction file, a state file or anything else.
+    ///
+    /// **The sweep deletes only what cannot still be in use**, and the bound is
+    /// derived rather than picked: a staging file is live exactly as long as the
+    /// `gh` child reading it can run, and that is bounded by
+    /// [`GH_CAPTURE_TIMEOUT`]. [`STAGING_ORPHAN_AGE`] is that timeout with a wide
+    /// margin, so a file young enough to belong to an in-flight post is never a
+    /// candidate — a sweep that raced a concurrent post would be a worse bug
+    /// than the litter it cleans. It runs before the write, is best-effort
+    /// throughout (a sweep that cannot read the directory must not fail a post),
+    /// and an unreadable mtime is treated as YOUNG, because unknown is not a
+    /// licence to delete.
     ///
     /// **Every post that reaches `gh` is audited, whichever way it goes.** The row
     /// is written after `gh` has been run and carries the outcome — the URL on
@@ -36621,8 +36706,10 @@ impl OrchRegistry {
     /// human rather than absent, which reads identically to never having been
     /// attempted.
     ///
-    /// **What writes no row, enumerated rather than gestured at** (review round 2,
-    /// finding 3). Anything that returns BEFORE `gh` runs: an empty body, an
+    /// **What writes no row, enumerated rather than gestured at** (review round
+    /// 2's PREMORTEM — not that round's finding 3, which was about something
+    /// else; the cite was wrong and a wrong cite sends the next reader to the
+    /// wrong argument). Anything that returns BEFORE `gh` runs: an empty body, an
     /// unusable agent id, an unknown group — and, the case the first wording
     /// missed, a STAGING failure, where `create_dir_all` or `fs::write` cannot
     /// produce the body file. The first three are argument validation and are not
@@ -36648,10 +36735,12 @@ impl OrchRegistry {
             .map(|g| g.repo)
             .ok_or_else(|| "unknown group".to_string())?;
         crate::gh::reject_empty_comment(body)?;
-        let dir = self.group_dir(group);
-        fs::create_dir_all(&dir).map_err(|e| format!("cannot prepare the comment body: {e}"))?;
+        let staging = self.group_dir(group).join(COMMENT_BODY_DIR);
+        fs::create_dir_all(&staging)
+            .map_err(|e| format!("cannot prepare the comment body: {e}"))?;
+        sweep_staged_comment_bodies(&staging, std::time::SystemTime::now());
         let seq = COMMENT_BODY_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let body_path = dir.join(format!("{actor}-comment-body-{seq}.md"));
+        let body_path = staging.join(format!("{actor}-comment-body-{seq}.md"));
         fs::write(&body_path, body)
             .map_err(|e| format!("cannot write the comment body: {e}"))?;
         let args =
@@ -36678,22 +36767,30 @@ impl OrchRegistry {
                 return Err(e);
             }
         };
-        // `gh issue comment` prints the new comment's URL, and prints it LAST:
-        // take the final non-empty line rather than the whole capture, so a
-        // future banner or deprecation notice on stdout cannot become the "URL"
-        // an agent then quotes into a report.
-        let url = out
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .next_back()
-            .unwrap_or("")
-            .to_string();
+        // `gh issue comment` prints the new comment's URL, and prints it LAST —
+        // and [`crate::gh::comment_url`] additionally checks that the line it
+        // takes IS a URL (#3061 residual 4). Before that check the empty string
+        // was handed back as an address whenever `gh` printed something else.
+        //
+        // **A line that is not a URL does not make this an `Err`**, and the
+        // distinction is the whole point: the comment HAS been posted, and
+        // telling the caller it failed would be a false claim about the world
+        // that no retry can undo — an agent that re-posted on it would double
+        // its plan onto the issue. What the caller gets instead is a sentence
+        // that cannot be mistaken for a URL and says exactly what happened, and
+        // the audit row carries the raw capture so a human can find the comment.
+        let raw = out.trim().to_string();
+        let url = match crate::gh::comment_url(&out) {
+            Some(u) => u.to_string(),
+            None => POSTED_URL_UNREADABLE.to_string(),
+        };
         self.audit(
             group,
             actor.as_str(),
             "issue-comment",
-            json!({ "issue": issue, "bytes": body.len(), "url": url }),
+            json!({ "issue": issue, "bytes": body.len(), "url": url,
+                    "url_unreadable": url == POSTED_URL_UNREADABLE,
+                    "raw": (url == POSTED_URL_UNREADABLE).then_some(raw) }),
         );
         Ok(url)
     }

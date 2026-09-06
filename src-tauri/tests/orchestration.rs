@@ -64652,8 +64652,15 @@ fn a_planner_posts_a_plan_longer_than_the_shell_could_carry_and_gets_the_url() {
     assert_eq!(seen.trim_end_matches(['\r', '\n']), body.trim_end_matches(['\r', '\n']),
         "the plan must arrive whole and unmodified (seen {} bytes, sent {})", seen.len(), body.len());
 
-    // The staging file is scratch, not an artifact: it must not survive the call.
-    let leftovers: Vec<String> = fs::read_dir(reg.state_root().join(g.id.as_str()))
+    // The staging file is scratch, not an artifact: it must not survive the
+    // call. **Scanned in the staging SUBDIRECTORY** (#3061 residual 1): the
+    // bodies moved out of the group dir, and a scan left pointing at the old
+    // location would still pass — while looking at a directory the staging path
+    // can no longer reach. That is a specimen leaving its class, so the
+    // assertion moves with it rather than being relaxed.
+    let staging = reg.state_root().join(g.id.as_str()).join(loomux_lib::orchestration::COMMENT_BODY_DIR);
+    assert!(staging.is_dir(), "the post must really have staged a body, in its own directory");
+    let leftovers: Vec<String> = fs::read_dir(&staging)
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -64674,7 +64681,213 @@ fn a_planner_posts_a_plan_longer_than_the_shell_could_carry_and_gets_the_url() {
     reg.set_gh_exec_override(None);
 }
 
+/// **#3061 residual 1: a staged comment body cannot clobber a block's
+/// instruction file**, because the two no longer share a directory.
+///
+/// The collision is real and silent. The group dir holds each roster block's
+/// instructions as `<block id>.md` (`workflow::Block::instructions_file`), a
+/// block id is operator-authored and only `sanitize_id`-checked, and the old
+/// staging name was `<agent>-comment-body-<seq>.md` in that same directory —
+/// with a process-wide sequence counter that starts at 0. So a workflow
+/// declaring a block called `<agent>-comment-body-0` had that block's
+/// instructions truncated and then DELETED by that agent's first post after a
+/// restart, with nothing failing.
+///
+/// The decoy here is written under exactly the name the pre-fix code would have
+/// chosen, so this test performs the collision rather than describing it.
+#[test]
+fn a_staged_comment_body_cannot_clobber_a_file_in_the_group_dir() {
+    let _serial = capture_lock();
+    let (reg, _d) = test_registry();
+    let repo = tempfile::tempdir().unwrap();
+    let g = reg
+        .create_group(&repo.path().to_string_lossy(), Guardrails { max_agents: 8, ..rails() })
+        .unwrap();
+    reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let planner = reg.spawn_agent(&g.id, Role::Planner, "plan", "plan #7", false, None).unwrap();
+    let cp = reg.resolve_token(&planner.token).unwrap();
+    reg.set_gh_exec_override(Some((
+        echoing_gh(repo.path(), "echoing_gh"),
+        Duration::from_secs(20),
+    )));
+
+    // The decoy, at the exact path the pre-fix code would have staged into: this
+    // agent's id, sequence 0. `COMMENT_BODY_SEQ` is process-wide and this test
+    // shares a process with others, so the name is built from a RANGE of the
+    // sequence numbers a single post could take rather than from one guess —
+    // and every one of them is written, so the collision cannot be missed by
+    // landing one number away.
+    let group_dir = reg.state_root().join(g.id.as_str());
+    fs::create_dir_all(&group_dir).unwrap();
+    let decoys: Vec<std::path::PathBuf> = (0..64u64)
+        .map(|n| group_dir.join(format!("{}-comment-body-{n}.md", cp.agent_id)))
+        .collect();
+    for d in &decoys {
+        fs::write(d, "THE BLOCK'S INSTRUCTIONS").unwrap();
+    }
+
+    post_comment(&reg, &cp, json!({ "issue": 7, "body": "a comment\n" })).unwrap();
+
+    for d in &decoys {
+        assert_eq!(
+            fs::read_to_string(d).as_deref(),
+            Ok("THE BLOCK'S INSTRUCTIONS"),
+            "a post overwrote a file in the group dir: {}",
+            d.display()
+        );
+    }
+    // The population control, and it is what makes the loop above a statement
+    // about the SUBDIRECTORY rather than about a post that never staged
+    // anything: the staging directory exists, which only a post creates.
+    assert!(
+        group_dir.join(loomux_lib::orchestration::COMMENT_BODY_DIR).is_dir(),
+        "the post must really have staged a body, in its own directory"
+    );
+
+    reg.set_gh_exec_override(None);
+}
+
+/// **#3061 residual 3: an orphaned staging file is swept**, and one that could
+/// still belong to an in-flight post is not.
+///
+/// Both directions, because a sweep that deleted eagerly would be a worse defect
+/// than the litter it cleans — it would pull the `--body-file` out from under a
+/// concurrent `gh`. The clock is the caller's, which is the only reason the
+/// young half can be performed at all.
+#[test]
+fn the_staging_sweep_deletes_an_orphan_and_spares_a_live_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let staging = dir.path().join(loomux_lib::orchestration::COMMENT_BODY_DIR);
+    fs::create_dir_all(&staging).unwrap();
+    let orphan = staging.join("a-7-comment-body-0.md");
+    fs::write(&orphan, "left behind by a kill between the write and the remove").unwrap();
+
+    // Young: a file this post could still be handing to `gh`.
+    loomux_lib::orchestration::sweep_staged_comment_bodies(&staging, SystemTime::now());
+    assert!(
+        orphan.exists(),
+        "a file young enough to belong to an in-flight post must never be swept"
+    );
+
+    // Old: nothing can still own it.
+    let later = SystemTime::now()
+        + loomux_lib::orchestration::STAGING_ORPHAN_AGE
+        + Duration::from_secs(60);
+    loomux_lib::orchestration::sweep_staged_comment_bodies(&staging, later);
+    assert!(!orphan.exists(), "an orphan past the bound must be swept");
+
+    // The bound is DERIVED from what can actually hold a staging file open, not
+    // picked: a sweep window shorter than the `gh` timeout could race a live
+    // post. If that timeout ever grows past this window, this fails rather than
+    // the race arriving in production.
+    assert!(
+        loomux_lib::orchestration::STAGING_ORPHAN_AGE
+            > loomux_lib::orchestration::GH_CAPTURE_TIMEOUT,
+        "the sweep window must outlast the longest a `gh` child can hold a body file"
+    );
+
+    // A sweep over a directory that is not there is silence, not an error: it
+    // runs on the way INTO a post, and must never be able to fail one.
+    loomux_lib::orchestration::sweep_staged_comment_bodies(
+        &dir.path().join("no-such-dir"),
+        later,
+    );
+}
+
+/// **#3061 residual 4: what comes back is a URL, or it says it is not one.**
+///
+/// The old code took the last non-empty line of `gh`'s stdout and returned it as
+/// "the comment's URL" with nothing in between — so a `gh` that printed a
+/// deprecation notice and no URL, or printed nothing at all, handed an agent a
+/// non-address to quote into a report, and printing nothing handed it the empty
+/// string.
+///
+/// The shape checked is an absolute http(s) URL, deliberately NOT the
+/// `#issuecomment-` fragment github.com renders: Enterprise is a different host,
+/// `gh`'s output shape is not a documented contract, and this file's own
+/// `echoing_gh` prints a URL without that fragment — a check the harness failed
+/// would be calibrated to one deployment rather than to the property.
+#[test]
+fn a_post_whose_gh_printed_no_url_says_so_instead_of_inventing_one() {
+    // The predicate first, over both polarities, so the end-to-end assertion
+    // below is about the WIRING rather than about the rule.
+    for good in [
+        "https://github.com/o/r/issues/7#issuecomment-1",
+        "https://ghe.internal/o/r/issues/7",
+        "http://example.invalid/c/1",
+        "noise\nhttps://example.invalid/c/2",
+    ] {
+        assert!(loomux_lib::gh::comment_url(good).is_some(), "must read as a URL: {good:?}");
+    }
+    for bad in [
+        "",
+        "\n\n",
+        "gh: a deprecation notice",
+        "https://example.invalid/c/1 and then some prose",
+        "ftp://example.invalid/c/1",
+        "https://",
+        "https://example.invalid/c/1\nan afterword",
+    ] {
+        assert!(loomux_lib::gh::comment_url(bad).is_none(), "must NOT read as a URL: {bad:?}");
+    }
+
+    let _serial = capture_lock();
+    let (reg, _d) = test_registry();
+    let repo = tempfile::tempdir().unwrap();
+    let g = reg
+        .create_group(&repo.path().to_string_lossy(), Guardrails { max_agents: 8, ..rails() })
+        .unwrap();
+    reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let planner = reg.spawn_agent(&g.id, Role::Planner, "plan", "plan #7", false, None).unwrap();
+    let cp = reg.resolve_token(&planner.token).unwrap();
+    reg.set_gh_exec_override(Some((mute_gh(repo.path(), "mute_gh"), Duration::from_secs(20))));
+
+    let out = post_comment(&reg, &cp, json!({ "issue": 7, "body": "a comment\n" }))
+        .expect("the post SUCCEEDED — gh simply printed no URL, and saying it failed would be a \
+                 false claim an agent could double-post on");
+    assert!(
+        out.contains(loomux_lib::orchestration::POSTED_URL_UNREADABLE),
+        "the caller is told plainly, in something that cannot be mistaken for an address: {out}"
+    );
+
+    let row = reg
+        .audit_log(&g.id)
+        .into_iter()
+        .find(|e| e.action == "issue-comment")
+        .expect("a post that reached gh leaves a row whichever way it went");
+    assert_eq!(row.detail["url_unreadable"], json!(true));
+    assert!(
+        row.detail["raw"].as_str().is_some_and(|r| r.contains("deprecation")),
+        "and the row carries what gh actually printed, so a human can still find the comment: \
+         {row:?}"
+    );
+
+    reg.set_gh_exec_override(None);
+}
+
+/// A stand-in `gh` that posts successfully and prints a banner instead of a URL
+/// — [`echoing_gh`]'s twin for the one case that fixture cannot express.
+fn mute_gh(dir: &Path, name: &str) -> std::path::PathBuf {
+    let (file, script) = if cfg!(windows) {
+        (format!("{name}.cmd"), "@echo off\r\necho gh: a deprecation notice\r\n".to_string())
+    } else {
+        (
+            name.to_string(),
+            "#!/bin/sh\nprintf '%s\\n' 'gh: a deprecation notice'\n".to_string(),
+        )
+    };
+    let path = dir.join(file);
+    fs::write(&path, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    path
+}
+
 /// The grant and the refusal are ONE test, so neither half can pass vacuously:
+
 /// a `post_issue_comment` that refused everybody would satisfy the reviewer
 /// assertions alone, and one that refused nobody would satisfy the other three.
 #[test]

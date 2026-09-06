@@ -31,7 +31,18 @@ const requireLabel = (require: string): string => {
  *  not "main": loomux is a generic tool and repos may default to
  *  master/trunk (CLAUDE.md hard constraint 8). */
 export function gateSummaryLine(status: WorkflowStatus): string | null {
-  const gate = status.gate;
+  return gateLine(status.gate);
+}
+
+/** The same sentence for a gate that is not (yet) any group's LIVE gate — the
+ *  one a `WorkflowSwitchPreview` carries for the file a switch would install
+ *  (#1689 slice D2).
+ *
+ *  Exported so the switch modal reads the gate through the definition the
+ *  lifecycle row already uses. A second formatter would be a second answer to
+ *  "what does this gate require", and the modal is where a human decides
+ *  whether to arm it — the one place the two must not disagree. */
+export function gateLine(gate: WorkflowGateStatus | null): string | null {
   if (!gate) return null;
   const clauses = [gate.reviewers.join(" + "), requireLabel(gate.require), ...gate.also];
   // #1174. A clause the gate enforces and this line did not mention would make the

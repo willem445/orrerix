@@ -465,8 +465,13 @@ export interface PaneEvents {
    *  it is in), so it asks its host, exactly as `onSplit` does for a welcome pane. */
   onOpenEditorPane: (pane: Pane, opts: { name: string; root: string; file?: string }) => void;
   /** Open a WORKFLOW pane beside `pane` (#222) — the file browser's "Open in workflow
-   *  pane" on a YAML row. Same shape, same reason, as `onOpenEditorPane`. */
-  onOpenWorkflowPane: (pane: Pane, opts: { name: string; root: string; file: string }) => void;
+   *  pane" on a YAML row. Same shape, same reason, as `onOpenEditorPane`.
+   *
+   *  `file` is optional since #1689 slice D2: the group header's *Edit…* sends none
+   *  for `default`, which is what keeps the pane's own default path AND its ability
+   *  to CREATE a workflow in a repo that has none — the launcher's button already
+   *  relies on both. The browser's row always sends one. */
+  onOpenWorkflowPane: (pane: Pane, opts: { name: string; root: string; file?: string }) => void;
   /** Right-click on the pane header (#271): the pane can't build/show its own connect
    *  menu — that needs the cross-tab armed-connect state and the backend wrappers,
    *  neither of which a Pane knows about — so, like `onOpenEditorPane`, it asks its
@@ -4953,6 +4958,9 @@ export class Pane implements VoiceTargetPane {
       // opens it there) — the workflow toggle's ON-confirm preview reads it
       // live rather than snapshotting at open time (#316).
       getRepo: () => this.cwdRaw,
+      // The header picker's *Edit…* (#1689 slice D2): the same call the file
+      // browser's "Open in workflow pane" makes, one caller over.
+      onEditWorkflow: (opts) => this.events.onOpenWorkflowPane(this, opts),
       onEmbedMenu: (anchor) => this.showEmbedMenu("group", anchor),
     });
     this.groupOverlay = document.createElement("div");

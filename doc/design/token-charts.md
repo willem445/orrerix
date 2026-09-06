@@ -30,9 +30,9 @@ compare per key and, at most, one small append per key per five minutes.
 
 ## The file
 
-Append-only JSONL in the group directory. **One writer** — the view publisher
-thread's usage tick — **never rotated, and never rebuilt** from `audit.jsonl` or
-a transcript.
+Append-only JSONL in the group directory. **One writer at a time** — the usage
+tick, whichever thread is running it (see *Which thread writes it* below) —
+**never rotated, and never rebuilt** from `audit.jsonl` or a transcript.
 
 ```
 {"ts_ms":…, "kind":"sample", "key":"<usage key>", "agent":"w-2389",
@@ -61,8 +61,38 @@ baseline every later row is differenced against.
 
 `append_series_line` delegates to `append_ledger_line`, whose doc carries the
 argument: a single `write_all` of a whole line is atomic enough when there is
-exactly one writer and no rotation to race the append. The audit log has both a
-second writer and a rotate step, which is what its lock is for.
+one writer at a time and no rotation to race the append. The audit log has both
+a second writer and a rotate step, which is what its lock is for.
+
+### Which thread writes it, and what actually serializes them
+
+**Not "the view publisher thread".** That was this note's original claim and it
+was wrong in a way worth recording, because the property it was reaching for is
+real and is better stated another way.
+
+`compute_group_usage` has exactly one caller, `group_usage_memoed`, and three
+ways in:
+
+| caller | thread |
+| --- | --- |
+| the polled view publisher's tick | the publisher loop |
+| `orch_group_usage`, `orch_autonomy` | a `run_blocking` pool thread |
+| the MCP `group_usage` tool | a fresh per-request thread |
+
+The third is the one that surprises: it asks with `Duration::ZERO`, so it never
+serves the memo and always recomputes — and therefore always samples. **An agent
+calling `group_usage` is a writer to this file, and walks its own repo for the
+fingerprint.**
+
+The two properties that do hold, and that everything above depends on:
+
+- **Never the GUI thread.** All three are off it, so CLAUDE.md constraint 10 —
+  about what a synchronous `#[tauri::command]` may do inside WebView2's COM
+  frame — is not in play.
+- **One writer at a time, per group.** `group_usage_memoed` holds that group's
+  memo cell *across* `compute_group_usage`, so two ticks for one group
+  serialize. That is mutual exclusion, not thread identity — and unlike a claim
+  about which thread runs, it is checkable at the one place that enforces it.
 
 ### The bucket is a SPACING, not a grid
 
@@ -179,10 +209,34 @@ process wrote. The rules that are easy to get wrong:
 
 ### Where it may run
 
-The publisher thread, at most once per bucket. **Never the GUI thread**: this
-walks directories and reads files, and CLAUDE.md constraint 10 is about what a
-synchronous `#[tauri::command]` may do inside WebView2's COM frame. Nothing
-reachable from one calls it.
+At most once per bucket, on whichever of the three threads above is running the
+tick — including an MCP `group_usage` request, so an agent asking for its
+group's cost walks that group's repo. **Never the GUI thread**: this reads
+directories and files, and CLAUDE.md constraint 10 is about what a synchronous
+`#[tauri::command]` may do inside WebView2's COM frame. Nothing reachable from
+one calls it.
+
+### Unreadable is a cap, and the cost is a false MARK
+
+A surface that exists but cannot be read this instant — a Windows exclusive
+lock, an antivirus scan — is treated as capped: `absent` for its digest, and
+`fp_partial` set. Both the file arm and the directory arm do this; the directory
+arm distinguishes "does not exist" (a real answer, not capped) from "exists and
+could not be read" (capped).
+
+The `fp_partial` half is the load-bearing one, and the reason is not a
+slightly-wrong hash. `absent` compares equal to a genuinely missing surface, so
+one locked read flips a component to absent for one bucket and back on the next:
+**two mark rows, each asserting a tuning change that never happened**, on a chart
+whose whole purpose is lining spend up against real changes. `fp_partial` is the
+only signal a reader has that a `changed` list may be a failed read rather than
+an edit.
+
+This ships the disclosure, not a repair. Holding the previous digest through a
+failed read would mean carrying per-component read errors onto the mark row and
+teaching the projection to ignore them — a schema change slice C would have to
+read. What is guaranteed here is that a spurious pair of marks is always flagged,
+never silent.
 
 ## `orch_usage_series(group_id, since_ms)`
 
@@ -193,7 +247,7 @@ Async, off-thread through `run_blocking`, inside a `read_command` frame
 to improve on.
 
 ```
-{ group, since_ms, first_ts_ms, skipped, rows: SeriesRow[], agents: [...] }
+{ group, since_ms, first_ts_ms, skipped, bytes, oversize, rows: SeriesRow[], agents: [...] }
 ```
 
 - `since_ms` **filters, it does not seek**: the file is read whole. That is the
@@ -201,6 +255,17 @@ to improve on.
   polls at 30 s — the series moves once per five-minute bucket, so a faster poll
   could only redraw the same picture. This does **not** widen the publisher's
   1 s tiers (`polled-views.md`).
+- `bytes` and `oversize` are the **revisit trigger**, and they are what keeps
+  the line above from being an open-ended residual. Nothing rotates or compacts
+  this file, so "cheap" has a size at which it stops being true, and a residual
+  with no number in it is one nobody can tell has been reached. That number is
+  `SERIES_REVISIT_BYTES` (32 MB, four times what the audit log rotates at, and
+  well short of stalling a 30 s poll). Past it the payload says so and still
+  returns every row: a chart that silently truncates its own history is worse
+  than a slow one. When it fires, the fix is one of the two things this slice
+  deliberately did not do: seek to `since_ms` instead of filtering, or compact
+  the file. Sizing: ~288 rows/day per moving key at ~300 B is single-digit MB a
+  month for a busy group.
 - `skipped` is how many lines would not parse. Surfaced, never folded into a
   shorter chart: skipping silently is how #240 stayed invisible, as a corrupt
   log that read as a slightly shorter timeline.

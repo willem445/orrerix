@@ -64309,3 +64309,133 @@ fn a_mark_is_written_when_the_repo_tuning_changes_and_not_before() {
         .count();
     assert_eq!(again, 1, "a mark is written on the CHANGE, not on the state");
 }
+
+#[test]
+fn an_unreadable_surface_is_capped_not_silently_absent() {
+    // #2941 review W3. `ABSENT` is a real value `fp_changed` compares like any
+    // other, so a surface that exists but cannot be read THIS INSTANT flips its
+    // component to absent for one bucket and back on the next: two mark rows
+    // asserting a tuning change that never happened. `fp_partial` is the only
+    // signal a reader has that a `changed` list may be a failed read rather
+    // than an edit, so every arm that cannot see a surface it can prove exists
+    // must set it.
+    //
+    // The unreadable DIRECTORY is provoked portably by putting a regular file
+    // where the walk expects a directory: `read_dir` fails on it everywhere,
+    // and `try_exists` still answers `Ok(true)`, which is exactly the
+    // "exists but I could not read it" state a lock or an AV scan produces.
+    let repo = tempfile::tempdir().unwrap();
+    fs::create_dir_all(repo.path().join(".claude")).unwrap();
+    fs::write(repo.path().join(".claude").join("skills"), "not a directory\n").unwrap();
+
+    let unreadable = tuningfp::fingerprint(repo.path());
+    assert!(
+        unreadable.partial,
+        "a directory that exists and could not be read is a CAP: {:?}",
+        unreadable.components
+    );
+
+    // The control that makes the assertion above discriminating: with the
+    // skills tree simply ABSENT, the digest is the same sentinel and `partial`
+    // is false. The two states are byte-identical in `components` — which is
+    // the whole reason the flag has to carry the difference.
+    let gone = tempfile::tempdir().unwrap();
+    let absent = tuningfp::fingerprint(gone.path());
+    assert!(!absent.partial, "a missing tree is a real answer, not a cap");
+    assert_eq!(
+        absent.components["skills"], unreadable.components["skills"],
+        "both read as the same sentinel, so `partial` is the ONLY thing that \
+         separates 'there is no skills tree' from 'I could not look'"
+    );
+    assert_eq!(absent.components["skills"], tuningfp::ABSENT);
+
+    // And the same for a file arm, so the two are not one accident: a
+    // directory where a FILE is expected makes `fs::read` fail with the path
+    // present.
+    let f = tempfile::tempdir().unwrap();
+    fs::create_dir_all(f.path().join(".orrerix").join("lessons.md")).unwrap();
+    let locked_file = tuningfp::fingerprint(f.path());
+    assert!(locked_file.partial, "an unreadable FILE is a cap too");
+}
+
+#[test]
+fn an_oversize_series_is_reported_not_truncated() {
+    // #2941 review finding 2. Nothing rotates or compacts this file, so the
+    // whole-file read has a size at which it stops being cheap — and a
+    // residual with no number in it is one nobody can tell has been reached.
+    // The ceiling is a REPORT: crossing it must never shorten the answer,
+    // because a chart that silently truncates its own history is worse than a
+    // slow one.
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let dir = reg.state_root().join(g.id.as_str());
+    fs::create_dir_all(&dir).unwrap();
+    let row = |ts: u64| {
+        json!({"ts_ms":ts,"kind":"sample","key":"s1","agent":"w-1","block":"worker",
+               "cli":"claude","role":"worker","in":ts,"out":0,"cache_w":0,"cache_r":0,
+               "cost_usd":null,"estimated":false,"source":"transcript","model":null})
+        .to_string()
+    };
+    let body = format!("{}\n{}\n{}\n", row(100), row(200), row(300));
+    fs::write(dir.join("usage-series.jsonl"), &body).unwrap();
+
+    // Under the ceiling: not oversize, and `bytes` is the file's real size
+    // rather than a figure derived from the parsed rows.
+    let under = reg.usage_series(&g.id, 0);
+    assert_eq!(under["oversize"], false);
+    assert_eq!(
+        under["bytes"].as_u64(),
+        Some(body.len() as u64),
+        "the size is read off the file: {under}"
+    );
+    assert_eq!(under["rows"].as_array().unwrap().len(), 3);
+
+    // Over it: the flag flips and NOTHING ELSE CHANGES. Same row count, same
+    // coverage floor — that is what makes it a report rather than a limit.
+    reg.set_series_revisit_bytes((body.len() as u64) - 1);
+    let over = reg.usage_series(&g.id, 0);
+    assert_eq!(over["oversize"], true, "the ceiling is crossed: {over}");
+    assert_eq!(
+        over["rows"].as_array().unwrap().len(),
+        3,
+        "every row is still returned — a report, never a truncation"
+    );
+    assert_eq!(over["first_ts_ms"].as_u64(), Some(100), "and the floor is unmoved");
+    assert_eq!(over["bytes"], under["bytes"]);
+
+    // Exactly AT the ceiling is not over it: the comparison is strict, so a
+    // file the size of the trigger does not report itself.
+    reg.set_series_revisit_bytes(body.len() as u64);
+    assert_eq!(reg.usage_series(&g.id, 0)["oversize"], false);
+}
+
+#[test]
+fn an_mcp_group_usage_call_is_a_writer_to_the_series() {
+    // #2941 review W1. Four permanent surfaces used to say the sampler runs on
+    // "the view publisher thread". It does not: `compute_group_usage` has one
+    // caller (`group_usage_memoed`) and three ways in, and the MCP
+    // `group_usage` tool is one of them — it asks with `Duration::ZERO`, so it
+    // never serves the memo, always recomputes, and therefore always samples.
+    //
+    // This pins the PROPERTY the corrected docs now claim, rather than the
+    // prose: a caller that is not the publisher writes rows. `group_usage` is
+    // that call's own entry point (`mcp.rs`'s tool arm calls exactly this), so
+    // driving it here exercises the same chain without standing up an MCP
+    // server.
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    reg.set_series_bucket_ms(0);
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    write_claude_transcript(proj.path(), w.session_id.as_deref().unwrap(), 1000, 500);
+
+    assert!(series_lines(&reg, &g.id).is_empty(), "nothing sampled yet");
+    // The un-memoed entry point, which is what the MCP tool arm calls.
+    reg.group_usage(&g.id);
+    assert_eq!(
+        series_lines(&reg, &g.id).len(),
+        1,
+        "a non-publisher caller of group_usage appends to the series"
+    );
+}

@@ -21,9 +21,12 @@
 //! missing row harmless: a reader differences consecutive rows per key
 //! ([`diff_series`]), so a row that never landed costs resolution and never
 //! double-counts, where a delta-encoded series would lose that spend forever.
-//! It is also what lets the file be append-only with **one writer** (the view
-//! publisher thread) and no rotation — see `append_series_line` in `src-tauri`,
-//! which is `append_ledger_line`'s single-`write_all` shape for that reason.
+//! It is also what lets the file be append-only with **one writer at a time**
+//! and no rotation — see `append_series_line` in `src-tauri`, which is
+//! `append_ledger_line`'s single-`write_all` shape for that reason. That is
+//! mutual exclusion, **not** thread identity: the sampler runs on whichever
+//! caller won the group's usage memo cell, and `src-tauri`'s
+//! `OrchRegistry::series_sample` names the three and says what serializes them.
 //!
 //! # What this module is NOT
 //!

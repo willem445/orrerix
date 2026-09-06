@@ -1633,6 +1633,15 @@ export interface UsageSeries {
   /** Lines that would not parse. Surfaced, never folded into a shorter
    *  chart — a corrupt file must not read as a quiet period. */
   skipped: number;
+  /** Size of the series file on disk, in bytes (`0` if it could not be
+   *  stat'd — never an invented figure). */
+  bytes: number;
+  /** The whole-file read has reached `SERIES_REVISIT_BYTES` (32 MB). A
+   *  **report, not a truncation**: every row is still returned. Nothing
+   *  rotates or compacts this file, so this is the trigger for the work slice
+   *  B deliberately deferred — seek to `since_ms` rather than filter, or
+   *  compact. See `doc/design/token-charts.md`. */
+  oversize: boolean;
   rows: UsageSeriesRow[];
   /** The agent dimension the projection attributes by, roster-wide (a dead
    *  agent's rows still label). `cli` is `""` where nothing recorded one. */

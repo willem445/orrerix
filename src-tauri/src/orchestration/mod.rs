@@ -21,8 +21,9 @@ pub mod humanq;
 pub mod mcp;
 pub mod needsyou;
 /// The repo tuning fingerprint behind the time-plot's marks (#2011 slice B).
-/// Walks and hashes the agent-facing config; runs on the publisher thread, at
-/// most once per series bucket, never the GUI thread — see the module doc.
+/// Walks and hashes the agent-facing config, at most once per series bucket.
+/// Never the GUI thread, and serialized per group by the usage memo cell — see
+/// [`OrchRegistry::series_sample`] for which threads actually reach it.
 pub mod tuningfp;
 pub mod views;
 
@@ -15593,15 +15594,31 @@ pub struct OrchRegistry {
     /// is the append performed. Unranked for that reason: it participates in no
     /// ordering because it is never one of two.
     ///
-    /// Bound: one small entry per group this process has sampled, holding one
-    /// [`usageseries::Sample`] per live usage key — the same population and the
-    /// same process lifetime as [`Self::usage_memo`]'s map, and bounded by the
-    /// same fact, that a human opens single digits of groups in one session.
+    /// **Bound, stated exactly, because the easy comparison is wrong** (#2941
+    /// review round 2). One entry per group this process has sampled, holding
+    /// one [`usageseries::Sample`] (~300 B) per usage key ever sampled for that
+    /// group. Nothing prunes it — there is no `invalidate_series_state` the way
+    /// [`Self::usage_memo`] has `invalidate_usage_memo`, so this is NOT "the
+    /// same population and lifetime" as that map: the memo sheds entries and
+    /// this does not. A long-lived group that recycles agents therefore grows
+    /// this map by one key per recycled session, for the process's life.
+    ///
+    /// Left as it is, deliberately. The population is usage KEYS (a CLI session
+    /// id, or `agent:<id>`), which a human's session produces in the hundreds
+    /// at most, so the ceiling is tens of KB; and each entry is exactly the
+    /// thing that stops a restarted process re-appending a row for a key it has
+    /// already written, so evicting one buys memory and costs a duplicate row.
+    /// If a group ever churns keys fast enough to matter, the eviction to write
+    /// is by key age against the series bucket, not by group.
     series_state: TrackedMutex<HashMap<GroupId, SeriesState>>,
     /// Test-only override of [`usageseries::SERIES_BUCKET_MS`], so a test can
     /// drive real ticks without sleeping five minutes. `None` in production.
     /// Mirrors `claude_projects_dir`.
     series_bucket_override: TrackedMutex<Option<u64>>,
+    /// Test-only override of [`SERIES_REVISIT_BYTES`], so the oversize REPORT
+    /// can be pinned on the real payload path without writing 32 MB of fixture
+    /// to disk. `None` in production. Mirrors `series_bucket_override`.
+    series_revisit_override: TrackedMutex<Option<u64>>,
     /// Per-REPO memo for the display-only default-branch name (#743 S4a),
     /// keyed by repo path so two groups on one repo share the answer.
     ///
@@ -17572,13 +17589,33 @@ fn append_ledger_line(path: &Path, line: &str) -> std::io::Result<()> {
 /// The usage series' file name inside a group directory (#2011 slice B).
 ///
 /// A **persisted schema** — `doc/design/token-charts.md` is its contract. It is
-/// append-only, has exactly one writer (the view publisher thread's usage
-/// tick), is **never rotated** and is **never rebuilt** from `audit.jsonl` or a
+/// append-only, has **exactly one writer at a time** (see
+/// [`OrchRegistry::series_sample`]: the usage tick, whichever thread is running
+/// it, serialized per group by the usage memo cell), is **never rotated** and
+/// is **never rebuilt** from `audit.jsonl` or a
 /// transcript. Rotation is what the audit log needs and what this file must not
 /// have: a rotated series loses the baseline every reader differences against,
 /// and the whole point of cumulative rows is that a reader can lose one and
 /// still be right.
 pub const USAGE_SERIES_FILE: &str = "usage-series.jsonl";
+
+/// The size at which reading `usage-series.jsonl` whole stops being obviously
+/// cheap, and the read starts saying so (#2941 review).
+///
+/// **A revisit trigger, not a limit.** Nothing rotates or compacts this file,
+/// so it grows with the calendar: at roughly 288 rows per day per moving key
+/// and ~300 bytes a row, a busy group is single-digit MB per month — fine at a
+/// 30 s poll — and a group left open for a year is not. The failure mode of
+/// leaving that unstated is that nobody can tell when it has arrived, because
+/// the read gets gradually slower and never says anything.
+///
+/// 32 MB is deliberately well past where anything hurts (it is four times the
+/// `AUDIT_ROTATE_BYTES` the audit log rotates at) and well short of where a
+/// 30 s poll would stall. Crossing it sets `oversize` on the payload; it never
+/// shortens the answer. When it does start firing, the fix is one of the two
+/// this slice consciously deferred: seek to `since_ms` rather than filter, or
+/// compact. See `doc/design/token-charts.md`.
+pub const SERIES_REVISIT_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Append one row to a group's `usage-series.jsonl`.
 ///
@@ -29422,6 +29459,7 @@ impl OrchRegistry {
             usage_memo: TrackedMutex::new("usage_memo", HashMap::new()),
             series_state: TrackedMutex::new("series_state", HashMap::new()),
             series_bucket_override: TrackedMutex::new("series_bucket_override", None),
+            series_revisit_override: TrackedMutex::new("series_revisit_override", None),
             default_branch_memo: TrackedMutex::new("default_branch_memo", HashMap::new()),
             creation: TrackedMutex::new("creation", ()),
             marker_io: TrackedMutex::new_ranked("marker_io", lockorder::MARKER_IO, ()),
@@ -44434,8 +44472,40 @@ impl OrchRegistry {
         *self.series_bucket_override.lock_safe() = Some(ms);
     }
 
+    /// The revisit ceiling in force, honouring the test seam.
+    fn series_revisit_bytes(&self) -> u64 {
+        self.series_revisit_override.lock_safe().unwrap_or(SERIES_REVISIT_BYTES)
+    }
+
+    /// Lower the series revisit ceiling so the oversize REPORT can be pinned
+    /// without a 32 MB fixture. Test-only seam (see `series_revisit_override`).
+    #[doc(hidden)]
+    pub fn set_series_revisit_bytes(&self, bytes: u64) {
+        *self.series_revisit_override.lock_safe() = Some(bytes);
+    }
+
     /// Sample this tick's usage into `<group>/usage-series.jsonl` (#2011 slice
     /// B) — the time plot's only source.
+    ///
+    /// # Which thread this is, and what actually makes it safe
+    ///
+    /// **Not "the view publisher thread".** `compute_group_usage` has one
+    /// caller — [`Self::group_usage_memoed`] — and three ways in: the polled
+    /// view publisher's tick, a `run_blocking` pool thread (`orch_group_usage`,
+    /// `orch_autonomy`), and an MCP `group_usage` request, which gets a fresh
+    /// `std::thread::spawn` per request and asks with `Duration::ZERO`, so it
+    /// never serves the memo and always recomputes — and therefore always
+    /// samples. An agent calling that tool is a writer to this file.
+    ///
+    /// What holds is the property that was wanted, stated the checkable way:
+    ///
+    /// - **Never the GUI thread.** All three are off it; nothing reachable from
+    ///   a synchronous `#[tauri::command]` gets here (CLAUDE.md constraint 10).
+    /// - **One writer at a time, per group.** `group_usage_memoed` holds that
+    ///   group's memo cell *across* `compute_group_usage`, so two ticks for one
+    ///   group serialize rather than race. That is mutual exclusion, not thread
+    ///   identity, and it is what the "one writer" claim on
+    ///   [`USAGE_SERIES_FILE`] means.
     ///
     /// Called once per tick from [`Self::compute_group_usage`], **after** the
     /// merge, on the snapshots that tick already computed: there is no second
@@ -44516,9 +44586,11 @@ impl OrchRegistry {
     ///
     /// The walk is bounded (`tuningfp`'s caps) but not free, so it runs at most
     /// once per bucket — which is also the finest resolution a mark is worth to
-    /// a plot bucketed at five minutes. It runs **on this tick's thread**, the
-    /// view publisher's, and never on the GUI thread: nothing reachable from a
-    /// synchronous `#[tauri::command]` calls it (CLAUDE.md constraint 10).
+    /// a plot bucketed at five minutes. It runs on this tick's thread, whichever
+    /// of the three that is, and never on the GUI thread — see
+    /// [`Self::series_sample`], which names them and says what serializes them.
+    /// The one worth noticing here is the MCP `group_usage` tool: an agent
+    /// calling it walks its own repo on an MCP request thread.
     fn series_mark(&self, group: &GroupId, dir: &Path, now: u64, bucket: u64) {
         {
             let mut states = self.series_state.lock_safe();
@@ -44578,14 +44650,30 @@ impl OrchRegistry {
     /// panel polls at 30 s rather than at the 1 s tiers, so this is not on a
     /// hot path (`doc/design/polled-views.md`).
     ///
+    /// **The residual that shape leaves is BOUNDED rather than open-ended**
+    /// (#2941 review). A file nothing rotates grows with the calendar, so
+    /// "cheap" has a size at which it stops being true, and a residual with no
+    /// number in it is one nobody can tell has been reached. That number is
+    /// [`SERIES_REVISIT_BYTES`]: past it the payload carries `oversize: true`
+    /// and `bytes`, which is a REPORT and not a refusal — the read still
+    /// returns every row, because a chart that silently truncates its own
+    /// history is worse than a slow one. It is the trigger for the work this
+    /// slice deliberately does not do: seek to `since_ms` instead of filtering,
+    /// or compact the file. `an_oversize_series_is_reported_not_truncated`
+    /// pins both halves.
+    ///
     /// `first_ts_ms` is the **coverage floor** — the oldest row in the file,
     /// before filtering. History starts when this build first ran against the
     /// group, and a panel that does not say so draws a flat line where there is
     /// simply no data.
     #[doc(hidden)] // pub for integration tests
     pub fn usage_series(&self, group: &GroupId, since_ms: u64) -> Value {
-        let text = fs::read_to_string(self.group_dir(group).join(USAGE_SERIES_FILE))
-            .unwrap_or_default();
+        let path = self.group_dir(group).join(USAGE_SERIES_FILE);
+        // Measured off the file rather than off `text.len()`: the point is the
+        // size on disk that the revisit trigger is stated in, and a file that
+        // could not be read at all reports 0 rather than an invented figure.
+        let bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let text = fs::read_to_string(&path).unwrap_or_default();
         let (all, skipped) = usageseries::parse_series_lines_counted(&text);
         let first_ts_ms = all.first().map(|r| r.ts_ms());
         let rows: Vec<Value> = all
@@ -44649,6 +44737,11 @@ impl OrchRegistry {
             "since_ms": since_ms,
             "first_ts_ms": first_ts_ms,
             "skipped": skipped,
+            "bytes": bytes,
+            // A REPORT, never a truncation — see `SERIES_REVISIT_BYTES`. Every
+            // row is still returned; this says the whole-file read has reached
+            // the size at which it was agreed to be revisited.
+            "oversize": bytes > self.series_revisit_bytes(),
             "rows": rows,
             "agents": agents,
         })

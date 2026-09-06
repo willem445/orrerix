@@ -13,7 +13,7 @@
 //!
 //! # Why sha256 of the bytes and not `git hash-object`
 //!
-//! `git hash-object` shells out, once per file, on the view publisher thread.
+//! `git hash-object` shells out, once per file, on a polled thread.
 //! `sha2` is already in this binary's linked graph (`filehash.rs`, and
 //! `workflow::body_digest` in the engine), needs no repo, and answers
 //! did-it-change for a working tree that is dirty, detached, or not a git
@@ -21,13 +21,17 @@
 //!
 //! # Where it may run
 //!
-//! **The publisher thread, at most once per series bucket — never the GUI
-//! thread.** This walks directories and reads files, and CLAUDE.md constraint
-//! 10 is about what a synchronous `#[tauri::command]` may do on the webview
-//! thread: nothing here is reachable from one. The caller
-//! (`OrchRegistry::series_sample`) is on the usage tick, and the bucket check
-//! in `usageseries::should_sample`'s sibling gate is what bounds the walk's
-//! frequency.
+//! **At most once per series bucket, and never the GUI thread.** Deliberately
+//! not "the publisher thread": `OrchRegistry::series_sample`'s doc names the
+//! three callers that actually reach here — the polled view publisher, a
+//! `run_blocking` command thread, and an MCP `group_usage` request thread — and
+//! says what serializes them (the group's usage memo cell, held across the
+//! computation). So an agent calling the `group_usage` MCP tool walks its own
+//! repo on an MCP thread. What matters for this module is the half that IS
+//! true of all three: none is the webview thread, so CLAUDE.md constraint 10 —
+//! about what a synchronous `#[tauri::command]` may do inside WebView2's COM
+//! frame — is not in play, and the bucket gate bounds the walk's frequency
+//! whoever runs it.
 //!
 //! # The caps, and why a capped answer is still worth having
 //!
@@ -38,6 +42,32 @@
 //! still a real change and still worth a mark. What a reader may not do is read
 //! an unchanged component as proof that nothing under it moved — which is
 //! exactly why the flag is on the row rather than in a log nobody reads.
+//!
+//! # Unreadable is a cap, and the reason is the MARK, not the hash
+//!
+//! A surface that **exists but cannot be read right now** — a Windows
+//! exclusive lock, an antivirus scan mid-pass — is treated exactly like a
+//! capped one: [`ABSENT`] for its digest, and `partial` set. The `partial` half
+//! is what makes it safe, and it is worth being explicit about why, because the
+//! cost is not a slightly-wrong hash.
+//!
+//! [`ABSENT`] is a real value that `usageseries::fp_changed` compares like any
+//! other. So a transiently unreadable `CLAUDE.md` flips its component to
+//! `absent` on one bucket and back on the next: **two mark rows, each asserting
+//! a tuning change that never happened**, on a chart whose entire purpose is
+//! lining spend up against real changes. `partial` is the one signal a reader
+//! has that a `changed` list may be an artefact of a failed read rather than an
+//! edit, so every arm that cannot see a surface it can prove exists must set
+//! it. `hash_file`'s `Err` arm and `walk`'s `read_dir` `Err` arm both do;
+//! `the_walk_cap_sets_fp_partial` and
+//! `an_unreadable_surface_is_capped_not_silently_absent` pin them.
+//!
+//! What this does NOT do is suppress the false marks. Distinguishing "gone"
+//! from "locked" well enough to hold the previous digest would mean carrying
+//! per-component read errors into the mark row and teaching the projection to
+//! ignore them, which is a schema change slice C would have to read. The bound
+//! shipped here is the disclosure: a spurious pair of marks is always flagged
+//! `fp_partial`, never silent.
 
 use loomux_engine::usageseries::Fp;
 use sha2::{Digest, Sha256};
@@ -103,8 +133,12 @@ fn hash_file(path: &Path) -> (String, bool) {
         }
         // Unreadable is not absent, but there is no third value to say so on a
         // fingerprint whose whole vocabulary is "same or different". Treat it
-        // as a cap: `partial` is exactly the flag that says "do not read an
-        // unchanged component as proof".
+        // as a cap. `partial` is not a nicety here: `ABSENT` compares equal to
+        // a genuinely missing file, so one locked read flips the component and
+        // the next tick flips it back — two mark rows claiming a tuning change
+        // that never happened — and `fp_partial` is a reader's only sign that a
+        // `changed` list may be a failed read rather than an edit. Module doc,
+        // "Unreadable is a cap".
         Err(_) => (ABSENT.to_string(), true),
     }
 }
@@ -119,7 +153,15 @@ fn walk(dir: &Path, depth: usize, keep: &dyn Fn(&Path) -> bool, out: &mut Vec<Pa
         return true; // capped
     }
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
+        // A directory that DOES NOT EXIST is a real answer (the component is
+        // absent) and not a cap. One that exists and could not be read is a
+        // cap: without this the component silently reads as `absent` with
+        // `partial = false`, which is byte-identical to "there is no skills
+        // tree" and produces two unflagged false marks — see the module doc.
+        // `exists()` is itself a fallible probe, so a failure to answer it
+        // counts as capped too: the honest reading of "I could not tell" is
+        // the same as "I could not look".
+        return !matches!(dir.try_exists(), Ok(false));
     };
     let mut kids: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
     kids.sort();

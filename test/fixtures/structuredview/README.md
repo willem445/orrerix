@@ -3,9 +3,12 @@
 `session.harness.jsonl` is one line per `HarnessEvent` **as it serializes** —
 `loomux_engine::harness::HarnessEvent` is `#[serde(tag = "kind", rename_all =
 "snake_case")]` with transparent newtype ids, so a line is
-`{"kind":"tool_call","turn":1,"id":"t1",…}`. Two lines are the local inputs
-`structuredview.ts` documents as deliberately NOT `HarnessEvent`s (`delivery`,
-`note`).
+`{"kind":"tool_call","turn":1,"id":"t1",…}`. **One** line is the single local
+input `structuredview.ts` documents as deliberately NOT a `HarnessEvent`:
+`delivery`, which is orrerix narrating its own action rather than anything a
+harness reported. The `note` line is not local — `Note` is a `HarnessEvent`
+variant (#2850 S1b), and this sentence said otherwise until review round 1
+caught the twin.
 
 **It is synthesized, and it will be swapped.** No pi process has run here
 (`CLAUDE.md` constraint 3 forbids spawning a real agent CLI to produce one),

@@ -105,7 +105,14 @@ one.
 The harness's own asides are **not** local. This slice first shipped them as a
 second `LocalEvent` because §1.2 had no variant for them; #2850 S1b then added
 one, so a retry, a failure and a fire-and-forget extension display are reported
-facts and arrive as `Note`:
+facts and arrive as `Note`.
+
+> **Tense:** the variant below and the 11 -> 17 count *will be* true when #2986
+> (S1b) and #2942 (S1a) land. On `main` today `HarnessEvent` has eleven variants
+> and `is_decision_grade` lists five; the seven counted here include S1a's two,
+> and are countable on the TypeScript side of this slice alone. This module
+> reads the shape either way — an unrecognised kind becomes a notice rather than
+> an error — so nothing here breaks while those sit open.
 
 ```rust
 pub enum NoteKind { Retry, Error, Ui }
@@ -140,6 +147,23 @@ Population is **11 → 17** and seven variants are decision-grade (`ToolCall`,
 `Exited`). That split is an audit-log concern, not a projection one: this module
 draws all seventeen. Protocol bookkeeping — message boundaries, settle events,
 command acks — never reaches `events()` at all, so it never reaches here.
+
+## 4a. One thing #2891 asks for that the contract cannot carry: an exit code
+
+#2891 wants a shell command rendered "command line + exit code + duration". Two
+of those three exist here: the command line is `ToolBlock.input`, the duration is
+`durationMs`. **The exit code has no field to occupy.** The contract's
+`ToolResult` is `{turn, id, ok}` — a boolean verdict, not a status — and
+`ToolOutput` carries bytes plus `is_error`. So a card can say a command failed
+and cannot say it exited 2.
+
+This is recorded rather than silently dropped, because the alternative is a
+renderer slice discovering it at draw time and either inventing a field or
+scraping the number out of the output text — which is the machinery the
+structured path exists to retire. Closing it is a contract change (`exit_code:
+Option<i32>` on `ToolResult`, or a distinct event), so it belongs to whoever owns
+§1.2, not here. Until then the requirement is **declined at the contract**, and
+a renderer that wants it should read this section rather than improvise.
 
 ## 5. Two ceilings, both visible
 

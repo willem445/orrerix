@@ -1,0 +1,1158 @@
+/* ============================================================================
+ * demo/structured-pane — the structured agent pane, S0 mock (#2891).
+ *
+ * TOKENS ARE COPIED, NOT IMPORTED. Every custom property in the :root block
+ * below is a verbatim copy of src/styles.css's token layer, kept here so the
+ * demo is a standalone page with no build step and no import into the app
+ * bundle. It is a COPY and it can drift: src/styles.css is the source of truth
+ * and test/theme.test.ts pins that file, not this one. Nothing below :root may
+ * introduce a raw colour — the same rule the app's token layer enforces, held
+ * here by hand because no test watches this directory.
+ *
+ * ONE THEME. orrerix is dark-only (`color-scheme: dark`, a single :root in
+ * src/styles.css). There is deliberately no light block here: inventing a light
+ * ramp would mean inventing palette values #2891 never sanctioned, and
+ * doc/design/ui-redesign.md's rule that a hue is not free to move between
+ * channels is exactly what an invented ramp would break. If a light theme ever
+ * lands in the app, this demo inherits it by swapping this block for an import.
+ *
+ * THE SIGNATURE IS THE WARP, AT A THIRD SCALE. ui-redesign.md §The signature
+ * gives every pane a 2px vertical thread down its left edge whose colour is the
+ * pane's live agent state, and says the rail would carry the same device as an
+ * aggregate — "the same warp at two scales". A structured transcript is a
+ * timeline, so this mock runs the thread down the transcript's own left gutter
+ * as well: the pane edge says what the agent is doing NOW, the gutter says what
+ * it has been doing, segment by segment. Same 2px, same six state dyes, same
+ * rule that a state change moves a colour and never a size.
+ *
+ * The gutter's vocabulary is the SIX STATE DYES AND NOTHING ELSE. Events that
+ * are not an agent state — a delivery arriving, a turn boundary, a compaction —
+ * are marked by FORM (a drawn glyph, a hairline rule), never by borrowing a
+ * hue from the identity or interaction channel. That is the same move the
+ * design note makes for `held` and `idle`, which "carry no dye and are marked
+ * by form, not by hue".
+ * ==========================================================================*/
+
+:root {
+  color-scheme: dark;
+
+  /* elevation ladder */
+  --surface-term: #0b0b0b;
+  --surface-0: #111111;
+  --surface-1: #171717;
+  --surface-2: #1f1f1f;
+  --line: #2a2a2a;
+  --line-strong: #393939;
+
+  /* ink */
+  --ink: #d2d2d2;
+  --ink-dim: #a3a3a3;
+  --ink-faint: #6d6d6d;
+
+  /* CHANNEL 1 — agent state. The only tokens the warp gutter may use. */
+  --state-working: #74d98d;
+  --state-attention: #e89c3c;
+  --state-ok: #35a86b;
+  --state-danger: #e35a5a;
+  --state-held: #6d6d6d;
+  --state-idle: #393939;
+
+  /* CHANNEL 2 — interaction. Marks, edges, rings, carets. Never a ground. */
+  --accent: #f8c93e;
+  --focus: #f8c93e;
+  --selection: #323232;
+
+  /* CHANNEL 3 — identity. Which thing this is, never what state it is in. */
+  --id-rose: #e35a5a;
+  --id-amber: #e89c3c;
+  --id-lime: #b5bf62;
+  --id-jade: #35a86b;
+  --id-cyan: #5aa8b5;
+  --id-azure: #6f93c4;
+  --id-violet: #9a8fc4;
+  --id-orchid: #c47f9e;
+
+  /* CHANNEL 3, per-CLI sub-table — which agent program runs in this pane. */
+  --cli-claude: #e08a5f;
+  --cli-codex: #3ec2a8;
+  --cli-copilot: #7fa8d8;
+  --cli-opencode: #5fc873;
+  --cli-gemini: #9677c5;
+  --cli-hermes: #b67c94;
+  --cli-ante: #c3c455;
+  --cli-pi: #00d2f0;
+
+  /* type roles — mono means "a literal string the machine gave you" */
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace;
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --text-eyebrow: 10px;
+  --text-xs: 10.5px;
+  --text-s: 11.5px;
+  --text-m: 13px;
+  --text-l: 15px;
+  --text-xl: 22px;
+  --tracking-eyebrow: 0.09em;
+
+  /* rhythm and shape */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --radius-s: 6px;
+  --radius-m: 10px;
+  --radius-l: 14px;
+  --radius-pill: 999px;
+  --line-w: 1px;
+  --thread: 2px;
+  --header-h: 40px;
+  --pane-header-h: 27px;
+  --rail-w: 200px;
+
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, 0.55);
+
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --ease: cubic-bezier(0.25, 0.8, 0.35, 1);
+
+  /* --- demo-local geometry. Not colours: a gutter width and the indent every
+     transcript row shares, named once so the thread and the rows cannot drift
+     apart. --gutter is where the warp lives; --run is the content column. */
+  --gutter: 18px;
+  --run-pad: var(--space-4);
+}
+
+/* ============================ reset and page ============================= */
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--surface-0);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-m);
+  /* Browser surfaces belong to the design too: the caret, the selection and
+     the scrollbars all ship with defaults that belong to no design system. */
+  caret-color: var(--accent);
+  accent-color: var(--accent);
+}
+
+::selection { background: var(--selection); color: var(--ink); }
+
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-clip: content-box; background-color: var(--ink-faint); }
+
+:focus-visible {
+  outline: var(--thread) solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-s);
+}
+
+/* Tabular numerals everywhere a figure is compared against another figure —
+   a ticker that jitters as digits change is the cheapest thing to get wrong. */
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+/* Every mark is sized HERE, once. An <svg> with no width/height and a viewBox
+   lays out at its default 300x150 replaced-element size, which is not a
+   subtle failure — one unsized chevron fills the pane. A default plus
+   `flex: none` means a new mark can never do that again, and the specific
+   sizes below are overrides of a working default rather than the only thing
+   standing between the page and a 300px glyph. */
+svg { width: 13px; height: 13px; flex: none; display: block; }
+.chev { width: 12px; height: 12px; color: var(--ink-faint); }
+
+/* ======================= the demo frame (not the pane) ==================== */
+/* Everything in this block is scaffolding for the mock — the grid that stands
+   in for the app's pane grid, and the playback controls. None of it is part of
+   the pane design; S2/S4 inherit the .pane block below, not this one. */
+
+.stage {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  /* The stage is the width authority. Without this a nowrap control bar sets
+     the grid's width and the whole page scrolls sideways — the body must never
+     do that, and a flex row of buttons is the classic way it ends up doing it. */
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.stagebar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  min-height: var(--header-h);
+  min-width: 0;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface-1));
+  border-bottom: var(--line-w) solid var(--line);
+}
+
+.stagebar-title {
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.stagebar-spacer { flex: 1; }
+
+.ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 24px;
+  padding: 0 var(--space-3);
+  font: inherit;
+  font-size: var(--text-s);
+  color: var(--ink-dim);
+  background: var(--surface-0);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease),
+              background var(--dur-fast) var(--ease);
+}
+.ctl:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface-2); }
+.ctl[aria-pressed="true"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.ctl:disabled { color: var(--ink-faint); border-color: var(--line); cursor: default; background: var(--surface-0); }
+.ctl svg { width: 13px; height: 13px; flex: none; }
+
+.ctl-group { display: inline-flex; gap: var(--space-1); align-items: center; }
+
+.ctl-label {
+  font-size: var(--text-eyebrow);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* The pane grid. Two cells, because the warp only resolves into one picture
+   when the things carrying it are tiled — a single pane cannot show it. */
+.grid {
+  display: grid;
+  /* min() rather than a bare 420px: a bare track floor cannot shrink below its
+     own minimum, so on a narrow window the grid overflows instead of dropping
+     to one column. */
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3);
+  min-height: 0;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .grid .pane:nth-child(2) { display: none; }
+}
+
+/* ============================== the pane ================================= */
+/* A structured pane occupies the cell a terminal would (CLAUDE.md constraint
+   1). It is a normal flow box: nothing here measures a PTY, and nothing here
+   may ever grow a code path that resizes one. */
+
+.pane {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface-term);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+}
+
+/* THE WARP — the pane's own edge thread, exactly as ui-redesign.md specifies:
+   2px, drawn as a positioned pseudo-element so the frame's geometry is
+   untouched, colour = the pane's live agent state, width constant forever. */
+.pane::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--thread);
+  background: var(--warp, var(--state-idle));
+  transition: background var(--dur-base) var(--ease);
+  z-index: 3;
+}
+
+.pane[data-state="working"]   { --warp: var(--state-working); }
+.pane[data-state="attention"] { --warp: var(--state-attention); }
+.pane[data-state="ok"]        { --warp: var(--state-ok); }
+.pane[data-state="danger"]    { --warp: var(--state-danger); }
+.pane[data-state="held"]      { --warp: var(--state-held); }
+.pane[data-state="idle"]      { --warp: var(--state-idle); }
+
+/* THE ONE CONTINUOUS ANIMATION the app sanctions: an attention thread pulses
+   its opacity, slowly, and only while an agent is actually waiting on the
+   human. It stops when acknowledged. Nothing else in this file loops. */
+.pane[data-state="attention"]::before { animation: warp-pulse 1.9s var(--ease) infinite; }
+
+@keyframes warp-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.42; }
+}
+
+/* ---------------------------- the pane header ---------------------------- */
+/* Compact by contract: --pane-header-h is the app's own height and a structured
+   pane may not be taller than the PTY pane it replaces, or the grid changes
+   shape when a block flips its driver. Everything here is one row. */
+
+.phead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--pane-header-h);
+  padding: 0 var(--space-3) 0 calc(var(--thread) + var(--space-3));
+  background: var(--surface-1);
+  border-bottom: var(--line-w) solid var(--line);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* The state dot — the second of the app's three state positions. Form carries
+   the reading as much as hue: a working dot breathes, a held dot is hollow. */
+.pdot {
+  flex: none;
+  width: 7px; height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--warp, var(--state-idle));
+  transition: background var(--dur-base) var(--ease);
+}
+.pane[data-state="held"] .pdot,
+.pane[data-state="idle"] .pdot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--warp);
+}
+
+.pname {
+  font-size: var(--text-s);
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+  flex: none;
+}
+
+/* Machine identifiers take the mono face — the token layer's rule, not a
+   costume: the model id, the session id and the thinking level are all
+   literal strings the machine handed us. */
+.pmeta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  overflow: hidden;
+}
+
+.pmeta .sep { color: var(--line-strong); }
+.pmeta .val { color: var(--ink-dim); }
+
+/* The CLI chip — the identity channel's per-CLI sub-table, one of its exactly
+   two sanctioned positions. Ground stays neutral; the hue is the mark. */
+.pcli {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 16px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-s);
+  border: var(--line-w) solid color-mix(in srgb, var(--cli, var(--ink-faint)) 40%, transparent);
+  color: var(--cli, var(--ink-dim));
+  background: color-mix(in srgb, var(--cli, var(--ink-faint)) 9%, transparent);
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  letter-spacing: 0.04em;
+}
+.pcli[data-cli="pi"]     { --cli: var(--cli-pi); }
+.pcli[data-cli="claude"] { --cli: var(--cli-claude); }
+.pcli[data-cli="codex"]  { --cli: var(--cli-codex); }
+
+.phead-spacer { flex: 1; min-width: var(--space-2); }
+
+/* The context meter — pi reports contextUsage{tokens,contextWindow,percent},
+   so this is a reported figure, not an estimate. It is a rule, not a ring:
+   a progress ring standing in for content is the decorative version. */
+.ctxmeter {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  color: var(--ink-faint);
+}
+.ctxmeter-track {
+  width: 44px; height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--line);
+  overflow: hidden;
+}
+/* Scaled, not re-widthed. A `width` transition is a layout property and this
+   one ticks on every usage event, which in the storm fixture is hundreds of
+   times — the same argument as the coalesced scroll-follow in render.js, one
+   surface up. transform-origin pins the growth to the left edge so it still
+   reads as a filling bar. */
+.ctxmeter-fill {
+  height: 100%;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: var(--ink-faint);
+  border-radius: inherit;
+  transition: transform var(--dur-base) var(--ease), background var(--dur-base) var(--ease);
+}
+/* Context pressure is a STATE the human acts on, so past the compaction
+   threshold it takes the attention dye and then the danger dye. */
+.ctxmeter[data-pressure="warn"] .ctxmeter-fill { background: var(--state-attention); }
+.ctxmeter[data-pressure="high"] .ctxmeter-fill { background: var(--state-danger); }
+
+/* ---------------------------- the transcript ----------------------------- */
+
+.scroll {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  background: var(--surface-term);
+}
+
+.transcript {
+  position: relative;
+  padding: var(--space-4) var(--space-4) var(--space-6) 0;
+  /* The rail the whole transcript hangs off. Every row indents past it, so the
+     thread is never interrupted by content. */
+  padding-left: calc(var(--gutter) + var(--run-pad));
+}
+
+/* THE WARP GUTTER — the signature, at its third scale. One continuous 2px
+   thread down the transcript's left edge, drawn per-row so each row paints its
+   own segment, which means the thread reads as a timeline of what the agent
+   was doing rather than as a border on a box. Collapsing a block leaves its
+   segment in place: you can still see that thinking happened there. */
+.row {
+  position: relative;
+  margin: 0;
+}
+
+.row::before {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  left: calc(-1 * (var(--gutter) + var(--run-pad)) + var(--gutter) / 2 - var(--thread) / 2);
+  width: var(--thread);
+  background: var(--seg, var(--state-idle));
+  transition: background var(--dur-base) var(--ease);
+}
+
+/* The gutter's whole vocabulary — the six state dyes, and nothing else. An
+   event that is not an agent state is marked by FORM, never by borrowing a hue
+   from the identity or interaction channel. */
+.row[data-seg="working"]   { --seg: var(--state-working); }
+.row[data-seg="thinking"]  { --seg: var(--state-held); }
+.row[data-seg="ok"]        { --seg: var(--state-ok); }
+.row[data-seg="danger"]    { --seg: var(--state-danger); }
+.row[data-seg="attention"] { --seg: var(--state-attention); }
+.row[data-seg="idle"]      { --seg: var(--state-idle); }
+
+/* A row still streaming carries the live dye at full strength; a settled one
+   keeps its dye but steps back, so the eye lands on the live end of the
+   thread without the history going invisible. */
+.row:not([data-live="1"])::before { opacity: 0.72; }
+
+.row[data-seg="attention"][data-live="1"]::before { animation: warp-pulse 1.9s var(--ease) infinite; }
+
+/* --- arrival. One authored moment, 120ms, from an already-visible default:
+   a row that fails to animate is still a legible row. Rise is 3px, not a
+   slide — this is a log, and content that travels reads as noise at 40 ev/s. */
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
+}
+.row { animation: row-in var(--dur-fast) var(--ease) both; }
+
+/* --- assistant text. The default voice: no card, no chrome, just prose in the
+   ink ramp, because the model's answer is the content and everything else in
+   this transcript is apparatus around it. */
+.say {
+  padding: var(--space-2) 0;
+  font-size: var(--text-m);
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 74ch;
+}
+
+/* The streaming caret. Continuous while bytes arrive and gone the instant they
+   stop — the live-text analogue of the attention pulse, reporting a state
+   rather than decorating one. It is the accent, which is what the accent is
+   for: "the focus ring, the caret". */
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: caret-blink 1.05s steps(1, end) infinite;
+}
+@keyframes caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+
+/* --- thinking. Quiet by construction: the faint ink, a hairline left rule
+   inside the content column (not a colour bar — a 1px rule is the hairline the
+   whole app separates with), and collapsed to a single summary line by default
+   past the first few. It is the one block the eye should be able to skip. */
+.think {
+  margin: var(--space-2) 0;
+  color: var(--ink-faint);
+}
+
+.think-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) 0;
+  font: inherit;
+  font-size: var(--text-s);
+  color: var(--ink-faint);
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+.think-head:hover { color: var(--ink-dim); }
+.think-head svg { width: 12px; height: 12px; flex: none; }
+
+/* Quiet, but still a CONTROL: a collapsed thinking block is something the
+   human clicks, so its label has to be legible enough to aim at. --ink-faint
+   is below AA by design and is for meta and rules — this is neither, so the
+   word takes --ink-dim and only the duration stays faint. */
+.think-word { letter-spacing: 0.02em; color: var(--ink-dim); }
+.think-dur { font-family: var(--font-mono); font-size: var(--text-eyebrow); font-variant-numeric: tabular-nums; }
+
+.think-body {
+  border-left: var(--line-w) solid var(--line);
+  padding: var(--space-1) 0 var(--space-2) var(--space-3);
+  margin-left: 3px;
+  font-size: var(--text-s);
+  line-height: 1.5;
+  color: var(--ink-faint);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 72ch;
+}
+
+/* --- expand / collapse. grid-template-rows 0fr->1fr animates to the content's
+   real height with no measured pixel value, so a block whose content is still
+   streaming does not need re-measuring on every delta. */
+.fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur-base) var(--ease);
+}
+.fold > * { min-height: 0; overflow: hidden; }
+[data-open="0"] > .fold { grid-template-rows: 0fr; }
+
+.chev { transition: transform var(--dur-base) var(--ease); }
+[data-open="0"] .chev { transform: rotate(-90deg); }
+
+/* --- tool cards. A card is a real object here — it has a lifecycle, a
+   duration and an outcome — which is what earns the container. State is
+   carried by the glyph, the chip and the gutter segment; there is deliberately
+   no coloured left border, which would be a costume for the state the thread
+   already reports. */
+.tool {
+  margin: var(--space-2) 0;
+  background: var(--surface-2);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+  transition: border-color var(--dur-base) var(--ease);
+}
+.tool[data-status="error"] { border-color: color-mix(in srgb, var(--state-danger) 45%, transparent); }
+
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.tool-head:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+
+/* The tool glyph takes the IDENTITY channel — which family of thing is this,
+   never what state it is in. Read/Write/Edit are content, Bash is source,
+   Grep/Glob are workspace, a failing call is danger. */
+.tool-ic { flex: none; width: 14px; height: 14px; color: var(--tool-hue, var(--ink-dim)); }
+.tool[data-family="content"]   { --tool-hue: var(--id-jade); }
+.tool[data-family="workspace"] { --tool-hue: var(--id-cyan); }
+.tool[data-family="source"]    { --tool-hue: var(--id-amber); }
+.tool[data-family="fleet"]     { --tool-hue: var(--id-violet); }
+.tool[data-family="vcs"]       { --tool-hue: var(--id-lime); }
+
+.tool-name {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-s);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* The argument line — the one thing that makes a collapsed card worth reading:
+   a path, a pattern, a command. Truncates from the LEFT for paths, because the
+   end of a path is the part that identifies it. */
+.tool-arg {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.tool-arg > span { direction: ltr; unicode-bidi: bidi-override; }
+
+.tool-dur {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+
+/* --- the status chip. The app's third state position. `pending` and `running`
+   carry no outcome yet, so they are marked by form (a hollow ring, a moving
+   arc) rather than by a dye that would pre-announce a result. */
+.chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 17px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-s);
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  letter-spacing: 0.03em;
+  border: var(--line-w) solid color-mix(in srgb, var(--chip-hue, var(--ink-faint)) 40%, transparent);
+  color: var(--chip-hue, var(--ink-dim));
+  background: color-mix(in srgb, var(--chip-hue, var(--ink-faint)) 10%, transparent);
+  transition: color var(--dur-base) var(--ease),
+              border-color var(--dur-base) var(--ease),
+              background var(--dur-base) var(--ease);
+}
+.chip[data-status="pending"] { --chip-hue: var(--state-held); }
+.chip[data-status="running"] { --chip-hue: var(--state-working); }
+.chip[data-status="ok"]      { --chip-hue: var(--state-ok); }
+.chip[data-status="error"]   { --chip-hue: var(--state-danger); }
+.chip[data-status="denied"]  { --chip-hue: var(--state-danger); }
+.chip[data-status="allowed"] { --chip-hue: var(--state-ok); }
+
+/* The working mark. A 2px arc on a 2px ring — the same weight as the warp,
+   because this app has two weights and no third. It turns only while the call
+   is actually running, so it reports rather than decorates. */
+.spin {
+  width: 9px; height: 9px;
+  border-radius: var(--radius-pill);
+  border: 2px solid color-mix(in srgb, var(--chip-hue) 25%, transparent);
+  border-top-color: var(--chip-hue);
+  animation: spin 720ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.dotmark {
+  width: 7px; height: 7px;
+  border-radius: var(--radius-pill);
+  box-shadow: inset 0 0 0 1.5px var(--chip-hue);
+}
+.chip[data-status="ok"] .dotmark,
+.chip[data-status="allowed"] .dotmark { background: var(--chip-hue); box-shadow: none; }
+
+/* --- the card body: arguments, output, diffs. */
+.tool-body {
+  border-top: var(--line-w) solid var(--line);
+  background: var(--surface-term);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+.kv dt { color: var(--ink-faint); white-space: nowrap; }
+.kv dd { margin: 0; color: var(--ink-dim); overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* Output is a machine's literal bytes: mono, dim, and capped in height with
+   its own scroll so a 4000-line result cannot push the live end of the
+   transcript off the screen. This is the ring/virtualisation stance made
+   visible — the storm fixture is what it is for. */
+.out {
+  margin: 0;
+  padding: var(--space-3);
+  max-height: 260px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-top: var(--line-w) solid var(--line);
+}
+.out:first-child { border-top: 0; }
+.out[data-error="1"] { color: color-mix(in srgb, var(--state-danger) 78%, var(--ink)); }
+
+/* The elision notice a ring leaves behind. It is a fact about the transcript,
+   so it is stated, not hidden. */
+.elided {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  letter-spacing: 0.03em;
+  color: var(--ink-faint);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+  border-top: var(--line-w) solid var(--line);
+}
+
+/* --- diffs. Edit tools get a real diff, not a JSON blob: the add/delete dyes
+   are the identity channel's sanctioned diff role, and the ground wash is the
+   documented exception to "the accent paints marks, never grounds" — these are
+   the STATE and IDENTITY channels, which the role table lets wash a ground. */
+.diff {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  overflow-x: auto;
+}
+.diff-line { display: grid; grid-template-columns: 3.5ch 1ch minmax(0, 1fr); }
+.diff-line > .ln { color: var(--ink-faint); text-align: right; padding-right: var(--space-2); user-select: none; }
+.diff-line > .sg { color: var(--ink-faint); user-select: none; }
+.diff-line > .tx { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-dim); }
+.diff-line[data-k="add"] { background: color-mix(in srgb, var(--id-jade) 12%, transparent); }
+.diff-line[data-k="add"] > .sg,
+.diff-line[data-k="add"] > .tx { color: color-mix(in srgb, var(--id-jade) 62%, var(--ink)); }
+.diff-line[data-k="del"] { background: color-mix(in srgb, var(--id-rose) 12%, transparent); }
+.diff-line[data-k="del"] > .sg,
+.diff-line[data-k="del"] > .tx { color: color-mix(in srgb, var(--id-rose) 62%, var(--ink)); }
+.diff-hunk { padding: var(--space-1) var(--space-3); color: var(--ink-faint); background: color-mix(in srgb, var(--ink) 3%, transparent); }
+
+/* --- shell commands. Given their own block rather than a generic tool card,
+   because a command is read differently: you read the command line first, the
+   output second, and the exit status decides whether you read the output at
+   all. The `$` is faint ink, not the accent — the accent means "you can act on
+   this", and a command that already ran is not actionable. */
+.cmd {
+  margin: var(--space-2) 0;
+  background: var(--surface-2);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+  transition: border-color var(--dur-base) var(--ease);
+}
+.cmd[data-status="error"] { border-color: color-mix(in srgb, var(--state-danger) 45%, transparent); }
+
+.cmd-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.cmd-head:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+
+.cmd-sigil { flex: none; font-family: var(--font-mono); font-size: var(--text-s); color: var(--ink-faint); user-select: none; }
+
+.cmd-line {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-s);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmd-meta { flex: none; display: flex; align-items: center; gap: var(--space-2); align-self: center; }
+
+/* --- deliveries. An inbound message is not an agent state, so it takes no
+   gutter dye: it is marked by FORM — a full-width hairline rule that visibly
+   interrupts the transcript, and a drawn inbound glyph. That interruption is
+   the point: a delivery is the one thing in this stream the agent did not
+   produce, and it should read as a seam rather than as another paragraph. */
+.deliv {
+  margin: var(--space-5) 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-1);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+}
+
+.deliv-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.deliv-head svg { width: 13px; height: 13px; flex: none; color: var(--ink-dim); }
+.deliv-from { color: var(--ink-dim); font-weight: 600; }
+.deliv-head .grow { flex: 1; }
+.deliv-ts { font-family: var(--font-mono); text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+
+.deliv-body {
+  font-size: var(--text-s);
+  line-height: 1.55;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 74ch;
+}
+
+/* A human's own words are the one inbound kind that gets the accent — as a
+   mark on the seam, not a wash: the human is the interaction channel. */
+.deliv[data-from="human"] { border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
+.deliv[data-from="human"] .deliv-head svg { color: var(--accent); }
+.deliv[data-from="human"] .deliv-body { color: var(--ink); }
+
+/* --- turn boundaries. A hairline rule with the turn's receipt sitting on it.
+   Structural, not decorative: TurnEnded is where usage, cost and the stop
+   reason arrive, and a turn is the unit a human scrolls by. */
+.turnrule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-5) 0 var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.turnrule::after {
+  content: "";
+  flex: 1;
+  height: var(--line-w);
+  background: var(--line-strong);
+}
+/* A turn is the unit a human scrolls by, so its label is a real landmark
+   rather than a whisper: the first span is the turn, set in the ink a label
+   takes, and the rule beside it runs to the edge so the eye can find it while
+   skimming past twenty tool cards. */
+.turnrule > span:first-child { color: var(--ink); font-weight: 600; }
+.turnrule .stop { color: var(--ink-dim); }
+.turnrule[data-stop="error"] .stop { color: var(--state-danger); }
+
+/* --- compaction. The transcript's own history being rewritten, so it reads as
+   a seam of a different kind: a dashed rule, which is the form the app already
+   uses for "held" — a thread that is present but not carrying. */
+.compact {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-5) 0;
+  padding: var(--space-2) 0;
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  border-top: var(--line-w) dashed var(--line-strong);
+  border-bottom: var(--line-w) dashed var(--line-strong);
+}
+.compact svg { width: 13px; height: 13px; flex: none; }
+.compact .num { font-family: var(--font-mono); color: var(--ink-dim); }
+
+/* --- UI requests. The one block in this transcript the human must act on, so
+   it is the one block that carries the attention dye AND the pulse. It is
+   INLINE, never a modal: doc/design/harness-adapters.md §3.3 refuses a dialog
+   in the pane outright — a dialog on an orchestrator's screen stops that pane
+   taking any delivery and strands every agent reporting to it (#946). An
+   inline card leaves the pane alive while the request waits. */
+.ask {
+  margin: var(--space-4) 0;
+  background: var(--surface-2);
+  border: var(--line-w) solid color-mix(in srgb, var(--state-attention) 42%, transparent);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+}
+.ask[data-open="pending"] { animation: ask-in var(--dur-base) var(--ease) both; }
+
+@keyframes ask-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.ask-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: color-mix(in srgb, var(--state-attention) 10%, transparent);
+  border-bottom: var(--line-w) solid color-mix(in srgb, var(--state-attention) 25%, transparent);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--state-attention);
+}
+.ask-head svg { width: 13px; height: 13px; flex: none; }
+.ask-head .grow { flex: 1; }
+.ask-method { font-family: var(--font-mono); text-transform: none; letter-spacing: 0; color: var(--ink-faint); }
+
+.ask-body { padding: var(--space-3); }
+
+.ask-title { font-size: var(--text-m); font-weight: 600; color: var(--ink); margin: 0 0 var(--space-2); }
+
+.ask-what {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-term);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ask-what b { color: var(--ink); font-weight: 600; }
+/* Prose written for the human, not a literal the machine handed us. */
+.ask-what[data-prose="1"] {
+  font-family: var(--font-ui);
+  font-size: var(--text-s);
+  color: var(--ink-dim);
+  background: none;
+  border: 0;
+  padding: 0 0 var(--space-1);
+  max-width: 68ch;
+}
+
+.ask-acts { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 26px;
+  padding: 0 var(--space-4);
+  font: inherit;
+  font-size: var(--text-s);
+  font-weight: 600;
+  color: var(--ink-dim);
+  background: var(--surface-term);
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease),
+              background var(--dur-fast) var(--ease);
+}
+.btn:hover { color: var(--ink); border-color: var(--ink-faint); }
+.btn:active { background: var(--surface-2); }
+
+/* The primary action is the accent as a MARK — a 1px edge and the ink, never a
+   gold fill. `--accent` paints marks, rings and carets; a gold button ground is
+   the exact move src/theme.ts's ramp comment forbids. */
+.btn-primary { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.btn-primary:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.btn-danger { color: var(--state-danger); border-color: color-mix(in srgb, var(--state-danger) 45%, transparent); }
+.btn-danger:hover { border-color: var(--state-danger); background: color-mix(in srgb, var(--state-danger) 10%, transparent); }
+
+.ask-hint { margin-left: auto; font-size: var(--text-eyebrow); color: var(--ink-faint); font-family: var(--font-mono); }
+
+/* Settled: the card goes quiet and records who decided. A settled request must
+   still be readable — it is the audit trail — so it collapses to one line
+   rather than disappearing. */
+.ask[data-open="settled"] { border-color: var(--line); }
+.ask[data-open="settled"] .ask-head { background: none; border-bottom-color: var(--line); color: var(--ink-faint); }
+.ask[data-open="settled"] .ask-head svg { color: var(--ink-faint); }
+
+/* --- notes: [orrerix] notices, retries, extension errors. Not the agent's
+   voice and not a delivery — the harness talking about itself. Faint, mono,
+   and set apart by a leading rule rather than a container. */
+.note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+  border-left: var(--line-w) solid var(--line-strong);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+.note .tag { flex: none; color: var(--ink-dim); }
+.note[data-kind="warn"] { border-left-color: color-mix(in srgb, var(--state-attention) 55%, transparent); }
+.note[data-kind="warn"] .tag { color: var(--state-attention); }
+.note[data-kind="error"] { border-left-color: color-mix(in srgb, var(--state-danger) 55%, transparent); }
+.note[data-kind="error"] .tag { color: var(--state-danger); }
+
+/* --------------------------- the footer ticker --------------------------- */
+/* Usage, cost and the queue. One row, mono, tabular — every figure here is one
+   the human compares against the last time they looked, so the digits must not
+   shift position as they change. pi reports these (session stats carry
+   cost.total and contextUsage), so nothing here is an estimate. */
+
+.ticker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: var(--pane-header-h);
+  padding: 0 var(--space-3) 0 calc(var(--thread) + var(--space-3));
+  background: var(--surface-1);
+  border-top: var(--line-w) solid var(--line);
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.tk { display: inline-flex; align-items: baseline; gap: 5px; }
+.tk-k { letter-spacing: var(--tracking-eyebrow); text-transform: uppercase; }
+.tk-v { color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.tk-v.money { color: var(--ink); }
+
+/* A figure that just moved gets one 320ms lift and settles. It reports a
+   change; it does not loop. */
+.tk-v.bumped { animation: tk-bump 320ms var(--ease); }
+@keyframes tk-bump {
+  0%   { color: var(--accent); }
+  100% { color: inherit; }
+}
+
+.ticker .grow { flex: 1; min-width: 0; }
+
+/* The queue indicator. QueueChanged carries steering[] and followUp[]; a queued
+   delivery is work the agent has accepted but not started, which is a fact the
+   supervisor needs at a glance. Zero renders as nothing at all — an empty queue
+   is not news. */
+.queue {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  height: 16px;
+  border-radius: var(--radius-s);
+  border: var(--line-w) solid var(--line-strong);
+  color: var(--ink-dim);
+  transition: opacity var(--dur-base) var(--ease), border-color var(--dur-base) var(--ease);
+}
+.queue[hidden] { display: none; }
+.queue svg { width: 11px; height: 11px; }
+.queue.bumped { animation: queue-bump var(--dur-base) var(--ease); }
+@keyframes queue-bump {
+  0%   { border-color: var(--accent); color: var(--accent); }
+  100% { border-color: var(--line-strong); color: var(--ink-dim); }
+}
+
+/* --------------------------- the compose strip --------------------------- */
+/* #43's compose strip is the input for a structured pane: write_pty is refused
+   (§5.5), so there is no keyboard path into the child except Turn::Human. The
+   strip is shown disabled here — S0 is a mock and the wiring is S4's. */
+
+.compose {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-2) calc(var(--thread) + var(--space-3));
+  background: var(--surface-0);
+  border-top: var(--line-w) solid var(--line);
+}
+
+.compose-in {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 var(--space-3);
+  font: inherit;
+  font-size: var(--text-s);
+  color: var(--ink);
+  background: var(--surface-term);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.compose-in::placeholder { color: var(--ink-faint); }
+.compose-in:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+
+/* ---------------------------- reduced motion ----------------------------- */
+/* Every looping cue stops and every transition collapses. A caret that cannot
+   blink stays SOLID rather than vanishing: it still reports "bytes are
+   arriving", which is the state it exists to carry. */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  .caret { animation: none !important; opacity: 1; }
+  .spin { animation: none !important; border-top-color: var(--chip-hue); }
+  .pane[data-state="attention"]::before,
+  .row[data-seg="attention"][data-live="1"]::before { animation: none !important; }
+}
+
+/* The same, driven by the demo's own toggle, so the human can see both
+   readings without changing an OS setting. */
+.stage[data-motion="off"] *,
+.stage[data-motion="off"] *::before,
+.stage[data-motion="off"] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+}
+.stage[data-motion="off"] .caret { animation: none !important; opacity: 1; }
+.stage[data-motion="off"] .spin { animation: none !important; border-top-color: var(--chip-hue); }

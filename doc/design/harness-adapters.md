@@ -128,7 +128,7 @@ compiling and keeps working, minus what it does not read.
 | variant | what it says | decoder source |
 |---|---|---|
 | `Thinking{turn, delta}` | streamed reasoning, which is NOT assistant text and must never be concatenated into it — a renderer that quiets thinking (#2891) cannot do so if the two share a variant | pi: `message_update` whose `assistantMessageEvent.type` is `thinking_delta`; claude: the equivalent reasoning delta, R2's to bind |
-| `ToolOutput{turn, id, delta, is_error}` | a tool's output as it streams, keyed to the `ToolUseId` of the `ToolCall` it belongs to. `ToolResult{ok}` still fires once at the end and still carries the verdict; `ToolOutput` carries the bytes, which `ToolResult` never did | pi: `tool_execution_update` (`partialResult`) and `tool_execution_end` (`result`, `isError`) |
+| `ToolOutput{turn, id, delta, is_error}` | a tool's output as it streams, keyed to the `ToolUseId` of the `ToolCall` it belongs to. `ToolResult{ok}` still fires once at the end and still carries the verdict; `ToolOutput` carries the bytes, which `ToolResult` never did | pi: `tool_execution_update` (`partialResult`) and `tool_execution_end` (`result`, `isError`) — **accumulated, not incremental; see below** |
 | `UiRequest{id, method, title, message, options, timeout_ms}` | the harness is asking a HUMAN a question and is blocked on the answer. It is not a `PermissionRequest`: a permission request is a policy decision `permissions.json` may settle without anyone (§3.2), and conflating the two would put an arbitrary extension prompt through a ladder written for tool policy | pi: `extension_ui_request` whose `method` is a dialog method (`select`, `confirm`, `input`, `editor`); the fire-and-forget methods are a `Note`, never this |
 | `UiSettled{id, answer, by}` | that question is closed, by whom, and with what. `by: DecisionSource` is the same field `PermissionSettled` carries, for the same reason: an audit that records the answer and not the answerer records nothing worth keeping | the driver's own reply, or the harness self-resolving its own `timeout` (`by: Policy`) |
 | `QueueChanged{steering, follow_up}` | what the harness has accepted but not yet run. orrerix's `queue` is the front door and stays so; this is the harness's own downstream queue, and without it a delivered turn that is merely QUEUED is indistinguishable from one being worked | pi: `queue_update` (`steering[]`, `followUp[]`) |
@@ -136,6 +136,25 @@ compiling and keeps working, minus what it does not read.
 **`timeout_ms` is descriptive, not a control.** It reports a deadline the
 HARNESS is keeping, so a renderer can show one; orrerix never starts a timer
 of its own against it, for §3.5's reason.
+
+**`ToolOutput.delta` is a DELTA, and one harness will have to convert.** The
+two sources disagree: pi's `partialResult` "contains the accumulated output so
+far (not just the delta), allowing clients to simply replace their display on
+each update" (`docs/rpc.md:1055` at 0.85.1), while a delta is what a
+stream-json reader gets natively. The contract picks the delta, because the
+conversion only goes one way cheaply — a consumer can accumulate deltas with no
+state, whereas recovering a delta from an accumulation needs the previous value,
+which the ADAPTER already holds and a consumer does not. Making the field
+carry whichever the harness happened to send would push that state into every
+renderer instead, and there is more than one.
+
+So the pi decoder subtracts: it keeps the last `partialResult` per
+`ToolUseId` and emits the suffix. Its precondition is that each update is a
+PREFIX-extension of the last, which is what "simply replace their display"
+implies but does not promise — so **S1b owes the failure case as a test, not as
+an assumption**: an update that is not an extension of its predecessor emits
+the whole new value and records that it did, rather than emitting a silently
+wrong suffix.
 
 ### 1.3 How a PTY pane maps onto it — and how "unknown" is spelled
 

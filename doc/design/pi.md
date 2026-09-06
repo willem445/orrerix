@@ -555,13 +555,45 @@ emits is SAFE to emit, which is the property claude's fallback rule gives, but
 it is not COST-neutral, and a cheap-tier roster that picked `medium` to avoid
 `high` may be paying for `high` on every turn.
 
-The per-model supported set is **not** in the installed package: it comes from
-the live model catalog pi fetches, and `getSupportedThinkingLevels` reads each
-model's own `thinkingLevelMap` (`models.js:551-562`). So which levels a given
-model supports is a live question — #2938 observed `--thinking medium`
-displaying as `high` on `openrouter/z-ai/glm-5.3-flash`, which is exactly what
-the clamp above produces, and the effective set for that model stays that
-issue's to record from a live run.
+**The per-model set is bundled, so the effective level is derivable without
+running anything.** `getSupportedThinkingLevels` reads each model's own
+`thinkingLevelMap` (`models.js:551-562`), and the catalogue that carries the
+map ships INSIDE the package: `pi-ai/dist/providers/data/openrouter.json`,
+imported by the auto-generated `providers/openrouter.models.js`
+(`import values from "./data/openrouter.json"`) and registered by
+`providers/all.js`.
+
+For `openrouter/z-ai/glm-5.3-flash`, that map is:
+
+```json
+{"off": null, "minimal": null, "low": "low", "medium": null,
+ "high": "high", "xhigh": null, "max": "max"}
+```
+
+A `null` means the level is not offered, and `xhigh`/`max` additionally
+require an entry to be present at all — so the supported set is
+`low, high, max`, and `--thinking medium` reaches the model as **`high`**.
+That is #2938's observation with its mechanism attached: the status line was
+not cosmetic.
+
+**The effective level per level, on that model:**
+
+| `--thinking` | reaches the model as |
+|---|---|
+| `off`, `minimal`, `low` | `low` |
+| `medium`, `high` | `high` |
+| `xhigh`, `max` | `max` |
+
+`off` and `minimal` clamping UP to `low` is the same rule seen from the
+bottom: a model with no `off` entry cannot be asked to stop reasoning, so the
+cheapest reachable level is what it gets.
+
+**The one live caveat, and it is a caveat rather than an absence.** The
+bundled catalogue is a snapshot that moves when the package version moves, and
+a provider may change a model's map between releases. So this table is a fact
+about 0.85.1, re-derived when the pin row moves — not a fact about
+`glm-5.3-flash` for all time. What it is NOT is unknowable without a live
+run, which is what an earlier draft of this section wrongly said.
 
 `context_variants` is empty: pi's `--list-models` REPORTS a context column,
 and no flag, setting or session control selects a variant.
@@ -796,7 +828,7 @@ mechanism and does not apply to a pane with no PTY.
 
 | `HarnessEvent` / trait method | pi command | source |
 |---|---|---|
-| `send(Turn)` | `prompt {message, streamingBehavior}` — `followUp` for a delivery, since a turn is a turn and never a mid-turn interjection | `docs/rpc.md:193-230` |
+| `send(Turn)` | `prompt {message, streamingBehavior}` — `followUp` for a delivery, since a turn is a turn and never a mid-turn interjection | `docs/rpc.md:43-77` |
 | (pi-only, for a future steer) | `steer` | `docs/rpc.md:80` |
 | (pi-only) | `follow_up` | `docs/rpc.md:102` |
 | `interrupt()` | `abort` | `docs/rpc.md:124` |
@@ -806,9 +838,9 @@ mechanism and does not apply to a pane with no PTY.
 
 **`prompt` gives a real acknowledgement, and it is not a completion.** "The
 command response is emitted after the prompt is accepted, queued, or handled"
-(`docs/rpc.md:195`), and `success: false` "means the prompt was rejected
+(`docs/rpc.md:45`), and `success: false` "means the prompt was rejected
 before acceptance", while a failure *after* acceptance arrives on the event
-stream and never as a second response for that id (`:222-224`). So the driver
+stream and never as a second response for that id (`:76`). So the driver
 correlates the response by command id and the drainer gets a genuine
 delivered-or-rejected verdict — the first harness where that is not an echo
 check — but "accepted" is all it means.

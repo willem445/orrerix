@@ -1410,7 +1410,7 @@ impl TranscriptCursors {
             let mut map = self.cursors.lock_safe();
             map.retain(|_, e| e.used.elapsed() < CURSOR_TTL);
             let entry = map
-                .entry((kind, root.to_path_buf(), session_id.to_string()))
+                .entry((TranscriptKind::Claude, root.to_path_buf(), session_id.to_string()))
                 .or_insert_with(|| CursorEntry {
                     used: Instant::now(),
                     cursor: Arc::new(TrackedMutex::new("usage_cursor_cell", None)),

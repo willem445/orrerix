@@ -42032,6 +42032,8 @@ fn gh_shim_script_enforces_the_workflow_merge_gate() {
     assert!(sh.contains("set -f"), "no pathname expansion over gate-file tokens");
     assert!(sh.contains("unknown-condition"), "an also: condition this build can't check refuses");
     assert!(sh.contains("ci-green") && sh.contains("pr checks"), "ci-green is checked with the real gh");
+    assert!(sh.contains("--json mergeStateStatus") && sh.contains("mergeability-unknown"),
+        "a non-zero `pr checks` is disambiguated: GitHub still recomputing mergeability polls and refuses `mergeability-unknown`, a real red stays `ci-not-green` (#2943)");
     assert!(sh.contains("body-unchanged") && sh.contains("--json body"),
         "and the opt-in body-unchanged condition re-reads the PR body with the real gh (#565)");
     // #1174. Both behavioural claims are EXECUTED in the two harness tests below;

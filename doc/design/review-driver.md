@@ -2400,6 +2400,19 @@ specified rather than left to whichever lands first:
   PR's head, so no lane can be reviewing a revision the queue replaced
   underneath it. A worker's own push is a different thing entirely and is
   handled by §2.1 arc 6.
+- **A non-zero `gh pr checks` can mean GitHub is still recomputing
+  mergeability, not a red.** Right after a base move, `mergeStateStatus` reads
+  `UNKNOWN` for a while (#2943, #3061), and the shim's `ci-green` arm used to
+  refuse that as `ci-not-green`, sending the orchestrator off to retry by hand.
+  The arm now reads `mergeStateStatus` once and, on `UNKNOWN`, polls — up to
+  three more reads, 20 s apart (`ORRERIX_MSS_POLL_SECS` shortens the interval
+  for tests only). `CLEAN` reached after a poll means GitHub settled and the
+  gate proceeds to its remaining arms; a PR still `UNKNOWN` after the last poll
+  refuses with the reason `mergeability-unknown` — a retry, not a defect. A
+  genuinely failing check (any other state, or an unreadable one) still refuses
+  `ci-not-green`, and so does a first-read `CLEAN`: checks non-zero with the
+  state already settled is the no-checks-reported case, and a gate asking for
+  green CI is not satisfied by an absent check.
 
 ## 9. What is deliberately not in v1
 

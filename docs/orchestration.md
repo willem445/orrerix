@@ -1403,8 +1403,20 @@ their own sessions, so orrerix **reports** their numbers instead of guessing one
 (including a genuine $0.00 on a free model, which is an answer, not a blank). Each
 total is labelled accordingly — *estimated*, *reported*, or *mixed* for a group
 running both kinds.
+Codex records tokens and no dollars at all, and orrerix's price table has no Codex
+model in it, so a Codex agent shows exact tokens and a **blank** dollar figure
+rather than an invented one.
 A CLI with no readable record falls back to whatever dollar figure it prints in its
 own statusline, which disappears when the pane does.
+
+**Two things that make Codex rows look empty, and neither is a fault.** A Codex
+pane has no usage at all until orrerix has identified which session it is running
+— Codex offers no way to tell it a session id up front, so orrerix watches its
+store and binds the one the pane creates, which happens when the pane does its
+first real work. And Codex compresses a session's transcript about a week after
+its last write; orrerix does not decompress, so a session that old reports no
+usage. Live panes are never affected. What you can lose is the lifetime figure
+for an old session that was never snapshotted when its agent exited.
 
 **When the panel says `stale`.** The lifecycle panel and the tab strip's agent
 counts are served from a snapshot orrerix refreshes about once a second, rather

@@ -667,6 +667,196 @@ pub fn pi_session_usage_in(dir: &Path, session_id: &str) -> Option<SessionUsage>
 }
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// codex rollout parsing (#2515 slice C3)
+// ---------------------------------------------------------------------------
+
+/// One codex `TokenUsage` object mapped onto loomux's four buckets.
+///
+/// **The buckets here are DISJOINT and codex's are not**, which is the whole of
+/// this function and the one thing to get right. Read at `rust-v0.153.4`
+/// (`codex-api/src/sse/responses.rs`, `impl From<ResponseCompletedUsage> for
+/// TokenUsage`), codex copies the Responses API's own shape straight through:
+/// `input_tokens` is the WHOLE prompt count, and `cached_tokens` /
+/// `cache_write_tokens` are fields of `input_tokens_details` -- details OF that
+/// number, not additions to it. Its own vendor test pins the arithmetic:
+/// `input_tokens: 100` with `cached_tokens: 40` and `cache_write_tokens: 60`,
+/// `output_tokens: 10`, and `total_tokens: 110` -- i.e. input + output, with
+/// the two cache figures already inside the input half.
+///
+/// loomux's [`TokenUsage::total`] sums all four buckets, so mapping
+/// `input_tokens` across whole would count the cached and written halves twice
+/// and report 210 for a turn codex itself calls 110. So the fresh-input bucket
+/// is `input_tokens` MINUS both details, and the identity that falls out is the
+/// one to check a fixture against: this mapping's `total()` equals codex's own
+/// `total_tokens`. The plan's D8 named only the two cache mappings and was
+/// silent on the subtraction; the correction is argued in
+/// `doc/design/codex.md` under Usage.
+///
+/// `saturating_sub` rather than a plain one, and it is what bounds the residual:
+/// if a future codex ever made `cache_write_input_tokens` genuinely disjoint
+/// from `input_tokens`, this would under-report fresh input rather than
+/// underflow to a colossal number. Failing toward a smaller figure is the right
+/// direction for a meter whose one refusal is a wrong total.
+///
+/// **`reasoning_output_tokens` is NOT added to output** -- pi's rule, on codex's
+/// facts. It is `output_tokens_details.reasoning_tokens`, a detail of
+/// `output_tokens` exactly as the cache figures are of input, so adding it would
+/// double-count for the same reason. That is the opposite of the OpenCode
+/// mapping, whose fifth bucket is genuinely disjoint.
+///
+/// Every field is read as a `u64` with a zero default, so a negative -- codex
+/// types these `i64` and `non_cached_input` clamps at zero for that reason --
+/// or an absent key contributes nothing rather than poisoning the sum.
+fn codex_tokens(usage: &Value) -> TokenUsage {
+    let cache_read = u64_field(usage, "cached_input_tokens");
+    let cache_write = u64_field(usage, "cache_write_input_tokens");
+    TokenUsage {
+        input_tokens: u64_field(usage, "input_tokens")
+            .saturating_sub(cache_read)
+            .saturating_sub(cache_write),
+        output_tokens: u64_field(usage, "output_tokens"),
+        cache_creation_tokens: cache_write,
+        cache_read_tokens: cache_read,
+    }
+}
+
+/// The running state of a codex rollout fold -- the third arm of
+/// [`TranscriptFolder`].
+///
+/// **`payload.usage` per record, never `thread_token_usage`.** A
+/// `token_usage_record` line carries THREE `TokenUsage` objects
+/// (`protocol/src/protocol.rs`, `struct TokenUsageRecord`): `usage` is this one
+/// response's, `turn_token_usage` is the running total for the turn, and
+/// `thread_token_usage` is the running total for the whole thread. Summing any
+/// of the latter two over a file sums a series of prefixes -- a thread of N
+/// responses would report something on the order of N times its real spend, and
+/// it would look plausible. Reading the LAST `thread_token_usage` instead of
+/// summing would be arithmetically right and is still refused: it would break
+/// the incremental cursor's contract, which is that folding the appended region
+/// on top of a partial total is the same as folding the file whole, and only a
+/// per-record SUM has that property.
+///
+/// No dedupe, like [`PiFold`] and unlike claude's: codex appends one record per
+/// completed response and never re-emits, so re-folding the same bytes is
+/// prevented by the cursor's own guards rather than by a set here.
+///
+/// No dollars: codex records tokens only, so `cost_usd` is left to a
+/// [`price_for`] lookup and labelled an ESTIMATE -- the claude posture, not
+/// opencode's or pi's.
+#[derive(Default)]
+struct CodexFold {
+    totals: TokenUsage,
+    /// The model of the LAST `turn_context` line seen. Not a best-priced-by-
+    /// output choice: the question this answers is "which model is this pane
+    /// on", and codex records a fresh `turn_context` per user turn, so the
+    /// latest one is the truth. `turn_context.payload.model` is a required
+    /// `String` at the pin (`struct TurnContextItem`), so a line that parses at
+    /// all either has it or is not a `turn_context`.
+    last_model: Option<String>,
+}
+
+impl CodexFold {
+    /// Fold ONE rollout line in.
+    ///
+    /// A rollout line is `RolloutItemWire` (`history/src/rollout_payload.rs`,
+    /// `#[serde(tag = "type", rename_all = "snake_case")]`) plus a `timestamp`,
+    /// so the two shapes that matter here are
+    /// `{"type":"token_usage_record","payload":{...,"usage":{...}}}` and
+    /// `{"type":"turn_context","payload":{...,"model":"..."}}`.
+    ///
+    /// Everything else -- `session_meta`, `response_item`, `compacted`,
+    /// `event_msg`, `world_state`, and the rest of the wire enum -- carries no
+    /// spend this meter counts and contributes nothing. In particular
+    /// `event_msg`/`token_count` is deliberately ignored even though it carries
+    /// a `total_token_usage`: it is the same cumulative figure
+    /// `thread_token_usage` is, written for the TUI's own display, and summing
+    /// it would multiply the total exactly as described above.
+    ///
+    /// A blank or unparseable line contributes nothing, which is what makes a
+    /// torn last line harmless the moment the cursor holds it back.
+    fn push(&mut self, line: &str) {
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
+        match v.get("type").and_then(Value::as_str) {
+            Some("token_usage_record") => {
+                let Some(usage) = v.pointer("/payload/usage") else { return };
+                let t = codex_tokens(usage);
+                self.totals.input_tokens += t.input_tokens;
+                self.totals.output_tokens += t.output_tokens;
+                self.totals.cache_creation_tokens += t.cache_creation_tokens;
+                self.totals.cache_read_tokens += t.cache_read_tokens;
+            }
+            Some("turn_context") => {
+                if let Some(m) = v.pointer("/payload/model").and_then(Value::as_str) {
+                    if !m.is_empty() {
+                        self.last_model = Some(m.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The session usage as of everything folded in so far.
+    ///
+    /// `cost_usd` is a price-table estimate or `None`: codex writes no dollars
+    /// at all, and no codex model is in [`price_for`]'s table today, so this is
+    /// `None` in practice and the row is tokens-only. That is deliberate --
+    /// inventing an OpenAI price column here would make the group total a guess
+    /// nobody dated -- and the arm still sets `estimated: true`, which is what
+    /// keeps a later priced row honest.
+    fn usage(&self) -> SessionUsage {
+        let price = self.last_model.as_deref().and_then(price_for);
+        SessionUsage {
+            tokens: self.totals,
+            cost_usd: price.map(|p| cost_of(&self.totals, &p)),
+            model: self.last_model.clone(),
+        }
+    }
+}
+
+/// Parse a codex rollout (JSONL text) into summed usage. Pure and
+/// fixture-testable; no codex is ever run (constraint 3).
+pub fn parse_codex_transcript(text: &str) -> SessionUsage {
+    parse_codex_transcript_lines(text.lines())
+}
+
+/// [`parse_codex_transcript`] over a LINE ITERATOR -- the codex twin of
+/// [`parse_pi_transcript_lines`], and for the same reason: the on-disk reader
+/// must never hold the whole file (#1218).
+pub fn parse_codex_transcript_lines<I, S>(lines: I) -> SessionUsage
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut fold = CodexFold::default();
+    for line in lines {
+        fold.push(line.as_ref());
+    }
+    fold.usage()
+}
+
+/// Read and sum a codex session's usage from the human's own store at `root`
+/// (`sessions::codex_sessions_root`), parsing the rollout from byte zero.
+/// `None` when no readable rollout in `root` carries that thread id -- which
+/// includes the compressed case, per `find_codex_session_file`'s doc.
+///
+/// The whole-file counterpart of the polled path, exactly as
+/// [`pi_session_usage_in`] is for pi.
+pub fn codex_session_usage_in(root: &Path, session_id: &str) -> Option<SessionUsage> {
+    let session = PathSegment::parse(session_id).ok()?;
+    let path = loomux_engine::sessions::find_codex_session_file(root, &session)?;
+    let mut cursor = TranscriptCursor::new(TranscriptKind::Codex, path);
+    fold_appended(&mut cursor, false).ok()?;
+    Some(cursor.fold.usage())
+}
 // Incremental transcript reading (#1239)
 // ---------------------------------------------------------------------------
 
@@ -776,6 +966,16 @@ pub enum TranscriptKind {
     Claude,
     /// `<group>/pi/sessions/<timestamp>_<session>.jsonl`, folded by [`PiFold`].
     Pi,
+    /// `<codex home>/sessions/YYYY/MM/DD/rollout-<ts>-<thread>[_<rollout>].jsonl`
+    /// in the HUMAN's own store, folded by [`CodexFold`] (#2515 C3).
+    ///
+    /// The odd one out in this enum, and worth saying where the variants are
+    /// listed: the other two roots hold one file per session at a name a
+    /// caller can spell, and codex's holds a date tree whose file names carry
+    /// a timestamp nobody can re-derive. So its [`transcript_path`] arm is a
+    /// LOOKUP over the store rather than a join, and the answer is remembered
+    /// on the cursor exactly as claude's scan result is.
+    Codex,
 }
 
 /// The per-CLI half of a cursor: how one line of THIS harness's transcript
@@ -789,6 +989,7 @@ pub enum TranscriptKind {
 enum TranscriptFolder {
     Claude(TranscriptFold),
     Pi(PiFold),
+    Codex(CodexFold),
 }
 
 impl TranscriptFolder {
@@ -796,6 +997,7 @@ impl TranscriptFolder {
         match kind {
             TranscriptKind::Claude => TranscriptFolder::Claude(TranscriptFold::default()),
             TranscriptKind::Pi => TranscriptFolder::Pi(PiFold::default()),
+            TranscriptKind::Codex => TranscriptFolder::Codex(CodexFold::default()),
         }
     }
 
@@ -803,6 +1005,7 @@ impl TranscriptFolder {
         match self {
             TranscriptFolder::Claude(f) => f.push(line),
             TranscriptFolder::Pi(f) => f.push(line),
+            TranscriptFolder::Codex(f) => f.push(line),
         }
     }
 
@@ -810,6 +1013,7 @@ impl TranscriptFolder {
         match self {
             TranscriptFolder::Claude(f) => f.usage(),
             TranscriptFolder::Pi(f) => f.usage(),
+            TranscriptFolder::Codex(f) => f.usage(),
         }
     }
 }
@@ -825,12 +1029,20 @@ impl TranscriptFolder {
 /// this reader has one degrade channel (`None` — no usage for that id), which
 /// is the same answer it already gives for a transcript that has not been
 /// written yet, so both non-answers collapse into it.
+///
+/// codex's arm is a LOOKUP and cannot be anything else: a rollout is named
+/// `rollout-<ts>-<thread>[_<rollout>].jsonl` under a date tree, so no
+/// `format!("{session}.jsonl")` could ever name it — the timestamp is not
+/// derivable and the revert suffix is not predictable. It answers `None` for a
+/// COMPRESSED rollout, which is a decision rather than a miss; see
+/// [`loomux_engine::sessions::find_codex_session_file`].
 fn transcript_path(kind: TranscriptKind, root: &Path, session: &PathSegment) -> Option<PathBuf> {
     match kind {
         TranscriptKind::Claude => claude_transcript_path(root, session),
         TranscriptKind::Pi => {
             crate::orchestration::pi_session_file_in_dir(root, session).ok().flatten()
         }
+        TranscriptKind::Codex => loomux_engine::sessions::find_codex_session_file(root, session),
     }
 }
 
@@ -1017,8 +1229,8 @@ enum Advance {
 /// Streaming, per #1218: one reusable line buffer, never the file. Peak live
 /// bytes are the longest single line plus whatever state the folder carries —
 /// [`TranscriptFold`]'s message-id dedupe set on a `Claude` cursor, and four
-/// counters plus one model id on a `Pi` one, which has no such set (see
-/// [`PiFold`]).
+/// counters plus one model id on a `Pi` or `Codex` one, neither of which has
+/// such a set (see [`PiFold`] and [`CodexFold`] for why neither needs one).
 fn fold_appended(cursor: &mut TranscriptCursor, verify_anchor: bool) -> std::io::Result<Advance> {
     let mut file = fs::File::open(&cursor.path)?;
     let mut bytes_read = 0u64;
@@ -1113,11 +1325,20 @@ fn fold_appended(cursor: &mut TranscriptCursor, verify_anchor: bool) -> std::io:
 /// it instead of a human having to guess.
 pub struct TranscriptCursors {
     /// Keyed by (harness, store root, session id). The `kind` is in the key
-    /// rather than merely inside the cursor because two harnesses' roots are
+    /// rather than merely inside the cursor because the harnesses' roots are
     /// different directories today and nothing here should depend on that
     /// staying true — a cache that answered a pi read out of a claude cursor
     /// because the paths collided would produce a WRONG total, which is the one
     /// failure this whole design refuses.
+    ///
+    /// That is not hypothetical for codex: its store layout is a date TREE
+    /// (`<root>/YYYY/MM/DD/`) and claude's is a folder per encoded cwd, so the
+    /// two can share one root directory without either noticing.
+    /// `a_codex_cursor_and_a_claude_cursor_never_serve_each_others_totals`
+    /// (`tests/codexusage.rs`) builds exactly that fixture — one root, one
+    /// session id, two stores — so the key's `kind` is pinned by a case where
+    /// dropping it really does collide, rather than by two disjoint paths that
+    /// would hold either way.
     cursors: TrackedMutex<HashMap<(TranscriptKind, PathBuf, String), CursorEntry>>,
     /// How long any one cursor may fold incrementally before it is discarded
     /// and re-parsed from zero. [`CURSOR_REVALIDATE_AFTER`] in production;

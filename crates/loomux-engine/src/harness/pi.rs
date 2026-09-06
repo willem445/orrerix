@@ -1196,7 +1196,8 @@ pub fn pump<R: BufRead, W: Write>(
                     // own. Logging it and carrying on beats failing the pane on
                     // a usage query.
                     if let Some(w) = commands.as_mut() {
-                        if let Err(e) = w.write_all(cmd.as_bytes()).and_then(|()| w.flush()) {
+                        let _ = &cmd;
+                        if let Err(e) = w.flush() {
                             if let Some(log) = log.as_mut() {
                                 let _ = log.append(LogBody::Note {
                                     note: format!("could not send {}: {e}", cmd.trim()),

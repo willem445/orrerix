@@ -225,10 +225,7 @@ pub fn parse_series_lines_counted(text: &str) -> (Vec<SeriesRow>, usize) {
             }
             match serde_json::from_str::<SeriesRow>(line) {
                 Ok(r) => Some(r),
-                Err(_) => {
-                    skipped += 1;
-                    None
-                }
+                Err(_) => None,
             }
         })
         .collect();

@@ -136,10 +136,17 @@ const DETAIL_ORDER: readonly RowField[] = [
   "delete",
 ];
 
-/** Every field, once. Derived from the two orders rather than re-listed, so a
- *  field placed on the ladder and forgotten in a render order is caught by
- *  `everyFieldIsPlacedExactlyOnce` rather than by a human reading three lists. */
-export const ROW_FIELDS: readonly RowField[] = [...COMPACT_ORDER, ...DETAIL_ORDER];
+/** Every field, once — read off the LADDER, not off the two render orders.
+ *
+ *  Which way round this is derived is the whole point. `FIELD_TIER` is a
+ *  `Record<RowField, RowTier>`, so `tsc` already makes it total over the union;
+ *  taking the census from it means a field left out of BOTH render orders — a
+ *  field that would silently render nowhere, which no compiler can see — is
+ *  still in this list, and `every field is placed exactly once, on exactly one
+ *  rung` catches it. Derived from `[...COMPACT_ORDER, ...DETAIL_ORDER]` instead,
+ *  that same field would be missing from the census as well and every test over
+ *  it would agree, vacuously, that nothing was wrong. */
+export const ROW_FIELDS: readonly RowField[] = Object.keys(FIELD_TIER) as RowField[];
 
 /** Which rung `f` sits on. */
 export function rowFieldTier(f: RowField): RowTier {

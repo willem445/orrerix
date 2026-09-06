@@ -107,8 +107,12 @@ test("a collapsed row reveals nothing at all", () => {
 
 test("every field is placed exactly once, on exactly one rung", () => {
   // The ladder is a `Record<RowField, RowTier>`, so `tsc` already refuses a
-  // field with no rung. What it cannot see is a field placed on a rung and then
-  // left out of both render orders — it would have a tier and render nowhere.
+  // field with no rung. What it cannot see is a field given a rung and then left
+  // out of both render orders — it would have a tier and render NOWHERE, and
+  // `renderTask` would file it into a slot no loop ever reads. This is the
+  // assertion that catches that, which is why `ROW_FIELDS` is the ladder's own
+  // census and not `[...compact, ...detail]`: derived the other way it would
+  // agree with itself and pass, vacuously, on exactly the defect it is for.
   const seen = new Set<RowField>();
   for (const f of ROW_FIELDS) {
     assert.ok(!seen.has(f), `${f} is listed twice`);
@@ -120,6 +124,13 @@ test("every field is placed exactly once, on exactly one rung", () => {
     const inDetail = rowLayout(true).detail.includes(f);
     assert.ok(inCompact !== inDetail, `${f} is in ${inCompact ? "both" : "neither"} render order`);
   }
+  // And the other direction: a render order must not name a field the ladder
+  // does not carry. Both loops run over a list, so both need the floor.
+  const census = new Set(ROW_FIELDS);
+  for (const f of [...rowLayout(true).compact, ...rowLayout(true).detail]) {
+    assert.ok(census.has(f), `${f} is rendered but is not on the ladder`);
+  }
+  assert.equal(seen.size, rowLayout(true).compact.length + rowLayout(true).detail.length);
 });
 
 test("a tier is one of the four rungs the human named", () => {

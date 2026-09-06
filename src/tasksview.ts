@@ -3085,6 +3085,10 @@ export class TasksView {
     ) as HTMLButtonElement;
     expand.setAttribute("aria-expanded", rowExpanded ? "true" : "false");
     expand.title = expandTitle(rowExpanded, hidden);
+    // The visible label is a glyph, so the tooltip text is also the accessible
+    // name — `aria-label` rather than leaning on `title`, which not every
+    // assistive technology announces.
+    expand.setAttribute("aria-label", expand.title);
     expand.addEventListener("click", () => {
       this.expandedRows = toggleExpandedRow(this.expandedRows, t.id);
       this.render();

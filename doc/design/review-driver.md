@@ -779,23 +779,24 @@ this note first.
    **HALF ENFORCED — prescribed on S4.** §5.5's key-set assertion pins which
    placeholders exist; its goldens pin what surrounds them. Neither constrains
    the *values*, which is §5.5's sanitization mandate.
-5. **Kill a pane — except the two states in "#2501 reopened this item" below.**
-   `reap_idle_agents` may; the driver may not, and the two exceptions are a
-   closed set spelled in code (`reviewdrive::ReleaseReason`) rather than in prose
-   here. A lane that goes quiet becomes `held(lane-stalled)` naming the pane, and
+5. **Kill a pane — except the states in "#2501 reopened this item" below.**
+   `reap_idle_agents` may; the driver may not, and the exceptions are a closed
+   set spelled in code (`reviewdrive::ReleaseReason` — three variants since
+   #2811 S1 added `DriveEnded`) rather than in prose here. A lane that goes quiet becomes `held(lane-stalled)` naming the pane, and
    a human or the orchestrator decides; the orchestrator's own kill authority is
    untouched everywhere.
    **ENFORCED BY TEST.** The scan denies `kill_agent`, `kill_agent_as`,
    `mark_dead` and the reaper entry points inside the driver's three files, and
    permits exactly ONE call to `release_driven_pane` — the barrier, which lives
    in `mod.rs` beside the primitives it wraps, never in a driver file. The COUNT
-   is the pin: a second call site is a second place the two-state rule can be
+   is the pin: a second call site is a second place the release rule can be
    broken, so it fails until it is argued onto the row. What a scan cannot see is
-   *which* two states, and the note says so rather than implying otherwise: that
+   *which* states, and the note says so rather than implying otherwise: that
    half is pinned behaviourally, by `releasable`'s unit tests and by
    `tests/reviewdrive.rs`'s negative controls — a briefed-but-silent lane, a
-   stale verdict, a `blocked` worker and a drive whose STEP parks all keep their
-   panes. The positive counterpart is pinned too, and it is the one rev-final's
+   stale verdict, a `blocked` worker, a worker whose report reached a tick that
+   took no arc, a worker still owed a round by a drive being cancelled, and a
+   drive whose STEP parks all keep their panes. The positive counterpart is pinned too, and it is the one rev-final's
    W1 asked for: a `fail`-route hand-back with the group at its cap, where the
    answering lane IS released and the drive does not park —
    `a_fail_route_hand_back_at_the_cap_is_fed_by_the_lane_it_releases`.
@@ -918,21 +919,50 @@ this note first.
    exists to remove. `held(cap-full)`'s SENTENCE was the right answer while the
    remedy was a human's; it is the wrong one when the remedy is a fact orrerix
    already holds.
-   So the item is **narrowed, not deleted**, and the narrowing is a closed set of
-   two rather than a principle:
+   So the item is **narrowed, not deleted**, and the narrowing is a closed set
+   rather than a principle:
    - a **reviewer lane whose verdict is recorded at the drive's CURRENT head**
      (`ReleaseReason::VerdictRecorded`), asked with `lane_verdict_is_current` —
      the same function `review-wait` decides with, and word-blind for its
      reasons: what finishes the pane is that it ANSWERED about this revision;
    - the **worker pane whose `report` the drive has just consumed**
-     (`ReleaseReason::ReportConsumed`) — `fix-wait` plus `WorkerSignal::Done`,
-     and nothing else: `blocked` is INVARIANT 3 territory and parks the drive for
-     an orchestrator that is about to speak to that very pane.
-   Three conditions bound both, and each excludes a case the previous version of
-   this item was right to worry about. **The STEP must leave the drive live** —
+     (`ReleaseReason::ReportConsumed`) — a hand-back OUTSTANDING plus
+     `WorkerSignal::Done` plus a tick that takes an arc on it, and nothing else:
+     `blocked` is INVARIANT 3 territory and parks the drive for an orchestrator
+     that is about to speak to that very pane.
+     **"Outstanding" is `DriveEntry::handback_outstanding`, and since #2168 E1
+     that is two states rather than one** (#2811 S1). This condition read
+     `fix-wait` alone, and E1 had already moved the report's consumption into
+     `ci-wait` for the ordinary push-then-report ordering — so for every
+     hand-back that PUSHED, the condition and its consumer never met. Measured
+     over one 6.4-hour session: all 5 `rd-worker-released` rows were body-only
+     fixes, and the other 15 of 20 hand-backs held a live-delegate slot through
+     ci-wait and the whole next review round (22 `rd-refused`, two
+     `held(cap-full)`, ~39 minutes starved, 33 panes killed by hand, one of them
+     stranding a live drive). The predicate is now asked once, on `DriveEntry`,
+     because `kickback_owed` needed the same answer for E1 and two spellings of
+     it is how this drifted. The arc clause is the other half of "consumed": in
+     `ci-wait` a `Done` can land before the matrix settles, `decide_ci_wait`
+     answers `Wait`, and a release there would be a `report-consumed` claim one
+     tick before it was true;
+   - either of them at the **step that ENDS the drive** — `DriveEnded` for the
+     worker, `VerdictRecorded` for the lane; see the STEP condition below.
+   Three conditions bound them, and each excludes a case the previous version of
+   this item was right to worry about. **The STEP must not PARK the drive** —
    the step `decide` proposed, which is not the same claim as "a drive that
    parks releases nothing" and is deliberately not written as one (rev-final
-   W1). A tick whose step is live can still end parked, because the arm can
+   W1). **A TERMINAL step is the opposite case and releases MORE** (#2811 S1):
+   it was folded in with `held` here on the reading that a terminal notice hands
+   the panes to the orchestrator to dispose of, and measured, that hand-off is a
+   bill — the orchestrator killed the reporting worker in the same second it
+   started 4 of one session's 16 drives, and the next hand-back then had to spawn
+   a fresh pane. Nothing is being waited for once the drive is over, so both
+   rules are evaluated, the panes go before the notice is built, and what the
+   notice lists is whatever the barrier refused. The released worker is named by
+   SESSION instead (`released_worker_clause`), which is the handle
+   `spawn_agent(resume:)` takes. `cancel_review_drive` is outside this: it takes
+   no tick, so no step is decided and nothing is released — deliberate, since the
+   orchestrator that called it is awake and gets the pane list in the result. A tick whose step is live can still end parked, because the arm can
    refuse on its own: an `Advance` into `fix-wait` whose hand-back cannot resume
    the worker becomes `held(worker-unresumable)` or `held(cap-refused)`, and by
    then the release has happened. What keeps §6's exit notices true is not that
@@ -945,12 +975,13 @@ this note first.
    the resolved id is written onto the record before the pane goes — a lane whose
    conversation cannot be named is not released at all, because a release that
    lost the conversation would cost the review rather than a slot.
-   **What makes these two safe is not that the pane is idle.** `IdleTimeout` is
+   **What makes these safe is not that the pane is idle.** `IdleTimeout` is
    demoted in `exit_notice_route` on the argument that an idle agent has nothing
-   in flight; these two add the half that argument does not have — the pane's
-   OUTPUT is already durable (a verdict file the gate re-reads, a report the
-   drive consumed and acted on) and the conversation survives, because lanes and
-   workers have been resumed by session since #2109. Nothing is lost, rather than
+   in flight; these add the half that argument does not have — the pane's OUTPUT
+   is already durable (a verdict file the gate re-reads, a report the drive
+   consumed and acted on, or a drive with nothing left to ask for at all) and the
+   conversation survives, because lanes and workers have been resumed by session
+   since #2109. Nothing is lost, rather than
    merely nothing being in progress. That is why the release is `AuditOnly` and
    not a prompt: `rd-lane-released` / `rd-worker-released` name the pane, the
    session and the reason (§5.4), the roster shows the liveness, and a turn spent

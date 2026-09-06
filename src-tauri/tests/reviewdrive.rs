@@ -334,23 +334,23 @@ const FORBIDDEN_CALLS: [(&str, &str); 7] = [
 /// its call sites.
 ///
 /// §3.1 item 5 used to be a closed sentence, and the rows above were the whole
-/// of its enforcement. #2501 narrows it to two states — a lane whose verdict is
-/// recorded at the drive's current head, and a worker whose `report` the drive
-/// has consumed — and the narrowing is a capability rather than a licence: the
-/// rows above still deny every kill primitive inside the driver's files, and
-/// this permits exactly one call to the one barrier, which lives outside them
-/// (`OrchRegistry::release_driven_pane`, in `mod.rs`, beside `kill_agent_as` and
-/// `mark_dead`).
+/// of its enforcement. #2501 narrows it to a lane whose verdict is recorded at
+/// the drive's current head and a worker whose `report` the drive has consumed;
+/// #2811 S1 adds either of them at the step that ENDS the drive. The narrowing
+/// is a capability rather than a licence: the rows above still deny every kill
+/// primitive inside the driver's files, and this permits exactly one call to the
+/// one barrier, which lives outside them (`OrchRegistry::release_driven_pane`,
+/// in `mod.rs`, beside `kill_agent_as` and `mark_dead`).
 ///
 /// **The COUNT is the pin, not the presence.** A second call site is a second
-/// place the two-state rule can be broken, and a scan that only asked "is it
+/// place the release rule can be broken, and a scan that only asked "is it
 /// called" would pass a driver that released a pane from anywhere in the tick.
 /// So the site count is stated here and asserted, and a slice that genuinely
 /// needs a second one argues it onto this row — which is the same discipline
 /// `ALLOWED_ASKS` applies to a `gh` verb.
 ///
 /// **What this scan does NOT enforce, stated because it is the interesting
-/// half.** Which two states may release is a property of a state machine, and no
+/// half.** Which states may release is a property of a state machine, and no
 /// source scan can see one. It is pinned behaviourally instead, by
 /// `reviewdrive::releasable`'s own unit tests and by the integration tests in
 /// this file that drive a real tick over a real registry and assert what
@@ -362,7 +362,7 @@ const PERMITTED_RELEASE: (&str, &str, usize, &str) = (
     "release_driven_pane",
     "src/orchestration/rdtick.rs",
     1,
-    "#2501: §3.1 item 5's two narrowed states, through the one barrier in mod.rs",
+    "#2501/#2811 S1: §3.1 item 5's narrowed states, through the one barrier in mod.rs",
 );
 
 /// One driver file as the scan reads it: **production source only**.
@@ -421,7 +421,7 @@ fn names_call(src: &str, ident: &str) -> bool {
 ///
 /// #2501 needs the number: the driver is permitted exactly one call to
 /// `release_driven_pane` and a second one is a second place §3.1 item 5's
-/// two-state rule can be broken, so a boolean would pass the thing the row is
+/// release rule can be broken, so a boolean would pass the thing the row is
 /// written to catch. `names_call` delegates here rather than the two matching in
 /// parallel — a guard and its counter that can disagree are two guards.
 fn count_calls(src: &str, ident: &str) -> usize {
@@ -544,7 +544,7 @@ fn the_driver_never_builds_a_landing_verb_and_never_grants_a_merge() {
             findings.push(format!(
                 "{rel}: calls {release} {found} time(s), and the permitted count for this file \
                  is {want} — {why}. §3.1 item 5 permits ONE site; a second is a second place \
-                 the two-state rule can be broken, and must be argued onto PERMITTED_RELEASE."
+                 the release rule can be broken, and must be argued onto PERMITTED_RELEASE."
             ));
         }
     }
@@ -660,7 +660,7 @@ fn the_landing_verb_scan_fires_on_a_real_merge_and_not_on_a_lookalike() {
 ///
 /// The interesting failure is not "the scan stopped catching `kill_agent`" — it
 /// is a driver that reaches a kill by some OTHER name now that one route is
-/// permitted, or one that releases a pane from a second site the two-state rule
+/// permitted, or one that releases a pane from a second site the release rule
 /// was never argued for. Both are checked by performing them.
 #[test]
 fn the_kill_scan_permits_exactly_one_release_site_and_no_other_route_to_a_kill() {
@@ -9046,15 +9046,15 @@ fn a_released_lane_is_resumed_on_its_own_session_for_the_next_round() {
     );
 }
 
-/// **The driver kills nothing outside the two states**, over the shapes that are
-/// closest to being releasable and are not.
+/// **The driver kills nothing outside the narrowed states**, over the shapes
+/// that are closest to being releasable and are not.
 ///
 /// Each arm is a lane or a worker the drive owns, idle or not, whose ONE
 /// difference from a releasable pane is named in its label. The positive control
 /// is the other tests above; what this adds is that a tick over each of these
 /// leaves every pane in the group alive.
 #[test]
-fn the_driver_releases_nothing_outside_the_two_narrowed_states() {
+fn the_driver_releases_nothing_outside_the_narrowed_states() {
     for arm in ["silent lane", "stale verdict", "parking step"] {
         let dir = tempfile::tempdir().unwrap();
         let reg = relaunch_registry(dir.path());

@@ -6317,6 +6317,12 @@ pub const CLAUDE_EDIT_DENY_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 /// own; see `claude_command_minimizes_init_approvals_without_bypass`.
 pub const CLAUDE_READONLY_DENY_GIT: &[&str] = &["Bash(git commit *)", "Bash(git push *)"];
 
+/// Per-call sequence for `post_issue_comment`'s staging file — see that method's
+/// doc for why the agent id alone is not a unique enough name. Process-wide
+/// rather than per-group: it only has to separate calls that are in flight at the
+/// same moment, and one counter does that for every group at once.
+static COMMENT_BODY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The blocking interactive-choice tool a Claude agent denies once its ROLE
 /// (not its [`Containment`] tier — see [`claude_denies_interactive_question`])
 /// warrants it — #946 Q4 / #1091 slice H. One entry: Claude Code's own
@@ -36513,6 +36519,150 @@ impl OrchRegistry {
     #[doc(hidden)] // pub for integration tests
     pub fn set_gh_exec_override(&self, exec: Option<(PathBuf, Duration)>) {
         *self.gh_exec_override.lock_safe() = exec;
+    }
+
+    /// Post `body` as a comment on issue `issue` in the calling group's repo and
+    /// return the new comment's URL — the backend half of the `post_issue_comment`
+    /// MCP tool (#2815).
+    ///
+    /// **Why this exists at all, when `gh` is on a planner's allowlist.** It is
+    /// not a convenience wrapper: a planner's deliverable is a whole document,
+    /// and there is no route for one through the CLI shell. Claude Code's
+    /// permission engine refuses to allow-match a Bash command longer than
+    /// 10,000 characters ("Commands longer than 10,000 characters always prompt
+    /// because they exceed what the analysis parses" — the permissions
+    /// reference, verified 2026-09-06), and treats newlines as subcommand
+    /// separators, so a multi-line `--body` matches no rule either. Under
+    /// `dontAsk` an unmatched call is denied outright. Measured, not inferred:
+    /// plan-2332 had `Bash(gh *)` allowed and was still denied
+    /// `gh issue comment <n> --body '<21610 chars>'`, the same via
+    /// `--body-file -` with a heredoc, and every file-write fallback. A tool
+    /// argument is a JSON payload, not a command line, so it has neither limit.
+    ///
+    /// **Comments only, by construction.** The verb and subcommand are literals
+    /// here; only the number and the body come from the caller, and the body is
+    /// the VALUE of `--body` (see [`crate::gh::comment_argv`]). Nothing a caller
+    /// passes can reach a label, a close, a merge, a review, or a PR-creating
+    /// argv — that is a property of the code, not of an argument check.
+    ///
+    /// **Residual, stated rather than implied:** GitHub numbers issues and pull
+    /// requests in ONE namespace, and `gh issue comment` accepts a PR number,
+    /// posting to that PR's conversation. So this tool can address a PR. What it
+    /// cannot do to one is anything but comment, which is the capability bound
+    /// that matters; refusing the number would cost a second round trip per post
+    /// to buy nothing. `doc/design/orchestration.md` carries the same statement.
+    ///
+    /// **The body travels as a FILE, not as an argument** — see
+    /// [`crate::gh::comment_file_argv`] for the two limits that forces: Windows'
+    /// 32,767-character command-line cap, which would ceiling a plan at about the
+    /// size plans already are, and Rust's refusal to pass an unescapable argument
+    /// to a `.cmd` shim, which fails a multi-line body before `gh` runs at all.
+    /// The file is written into the group's own state directory and removed once
+    /// `gh` has read it, whether or not the post succeeded.
+    ///
+    /// `actor` is a [`PathSegment`] (#925) for the same reason
+    /// [`Self::ledger_path`]'s is: it becomes a file name, so it must be proven a
+    /// single component before it gets there.
+    ///
+    /// **The staging path carries a per-call sequence number, not just the agent
+    /// id** (review round 1). An agent is free to issue two tool calls at once —
+    /// Claude Code batches independent calls in one message — so two posts by ONE
+    /// pane would otherwise race on a single `<agent>-comment-body.md`: the second
+    /// write truncates the file the first is still handing to `gh`, and the first
+    /// post silently publishes the second's text or a torn prefix of it. Nothing
+    /// fails, which is what makes it worth a counter rather than a comment. The
+    /// counter is process-wide and monotonic, so it separates concurrent calls.
+    ///
+    /// **What the counter does NOT fix, stated because the earlier draft of this
+    /// doc claimed otherwise** (review round 2's premortem). Before the counter,
+    /// a staging file orphaned by a kill between the write and the remove was
+    /// reclaimed by the next post from that agent, which reused the one name.
+    /// With a per-call name nothing ever reuses it, so an orphan is permanent
+    /// debris in the group dir until something enumerates and sweeps it. That is
+    /// a real trade the counter makes — a correctness fix bought with litter —
+    /// and it is not swept here because no surface enumerates the group dir yet.
+    ///
+    /// **Every post that reaches `gh` is audited, whichever way it goes.** The row
+    /// is written after `gh` has been run and carries the outcome — the URL on
+    /// success, the error on failure — so a post that failed is visible to the
+    /// human rather than absent, which reads identically to never having been
+    /// attempted.
+    ///
+    /// **What writes no row, enumerated rather than gestured at** (review round 2,
+    /// finding 3). Anything that returns BEFORE `gh` runs: an empty body, an
+    /// unusable agent id, an unknown group — and, the case the first wording
+    /// missed, a STAGING failure, where `create_dir_all` or `fs::write` cannot
+    /// produce the body file. The first three are argument validation and are not
+    /// posts; the last one is a genuine attempt that leaves no trace, and it is a
+    /// carve-out rather than a gap that got fixed for one reason: the audit log
+    /// lives in the very directory the staging write just failed to write into, so
+    /// a row recorded there is not reliably obtainable in exactly the case that
+    /// would need it. Naming the case is honest; pretending a row would appear
+    /// would not be.
+    ///
+    /// `repo` is resolved from the caller's own group, never from an argument —
+    /// the same server-side resolution [`Self::gh_capture`] documents — so the
+    /// group-id path seam (#904) is not engaged here.
+    pub fn post_issue_comment(
+        &self,
+        group: &GroupId,
+        actor: &PathSegment,
+        issue: u64,
+        body: &str,
+    ) -> Result<String, String> {
+        let repo = self
+            .group(group.as_str())
+            .map(|g| g.repo)
+            .ok_or_else(|| "unknown group".to_string())?;
+        crate::gh::reject_empty_comment(body)?;
+        let dir = self.group_dir(group);
+        fs::create_dir_all(&dir).map_err(|e| format!("cannot prepare the comment body: {e}"))?;
+        let seq = COMMENT_BODY_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let body_path = dir.join(format!("{actor}-comment-body-{seq}.md"));
+        fs::write(&body_path, body)
+            .map_err(|e| format!("cannot write the comment body: {e}"))?;
+        let args =
+            crate::gh::comment_file_argv("issue", issue, &body_path.to_string_lossy());
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        let captured = self.gh_capture(&repo, &argv);
+        // Best-effort, and deliberately not `?`: the post has already happened
+        // or already failed, and a leftover scratch file is not a reason to
+        // report either outcome differently.
+        let _ = fs::remove_file(&body_path);
+        let out = match captured {
+            Ok(out) => out,
+            Err(e) => {
+                // Audited BEFORE the early return: a failed post the human cannot
+                // see is indistinguishable from one that was never attempted, and
+                // "every post leaves a row" is a claim this branch has to honour
+                // too (review round 1).
+                self.audit(
+                    group,
+                    actor.as_str(),
+                    "issue-comment",
+                    json!({ "issue": issue, "bytes": body.len(), "error": e }),
+                );
+                return Err(e);
+            }
+        };
+        // `gh issue comment` prints the new comment's URL, and prints it LAST:
+        // take the final non-empty line rather than the whole capture, so a
+        // future banner or deprecation notice on stdout cannot become the "URL"
+        // an agent then quotes into a report.
+        let url = out
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .next_back()
+            .unwrap_or("")
+            .to_string();
+        self.audit(
+            group,
+            actor.as_str(),
+            "issue-comment",
+            json!({ "issue": issue, "bytes": body.len(), "url": url }),
+        );
+        Ok(url)
     }
 
     /// Run `cmd` to completion and capture it the way `Command::output()`

@@ -810,10 +810,7 @@ pub async fn gh_issue_comment(repo: String, number: u64, body: String) -> Result
 }
 
 fn gh_issue_comment_sync(repo: String, number: u64, body: String) -> Result<(), String> {
-    if body.trim().is_empty() {
-        return Err("empty comment".to_string());
-    }
-    let args = comment_args("issue", number, &body);
+    let args = comment_argv("issue", number, &body)?;
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
     run_gh(Some(&repo), &argv).map(|_| ())
 }
@@ -873,10 +870,7 @@ pub async fn gh_pr_comment(repo: String, number: u64, body: String) -> Result<()
 }
 
 fn gh_pr_comment_sync(repo: String, number: u64, body: String) -> Result<(), String> {
-    if body.trim().is_empty() {
-        return Err("empty comment".to_string());
-    }
-    let args = comment_args("pr", number, &body);
+    let args = comment_argv("pr", number, &body)?;
     let argv: Vec<&str> = args.iter().map(String::as_str).collect();
     run_gh(Some(&repo), &argv).map(|_| ())
 }
@@ -1150,6 +1144,64 @@ fn comment_args(kind: &str, number: u64, body: &str) -> Vec<String> {
         number.to_string(),
         "--body".into(),
         body.into(),
+    ]
+}
+
+/// The whole non-spawning half of posting a comment: reject an empty body, then
+/// build the argv. Shared by this file's two `#[tauri::command]` wrappers and by
+/// the MCP orchestration path (`OrchRegistry::post_issue_comment`, #2815), so the
+/// empty-body guard and the discrete-`--body` shape have one definition rather
+/// than one per caller.
+///
+/// **The spawn is deliberately NOT shared.** `OrchRegistry::gh_capture` is "the one
+/// place the backend spawns `gh`" (#791) and the only one carrying
+/// `capture_with_timeout`'s bound; this file's [`run_gh`] is the unbounded
+/// webview-request path. An MCP tool routed through `run_gh` would put a second,
+/// unbounded `gh` spawn on an agent's request path — the exact shape #791 folded
+/// away, whose failure mode was a wedged MCP turn with no error — so the registry
+/// takes THIS function's argv and spawns it through its own bounded helper.
+#[doc(hidden)] // pub for the MCP orchestration path and integration tests
+pub fn comment_argv(kind: &str, number: u64, body: &str) -> Result<Vec<String>, String> {
+    reject_empty_comment(body)?;
+    Ok(comment_args(kind, number, body))
+}
+
+/// The empty-body guard on its own, for a caller that does not put the body on
+/// the command line at all (`comment_file_argv`). `gh` with no `--body` value
+/// opens an interactive editor, which in an agent pane is a hang rather than an
+/// error, so every comment path refuses one before spawning.
+#[doc(hidden)] // pub for integration tests
+pub fn reject_empty_comment(body: &str) -> Result<(), String> {
+    if body.trim().is_empty() {
+        return Err("empty comment".to_string());
+    }
+    Ok(())
+}
+
+/// `gh <kind> comment <n> --body-file <path>`: the same comment, with the text
+/// read from a FILE instead of an argument.
+///
+/// **Why the MCP path needs this and the webview path does not.** A command line
+/// is a bounded, escaped channel and a plan is neither small nor quotable.
+/// Windows caps a whole command line at 32,767 characters, so a `--body` argv
+/// silently ceilings a plan at roughly that — plan-2332's was 21,610, close
+/// enough that the ceiling is a real limit rather than a theoretical one. Worse,
+/// Rust's `Command` REFUSES outright to pass an argument it cannot safely escape
+/// to a `.cmd`/`.bat` (the CVE-2024-24576 hardening), returning "batch file
+/// arguments are invalid" — so on a host where `gh` resolves to a batch shim, a
+/// multi-line plan fails on the argv before `gh` ever runs. A file has neither
+/// property: only the short path travels as an argument.
+///
+/// The path is built by the caller inside the group's own state directory, never
+/// from anything the caller passing the body can influence.
+#[doc(hidden)] // pub for the MCP orchestration path and integration tests
+pub fn comment_file_argv(kind: &str, number: u64, body_file: &str) -> Vec<String> {
+    vec![
+        kind.into(),
+        "comment".into(),
+        number.to_string(),
+        "--body-file".into(),
+        body_file.into(),
     ]
 }
 

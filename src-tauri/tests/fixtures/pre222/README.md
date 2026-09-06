@@ -850,6 +850,35 @@ pin advertised to stop it (rev-11 F1).
   docs page. What a manager does differently because of it: it no longer asserts a mode, and
   it asks instead of guessing.
 
+- **#2815, a planner can post its own plan** — `planner.md` and
+  `orchestrator-playbook.md`. `orchestrator.md`, `worker.md`, `reviewer.md`, `manager.md`
+  and `lead.md` are byte-identical to their previous blessed copies.
+
+  What changed for the agents: a planner is told to publish with the new
+  `post_issue_comment(issue, body)` MCP tool and **not** to shell out to
+  `gh issue comment`, and the playbook tells the orchestrator to read the plan at the URL
+  the planner reports rather than relay one by hand. The shell route was never merely
+  discouraged — it does not work. A plan is thousands of characters; Claude Code refuses to
+  allow-match a Bash command over 10,000 characters and treats newlines as subcommand
+  separators, so a multi-line `--body` matches no permission rule and `dontAsk` denies it.
+  `Bash(gh *)` was on the planner's allowlist throughout; widening it would have changed
+  nothing.
+
+  **`orchestrator.md` was deliberately NOT touched**, and the reason is measurable rather
+  than editorial: the resident core is paid on every model call under a 45,000-byte budget
+  and had 10 bytes of margin at the last measurement recorded above, so this paragraph could
+  not go there — `the_resident_core_is_under_the_byte_budget` would have caught it as a red.
+  The playbook is on-demand and has no such budget, which is why the orchestrator-facing half
+  is there. The orchestrator also reads the tool's own MCP description, which carries the
+  same facts; a role file is not the only surface it learns from.
+
+  **`worker.md` was not touched either**, and that is a scope decision rather than a budget
+  one: a worker CAN see and call the tool (it is role-gated to orchestrator, worker and
+  planner) but has no routine use for one — its deliverable is a PR body, not an issue
+  comment — so naming it in the role file would add prose every worker pays for to describe a
+  route none of them takes. It is discoverable in the tool listing where a worker that wants
+  it will look.
+
 ## If this test fails
 
 It is telling you that **the text every agent in every default group reads has

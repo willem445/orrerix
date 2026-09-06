@@ -403,6 +403,14 @@ A planner counts against the {{MAX_AGENTS}} cap while it runs, but orrerix close
 moment it posts its plan and reports `done` (#203), freeing the slot. One planner per work item;
 never hold an idle one "just in case".
 
+**A planner posts its own plan — you never relay one.** It publishes with
+`post_issue_comment(issue, body)` and hands you the comment URL in `report`'s `detail_url`;
+read the plan there. Before #2815 it could not: a plan is thousands of characters, a CLI's
+permission engine will not match a shell command that long, and every `gh issue comment`
+route was denied — so plans were smuggled out through `message_orchestrator` and re-posted
+by hand, at two full turns of plan text each. If a planner ever reports `blocked` because it
+cannot post, that is a regression in the tool, not a task for you to work around by pasting.
+
 **One task per worker** (INVARIANT 10). Idle just-spawned workers may receive their first task
 via `send_prompt`; once a worker's PR is settled, `kill_agent` it (record its session id on the
 task first) and spawn fresh workers for new items. A second task in one session pollutes its

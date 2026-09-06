@@ -713,9 +713,7 @@ fn codex_tokens(usage: &Value) -> TokenUsage {
     let cache_read = u64_field(usage, "cached_input_tokens");
     let cache_write = u64_field(usage, "cache_write_input_tokens");
     TokenUsage {
-        input_tokens: u64_field(usage, "input_tokens")
-            .saturating_sub(cache_read)
-            .saturating_sub(cache_write),
+        input_tokens: u64_field(usage, "input_tokens"),
         output_tokens: u64_field(usage, "output_tokens"),
         cache_creation_tokens: cache_write,
         cache_read_tokens: cache_read,

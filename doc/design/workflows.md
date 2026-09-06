@@ -3133,6 +3133,53 @@ the preview is of *that* workflow. The preview memo is keyed by
 `(repo, cli, name)` for the same reason — two workflows resolve to different
 rosters, so a memo keyed without the name would show `a`'s blocks under `b`'s.
 
+### Painting may lag; DECIDING may not
+
+The picker repaints on a 250 ms debounce and then waits on a listing IPC, while Enter
+submits from any field immediately. So there is a window in which the held picker describes
+the repo the human has just moved off — and the resolver above cannot help, because it was
+never asked. A launch reading the picker inside that window pins a workflow the new repo may
+not declare; the backend parses the name for **shape**, never for existence, so it is
+accepted, recorded in `group.json`, and then silently resolved to an absent file and the
+built-in roster. That is exactly the outcome the resolver exists to prevent, reached through
+timing rather than through a stale name. The *Edit workflow…* arm misfires the same way, and
+worse: the pane creates a missing file, so a save there writes a workflow the repo never
+declared.
+
+The rule the fix states is therefore a split, not a tightening. **Painting is allowed to
+lag** — a control that repaints a beat late is normal, and making it synchronous would put
+an IPC in a keystroke handler. **Deciding is not**: every read that produces a launch
+payload or opens a file goes through `settledWorkflowPicker(repo)`, which compares the repo
+the picker was last resolved *for* against the one being acted on and re-resolves when they
+differ. Both callers can afford the await — they are already `async` and latch-protected —
+and `listingFor` is memoized, so a repo already resolved costs nothing. A listing that fails
+resolves to `null`, which the resolver reads as "we do not know" and answers with `default`:
+failing toward the file every repo has beats failing toward a name this one may not declare.
+
+The picker's repo is recorded *with* the picker, in one statement pair, so the two cannot
+come to disagree about which repo the answer is about. Nothing outside
+`settledWorkflowPicker` reads the held picker at all.
+
+This is a defect no read of the DOM wiring can find — both reads are individually correct
+and it lives in the timing between them — which is worth recording as the limit of the
+"hand-validate the wiring" convention rather than as a lapse in applying it (rev-std round 1,
+finding 1).
+
+### The listing's own findings reach the roster box
+
+`list_workflows` reports two different kinds of problem and they belong in different places.
+A file's `errors` are about the one workflow a launch will read, and the roster box already
+shows them. A **listing** finding is about the set of files — `default` declared twice, a
+stem that is not a usable name, more files than the listing carries — and it rode through the
+picker to no surface at all until `workflowNoticeLines` gave it one (rev-std round 1,
+finding 2).
+
+It is gated on the toggle, because with advanced mode off no workflow file is opened and a
+warning about which files exist describes nothing the launch will do. It is deliberately
+**not** gated on whether the picker row is shown: a repo whose only fault is declaring
+`default` twice still offers one usable option, and the finding is precisely what explains
+why it is one option and not two.
+
 ### One layout sidecar per workflow file
 
 `workflowlayout.ts` derived the canvas's layout file from the workflow file's

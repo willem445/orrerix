@@ -30,6 +30,7 @@ import {
   type RolePick,
   type RosterBlock,
   resolveWorkflowPicker,
+  workflowNoticeLines,
   type WorkflowPreview,
   type WorkflowEntry,
   type WorkflowListing,
@@ -811,4 +812,41 @@ test("listing findings ride through, and are not confused with a file's own erro
   // launch nor marks a file.
   assert.equal(p.options[0]!.valid, true);
   assert.equal(p.options[0]!.label, "default");
+});
+
+// ---------- listing findings reach a surface (#1689 D1, rev-std round 1 finding 2) ----------
+
+test("listing findings are shown with the toggle ON — they were write-only before", () => {
+  // The defect: `findings` rode through the picker, a test pinned that it did, and NOTHING
+  // in src/ ever read it. A pinned value with no consumer is a pin on a pipe to nowhere.
+  const p = resolveWorkflowPicker(
+    listing([DEFAULT_ENTRY], ["'default' is declared twice — .orrerix/workflow.yml is the one that is read"]),
+    null
+  );
+  const lines = workflowNoticeLines(p, true);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /declared twice/);
+});
+
+test("listing findings are silent with the toggle OFF — no file is opened, so none applies", () => {
+  // With advanced mode off no workflow file is read at all, so a warning about which files
+  // exist describes nothing this launch will do: the form would be volunteering a problem
+  // in a feature the human has not turned on.
+  const p = resolveWorkflowPicker(listing([DEFAULT_ENTRY], ["'default' is declared twice"]), null);
+  assert.deepEqual(workflowNoticeLines(p, false), []);
+});
+
+test("a repo with nothing wrong says nothing, and a single option does not suppress a finding", () => {
+  // The empty case, and the gate that is deliberately ABSENT: findings are not gated on
+  // `show`. A repo whose only fault is declaring `default` twice still offers one usable
+  // option, and the finding is exactly what explains why it is one option and not two.
+  assert.deepEqual(workflowNoticeLines(resolveWorkflowPicker(listing([DEFAULT_ENTRY]), null), true), []);
+  const oneOption = resolveWorkflowPicker(listing([DEFAULT_ENTRY], ["'default' is declared twice"]), null);
+  assert.equal(oneOption.show, false, "one option — the picker row stays hidden");
+  assert.equal(workflowNoticeLines(oneOption, true).length, 1, "and the finding is still said");
+});
+
+test("a blank finding is not rendered as an empty line", () => {
+  const p = resolveWorkflowPicker(listing([DEFAULT_ENTRY], ["", "   ", "a real one"]), null);
+  assert.deepEqual(workflowNoticeLines(p, true), ["a real one"]);
 });

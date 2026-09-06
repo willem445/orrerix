@@ -604,6 +604,26 @@ export function resolveWorkflowPicker(
   };
 }
 
+/** What the launcher should SAY about the repo's workflow listing, as lines — or nothing.
+ *
+ *  A listing finding is about the set of files (`default` declared twice, a stem that is
+ *  not a usable name, more files than the listing carries), never about the one workflow a
+ *  launch will read; those are the preview's `errors`, which the roster box already shows.
+ *  Both would otherwise land in the same box saying different kinds of thing.
+ *
+ *  Gated on the toggle for the reason the whole feature is: with advanced mode OFF no
+ *  workflow file is opened at all, so a warning about which files exist describes nothing
+ *  this launch will do — it would be the form volunteering a problem in a feature the human
+ *  has not turned on. Deliberately NOT gated on `show`: a repo whose only fault is
+ *  declaring `default` twice may still offer one usable option, and the finding is exactly
+ *  what explains why it is one and not two.
+ *
+ *  (rev-std round 1, finding 2: `findings` used to ride through the picker and reach no
+ *  surface at all.) */
+export function workflowNoticeLines(picker: WorkflowPicker, advanced: boolean): string[] {
+  return advanced ? picker.findings.filter((f) => f.trim() !== "") : [];
+}
+
 /** One option's on-screen text. The name is the identity, so it leads; the file's own
  *  `name:` follows only when it says something the name does not (a file called
  *  `review-heavy.yml` whose `name:` is "review-heavy" would otherwise read twice). An

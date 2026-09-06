@@ -43,6 +43,7 @@ import {
   orchestratorCliOf,
   resolveRoster,
   resolveWorkflowPicker,
+  workflowNoticeLines,
   type OrchRole,
   type ResolvedRoster,
   type RolePick,
@@ -426,6 +427,22 @@ export class WelcomeForm {
   /** The picker as last resolved — what the row is painted from, which file
    *  "Edit workflow…" opens, and which name the launch sends. */
   private workflowPicker: WorkflowPicker = resolveWorkflowPicker(null, null);
+  /** WHICH repo {@link workflowPicker} was resolved for, and the reason it is recorded
+   *  rather than assumed (rev-std round 1, finding 1).
+   *
+   *  Repainting the picker is DEBOUNCED (250 ms on the repo field) and then waits on a
+   *  listing IPC, while Enter submits from any field immediately. So between typing a new
+   *  repo path and the repaint landing there is a window in which `workflowPicker`
+   *  describes the PREVIOUS repo — and a launch reading it there pins a workflow the new
+   *  repo may not declare, which the backend accepts (the name is parsed for shape, never
+   *  for existence) and then silently resolves to the built-in roster. That is precisely
+   *  the outcome `resolveWorkflowPicker` exists to prevent, reached through timing rather
+   *  than through a stale name.
+   *
+   *  Every read that DECIDES something — the launch payload and "Edit workflow…" — goes
+   *  through {@link settledWorkflowPicker}, which compares this against the field and
+   *  re-resolves when they disagree. Painting is allowed to lag; deciding is not. */
+  private workflowPickerRepo: string | null = null;
   /** One backend listing per repo, memoized for the form's life, exactly as `previews` is
    *  and cleared on the same gestures. */
   private listings = new Map<string, Promise<WorkflowListing | null>>();
@@ -1438,8 +1455,11 @@ export class WelcomeForm {
    *  Hidden unless the repo declares more than one workflow AND the toggle is on: a picker
    *  with a single option is a control that cannot be used, and one above an unticked
    *  toggle offers a choice that changes nothing this launch will do. */
-  private paintWorkflowPicker(picker: WorkflowPicker, advanced: boolean): void {
+  private paintWorkflowPicker(repo: string, picker: WorkflowPicker, advanced: boolean): void {
     this.workflowPicker = picker;
+    // Recorded WITH the picker, in one statement pair, so the two cannot disagree about
+    // which repo the answer is about — see `workflowPickerRepo`.
+    this.workflowPickerRepo = repo;
     this.workflowRow.hidden = !advanced || !picker.show;
     this.workflowSel.replaceChildren(
       ...picker.options.map((o) => {
@@ -1451,6 +1471,28 @@ export class WelcomeForm {
     );
     this.workflowSel.value = picker.selected;
     this.workflowSel.title = picker.file;
+  }
+
+  /** The picker as it stands **for `repo`**, re-resolving first when the last paint was
+   *  for a different one (rev-std round 1, finding 1).
+   *
+   *  The one entry point for every read that DECIDES something. Painting the picker is
+   *  debounced and then waits on an IPC; Enter submits immediately. `workflowPicker` is
+   *  therefore allowed to describe the previous repo for a beat, and the fix is not to
+   *  make the paint synchronous — it is to make the DECISION wait for the answer it is
+   *  about, which both callers can afford (`submit` and `openWorkflowPane` are async and
+   *  latch-protected, and `listingFor` is memoized so a repo already resolved costs
+   *  nothing).
+   *
+   *  A listing that fails resolves to `null`, which `resolveWorkflowPicker` reads as "we
+   *  do not know" and answers with `default` — the pre-#1689 launch. Failing toward the
+   *  file every repo has beats failing toward a name this one may not declare. */
+  private async settledWorkflowPicker(repo: string): Promise<WorkflowPicker> {
+    if (this.workflowPickerRepo === repo) return this.workflowPicker;
+    const picker = resolveWorkflowPicker(await this.listingFor(repo), this.workflowChoice);
+    this.workflowChoice = picker.selected;
+    this.paintWorkflowPicker(repo, picker, this.advancedInput.checked);
+    return picker;
   }
 
   /** Re-resolve and repaint the roster box. Cheap and idempotent — called from
@@ -1478,7 +1520,7 @@ export class WelcomeForm {
     // tell the human their workflow file is being ignored — which is worth one
     // cached call, and is why this path fetches too. No repo yet: nothing to read.
     if (!repo) {
-      this.paintWorkflowPicker(resolveWorkflowPicker(null, this.workflowChoice), advanced);
+      this.paintWorkflowPicker(repo, resolveWorkflowPicker(null, this.workflowChoice), advanced);
       this.paintRoster(resolveRoster(advanced, null, this.rolePicks(), cli), advanced);
       return;
     }
@@ -1494,7 +1536,7 @@ export class WelcomeForm {
         // longer declares stops being held — the payload and the row then agree with the
         // roster box, which is the whole point of resolving rather than trusting.
         this.workflowChoice = picker.selected;
-        this.paintWorkflowPicker(picker, this.advancedInput.checked);
+        this.paintWorkflowPicker(repo, picker, this.advancedInput.checked);
         return this.previewFor(repo, cli, picker.selected);
       })
       .then((preview) => {
@@ -1571,6 +1613,13 @@ export class WelcomeForm {
         }
       }
       for (const err of r.errors) rows.push(line("roster-error", err));
+      // #1689: what the LISTING could not make sense of, as opposed to what the selected
+      // file could not parse (`r.errors`, above). Advisory — nothing here blocks a launch —
+      // so it reads as a note rather than an error, and `workflowNoticeLines` is what
+      // decides whether there is anything to say at all.
+      for (const note of workflowNoticeLines(this.workflowPicker, advanced)) {
+        rows.push(line("roster-note", note));
+      }
       const actions = document.createElement("div");
       actions.className = "dlg-row";
       actions.append(this.editWorkflowBtn);
@@ -1619,17 +1668,23 @@ export class WelcomeForm {
     // the BACKEND resolved for that name (`WorkflowPicker.file`), so a repo on the legacy
     // `.loomux/` spelling opens the file it really has rather than one derived here.
     //
+    // Through `settledWorkflowPicker`, never the field directly: a click landing before the
+    // debounced repaint would otherwise open the PREVIOUS repo's workflow path against this
+    // root — and because the pane creates a missing file, saving there would write a
+    // workflow this repo never declared (rev-std round 1, finding 1).
+    //
     // `default` keeps today's behaviour in both halves — the pane is named after the repo
     // and no `file` is sent, so `WorkflowView` falls back to its own default path, which is
     // also what makes the button work in a repo that has no workflow yet (that is how the
     // first one gets written). A NAMED workflow is named after the workflow, because a pane
     // called after the repo would be indistinguishable from every other workflow pane in it.
-    const named = this.workflowPicker.selected !== DEFAULT_WORKFLOW_NAME;
+    const picker = await this.settledWorkflowPicker(root);
+    const named = picker.selected !== DEFAULT_WORKFLOW_NAME;
     this.fire({
       kind: "workflow",
-      name: named ? this.workflowPicker.selected : basename(root) || "workflow",
+      name: named ? picker.selected : basename(root) || "workflow",
       root,
-      file: named ? this.workflowPicker.file : undefined,
+      file: named ? picker.file : undefined,
     });
   }
 
@@ -2248,6 +2303,13 @@ export class WelcomeForm {
       const worker = role("worker");
       const reviewer = role("reviewer");
       const planner = role("planner");
+      // #1689: settle the picker against the repo THIS launch is for before reading a name
+      // off it. The paint is debounced and IPC-backed while Enter submits at once, so the
+      // held picker can still describe the repo the human just moved off — and the backend
+      // parses the name for SHAPE, never for existence, so a stale one is accepted, pinned
+      // in `group.json`, and then silently resolved to the built-in roster (rev-std round 1,
+      // finding 1). Awaiting here is free for a repo already resolved (`listingFor` memo).
+      const workflowPicker = await this.settledWorkflowPicker(plan.repo);
       this.fire({
         kind: "orchestrator",
         config: {
@@ -2280,11 +2342,13 @@ export class WelcomeForm {
           // Sent even when the picker row is hidden (the toggle is off), because the
           // backend records the name and leaves it inert: turning the toggle on live then
           // comes back to the workflow the human chose rather than to `default`. The name
-          // in view state is always one the repo really declares — `resolveWorkflowPicker`
-          // is what guarantees that, on every repaint.
-          ...(this.workflowPicker.selected === DEFAULT_WORKFLOW_NAME
+          // is one THIS repo declares because `settledWorkflowPicker` re-resolved it above
+          // — never merely because a repaint happened, which is a weaker claim than it
+          // reads and was the defect rev-std round 1 found: a repaint is debounced and a
+          // submit is not.
+          ...(workflowPicker.selected === DEFAULT_WORKFLOW_NAME
             ? {}
-            : { workflow: this.workflowPicker.selected }),
+            : { workflow: workflowPicker.selected }),
           // #687. One optional object rather than eight more positional args on a
           // command that already carries eighteen (slice A's wire shape). Every
           // field empty is the pre-#687 payload in effect: the backend reads

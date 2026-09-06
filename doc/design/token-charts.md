@@ -308,3 +308,182 @@ has not spent yet is an ordinary state.
   historical rows, and a frozen counter is not a new data point — without the
   live-key filter every restart would append one duplicate row per historical
   key, forever.
+
+## The projection, and the panel (slice C)
+
+Everything above is what the app WRITES. This is what reads it.
+
+`src/tokencharts.ts` is DOM-free and has **no intra-src imports at all**, the
+same rule `timelinelayout.ts` follows (TS5097). It re-declares the wire shapes
+above structurally rather than importing them, which is not merely import
+hygiene: it makes the module answer *given rows of this shape, what is the
+picture*, and it puts the check that the two descriptions agree at
+`tokenchartsview.ts`'s call site — so a field renamed here fails the VIEW's
+compile, which is where it should fail. `src/tokenchartsview.ts` holds no
+arithmetic: every number it paints came from the tested module.
+
+### Attribution: the ladder, and the two bars that are not features
+
+First rung that decides wins, and the rung is reported as `via` on every
+answer so a reader can tell a strong attribution from a weak one:
+
+| rung | test | `via` |
+| --- | --- | --- |
+| 0 | `role == "orchestrator"` | `orchestrator` |
+| 1 | a board row whose `assignee` is the agent's id | `assignee` |
+| 2 | a board row whose `session` is the agent's session | `session` |
+| 3 | the agent's brief names `#N`, and a row carries that `#N` | `brief` |
+| 4 | — | `none` |
+
+Rungs 1–3 then walk `parent` to the nearest `feature`, else the nearest
+`epic`, else the chain's root, and record which of the three in `level`. The
+**root** fallback is deliberate and is not the same as unattributed: a board
+running no agile levels at all is legal and is the pre-#958 shape, and sending
+every one of its agents to `(unattributed)` would be false — the ladder DID
+find the row being worked.
+
+Rung 3 takes the first `#N` **a board row actually carries**, not the first in
+the text. A brief routinely cites issues it merely references ("per #2011's
+plan") beside the one it is working, and only the board can tell those apart.
+
+**Rung 0 sits ABOVE the ladder rather than inside it**, and that placement is
+the whole rule. An orchestrator NAMED as a board row's assignee would
+otherwise fire rung 1 and have its entire session lifetime billed to whichever
+row it happened to be holding. There is no per-turn PR attribution for a
+long-lived orchestrator (§7 of the plan), so it gets `(orchestrator,
+group-wide)` — its own bar, and its own series in the plot, where its real
+spend IS visible. That is how the chart avoids lying about #2502 in either
+direction: not a fabricated per-feature split, and not a silent zero.
+
+`(unattributed)` renders **first and unconditionally**, present even with no
+agents on it. A bar whose job is to say "this chart is not the whole story"
+must not be able to disappear by being empty. Beside it, `unknownAgentTokens`
+counts spend by an agent the ROSTER does not list — a different fact from "the
+board does not", since the roster is group-wide and includes exited agents, so
+a miss there is a real hole rather than an unlabelled one.
+
+The legend prints the identity the chart is checkable by:
+`features + orchestrator + unattributed = lifetime`. Its test asserts the sum
+against the DELTAS themselves and not against the same three numbers re-added,
+because a bar the loop failed to reach would satisfy the weaker form.
+
+### Differencing, and why the grid is dense
+
+Deltas are taken per **usage key** — the cumulative counter's own identity —
+and each one is attributed to the LATER row's agent, block, cli and timestamp.
+That is the forward fix for H8: `usage.json` keeps a key's last occupant, the
+series keeps every one, and spend lands on whoever was there when it was
+counted.
+
+The read side re-buckets onto an **epoch-aligned** grid (the writer's spacing
+is measured from its own last row, per §The bucket is a SPACING). Alignment is
+what makes bucketing identical in every timezone and across a DST boundary,
+the property `timelinelayout.ts` already leans on.
+
+The grid is **dense**: every key gets a point in every bucket of the window,
+zero where nothing was written. The sparse alternative joins two real samples
+with one straight segment and draws an hour of steady spend that never
+happened — and it looks *more* plausible than the truth, which is what makes
+it the dangerous default rather than merely the wrong one.
+
+Nothing is dropped silently. A delta outside the window is COUNTED
+(`dropped`), never clamped onto an edge where it would read as spend at a
+time it did not happen; a key with only its baseline row is counted
+(`baselineOnlyKeys`) rather than drawn as a spike; a clamped interval is
+counted (`resets`). Each is a sentence under the chart.
+
+Cost is **null-poisoned** at every level — interval, bucket, segment, bar,
+readout. One unknown makes the sum `null` rather than a partial total,
+because a partial total prints a SMALLER bill, which is a wrong number rather
+than a missing one.
+
+### The mark labels are measured, not read
+
+A `mark` row carries sha256 hashes and component NAMES — never content — so
+*what changed* cannot be read out of it. What CAN be read is what the fleet
+then ran: the CLI each block was last sampled with before the mark, against
+the first it was sampled with after. `worker-std: opencode → pi` is therefore
+a measurement of the #2817 switch rather than a guess at it.
+
+The cost of measuring it this way is stated rather than hidden: **a block
+observed on only one side of a mark contributes no row**, because "not
+observed" is not "unchanged". A mark no block's CLI moved across falls back to
+its component list, and `fp_partial` rides through to the view so a reader is
+told when an unchanged component is not proof nothing under it moved.
+
+`beforeAfter` is `null` below `k` buckets on a side — **never `0`**. A mark
+two buckets after the series began has no "before", and printing `0` there
+says the fleet spent nothing for an hour, which is the opposite of "we cannot
+say". `k` travels on every row, because `k` is the scope of the claim.
+
+### Colour: why the order is measured
+
+Colour carries the **block**; the CLI is carried by line style and bar hatch.
+Two channels, not one, and the second is load-bearing rather than decorative:
+the identity octet's `azure`/`violet` pair separates by ΔE **0.4** under a
+protan simulation and **5.7** in normal vision (OKLab×100), so colour alone is
+never allowed to be the only difference between two series.
+
+A categorical palette's separation check is over **adjacent** pairs, which
+makes the ORDER the one lever a chart owns over a fixed design system.
+`HUE_ORDER` is therefore the exhaustive-search best of all 8! permutations of
+`theme.ts`'s `IDENTITY` octet — worst adjacent pair ΔE 12.0 (deutan) / 11.5
+(tritan) / 20.4 normal, clearing the ≥8 and ≥15 floors that
+`IDENTITY`'s own declaration order fails. **Changing that order is a
+measurement, not a preference:** re-run the search.
+
+The residual is real and is why the other channels exist: `azure` and
+`violet` remain an ALL-pairs collision, so two blocks four slots apart can
+still collide. Hence a legend that is always present, a CLI carried by dash
+pattern, and direct labels while there are few enough series to carry them.
+
+A hue follows the **block**, from a caller-supplied stable order (the group's
+roster), never from the windowed data's own rank — a filter that changes which
+series are on screen must not repaint the survivors. A **ninth** block takes
+the neutral ramp rather than recycling slot 0: a repeated hue is a false claim
+that two blocks are one. Nothing is merged away to avoid that, because this is
+a cost chart and folding two blocks' spend together to save a colour is the
+worse trade.
+
+### Where the panel lives, and what it costs
+
+An embeddable view on the orchestrator pane, registered as embed kind
+`tokens` exactly as `timeline` is — it floats as an overlay and docks through
+the shared #361 engine. **No PTY resize** (constraint 1): the chart's width
+comes from its own container's `ResizeObserver`, and the pure layout takes it
+as a parameter. Rejected: a new `PaneKind` (content kinds are cwd-rooted
+surfaces with no group) and a side-dock section (the dock follows the active
+pane's *directory*; this is group-scoped like audit and timeline).
+
+Poll cadence is **30 s** — twenty times the two audit-backed follows, and
+deliberately so. The series advances once per `SERIES_BUCKET_MS` by
+construction, so a faster tick could only redraw the same picture, and
+`orch_usage_series` reads a whole append-only file that grows without bound.
+The publisher's 1 s tiers are untouched (`polled-views.md`). The `AuditStore`
+read a tick also takes is the pane's SHARED one (#1317), never a second
+`orch_audit`.
+
+Rendering is **SVG**, following `timelineview.ts`/`timelinelayout.ts` and
+reusing `makeScale`/`xForTs`/`niceTicks`. The plan's S7 said Canvas; the
+repo's chart convention is SVG (theme via CSS classes — `theme.ts` notes that
+a canvas cannot read custom properties — and hit-testing for free). At
+five-minute buckets a month is ~8.6k points per key; Canvas is the fallback
+past ~50k, and the projection is renderer-agnostic so that swap would touch
+the view alone.
+
+### The coverage floor
+
+Two floors, and they are different facts. The **series** floor is
+`first_ts_ms` (§The coverage note): history starts at deploy, and the panel
+prints the instant rather than drawing a flat line where there is no data. The
+**audit** floor is the oldest row of the pane's `AuditStore` read, which is
+capped at `AUDIT_VIEW_LIMIT` across two generations of a rotating log — so
+`scorecardColumns` flags any bar with spend older than that `belowFloor`
+rather than presenting "2 review rounds" for a feature that had eleven. A
+`null` floor means *no rows were read*, which is "we have not looked" and
+never "there is no history".
+
+`scorecardColumns` ships here as the tested projection; slice D renders those
+columns beside the bars. Its fail-verdict vocabulary is ENUMERATED rather than
+"anything that is not a pass", so a verdict this build has not heard of lands
+in neither column instead of silently inflating the fail rate.

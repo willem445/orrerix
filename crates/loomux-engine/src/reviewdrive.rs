@@ -4077,7 +4077,12 @@ pub struct ReleaseCandidate {
 /// the state condition is what makes "the driver has consumed the report" a fact
 /// rather than a description — the signal is one-shot, cleared when the arc it
 /// fed is durable, so the tick that sees `Done` while a hand-back is
-/// outstanding is the tick that consumed it.
+/// outstanding **and takes an arc on it** is the tick that consumed it. That last clause is load-bearing in `ci-wait`
+/// and in `ci-wait` only: there a `Done` can arrive before the matrix settles,
+/// [`decide_ci_wait`] answers `Wait`, and nothing has been consumed yet — so
+/// the pane is kept for the tick that really does end the wait. In `fix-wait`
+/// every `Done` takes an arc (2, or 7 when the head moved under it), so the
+/// clause changes nothing there and #2501's rows are unmoved.
 ///
 /// **"Waiting on it" is [`DriveEntry::handback_outstanding`], which since #2168
 /// E1 spans TWO states** (#2811 S1). This condition used to read `fix-wait` alone,
@@ -4165,11 +4170,20 @@ pub fn releasable(
     // same as "a drive that parks": the arm can refuse and park after this has
     // answered. See the doc above (rev-final W1).
     let mut terminal = false;
+    // **Whether this tick takes an ARC at all**, which is what makes "the driver
+    // consumed the report" a fact rather than a description: `rdtick` clears the
+    // one-shot signal on every arc and on nothing else, so a tick that merely
+    // WAITS has consumed nothing. It is reachable with a `Done` in hand — green
+    // has not landed yet, so `decide_ci_wait` waits — and releasing there would
+    // free the pane one tick before the drive stopped needing it, on a claim
+    // (`report-consumed`) that was not yet true.
+    let mut advancing = false;
     if let DriveStep::Advance { to, .. } = step {
         if to.is_parked() {
             return Vec::new();
         }
         terminal = to.is_terminal();
+        advancing = true;
     }
     let mut out: Vec<ReleaseCandidate> = Vec::new();
     // Condition 3, first, so the list reads worker-first exactly as
@@ -4186,7 +4200,10 @@ pub fn releasable(
                     reason: ReleaseReason::DriveEnded,
                 });
             }
-        } else if entry.handback_outstanding() && facts.worker == WorkerSignal::Done {
+        } else if advancing
+            && entry.handback_outstanding()
+            && facts.worker == WorkerSignal::Done
+        {
             out.push(ReleaseCandidate {
                 role: DrivenRole::Worker,
                 reason: ReleaseReason::ReportConsumed,
@@ -7785,6 +7802,14 @@ mod tests {
     /// there, so a `Done` is not this drive's to consume.
     #[test]
     fn the_worker_is_released_only_on_the_tick_that_consumes_its_done_report() {
+        // The step a tick takes when it really does consume the report: arc 2.
+        // `LIVE` (a bare `Wait`) is the wrong instrument for this table — a tick
+        // that consumes nothing must release nothing, which the last row pins.
+        let arc2 = DriveStep::Advance {
+            to: DriveState::ReviewWait,
+            held_reason: None,
+            bump: None,
+        };
         for (state, pushed, signal, owed) in [
             (DriveState::FixWait, false, WorkerSignal::Done, true),
             (DriveState::FixWait, false, WorkerSignal::Blocked, false),
@@ -7816,7 +7841,7 @@ mod tests {
             e.record_worker_pane("w-1");
             let mut f = facts_at("h1");
             f.worker = signal;
-            let got = releasable(&e, &f, &LIVE);
+            let got = releasable(&e, &f, &arc2);
             assert_eq!(
                 got.len(),
                 usize::from(owed),
@@ -7828,6 +7853,23 @@ mod tests {
                 assert_eq!(got[0].reason, ReleaseReason::ReportConsumed);
             }
         }
+
+        // **A tick that WAITS has consumed nothing**, and this is a real state
+        // rather than a hypothetical: a worker that reports before the matrix
+        // settles is a `Done` sitting in `ci-wait` while `decide_ci_wait`
+        // answers `Wait`. The only difference from the positive row above is the
+        // step, so the fixture discriminates on exactly the axis this pins.
+        let mut e = entry_at(DriveState::FixWait);
+        e.advance(DriveState::CiWait, None, None, 1_000).unwrap();
+        e.head = "h1".to_string();
+        e.record_worker_pane("w-1");
+        let mut f = facts_at("h1");
+        f.worker = WorkerSignal::Done;
+        assert_eq!(releasable(&e, &f, &arc2).len(), 1, "the control: the arc DOES release");
+        assert!(
+            releasable(&e, &f, &LIVE).is_empty(),
+            "a tick that takes no arc has consumed no report, so it releases nothing"
+        );
     }
 
     /// **One predicate, two callers** (#2811 S1) — `kickback_owed` and

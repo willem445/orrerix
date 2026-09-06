@@ -8816,7 +8816,12 @@ fn the_worker_pane_is_released_when_its_report_lands_in_ci_wait_after_a_push() {
         // and the drive goes back to `ci-wait` to watch the new matrix. The
         // report has not arrived yet, so this tick must release nothing — the
         // negative control that keeps the assertion below about the REPORT.
-        gh.set_checks("[]");
+        //
+        // The new matrix is GREEN, which is what lets arc 2 be taken once the
+        // report lands. An empty check list is not green — it is "no checks
+        // reported", which `ci-wait` waits on — so the payload is the one
+        // `FakeGh::green` uses.
+        gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
         gh.set_facts("OPEN", HEAD_C);
         let pushed = reg.rd_drive_group_with(&group, &gh, 50_000);
         assert_eq!(status_state(&reg, &group), "ci-wait", "{arm}: arc 7 puts it back in ci-wait");
@@ -8918,9 +8923,12 @@ fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
     );
 
     // The orchestrator dispositions and resumes; CI is green at the same head.
-    gh.set_checks("[]");
+    gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
     let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 60_000);
     assert_eq!(out["driving"], json!(true), "the resume was refused: {out}");
+    // Two ticks, as `briefed` takes: arc 11 re-enters `ci-wait`, the first tick
+    // reads green and advances to `review-wait`, the second opens the lane.
+    reg.rd_drive_group_with(&group, &gh, 65_000);
     let reopened = reg.rd_drive_group_with(&group, &gh, 70_000);
     let lane = reopened
         .lanes_opened

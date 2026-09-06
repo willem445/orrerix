@@ -899,6 +899,8 @@ impl Decoder {
     fn emit_tool_output(&mut self, id: &str, accumulated: &str, is_error: bool) -> Vec<Decoded> {
         let previous = self.tool_output.get(id);
         let (delta, restated) = match previous {
+            Some(_p) => (accumulated.to_string(), false),
+            #[allow(unreachable_patterns)]
             Some(p) if accumulated.starts_with(p.as_str()) => {
                 (accumulated[p.len()..].to_string(), false)
             }

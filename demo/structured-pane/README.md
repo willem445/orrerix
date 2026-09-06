@@ -11,12 +11,27 @@ and `test/theme.test.ts` do not see it — verified: `npm run build` is green an
 ## How to open it
 
 ```
-npm ci                          # once per worktree, if you have not already
-npx vite demo/structured-pane   # then open the URL it prints
+npm ci                                          # once per worktree
+npx vite demo/structured-pane --host 127.0.0.1  # then open the URL it prints
 ```
 
-**A plain `file://` open does not work.** That is measured, not assumed —
-Chrome refuses the module script before any fixture is even requested:
+Open the URL vite prints, not one from memory: it is `http://127.0.0.1:5173/`
+on a free machine, but this directory has no `vite.config` and therefore no
+`strictPort`, so a busy 5173 rolls silently to 5174 and up.
+
+**Pass `--host 127.0.0.1`.** Without it, vite here binds IPv6 loopback only —
+`[::1]:5173` answers 200 and `127.0.0.1:5173` refuses the connection — so a
+browser that resolves `localhost` to IPv4 loads nothing at all, with no error
+worth reading. With the flag, `127.0.0.1`, `[::1]` and `localhost` all answer,
+and so do the fixtures. `--host localhost` works too.
+
+**It is not the app's port 1420.** `npx vite demo/structured-pane` makes *this
+directory* the vite root, and there is no `vite.config` in here, so the
+repo-root config — which pins `port: 1420, strictPort: true` for the app — never
+loads. Pass `--port` to pin one yourself.
+
+**A plain `file://` open does not work.** Chrome refuses the module script
+before any fixture is requested:
 
 ```
 Access to script at '.../main.js' from origin 'null' has been blocked by CORS
@@ -71,11 +86,20 @@ The fixtures are **pi's own RPC shapes**, not a convenient invention, so
 `decode.js` is doing the real mapping work rather than reading a format written
 to be easy. The renderer never sees a pi field name.
 
-## What this mock does not settle
+## How this squares with the ring
 
-`doc/design/harness-adapters.md` §5.1 renders a structured pane as **VT bytes
-into the existing xterm ring**, and rejects a DOM transcript. #2891 then asked
-for "a designed surface … not an xterm emulation of a chat log". Both cannot be
-fully true, and **S1a owns that contract**, not this mock. `DESIGN.md` states
-the three ways out. Everything here is a picture of the raised bar, so the
-choice can be made against something visible.
+R1's `harness-adapters.md` §5.1 rendered a structured pane as **VT bytes into
+the xterm ring** and rejected a DOM transcript, because a DOM view would break
+`get_output`, replay, thumbnails and `last_exit_tail`. #2891 then asked for "a
+designed surface … not an xterm emulation of a chat log", which a VT renderer
+cannot give you — it cannot draw a fold or a button.
+
+**S1a settled it** (#2850, PR #2942): §5.1 is now *"Two projections, one log"* —
+the VT projection keeps feeding the ring so all four consumers are untouched,
+and the human gets a DOM renderer in the same grid cell fed by
+`orch-pane-event`. The rejection of a DOM view "was right about the consequence
+and wrong to treat ring-versus-DOM as a choice."
+
+So this mock is the DOM projection, and `projectText()` in `render.js` is the
+text one — both derived from the same event log, which is what makes them agree
+by construction rather than by discipline. `DESIGN.md` §8 carries the detail.

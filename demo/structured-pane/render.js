@@ -1,21 +1,23 @@
 // HarnessEvent -> DOM. The renderer half of the mock.
 //
-// WHAT THIS MOCK IS ARGUING, and the one place it departs from the contract as
-// merged. doc/design/harness-adapters.md §5.1 renders a structured pane by
-// turning each event into VT bytes and pushing them into the pane's existing
-// OutputBuf ring, so get_output, termgrid replay, thumbnails and last_exit_tail
-// keep working with no API change — and it rejects "a DOM transcript view
-// beside the terminal" precisely because that breaks all five.
+// THIS IS ONE OF TWO PROJECTIONS OF ONE LOG, which is the shape S1a settled on
+// (#2850, PR #2942, harness-adapters.md §5.1 "Two projections, one log").
 //
-// #2891 then raised the bar above that floor: "a designed surface (typography,
-// spacing, colour tokens from the theme system), not an xterm emulation of a
-// chat log". A VT renderer cannot draw a collapsible card, a fold animation, or
-// a button. Those two cannot both be fully true, and RESOLVING IT IS S1a's, not
-// this mock's: S1a owns the contract. This file exists to show the human what
-// the raised bar buys, so the choice is made against a picture rather than a
-// paragraph. DESIGN.md §The one open question states the three ways out.
+// R1's §5.1 turned each event into VT bytes and pushed them into the pane's
+// existing OutputBuf ring — keeping get_output, termgrid replay, thumbnails and
+// last_exit_tail working — and rejected "a DOM transcript view beside the
+// terminal" because that breaks all four. #2891 then asked for "a designed
+// surface … not an xterm emulation of a chat log", which a VT renderer cannot
+// give: it cannot draw a collapsible card, a fold animation, or a button.
 //
-// What the mock does NOT get to hand-wave, and honours anyway:
+// S1a's resolution is that this was never a choice between the two. The VT
+// projection keeps feeding the ring; the human gets a DOM renderer in the same
+// grid cell, fed by orch-pane-event. This file is that DOM projection, and
+// projectText() at the bottom is the text one — both derived from the SAME
+// event log, which is what makes them agree by construction rather than by
+// discipline. DESIGN.md §8 carries the argument.
+//
+// What that shape obliges, and this file honours:
 //  - The transcript is a VIEW OVER THE EVENT LOG, never the only copy. Every
 //    block below is derived from an event, and `projectText()` at the bottom is
 //    the text projection that keeps the ring, thumbnails and replay fed. That

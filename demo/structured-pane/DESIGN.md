@@ -174,39 +174,47 @@ That is the same argument §5.3's coalescer makes one level down: **a producer
 may not make the consumer pay per event.** S4 inherits the constraint, not just
 the fix.
 
-## 8. The one open question — for the human, not for this mock
+## 8. Two projections, one log — settled
 
-`harness-adapters.md` §5.1 says a structured pane renders **VT bytes into the
-existing `OutputBuf` ring**, so `get_output`, termgrid replay, thumbnails,
-`last_exit_tail` and C5 replay-on-attach keep working with no API change — and
-it explicitly rejects "a DOM transcript view beside the terminal" because that
-breaks all five.
+R1's `harness-adapters.md` §5.1 rendered a structured pane as **VT bytes into
+the existing `OutputBuf` ring**, so `get_output`, termgrid replay, thumbnails,
+`last_exit_tail` and C5 replay-on-attach kept working with no API change — and
+it explicitly rejected "a DOM transcript view beside the terminal" because that
+breaks all five. #2891 then raised the bar above that floor: "a designed surface
+… not an xterm emulation of a chat log", and **a VT renderer cannot draw a
+collapsible card, a fold animation, or a button.**
 
-#2891 raised the bar above that floor: "a designed surface (typography,
-spacing, colour tokens from the theme system), not an xterm emulation of a chat
-log". **A VT renderer cannot draw a collapsible card, a fold animation, or a
-button.** Both statements cannot be fully true.
+This mock was built while that tension was open, and **S1a has since settled it**
+(#2850, PR #2942). §5.1 is now *"Two projections, one log"*: the
+`transcript::Renderer` VT projection keeps feeding the ring, so the ring
+consumers are untouched, and the human gets a DOM renderer in the same grid cell
+fed by `orch-pane-event` — which replaces the never-emitted
+`orch-pane-transcript`. In S1a's own words, the rejection of a DOM view "was
+right about the consequence and wrong to treat ring-versus-DOM as a choice."
 
-This mock does not resolve it — **S1a owns the contract.** The three ways out,
-stated so the choice is explicit:
+**What that means for this design:** it is the shape the mock was already built
+as, so nothing here changes. The consequences worth carrying forward:
 
-1. **VT only.** Keep §5.1 exactly. The pane gets colour, spacing and structure
-   but no folds and no inline buttons; permission answers move entirely to the
-   needs-you panel. Cheapest, and the bar #2891 set is not met.
-2. **DOM view, VT projection.** The pane renders DOM; `projectText()` (already
-   in `render.js`) writes the same events into the ring so all five consumers
-   keep working off a text copy that is *derived from the same log*, never
-   scraped. This is what the mock is built as. The cost is that the ring's text
-   and the human's view are two renderings, and they must be kept honest by
-   being generated from one source — which is why the projection is a pure,
-   testable module and **S2 owns it**.
-3. **DOM view, ring keeps raw events.** Thumbnails and replay re-render from
-   the event log rather than from text. Most faithful, and the largest change
-   to #888's consumers.
+- **The DOM is a projection, never the only copy.** Every block in §6 is derived
+  from an event; nothing is scraped, and nothing renders from state the log does
+  not carry.
+- **`projectText()` is the other projection**, and the two must be kept honest by
+  being generated from one source rather than by discipline. That is why it is a
+  pure, DOM-free function and why **S2 owns it as the tested module** — the risk
+  this shape creates is two projections drifting, and a shared log plus a tested
+  projection is where it is closed.
+- **S4 renders DOM in the pane's own grid cell** — not beside the terminal, not
+  over it. Constraint 1 still holds by construction: there is no PTY behind a
+  structured pane, and nothing in `render.js` measures or resizes one.
 
-Nothing in this mock depends on which is chosen except the last mile: the block
-catalogue, the palette rules, the motion budget and the warp all survive option
-1 in reduced form and options 2 and 3 intact.
+## 8b. One theme — settled
+
+Also decided rather than open: orrerix stays **dark-only** for this surface. The
+human's call, and §2 records what it rules out — no light ramp is invented here,
+because inventing palette values would break `ui-redesign.md`'s rule that a hue
+is not free to move between channels. Every colour is a `var(--token)` off one
+copied block, so if a light theme ever lands app-wide this page inherits it by
+swapping that block for an import.
 
 ## 9. What each later slice inherits
 

@@ -16,6 +16,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   driftChip,
+  resolveEditTarget,
   resolveSwitchPicker,
   switchConfirm,
 } from "../src/workflowswitch.ts";
@@ -314,6 +315,80 @@ test("a preview loomux could not fingerprint declines the apply and says why", (
   const ok = switchConfirm(preview({ digest: "d9", diff: { ...EMPTY_DIFF, added: ["w-2"] } }));
   assert.equal(ok.canApply, true);
   assert.equal(ok.lines.filter((l) => l.includes("fingerprint")).length, 0);
+});
+
+// ---------- what Edit… opens (review round 1, finding 1) ----------
+
+const LISTING = {
+  workflows: [
+    { name: "default", path: ".orrerix/workflow.yml" },
+    { name: "b", path: ".orrerix/workflows/b.yml" },
+  ],
+};
+
+test("a named workflow opens the path the LISTING carries", () => {
+  const t = resolveEditTarget("b", LISTING);
+  assert.deepEqual(t, { kind: "open", paneName: "b", file: ".orrerix/workflows/b.yml" });
+});
+
+test("`default` opens with NO file, which is the pane's own default path", () => {
+  // Both halves matter: the pane falls back to the repo's default workflow
+  // path, and that absent `file` is also what lets it CREATE the first
+  // workflow in a repo that has none.
+  const t = resolveEditTarget("default", LISTING);
+  assert.deepEqual(t, { kind: "open", paneName: "workflow" });
+  assert.equal("file" in t, false);
+});
+
+test("a named workflow the listing has LOST refuses rather than opening the default file", () => {
+  // The defect this replaces: sending no `file` for a named workflow made the
+  // pane open `.orrerix/workflow.yml` under the title `b`, and the designer
+  // creates and saves a missing file — so an edit there rewrote the DEFAULT
+  // workflow other groups may be running.
+  const t = resolveEditTarget("b", { workflows: [{ name: "default", path: ".orrerix/workflow.yml" }] });
+  assert.equal(t.kind, "refuse");
+  assert.match((t as { reason: string }).reason, /no longer declares a workflow called "b"/);
+  assert.match((t as { reason: string }).reason, /file is gone/);
+});
+
+test("no listing at all refuses too, and says it could not LOOK rather than that the file is gone", () => {
+  // A failed read is not knowledge that the file is missing, and the human's
+  // next move differs: retry, not recreate.
+  const t = resolveEditTarget("b", null);
+  assert.equal(t.kind, "refuse");
+  assert.match((t as { reason: string }).reason, /Couldn't read this repo's workflows/);
+  assert.doesNotMatch((t as { reason: string }).reason, /gone/);
+});
+
+test("NO named workflow can ever reach the pane's default-file fallback", () => {
+  // The property, not the three cases: for every listing shape, an `open` for a
+  // non-default name carries a real path. This is what the fix is FOR, and it
+  // fails if any future branch reintroduces an undefined `file`.
+  const listings = [
+    null,
+    { workflows: [] },
+    { workflows: [{ name: "default", path: ".orrerix/workflow.yml" }] },
+    LISTING,
+    { workflows: [{ name: "b", path: ".loomux/workflows/b.yml" }] },
+  ];
+  let opened = 0;
+  for (const l of listings) {
+    const t = resolveEditTarget("b", l);
+    if (t.kind === "open") {
+      opened++;
+      assert.equal(typeof t.file, "string");
+      assert.notEqual(t.file, "");
+      assert.equal(t.paneName, "b");
+    }
+  }
+  // Positive control: the sweep really did reach the opening branch, so the
+  // assertions above are not vacuously satisfied by five refusals.
+  assert.equal(opened, 2);
+});
+
+test("the path is taken from the listing, never derived — a legacy `.loomux/` repo opens its own file", () => {
+  const t = resolveEditTarget("b", { workflows: [{ name: "b", path: ".loomux/workflows/b.yml" }] });
+  assert.deepEqual(t, { kind: "open", paneName: "b", file: ".loomux/workflows/b.yml" });
 });
 
 test("the target line names the file, and the display name only when there is one", () => {

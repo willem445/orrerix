@@ -40,8 +40,7 @@ import {
   type WorkflowListing,
   type WorkflowStatus,
 } from "./orchestration";
-import { driftChip, resolveSwitchPicker, switchConfirm } from "./workflowswitch.ts";
-import { DEFAULT_WORKFLOW_NAME } from "./workflowmodel.ts";
+import { driftChip, resolveEditTarget, resolveSwitchPicker, switchConfirm } from "./workflowswitch.ts";
 import {
   needsViewTierRetry,
   staleState,
@@ -1673,8 +1672,8 @@ export class GroupView {
    *  carries names only, and deriving a path from a name here would guess the
    *  config-dir spelling — a repo still on `.loomux/` would open (and, since the
    *  pane creates a missing file, could SAVE) a workflow it never declared. A
-   *  listing that fails or that does not carry the name sends no `file` at all,
-   *  which is the pane's own default path and the pre-#1689 behaviour. */
+   *  lookup that misses REFUSES rather than falling back — `resolveEditTarget`
+   *  is where that is decided and why. */
   private async editSelectedWorkflow(): Promise<void> {
     const picker = resolveSwitchPicker(this.workflow, this.workflowChoice, this.workflowBusy);
     const name = picker.selected;
@@ -1683,19 +1682,30 @@ export class GroupView {
       this.toast("Can't tell which repo this group is in — open the workflow from its pane instead.");
       return;
     }
-    if (!this.workflowListing) {
-      this.workflowListing = workflowList(repo).catch(() => null);
+    const target = resolveEditTarget(name, await this.listing(repo));
+    if (target.kind === "refuse") {
+      this.toast(target.reason);
+      return;
     }
-    const listing = await this.workflowListing;
-    const file = listing?.workflows.find((w) => w.name === name)?.path;
-    this.onEditWorkflow?.({
-      // Named after the WORKFLOW, not the repo: a pane called after the repo
-      // would be indistinguishable from every other workflow pane in it. Only
-      // `default` keeps the repo-shaped name the launcher's own button uses.
-      name: name === DEFAULT_WORKFLOW_NAME ? "workflow" : name,
-      root: repo,
-      file: name === DEFAULT_WORKFLOW_NAME ? undefined : file,
-    });
+    this.onEditWorkflow?.({ name: target.paneName, root: repo, file: target.file });
+  }
+
+  /** The repo's workflow listing, memoized **on success only** (review round 1,
+   *  finding 2).
+   *
+   *  Caching the rejection would turn one transient IPC failure into a
+   *  permanently degraded *Edit…* for the life of this panel — and since the
+   *  refusal above is worded "try again in a moment", a latched `null` would
+   *  make that sentence a lie. A failed read declines this click and is not
+   *  remembered, so the next one really does retry. */
+  private listing(repo: string): Promise<WorkflowListing | null> {
+    if (!this.workflowListing) {
+      this.workflowListing = workflowList(repo).catch(() => {
+        this.workflowListing = null;
+        return null;
+      });
+    }
+    return this.workflowListing;
   }
 
   /** The lock-resource section (#858). Hidden entirely for a repo that

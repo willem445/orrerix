@@ -293,4 +293,68 @@ function diffLines(preview: WorkflowSwitchPreview): string[] {
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/** What *Edit…* should do for the selected workflow: open a designer pane on a
+ *  specific file, or refuse and say why. */
+export type EditTarget =
+  | {
+      kind: "open";
+      /** The pane's name. */
+      paneName: string;
+      /** The repo-relative file, from the LISTING. `undefined` ONLY for
+       *  `default`, where it means the pane's own default path — see below. */
+      file?: string;
+    }
+  | { kind: "refuse"; reason: string };
+
+/** Decide what *Edit…* opens, from the selected name and the repo's listing.
+ *
+ *  This is a decision, not a paint, so it lives here rather than in the DOM
+ *  half — and it is here specifically because the DOM half got it wrong (review
+ *  round 1, finding 1). Sending no `file` is the pane's signal to fall back to
+ *  the repo's DEFAULT workflow path, which is right for `default` and a
+ *  **silent wrong-file write** for anything else: a pane titled `b` would open
+ *  `.orrerix/workflow.yml`, and the designer creates and saves a missing file,
+ *  so an edit there rewrites the default workflow other groups may be running.
+ *
+ *  So a named workflow opens the path the LISTING carries, or nothing opens at
+ *  all. The path is never derived from the name — `workflowRelFor`'s rule: the
+ *  frontend must not guess which config-dir spelling a repo uses, and the
+ *  backend already resolved it per entry.
+ *
+ *  The two ways a lookup misses are different facts and get different
+ *  sentences, because the human's next move differs:
+ *
+ *  - **the listing does not carry the name** — the file is gone. The listing
+ *    never drops a workflow for being unparseable, so absence means absence,
+ *    and it is exactly the state the picker's `(running — file is gone)` row
+ *    describes.
+ *  - **there is no listing** — the read failed. Nothing is known about the
+ *    file, which is not the same as knowing it is missing, and retrying is the
+ *    fix. */
+export function resolveEditTarget(
+  name: string,
+  listing: { workflows: { name: string; path: string }[] } | null
+): EditTarget {
+  if (name === DEFAULT_WORKFLOW_NAME) {
+    // Named after the REPO, not the workflow, matching the launcher's own
+    // button — and no `file`, which is both the pane's default path and what
+    // lets it CREATE the first workflow in a repo that has none.
+    return { kind: "open", paneName: "workflow" };
+  }
+  if (!listing) {
+    return {
+      kind: "refuse",
+      reason: `Couldn't read this repo's workflows, so loomux can't tell which file "${name}" is. Try again in a moment.`,
+    };
+  }
+  const path = listing.workflows.find((w) => w.name === name)?.path;
+  if (!path) {
+    return {
+      kind: "refuse",
+      reason: `This repo no longer declares a workflow called "${name}" — the file is gone. The group keeps running the roster it pinned; recreate the file to edit it.`,
+    };
+  }
+  return { kind: "open", paneName: name, file: path };
+}
+
 export type { WorkflowStatus, WorkflowSwitchPreview };

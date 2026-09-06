@@ -55,7 +55,7 @@ import {
   turnReceipt,
   wantsFreeText,
 } from "../src/structuredrows.ts";
-import type { Segment } from "../src/structuredrows.ts";
+import type { RowSpec, Segment } from "../src/structuredrows.ts";
 import { MARK_NAMES } from "../src/structuredicons.ts";
 
 const FIXTURE = fileURLToPath(
@@ -388,6 +388,12 @@ test("thinking is open while it streams and folds itself once the model moves on
 
 // ── the row signature ───────────────────────────────────────────────────────
 
+/** The row a signature test is about, minus the block. Defaults are a plain,
+ *  open, settled row; every test below varies only what it is pinning. */
+function rowShell(over: Partial<RowSpec> = {}): Pick<RowSpec, "collapsed" | "live" | "segment"> {
+  return { collapsed: false, live: false, segment: "idle", ...over };
+}
+
 test("every field a row draws moves the signature", () => {
   // THE FAILURE THIS PINS. `project()` mutates blocks in place, so a renderer
   // that compares by object identity never repaints. The signature is what
@@ -397,7 +403,7 @@ test("every field a row draws moves the signature", () => {
     { kind: "tool_call", turn: 1, id: "t1", name: "Grep", input: { pattern: "x" } },
   ]).blocks.find((b): b is ToolBlock => b.kind === "tool")!;
   const sig = (over: Partial<ToolBlock>, collapsed = true) =>
-    rowSignature({ ...base, ...over }, collapsed);
+    rowSignature({ ...base, ...over }, rowShell({ collapsed }));
 
   const start = sig({});
   for (const [what, over] of [
@@ -417,14 +423,14 @@ test("every field a row draws moves the signature", () => {
 
 test("a text delta moves its row's signature", () => {
   const s = project(emptyState(), [{ kind: "text", turn: 1, delta: "one" }]);
-  const before = rowSignature(s.blocks[0]!, false);
+  const before = rowSignature(s.blocks[0]!, rowShell());
   project(s, [{ kind: "text", turn: 1, delta: " two" }]);
-  assert.notEqual(rowSignature(s.blocks[0]!, false), before, "an append must repaint the row");
+  assert.notEqual(rowSignature(s.blocks[0]!, rowShell()), before, "an append must repaint the row");
 });
 
 test("a turn's receipt landing moves its signature", () => {
   const s = project(emptyState(), [{ kind: "turn_started", turn: 1 }]);
-  const before = rowSignature(s.blocks[0]!, false);
+  const before = rowSignature(s.blocks[0]!, rowShell());
   project(s, [
     {
       kind: "turn_ended",
@@ -438,16 +444,77 @@ test("a turn's receipt landing moves its signature", () => {
       stop: "end_turn",
     },
   ]);
-  assert.notEqual(rowSignature(s.blocks[0]!, false), before, "the receipt must repaint the rule");
+  assert.notEqual(rowSignature(s.blocks[0]!, rowShell()), before, "the receipt must repaint the rule");
 });
 
 test("a settlement moves a request row's signature", () => {
   const s = project(emptyState(), [
     { kind: "permission_request", id: "r1", tool: "Bash", input: { command: "rm -rf /" } },
   ]);
-  const before = rowSignature(s.blocks[0]!, false);
+  const before = rowSignature(s.blocks[0]!, rowShell());
   project(s, [{ kind: "permission_settled", id: "r1", decision: "deny", by: "human" }]);
-  assert.notEqual(rowSignature(s.blocks[0]!, false), before, "a settled card must repaint");
+  assert.notEqual(rowSignature(s.blocks[0]!, rowShell()), before, "a settled card must repaint");
+});
+
+
+test("the caret stops when the live run ends, even though the block never changed", () => {
+  // REVIEW ROUND 1, FINDING 1 — a real defect this pins, and the shape of it is
+  // worth keeping: `live` is derived from the PROJECTION's open-block pointers,
+  // not from the block, so a `tool_call` that closes an open text run flips
+  // `live` while leaving the text block byte-identical. A signature built from
+  // the block alone was therefore equal across the transition, the reconciler
+  // reused the node, and the caret kept blinking on a finished paragraph — for
+  // the life of the pane, on the fixture's own shape.
+  const s = project(emptyState(), [
+    { kind: "turn_started", turn: 1 },
+    { kind: "text", turn: 1, delta: "still coming" },
+  ]);
+  const row = () => rowsFor(s, emptyViewState()).find((r) => r.kind === "text")!;
+  const block = () => s.blocks.find((b) => b.kind === "text")!;
+
+  const before = { ...row() };
+  const sigBefore = rowSignature(block(), before);
+  assert.equal(before.live, true, "positive control: the run is live to start with");
+
+  project(s, [{ kind: "tool_call", turn: 1, id: "t1", name: "Grep", input: { pattern: "x" } }]);
+  const after = { ...row() };
+  assert.equal(after.live, false, "positive control: closing the run flipped `live`");
+
+  // The block itself did NOT move — which is exactly why this was invisible.
+  assert.equal(block().text.length, 12, "the text block was not mutated by the tool call");
+  assert.notEqual(
+    rowSignature(block(), after),
+    sigBefore,
+    "the signature is equal across a live→settled flip, so the renderer reuses the node " +
+      "and the caret never stops",
+  );
+});
+
+test("every RowSpec field a row DRAWS moves the signature, and the two that are not drawn do not", () => {
+  // The generalisation of the finding above. `rowSignature` takes the ROW now,
+  // not just the block, so the fields are enumerated here rather than trusted:
+  // a field added to `RowSpec` and drawn but left out of the signature is the
+  // same silent-stale-row defect one field over.
+  const s = project(emptyState(), [{ kind: "text", turn: 1, delta: "hello" }]);
+  const b = s.blocks[0]!;
+  const base = rowsFor(s, emptyViewState())[0]!;
+  const sig = (over: Partial<RowSpec>) => rowSignature(b, { ...base, ...over });
+
+  const start = sig({});
+  assert.equal(sig({}), start, "positive control: an unchanged row is unchanged");
+  for (const [what, over] of [
+    ["live", { live: !base.live }],
+    ["collapsed", { collapsed: !base.collapsed }],
+    ["segment", { segment: "danger" as const }],
+  ] as const) {
+    assert.notEqual(sig(over), start, `${what} is drawn but does not move the signature`);
+  }
+  // And the two that are deliberately excluded, each for a stated reason:
+  // `key` is the map key (a different key is a different row, not a repaint),
+  // and `estimate` is never drawn — it is superseded by measurement, so folding
+  // it in would repaint every row whose text grew by one character.
+  assert.equal(sig({ key: "somewhere-else" }), start, "`key` is the map key, not a painted field");
+  assert.equal(sig({ estimate: base.estimate + 999 }), start, "`estimate` is never drawn");
 });
 
 // ── the tool's mark and family ──────────────────────────────────────────────

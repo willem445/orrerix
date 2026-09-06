@@ -299,19 +299,32 @@ const PANE_KINDS: readonly PersistedPaneKind[] = [
  *
  *  **A STRUCTURED pane (#2891) is deliberately NOT a sixth content rung.** It is a
  *  content pane in `pane.ts`'s sense — no PTY, a view filling the content box — but it
- *  is an AGENT: it is a view of one agent's event log, created by the orchestration
- *  spawn path, and what brings it back is a group resume, not a layout snapshot. Two
- *  things follow, and each is the reason for the other:
+ *  is an AGENT: a view of one agent's event log, created by the orchestration spawn
+ *  path rather than by a human opening a folder. Two things follow:
  *
  *   - it persists as `agent` rather than as its own kind, so a DOWNGRADE costs nothing.
  *     The comment on `PersistedPaneKind` above records what a new leaf really costs: an
  *     older build's `decodePane` rejects the unknown kind and `decodeLayout`'s whole-tree
- *     fail-safe collapses THAT TAB's entire layout to one welcome pane. Paying that for
- *     a kind whose restore is a group resume either way buys nothing;
+ *     fail-safe collapses THAT TAB's entire layout to one welcome pane;
  *   - it does not take the content rung, because the four content kinds restore from
  *     their ROOT alone (`cwd`) and a structured pane cannot — a root without a group and
  *     an agent id is not a transcript, and a slot restored that way would come back as an
  *     empty pane claiming to watch an agent nobody named.
+ *
+ *  **WHAT A STRUCTURED PANE ACTUALLY RESTORES AS TODAY, stated rather than implied.**
+ *  `agent` is where it BELONGS in the ladder, not a working restore. `Pane.capture()`
+ *  fills `command`/`argv` from the spawn line and `groupId` only for kind `orch`, and a
+ *  structured pane has neither a spawn line nor that kind — so the record it writes
+ *  carries `command: null, argv: null, sessionId: null, groupId: null`, and
+ *  `panerestore.ts` turns that into a **dormant-agent placeholder**: the slot and the
+ *  name come back, the transcript does not, and the human presses Start.
+ *
+ *  That is honest degradation rather than a wrong pane, and it is the right floor for
+ *  a slice that cannot spawn one yet (#2891 S4 renders; the spawn path is S3b). Making
+ *  it a real restore needs two things this record does not carry — the `group_id` and
+ *  `agent_id` the pane is a view OF — plus a decision about where the transcript comes
+ *  from on the way back (the per-pane event log, §4.1). Whoever builds that owes both
+ *  fields here and a rung test beside `a structured pane persists as the agent it is`.
  *
  *  It is passed as its own flag rather than through `contentKind` for the reason the
  *  `ssh` rung exists: a FALLTHROUGH gets it silently wrong, and a flag makes the

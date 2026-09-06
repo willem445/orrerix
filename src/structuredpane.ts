@@ -105,6 +105,10 @@ import {
 } from "./structuredrows.ts";
 import type { RowSpec } from "./structuredrows.ts";
 import { mark } from "./structuredicons.ts";
+// DOM-only and dependency-free (it creates one element and toggles a class), so it
+// costs this module nothing it was avoiding — unlike the orchestration bridge, which
+// is injected precisely because importing it would be a cycle.
+import { showToast } from "./toast";
 import type { MarkName } from "./structuredicons.ts";
 
 /** How a dialog or permission answer leaves this pane.
@@ -237,6 +241,13 @@ export class StructuredPaneView {
     // itself schedule work per wheel tick: the rAF below coalesces it.
     this.scrollEl.addEventListener("scroll", this.onScroll, { passive: true });
     this.scrollEl.addEventListener("click", this.onClick);
+    // The write half of `drafts`. Without it the map is seeded and read and never
+    // filled, which is the in-list-editor rule half-implemented: the value would be
+    // read off the `<input>` at submit and lost with the node the moment the card
+    // left the virtualised window. `input` rather than `change` because a card can
+    // be evicted mid-keystroke — `change` does not fire until blur, and the blur
+    // here is the element being removed.
+    this.scrollEl.addEventListener("input", this.onInput);
   }
 
   /** Attach-then-show, the contract every content view here follows: nothing
@@ -285,6 +296,7 @@ export class StructuredPaneView {
     this.frame = null;
     this.scrollEl.removeEventListener("scroll", this.onScroll);
     this.scrollEl.removeEventListener("click", this.onClick);
+    this.scrollEl.removeEventListener("input", this.onInput);
     this.nodes.clear();
     this.heights.clear();
     this.drafts.clear();
@@ -347,7 +359,7 @@ export class StructuredPaneView {
       const row = rows[i]!;
       const block = this.state.blocks[i]!;
       wanted.add(row.key);
-      const sig = rowSignature(block, row.collapsed);
+      const sig = rowSignature(block, row);
       let node = this.nodes.get(row.key);
       if (!node) {
         node = { el: this.buildRow(block, row), sig, height: row.estimate, measured: false };
@@ -821,6 +833,21 @@ export class StructuredPaneView {
   /** One delegated listener for the whole transcript rather than a handler per
    *  row: rows are created and destroyed constantly by the virtualiser, and a
    *  per-row listener would be work per row on every frame. */
+  /** Keep the unsent answer in the VIEW as it is typed.
+   *
+   *  Delegated for the reason `onClick` is: rows are created and destroyed
+   *  constantly by the virtualiser, so a per-input listener would be work per row
+   *  on every frame — and would be attached to exactly the node that is about to
+   *  be thrown away. It deliberately does NOT schedule a render: the model already
+   *  agrees with what is on screen, and repainting mid-keystroke would rebuild the
+   *  field under the caret. */
+  private onInput = (ev: Event): void => {
+    const el = ev.target as HTMLElement | null;
+    const id = el?.dataset?.draft;
+    if (!id) return;
+    this.drafts.set(id, (el as HTMLInputElement).value);
+  };
+
   private onClick = (ev: MouseEvent): void => {
     const target = ev.target as HTMLElement | null;
     if (!target) return;
@@ -841,13 +868,30 @@ export class StructuredPaneView {
         `[data-draft="${btn.dataset.free}"]`,
       );
       value = input?.value ?? this.drafts.get(btn.dataset.free) ?? "";
+      // Cleared optimistically and PUT BACK if the send rejects (below), so the
+      // field does not keep stale text after a successful send and does not lose
+      // the human's typing after a failed one.
       this.drafts.delete(btn.dataset.free);
     }
     // The answer leaves through the injected trusted path. The card is NOT
     // marked settled here: the settlement is a fact the ENGINE reports back as
     // a `UiSettled`/`PermissionSettled` event, and drawing it optimistically
     // would put a decision on screen that the harness may not have taken.
-    void this.opts.answer({ requestId: btn.dataset.answer!, channel, answer: value });
+    //
+    // A REJECTION IS THE HUMAN'S BUSINESS, not an unhandled promise. The card
+    // stays pending either way — that part is correct — but silently pending after
+    // a click reads exactly like a button that does nothing, and the human has no
+    // way to tell the two apart. So say so, and give back what they typed: a
+    // free-text answer that failed to send is still the only copy of it.
+    const draftId = btn.dataset.free;
+    void this.opts
+      .answer({ requestId: btn.dataset.answer!, channel, answer: value })
+      .catch((e: unknown) => {
+        if (draftId) this.drafts.set(draftId, value);
+        const why = e instanceof Error ? e.message : String(e);
+        showToast(`Could not send that answer: ${why}`, "error");
+        this.schedule();
+      });
   };
 }
 

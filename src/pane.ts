@@ -2897,10 +2897,6 @@ export class Pane implements VoiceTargetPane {
     return this.gitPaneView;
   }
 
-  /** True when this pane is a PTY-less content pane (#214 files, #217 editor / git) —
-   *  no PTY, ever. The kind itself stays private: nothing outside needs to know WHICH
-   *  surface it is, and the moment something does, it should ask a question about the
-   *  behavior it cares about rather than switch on the kind. */
   /** This pane's structured transcript view (#2891), or null on every other kind.
    *  Exposed for ONE reader — `orchestration.ts`'s registry, which drops its entry
    *  by identity when the pane is disposed. The kind itself stays private, as
@@ -2910,6 +2906,10 @@ export class Pane implements VoiceTargetPane {
     return this.structuredPaneView;
   }
 
+  /** True when this pane is a PTY-less content pane (#214 files, #217 editor / git,
+   *  #2891 structured) — no PTY, ever. The kind itself stays private: nothing outside
+   *  needs to know WHICH surface it is, and the moment something does, it should ask a
+   *  question about the behavior it cares about rather than switch on the kind. */
   get isContent(): boolean {
     return this.contentKind !== null;
   }

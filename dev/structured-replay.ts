@@ -186,3 +186,24 @@ document.getElementById("dim")!.addEventListener("click", () => {
 fresh();
 report(0);
 void replaySession();
+
+// A DEV HOOK, and only that. The DOM wiring in `structuredpane.ts` is validated by
+// hand (CLAUDE.md: no simulated DOM in tests), and "by hand" is worth more when the
+// next person can re-run the check instead of re-deriving it. This exposes the live
+// view so a console session — or a reviewer — can assert what the pure tests
+// structurally cannot reach. The one review round 1 asked for, verbatim:
+//
+//   const v = window.__spane.view();
+//   const i = document.createElement("input");
+//   i.dataset.draft = "b1"; i.value = "half an answer";
+//   v.el.querySelector(".spane-scroll").appendChild(i);
+//   i.dispatchEvent(new Event("input", { bubbles: true }));
+//   v.drafts.get("b1")   // => "half an answer"  (private is compile-time only)
+//
+// It exists on this page only; nothing under `src/` reads or defines it.
+declare global {
+  interface Window {
+    __spane?: { view: () => StructuredPaneView | null };
+  }
+}
+window.__spane = { view: () => view };

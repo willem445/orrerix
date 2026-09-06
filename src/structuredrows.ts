@@ -241,9 +241,26 @@ function isLive(b: Block, state: State): boolean {
  * shape. A field a row draws and this string omits is a row that goes stale on
  * screen with nothing red to say so, which is why the tests pin the fields
  * individually rather than asserting a fixed string.
+ *
+ * IT TAKES THE ROW, NOT JUST THE BLOCK, and that is the fix for a real defect
+ * rather than tidiness. `RowSpec.live` is derived from the PROJECTION's open-block
+ * pointers, not from the block — so when a `tool_call` closes an open text run,
+ * `state.openText` goes null while the text block itself is not touched. A
+ * signature built from the block alone is then byte-identical across that
+ * transition, the reconciler reuses the node, and the streaming caret keeps
+ * blinking on a paragraph that finished — contradicting `isLive`'s own promise
+ * that it "stops the instant that state ends". `segment` is here for the same
+ * reason one level weaker: it happens to be derivable from fields already named
+ * below, and relying on that is the exact reasoning that let `live` slip.
+ *
+ * The two `RowSpec` fields deliberately NOT here: `key`, which is the map key and
+ * cannot change without being a different row, and `estimate`, which is never
+ * drawn — it is superseded by measurement, so folding it in would repaint every
+ * row whose text grew by one character for no visible difference.
  */
-export function rowSignature(b: Block, collapsed: boolean): string {
-  const head = `${b.kind}|${collapsed ? 1 : 0}|${b.turn ?? "-"}`;
+export function rowSignature(b: Block, row: Pick<RowSpec, "collapsed" | "live" | "segment">): string {
+  const head =
+    `${b.kind}|${row.collapsed ? 1 : 0}|${row.live ? 1 : 0}|${row.segment}|${b.turn ?? "-"}`;
   switch (b.kind) {
     case "text":
     case "thinking":

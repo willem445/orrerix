@@ -50,9 +50,10 @@
 //!    [`BranchName`] validate in their own `Deserialize` impls, so a bad id or
 //!    branch is a YAML error carrying the offending scalar's own mark. Unknown
 //!    keys (`deny_unknown_fields`) and type mismatches come with marks free.
-//! 2. **Cross-slice checks re-deserialize with a probe.** A duplicate id, an
-//!    unknown dep and a cycle are facts about the *document*, so they cannot be
-//!    raised during a single pass. Once such a fault is found by index,
+//! 2. **Cross-slice checks re-deserialize with a probe.** A duplicate id, a
+//!    colliding branch, an unknown dep and a cycle are facts about the
+//!    *document*, so they cannot be raised during a single pass. Once such a
+//!    fault is found by index,
 //!    `probe::line_of` re-deserializes the same text with a shadow type that
 //!    deliberately fails at exactly that value, and reads the mark off the
 //!    resulting error.
@@ -477,7 +478,20 @@ pub fn parse(text: &str, first_line: usize) -> Result<PlanDoc, Vec<String>> {
     };
 
     let mut errs = Vec::new();
+    check_document(&doc, text, first_line, &mut errs);
+    let edges_all_land = check_slices(&doc, text, first_line, &mut errs);
+    check_cycle(&doc, text, first_line, edges_all_land, &mut errs);
 
+    if errs.is_empty() {
+        Ok(doc)
+    } else {
+        Err(errs)
+    }
+}
+
+/// Faults of the document as a whole: the header scalars, and the two
+/// uniqueness rules.
+fn check_document(doc: &PlanDoc, text: &str, first_line: usize, errs: &mut Vec<String>) {
     if doc.version != SCHEMA_VERSION {
         errs.push(reason(
             first_line,
@@ -504,22 +518,82 @@ pub fn parse(text: &str, first_line: usize) -> Result<PlanDoc, Vec<String>> {
         ));
     }
 
-    // Duplicate ids first: every later check addresses slices by id, and with a
-    // duplicate present "the slice named P1" does not denote.
-    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    // Ids first: every later check addresses slices by id, and with a duplicate
+    // present "the slice named P1" does not denote.
+    //
+    // **Case-insensitively**, and that is not fussiness. A slice id reaches a
+    // pane name and a persisted row key, and a branch becomes a worktree
+    // DIRECTORY on this project's Windows baseline — where `P1` and `p1`, or
+    // `feat/A` and `feat/a`, are one name. Accepting both is precisely the
+    // two-strings-name-one-thing hazard this module's own rationale refuses to
+    // create by rewriting; it would be odd to refuse to *create* it and then
+    // wave it through when a planner writes it directly. `to_ascii_lowercase`
+    // is the whole fold: `check_segment` has already made the alphabet ASCII,
+    // and `BranchName` has already refused every non-printable byte.
+    let mut ids: BTreeMap<String, (usize, &str)> = BTreeMap::new();
+    let mut branches: BTreeMap<String, (usize, &str)> = BTreeMap::new();
     for (i, s) in doc.slices.iter().enumerate() {
-        if let Some(first) = seen.insert(s.id.as_str(), i) {
-            errs.push(reason(
+        let at = probe::line_of(text, probe::Target::SliceId(i));
+        match ids.get(&s.id.as_str().to_ascii_lowercase()) {
+            Some(&(first, spelling)) if spelling == s.id.as_str() => errs.push(reason(
                 first_line,
-                probe::line_of(text, probe::Target::SliceId(i)),
+                at,
                 &format!(
                     "slices[{i}]: duplicate slice id {:?} (first declared at slices[{first}])",
                     s.id.as_str()
                 ),
-            ));
+            )),
+            Some(&(first, spelling)) => errs.push(reason(
+                first_line,
+                at,
+                &format!(
+                    "slices[{i}]: slice id {:?} differs from {spelling:?} at slices[{first}] only \
+                     by case — the two would name one directory on a case-insensitive filesystem",
+                    s.id.as_str()
+                ),
+            )),
+            None => {
+                ids.insert(s.id.as_str().to_ascii_lowercase(), (i, s.id.as_str()));
+            }
+        }
+
+        let at = probe::line_of(text, probe::Target::Branch(i));
+        match branches.get(&s.branch.as_str().to_ascii_lowercase()) {
+            Some(&(first, spelling)) if spelling == s.branch.as_str() => errs.push(reason(
+                first_line,
+                at,
+                &format!(
+                    "slices[{i}] ({}): branch {:?} is already slices[{first}]'s — two slices on \
+                     one branch cannot each open their own PR",
+                    s.id,
+                    s.branch.as_str()
+                ),
+            )),
+            Some(&(first, spelling)) => errs.push(reason(
+                first_line,
+                at,
+                &format!(
+                    "slices[{i}] ({}): branch {:?} differs from {spelling:?} at slices[{first}] \
+                     only by case — the two would name one worktree directory on a \
+                     case-insensitive filesystem",
+                    s.id,
+                    s.branch.as_str()
+                ),
+            )),
+            None => {
+                branches.insert(
+                    s.branch.as_str().to_ascii_lowercase(),
+                    (i, s.branch.as_str()),
+                );
+            }
         }
     }
+}
 
+/// Per-slice faults. Returns whether every dep edge lands on a slice that
+/// exists — the cycle walk is only meaningful once it does.
+fn check_slices(doc: &PlanDoc, text: &str, first_line: usize, errs: &mut Vec<String>) -> bool {
+    let mut edges_all_land = true;
     for (i, s) in doc.slices.iter().enumerate() {
         if s.title.trim().is_empty() {
             errs.push(reason(
@@ -552,12 +626,14 @@ pub fn parse(text: &str, first_line: usize) -> Result<PlanDoc, Vec<String>> {
         }
         for (j, d) in s.deps.iter().enumerate() {
             if d == &s.id {
+                edges_all_land = false;
                 errs.push(reason(
                     first_line,
                     probe::line_of(text, probe::Target::Dep { slice: i, dep: j }),
                     &format!("slices[{i}].deps[{j}]: slice {} depends on itself", s.id),
                 ));
             } else if doc.slice(d.as_str()).is_none() {
+                edges_all_land = false;
                 errs.push(reason(
                     first_line,
                     probe::line_of(text, probe::Target::Dep { slice: i, dep: j }),
@@ -570,30 +646,31 @@ pub fn parse(text: &str, first_line: usize) -> Result<PlanDoc, Vec<String>> {
             }
         }
     }
+    edges_all_land
+}
 
-    // Cycles only once every edge is known to land somewhere: a walk over
-    // dangling edges reports a cycle that is really the unknown dep above.
-    let edges_all_land = !errs
-        .iter()
-        .any(|e| e.contains("unknown dep") || e.contains("depends on itself"));
-    if edges_all_land {
-        if let Some(cycle) = find_cycle(&doc) {
-            let (i, j) = cycle.edge;
-            errs.push(reason(
-                first_line,
-                probe::line_of(text, probe::Target::Dep { slice: i, dep: j }),
-                &format!(
-                    "slices[{i}].deps[{j}]: dependency cycle {} — nothing in it can ever start",
-                    cycle.path.join(" -> ")
-                ),
-            ));
-        }
+/// The cycle walk, run only once every edge is known to land somewhere: a walk
+/// over dangling edges reports a cycle that is really the unknown dep above.
+fn check_cycle(
+    doc: &PlanDoc,
+    text: &str,
+    first_line: usize,
+    edges_all_land: bool,
+    errs: &mut Vec<String>,
+) {
+    if !edges_all_land {
+        return;
     }
-
-    if errs.is_empty() {
-        Ok(doc)
-    } else {
-        Err(errs)
+    if let Some(cycle) = find_cycle(doc) {
+        let (i, j) = cycle.edge;
+        errs.push(reason(
+            first_line,
+            probe::line_of(text, probe::Target::Dep { slice: i, dep: j }),
+            &format!(
+                "slices[{i}].deps[{j}]: dependency cycle {} — nothing in it can ever start",
+                cycle.path.join(" -> ")
+            ),
+        ));
     }
 }
 
@@ -610,8 +687,18 @@ fn reason(first_line: usize, block_line: Option<usize>, msg: &str) -> String {
 /// `serde_norway` appends its own `at line L column C` to a `Display`ed error.
 /// That number is block-relative, so leaving it in would put a second, wrong
 /// line beside the absolute one this module prints.
+///
+/// **`rfind`, not `find`**: the position is a *suffix*, and the rest of the
+/// message quotes the planner's own text. A key literally named
+/// `foo at line 9` makes serde print ``unknown field `foo at line 9`, expected
+/// one of … at line 12 column 5``, and cutting at the first match would
+/// truncate the message to ``unknown field `foo`` — dropping the list of legal
+/// keys, which is the only part a planner can act on. The plan is refused
+/// either way, so this fails toward a useless message rather than toward a
+/// wrong verdict; that is still a reason to get it right, and
+/// `a_key_named_like_the_position_suffix_keeps_its_message` pins it.
 fn strip_yaml_position(s: &str) -> String {
-    match s.find(" at line ") {
+    match s.rfind(" at line ") {
         Some(i) => s[..i].trim_end().to_string(),
         None => s.to_string(),
     }
@@ -726,6 +813,8 @@ mod probe {
         Issue,
         /// `slices[i].id`.
         SliceId(usize),
+        /// `slices[i].branch`.
+        Branch(usize),
         /// `slices[slice].deps[dep]`.
         Dep {
             /// Index of the slice.
@@ -845,10 +934,22 @@ mod probe {
         }
     }
 
+    /// One slice's `branch`: fails if this slice is the addressed one.
+    struct ProbeBranch;
+    impl<'de> Deserialize<'de> for ProbeBranch {
+        fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+            let slice = CUR_SLICE.with(|c| c.get()).unwrap_or(usize::MAX);
+            eat_scalar(de, Target::Branch(slice))?;
+            Ok(ProbeBranch)
+        }
+    }
+
     #[derive(Deserialize)]
     struct ProbeSliceInner {
         #[allow(dead_code)]
         id: ProbeId,
+        #[allow(dead_code)]
+        branch: ProbeBranch,
         #[serde(default)]
         #[allow(dead_code)]
         deps: Vec<ProbeDep>,
@@ -1324,6 +1425,101 @@ slices:
         );
     }
 
+    /// Two slices whose bodies differ only in the `id` and `branch` values the
+    /// caller supplies. Everything else is held constant so a refusal can only
+    /// be about the pair under test.
+    fn two_slices(id_a: &str, branch_a: &str, id_b: &str, branch_b: &str) -> String {
+        let mut b = String::from("version: 1\nissue: 3040\nslices:\n");
+        for (id, branch) in [(id_a, branch_a), (id_b, branch_b)] {
+            b.push_str(&format!("  - id: {id}\n"));
+            b.push_str("    title: a slice\n");
+            b.push_str(&format!("    branch: {branch}\n"));
+            b.push_str("    block: worker-adv\n");
+            b.push_str("    brief: a brief long enough to clear the forty character floor\n");
+        }
+        b
+    }
+
+    #[test]
+    fn two_distinct_slices_are_accepted() {
+        // The control for the four collision tests below: same fixture shape,
+        // no collision, accepted. Without it "refuse everything" would pass
+        // every one of them.
+        let block = two_slices("P1", "feat/p1", "P2", "feat/p2");
+        parse(&block, 6).expect("two genuinely distinct slices must be accepted");
+    }
+
+    #[test]
+    fn two_slice_ids_differing_only_by_case_are_refused() {
+        let block = two_slices("P1", "feat/p1", "p1", "feat/p2");
+        let errs = refuse(&block);
+        assert_eq!(errs.len(), 1, "{errs:#?}");
+        assert!(errs[0].contains("only by case"), "{}", errs[0]);
+        assert!(errs[0].contains("\"p1\""), "{}", errs[0]);
+        assert!(errs[0].contains("\"P1\""), "{}", errs[0]);
+        // Refused, not folded: neither spelling is rewritten into the other.
+        assert!(errs[0].starts_with("plan block line "), "{}", errs[0]);
+    }
+
+    #[test]
+    fn two_slices_on_one_branch_are_refused() {
+        let block = two_slices("P1", "feat/same", "P2", "feat/same");
+        let errs = refuse(&block);
+        assert_eq!(errs.len(), 1, "{errs:#?}");
+        assert!(
+            errs[0].contains("is already slices[0]'s"),
+            "{}",
+            errs[0]
+        );
+        assert!(errs[0].starts_with("plan block line "), "{}", errs[0]);
+    }
+
+    #[test]
+    fn two_branches_differing_only_by_case_are_refused() {
+        let block = two_slices("P1", "feat/A", "P2", "feat/a");
+        let errs = refuse(&block);
+        assert_eq!(errs.len(), 1, "{errs:#?}");
+        assert!(errs[0].contains("only by case"), "{}", errs[0]);
+        assert!(errs[0].contains("worktree directory"), "{}", errs[0]);
+    }
+
+    #[test]
+    fn a_key_named_like_the_position_suffix_keeps_its_message() {
+        // `strip_yaml_position` cuts serde's trailing "at line L column C". A
+        // planner key that itself contains that phrase must not truncate the
+        // message: the list of legal keys is the only part they can act on.
+        let block = "\
+version: 1
+issue: 3040
+slices:
+  - id: P1
+    title: one
+    branch: feat/p1
+    block: worker-adv
+    brief: a brief long enough to clear the forty character floor
+    \"foo at line 9\": 1
+";
+        let errs = refuse(block);
+        assert_eq!(errs.len(), 1, "{errs:#?}");
+        assert!(errs[0].contains("unknown field"), "{}", errs[0]);
+        assert!(
+            errs[0].contains("expected one of"),
+            "the legal-key list must survive the strip: {}",
+            errs[0]
+        );
+        assert!(
+            errs[0].contains("foo at line 9"),
+            "the offending key is named as written: {}",
+            errs[0]
+        );
+        // Exactly one position phrase was cut, and none survives.
+        assert!(
+            !errs[0].contains(" column "),
+            "the block-relative position must not survive: {}",
+            errs[0]
+        );
+    }
+
     #[test]
     fn a_short_brief_is_refused() {
         let block = "\
@@ -1445,6 +1641,8 @@ slices:
         assert_eq!(probe::line_of(block, probe::Target::Issue), Some(2));
         assert_eq!(probe::line_of(block, probe::Target::SliceId(0)), Some(4));
         assert_eq!(probe::line_of(block, probe::Target::SliceId(1)), Some(10));
+        assert_eq!(probe::line_of(block, probe::Target::Branch(0)), Some(6));
+        assert_eq!(probe::line_of(block, probe::Target::Branch(1)), Some(12));
         assert_eq!(
             probe::line_of(block, probe::Target::Dep { slice: 1, dep: 0 }),
             Some(14)

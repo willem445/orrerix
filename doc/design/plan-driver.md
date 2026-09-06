@@ -40,9 +40,9 @@ risks:
 | `version` | yes | Must be `1`. A different version is refused, not read optimistically. |
 | `issue` | yes | The issue this plan is for. |
 | `slices` | yes | At least one. Order is the planner's; it carries no scheduling meaning — `deps` does. |
-| `slices[].id` | yes | Unique within the plan. Validated through `pathseg::check_segment` (CLAUDE.md constraint 6). |
+| `slices[].id` | yes | Unique within the plan, **case-insensitively**. Validated through `pathseg::check_segment` (CLAUDE.md constraint 6). |
 | `slices[].title` | yes | Non-empty. Becomes the board row title beside the id. |
-| `slices[].branch` | yes | A git ref name, checked and **refused, never sanitized**. |
+| `slices[].branch` | yes | A git ref name, checked and **refused, never sanitized**. Unique within the plan, **case-insensitively**. |
 | `slices[].block` | yes | A roster block id. **Not** resolved at parse time. |
 | `slices[].deps` | no (`[]`) | Slice ids in this same plan. Unknown ids and cycles are refused. |
 | `slices[].brief` | yes | At least 40 characters. Delivered verbatim. |
@@ -65,6 +65,14 @@ one to appear.
 branch containing `..` is refused, not cleaned. Repair is how two distinct
 strings come to name one thing, and a slice id reaches a branch name, a pane
 name and a persisted row key.
+
+*Uniqueness is case-insensitive, and that follows from the same argument.* Ids
+`P1` and `p1`, or branches `feat/A` and `feat/a`, are two strings that name one
+worktree directory on a case-insensitive filesystem — the hazard the previous
+paragraph refuses to *create*, arriving instead from the planner's own text.
+Both are refused, naming both spellings; neither is folded into the other. Two
+slices sharing one branch outright are refused for a plainer reason: they cannot
+each open their own PR.
 
 *`block` is a string here.* Whether `worker-adv` exists is a question about the
 roster the group was launched with, which the parser cannot see. The drive asks

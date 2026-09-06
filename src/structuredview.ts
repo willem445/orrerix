@@ -1,0 +1,862 @@
+// The structured pane's PROJECTION: a pure reducer from a stream of harness
+// events to the block list a renderer draws (#2891 S2).
+//
+// This is the DOM half of `harness-adapters.md` §5.1's "two projections, one
+// log". The other half — VT bytes into the `OutputBuf` ring, which keeps
+// `get_output`, replay, thumbnails and `last_exit_tail` working — is
+// `transcript::Renderer` in the engine, in Rust. Both are fed from the same
+// `events()` stream by the same drainer, so neither can show what the other
+// has not seen. (`demo/structured-pane/DESIGN.md` §9 assigned the VT half to a
+// `projectText()` here; §5.1 landed after that mock and puts it in the engine.
+// The note wins, as that file says it must.)
+//
+// Self-contained by the `timelinelayout.ts` / `embedsplit.ts` rule: **no
+// intra-`src` imports at all** (TS5097), so the harness vocabulary is
+// re-declared here as types rather than imported. That is not only import
+// hygiene — it is what lets `test/structuredview.test.ts` run this module
+// under `node --test` with no bundler, and what keeps a DOM out of it.
+//
+// THREE RULES CARRIED FROM THE CONTRACT, because each is one a renderer can
+// silently break:
+//
+//  1. **Unknown is not a value** (§1.3). A fact the pane does not have is
+//     `null`, never a sentinel string. An orphan `tool_result` produces a card
+//     whose `name` is `null`, not `"unknown"`.
+//  2. **Thinking is not text** (§1.2). `Thinking` and `Text` never share a
+//     block, because a renderer that quiets thinking cannot do so if they do.
+//  3. **An unknown event kind is ignored, not fatal — but it is RECORDED.**
+//     `HarnessEvent` is an additive enum: "a consumer that does not match them
+//     keeps compiling and keeps working, minus what it does not read" (§1.2).
+//     A kind this build does not know becomes a notice block carrying the raw
+//     kind, so a later slice can find it. Nothing here throws on input.
+//
+// AND ONE THIS MODULE OWNS: **an elision the reader cannot see is a transcript
+// that lies** (`DESIGN.md` §7). Both ceilings below produce a VISIBLE artifact
+// — an eviction sentinel block, and a per-block dropped-byte figure — never a
+// silent drop.
+
+// ── the input vocabulary ────────────────────────────────────────────────────
+//
+// These mirror `loomux_engine::harness::HarnessEvent` as it serializes:
+// internally tagged on `kind`, `rename_all = "snake_case"`, newtype ids
+// transparent (`TurnId(pub u64)` -> a number, `ToolUseId(pub String)` -> a
+// string). They are a re-declaration of a wire shape, not a second definition
+// of it: the Rust enum is the contract and this file follows it.
+
+export type TurnId = number;
+export type ToolUseId = string;
+export type RequestId = string;
+
+/** `harness::Tokens` — four buckets; thinking folds into `output`. */
+export interface Tokens {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_creation: number;
+}
+
+/** `harness::Usage`. The two token fields answer different questions and are
+ *  **never added together**, which is why the reducer only ever REPLACES. */
+export interface Usage {
+  call_cumulative: Tokens;
+  this_turn_main_loop: Tokens | null;
+  per_model: Array<{ model: string; tokens: Tokens }>;
+}
+
+export interface Cost {
+  usd: number;
+  basis: string;
+}
+
+/** `harness::StopReason`: unit variants are strings, `Other(String)` is
+ *  `{"other": "..."}`. */
+export type StopReason = string | { other: string };
+
+export type DecisionSource = "policy" | "human" | "pane_exited";
+export type UiMethod = "select" | "confirm" | "input" | "editor";
+export type UiAnswer = { Value: string } | { Confirmed: boolean } | "Cancelled";
+
+/** The contract's sixteen variants (§1.2's eleven plus S1a's five). */
+export type HarnessEventLike =
+  | { kind: "booted"; session: string | null; model: string | null; capabilities: string[] }
+  | { kind: "turn_started"; turn: TurnId }
+  | { kind: "text"; turn: TurnId; delta: string }
+  | { kind: "thinking"; turn: TurnId; delta: string }
+  | { kind: "tool_call"; turn: TurnId; id: ToolUseId; name: string; input: unknown }
+  | { kind: "tool_output"; turn: TurnId; id: ToolUseId; delta: string; is_error: boolean }
+  | { kind: "tool_result"; turn: TurnId; id: ToolUseId; ok: boolean }
+  | { kind: "permission_request"; id: RequestId; tool: string; input: unknown }
+  | { kind: "permission_settled"; id: RequestId; decision: string; by: DecisionSource }
+  | {
+      kind: "ui_request";
+      id: RequestId;
+      method: UiMethod;
+      title: string | null;
+      message: string | null;
+      options: string[];
+      timeout_ms: number | null;
+    }
+  | { kind: "ui_settled"; id: RequestId; answer: UiAnswer; by: DecisionSource }
+  | { kind: "queue_changed"; steering: string[]; follow_up: string[] }
+  | { kind: "turn_ended"; turn: TurnId; usage: Usage | null; cost: Cost | null; stop: StopReason }
+  | { kind: "compacted"; trigger: "manual" | "auto"; pre_tokens: number | null }
+  | { kind: "exited"; code: number | null }
+  | { kind: "observed"; observed: string; matched?: string };
+
+/**
+ * The two inputs that are **not** `HarnessEvent`s, and are deliberately not
+ * spelled as ones.
+ *
+ * A structured pane's transcript has to show two things no harness reports:
+ * what orrerix DELIVERED into the pane (`harness::Turn`'s four variants — the
+ * one thing in the stream the agent did not produce, `DESIGN.md` §6), and
+ * orrerix's own `[orrerix]` notices plus any adapter-level note (a retry, an
+ * extension fault). Giving these a `HarnessEvent` variant would let a harness
+ * FORGE a delivery, which is the same conflation §1.3 rule 2 refuses between
+ * scraped and reported facts. They ride the same batch, tagged distinctly.
+ */
+export type LocalEvent =
+  | {
+      kind: "delivery";
+      /** Mirrors `harness::Turn`'s four variants. */
+      via: "kickoff" | "prompt" | "notice" | "human";
+      from: string | null;
+      text: string;
+      ts: string | null;
+    }
+  | { kind: "note"; level: "info" | "warn" | "error"; tag: string; text: string };
+
+export type ProjectionInput = HarnessEventLike | LocalEvent;
+
+// ── the output vocabulary: blocks ───────────────────────────────────────────
+
+export type ToolStatus = "pending" | "running" | "ok" | "error";
+
+interface BlockBase {
+  /** Stable across re-projection: derived from a counter in `State`, so
+   *  projecting the same event sequence from `emptyState()` twice yields the
+   *  same ids. That is what lets `ViewState.collapsed` survive (see below). */
+  id: string;
+  turn: TurnId | null;
+}
+
+export interface TextBlock extends BlockBase {
+  kind: "text";
+  text: string;
+  /** UTF-8 bytes of `text`, tracked incrementally rather than re-measured. */
+  bytes: number;
+  /** Bytes dropped from the HEAD of this block by the per-block ceiling.
+   *  Rendered, never merely logged (`DESIGN.md` §7). */
+  droppedBytes: number;
+}
+
+export interface ThinkingBlock extends BlockBase {
+  kind: "thinking";
+  text: string;
+  bytes: number;
+  droppedBytes: number;
+}
+
+export interface ToolBlock extends BlockBase {
+  kind: "tool";
+  toolUseId: ToolUseId;
+  /** `null` when this card was created by a `tool_result`/`tool_output` whose
+   *  `tool_call` was never seen — rule 1, not the string `"unknown"`. */
+  name: string | null;
+  input: unknown;
+  status: ToolStatus;
+  output: string;
+  outputBytes: number;
+  outputDroppedBytes: number;
+  /** True once any output or result arrived carrying `is_error` / `!ok`. */
+  isError: boolean;
+  /** Wall-clock ms from the call to its result, or `null` when the caller
+   *  supplied no clock (`project`'s `nowMs`) or the call has not returned. */
+  durationMs: number | null;
+  /** No `tool_call` was ever seen for this id. */
+  orphan: boolean;
+}
+
+export interface DeliveryBlock extends BlockBase {
+  kind: "delivery";
+  via: "kickoff" | "prompt" | "notice" | "human";
+  from: string | null;
+  text: string;
+  ts: string | null;
+}
+
+export interface RequestBlock extends BlockBase {
+  kind: "request";
+  /** A permission is a policy decision `permissions.json` may settle without
+   *  anyone; a UI request is a harness asking a HUMAN and blocking on it. §1.2
+   *  refuses to conflate them, so the card records which it is. */
+  channel: "permission" | "ui";
+  requestId: RequestId;
+  /** Permission: the tool name. UI: `null`. */
+  tool: string | null;
+  method: UiMethod | null;
+  title: string | null;
+  message: string | null;
+  options: string[];
+  timeoutMs: number | null;
+  input: unknown;
+  /** `null` while pending — the pane is waiting on a human. */
+  settled: { answer: UiAnswer | string; by: DecisionSource } | null;
+}
+
+export interface TurnBlock extends BlockBase {
+  kind: "turn";
+  turn: TurnId;
+  ended: boolean;
+  usage: Usage | null;
+  cost: Cost | null;
+  stop: StopReason | null;
+  durationMs: number | null;
+}
+
+export interface NoticeBlock extends BlockBase {
+  kind: "notice";
+  level: "info" | "warn" | "error";
+  tag: string;
+  text: string;
+}
+
+/** The visible artifact of the `MAX_BLOCKS` ceiling. Always the first block
+ *  when it exists, and never itself evicted. */
+export interface EvictionBlock extends BlockBase {
+  kind: "evicted";
+  blocks: number;
+}
+
+export type Block =
+  | TextBlock
+  | ThinkingBlock
+  | ToolBlock
+  | DeliveryBlock
+  | RequestBlock
+  | TurnBlock
+  | NoticeBlock
+  | EvictionBlock;
+
+// ── ceilings ────────────────────────────────────────────────────────────────
+
+/** Blocks kept in the projection. Older ones roll into the eviction sentinel;
+ *  the full transcript is on disk in the per-pane event log (§4.1). */
+export const MAX_BLOCKS = 2000;
+
+/** UTF-8 bytes of text kept per block — assistant text, thinking, and each
+ *  tool card's output separately. The HEAD is dropped, because the live end is
+ *  the part being read. */
+export const MAX_TEXT_BYTES_PER_BLOCK = 256 * 1024;
+
+// ── state ───────────────────────────────────────────────────────────────────
+
+/** Everything about the SESSION, rebuilt by replaying the log. */
+export interface State {
+  blocks: Block[];
+  /** Monotonic block-id counter — the source of id stability. */
+  seq: number;
+  /** Join keys for blocks a later event appends to. */
+  byTool: Map<ToolUseId, string>;
+  byRequest: Map<RequestId, string>;
+  byTurn: Map<TurnId, string>;
+  /** The text/thinking block currently being appended to, or `null`. Anything
+   *  that is not another delta of the same kind clears them. */
+  openText: string | null;
+  openThinking: string | null;
+  /** Boot facts for the header. Unknown is `null`, never `"unknown"`. */
+  session: string | null;
+  model: string | null;
+  capabilities: string[];
+  /** The LATEST usage/cost reported, never a sum: `call_cumulative` is already
+   *  cumulative, so adding two reports would multiply a pane's spend by
+   *  roughly its turn count. */
+  usage: Usage | null;
+  cost: Cost | null;
+  /** The harness's own downstream queue (`QueueChanged`). Empty is not news. */
+  steering: string[];
+  followUp: string[];
+  currentTurn: TurnId | null;
+  exitCode: number | null;
+  exited: boolean;
+  /** Blocks rolled out by the `MAX_BLOCKS` ceiling. The eviction sentinel's
+   *  positive control: a test that claims eviction fired asserts this > 0. */
+  evicted: number;
+  /** Total bytes dropped from block heads by the per-block ceiling. */
+  droppedBytes: number;
+  /** Input events whose `kind` this build does not know (rule 3). */
+  unknownEvents: number;
+  /** Wall-clock ms at which an open tool call / turn started, for durations.
+   *  Only ever written when the caller supplied a clock. */
+  toolStartedAt: Map<ToolUseId, number>;
+  turnStartedAt: Map<TurnId, number>;
+}
+
+/** State the VIEW owns, which no re-projection may clobber.
+ *
+ *  The in-list-editor rule (`CLAUDE.md`): un-submitted / view-only state lives
+ *  in the view, never on its DOM elements, because the renderer rebuilds its
+ *  elements from the model on every batch. `collapsed` is keyed by block id,
+ *  which is why ids are a counter over the event sequence rather than an array
+ *  index — an index shifts under an eviction and would silently move a human's
+ *  fold onto a different card. */
+export interface ViewState {
+  collapsed: Set<string>;
+  dimThinking: boolean;
+}
+
+export function emptyState(): State {
+  return {
+    blocks: [],
+    seq: 0,
+    byTool: new Map(),
+    byRequest: new Map(),
+    byTurn: new Map(),
+    openText: null,
+    openThinking: null,
+    session: null,
+    model: null,
+    capabilities: [],
+    usage: null,
+    cost: null,
+    steering: [],
+    followUp: [],
+    currentTurn: null,
+    exitCode: null,
+    exited: false,
+    evicted: 0,
+    droppedBytes: 0,
+    unknownEvents: 0,
+    toolStartedAt: new Map(),
+    turnStartedAt: new Map(),
+  };
+}
+
+export function emptyViewState(): ViewState {
+  return { collapsed: new Set(), dimThinking: false };
+}
+
+export interface ProjectOptions {
+  /** Wall clock for this batch, in ms. Supplied by the caller rather than read
+   *  from `Date.now()` so this module stays pure and its durations testable.
+   *  Absent -> durations stay `null` rather than being invented. */
+  nowMs?: number;
+}
+
+// ── the reducer ─────────────────────────────────────────────────────────────
+
+/**
+ * Fold one batch of events into the projection.
+ *
+ * **Mutates and returns `state`.** A batch arrives at most once per pane per
+ * 16 ms carrying up to 64 events (§5.6), and a pane holds thousands of blocks;
+ * copying the block array per batch would make the consumer pay per event,
+ * which is the constraint `DESIGN.md` §7's storm fixture established one layer
+ * up. Callers that want a snapshot re-project from `emptyState()` — which is
+ * exactly what the id-stability property above makes safe.
+ */
+export function project(
+  state: State,
+  batch: readonly ProjectionInput[],
+  opts?: ProjectOptions,
+): State {
+  const now = opts && typeof opts.nowMs === "number" ? opts.nowMs : null;
+  for (const ev of batch) reduce(state, ev, now);
+  evictBlocks(state);
+  return state;
+}
+
+function reduce(state: State, ev: ProjectionInput, now: number | null): void {
+  switch (ev.kind) {
+    case "booted":
+      state.session = ev.session ?? null;
+      state.model = ev.model ?? null;
+      state.capabilities = Array.isArray(ev.capabilities) ? ev.capabilities.slice() : [];
+      return;
+
+    case "turn_started": {
+      state.currentTurn = ev.turn;
+      closeRuns(state);
+      const b: TurnBlock = {
+        id: nextId(state),
+        kind: "turn",
+        turn: ev.turn,
+        ended: false,
+        usage: null,
+        cost: null,
+        stop: null,
+        durationMs: null,
+      };
+      state.byTurn.set(ev.turn, b.id);
+      push(state, b);
+      if (now !== null) state.turnStartedAt.set(ev.turn, now);
+      return;
+    }
+
+    case "turn_ended": {
+      const b = findTurn(state, ev.turn);
+      if (b) {
+        b.ended = true;
+        b.usage = ev.usage ?? null;
+        b.cost = ev.cost ?? null;
+        b.stop = ev.stop ?? null;
+        const started = state.turnStartedAt.get(ev.turn);
+        if (now !== null && typeof started === "number") b.durationMs = now - started;
+      }
+      // Latest, never a sum. A turn that reported no usage (the bounded
+      // "missing stats" case) leaves the ticker showing the last figure it
+      // really had rather than zeroing it.
+      if (ev.usage) state.usage = ev.usage;
+      if (ev.cost) state.cost = ev.cost;
+      closeRuns(state);
+      state.currentTurn = null;
+      return;
+    }
+
+    case "text": {
+      const b = openRun(state, "text", ev.turn);
+      appendText(state, b, ev.delta);
+      return;
+    }
+
+    case "thinking": {
+      // Rule 2: its own block, always. Never `openRun(state, "text", ...)`.
+      const b = openRun(state, "thinking", ev.turn);
+      appendText(state, b, ev.delta);
+      return;
+    }
+
+    case "tool_call": {
+      const b = toolBlock(state, ev.id, ev.turn);
+      b.name = ev.name;
+      b.input = ev.input;
+      b.orphan = false;
+      if (now !== null && !state.toolStartedAt.has(ev.id)) state.toolStartedAt.set(ev.id, now);
+      // A call interrupts the text run: output that follows belongs after the
+      // card, not appended to the paragraph above it.
+      closeRuns(state);
+      return;
+    }
+
+    case "tool_output": {
+      const b = toolBlock(state, ev.id, ev.turn);
+      if (b.status === "pending") b.status = "running";
+      if (ev.is_error) b.isError = true;
+      // §1.2: `ToolOutput.delta` IS A DELTA. The contract picked the delta over
+      // pi's accumulated `partialResult` "because the conversion only goes one
+      // way cheaply" — the ADAPTER holds the previous value and subtracts, a
+      // consumer does not. So this APPENDS; it never replaces. If it ever
+      // starts replacing, pi's suffix subtraction has moved here and every
+      // other harness pays for it.
+      appendToolOutput(state, b, ev.delta);
+      return;
+    }
+
+    case "tool_result": {
+      const b = toolBlock(state, ev.id, ev.turn);
+      if (!ev.ok) b.isError = true;
+      b.status = ev.ok ? "ok" : "error";
+      const started = state.toolStartedAt.get(ev.id);
+      if (now !== null && typeof started === "number") b.durationMs = now - started;
+      state.toolStartedAt.delete(ev.id);
+      return;
+    }
+
+    case "permission_request": {
+      const b = requestBlock(state, ev.id, "permission");
+      b.tool = ev.tool;
+      b.input = ev.input;
+      closeRuns(state);
+      return;
+    }
+
+    case "permission_settled": {
+      const b = requestBlock(state, ev.id, "permission");
+      b.settled = { answer: ev.decision, by: ev.by };
+      return;
+    }
+
+    case "ui_request": {
+      const b = requestBlock(state, ev.id, "ui");
+      b.method = ev.method;
+      b.title = ev.title ?? null;
+      b.message = ev.message ?? null;
+      b.options = Array.isArray(ev.options) ? ev.options.slice() : [];
+      // Descriptive, not a control: it reports a deadline the HARNESS keeps,
+      // and orrerix starts no timer of its own against it (§1.2).
+      b.timeoutMs = ev.timeout_ms ?? null;
+      closeRuns(state);
+      return;
+    }
+
+    case "ui_settled": {
+      const b = requestBlock(state, ev.id, "ui");
+      b.settled = { answer: ev.answer, by: ev.by };
+      return;
+    }
+
+    case "queue_changed":
+      state.steering = Array.isArray(ev.steering) ? ev.steering.slice() : [];
+      state.followUp = Array.isArray(ev.follow_up) ? ev.follow_up.slice() : [];
+      return;
+
+    case "compacted": {
+      const pre = ev.pre_tokens == null ? "" : ` · ${ev.pre_tokens} tokens before`;
+      pushNotice(state, "info", "compaction", `context compacted (${ev.trigger})${pre}`);
+      return;
+    }
+
+    case "exited":
+      state.exited = true;
+      state.exitCode = ev.code ?? null;
+      pushNotice(
+        state,
+        ev.code ? "error" : "info",
+        "exit",
+        ev.code == null ? "pane exited" : `pane exited (${ev.code})`,
+      );
+      return;
+
+    case "observed":
+      // A PTY pane's inferred evidence. A structured pane never emits one, and
+      // nothing here promotes a heuristic to a reported fact (§1.3 rule 2): it
+      // is recorded and drawn as a note, never as a request or a turn.
+      pushNotice(
+        state,
+        "info",
+        "observed",
+        ev.matched ? `${ev.observed}: ${ev.matched}` : String(ev.observed),
+      );
+      return;
+
+    case "delivery": {
+      closeRuns(state);
+      push(state, {
+        id: nextId(state),
+        kind: "delivery",
+        turn: state.currentTurn,
+        via: ev.via,
+        from: ev.from ?? null,
+        text: ev.text,
+        ts: ev.ts ?? null,
+      });
+      return;
+    }
+
+    case "note":
+      pushNotice(state, ev.level, ev.tag, ev.text);
+      return;
+
+    default: {
+      // Rule 3: additive enum, unknown kind recorded rather than thrown on.
+      const raw = ev as { kind?: unknown };
+      state.unknownEvents += 1;
+      pushNotice(state, "info", "unknown", String(raw && raw.kind));
+      return;
+    }
+  }
+}
+
+// ── block helpers ───────────────────────────────────────────────────────────
+
+function nextId(state: State): string {
+  state.seq += 1;
+  return `b${state.seq}`;
+}
+
+function push(state: State, b: Block): void {
+  state.blocks.push(b);
+}
+
+function pushNotice(
+  state: State,
+  level: "info" | "warn" | "error",
+  tag: string,
+  text: string,
+): void {
+  closeRuns(state);
+  push(state, { id: nextId(state), kind: "notice", turn: state.currentTurn, level, tag, text });
+}
+
+/** End the open text/thinking runs. Anything that is not another delta of the
+ *  same kind interrupts them, so the next delta starts a new block instead of
+ *  reaching back over a card that has since been drawn. */
+function closeRuns(state: State): void {
+  state.openText = null;
+  state.openThinking = null;
+}
+
+function openRun(
+  state: State,
+  kind: "text" | "thinking",
+  turn: TurnId,
+): TextBlock | ThinkingBlock {
+  const openId = kind === "text" ? state.openText : state.openThinking;
+  if (openId !== null) {
+    const found = state.blocks.find((b) => b.id === openId);
+    if (found && found.kind === kind) return found;
+    // Evicted out from under us — start a fresh run rather than resurrecting.
+  }
+  // The other run ends: text and thinking interleave, and a renderer that
+  // quiets thinking must not be left with a text block straddling it.
+  closeRuns(state);
+  const id = nextId(state);
+  const b: TextBlock | ThinkingBlock =
+    kind === "text"
+      ? { id, kind: "text", turn, text: "", bytes: 0, droppedBytes: 0 }
+      : { id, kind: "thinking", turn, text: "", bytes: 0, droppedBytes: 0 };
+  if (kind === "text") state.openText = id;
+  else state.openThinking = id;
+  push(state, b);
+  return b;
+}
+
+function toolBlock(state: State, id: ToolUseId, turn: TurnId): ToolBlock {
+  const openId = state.byTool.get(id);
+  if (openId !== undefined) {
+    const found = state.blocks.find((b) => b.id === openId);
+    if (found && found.kind === "tool") return found;
+    state.byTool.delete(id);
+  }
+  // Reached by a `tool_output` / `tool_result` whose `tool_call` was never seen
+  // — a batch that started mid-session, or a harness that reordered them.
+  // `orphan` records it and `name` stays `null` (rule 1); nothing throws.
+  const b: ToolBlock = {
+    id: nextId(state),
+    kind: "tool",
+    turn,
+    toolUseId: id,
+    name: null,
+    input: null,
+    status: "pending",
+    output: "",
+    outputBytes: 0,
+    outputDroppedBytes: 0,
+    isError: false,
+    durationMs: null,
+    orphan: true,
+  };
+  state.byTool.set(id, b.id);
+  push(state, b);
+  return b;
+}
+
+function requestBlock(
+  state: State,
+  id: RequestId,
+  channel: "permission" | "ui",
+): RequestBlock {
+  const openId = state.byRequest.get(id);
+  if (openId !== undefined) {
+    const found = state.blocks.find((b) => b.id === openId);
+    if (found && found.kind === "request") return found;
+    state.byRequest.delete(id);
+  }
+  const b: RequestBlock = {
+    id: nextId(state),
+    kind: "request",
+    turn: state.currentTurn,
+    channel,
+    requestId: id,
+    tool: null,
+    method: null,
+    title: null,
+    message: null,
+    options: [],
+    timeoutMs: null,
+    input: null,
+    settled: null,
+  };
+  state.byRequest.set(id, b.id);
+  push(state, b);
+  return b;
+}
+
+function findTurn(state: State, turn: TurnId): TurnBlock | null {
+  const id = state.byTurn.get(turn);
+  if (id === undefined) return null;
+  const found = state.blocks.find((b) => b.id === id);
+  return found && found.kind === "turn" ? found : null;
+}
+
+// ── the two ceilings ────────────────────────────────────────────────────────
+
+/** UTF-8 byte length. Hand-rolled rather than `TextEncoder`, which allocates a
+ *  byte array per call and is measured per delta on a streaming path. */
+export function utf8Bytes(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        n += 4;
+        i += 1;
+        continue;
+      }
+      n += 3;
+    } else n += 3;
+  }
+  return n;
+}
+
+function appendText(state: State, b: TextBlock | ThinkingBlock, delta: string): void {
+  b.text += delta;
+  b.bytes += utf8Bytes(delta);
+  if (b.bytes <= MAX_TEXT_BYTES_PER_BLOCK) return;
+  const cut = trimHead(b.text, b.bytes);
+  b.text = cut.text;
+  b.droppedBytes += cut.dropped;
+  b.bytes = cut.bytes;
+  state.droppedBytes += cut.dropped;
+}
+
+function appendToolOutput(state: State, b: ToolBlock, delta: string): void {
+  b.output += delta;
+  b.outputBytes += utf8Bytes(delta);
+  if (b.outputBytes <= MAX_TEXT_BYTES_PER_BLOCK) return;
+  const cut = trimHead(b.output, b.outputBytes);
+  b.output = cut.text;
+  b.outputDroppedBytes += cut.dropped;
+  b.outputBytes = cut.bytes;
+  state.droppedBytes += cut.dropped;
+}
+
+/** Drop from the HEAD until the tail fits, never splitting a surrogate pair —
+ *  a cut between the halves of one leaves a lone surrogate, which is not a
+ *  character and renders as a replacement glyph. */
+function trimHead(
+  text: string,
+  bytes: number,
+): { text: string; bytes: number; dropped: number } {
+  let over = bytes - MAX_TEXT_BYTES_PER_BLOCK;
+  let i = 0;
+  while (over > 0 && i < text.length) {
+    const c = text.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length) {
+      const d = text.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        over -= 4;
+        i += 2;
+        continue;
+      }
+    }
+    over -= c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
+    i += 1;
+  }
+  const kept = text.slice(i);
+  const keptBytes = utf8Bytes(kept);
+  return { text: kept, bytes: keptBytes, dropped: bytes - keptBytes };
+}
+
+/** Roll the oldest blocks into the sentinel. The sentinel is a BLOCK, so the
+ *  elision is on screen next to what survived it (`DESIGN.md` §7); it is
+ *  always index 0 and is never itself a candidate for eviction. */
+function evictBlocks(state: State): void {
+  if (state.blocks.length <= MAX_BLOCKS) return;
+  const first = state.blocks[0];
+  const hasSentinel = first !== undefined && first.kind === "evicted";
+  const sentinel: EvictionBlock = hasSentinel
+    ? (first as EvictionBlock)
+    : { id: nextId(state), kind: "evicted", turn: null, blocks: 0 };
+  const body = hasSentinel ? state.blocks.slice(1) : state.blocks;
+  // The sentinel occupies one of the `MAX_BLOCKS` slots, so the elision is
+  // visible without pushing the pane over its own ceiling.
+  const drop = body.length + 1 - MAX_BLOCKS;
+  if (drop <= 0) return;
+  for (const b of body.slice(0, drop)) forgetBlock(state, b);
+  sentinel.blocks += drop;
+  state.evicted += drop;
+  state.blocks = [sentinel, ...body.slice(drop)];
+}
+
+/** Drop an evicted block's join keys, so a later event for it opens a fresh
+ *  card rather than appending to a block nobody can see. */
+function forgetBlock(state: State, b: Block): void {
+  if (b.kind === "tool") {
+    state.byTool.delete(b.toolUseId);
+    state.toolStartedAt.delete(b.toolUseId);
+  } else if (b.kind === "request") {
+    state.byRequest.delete(b.requestId);
+  } else if (b.kind === "turn") {
+    state.byTurn.delete(b.turn);
+    state.turnStartedAt.delete(b.turn);
+  }
+  if (state.openText === b.id) state.openText = null;
+  if (state.openThinking === b.id) state.openThinking = null;
+}
+
+// ── read models ─────────────────────────────────────────────────────────────
+
+/**
+ * The last `n` characters of the projection as plain text, for a pane
+ * thumbnail.
+ *
+ * Thinking is included only when the view is not dimming it, so a thumbnail
+ * shows what the human chose to look at rather than what the model muttered.
+ * A tool card contributes its name and status, not its output: a thumbnail of
+ * a 4 000-line grep result says nothing about what the agent is doing.
+ */
+export function textTail(state: State, n: number, view?: ViewState): string {
+  if (n <= 0) return "";
+  const dim = view ? view.dimThinking : false;
+  const lines: string[] = [];
+  let size = 0;
+  for (let i = state.blocks.length - 1; i >= 0 && size < n; i -= 1) {
+    const line = blockLine(state.blocks[i]!, dim);
+    if (line === null) continue;
+    lines.push(line);
+    size += line.length + 1;
+  }
+  lines.reverse();
+  const joined = lines.join("\n");
+  return joined.length <= n ? joined : joined.slice(joined.length - n);
+}
+
+function blockLine(b: Block, dimThinking: boolean): string | null {
+  switch (b.kind) {
+    case "text":
+      return b.text;
+    case "thinking":
+      return dimThinking ? null : b.text;
+    case "tool":
+      return `${b.name ?? "?"} · ${b.status}`;
+    case "delivery":
+      return `[${b.via}] ${b.text}`;
+    case "request":
+      return `[${b.channel}] ${b.title ?? b.tool ?? b.requestId}`;
+    case "turn":
+      return b.ended ? `— turn ${b.turn} ended —` : `— turn ${b.turn} —`;
+    case "notice":
+      return `[${b.tag}] ${b.text}`;
+    case "evicted":
+      return `[ring] ${b.blocks} earlier blocks rolled out of the pane; the full transcript is in the event log`;
+    default:
+      return null;
+  }
+}
+
+/** Whether a block is folded, for a renderer. Kept here so `ViewState` has one
+ *  reader and a renderer never reads a fold off a DOM element. */
+export function isCollapsed(view: ViewState, block: Block): boolean {
+  return view.collapsed.has(block.id);
+}
+
+/** Toggle a fold. Returns the same `ViewState` — it is the view's, and the
+ *  reducer never touches it, which is the whole point of the split. */
+export function toggleCollapsed(view: ViewState, blockId: string): ViewState {
+  if (view.collapsed.has(blockId)) view.collapsed.delete(blockId);
+  else view.collapsed.add(blockId);
+  return view;
+}
+
+/** Drop folds for blocks that no longer exist, so the set cannot grow without
+ *  bound across a long session (the `selected` / `collapsed` pruning idiom). */
+export function pruneViewState(view: ViewState, state: State): ViewState {
+  if (view.collapsed.size === 0) return view;
+  const live = new Set(state.blocks.map((b) => b.id));
+  for (const id of Array.from(view.collapsed)) if (!live.has(id)) view.collapsed.delete(id);
+  return view;
+}

@@ -3461,6 +3461,25 @@ since `orchestrator` and `worker` are in nearly all of them. A sidecar keyed by
 block id would merge exactly there and pass a disjoint-id fixture; the test uses
 the colliding one.
 
+**The layout is the other door onto that rule, and it was open.** `saveLayout`
+prunes the node positions against the roster it can see and only then awaits — the
+config-dir check, then the write — while the destination was re-derived from
+`this.rel` at the END. A switch landing inside that window sent one workflow's
+positions into another workflow's sidecar: the same "never written to the other
+file" failure, reached through the layout rather than the buffer, where neither
+existing guard could see it. The unsaved-buffer guard is about `text`; the conflict
+machinery does not apply, because the layout is written with a null hash (nothing
+else writes it).
+
+The file is now captured before any await, and a write whose target moved is
+**dropped, not redirected** to the file it was computed for. Positions belong to the
+roster they were pruned against and the pane has moved on, so re-aiming them would
+write a stale picture. A layout is never anyone's work — it comes back computed — so
+losing one costs a drag, while writing it into the wrong file moves the boxes of a
+workflow the human was not editing. `savedLayout` is deliberately not advanced on a
+dropped write, or the next honest attempt would be suppressed as a no-change
+(rev-final round 2).
+
 Settling the buffer is ONE method (`settleBuffer`), called by both the switch and
 the create, rather than the same eight lines written twice. That is not tidiness:
 it is the only thing standing between a switch and a save into the wrong file, so
@@ -3537,6 +3556,9 @@ in the pane created a file two levels down.
   apply* (D2); this pane edits files.
 - **The rest of #2892.** Discovery still lists both spellings of a pair that is
   already on disk.
+- **A `newWorkflow` whose target moved under it**, and the wording of the
+  Windows case-drift note: both raised in rev-final round 2 and deferred to a
+  follow-up by the human, deliberately, rather than folded in on the last round.
 - **No hand-test of the wiring beyond reading it.** The DOM half is hand-validated
   per the repo's convention; the decisions are in the pure module and the module is
   tested.

@@ -7745,7 +7745,8 @@ fn gate_missing_blocks_reports_a_block_named_by_id_but_not_kind_reviewer() {
 // The repo dogfoods the feature (#222): `.orrerix/workflow.yml` at the root declares
 // loomux's own roster — the CHEAP-TIER one: two worker tiers and two reviewer lanes,
 // with the standard worker and the every-round reviewer on `cli: pi` (thinking
-// medium / high, #2817) and the judgment-shaped worker and the once-last final
+// high for both — GLM 5.3 Flash on OpenRouter has no medium and pi clamps
+// upward, #2938) and the judgment-shaped worker and the once-last final
 // validator on Opus, each with a persona in `.github/agents/` — and the tests below
 // are what keep that file honest.
 // The pane's half of the same pin lives in `test/workflowdogfood.test.ts`.
@@ -7835,7 +7836,7 @@ fn the_repos_own_workflow_file_parses_clean_against_the_real_parser() {
     // shell-syntax strip test.
     let via_pi: Vec<&workflow::Block> = wf.blocks.iter().filter(|b| b.cli == "pi").collect();
     assert!(!via_pi.is_empty(), "the cheap tier is the point of this roster");
-    let pi_efforts: &[(&str, &str)] = &[("worker-std", "medium"), ("rev-std", "high")];
+    let pi_efforts: &[(&str, &str)] = &[("worker-std", "high"), ("rev-std", "high")];
     for b in &via_pi {
         let (provider, rest) = b
             .model
@@ -8336,7 +8337,7 @@ fn the_repos_own_workflow_runs_its_worker_tiers_on_the_models_it_declares() {
     // REPO'S OWN declared blocks carry their declared model, persona AND thinking
     // level through the real load + clamp, the pi analogue of the worker-tier pin
     // above.
-    for (block, effort) in [("worker-std", "medium"), ("rev-std", "high")] {
+    for (block, effort) in [("worker-std", "high"), ("rev-std", "high")] {
         let (cmd, argv, kickoff) = compile(&reg, &g, block);
         assert!(
             cmd.starts_with("pi "),

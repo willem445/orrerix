@@ -67,7 +67,7 @@ test("the roster is the one the repo means to run", () => {
   assert.deepEqual(
     tiers.map((b) => [b.id, b.cli, b.model, b.effort ?? ""]),
     [
-      ["worker-std", "pi", "openrouter/z-ai/glm-5.3-flash", "medium"],
+      ["worker-std", "pi", "openrouter/z-ai/glm-5.3-flash", "high"],
       ["worker-adv", "claude", "opus", ""],
     ],
     "the tiers are the demo: a cheap default worker, and a strong one for work with judgment in it"

@@ -737,6 +737,67 @@ caller joins a session id onto a path here, so `pathseg.rs`'s filename-
 interpolation scan gains no row for this slice. The type still guards the input
 — `find_codex_session_file` takes a `&PathSegment`, never a `&str`.
 
+### Several rollouts, one thread: the NEWEST is the live one
+
+A thread is not one file. `thread/revert` keeps the thread id stable and starts
+a new rollout, which is exactly why the `_<rollout>` half of the name grammar
+exists — and the vendor's own by-id lookup says what to do about it
+(`find_thread_path_by_id_str`, `rollout/src/list.rs`):
+
+> A thread normally has one rollout file. `thread/revert` keeps the thread ID
+> stable while creating a new rollout file and switching the thread to it, so
+> filesystem fallback matches the stable thread ID encoded before any
+> `_rollout-id` suffix and chooses the newest matching filename.
+
+So `find_codex_session_file` chooses the **newest matching filename**, by the
+vendor's own comparator and in its order: `(timestamp, rollout id)`, the second
+half breaking a tie because filenames carry only second precision
+(`find_thread_path_by_id_from_filenames` says so in as many words). loomux and
+codex therefore resolve `codex resume <id>` to the same file, which is the
+property the lookup was built for.
+
+**Neither of the two obvious alternatives is right.** Serving whichever file the
+directory yields first freezes a reverted pane's usage at the superseded file's
+spend — and then unfreezes it, with a visible jump, about a week later when that
+file compresses and the skip changes the answer. Summing every matching file is
+the other wrong answer: a revert *undoes* the pre-revert file's later records, so
+a blind sum double-counts work the thread threw away.
+
+**The compression check is applied to the WINNER, not as a filter before the
+choice.** Filtering first would let an older readable file inherit the answer the
+moment the live one compressed — the same frozen-usage defect, and worse for
+being plausible: a real number, off a real file of this very thread. A thread
+whose live rollout is compressed reports no usage, exactly as a thread with one
+compressed rollout does.
+
+**Residual.** Both halves of the comparator are compared as strings. The
+timestamp is fixed-width and zero-padded, so lexicographic order is chronological
+order; a canonical lowercase UUIDv7 orders like its integer value. A
+non-canonical (upper-case) rollout id would compare wrongly — and only against
+another file of the same thread written in the same second. codex writes
+canonical lowercase; a name it did not write is outside what any of this
+promises.
+
+**The cursor follows the thread, on the revalidation timer.** The lookup alone
+is not enough: `TranscriptCursors` remembers the path it resolved and
+re-validates it with the one stat it already takes, so the path survives for as
+long as the file it names exists  and a reverted thread leaves the old rollout
+on disk and readable. A due cursor therefore drops its remembered PATH as well
+as its fold (`usage.rs`, `session_usage_measured`), so a revert is picked up
+within one `CURSOR_REVALIDATE_AFTER` rather than never. That refresh is not
+codex-only, deliberately: a second per-harness path policy would be one more
+thing to keep in step, and the other harnesses re-resolve to the path they
+already had. **Bound:** a revert is invisible for at most one revalidation
+interval  pinned by `within_the_revalidation_interval_the_cursor_keeps_the_file_it_had`,
+which is also what shows the move in the test below is the timer firing rather
+than a lookup on every tick.
+
+Pinned by `the_newest_of_a_threads_rollouts_is_the_one_read`,
+`two_rollouts_in_the_same_second_are_ordered_by_the_rollout_id` and
+`a_compressed_newest_rollout_does_not_fall_back_to_an_older_readable_one`,
+and `a_reverted_thread_moves_the_cursor_to_the_new_rollout_on_revalidation`
+(#2515 C3 review round 1, finding 1).
+
 ### Compressed rollouts report no usage
 
 Codex compresses a rollout to `.jsonl.zst` about seven days after its last write

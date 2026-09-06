@@ -1425,12 +1425,37 @@ impl TranscriptCursors {
         // discarded", and reading it off `slot` afterwards would miss that one.
         let had_cursor = slot.is_some();
 
+        // Is this cursor due for revalidation? Asked HERE, above the path
+        // step, because the answer decides whether the remembered path may be
+        // reused at all — see the block below.
+        let due = slot.as_ref().is_some_and(|c| c.built.elapsed() >= self.revalidate_after);
+
         // ONE stat per tick, and it does double duty: the same `metadata` call
         // that answers `len`/mtime/creation is what validates the remembered
         // path. Asking `is_file()` first would be a second stat on the app's
         // hottest poll and would falsify the "one stat, then" claim this
         // design is documented with (#1361 review N4).
-        let remembered = slot.as_ref().map(|c| c.path.clone());
+        //
+        // **A due cursor drops its remembered PATH too, not just its fold**
+        // (#2515 C3 review round 1, finding 1). The remembered path is
+        // re-validated by that stat alone, so it survives for as long as the
+        // file it names exists — and "the file still exists" is not the same
+        // question as "this is still the session's file". codex makes the two
+        // come apart on an ordinary gesture: `thread/revert` keeps the thread
+        // id, starts a NEW rollout and switches the thread to it, leaving the
+        // old file on disk and perfectly readable. Without this the cursor goes
+        // on folding the superseded file for the life of the process — a live
+        // pane whose usage silently stops moving — because nothing it checks
+        // ever objects. Re-resolving on the revalidation tick bounds that the
+        // same way the timer already bounds the anchor's blind spot, and costs
+        // one lookup per `CURSOR_REVALIDATE_AFTER` per live agent.
+        //
+        // It is not codex-only on purpose: claude's transcript can be moved
+        // between project folders and pi's store rewritten, and a second,
+        // per-harness path-refresh policy would be one more thing to keep in
+        // step. The other harnesses simply re-resolve to the path they already
+        // had.
+        let remembered = if due { None } else { slot.as_ref().map(|c| c.path.clone()) };
         let (path, meta) = match remembered.and_then(|p| {
             let m = fs::metadata(&p).ok()?;
             m.is_file().then_some((p, m))
@@ -1454,12 +1479,12 @@ impl TranscriptCursors {
         // structurally cannot detect (see `ANCHOR_BYTES` and
         // `CURSOR_REVALIDATE_AFTER`), so it has to fire even on a tick where
         // every other signal is content.
+        // `revalidated` says WHY a reset happened, and the re-resolution above
+        // has already cleared `slot` when `due`, so it is recorded from `due`
+        // rather than re-derived from a cursor that is no longer there.
+        work.revalidated = due;
         let mut verdict = match slot.as_ref() {
             None => StatVerdict::Reset,
-            Some(c) if c.built.elapsed() >= self.revalidate_after => {
-                work.revalidated = true;
-                StatVerdict::Reset
-            }
             Some(c) => match c.stat_verdict(len, modified, created) {
                 StatVerdict::Serve => {
                     work.served_cached = true;

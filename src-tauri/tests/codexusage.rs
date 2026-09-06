@@ -45,6 +45,7 @@ use loomux_engine::pathseg::PathSegment;
 use loomux_engine::sessions::{codex_sessions_root, find_codex_session_file};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// A thread id in the shape codex's own round-trip test uses
 /// (`rollout_file_name_tests.rs`), so the fixture names below are shapes codex
@@ -186,13 +187,16 @@ fn token_usage_records_are_summed_per_response_not_read_off_the_cumulative_threa
     // different number. Two shapes are what make that possible, and both are
     // codex's own rather than invented here:
     //
-    // - **the thread is RESUMED**, so `thread_token_usage` opens at a non-zero
-    //   baseline. `codex resume` continues one thread into a NEW rollout file,
-    //   and the thread running total carries the earlier file's spend with it.
-    //   Without this the last `thread_token_usage` EQUALS the sum of `usage` by
-    //   construction, and that reading is indistinguishable arithmetically —
-    //   which is why the fold's doc refuses it on the cursor's incremental
-    //   contract instead;
+    // - **the thread was REVERTED**, so `thread_token_usage` opens at a non-zero
+    //   baseline. `thread/revert` keeps the thread id stable and starts a NEW
+    //   rollout file, so that file's first record already carries the thread's
+    //   earlier spend (`find_thread_path_by_id_str`'s doc, `rollout/src/list.rs`
+    //   at `rust-v0.153.4`: "A thread normally has one rollout file.
+    //   `thread/revert` keeps the thread ID stable while creating a new rollout
+    //   file and switching the thread to it"). Without a non-zero opening the
+    //   last `thread_token_usage` EQUALS the sum of `usage` by construction, and
+    //   that reading is indistinguishable arithmetically — which is why the
+    //   fold's doc refuses it on the cursor's incremental contract instead;
     // - **two TURNS**, so `turn_token_usage` resets between them and its last
     //   value is not the whole file's spend either.
     //
@@ -319,9 +323,12 @@ fn the_model_is_the_latest_turn_context() {
     );
     let u = parse_codex_transcript(&text);
     assert_eq!(u.model.as_deref(), Some("gpt-5.1-codex-max"));
-    // Non-vacuity: the two fixture models really do differ, so the assertion
-    // above would fail against an implementation keeping the FIRST.
-    assert_ne!("gpt-5.1-codex-mini", "gpt-5.1-codex-max");
+    // Non-vacuity, asserted about the FIXTURE rather than about two literals:
+    // the file really does carry two `turn_context` lines and they really do
+    // name different models, so the assertion above fails against an
+    // implementation that kept the first.
+    assert_eq!(text.matches("\"type\":\"turn_context\"").count(), 2);
+    assert!(text.contains("gpt-5.1-codex-mini"), "the superseded model is in the fixture");
 }
 
 #[test]
@@ -501,8 +508,230 @@ fn a_header_only_rollout_reports_no_usage_not_zero() {
 }
 
 // ---------------------------------------------------------------------------
-// The cursor: two harnesses, one cache
+// Which FILE is a thread's -- several rollouts, one thread id (review round 1)
 // ---------------------------------------------------------------------------
+
+#[test]
+fn the_newest_of_a_threads_rollouts_is_the_one_read() {
+    // Review round 1, finding 1. A thread can have SEVERAL rollout files: the
+    // `_<rollout>` grammar exists because `thread/revert` keeps the thread id
+    // stable and starts a new file, "switching the thread to it"
+    // (`find_thread_path_by_id_str`, `rollout/src/list.rs` at `rust-v0.153.4`).
+    // Serving whichever the directory yielded first froze a reverted pane's
+    // usage at the SUPERSEDED file's spend -- and then unfroze it, with a jump,
+    // about seven days later when that file compressed and the skip changed the
+    // answer.
+    //
+    // The rule pinned here is the vendor's own: newest matching filename.
+    let seam = seam();
+    let old = Usage { input: 1_000, output: 100, ..Usage::default() };
+    let new = Usage { input: 30, output: 3, ..Usage::default() };
+
+    // The pre-revert file, and the post-revert one an hour later. The NEWEST is
+    // deliberately the SMALLER, so "newest wins" cannot be confused with
+    // "biggest wins" or with a sum -- all three answers differ here.
+    write_raw(
+        &seam.codex,
+        &rollout_name(THREAD),
+        &format!("{}{}", header(THREAD, "C:/tmp/codex-repo"), usage_line(old, old, old)),
+    );
+    write_raw(
+        &seam.codex,
+        &format!("rollout-2026-09-03T15-00-00-{THREAD}_{ROLLOUT}.jsonl"),
+        &format!("{}{}", header(THREAD, "C:/tmp/codex-repo"), usage_line(new, new, new)),
+    );
+
+    let found = find_codex_session_file(&seam.codex, &PathSegment::parse(THREAD).unwrap())
+        .expect("the thread has a readable rollout");
+    assert!(
+        found.to_string_lossy().contains("T15-00-00"),
+        "the post-revert file is the live one; got {}",
+        found.display()
+    );
+
+    let u = codex_session_usage_in(&seam.codex, THREAD).expect("and its usage reads");
+    assert_eq!(u.tokens.input_tokens, 30, "the newest file's spend");
+    assert_ne!(u.tokens.input_tokens, 1_000, "not the superseded file's");
+    assert_ne!(
+        u.tokens.input_tokens, 1_030,
+        "and not the sum: a revert UNDOES the pre-revert file's later records, so summing \
+         a thread's files double-counts work the thread threw away"
+    );
+}
+
+#[test]
+fn two_rollouts_in_the_same_second_are_ordered_by_the_rollout_id() {
+    // The vendor's tie-breaker, and its stated reason: "Rollout filenames only
+    // encode timestamps to second precision, so use the UUIDv7 rollout ID as a
+    // deterministic tie-breaker when multiple files are created in the same
+    // second" (`find_thread_path_by_id_from_filenames`). Without it the answer
+    // for this fixture is directory order.
+    let seam = seam();
+    let plain = Usage { input: 700, output: 70, ..Usage::default() };
+    let reverted = Usage { input: 40, output: 4, ..Usage::default() };
+
+    // Same timestamp; the un-reverted file's rollout id IS its thread id (the
+    // vendor's `unwrap_or((ids, ids))`), and ROLLOUT sorts above THREAD.
+    write_raw(
+        &seam.codex,
+        &rollout_name(THREAD),
+        &format!("{}{}", header(THREAD, "C:/tmp/codex-repo"), usage_line(plain, plain, plain)),
+    );
+    write_raw(
+        &seam.codex,
+        &format!("rollout-{TS}-{THREAD}_{ROLLOUT}.jsonl"),
+        &format!("{}{}", header(THREAD, "C:/tmp/codex-repo"), usage_line(reverted, reverted, reverted)),
+    );
+
+    // The fixture's premise, asserted rather than assumed: the two names really
+    // do carry the same timestamp and really do differ on the rollout id, in
+    // the direction the assertion below depends on.
+    assert!(ROLLOUT > THREAD, "fixture: the revert's rollout id must sort above the thread id");
+
+    let u = codex_session_usage_in(&seam.codex, THREAD).expect("one of them is served");
+    assert_eq!(u.tokens.input_tokens, 40, "the higher rollout id wins the tie");
+}
+
+#[test]
+fn a_compressed_newest_rollout_does_not_fall_back_to_an_older_readable_one() {
+    // The half of finding 1 that is easy to reintroduce: if the compression
+    // check were a FILTER on the candidates rather than a check on the WINNER,
+    // an older readable file would silently inherit the answer the moment the
+    // live one compressed -- which is the frozen-usage defect again, wearing a
+    // different hat, and worse for being plausible (a real number, from a real
+    // file of this very thread).
+    let seam = seam();
+    let old = Usage { input: 5_000, output: 500, ..Usage::default() };
+    let live = Usage { input: 60, output: 6, ..Usage::default() };
+
+    write_raw(
+        &seam.codex,
+        &rollout_name(THREAD),
+        &format!("{}{}", header(THREAD, "C:/tmp/codex-repo"), usage_line(old, old, old)),
+    );
+    // The newer file, compressed -- a different NAME from the one above, so
+    // this is not the plain-hides-compressed sibling rule.
+    write_raw(
+        &seam.codex,
+        &format!("rollout-2026-09-03T16-00-00-{THREAD}_{ROLLOUT}.jsonl.zst"),
+        &format!("{}{}", header(THREAD, "C:/tmp/codex-repo"), usage_line(live, live, live)),
+    );
+
+    assert_eq!(
+        find_codex_session_file(&seam.codex, &PathSegment::parse(THREAD).unwrap()),
+        None,
+        "the live file is unreadable, so this thread has no readable usage -- serving the \
+         superseded file's 5000 would be a wrong number, not a degraded one"
+    );
+    assert!(codex_session_usage_in(&seam.codex, THREAD).is_none());
+
+    // The positive control that stops the assertions above passing for the
+    // wrong reason: the older file IS readable and IS this thread's, so a
+    // lookup that ignored the compressed one entirely would have answered.
+    let older_alone = seam.codex.join(DATE.0).join(DATE.1).join(DATE.2)
+        .join(format!("rollout-2026-09-03T16-00-00-{THREAD}_{ROLLOUT}.jsonl.zst"));
+    fs::remove_file(&older_alone).unwrap();
+    let u = codex_session_usage_in(&seam.codex, THREAD)
+        .expect("with the compressed winner gone, the older file is the newest and reads");
+    assert_eq!(u.tokens.input_tokens, 5_000);
+}
+
+// ---------------------------------------------------------------------------
+// The cursor: two harnesses, one cache -- and which FILE it holds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_reverted_thread_moves_the_cursor_to_the_new_rollout_on_revalidation() {
+    // The half of review round 1's finding 1 that the LOOKUP alone does not
+    // close. The cursor remembers the path it resolved and re-validates it with
+    // the one stat it already takes -- so the path survives for as long as the
+    // file it names exists. "The file still exists" is not "this is still the
+    // thread's file": `thread/revert` leaves the old rollout on disk and
+    // perfectly readable, so without a path refresh the cursor folds the
+    // superseded file for the life of the process and a live pane's usage
+    // silently stops moving.
+    let seam = seam();
+    let before = Usage { input: 900, output: 90, ..Usage::default() };
+    let after = Usage { input: 20, output: 2, ..Usage::default() };
+
+    write_raw(
+        &seam.codex,
+        &rollout_name(THREAD),
+        &format!("{}{}", header(THREAD, "C:/tmp/codex-repo"), usage_line(before, before, before)),
+    );
+
+    // `Duration::ZERO` revalidates on every tick, which is how the production
+    // timer is exercised without waiting five real minutes for it.
+    let cursors = TranscriptCursors::with_revalidate_after(Duration::ZERO);
+    let first = cursors
+        .session_usage(TranscriptKind::Codex, &seam.codex, THREAD)
+        .expect("the pre-revert rollout reads");
+    assert_eq!(first.tokens.input_tokens, 900);
+
+    // The revert: a NEW file, a later timestamp, the same thread id — and the
+    // old file still on disk, which is the whole point.
+    write_raw(
+        &seam.codex,
+        &format!("rollout-2026-09-03T17-00-00-{THREAD}_{ROLLOUT}.jsonl"),
+        &format!("{}{}", header(THREAD, "C:/tmp/codex-repo"), usage_line(after, after, after)),
+    );
+    assert!(
+        seam.codex.join(DATE.0).join(DATE.1).join(DATE.2).join(rollout_name(THREAD)).is_file(),
+        "fixture: the superseded file is still there, so a cursor that only asks \
+         'does my path still exist' has no reason to move"
+    );
+
+    let second = cursors
+        .session_usage(TranscriptKind::Codex, &seam.codex, THREAD)
+        .expect("and the thread still resolves");
+    assert_eq!(second.tokens.input_tokens, 20, "the cursor followed the thread to its new file");
+    assert_ne!(second.tokens.input_tokens, 900, "rather than folding the superseded one forever");
+}
+
+#[test]
+fn within_the_revalidation_interval_the_cursor_keeps_the_file_it_had() {
+    // The disclosed bound on the fix above, pinned rather than asserted in
+    // prose: the path refresh rides the revalidation timer, so a revert is
+    // picked up within one `CURSOR_REVALIDATE_AFTER` and not instantly. This is
+    // also the non-vacuity control for the test above — it shows that test's
+    // move is the TIMER firing, not the lookup being re-run on every tick.
+    let seam = seam();
+    let before = Usage { input: 900, output: 90, ..Usage::default() };
+    let after = Usage { input: 20, output: 2, ..Usage::default() };
+
+    write_raw(
+        &seam.codex,
+        &rollout_name(THREAD),
+        &format!("{}{}", header(THREAD, "C:/tmp/codex-repo"), usage_line(before, before, before)),
+    );
+
+    let cursors = TranscriptCursors::with_revalidate_after(Duration::from_secs(3_600));
+    assert_eq!(
+        cursors
+            .session_usage(TranscriptKind::Codex, &seam.codex, THREAD)
+            .unwrap()
+            .tokens
+            .input_tokens,
+        900
+    );
+
+    write_raw(
+        &seam.codex,
+        &format!("rollout-2026-09-03T17-00-00-{THREAD}_{ROLLOUT}.jsonl"),
+        &format!("{}{}", header(THREAD, "C:/tmp/codex-repo"), usage_line(after, after, after)),
+    );
+
+    assert_eq!(
+        cursors
+            .session_usage(TranscriptKind::Codex, &seam.codex, THREAD)
+            .unwrap()
+            .tokens
+            .input_tokens,
+        900,
+        "well inside the interval the remembered path stands — the bound this fix has, \
+         stated in `codex.md` and pinned here"
+    );
+}
 
 #[test]
 fn a_codex_cursor_and_a_claude_cursor_never_serve_each_others_totals() {

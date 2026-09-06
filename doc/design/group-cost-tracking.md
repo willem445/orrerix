@@ -149,7 +149,11 @@ be spelled from a session id — the file name carries a timestamp nobody can
 re-derive and an optional `_<rollout>` revert suffix — so `transcript_path`'s
 codex arm is a LOOKUP over the store
 (`sessions::find_codex_session_file`), remembered on the cursor exactly as
-claude's scan result is. And a rollout older than about seven days is
+claude's scan result is. That suffix also means a thread can own SEVERAL
+rollouts (`thread/revert` starts a new one and switches the thread to it), and
+the lookup picks the newest by the vendor's own comparator rather than summing
+them or taking whichever the directory yielded first — [codex.md](codex.md)
+under *Several rollouts, one thread* has the citation and the residual. And a rollout older than about seven days is
 zstd-compressed in place by codex's own background worker, at which point it
 reports **no usage at all**: decompressing means a new `src-tauri` dependency
 and its getrandom audit (constraint 2), which C2 refused for one metadata line

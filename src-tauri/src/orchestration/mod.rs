@@ -36433,7 +36433,7 @@ impl OrchRegistry {
         crate::gh::reject_empty_comment(body)?;
         let dir = self.group_dir(group);
         fs::create_dir_all(&dir).map_err(|e| format!("cannot prepare the comment body: {e}"))?;
-        let seq = COMMENT_BODY_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let seq = COMMENT_BODY_SEQ.load(std::sync::atomic::Ordering::Relaxed);
         let body_path = dir.join(format!("{actor}-comment-body-{seq}.md"));
         fs::write(&body_path, body)
             .map_err(|e| format!("cannot write the comment body: {e}"))?;

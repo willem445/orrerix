@@ -1076,7 +1076,7 @@ fn lead_prepare_refuses_a_non_argv_seam_cli() {
 fn a_codex_lead_is_refused_naming_its_follow_up() {
     let (reg, _d) = test_registry();
     let err = reg
-        .lead_prepare("codex", std::path::Path::new("Z:/not/a/repo"), "l", 4, false, 5, 0, 5)
+        .lead_prepare("codex", "Z:/not/a/repo", "l", 4, false, 5, 0, 5)
         .expect_err("a codex lead must be refused");
     assert!(err.contains("codex cannot host a lead pane yet"), "{err}");
     assert!(err.contains("#2833") && err.contains("lead-pane.md"), "{err}");

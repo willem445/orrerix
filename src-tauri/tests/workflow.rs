@@ -7826,9 +7826,13 @@ fn the_repos_own_workflow_file_parses_clean_against_the_real_parser() {
     // `z-ai/glm-5.3-flash`). Each pi block's thinking level is pinned beside it —
     // the load-bearing axis #2817 added — and a pi block whose effort is not in
     // the map fails loudly, so a future roster edit cannot add an unpinned axis.
-    // The roster has NO opencode block since #2817: opencode's own id-shape rules
-    // keep their coverage in the #722 `sanitize_model` specimens in this same file
-    // (`a_declared_block_model_survives_both_clis_and_a_resume` and neighbours).
+    // The roster has NO opencode block since #2817: opencode's own id-shape
+    // rules keep their coverage in the #722 specimens in
+    // `src-tauri/tests/orchestration.rs` —
+    // `a_model_id_may_carry_a_provider_prefix_but_never_shell_syntax` (the
+    // latent-mangle pin: `opencode/deepseek-v4-flash-free` through parse,
+    // `clamped()` and `default_roster`) plus the `/`-admission note in the
+    // shell-syntax strip test.
     let via_pi: Vec<&workflow::Block> = wf.blocks.iter().filter(|b| b.cli == "pi").collect();
     assert!(!via_pi.is_empty(), "the cheap tier is the point of this roster");
     let pi_efforts: &[(&str, &str)] = &[("worker-std", "medium"), ("rev-std", "high")];
@@ -7848,8 +7852,25 @@ fn the_repos_own_workflow_file_parses_clean_against_the_real_parser() {
             .find(|(id, _)| *id == b.id)
             .map(|(_, effort)| *effort)
             .unwrap_or_else(|| panic!("{}: pin this pi block's thinking level beside it", b.id));
-        assert_eq!(&b.effort, want, "{}: the thinking level #2817 pinned on pi", b.id);
+        assert_eq!(
+            &b.effort, want,
+            "{}: the thinking level #2817 pinned on pi",
+            b.id
+        );
     }
+    // And the map has no STALE row: a row for a block that left pi (or was
+    // renamed) must fail loudly beside the missing-row panic above, so the
+    // pin's coverage is exactly the pi roster, never more.
+    assert_eq!(
+        via_pi.len(),
+        pi_efforts.len(),
+        "pi_efforts must cover exactly the pi blocks: {}",
+        via_pi
+            .iter()
+            .map(|b| b.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
     // And every one of them is a class this CLI may actually host — the containment
     // gate the parser itself consults, re-asserted here against the real file so a
@@ -8129,7 +8150,7 @@ fn the_cheap_review_lanes_carry_the_rules_that_make_them_safe() {
     // comment.
     //
     // BOUND TO THE FILES, NOT TO ROSTER MEMBERSHIP, for the same reason as the pin
-    // above: the live cheap-tier roster declares one opencode reviewer (`rev-std`),
+    // above: the live cheap-tier roster declares one pi reviewer (`rev-std`),
     // which is an ITERATING reviewer rather than a fixed-checklist instrument and
     // carries none of these rules — deriving the population from the roster would
     // therefore assert this file's rules of a persona they were never written for.

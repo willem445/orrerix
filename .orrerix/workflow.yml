@@ -206,7 +206,7 @@ gates:
 # the injected tail is capped at ~4 KB, so it evicts the oldest unpinned entry):
 #
 # ## Cheap-tier roster: literal briefs, sequenced lanes, worker chosen at intake
-# When the roster carries `worker-std`/`rev-std` (opencode + GLM Flash):
+# When the roster carries `worker-std`/`rev-std` (pi + GLM Flash):
 # 1. A brief names EXACT files and functions, the EXACT commands to run and the
 #    EXACT output that means done; one task, no judgment calls left open; grep
 #    every anchor before briefing. PR bodies carry the diffstat and run ids —

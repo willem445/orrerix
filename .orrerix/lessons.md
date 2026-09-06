@@ -65,7 +65,7 @@ END the turn, act on the notice. Same for any pane-delivered answer: reading onc
 fine, waiting is the defect.
 
 ## Cheap-tier roster: literal briefs, sequenced lanes, worker chosen at intake
-When the roster carries `worker-std`/`rev-std` (opencode + GLM Flash):
+When the roster carries `worker-std`/`rev-std` (pi + GLM Flash):
 1. A brief names EXACT files and functions, the EXACT commands to run and the
    EXACT output that means done; one task, no judgment calls left open; grep
    every anchor before briefing. PR bodies carry the diffstat and run ids —

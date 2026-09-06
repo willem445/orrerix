@@ -386,6 +386,11 @@ const FIELDS_WITHOUT_AN_EDITOR = new Set<string>([
   // and its refusals. An affordance for it waits on the operator binding
   // (#1458), which is what turns a label into a list of names worth offering.
   "block.remote",
+  // #2850. The pane READS and EMITS `driver:` (the round-trip tests above),
+  // but has no control for it yet: there is exactly one legal value in this
+  // release (`structured`, pi-only), so a form for it waits on the spawn-path
+  // slice that makes the key do anything.
+  "block.driver",
   "edge.from",
   "edge.to",
   "gate.require",

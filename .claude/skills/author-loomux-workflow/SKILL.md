@@ -486,6 +486,11 @@ As an authoring agent you cannot invoke either directly, so:
      block whose `cli:` can't honor that knob (e.g. `context: 1m` on a
      `copilot` block) — check the per-CLI knob matrix in Step 4 BEFORE
      writing either key; the refusal names both fixes if you don't;
+   - `driver: structured` on a block whose `cli:` has no structured driver —
+     in this release only `pi` carries one (claude's decoder exists but its
+     spawn wiring is #84 R2), so a structured block needs `cli: pi`; the
+     value set is closed (`structured` only) and an unknown value is refused
+     the same way;
    - `context: 1m` paired with a `model:` that has no `[1m]` form (`haiku`,
      `fable`, `best`, `default`) — `parse_workflow` does not check this (it
      checks the CLI, not the model), so this combination parses clean and

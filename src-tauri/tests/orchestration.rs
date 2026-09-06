@@ -64729,9 +64729,13 @@ fn a_staged_comment_body_cannot_clobber_a_file_in_the_group_dir() {
     post_comment(&reg, &cp, json!({ "issue": 7, "body": "a comment\n" })).unwrap();
 
     for d in &decoys {
+        // `unwrap`, not a `Result` comparison: the pre-fix code DELETED the
+        // colliding file after writing over it, so an unreadable decoy is the
+        // defect too and must fail here rather than compare unequal.
         assert_eq!(
-            fs::read_to_string(d).as_deref(),
-            Ok("THE BLOCK'S INSTRUCTIONS"),
+            fs::read_to_string(d)
+                .unwrap_or_else(|e| panic!("a post removed a file in the group dir: {} ({e})", d.display())),
+            "THE BLOCK'S INSTRUCTIONS",
             "a post overwrote a file in the group dir: {}",
             d.display()
         );

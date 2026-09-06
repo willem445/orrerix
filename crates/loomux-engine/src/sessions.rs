@@ -1471,9 +1471,7 @@ pub fn find_codex_session_file(root: &Path, session_id: &PathSegment) -> Option<
         None
     });
     let (_, _, path) = newest?;
-    // Unreadable content is no usage at all. Deliberately AFTER the choice: see
-    // the doc above on why an older readable file must not inherit the answer.
-    (!codex_rollout_is_compressed(&path)).then_some(path)
+    Some(path)
 }
 
 /// Is candidate `(timestamp, rollout id)` NEWER than the incumbent?

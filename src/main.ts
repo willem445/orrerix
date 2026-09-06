@@ -68,6 +68,9 @@ import {
   cancelPendingConnect,
   soloPrepare,
   soloBind,
+  leadPrepare,
+  leadBind,
+  badgeFor,
   confirmSoloCopilotAutopilot,
   SOLO_GROUP,
   type OrchWiring,
@@ -75,6 +78,7 @@ import {
   type OrchestratorConfig,
   type AttentionItem,
 } from "./orchestration";
+import { LEAD_RESTORE_GUARDRAILS } from "./agents";
 import { tabAttention, sameAttention, findPaneByPty, orchestratorLaunchTarget } from "./tabroute";
 import { AttentionGate } from "./attentiongate";
 import {
@@ -387,6 +391,20 @@ function eventsFor(ws: Workspace): PaneEvents {
     // close it. Every human-initiated single-pane close — header ✕, dock chip ✕,
     // Ctrl+Shift+W — arrives through that one path.
     onCloseRequest: (pane) => ws.grid.closePane(pane),
+    // #2519: how many LIVE children a lead's close is about to end, for its
+    // arm-and-confirm tooltip. Counted over EVERY tab, not just this one: a
+    // child is routed into the lead's tab (`bindLeadTab`), but a human can drag
+    // a pane to another tab, and a confirm that under-reports what it destroys
+    // is worse than one that offers no number at all. The lead itself is
+    // excluded — it is the pane being closed, not one of its helpers — and so
+    // are dead panes, whose agents are already gone.
+    leadChildCount: (pane) => {
+      const group = pane.facts().orch?.group ?? null;
+      if (group === null) return null;
+      return tabs.tabs
+        .flatMap((t) => t.grid.allPanes())
+        .filter((p) => p !== pane && p.facts().orch?.group === group && p.facts().alive).length;
+    },
     // A pane header's ◫/⬓ — a human split gesture, so the pane being split is
     // the one that pays for the new one (#885 `halve`).
     onSplit: (pane, dir) => openWelcomeIn(ws, dir, pane, "halve"),
@@ -474,6 +492,35 @@ function eventsFor(ws: Workspace): PaneEvents {
  *  `findPaneByPty` (tabroute.ts), unit-tested. */
 function findPaneAcrossTabs(ptyId: number): { ws: Workspace; pane: Pane } | null {
   return findPaneByPty(tabs.tabs, (ws) => ws.grid, ptyId);
+}
+
+/** The tab a pane lives in, or null if it is in none (a disposed pane).
+ *  A `Pane` holds no back-reference to its `Workspace` (see `TabRef` in
+ *  `agentrows.ts`), so the answer is a walk, and this is the one place that
+ *  walks it by pane IDENTITY rather than by pty — the lead paths below need it
+ *  for a pane whose pty is being replaced. */
+function workspaceOfPane(pane: Pane): Workspace | null {
+  return tabs.tabs.find((ws) => ws.grid.allPanes().includes(pane)) ?? null;
+}
+
+/** Register a freshly-minted lead group against the tab its pane opened in
+ *  (#2519), which is what routes the lead's CHILDREN into that same tab.
+ *
+ *  `spawn_agent` from a lead produces an ordinary `OrchSpawnRequest` carrying
+ *  the lead's group id, and the router (`orchWiring.targetForGroup`) opens it
+ *  in `tabs.workspaceForGroup(group)` — or, finding none, in a NEW background
+ *  tab it names after the repo. So without this binding a lead's helpers would
+ *  scatter into a tab of their own, away from the human who asked for them,
+ *  and `parentKey`'s (same group, same tab) rule would correctly refuse to nest
+ *  any of them. This is that rule's other half, and it is the same
+ *  `tabs.bindGroup` the orchestrator launch path calls for the same reason.
+ *
+ *  A no-op when the re-mint or the prepare produced no group (best-effort
+ *  failure) or the pane's tab could not be found. */
+function bindLeadTab(ws: Workspace | null, remint: { orch?: { group: string } }): void {
+  if (!ws || !remint.orch) return;
+  tabs.bindGroup(remint.orch.group, ws.id);
+  persistTabs();
 }
 
 /** Make a pane VISIBLE and focused, wherever it is (#2365).
@@ -846,14 +893,29 @@ async function remintSoloIdentity(
   name: string,
   cwd: string | undefined,
   command: string | undefined,
-  argv: string[] | undefined
+  argv: string[] | undefined,
+  // #2519: this pane was a LEAD, so what gets re-minted is a whole lead GROUP
+  // rather than a channel identity. Defaulted so every pre-existing caller
+  // reads unchanged; only the three agent-restore arms pass it.
+  lead = false
 ): Promise<{
   command?: string;
   argv?: string[];
   channelAgent?: { group: string; agentId: string; role: string; canSend: boolean };
+  /** The orchestration identity a re-minted LEAD pane must open with (#2519)
+   *  — `PaneOptions.orchGroup`/`orchRole`/`orchAgent`, not `channelAgent`:
+   *  those are what give the pane its role badge, its audit button and (through
+   *  `PaneFacts.orch`) its Agents-tab children. Absent for every non-lead
+   *  restore, and for a lead whose re-mint failed. */
+  orch?: { group: string; agentId: string };
   bind: (ptyId: number) => void;
 }> {
-  const stripped = stripSoloMcpFlags(command, argv);
+  // `lead` reaches the STRIP as well as the branch below it (#2519 C2): the
+  // claude arm excises loomux's `--disallowedTools Agent` marker only for a pane
+  // that really was a lead, so a SOLO pane whose human typed that same flag
+  // themselves keeps it across a restore (C1 review F2, closed here).
+  const stripped = stripSoloMcpFlags(command, argv, lead);
+  if (lead) return remintLeadIdentity(name, cwd, stripped);
   if (!stripped.cli) return { command: stripped.command, argv: stripped.argv, bind: () => {} };
   try {
     const prepared = await soloPrepare(stripped.cli, cwd ?? "", name);
@@ -873,6 +935,85 @@ async function remintSoloIdentity(
     // simply gone — delivery-only until the human adopts it via Connect.
     return { command: stripped.command, argv: stripped.argv, bind: () => {} };
   }
+}
+
+/** Re-mint a restored LEAD pane's group (#2519) — `remintSoloIdentity`'s lead
+ *  arm, split out because almost nothing about it is the same question.
+ *
+ *  A lead group is RE-MINTED, never resumed: its children's worktrees and
+ *  sessions are gone, their panes are not restored, and the backend refuses a
+ *  resume of one outright. So this mints a FRESH group for the same pane, on the
+ *  same command line, and hands back the orchestration identity the pane opens
+ *  with — the shape a live launch produces, arrived at by a different road.
+ *
+ *  `stripSoloMcpFlags` has already run on the recorded command: it removes the
+ *  dead `--mcp-config` pointing at a config the last exit deleted AND the lead
+ *  marker beside it (`--disallowedTools Agent`, #2519 C1), so the fresh
+ *  `mcp_args` are appended to a clean line rather than duplicated onto a stale
+ *  one. It reports a `cli` for any line carrying loomux's own MCP identity;
+ *  a lead line always does, since the backend refuses to prepare one for a CLI
+ *  with no command-line MCP seam.
+ *
+ *  BEST-EFFORT, like every other re-mint on this path: a failed prepare leaves
+ *  the pane booting on the stripped line as an ORDINARY agent pane — no group,
+ *  no tools, no badge — which is legible and recoverable (close it, launch a
+ *  new one), where replaying a dead group's flags would not be. */
+async function remintLeadIdentity(
+  name: string,
+  cwd: string | undefined,
+  stripped: { cli: string | null; command?: string; argv?: string[] }
+): Promise<{
+  command?: string;
+  argv?: string[];
+  orch?: { group: string; agentId: string };
+  bind: (ptyId: number) => void;
+}> {
+  if (!stripped.cli) return { command: stripped.command, argv: stripped.argv, bind: () => {} };
+  try {
+    const prepared = await leadPrepare(stripped.cli, cwd ?? "", name, LEAD_RESTORE_GUARDRAILS);
+    const withArgs = appendSoloMcpArgs(stripped.command, stripped.argv, prepared.mcp_args);
+    return {
+      command: withArgs.command,
+      argv: withArgs.argv,
+      orch: { group: prepared.group_id, agentId: prepared.agent_id },
+      bind: (ptyId: number) => {
+        void leadBind(prepared.agent_id, ptyId).catch((err) => {
+          // The pane is open and typable, so this is not a launch failure — but
+          // the kickoff is what tells a lead it IS one, so a swallowed failure
+          // here leaves a pane holding a live group and fleet tools with no idea
+          // it has them (review round 1, premortem). Said, not silent, on the
+          // same channel the launch path uses.
+          showToast(`"${name}" restored as a lead, but its briefing didn't arrive: ${String(err)}`, "error");
+        });
+      },
+    };
+  } catch (err) {
+    // SURFACED, unlike the solo re-mint's silent fallback beside it, and for the
+    // reason the launch path gives: a pane that was a lead comes back as an
+    // ordinary agent pane, which is a capability the human had and no longer
+    // has. It still BOOTS — the alternative is a pane that refuses to open on a
+    // restart — but it does not do so quietly.
+    showToast(`"${name}" restored without its orrerix subagents: ${String(err)}`, "error");
+    return { command: stripped.command, argv: stripped.argv, bind: () => {} };
+  }
+}
+
+/** The `PaneOptions` a re-minted lead identity contributes (#2519), or nothing
+ *  at all when there is none — spread into the three agent-restore arms so each
+ *  one states the lead case once, in the same place it states the solo case.
+ *
+ *  The BADGE is built here rather than by the pane, from `badgeFor`, which is
+ *  the same function the orchestrator-driven spawn path uses: one definition of
+ *  what a role chip says, so a lead's "LEAD 1" and its children's "W 3" are
+ *  minted by the same code and carry the same group colour. */
+function leadPaneOptions(remint: { orch?: { group: string; agentId: string } }) {
+  if (!remint.orch) return {};
+  return {
+    orchGroup: remint.orch.group,
+    orchRole: "lead",
+    orchAgent: remint.orch.agentId,
+    badge: badgeFor({ group_id: remint.orch.group, agent_id: remint.orch.agentId, role: "lead" }),
+  };
 }
 
 /** Open the ONE pane a restore action describes, per the adopted hybrid. Shared
@@ -914,7 +1055,7 @@ async function openActionPane(
       // #439: the recorded command may carry a solo channel identity's MCP flags
       // pointing at a config file this pane's own last exit already deleted (and
       // cleared the token for) — re-mint a fresh identity before replaying it.
-      const remint = await remintSoloIdentity(a.name, a.cwd ?? undefined, resume.command, resume.argv);
+      const remint = await remintSoloIdentity(a.name, a.cwd ?? undefined, resume.command, resume.argv, a.lead);
       const pane = await ws.grid.openPane(
         {
           name: a.name,
@@ -923,6 +1064,7 @@ async function openActionPane(
           argv: remint.argv,
           sessionId: a.sessionId,
           channelAgent: remint.channelAgent,
+          ...leadPaneOptions(remint),
           background: true,
         },
         events,
@@ -930,6 +1072,7 @@ async function openActionPane(
         anchor
       );
       if (pane.ptyId !== null) remint.bind(pane.ptyId);
+      bindLeadTab(ws, remint);
       // #456: a restored kickoff is trusted no differently than a fresh one
       // (#364's own precedent for the group path) — checked against the
       // FINAL command (post `remintSoloIdentity` — the MCP re-mint above
@@ -973,7 +1116,7 @@ async function openActionPane(
       const fresh = agentFreshCommand(a.command, a.argv, a.sessionId);
       // #439: same re-mint as resume-agent — a recorded solo identity's config was
       // deleted at this pane's last exit, so its MCP flags must never be replayed.
-      const remint = await remintSoloIdentity(a.name, a.cwd ?? undefined, fresh.command, fresh.argv);
+      const remint = await remintSoloIdentity(a.name, a.cwd ?? undefined, fresh.command, fresh.argv, a.lead);
       const pane = await ws.grid.openPane(
         {
           name: a.name,
@@ -982,6 +1125,7 @@ async function openActionPane(
           argv: remint.argv,
           sessionId: a.sessionId,
           channelAgent: remint.channelAgent,
+          ...leadPaneOptions(remint),
           background: true,
         },
         events,
@@ -989,6 +1133,7 @@ async function openActionPane(
         anchor
       );
       if (pane.ptyId !== null) remint.bind(pane.ptyId);
+      bindLeadTab(ws, remint);
       // #456: see the identical guard in "resume-agent" above.
       if (shouldWatchCopilotOnRestore(remint.command ?? null, remint.argv ?? null) && pane.ptyId !== null) {
         void confirmSoloCopilotAutopilot(pane.ptyId, "copilot").catch(() => {
@@ -1012,6 +1157,11 @@ async function openActionPane(
         groupId: null, // an agent pane belongs to no orchestration group (#485)
         file: null,
         sshProfileId: null, // …nor to an SSH connection (#887 S4)
+        // #2519: carried through so a dormant LEAD placeholder that is never
+        // started still captures as a lead on the next quit — `Pane.capture`
+        // returns this record verbatim for a pane that stayed dormant, so a
+        // `false` here would silently demote the pane one boot later.
+        lead: a.lead,
         embeds: [],
       };
       let pane: Pane;
@@ -1049,7 +1199,8 @@ async function openActionPane(
               a.name,
               a.cwd ?? undefined,
               a.command ?? undefined,
-              a.argv ?? undefined
+              a.argv ?? undefined,
+              a.lead
             );
             await pane.startFromDormant({
               name: a.name,
@@ -1057,8 +1208,10 @@ async function openActionPane(
               command: remint.command,
               argv: remint.argv,
               channelAgent: remint.channelAgent,
+              ...leadPaneOptions(remint),
             });
             if (pane.ptyId !== null) remint.bind(pane.ptyId);
+            bindLeadTab(ws, remint);
             // #456: today's most-reachable copilot restore path — copilot
             // never carries a tracked session id on this build, so it always
             // restores dormant (see panerestore.ts's `decide()`). Same guard
@@ -1150,6 +1303,9 @@ async function openActionPane(
         command: null,
         argv: null,
         shellKind: null,
+        // #2519, and the same boundary the fields below restate: an SSH pane can
+        // never be an orchestration member, so it can never have been a lead.
+        lead: false,
         sessionId: a.sessionId,
         // The #887/#888 boundary, restated where the placeholder is built: an
         // SSH pane is never an orchestration member, so this record carries no
@@ -1323,6 +1479,10 @@ async function openActionPane(
         command: null,
         argv: null,
         shellKind: null,
+        // #2519: an `orch` placeholder is a member of a RESUMABLE group, which
+        // is the one thing a lead pane is not — a lead persists as `agent`
+        // (`Pane.liveKind`), so this arm can never be reached for one.
+        lead: false,
         // Carry the captured member identity so a group resume restores exactly
         // the panes that were live at close (#194.5) and re-capture is exact.
         sessionId: a.sessionId,
@@ -1983,14 +2143,26 @@ function tryResumeFallback(pane: Pane, exit: PtyExit): boolean {
   // "just in case" would leak an orphan solo-N config for every successful resume.
   // respawnFresh does NOT apply opts.channelAgent (unlike Pane.start), so the
   // channel identity is set explicitly via setChannelAgent once it's spawned.
-  void remintSoloIdentity(fb.opts.name ?? pane.name, fb.opts.cwd, fb.opts.command, fb.opts.argv).then((remint) =>
-    pane
-      .respawnFresh({ ...fb.opts, command: remint.command, argv: remint.argv })
-      .then(() => {
-        pane.setChannelAgent(remint.channelAgent ?? null);
-        if (pane.ptyId !== null) remint.bind(pane.ptyId);
-        onGridChanged();
-      })
+  //
+  // #2519: a LEAD pane re-mints a lead GROUP here, not a channel identity, and
+  // the group it held is already gone — this fires on the pty EXIT, and the
+  // backend's exit path marks a dead lead's group down with it. So the fresh
+  // group is the only live one, and `respawnFresh` re-applies the identity
+  // (badge, audit button, `PaneFacts.orch`) exactly as an in-place promotion
+  // does. `pane.isLead` is the question because the pane is what survived the
+  // failed resume; the recorded action is long out of scope here.
+  const wasLead = pane.isLead;
+  const leadWs = wasLead ? workspaceOfPane(pane) : null;
+  void remintSoloIdentity(fb.opts.name ?? pane.name, fb.opts.cwd, fb.opts.command, fb.opts.argv, wasLead).then(
+    (remint) =>
+      pane
+        .respawnFresh({ ...fb.opts, command: remint.command, argv: remint.argv, ...leadPaneOptions(remint) })
+        .then(() => {
+          if (!wasLead) pane.setChannelAgent(remint.channelAgent ?? null);
+          if (pane.ptyId !== null) remint.bind(pane.ptyId);
+          bindLeadTab(leadWs, remint);
+          onGridChanged();
+        })
   );
   return true;
 }
@@ -2020,7 +2192,13 @@ function openWelcomeIn(
   policy: SplitPolicy = "share"
 ): Pane {
   const context = relativeTo ?? ws.grid.activePane;
-  const form = new WelcomeForm(context?.workdir ?? undefined);
+  // #2519: one tab owns at most one orchestration group, and a lead pane mints
+  // one — so the toggle that would mint it is disabled, with a reason, on a tab
+  // that already has one. Read here rather than inside the form: `tabs` is the
+  // host's, and the form is a DOM component that knows nothing about tabs.
+  const form = new WelcomeForm(context?.workdir ?? undefined, {
+    tabOwnsGroup: () => tabs.groupForWorkspace(ws.id) !== null,
+  });
   const pane = ws.grid.openWelcomePane(eventsFor(ws), form.el, dir, relativeTo, policy);
   form.onSubmit = (result) => void handleWelcomeSubmit(ws, pane, form, result);
   return pane;
@@ -2169,8 +2347,10 @@ async function handleWelcomeSubmit(
     command: first.command,
     sessionId: first.sessionId,
     channelAgent: channelAgentFor(first),
+    ...leadSpecOptions(first),
   });
   await bindSoloIfNeeded(pane, first);
+  await bindLeadIfNeeded(ws, pane, first);
   watchCopilotAutopilotIfNeeded(pane, first);
   recordCopilotPostureIfNeeded(first);
   recordClaudePostureIfNeeded(first);
@@ -2189,6 +2369,7 @@ async function handleWelcomeSubmit(
         command: spec.command,
         sessionId: spec.sessionId,
         channelAgent: channelAgentFor(spec),
+        ...leadSpecOptions(spec),
       },
       eventsFor(ws),
       d,
@@ -2201,6 +2382,7 @@ async function handleWelcomeSubmit(
       "share"
     );
     await bindSoloIfNeeded(p, spec);
+    await bindLeadIfNeeded(ws, p, spec);
     watchCopilotAutopilotIfNeeded(p, spec);
     recordCopilotPostureIfNeeded(spec);
     recordClaudePostureIfNeeded(spec);
@@ -2225,6 +2407,50 @@ function channelAgentFor(spec: AgentLaunchSpec) {
  *  the orchestration group's `bind_agent` round trip. Best-effort: a failed
  *  bind just leaves the pane without a live channel identity, same as any
  *  other mint failure. */
+/** The orchestration identity a freshly-launched LEAD pane opens with (#2519),
+ *  or nothing at all for every other launch — the live-launch twin of
+ *  `leadPaneOptions`, reading the launcher's spec instead of a re-mint. */
+function leadSpecOptions(spec: AgentLaunchSpec) {
+  if (!spec.lead) return {};
+  return {
+    orchGroup: spec.lead.group,
+    orchRole: "lead",
+    orchAgent: spec.lead.agentId,
+    badge: badgeFor({ group_id: spec.lead.group, agent_id: spec.lead.agentId, role: "lead" }),
+  };
+}
+
+/** Bind a just-spawned LEAD pane's pty to the identity `orch_lead_prepare`
+ *  minted, register its group against the tab, and report a mint that failed
+ *  (#2519) — the lead's counterpart to `bindSoloIfNeeded`.
+ *
+ *  Three differences from that function, each deliberate:
+ *
+ *   - the bind DELIVERS. `lead_bind` types the pane's kickoff, which is how it
+ *     learns it is a lead at all, so a bind that never lands leaves a pane
+ *     holding fleet tools and no idea it has them. Still best-effort — the
+ *     backend audits a kickoff it could not deliver, and a launch that plainly
+ *     happened must not be reported as a failure — but not silent: the toast
+ *     says the pane opened without its briefing.
+ *   - the TAB is bound to the group, which is what makes the children this pane
+ *     spawns open beside it (`bindLeadTab`).
+ *   - a mint that failed in the launcher is SURFACED here (`spec.leadError`),
+ *     because the human ticked a box and did not get what it said. */
+async function bindLeadIfNeeded(ws: Workspace, pane: Pane, spec: AgentLaunchSpec): Promise<void> {
+  if (spec.leadError) {
+    showToast(`Couldn't give "${spec.name}" orrerix subagents: ${spec.leadError}`, "error");
+    return;
+  }
+  if (!spec.lead) return;
+  bindLeadTab(ws, { orch: { group: spec.lead.group } });
+  if (pane.ptyId === null) return;
+  try {
+    await leadBind(spec.lead.agentId, pane.ptyId);
+  } catch (err) {
+    showToast(`"${spec.name}" opened, but its lead briefing didn't arrive: ${String(err)}`, "error");
+  }
+}
+
 async function bindSoloIfNeeded(pane: Pane, spec: AgentLaunchSpec): Promise<void> {
   if (!spec.channelAgent || pane.ptyId === null) return;
   try {

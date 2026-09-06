@@ -461,6 +461,13 @@ export class AgentsView {
       this.paintState(els.state, row.state);
       els.el.className = `agents-item state-${row.state}`;
     }
+    // AFTER the state block, never inside it: that block rewrites `className`
+    // wholesale and is guarded on the STATE changing, so a child-ness that
+    // arrived on a tick where the state did not (a lead pane binding its group
+    // while its worker sits `idle`) would be painted and then wiped, or never
+    // painted at all. `classList.toggle` with an explicit second argument is
+    // idempotent, so running it every tick costs nothing and cannot drift.
+    els.el.classList.toggle("child", row.parent !== null);
     const title = this.rowTitle(row);
     if (els.el.title !== title) els.el.title = title;
   }

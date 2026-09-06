@@ -338,6 +338,15 @@ export interface AgentRow {
    *  from `PaneFacts.mark`, which is the pane header's own input. NOT
    *  `harness`: see that field for the divergence reading it caused. */
   readonly mark: AgentMarkInput;
+  /** The pane key of the lead this row's pane reports to (#2519 C2), or null
+   *  when it nests under nobody — `parentKey`'s answer, carried on the row so
+   *  the view renders an indent without re-deriving the relationship.
+   *
+   *  Set by `agentRows` alone, from the WHOLE reading it was handed. A caller
+   *  building rows from a pre-filtered list would silently lose every parent
+   *  whose lead the filter dropped, which is why `toAgentRow` cannot compute
+   *  it: that function sees one pane and has no fleet to ask. */
+  readonly parent: string | null;
 }
 
 /** Project one pane's facts into a row. `notes` is supplied by the caller
@@ -354,6 +363,9 @@ export function toAgentRow(facts: PaneFacts, notes: number | null = null): Agent
     notes,
     tab: facts.tab,
     mark: facts.mark,
+    // Null here by construction: one pane's facts cannot answer "which lead is
+    // it under" — that needs the fleet. `agentRows` fills it in below.
+    parent: null,
   };
 }
 
@@ -370,7 +382,19 @@ export function toAgentRow(facts: PaneFacts, notes: number | null = null): Agent
  *  parameter no caller supplies is a claim about a caller that does not
  *  exist. `toAgentRow` still takes one for the caller that will. */
 export function agentRows(facts: readonly PaneFacts[]): AgentRow[] {
-  return facts.filter(isAgentPane).map((f) => toAgentRow(f));
+  // THE FULL READING, not the filtered list (#2519 C1 review's standing
+  // instruction). `isAgentPane` is a membership rule about which panes get a
+  // ROW; the index's question is which panes can be a PARENT, and the two are
+  // not the same question even where they happen to agree.
+  //
+  // TODAY THEY DO AGREE, and this does not lean on it: a lead pane carries an
+  // orchestration identity, which is `isAgentPane`'s first and widest arm, so
+  // no lead can currently be filtered out here. That coincidence is a fact
+  // about `isAgentPane`, pinned as one in `test/agentrows.test.ts`
+  // ("a lead pane is always a row"), so narrowing that rule reddens a test
+  // instead of silently orphaning every child under a lead.
+  const index = leadIndex(facts);
+  return facts.filter(isAgentPane).map((f) => ({ ...toAgentRow(f), parent: parentKeyIn(f, index) }));
 }
 
 /** A filter chip's selection: one state, or everything. */
@@ -519,17 +543,49 @@ export function needsYouCount(rows: readonly AgentRow[]): number {
  *  the lead present), both red under group-only matching. The two-leads test
  *  cannot hold that half: its leads differ in group as well as tab. */
 export function parentKey(facts: PaneFacts, fleet: readonly PaneFacts[]): string | null {
+  return parentKeyIn(facts, leadIndex(fleet));
+}
+
+/** Every lead in one reading, indexed by the (group, tab) pair its children
+ *  match on — built ONCE per render instead of re-scanned per row (#2519 C1
+ *  review, the O(n^2) note this slice is the caller for).
+ *
+ *  TWO LEVELS rather than one map on a joined key, because a join has to
+ *  promise that no separator can appear in either half, and this needs no such
+ *  promise: group ids and tab ids are compared as whole strings at their own
+ *  level, so no pair of distinct (group, tab) can collide however either is
+ *  spelled.
+ *
+ *  FIRST WINS, and that is not an arbitrary tie-break: it is what makes this
+ *  index and a linear scan answer identically for every input, including the
+ *  pathological one (two lead panes sharing a group AND a tab, which the
+ *  backend's one-root-per-group invariant forbids and this module must still
+ *  be total about). `Map.set` overwrites, so the guard is explicit rather than
+ *  implied by insertion order. */
+export function leadIndex(fleet: readonly PaneFacts[]): LeadIndex {
+  const index = new Map<string, Map<string, string>>();
+  for (const p of fleet) {
+    if (p.orch === null || p.orch.role !== "lead" || p.tab === null) continue;
+    let byTab = index.get(p.orch.group);
+    if (byTab === undefined) {
+      byTab = new Map<string, string>();
+      index.set(p.orch.group, byTab);
+    }
+    if (!byTab.has(p.tab.id)) byTab.set(p.tab.id, p.key);
+  }
+  return index;
+}
+
+/** Lead pane keys by group, then by tab — `leadIndex`'s output, named so the
+ *  two functions that speak it agree on one type. */
+export type LeadIndex = ReadonlyMap<string, ReadonlyMap<string, string>>;
+
+/** `parentKey` against a prebuilt `leadIndex` — THE one implementation of the
+ *  rule, so the per-row and per-render forms cannot drift apart. */
+export function parentKeyIn(facts: PaneFacts, index: LeadIndex): string | null {
   const orch = facts.orch;
   if (orch === null || orch.role !== "worker") return null;
   const tab = facts.tab;
   if (tab === null) return null;
-  const lead = fleet.find(
-    (p) =>
-      p.orch !== null &&
-      p.orch.role === "lead" &&
-      p.orch.group === orch.group &&
-      p.tab !== null &&
-      p.tab.id === tab.id,
-  );
-  return lead === undefined ? null : lead.key;
+  return index.get(orch.group)?.get(tab.id) ?? null;
 }

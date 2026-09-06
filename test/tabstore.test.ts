@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   encodeTabs,
   decodeTabs,
+  persistedKindFor,
   SCHEMA_VERSION,
   type PersistedTabs,
   type PersistedLayoutNode,
@@ -94,6 +95,7 @@ test("docked panes round-trip (captured outside the layout tree, #194 P4)", () =
             groupId: null,
             file: null,
             sshProfileId: null,
+            lead: false,
             embeds: [],
           },
         ],
@@ -214,6 +216,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
         groupId: null,
         file: null,
         sshProfileId: null,
+        lead: false,
         embeds: [],
       },
     },
@@ -237,6 +240,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             groupId: null,
             file: null,
             sshProfileId: null,
+            lead: false,
             embeds: [],
           },
         },
@@ -255,6 +259,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             groupId: null,
             file: null,
             sshProfileId: null,
+            lead: false,
             embeds: [],
           },
         },
@@ -275,6 +280,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             groupId: null,
             file: null,
             sshProfileId: null,
+            lead: false,
             embeds: [],
           },
         },
@@ -308,6 +314,7 @@ test("a files leaf round-trips its root — and needed NO new field or schema bu
     groupId: null,
     file: null,
     sshProfileId: null,
+    lead: false,
     embeds: [],
   };
   const state: PersistedTabs = {
@@ -379,6 +386,7 @@ test("editor and git leaves round-trip their root — and the editor's open FILE
     groupId: null,
     file,
     sshProfileId: null,
+    lead: false,
     embeds: [],
   });
   const state: PersistedTabs = {
@@ -516,6 +524,7 @@ test("malformed pane fields inside a valid leaf coerce to null, not a drop", () 
       groupId: null,
       file: null,
       sshProfileId: null,
+      lead: false,
       embeds: [],
     },
   });
@@ -536,6 +545,7 @@ test("embed preferences ({view, side, share}), one per docked edge, round-trip t
     groupId: null,
     file: null,
     sshProfileId: null,
+    lead: false,
     embeds: [
       { view: "group", side: "bottom", share: 0.42 },
       { view: "tasks", side: "left", share: 0.3 },
@@ -569,6 +579,7 @@ test("git and editor are valid embed views too (#361 scope increase), round-trip
     groupId: null,
     file: null,
     sshProfileId: null,
+    lead: false,
     embeds: [
       { view: "git", side: "left", share: 0.35 },
       { view: "editor", side: "right", share: 0.4 },
@@ -602,6 +613,7 @@ test("the progress timeline (#608) is a valid embed view and round-trips like an
     groupId: null,
     file: null,
     sshProfileId: null,
+    lead: false,
     embeds: [{ view: "timeline", side: "bottom", share: 0.45 }],
   };
   const state: PersistedTabs = {
@@ -880,6 +892,7 @@ test("an ssh leaf round-trips its connection + recorded session, and carries NO 
     groupId: null,
     file: null,
     sshProfileId: "prof-7",
+    lead: false,
     embeds: [],
   };
   const state: PersistedTabs = {
@@ -963,4 +976,94 @@ test("sshProfileId is null on every non-ssh leaf (nothing else grew a connection
   const leaf = decodeTabs(raw)?.tabs[0].layout;
   assert.ok(leaf?.kind === "leaf");
   assert.equal(leaf.pane.sshProfileId, null);
+});
+
+// ---------- the lead flag (#2519 C2) ----------
+
+test("a lead pane's flag round-trips, and only an exact `true` is one", () => {
+  // Default-OFF with the same polarity as the launcher toggle that mints one
+  // (`subagentsFromStored`), and for the same reason: a corrupted or
+  // hand-edited snapshot must not silently mint a real orchestration group,
+  // with a cap's worth of live agents, on the next boot. Every value that is
+  // not the boolean `true` reads false — including the STRING "true", which is
+  // what a hand-edit is most likely to write.
+  const leaf = (lead: unknown) => ({
+    kind: "leaf",
+    weight: 1,
+    pane: {
+      paneKind: "agent",
+      name: "lead",
+      cwd: "/repo",
+      command: "claude",
+      argv: null,
+      shellKind: null,
+      sessionId: "s-1",
+      role: null,
+      groupId: null,
+      file: null,
+      sshProfileId: null,
+      lead,
+      embeds: [],
+    },
+  });
+  const decode = (lead: unknown) => {
+    const back = decodeTabs(
+      JSON.stringify({ tabs: [{ name: "t", color: null, groupId: null, layout: leaf(lead) }], activeIndex: 0 })
+    );
+    const node = back?.tabs[0].layout;
+    assert.equal(node?.kind, "leaf", "the leaf decoded at all (positive control)");
+    return node?.kind === "leaf" ? node.pane.lead : undefined;
+  };
+  assert.equal(decode(true), true, "a real lead comes back as one");
+  assert.equal(decode(false), false);
+  assert.equal(decode(undefined), false, "every pre-#2519 snapshot");
+  assert.equal(decode("true"), false, "a hand-edited string is not a lead");
+  assert.equal(decode(1), false);
+});
+
+// ---------- `persistedKindFor`: what a live pane comes back AS (#2519 C2) ----------
+
+const LIVE = {
+  contentKind: null,
+  ssh: false,
+  orchRole: null,
+  orchGroup: null,
+  launchedCommand: false,
+} as const;
+
+test("a LEAD persists as the agent pane it is, never as a resumable orch placeholder", () => {
+  // The whole restore contract for a lead, and the reason it is a rung of its
+  // own: `orch` means "a member of a group a whole-group RESUME brings back",
+  // and a lead group cannot be resumed. Persisted that way it would return as a
+  // Resume button that can only fail, with the human's command line discarded.
+  const lead = { ...LIVE, orchRole: "lead", orchGroup: "g-lead", launchedCommand: true };
+  assert.equal(persistedKindFor(lead), "agent");
+  // The operands COLLIDE, which is what makes the assertion above fail-able:
+  // this pane really does carry a group, so a rung that read `orchGroup` first
+  // would answer "orch" for it. The control is the same pane one field over.
+  assert.equal(persistedKindFor({ ...lead, orchRole: "worker" }), "orch", "any OTHER role in a group is orch");
+});
+
+test("the persisted-kind ladder answers each rung, with the rung below it varied", () => {
+  // Fixture-per-rung (#1182): each row differs from the one that would win
+  // beneath it, so a rung deleted from the ladder reddens exactly its own row
+  // rather than being masked by an arm further down.
+  assert.equal(
+    persistedKindFor({ ...LIVE, contentKind: "editor", ssh: true, orchGroup: "g", launchedCommand: true }),
+    "editor",
+    "content outranks everything — it has no process at all"
+  );
+  assert.equal(
+    persistedKindFor({ ...LIVE, ssh: true, orchRole: "lead", orchGroup: "g" }),
+    "ssh",
+    "ssh outranks lead and orch (the #887/#888 boundary, belt: an ssh pane can hold neither)"
+  );
+  assert.equal(
+    persistedKindFor({ ...LIVE, ssh: true }),
+    "ssh",
+    "…and outranks terminal, which is the fallthrough it exists to prevent: an ssh pane launches an argv, so `launchedCommand` is false for it"
+  );
+  assert.equal(persistedKindFor({ ...LIVE, orchGroup: "g" }), "orch");
+  assert.equal(persistedKindFor({ ...LIVE, launchedCommand: true }), "agent");
+  assert.equal(persistedKindFor(LIVE), "terminal", "a bare shell");
 });

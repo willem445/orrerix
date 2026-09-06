@@ -186,3 +186,136 @@ export function addRecentRepo(path: string): void {
     /* write failed (quota / security) — nothing to recover, same as before */
   }
 }
+
+/** What the launcher does with the "orrerix subagents" control for one form
+ *  state (#2519 C2). Pure so the gate can be pinned without a DOM — the DOM
+ *  wiring that reads it is hand-validated, per this repo's convention.
+ *
+ *  Three outcomes, and the difference between the last two is the whole point:
+ *
+ *   - **hidden** — the toggle does not APPLY. Another pane kind, a custom
+ *     command (the human owns that line; appending MCP flags to it could
+ *     collide with flags they typed), or a CLI the LEAD launch path has no
+ *     flag string for (`isLeadCli` false). That last set is narrower than the
+ *     channel-tools one and deliberately so: opencode and gemini deliver
+ *     their MCP config through a file or the environment, and codex's rides
+ *     its command line but `lead_mcp_args` has no arm for it — offering the
+ *     toggle there would offer a checkbox whose only outcome is an
+ *     internal-error toast. See `LEAD_CLIS`.
+ *   - **disabled with a reason** — it applies, but not HERE: one tab owns at
+ *     most one orchestration group (`tabs.groupForWorkspace` is singular), and
+ *     a lead pane mints one of its own. Shown-and-explained rather than hidden,
+ *     because a control that vanishes teaches nothing: the human's next move is
+ *     a new tab, and the title says so.
+ *   - **enabled** — the launch may mint a lead group.
+ *
+ *  `reason` is non-null exactly when `disabled` is true, so a caller cannot
+ *  render a disabled control with no explanation. */
+export interface SubagentsToggleState {
+  readonly hidden: boolean;
+  readonly disabled: boolean;
+  readonly reason: string | null;
+}
+
+/** What a submit does with the subagents checkbox, given the gate's answer AT
+ *  SUBMIT TIME (#2519, review round 1 B1). Three outcomes, and the middle one is
+ *  the finding this function exists for.
+ *
+ *  The DOM is painted when the form opens and the gate's answer can change
+ *  under it: `onSplit` puts a second welcome form in the same tab, so form B
+ *  can launch a lead — binding a group to that tab — while form A sits there
+ *  with an enabled checkbox, and a session restore can bind one with no form
+ *  gesture at all. Deciding from the checkbox alone then minted a SECOND group
+ *  into one tab; deciding from the live gate alone would silently drop a box the
+ *  human ticked. So the refusal is a value, not a `return`:
+ *
+ *   - `mint` — go ahead: the gate allows it and the box is ticked.
+ *   - `refusal` — the box is ticked and the gate now says no. The launch
+ *     proceeds WITHOUT a lead group (the human still gets their agent pane) and
+ *     the caller surfaces this text, on the same channel a failed mint uses.
+ *   - neither — the box is not ticked, or the toggle does not apply here at
+ *     all, which is not something to tell anyone about.
+ *
+ *  A HIDDEN gate never refuses out loud: it covers form states where the control
+ *  is not on screen (another kind, a custom line, a CLI with no lead flags), so
+ *  a ticked-but-hidden box is a stale preference from a previous launch rather
+ *  than a request the human just made. Only `disabled` — shown, ticked, and
+ *  newly impossible — is worth a word. */
+export function subagentsLaunchDecision(
+  gate: SubagentsToggleState,
+  checked: boolean
+): { mint: boolean; refusal: string | null } {
+  if (!checked || gate.hidden) return { mint: false, refusal: null };
+  if (gate.disabled) return { mint: false, refusal: gate.reason };
+  return { mint: true, refusal: null };
+}
+
+/** How many panes a launch opens once the subagents toggle is applied (#2519).
+ *
+ *  ONE, always, for a lead launch. The fan-out field means "open N of this
+ *  pane", and N leads is N orchestration groups minted into one tab from one
+ *  gesture — which is the very thing the toggle's own disabled reason tells the
+ *  human a tab cannot have. Rather than let the form contradict itself, the
+ *  count is clamped and the field is disabled with that reason while the toggle
+ *  is on, so nothing is silently ignored: the human sees the 1 they are going to
+ *  get before they submit.
+ *
+ *  (A fan-out of leads is not incoherent in principle — `bindGroup` has held
+ *  several groups per tab since #485 — but the tab strip's chip and its
+ *  pause/resume act on the FIRST group only, so N of them in one tab is a UI
+ *  that misreports itself. A lead per tab is the shape this feature is for.) */
+export function leadLaunchCount(count: number, subagentsOn: boolean): number {
+  return subagentsOn ? 1 : count;
+}
+
+export function subagentsToggleState(form: {
+  /** The welcome form's chosen kind — only `"agent"` can be a lead. */
+  readonly kind: string;
+  /** The resolved program name, or null when the form names none. */
+  readonly program: string | null;
+  /** The human typed their own command line. */
+  readonly isCustom: boolean;
+  /** The lead launch path can serve this CLI (`isLeadCli`) — passed in rather
+   *  than computed so the caller keeps ONE reading of it. Named for what it
+   *  decides, not for the seam underneath: the seam is necessary and not
+   *  sufficient (`LEAD_CLIS`). */
+  readonly leadCapableCli: boolean;
+  /** The tab this pane would open in already owns an orchestration group. */
+  readonly tabOwnsGroup: boolean;
+}): SubagentsToggleState {
+  if (form.kind !== "agent" || form.isCustom || form.program === null || !form.leadCapableCli) {
+    return { hidden: true, disabled: false, reason: null };
+  }
+  if (form.tabOwnsGroup) {
+    return {
+      hidden: false,
+      disabled: true,
+      reason:
+        "This tab already runs an orchestration group — a lead pane needs a tab of its own. " +
+        "Open a new tab (Ctrl+Shift+T) and launch it there.",
+    };
+  }
+  return { hidden: false, disabled: false, reason: null };
+}
+
+/** The guardrails a RESTORED lead pane's re-minted group runs under (#2519 C2).
+ *
+ *  A restore re-mints a lead group rather than resuming one, and `lead_prepare`
+ *  takes the four numbers the launcher's guardrail row supplies — but the
+ *  persisted pane record carries a FLAG, not a configuration (`PersistedPane.lead`),
+ *  so the numbers the human set at launch are not on disk to read back. These are
+ *  the launcher's own defaults, named once here so the restore and the form cannot
+ *  drift into two different answers, and disclosed as a v1 residual in
+ *  `docs/features/orrerix-subagents.md`: a lead pane restored from a previous boot
+ *  comes back on the DEFAULT guardrails, not the ones its launch was given.
+ *
+ *  `autoOps` is deliberately `false` rather than a default read off anything: it
+ *  is the permissions posture, and the conservative answer is the only one a
+ *  restore may assume on the human's behalf. */
+export const LEAD_RESTORE_GUARDRAILS = {
+  maxAgents: 4,
+  autoOps: false,
+  idleKillMinutes: 0,
+  maxSpawnsPerHour: 0,
+  watchdogStallMinutes: 10,
+} as const;

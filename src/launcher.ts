@@ -97,11 +97,16 @@ import {
   getRecentRepos,
   setAutopilot,
   setChannelTools,
+  getSubagents,
+  setSubagents,
+  subagentsToggleState,
+  subagentsLaunchDecision,
+  leadLaunchCount,
   setCustomCommand,
   setDefaultAgent,
 } from "./agents";
-import { soloPrepare } from "./orchestration";
-import { isSoloMcpCli } from "./panerestore";
+import { leadPrepare, soloPrepare } from "./orchestration";
+import { isLeadCli, isSoloMcpCli } from "./panerestore";
 
 export interface AgentLaunchSpec {
   name: string;
@@ -150,6 +155,23 @@ export interface AgentLaunchSpec {
    *  never collides with another launch's). `undefined` for every other
    *  CLI/kind, same meaning as `copilotAutopilotPosture`'s `undefined`. */
   claudeAutopilotPosture?: boolean;
+  /** #2519: this pane is a LEAD — `orch_lead_prepare` minted it a lightweight
+   *  orchestration group of its own (whose flags `command` above already
+   *  carries), and the caller must bind its pty to `agentId` once it spawns
+   *  AND register `group` against the tab, so the children this pane spawns
+   *  open beside it.
+   *
+   *  Absent unless the "orrerix subagents" toggle was on for a launch that
+   *  could honour it, and absent when the mint FAILED — unlike `channelAgent`
+   *  that is not silent: the human asked for a fleet-capable pane and got an
+   *  ordinary one, so the launcher surfaces the error rather than degrading
+   *  quietly (`leadError`). */
+  lead?: { group: string; agentId: string };
+  /** Why this launch is NOT a lead although the toggle asked for one (#2519),
+   *  or absent when nothing was asked or nothing failed. Carried on the spec
+   *  rather than thrown, because the pane still opens: the human gets their
+   *  agent, and one toast says what it did not get. */
+  leadError?: string;
 }
 
 /** What a submitted welcome form resolves to — the caller (main.ts) spawns the
@@ -357,8 +379,33 @@ export class WelcomeForm {
   // addendum / PR #289 review round 2, N1).
   private channelToolsField: HTMLElement;
   private channelToolsInput: HTMLInputElement;
+  /** #2519: the "orrerix subagents" toggle and the reason line under it. */
+  private subagentsField: HTMLElement;
+  private subagentsInput: HTMLInputElement;
+  private subagentsHint: HTMLElement;
+  /** Does the tab this pane would open in already own an orchestration group
+   *  (#2519)? An ACCESSOR, asked afresh every time the answer is used — never a
+   *  boolean snapshot, and that is a correctness requirement rather than a
+   *  style choice (review round 1, B1).
+   *
+   *  A welcome form is NOT short-lived enough to cache it. `onSplit` opens a
+   *  second welcome form in the same tab, so two can be open at once: submit
+   *  form B as a lead and its group binds to the tab, while form A is still
+   *  sitting there with a construction-time `false` and a visibly enabled
+   *  toggle. Submitting A then minted a SECOND group into that tab — the exact
+   *  state this gate exists to prevent, and the one the change's own rationale
+   *  calls a UI that misreports itself. A group can also arrive under an open
+   *  form from a session restore, which no form gesture is involved in at all.
+   *
+   *  The form still owns no knowledge of tabs: the host passes the question, the
+   *  form asks it. */
+  private tabOwnsGroup: () => boolean;
   // Orchestrator guardrails.
   private orchFields: HTMLElement;
+  /** The four numeric guardrails (#1020 item 3), in their own container since
+   *  #2519 because they are shown for an orchestrator launch AND for a lead
+   *  one — see the comment where they are built. */
+  private guardFields: HTMLElement;
   private maxAgentsInput: HTMLInputElement;
   private idleKillInput: HTMLInputElement;
   private spawnRateInput: HTMLInputElement;
@@ -455,7 +502,8 @@ export class WelcomeForm {
    *  one is splitting from (or the tab's active pane), so a file explorer opened
    *  beside an agent defaults to THAT agent's worktree rather than to whatever repo
    *  was last used app-wide (#214). Falls back to the most recent repo, as before. */
-  constructor(defaultFolder?: string) {
+  constructor(defaultFolder?: string, opts?: { tabOwnsGroup?: () => boolean }) {
+    this.tabOwnsGroup = opts?.tabOwnsGroup ?? (() => false);
     this.el = document.createElement("div");
     this.el.className = "welcome-form";
 
@@ -707,6 +755,33 @@ export class WelcomeForm {
     this.channelToolsField.className = "dlg-field";
     this.channelToolsField.appendChild(channelToolsLabel);
 
+    // #2519: "orrerix subagents". Turning it on makes this pane a LEAD — it
+    // gets a lightweight orchestration group of its own and spawns its helpers
+    // as orrerix panes (in worktrees, visible, steerable) instead of running
+    // them as the harness's own in-process subagents.
+    this.subagentsInput = document.createElement("input");
+    this.subagentsInput.type = "checkbox";
+    this.subagentsInput.className = "dlg-check";
+    const subagentsLabel = document.createElement("label");
+    subagentsLabel.className = "dlg-toggle";
+    const subagentsText = document.createElement("span");
+    subagentsText.textContent =
+      "orrerix subagents — spawn helpers as orrerix panes instead of the harness's own subagents";
+    subagentsLabel.append(this.subagentsInput, subagentsText);
+    // The guardrail row below is the lead's children's cap, and it is only
+    // relevant while the toggle is on — so the toggle drives its visibility
+    // rather than the kind alone (see `applySubagents`).
+    this.subagentsInput.addEventListener("change", () => {
+      setSubagents(this.subagentsInput.checked);
+      this.applySubagents();
+    });
+    this.subagentsHint = document.createElement("div");
+    this.subagentsHint.className = "dlg-hint";
+    this.subagentsHint.hidden = true;
+    this.subagentsField = document.createElement("div");
+    this.subagentsField.className = "dlg-field";
+    this.subagentsField.append(subagentsLabel, this.subagentsHint);
+
     // Orchestrator guardrails: enforced by the backend; the form only collects
     // them. Models are pinned per role at group creation; the suggestion list
     // follows the selected agent CLI.
@@ -882,11 +957,20 @@ export class WelcomeForm {
       field("Max spawns/hour (0=∞)", this.spawnRateInput),
       field("Watchdog stall (min, 0=off)", this.watchdogInput)
     );
+    // #2519: the SAME four numbers, in their own container, because they now
+    // have two owners. An orchestrator has always set them for its fleet; a
+    // LEAD sets them for its children, through the identical `lead_prepare`
+    // arguments. Hoisted rather than duplicated: a second copy of this row for
+    // the agent kind would be two controls for one setting, and the day they
+    // disagreed the human would have no way to tell which one was sent.
+    this.guardFields = document.createElement("div");
+    this.guardFields.className = "dlg-field";
+    this.guardFields.append(guardNumbers);
+
     this.orchFields = document.createElement("div");
     this.orchFields.className = "dlg-field";
     this.orchFields.append(
       roleRows,
-      guardNumbers,
       field(
         "Autonomy budget (tokens, 0=no cap)",
         this.autonomyBudgetInput,
@@ -920,6 +1004,8 @@ export class WelcomeForm {
       this.worktreeField,
       this.autopilotField,
       this.channelToolsField,
+      this.subagentsField,
+      this.guardFields,
       this.orchFields,
       this.nameField,
       this.errorEl,
@@ -952,6 +1038,7 @@ export class WelcomeForm {
     seedPicker(this.repoPicker, recent, defaultFolder?.trim() || recent[0] || "");
     this.autopilotInput.checked = getAutopilot();
     this.channelToolsInput.checked = getChannelTools();
+    this.subagentsInput.checked = getSubagents();
     this.applyKind();
   }
 
@@ -982,6 +1069,11 @@ export class WelcomeForm {
     this.worktreeField.hidden = !agent; // workers get worktrees on demand
     this.autopilotField.hidden = !agent;
     this.orchFields.hidden = !orch;
+    // #2519: the guardrails follow whoever is about to set them — the
+    // orchestrator's roster, or a lead's children. `applySubagents` below
+    // refines the agent half (it is only shown once the toggle is actually on),
+    // and runs after this on every path that reaches here.
+    this.guardFields.hidden = !orch;
     this.nameField.hidden = orch; // orchestrator names its panes from the roles
     if (ssh) {
       // Both are cheap, memoized and idempotent, and both have to have happened
@@ -1016,6 +1108,7 @@ export class WelcomeForm {
     this.applyOrchCli();
     this.applyAutopilot();
     this.applyChannelTools();
+    this.applySubagents();
     this.updateName();
     // After `applyOrchCli`, never before: entering orchestrator mode can re-point the Agent
     // picker at a supported CLI, and a preview painted first would show the one it moved off.
@@ -1083,6 +1176,45 @@ export class WelcomeForm {
    *  list. */
   private applyChannelTools(): void {
     this.channelToolsField.hidden = this.kind !== "agent" || !isSoloMcpCli(this.agentSel.value);
+  }
+
+  /** Show/hide/disable the "orrerix subagents" toggle, and the guardrail row it
+   *  owns (#2519). The DECISION is `subagentsToggleState`, a pure function in
+   *  `agents.ts` pinned by `test/autopilot.test.ts`; what is left here is the
+   *  DOM, which this repo validates by hand.
+   *
+   *  The guardrail row is shown only while the toggle is ON, and never for a
+   *  disabled toggle: those numbers configure a group this launch is not going
+   *  to mint, and a control that does nothing is worse than an absent one. An
+   *  orchestrator launch keeps its own unconditional row (`applyKind`), which
+   *  this must not take away — hence the `orch` arm rather than a bare
+   *  assignment. */
+  private applySubagents(): void {
+    const program = this.currentProgram();
+    const state = subagentsToggleState({
+      kind: this.kind,
+      program,
+      isCustom: this.agentSel.value === "custom",
+      leadCapableCli: isLeadCli(this.agentSel.value),
+      tabOwnsGroup: this.tabOwnsGroup(),
+    });
+    this.subagentsField.hidden = state.hidden;
+    this.subagentsInput.disabled = state.disabled;
+    this.subagentsHint.hidden = state.reason === null;
+    this.subagentsHint.textContent = state.reason ?? "";
+    if (this.kind === "orchestrator") return; // its own row, always on
+    const on = !state.hidden && !state.disabled && this.subagentsInput.checked;
+    this.guardFields.hidden = !on;
+    // A lead launch opens exactly one pane (`leadLaunchCount`), so the fan-out
+    // field is disabled with that reason rather than silently overridden at
+    // submit — the human sees the 1 they are going to get.
+    this.countInput.disabled = on;
+    if (on) {
+      this.countInput.value = "1";
+      this.countInput.title = "A lead pane opens one at a time — it mints an orchestration group, and a tab holds one";
+    } else {
+      this.countInput.removeAttribute("title");
+    }
   }
 
   /** Show the autopilot toggle only where it applies — agent kind, a non-custom
@@ -2192,6 +2324,32 @@ export class WelcomeForm {
     const channelToolsEnabled = this.channelToolsInput.checked;
     setChannelTools(channelToolsEnabled);
 
+    // #2519. The checkbox's own `change` listener already persisted the value —
+    // this is the LAUNCH decision, and it is the pure gate's answer rather than
+    // the checkbox's, so a box left ticked from a previous launch cannot mint a
+    // group on a form state where the control is hidden or disabled (a custom
+    // command, a CLI with no argv MCP seam, a tab that already owns a group).
+    // `program` is re-asserted for the type: the gate already required it
+    // non-null, and this is what tells the compiler.
+    const subagentsGate = subagentsToggleState({
+      kind: this.kind,
+      program,
+      isCustom: plan.isCustom,
+      leadCapableCli: isLeadCli(this.agentSel.value),
+      // ASKED AT SUBMIT, not read off a field set at construction (B1). This is
+      // the reading that decides whether a group is minted, and the tab may have
+      // acquired one since this form opened.
+      tabOwnsGroup: this.tabOwnsGroup(),
+    });
+    // The launch decision is `subagentsLaunchDecision` (pure, pinned in
+    // `test/autopilot.test.ts`), not a condition spelled out here: a ticked box
+    // the live gate now refuses must be REPORTED rather than silently dropped,
+    // and that is the rule review round 1 B1 found missing. `program !== null`
+    // is re-asserted for the compiler — the gate already required it.
+    const decision = subagentsLaunchDecision(subagentsGate, this.subagentsInput.checked);
+    const subagentsEnabled = decision.mint && program !== null;
+    const subagentsRefused = decision.refusal ?? undefined;
+
     this.setBusy(true, "Creating worktree…");
     this.hideError();
     try {
@@ -2202,8 +2360,13 @@ export class WelcomeForm {
       // backend declares each one as it creates it, which is the only place that
       // knows the path it produced.
       if (plan.repo) await admitRoot(plan.repo);
+      // #2519: one pane for a lead launch, whatever the (disabled) fan-out field
+      // says — see `leadLaunchCount`. Clamped here as well as in the DOM because
+      // this is the value that decides, and a stale control is not a reason to
+      // mint N groups.
+      const paneCount = leadLaunchCount(plan.count, subagentsEnabled);
       const specs: AgentLaunchSpec[] = [];
-      for (let i = 1; i <= plan.count; i++) {
+      for (let i = 1; i <= paneCount; i++) {
         let cwd = plan.repo || undefined;
         if (plan.worktree) {
           // Fan out to isolated worktrees: fix-auth → fix-auth-1 … fix-auth-N.
@@ -2214,7 +2377,7 @@ export class WelcomeForm {
           // "Creating worktree…" state (N launches → N fetches). Acceptable for
           // the small fan-out counts this dialog produces; revisit with a
           // resolve-default-once step if it ever grows.
-          cwd = await gitWorktreeAdd(plan.repo, worktreeNameFor(plan.worktree, i, plan.count));
+          cwd = await gitWorktreeAdd(plan.repo, worktreeNameFor(plan.worktree, i, paneCount));
         }
         // Session-capable CLIs (Claude) get a pre-assigned session id (#194 P4)
         // so a restored pane can `--resume` the EXACT prior session — the tracked
@@ -2236,7 +2399,7 @@ export class WelcomeForm {
           sessionId = crypto.randomUUID();
           cmd = `${command} --session-id ${sessionId}`;
         }
-        const name = plan.count > 1 ? `${plan.baseName} ${i}` : plan.baseName;
+        const name = paneCount > 1 ? `${plan.baseName} ${i}` : plan.baseName;
         // #271 W3 addendum, part A2: mint a channel-scoped identity BEFORE this
         // pane boots — only for claude/copilot (the CLIs with an MCP config
         // seam), only for agent panes (this loop never runs for terminal/
@@ -2261,7 +2424,38 @@ export class WelcomeForm {
         // agent with an empty `mcp_args` for a CLI whose row does not say
         // otherwise, so the pane simply boots lazy.
         let channelAgent: { agentId: string; canSend: boolean } | undefined;
-        if (!plan.isCustom && channelToolsEnabled && isSoloMcpCli(program)) {
+        // #2519: a LEAD mint REPLACES the solo one rather than joining it. Both
+        // append an `--mcp-config` naming loomux's server to the same command
+        // line, and two would be two servers and two identities for one pane;
+        // the lead's is strictly the larger grant (its group is real, its tools
+        // include `spawn_agent`), so where the human asked for both, the lead
+        // is what they get. The channel-tools checkbox is not overridden
+        // silently — a lead pane HAS `channel_send`/`channel_status`, which is
+        // what that toggle is about.
+        let lead: { group: string; agentId: string } | undefined;
+        let leadError: string | undefined;
+        if (subagentsRefused) leadError = subagentsRefused;
+        if (subagentsEnabled) {
+          try {
+            const prepared = await leadPrepare(program, cwd ?? "", name, {
+              maxAgents: intVal(this.maxAgentsInput, 4),
+              autoOps: false,
+              idleKillMinutes: intVal(this.idleKillInput, 0),
+              maxSpawnsPerHour: intVal(this.spawnRateInput, 0),
+              watchdogStallMinutes: intVal(this.watchdogInput, 10),
+            });
+            cmd = `${cmd} ${prepared.mcp_args}`;
+            lead = { group: prepared.group_id, agentId: prepared.agent_id };
+          } catch (err) {
+            // NOT best-effort-silent, unlike the solo mint below: the human
+            // ticked a box asking for a fleet-capable pane. The pane still
+            // opens (they asked for an agent and there is one to give them);
+            // what they are not left with is a pane that quietly is not what
+            // the box said.
+            leadError = String(err);
+          }
+        }
+        if (!lead && !plan.isCustom && channelToolsEnabled && isSoloMcpCli(program)) {
           try {
             const prepared = await soloPrepare(program, cwd ?? "", name);
             if (prepared.mcp_args) cmd = `${cmd} ${prepared.mcp_args}`;
@@ -2287,6 +2481,8 @@ export class WelcomeForm {
           // #457: claude's counterpart — same gate, keyed by the `sessionId`
           // minted just above instead of `cwd`.
           claudeAutopilotPosture: !plan.isCustom && program === "claude" ? plan.autopilot : undefined,
+          lead,
+          leadError,
         });
       }
       setDefaultAgent(plan.isCustom ? "custom" : this.agentSel.value);

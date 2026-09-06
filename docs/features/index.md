@@ -41,6 +41,9 @@ shell.
   discussion, status as a conversation, and turning a half-formed idea into a
   brief the team can build, with your own label on GitHub still the only thing
   that starts the work.
+- **[orrerix subagents](orrerix-subagents.html)** — one checkbox that makes an
+  agent pane open its helpers as orrerix panes, in their own worktrees, instead
+  of running them invisibly inside its own process.
 - **[Agents tab](agents-tab.html)** — every pane in the window and what its agent
   is doing right now — working, idle, done with its turn, or waiting on you —
   on the second tab of the left panel, with a click to go there.

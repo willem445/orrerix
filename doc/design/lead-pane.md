@@ -517,15 +517,154 @@ Nothing else in that section moves: a workflow file still cannot declare
 `kind: lead`, and `spawn_agent(kind: "lead")` is still refused as an unknown kind
 by the parse rather than by an arm.
 
+## The frontend (slice C2)
+
+Slice C1 shipped the pure modules; this is the wiring that reaches them, and the
+five decisions in it that are not obvious.
+
+### The toggle's gate is a pure function, and it has three answers
+
+`subagentsToggleState` (`src/agents.ts`) answers **hidden**, **disabled with a
+reason**, or **enabled**, and the middle answer is the one worth having. A tab
+owns at most one orchestration group (`tabs.groupForWorkspace` is singular) and a
+lead mints one, so the toggle cannot be honoured on a tab that already runs a
+project. Hiding it there would be the cheap move and it teaches nothing: the
+human's next gesture is a new tab, and only a shown-and-explained control says
+so. `reason` is non-null exactly when `disabled` is — swept over every
+combination of the gate's five inputs — so a caller cannot render a disabled
+control with no explanation.
+
+The DOM around it (`applySubagents`) is hand-validated, as every DOM path in this
+repo is; what a test can see is the decision, and the decision is not in the DOM.
+
+### `LEAD_CLIS` is narrower than `SOLO_MCP_CLIS`, and the gap is codex
+
+The two lists answer different questions. `SOLO_MCP_CLIS` asks whether a CLI's
+MCP config can ride its command line (`CliCaps::mcp_argv_seam`); codex's can,
+through the `-p <profile>` naming a file loomux wrote (#2515 C2). `LEAD_CLIS`
+asks whether the lead path can **serve** it, and for codex the backend answers no
+twice over: `lead_mcp_args` has arms for claude, copilot and pi only, and
+`lead_prepare` refuses codex **by name** before reaching them — *"its MCP
+identity rides a profile file the lead path does not write"* — naming #2833 as
+the follow-up that lifts it (#2819).
+
+Gating the launcher on the seam therefore offered a checkbox whose only possible
+outcome was that refusal. `LEAD_CLIS` is the narrower set, and it is **checked
+rather than hand-maintained**: `test/panerestore.test.ts` reads the Rust and
+asserts this list is exactly `lead_mcp_args`'s match arms, that the named
+refusal and that arm set agree about codex, and that the launcher gate agrees
+with both. So #2833 landing reddens the frontend instead of leaving the toggle
+hidden for a CLI that now works.
+
+### The guardrail row has two owners now, and stayed one row
+
+`lead_prepare` takes the same four numbers `create_orchestration` does, because
+they govern the same thing: a lead's children are capped, idle-killed,
+rate-limited and watchdogged exactly as an orchestrator's fleet is (slice A, Q6).
+The launcher already had that row — inside `orchFields`, hidden for the agent
+kind.
+
+Two shapes were possible: send the hidden inputs' values (the defaults), or show
+the row for a lead launch. **The row is shown** (orchestrator's decision on the
+worker's question). Sending hidden defaults would ship a guardrail the docs
+describe and the human cannot touch; and a *second* row for the agent kind would
+be two controls for one setting, with no way to tell which one was sent on the
+day they disagreed. So the existing row was hoisted out of `orchFields` into its
+own container, shown for an orchestrator launch unconditionally and for an agent
+launch once the toggle is actually on. Never for a *disabled* toggle: those
+numbers would configure a group that launch is not going to mint.
+
+### A lead persists as an AGENT pane, and that is the whole restore contract
+
+`Pane.liveKind`'s ladder decides what a pane comes back as, and a lead sits above
+`orch` on it. `orch` means *a member of a group that a whole-group **resume**
+brings back*: the record drops the command line and the pane returns as a dormant
+Resume placeholder. A lead group cannot be resumed — slice B refuses it, because
+the children's worktrees and sessions are gone and their panes are not restored —
+so a lead persisted that way would return as a Resume button that can only ever
+fail, with the human's own command line discarded to make it.
+
+As `agent` it returns as itself, and `PersistedPane.lead` (a flag, not a
+configuration) tells `remintLeadIdentity` to mint it a **fresh** group before it
+boots. `stripSoloMcpFlags` runs first, so the dead group's flags are gone rather
+than duplicated.
+
+The ladder moved into `persistedKindFor` (`src/tabstore.ts`) in this slice, pure
+and pinned. It had been a private method reading six fields off a live pane, so
+nothing could hold it up without a DOM — and "an ssh pane must not fall through
+to terminal", like "a lead must not fall through to orch", is exactly the kind of
+claim that should not rest on someone re-reading the order.
+
+### A lead launch opens one pane
+
+The Panes field fans a launch out to N panes. N leads is N orchestration groups
+minted into one tab from a single gesture — the very thing the toggle's own
+disabled reason tells the human a tab cannot have. (`bindGroup` has tolerated
+several groups per tab since #485, but the tab strip's chip and its pause/resume
+act on the FIRST only, so N of them in one tab is a UI that misreports itself.)
+
+So while the toggle is on, the Panes field is **disabled at 1 with that reason**
+and the count is clamped in the submit path as well (`leadLaunchCount`). Both,
+deliberately: the DOM tells the human what they are going to get before they
+submit, and the clamp is what decides, because a stale control is not a reason to
+mint four groups.
+
+### Closing: the pane asks, the tab already did
+
+`Pane.requestClose` arms on a lead and confirms on the second click, then calls
+`endGroup(group, cleanup=false)` — and deliberately does NOT also call
+`onCloseRequest`: the `orch-group-ended` event is the one teardown path, and two
+teardowns for one gesture is how a pane gets disposed twice. The worktrees are
+kept, because ending a group kills agents and a human closing the pane they were
+helping in has not asked for their work to be deleted.
+
+**The TAB close needed nothing.** `bindLeadTab` registers the lead's group
+against its tab, which is the same binding `tabbar.ts`'s `destructiveClose`
+reads — so a tab holding a lead already arms its own confirm and already says it
+will "end its agents". And the teardown itself is backend-side: `closeTab`
+disposes the panes, the lead's pty exits, and slice B's exit path takes the
+group's live delegates with it. One binding, three behaviours that would each
+otherwise have been a special case.
+
+### C1's residual F2 is closed
+
+C1 could not tell a minted lead line from a solo line whose human had typed their
+own `--disallowedTools Agent`: byte-shape-identical, so the excision took the
+human's flag and the solo re-prepare re-appended none, silently re-enabling
+claude's own subagent tool. C1 named what would close it — *"the persisted pane
+record's role"* — and that record exists now. `stripSoloMcpFlags` takes a `lead`
+argument, so the marker is excised only for a pane that really was one. Both
+polarities are pinned on one fixture.
+
+### Two residuals this slice ships
+
+1. **A restored lead runs on `LEAD_RESTORE_GUARDRAILS`**, the launcher's
+   defaults, not the numbers its launch was given: `PersistedPane.lead` is a
+   flag, and widening it to a configuration is a schema change this slice did not
+   make. Stated on the docs page.
+2. **`Pane`'s own wiring is validated by hand, not by tests.** The mutation table
+   in the PR shows it: removing the lead flag from `capture()`, or short-circuiting
+   `liveKind` before it asks `persistedKindFor`, reddens nothing and passes
+   `tsc`. That is structural — `pane.ts` has no test file, by the repo's
+   no-DOM-simulation rule — not a gap this slice could close by adding one
+   assertion. What it *did* do is move the part that can be pinned (the ladder)
+   out of the part that cannot (the field reading).
+
 ## What is not shipped yet
 
-- **The UI.** Everything a human touches: slice C. Until it lands there is no
-  way to reach `orch_lead_prepare` at all — the two commands exist and nothing
-  calls them.
 - **`spawn_agent(cli:)`**, the model/CLI-mixing half of the feature's own
   motivation. Independent of A–C and recommended as its own issue.
-- **Restore.** A persisted lead pane and its children across an app restart.
-  Slice B ships the REFUSAL — `resume_recorded_session` turns away every
-  session in a lead group, with the message a human sees — and not the
-  capability. Bringing a lead back means re-minting the group, which is a
-  launcher gesture and therefore slice C at the earliest.
+- **A lead's CHILDREN across a restart.** Slice C2 brings the lead PANE back —
+  same command line, fresh group — and deliberately not its helpers: their
+  worktrees and sessions have moved on, and slice B's refusal
+  (`resume_recorded_session` turns away every session in a lead group) is what a
+  human meets if they try to resume one from the session browser. Their
+  worktrees are left on disk.
+- **A restored lead's GUARDRAILS.** `PersistedPane.lead` is a flag, so the
+  re-mint uses `LEAD_RESTORE_GUARDRAILS` (the launcher's defaults) rather than
+  the numbers the launch was given. Widening the record to carry them is a
+  schema change; the residual is stated on the docs page.
+- **codex as a lead — #2833.** Its MCP config can ride the command line, but its
+  identity is a profile file the lead path does not write, so `lead_prepare`
+  refuses it by name (#2819) and the launcher does not offer the toggle
+  (`LEAD_CLIS`). The two are pinned against each other.

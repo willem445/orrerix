@@ -15,6 +15,9 @@ import {
   subagentsFromStored,
   getSubagents,
   setSubagents,
+  subagentsToggleState,
+  subagentsLaunchDecision,
+  leadLaunchCount,
 } from "../src/agents.ts";
 
 test("autopilot defaults ON when nothing is stored", () => {
@@ -143,4 +146,120 @@ test("a throwing read degrades to OFF; a throwing write is swallowed", () => {
       assert.doesNotThrow(() => setSubagents(true), "a refused write must not crash the caller");
     },
   );
+});
+
+// ---------- the toggle's launcher GATE (#2519 C2) ----------
+//
+// `subagentsToggleState` decides three outcomes, and the two that are not
+// "hidden" are the ones worth pinning: a control that is SHOWN AND DISABLED
+// teaches the human what to do next, and a control that is shown and enabled is
+// a launch that will mint a real group. Every field the gate reads has a
+// fixture that varies it (the #1182 rule), and each of the four gates below is
+// varied ALONE, from the one enabled baseline — so a gate deleted from the
+// implementation reddens exactly its own row.
+
+const LEAD_OK = {
+  kind: "agent",
+  program: "claude",
+  isCustom: false,
+  leadCapableCli: true,
+  tabOwnsGroup: false,
+} as const;
+
+test("the toggle is offered for a plain claude agent launch (#2519)", () => {
+  assert.deepEqual(subagentsToggleState(LEAD_OK), { hidden: false, disabled: false, reason: null });
+});
+
+test("the toggle is HIDDEN wherever it does not apply, one field at a time (#2519)", () => {
+  const hidden = { hidden: true, disabled: false, reason: null };
+  assert.deepEqual(subagentsToggleState({ ...LEAD_OK, kind: "orchestrator" }), hidden, "another pane kind");
+  assert.deepEqual(subagentsToggleState({ ...LEAD_OK, isCustom: true }), hidden, "the human's own command line");
+  assert.deepEqual(subagentsToggleState({ ...LEAD_OK, program: null }), hidden, "no program named");
+  assert.deepEqual(
+    subagentsToggleState({ ...LEAD_OK, leadCapableCli: false }),
+    hidden,
+    "a CLI whose MCP config cannot ride the command line (opencode, codex)"
+  );
+});
+
+test("a tab that already owns a group DISABLES the toggle with a reason, never hides it (#2519)", () => {
+  // The distinction is the point: hiding teaches nothing, and the human's next
+  // move (a new tab) is only obvious if something says so. The reason is
+  // asserted for CONTENT, not just for presence — a disabled control whose
+  // explanation is an empty string is the failure this is guarding against.
+  const state = subagentsToggleState({ ...LEAD_OK, tabOwnsGroup: true });
+  assert.equal(state.hidden, false, "shown");
+  assert.equal(state.disabled, true, "and disabled");
+  assert.match(state.reason ?? "", /already runs an orchestration group/);
+  assert.match(state.reason ?? "", /new tab/, "and it names the way out");
+});
+
+test("hidden always beats disabled — a tab-owned group on a custom line stays hidden (#2519)", () => {
+  // Order matters and is not arbitrary: the applicability gates run first, so a
+  // form state that could never mint a lead at all does not explain to the
+  // human why it will not. `reason` is null exactly when `disabled` is false,
+  // which is the invariant a caller renders against.
+  const state = subagentsToggleState({ ...LEAD_OK, isCustom: true, tabOwnsGroup: true });
+  assert.deepEqual(state, { hidden: true, disabled: false, reason: null });
+});
+
+test("a reason is present exactly when the control is disabled (#2519)", () => {
+  // Swept over every combination the gate's five inputs can take, so the
+  // invariant is a property of the FUNCTION rather than of the rows above.
+  let disabledSeen = 0;
+  for (const kind of ["agent", "orchestrator", "terminal"]) {
+    for (const program of ["claude", null]) {
+      for (const isCustom of [false, true]) {
+        for (const leadCapableCli of [false, true]) {
+          for (const tabOwnsGroup of [false, true]) {
+            const s = subagentsToggleState({ kind, program, isCustom, leadCapableCli, tabOwnsGroup });
+            assert.equal(s.reason !== null, s.disabled, `reason<->disabled for ${JSON.stringify({ kind, program, isCustom, leadCapableCli, tabOwnsGroup })}`);
+            if (s.disabled) disabledSeen++;
+          }
+        }
+      }
+    }
+  }
+  // The sweep's positive control: it really did reach the disabled branch, so a
+  // gate that could never disable anything would fail here rather than pass
+  // vacuously over 24 rows that were all `hidden`.
+  assert.equal(disabledSeen, 1, "exactly one of the 24 combinations is the disabled one");
+});
+
+test("a lead launch opens exactly one pane, whatever the fan-out field says (#2519)", () => {
+  // N leads is N orchestration groups minted into one tab from one gesture,
+  // which is what the toggle's own disabled reason says a tab cannot have. The
+  // field is disabled in the DOM AND the count is clamped here, because the DOM
+  // is not what decides.
+  assert.equal(leadLaunchCount(4, true), 1);
+  assert.equal(leadLaunchCount(1, true), 1);
+  // …and it changes NOTHING for an ordinary launch, which is the control that
+  // makes the assertions above about leads rather than about clamping.
+  assert.equal(leadLaunchCount(4, false), 4);
+  assert.equal(leadLaunchCount(1, false), 1);
+});
+
+test("a ticked box the live gate now refuses is REPORTED, not silently dropped (#2519 B1)", () => {
+  // The finding this pins: the gate's answer can change while a form sits open
+  // (a second welcome form in the same tab launches a lead; a session restore
+  // binds a group), so deciding from the checkbox alone minted a second group
+  // into one tab. Deciding from the gate alone would be the opposite defect —
+  // the human ticks a box and nothing happens, with no word about it.
+  const disabled = subagentsToggleState({ ...LEAD_OK, tabOwnsGroup: true });
+  const refused = subagentsLaunchDecision(disabled, true);
+  assert.equal(refused.mint, false, "no group is minted into a tab that has one");
+  assert.match(refused.refusal ?? "", /already runs an orchestration group/, "…and the human is told why");
+});
+
+test("the launch decision's other three outcomes (#2519 B1)", () => {
+  const ok = subagentsToggleState(LEAD_OK);
+  const hidden = subagentsToggleState({ ...LEAD_OK, isCustom: true });
+  const disabled = subagentsToggleState({ ...LEAD_OK, tabOwnsGroup: true });
+  assert.deepEqual(subagentsLaunchDecision(ok, true), { mint: true, refusal: null }, "ticked and allowed");
+  assert.deepEqual(subagentsLaunchDecision(ok, false), { mint: false, refusal: null }, "not ticked");
+  // A ticked-but-HIDDEN box is a stale preference from a previous launch, not a
+  // request just made, so it is silent — the distinction from the disabled case
+  // above is the whole point, and asserting only one of them would not hold it.
+  assert.deepEqual(subagentsLaunchDecision(hidden, true), { mint: false, refusal: null }, "ticked but not applicable");
+  assert.equal(subagentsLaunchDecision(disabled, false).refusal, null, "not ticked, so nothing to report");
 });

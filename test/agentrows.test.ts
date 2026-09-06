@@ -28,6 +28,8 @@ import {
   sortRows,
   needsYouCount,
   parentKey,
+  parentKeyIn,
+  leadIndex,
   type AgentOrder,
   type AgentRow,
   type AgentState,
@@ -381,6 +383,11 @@ test("toAgentRow carries the identity fields through and derives the state", () 
     notes: 3,
     tab: { id: "ws-1", title: "loomux", index: 0 },
     mark: { command: "claude", argv: null, knownCli: null, remote: false },
+    // #2519: null BY CONSTRUCTION here, and the assertion is the point rather
+    // than a shape update — one pane's facts cannot answer which lead it is
+    // under, so `toAgentRow` must not pretend to. `agentRows` is where the
+    // fleet is in scope and the parent is filled in (see the tests below it).
+    parent: null,
   });
 });
 
@@ -1290,4 +1297,77 @@ test("needsYouCount is unchanged by lead nesting — the badge counts as it alwa
   const rows = agentRows([lead, wedged, asking, reporting]);
   assert.equal(rows.length, 4, "the lead and every child are agent rows (orch identity)");
   assert.equal(needsYouCount(rows), 2, "attention + question, exactly as without a lead");
+});
+
+// ---------- #2519 C2: the render-side index and the row's `parent` ----------
+
+test("leadIndex and parentKey answer identically — one rule, two shapes", () => {
+  // `parentKey` (per row, linear) and `parentKeyIn` (per render, indexed) are
+  // the SAME rule: the second exists only so a render does not re-scan the
+  // fleet once per row. A test that exercised one and not the other would let
+  // them drift, so every fixture in this file's lead corpus is run through
+  // both, including the ones that answer null.
+  const lead = facts({ key: "lead-pane", orch: { group: "g-lead", agentId: "lead-1", role: "lead" } });
+  const child = facts({ key: "child", orch: { group: "g-lead", agentId: "w-9", role: "worker" } });
+  const stranger = facts({ key: "stranger", orch: { group: "g-other", agentId: "w-2", role: "worker" } });
+  const otherTab = facts({
+    key: "other-tab",
+    tab: { id: "ws-2", title: "B", index: 1 },
+    orch: { group: "g-lead", agentId: "w-3", role: "worker" },
+  });
+  const fleet = [lead, child, stranger, otherTab];
+  const index = leadIndex(fleet);
+  for (const f of fleet) {
+    assert.equal(parentKeyIn(f, index), parentKey(f, fleet), `the two forms agree on ${f.key}`);
+  }
+  // …and a positive control on the corpus itself: if every fixture answered
+  // null, the loop above would pass over an index that never matched anything.
+  assert.equal(parentKeyIn(child, index), "lead-pane", "the corpus really does contain a nesting child");
+  assert.equal(parentKeyIn(otherTab, index), null, "…and one the tab half correctly refuses");
+});
+
+test("leadIndex keeps the FIRST lead of a (group, tab) pair, as a linear scan would", () => {
+  // The backend's one-root-per-group invariant forbids two leads in one group,
+  // so this input cannot arise — which is exactly why the tie-break is pinned
+  // rather than left to `Map.set`'s last-wins. A projection must be total, and
+  // "total" here means answering what the rule it replaced would have.
+  const first = facts({ key: "lead-first", orch: { group: "g", agentId: "lead-1", role: "lead" } });
+  const second = facts({ key: "lead-second", orch: { group: "g", agentId: "lead-2", role: "lead" } });
+  const child = facts({ key: "child", orch: { group: "g", agentId: "w-1", role: "worker" } });
+  const fleet = [first, second, child];
+  assert.equal(parentKeyIn(child, leadIndex(fleet)), "lead-first");
+  assert.equal(parentKey(child, fleet), "lead-first", "the linear scan says the same");
+});
+
+test("agentRows fills in `parent` from the WHOLE reading it was handed", () => {
+  // The row-level half of the same rule: the Agents tab renders its indent off
+  // `AgentRow.parent`, and nothing else on the row can answer it.
+  const lead = facts({ key: "lead-pane", name: "lead-1", orch: { group: "g-lead", agentId: "lead-1", role: "lead" } });
+  const child = facts({ key: "child", name: "w-9", orch: { group: "g-lead", agentId: "w-9", role: "worker" } });
+  const rows = agentRows([lead, child]);
+  assert.equal(rows.length, 2, "both panes are rows (positive control: the projection ran)");
+  assert.equal(rows.find((r) => r.key === "child")?.parent, "lead-pane");
+  assert.equal(rows.find((r) => r.key === "lead-pane")?.parent, null, "a lead is nobody's child");
+});
+
+test("a lead pane is always a row — what lets agentRows index the reading it filters", () => {
+  // `agentRows` builds its lead index over the FULL reading and then filters
+  // the rows, so a lead that `isAgentPane` excluded would still be a parent.
+  // The reverse is what would break the RENDER: a lead that is not a row has
+  // no element for its children to sit under. That cannot happen while an
+  // orchestration identity is `isAgentPane`'s widest arm — pinned here, so
+  // narrowing that rule reddens a test rather than orphaning children.
+  //
+  // The fixture strips every OTHER reason a pane could qualify: no harness, and
+  // a mark naming no launchable CLI. What is left is the orch arm alone.
+  const bareLead = facts({
+    key: "lead-pane",
+    harness: null,
+    mark: { command: "some-unknown-binary", argv: null, knownCli: null, remote: false },
+    orch: { group: "g-lead", agentId: "lead-1", role: "lead" },
+  });
+  assert.equal(isAgentPane(bareLead), true, "a lead qualifies on its orchestration identity alone");
+  // The negative control: the same pane with the identity removed is NOT a row,
+  // which is what proves the assertion above is carried by the orch arm.
+  assert.equal(isAgentPane({ ...bareLead, orch: null }), false);
 });

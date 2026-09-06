@@ -80,6 +80,19 @@ Inside a group the order is the same either way: most wants you first, then by
 name. Your choice is remembered on this machine, and changing it does not resize
 anything.
 
+### Helpers under their lead
+
+A pane launched with [orrerix subagents](orrerix-subagents.html) opens helpers of
+its own, and those are shown **indented under it**, with a ↳. The nesting is
+exact rather than approximate: a pane is shown under a lead only when it is in
+that lead's group *and* in the same tab, so two leads in two tabs never claim
+each other's helpers, and a worker belonging to an ordinary orchestration group
+that happens to share a tab with a lead is not indented under it.
+
+The indent is only an indent. It does not change the order (helpers sort with
+everything else, most wants you first), and it does not group or collapse them
+— a helper that wants your attention still rises to the top of its tab's block.
+
 ## Which panes are listed
 
 A pane is listed when orrerix has a reason to say it is running an agent. Any

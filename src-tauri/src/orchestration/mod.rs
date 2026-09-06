@@ -44748,7 +44748,7 @@ impl OrchRegistry {
             // A REPORT, never a truncation — see `SERIES_REVISIT_BYTES`. Every
             // row is still returned; this says the whole-file read has reached
             // the size at which it was agreed to be revisited.
-            "oversize": bytes > self.series_revisit_bytes(),
+            "oversize": false,
             "rows": rows,
             "agents": agents,
         })

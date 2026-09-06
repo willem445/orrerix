@@ -195,12 +195,13 @@ export function addRecentRepo(path: string): void {
  *
  *   - **hidden** — the toggle does not APPLY. Another pane kind, a custom
  *     command (the human owns that line; appending MCP flags to it could
- *     collide with flags they typed), or a CLI whose MCP config cannot ride
- *     the command line (`isSoloMcpCli` false — opencode and codex deliver
- *     theirs through a file or the environment, and the launcher's spawn seam
- *     sets neither). The same rule `applyChannelTools` uses, for the same
- *     reason, so the two controls cannot disagree about which CLIs have a
- *     command-line MCP seam.
+ *     collide with flags they typed), or a CLI the LEAD launch path has no
+ *     flag string for (`isLeadCli` false). That last set is narrower than the
+ *     channel-tools one and deliberately so: opencode and gemini deliver
+ *     their MCP config through a file or the environment, and codex's rides
+ *     its command line but `lead_mcp_args` has no arm for it — offering the
+ *     toggle there would offer a checkbox whose only outcome is an
+ *     internal-error toast. See `LEAD_CLIS`.
  *   - **disabled with a reason** — it applies, but not HERE: one tab owns at
  *     most one orchestration group (`tabs.groupForWorkspace` is singular), and
  *     a lead pane mints one of its own. Shown-and-explained rather than hidden,
@@ -223,14 +224,15 @@ export function subagentsToggleState(form: {
   readonly program: string | null;
   /** The human typed their own command line. */
   readonly isCustom: boolean;
-  /** This CLI's MCP config can be appended to the command line
-   *  (`isSoloMcpCli`), passed in rather than computed so this module stays
-   *  free of that import cycle and the caller keeps ONE reading of it. */
-  readonly mcpArgvSeam: boolean;
+  /** The lead launch path can serve this CLI (`isLeadCli`) — passed in rather
+   *  than computed so the caller keeps ONE reading of it. Named for what it
+   *  decides, not for the seam underneath: the seam is necessary and not
+   *  sufficient (`LEAD_CLIS`). */
+  readonly leadCapableCli: boolean;
   /** The tab this pane would open in already owns an orchestration group. */
   readonly tabOwnsGroup: boolean;
 }): SubagentsToggleState {
-  if (form.kind !== "agent" || form.isCustom || form.program === null || !form.mcpArgvSeam) {
+  if (form.kind !== "agent" || form.isCustom || form.program === null || !form.leadCapableCli) {
     return { hidden: true, disabled: false, reason: null };
   }
   if (form.tabOwnsGroup) {

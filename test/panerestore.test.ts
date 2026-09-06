@@ -23,6 +23,8 @@ import {
   SOLO_MCP_CLIS,
   isSoloMcpCli,
   LEAD_AGENT_DISALLOW_RE,
+  LEAD_CLIS,
+  isLeadCli,
   shouldWatchCopilotOnRestore,
   AUTO_RESUME_AGENTS,
   type RestoreAction,
@@ -2103,4 +2105,31 @@ test("a persisted lead plans an agent restore that says it is one (#2519 C2)", (
   // leads. Without this, an action type that hard-coded `lead: true` would pass.
   assert.equal(planPaneRestore(rec({ sessionId: "s-1", lead: false })).lead, false, "an ordinary resume");
   assert.equal(planPaneRestore(rec({ sessionId: null, lead: false })).lead, false, "an ordinary dormant Start");
+});
+
+test("LEAD_CLIS is exactly the set `lead_mcp_args` has an arm for (#2519 C2)", () => {
+  // The frontend gate and the backend's flag builder are two spellings of one
+  // fact, and the failure of a hand-typed copy is silent in BOTH directions: a
+  // CLI offered the toggle with no arm gets an internal-error toast ("loomux
+  // has no lead command-line flags for <cli>"), and a CLI that gained an arm
+  // with no entry here stays hidden for no reason anyone would find.
+  //
+  // So the set is READ out of the Rust rather than restated. The extraction is
+  // itself an instrument, so it carries its own controls: the function must
+  // exist, and the arms it yields must be non-empty and must not include the
+  // wildcard.
+  const rust = readFileSync(new URL("../src-tauri/src/orchestration/mod.rs", import.meta.url), "utf8");
+  const start = rust.indexOf("fn lead_mcp_args(");
+  assert.notEqual(start, -1, "lead_mcp_args must still exist — this pin has no subject otherwise");
+  const body = rust.slice(start, rust.indexOf("\n}", start));
+  const arms = [...body.matchAll(/^\s*"([a-z]+)" => /gm)].map((m) => m[1]);
+  assert.ok(arms.length > 0, "the arm scan found something (positive control)");
+  assert.ok(!arms.includes("_"), "the wildcard fallthrough is not an arm — it is the refusal");
+  assert.deepEqual([...arms].sort(), [...LEAD_CLIS].sort(), "the launcher offers exactly the CLIs the backend can serve");
+
+  // …and the gap this list exists for is real: codex CAN take an argv MCP seam
+  // (it is in SOLO_MCP_CLIS) and still has no lead arm. If that ever changes,
+  // the assertion above fails first and this line is the explanation.
+  assert.ok(SOLO_MCP_CLIS.includes("codex" as never), "codex has an argv MCP seam");
+  assert.equal(isLeadCli("codex"), false, "…and is still not lead-capable");
 });

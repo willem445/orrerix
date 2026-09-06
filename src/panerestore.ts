@@ -880,6 +880,34 @@ const SOLO_MCP_CLI_SET: Record<SoloCli, true> = {
  *  identity, never a wrong grant. */
 export const SOLO_MCP_CLIS: readonly SoloCli[] = Object.keys(SOLO_MCP_CLI_SET) as SoloCli[];
 
+/** The CLIs a LEAD launch may be offered for (#2519 C2) — **narrower than
+ *  `SOLO_MCP_CLIS` above, and the gap is codex.**
+ *
+ *  The two lists answer different questions. `SOLO_MCP_CLIS` asks whether a
+ *  CLI's MCP config can ride its command line at all (`CliCaps::mcp_argv_seam`),
+ *  and codex's can — the `-p <profile>` naming a file loomux wrote (#2515 C2).
+ *  This one asks whether the LEAD launch path has a flag string for it, and the
+ *  backend's `lead_mcp_args` has arms for claude, copilot and pi only. Its
+ *  fallthrough returns an empty string, which `lead_prepare` turns into
+ *  *"loomux has no lead command-line flags for <cli> — this is a loomux bug"*.
+ *
+ *  So offering the toggle for codex would offer the human a checkbox whose only
+ *  outcome is an internal-error toast. It is hidden instead, and that is the
+ *  whole of the difference: nothing else about a codex pane changes.
+ *
+ *  **Checked, not hand-maintained.** `test/panerestore.test.ts` reads
+ *  `lead_mcp_args`'s own match arms out of the Rust and asserts this list is
+ *  exactly that set, so a codex arm added over there reddens here rather than
+ *  leaving the toggle hidden for a CLI that now works. */
+export const LEAD_CLIS: readonly SoloCli[] = ["claude", "copilot", "pi"];
+
+/** Whether a lead launch may be offered for `program` — the "orrerix
+ *  subagents" toggle's CLI gate, the counterpart to `isSoloMcpCli`. */
+export function isLeadCli(program: string | null | undefined): program is SoloCli {
+  return (LEAD_CLIS as readonly string[]).includes(program ?? "");
+}
+
+
 /** Whether a solo launch of `program` can be handed a channel identity on its
  *  command line. Pure, so `test/panerestore.test.ts` can pin the set against
  *  `SoloCli` directly rather than through a DOM. */

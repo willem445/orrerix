@@ -160,7 +160,7 @@ const LEAD_OK = {
   kind: "agent",
   program: "claude",
   isCustom: false,
-  mcpArgvSeam: true,
+  leadCapableCli: true,
   tabOwnsGroup: false,
 } as const;
 
@@ -174,7 +174,7 @@ test("the toggle is HIDDEN wherever it does not apply, one field at a time (#251
   assert.deepEqual(subagentsToggleState({ ...LEAD_OK, isCustom: true }), hidden, "the human's own command line");
   assert.deepEqual(subagentsToggleState({ ...LEAD_OK, program: null }), hidden, "no program named");
   assert.deepEqual(
-    subagentsToggleState({ ...LEAD_OK, mcpArgvSeam: false }),
+    subagentsToggleState({ ...LEAD_OK, leadCapableCli: false }),
     hidden,
     "a CLI whose MCP config cannot ride the command line (opencode, codex)"
   );
@@ -208,10 +208,10 @@ test("a reason is present exactly when the control is disabled (#2519)", () => {
   for (const kind of ["agent", "orchestrator", "terminal"]) {
     for (const program of ["claude", null]) {
       for (const isCustom of [false, true]) {
-        for (const mcpArgvSeam of [false, true]) {
+        for (const leadCapableCli of [false, true]) {
           for (const tabOwnsGroup of [false, true]) {
-            const s = subagentsToggleState({ kind, program, isCustom, mcpArgvSeam, tabOwnsGroup });
-            assert.equal(s.reason !== null, s.disabled, `reason<->disabled for ${JSON.stringify({ kind, program, isCustom, mcpArgvSeam, tabOwnsGroup })}`);
+            const s = subagentsToggleState({ kind, program, isCustom, leadCapableCli, tabOwnsGroup });
+            assert.equal(s.reason !== null, s.disabled, `reason<->disabled for ${JSON.stringify({ kind, program, isCustom, leadCapableCli, tabOwnsGroup })}`);
             if (s.disabled) disabledSeen++;
           }
         }

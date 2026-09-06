@@ -104,7 +104,7 @@ import {
   setDefaultAgent,
 } from "./agents";
 import { leadPrepare, soloPrepare } from "./orchestration";
-import { isSoloMcpCli } from "./panerestore";
+import { isLeadCli, isSoloMcpCli } from "./panerestore";
 
 export interface AgentLaunchSpec {
   name: string;
@@ -1182,7 +1182,7 @@ export class WelcomeForm {
       kind: this.kind,
       program,
       isCustom: this.agentSel.value === "custom",
-      mcpArgvSeam: isSoloMcpCli(this.agentSel.value),
+      leadCapableCli: isLeadCli(this.agentSel.value),
       tabOwnsGroup: this.tabOwnsGroup,
     });
     this.subagentsField.hidden = state.hidden;
@@ -2311,7 +2311,7 @@ export class WelcomeForm {
       kind: this.kind,
       program,
       isCustom: plan.isCustom,
-      mcpArgvSeam: isSoloMcpCli(this.agentSel.value),
+      leadCapableCli: isLeadCli(this.agentSel.value),
       tabOwnsGroup: this.tabOwnsGroup,
     });
     const subagentsEnabled =

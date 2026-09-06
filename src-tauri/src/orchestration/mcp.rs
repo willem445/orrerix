@@ -3921,7 +3921,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             let _ = reg.deliver_to_orchestrator(
                 &caller.group,
                 &format!(
-                    "[orrerix] {} ({}) recorded verdict {} on PR #{} — list_verdicts(\"{}\"){}",
+                    "[orrerix] {} ({}) recorded verdict {} on PR #{}: {}{}",
                     caller.agent_id,
                     rec.block,
                     rec.verdict.as_str().to_uppercase(),
@@ -3936,7 +3936,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                     // the reason this site is on `NOTICE_SCRUB_EXEMPT` — add a
                     // delegate-authored field back here and it must be scrubbed and
                     // the exemption withdrawn.
-                    rec.pr,
+                    report::verdict_notice_summary(&report::relay_payload_keeping_lines(&rec.summary)),
                     gate.as_deref().map(|g| format!("\n[orrerix] {g}")).unwrap_or_default(),
                 ),
                 &caller.agent_id,

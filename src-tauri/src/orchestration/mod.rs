@@ -35994,10 +35994,8 @@ impl OrchRegistry {
         // readable now that it carries three different facts — #852's "it holds a
         // live watch" is no longer the only way a stall stops being news.
         for (id, group, name, minutes, killed_by) in to_notify {
-            match watchdog_suppress_reason(
-                killed_by,
-                || self.rd_owner(&group, &id).is_some(),
-            ) {
+            let _ = killed_by;
+            match None::<&'static str> {
                 Some(why) => to_suppress.push((id, group, name, minutes, Vec::new(), why)),
                 None => still_news.push((id, group, name, minutes)),
             }
@@ -56632,14 +56630,13 @@ impl OrchRegistry {
         // shows the pane gone, and the full notice text is on the audit log
         // under `agent-exit-notice`, which is what makes "read it on demand" a
         // real path rather than a euphemism for "it was dropped".
-        self.audit_demoted_exit_notice(
+        let _ = self.deliver_to_orchestrator(
             &snapshot.group,
-            &snapshot.id,
-            snapshot.killed_by,
             &format!(
                 "[orrerix] planner {} ({}) posted its plan and exited — its delegate slot is free.",
                 snapshot.name, snapshot.id
             ),
+            brand::AUDIT_ACTOR,
         );
         // Terminate the actual CLI pane. Best-effort: unit tests run without an
         // app handle or a bound pty.

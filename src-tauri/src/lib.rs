@@ -249,6 +249,7 @@ pub fn run() {
             orchestration::resume_orch_session,
             orchestration::orch_tasks,
             orchestration::orch_audit,
+            orchestration::orch_usage_series,
             orchestration::orch_merge_queue,
             orchestration::orch_steer,
             orchestration::orch_save_attachment,

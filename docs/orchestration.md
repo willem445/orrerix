@@ -1447,6 +1447,17 @@ rather than an invented one.
 A CLI with no readable record falls back to whatever dollar figure it prints in its
 own statusline, which disappears when the pane does.
 
+**Those figures are totals, and orrerix now also keeps a history.** While a group is
+open, orrerix records each agent's running token counts into a small per-group file
+roughly every five minutes, and only when something actually moved — so an idle
+agent writes nothing and the file stays small. That is what a spend-over-time chart
+will read. Two things worth knowing about it: it is **never rebuilt**, so history
+starts the first time a build that records it ran against that group, and every panel
+built on it says how far back it goes rather than drawing a flat line where there is
+simply no data. And it notes the moments the fleet's own configuration changed — the
+workflow file, the personas, the skills, `CLAUDE.md`, the lessons file — so a change
+in spend can be lined up against the change that might explain it.
+
 **Two things that make Codex rows look empty, and neither is a fault.** A Codex
 pane has no usage at all until orrerix has identified which session it is running
 — Codex offers no way to tell it a session id up front, so orrerix watches its

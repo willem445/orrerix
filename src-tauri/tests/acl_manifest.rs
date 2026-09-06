@@ -63,7 +63,7 @@ stub_commands!(
     git_watch, git_unwatch,
     agent_autopilot_flags, agent_cli_knobs, create_orchestration, promote_to_orchestrator, bind_agent,
     orch_agent_renamed, orch_session_roles, orch_list_recorded,
-    resume_orch_session, orch_tasks, orch_audit, orch_merge_queue, orch_steer, orch_save_attachment, orch_upsert_task,
+    resume_orch_session, orch_tasks, orch_audit, orch_usage_series, orch_merge_queue, orch_steer, orch_save_attachment, orch_upsert_task,
     orch_delete_task, orch_delete_done_tasks, orch_clear_done_tasks, orch_restore_cleared_tasks,
     orch_delete_tasks, orch_reorder_tasks, orch_open_ref,
     orch_approve_task, orch_approve_tasks, orch_grant_merge, orch_grant_release, orch_request_changes, orch_start_task,
@@ -169,11 +169,11 @@ fn generate_handler_matches_app_commands() {
 }
 
 #[test]
-fn app_commands_len_is_169() {
+fn app_commands_len_is_170() {
     assert_eq!(
         loomux_lib::command_manifest::APP_COMMANDS.len(),
-        169,
-        "APP_COMMANDS drifted from the expected count of 169 (120 per the #363 plan's audited \
+        170,
+        "APP_COMMANDS drifted from the expected count of 170 (120 per the #363 plan's audited \
          count, +1 for orch_confirm_solo_copilot_autopilot added in #364, +2 for \
          orch_set_advanced_orchestrator/orch_workflow_status added in #316/#355, +3 for \
          orch_set_compact_nudge_minutes/orch_set_compact_nudge_roles/ \
@@ -225,13 +225,15 @@ fn app_commands_len_is_169() {
          consent-preserving live roster switch behind it, added in #1689 slice B, \
          +2 for orch_lead_prepare/orch_lead_bind — the launch path for a lead pane (the \
          orrerix-subagents toggle: mint the group and its MCP flags before the pane boots, \
-         then bind the pty and type the lead's kickoff), added in #2519 slice B) — \
+         then bind the pty and type the lead's kickoff), added in #2519 slice B, \
+         +1 for orch_usage_series - the persisted usage time series the token time-plot \
+         reads, added in #2011 slice B) — \
          if this is an intentional addition/removal, update this tripwire's count too"
     );
 }
 
 #[test]
-fn main_has_all_169_and_zero_permission_denies_dangerous_spread() {
+fn main_has_all_170_and_zero_permission_denies_dangerous_spread() {
     // Catches drift in *this test file* before it can mask a real gap: the
     // stub list above must match APP_COMMANDS exactly.
     let mut stub_names: Vec<&str> = STUB_COMMAND_NAMES.to_vec();

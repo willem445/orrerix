@@ -351,11 +351,30 @@ pub fn tool_kind(name: &str) -> ToolKind {
         // - `list_locks` reaches `with_locks` -> `table.sync(declared)`, which
         //   DROPS undeclared resources including live holders, then audits.
         //
-        // `group_usage` deliberately stays a Read: its `usage.json` merge is a
-        // durable cache refresh rather than the point of the call, and the
-        // seal (`budget::note_durable_write`) is what makes it safe — putting
-        // every usage read on the mutate deadline would be a heavy answer to a
-        // hazard the floor already closes. `doc/design/lock-liveness.md` §4.
+        // `group_usage` deliberately stays a Read, and the argument had to be
+        // rewritten for #2011 slice B because its original premise stopped
+        // being true of the call.
+        //
+        // It WAS: the only durable effect is the `usage.json` merge, which is a
+        // cache refresh rather than the point of the call, sealed by
+        // `budget::note_durable_write` via `atomic_write`. That is still true of
+        // that write, and it is no longer the whole story. The same call now
+        // also (a) appends to `<group>/usage-series.jsonl`, an **append-only
+        // persisted record** — not a cache; nothing rebuilds it — through
+        // `append_ledger_line`, which like `append_audit` takes no seal, and
+        // (b) may walk and hash the caller's repo (`tuningfp::fingerprint`),
+        // once per five-minute bucket.
+        //
+        // It stays a Read on a narrower claim: neither added effect can leave
+        // shared state half-written for the next caller. The series append is a
+        // single `write_all` of one whole line to a file with one writer at a
+        // time and no rotation, and the schema is cumulative, so an abandoned
+        // or duplicated row costs resolution and never spend
+        // (`doc/design/token-charts.md`); the fingerprint walk is read-only.
+        // What a mutate classification buys — a deadline that refuses rather
+        // than corrupts — has nothing here to protect. Putting every usage read
+        // on the mutate deadline would still be a heavy answer to a hazard the
+        // floor already closes. `doc/design/lock-liveness.md` §4.
         "check_mail" | "queue_orphans" | "list_locks" => ToolKind::Mutate,
 
         // Everything else, including anything unrecognised.

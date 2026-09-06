@@ -1,11 +1,12 @@
 [[set]]
 identifier = "orch-read"
-description = "Read-only orchestration queries: tasks, audit log, merge queue, human questions, needs-you items, session roles, recorded orchestrations, autonomy/usage/summary, workflow preview/status, channel list, notification/spawn state, per-CLI model knobs."
+description = "Read-only orchestration queries: tasks, audit log, merge queue, human questions, needs-you items, session roles, recorded orchestrations, autonomy/usage/summary, the persisted usage time series, workflow preview/status, channel list, notification/spawn state, per-CLI model knobs."
 permissions = [
     "allow-agent-autopilot-flags",
     "allow-agent-cli-knobs",
     "allow-orch-tasks",
     "allow-orch-audit",
+    "allow-orch-usage-series",
     "allow-orch-merge-queue",
     "allow-orch-session-roles",
     "allow-orch-list-recorded",

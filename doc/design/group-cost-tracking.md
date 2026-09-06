@@ -247,6 +247,20 @@ under one label. Each agent row carries its token breakdown, `source`
 (`transcript`/`pi-transcript`/`codex-transcript`/`session-db`/`statusline`/`none`), `model`,
 `cost_usd`, and an `estimated` flag.
 
+Each row also carries `block` and `cli` (#2011 slice B, `#[serde(default)]` and
+additive — empty on a row an older build wrote). `role` above is the capability
+CLASS, so it cannot tell `worker-std` from `worker-adv`; `cli` is resolved by
+`cli_for_block` and is never derived from `source`, which has `statusline`/`none`
+values off which no CLI can be read at all.
+
+**This store still has no history**, and that is what
+[token-charts.md](token-charts.md) exists for: the same tick that refreshes these
+snapshots samples them into `<group>/usage-series.jsonl`, an append-only,
+never-rotated, never-rebuilt series of cumulative rows the token time-plot reads
+through `orch_usage_series`. Both the file and that command are contracts, and
+that note carries them — along with the bucket and mark rules, the cursor-reset
+clamp, and why history starts when the build that writes it first ran.
+
 `transcript-backfill` is a FOURTH `source` value, and loomux never writes it:
 it exists only in `scripts/orch-scorecard.cjs`'s in-memory copy of a row it
 reconstructed from the transcript on disk (below).

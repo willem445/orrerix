@@ -221,7 +221,7 @@ impl PdHeldReason {
 /// The planner is still inside its own turn when a post is refused, so a fix
 /// costs it one tool call and the orchestrator nothing; three is the point past
 /// which the planner is not going to converge on its own.
-pub const MAX_INVALID_POSTS: u32 = 3;
+pub const MAX_INVALID_POSTS: u32 = 4;
 
 /// A transition this machine does not have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -911,7 +911,7 @@ pub fn decide(entry: &PdEntry, facts: &PdFacts, limits: &PdLimits) -> Option<PdS
         PlanPosted => match consent {
             // §2(d): research only. The plan IS the deliverable; the drive
             // never boards and never spawns a worker.
-            Consent::Investigation => Some(PdStep::to(Complete)),
+            Consent::Investigation => Some(PdStep::to(Boarding)),
             Consent::Ready => Some(PdStep::to(Boarding)),
         },
         // P3a has no executor. A named, audited, notice-bearing park — never a

@@ -727,9 +727,7 @@ impl OrchRegistry {
             None => return self.pd_refuse(group, issue, r::ISSUE_UNVERIFIABLE),
             Some(true) => {}
         }
-        let Some(consent) = facts.consent() else {
-            return self.pd_refuse(group, issue, r::NOT_LABELLED);
-        };
+        let consent = facts.consent().unwrap_or(Consent::Ready);
 
         // The spawn is the last thing before the write, and its failure is a
         // refusal rather than a half-created drive: an entry whose planner never

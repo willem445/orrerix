@@ -47729,14 +47729,10 @@ impl OrchRegistry {
         // nothing because it is never checked, so the sentence would be a claim
         // about a condition this gate does not have — the drift is still
         // REPORTED there, exactly as it always was. And the read walks the
-        // verdict directory once into `verdict_map`, which the #1889 merge-time
-        // evaluation below shares — the cost #791 spent a slice removing from
-        // this very function is not paid a third time.
-        let verdict_map: BTreeMap<String, workflow::ReviewVerdict> = self
-            .verdicts(group, pr)
-            .into_iter()
-            .map(|v| (v.block.clone(), v))
-            .collect();
+        // verdict directory once, into the shared `verdict_map` helper, which
+        // the #1889 merge-time evaluation below reuses — the cost #791 spent a
+        // slice removing from this very function is not paid a third time.
+        let verdict_map = self.verdict_map(group, pr);
         let verified = !drift_passed.is_empty()
             && gate.also.iter().any(|c| c == "body-unchanged")
             && head.as_ref().ok().is_some_and(|h| {
@@ -47748,8 +47744,24 @@ impl OrchRegistry {
         // below gives way to NOT YET SATISFIED naming the lane. `verified` is
         // false precisely when no verification round covers the body, which is
         // the accepted case this must not disturb.
+        //
+        // **The population is the gate's REQUIRED reviewers** (review round 1,
+        // finding 1) — the same one every enforcing half asks
+        // (`mergeq::body_unchanged`, `evaluate_merge_gate`, the evaluation
+        // below). `body_drift` reports every verdict file on disk, and a block
+        // the gate does not name — left behind by an edited `reviewers:` list —
+        // must not flip the headline to NOT YET SATISFIED while the shim passes
+        // the clause and the merge is not refused. Liveness needs no separate
+        // check here: outcome == Satisfied already means every required lane
+        // covers the head. The FULL drift list is kept for the caveat notes,
+        // where reporting all drift is the point.
+        let required_drift: Vec<String> = drift_passed
+            .iter()
+            .filter(|b| gate.reviewers.contains(b))
+            .cloned()
+            .collect();
         let drift_headline = matches!(outcome, workflow::GateOutcome::Satisfied)
-            && !drift_passed.is_empty()
+            && !required_drift.is_empty()
             && gate.also.iter().any(|c| c == "body-unchanged")
             && !verified;
         // #1889 (option 3): which merge-time conditions are failing RIGHT NOW,
@@ -47814,7 +47826,7 @@ impl OrchRegistry {
             workflow::GateOutcome::Satisfied if drift_headline => format!(
                 "merge gate for PR #{pr}: NOT YET SATISFIED — {} passed a different body; \
                  re-record. `gh pr merge` is refused until then.{also} {exits}",
-                drift_passed.join(", ")
+                required_drift.join(", ")
             ),
             workflow::GateOutcome::Satisfied => format!(
                 "merge gate for PR #{pr}: SATISFIED by the reviewer verdicts ({}) for the current \

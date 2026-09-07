@@ -1892,9 +1892,13 @@ with the refusal: while a pass has drifted and no verification round has
 superseded it, the line reads **NOT YET SATISFIED**, names the lane, and says
 `gh pr merge` is refused — a body nobody approved is as blocking as a commit
 nobody reviewed, because the squash message is unamendable after merge. While
-any merge-time condition is failing, the gate line also withholds the
-"merge this PR from the GitHub UI" exit and offers the two ways that go
-through the gate instead; the exit comes back once the condition is met.
+the `body-unchanged` condition is failing — the one merge-time condition the
+gate line itself can see, since it never spends a `gh` call on the others —
+the gate line also withholds the "merge this PR from the GitHub UI" exit and
+offers the two ways that go through the gate instead; the exit comes back once
+the condition is met. (Conditions the shim checks against real `gh` at merge
+time, like `ci-green`, are invisible to the gate line, so the exit stays for
+them there; the shim's own refusal always names all three.)
 
 **One case does not cost every reviewer a re-read.** When the review driver is
 running a PR and the body changes after *every* required lane has already passed

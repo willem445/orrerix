@@ -1915,10 +1915,13 @@ Rust body-drift evaluation in shell would be a second copy of the question.
 The MALFORMED and routing-unaccountable early returns keep exit (3) as well —
 a gate unreadable enough to refuse there has no evaluable conditions to speak
 of. The same #1889 rule moves the HEADLINE, not only the exits: on a gate that
-declares `body-unchanged`, a drifted pass no verification round covers makes
-the status line read NOT YET SATISFIED, naming the lane, instead of SATISFIED
-with a caveat underneath that contradicts it; a verification round covering
-the body keeps SATISFIED, because that is the case the clause accepts.
+declares `body-unchanged`, a drifted pass by one of the gate's REQUIRED
+reviewers — the population every enforcing half asks; drift on a block the
+gate does not name is reported in the caveat, never in the headline — that no
+verification round covers makes the status line read NOT YET SATISFIED, naming
+the lane, instead of SATISFIED with a caveat underneath that contradicts it; a
+verification round covering the body keeps SATISFIED, because that is the case
+the clause accepts.
 
 ### loomux never silently arms a gate the roster can't satisfy (#316)
 

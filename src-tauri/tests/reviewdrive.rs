@@ -13692,3 +13692,73 @@ fn a_stop_line_the_queue_refuses_is_audited_and_retried() {
          tells the lane again: {observed:?}"
     );
 }
+
+/// **A lane whose pane is GONE is told nothing, and no row is written for the
+/// telling that did not happen** (#3176, rev-std round 1 finding 1).
+///
+/// The declined row earns its retry from the queue-full case, where the next
+/// tick can succeed. A pane that died mid-review while the PR is CONFLICTING is
+/// the opposite: `deliver_prompt` answers `Err` on every tick of the whole
+/// conflict window, the mark is never written, and `release_driven_pane` refuses
+/// the same pane — so a futile retry would put one `rd-lane-stop-declined` row
+/// per tick on the surface §5.4 asks a reader to count from. Truthful and
+/// bounded, and still noise.
+///
+/// **Two arms differing in ONE fact — whether the pane is alive — and TWO ticks
+/// each**, because the defect is per-tick repetition and a single tick cannot
+/// show it. The live arm is the positive control: without it, "no rows" is
+/// satisfied by a fixture that never reached the conflict, and by an
+/// implementation that stopped telling anyone anything.
+#[test]
+fn a_lane_whose_pane_died_is_not_told_to_stop_and_writes_no_declined_row() {
+    // (pane alive, rd-lane-stopped rows, rd-lane-stop-declined rows)
+    type Row = (bool, usize, usize);
+    let mut observed: Vec<Row> = Vec::new();
+
+    for alive in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, lane) = briefed(&reg, &repo, &gh);
+        reg.set_pr_body_override(Some("b".to_string()));
+        reg.set_pr_head_override(Some(HEAD_A.to_string()));
+        make_delivery_land(&reg, &group, &lane, 7801);
+
+        if !alive {
+            // The pane dies mid-review, the way a human kill or the idle reaper
+            // ends one — the lane record still names it, which is the whole
+            // point: the drive has an agent id to try and it is futile.
+            reg.kill_agent(&lane).expect("the lane's pane is killable");
+            assert_eq!(
+                reg.agent(&lane).map(|a| a.status == AgentStatus::Dead),
+                Some(true),
+                "the fixture's premise: the pane is gone"
+            );
+            assert_eq!(
+                live_lanes(&reg, &group).first().and_then(|l| l["agent"].as_str()),
+                Some(lane.as_str()),
+                "…and the lane record still names it, so the arm has something to try"
+            );
+        }
+
+        gh.set_merge_state("CONFLICTING");
+        let before = reg.audit_log(&group).len();
+        reg.rd_drive_group_with(&group, &gh, 30_000);
+        // A second tick, because the defect is one row PER TICK.
+        reg.rd_drive_group_with(&group, &gh, 40_000);
+        let mut log = reg.audit_log(&group);
+        let after: Vec<_> = log.split_off(before);
+        let rows = |a: &str| after.iter().filter(|e| e.action == a).count();
+
+        observed.push((alive, rows("rd-lane-stopped"), rows("rd-lane-stop-declined")));
+    }
+
+    assert_eq!(
+        observed,
+        vec![(true, 1, 0), (false, 0, 0)],
+        "a live busy lane is told once across two ticks; a lane whose pane is gone is told \
+         nothing and writes no declined row for either tick — retrying a dead pane is provably \
+         futile, so the row would be noise rather than a record: {observed:?}"
+    );
+}

@@ -2683,11 +2683,6 @@ impl OrchRegistry {
         }
     }
 
-    /// Render the worker's hand-back brief (§5.5).
-    ///
-    /// `{{WHAT}}` is **loomux-authored text chosen from a closed set of three**,
-    /// with facts orrerix read interpolated into it — never delegate- or
-    /// repo-authored prose (§3.1 item 4). The three are the three ways a PR
     /// **What a busy reviewer lane is told when its PR stops merging** (#3176).
     ///
     /// One paragraph on one source line, for [`Self::rd_lane_brief`]'s reason: a
@@ -2720,6 +2715,11 @@ impl OrchRegistry {
         )
     }
 
+    /// Render the worker's hand-back brief (§5.5).
+    ///
+    /// `{{WHAT}}` is **loomux-authored text chosen from a closed set of three**,
+    /// with facts orrerix read interpolated into it — never delegate- or
+    /// repo-authored prose (§3.1 item 4). The three are the three ways a PR
     /// comes back: a lane's findings, a red run, and a conflict.
     fn rd_fix_brief(
         &self,
@@ -3456,11 +3456,34 @@ impl OrchRegistry {
             if agent.trim().is_empty() {
                 continue;
             }
-            // Idle: the release arm below takes this one, and telling a pane to
-            // stop and then killing it on the same tick would be two events for
-            // one decision.
-            if self.agent(&agent).is_some_and(|a| a.idle_since_ms.is_some()) {
-                continue;
+            // **Which panes this arm is for, decided once** (rev-std round 1
+            // finding 1).
+            //
+            // IDLE is the release arm's: telling a pane to stop and then killing
+            // it on the same tick would be two events for one decision, and
+            // `idle_since_ms` is the same signal `release_driven_pane` refuses
+            // on, so the two arms cannot both fire.
+            //
+            // DEAD, or unknown to the registry, is NEITHER arm's — and the
+            // reason is the retry. The declined row below earns its retry from
+            // the queue-full case, where the next tick can succeed. For a pane
+            // that died mid-review (a human kill, the idle reaper) while the PR
+            // is CONFLICTING, `deliver_prompt` answers `Err` on every tick of
+            // the whole conflict window, the mark is never written and the
+            // release barrier refuses the same pane — so a futile retry would
+            // put one row per tick on the very surface §5.4 asks a reader to
+            // count from. Bounded and truthful, but noise, and noise on that
+            // surface is what `rd-hold-repeated` exists to stop one arm over.
+            //
+            // Nothing else changes: the lane keeps its dead pane on record and
+            // `decide_review_wait`'s `pane_dead` arm re-opens it once the rebase
+            // clears the conflict, which is #2163's existing path and not this
+            // slice's to alter.
+            match self.agent(&agent) {
+                Some(a) if a.idle_since_ms.is_some() => continue,
+                Some(a) if a.status == AgentStatus::Dead => continue,
+                Some(_) => {}
+                None => continue,
             }
             if entry.lane_stopped_at(block, &brief.head) {
                 continue;

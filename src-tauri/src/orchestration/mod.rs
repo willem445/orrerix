@@ -56725,13 +56725,22 @@ impl OrchRegistry {
     /// its pane deterministically here so the slot frees the moment the plan is
     /// posted; the planner role-template exit instruction is only belt-and-braces.
     ///
-    /// Ordering: the caller (the MCP `report` handler) hands the done report to
-    /// the orchestrator *first*, so the completion exit notice this delivers is
-    /// *enqueued* after it — phrased as a normal finish, not a crash. On the live
-    /// path both are pasted by detached threads serialized by the per-pty
-    /// delivery mutex, which is not FIFO-fair, so "enqueued after" is
-    /// overwhelmingly-but-not-strictly "delivered after" — the same semantics
-    /// every back-to-back notice pair in loomux has; both always arrive.
+    /// Ordering, and what it now means (#3040 N2). The caller (the MCP `report`
+    /// handler) hands the done report to the orchestrator *first*; this function
+    /// then writes an `agent-exit-notice` **audit row** and delivers nothing to
+    /// any pane. So the orchestrator receives exactly ONE prompt for a planner's
+    /// completion — the report — and the ordering that used to be a claim about
+    /// two pastes racing on the per-pty delivery mutex is now a claim about one
+    /// paste and one file write, which cannot race for a reader's attention at
+    /// all.
+    ///
+    /// That is the demotion's whole argument: the report the orchestrator has
+    /// just read IS the news, so a second prompt saying the same pane is gone
+    /// told it nothing (#3040's census: acted on zero times out of ten). The
+    /// ordering is still pinned, because it still has to hold — the report must
+    /// be delivered BEFORE the audit row is written, or a reader reconstructing
+    /// the sequence from the log sees the exit first. See
+    /// `a_planner_exit_is_audited_after_the_report_is_delivered`.
     ///
     /// Claiming the close: [`mark_dead`](Self::mark_dead) is the atomic gate. It
     /// returns `Some` only for the caller that transitions the agent live→dead
@@ -56770,9 +56779,10 @@ impl OrchRegistry {
         // read back from the roster on demand, is not worth a turn. This one is
         // the clearest case of the class — the planner's `report(done)` is the
         // IMMEDIATELY PRECEDING prompt in that same pane (the ordering is a
-        // guarantee, pinned by
-        // `planner_done_report_closes_pane_and_reports_before_exit`), so the
-        // notice tells the orchestrator a second time what it has just read.
+        // guarantee, and it survives the demotion as an ordering between the
+        // delivered report and this audit row — pinned by
+        // `a_planner_exit_is_audited_after_the_report_is_delivered`), so the
+        // notice told the orchestrator a second time what it had just read.
         // The census on #3040 found it acted on zero times out of ten.
         //
         // The one edge worth naming, because it is the reason this is a

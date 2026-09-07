@@ -16706,13 +16706,24 @@ fn report_note_over_the_cap_does_not_fail_validation() {
         "an over-cap note must truncate, not fail validation, got: {text}");
 }
 
+/// #203's contract, with #3040 N2's demotion folded in: a planner's `done`
+/// closes its pane, the orchestrator receives the REPORT, and the exit is
+/// recorded on the audit log AFTER that report was delivered.
+///
+/// **The ordering is still pinned, and this is the test the code cites for it.**
+/// Before N2 it was an order between two pane deliveries (`report_at <
+/// exit_at`); the exit notice is now an audit row, so the same property is now an
+/// order between the delivered report and that row. It still has to hold —
+/// a reader reconstructing what happened from the log must not meet the exit
+/// before the plan it delivered — and dropping the assertion when the surface
+/// moved would have retired a property rather than relocating it, while leaving
+/// two comments citing this test for a guarantee it no longer made (rev-std
+/// round 1, B1/N1).
+///
+/// The name changed with it: the old one said `reports_before_exit` about two
+/// notices that no longer both exist.
 #[test]
-fn planner_done_report_closes_pane_and_reports_before_exit() {
-    // #203: a planner's contract is one plan → one report → exit. When it
-    // reports `done`, loomux must close its pane deterministically (freeing the
-    // delegate slot it would otherwise hold idle until idle-kill), and the
-    // orchestrator must receive the plan report BEFORE the exit notice — which
-    // must read as a normal completion, not a crash.
+fn a_planner_exit_is_audited_after_the_report_is_delivered() {
     let (reg, _d) = test_registry();
     let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
     let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
@@ -16749,6 +16760,26 @@ fn planner_done_report_closes_pane_and_reports_before_exit() {
         texts.iter().any(|t| t.contains("reports done") && t.contains("plan posted")),
         "orchestrator must receive the done report: {texts:?}"
     );
+
+    // ORDERING, relocated rather than retired. The audit log is append-ordered,
+    // so the two rows' positions in it are the record of which happened first:
+    // the `prompt` that delivered the report, then the `agent-exit-notice` that
+    // replaced the second prompt.
+    let log = reg.audit_log(&g.id);
+    let report_at = log
+        .iter()
+        .position(|e| e.action == "prompt"
+            && e.detail["text"].as_str().is_some_and(|t| t.contains("plan posted")))
+        .expect("the done report must be on the log");
+    let exit_at = log
+        .iter()
+        .position(|e| e.action == "agent-exit-notice"
+            && e.detail["agent"] == json!(planner.id))
+        .expect("the demoted exit notice must be on the log");
+    assert!(report_at < exit_at,
+        "the plan's report must be delivered before the exit is recorded — a reader \
+         reconstructing this from the log must not meet the exit first (got report at \
+         {report_at}, exit at {exit_at})");
     // **The exit notice no longer does** (#3040 N2). What #203 called an ordering
     // guarantee is now the whole argument for the demotion: the report the
     // orchestrator has just read IS the news, and a second prompt saying the same

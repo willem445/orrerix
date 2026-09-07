@@ -3877,9 +3877,13 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // its pane deterministically on the `done` report so it stops holding
             // a delegate slot the instant its work is posted — the role-template
             // exit instruction is only belt-and-braces. The report is handed off
-            // first (above); the close enqueues the completion exit notice after
-            // it (see `close_completed_planner` for the ordering guarantee and
-            // its edges). Progress/blocked reports leave the planner alone.
+            // first (above); since #3040 N2 the close delivers NO second notice —
+            // it writes an `agent-exit-notice` audit row instead, because the
+            // report just handed off is the news and a prompt repeating it was
+            // acted on zero times out of ten. The handoff still happens first, so
+            // the log reads report-then-exit (see `close_completed_planner` for
+            // that ordering and its edges). Progress/blocked reports leave the
+            // planner alone.
             if caller.role == Role::Planner && status == "done" {
                 reg.close_completed_planner(&caller.agent_id);
             }

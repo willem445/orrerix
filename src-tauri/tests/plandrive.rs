@@ -952,10 +952,6 @@ fn a_refused_spawn_leaves_no_reservation_behind() {
     let filler = reg
         .spawn_agent(&group, Role::Worker, "filler", "", false, None)
         .expect("the filler fits");
-    // `kill_agent` refuses a pane with no terminal bound — "still binding",
-    // which is every agent in test mode, because nothing binds one here. The
-    // filler is killed below to free its slot, so it needs one to be killable.
-    reg.set_pty_for_test(&filler.id, 8);
     let gh = FakeGh::open(&["agent-ready"]);
 
     let out = reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch.id, 1_000);
@@ -989,9 +985,19 @@ fn a_refused_spawn_leaves_no_reservation_behind() {
         .as_array()
         .is_none_or(|e| e.is_empty()));
 
-    // THE CONTROL: with room — freed the way an orchestrator frees one — the
-    // identical call drives.
-    reg.kill_agent(&filler.id).expect("the filler can be killed");
+    // THE CONTROL: with room, the identical call drives.
+    //
+    // The slot is freed by marking the filler DEAD rather than through
+    // `kill_agent`, which cannot run here at all: it wants a terminal bound
+    // (every agent in test mode is "still binding") and then a Tauri app handle
+    // to end the process, and there is none. `mark_agent_dead_for_test` is
+    // `tests/reviewdrive.rs`'s own seam for exactly this, and it moves the one
+    // thing the cap reads — `AgentStatus::Dead` is what
+    // `counts_against_max_agents` stops counting.
+    assert!(
+        reg.mark_agent_dead_for_test(&filler.id),
+        "the filler must exist to be freed"
+    );
     let out = reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch.id, 1_200);
     assert_eq!(out["driving"], json!(true), "the same call must drive once there is room: {out}");
 }

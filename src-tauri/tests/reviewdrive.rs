@@ -10190,3 +10190,139 @@ fn the_one_shot_grace_has_one_writer_and_one_proposal_site() {
         "the variant counter must see a real proposal"
     );
 }
+
+// ───────── #3040 N2: a stall on a lane the driver owns is not news ─────────
+
+/// **A watchdog stall on a pane a LIVE drive owns is suppressed, with the reason
+/// on the audit row** (#3040 N2).
+///
+/// The driver is already watching that pane on its own tick and answers a stuck
+/// lane with a `lane-stalled` HOLD — which names the PR, the lane and what to do
+/// about it. The watchdog nudge arrives beside that saying the same thing with
+/// no remedy: 16 of the 25 stall notices in #3040's census were exactly this,
+/// against `Standard review …` lanes, and none was acted on.
+///
+/// It lives in this file rather than beside its siblings in
+/// `tests/orchestration.rs` for the reason this file's own header gives: the
+/// fixture needs a live drive, and the drive helpers are here. Its control —
+/// `a_stall_on_an_undriven_pane_still_announces` — is over there with the rest
+/// of the watchdog suite, which is where the assertion it controls for lives.
+#[test]
+fn a_stall_on_a_driven_lane_is_suppressed_with_a_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+
+    // `driven`'s setup, inlined for one reason: the group needs a non-zero
+    // `watchdog_stall_minutes`, and `rails()` leaves the guardrail OFF. Built
+    // from `rails()` with that one field changed, so nothing else diverges.
+    let group = reg
+        .create_group(&repo.path(), Guardrails { watchdog_stall_minutes: 5, ..rails() })
+        .unwrap()
+        .id;
+    let w = reg
+        .spawn_agent(&group, Role::Worker, "w", "", false, None)
+        .expect("a worker to hand back to");
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], serde_json::json!(true), "drive_review refused: {out}");
+
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(&reg, &orch.id, 7301);
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    let report = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let (_pr, _block, lane) = report.lanes_opened.first().cloned().expect("lane 0 opens");
+    assert!(
+        reg.rd_owner(&group, &lane).is_some(),
+        "fixture: the drive must really own this lane, or the test proves nothing"
+    );
+
+    // The lane has an assignment and has produced nothing since it opened, which
+    // is exactly the shape the watchdog fires on.
+    let no_output = std::collections::HashMap::new();
+    let no_watch = std::collections::HashMap::new();
+    let notified = reg.watchdog_tick(FAR, &no_output, &no_watch);
+    assert!(
+        !notified.contains(&lane),
+        "a driven lane's stall reached the orchestrator: {notified:?}"
+    );
+
+    let rows = audit_details(&reg, &group, "watchdog-suppressed");
+    let row = rows
+        .iter()
+        .find(|d| d["agent"] == serde_json::json!(lane))
+        .unwrap_or_else(|| panic!("the suppression must be diagnosable, not silent: {rows:?}"));
+    assert_eq!(row["why"], serde_json::json!("driven-lane"),
+        "the row must say WHICH of the three reasons this was: {row}");
+    assert_eq!(row["watch_ids"], serde_json::json!([]),
+        "…and not borrow #852's field, which is about a live notify_when watch: {row}");
+
+    // ── the control, and the RE-ARM it also pins (rev-std round 1, N2) ──
+    //
+    // Two things are being asserted by the same sequence, and the second is why
+    // the first is written this way. The CONTROL is that this is about the DRIVE
+    // and not about reviewer lanes in general: end the drive and the same pane
+    // announces, so an implementation that suppressed every lane's stall fails
+    // here. The RE-ARM is that ending the drive is ENOUGH — the pane needs no
+    // activity, no new assignment and no human touch to become announceable
+    // again.
+    //
+    // An earlier draft of this test fed the lane one tick of synthetic OUTPUT
+    // before re-ticking, to clear the anti-nag latch the suppressed stall had
+    // set. That made the control pass while hiding a real defect: nothing cleared
+    // that latch when a drive ended, so a lane stalled under a drive that was
+    // then cancelled — or whose driver died — would never be nudged again, where
+    // base announced once. The synthetic tick WAS the bug's disguise, which is
+    // exactly what rev-std named. It is gone: the only thing that happens between
+    // the suppression and the announcement is the drive going away.
+    assert_eq!(
+        reg.cancel_review_drive(&group, 1758, "orch-1")["cancelled"],
+        serde_json::json!(true),
+        "the drive must actually stop, or the control is the same case again"
+    );
+    assert!(reg.rd_owner(&group, &lane).is_none(), "…and really stop owning the lane");
+
+    // Tick 1 after the drive ends: the re-arm fires. It does NOT announce — the
+    // pane is handed a fresh FULL window from this instant, exactly as #852's
+    // watch arm does, rather than firing on the remains of the expired one.
+    let notified = reg.watchdog_tick(FAR, &no_output, &no_watch);
+    assert!(!notified.contains(&lane),
+        "the re-arm gives a fresh window, it does not fire on the old one: {notified:?}");
+
+    // Tick 2, a full window later, with NO activity of any kind in between: now
+    // it announces. This is the assertion the synthetic output tick was standing
+    // in for, and it is what fails against the shipped-without-a-re-arm
+    // implementation.
+    //
+    // It is deliberately the FIRST of the two claims below. A red evidences only
+    // the assertion it reached and MOVED, and the `watchdog-rearmed` pin used to
+    // sit above this one — so the red instrument aborted on the audit row and
+    // never reached the behavioural claim at all, which is the claim worth
+    // proving fail-able.
+    let notified = reg.watchdog_tick(FAR + 6 * 60_000, &no_output, &no_watch);
+    assert!(
+        notified.contains(&lane),
+        "with no drive owning it, the same silent lane is the orchestrator's business \
+         again — and getting there took no activity, only the drive ending: {notified:?}"
+    );
+
+    // …and the re-arm is diagnosable rather than silent. Second, for the reason
+    // above; its own red is therefore not separately evidenced — the same
+    // mutation removes both, and this one is reached only once the behaviour is
+    // right.
+    assert!(
+        audit_details(&reg, &group, "watchdog-rearmed")
+            .iter()
+            .any(|d| d["agent"] == serde_json::json!(lane)),
+        "the re-arm must be diagnosable, not silent"
+    );
+}
+
+/// A time far past any real `now_ms()`, so a `watchdog_tick` at this instant is
+/// unambiguously past the stall window for a pane whose clock was stamped with
+/// the real wall clock. (`tests/orchestration.rs` has its own copy for its own
+/// watchdog suite; the two files share no module.)
+const FAR: u64 = 1_000_000_000_000_000;

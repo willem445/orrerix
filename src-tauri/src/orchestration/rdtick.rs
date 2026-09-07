@@ -1176,12 +1176,54 @@ impl OrchRegistry {
         // Sorted and de-duplicated so the line is stable tick to tick: an
         // unstable ordering would make the same hold read as new information
         // every tick, which is #3040 N1 arriving from the other end.
+        //
+        // **Emitted on a NEW hold, but counted over every drive still held**
+        // (#3191 review finding 4). Those are two different questions and an
+        // earlier revision answered both with this tick's arrivals, which
+        // under-counts an outage that arrives staggered: two drives on one
+        // provider holding on different ticks each produced a line reading
+        // "1 drive held", while two were held. Each line was true about what
+        // had just happened and false about the thing an orchestrator reads it
+        // for — how much of the group is stopped.
+        //
+        // So the trigger stays per-tick (a line only when something newly
+        // parked, or a repeat would fire every three seconds for the whole
+        // outage) and the CONTENT is the live set, re-derived from the state
+        // file: every entry parked on `provider-limit` whose own panes still
+        // show that provider. A drive whose panes recovered drops out of the
+        // list even though it is still parked, which is the honest reading —
+        // it is held awaiting a `drive_review`, not held by the outage.
         {
             let mut by_provider: std::collections::BTreeMap<String, Vec<u64>> =
                 std::collections::BTreeMap::new();
-            for o in &outs {
-                if let Some(p) = &o.provider_limited {
-                    by_provider.entry(p.clone()).or_default().push(o.pr);
+            let newly: std::collections::BTreeSet<String> =
+                outs.iter().filter_map(|o| o.provider_limited.clone()).collect();
+            if !newly.is_empty() {
+                if let Ok(live) = reviewdrive::load_state(&self.group_dir(group)) {
+                    for e in &live.entries {
+                        if e.state() != reviewdrive::DriveState::Held
+                            || e.held_reason != Some(reviewdrive::HeldReason::ProviderLimit)
+                        {
+                            continue;
+                        }
+                        let still = e
+                            .owned_panes()
+                            .into_iter()
+                            .find_map(|(a, _)| self.provider_limit_for_agent(&a));
+                        if let Some(p) = still.filter(|p| newly.contains(p)) {
+                            by_provider.entry(p).or_default().push(e.pr);
+                        }
+                    }
+                }
+            }
+            // Fail-safe: if the state could not be re-read, say what THIS tick
+            // saw rather than nothing. An under-count beats silence, and the
+            // per-drive `rd-held` rows are already on the record either way.
+            if by_provider.is_empty() {
+                for o in &outs {
+                    if let Some(p) = &o.provider_limited {
+                        by_provider.entry(p.clone()).or_default().push(o.pr);
+                    }
                 }
             }
             for (provider, mut prs) in by_provider {

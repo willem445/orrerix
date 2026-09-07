@@ -3273,7 +3273,10 @@ next tick rather than an hour later. Because one limit stops every pane on that 
 once, you get **one** line naming the provider and listing the PRs held, not one per drive.
 Fix the billing — or point the block at a different `model:` — then `drive_review` each PR to
 restart it. orrerix does not restart them for you: a pane going quiet again is not proof the
-account was topped up. The last of those quotes what actually refused rather than
+account was topped up.
+
+**The fix-handback hold** — a fix that could not be handed back to its worker — quotes what
+actually refused rather than
 diagnosing one cause: the session may no longer resolve, the block it was minted under may no
 longer be declared in this group's roster, or the pane the driver resumed may have opened and then
 exited without saying anything — and when the same hand-back has failed the same way twice, the

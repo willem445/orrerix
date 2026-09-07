@@ -15767,12 +15767,21 @@ pub struct OrchRegistry {
     ///
     /// In memory, like [`rd_signals`](Self::rd_signals), and deliberately so:
     /// the mark says "this PROCESS restarted under this drive", which is only
-    /// ever true between one reconcile and the tick that follows it. Persisting
-    /// it would outlive the fact — a mark written now and read after the NEXT
-    /// restart would re-brief a worker on a process boundary it already
-    /// answered — and it needs no persistence to be reliable, because a process
-    /// that dies before the tick runs simply reconciles again on the way back
-    /// up. Entries are removed by the tick that acts on one.
+    /// ever true until this process answers it. Persisting it would outlive the
+    /// fact — a mark written now and read after the NEXT restart would re-brief
+    /// a worker on a process boundary it already answered — and it needs no
+    /// persistence to be reliable, because a process that dies before the tick
+    /// runs simply reconciles again on the way back up.
+    ///
+    /// **An entry is removed by the tick that ACTED on it — never by one that
+    /// merely read it** (#3196 review 2). A tick can be preempted above
+    /// `decide_fix_wait` by the empty-head guard (`observe_pr` could not read
+    /// the PR) or by the age and state backstops, and none of those re-brief
+    /// anybody; since the reconcile runs once per registry instance, a mark
+    /// spent by such a tick is never re-issued and the drive keeps its dead pane
+    /// until `fix_timeout_minutes` expires. So the mark survives every tick that
+    /// decided nothing, and is discharged when the worker was re-briefed or the
+    /// drive has left `fix-wait`.
     rd_restart_handback: Arc<TrackedMutex<HashSet<(GroupId, u64)>>>,
     /// The last hand-back failure of each drive — the session it failed FOR and
     /// the failure line — so a SECOND identical failure (#2555 item 2) can be

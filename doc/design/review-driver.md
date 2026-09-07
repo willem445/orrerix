@@ -537,7 +537,7 @@ neither — `mqloop::draft_pr_open` returns `None` there and its doc says reconc
 treats that as "the world does not match", never as "probably fine", and §8's
 row says what the driver does with it.
 
-The reconcile also **re-hands-back every drive it finds in `fix-wait`** (#2811
+The reconcile also **re-hands-back the drives it finds in `fix-wait`** (#2811
 S10). That drive is waiting on a worker pane, and every pane died with the
 process: the signals map is per-process and empty, and the pane whose `report`
 would fill it is gone, so nothing can ever arrive and the drive waits out
@@ -551,9 +551,35 @@ So the reconcile MARKS the entry and the tick acts on it, which is the same
 split the rest of this section keeps — the reconcile reads no more than
 `pr_is_open`, and observing the PR, rendering a brief and resuming a session are
 the tick's job. The mark is in memory (it says "this PROCESS restarted under
-this drive", which is only true between one reconcile and the tick that follows
-it) and it is TAKEN by that tick, so it cannot re-brief a worker on some later
-round of the same process. `DriveStep::Rehandback` then takes **no arc and
+this drive", which is only true while this process has not yet answered it).
+
+**It is spent by the tick that ACTS on it, not by the tick that reads it**, and
+the difference is the whole reliability of this mechanism. Several things decide
+above `decide_fix_wait`: the empty-head guard returns `Wait` whenever
+`observe_pr` could not read the PR at all — a runner error, a rate limit, an
+unparseable response, which is a routine FIRST-tick condition precisely because a
+restart sends a burst of `gh` calls at once — and the age and state backstops
+park the drive before any state logic runs. None of them re-brief anybody, and
+the reconcile runs once per registry instance, so a mark spent by such a tick is
+never re-issued and the drive keeps its dead pane all the way into the
+`held(fix-stalled)` this row exists to remove. The mark is therefore discharged
+only when the worker was re-briefed, or when the drive has left `fix-wait`
+altogether — arc 7 or 8, where the worker already answered, or a hold, which is
+a decision surface for the orchestrator rather than a wait a re-brief can
+shorten. It cannot loop: the first tick that succeeds discharges it.
+
+**What this does NOT do is outrank the bounds.** `state-stalled` and
+`drive-stalled` are read above the per-state logic and #2117 deliberately charges
+orrerix's own downtime to the state it spanned, while `Rehandback` takes no arc
+and so never re-stamps `state_since_ms`. A drive that was already deep into its
+`fix-wait` bound before the shutdown, or one whose downtime carries it past that
+bound, therefore parks on the backstop and is never re-briefed — the mark is
+discharged by the park, and the remedy is the orchestrator's `drive_review`, as
+it is for any parked drive. That is the disclosed #2117 residual rather than a
+new one, and it is named here so "the drives it finds in `fix-wait`" is not read
+as a promise the bounds do not keep.
+
+`DriveStep::Rehandback` takes **no arc and
 spends no counter**: nothing about the review, the checks or the base changed,
 and charging INVARIANT 9 for a restart would bill a PR for its host going down.
 The `rd-handback` row carries `why: restart` (§5.4) so a reader totting up what

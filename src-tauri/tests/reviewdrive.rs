@@ -12213,3 +12213,116 @@ fn a_review_wait_drive_recovers_across_a_restart_by_the_path_it_already_had() {
         "the restart re-brief is `fix-wait`'s alone: `review-wait` emitted one"
     );
 }
+
+/// `rd-handback` rows this drive recorded for the RESTART, which is the only
+/// `why` these tests are about — the shared on-disk audit log also carries the
+/// fixture's own `ci-red` hand-back from before the restart.
+fn restart_handbacks(reg: &OrchRegistry, group: &GroupId) -> usize {
+    audit_details(reg, group, "rd-handback")
+        .into_iter()
+        .filter(|d| d["why"] == json!("restart"))
+        .count()
+}
+
+/// Repoint the drive's recorded worker session by rewriting `review_drives.json`
+/// — the only way to build a drive that reached `fix-wait` with a REAL worker
+/// and then lost that session, which is what a restart across a roster edit
+/// looks like. A drive pointed at a bad session from the start never reaches
+/// `fix-wait` at all: it parks on its first hand-back.
+fn repoint_worker_session(reg: &OrchRegistry, group: &GroupId, session: &str) {
+    let p = reg.state_root().join(group.as_str()).join(reviewdrive::REVIEW_DRIVES_FILE);
+    let mut v = drives_json(reg, group);
+    let before = v["entries"][0]["worker_session"].as_str().unwrap_or_default().to_string();
+    assert!(!before.is_empty(), "the fixture must start from a recorded session: {v}");
+    assert_ne!(before, session, "the repoint must actually change the session");
+    v["entries"][0]["worker_session"] = json!(session);
+    std::fs::write(&p, serde_json::to_string_pretty(&v).unwrap()).expect("rewrite the record");
+}
+
+/// **Review 2, rev-final finding 1.** A tick that could not read the PR has
+/// decided nothing about the restart, so the mark must survive it.
+///
+/// `observe_pr` yields an empty head on any `gh` failure — a runner error, a
+/// rate limit, an unparseable response — and `decide` returns `Wait` at its
+/// empty-head guard before `decide_fix_wait` runs. That is a routine first-tick
+/// condition, because a restart sends a burst of `gh` calls at once. With the
+/// mark taken at facts-build time it was spent by that tick and never re-issued
+/// (the reconcile runs once per registry instance), and the drive waited out
+/// `fix_timeout_minutes` into the very `held(fix-stalled)` this slice removes.
+///
+/// The first half is the negative control and is true either way; the second
+/// half is the test.
+#[test]
+fn a_restart_tick_that_cannot_read_the_pr_still_re_briefs_on_the_next_tick() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = fix_wait_across_a_restart(dir.path(), &repo, &gh);
+
+    // The seam itself is down: not a fact about the PR, just no answer.
+    gh.seam_down();
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+    assert_eq!(
+        restart_handbacks(&reg, &group),
+        0,
+        "control: a tick that could not read the PR re-briefs nobody"
+    );
+
+    // `gh` comes back at the head the hand-back was made against, so nothing
+    // but the restart has changed.
+    gh.set_facts("OPEN", HEAD_B);
+    reg.rd_drive_group_with(&group, &gh, 60_000);
+    assert_eq!(
+        restart_handbacks(&reg, &group),
+        1,
+        "the mark must survive a tick that decided nothing, or one transient `gh` failure \
+         at startup costs the drive the whole fix timeout"
+    );
+
+    // And it is still discharged exactly once: the tick that re-briefed spent it.
+    reg.rd_drive_group_with(&group, &gh, 70_000);
+    reg.rd_drive_group_with(&group, &gh, 80_000);
+    assert_eq!(restart_handbacks(&reg, &group), 1, "spent by the tick that acted");
+}
+
+/// **Review 2, rev-std finding 2.** The `Rehandback -> Err` edge, executed.
+///
+/// The body and the design note both say a session that will not resume lands
+/// on `held(worker-unresumable)` "by the ordinary path, through the one shared
+/// `rd_handback_failed`". The extraction makes the DECISION shared; this makes
+/// the new call edge — and the `rd-refused` row and hold that ride it on a
+/// restart tick — something a test executes rather than something the prose
+/// asserts.
+#[test]
+fn a_restart_re_brief_that_cannot_resume_the_session_holds_worker_unresumable() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = fix_wait_across_a_restart(dir.path(), &repo, &gh);
+
+    // A well-shaped uuid this roster never recorded — `driven`'s own doc names
+    // it as the fixture that parks a drive on its first hand-back. Written to
+    // the record before the first post-restart tick, so the reconcile still
+    // marks a `fix-wait` entry and the failure happens at the re-brief.
+    repoint_worker_session(&reg, &group, "11111111-2222-3333-4444-555555555555");
+
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+
+    let status = reg.review_drive_status_with(&group, 50_000);
+    assert_eq!(status["drives"][0]["state"], json!("held"), "{status}");
+    assert_eq!(
+        status["drives"][0]["held_reason"],
+        json!("worker-unresumable"),
+        "the restart re-brief must fail into the ordinary hold, not a new one: {status}"
+    );
+    assert_eq!(
+        restart_handbacks(&reg, &group),
+        0,
+        "and no `rd-handback` row claims a worker that was never reached"
+    );
+    let refused = audit_details(&reg, &group, "rd-refused");
+    assert!(
+        refused.iter().any(|d| d["reason"] == json!("worker-unresumable")),
+        "the refusal is recorded where §5.4 asks a reader to count it: {refused:?}"
+    );
+}

@@ -3083,20 +3083,28 @@ impl OrchRegistry {
             },
             gate,
             messaged: signal.messaged,
-            // #2811 S10, and TAKEN rather than read: the mark is worth exactly
-            // one tick of this entry. Whatever that tick decides, the fact it
-            // records — that the process restarted while this drive was parked
-            // — has been acted on: `decide_fix_wait` re-briefs the worker, or an
-            // arc the restart does not change (7 or 8, a worker that pushed or
-            // reported before the shutdown) takes precedence and no re-brief is
-            // owed at all. Leaving it standing is the defect the take avoids:
-            // this drive can re-enter `fix-wait` many times later in the same
-            // process, and a stale mark would hand the worker an unasked-for
-            // second brief on the first tick of one of those rounds.
+            // #2811 S10, and READ here — the mark is SPENT below, by the tick
+            // that acts on it (#3196 review 2, rev-final finding 1).
+            //
+            // Taking it here was wrong, and wrong in the direction that revives
+            // the incident this slice exists to remove. Several things decide
+            // above `decide_fix_wait` and none of them re-brief anybody: the
+            // empty-head guard returns `Wait` whenever `observe_pr` could not
+            // read the PR — a runner error, a rate limit, an unparseable
+            // response, which is a routine first-tick condition when a restart
+            // sends a burst of `gh` calls at once — and the age and state
+            // backstops park the drive. The reconcile runs once per registry
+            // instance, so a mark spent by a tick that did nothing is never
+            // re-issued: the drive keeps its dead pane, is never re-briefed, and
+            // waits out `fix_timeout_minutes` into exactly the
+            // `held(fix-stalled)` this slice is about.
+            //
+            // So the mark now survives every such tick and is discharged only by
+            // one that RESOLVED the restart question — see the spend below.
             restart_handback: self
                 .rd_restart_handback
                 .lock_safe()
-                .remove(&(group.clone(), pr)),
+                .contains(&(group.clone(), pr)),
             // #2811 S5b: the union over every pane this drive owns — lanes
             // AND the worker — which is why the fact is drive-level and not
             // on `LaneFact`: a drive in `fix-wait` owns a worker pane and no
@@ -3291,6 +3299,8 @@ impl OrchRegistry {
             out.audits.push((action, detail));
             out.releases.push((cand.role.clone(), freed));
         }
+        // #2811 S10: set by the `Rehandback` arm, read by the spend below.
+        let mut re_briefed = false;
         match &step {
             reviewdrive::DriveStep::Wait => {
                 // **#1959: a worker's `report(progress)` in `fix-wait` is
@@ -3345,6 +3355,7 @@ impl OrchRegistry {
             // spends it, and this takes no arc. Passing `true` here would print
             // a grant the entry's counters do not record.
             reviewdrive::DriveStep::Rehandback => {
+                re_briefed = true;
                 match self.rd_handback(group, entry, &brief, limits, false) {
                     Ok(agent) => {
                         // The clock moves only once the worker has actually
@@ -3638,6 +3649,26 @@ impl OrchRegistry {
                 }
             }
         }
+        // **#2811 S10: the restart mark is spent by the tick that ACTED on it**,
+        // never merely by the one that read it (#3196 review 2).
+        //
+        // Two ways to have acted, and both are about the drive rather than about
+        // this tick's luck: the worker was re-briefed, or the drive is no longer
+        // in `fix-wait` at all — arc 7 or 8, where a worker that pushed or
+        // reported before the shutdown has already answered and no re-brief is
+        // owed, or a hold, which is a decision surface for the orchestrator
+        // rather than a wait this mark can shorten.
+        //
+        // Everything else LEAVES IT STANDING, which is the fix: a tick that could
+        // not read the PR, or that was preempted by a bound above
+        // `decide_fix_wait`, has decided nothing about the restart, and the next
+        // tick is owed the same re-brief. That cannot loop — the first tick that
+        // succeeds sets `re_briefed` and discharges it, which is what
+        // `the_restart_mark_is_spent_by_the_tick_that_reads_it` pins.
+        if re_briefed || entry.state() != reviewdrive::DriveState::FixWait {
+            self.rd_restart_handback.lock_safe().remove(&(group.clone(), pr));
+        }
+
         // **THE HEAD, PERSISTED — the line two reviewers named on S1 as the one
         // that would be forgotten.** `DriveEntry::head` is only ever *compared*
         // against the live head (arc 6 in `review-wait`, arc 7 in `fix-wait`), so

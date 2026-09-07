@@ -12773,6 +12773,18 @@ fn tick_until_handback(
 /// implementation that widened the population and dropped the barrier passes the
 /// first row and fails the second.
 ///
+/// **What varies the arms is whether the superseded pane has FINISHED its turn,
+/// and getting that wrong is what CI caught twice.** A pane the driver spawns is
+/// given the fix brief as its task, so it is born mid-turn and `idle_since_ms`
+/// is `None` — meaning a fixture that only withholds a `send_prompt` leaves the
+/// pane busy in BOTH arms, the barrier refuses it in both, and the loop varies
+/// nothing. So the idle arm makes the pane idle the way a real one becomes idle:
+/// it `report`s. That a SUPERSEDED worker's report is consumed and moves the
+/// drive nowhere is #1871 B2's own pinned behaviour
+/// (`a_superseded_worker_pane_is_still_intercepted_and_never_moves_the_drive`),
+/// which is what makes it usable here: it changes the pane's idleness and
+/// nothing else about the drive.
+///
 /// Both arms are walked before anything is compared, for the reason
 /// `a_pane_that_is_idle_but_not_delivery_ready_is_not_reused_for_a_handback`
 /// gives: an assert-per-arm loop evidences only the arm it stopped at.
@@ -12814,26 +12826,27 @@ fn a_release_reaches_every_worker_pane_the_drive_owns_on_that_session() {
         // barrier refuses a pane bound to none, so an arm without one fails on
         // the barrier's third condition rather than on the population this test
         // is about — which is how the first draft of this test read red against
-        // the fix. `busy` is then the only thing that varies.
+        // the fix. Turn-state is then the only thing that varies.
         with_pane(&reg, &w1, 7301);
-        if busy {
-            let _ = dispatch(
-                &reg,
-                &Caller {
-                    agent_id: orch.id.clone(),
-                    group: group.clone(),
-                    role: Role::Orchestrator,
-                    role_hint: None,
-                },
-                "tools/call",
-                &json!({ "name": "send_prompt", "arguments": {
-                    "agent_id": w1.clone(), "text": "actually, look at this instead" } }),
-            );
-            assert!(
-                reg.agent(&w1).is_some_and(|a| a.idle_since_ms.is_none()),
-                "busy={busy}: the fixture's premise — the superseded pane is working again"
-            );
+        if !busy {
+            // The superseded pane finishes its turn. Consumed and inert by
+            // #1871 B2, so the only thing it changes is `idle_since_ms` — which
+            // is exactly the barrier condition this arm needs to satisfy.
+            report_as(&reg, &group, &w1, Role::Worker, "done");
         }
+        assert_eq!(
+            reg.agent(&w1).and_then(|a| a.idle_since_ms).is_none(),
+            busy,
+            "busy={busy}: the fixture's premise — the superseded pane is mid-turn in one \
+             arm and finished in the other, and a driver-spawned pane is born mid-turn, \
+             so this is the assertion that keeps the two arms from being the same arm"
+        );
+        assert_eq!(
+            reg.rd_owner(&group, &w1).map(|(_pr, p)| p.current),
+            Some(false),
+            "busy={busy}: …and it is still SUPERSEDED either way — a report that made it \
+             current again would make this a test about the current pane"
+        );
 
         // The current worker reports done; the drive consumes it and releases.
         report_as(&reg, &group, &w2, Role::Worker, "done");

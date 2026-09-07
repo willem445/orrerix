@@ -66177,11 +66177,31 @@ fn a_provider_limit_is_subsumed_when_every_affected_pane_is_outranked() {
     );
     // The control for the whole test: drop ONE latch and the chip comes back,
     // so the silence above is the all-outranked arm and not the scan failing.
-    reg.ack_attention(&second.id);
+    //
+    // **The latch dropped is the HIGHER-sorting pane's, deliberately.**
+    // `attention_setup`'s worker is `w-2` and its reviewer `rev-3`, so `rev-3`
+    // sorts first: acking `rev-3` would leave the un-outranked candidate and
+    // the lowest-id candidate as the same pane, and a plain lowest-id rule —
+    // the exact thing B1 removed — would satisfy this assertion too. Acking the
+    // worker instead makes the two disagree, so this row fails if the
+    // precedence-aware choice is ever reverted. Measured: with `rev-3` acked
+    // the mutation run left this test GREEN.
+    let unlatched = if first > second.id { first.clone() } else { second.id.clone() };
+    assert_ne!(
+        unlatched,
+        {
+            let mut ids = vec![first.clone(), second.id.clone()];
+            ids.sort();
+            ids[0].clone()
+        },
+        "fixture: the un-outranked pane must NOT be the lowest-sorting one, or a \
+         plain lowest-id carrier rule satisfies this row and it discriminates nothing"
+    );
+    reg.ack_attention(&unlatched);
     let after = limit_scan(&reg, 1_000_000_005_000, &tails);
     assert_eq!(
         after.iter().find(|i| i.reason == "provider-limit").map(|i| i.agent_id.as_str()),
-        Some(second.id.as_str()),
-        "with one candidate un-outranked, that candidate carries the chip: {after:?}"
+        Some(unlatched.as_str()),
+        "the chip goes to the un-outranked pane, not to the lowest-sorting one: {after:?}"
     );
 }

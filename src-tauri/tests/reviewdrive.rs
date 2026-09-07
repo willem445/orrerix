@@ -11935,6 +11935,17 @@ fn a_fix_wait_drive_left_by_a_restart_is_handed_back_again() {
 
     reg.rd_drive_group_with(&group, &gh, 50_000);
 
+    // The control: this test is about what the RECONCILE marked, so a zero
+    // below must not be able to mean "the reconcile never ran in this
+    // registry at all".
+    assert!(
+        reg.audit_log(&group)
+            .into_iter()
+            .any(|e| e.action == "rd-recovered" && e.detail["at"] == json!("reconcile")),
+        "the restarted registry must actually reconcile this group, or nothing below is \
+         about S10"
+    );
+
     let handbacks = audit_details(&reg, &group, "rd-handback");
     let restart: Vec<_> =
         handbacks.iter().filter(|d| d["why"] == json!("restart")).collect();
@@ -12050,7 +12061,12 @@ fn the_restart_hand_back_re_anchors_the_fix_stalled_clock() {
 /// the second half here is the control: with no mark, the same facts still hold.
 #[test]
 fn a_dead_pane_holds_the_drive_unless_the_restart_mark_says_why_it_is_dead() {
-    let e = entry_at(DriveState::FixWait);
+    // **The head must MATCH the entry's.** `DriveEntry::new` leaves `head`
+    // empty and `decide` returns `Wait` for an empty observed head before any
+    // state logic runs, so a fixture that leaves them unequal takes arc 7 (the
+    // worker pushed) and never reaches `decide_fix_wait` at all.
+    let mut e = entry_at(DriveState::FixWait);
+    e.head = "head-a".to_string();
     let limits = DriveLimits::default();
     let dead = DriveFacts { worker: WorkerSignal::Unresumable, ..facts_at("head-a") };
 
@@ -12075,7 +12091,8 @@ fn a_dead_pane_holds_the_drive_unless_the_restart_mark_says_why_it_is_dead() {
 /// only difference between the two.
 #[test]
 fn a_push_that_landed_before_the_shutdown_outranks_the_restart_re_brief() {
-    let e = entry_at(DriveState::FixWait);
+    let mut e = entry_at(DriveState::FixWait);
+    e.head = "head-a".to_string();
     let limits = DriveLimits::default();
     let moved = DriveFacts { restart_handback: true, ..facts_at("head-b") };
     assert_ne!(e.head, "head-b", "the fixture must actually move the head");
@@ -12093,60 +12110,65 @@ fn a_push_that_landed_before_the_shutdown_outranks_the_restart_re_brief() {
     );
 }
 
-/// **Coverage, not a claim.** The two other working states a restart can leave
-/// a drive in already recover by paths that predate S10, and this pins that they
-/// do — so nothing here is read as having made them work.
+/// **Coverage, not a claim.** A `review-wait` drive already recovers across a
+/// restart by a path that predates S10, and this pins that it does — so nothing
+/// here is read as having made it work.
 ///
-/// A `review-wait` drive re-opens its lane by the ordinary path (the record's
-/// pane is gone, so `open_lane` resumes the recorded session), and a
-/// `gate-check` drive re-evaluates the gate on its next tick against the LIVE
-/// head rather than the one the file remembers. Both survive the restart on
-/// disk in the state they were parked in, neither reaches `fix-stalled`, and
-/// neither emits the re-brief `fix-wait` gets: the mark is that state's alone.
+/// It survives the restart on disk in the state it was parked in, its lane is
+/// re-opened by the ordinary path (the record's pane is gone, so `open_lane`
+/// resumes the recorded session), it never reaches `fix-stalled`, and it emits
+/// no `why: restart` hand-back: the re-brief is `fix-wait`'s alone, which is
+/// what makes the mark a fact about ONE state rather than about restarts.
+///
+/// **Scoped to `review-wait` deliberately.** Reaching `gate-check` through this
+/// seam needs recorded pass verdicts for every required lane, which is fixture
+/// machinery about the GATE rather than about the restart; `decide_gate_check`
+/// reads only `facts.gate` and `facts.required_lanes`, neither of which the
+/// mark touches, and it is covered where the gate is.
 #[test]
-fn the_other_states_a_restart_can_interrupt_recover_by_the_paths_they_already_had() {
-    for (state, expected) in [
-        (DriveState::ReviewWait, "review-wait"),
-        (DriveState::GateCheck, "gate-check"),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = Repo::new();
-        let gh = FakeGh::green(HEAD_A);
-        let group = {
-            let reg = relaunch_registry(dir.path());
-            let (group, _s) = driven(&reg, &repo, &gh);
-            reg.rd_drive_group_with(&group, &gh, 10_000);
-            if state == DriveState::GateCheck {
-                reg.rd_drive_group_with(&group, &gh, 20_000);
-            }
-            group
-        };
+fn a_review_wait_drive_recovers_across_a_restart_by_the_path_it_already_had() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = {
         let reg = relaunch_registry(dir.path());
-        let status = reg.review_drive_status_with(&group, 30_000);
-        assert_eq!(
-            status["drives"].as_array().map(|a| a.len()),
-            Some(1),
-            "a live drive survives the restart on disk: {status}"
-        );
+        let (group, _s) = driven(&reg, &repo, &gh);
+        reg.rd_drive_group_with(&group, &gh, 10_000);
+        let status = reg.review_drive_status_with(&group, 10_000);
         assert_eq!(
             status["drives"][0]["state"],
-            json!(expected),
-            "and in the state it was parked in: {status}"
+            json!("review-wait"),
+            "the fixture must actually park the drive in `review-wait`: {status}"
         );
-        reg.rd_drive_group_with(&group, &gh, 40_000);
-        let after = reg.review_drive_status_with(&group, 40_000);
-        assert_ne!(
-            after["drives"][0]["held_reason"],
-            json!("fix-stalled"),
-            "no state but `fix-wait` may reach the bound S10 is about: {after}"
-        );
-        let restarted = audit_details(&reg, &group, "rd-handback")
-            .into_iter()
-            .filter(|d| d["why"] == json!("restart"))
-            .count();
-        assert_eq!(
-            restarted, 0,
-            "and the restart re-brief is `fix-wait`'s alone: {expected} emitted one"
-        );
-    }
+        group
+    };
+    let reg = relaunch_registry(dir.path());
+
+    let status = reg.review_drive_status_with(&group, 30_000);
+    assert_eq!(
+        status["drives"].as_array().map(|a| a.len()),
+        Some(1),
+        "a live drive survives the restart on disk: {status}"
+    );
+    assert_eq!(
+        status["drives"][0]["state"],
+        json!("review-wait"),
+        "and in the state it was parked in: {status}"
+    );
+
+    reg.rd_drive_group_with(&group, &gh, 40_000);
+    let after = reg.review_drive_status_with(&group, 40_000);
+    assert_ne!(
+        after["drives"][0]["held_reason"],
+        json!("fix-stalled"),
+        "no state but `fix-wait` may reach the bound S10 is about: {after}"
+    );
+    let restarted = audit_details(&reg, &group, "rd-handback")
+        .into_iter()
+        .filter(|d| d["why"] == json!("restart"))
+        .count();
+    assert_eq!(
+        restarted, 0,
+        "the restart re-brief is `fix-wait`'s alone: `review-wait` emitted one"
+    );
 }

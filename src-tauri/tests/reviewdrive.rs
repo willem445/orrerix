@@ -12038,12 +12038,20 @@ fn the_restart_hand_back_charges_no_counter() {
     assert_eq!(restarts, 1, "exactly one restart re-brief, and it spent nothing");
 }
 
-/// The mark the reconcile leaves is worth **one tick**, and the second tick is
-/// the one that says so.
+/// One re-brief per restart, and the ticks after it are what say so.
 ///
-/// Without the take, the mark would stand for the life of the process and
+/// Were the mark not discharged, it would stand for the life of the process and
 /// re-brief the worker on every tick for as long as the drive stayed in
-/// `fix-wait` — which is a hand-back loop, not a recovery.
+/// `fix-wait` — a hand-back loop, not a recovery.
+///
+/// **The discharge moved at review 2 and this test did not**, which is why the
+/// name says "reads": it was written when the mark was TAKEN at facts-build
+/// time, so reading it and spending it were the same event. They are no longer
+/// — a tick that cannot read the PR reads the mark and leaves it standing
+/// (`a_restart_tick_that_cannot_read_the_pr_still_re_briefs_on_the_next_tick`)
+/// — and what this pins is the half that did not change: the tick that ACTS
+/// discharges it, so no later tick re-briefs. Kept under its original name so
+/// the mutation history in the PR body still resolves to it.
 #[test]
 fn the_restart_mark_is_spent_by_the_tick_that_reads_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -12324,5 +12332,139 @@ fn a_restart_re_brief_that_cannot_resume_the_session_holds_worker_unresumable() 
     assert!(
         refused.iter().any(|d| d["reason"] == json!("worker-unresumable")),
         "the refusal is recorded where §5.4 asks a reader to count it: {refused:?}"
+    );
+}
+
+// ── #2811 S10, review 3: the mark must not outlive the entry it describes ───
+
+/// A restarted registry holding a **stale** restart mark: the reconcile marked
+/// a `fix-wait` entry, and the tick that followed could not read the PR, so the
+/// mark is still standing (which is review 2's fix — see
+/// `a_restart_tick_that_cannot_read_the_pr_still_re_briefs_on_the_next_tick`).
+///
+/// That is the only state from which the three paths below can be tested: the
+/// mark has to survive its own tick before anything else can strand it.
+fn restarted_with_a_standing_mark(
+    dir: &std::path::Path,
+    repo: &Repo,
+    gh: &FakeGh,
+) -> (OrchRegistry, GroupId) {
+    let (reg, group) = fix_wait_across_a_restart(dir, repo, gh);
+    gh.seam_down();
+    reg.rd_drive_group_with(&group, gh, 50_000);
+    assert_eq!(
+        restart_handbacks(&reg, &group),
+        0,
+        "the fixture must leave the mark STANDING, not spent: a tick that re-briefed \
+         would make every assertion below vacuous"
+    );
+    (reg, group)
+}
+
+/// Walk a fresh drive on the same PR to `fix-wait` and answer how many
+/// `why: restart` re-briefs it collected — which must be none, because no
+/// restart interrupted THIS drive.
+fn redrive_to_fix_wait(reg: &OrchRegistry, group: &GroupId, gh: &FakeGh, session: &str) -> usize {
+    gh.set_facts("OPEN", HEAD_A);
+    gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+    let out = reg.drive_review_with(group, gh, 1758, session, false, 0, "orch-1", 100_000);
+    assert_eq!(out["driving"], json!(true), "the re-drive must succeed: {out}");
+    let before = restart_handbacks(reg, group);
+    reg.rd_drive_group_with(group, gh, 110_000);
+    reg.rd_drive_group_with(group, gh, 120_000);
+    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    gh.set_facts("OPEN", HEAD_B);
+    reg.rd_drive_group_with(group, gh, 130_000);
+    reg.rd_drive_group_with(group, gh, 140_000);
+    let status = reg.review_drive_status_with(group, 140_000);
+    assert_eq!(
+        status["drives"][0]["state"],
+        json!("fix-wait"),
+        "the re-drive must actually REACH `fix-wait`, or the stale mark is never asked \
+         for and this pins nothing: {status}"
+    );
+    restart_handbacks(reg, group) - before
+}
+
+/// **Review 3, the ruling.** A mark left behind by a CANCELLED drive must not
+/// re-brief the next drive on that PR.
+///
+/// `rd_signals` is cleared here for the same reason and always has been; the
+/// mark was not, and it is keyed `(group, pr)` while the entry it describes is
+/// not — so it survived the cancel and was spent by the next drive's first
+/// `fix-wait` tick as one unearned `why: restart` hand-back, on a drive no
+/// restart ever interrupted.
+#[test]
+fn a_cancelled_drive_does_not_leave_a_restart_mark_for_the_next_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = restarted_with_a_standing_mark(dir.path(), &repo, &gh);
+
+    assert_eq!(
+        reg.cancel_review_drive(&group, 1758, "orch-1")["cancelled"],
+        json!(true),
+        "the fixture must actually cancel"
+    );
+
+    let w = reg.spawn_agent(&group, Role::Worker, "w2", "", false, None).unwrap();
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    assert_eq!(
+        redrive_to_fix_wait(&reg, &group, &gh, &session),
+        0,
+        "a cancel must forget the mark: the next drive on this PR was interrupted by no \
+         restart and is owed no re-brief"
+    );
+}
+
+/// **Review 3, the ruling.** Same property at the PRUNE, which is a different
+/// site: a terminal entry is dropped from `review_drives.json` after its notice
+/// is delivered, and the mark is keyed on the PR rather than on the entry.
+#[test]
+fn a_pruned_drive_does_not_leave_a_restart_mark_for_the_next_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = restarted_with_a_standing_mark(dir.path(), &repo, &gh);
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    make_delivery_land(&reg, &group, &orch.id, 7501);
+
+    // The PR is positively gone, so the next tick cancels and the tick after
+    // that prunes the entry once its notice has landed.
+    gh.set_facts("CLOSED", HEAD_A);
+    reg.rd_drive_group_with(&group, &gh, 60_000);
+    reg.rd_drive_group_with(&group, &gh, 70_000);
+    assert!(
+        action_count(&reg, &group, "rd-pruned") >= 1,
+        "the fixture must actually PRUNE, or this test is about the cancel path again"
+    );
+
+    let w = reg.spawn_agent(&group, Role::Worker, "w2", "", false, None).unwrap();
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    assert_eq!(
+        redrive_to_fix_wait(&reg, &group, &gh, &session),
+        0,
+        "a prune must forget the mark: the entry it described no longer exists"
+    );
+}
+
+/// **Review 3, the ruling.** And at `drive_review` itself, which is the path
+/// that needs no cancel at all: an orchestrator re-driving a live PR displaces
+/// the existing entry, and the drive it starts is one no restart interrupted.
+#[test]
+fn a_fresh_drive_review_does_not_inherit_the_previous_drives_restart_mark() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = restarted_with_a_standing_mark(dir.path(), &repo, &gh);
+
+    // No cancel and no prune: the entry is displaced by the re-drive itself.
+    let w = reg.spawn_agent(&group, Role::Worker, "w2", "", false, None).unwrap();
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    assert_eq!(
+        redrive_to_fix_wait(&reg, &group, &gh, &session),
+        0,
+        "`drive_review` starts a drive NOW; a mark about whatever was on this PR before \
+         is not about it"
     );
 }

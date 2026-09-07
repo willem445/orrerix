@@ -1382,6 +1382,8 @@ impl OrchRegistry {
         for pr in &flush.pruned {
             self.rd_audit(group, "", rddrive::audit_action::PRUNED, json!({ "pr": pr }));
             self.rd_signals.lock_safe().remove(&(group.clone(), *pr));
+            // #2811 S10: the entry is gone, so a mark about it describes nothing.
+            self.rd_forget_restart_mark(group, *pr);
         }
         flush
     }
@@ -2761,6 +2763,27 @@ impl OrchRegistry {
         }
     }
 
+    /// Forget this PR's restart mark (#2811 S10).
+    ///
+    /// The mark is keyed `(group, pr)` and the ENTRY it was made for is not:
+    /// a drive can be cancelled, pruned, or displaced by a fresh
+    /// `drive_review` on the same PR, all within one process. A mark left
+    /// behind by any of those outlives the drive it described, and the NEXT
+    /// drive on that PR spends it the first time it reaches `fix-wait` — one
+    /// unearned `why: restart` re-brief, charged to nobody and explained by
+    /// nothing, on a drive no restart ever interrupted.
+    ///
+    /// So it is cleared everywhere [`rd_signals`](Registry::rd_signals) is,
+    /// and for the same reason: both are per-process facts ABOUT AN ENTRY,
+    /// held in a map keyed by the PR that entry happened to be for. The three
+    /// sites are the prune, `cancel_review_drive`, and `drive_review`'s
+    /// re-drive; the tick's own discharge is separate and is the `re_briefed`
+    /// spend, which answers "was this mark used" rather than "is this mark
+    /// still about anything".
+    fn rd_forget_restart_mark(&self, group: &GroupId, pr: u64) {
+        self.rd_restart_handback.lock_safe().remove(&(group.clone(), pr));
+    }
+
     /// §2.4's restart reconcile, once per group per registry instance, before
     /// driving — `rd_reconciled` is a field of the registry, so "per process"
     /// holds only while a process builds one of these (#2135 review 2).
@@ -3666,7 +3689,7 @@ impl OrchRegistry {
         // succeeds sets `re_briefed` and discharges it, which is what
         // `the_restart_mark_is_spent_by_the_tick_that_reads_it` pins.
         if re_briefed || entry.state() != reviewdrive::DriveState::FixWait {
-            self.rd_restart_handback.lock_safe().remove(&(group.clone(), pr));
+            self.rd_forget_restart_mark(group, pr);
         }
 
         // **THE HEAD, PERSISTED — the line two reviewers named on S1 as the one
@@ -4262,6 +4285,10 @@ impl OrchRegistry {
         // A resume that carried a stale signal would re-hold on the reason it
         // was resumed out of — `messaged` most obviously.
         self.rd_signals.lock_safe().remove(&(group.clone(), pr));
+        // #2811 S10, same argument one fact over: this call establishes a drive
+        // the orchestrator is starting NOW, so a restart mark left by whatever
+        // was on this PR before is not about it.
+        self.rd_forget_restart_mark(group, pr);
         self.rd_audit(group, on_behalf_of, audit_action, detail);
         // Service this group on the very next wake rather than after a backoff
         // window that predates the drive.
@@ -4385,6 +4412,8 @@ impl OrchRegistry {
             }
         }
         self.rd_signals.lock_safe().remove(&(group.clone(), pr));
+        // #2811 S10: cancelled is terminal, so nothing is owed a re-brief.
+        self.rd_forget_restart_mark(group, pr);
         self.rd_audit(
             group,
             on_behalf_of,

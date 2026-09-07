@@ -3254,16 +3254,29 @@ the problem. Both are now the same thing that a red run is: the worker is handed
 on its own one-attempt budget, and a second conflict parks the drive as `rebase-limit`. A mergeability
 GitHub has not finished computing is not a conflict and changes nothing.
 
-**A drive stops, it does not drift.** There are seventeen ways out and each produces at most one
+**A drive stops, it does not drift.** There are eighteen ways out and each produces at most one
 line in the orchestrator's pane: the gate being satisfied, the drive being cancelled — by you, or
 by orrerix on its own when it sees the PR has been closed — or one of
-fifteen holds — a counter reaching INVARIANT 9's bound, a reviewer escalating, a lane or a worker going quiet past its timeout,
+sixteen holds — a counter reaching INVARIANT 9's bound, a reviewer escalating, a lane or a worker going quiet past its timeout,
 the drive sitting in one state past that state's bound, the drive itself getting old,
 a reviewer requirement orrerix could not compute, a gate file it
 could not read, a worker that reported blocked, a delegate messaging the orchestrator, this group's
 live-delegate cap refusing the pane a hand-back needed, that same cap refusing a *reviewer* for
-long enough that the drive cannot get started at all, or a fix that could not be handed back to
-its worker. The last of those quotes what actually refused rather than
+long enough that the drive cannot get started at all, a fix that could not be handed back to
+its worker, or the account behind one of the drive's panes running out of budget.
+
+That last one is worth knowing about separately, because it is the only hold that costs the
+drive nothing at all — no review round, no CI attempt, no timeout. When a model provider stops
+a pane (an OpenRouter key at its spend cap, Claude usage credits exhausted), orrerix reads the
+refusal off the pane's own text and parks every drive whose panes are on that provider, on the
+next tick rather than an hour later. Because one limit stops every pane on that provider at
+once, you get **one** line naming the provider and listing the PRs held, not one per drive.
+Fix the billing — or point the block at a different `model:` — then `drive_review` each PR to
+restart it. orrerix does not restart them for you: a pane going quiet again is not proof the
+account was topped up.
+
+**The fix-handback hold** — a fix that could not be handed back to its worker — quotes what
+actually refused rather than
 diagnosing one cause: the session may no longer resolve, the block it was minted under may no
 longer be declared in this group's roster, or the pane the driver resumed may have opened and then
 exited without saying anything — and when the same hand-back has failed the same way twice, the

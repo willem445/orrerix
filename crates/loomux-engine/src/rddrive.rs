@@ -571,6 +571,16 @@ pub mod audit_action {
     pub const HELD: &str = "rd-held";
     /// A parked drive was resumed. Carries `reset_counters` (§2.3).
     pub const RESUMED: &str = "rd-resumed";
+    /// **One provider limit, one row, however many drives it held** (#2811
+    /// S5b) — the aggregated notice's own record, carrying the provider and
+    /// the PR list.
+    ///
+    /// Beside the per-drive [`HELD`] rows rather than instead of them: those
+    /// say what happened to each drive, and this says what happened to the
+    /// GROUP, which is the fact the single notice is about and which no
+    /// per-drive row can carry. §5.4's rule that an action must name what
+    /// happened is why it is not folded into `rd-held`.
+    pub const PROVIDER_LIMIT: &str = "rd-provider-limit";
     /// The drive was cancelled — by the tool, or by reconcile positively
     /// establishing the PR is closed or merged.
     pub const CANCELLED: &str = "rd-cancelled";
@@ -938,6 +948,14 @@ pub struct HeldFacts {
     /// The bound that fired — `reviewdrive::state_bound_ms` for
     /// `state-stalled`, `drive_timeout_minutes` for `drive-stalled`.
     pub held_bound_ms: u64,
+    /// **Which provider's limit stopped a pane** (#2811 S5b) — the
+    /// `providerlimit` id, empty for every other reason.
+    ///
+    /// Carried rather than derived, for the reason `refusal` is carried: the
+    /// reason enum says which CLASS of thing happened, and an orchestrator
+    /// deciding what to DO needs to know whose billing page to open. A hold
+    /// that named no provider would leave it to guess from the roster.
+    pub provider: String,
 }
 
 /// A duration as an orchestrator reads one — `"3h 12m"`, `"47m"`, `"12h"`.
@@ -1213,9 +1231,70 @@ pub fn held_notice(pr: u64, reason: HeldReason, f: &HeldFacts) -> String {
              the drive, cancel_review_drive stops it.",
             pane_of(&f.messaged_by),
         ),
+        // #2811 S5b. This wording lands on the DRIVE's own board task, one
+        // per held drive; the orchestrator receives `provider_limit_notice`
+        // once for all of them. Both exist because they answer different
+        // questions: the board row must say why THIS PR stopped, and the
+        // orchestrator must not read the same remedy N times.
+        //
+        // No counter is named, and that is the point of the hold rather than
+        // an omission: nothing was spent. Saying "round 2 of 3" here would
+        // report a cost this drive did not pay.
+        HeldReason::ProviderLimit => format!(
+            "HELD — the {} account behind this drive's panes is out of budget{at}; \
+             its CLI is parked on the provider's refusal and nothing typed into that \
+             pane clears it. No review round and no CI attempt were spent. {} \
+             drive_review resumes this drive once the account is topped up; \
+             cancel_review_drive stops it.",
+            provider_display(&f.provider),
+            provider_remedy(&f.provider),
+        ),
     };
     let panes = panes_clause(&f.panes, PaneStanding::Owned);
     format!("[orrerix] review drive PR #{pr}: {body}{panes}")
+}
+
+/// How a provider is NAMED in a notice — its `providerlimit` display, or the
+/// bare id for a provider this build has no row for.
+///
+/// Falls back rather than refusing: a hold whose notice cannot be worded is a
+/// hold that cannot be explained, and the id is still a true thing to print.
+fn provider_display(id: &str) -> String {
+    crate::providerlimit::provider(id).map(|p| p.display.to_string()).unwrap_or_else(|| id.to_string())
+}
+
+/// The remedy sentence for a provider, empty when this build has no row.
+fn provider_remedy(id: &str) -> String {
+    crate::providerlimit::provider(id)
+        .map(|p| format!("To clear it: {}.", p.remedy))
+        .unwrap_or_default()
+}
+
+/// **ONE line for every drive a provider's limit stopped** (#2811 S5b).
+///
+/// A provider limit is one cause with one remedy that happens to stop N
+/// drives at the same instant. N per-drive notices would be N times the
+/// orchestrator's attention for one action it can only take once — and the
+/// measured incident this slice is filed against had four drives stall
+/// together. Each drive still records its own `rd-held` row and its own board
+/// note (§5.4 is a record of what happened); this is what reaches the pane.
+///
+/// `prs` is sorted and de-duplicated by the caller so the line is stable
+/// across ticks — an unstable ordering would make `announce` treat the same
+/// hold as new information every tick, which is #3040 N1 from the other end.
+pub fn provider_limit_notice(provider: &str, prs: &[u64]) -> String {
+    let list = prs.iter().map(|p| format!("#{p}")).collect::<Vec<_>>().join(", ");
+    let n = prs.len();
+    let noun = if n == 1 { "drive" } else { "drives" };
+    let remedy = provider_remedy(provider);
+    let remedy = if remedy.is_empty() { String::new() } else { format!(" {remedy}") };
+    format!(
+        "[orrerix] provider limit: {} — {n} {noun} held ({list}). Every pane on this \
+         provider is stopped on its refusal; no round or CI attempt was spent.{remedy} \
+         Changing the block's model: in the workflow file is the other way out. \
+         drive_review on each PR resumes them.",
+        provider_display(provider),
+    )
 }
 
 /// **The one line the driver types back at a worker that reported progress**
@@ -1665,6 +1744,12 @@ mod tests {
             failing_jobs: vec!["build (windows)".into()],
             messaged_by: "w-7".into(),
             refusal: "unknown block \"worker-adv\"".into(),
+            // #2811 S5b: a real provider id, so the ProviderLimit arm renders
+            // its display name and remedy rather than the bare-id fallback —
+            // the loop below asserts every arm names a tool, and an arm that
+            // silently took the fallback path would still pass while wording
+            // the one thing an orchestrator acts on wrongly.
+            provider: "openrouter".into(),
             panes: vec![
                 ("w-1715".into(), DrivenRole::Worker),
                 ("rev-1714".into(), DrivenRole::Lane("rev-std".into())),

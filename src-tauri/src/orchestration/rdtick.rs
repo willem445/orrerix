@@ -224,6 +224,7 @@ impl RdBrief {
         reason: reviewdrive::HeldReason,
         messaged_by: &str,
         refusal: &str,
+        provider: &str,
     ) -> rddrive::HeldFacts {
         let speaking = self.speaking_lane();
         let lane = self
@@ -238,6 +239,7 @@ impl RdBrief {
             lane_summary: speaking.map(|l| l.summary.clone()).unwrap_or_default(),
             messaged_by: messaged_by.to_string(),
             refusal: refusal.to_string(),
+            provider: provider.to_string(),
             panes: entry.owned_panes(),
             lane,
             counters: entry.counters.clone(),
@@ -332,6 +334,17 @@ struct RdOut {
     releases: Vec<(reviewdrive::DrivenRole, String)>,
     audits: Vec<(&'static str, Value)>,
     notices: Vec<String>,
+    /// #2811 S5b: set when THIS entry held on a provider limit, to the
+    /// provider id. The tick aggregates these into ONE notice rather than
+    /// letting each drive push its own — a provider limit is one cause with
+    /// one remedy that stops N drives at once, and N identical lines would be
+    /// N times the orchestrator's attention for one action.
+    provider_limited: Option<String>,
+    /// This drive's OWN hold wording (#2811 S5b) — written to its board task
+    /// so the row says why this PR stopped, while the orchestrator's pane
+    /// gets the aggregated line instead. `None` unless this entry held on a
+    /// provider limit and `announce_hold` admitted the line.
+    provider_note: Option<String>,
     /// What refused, when this tick's hold is about a refusal (#1961) — the
     /// spawn error, or the line the resumed pane exited on. Empty otherwise,
     /// which renders as no clause; see [`rddrive::HeldFacts::refusal`].
@@ -1140,12 +1153,91 @@ impl OrchRegistry {
                 self.rd_task_note(group, o.pr, n);
                 report.notices.push(n.clone());
             }
+            // #2811 S5b: the per-drive wording lands on the BOARD only. The
+            // orchestrator's copy is the aggregated line below.
+            if let Some(n) = &o.provider_note {
+                self.rd_task_note(group, o.pr, n);
+            }
             // Only once the arc that consumed it is durable — see `persisted`.
             if o.clear_signal && persisted {
                 self.rd_signals.lock_safe().remove(&(group.clone(), o.pr));
             }
             if o.backoff {
                 report.backoff = true;
+            }
+        }
+        // #2811 S5b — ONE notice per provider, however many drives it stopped.
+        //
+        // Built here rather than per entry because the fact it states is about
+        // the SET: "4 drives held" is not a thing any single drive knows. The
+        // per-drive `rd-held` rows are already written above, so the record is
+        // complete either way and this is purely what reaches the pane.
+        //
+        // Sorted and de-duplicated so the line is stable tick to tick: an
+        // unstable ordering would make the same hold read as new information
+        // every tick, which is #3040 N1 arriving from the other end.
+        //
+        // **Emitted on a NEW hold, but counted over every drive still held**
+        // (#3191 review finding 4). Those are two different questions and an
+        // earlier revision answered both with this tick's arrivals, which
+        // under-counts an outage that arrives staggered: two drives on one
+        // provider holding on different ticks each produced a line reading
+        // "1 drive held", while two were held. Each line was true about what
+        // had just happened and false about the thing an orchestrator reads it
+        // for — how much of the group is stopped.
+        //
+        // So the trigger stays per-tick (a line only when something newly
+        // parked, or a repeat would fire every three seconds for the whole
+        // outage) and the CONTENT is the live set, re-derived from the state
+        // file: every entry parked on `provider-limit` whose own panes still
+        // show that provider. A drive whose panes recovered drops out of the
+        // list even though it is still parked, which is the honest reading —
+        // it is held awaiting a `drive_review`, not held by the outage.
+        {
+            let mut by_provider: std::collections::BTreeMap<String, Vec<u64>> =
+                std::collections::BTreeMap::new();
+            let newly: std::collections::BTreeSet<String> =
+                outs.iter().filter_map(|o| o.provider_limited.clone()).collect();
+            if !newly.is_empty() {
+                if let Ok(live) = reviewdrive::load_state(&self.group_dir(group)) {
+                    for e in &live.entries {
+                        if e.state() != reviewdrive::DriveState::Held
+                            || e.held_reason != Some(reviewdrive::HeldReason::ProviderLimit)
+                        {
+                            continue;
+                        }
+                        let still = e
+                            .owned_panes()
+                            .into_iter()
+                            .find_map(|(a, _)| self.provider_limit_for_agent(&a));
+                        if let Some(p) = still.filter(|p| newly.contains(p)) {
+                            by_provider.entry(p).or_default().push(e.pr);
+                        }
+                    }
+                }
+            }
+            // Fail-safe: if the state could not be re-read, say what THIS tick
+            // saw rather than nothing. An under-count beats silence, and the
+            // per-drive `rd-held` rows are already on the record either way.
+            if by_provider.is_empty() {
+                for o in &outs {
+                    if let Some(p) = &o.provider_limited {
+                        by_provider.entry(p.clone()).or_default().push(o.pr);
+                    }
+                }
+            }
+            for (provider, mut prs) in by_provider {
+                prs.sort_unstable();
+                prs.dedup();
+                let n = rddrive::provider_limit_notice(&provider, &prs);
+                let _ = self.deliver_to_orchestrator(group, &n, brand::AUDIT_ACTOR);
+                self.rd_audit(
+                    group,
+                    brand::AUDIT_ACTOR,
+                    rddrive::audit_action::PROVIDER_LIMIT,
+                    json!({ "provider": provider, "prs": prs, "drives": prs.len() }),
+                );
+                report.notices.push(n);
             }
         }
         // **§5.2's ordering rule, implemented** (#1857): every owed notice is
@@ -2855,6 +2947,26 @@ impl OrchRegistry {
             },
             gate,
             messaged: signal.messaged,
+            // #2811 S5b: the union over every pane this drive owns — lanes
+            // AND the worker — which is why the fact is drive-level and not
+            // on `LaneFact`: a drive in `fix-wait` owns a worker pane and no
+            // open lane at all, and that is exactly a drive the hold covers.
+            //
+            // Read from the attention scan's published map, never by reading
+            // pane text here: plan-2504 keeps ONE pane-text classifier, and a
+            // second would be a second answer that can disagree with the chip
+            // the human is looking at.
+            //
+            // `prior_*` agents come with `owned_panes()` and are harmless:
+            // a pane that is gone is not in the map, so it contributes
+            // nothing, and one still alive on a limited provider is a pane
+            // this drive really did leave stopped.
+            provider_limited: state
+                .entry(pr)
+                .map(|e| e.owned_panes())
+                .unwrap_or_default()
+                .into_iter()
+                .find_map(|(agent, _)| self.provider_limit_for_agent(&agent)),
         };
         let mut out = RdOut::new(pr);
         out.backoff = obs.runner_failed;
@@ -3523,11 +3635,20 @@ impl OrchRegistry {
                 }
                 (reviewdrive::DriveState::Held, Some(r)) => {
                     let refusal = out.refusal.clone();
+                    // #2811 S5b: the provider that DECIDED this hold, off the
+                    // facts `decide` saw rather than re-read from the map. A
+                    // second read could report a provider that recovered
+                    // between the decision and the notice, which is a line
+                    // contradicting the hold beside it.
+                    let provider = facts.provider_limited.clone().unwrap_or_default();
                     let n = rddrive::held_notice(
                         pr,
                         r,
-                        &brief.held_facts(entry, limits, r, &messaged_by, &refusal),
+                        &brief.held_facts(entry, limits, r, &messaged_by, &refusal, &provider),
                     );
+                    if r == reviewdrive::HeldReason::ProviderLimit {
+                        out.provider_limited = Some(provider.clone());
+                    }
                     // The refusal rides the `rd-held` row rather than a
                     // `rd-refused` row of its own, and only when there is one:
                     // it is a detail OF this hold, and a separate row pushed
@@ -3558,7 +3679,18 @@ impl OrchRegistry {
                     // has moved — is a different key and announces. The tuple
                     // alone could not see any of that.
                     if entry.announce_hold(r, &n) {
-                        out.notices.push(n);
+                        // #2811 S5b: a provider limit's line does NOT go out
+                        // per drive. `announce_hold` still runs, because it
+                        // is what stamps the hold and keeps a repeat from
+                        // re-announcing; only the destination changes. The
+                        // aggregated line is built once in `rd_tick_group`
+                        // from `out.provider_limited`, and this drive's own
+                        // wording still reaches its board task there.
+                        if r != reviewdrive::HeldReason::ProviderLimit {
+                            out.notices.push(n);
+                        } else {
+                            out.provider_note = Some(n);
+                        }
                     } else {
                         out.audits.push((
                             rddrive::audit_action::HOLD_REPEATED,

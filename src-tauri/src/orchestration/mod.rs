@@ -16287,6 +16287,24 @@ pub struct OrchRegistry {
     /// desktop toast only once per attention onset (the event itself is
     /// re-emitted every tick and the frontend badges idempotently).
     attn_emitted: TrackedMutex<HashMap<String, String>>,
+    /// **agent id → the [`providerlimit`] provider id whose refusal that pane is
+    /// showing** (#2811 S5b), rewritten WHOLE by every `attention_tick`.
+    ///
+    /// The review driver holds a drive whose panes are stopped on a provider's
+    /// spend limit, and it must not grow a pane-text reader of its own to know
+    /// that: plan-2504 is explicit that the attention scan owns the one
+    /// pane-text classifier, and a second scanner would be a second answer that
+    /// can disagree with the chip the human is looking at. So the scan — which
+    /// already computes this every three seconds, off the MASKED tail, with the
+    /// paragraph-start anchor — publishes what it found and `rdtick` reads it.
+    ///
+    /// **Rewritten whole rather than updated**, so a pane that recovered simply
+    /// stops appearing and no clearing path has to be remembered. An empty map
+    /// therefore means "no pane is limited" AND "the scan has not run", which
+    /// are deliberately the same answer here: both are `None` in
+    /// `DriveFacts::provider_limited`, and that field's doc argues the fail
+    /// direction — a drive is never held on a reading orrerix could not make.
+    attn_provider_limit: TrackedMutex<HashMap<String, String>>,
     /// Attention routing (#496 PR-C): agent id → the stranded-delivery state
     /// of its pane — a delivery the late monitor declared `Failed`, and
     /// whether loomux is self-healing it or needs the human. Latched (unlike
@@ -30033,6 +30051,7 @@ impl OrchRegistry {
             attn_quiet: TrackedMutex::new("attn_quiet", HashMap::new()),
             attn_waiting_ack: TrackedMutex::new("attn_waiting_ack", HashSet::new()),
             attn_emitted: TrackedMutex::new("attn_emitted", HashMap::new()),
+            attn_provider_limit: TrackedMutex::new("attn_provider_limit", HashMap::new()),
             attn_stranded: TrackedMutex::new("attn_stranded", HashMap::new()),
             attn_question_held: TrackedMutex::new("attn_question_held", HashSet::new()),
             notify_groups: TrackedMutex::new("notify_groups", HashSet::new()),
@@ -44433,6 +44452,31 @@ impl OrchRegistry {
             })
             .collect();
 
+        // #2811 S5b — publish what this scan found, for the review driver.
+        //
+        // EVERY limited pane, not just the carrier: the chip is deduped to one
+        // per (group, provider) because a human needs one alarm, and a DRIVE
+        // needs to know whether ITS OWN panes are stopped. Handing the driver
+        // the carrier alone would hold whichever drive happened to own the
+        // lowest-sorting id and leave every other affected drive to time out —
+        // the sixty-minute stall this slice exists to remove, reintroduced by a
+        // presentation decision.
+        //
+        // Written whole, so a pane that recovered stops appearing and there is
+        // no clearing path to remember. Taken after the `limit_chip` build and
+        // before the per-agent loop: this is a map of its own, so it adds no
+        // ordering against the attention maps phase 3 already holds.
+        *self.attn_provider_limit.lock_safe() = roster
+            .iter()
+            .filter(|a| a.status == AgentStatus::Running)
+            .filter_map(|a| {
+                signals
+                    .get(&a.id)
+                    .and_then(|s| s.limit)
+                    .map(|l| (a.id.clone(), l.provider.to_string()))
+            })
+            .collect();
+
         let mut out = Vec::new();
         for a in &roster {
             if a.status != AgentStatus::Running {
@@ -53772,6 +53816,34 @@ impl OrchRegistry {
     /// (`delivery-held-for-question`) at the call site that decided to hold;
     /// this only mirrors that decision into the attention set so
     /// `attention_tick` can surface it.
+    /// The [`providerlimit`] provider whose refusal `agent_id`'s pane is
+    /// showing, as of the last attention scan (#2811 S5b).
+    ///
+    /// The driver's read of the ONE pane-text classifier. `None` covers both
+    /// "that pane is fine" and "the scan has not run" — see
+    /// [`Self::attn_provider_limit`] for why those are deliberately the same
+    /// answer, and `DriveFacts::provider_limited` for the fail direction.
+    pub fn provider_limit_for_agent(&self, agent_id: &str) -> Option<String> {
+        self.attn_provider_limit.lock_safe().get(agent_id).cloned()
+    }
+
+    /// Test seam: publish a provider limit for `agent_id` without running a
+    /// real attention scan, which needs pty tails a fake runner has none of.
+    /// Production writes this map ONLY from `attention_tick`.
+    pub fn set_provider_limit_for_test(&self, agent_id: &str, provider: &str) {
+        self.attn_provider_limit
+            .lock_safe()
+            .insert(agent_id.to_string(), provider.to_string());
+    }
+
+    /// Test seam: the pane recovered. Production has no such call — the scan
+    /// rewrites the map WHOLE, so a pane that is no longer showing a refusal
+    /// simply stops appearing in it. This exists so a test can reach the same
+    /// state without running a scan.
+    pub fn clear_provider_limit_for_test(&self, agent_id: &str) {
+        self.attn_provider_limit.lock_safe().remove(agent_id);
+    }
+
     pub fn latch_question_held(&self, agent_id: &str) {
         self.attn_question_held.lock_safe().insert(agent_id.to_string());
     }

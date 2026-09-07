@@ -66424,8 +66424,22 @@ fn a_branch_is_owned_only_by_itself_or_by_a_separated_descendant() {
     // closed five PRs belonging to other workers, so a rule that cannot tell a
     // sibling from a descendant would be the same defect wearing a guard's name.
     assert!(!o("fix/2985-x", "fix/29"), "a bare prefix is NOT ownership: fix/29 owns nothing of fix/2985-x");
-    assert!(!o("fix/2985-other", "fix/2985"), "…and not even one character short of the separator");
     assert!(!o("feat/other", "fix/2985-x"), "an unrelated branch");
+    // THE RESIDUAL, pinned rather than glossed. The separator rule is about
+    // where a prefix ENDS, not about who the branches belong to, so an agent
+    // whose own branch is a strict prefix of another's *up to a separator* does
+    // own it: `fix/2985` owns `fix/2985-other`. That is the accepted cost of
+    // "same branch prefix" (issue #2985's own wording) rather than exact-match,
+    // and it is bounded by what actually mints these names — orrerix cuts a
+    // worker's branch from the ISSUE it is working, so two live workers whose
+    // branches nest that way are two workers on one issue, which is the case
+    // where the looser reading is wanted. Pinned as a passing row so that a
+    // later narrowing to exact-match reddens here and has to argue for itself,
+    // instead of silently changing what the design note claims.
+    assert!(o("fix/2985-other", "fix/2985"), "a separated descendant is owned even when the parent is short — the accepted residual");
+    // …and the bound on it: one character short of a separator is NOT ownership,
+    // which is what keeps the row above a residual rather than a hole.
+    assert!(!o("fix/2985other", "fix/2985"), "no separator, no ownership");
     // An empty own-branch owns NOTHING. Without this, every role with no branch
     // (orchestrator, planner, reviewer-without-worktree) would own every branch
     // in the repo by empty-prefix match — the widest possible failure, reached

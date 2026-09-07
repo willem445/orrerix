@@ -5455,6 +5455,18 @@ owns nothing, for the widest reason: without that, every role with no branch of 
 (planner, reviewer-without-worktree, and the orchestrator's own roster row) would own every
 branch in the repo by empty-prefix match.
 
+**The residual, stated rather than mitigated.** The separator rule is about where a prefix
+*ends*, not about who the branches belong to — so an agent whose own branch is a strict
+prefix of another's *up to a separator* does own it: a `fix/2985` holder owns
+`fix/2985-other`. That is the accepted cost of taking issue #2985's own wording ("same
+branch prefix") over exact-match, and it is bounded by what actually mints these names:
+orrerix cuts a worker's branch from the issue it is working, so two live workers whose
+branches nest that way are two workers on one issue — the case where the looser reading is
+the one wanted. `a_branch_is_owned_only_by_itself_or_by_a_separated_descendant` pins it as a
+*passing* row beside its bound (`fix/2985other`, one character short of the separator, is
+not owned), so a later narrowing to exact-match reddens there and has to argue for itself
+rather than silently falsifying this paragraph.
+
 **Fail-closed, both halves.** An unresolvable head ref and a pane the roster has no row for
 are the same epistemic state — this app cannot say whose PR this is — and are refused with a
 message that says *which* half is missing, so a real infrastructure fault does not read as a

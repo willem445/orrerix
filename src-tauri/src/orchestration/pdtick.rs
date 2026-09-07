@@ -1261,6 +1261,7 @@ impl OrchRegistry {
                 if let Some(s) = entry.slices.get_mut(id) {
                     s.advance(plandrive::SliceState::Queued, None);
                     s.cap_starved_since_ms = 0;
+                    s.reported_done = false;
                     s.agent.clear();
                     s.session.clear();
                 }
@@ -1644,16 +1645,25 @@ impl OrchRegistry {
         let mut reads = PdPrReads::default();
         let Some(plan) = entry.plan.as_ref() else { return reads };
 
-        // (a) The PR a `done`-reporting worker has just produced. At most one
-        // per slice per tick, and only for a slice whose PR is not known yet:
-        // the `ref` covers the normal case for free.
-        for (id, sig) in &signal.workers {
-            let PdWorkerSignal::Done { pr_ref } = sig else { continue };
-            let Some(run) = entry.slices.get(id) else { continue };
+        // (a) The PR a `done`-reporting worker has produced. Driven off the
+        // RECORD's `reported_done` rather than off this tick's signal, so a
+        // `done` whose PR could not be resolved on the tick it arrived is
+        // retried instead of lost — see [`plandrive::PdSlice::reported_done`].
+        // The signal is still read, because it is what SETS that flag, and this
+        // tick must not have to wait for the next one to act on a fresh report.
+        for (id, run) in &entry.slices {
+            let fresh = signal.workers.get(id).map(|s| matches!(s, PdWorkerSignal::Done { .. }));
+            if !run.reported_done && fresh != Some(true) {
+                continue;
+            }
             if run.pr > 0 || run.state() != plandrive::SliceState::Running {
                 continue;
             }
-            if let Some(pr) = Self::pd_pr_from_ref(pr_ref) {
+            let hint = match signal.workers.get(id) {
+                Some(PdWorkerSignal::Done { pr_ref }) => pr_ref.as_str(),
+                _ => "",
+            };
+            if let Some(pr) = Self::pd_pr_from_ref(hint) {
                 reads.resolved.insert(id.clone(), pr);
                 continue;
             }
@@ -1762,6 +1772,19 @@ impl OrchRegistry {
             }
         }
         entry.pr_poll_cursor = entry.pr_poll_cursor.saturating_add(reads.cursor_advance);
+
+        // A worker's `done` is written to the record before anything is done
+        // with it, so a tick that cannot resolve its PR loses nothing.
+        for (id, sig) in &signal.workers {
+            if !matches!(sig, PdWorkerSignal::Done { .. }) {
+                continue;
+            }
+            if let Some(run) = entry.slices.get_mut(id) {
+                if run.state() == plandrive::SliceState::Running {
+                    run.reported_done = true;
+                }
+            }
+        }
 
         // A worker's `blocked` parks ITS slice and nothing else (§2(e)).
         for (id, sig) in &signal.workers {
@@ -1903,7 +1926,11 @@ impl OrchRegistry {
                     // (a) a worker that reported `done` hands its PR to the
                     //     review driver — performed by the caller, outside this
                     //     lock, because `drive_review_with` reads GitHub.
-                    if matches!(signal.workers.get(id), Some(PdWorkerSignal::Done { .. }))
+                    // §2(d) gates this too, and not only the spawn below: a
+                    // hand-off opens a REVIEWER, so a drive whose consent was
+                    // withdrawn this tick must not perform one either.
+                    if consent_ok
+                        && run.reported_done
                         && run.state() == plandrive::SliceState::Running
                         && run.pr > 0
                     {
@@ -2213,6 +2240,7 @@ impl OrchRegistry {
                 if let Some(entry) = state.entry_mut(issue) {
                     if let Some(run) = entry.slices.get_mut(slice) {
                         run.advance(plandrive::SliceState::InReview, None);
+                        run.reported_done = false;
                     }
                     entry.note_progress(now);
                     let _ = plandrive::store_state(&dir, &state);

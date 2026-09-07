@@ -3450,7 +3450,26 @@ impl OrchRegistry {
                 } else if cand.role == reviewdrive::DrivenRole::Worker {
                     agent.clone()
                 } else {
-                    match entry.release_pane(&cand.role, &session) {
+                    // **A conflict release also forgets the revision the lane
+                    // was briefed at** (#3176) — see
+                    // [`reviewdrive::DriveEntry::reseed_lane`] for why a plain
+                    // `release_pane` here leaves `review-wait` waiting on a lane
+                    // it can see is open and cannot see has no pane. Every other
+                    // reason releases a lane that has ANSWERED, where the field
+                    // is inert.
+                    //
+                    // This is the LANE arm: the two above it are the worker's
+                    // (#3203's per-pane widening), and a lane candidate names
+                    // exactly one pane, so the reseed cannot reach a superseded
+                    // id it was not decided for.
+                    let freed = match (&cand.role, cand.reason) {
+                        (
+                            reviewdrive::DrivenRole::Lane(block),
+                            reviewdrive::ReleaseReason::Conflict,
+                        ) => entry.reseed_lane(block, &session),
+                        _ => entry.release_pane(&cand.role, &session),
+                    };
+                    match freed {
                         Some(freed) => freed,
                         None => continue,
                     }

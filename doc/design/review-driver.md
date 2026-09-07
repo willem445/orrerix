@@ -1152,6 +1152,53 @@ this note first.
      `ci-wait` a `Done` can land before the matrix settles, `decide_ci_wait`
      answers `Wait`, and a release there would be a `report-consumed` claim one
      tick before it was true;
+   - a **reviewer lane open on a PR that does not merge** (`ReleaseReason::Conflict`,
+     #3176) — the PR is CONFLICTING and that lane has recorded nothing at this
+     head. **Its safety argument is not the one the other three share, and that is
+     why it is a fourth word rather than a reuse.** Theirs is that the pane's
+     output is already durable; this pane has produced none, and that is the
+     point: a verdict recorded against a conflicted head binds to a commit the
+     rebase is about to replace, so `lane_verdict_is_current` reads it as stale
+     the moment the worker pushes and the drive re-briefs that same lane at the
+     new head. What the release destroys is a review whose only possible product
+     is a stale verdict — #3150 paid a whole `rev-std` pass exactly that way, and
+     #2311's ruling (a CONFLICTING PR briefs NO reviewer) covered the lane not yet
+     spawned, never the one already in flight.
+     **Keyed on `facts.ci`, not on the arc**, and that is the difference between a
+     fix and a coin flip: #2311's hoist takes arc 3 on the first tick that observes
+     the conflict, and on that tick the reviewer is as likely to be mid-turn as
+     not — which the idle barrier below refuses, correctly. Asked of the FACTS it
+     is a standing property the way the lane rule is, re-asked on every later tick
+     the drive spends waiting out the same conflict, so the pane goes on the first
+     tick it is between turns. Bounded by the conflict itself: the rebase moves the
+     head, mergeability clears, the rule stops matching — and by `rebase-limit` and
+     `fix-stalled` under it.
+     **A lane that has ALREADY answered at this head is excluded**, and the record
+     is what answers, because `facts.required_lanes` is `None` in exactly the
+     states a conflicted PR is usually observed in (GitHub computes no changed-file
+     list for a head that does not merge — #2311's own measurement), so a rule that
+     could read only `facts` would fire nowhere it mattered. `LaneRecord::at_head`
+     is a record of what the drive READ rather than a gate input, and it is read
+     here only to DECLINE a release: it can cost a slot, never a review. Such a
+     lane is `VerdictRecorded`'s where the routing could be read, and the ordinary
+     stale-verdict handling's where it could not; a `conflict` row on it would be
+     the false claim this word exists to avoid.
+     **This release also forgets the revision the lane was briefed at**
+     (`DriveEntry::reseed_lane`), which no other reason does. The others release a
+     lane that has answered, where `briefed_head` is inert — nothing asks whether
+     it is still open. Left standing on a lane that answered NOTHING it is a trap:
+     `decide_review_wait`'s wait arm is `lane_open_for(rec, head, digest) &&
+     !lane.pane_dead`, and `pane_dead` is derived from the recorded pane, which a
+     plain release empties — so the lane reads as *open at this revision, pane
+     alive* and the drive waits out `state-stalled` for a verdict no pane can
+     produce. `LaneRecord::reseeded` is the existing answer to that exact question
+     and is reused rather than re-spelled: the pane moves to `prior_agents` so §7
+     still intercepts anything it says on its way out, the revision key and
+     `spawned_ms` clear, and the session is carried so the next brief resumes the
+     same conversation.
+     **It spends no counter of its own.** #2311 already spends `rebase_attempts`
+     for the conflict and hands the worker back; `review_rounds` is untouched here
+     exactly as it is there, because no lane delivered any findings.
    - either of them at the **step that ENDS the drive** — `DriveEnded` for the
      worker, `VerdictRecorded` for the lane; see the STEP condition below.
    Three conditions bound them, and each excludes a case the previous version of
@@ -2327,7 +2374,13 @@ disclosure cannot go quietly false.
 item 5's narrowed states: a pane the driver KILLED, with the conversation kept.
 Each carries `pr`, `agent`, the `session` the next round resumes, the `head` it
 was released at, and a `reason` from the closed set `verdict-recorded` |
-`report-consumed` | `drive-ended`; the lane row adds `block`. **`drive-ended` is
+`report-consumed` | `drive-ended` | `conflict`; the lane row adds `block`.
+`conflict` (#3176) is a LANE row only, and it is the one reason that does not
+mean a finished review: the PR does not merge, so the lane was reviewing a head
+the rebase is about to replace and had recorded nothing at it. A reader counting
+the releases that followed real work leaves it out, and a reader counting review
+COST finds it beside the `rd-conflicting` row that accounts for the same tick —
+with `review_rounds` unmoved on both, because nothing was billed. **`drive-ended` is
 its own word rather than a reuse of `report-consumed`** because these rows are
 counted and a reason is a claim: a drive can reach a terminal step having
 consumed no report at all (resumed out of `held(fix-stalled)` or

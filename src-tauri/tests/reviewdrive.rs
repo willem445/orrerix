@@ -13127,3 +13127,298 @@ fn a_superseded_pane_the_barrier_skips_is_not_re_asked_on_a_later_tick() {
         "…and no later tick wrote a release row for it either — a row means a pane went (§5.4)"
     );
 }
+
+// ── #3176: the CONFLICTING transition releases open reviewer lanes ──────────
+
+/// **An open lane on a PR that has gone CONFLICTING is released, and the round
+/// it was reviewing is not charged for** (#3176).
+///
+/// The defect this closes is a whole review round spent on nothing. #2311 hoisted
+/// the conflict read above the per-state logic, so a drive whose base moved under
+/// an open lane now hands the worker back for a rebase instead of holding
+/// `routing-unaccountable` — but the lane the drive had already spawned was left
+/// running, reviewing a head the rebase is about to replace. Whatever it
+/// concluded bound to that head, `lane_verdict_is_current` read it as stale the
+/// moment the worker pushed, and the drive re-briefed the same lane at the new
+/// head. Measured on #3150, which paid a `rev-std` pass exactly that way.
+///
+/// **The two arms differ in ONE fact — the mergeability — and everything else in
+/// the fixture is identical**, so the release is attributable to the conflict and
+/// not to a walk that happened to end somewhere else. Without the CLEAN arm
+/// "the lane was released" is satisfied by any implementation that releases an
+/// idle lane whenever it likes, and "no review round was spent" is satisfied by a
+/// drive that never left `review-wait`.
+///
+/// Six things are asserted together because each alone has a passing
+/// implementation that is wrong: the RELEASE (the pane really went, through the
+/// barrier), the REASON (`conflict`, not one of the three words that claim a
+/// finished review — an audit reason is a claim), the COUNTERS (`rebase_attempts`
+/// says the conflict arc was taken, `review_rounds` says nothing was billed for
+/// it), the SESSION (kept, or the release costs the review rather than a slot),
+/// and the RECORD (the pane forgotten, and the revision key with it, so the next
+/// round is an ordinary re-brief rather than a wait on a lane with no pane).
+#[test]
+fn a_conflict_releases_the_open_lane_it_was_about_to_strand() {
+    for (arm, conflicting) in [("CONFLICTING", true), ("CLEAN", false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, lane) = briefed(&reg, &repo, &gh);
+        reg.set_pr_body_override(Some("b".to_string()));
+        reg.set_pr_head_override(Some(HEAD_A.to_string()));
+
+        // The lane ends its turn WITHOUT recording anything — the shape the issue
+        // is about, and the one `releasable`'s other three reasons cannot reach:
+        // there is no verdict, no consumed report and no terminal step. Ending
+        // the turn is what `release_driven_pane`'s idle barrier requires; a lane
+        // mid-turn is the residual, pinned separately below.
+        report_as(&reg, &group, &lane, Role::Reviewer, "progress");
+        let session_before = live_lanes(&reg, &group)
+            .first()
+            .and_then(|l| l["session"].as_str().map(str::to_string))
+            .unwrap_or_default();
+        assert!(
+            !session_before.is_empty(),
+            "{arm}: the fixture's premise: the lane has a session to keep"
+        );
+        assert_eq!(
+            live_lanes(&reg, &group).first().and_then(|l| l["briefed_head"].as_str()),
+            Some(HEAD_A),
+            "{arm}: …and it was briefed at this head"
+        );
+
+        // The ONE thing that differs between the two runs.
+        if conflicting {
+            gh.set_merge_state("CONFLICTING");
+        }
+        let out = reg.rd_drive_group_with(&group, &gh, 30_000);
+
+        let released: Vec<String> = out.released.iter().map(|(_, _, a)| a.clone()).collect();
+        let rows = audit_details(&reg, &group, "rd-lane-released");
+        let dead = reg.agent(&lane).map(|a| a.status == AgentStatus::Dead).unwrap_or(false);
+        let rec = live_lanes(&reg, &group).first().cloned().unwrap_or_default();
+        let s = reg.review_drive_status(&group);
+
+        assert_eq!(
+            released,
+            if conflicting { vec![lane.clone()] } else { vec![] },
+            "{arm}: the pane the driver freed"
+        );
+        assert_eq!(dead, conflicting, "{arm}: …and its liveness");
+        assert_eq!(rows.len(), usize::from(conflicting), "{arm}: rd-lane-released rows {rows:?}");
+        assert_eq!(
+            s["drives"][0]["counters"]["review_rounds"],
+            json!(0),
+            "{arm}: no lane delivered any findings, so no review round is billed — the half of \
+             #3176 that says the round is not spent: {s}"
+        );
+
+        if conflicting {
+            let row = &rows[0];
+            assert_eq!(row["reason"], json!("conflict"), "{arm}: {row}");
+            assert_eq!(row["block"], json!("rev-std"), "{arm}: {row}");
+            assert_eq!(row["agent"], json!(lane), "{arm}: {row}");
+            assert_eq!(row["head"], json!(HEAD_A), "{arm}: the head it was released at: {row}");
+            assert_eq!(
+                row["session"].as_str().unwrap_or_default(),
+                session_before,
+                "{arm}: the conversation survives, so the re-brief at the rebased head resumes \
+                 the reviewer that has already read this PR: {row}"
+            );
+            assert_eq!(
+                status_state(&reg, &group),
+                "fix-wait",
+                "{arm}: …and the drive still takes #2311's rebase arc: {s}"
+            );
+            assert_eq!(
+                s["drives"][0]["counters"]["rebase_attempts"],
+                json!(1),
+                "{arm}: the REBASE budget is what a conflict spends: {s}"
+            );
+            assert_eq!(
+                rec["session"].as_str().unwrap_or_default(),
+                session_before,
+                "{arm}: the record keeps the session: {rec}"
+            );
+            assert!(
+                rec["agent"].as_str().unwrap_or_default().is_empty(),
+                "{arm}: …and stops naming a pane that is gone: {rec}"
+            );
+            assert_eq!(
+                rec["briefed_head"].as_str().unwrap_or_default(),
+                "",
+                "{arm}: …and forgets the revision it was briefed at. A plain release leaves this \
+                 standing, and `decide_review_wait`'s wait arm then reads the lane as open at \
+                 this revision with a pane that is not dead — `pane_dead` is derived from the \
+                 recorded pane, which the release just emptied — so the drive would wait out \
+                 `state-stalled` for a verdict no pane can produce: {rec}"
+            );
+        } else {
+            // The control, which is also the negative one for the reason: a CLEAN
+            // PR at exactly this point releases nothing at all and stays in
+            // `review-wait` waiting on the lane it has open.
+            assert_eq!(
+                status_state(&reg, &group),
+                "review-wait",
+                "{arm}: nothing moved this drive: {s}"
+            );
+            assert_eq!(s["drives"][0]["counters"]["rebase_attempts"], json!(0), "{arm}: {s}");
+            assert_eq!(
+                rec["agent"].as_str().unwrap_or_default(),
+                lane,
+                "{arm}: the record still names the live pane: {rec}"
+            );
+        }
+    }
+}
+
+/// **A lane that has ALREADY answered at this head is not released as a
+/// conflict** (#3176) — the carve-out, performed rather than described.
+///
+/// An audit reason is a claim, and `conflict` claims a review that was thrown
+/// away. A lane whose verdict is on durable record at this head threw nothing
+/// away: it is `verdict-recorded`'s, and the ordinary stale-verdict handling is
+/// what deals with the verdict itself once the rebase moves the head under it.
+/// Without the carve-out the new rule would relabel every release that happened
+/// to coincide with a conflict, and #3176's own row would stop counting what it
+/// says it counts.
+///
+/// The assertion is on the WORD rather than on the release, because BOTH
+/// candidate rules release this pane — which is exactly why a test asserting
+/// "the lane was released" would pass against the defect.
+#[test]
+fn a_lane_that_answered_at_this_head_is_released_as_verdict_recorded_not_as_a_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, lane) = briefed(&reg, &repo, &gh);
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+
+    record_pass_for(&reg, &group, &lane);
+    report_as(&reg, &group, &lane, Role::Reviewer, "approved");
+    // The drive must have READ that verdict before the conflict lands, or the
+    // record carries nothing to distinguish this lane from an unanswered one and
+    // the test would pass for the wrong reason.
+    reg.rd_drive_group_with(&group, &gh, 25_000);
+    assert_eq!(
+        live_lanes(&reg, &group).first().and_then(|l| l["at_head"].as_str()),
+        Some(HEAD_A),
+        "the fixture's premise: the drive has recorded this lane's answer at this head"
+    );
+
+    gh.set_merge_state("CONFLICTING");
+    reg.rd_drive_group_with(&group, &gh, 30_000);
+
+    let rows = audit_details(&reg, &group, "rd-lane-released");
+    assert!(!rows.is_empty(), "the fixture's premise: the answered lane's pane is released");
+    for row in &rows {
+        assert_ne!(
+            row["reason"],
+            json!("conflict"),
+            "a lane whose verdict is on record threw no review away, so `conflict` would be a \
+             false row on the surface §5.4 asks a reader to count from: {row}"
+        );
+    }
+}
+
+/// **A conflict with no open lane releases nothing and still takes the rebase
+/// arc** (#3176) — the positive control for the rule's own emptiness.
+///
+/// "No lane was released" is trivially true of a fixture that never reached a
+/// conflict at all, so the arc is asserted beside it: this drive really did
+/// observe the conflict, spend `rebase_attempts` and reach `fix-wait`. What it
+/// did not do is invent a release for a lane it never opened.
+#[test]
+fn a_conflict_with_no_open_lane_releases_nothing_and_still_rebases() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _session) = driven(&reg, &repo, &gh);
+
+    // Red CI hands the PR back before any lane has opened, so the drive has a
+    // worker pane and no lane record at all.
+    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    assert_eq!(status_state(&reg, &group), "fix-wait", "the fixture's premise");
+    assert!(live_lanes(&reg, &group).is_empty(), "…and no lane has ever been opened");
+
+    // `fix-wait` is the one state #2311 excludes from the conflict read, so the
+    // worker pushes: arc 7 takes the drive to `ci-wait`, where the conflict is
+    // acted on.
+    gh.set_merge_state("CONFLICTING");
+    gh.set_facts("OPEN", HEAD_B);
+    reg.set_pr_head_override(Some(HEAD_B.to_string()));
+    reg.rd_drive_group_with(&group, &gh, 20_000);
+    reg.rd_drive_group_with(&group, &gh, 30_000);
+
+    let s = reg.review_drive_status(&group);
+    assert_eq!(
+        s["drives"][0]["counters"]["rebase_attempts"],
+        json!(1),
+        "the control: this drive really did act on the conflict: {s}"
+    );
+    assert!(
+        audit_details(&reg, &group, "rd-lane-released").is_empty(),
+        "…and released no lane, because it had none"
+    );
+}
+
+/// **The rule is a standing property of the FACTS, not of the one tick that took
+/// the arc** (#3176) — which is the difference between a fix and a coin flip.
+///
+/// #2311's hoist takes arc 3 on the first tick that observes the conflict, and on
+/// that tick the lane's pane is whatever it happened to be doing. A reviewer
+/// mid-turn is refused by `release_driven_pane`'s idle barrier — the judgment §3
+/// forbids the driver making — so a rule keyed on the STEP would release the pane
+/// only when the conflict happened to arrive between the reviewer's turns, and
+/// leave it burning the round it was spawned for the rest of the time.
+///
+/// Both halves are asserted in one walk, and the first is the negative control
+/// for the second: the SAME lane and the SAME conflict, released on a later tick
+/// once it is idle and not killed on the tick that took the arc.
+#[test]
+fn a_lane_still_mid_turn_at_the_conflict_is_released_on_the_next_tick_it_is_idle() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, lane) = briefed(&reg, &repo, &gh);
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    assert!(
+        reg.agent(&lane).expect("the lane is on the roster").idle_since_ms.is_none(),
+        "the fixture's premise: the reviewer has not ended a turn"
+    );
+
+    gh.set_merge_state("CONFLICTING");
+    reg.rd_drive_group_with(&group, &gh, 30_000);
+    assert_eq!(
+        status_state(&reg, &group),
+        "fix-wait",
+        "the arc is taken on this tick whatever the pane is doing"
+    );
+    assert!(
+        audit_details(&reg, &group, "rd-lane-released").is_empty(),
+        "…and the busy pane is NOT killed: the barrier refuses it, and a release row is written \
+         on the kill succeeding rather than on the intent"
+    );
+    assert_eq!(
+        reg.agent(&lane).map(|a| a.status == AgentStatus::Dead),
+        Some(false),
+        "…so the reviewer mid-turn is still alive"
+    );
+
+    // The reviewer ends its turn. Nothing else about the world has changed: the
+    // PR is still CONFLICTING and the drive is still waiting out the same rebase.
+    report_as(&reg, &group, &lane, Role::Reviewer, "progress");
+    reg.rd_drive_group_with(&group, &gh, 40_000);
+
+    let rows = audit_details(&reg, &group, "rd-lane-released");
+    assert_eq!(rows.len(), 1, "the later tick releases it: {rows:?}");
+    assert_eq!(rows[0]["reason"], json!("conflict"), "{:?}", rows[0]);
+    assert_eq!(rows[0]["agent"], json!(lane), "{:?}", rows[0]);
+}

@@ -2980,6 +2980,52 @@ impl DriveEntry {
         }
     }
 
+    /// Release this lane's pane AND forget the revision it was briefed at —
+    /// [`ReleaseReason::Conflict`]'s half of the release (#3176).
+    ///
+    /// **Why this is not [`release_pane`](DriveEntry::release_pane).** That one
+    /// takes the pane and leaves `briefed_head`/`briefed_digest` standing, which
+    /// is right for a lane that has ANSWERED: `first_stale_lane` skips it, so
+    /// nothing ever asks whether it is still open. A lane released with nothing
+    /// recorded is the opposite case, and the field it leaves behind is a trap:
+    /// `decide_review_wait`'s wait arm is `lane_open_for(rec, head, digest) &&
+    /// !lane.pane_dead`, and `pane_dead` is derived from the recorded pane, which
+    /// a plain release empties — so the lane reads as *open at this revision, pane
+    /// alive*, and the drive waits out `state-stalled` for a verdict no pane can
+    /// produce. That is #2163's defect with the pane removed by the driver's own
+    /// hand instead of by a human's kill.
+    ///
+    /// [`LaneRecord::reseeded`] is the existing answer to exactly that question
+    /// — it is what a re-drive seeds a fresh entry's lanes with — and it is reused
+    /// rather than re-spelled: the pane moves to
+    /// [`prior_agents`](LaneRecord::prior_agents) so §7 still intercepts anything
+    /// it manages to say on its way out, the revision key and `spawned_ms` are
+    /// cleared so the next round is an ordinary fresh brief, and the session is
+    /// carried so that brief resumes the same conversation.
+    ///
+    /// Returns the pane it freed, for the audit row, or `None` when there was no
+    /// pane or no session to carry — the same two refusals `release_pane` makes,
+    /// and for the same reason: a release that lost the conversation would cost
+    /// the review rather than a slot.
+    pub fn reseed_lane(&mut self, block: &str, session: &str) -> Option<String> {
+        let rec = self.lanes.iter_mut().find(|l| l.block == block)?;
+        if rec.agent.trim().is_empty() {
+            return None;
+        }
+        let sess = if rec.session.trim().is_empty() {
+            session.trim().to_string()
+        } else {
+            rec.session.clone()
+        };
+        if sess.is_empty() {
+            return None;
+        }
+        let freed = rec.agent.clone();
+        let next = rec.reseeded(&sess);
+        *rec = next;
+        Some(freed)
+    }
+
     /// Which side of this drive `agent_id` is, if any — §7's interception key.
     ///
     /// **The key is the agent, never text a delegate typed**, and this method is
@@ -4430,6 +4476,37 @@ pub enum ReleaseReason {
     /// a drive cancelled while its worker is mid-round is still waiting on that
     /// worker, and releases nothing.
     DriveEnded,
+    /// **A reviewer lane reviewing a head that is about to be rebased away**
+    /// (#3176) — the PR is CONFLICTING and the lane has recorded nothing at this
+    /// revision.
+    ///
+    /// The fourth variant, and the first whose safety argument is NOT the one
+    /// the other three share. Their pane's output is already on durable record;
+    /// this pane has produced none, and that is the whole point. A verdict
+    /// recorded against a conflicted head binds to a commit the rebase is about
+    /// to replace, so [`lane_verdict_is_current`] is false for it the moment the
+    /// worker pushes: the round is spent and the drive re-briefs that lane at the
+    /// new head anyway. What a release destroys here is therefore a review whose
+    /// only possible product is a stale verdict — measured on #3150, which paid a
+    /// whole `rev-std` pass exactly that way.
+    ///
+    /// It is a fourth WORD rather than a reuse for the reason
+    /// [`DriveEnded`](ReleaseReason::DriveEnded) is one: a reason is a claim on
+    /// the surface §5.4 asks a reader to count from, and a reader counting the
+    /// releases that followed a finished review must be able to leave this one
+    /// out.
+    ///
+    /// **It spends no counter and proposes no arc.** #2311's hoist already spends
+    /// `rebase_attempts` for the conflict and hands the worker back;
+    /// `review_rounds` is untouched here exactly as it is there, because no lane
+    /// delivered any findings.
+    ///
+    /// A lane that has ALREADY answered at this head is deliberately left to
+    /// [`VerdictRecorded`](ReleaseReason::VerdictRecorded) and to the ordinary
+    /// stale-verdict handling: its pane is finished either way, and labelling
+    /// that release `conflict` would be the false row this variant exists to
+    /// avoid.
+    Conflict,
 }
 
 impl ReleaseReason {
@@ -4438,6 +4515,7 @@ impl ReleaseReason {
             ReleaseReason::VerdictRecorded => "verdict-recorded",
             ReleaseReason::ReportConsumed => "report-consumed",
             ReleaseReason::DriveEnded => "drive-ended",
+            ReleaseReason::Conflict => "conflict",
         }
     }
 }
@@ -4669,6 +4747,57 @@ pub fn releasable(
             role: DrivenRole::Lane(l.block.clone()),
             reason: ReleaseReason::VerdictRecorded,
         });
+    }
+    // **Condition 4: the PR does not merge, so every open lane is reviewing a
+    // head that is about to be rebased away** (#3176).
+    //
+    // Keyed on `facts.ci` and not on the STEP, and that is the difference
+    // between a fix and a coin flip. #2311's hoist takes arc 3 on the first tick
+    // that observes the conflict, and on that tick the lane's pane is whatever it
+    // happened to be doing — mid-turn as often as not, which
+    // `release_driven_pane`'s idle barrier refuses (§3.1 item 5). Asked of the
+    // FACTS, the rule is a standing property the way condition 2's is: it is
+    // re-asked on every later tick the drive spends waiting out the same
+    // conflict, so the pane goes on the first tick it is between turns instead of
+    // on the one tick that took the arc. It is bounded by the conflict itself —
+    // the worker's rebase moves the head, mergeability clears, and the rule stops
+    // matching — and by `rebase-limit` / `fix-stalled` under it.
+    //
+    // Conditions 1's exclusions still apply above: a step that PARKS the drive
+    // returned empty, so a `held(rebase-limit)` conflict releases nothing and §6's
+    // notice keeps naming panes that are really there. A TERMINAL step is excluded
+    // here rather than there — `satisfied` cannot be reached on a conflict since
+    // #2311, and at `cancelled` the panes are the orchestrator's to dispose of,
+    // named on the way out.
+    //
+    // **The lane that has answered is not this variant's.** It is condition 2's
+    // when the routing could be read, and the ordinary stale-verdict handling's
+    // when it could not; either way its pane is finished, and a `conflict` row on
+    // it would be the false claim [`ReleaseReason::Conflict`] exists to avoid. The
+    // record is what answers, because `facts.required_lanes` is `None` in exactly
+    // the states a conflicted PR is usually observed in — GitHub computes no
+    // changed-file list for a head that does not merge, which is #2311's own
+    // measurement — so a rule that could only read `facts` would fire nowhere it
+    // mattered. `LaneRecord::at_head` is a record of what the drive READ rather
+    // than a gate input, and it is read here only to DECLINE a release: it can
+    // cost a slot, never a review.
+    if !terminal && facts.ci == CiObservation::Conflicting {
+        for l in &entry.lanes {
+            if l.agent.trim().is_empty() {
+                continue;
+            }
+            let role = DrivenRole::Lane(l.block.clone());
+            if out.iter().any(|c| c.role == role) {
+                continue;
+            }
+            let answered_here = l.last_verdict.is_some()
+                && !l.at_head.is_empty()
+                && l.at_head == facts.head;
+            if answered_here {
+                continue;
+            }
+            out.push(ReleaseCandidate { role, reason: ReleaseReason::Conflict });
+        }
     }
     out
 }

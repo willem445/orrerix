@@ -13284,26 +13284,41 @@ fn a_conflict_releases_the_open_lane_it_was_about_to_strand() {
 ///
 /// An audit reason is a claim, and `conflict` claims a review that was thrown
 /// away. A lane whose verdict is on durable record at this head threw nothing
-/// away: it is `verdict-recorded`'s where the routing can be read, and the
-/// ordinary stale-verdict handling's where it cannot.
+/// away, so neither arm may touch it: it is not told to stop (it is not
+/// mid-review) and it is not released as a `conflict` (it is
+/// `verdict-recorded`'s, or the ordinary stale-verdict handling's).
 ///
-/// **The two arms differ in whether `lane_verdict_is_current` can answer, and
-/// that is what makes the second one discriminating.** In the `current` arm
-/// condition 2 fires first and condition 4's dedupe never reaches the lane at
-/// all — so that arm pins the label and is worth nothing as a test OF the
-/// carve-out. The `body moved` arm moves the PR body under a recorded pass:
-/// `lane_verdict_is_current` is false for it (the digest half), condition 2
-/// skips, and the carve-out is the only thing standing between that lane and a
-/// `conflict` row. A first draft asserted only the first arm; dropping the
-/// carve-out reddened nothing, which is how the gap was found.
+/// **The two arms differ in exactly one thing — whether a verdict was recorded
+/// — and the unanswered one is the positive control.** Without it "no rows"
+/// is satisfied by any fixture that never reached the conflict at all, and by an
+/// implementation that does nothing whatsoever.
 ///
-/// The record is what the carve-out reads, deliberately: `facts.required_lanes`
-/// is `None` in exactly the states a conflicted PR is usually observed in
-/// (GitHub computes no changed-file list for a head that does not merge), so a
-/// rule that could read only `facts` would decline nowhere it mattered.
+/// # The fixture, and the two ways an earlier draft of it proved nothing
+///
+/// The lane stays **mid-turn** throughout: `record_pass_for` writes the verdict
+/// file and does not stamp `idle_since_ms`, and no `report` follows it. That is
+/// load-bearing twice over. It keeps `release_driven_pane` refusing, so the
+/// answered lane's pane survives the pre-conflict tick with its record intact —
+/// a draft that let condition 2 release it there had no pane left for the
+/// carve-out to decline, and the assertion passed against a lane that was simply
+/// gone. And it routes the counterfactual through the STOP arm, which is where
+/// a missing carve-out is actually visible: drop it and the answered lane is
+/// told to stand down from a review it has already delivered.
+///
+/// The live body is moved out from under the recorded pass so condition 2 cannot
+/// answer either — `gh.set_body`, not `set_pr_body_override`. The override is
+/// what a verdict binds to when it is RECORDED, which is already past; the
+/// fake's body is what the drive reads live. A draft that moved the override
+/// moved neither, `lane_verdict_is_current` stayed true, and condition 2
+/// released the lane before the carve-out was reached.
+///
+/// Rows are counted from a SNAPSHOT taken before the conflict tick. `audit_log`
+/// is the whole group's history, so a bare `audit_details` here answers for
+/// every tick the fixture walked through — which is how the first draft read a
+/// release from the setup as if the conflict had produced it.
 #[test]
 fn a_lane_that_answered_at_this_head_is_never_released_as_a_conflict() {
-    for (arm, move_body) in [("current", false), ("body moved", true)] {
+    for (arm, answered) in [("answered", true), ("never answered", false)] {
         let dir = tempfile::tempdir().unwrap();
         let reg = relaunch_registry(dir.path());
         let repo = Repo::new();
@@ -13311,41 +13326,51 @@ fn a_lane_that_answered_at_this_head_is_never_released_as_a_conflict() {
         let (group, lane) = briefed(&reg, &repo, &gh);
         reg.set_pr_body_override(Some("b".to_string()));
         reg.set_pr_head_override(Some(HEAD_A.to_string()));
+        make_delivery_land(&reg, &group, &lane, 4322);
 
-        record_pass_for(&reg, &group, &lane);
-        report_as(&reg, &group, &lane, Role::Reviewer, "approved");
-        // The drive must have READ that verdict before the conflict lands, or
-        // the record carries nothing to distinguish this lane from an unanswered
-        // one and the test would pass for the wrong reason.
-        reg.rd_drive_group_with(&group, &gh, 25_000);
-        assert_eq!(
-            live_lanes(&reg, &group).first().and_then(|l| l["at_head"].as_str()),
-            Some(HEAD_A),
-            "{arm}: the fixture's premise: the drive has recorded this lane's answer at this head"
-        );
-
-        // The ONE thing that differs: the LIVE body, moved out from under the
-        // recorded pass.
-        //
-        // `gh.set_body` and not `set_pr_body_override`, and the distinction is
-        // the one the sibling release test states from the other side ("the
-        // digest a verdict binds to is computed from the body override, so it
-        // must agree with the one FakeGh serves or every pass reads as stale"):
-        // the override is what the VERDICT bound to when it was recorded, the
-        // fake's body is what the DRIVE reads live. Moving the override here
-        // moves neither — it is read at record time, which is already past — and
-        // the first draft of this test did exactly that, so
-        // `lane_verdict_is_current` stayed true, condition 2 released the lane as
-        // `verdict-recorded`, and the arm proved nothing about the carve-out.
-        if move_body {
+        if answered {
+            record_pass_for(&reg, &group, &lane);
+            // The drive must have READ that verdict before the conflict lands,
+            // or the record carries nothing to distinguish this lane from an
+            // unanswered one and the test would pass for the wrong reason.
+            reg.rd_drive_group_with(&group, &gh, 25_000);
+            assert_eq!(
+                live_lanes(&reg, &group).first().and_then(|l| l["at_head"].as_str()),
+                Some(HEAD_A),
+                "{arm}: the fixture's premise: the drive has recorded this lane's answer"
+            );
+            // …and the live body moves, so `lane_verdict_is_current` is false
+            // and condition 2 cannot be what declines this lane.
             gh.set_body("b — and one more sentence");
         }
+        assert!(
+            reg.agent(&lane).expect("the lane is on the roster").idle_since_ms.is_none(),
+            "{arm}: the fixture's premise: the reviewer is mid-turn in BOTH arms"
+        );
+        assert_eq!(
+            live_lanes(&reg, &group).first().and_then(|l| l["agent"].as_str()),
+            Some(lane.as_str()),
+            "{arm}: …so its pane is still on the record, whatever happened before"
+        );
 
+        // Everything above is setup; only what follows is this test's subject.
+        let before = reg.audit_log(&group).len();
         gh.set_merge_state("CONFLICTING");
         reg.rd_drive_group_with(&group, &gh, 30_000);
+        let mut log = reg.audit_log(&group);
+        let after: Vec<_> = log.split_off(before);
+        let rows = |action: &str| -> Vec<serde_json::Value> {
+            after.iter().filter(|e| e.action == action).map(|e| e.detail.clone()).collect()
+        };
+        let stopped = rows("rd-lane-stopped");
+        let released = rows("rd-lane-released");
 
-        let rows = audit_details(&reg, &group, "rd-lane-released");
-        for row in &rows {
+        assert_eq!(
+            status_state(&reg, &group),
+            "fix-wait",
+            "{arm}: the control on the tick itself — this drive really did act on the conflict"
+        );
+        for row in &released {
             assert_ne!(
                 row["reason"],
                 json!("conflict"),
@@ -13353,27 +13378,12 @@ fn a_lane_that_answered_at_this_head_is_never_released_as_a_conflict() {
                  would be a false row on the surface §5.4 asks a reader to count from: {row}"
             );
         }
-        if move_body {
-            // The discriminating half. Condition 2 cannot see this lane — its
-            // pass no longer stands at the live digest — so without the
-            // carve-out condition 4 releases it, as `conflict`, for a review
-            // that is sitting in the verdict file.
-            assert!(
-                rows.is_empty(),
-                "{arm}: nothing releases this pane on this tick — condition 2 skips it (the pass \
-                 does not stand at the moved digest) and the carve-out declines it: {rows:?}"
-            );
-        } else {
-            // The control for the arm above: the same walk with the body left
-            // alone DOES release, so \"no row\" there is the carve-out and not a
-            // fixture that never reached a release at all.
-            assert_eq!(
-                rows.len(),
-                1,
-                "{arm}: the control — a current pass releases its pane: {rows:?}"
-            );
-            assert_eq!(rows[0]["reason"], json!("verdict-recorded"), "{arm}: {:?}", rows[0]);
-        }
+        assert_eq!(
+            stopped.len(),
+            usize::from(!answered),
+            "{arm}: rd-lane-stopped rows — a lane mid-review is told to stand down, and one \
+             whose verdict is already delivered is told nothing: {stopped:?}"
+        );
     }
 }
 

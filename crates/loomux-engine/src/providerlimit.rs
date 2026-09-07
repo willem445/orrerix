@@ -223,7 +223,7 @@ pub fn limit_in_tail(tail: &str) -> Option<&'static LimitPattern> {
         if strip_gutter(lines[i]).is_empty() {
             continue;
         }
-        let logical = rejoined(&lines, i);
+        let logical = strip_gutter(lines[i]).to_string(); // MUTATION M4: no reassembly
         if let Some(p) = LIMIT_PATTERNS.iter().find(|p| logical.starts_with(p.needle)) {
             return Some(p);
         }

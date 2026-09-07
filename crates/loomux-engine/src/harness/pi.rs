@@ -205,6 +205,19 @@ impl LaunchSpec {
     }
 }
 
+/// The whole argv a child is started with: `prefix_args`, then the spec's own.
+///
+/// Pure and separate from [`PiPane::spawn_with`] so the ORDER is testable
+/// without starting a process — this module's tests never do (constraint 3),
+/// and the order is the only thing the prefix mechanism can get wrong. A
+/// prefix appended AFTER the spec would still spawn on Windows and would
+/// silently hand `pi` its own launch line as arguments to `cmd.exe`.
+pub fn full_argv(prefix_args: &[String], spec: &LaunchSpec) -> Vec<String> {
+    let mut a: Vec<String> = prefix_args.to_vec();
+    a.extend(spec.argv());
+    a
+}
+
 // ── the session id ──────────────────────────────────────────────────────────
 
 /// Does the id `get_state` reported name the session loomux asked for?
@@ -1295,9 +1308,10 @@ impl PiPane {
     /// **`program` is a parameter and never a literal**, so nothing in this
     /// crate can start a real CLI on its own: this slice's tests exercise
     /// [`pump`] over in-memory streams and never reach this function
-    /// (constraint 3). On Windows `pi` is an npm `.cmd` shim, and resolving that
-    /// to something `CreateProcessW` will start is the CALLER's job (S3b) — the
-    /// same resolution `src-tauri` already does for `gh` and `git`.
+    /// (constraint 3). On Windows `pi` is an npm `.cmd` shim, and resolving
+    /// that to something `CreateProcessW` will start is the CALLER's job —
+    /// [`Self::spawn_with`] is where the resolved shim's `cmd.exe /c` prefix
+    /// goes.
     ///
     /// stderr is inherited rather than piped, for [`super::claude::ClaudePane`]'s
     /// reason: a piped stderr nobody drains fills its buffer and blocks the
@@ -1307,8 +1321,36 @@ impl PiPane {
     /// turn, because [`HarnessEvent::Booted`] is synthesized from its reply and
     /// a pane that never asked would never boot.
     pub fn spawn(program: &Path, spec: &LaunchSpec, log: Option<EventLog>) -> std::io::Result<Self> {
+        Self::spawn_with(program, &[], spec, log)
+    }
+
+    /// [`Self::spawn`], with argv words inserted BEFORE the launch spec's own.
+    ///
+    /// The Windows shim problem, carried rather than worked around. `pi` is an
+    /// npm `.cmd` shim, `winpath::is_native_executable` excludes `.cmd`
+    /// deliberately, and `CreateProcessW` — which is all
+    /// `std::process::Command` does — cannot start one. The only thing that
+    /// can is `cmd.exe /c <shim> ...`, so the CALLER that resolved the shim
+    /// needs somewhere to put the two words in front. [`Self::spawn`] gave it
+    /// none: it builds argv from the spec alone, which made "resolving the
+    /// shim is the caller's job (S3b)" a job with no API to do it in.
+    ///
+    /// A PREFIX and not a whole argv, so the launch line stays this module's
+    /// to build: a caller can say how to REACH pi and cannot say what to ask
+    /// pi for. That is what keeps `pi_rpc_argv_is_the_pty_line_plus_one_flag`
+    /// meaningful — the spec's own words are still the whole of the argv that
+    /// carries containment, session identity and the MCP bridge.
+    ///
+    /// `&[]` is the ordinary case and the one [`Self::spawn`] passes, so a
+    /// platform that needs no shim pays nothing and reads the same.
+    pub fn spawn_with(
+        program: &Path,
+        prefix_args: &[String],
+        spec: &LaunchSpec,
+        log: Option<EventLog>,
+    ) -> std::io::Result<Self> {
         let mut child = std::process::Command::new(program)
-            .args(spec.argv())
+            .args(full_argv(prefix_args, spec))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -1481,36 +1523,88 @@ impl AgentPane for PiPane {
     fn session_id(&self) -> Option<String> {
         self.session.lock_safe().clone()
     }
+
+    /// pi HAS a dialog channel, so this is the one implementation that does
+    /// not take the trait default. Delegates to the inherent
+    /// [`PiPane::answer_ui`], which is also reachable directly where the
+    /// caller holds a concrete pane.
+    fn answer_ui(&self, req: RequestId, answer: UiAnswer) -> Result<(), String> {
+        PiPane::answer_ui(self, req, answer)
+    }
+}
+
+/// How a pane's child actually left, as [`shutdown_child`] observed it.
+///
+/// Returned rather than discarded because it is the only EVIDENCE the reap
+/// happened: an exit status can be obtained in exactly one way, by waiting for
+/// it, so a caller holding one of these is holding proof the child was
+/// collected. That is what makes the reap testable without libc, `/proc`, or a
+/// second look at the process table — delete the `wait` and this cannot be
+/// produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Departure {
+    /// Left on its own before the grace ran out, and was collected there.
+    Graceful(Option<i32>),
+    /// Had to be killed, and was collected after the kill.
+    Killed(Option<i32>),
+    /// The child could not be collected — `try_wait` and `wait` both failed.
+    /// Kept as a variant rather than folded into `Killed` so "we could not
+    /// reap" stays distinguishable from "we reaped a killed child".
+    Unreaped,
+}
+
+/// Close a pi child down: wait out `grace`, then kill, and **collect it either
+/// way**.
+///
+/// Split out of [`PiPane::drop`] so the teardown can be exercised against a
+/// real short-lived child. That is not the constraint-3 prohibition: the rule
+/// is never to spawn a real AGENT CLI, and `src-tauri/tests/direct_spawn.rs`
+/// already drives process spawning the same way.
+///
+/// A killed child is not a REAPED one. `Child::kill` signals and returns;
+/// without the `wait` the OS keeps the process-table entry (a zombie on Unix)
+/// and the handle on Windows until orrerix exits, so a group that spawns and
+/// kills panes all day accumulates them. `src-tauri`'s own post-spawn failure
+/// paths already kill AND wait; this matches them rather than inventing a
+/// second convention (#3067 item 2).
+pub fn shutdown_child(child: &mut Child, grace: std::time::Duration) -> Departure {
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        match child.try_wait() {
+            // Already collected by `try_wait` itself — that IS the reap.
+            Ok(Some(st)) => return Departure::Graceful(st.code()),
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    // A cooperative shutdown that has not happened within the grace is not one
+    // that is about to, so the kill is unconditional from here.
+    let _ = child.kill();
+    match child.wait() {
+        Ok(st) => Departure::Killed(st.code()),
+        Err(_) => Departure::Unreaped,
+    }
 }
 
 impl Drop for PiPane {
     /// End the turn, then the process: `abort`, close stdin, wait
-    /// [`SHUTDOWN_GRACE`], kill.
+    /// [`SHUTDOWN_GRACE`], kill, reap.
     ///
     /// The graceful path exists here and not on the Claude side because pi has
-    /// the command that makes it graceful. The kill is still unconditional after
-    /// the wait: a cooperative shutdown that has not happened in two seconds is
-    /// not one that is about to.
+    /// the command that makes it graceful. The teardown itself is
+    /// [`shutdown_child`], which is where its reasoning and its test live; a
+    /// `Drop` body cannot return anything a test could read.
     fn drop(&mut self) {
         let _ = self.write_line(&abort_line());
         *self.stdin.lock_safe() = None;
-        let deadline = std::time::Instant::now() + SHUTDOWN_GRACE;
-        loop {
-            let mut child = self.child.lock_safe();
-            match child.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) => {}
-                Err(_) => break,
-            }
-            drop(child);
-            if std::time::Instant::now() >= deadline {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-        let _ = self.child.lock_safe().kill();
+        let _ = shutdown_child(&mut self.child.lock_safe(), SHUTDOWN_GRACE);
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -1603,6 +1697,30 @@ mod tests {
         ] {
             assert!(argv.iter().any(|a| a == flag), "argv dropped {flag}: {argv:?}");
         }
+    }
+
+    #[test]
+    fn a_launch_prefix_lands_in_front_of_the_spec_and_changes_nothing_else() {
+        // The Windows shim path: `cmd.exe /c C:/npm/pi.cmd` in front, pi's own
+        // line untouched behind it. Order is the whole mechanism — a prefix
+        // that landed AFTER would make pi's flags arguments to `cmd.exe`, and
+        // would still spawn, which is why this is pinned rather than read.
+        let prefix = vec!["/c".to_string(), "C:/npm/pi.cmd".to_string()];
+        let bare = full_argv(&[], &spec());
+        let with = full_argv(&prefix, &spec());
+
+        assert_eq!(&with[..prefix.len()], &prefix[..], "the prefix is not in front: {with:?}");
+        assert_eq!(
+            &with[prefix.len()..],
+            &bare[..],
+            "the prefix changed the launch line behind it: {with:?}"
+        );
+        // The empty prefix is the ordinary case, and it must cost nothing:
+        // `spawn` delegates through here on every platform.
+        assert_eq!(bare, spec().argv(), "an empty prefix altered the argv");
+        // `--mode rpc` still leads the pi half, so the prefix has not been
+        // spliced INTO the launch line rather than before it.
+        assert_eq!(&with[prefix.len()..prefix.len() + 2], &MODE_FLAG[..], "{with:?}");
     }
 
     #[test]

@@ -380,6 +380,7 @@ guess about which CLI a block runs:
 | `pi-transcript` | `pi` |
 | `session-db` | `opencode` |
 | `codex-transcript` | `codex` |
+| `stream` | `unknown` — **deliberately.** #2850's structured panes report usage over the harness protocol, so this value names a TRANSPORT rather than a CLI. It is `pi` alone today only because pi is the only CLI with a structured driver; mapping it would be a per-CLI identity read off the wrong axis, and would go silently false the moment claude gains one (#84 R2) |
 | `statusline`, `none`, absent, anything else | `unknown` |
 
 **A ladder, and `unknown` is the last outcome, never a guess.**

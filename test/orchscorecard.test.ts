@@ -825,6 +825,13 @@ test('cli: the source label decides, one map, and everything else is `unknown`',
   assert.equal(sc.cliForSource('pi-transcript'), 'pi');
   assert.equal(sc.cliForSource('session-db'), 'opencode');
   assert.equal(sc.cliForSource('codex-transcript'), 'codex');
+  // `stream` (#2850) is `unknown` ON PURPOSE, and this is the assertion that
+  // keeps it that way. A structured pane reports its usage over the harness
+  // protocol, so the label names a TRANSPORT rather than a CLI. It happens to
+  // be pi alone today only because pi is the only CLI with a structured
+  // driver; mapping it to 'pi' would read a per-CLI identity off the wrong
+  // axis and go silently false when claude gains one (#84 R2).
+  assert.equal(sc.cliForSource('stream'), 'unknown');
   // The two labels that name no CLI, and the three shapes of absence. A
   // statusline scrape says a CLI printed a dollar figure, never which one.
   assert.equal(sc.cliForSource('statusline'), 'unknown');

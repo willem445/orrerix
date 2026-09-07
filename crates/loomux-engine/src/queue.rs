@@ -229,6 +229,21 @@ pub enum EnqueueReason {
     /// the marker drains (that is `drain_stranded_submit`'s press, identical
     /// for both pushes) and never a notice — see `queued_notice` below.
     StrandedSelfHeal,
+    /// #2850: a delivery to a STRUCTURED pane whose `AgentPane::send` failed.
+    ///
+    /// Its own variant for the audit-honesty rule every reason above follows.
+    /// None of the others is true here: nothing is occupying an input box, no
+    /// question is on screen, nothing is ahead in the queue, and there is no
+    /// box for text to strand in — a structured pane has no terminal at all.
+    /// Reusing one of them would put a PTY-shaped explanation on a failure
+    /// that has none, which is exactly the false audit claim this enum exists
+    /// to prevent.
+    ///
+    /// What it means concretely: the child stdin would not take the bytes, so
+    /// the pane is on its way out. The entry stays queued and the drainer
+    /// stops when the pane is torn down, rather than a delivery being lost to
+    /// an `Ok` nobody could check.
+    PaneSendFailed,
     /// #658: the drain-time roster naming deliveries this pane REFUSED while
     /// its queue was full (`announce_refusal_roster`).
     ///
@@ -267,7 +282,8 @@ impl EnqueueReason {
             | EnqueueReason::Recovered
             | EnqueueReason::GroupPaused
             | EnqueueReason::StrandedSelfHeal
-            | EnqueueReason::RefusalRoster => 0,
+            | EnqueueReason::RefusalRoster
+            | EnqueueReason::PaneSendFailed => 0,
         }
     }
 }
@@ -290,6 +306,7 @@ impl EnqueueReason {
             EnqueueReason::PauseLossNotice => "pause-loss-notice",
             EnqueueReason::StrandedSelfHeal => "stranded-self-heal",
             EnqueueReason::RefusalRoster => "refusal-roster",
+            EnqueueReason::PaneSendFailed => "pane-send-failed",
         }
     }
 }
@@ -601,6 +618,13 @@ pub fn queued_notice(agent_id: &str, reason: EnqueueReason) -> String {
         // queued. Spelled out rather than folded into a `_` arm so the next
         // variant added to this enum is still a compile error here.
         EnqueueReason::RefusalRoster => "it reports what this pane refused while full",
+        // #2850: REACHABLE, unlike the five above it. A structured pane whose
+        // `send` failed has a sender waiting to hear what happened, and the
+        // honest answer is that the pane is on its way out rather than that
+        // something is in the way — there is no box, no question and no queue
+        // ahead of it. "do NOT re-send" in the shared suffix stays true: the
+        // entry is still queued, and a pane that comes back drains it.
+        EnqueueReason::PaneSendFailed => "the pane did not accept it",
     };
     format!(
         "[orrerix] delivery to {agent_id} queued ({why}) — delivers automatically once clear; do NOT re-send"

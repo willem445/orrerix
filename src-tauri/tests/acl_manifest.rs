@@ -62,7 +62,7 @@ stub_commands!(
     gh_pr_list, gh_pr_view, gh_pr_comment, gh_activity,
     git_watch, git_unwatch,
     agent_autopilot_flags, agent_cli_knobs, create_orchestration, promote_to_orchestrator, bind_agent,
-    orch_agent_renamed, orch_session_roles, orch_list_recorded,
+    orch_agent_renamed, orch_session_roles, orch_list_recorded, orch_answer_pane_ui,
     resume_orch_session, orch_tasks, orch_audit, orch_usage_series, orch_merge_queue, orch_steer, orch_save_attachment, orch_upsert_task,
     orch_delete_task, orch_delete_done_tasks, orch_clear_done_tasks, orch_restore_cleared_tasks,
     orch_delete_tasks, orch_reorder_tasks, orch_open_ref,
@@ -169,11 +169,11 @@ fn generate_handler_matches_app_commands() {
 }
 
 #[test]
-fn app_commands_len_is_170() {
+fn app_commands_len_is_171() {
     assert_eq!(
         loomux_lib::command_manifest::APP_COMMANDS.len(),
-        170,
-        "APP_COMMANDS drifted from the expected count of 170 (120 per the #363 plan's audited \
+        171,
+        "APP_COMMANDS drifted from the expected count of 171 (120 per the #363 plan's audited \
          count, +1 for orch_confirm_solo_copilot_autopilot added in #364, +2 for \
          orch_set_advanced_orchestrator/orch_workflow_status added in #316/#355, +3 for \
          orch_set_compact_nudge_minutes/orch_set_compact_nudge_roles/ \
@@ -228,12 +228,14 @@ fn app_commands_len_is_170() {
          then bind the pty and type the lead's kickoff), added in #2519 slice B, \
          +1 for orch_usage_series - the persisted usage time series the token time-plot \
          reads, added in #2011 slice B) — \
+         +1 for orch_answer_pane_ui — the one trusted door that settles a \
+         structured pane's extension-UI dialog, added in #2850 S3b — \
          if this is an intentional addition/removal, update this tripwire's count too"
     );
 }
 
 #[test]
-fn main_has_all_170_and_zero_permission_denies_dangerous_spread() {
+fn main_has_all_171_and_zero_permission_denies_dangerous_spread() {
     // Catches drift in *this test file* before it can mask a real gap: the
     // stub list above must match APP_COMMANDS exactly.
     let mut stub_names: Vec<&str> = STUB_COMMAND_NAMES.to_vec();

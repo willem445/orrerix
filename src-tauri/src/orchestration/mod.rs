@@ -21,6 +21,7 @@ pub mod e2ehold;
 pub mod humanq;
 pub mod mcp;
 pub mod needsyou;
+pub mod structured;
 /// The repo tuning fingerprint behind the time-plot's marks (#2011 slice B).
 /// Walks and hashes the agent-facing config, at most once per series bucket.
 /// Never the GUI thread, and serialized per group by the usage memo cell — see
@@ -4931,6 +4932,8 @@ fn human_pane_entry(
         token: token.to_string(),
         status: AgentStatus::Starting,
         pty_id: None,
+        pane_id: None,
+        pane_kind: None,
         task: String::new(),
         task_id: None, // a human-launched pane has no board binding
         session_id: None,
@@ -11460,6 +11463,26 @@ pub struct AgentEntry {
     pub token: String,
     pub status: AgentStatus,
     pub pty_id: Option<u32>,
+    /// The pane id of a STRUCTURED pane (#2850 S3b), or `None`.
+    ///
+    /// Beside `pty_id` and never instead of it. Both come from one counter
+    /// (`PtyManager::reserve_id`) so the queue, the drainer and `deliver_now`
+    /// can key on either, but they name different things and a single field
+    /// holding both would put a reserved id where every PTY-side lookup
+    /// expects a real one. A structured pane keeps `pty_id: None` for its
+    /// whole life; that is the guard, not a check.
+    pub pane_id: Option<u32>,
+    /// What kind of pane was spawned — `None` (absent) means `pty`, so every
+    /// roster written before #2850 reads correctly.
+    ///
+    /// A RECORD of what was spawned, not a control: nothing reads it to decide
+    /// how to drive a pane, only to render it and to answer `PaneKind` for a
+    /// pane this process did not spawn (`harness-adapters.md` section 2.4).
+    ///
+    /// Persisted by `persist_agent_record`, which builds its JSON by hand --
+    /// this struct derives no serde, so a field reaches `agents.json` only by
+    /// being written there.
+    pub pane_kind: Option<String>,
     pub task: String,
     /// The board task this spawn was bound to (#1273), when the orchestrator
     /// named one (`spawn_agent(task_id:)`). Metadata in the task-hierarchy §7
@@ -14050,6 +14073,15 @@ pub struct AgentRecord {
     /// Additive: absent on a pre-#1 roster row.
     #[serde(default)]
     pub branch: Option<String>,
+    /// What KIND of pane was spawned (#2850) — `"structured"`, or absent
+    /// for the PTY pane every roster written before this key carried.
+    ///
+    /// A record, never a control: nothing reads it to decide how to DRIVE a
+    /// pane (this process knows that from its own registry), only to render
+    /// it and to answer the question for a pane this process did not spawn
+    /// — which is exactly the case a persisted roster exists for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_kind: Option<String>,
 }
 
 /// Durable per-agent usage snapshot (`usage.json` per group). Keyed by the CLI
@@ -14070,18 +14102,39 @@ pub struct UsageSnapshot {
     /// in the human's own store — exact tokens, dollars ESTIMATED here because
     /// codex records none, #2515), `session-db` (opencode's own
     /// `session` row — exact tokens AND its own dollar figure, #722),
+    /// `stream` (a STRUCTURED pane, #2850 — the figures the harness REPORTED
+    /// over its own protocol, which is why it is distinguishable from every
+    /// scrape above rather than folded into one of them),
     /// `statusline` (last-resort parse of the CLI's own dollar figure), or
     /// `none` (nothing available yet).
     ///
-    /// **Six values, on three surfaces that must move together**: this doc,
-    /// `AgentUsage.source`'s union in `src/orchestration.ts`, and the
-    /// enumeration in `doc/design/group-cost-tracking.md` (which carries the
-    /// same list twice — the per-CLI sections and the payload shape). The frontend's is a
-    /// declared TYPE for a value that crosses the IPC seam untyped, so `tsc`
-    /// cannot catch a value outside it and a narrowing written against a stale
-    /// union is silently wrong. Adding a seventh means one entity grep
-    /// (`grep -rn session-db --include=*.ts --include=*.rs --include=*.md`),
-    /// not three guesses.
+    /// **Seven values, on SIX surfaces that must move together**: this doc,
+    /// `AgentUsage.source`'s union in `src/orchestration.ts`, the enumeration
+    /// in `doc/design/group-cost-tracking.md`, the `source`→`cli` table in
+    /// `doc/design/orchestration-evals.md`, and TWO in
+    /// `scripts/orch-scorecard.cjs`: `SOURCE_TO_CLI` (whose test pins it) and
+    /// the H10 hazard entry, which states the same mapping in prose.
+    ///
+    /// This paragraph said THREE until #2850 added the seventh value, and the
+    /// count was wrong TWICE on the way to six. The first sweep found five —
+    /// the scorecard pair was never in the list. The second, re-run after a
+    /// rebase and with `--include=*.cjs` actually in the pattern, found H10 as
+    /// well. Both misses are the same shape: a surface nobody knows about is a
+    /// surface nobody updates, and a sweep is only as wide as the globs it was
+    /// run with and only valid for the base it was run on.
+    ///
+    /// The frontend's is a declared TYPE for a value that crosses the IPC seam
+    /// untyped, so `tsc` cannot catch a value outside it and a narrowing
+    /// written against a stale union is silently wrong. The scorecard's is a
+    /// LOOKUP, and a missing key there degrades to `unknown` rather than
+    /// failing — quiet in a different way. Adding an eighth means one entity
+    /// grep (`grep -rn session-db --include=*.ts --include=*.rs --include=*.md
+    /// --include=*.cjs`), not five guesses.
+    ///
+    /// **`stream` is deliberately absent from `SOURCE_TO_CLI`.** It names a
+    /// transport, not a CLI: it is pi alone today only because pi is the only
+    /// CLI with a structured driver, so mapping it would read a per-CLI
+    /// identity off the wrong axis and go false when claude gains one.
     pub source: String,
     /// The workflow block this agent was spawned from (#2011 slice B, closing
     /// the `block` half of t-664). `role` above is the capability CLASS — four
@@ -15259,6 +15312,21 @@ pub struct OrchRegistry {
     agents: TrackedMutex<HashMap<String, AgentEntry>>,
     by_token: TrackedMutex<HashMap<String, String>>,
     by_pty: TrackedMutex<HashMap<u32, String>>,
+    /// Live structured panes (#2850 S3b), keyed by agent id.
+    ///
+    /// Beside `by_pty` rather than inside it: the two pane kinds share ONE
+    /// id keyspace (`PtyManager::reserve_id`) so a delivery can be routed by
+    /// id alone, but they are different things and a lookup that returned
+    /// either would be the asymmetry a guard is supposed to prevent. A
+    /// structured pane is found HERE, before anything reaches `PtyManager`.
+    structured: structured::StructuredPanes,
+    /// Usage a structured pane REPORTED, per agent id (#2850 S3b).
+    ///
+    /// Stored rather than recomputed, which is what separates this source
+    /// from the six transcript ones: those re-read a file the CLI wrote, so
+    /// their figures survive a restart on their own. A stream source has no
+    /// file to re-read.
+    stream_usage: TrackedMutex<HashMap<String, structured::StreamUsage>>,
     pending_binds: TrackedMutex<HashMap<String, mpsc::Sender<u32>>>,
     /// The `SpawnRequest`s built on the **no-frontend** path, by agent id — the
     /// payload a real frontend would have received, kept only when there is no
@@ -23469,6 +23537,55 @@ fn deliver_now(
     // stage necessarily adds it to the bound) is the version that cannot be
     // forgotten; this comment is option 1, and it is a request, not a guard.
     let _guard = lock.lock_safe();
+
+    // #2850 S3b — the structured branch, and it is FIRST for a structural
+    // reason rather than a stylistic one.
+    //
+    // `PtyManager` is reached on the very next line. A structured pane holds a
+    // reserved id from the same counter, so handing one to that state would
+    // look perfectly valid and simply find nothing — or, if the id were ever
+    // reused, find the WRONG pane. Returning above it means no reserved id can
+    // travel further down this function, which is a property of the ordering
+    // and not of a check anyone has to remember to keep.
+    //
+    // Everything below this point exists because a PTY pane cannot be ASKED
+    // whether it took the bytes: the readiness wait, the question gate, the
+    // typing loop, the Enter, the submit confirmation, the late monitor.
+    // `AgentPane::send` returns a receipt, so none of them has anything to do
+    // here — they are not SKIPPED, they are inapplicable.
+    if let Some(reg) = reg.as_ref() {
+        if let Some(pane) = reg.structured_by_pane_id(pty_id) {
+            let kind = record_contributions
+                .first()
+                .map(|(_, k)| *k)
+                .unwrap_or_default();
+            let turn = structured::turn_for(kind, &delivery_from, &text);
+            return match reg.deliver_structured(&pane, turn) {
+                Ok(_) => {
+                    reg.audit(
+                        &group,
+                        &delivery_from,
+                        "delivery",
+                        json!({
+                            "agent": agent,
+                            "pane": pty_id,
+                            "kind": "structured",
+                            "bytes": text.len(),
+                        }),
+                    );
+                    DeliverOutcome::Done
+                }
+                Err(e) => {
+                    crate::obs::breadcrumb(
+                        "structured-delivery-failed",
+                        &format!("agent={agent} err={e}"),
+                    );
+                    DeliverOutcome::AbortedPrePaste(queue::EnqueueReason::PaneSendFailed)
+                }
+            };
+        }
+    }
+
     let ptys = app.state::<crate::pty::PtyManager>();
     let paste = bracketed_paste(&text);
     let submit = submit_sequence(&cli);
@@ -29693,6 +29810,8 @@ impl OrchRegistry {
             agents: TrackedMutex::new_ranked("agents", lockorder::AGENTS, HashMap::new()),
             by_token: TrackedMutex::new("by_token", HashMap::new()),
             by_pty: TrackedMutex::new_ranked("by_pty", lockorder::BY_PTY, HashMap::new()),
+            structured: structured::StructuredPanes::default(),
+            stream_usage: TrackedMutex::new("stream_usage", HashMap::new()),
             pending_binds: TrackedMutex::new("pending_binds", HashMap::new()),
             test_spawn_requests: TrackedMutex::new("test_spawn_requests", HashMap::new()),
             spawn_notices: TrackedMutex::new("spawn_notices", HashMap::new()),
@@ -33667,6 +33786,7 @@ impl OrchRegistry {
             updated_ms: now_ms(),
             task: entry.task.clone(),
             branch: entry.branch.clone(),
+            pane_kind: entry.pane_kind.clone(),
         };
         // Match by (id, session). Since #524 an id is never re-minted, so a
         // bare-id match can no longer overwrite a DIFFERENT run's record —
@@ -34166,6 +34286,12 @@ impl OrchRegistry {
                 updated_ms: v["ts_ms"].as_u64().unwrap_or(0),
                 task,
                 branch,
+                // The spawn audit does not record the pane kind, and this
+                // rebuild is reconstructing a roster from it. `None` is the
+                // honest answer — absent means `pty`, which is what every
+                // agent this path can see was, since a structured pane is
+                // #2850 and newer than every audit line it reads.
+                pane_kind: None,
             };
             match out.iter_mut().find(|r| r.id == record.id && r.session == record.session) {
                 Some(r) => *r = record,
@@ -38785,6 +38911,8 @@ impl OrchRegistry {
             token: String::new(), // delivery-only, by construction: never a channel_send caller
             status: AgentStatus::Running,
             pty_id: Some(pty_id),
+            pane_id: None,
+            pane_kind: None,
             task: String::new(),
             task_id: None, // a solo pane has no board binding
             session_id: None,
@@ -43963,6 +44091,17 @@ impl OrchRegistry {
         let prompt_shaped: HashMap<String, bool> = roster
             .iter()
             .filter(|a| a.status == AgentStatus::Running)
+            // #2850 S3b: never scrape a structured pane. Section 5.4 — orrerix
+            // must not read back what orrerix itself rendered, which is not
+            // merely pointless but FORGEABLE: the ring holds the pane own
+            // transcript, so model prose shaped like a question grid would be
+            // detected as one. Its attention comes from the event stream
+            // instead (a pending `UiRequest`), decided below.
+            //
+            // Written as an explicit filter rather than left to the `tails`
+            // lookup missing: that would be true today and silently wrong the
+            // moment a structured pane grows a tail entry.
+            .filter(|a| a.pane_kind.is_none())
             .filter_map(|a| tails.get(&a.id).map(|t| (a, t)))
             .map(|(a, t)| {
                 // #1702: the session comes off the ROSTER SNAPSHOT, so this
@@ -44075,6 +44214,15 @@ impl OrchRegistry {
                 ))
             } else if report == Some("blocked") {
                 ("blocked", format!("{} reported blocked — it needs you", a.name))
+            } else if self
+                .structured_pane(&a.id)
+                .is_some_and(|p| p.awaiting_human())
+            {
+                // #2850 S3b. A parked dialog BLOCKS the agent — pi waits on
+                // stdin indefinitely — so this ranks with `stranded` rather
+                // than with the amber `question`: the pane will not un-wedge
+                // itself, and every delivery behind it waits too.
+                ("dialog", format!("{} is waiting on a dialog — answer it to unblock the pane", a.name))
             } else if let Some(note) = stranded.get(a.id.as_str()) {
                 // #496 PR-C: ranked directly under `blocked` and above
                 // `waiting` — a stranded prompt is a wedged pane that will
@@ -44627,6 +44775,22 @@ impl OrchRegistry {
             model: None,
             updated_ms: now_ms(),
         };
+
+        // #2850 S3b — a structured pane reported its own figures, so nothing
+        // below applies: there is no transcript file to read and no statusline
+        // to parse. Checked FIRST because the fallbacks would otherwise return
+        // `none` for a pane that has perfectly good numbers.
+        if let Some(u) = self.stream_usage_for(&entry.id) {
+            snap.source = structured::USAGE_SOURCE_STREAM.to_string();
+            snap.input_tokens = u.input;
+            snap.output_tokens = u.output;
+            snap.cache_read_tokens = u.cache_read;
+            snap.cache_creation_tokens = u.cache_creation;
+            snap.cost_usd = u.cost_usd;
+            snap.estimated = u.estimated.unwrap_or(false);
+            snap.updated_ms = u.updated_ms;
+            return snap;
+        }
 
         // Primary source: per-session token usage from the transcript. Claude
         // Code writes it; Copilot has no readable token record today (see the
@@ -51053,6 +51217,21 @@ impl OrchRegistry {
                 block.id, SUPPORTED_CLIS.join(", ")
             ));
         }
+        // #2850 S3b: the SECOND ask of the `driver:` rule, against the cli
+        // `cli_of` just resolved rather than the one the block spelled.
+        //
+        // `parse_workflow` cannot make this check for a block with no `cli:`
+        // of its own: `caps` is `None` there, so `driver: structured` under a
+        // workflow-level `cli: claude` parses CLEAN and arrives here. That is
+        // the trigger this check exists for — not a hand-edited group.json,
+        // though it catches one of those too, the same way `cli_can_host` and
+        // the SUPPORTED_CLIS guard above are each asked twice.
+        //
+        // Refusing is the honest outcome: a structured block that spawned a
+        // PTY pane anyway would be the app quietly giving the human a
+        // different thing from what their workflow file asked for.
+        let structured = workflow::structured_harness_for(block.driver.as_deref(), cli)
+            .map_err(|e| format!("guardrail: block {} — {e}", block.id))?;
         let cli = cli.to_string();
         let model = workflow::model_of(&block, &group.guardrails.agent_cli).to_string();
 
@@ -51322,6 +51501,8 @@ impl OrchRegistry {
             token: token.clone(),
             status: AgentStatus::Starting,
             pty_id: None,
+            pane_id: None,
+            pane_kind: None,
             task: task.to_string(),
             task_id: task_id.clone(),
             session_id: session_id.clone(),
@@ -51479,6 +51660,105 @@ impl OrchRegistry {
             "agent-spawn",
             &format!("group={group_id} agent={agent_id} role={role:?} worktree={use_worktree}"),
         );
+
+        // #2850 S3b — the structured path, which REPLACES everything below
+        // rather than adding to it.
+        //
+        // No `orch-spawn-request` is emitted: that event asks the FRONTEND to
+        // open a ConPTY and run the command line, and a frontend that does not
+        // yet know about structured panes would do exactly that — starting a
+        // SECOND, real pi beside the one this arm spawns. So the pane is
+        // backend-only until the DOM renderer (#2891 S4) mounts it from the
+        // roster `pane_kind`, and there is no bind rendezvous to wait on.
+        if let Some(harness) = structured {
+            let spec = structured::pi_launch_spec(
+                session_id.as_deref(),
+                &self.group_dir(group_id),
+                &cfg.path,
+                inject.pi_append_system_prompt_file.as_deref(),
+                role.containment(),
+                &model,
+                block.knobs().effort,
+            );
+            // Resolve the program the caller will actually start. On Windows
+            // `pi` is an npm `.cmd` shim, which `CreateProcessW` cannot run —
+            // `launch_form` returns the `cmd.exe /c <shim>` prefix for it and
+            // nothing at all for a native image.
+            let path_env = crate::winpath::launch_path();
+            let pathext = crate::winpath::launch_pathext();
+
+            // Both failures below happen AFTER the roster insert and the
+            // `running` persist, so neither may simply `?` out: the row would
+            // survive as a `Starting` ghost that counts against `max_agents`,
+            // that `kill_agent` refuses ("no terminal yet"), and that nothing
+            // expires — the spawn-expiry paths key on `orch-spawn-request`,
+            // which this arm deliberately never emits. A machine without `pi`
+            // on PATH is the ordinary case, so the capacity would fill with
+            // ghosts on repeated attempts and nothing would say why.
+            //
+            // The PTY arm's own bind-timeout failure does exactly this
+            // teardown; this is the same one, not a second convention.
+            let resolved = match crate::winpath::resolve_program(&cli, &path_env, &pathext) {
+                Some(p) => p,
+                None => {
+                    return Err(self.abandon_structured_spawn(
+                        group_id,
+                        &agent_id,
+                        &entry.token,
+                        format!("guardrail: block {} — {cli} is not on PATH", block.id),
+                    ))
+                }
+            };
+            let (program, prefix) = crate::winpath::launch_form(&resolved);
+
+            let pane = match self.spawn_structured_pane(harness, &entry, &spec, &program, &prefix)
+            {
+                Ok(p) => p,
+                Err(e) => return Err(self.abandon_structured_spawn(group_id, &agent_id, &entry.token, e)),
+            };
+            if let Some(app) = self.app.lock_safe().clone() {
+                use tauri::Manager;
+                app.state::<crate::pty::PtyManager>()
+                    .register_structured_ring(pane.pane_id);
+            }
+            // The roster row records WHAT WAS SPAWNED. `pty_id` stays `None`
+            // for ever, which is what keeps every PTY-side operation
+            // structurally unable to reach this pane.
+            {
+                let mut agents = self.agents.lock_safe();
+                if let Some(a) = agents.get_mut(&agent_id) {
+                    a.status = AgentStatus::Running;
+                    a.pane_id = Some(pane.pane_id);
+                    a.pane_kind = Some(structured::PANE_KIND_STRUCTURED.to_string());
+                }
+            }
+            if let Some(a) = self.agent(&agent_id) {
+                self.persist_agent_record(&a, "running");
+            }
+            self.audit(
+                group_id,
+                brand::AUDIT_ACTOR,
+                "agent-bind",
+                json!({ "agent": agent_id, "pane": pane.pane_id, "kind": "structured" }),
+            );
+            if let Some(reg) = self.arc() {
+                reg.drain_structured_pane(Arc::clone(&pane));
+            }
+            // Same kickoff rules as the PTY path: a resume delivers only the
+            // follow-up, a fresh spawn delivers the whole kickoff.
+            if resume {
+                if !task.trim().is_empty() {
+                    self.deliver_prompt(&agent_id, task, brand::AUDIT_ACTOR, Delivery::ResumeKickoff)?;
+                }
+            } else {
+                let a = self.agent(&agent_id).ok_or("agent vanished during spawn")?;
+                let kickoff = self.kickoff_prompt(&a, &group, &branch_note, inject.kickoff.as_deref());
+                self.deliver_prompt(&agent_id, &kickoff, brand::AUDIT_ACTOR, Delivery::FreshKickoff)?;
+            }
+            return self
+                .agent(&agent_id)
+                .ok_or_else(|| "agent vanished during spawn".to_string());
+        }
 
         let pane_env = {
             let mut e = self.agent_pane_env(group_id, &agent_id);
@@ -52040,7 +52320,14 @@ impl OrchRegistry {
             );
             return Err(format!("agent {agent_id} is dead"));
         }
-        let Some(pty_id) = a.pty_id else {
+        // #2850 S3b: the delivery KEY, which is a pty id for a PTY pane and a
+        // reserved pane id for a structured one. One queue, one drainer, one
+        // front door — the two pane kinds differ at the far end of
+        // `deliver_now`, not here.
+        //
+        // `or` and not `and`: exactly one of the pair is ever set, so this
+        // cannot silently prefer the wrong one.
+        let Some(pty_id) = a.pty_id.or(a.pane_id) else {
             self.audit_delivery_refused(
                 &a.group, agent_id, from, text, RefusalReason::NoTerminal,
             );
@@ -56849,6 +57136,26 @@ impl OrchRegistry {
         }
         // Checked BEFORE the app handle and before the stamp: with no pty
         // there is nothing to kill, so there is nothing to attribute either.
+        // #2850 S3b: a structured pane is killed through its own ladder —
+        // interrupt (end the turn rather than abandon it mid-tool), close
+        // stdin, bounded wait, kill, reap. `PtyManager::kill` is not involved
+        // and cannot be: this pane has no `pty_id`, which is the point of it
+        // never having one.
+        //
+        // Ahead of the `pty_id` check below, because that check would
+        // otherwise refuse a live structured pane as "still binding" — true of
+        // its pty_id, false of the pane, and the kind of asymmetry that leaves
+        // an agent unkillable.
+        if self.structured_pane(agent_id).is_some() {
+            self.record_exit_initiator(agent_id, initiator);
+            self.kill_structured_pane(agent_id)?;
+            self.audit(&a.group, brand::AUDIT_ACTOR, "agent-kill", json!({
+                "agent": agent_id,
+                "initiator": initiator.as_str(),
+                "kind": "structured",
+            }));
+            return Ok(());
+        }
         let Some(pty) = a.pty_id else {
             self.audit(&a.group, brand::AUDIT_ACTOR, "agent-kill-noop", json!({
                 "agent": agent_id,
@@ -59835,6 +60142,88 @@ pub async fn orch_apply_workflow(
 /// **Reentrancy.** Reads only — the workflow file, in-memory guardrails, and
 /// the branch name; the sole mutation is filling the in-memory branch memo,
 /// which is last-writer-wins on a value every racer resolves identically.
+/// Settle an extension-UI dialog on a structured pane (#2850 S3b).
+///
+/// **The one trusted entry point, and the gate is that it IS one.** Section
+/// 3.5: every agent may be ASKED, no agent may ever answer. That is enforced
+/// by there being no MCP tool for it — a `#[tauri::command]` is reachable only
+/// from the app own webview, so the answerer identity is a property of the
+/// door rather than an argument anyone could set. `DecisionSource::Human` is
+/// therefore recorded because of WHERE this ran, not because a caller said so.
+///
+/// An agent that could settle its own dialog would have a gate that is
+/// theatre, which is the `questions.json` boundary and its reason.
+///
+/// `value` carries a `select`/`input`/`editor` answer, `confirmed` a
+/// `confirm` one, and neither means a cancel. Exactly one of the two may be
+/// set; both together is a refusal rather than a precedence rule, because a
+/// caller that supplied both did not know which dialog it was answering.
+///
+/// `async`, so constraint 10 does not apply the way it does to a sync command:
+/// the work runs on the blocking pool through `run_blocking`, not inline on
+/// the webview thread.
+#[tauri::command]
+pub async fn orch_answer_pane_ui(
+    app: AppHandle,
+    group_id: String,
+    agent_id: String,
+    request: String,
+    value: Option<String>,
+    confirmed: Option<bool>,
+) -> Result<(), String> {
+    let reg = reg_of(&app);
+    let group_id = command_group(&group_id)?;
+    // The three shapes pi accepts, decided here rather than in the engine:
+    // which one a dialog wants is a property of its METHOD, and the caller
+    // that rendered the control is the one that knows.
+    let answer = match (value, confirmed) {
+        (Some(v), None) => loomux_engine::harness::UiAnswer::Value(v),
+        (None, Some(c)) => loomux_engine::harness::UiAnswer::Confirmed(c),
+        (None, None) => loomux_engine::harness::UiAnswer::Cancelled,
+        (Some(_), Some(_)) => {
+            return Err(
+                "a dialog answer is a value OR a confirmation, never both".to_string()
+            )
+        }
+    };
+    run_blocking(move || {
+        let row = reg.answer_pane_ui(&group_id, &agent_id, &request, answer)?;
+        // The human answered, so their own queue row is discharged — a row
+        // that outlived the dialog it describes is a queue that only grows.
+        //
+        // Done HERE rather than in `structured.rs` because `ResolveSource` is
+        // pinned by a source scan to `needsyou.rs` and this file, and a third
+        // file naming it is a new resolving surface rather than a list to
+        // extend. This is the same trusted-command layer
+        // `orch_needs_you_resolve` settles from.
+        //
+        // `Webview` is the party and the surface: the human, in loomux's own
+        // webview, through a command no agent can reach. WHICH gesture it was
+        // goes in the resolution note rather than into a new provenance tag —
+        // see the PR for why a fifth `resolved_by` spelling was considered and
+        // left to a reviewer's call rather than taken unilaterally on a trust
+        // boundary.
+        //
+        // Best-effort: a row already cleared by hand, or pruned, must not turn
+        // a dialog that really was answered into an error the human sees.
+        if let Some(row) = row.as_deref() {
+            if let Err(e) = reg.resolve_needs_you(
+                &group_id,
+                row,
+                Some("answered in the pane dialog"),
+                needsyou::ResolveSource::Webview,
+            ) {
+                crate::obs::breadcrumb(
+                    "structured-dialog-row-unresolved",
+                    &format!("row={row} err={e}"),
+                );
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn orch_workflow_status(app: AppHandle, group_id: String) -> Value {
     let reg = reg_of(&app);
@@ -60609,6 +60998,8 @@ fn register_orchestrator_pane(
         token: token.clone(),
         status: AgentStatus::Starting,
         pty_id: None,
+        pane_id: None,
+        pane_kind: None,
         task: String::new(),
         task_id: None, // the group’s own orchestrator is never spawned against a board row
         session_id,

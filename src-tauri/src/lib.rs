@@ -302,6 +302,7 @@ pub fn run() {
             orchestration::orch_workflow_switch_preview,
             orchestration::orch_apply_workflow,
             orchestration::orch_workflow_status,
+            orchestration::orch_answer_pane_ui,
             orchestration::orch_group_watches,
             orchestration::orch_lock_state,
             orchestration::orch_mailbox_status,

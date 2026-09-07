@@ -1486,13 +1486,15 @@ export interface AgentUsage {
    *  exact tokens AND pi's own dollar figure, #2126), `codex-transcript` (a
    *  codex rollout — exact tokens, dollars estimated here because codex
    *  records none, #2515), `session-db` (opencode's own session row, which
-   *  carries its dollar figure too), `statusline` (last-resort CLI parse), or
-   *  `none` (nothing available yet). */
+   *  carries its dollar figure too), `stream` (a STRUCTURED pane, #2850 — the
+   *  figures the harness reported over its own protocol, not a scrape),
+   *  `statusline` (last-resort CLI parse), or `none` (nothing available yet). */
   source:
     | "transcript"
     | "pi-transcript"
     | "codex-transcript"
     | "session-db"
+    | "stream"
     | "statusline"
     | "none";
   /** The workflow block this agent was spawned from (`worker-std`,

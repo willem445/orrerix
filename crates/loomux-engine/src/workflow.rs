@@ -2697,6 +2697,84 @@ pub fn driver_mode_names() -> String {
     DRIVER_MODES.join(", ")
 }
 
+/// Which structured harness this block's driver resolves to, for a KNOWN CLI —
+/// or the refusal naming why it cannot.
+///
+/// **One spelling of the `driver:`/`CliCaps` rule, asked in two places.**
+/// `parse_workflow` asks it of an explicitly spelled `cli:`, where a refusal is
+/// a parse error the human sees. `spawn_agent_bound` asks it again of the
+/// EFFECTIVE cli — the one `cli_of` resolved after inheritance — which is the
+/// case the parse cannot reach at all: a block with no `cli:` of its own gets
+/// `caps: None` there, so `driver: structured` under a workflow-level
+/// `cli: claude` parses CLEAN today and would otherwise arrive at a spawn path
+/// with no driver to run it on. That second ask is also the copy a hand-edited
+/// `group.json` has to get past, the same reason `cli_can_host` is checked
+/// twice.
+///
+/// A function rather than the check written out at both sites, because two
+/// spellings of one rule is the divergence the shared-helper rule exists to
+/// stop — and because only one of the two sites is reachable by the tests that
+/// cover the other.
+///
+/// `Ok(None)` means this block asked for no structured driver, which is every
+/// block written before the key existed and every PTY pane after it.
+pub fn structured_harness_for(
+    driver: Option<&str>,
+    cli: &str,
+) -> Result<Option<crate::harness::Harness>, StructuredDriverRefusal> {
+    // Absent, or any mode that is not `structured`: no structured driver is
+    // asked for. The vocabulary itself is checked where the value is admitted
+    // (`parse_workflow`, and `read_blocks`' defence in depth), never here —
+    // this function answers "which harness", not "is this spelled right".
+    if driver != Some("structured") {
+        return Ok(None);
+    }
+    match crate::model::cli_caps(cli).and_then(|c| c.structured_driver) {
+        Some(h) => Ok(Some(h)),
+        None => Err(StructuredDriverRefusal {
+            cli: cli.to_string(),
+            with_driver: clis_with_a_structured_driver(),
+        }),
+    }
+}
+
+/// Why a `driver: structured` block cannot run on the CLI it resolved to.
+///
+/// A struct rather than a formatted `String`, so each caller can frame it for
+/// its own surface — `parse_workflow` prefixes the block index a human reads
+/// in their workflow file, the spawn path prefixes `guardrail:` like every
+/// other refusal on that path — while the REASON and the remedy stay one
+/// sentence written once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructuredDriverRefusal {
+    pub cli: String,
+    pub with_driver: Vec<&'static str>,
+}
+
+impl std::fmt::Display for StructuredDriverRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cli {:?} has no structured driver — driver: structured needs a CLI \
+             loomux drives over its structured protocol. Fix: drop the key (the \
+             block runs as a PTY pane), or give this block a cli: that has one — {}",
+            self.cli,
+            self.with_driver.join(", ")
+        )
+    }
+}
+
+/// Every CLI whose `CliCaps` row carries a structured driver, in table order.
+/// Derived rather than listed, so a row that gains one appears in the remedy
+/// without anyone remembering to add it.
+pub fn clis_with_a_structured_driver() -> Vec<&'static str> {
+    crate::model::CLI_CAPS
+        .iter()
+        .filter(|c| c.structured_driver.is_some())
+        .map(|c| c.cli)
+        .collect()
+}
+
 /// Validate one block model knob — `effort:` or `context:` (#687).
 ///
 /// Two checks, in this order, and both are **loud**: the value must be in
@@ -3112,20 +3190,15 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                     ));
                     continue;
                 } else {
-                    if let Some(caps) = caps {
-                        if caps.structured_driver.is_none() {
-                            let with_driver: Vec<&str> = crate::model::CLI_CAPS
-                                .iter()
-                                .filter(|c| c.structured_driver.is_some())
-                                .map(|c| c.cli)
-                                .collect();
-                            errs.push(format!(
-                                "blocks[{i}] ({id}): cli {cli:?} has no structured driver — \
-                                 driver: {want} needs a CLI loomux drives over its structured \
-                                 protocol. Fix: drop the key (the block runs as a PTY pane), or \
-                                 give this block a cli: that has one — {}",
-                                with_driver.join(", ")
-                            ));
+                    // Only for an EXPLICIT `cli:` — `caps` is `None` for an
+                    // inherited one, which is unknowable here. That case is
+                    // not merely deferred, it is genuinely UNREACHABLE from
+                    // this function, and `structured_harness_for` is asked
+                    // again at spawn against the cli `cli_of` resolves (the
+                    // second ask #2850 S3b lands).
+                    if caps.is_some() {
+                        if let Err(refusal) = structured_harness_for(Some(want.as_str()), &cli) {
+                            errs.push(format!("blocks[{i}] ({id}): {refusal}"));
                             continue;
                         }
                     }

@@ -16357,6 +16357,7 @@ fn a_bare_resume_of_an_unparseable_recorded_role_refuses_instead_of_defaulting()
         updated_ms: 0,
         task: String::new(),
         branch: None,
+        pane_kind: None,
     };
     fs::write(
         reg.state_root().join(g.id.as_str()).join("agents.json"),
@@ -16415,6 +16416,7 @@ fn write_roster(reg: &OrchRegistry, group: &GroupId, sessions: &[&str]) {
             updated_ms: 0,
             task: String::new(),
             branch: None,
+            pane_kind: None,
         })
         .collect();
     fs::write(

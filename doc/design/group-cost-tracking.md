@@ -244,7 +244,8 @@ panes actually running. See doc/design/polled-payload-shapes.md §1. Each total'
 is `estimated` (all token-derived), `reported` (all CLI statusline), `mixed`, or
 `null` — so a total that blends estimated and reported dollars is never hidden
 under one label. Each agent row carries its token breakdown, `source`
-(`transcript`/`pi-transcript`/`codex-transcript`/`session-db`/`statusline`/`none`), `model`,
+(`transcript`/`pi-transcript`/`codex-transcript`/`session-db`/`stream`/`statusline`/`none`),
+`model`,
 `cost_usd`, and an `estimated` flag.
 
 Each row also carries `block` and `cli` (#2011 slice B, `#[serde(default)]` and

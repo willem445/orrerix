@@ -52,7 +52,7 @@ path, one delivery door, one idle model, and one thing the daemon's `PaneHost`
 
 ```rust
 pub enum PaneKind { Pty, Structured(Harness) }
-pub enum Harness  { Claude }          // R1's only variant; opencode/ACP are R3/R4
+pub enum Harness  { Claude, Pi }      // opencode/ACP are R3/R4
 
 pub trait AgentPane: Send + Sync {
     fn kind(&self) -> PaneKind;

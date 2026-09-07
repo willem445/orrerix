@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-orch-answer-pane-ui"
+description = "Enables the orch_answer_pane_ui command without any pre-configured scope."
+commands.allow = ["orch_answer_pane_ui"]
+
+[[permission]]
+identifier = "deny-orch-answer-pane-ui"
+description = "Denies the orch_answer_pane_ui command without any pre-configured scope."
+commands.deny = ["orch_answer_pane_ui"]

@@ -1327,11 +1327,7 @@ impl OrchRegistry {
                     // row still carries when `pd_spawn_slice`'s post-spawn
                     // assignee write failed, and skipping THAT row is the
                     // stranding this release exists to prevent.
-                    plandrive::rollback_is_ours_of(
-                        &t.status,
-                        t.assignee.as_deref(),
-                        &[agent, brand::AUDIT_ACTOR],
-                    )
+                    plandrive::rollback_is_ours(&t.status, t.assignee.as_deref(), agent)
                 });
             if !held_by_us {
                 continue;

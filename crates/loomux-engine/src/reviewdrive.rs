@@ -4868,6 +4868,76 @@ fn minutes_ms(minutes: u64) -> u64 {
 mod tests {
     use super::*;
 
+
+    /// **The once-per-revision stop mark, pinned where it is decidable** (#3176).
+    ///
+    /// The integration test asserts the observable property — one
+    /// `rd-lane-stopped` row across two ticks — and measured against a mutation
+    /// that DELETES the `lane_stopped_at` check it does not discriminate: the
+    /// second delivery does not duplicate anyway, for a reason further down the
+    /// delivery stack. So the guard's own coverage is here, where the question
+    /// is a pure one and every answer is reachable.
+    ///
+    /// Four properties, and the second and fourth are what stop the first being
+    /// satisfiable by a constant: the mark does not stand before it is written,
+    /// it DOES once it is, it is keyed on the REVISION rather than on the lane,
+    /// and `reseeded` clears it so the lane is tellable again at the rebased
+    /// head — which is the whole reason the field can be persisted without
+    /// silencing the next round.
+    #[test]
+    fn the_stop_mark_is_per_revision_and_a_reseed_clears_it() {
+        let head_a = "aa11bb22cc33dd44";
+        let head_b = "bb22cc33dd44ee55";
+        let mut e = entry_at(DriveState::ReviewWait);
+        e.open_lane("rev-std", "s1", "rev-1", head_a, Some("d1"), 1_000, false, false);
+
+        // 1. Not marked before anything writes it — the negative control, and
+        //    what makes the assertion below about the WRITE rather than about a
+        //    predicate that answers `true` for everything.
+        assert!(!e.lane_stopped_at("rev-std", head_a), "nothing has told this lane anything yet");
+
+        // 2. The write lands, and says it moved.
+        assert!(e.mark_lane_stopped("rev-std", head_a), "the first mark moves the field");
+        assert!(e.lane_stopped_at("rev-std", head_a), "…and the predicate now answers for it");
+        assert!(
+            !e.mark_lane_stopped("rev-std", head_a),
+            "…and a second mark at the same revision moves nothing, so a caller can tell whether \
+             the entry needs storing"
+        );
+
+        // 3. Keyed on the REVISION. A lane told about one head has not been told
+        //    about the next, which is what makes the mark safe to persist: the
+        //    rebase produces a new head and the lane is tellable again.
+        assert!(
+            !e.lane_stopped_at("rev-std", head_b),
+            "the mark is per-revision — a head-blind mark would silence the lane for the whole \
+             drive, including the rebased head this whole feature exists to re-brief at"
+        );
+        // …and it is keyed on the LANE, so one lane's mark is not another's.
+        assert!(!e.lane_stopped_at("rev-final", head_a), "a mark belongs to one lane");
+        assert!(
+            !e.mark_lane_stopped("rev-final", head_a),
+            "…and marking a lane with no record writes nothing at all"
+        );
+
+        // 4. An unresolved head is never "already told": §8's posture, and the
+        //    same one `decide`'s empty-head guard takes one screen up.
+        assert!(!e.lane_stopped_at("rev-std", ""), "an empty head is not a head");
+        assert!(!e.mark_lane_stopped("rev-std", ""), "…and is never written as one");
+        assert!(
+            e.lane_stopped_at("rev-std", head_a),
+            "…and that refusal left the real mark alone"
+        );
+
+        // 5. `reseeded` clears it with the rest of the per-revision fields.
+        let rec = e.lane("rev-std").expect("the lane is on record").reseeded("s1");
+        assert_eq!(
+            rec.stopped_head, "",
+            "a reseeded lane is tellable again — the release path reseeds, so a lane released at \
+             a conflicted head must not carry a mark that silences its next round"
+        );
+    }
+
     /// **`hold_key` stays reason-blind, so the exception cannot migrate into
     /// it** (rev-std round 2 premortem).
     ///

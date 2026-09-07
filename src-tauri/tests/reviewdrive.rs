@@ -13501,18 +13501,26 @@ fn a_lane_still_mid_turn_at_the_conflict_is_released_on_the_next_tick_it_is_idle
 /// (`Delivery::MidSession` — the mechanism `rd_reuse_pane` types a re-brief
 /// with, never an interrupt), telling it to stand down and report.
 ///
-/// Five things are asserted. **Exactly one delivery across two ticks** — the
-/// rule is a standing property of the facts, so the second tick is a tick on
-/// which nothing about the world changed. **The `stopped_head` mark**, asserted
-/// directly, because the row count alone turned out not to discriminate: a
-/// scratch run with the once-per-revision check deleted still produced one row,
-/// for a reason further down the delivery stack this test cannot see, and an
-/// absence nobody can explain is not evidence for the mechanism that was
-/// supposed to cause it. **None to a lane that has already recorded a verdict**
-/// — it is not mid-review and has nothing to stand down from, and telling it
-/// would be the same false claim the `conflict` release reason avoids. **The
-/// pane is still alive**: this arm delivers, it does not kill. And **the line
-/// itself**, read off the pane's own audit trail rather than off the renderer.
+/// Five things are asserted. **Exactly one delivery across two ticks**, on a
+/// second tick where nothing about the world changed. **The `stopped_head` mark
+/// on the record**, which is what the next tick and the next process read.
+/// **None to a lane that has already recorded a verdict** — it is not
+/// mid-review and has nothing to stand down from, and telling it would be the
+/// same false claim the `conflict` release reason avoids. **The pane is still
+/// alive**: this arm delivers, it does not kill. And **the line itself**, read
+/// off the pane's own audit trail rather than off the renderer — a test that
+/// called `rd_lane_stop_brief` directly would pass just as well if nothing were
+/// ever delivered.
+///
+/// **What this test does NOT pin, stated because a measurement that surprised
+/// me is worth more than one that did not.** Deleting the `lane_stopped_at`
+/// check reddens nothing here: the second delivery does not duplicate even with
+/// the guard gone, for a reason further down the delivery stack this test
+/// cannot see. So the row count is the observable PROPERTY and not evidence for
+/// the mechanism behind it, and the guard's own coverage is
+/// `the_stop_mark_is_per_revision_and_a_reseed_clears_it` in the engine crate,
+/// where the question is pure and every answer is reachable. An absence nobody
+/// can explain is not evidence for the thing that was supposed to cause it.
 #[test]
 fn a_busy_lane_on_a_conflicted_pr_is_told_to_stop_once_and_an_answered_one_is_not() {
     for (arm, answered) in [("busy mid-review", false), ("already recorded", true)] {
@@ -13547,19 +13555,14 @@ fn a_busy_lane_on_a_conflicted_pr_is_told_to_stop_once_and_an_answered_one_is_no
         gh.set_merge_state("CONFLICTING");
         reg.rd_drive_group_with(&group, &gh, 30_000);
 
-        // **The MARK, pinned directly, and not as a flourish.** The row count
-        // below is the property the issue asks for, and measured against a
-        // mutation that deletes the `stopped_head` check it does NOT
-        // discriminate: the second delivery does not duplicate even with the
-        // check gone, for a reason further down the delivery stack that this
-        // test cannot see and should not guess at. An absence nobody can explain
-        // is not evidence, so what the once-per-revision rule rests on is
-        // asserted where it is written.
+        // **The mark is on the record**, which is what the next tick and the
+        // next PROCESS read. This asserts the WRITE, not the check — see the
+        // doc above for what does and does not discriminate here.
         if !answered {
             assert_eq!(
                 live_lanes(&reg, &group).first().and_then(|l| l["stopped_head"].as_str()),
                 Some(HEAD_A),
-                "the mark is what makes the stop line arrive once per REVISION rather than once                  per tick, and it is persisted so a restart does not re-send a line the previous                  process sent"
+                "the stop is recorded against the revision it was about, and persisted, so the next process does not re-send a line this one already sent"
             );
         }
 

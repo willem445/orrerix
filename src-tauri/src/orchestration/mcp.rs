@@ -959,6 +959,18 @@ fn group_usage_tool() -> Value {
 /// pane" carry nothing orchestration-specific — no board, no review gate, no
 /// merge queue — so two copies would be two places for one sentence to drift.
 ///
+/// **One clause is now an exception, stated rather than left for a reader to
+/// find** (#2811 S2): `kill_agent` describes the review-drive refusal and its
+/// `force` override, and a LEAD group has no review driver at all — no board,
+/// no gate, nothing that could write a `review_drives.json` — so that clause is
+/// inert there. It stays in the shared description rather than earning
+/// `spawn_agent`'s split below, and the difference is size: that one is three
+/// screens of contract a lead is refused every line of, which is what makes
+/// advertising it the failure its doc names. This is one sentence of one
+/// description, and the alternative — two spellings of a refusal whose wording
+/// a test pins — is the drift this function exists to prevent. Should a second
+/// orchestration-only clause land here, split it then.
+///
 /// **`spawn_agent` is deliberately NOT in here**, and that asymmetry is the
 /// design rather than an oversight. Its description is three screens of
 /// orchestrator-specific contract — reviewer and planner classes, board-task

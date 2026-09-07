@@ -12361,31 +12361,49 @@ fn restarted_with_a_standing_mark(
     (reg, group)
 }
 
-/// Walk a fresh drive on the same PR to `fix-wait` and answer how many
-/// `why: restart` re-briefs it collected — which must be none, because no
-/// restart interrupted THIS drive.
+/// Walk a fresh drive on the same PR to `fix-wait`, then tick ONCE MORE, and
+/// answer how many `why: restart` re-briefs it collected — which must be none,
+/// because no restart interrupted THIS drive.
+///
+/// **Two things here are load-bearing, and the first draft had neither.** That
+/// draft walked the drive to `fix-wait` through `ci-wait` and stopped, and it
+/// passed with all three clears reverted — vacuously, twice over:
+///
+/// 1. The re-drive's `ci-wait` ticks each end outside `fix-wait`, and the
+///    review-2 spend rule discharges the mark on exactly that condition. The
+///    stale mark was gone before `fix-wait` was ever reached, so no clear was
+///    needed for the assertion to hold. The route here is therefore
+///    `CONFLICTING` on the first tick: arc 3 takes `ci-wait -> fix-wait` in one
+///    step, the entry ends IN `fix-wait`, and the mark survives to be asked
+///    for.
+/// 2. The mark is spent by the tick AFTER the one that enters `fix-wait`, so a
+///    walk that stops on entry never asks for it at all. Hence the extra tick,
+///    with mergeability back to `CLEAN` so that tick is not another conflict
+///    hand-back.
 fn redrive_to_fix_wait(reg: &OrchRegistry, group: &GroupId, gh: &FakeGh, session: &str) -> usize {
     gh.set_facts("OPEN", HEAD_A);
     gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+    gh.set_merge_state("CONFLICTING");
     let out = reg.drive_review_with(group, gh, 1758, session, false, 0, "orch-1", 100_000);
     assert_eq!(out["driving"], json!(true), "the re-drive must succeed: {out}");
     let before = restart_handbacks(reg, group);
+
+    // Arc 3, in ONE step: the entry ends in `fix-wait`, so the review-2 spend
+    // rule does not discharge the mark on the way.
     reg.rd_drive_group_with(group, gh, 110_000);
-    reg.rd_drive_group_with(group, gh, 120_000);
-    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
-    gh.set_facts("OPEN", HEAD_B);
-    reg.rd_drive_group_with(group, gh, 130_000);
-    reg.rd_drive_group_with(group, gh, 140_000);
-    let status = reg.review_drive_status_with(group, 140_000);
+    let entered = reg.review_drive_status_with(group, 110_000);
     assert_eq!(
-        status["drives"][0]["state"],
+        entered["drives"][0]["state"],
         json!("fix-wait"),
-        "the re-drive must actually REACH `fix-wait`, or the stale mark is never asked \
-         for and this pins nothing: {status}"
+        "the re-drive must reach `fix-wait` in one step, or the mark is discharged before \
+         anything asks for it and this pins nothing: {entered}"
     );
+
+    // The tick that would SPEND a stale mark.
+    gh.set_merge_state("CLEAN");
+    reg.rd_drive_group_with(group, gh, 120_000);
     restart_handbacks(reg, group) - before
 }
-
 /// **Review 3, the ruling.** A mark left behind by a CANCELLED drive must not
 /// re-brief the next drive on that PR.
 ///

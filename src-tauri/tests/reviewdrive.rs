@@ -11411,15 +11411,11 @@ fn a_conflicting_pr_briefs_no_lane_at_all() {
 // `set_provider_limit_for_test` for the reason `with_pane` exists — a fake
 // runner has no pty tails for a real scan to read.
 
-/// The lane pane a drive just opened, which is the pane a provider limit stops.
-fn opened_lane_agent(report: &RdDriveReport) -> String {
-    report
-        .lanes_opened
-        .first()
-        .cloned()
-        .map(|(_pr, _block, agent)| agent)
-        .expect("the tick opens a lane")
-}
+// The lane pane a provider limit stops is the one `briefed()` returns: a drive
+// starts in `ci-wait` and only reaches `review-wait` once CI is green, so the
+// lane opens on the SECOND tick. An earlier revision of these tests read the
+// first tick's report and every one of them failed on its own fixture guard —
+// which is the guard working, and the reason it is an assertion.
 
 /// A drive whose lane pane is stopped on a provider's refusal holds
 /// `provider-limit` on the NEXT TICK — not sixty minutes later on
@@ -11430,17 +11426,13 @@ fn a_limited_lane_pane_parks_the_drive_on_the_next_tick() {
     let reg = relaunch_registry(dir.path());
     let repo = Repo::new();
     let gh = FakeGh::green(HEAD_A);
-    let (group, _session) = driven(&reg, &repo, &gh);
-
-    // Get the drive to review-wait with a lane open.
-    let report = reg.rd_drive_group_with(&group, &gh, 10_000);
-    let lane = opened_lane_agent(&report);
+    let (group, lane) = briefed(&reg, &repo, &gh);
     assert_eq!(status_state(&reg, &group), "review-wait", "precondition");
 
     // The provider stops that pane.
     reg.set_provider_limit_for_test(&lane, "openrouter");
 
-    let out = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let out = reg.rd_drive_group_with(&group, &gh, 30_000);
     assert_eq!(status_state(&reg, &group), "held", "the drive must park");
     let s = reg.review_drive_status(&group);
     assert_eq!(
@@ -11488,8 +11480,7 @@ fn a_limit_on_a_pane_this_drive_does_not_own_parks_nothing() {
     let reg = relaunch_registry(dir.path());
     let repo = Repo::new();
     let gh = FakeGh::green(HEAD_A);
-    let (group, _session) = driven(&reg, &repo, &gh);
-    reg.rd_drive_group_with(&group, &gh, 10_000);
+    let (group, lane) = briefed(&reg, &repo, &gh);
     assert_eq!(status_state(&reg, &group), "review-wait", "precondition");
 
     // A pane in the same group that this drive never opened.
@@ -11498,7 +11489,7 @@ fn a_limit_on_a_pane_this_drive_does_not_own_parks_nothing() {
         .expect("a bystander pane");
     reg.set_provider_limit_for_test(&bystander.id, "openrouter");
 
-    let out = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let out = reg.rd_drive_group_with(&group, &gh, 30_000);
     assert_eq!(
         status_state(&reg, &group),
         "review-wait",
@@ -11513,13 +11504,8 @@ fn a_limit_on_a_pane_this_drive_does_not_own_parks_nothing() {
     // Non-vacuity: the SAME registry parks the drive once the limit lands on a
     // pane it DOES own, so the silence above is the ownership test working
     // rather than the fact never being read.
-    let lane = reg.review_drive_status(&group)["drives"][0]["lanes"][0]["agent"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    assert!(!lane.is_empty(), "fixture: the drive must have a lane pane to limit");
     reg.set_provider_limit_for_test(&lane, "openrouter");
-    reg.rd_drive_group_with(&group, &gh, 30_000);
+    reg.rd_drive_group_with(&group, &gh, 40_000);
     assert_eq!(
         status_state(&reg, &group),
         "held",
@@ -11537,9 +11523,7 @@ fn a_provider_limit_outranks_the_stall_timeouts() {
     let reg = relaunch_registry(dir.path());
     let repo = Repo::new();
     let gh = FakeGh::green(HEAD_A);
-    let (group, _session) = driven(&reg, &repo, &gh);
-    let report = reg.rd_drive_group_with(&group, &gh, 10_000);
-    let lane = opened_lane_agent(&report);
+    let (group, lane) = briefed(&reg, &repo, &gh);
 
     // Past the lane bound — where the pre-#2811 behaviour lived.
     let past_lane_timeout = 61 * 60 * 1000;
@@ -11560,8 +11544,7 @@ fn a_provider_limit_outranks_the_stall_timeouts() {
     let reg2 = relaunch_registry(dir2.path());
     let repo2 = Repo::new();
     let gh2 = FakeGh::green(HEAD_A);
-    let (group2, _s2) = driven(&reg2, &repo2, &gh2);
-    reg2.rd_drive_group_with(&group2, &gh2, 10_000);
+    let (group2, _lane2) = briefed(&reg2, &repo2, &gh2);
     reg2.rd_drive_group_with(&group2, &gh2, past_lane_timeout);
     let s2 = reg2.review_drive_status(&group2);
     assert_ne!(
@@ -11589,10 +11572,15 @@ fn drive_review_resumes_a_provider_limited_drive() {
     let repo = Repo::new();
     let gh = FakeGh::green(HEAD_A);
     let (group, session) = driven(&reg, &repo, &gh);
-    let report = reg.rd_drive_group_with(&group, &gh, 10_000);
-    let lane = opened_lane_agent(&report);
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    let report = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let (_pr, _block, lane) = report
+        .lanes_opened
+        .first()
+        .cloned()
+        .expect("the second tick opens lane 0");
     reg.set_provider_limit_for_test(&lane, "openrouter");
-    reg.rd_drive_group_with(&group, &gh, 20_000);
+    reg.rd_drive_group_with(&group, &gh, 30_000);
     assert_eq!(status_state(&reg, &group), "held", "precondition");
 
     // The human raised the limit; the scan stops publishing it.

@@ -1808,141 +1808,7 @@ impl OrchRegistry {
         let mut out = PdTickOutcome { on_behalf: entry.on_behalf_of.clone(), ..Default::default() };
 
         // ---- 1. what the gh reads and the worker signals changed ----
-        for (id, pr) in &reads.resolved {
-            if let Some(run) = entry.slices.get_mut(id) {
-                run.pr = *pr;
-                out.audits.push((
-                    plandrive::audit_action::SLICE_PR,
-                    json!({ "issue": issue, "slice": id, "pr": pr }),
-                ));
-            }
-        }
-        entry.pr_poll_cursor = entry.pr_poll_cursor.saturating_add(reads.cursor_advance);
-
-        // A worker's `done` is written to the record before anything is done
-        // with it, so a tick that cannot resolve its PR loses nothing.
-        for (id, sig) in &signal.workers {
-            if !matches!(sig, PdWorkerSignal::Done { .. }) {
-                continue;
-            }
-            if let Some(run) = entry.slices.get_mut(id) {
-                if run.state() == plandrive::SliceState::Running {
-                    run.reported_done = true;
-                }
-            }
-        }
-
-        // A worker's `blocked` parks ITS slice and nothing else (§2(e)).
-        for (id, sig) in &signal.workers {
-            let PdWorkerSignal::Blocked { note } = sig else { continue };
-            let Some(run) = entry.slices.get_mut(id) else { continue };
-            if run.state() != plandrive::SliceState::Running {
-                continue;
-            }
-            run.advance(plandrive::SliceState::Held, Some(plandrive::PdSliceHold::WorkerBlocked));
-            entry.note_progress(now);
-            out.audits.push((
-                plandrive::audit_action::SLICE_HELD,
-                json!({ "issue": issue, "slice": id,
-                        "reason": plandrive::PdSliceHold::WorkerBlocked.as_str() }),
-            ));
-            out.notices.push(format!(
-                "[orrerix] plan drive #{issue}: slice {id} HELD ({}) — {}. It said: {}",
-                plandrive::PdSliceHold::WorkerBlocked.as_str(),
-                plandrive::PdSliceHold::WorkerBlocked.notice_line(),
-                pd_fact(note),
-            ));
-        }
-
-        // **A worker pane that DIED without reporting parks its slice**, the
-        // planner's own `plan-missing` arm applied to the other side (rev-std
-        // round 1, finding 1).
-        //
-        // Without it the drive runs forever in silence: nothing synthesizes a
-        // report for a dead pane, so the slice stays `Running` — and a slice in
-        // `Running` is exactly what makes `running_idle` false, so the stall
-        // backstop cannot see it either. A drive nobody is told about is the one
-        // outcome this design exists to avoid.
-        //
-        // **`reported_done` is checked first, and that ordering is the point.**
-        // A worker that reports `done` and then exits is a worker that did its
-        // job; parking it would throw away the hand-off it just earned, on the
-        // tick where the PR is about to be resolved.
-        //
-        // **No grace period, deliberately.** `AgentStatus::Dead` is terminal,
-        // and a pane that has not bound yet is NOT dead — which is the same
-        // reading `pd_planner_live` takes, and a grace here would be a second
-        // rule for one question. A record that has gone entirely counts as gone.
-        let gone: Vec<String> = entry
-            .slices
-            .iter()
-            .filter(|(_, s)| {
-                s.state() == plandrive::SliceState::Running
-                    && !s.reported_done
-                    && !s.agent.is_empty()
-            })
-            .filter(|(_, s)| {
-                self.agent(&s.agent).is_none_or(|a| a.status == AgentStatus::Dead)
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in &gone {
-            let Some(run) = entry.slices.get_mut(id) else { continue };
-            run.advance(plandrive::SliceState::Held, Some(plandrive::PdSliceHold::WorkerGone));
-            entry.note_progress(now);
-            out.audits.push((
-                plandrive::audit_action::SLICE_HELD,
-                json!({ "issue": issue, "slice": id,
-                        "reason": plandrive::PdSliceHold::WorkerGone.as_str() }),
-            ));
-            out.notices.push(format!(
-                "[orrerix] plan drive #{issue}: slice {id} HELD ({}) — {}",
-                plandrive::PdSliceHold::WorkerGone.as_str(),
-                plandrive::PdSliceHold::WorkerGone.notice_line(),
-            ));
-        }
-
-        // A PR that positively MERGED marks its row done; one positively CLOSED
-        // without merging parks the slice. **Only those two are positive** — a
-        // PR orrerix could not read leaves the slice exactly where it was.
-        let mut mark_done: Vec<(String, String)> = Vec::new();
-        for (id, outcome) in &reads.pr_state {
-            let Some(run) = entry.slices.get_mut(id) else { continue };
-            if run.state() != plandrive::SliceState::InReview {
-                continue;
-            }
-            let pr = run.pr;
-            match outcome {
-                PrOutcome::Merged => {
-                    run.advance(plandrive::SliceState::Done, None);
-                    let task_id = run.task_id.clone();
-                    mark_done.push((id.clone(), task_id));
-                    entry.note_progress(now);
-                    out.audits.push((
-                        plandrive::audit_action::SLICE_MERGED,
-                        json!({ "issue": issue, "slice": id, "pr": pr }),
-                    ));
-                }
-                PrOutcome::ClosedUnmerged => {
-                    run.advance(
-                        plandrive::SliceState::Held,
-                        Some(plandrive::PdSliceHold::PrClosed),
-                    );
-                    entry.note_progress(now);
-                    out.audits.push((
-                        plandrive::audit_action::SLICE_HELD,
-                        json!({ "issue": issue, "slice": id, "pr": pr,
-                                "reason": plandrive::PdSliceHold::PrClosed.as_str() }),
-                    ));
-                    out.notices.push(format!(
-                        "[orrerix] plan drive #{issue}: slice {id} HELD ({}) — {}",
-                        plandrive::PdSliceHold::PrClosed.as_str(),
-                        plandrive::PdSliceHold::PrClosed.notice_line(),
-                    ));
-                }
-                PrOutcome::Open | PrOutcome::Unknown => {}
-            }
-        }
+        let mark_done = self.pd_apply_observations(entry, issue, signal, reads, &mut out, now);
 
         // ---- 2. board the plan, when that is where the drive is ----
         let st = entry.state();
@@ -2158,40 +2024,7 @@ impl OrchRegistry {
         }
 
         // ---- 6. the facts `decide` needs, read off the record and the board ----
-        let facts = PdFacts {
-            now_ms: now,
-            issue_open: obs.open,
-            consent: obs.consent_read,
-            planner_live: self.pd_planner_live(entry),
-            planner: signal.planner,
-            boarded: entry
-                .plan
-                .as_ref()
-                .is_some_and(|p| p.slices.iter().all(|s| entry.slices.contains_key(s.id.as_str()))),
-            row_removed: !entry.slices.is_empty()
-                && entry.slices.values().any(|s| !board.iter().any(|t| t.id == s.task_id)),
-            slices_settled: !entry.slices.is_empty()
-                && entry.slices.values().all(|s| {
-                    s.is_done()
-                        || board
-                            .iter()
-                            .find(|t| t.id == s.task_id)
-                            .is_some_and(|t| plandrive::slice_settled_by_board(&t.status))
-                }),
-            running_idle: !entry.slices.values().any(|s| {
-                matches!(
-                    s.state(),
-                    plandrive::SliceState::Running | plandrive::SliceState::InReview
-                )
-            }) && !entry.plan.as_ref().is_some_and(|p| {
-                p.slices.iter().any(|slice| {
-                    entry
-                        .slices
-                        .get(slice.id.as_str())
-                        .is_some_and(|run| Self::pd_slice_spawnable(slice, run, &board))
-                })
-            }),
-        };
+        let facts = self.pd_facts(entry, obs, signal, &board, now);
 
         // ---- 7. the one state decision ----
         if let Some(step) = plandrive::decide(entry, &facts, limits) {
@@ -2259,6 +2092,226 @@ impl OrchRegistry {
         out.hand_offs = hand_offs;
         let _ = plandrive::store_state(&dir, &state);
         Some(out)
+    }
+
+    /// Apply what this tick OBSERVED to the record: the PR numbers it resolved,
+    /// what each slice's worker said, which worker panes have died, and where
+    /// each in-review PR got to.
+    ///
+    /// Answers the slices whose rows are now to be marked `done` on the board —
+    /// which the caller does, because that is a board write and everything here
+    /// is a record write.
+    ///
+    /// Its own function for [`pd_facts`](Self::pd_facts)'s reason (rev-std round
+    /// 1, finding 5): this is the half of the executor driven entirely by
+    /// OBSERVATION, with no spawn, no board write and no state decision in it,
+    /// so lifting it leaves `pd_execute` as the sequence of steps rather than
+    /// the detail of one.
+    fn pd_apply_observations(
+        &self,
+        entry: &mut PdEntry,
+        issue: u64,
+        signal: &PdSignal,
+        reads: &PdPrReads,
+        out: &mut PdTickOutcome,
+        now: u64,
+    ) -> Vec<(String, String)> {
+        for (id, pr) in &reads.resolved {
+            if let Some(run) = entry.slices.get_mut(id) {
+                run.pr = *pr;
+                out.audits.push((
+                    plandrive::audit_action::SLICE_PR,
+                    json!({ "issue": issue, "slice": id, "pr": pr }),
+                ));
+            }
+        }
+        entry.pr_poll_cursor = entry.pr_poll_cursor.saturating_add(reads.cursor_advance);
+
+        // A worker's `done` is written to the record before anything is done
+        // with it, so a tick that cannot resolve its PR loses nothing.
+        for (id, sig) in &signal.workers {
+            if !matches!(sig, PdWorkerSignal::Done { .. }) {
+                continue;
+            }
+            if let Some(run) = entry.slices.get_mut(id) {
+                if run.state() == plandrive::SliceState::Running {
+                    run.reported_done = true;
+                }
+            }
+        }
+
+        // A worker's `blocked` parks ITS slice and nothing else (§2(e)).
+        for (id, sig) in &signal.workers {
+            let PdWorkerSignal::Blocked { note } = sig else { continue };
+            let Some(run) = entry.slices.get_mut(id) else { continue };
+            if run.state() != plandrive::SliceState::Running {
+                continue;
+            }
+            run.advance(plandrive::SliceState::Held, Some(plandrive::PdSliceHold::WorkerBlocked));
+            entry.note_progress(now);
+            out.audits.push((
+                plandrive::audit_action::SLICE_HELD,
+                json!({ "issue": issue, "slice": id,
+                        "reason": plandrive::PdSliceHold::WorkerBlocked.as_str() }),
+            ));
+            out.notices.push(format!(
+                "[orrerix] plan drive #{issue}: slice {id} HELD ({}) — {}. It said: {}",
+                plandrive::PdSliceHold::WorkerBlocked.as_str(),
+                plandrive::PdSliceHold::WorkerBlocked.notice_line(),
+                pd_fact(note),
+            ));
+        }
+
+        // **A worker pane that DIED without reporting parks its slice**, the
+        // planner's own `plan-missing` arm applied to the other side (rev-std
+        // round 1, finding 1).
+        //
+        // Without it the drive runs forever in silence: nothing synthesizes a
+        // report for a dead pane, so the slice stays `Running` — and a slice in
+        // `Running` is exactly what makes `running_idle` false, so the stall
+        // backstop cannot see it either. A drive nobody is told about is the one
+        // outcome this design exists to avoid.
+        //
+        // **`reported_done` is checked first, and that ordering is the point.**
+        // A worker that reports `done` and then exits is a worker that did its
+        // job; parking it would throw away the hand-off it just earned, on the
+        // tick where the PR is about to be resolved.
+        //
+        // **No grace period, deliberately.** `AgentStatus::Dead` is terminal,
+        // and a pane that has not bound yet is NOT dead — which is the same
+        // reading `pd_planner_live` takes, and a grace here would be a second
+        // rule for one question. A record that has gone entirely counts as gone.
+        let gone: Vec<String> = entry
+            .slices
+            .iter()
+            .filter(|(_, s)| {
+                s.state() == plandrive::SliceState::Running
+                    && !s.reported_done
+                    && !s.agent.is_empty()
+            })
+            .filter(|(_, s)| {
+                self.agent(&s.agent).is_none_or(|a| a.status == AgentStatus::Dead)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &gone {
+            let Some(run) = entry.slices.get_mut(id) else { continue };
+            run.advance(plandrive::SliceState::Held, Some(plandrive::PdSliceHold::WorkerGone));
+            entry.note_progress(now);
+            out.audits.push((
+                plandrive::audit_action::SLICE_HELD,
+                json!({ "issue": issue, "slice": id,
+                        "reason": plandrive::PdSliceHold::WorkerGone.as_str() }),
+            ));
+            out.notices.push(format!(
+                "[orrerix] plan drive #{issue}: slice {id} HELD ({}) — {}",
+                plandrive::PdSliceHold::WorkerGone.as_str(),
+                plandrive::PdSliceHold::WorkerGone.notice_line(),
+            ));
+        }
+
+        // A PR that positively MERGED marks its row done; one positively CLOSED
+        // without merging parks the slice. **Only those two are positive** — a
+        // PR orrerix could not read leaves the slice exactly where it was.
+        let mut mark_done: Vec<(String, String)> = Vec::new();
+        for (id, outcome) in &reads.pr_state {
+            let Some(run) = entry.slices.get_mut(id) else { continue };
+            if run.state() != plandrive::SliceState::InReview {
+                continue;
+            }
+            let pr = run.pr;
+            match outcome {
+                PrOutcome::Merged => {
+                    run.advance(plandrive::SliceState::Done, None);
+                    let task_id = run.task_id.clone();
+                    mark_done.push((id.clone(), task_id));
+                    entry.note_progress(now);
+                    out.audits.push((
+                        plandrive::audit_action::SLICE_MERGED,
+                        json!({ "issue": issue, "slice": id, "pr": pr }),
+                    ));
+                }
+                PrOutcome::ClosedUnmerged => {
+                    run.advance(
+                        plandrive::SliceState::Held,
+                        Some(plandrive::PdSliceHold::PrClosed),
+                    );
+                    entry.note_progress(now);
+                    out.audits.push((
+                        plandrive::audit_action::SLICE_HELD,
+                        json!({ "issue": issue, "slice": id, "pr": pr,
+                                "reason": plandrive::PdSliceHold::PrClosed.as_str() }),
+                    ));
+                    out.notices.push(format!(
+                        "[orrerix] plan drive #{issue}: slice {id} HELD ({}) — {}",
+                        plandrive::PdSliceHold::PrClosed.as_str(),
+                        plandrive::PdSliceHold::PrClosed.notice_line(),
+                    ));
+                }
+                PrOutcome::Open | PrOutcome::Unknown => {}
+            }
+        }
+        mark_done
+    }
+
+    /// Everything [`plandrive::decide`] needs, read off the record, the board and
+    /// this tick's one `gh` call.
+    ///
+    /// Its own function rather than a block inside `pd_execute` because it is
+    /// the one part of the tick that **reads and decides nothing** — no
+    /// mutation, no spawn, no board write — so lifting it makes the executor's
+    /// remaining body all effects, and makes each fact's derivation reviewable
+    /// beside the others rather than 40 lines into a 300-line function
+    /// (rev-std round 1, finding 5).
+    fn pd_facts(
+        &self,
+        entry: &PdEntry,
+        obs: &PdIssueObs,
+        signal: &PdSignal,
+        board: &[super::Task],
+        now: u64,
+    ) -> PdFacts {
+        // A slice is settled when the DRIVE marked it done, or when the human's
+        // own row status did — the two ways a slice legitimately ends.
+        let settled = |s: &plandrive::PdSlice| {
+            s.is_done()
+                || board
+                    .iter()
+                    .find(|t| t.id == s.task_id)
+                    .is_some_and(|t| plandrive::slice_settled_by_board(&t.status))
+        };
+        // Nothing is spawnable and nothing is with the review driver — the
+        // condition the `running` stall backstop is allowed to fire on.
+        let working = entry.slices.values().any(|s| {
+            matches!(s.state(), plandrive::SliceState::Running | plandrive::SliceState::InReview)
+        });
+        let spawnable = entry.plan.as_ref().is_some_and(|p| {
+            p.slices.iter().any(|slice| {
+                entry
+                    .slices
+                    .get(slice.id.as_str())
+                    .is_some_and(|run| Self::pd_slice_spawnable(slice, run, board))
+            })
+        });
+        PdFacts {
+            now_ms: now,
+            issue_open: obs.open,
+            consent: obs.consent_read,
+            planner_live: self.pd_planner_live(entry),
+            planner: signal.planner,
+            boarded: entry
+                .plan
+                .as_ref()
+                .is_some_and(|p| p.slices.iter().all(|s| entry.slices.contains_key(s.id.as_str()))),
+            // A slice this drive BOARDED whose row is gone. Guarded on the map
+            // being non-empty so a drive that has not boarded yet — where every
+            // row is legitimately absent — is not read as one whose rows were
+            // struck.
+            row_removed: !entry.slices.is_empty()
+                && entry.slices.values().any(|s| !board.iter().any(|t| t.id == s.task_id)),
+            slices_settled: !entry.slices.is_empty() && entry.slices.values().all(settled),
+            running_idle: !working && !spawnable,
+        }
     }
 
     /// Open one slice's worker pane (§2(b) step 6).

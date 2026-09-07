@@ -846,7 +846,7 @@ pub fn rollback_is_ours(status: &str, assignee: Option<&str>, claimant: &str) ->
 /// name and is still left alone, which is the whole of what the guard was
 /// added for.
 pub fn rollback_is_ours_of(status: &str, assignee: Option<&str>, claimants: &[&str]) -> bool {
-    claimants.iter().any(|c| rollback_is_ours(status, assignee, c))
+    rollback_is_ours(status, assignee, claimants.first().copied().unwrap_or_default())
 }
 
 /// Board statuses that settle a slice **by the human's hand** (§2(c)).

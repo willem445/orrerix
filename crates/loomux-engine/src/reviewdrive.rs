@@ -4422,15 +4422,23 @@ mod tests {
                 r.as_str()
             );
         }
-        // The other half of the split, stated as a set rather than as a list of
+        // The other half of the split, stated as a SET rather than as a list of
         // calls: exactly the two time-bound reasons are exempt, so a sixteenth
         // reason folded in silently fails here as well as at the match.
-        let exempt: Vec<&str> = HeldReason::ALL
+        //
+        // Sorted on both sides deliberately. The set is the property; the
+        // order is `HeldReason::ALL`'s, which puts `drive-stalled` first and is
+        // no part of what this asserts — pinning it would make a reordering of
+        // that array read as an exemption changing.
+        let mut exempt: Vec<&str> = HeldReason::ALL
             .into_iter()
             .filter(|r| repeat_carries_new_information(*r))
             .map(|r| r.as_str())
             .collect();
-        assert_eq!(exempt, vec!["state-stalled", "drive-stalled"], "{exempt:?}");
+        exempt.sort_unstable();
+        let mut want = vec!["state-stalled", "drive-stalled"];
+        want.sort_unstable();
+        assert_eq!(exempt, want, "{exempt:?}");
     }
 
     // ── §2.1 the closed state enum ──────────────────────────────────────────

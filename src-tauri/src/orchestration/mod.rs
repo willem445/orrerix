@@ -49593,6 +49593,65 @@ impl OrchRegistry {
         ReusablePane { agent: None, declined }
     }
 
+    /// The newest **live** pane in `group` running `session` under `block` —
+    /// what a hand-back TAKES OVER when `idle_pane_on_session` found nothing
+    /// eligible to reuse (#3203).
+    ///
+    /// Four conditions, and the two that are missing are the point:
+    ///
+    /// - **not `Dead`**, or the take-over is a delivery into a pane that is gone;
+    /// - **on `session`**, which is what makes this a take-over rather than a
+    ///   second conversation;
+    /// - **running `block`** — #1961 one arm over, and the one filter this does
+    ///   NOT drop: a wrong-block pane is the wrong persona on the wrong model,
+    ///   and reusing one is the defect that issue exists to stop. The residual
+    ///   is stated at the call site: a live pane on this session under a
+    ///   DIFFERENT block still spawns, and the driver mints no such pane.
+    /// - **has a pane**, since `deliver_prompt` resolves `pty_id` before it does
+    ///   anything else and refuses an agent with none.
+    ///
+    /// **What is dropped is `idle_since_ms` and the readiness test, and that is
+    /// #3203's whole retraction.** `idle_pane_on_session` refuses a pane that is
+    /// mid-turn or not delivery-ready on the argument that the brief would land
+    /// behind whatever the pane is doing — which is true, and was the better
+    /// trade while the alternative was a pane that reads it now. It is not the
+    /// alternative on the hand-back path: measured on PR #3198, two red heads
+    /// arriving inside one fix produced `w-2659` and then `w-2660` on the
+    /// session `w-2657` was still sitting on, three panes writing one worktree,
+    /// with the third pane correctly reporting commits it had not authored.
+    /// Landing behind a turn costs latency that `fix-stalled` already bounds;
+    /// a second pane costs the worktree. So the fail direction flips here and
+    /// only here — `rd_open_lane`'s reuse is
+    /// unchanged, because a duplicate reviewer costs a review and not a
+    /// checkout.
+    ///
+    /// **Newest first, `(started_ms, id)`**, for `idle_pane_on_session`'s own
+    /// reason and with its own tiebreak: `started_ms` is a wall-clock
+    /// millisecond, so two panes registered inside one would otherwise be
+    /// ordered by `HashMap` iteration order, differently between runs.
+    fn live_pane_on_session(
+        &self,
+        group: &GroupId,
+        session: &str,
+        block: &str,
+    ) -> Option<String> {
+        let mut candidates: Vec<(u64, String)> = self
+            .agents
+            .lock_safe()
+            .values()
+            .filter(|a| {
+                a.group == *group
+                    && a.status != AgentStatus::Dead
+                    && a.session_id.as_deref() == Some(session)
+                    && a.block == block
+                    && a.pty_id.is_some()
+            })
+            .map(|a| (a.started_ms, a.id.clone()))
+            .collect();
+        candidates.sort_by(|x, y| (y.0, &y.1).cmp(&(x.0, &x.1)));
+        candidates.into_iter().next().map(|(_started, id)| id)
+    }
+
     /// [`pane_delivery_readiness`] against the live registry — the impure half,
     /// split out for that function's reason (#2089).
     ///

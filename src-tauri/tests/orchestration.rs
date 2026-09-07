@@ -42001,6 +42001,122 @@ fn the_rust_gate_status_never_reports_satisfied_when_the_shim_would_refuse() {
     assert!(s.contains("turn workflow mode off"), "a MALFORMED refusal must name the exits too: {s}");
 }
 
+/// #1889: the headline must agree with the body-drift caveat. On a gate that
+/// DECLARES `body-unchanged`, a pass whose body has moved — with no
+/// body-verification round covering it (#2168 E2) — is exactly as blocking as a
+/// stale head: the body is what a squash merge records as the commit message. So
+/// the headline reads NOT YET SATISFIED and names the lane, instead of SATISFIED
+/// with a warning underneath that contradicts it. And because a merge-time
+/// condition is failing, the "merge this PR from the GitHub UI, which is not
+/// gated" exit is withheld: it is the one line that turns the caveat into an
+/// action around the very condition it warns about.
+#[test]
+fn a_drifted_uncovered_pass_on_a_body_unchanged_gate_reads_not_yet_satisfied() {
+    let (reg, _d, _repo, gid) = gated_group("    also: [body-unchanged]\n");
+    reg.set_pr_body_override(Some("the body they reviewed\n".into()));
+    for block in ["rev-security", "rev-tests"] {
+        let c = reviewer_caller(&reg, &gid, block);
+        recorded(&reg, &c, "7", "pass", "fine");
+    }
+    assert!(
+        reg.gate_status_line(&gid, 7).unwrap().starts_with("merge gate for PR #7: SATISFIED"),
+        "the control: an unedited body is satisfied, and nothing is warned about"
+    );
+
+    // The worker edits the body. Both passes drift, and no verification round
+    // covers them — `body-unchanged` is failing RIGHT NOW.
+    reg.set_pr_body_override(Some("the body after a worker fixed a finding in it\n".into()));
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.contains("NOT YET SATISFIED"), "the headline must agree with the caveat: {s}");
+    assert!(!s.contains("SATISFIED by the reviewer verdicts"),
+        "SATISFIED beside a have-them-re-record caveat is the #1889 defect: {s}");
+    assert!(s.contains("rev-security") && s.contains("rev-tests"),
+        "the headline names the lane(s) that must re-record: {s}");
+    assert!(s.contains("passed a different body"), "the headline says what moved: {s}");
+    assert!(s.contains("`gh pr merge` is refused until then"),
+        "the refusal is stated like any other NOT YET SATISFIED: {s}");
+    // The GitHub-UI exit is the documented path PAST the failing condition, so a
+    // failing merge-time condition is exactly when it must not be offered. The
+    // other exits stay — only the bypass is withheld.
+    assert!(!s.contains("GitHub UI"), "{s}");
+    assert!(s.contains("turn workflow mode off"), "{s}");
+}
+
+/// The #2168 E2 rule, on the #1889 headline: a drifted pass covered by a
+/// body-VERIFICATION round is one the `body-unchanged` clause ACCEPTS, so the
+/// headline stays SATISFIED — "re-record" beside a gate that accepts them would
+/// be the false instruction #2168 E2 removed, now in the headline itself.
+#[test]
+fn a_drifted_pass_covered_by_a_verification_round_keeps_the_satisfied_headline() {
+    const REVIEWED: &str = "the body they reviewed\n";
+    const EDITED: &str = "the body as it stands now\n";
+    let (reg, d, _repo, gid) = gated_group("    also: [body-unchanged]\n");
+    reg.set_pr_body_override(Some(REVIEWED.into()));
+    for block in ["rev-security", "rev-tests"] {
+        let c = reviewer_caller(&reg, &gid, block);
+        recorded(&reg, &c, "7", "pass", "fine");
+    }
+    reg.set_pr_body_override(Some(EDITED.into()));
+
+    // rev-security is re-briefed as a verification delta and passes the body as
+    // it stands. Planted as the same bytes `verdict_file_text` writes — line 5's
+    // digest plus the mark — with the positive control below proving the plant
+    // really parses as a verification pass, so the SATISFIED headline below is
+    // the delegation deciding and not a mark this build failed to read.
+    let now = workflow::body_digest(EDITED);
+    let vf = d.path().join(gid.as_str()).join("verdicts").join("pr-7").join("rev-security");
+    fs::write(
+        &vf,
+        format!("pass\n{HEAD}\n1\nrev-9\n{now} {}\nverified\n", workflow::VERIFIED_BODY_MARK),
+    )
+    .unwrap();
+    let planted =
+        workflow::parse_verdict_file(7, "rev-security", &fs::read_to_string(&vf).unwrap()).unwrap();
+    assert!(planted.verified_body && planted.body_digest == now,
+        "positive control: the plant parses as a body-verification pass: {planted:?}");
+
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.starts_with("merge gate for PR #7: SATISFIED"),
+        "a covered drift is accepted, so the headline must not say otherwise: {s}");
+    assert!(!s.contains("NOT YET SATISFIED"), "{s}");
+    assert!(s.contains("VERIFIED SINCE"), "the acceptance is still reported: {s}");
+}
+
+/// The GitHub-UI exit is not withheld only in the drifted-Satisfied state: ANY
+/// failing merge-time condition withholds it, in whatever state the line is
+/// reporting. Here one lane is live with a drifted body while the other is
+/// stale at an earlier head, so the verdict half is what refuses — and the line
+/// still must not offer the merge that would skip the body condition the live
+/// lane is failing. The second half is the positive control for the absence:
+/// with no condition failing, the exit is named again.
+#[test]
+fn a_failing_merge_time_condition_drops_the_github_ui_exit_wherever_the_line_reports() {
+    let (reg, _d, _repo, gid) = gated_group("    also: [body-unchanged]\n");
+    reg.set_pr_body_override(Some("the body they reviewed\n".into()));
+    let sec = reviewer_caller(&reg, &gid, "rev-security");
+    recorded(&reg, &sec, "7", "pass", "fine");
+    // The worker pushes; rev-tests reviews the new head while the body still
+    // reads exactly as both lanes reviewed it.
+    reg.set_pr_head_override(Some(NEW_HEAD.into()));
+    let tests = reviewer_caller(&reg, &gid, "rev-tests");
+    recorded(&reg, &tests, "7", "pass", "fine");
+    // Then the body moves: rev-tests is the live pass, and its approval no
+    // longer covers what would be committed.
+    reg.set_pr_body_override(Some("the body after a worker fixed a finding in it\n".into()));
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.contains("NOT YET SATISFIED") && s.contains("EARLIER revision"),
+        "the verdict half is what refuses here: {s}");
+    assert!(!s.contains("GitHub UI"), "a failing merge-time condition withholds the bypass: {s}");
+    assert!(s.contains("turn workflow mode off"), "the other exits are still named: {s}");
+
+    // The control, in the same state: body restored to what the live pass read,
+    // so no merge-time condition is failing and the exit is named again.
+    reg.set_pr_body_override(Some("the body they reviewed\n".into()));
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.contains("GitHub UI"),
+        "an intact body is no condition failing — all three exits come back: {s}");
+}
+
 #[test]
 fn gh_shim_script_enforces_the_workflow_merge_gate() {
     // A source-text pin of the shape. Every behavioural claim is EXECUTED below.

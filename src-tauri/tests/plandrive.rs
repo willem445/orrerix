@@ -2081,8 +2081,22 @@ fn row(reg: &OrchRegistry, group: &GroupId, id: &str) -> Option<loomux_lib::orch
 fn report(reg: &OrchRegistry, group: &GroupId, agent: &str, status: &str, args: Value) -> Value {
     let mut a = args;
     a["status"] = json!(status);
-    dispatch(reg, &caller(group, agent, Role::Worker), "report", &a)
-        .unwrap_or_else(|e| panic!("report({status}) failed: {e:?}"))
+    let out = dispatch(
+        reg,
+        &caller(group, agent, Role::Worker),
+        "tools/call",
+        &json!({ "name": "report", "arguments": a }),
+    )
+    .unwrap_or_else(|e| panic!("report({status}) failed: {e:?}"));
+    // A tool that ERRORS answers `Ok` with `isError`, so a bare `unwrap` above
+    // would let a refused report pass for a delivered one — which is exactly
+    // the shape every test here is about.
+    assert_eq!(
+        out["isError"],
+        json!(false),
+        "report({status}) was refused: {out}"
+    );
+    out
 }
 
 // ── §3: the brief ───────────────────────────────────────────────────────────
@@ -2522,14 +2536,29 @@ fn a_review_window_posts_exactly_one_notice() {
         0,
         "nothing is boarded and nothing is spawned inside the window"
     );
-    let notices = reg
-        .audit_log(&group)
-        .into_iter()
-        .filter(|e| {
-            e.action == "pd-notice" && e.detail.get("delivered").and_then(Value::as_bool) == Some(true)
-        })
-        .count();
-    assert_eq!(notices, 1, "exactly one notice, however many ticks pass: {:?}", audit_actions(&reg, &group));
+    // **One notice OWED, however many ticks pass** — which is the property, and
+    // it is read off the record rather than off a count of delivery attempts.
+    // A notice that fails to deliver is KEPT and RETRIED by design (a hold
+    // nobody was told about is the one outcome this design exists to avoid), so
+    // `pd-notice` rows count attempts, not notices: four ticks against a pane
+    // that cannot take a delivery produce four rows for the one notice. What
+    // `failures` distinguishes is exactly the thing under test — a retry of the
+    // same notice from a second notice, which would reset it to zero.
+    let owed = read_record(&reg, &group)["entries"][0]["owed"].clone();
+    assert!(
+        owed["text"]
+            .as_str()
+            .is_some_and(|t| t.contains("PLAN POSTED") && t.contains("spawning in 30 min")),
+        "the window's own notice is the one owed: {owed}"
+    );
+    let attempts = reg.audit_log(&group).into_iter().filter(|e| e.action == "pd-notice").count();
+    assert!(attempts >= 2, "the population control: delivery really was attempted more than once");
+    assert_eq!(
+        owed["failures"].as_u64().map(|f| f + 1),
+        Some(attempts as u64),
+        "every one of those attempts is a RETRY of the same notice — a second notice would have \
+         replaced this one and reset its failure count: {owed}"
+    );
 
     // Past the window: the drive boards and runs, so the wait was a wait and not
     // a stop.

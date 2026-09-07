@@ -221,8 +221,8 @@ pub fn limit_in_tail(tail: &str) -> Option<&'static LimitPattern> {
         if strip_gutter(lines[i]).is_empty() {
             continue;
         }
-        let logical = rejoined(&lines, i);
-        if let Some(p) = LIMIT_PATTERNS.iter().find(|p| logical.starts_with(p.needle)) {
+        let logical = strip_gutter(lines[i]).to_string(); // M4: no wrap reassembly
+        if let Some(p) = LIMIT_PATTERNS.iter().find(|p| logical.contains(p.needle)) { // M1: anchor dropped
             return Some(p);
         }
     }

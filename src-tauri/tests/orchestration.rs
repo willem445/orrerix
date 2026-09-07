@@ -65806,9 +65806,19 @@ const FIX_LIMIT_OR_CREDITS: &str =
     include_str!("fixtures/attention/openrouter-credits-exhausted.txt");
 /// The negative control, and it is not a synthetic one either: this is the
 /// ORCHESTRATOR's own `ask_human` text from `q-39`, in which it quotes the
-/// Claude refusal while asking the human to top the account up. A detector that
-/// searched the tail for its needles anywhere would badge the orchestrator's
-/// pane as out of credit for talking about being out of credit.
+/// Claude refusal (`/usage-credits to finish what you're working on`,
+/// mid-sentence and behind a `stopped at "`) while asking the human to top the
+/// account up. A detector that searched the tail for its needles anywhere
+/// would badge the orchestrator's pane as out of credit for talking about
+/// being out of credit.
+///
+/// **This file is also why `LIMIT_PATTERNS` may only carry captured needles.**
+/// Its first 26 bytes are `Claude usage limit reached`, which an earlier
+/// revision of the table carried as a needle taken on report — so this very
+/// fixture, the control, matched it line-initially and the test below could
+/// never have passed. The row is gone; see `LIMIT_PATTERNS`' own doc. Keep
+/// that in mind before adding a needle that reads like a sentence someone
+/// might write.
 const FIX_LIMIT_NEGATIVE: &str =
     include_str!("fixtures/attention/negative-orchestrator-quotes-a-limit.txt");
 
@@ -65826,6 +65836,43 @@ fn limit_scan(
         .map(|(id, t)| ((*id).to_string(), strip_ansi(t.as_bytes())))
         .collect();
     reg.attention_tick(now, &outputs, &tails, &HashMap::new())
+}
+
+/// The provenance rule `LIMIT_PATTERNS` states, enforced where the fixtures
+/// live. A needle ships only when a CAPTURED pane tail proves both that the
+/// provider prints it and that it prints it **line-initially** — the second
+/// half being the one the line-initial anchor actually depends on.
+///
+/// This exists because the honest-label version of the rule was not enough. An
+/// earlier revision carried needles marked "taken on report", one of which
+/// (`Claude usage limit reached`) is an ordinary sentence opener that the
+/// orchestrator's own `ask_human` text begins with — so it badged the
+/// orchestrator's pane for talking about a limit. A field recording provenance
+/// let a reader notice that; a test refusing the row stops it.
+#[test]
+fn every_pattern_is_exercised_by_its_own_captured_fixture() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/attention");
+    for p in providerlimit::LIMIT_PATTERNS {
+        let path = dir.join(p.fixture);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("pattern {:?} names {:?}: {e}", p.needle, p.fixture));
+        // Line-initial in the capture, modulo the indent/gutter the scan
+        // strips — the property the anchor rests on, not merely "appears
+        // somewhere in the file".
+        assert!(
+            providerlimit::limit_in_tail(&text).is_some_and(|hit| hit.needle == p.needle),
+            "pattern {:?} does not match its own capture {:?} line-initially — either the \
+             fixture is not what the provider prints, or the needle was not cut from it",
+            p.needle,
+            p.fixture
+        );
+    }
+    // Non-vacuity: the loop saw the whole table, and the table is not empty.
+    assert!(
+        providerlimit::LIMIT_PATTERNS.len() >= 3,
+        "only {} patterns scanned",
+        providerlimit::LIMIT_PATTERNS.len()
+    );
 }
 
 #[test]

@@ -46,7 +46,9 @@
 //! reassembled line rather than searched for anywhere in the tail.
 //! `negative-orchestrator-quotes-a-limit.txt` is the control, and the residual
 //! the anchor does NOT close — prose that OPENS with a needle — is pinned by
-//! `a_quotation_of_a_refusal_is_not_a_refusal` rather than left implied.
+//! `a_quotation_of_a_refusal_is_not_a_refusal` rather than left implied. That
+//! residual is also why every needle must come from a capture: see
+//! [`LIMIT_PATTERNS`].
 //!
 //! # The table is data
 //!
@@ -54,23 +56,8 @@
 //! row on [`LIMIT_PATTERNS`] — never a new branch in the scan (CLAUDE.md
 //! constraint 8: no machine- or repo-specific knowledge in product code, and
 //! nothing here is either — these are the vendors' own strings). Each row
-//! carries its own [`PatternSource`] so a reader can tell a needle cut from a
-//! captured pane apart from one taken on report.
-
-/// Where a row's needle came from — provenance carried in the table rather
-/// than in a comment, because the two classes are not equally trustworthy and
-/// a reader is owed the difference.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PatternSource {
-    /// Cut from a pane tail captured in a real incident. The matching fixture
-    /// under `src-tauri/tests/fixtures/attention/` is that capture, and
-    /// `a_captured_pane_raises_its_providers_limit` is its positive control.
-    Captured,
-    /// The vendor's documented / widely-reported wording for the same state,
-    /// with no capture in hand here. Pinned by an inline string in the tests,
-    /// not by a fixture — the honest bound on what it is evidence of.
-    Reported,
-}
+//! names the captured fixture it was cut from, and a test refuses a row whose
+//! needle does not appear line-initially in that capture.
 
 /// One provider whose spend/usage limit can stop a pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,47 +99,58 @@ pub struct LimitPattern {
     /// PARAPHRASE of the same message uses, and so would have matched the
     /// paraphrase and not the pane.
     pub needle: &'static str,
-    pub source: PatternSource,
+    /// The fixture under `src-tauri/tests/fixtures/attention/` this needle was
+    /// cut from. **Every row has one** — see the rule on the table below.
+    pub fixture: &'static str,
 }
 
 /// Every refusal spelling, in one table. **Extending this is a row, not a
 /// branch.**
+///
+/// # A row ships only with a captured fixture, and that is enforced
+///
+/// An earlier revision carried two extra needles taken on report rather than
+/// from a capture — `Claude usage limit reached` and
+/// `Your credit balance is too low` — with the provenance recorded in a
+/// `PatternSource` field so a reader could tell the classes apart. Both are
+/// gone, and the field with them, because a mutation run showed the honest
+/// label was not enough: `Claude usage limit reached` is an ordinary English
+/// sentence opener, and the orchestrator's own `ask_human` text about a
+/// provider limit BEGINS with those exact words (this repo's `q-39`). The
+/// line-initial anchor is what separates a refusal from a quotation of one,
+/// and it cannot separate anything from prose that opens with the needle — so
+/// that row made the orchestrator's pane badge itself for talking about a
+/// limit, which #2811 S5b would turn into a spurious drive hold.
+///
+/// The three surviving needles do not have that shape: prose quoting them puts
+/// them after a `got "` or a `stopped at "`, and one of them opens with a
+/// slash-command. That is not luck — it is what having a real capture tells
+/// you and a plausible-sounding string does not. So the rule is now
+/// structural: a needle ships when a captured pane tail proves both that the
+/// provider prints it and that it prints it line-initially.
+/// `every_pattern_is_exercised_by_its_own_captured_fixture` (in
+/// `src-tauri/tests/orchestration.rs`, where the fixtures live) fails a row
+/// that names a fixture the text does not appear line-initially in.
 pub const LIMIT_PATTERNS: &[LimitPattern] = &[
-    // Claude Code, out of usage credits. Captured:
-    // `fixtures/attention/claude-usage-limit.txt`.
+    // Claude Code, out of usage credits.
     LimitPattern {
         provider: "anthropic",
         needle: "/usage-credits to finish what you",
-        source: PatternSource::Captured,
+        fixture: "claude-usage-limit.txt",
     },
-    // The headline the same state prints when the whole message is on screen.
-    LimitPattern {
-        provider: "anthropic",
-        needle: "Claude usage limit reached",
-        source: PatternSource::Reported,
-    },
-    // The Anthropic API's own refusal for an exhausted balance, which a
-    // wrapper CLI surfaces verbatim.
-    LimitPattern {
-        provider: "anthropic",
-        needle: "Your credit balance is too low",
-        source: PatternSource::Reported,
-    },
-    // OpenRouter, key spend cap reached. Captured:
-    // `fixtures/attention/openrouter-key-limit.txt`. pi and opencode both
-    // surface OpenRouter's text verbatim, which is why the row is keyed on the
+    // OpenRouter, key spend cap reached. pi and opencode both surface
+    // OpenRouter's text verbatim, which is why the row is keyed on the
     // PROVIDER and not on the CLI that printed it.
     LimitPattern {
         provider: "openrouter",
         needle: "Key limit exceeded",
-        source: PatternSource::Captured,
+        fixture: "openrouter-key-limit.txt",
     },
-    // OpenRouter, account credits exhausted. Captured (and WRAPPED mid-word):
-    // `fixtures/attention/openrouter-credits-exhausted.txt`.
+    // OpenRouter, account credits exhausted — captured WRAPPED mid-word.
     LimitPattern {
         provider: "openrouter",
         needle: "This request would exceed your available credits",
-        source: PatternSource::Captured,
+        fixture: "openrouter-credits-exhausted.txt",
     },
 ];
 
@@ -257,10 +255,23 @@ mod tests {
         assert!(LIMIT_PATTERNS.iter().any(|p| p.provider == "anthropic"));
         assert!(LIMIT_PATTERNS.iter().any(|p| p.provider == "openrouter"));
         assert!(
-            LIMIT_PATTERNS.len() >= 5,
+            LIMIT_PATTERNS.len() >= 3,
             "only {} patterns scanned",
             LIMIT_PATTERNS.len()
         );
+        // Every row names a fixture. The fixture files live under
+        // `src-tauri/tests/`, so whether the needle really appears in one —
+        // line-initially — is checked there, by
+        // `every_pattern_is_exercised_by_its_own_captured_fixture`. What this
+        // crate can check is that the field is not empty, which is what stops a
+        // row from being added with the provenance rule quietly skipped.
+        for p in LIMIT_PATTERNS {
+            assert!(
+                p.fixture.ends_with(".txt"),
+                "pattern {:?} names no captured fixture — see LIMIT_PATTERNS' own rule",
+                p.needle
+            );
+        }
         // Every declared provider is reachable from the table, so a provider
         // row whose needles were all deleted fails here rather than becoming
         // dead vocabulary.
@@ -284,9 +295,20 @@ mod tests {
             Some("openrouter"),
             "a wrapped refusal must still be seen"
         );
-        // The instrument's own control: the SAME text unwrapped. A `contains`
-        // implementation passes this one and fails the one above, which is the
-        // whole reason the reassembly exists.
+        // The specimen above does NOT pin the reassembly, and saying so is the
+        // point: its break falls AFTER the needle ends, so `starts_with`
+        // matches line 2 alone and the row stays green with `rejoined` deleted.
+        // A mutation run is what showed that — reading the test did not. The
+        // case that pins it is a NARROWER pane, where the break falls INSIDE
+        // the needle:
+        let straddled = "  \u{2503}  This request would exceed your available\n  \u{2503}  credits given your current in-flight requests.\n";
+        assert_eq!(
+            limit_in_tail(straddled).map(|p| p.provider),
+            Some("openrouter"),
+            "a needle split across the wrap must still be seen — this is the row \
+             that reddens when the reassembly is removed"
+        );
+        // The unwrapped form, so the reassembly is not the ONLY way to match.
         let flat = "This request would exceed your available credits given your current in-flight requests.";
         assert_eq!(limit_in_tail(flat).map(|p| p.provider), Some("openrouter"));
         // And the hyphen join really did rebuild the broken word rather than
@@ -314,10 +336,23 @@ mod tests {
         // words. This is what the loomux-notice mask (the caller's job) and the
         // once-per-group-per-provider dedup bound; the anchor alone does not.
         let prose_opening_with_a_needle =
-            "Claude usage limit reached is what stopped every delegate — please top it up.";
+            "Key limit exceeded is what stopped rev-2313 — please raise the cap.";
         assert!(
             limit_in_tail(prose_opening_with_a_needle).is_some(),
             "disclosed blind spot: prose OPENING with a needle is indistinguishable here"
+        );
+        // Which is exactly why a needle must come from a capture rather than
+        // from what a provider is *said* to print. The needle this residual
+        // used to be written with — `Claude usage limit reached` — was an
+        // ordinary sentence opener, and the orchestrator's own `ask_human` text
+        // about a limit begins with those words verbatim (q-39, the negative
+        // fixture). It is off the table now; see `LIMIT_PATTERNS`. The three
+        // that remain are quoted in prose behind a `got "` or a `stopped at "`,
+        // so the anchor really does separate them.
+        assert!(
+            !LIMIT_PATTERNS.iter().any(|p| p.needle == "Claude usage limit reached"),
+            "the sentence-opener needle must not come back without a capture showing \
+             it is printed line-initially"
         );
     }
 

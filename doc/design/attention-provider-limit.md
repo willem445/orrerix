@@ -149,13 +149,35 @@ the rule that comment already states), and `agents-tab.md`'s rung 4.
 
 ## Extending it
 
-One row on `LIMIT_PATTERNS`, never a branch in the scan. Each row carries a
-`PatternSource`: `Captured` means the needle was cut from a pane tail in this
-repo's audit log and has a fixture under
-`src-tauri/tests/fixtures/attention/` that pins it; `Reported` means the
-vendor's documented wording with no capture in hand, pinned by an inline string
-only. The distinction is in the data rather than in a comment because the two
-are not equally trustworthy and a reader is owed the difference.
+One row on `LIMIT_PATTERNS`, never a branch in the scan — **and only with a
+captured fixture behind it.** Each row names the file under
+`src-tauri/tests/fixtures/attention/` it was cut from, and
+`every_pattern_is_exercised_by_its_own_captured_fixture` refuses a row whose
+needle does not appear *line-initially* in that capture.
+
+That rule is stronger than the one this slice first shipped, and the difference
+was found by running a mutation rather than by reading anything. The first
+revision carried two extra needles taken on report — `Claude usage limit
+reached` and `Your credit balance is too low` — with the provenance honestly
+labelled in a `PatternSource` field, on the reasoning that a reader owed the
+distinction could then weigh it. The label was not enough. `Claude usage limit
+reached` is an ordinary English sentence opener, and the orchestrator's own
+`ask_human` text about a provider limit begins with those exact words — this
+repo's `q-39`, which was sitting in the tree as the *negative control fixture*.
+The line-initial anchor is the whole of what separates a refusal from a
+quotation of one, and it cannot separate anything from prose that opens with
+the needle: that row made the orchestrator's pane badge itself for talking
+about a limit, and S5b would have turned the same reading into a spurious drive
+hold across every drive in the group.
+
+The three surviving needles do not have that shape — prose quoting them puts
+them behind a `got "` or a `stopped at "`, and one opens with a slash-command.
+That is not luck. It is the difference between a string a real pane was
+observed printing, line-initially, and a string that sounds like what a
+provider would say; only the capture tells you which side of the anchor the
+words fall on. Hence the rule is structural now rather than advisory, and
+`PatternSource` is gone: there is only one class left, so a field naming it was
+dead vocabulary.
 
 Nothing here is machine- or repo-specific (CLAUDE.md constraint 8): these are
 the vendors' own error strings, and the table is the product's knowledge of its

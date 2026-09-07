@@ -2260,8 +2260,10 @@ interpolates single-line facts and has no line breaks to keep.
 ```
 [orrerix] review drive PR #1758: GATE SATISFIED at df6a73d0 (body 3f1a..) —
   rev-std PASS, rev-final PASS; 3 rounds, 2 CI, 0 rebases; 2 lanes carry
-  non-blocking findings. Panes RELEASED: w-1715 (worker), rev-1714
-  (rev-std). Disposition is yours (INVARIANT 3): list_verdicts("1758").
+  non-blocking findings. The worker pane was released; worker session
+  cafb930d-… resumes with spawn_agent(resume:). Panes RELEASED, still
+  running: rev-1714 (rev-std). Disposition is yours (INVARIANT 3):
+  list_verdicts("1758").
 
 [orrerix] review drive PR #1764: ESCALATE by rev-final at 306176c4 —
   "<capped summary>". Drive held on a JUDGMENT the driver may not make
@@ -2292,7 +2294,8 @@ interpolates single-line facts and has no line breaks to keep.
 [orrerix] review drive PR #1870: CANCELLED — the PR is closed or merged —
   positively established, not inferred from a lookup that failed. Its
   counters are gone; a fresh drive_review starts a new drive.
-  Panes RELEASED: w-1715 (worker), w-1716 (worker), rev-1714 (rev-std).
+  Panes RELEASED, still running: w-1715 (worker), w-1716 (worker),
+  rev-1714 (rev-std).
 ```
 
 **Since #3040 N1 these lines are a diet, and the diet is a measurement rather
@@ -2308,14 +2311,20 @@ things changed, and each is a rule rather than a trim:
   and a pointer.** It says which lanes answered, what the drive cost, that
   there is something to disposition, and where the words are. What it does not
   do is re-send text the orchestrator's next tool call fetches anyway.
-- **The panes clause is a list.** Everything the old paragraph spelled out —
-  the panes are still running, the driver killed none of them, worker panes
-  sharing a session share a worktree, disposal is the orchestrator's — is
-  already the orchestrator's own ground: `orchestrator-playbook.md`'s
-  INVARIANT 10 paragraph makes disposing of a settled pane its call, and
-  `orchestrator.md`'s worktree-defaults paragraph states #338/#359.
-  WHICH panes is the fact #1871 B3 added the clause for, and it is what
-  survives; the standing survives as one word, `RELEASED` or `still OWNED`.
+- **The panes clause is a list.** Most of what the old paragraph spelled out —
+  worker panes sharing a session share a worktree, disposal is the
+  orchestrator's — is already the orchestrator's own ground:
+  `orchestrator-playbook.md`'s INVARIANT 10 paragraph makes disposing of a
+  settled pane its call, and `orchestrator.md`'s worktree-defaults paragraph
+  states #338/#359. WHICH panes is the fact #1871 B3 added the clause for, and
+  it is what survives, with the standing in the words that tell the halves
+  apart: `still OWNED`, or `RELEASED, still running`.
+  **Those last two words are not slack.** Since #2811 S1 the same line also
+  carries `released_worker_clause`, which reports a pane the driver KILLED
+  (session kept, resumable) — so "released" appears in the line twice meaning
+  two different things, and the pane list has to say that its own entries are
+  the ones still alive. `a_killed_pane_and_a_let_go_pane_are_not_both_just_released`
+  pins the pair.
 - **A hold's reason and remedy are untouched**, because they are the decision.
   The capped summary stays on `escalate` alone, which is the one hold whose
   subject is a reviewer's argument rather than a counter or a clock.

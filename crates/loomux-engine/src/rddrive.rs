@@ -1422,9 +1422,17 @@ pub fn panes_clause(panes: &[(String, DrivenRole)], standing: PaneStanding) -> S
     // that is what survives. The standing is still stated, in the two words
     // that tell the halves apart at a glance: a parked drive still OWNED them,
     // a terminal one has RELEASED them.
+    //
+    // **"still running" survives the trim, and #2811 S1 is why it has to.**
+    // The line this clause sits in now also carries
+    // [`released_worker_clause`], which reports a pane the drive KILLED (with
+    // its session kept). Two senses of "released" in one sentence is a reader
+    // being told that some of these panes are gone; the shortest thing that
+    // separates them is the two words that say these ones are not. Everything
+    // else the old paragraph spelled out stays gone.
     match standing {
         PaneStanding::Owned => format!(" Panes still OWNED: {list}."),
-        PaneStanding::Released => format!(" Panes RELEASED: {list}."),
+        PaneStanding::Released => format!(" Panes RELEASED, still running: {list}."),
     }
 }
 
@@ -1749,6 +1757,51 @@ mod tests {
         assert!(!r.contains("          "), "no source indentation reaches the reader: {r:?}");
     }
 
+
+    /// **The two senses of "released" in one line stay apart** (#3040 N1 after
+    /// #2811 S1's rebase).
+    ///
+    /// A terminal notice now carries both clauses at once:
+    /// [`released_worker_clause`] names a pane the drive KILLED, session kept,
+    /// and [`panes_clause`] names panes it merely let go of and did NOT kill.
+    /// The diet cut the paragraph that used to spell the second one out, and
+    /// beside S1's clause the bare word "RELEASED" would read as "these are
+    /// gone too" — a false claim about panes the orchestrator still has to
+    /// dispose of.
+    ///
+    /// The discriminator is that the released WORKER is named by session and is
+    /// absent from the pane list, while the pane list says in two words that
+    /// its entries are still running.
+    #[test]
+    fn a_killed_pane_and_a_let_go_pane_are_not_both_just_released() {
+        let panes = vec![
+            ("rev-1714".to_string(), DrivenRole::Lane("rev-std".into())),
+        ];
+        let session = "6d1f993c-0000-4000-8000-000000000001";
+        let n = satisfied_notice(
+            1758,
+            HEAD,
+            "",
+            &[],
+            &Counters::default(),
+            &panes,
+            session,
+        );
+        // Both clauses are present — the control, without which the assertions
+        // below would pass against a notice carrying neither.
+        assert!(n.contains("The worker pane was released"), "{n}");
+        assert!(n.contains("Panes RELEASED"), "{n}");
+        // ...and they are about different things.
+        assert!(
+            n.contains("Panes RELEASED, still running: rev-1714 (rev-std)."),
+            "the let-go panes say they are alive, or a reader takes them for killed too: {n}"
+        );
+        assert!(
+            !n.contains(&format!("{session} (")),
+            "the KILLED worker is named by session, never as an entry in the pane list: {n}"
+        );
+        assert!(n.contains("spawn_agent(resume:)"), "…and by how to get it back: {n}");
+    }
     /// A pane named twice is a pane a human goes looking for twice, and the
     /// list's own bounds do not stop a duplicate — a superseded pane can be
     /// resumed into again.

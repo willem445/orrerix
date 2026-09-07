@@ -512,7 +512,11 @@ pub fn transition(from: DriveState, to: DriveState) -> Result<DriveState, Invali
         (CiWait | GateCheck, FixWait) => true,
         // 4. The last required lane passed at (head, digest).
         (ReviewWait, GateCheck) => true,
-        // 5. A lane recorded `fail` (§2.1).
+        // 5. A lane recorded `fail` (§2.1) — and, since #2311, the pair arc 3
+        //    also uses when this state observes a CONFLICTING PR. One pair, two
+        //    arcs: what tells them apart is the counter each spends, which is
+        //    what `a_conflicting_pr_takes_the_rebase_arc_from_every_state_that_can`
+        //    asserts.
         (ReviewWait, FixWait) => true,
         // 6. The head moved under a lane mid-review (§8 row 4). The verdict
         //    that lands binds to the old head; a `fail` there still routes, a
@@ -3402,7 +3406,15 @@ pub fn first_stale_lane(required: &[LaneFact], head: &str, body_digest: Option<&
 ///    Below the age for the reason argued at the line itself: both are past
 ///    only for a drive resumed out of a very long park, where the twelve-hour
 ///    figure is the more important of the two.
-/// 6. Then the state's own logic.
+/// 6. **A CONFLICTING PR takes arc 3, from every state that can leave for
+///    `fix-wait`** (#2311) — argued at the line itself. It is a fact about the
+///    PR rather than about the wait, so it outranks each state's own reading:
+///    at `gate-check` the gate's own `satisfied`, and at `review-wait` the
+///    routing question, which cannot be answered for a conflicted head at all
+///    (no changed-file list) and therefore reports a CONSEQUENCE of the
+///    conflict as if it were an independent fact. Below the bounds above,
+///    which are about the drive rather than the PR.
+/// 7. Then the state's own logic.
 pub fn decide(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> DriveStep {
     let state = entry.state();
     if state.is_terminal() || state.is_parked() {
@@ -3473,11 +3485,57 @@ pub fn decide(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> D
     if facts.head.is_empty() {
         return DriveStep::Wait;
     }
+    // **6. A CONFLICTING PR takes arc 3 wherever it is observed** (#2311).
+    //
+    // Read here rather than inside a state, because a conflict is a fact about
+    // the PR and not about what the drive happens to be waiting for, and every
+    // state that read it separately was a state that could answer something
+    // else first:
+    //
+    // - `gate-check` read only `facts.gate`, so a base that moved while the
+    //   lanes reviewed reached `satisfied` with every lane passed and the PR
+    //   unmergeable — #2942, where `rev-final` passed carrying
+    //   `mergeable:CONFLICTING` in its own summary and the cost (a hand rebase,
+    //   a re-drive at `rounds_already_spent 3`, two fresh whole-diff lanes, ten
+    //   minutes of cap starvation, three orchestrator turns) was paid outside
+    //   the driver.
+    // - `review-wait` asks `route_reviewers` FIRST, and routing needs the
+    //   changed-file list, which GitHub does not compute for a conflicted head.
+    //   So the same conflict parked the drive `held(routing-unaccountable)` —
+    //   a hold whose notice says *which reviewers are required is unknown* for
+    //   a PR whose real problem is that it does not merge, and whose remedy
+    //   (`drive_review` again) reproduces it. Measured on #3118.
+    //
+    // Above the routing check for exactly that reason: routing being
+    // unaccountable is a CONSEQUENCE of the conflict there, not an independent
+    // fact, and the honest report is the one naming the cause. It stays BELOW
+    // the bounds and the `messaged` hold above — those are about the drive
+    // rather than the PR, and a drive already past its clock is not made young
+    // by a rebase — and below the empty-head guard, which is "we could not read
+    // this PR at all".
+    //
+    // **`fix-wait` is the one state excluded, and it is excluded by the arc
+    // table rather than by an opinion**: a rebase hand-back is already
+    // outstanding there, `(fix-wait, fix-wait)` is not a transition, and the
+    // worker's own signals are what that state waits on. Spending a second
+    // `rebase_attempts` on the conflict the worker was just asked to fix would
+    // park `rebase-limit` before the worker had a chance to push.
+    //
+    // `Pending`/`Unknown` are NOT conflicts: §8's posture is that an unknown is
+    // never a fact about the PR, so a mergeability orrerix could not read is
+    // not evidence that a rebase is owed.
+    if facts.ci == CiObservation::Conflicting && state != DriveState::FixWait {
+        return if counter_exhausted(entry.counters.rebase_attempts, limits.max_rebase_attempts) {
+            DriveStep::held(HeldReason::RebaseLimit)
+        } else {
+            DriveStep::spend(DriveState::FixWait, Counter::RebaseAttempts)
+        };
+    }
     match state {
         DriveState::CiWait => decide_ci_wait(entry, facts, limits),
         DriveState::ReviewWait => decide_review_wait(entry, facts, limits),
         DriveState::FixWait => decide_fix_wait(entry, facts, limits),
-        DriveState::GateCheck => decide_gate_check(entry, facts, limits),
+        DriveState::GateCheck => decide_gate_check(facts),
         // Both returned above; repeated here because the enum is closed and a
         // catch-all arm is exactly what §2.1 forbids.
         DriveState::Held | DriveState::Satisfied | DriveState::Cancelled => DriveStep::Wait,
@@ -3504,19 +3562,21 @@ fn decide_ci_wait(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) 
                 DriveStep::spend(DriveState::FixWait, Counter::CiAttempts)
             }
         }
-        // Arc 3 again: a conflict is a hand-back for a rebase, on its own
-        // counter. §2.2's `rebase-limit` is "a second conflict after the one
-        // rebase hand-back", which is [`counter_exhausted`]'s ordering.
-        CiObservation::Conflicting => {
-            if counter_exhausted(entry.counters.rebase_attempts, limits.max_rebase_attempts) {
-                DriveStep::held(HeldReason::RebaseLimit)
-            } else {
-                DriveStep::spend(DriveState::FixWait, Counter::RebaseAttempts)
-            }
+        // Arc 3 again — **answered by [`decide`] before this function is
+        // reached** (#2311), which is why it is not a second ladder here: a
+        // conflict is a fact about the PR, so every state that can act on one
+        // acts through the same rule, with the same counter and the same
+        // `held(rebase-limit)`. Kept as an explicit arm rather than folded
+        // into the catch-all because the enum is closed and §2.1 forbids a
+        // catch-all; `Wait` is what it degrades to if a caller ever reaches
+        // this function directly, which is the conservative direction.
+        //
+        // `Pending`/`Unknown` are neither an answer nor a reason to move. §8:
+        // unknown is never treated as safe, and it is never treated as a fact
+        // about the PR either.
+        CiObservation::Conflicting | CiObservation::Pending | CiObservation::Unknown => {
+            DriveStep::Wait
         }
-        // Neither an answer nor a reason to move. §8: unknown is never treated
-        // as safe, and it is never treated as a fact about the PR either.
-        CiObservation::Pending | CiObservation::Unknown => DriveStep::Wait,
     }
 }
 
@@ -3913,7 +3973,7 @@ fn decide_fix_wait(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits)
     DriveStep::Wait
 }
 
-fn decide_gate_check(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> DriveStep {
+fn decide_gate_check(facts: &DriveFacts) -> DriveStep {
     // §4: `route_reviewers` returning `None` is `held(routing-unaccountable)`
     // from every state that reads it, **`gate-check` included**. This is the
     // one degradation whose absence would be a security defect rather than an
@@ -3924,54 +3984,7 @@ fn decide_gate_check(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimit
     if facts.required_lanes.is_none() {
         return DriveStep::held(HeldReason::RoutingUnaccountable);
     }
-    // Asked before the conflict below, because an unreadable gate is a fact
-    // about the thing this state exists to read: a drive that cannot evaluate
-    // its gate at all is parked whatever the mergeability says, and answering
-    // "go rebase" there would spend a counter on a drive that is not going to
-    // reach `satisfied` by rebasing.
-    if facts.gate == GateOutcome::Unreadable {
-        return DriveStep::held(HeldReason::GateUnreadable);
-    }
-    // **Arc 3 from here too, and it is what makes `satisfied` mean `gated AND
-    // mergeable`** (#2311).
-    //
-    // `decide_ci_wait` has consulted [`CiObservation::Conflicting`] since v1 and
-    // this state did not, so a PR that went CONFLICTING while its lanes were
-    // reviewing — a base that moved under a live drive, which is the ordinary
-    // case on a busy default branch — arrived here with every lane `pass` and
-    // was answered `satisfied`. The gate had genuinely been met; the PR was
-    // simply not mergeable, and nothing in the notice said so. Measured on
-    // #2942: `rev-final` passed carrying `mergeable:CONFLICTING` in its own
-    // summary, the drive reported GATE SATISFIED, a human rebased by hand and
-    // re-drove — two fresh whole-diff lanes at `rounds_already_spent 3`, ten
-    // minutes of cap starvation and three orchestrator turns, for a conflict
-    // the drive had already read.
-    //
-    // It is the SAME arc `ci-wait` takes and not a second one: the same
-    // counter, the same `held(rebase-limit)` on the second conflict
-    // ([`counter_exhausted`]'s ordering), and the same hand-back brief, which
-    // is keyed on the observation rather than on the state it was read in and
-    // therefore already says CONFLICTING here. A separate rule would be a
-    // second way to answer one question, which §4 forbids.
-    //
-    // **Precedence**: after `routing-unaccountable` and `gate-unreadable`
-    // above, before every outcome of the gate itself — including
-    // `Unsatisfied`, whose arc 10 would send this drive round `ci-wait` ->
-    // `review-wait` -> here again with the conflict still unaddressed. And
-    // `Pending`/`Unknown` are NOT conflicts: §8's posture is that an unknown
-    // is never a fact about the PR, so those still evaluate the gate exactly
-    // as they did — the mergeability orrerix could not read is not evidence
-    // that a rebase is owed.
-    if facts.ci == CiObservation::Conflicting {
-        return if counter_exhausted(entry.counters.rebase_attempts, limits.max_rebase_attempts) {
-            DriveStep::held(HeldReason::RebaseLimit)
-        } else {
-            DriveStep::spend(DriveState::FixWait, Counter::RebaseAttempts)
-        };
-    }
     match facts.gate {
-        // Answered above, ahead of the conflict check. Repeated rather than
-        // dropped because the enum is closed and §2.1 forbids a catch-all arm.
         GateOutcome::Unreadable => DriveStep::held(HeldReason::GateUnreadable),
         // Arc 9.
         GateOutcome::Satisfied => DriveStep::to(DriveState::Satisfied),
@@ -7171,111 +7184,97 @@ mod tests {
     }
 
     #[test]
-    fn a_conflicting_pr_at_gate_check_is_a_rebase_hand_back_not_satisfied() {
-        // #2311: `satisfied` must mean "gated AND mergeable". Every lane has
-        // passed and the gate agrees — the ONE difference from arc 9 above is
-        // that the PR is CONFLICTING, which `ci-wait` has always read and this
-        // state did not. Measured on #2942: GATE SATISFIED on a PR `rev-final`
-        // had itself called `mergeable:CONFLICTING`.
+    fn a_conflicting_pr_takes_the_rebase_arc_from_every_state_that_can() {
+        // #2311, widened past the plan's `gate-check` scope by the measurement
+        // on #3118: routing needs a changed-file list, GitHub computes none for
+        // a conflicted head, so `review-wait` answered `routing-unaccountable`
+        // — a hold naming a CONSEQUENCE of the conflict, whose remedy
+        // (`drive_review` again) reproduces it.
         let limits = DriveLimits::default();
-        let mut e = entry_at(DriveState::GateCheck);
+        for st in [DriveState::CiWait, DriveState::ReviewWait, DriveState::GateCheck] {
+            let mut e = entry_at(st);
+            e.head = "head-a".into();
+            let facts = DriveFacts {
+                ci: CiObservation::Conflicting,
+                // Each state's own strongest OTHER answer, so the assertion is
+                // a difference rather than a shape that holds either way: the
+                // gate says SATISFIED, and routing says nothing at all.
+                gate: GateOutcome::Satisfied,
+                required_lanes: None,
+                ..facts_at("head-a")
+            };
+            assert_eq!(
+                decide(&e, &facts, &limits),
+                DriveStep::spend(DriveState::FixWait, Counter::RebaseAttempts),
+                "{}: a conflicting PR is a rebase hand-back, not this state's own answer",
+                st.as_str()
+            );
+            // The controls: with the mergeability the ONLY thing changed, each
+            // state gives the answer that must not have won above.
+            assert_eq!(
+                decide(&e, &DriveFacts { ci: CiObservation::Pending, ..facts.clone() }, &limits),
+                DriveStep::held(HeldReason::RoutingUnaccountable),
+                "{}: the control — without the conflict, routing is what answers",
+                st.as_str()
+            );
+            // …and the second conflict parks, on the same counter `ci-wait` has
+            // always spent (`counter_exhausted`'s ordering).
+            let mut spent = e.clone();
+            spent.counters.rebase_attempts = limits.max_rebase_attempts;
+            assert_eq!(
+                decide(&spent, &facts, &limits),
+                DriveStep::held(HeldReason::RebaseLimit),
+                "{}",
+                st.as_str()
+            );
+            // The machine really accepts the arc: a step `decide` proposes and
+            // `transition` refuses fails at runtime, on the degradation path.
+            assert!(transition(st, DriveState::FixWait).is_ok(), "{}", st.as_str());
+        }
+    }
+
+    #[test]
+    fn fix_wait_is_the_one_state_a_conflict_does_not_divert() {
+        // A rebase hand-back is already outstanding there — `(fix-wait,
+        // fix-wait)` is not a transition, and spending a second
+        // `rebase_attempts` on the conflict the worker was just asked to fix
+        // would park `rebase-limit` before it could push.
+        let limits = DriveLimits::default();
+        let mut e = entry_at(DriveState::FixWait);
         e.head = "head-a".into();
-        let conflicting = DriveFacts {
-            gate: GateOutcome::Satisfied,
-            ci: CiObservation::Conflicting,
-            ..facts_at("head-a")
-        };
-        // Arc 3, spending the rebase counter — NOT terminal, and not the arc
-        // the gate on its own would have taken.
+        let facts = DriveFacts { ci: CiObservation::Conflicting, ..facts_at("head-a") };
+        assert_eq!(decide(&e, &facts, &limits), DriveStep::Wait);
+        assert!(transition(DriveState::FixWait, DriveState::FixWait).is_err());
+        // And the worker's own signals still decide the state, unchanged by the
+        // mergeability beside them — the positive control for "this state was
+        // reached at all".
         assert_eq!(
-            decide(&e, &conflicting, &limits),
-            DriveStep::spend(DriveState::FixWait, Counter::RebaseAttempts)
-        );
-        // The step the gate alone would have produced, so the assertion above
-        // is a DIFFERENCE rather than a shape that holds either way.
-        assert_eq!(
-            decide(
-                &e,
-                &DriveFacts { gate: GateOutcome::Satisfied, ..facts_at("head-a") },
-                &limits
-            ),
-            DriveStep::to(DriveState::Satisfied)
-        );
-        // The machine really accepts it: a step `decide` proposes and
-        // `transition` refuses is a runtime failure on the degradation path.
-        assert!(transition(DriveState::GateCheck, DriveState::FixWait).is_ok());
-        // The second conflict parks, exactly as `ci-wait` does —
-        // `counter_exhausted`'s ordering at `max_rebase_attempts = 1`.
-        assert_eq!(limits.max_rebase_attempts, 1);
-        e.counters.rebase_attempts = 1;
-        assert_eq!(
-            decide(&e, &conflicting, &limits),
-            DriveStep::held(HeldReason::RebaseLimit)
+            decide(&e, &DriveFacts { worker: WorkerSignal::Done, ..facts }, &limits),
+            DriveStep::to(DriveState::ReviewWait)
         );
     }
 
     #[test]
-    fn only_a_positive_conflict_diverts_gate_check_and_it_yields_to_the_two_holds() {
-        // The three controls the arc above needs to be a narrow claim.
+    fn an_unreadable_or_unevaluated_mergeability_is_never_a_conflict() {
+        // §8: an unknown is never a fact about the PR. Each state still gives
+        // its own answer, both ways, so neither reading is "it waits anyway".
         let limits = DriveLimits::default();
         let mut e = entry_at(DriveState::GateCheck);
         e.head = "head-a".into();
-        let at = |ci, gate| {
-            decide(&e, &DriveFacts { ci, gate, ..facts_at("head-a") }, &limits)
-        };
-        // 1. An UNKNOWN mergeability is not a conflict. §8: an unknown is
-        //    never a fact about the PR, so the gate is still what decides —
-        //    both ways, so neither answer is "it happens to wait anyway".
-        for unknown in [CiObservation::Pending, CiObservation::Unknown] {
-            assert_eq!(
-                at(unknown, GateOutcome::Satisfied),
-                DriveStep::to(DriveState::Satisfied),
-                "{unknown:?} at gate-check must still evaluate the gate"
-            );
-            assert_eq!(
-                at(unknown, GateOutcome::Unsatisfied),
-                DriveStep::to(DriveState::CiWait),
-                "{unknown:?} at gate-check must still evaluate the gate"
-            );
+        for ci in [CiObservation::Pending, CiObservation::Unknown, CiObservation::Green] {
+            for (gate, want) in [
+                (GateOutcome::Satisfied, DriveStep::to(DriveState::Satisfied)),
+                (GateOutcome::Unsatisfied, DriveStep::to(DriveState::CiWait)),
+                (GateOutcome::Unreadable, DriveStep::held(HeldReason::GateUnreadable)),
+                (GateOutcome::NotEvaluated, DriveStep::Wait),
+            ] {
+                assert_eq!(
+                    decide(&e, &DriveFacts { ci, gate, ..facts_at("head-a") }, &limits),
+                    want,
+                    "{ci:?} at gate-check must leave the gate to answer"
+                );
+            }
         }
-        // 2. Green and Red are not conflicts either. Red is a `ci-wait`
-        //    observation and this state does not read the check matrix; both
-        //    leave the gate to answer.
-        for other in [CiObservation::Green, CiObservation::Red] {
-            assert_eq!(
-                at(other, GateOutcome::Satisfied),
-                DriveStep::to(DriveState::Satisfied),
-                "{other:?} at gate-check must still evaluate the gate"
-            );
-        }
-        // 3. Precedence: both holds above the conflict still win, on facts
-        //    that WOULD divert (the positive control is the first assertion
-        //    of the test above, on these same conflicting facts).
-        assert_eq!(
-            decide(
-                &e,
-                &DriveFacts {
-                    ci: CiObservation::Conflicting,
-                    gate: GateOutcome::Unreadable,
-                    ..facts_at("head-a")
-                },
-                &limits
-            ),
-            DriveStep::held(HeldReason::GateUnreadable)
-        );
-        assert_eq!(
-            decide(
-                &e,
-                &DriveFacts {
-                    ci: CiObservation::Conflicting,
-                    gate: GateOutcome::Satisfied,
-                    required_lanes: None,
-                    ..facts_at("head-a")
-                },
-                &limits
-            ),
-            DriveStep::held(HeldReason::RoutingUnaccountable)
-        );
     }
 
     // ── the two carried-over gate properties (§2.1) ─────────────────────────

@@ -1642,6 +1642,29 @@ fn assert_one_paragraph(what: &str, text: &str) {
     );
 }
 
+/// Every notice one fixture delivered: one paragraph each, and **at least one**.
+///
+/// The per-block floor, and it is the whole of what the aggregate `seen >= 5`
+/// could not say. Every assertion in this test sits inside a loop over a list
+/// that may be empty, so a fixture delivering nothing satisfies all of them —
+/// and an aggregate floor is satisfied by ONE block delivering five while four
+/// deliver none. That is not hypothetical: this test's first block used to
+/// drive to `held(awaiting-p3b)`, and #3040 P3b replaced that arc with
+/// `boarding -> running`, which owes no notice at all. The block went silently
+/// vacuous and the aggregate stayed green.
+fn assert_block_notices(what: &str, reg: &OrchRegistry, group: &GroupId) -> usize {
+    let texts = pane_texts(reg, group);
+    assert!(
+        !texts.is_empty(),
+        "{what}: this fixture delivered NO notice, so every one-paragraph assertion over it is \
+         vacuous — the arc it is meant to drive no longer owes one"
+    );
+    for t in &texts {
+        assert_one_paragraph(what, t);
+    }
+    texts.len()
+}
+
 /// **Every notice this drive can put in the orchestrator's pane is ONE
 /// PARAGRAPH** (rev-std round 3, finding 1).
 ///
@@ -1669,22 +1692,52 @@ fn every_pd_notice_is_one_paragraph() {
     // (b) the composed half. Each of these drives a real arc to the point where
     // it owes a notice, and the notice is read off the delivery the
     // orchestrator's pane really received.
-    let mut seen = 0usize;
+    // Counted per BLOCK, not per notice: the floor this test needs is "every
+    // fixture still drives an arc that owes a notice", and a notice total is
+    // satisfied by one fixture delivering several while another delivers none.
+    let mut blocks = 0usize;
 
-    // held(awaiting-p3b) — the end of every `agent-ready` drive in this build.
+    // plan-review — the ONE notice a declared window buys, which interpolates a
+    // slice count and the plan's URL.
     {
         let repo = Repo::new();
         let (reg, _d) = test_registry();
         let gh = FakeGh::open(&["agent-ready"]);
-        let (group, _orch, _planner) = driven(&reg, &repo, &gh);
-        let doc = plandrive::validate_for_drive(&in_comment(PLAN), 3040, &roster()).unwrap();
+        let (group, orch) = grouped(&reg, &repo);
+        let out = reg.drive_plan_with(&group, &gh, 3040, None, Some(30), None, &orch, 1_000);
+        assert_eq!(out["driving"], json!(true), "{out}");
+        let doc = plandrive::validate_for_drive(&in_comment(PLAN3), 3040, &roster()).unwrap();
         reg.pd_store_posted_plan_at(&group, 3040, doc, "https://example/c/1", 1_100);
         reg.pd_drive_group_with(&group, &gh, 1_200);
-        reg.pd_drive_group_with(&group, &gh, 1_300);
-        for t in pane_texts(&reg, &group) {
-            assert_one_paragraph("an awaiting-p3b notice", &t);
-            seen += 1;
-        }
+        blocks += 1;
+        assert_block_notices("a plan-review notice", &reg, &group);
+    }
+    // held(row-removed) — the human strikes a boarded row.
+    {
+        let repo = Repo::new();
+        let (reg, _d) = test_registry();
+        let gh = FakeGh::open(&["agent-ready"]);
+        let (group, _orch, rows) = running(&reg, &repo, &gh, PLAN3);
+        reg.delete_task(&group, "the human", &rows["P2"]).expect("the human strikes a row");
+        reg.pd_drive_group_with(&group, &gh, 1_500);
+        blocks += 1;
+        assert_block_notices("a row-removed notice", &reg, &group);
+    }
+    // A SLICE hold — composed in `pd_execute` rather than by `owe_notice`, and
+    // it interpolates the worker's own note, which is the one value here that a
+    // delegate chooses. A third composition site, and the one this slice added.
+    {
+        let repo = Repo::new();
+        let (reg, _d) = test_registry();
+        let gh = FakeGh::open(&["agent-ready"]);
+        let (group, _orch, _rows) = running(&reg, &repo, &gh, PLAN3);
+        reg.pd_drive_group_with(&group, &gh, 1_400);
+        let agent = slice_agent(&reg, &group, "P1");
+        reg.set_pty_for_test(&agent, 7_101);
+        report(&reg, &group, &agent, "blocked", json!({ "note": "the contract is ambiguous" }));
+        reg.pd_drive_group_with(&group, &gh, 1_500);
+        blocks += 1;
+        assert_block_notices("a worker-blocked slice notice", &reg, &group);
     }
     // complete — the `agent-investigation` end, whose notice interpolates a URL.
     {
@@ -1695,10 +1748,8 @@ fn every_pd_notice_is_one_paragraph() {
         let doc = plandrive::validate_for_drive(&in_comment(PLAN), 3040, &roster()).unwrap();
         reg.pd_store_posted_plan_at(&group, 3040, doc, "https://example/c/1", 1_100);
         reg.pd_drive_group_with(&group, &gh, 1_200);
-        for t in pane_texts(&reg, &group) {
-            assert_one_paragraph("a plan-posted-complete notice", &t);
-            seen += 1;
-        }
+        blocks += 1;
+        assert_block_notices("a plan-posted-complete notice", &reg, &group);
     }
     // cancelled — the reconcile's closed-issue notice.
     {
@@ -1708,10 +1759,8 @@ fn every_pd_notice_is_one_paragraph() {
         let (group, _orch, _planner) = driven(&reg, &repo, &gh);
         gh.set_state("CLOSED");
         reg.pd_drive_group_with(&group, &gh, 1_200);
-        for t in pane_texts(&reg, &group) {
-            assert_one_paragraph("an issue-closed notice", &t);
-            seen += 1;
-        }
+        blocks += 1;
+        assert_block_notices("an issue-closed notice", &reg, &group);
     }
     // held(plan-invalid) — the notice the hook itself owes, which is composed in
     // a different function again and interpolates the planner's own reasons.
@@ -1723,10 +1772,8 @@ fn every_pd_notice_is_one_paragraph() {
         for at in [1_100u64, 1_200, 1_300] {
             let _ = reg.pd_plan_check_at(&group, &planner, 3040, "no block here\n", at);
         }
-        for t in pane_texts(&reg, &group) {
-            assert_one_paragraph("a plan-invalid notice", &t);
-            seen += 1;
-        }
+        blocks += 1;
+        assert_block_notices("a plan-invalid notice", &reg, &group);
     }
     // held(plan-missing) via the RESERVATION arm — the literal that shipped
     // broken, reached the only way it can be: through the reconcile.
@@ -1734,19 +1781,20 @@ fn every_pd_notice_is_one_paragraph() {
         let (reg, group, _repo, _d) = reserved_drive();
         let gh = FakeGh::open(&["agent-ready"]);
         reg.pd_drive_group_with(&group, &gh, 9_000);
-        for t in pane_texts(&reg, &group) {
-            assert_one_paragraph("a reservation-unspawned notice", &t);
-            seen += 1;
-        }
+        blocks += 1;
+        assert_block_notices("a reservation-unspawned notice", &reg, &group);
     }
 
-    // THE POSITIVE CONTROL, and this test needs it more than most: every
-    // assertion above is inside a loop over a list that may be empty, so a
-    // fixture that delivered nothing would satisfy all of them.
+    // The control that MATTERS is now per block, inside
+    // `assert_block_notices` — an aggregate floor is satisfied by one fixture
+    // delivering five while four deliver none, which is exactly how this test's
+    // first block went vacuous when #3040 P3b replaced the arc it drove.
+    //
+    // What is left here is a floor on the number of BLOCKS, so that deleting a
+    // fixture is visible rather than merely lowering a total.
     assert!(
-        seen >= 5,
-        "the fixtures must really have delivered notices — an empty list passes every assertion \
-         in this test: seen={seen}"
+        blocks == 7,
+        "seven fixtures, each of which must still deliver at least one notice: blocks={blocks}"
     );
 }
 

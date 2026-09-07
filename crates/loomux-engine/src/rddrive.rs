@@ -1432,7 +1432,7 @@ pub fn panes_clause(panes: &[(String, DrivenRole)], standing: PaneStanding) -> S
     // else the old paragraph spelled out stays gone.
     match standing {
         PaneStanding::Owned => format!(" Panes still OWNED: {list}."),
-        PaneStanding::Released => format!(" Panes RELEASED, still running: {list}."),
+        PaneStanding::Released => format!(" Panes RELEASED: {list}."),
     }
 }
 

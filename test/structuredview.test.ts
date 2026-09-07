@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import {
   MAX_BLOCKS,
   MAX_TEXT_BYTES_PER_BLOCK,
+  decodeProjectionInput,
   emptyState,
   emptyViewState,
   isCollapsed,
@@ -298,7 +299,7 @@ test("a REQUEST card interrupts the open run too — the twin of the orphan case
   // paragraph ABOVE it.
   for (const settle of [
     { kind: "permission_settled", id: "r1", decision: "allow", by: "policy" } as const,
-    { kind: "ui_settled", id: "u1", answer: "Cancelled", by: "human" } as const,
+    { kind: "ui_settled", id: "u1", answer: "cancelled", by: "human" } as const,
   ]) {
     const s = run([
       { kind: "turn_started", turn: 1 },
@@ -350,7 +351,7 @@ test("every non-run block kind interrupts the open run, by construction", () => 
   const cases: Array<[string, ProjectionInput]> = [
     ["turn", { kind: "turn_started", turn: 2 }],
     ["tool", { kind: "tool_output", turn: 1, id: "tz", delta: "o", is_error: false }],
-    ["request", { kind: "ui_settled", id: "uz", answer: "Cancelled", by: "human" }],
+    ["request", { kind: "ui_settled", id: "uz", answer: "cancelled", by: "human" }],
     ["delivery", { kind: "delivery", via: "human", from: null, text: "hi", ts: null }],
     ["notice", { kind: "note", turn: null, note: "ui", text: "n" }],
     ["notice", { kind: "compacted", trigger: "auto", pre_tokens: 1 }],
@@ -888,7 +889,9 @@ function readFixture(): ProjectionInput[] {
     .split("\n")
     .map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l))
     .filter((l) => l.length > 0)
-    .map((l) => JSON.parse(l) as ProjectionInput);
+    // DECODE, never cast. The `as` this replaces is why three wrong spellings
+    // sat in this fixture under a green suite (#2891 S4).
+    .map((l) => decodeProjectionInput(JSON.parse(l)));
 }
 
 test("the fixture session projects to the block catalogue, with nothing unknown", () => {
@@ -938,7 +941,7 @@ test("the fixture session projects to the block catalogue, with nothing unknown"
   const requests = only(s, "request");
   assert.deepEqual(requests.map((b) => b.channel), ["permission", "ui"]);
   assert.deepEqual(requests[0]!.settled, { answer: "deny", by: "policy" });
-  assert.deepEqual(requests[1]!.settled, { answer: { Value: "fix/2214-resume-model" }, by: "human" });
+  assert.deepEqual(requests[1]!.settled, { answer: { value: "fix/2214-resume-model" }, by: "human" });
 
   // Latest, not sum: 12 300 then 25 000.
   assert.equal(s.usage?.call_cumulative.input, 25_000);

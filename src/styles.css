@@ -5803,3 +5803,807 @@ button.wf-finding:hover { background: var(--surface-2); }
 .git-overlay.resizing .tokens-body {
   content-visibility: hidden;
 }
+
+/* ==========================================================================
+ * The structured agent pane (#2891 S4) — `src/structuredpane.ts`.
+ *
+ * WHY THIS IS IN styles.css AND NOT A FILE OF ITS OWN. `test/theme.test.ts`
+ * reads `../src/styles.css` by name in fifteen tests — the raw-colour ban below
+ * the token block, the channel rules, the one-role-table check, the
+ * font-family rule. A second stylesheet would be invisible to every one of
+ * them, so the surface with the most colour decisions in the app would be the
+ * one surface nothing watches. Everything below therefore names a `var(--…)`
+ * and introduces no pigment.
+ *
+ * THE SIGNATURE IS THE WARP, AT A THIRD SCALE. `ui-redesign.md` §The signature
+ * gives every pane a 2px thread down its left edge whose colour is the pane's
+ * live agent state, and argues the rail carries the same device as an
+ * aggregate — "the same warp at two scales". A structured transcript is a
+ * timeline, so the thread runs down the transcript's own left gutter as well:
+ * the pane edge says what the agent is doing NOW, the gutter says what it has
+ * been doing, segment by segment. Same 2px, same six dyes, same rule that a
+ * state change moves a colour and never a size.
+ *
+ * THE GUTTER'S VOCABULARY IS THE SIX STATE DYES AND NOTHING ELSE. An event
+ * that is not an agent state — a delivery arriving, a turn boundary — is marked
+ * by FORM: a drawn glyph, a full-width hairline. That is the same move the
+ * design note makes for `held` and `idle`, which "carry no dye and are marked
+ * by form, not by hue", and it is why a delivery is a seam rather than a
+ * seventh colour.
+ *
+ * CONSTRAINT 1. Nothing here sizes a terminal. A structured pane has no PTY:
+ * `.spane` is a content view in the pane's content box, and it lays itself out
+ * in the box it is given.
+ * ======================================================================== */
+
+.spane {
+  /* Demo-local geometry, not colour: the gutter the warp lives in and the
+     content column's indent, named once so the thread and the rows cannot
+     drift apart. */
+  --spane-gutter: 18px;
+  --spane-run: var(--space-4);
+
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-0);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-m);
+  overflow: hidden;
+}
+
+/* The pane-edge warp. A positioned pseudo-element, never a border in a box, so
+   it cannot cost a reflow. */
+.spane::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--thread);
+  background: var(--spane-warp, var(--state-idle));
+  pointer-events: none;
+  z-index: 1;
+}
+
+.spane[data-state="working"] { --spane-warp: var(--state-working); }
+.spane[data-state="attention"] { --spane-warp: var(--state-attention); }
+.spane[data-state="ok"] { --spane-warp: var(--state-ok); }
+.spane[data-state="danger"] { --spane-warp: var(--state-danger); }
+.spane[data-state="held"] { --spane-warp: var(--state-held); }
+.spane[data-state="idle"] { --spane-warp: var(--state-idle); }
+
+/* The app's one looping animation: an attention thread pulsing slowly, only
+   while an agent is actually waiting on the human. */
+.spane[data-state="attention"]::before {
+  animation: spane-warp-pulse 1.9s var(--ease) infinite;
+}
+
+@keyframes spane-warp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.42; }
+}
+
+/* ---- header ------------------------------------------------------------ */
+
+.spane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--pane-header-h);
+  padding: 0 var(--space-3) 0 var(--space-4);
+  border-bottom: var(--line-w) solid var(--line);
+  background: var(--surface-1);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+.spane-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--spane-warp, var(--state-idle));
+  flex: none;
+}
+
+/* Identity, not state: which agent PROGRAM runs in this pane. The token a rule
+   names is the program it dyes, so there is no third spelling to drift. */
+.spane-cli {
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  color: var(--spane-cli-hue, var(--ink-dim));
+  border: var(--line-w) solid color-mix(in srgb, var(--spane-cli-hue, var(--line-strong)) 40%, transparent);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--space-2);
+}
+
+.spane-cli[data-cli="claude"] { --spane-cli-hue: var(--cli-claude); }
+.spane-cli[data-cli="codex"] { --spane-cli-hue: var(--cli-codex); }
+.spane-cli[data-cli="copilot"] { --spane-cli-hue: var(--cli-copilot); }
+.spane-cli[data-cli="opencode"] { --spane-cli-hue: var(--cli-opencode); }
+.spane-cli[data-cli="gemini"] { --spane-cli-hue: var(--cli-gemini); }
+.spane-cli[data-cli="hermes"] { --spane-cli-hue: var(--cli-hermes); }
+.spane-cli[data-cli="ante"] { --spane-cli-hue: var(--cli-ante); }
+.spane-cli[data-cli="pi"] { --spane-cli-hue: var(--cli-pi); }
+
+.spane-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.spane-k { letter-spacing: var(--tracking-eyebrow); text-transform: uppercase; }
+.spane-v { color: var(--ink-dim); white-space: nowrap; }
+.spane-sep { color: var(--line-strong); }
+.spane-grow { flex: 1; min-width: 0; }
+
+/* Every figure a reader compares against the last time they looked is tabular:
+   a ticker whose digits shift position as they change is the cheapest thing to
+   get wrong. Mono means "a literal string the machine gave you". */
+.spane-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ---- the scroller and the virtualised list ----------------------------- */
+
+.spane-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  outline: none;
+}
+
+.spane-transcript {
+  display: flow-root;
+  padding: var(--space-3) var(--space-4) var(--space-6) 0;
+}
+
+/* The two spacers the virtualiser stands the off-screen rows up with. They
+   carry height and nothing else — a spacer that painted anything would be a
+   row, and the scrollbar is scaled to them. */
+.spane-pad { width: 100%; }
+
+.spane-row {
+  position: relative;
+  padding: var(--space-1) var(--space-3) var(--space-1) calc(var(--spane-gutter) + var(--spane-run));
+  min-height: 0;
+}
+
+/* The gutter segment: the same 2px thread, one scale down. */
+.spane-row::before {
+  content: "";
+  position: absolute;
+  left: var(--spane-gutter);
+  top: 0;
+  bottom: 0;
+  width: var(--thread);
+  background: var(--spane-seg, var(--state-idle));
+}
+
+.spane-row[data-seg="working"] { --spane-seg: var(--state-working); }
+/* Thinking takes the achromatic dye deliberately: it is the block the eye
+   should be able to skip, and a hue would pull the eye to it. */
+.spane-row[data-seg="thinking"] { --spane-seg: var(--state-held); }
+.spane-row[data-seg="ok"] { --spane-seg: var(--state-ok); }
+.spane-row[data-seg="danger"] { --spane-seg: var(--state-danger); }
+.spane-row[data-seg="attention"] { --spane-seg: var(--state-attention); }
+.spane-row[data-seg="idle"] { --spane-seg: var(--state-idle); }
+
+/* A settled row's segment drops back so the eye lands on the live end of the
+   thread without the history going invisible. */
+.spane-row:not([data-live="1"])::before { opacity: 0.72; }
+
+.spane-row[data-seg="attention"][data-live="1"]::before {
+  animation: spane-warp-pulse 1.9s var(--ease) infinite;
+}
+
+/* Row arrival: a one-shot, 3px rise. Nothing here loops.
+
+   Scoped to a row that has NOT been on screen before (`data-arrived`), because a
+   node is rebuilt whenever its content changes and an arrival that restarts on
+   every rebuild never finishes: under a burst every row sits at opacity 0 and
+   the pane renders blank with a full, correctly-positioned node count. */
+@keyframes spane-row-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* NO `animation-fill-mode`, deliberately. `both` holds the from-state
+   (opacity 0) before the animation starts and after it ends, so the row's
+   RESTING appearance would depend on an animation having run. Without a fill
+   mode the resting state is the row's own and the fade is a 120ms decoration on
+   top of it — which is what a decoration should be. */
+.spane-row:not([data-arrived="1"]) { animation: spane-row-in var(--dur-fast) var(--ease); }
+
+/* ---- the model's answer ------------------------------------------------ */
+
+/* The content, not apparatus around it: bare prose, no container, measured to
+   a comfortable line. */
+.spane-say {
+  max-width: 74ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  line-height: 1.55;
+}
+
+/* The live-text analogue of the attention pulse: it reports that bytes are
+   arriving and stops the instant that state ends. */
+.spane-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: spane-caret-blink 1.05s steps(1, end) infinite;
+}
+
+@keyframes spane-caret-blink {
+  0%, 55% { opacity: 1; }
+  56%, 100% { opacity: 0; }
+}
+
+/* ---- thinking ---------------------------------------------------------- */
+
+.spane-think {
+  max-width: 74ch;
+  border-left: var(--line-w) solid var(--line);
+  padding-left: var(--space-3);
+}
+
+.spane-think-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: var(--text-s);
+  cursor: pointer;
+  text-align: left;
+}
+
+.spane-think-head:hover { color: var(--ink-dim); }
+.spane-think-head svg { width: 12px; height: 12px; flex: none; }
+.spane-think-word { letter-spacing: 0.02em; color: var(--ink-dim); }
+
+.spane-think-body {
+  padding: var(--space-2) 0 var(--space-1);
+  color: var(--ink-faint);
+  font-size: var(--text-s);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- the fold ---------------------------------------------------------- */
+
+/* `grid-template-rows` rather than max-height: it animates to the content's
+   real size instead of to a guessed ceiling. */
+.spane-fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur-base) var(--ease);
+}
+
+.spane-fold > * { min-height: 0; overflow: hidden; }
+[data-open="0"] > .spane-fold { grid-template-rows: 0fr; }
+
+.spane-chev {
+  width: 12px;
+  height: 12px;
+  color: var(--ink-faint);
+  transition: transform var(--dur-base) var(--ease);
+}
+
+[data-open="0"] .spane-chev { transform: rotate(-90deg); }
+
+/* ---- tool cards -------------------------------------------------------- */
+
+.spane-tool,
+.spane-cmd {
+  max-width: 74ch;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+.spane-tool[data-status="error"],
+.spane-cmd[data-status="error"] {
+  border-color: color-mix(in srgb, var(--state-danger) 45%, transparent);
+}
+
+.spane-tool-head,
+.spane-cmd-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--ink-dim);
+  font-family: var(--font-ui);
+  font-size: var(--text-s);
+  cursor: pointer;
+  text-align: left;
+}
+
+.spane-tool-head:hover,
+.spane-cmd-head:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+
+/* Identity, not state: which FAMILY a tool belongs to. A tool orrerix has never
+   seen carries no family attribute and falls back to plain ink rather than
+   being given a hue it has not earned. */
+.spane-tool-ic { flex: none; width: 14px; height: 14px; color: var(--spane-tool-hue, var(--ink-faint)); }
+.spane-tool[data-family="content"] { --spane-tool-hue: var(--id-jade); }
+.spane-tool[data-family="workspace"] { --spane-tool-hue: var(--id-cyan); }
+.spane-tool[data-family="source"] { --spane-tool-hue: var(--id-amber); }
+.spane-tool[data-family="fleet"] { --spane-tool-hue: var(--id-violet); }
+.spane-tool[data-family="vcs"] { --spane-tool-hue: var(--id-lime); }
+
+.spane-tool-name { flex: none; color: var(--ink); font-weight: 600; }
+
+/* The identifying argument. Truncated from the LEFT, because a path's tail is
+   what identifies it — the bidi override keeps the string itself unreversed. */
+.spane-tool-arg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+.spane-tool-arg > span { direction: ltr; unicode-bidi: bidi-override; }
+
+.spane-dur {
+  flex: none;
+  font-size: var(--text-eyebrow);
+  color: var(--ink-faint);
+}
+
+.spane-sigil {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-s);
+  color: var(--ink-faint);
+  user-select: none;
+}
+
+/* A command is read command-first, output-only-if-the-status-says-so. */
+.spane-cmd-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink);
+}
+
+.spane-cmd-meta { flex: none; display: flex; align-items: center; gap: var(--space-2); }
+
+.spane-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 1px var(--space-2);
+  border: var(--line-w) solid color-mix(in srgb, var(--spane-chip-hue) 40%, transparent);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-eyebrow);
+  color: var(--spane-chip-hue);
+  white-space: nowrap;
+}
+
+.spane-chip[data-status="pending"] { --spane-chip-hue: var(--state-held); }
+.spane-chip[data-status="running"] { --spane-chip-hue: var(--state-working); }
+.spane-chip[data-status="ok"] { --spane-chip-hue: var(--state-ok); }
+.spane-chip[data-status="error"] { --spane-chip-hue: var(--state-danger); }
+
+.spane-dotmark {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--spane-chip-hue);
+  flex: none;
+}
+
+/* The one continuous cue a running call gets — it stops the instant the call
+   returns, which is the state it exists to report. */
+.spane-spin {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  border: 1.5px solid color-mix(in srgb, var(--spane-chip-hue) 30%, transparent);
+  border-top-color: var(--spane-chip-hue);
+  animation: spane-spin 720ms linear infinite;
+}
+
+@keyframes spane-spin { to { transform: rotate(360deg); } }
+
+.spane-tool-body { padding: 0 var(--space-3) var(--space-2); }
+
+.spane-kv {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px var(--space-3);
+  margin: var(--space-2) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.spane-kv dt { color: var(--ink-faint); white-space: nowrap; }
+.spane-kv dd { margin: 0; color: var(--ink-dim); overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* A 4000-line result must not push the live end off screen: own scroll, capped
+   height. */
+.spane-out {
+  margin: var(--space-2) 0 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: var(--space-2);
+  border-radius: var(--radius-s);
+  background: var(--surface-term);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.spane-out[data-error="1"] { color: color-mix(in srgb, var(--state-danger) 78%, var(--ink)); }
+
+/* An elision the reader cannot see is a transcript that lies: both ceilings
+   render this, they do not merely log. */
+.spane-elided {
+  margin: var(--space-2) 0 0;
+  padding: 2px var(--space-2);
+  border-left: var(--thread) solid var(--state-held);
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  color: var(--ink-faint);
+}
+
+/* ---- the Edit diff ----------------------------------------------------- */
+
+.spane-diff {
+  margin: var(--space-2) 0 0;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.spane-diff-hunk {
+  padding: var(--space-1) var(--space-3);
+  color: var(--ink-faint);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+}
+
+.spane-diff-line { display: grid; grid-template-columns: 3.5ch 1ch minmax(0, 1fr); }
+.spane-diff-line > .spane-ln {
+  color: var(--ink-faint);
+  text-align: right;
+  padding-right: var(--space-2);
+  user-select: none;
+}
+.spane-diff-line > .spane-sg { color: var(--ink-faint); user-select: none; }
+.spane-diff-line > .spane-tx { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-dim); }
+
+/* Identity, not state: an added and a removed line are two KINDS of line, so
+   they take `--id-*` and never the ok/danger dyes — a deletion is not a
+   failure. */
+.spane-diff-line[data-k="add"] { background: color-mix(in srgb, var(--id-jade) 12%, transparent); }
+.spane-diff-line[data-k="add"] > .spane-tx { color: color-mix(in srgb, var(--id-jade) 62%, var(--ink)); }
+.spane-diff-line[data-k="del"] { background: color-mix(in srgb, var(--id-rose) 12%, transparent); }
+.spane-diff-line[data-k="del"] > .spane-tx { color: color-mix(in srgb, var(--id-rose) 62%, var(--ink)); }
+
+/* ---- the request card -------------------------------------------------- */
+
+/* INLINE, never a modal: a dialog strands every other agent reporting to this
+   window (#946). The card sits where it happened and the rest of the app keeps
+   working. */
+.spane-ask {
+  max-width: 74ch;
+  border: var(--line-w) solid color-mix(in srgb, var(--state-attention) 50%, transparent);
+  border-radius: var(--radius-s);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+/* No fill mode, for the reason the row-arrival rule states. */
+.spane-ask[data-open="pending"] { animation: spane-ask-in var(--dur-base) var(--ease); }
+
+@keyframes spane-ask-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.spane-ask-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--line-w) solid color-mix(in srgb, var(--state-attention) 30%, transparent);
+  background: color-mix(in srgb, var(--state-attention) 10%, transparent);
+  color: var(--state-attention);
+  font-size: var(--text-eyebrow);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+}
+
+.spane-ask-head svg { width: 13px; height: 13px; flex: none; }
+.spane-ask-method {
+  font-family: var(--font-mono);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-faint);
+}
+
+.spane-ask-body { padding: var(--space-3); }
+
+.spane-ask-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-m);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* A permission's payload is a literal the machine handed us — a command line —
+   so it takes mono. A dialog's message is PROSE written for the human, and
+   prose in mono is the costume the type roles exist to prevent. */
+.spane-ask-what {
+  margin-bottom: var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--radius-s);
+  background: var(--surface-term);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.spane-ask-what[data-prose="1"] {
+  background: none;
+  padding: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-s);
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
+.spane-ask-acts { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+.spane-ask-in {
+  flex: 1;
+  min-width: 12ch;
+  padding: var(--space-1) var(--space-2);
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-term);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-s);
+}
+
+.spane-ask-in:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+
+.spane-btn {
+  padding: var(--space-1) var(--space-3);
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: none;
+  color: var(--ink-dim);
+  font-family: var(--font-ui);
+  font-size: var(--text-s);
+  cursor: pointer;
+}
+
+.spane-btn:hover { color: var(--ink); border-color: var(--ink-faint); }
+.spane-btn:active { background: var(--surface-2); }
+.spane-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--focus); }
+
+/* Gold INK on a gold hairline, never a gold fill: `--accent` is never a
+   ground. */
+.spane-btn-primary { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.spane-btn-primary:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.spane-btn-danger { color: var(--state-danger); border-color: color-mix(in srgb, var(--state-danger) 45%, transparent); }
+.spane-btn-danger:hover { border-color: var(--state-danger); background: color-mix(in srgb, var(--state-danger) 10%, transparent); }
+
+.spane-ask-hint {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  color: var(--ink-faint);
+}
+
+/* A settled request is the audit trail: it goes quiet, it does not vanish. */
+.spane-ask[data-open="settled"] { border-color: var(--line); }
+.spane-ask[data-open="settled"] .spane-ask-head {
+  background: none;
+  border-bottom-color: var(--line);
+  color: var(--ink-faint);
+}
+
+/* ---- deliveries: a seam, marked by form ------------------------------- */
+
+.spane-deliv {
+  max-width: 74ch;
+  border: var(--line-w) solid var(--line);
+  border-left-width: var(--thread);
+  border-radius: var(--radius-s);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+.spane-deliv-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--line-w) solid var(--line);
+  font-size: var(--text-eyebrow);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.spane-deliv-head svg { width: 13px; height: 13px; flex: none; color: var(--ink-dim); }
+.spane-deliv-from { color: var(--ink-dim); font-weight: 600; }
+.spane-deliv-ts { text-transform: none; letter-spacing: 0; }
+
+.spane-deliv-body {
+  padding: var(--space-3);
+  color: var(--ink-dim);
+  font-size: var(--text-s);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A human's own words are the one delivery the accent marks — interaction, not
+   state: this is the thing the human did. */
+.spane-deliv[data-from="human"] { border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
+.spane-deliv[data-from="human"] .spane-deliv-head svg { color: var(--accent); }
+.spane-deliv[data-from="human"] .spane-deliv-body { color: var(--ink); }
+
+/* ---- turn boundaries: a labelled rule --------------------------------- */
+
+.spane-turnrule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  font-size: var(--text-eyebrow);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spane-turnrule::after {
+  content: "";
+  flex: 1;
+  height: var(--line-w);
+  background: var(--line);
+}
+
+.spane-turnrule[data-stop="error"] { color: var(--state-danger); }
+
+/* ---- notices: the harness talking about itself ------------------------ */
+
+.spane-note {
+  display: flex;
+  gap: var(--space-2);
+  max-width: 74ch;
+  padding-left: var(--space-2);
+  border-left: var(--thread) solid var(--line-strong);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+
+.spane-tag { flex: none; color: var(--ink-dim); }
+.spane-note[data-kind="warn"] { border-left-color: color-mix(in srgb, var(--state-attention) 55%, transparent); }
+.spane-note[data-kind="warn"] .spane-tag { color: var(--state-attention); }
+.spane-note[data-kind="error"] { border-left-color: color-mix(in srgb, var(--state-danger) 55%, transparent); }
+.spane-note[data-kind="error"] .spane-tag { color: var(--state-danger); }
+
+/* ---- the usage ticker -------------------------------------------------- */
+
+.spane-foot {
+  flex: none;
+  border-top: var(--line-w) solid var(--line);
+  background: var(--surface-1);
+}
+
+.spane-ticker {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-4);
+  font-size: var(--text-eyebrow);
+  color: var(--ink-faint);
+}
+
+.spane-tk { display: inline-flex; align-items: baseline; gap: 5px; }
+.spane-tk-k { letter-spacing: var(--tracking-eyebrow); text-transform: uppercase; }
+.spane-tk-v { color: var(--ink-dim); }
+.spane-tk-v.spane-money { color: var(--ink); }
+
+/* A figure that just moved lifts ONCE. Not a loop — the motion budget spends
+   its two loops on the attention pulse and the streaming caret. */
+.spane-tk-v.bumped { animation: spane-tk-bump 320ms var(--ease); }
+
+@keyframes spane-tk-bump {
+  0% { transform: translateY(0); }
+  35% { transform: translateY(-2px); }
+  100% { transform: translateY(0); }
+}
+
+/* An empty queue is not news. */
+.spane-queue {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-4);
+  border-bottom: var(--line-w) solid var(--line);
+  font-size: var(--text-eyebrow);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* ---- reduced motion ---------------------------------------------------- */
+
+/* Under `prefers-reduced-motion: reduce` this surface has ZERO animations with
+   infinite iterations. The CARET STAYS SOLID rather than vanishing: it reports
+   that bytes are arriving, which is the state it exists to carry, and removing
+   it would delete information rather than motion. The one-shots — a row's
+   arrival, a ticker digit's lift, a card appearing — are dropped outright,
+   since their information is the row, not the movement. */
+@media (prefers-reduced-motion: reduce) {
+  .spane::before,
+  .spane-row::before,
+  .spane-spin,
+  .spane-caret,
+  .spane-row:not([data-arrived="1"]),
+  .spane-ask[data-open="pending"],
+  .spane-tk-v.bumped {
+    animation: none !important;
+  }
+  .spane-caret { opacity: 1; }
+  .spane-spin { border-top-color: var(--spane-chip-hue); }
+  .spane-fold { transition: none; }
+  .spane-chev { transition: none; }
+}

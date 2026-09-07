@@ -74,7 +74,22 @@ export type StopReason = string | { other: string };
 
 export type DecisionSource = "policy" | "human" | "pane_exited";
 export type UiMethod = "select" | "confirm" | "input" | "editor";
-export type UiAnswer = { Value: string } | { Confirmed: boolean } | "Cancelled";
+/** `harness::UiAnswer`, which carries `#[serde(rename_all = "snake_case")]` — so
+ *  the wire keys are LOWER-CASE and this declaration follows it, as every type in
+ *  this block follows the Rust enum rather than defining a second contract.
+ *
+ *  It said `Value`/`Confirmed`/`Cancelled` until #2891 S4, which is a spelling
+ *  nothing has ever emitted: `serde`'s external tagging renames the VARIANT, and
+ *  the enum's own doc says as much in prose ("answer with a `value`", "`confirm`
+ *  with a `confirmed` boolean"). Every reader matched on the capitalised keys, so
+ *  a real settlement would have fallen through to "cancelled" on every dialog —
+ *  green on both sides, because the fixture carried the same error and the
+ *  fixture reader is an unchecked `as` cast. Found by building §5.1's parity
+ *  control, which is the first thing that read the two side by side.
+ *
+ *  No back-compat arm is owed. CLAUDE.md's rename rule keeps a READER accepting
+ *  every spelling that was ever EMITTED, and the capitalised one never was. */
+export type UiAnswer = { value: string } | { confirmed: boolean } | "cancelled";
 
 /** `harness::NoteKind` — the closed set a decoder may produce, three kinds a
  *  renderer is meant to draw differently.
@@ -1004,4 +1019,177 @@ export function pruneViewState(view: ViewState, state: State): ViewState {
   const live = new Set(state.blocks.map((b) => b.id));
   for (const id of Array.from(view.collapsed)) if (!live.has(id)) view.collapsed.delete(id);
   return view;
+}
+
+// ── the decoder: the cast, replaced (#2891 S4) ──────────────────────────────
+//
+// WHY THIS EXISTS, and what it closes. The types above are a re-declaration of
+// a wire shape defined in Rust. Nothing checked that they matched it: every
+// reader — the fixture readers, the replay page, and the `orch-pane-event`
+// listener — did `JSON.parse(line) as ProjectionInput`, which is an assertion
+// the compiler is REQUIRED to believe. Three spellings were wrong when this was
+// written and the suite was green over all three (#2891 S4):
+//
+//   - `UiAnswer` was `{ Value } | { Confirmed } | "Cancelled"`, where the Rust
+//     enum carries `rename_all = "snake_case"` and the wire is
+//     `{ value } | { confirmed } | "cancelled"`. Every reader matched the
+//     capitalised keys, so a real settlement would have fallen through to
+//     "cancelled" on every dialog;
+//   - the fixture carried the same capitalised answer, which is why nothing
+//     reddened;
+//   - and a `compacted` trigger of `"threshold"`, which is not a
+//     `CompactTrigger` — and did not satisfy the type it was cast to either.
+//
+// The engine side of the fix is a round-trip test in
+// `crates/loomux-engine/src/harness/transcript.rs`, which reddens if a serde
+// attribute in that crate stops agreeing with the fixture the frontend runs on.
+// This is the other side: a spelling that reaches THIS build at runtime is
+// refused rather than believed.
+//
+// TWO KINDS OF UNKNOWN, and they are not the same thing.
+//
+//   - **An unknown `kind` is not an error.** `HarnessEvent` is an additive enum
+//     and §1.2 is explicit: "a consumer that does not match them keeps
+//     compiling and keeps working, minus what it does not read". So a kind this
+//     build has never heard of passes through and `project()` files it as a
+//     notice carrying the raw kind — rule 3, unchanged.
+//   - **A known kind with a payload this contract does not allow IS an error.**
+//     `{"kind":"compacted","trigger":"threshold"}` is not a newer protocol, it
+//     is a value nothing may emit; believing it means rendering a fact nobody
+//     reported. That is refused.
+//
+// The check is deliberately SHALLOW: it validates the closed vocabularies —
+// the enums whose spellings serde decides, which is exactly where the three
+// defects were — and the shape of the fields those enums live in. It does not
+// re-validate every string and number, because a `string` that arrives as a
+// string is not where a rename can hurt you. What it is scoped to is stated
+// here rather than implied, and `test/structuredrows.test.ts` runs it over the
+// whole fixture with a positive control that the refusal really fires.
+
+const NOTE_KINDS: readonly string[] = ["retry", "error", "ui"];
+const UI_METHODS: readonly string[] = ["select", "confirm", "input", "editor"];
+const DECISION_SOURCES: readonly string[] = ["policy", "human", "pane_exited"];
+const COMPACT_TRIGGERS: readonly string[] = ["manual", "auto"];
+const DELIVERY_VIA: readonly string[] = ["kickoff", "prompt", "notice", "human"];
+
+/** Thrown by `decodeProjectionInput` when a KNOWN kind carries a payload the
+ *  contract does not allow. Carries the offending value so a reviewer reading a
+ *  CI log can see the spelling rather than only the field name. */
+export class ProjectionDecodeError extends Error {
+  /** Fields are declared and assigned, NOT constructor parameter properties:
+   *  `node --test` loads `src/*.ts` off disk in strip-only mode, which refuses
+   *  a parameter property outright (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`).
+   *  `tsc --noEmit` is perfectly happy with them, so the compiler is not the
+   *  instrument that catches this — the suite is. */
+  readonly kind: string;
+  readonly field: string;
+  readonly value: unknown;
+
+  constructor(kind: string, field: string, value: unknown) {
+    super(
+      `${kind}.${field} is ${JSON.stringify(value)}, which this contract does not allow — ` +
+        "the wire shape is crates/loomux-engine/src/harness/mod.rs",
+    );
+    this.kind = kind;
+    this.field = field;
+    this.value = value;
+    this.name = "ProjectionDecodeError";
+  }
+}
+
+function requireOneOf(kind: string, field: string, value: unknown, allowed: readonly string[]): void {
+  if (typeof value !== "string" || !allowed.includes(value)) {
+    throw new ProjectionDecodeError(kind, field, value);
+  }
+}
+
+/**
+ * Decode one event off the wire (or off a fixture line).
+ *
+ * Returns the value typed, or throws `ProjectionDecodeError`. An unrecognised
+ * `kind` is returned unchanged for `project()`'s rule-3 handling — see the
+ * header for why those two unknowns are not the same thing.
+ */
+export function decodeProjectionInput(raw: unknown): ProjectionInput {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ProjectionDecodeError("?", "(event)", raw);
+  }
+  const o = raw as Record<string, unknown>;
+  const kind = o.kind;
+  if (typeof kind !== "string") throw new ProjectionDecodeError("?", "kind", kind);
+
+  switch (kind) {
+    case "note":
+      requireOneOf(kind, "note", o.note, NOTE_KINDS);
+      break;
+    case "compacted":
+      requireOneOf(kind, "trigger", o.trigger, COMPACT_TRIGGERS);
+      break;
+    case "ui_request":
+      requireOneOf(kind, "method", o.method, UI_METHODS);
+      break;
+    case "ui_settled":
+      requireDecisionSource(kind, o.by);
+      requireUiAnswer(o.answer);
+      break;
+    case "permission_settled":
+      requireDecisionSource(kind, o.by);
+      break;
+    case "delivery":
+      requireOneOf(kind, "via", o.via, DELIVERY_VIA);
+      break;
+    default:
+      // Every other kind's payload is strings, numbers and free-form JSON —
+      // nothing whose spelling a serde attribute decides. An unknown kind lands
+      // here too, and passes through by design.
+      break;
+  }
+  return raw as ProjectionInput;
+}
+
+function requireDecisionSource(kind: string, by: unknown): void {
+  requireOneOf(kind, "by", by, DECISION_SOURCES);
+}
+
+/** `UiAnswer` is the one payload that is itself an enum, and the one the three
+ *  defects were in. Externally tagged with `rename_all = "snake_case"`: a
+ *  one-key object `{value}` or `{confirmed}`, or the bare string `"cancelled"`.
+ *  Anything else — the capitalised spellings included — is refused. */
+function requireUiAnswer(answer: unknown): void {
+  if (answer === "cancelled") return;
+  if (answer && typeof answer === "object" && !Array.isArray(answer)) {
+    const keys = Object.keys(answer);
+    if (keys.length === 1 && keys[0] === "value") {
+      if (typeof (answer as { value: unknown }).value === "string") return;
+    }
+    if (keys.length === 1 && keys[0] === "confirmed") {
+      if (typeof (answer as { confirmed: unknown }).confirmed === "boolean") return;
+    }
+  }
+  throw new ProjectionDecodeError("ui_settled", "answer", answer);
+}
+
+/**
+ * Decode a whole batch, dropping what it refuses rather than throwing.
+ *
+ * The listener's form. One malformed event must not cost the batch it rode in
+ * on — the other 63 are fine and the transcript is what the human is watching —
+ * so a refusal is DROPPED and REPORTED, never swallowed and never fatal. The
+ * `rejected` array is what a caller logs; returning it rather than logging here
+ * keeps this module pure and testable.
+ */
+export function decodeBatch(raws: readonly unknown[]): {
+  events: ProjectionInput[];
+  rejected: ProjectionDecodeError[];
+} {
+  const events: ProjectionInput[] = [];
+  const rejected: ProjectionDecodeError[] = [];
+  for (const raw of raws) {
+    try {
+      events.push(decodeProjectionInput(raw));
+    } catch (e) {
+      rejected.push(e instanceof ProjectionDecodeError ? e : new ProjectionDecodeError("?", "(event)", raw));
+    }
+  }
+  return { events, rejected };
 }

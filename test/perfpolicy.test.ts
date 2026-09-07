@@ -184,6 +184,25 @@ const STREAMS: StreamRow[] = [
     debt: null,
   },
   {
+    event: "orch-pane-event",
+    rate: "producer",
+    bound: "rAF-gated",
+    cite: "src/structuredpane.ts",
+    reason:
+      "The structured pane's event stream (#2891, harness-adapters.md §5.6). Bounded TWICE, " +
+      "and the second bound is the one that matters here: the backend coalescer coalesces the " +
+      "same 16 ms / 64 KiB way it does for pty-output — it is the same sink, and it does not " +
+      "know what it is coalescing — while the handler does no DOM work at all. It hands the " +
+      "batch to that agent's view in O(1) through a registry (never a scan over every pane in " +
+      "every tab, which at up to 60 batches/s per pane would be O(panes²) per second), the " +
+      "view folds it into its pure projection and sets a dirty flag, and ONE " +
+      "requestAnimationFrame renders whatever arrived in that frame. That is P5, the same " +
+      "gate ft-files established. The frame itself does every write before every read, so a " +
+      "burst costs one forced layout rather than one per row — the O(n²) follow-the-live-end " +
+      "defect the S0 mock's storm fixture found (demo/structured-pane/DESIGN.md §7).",
+    debt: null,
+  },
+  {
     event: "fm-hash",
     rate: "producer",
     bound: "rAF-gated",

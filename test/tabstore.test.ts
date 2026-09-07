@@ -1025,6 +1025,7 @@ test("a lead pane's flag round-trips, and only an exact `true` is one", () => {
 
 const LIVE = {
   contentKind: null,
+  structured: false,
   ssh: false,
   orchRole: null,
   orchGroup: null,
@@ -1042,6 +1043,40 @@ test("a LEAD persists as the agent pane it is, never as a resumable orch placeho
   // this pane really does carry a group, so a rung that read `orchGroup` first
   // would answer "orch" for it. The control is the same pane one field over.
   assert.equal(persistedKindFor({ ...lead, orchRole: "worker" }), "orch", "any OTHER role in a group is orch");
+});
+
+test("a structured pane persists as the agent it is, never as ssh or orch", () => {
+  // #2891 S4's rung. A structured pane has no PTY — so every reflex says "content"
+  // — but it is a view of ONE AGENT's event log, and the four content kinds restore
+  // from their root alone, which for a transcript restores nothing.
+  //
+  // THE OPERANDS COLLIDE, which is what makes this fail-able (#1300): the fixture
+  // carries `ssh` AND a group AND a launched command, so every rung below the
+  // structured one would answer something else. Delete `if (pane.structured)` from
+  // the ladder and this row goes to "ssh"; a disjoint fixture would hold under both.
+  const structured = {
+    ...LIVE,
+    structured: true,
+    ssh: true,
+    orchGroup: "g",
+    launchedCommand: true,
+  };
+  assert.equal(persistedKindFor(structured), "agent");
+  // The control is the same pane one field over — so this pair fails if the rung
+  // stops reading `structured`, and also if it starts answering "agent" for
+  // everything.
+  assert.equal(
+    persistedKindFor({ ...structured, structured: false }),
+    "ssh",
+    "without the flag the very same pane takes the rung below"
+  );
+  // And it does NOT outrank content: a files/editor/git pane that somehow carried
+  // the flag is still a content pane, because `contentKind` is the first rung.
+  assert.equal(
+    persistedKindFor({ ...structured, contentKind: "editor" }),
+    "editor",
+    "content is still the first rung"
+  );
 });
 
 test("the persisted-kind ladder answers each rung, with the rung below it varied", () => {

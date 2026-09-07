@@ -24,6 +24,8 @@ import { reduceConnect, channelBadge, dropIfStale } from "./channel";
 import type { HeldReason } from "./heldbadge";
 import { modal } from "./modal";
 import { killPty, onPtyExit } from "./pty";
+import { decodeBatch } from "./structuredview.ts";
+import type { StructuredPaneView } from "./structuredpane";
 import { withDeadline } from "./dirtystate";
 import {
   promoteConfirmLines,
@@ -865,6 +867,101 @@ export function initOrchestration(wiring: OrchWiring): void {
   void listen<OrchChannelEvent>("orch-channel", ({ payload }) => {
     applyChannelEvent(payload, wiring);
   });
+  // The structured pane's event stream (#2891 / harness-adapters.md §5.6). One
+  // batch per pane per 16 ms, carrying at most 64 events or 64 KiB — the same
+  // coalescer that bounds `pty-output`, because it is the same sink.
+  //
+  // The handler is O(1): the batch is handed to the registered view for that
+  // agent, which folds it into its projection and sets a dirty flag. NOTHING is
+  // rendered here — one rAF per frame does that, however many batches land in it
+  // (P5, `test/perfpolicy.test.ts`'s row for this event).
+  //
+  // An event for an agent with no structured pane open is DROPPED, not queued: the
+  // transcript of record is the per-pane event log on disk (§4.1), and a pane
+  // opening later replays from that rather than from a backlog this window held.
+  void listen<PaneEventBatch>("orch-pane-event", ({ payload }) => {
+    const view = structuredPanes.get(payload.agent_id);
+    if (!view) return;
+    // DECODE, never cast (#2891 S4). `decodeBatch` refuses a payload spelling
+    // this contract does not allow — the class of defect that shipped a
+    // `{"Value":…}` settlement nothing could read — and DROPS the offender
+    // rather than the batch: the other 63 events are fine and the transcript is
+    // what the human is watching. An unrecognised `kind` is not a refusal; it
+    // passes through and the projection files it as a notice (§1.2's additive
+    // rule), so a newer engine never loses a batch to this.
+    const { events, rejected } = decodeBatch(payload.events);
+    for (const e of rejected) {
+      console.warn(`[orrerix] dropped a malformed pane event for ${payload.agent_id}: ${e.message}`);
+    }
+    view.apply(events);
+  });
+}
+
+/** One `orch-pane-event` batch (§5.6). `events` are `HarnessEvent`s as they
+ *  serialize, plus orrerix's own `delivery` — the one thing in the stream the
+ *  agent did not produce, tagged distinctly so a harness cannot forge one. */
+export interface PaneEventBatch {
+  group_id: string;
+  agent_id: string;
+  /** RAW, deliberately. Typing this `ProjectionInput[]` would be the same
+   *  unchecked assertion the `as` cast was — the wire is JSON and this build's
+   *  belief about its shape is what `decodeBatch` exists to stop taking on
+   *  faith. */
+  events: unknown[];
+}
+
+/** Live structured panes, by agent id.
+ *
+ *  A REGISTRY rather than a scan over every pane in every tab, which is what the
+ *  neighbouring lifecycle listeners do. Those fire a handful of times per pane;
+ *  this one fires up to 60 times a second PER PANE, so a scan would be O(panes)
+ *  per event and O(panes²) per second across a tiled group — the exact shape
+ *  INV-3 exists to keep out of the webview's one thread.
+ *
+ *  It is not a cache in front of a scan (#1625): there is no other path to a
+ *  structured view, so there is nothing it can answer less of. Registration is
+ *  the pane's own lifecycle — `startContent` in, `notifyPaneDisposed` out — so an
+ *  entry cannot outlive the view it names. */
+const structuredPanes = new Map<string, StructuredPaneView>();
+
+/** Bind a structured pane to the agent whose stream fills it. Called by
+ *  `Pane.startContent`; replacing an existing entry is legal (a pane respawned in
+ *  place) and drops the old view, which is already disposed by then. */
+export function registerStructuredPane(agentId: string, view: StructuredPaneView): void {
+  structuredPanes.set(agentId, view);
+}
+
+/**
+ * Settle a pending dialog or permission request (harness-adapters.md §3.5).
+ *
+ * **Every agent may be asked. No agent may ever answer.** That is not enforced
+ * here and cannot be: this is the WEBVIEW, and the caller's identity is a
+ * property of the ENTRY POINT rather than an argument — a button in the human's
+ * own window is the trusted path, exactly as `questions.json` is. The backend
+ * command `answer_pane_ui` is the boundary, and the slice that builds it owes the
+ * boundary test that ends in a positive control settling one through this path.
+ *
+ * Reaches the engine through `transport.ts` like every other capability
+ * (constraint 5) — `test/transport.test.ts` fails the build otherwise.
+ */
+export function answerPaneUi(req: {
+  groupId: string;
+  agentId: string;
+  requestId: string;
+  /** `permission` settles a §3.2 policy request, `ui` a §3.5 extension dialog.
+   *  They are NOT conflated: a permission is a tool-policy decision and a dialog
+   *  is arbitrary extension text, and §3.5 refuses to run one through the other's
+   *  ladder. */
+  channel: "permission" | "ui";
+  answer: string;
+}): Promise<void> {
+  return invoke<void>("answer_pane_ui", {
+    groupId: req.groupId,
+    agentId: req.agentId,
+    requestId: req.requestId,
+    channel: req.channel,
+    answer: req.answer,
+  });
 }
 
 /** Apply one `orch-channel` event across every open pane in every tab.
@@ -969,6 +1066,14 @@ function setPending(next: PendingConnect | null, source: Pane | null): void {
  *  precedent so the two teardown notifications read as one pattern. */
 export function notifyPaneDisposed(pane: Pane): void {
   if (pendingPane === pane) setPending(null, null);
+  // #2891: drop the structured-pane registration with the pane, so a batch for a
+  // closed pane reaches a disposed view rather than being applied to one. Keyed by
+  // the pane's OWN view, never by the agent id alone: a pane respawned in place has
+  // already registered its replacement under that id, and an id-aimed delete here
+  // would unregister the live one.
+  for (const [agentId, view] of structuredPanes) {
+    if (view === pane.structuredView) structuredPanes.delete(agentId);
+  }
 }
 
 /** Drop a stale armed source (review finding #286-1) before it can render a

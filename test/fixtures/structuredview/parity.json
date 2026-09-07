@@ -1,0 +1,73 @@
+{
+  "_": [
+    "THE PARITY RECORD (#2891 S4). doc/design/harness-adapters.md §5.1 makes the",
+    "event log the record and gives it TWO projections: the engine's VT renderer",
+    "(crates/loomux-engine/src/harness/transcript.rs), which feeds the pane's",
+    "OutputBuf ring and with it get_output, termgrid replay, thumbnails,",
+    "last_exit_tail and replay-on-attach; and the DOM renderer (src/structuredview.ts",
+    "-> src/structuredpane.ts), which is the human's surface. §5.1 states the risk",
+    "that shape creates in one line — 'two projections of one log can disagree' — and",
+    "assigns the control to the slice that builds the DOM renderer.",
+    "",
+    "WHY THIS IS A TABLE AND NOT AN EQUALITY. The obvious control is 'both",
+    "projections draw the same set of kinds', and it is FALSE BY DESIGN: the VT",
+    "renderer draws nothing for Thinking or ToolOutput, and has no turn row at all,",
+    "and it argues",
+    "why in place (volume, and what a thumbnail would then be full of). An equality",
+    "assertion would have to be weakened until it caught nothing. So the record is",
+    "per-kind, every divergence carries its reason, and BOTH sides assert against",
+    "this file: a NEW divergence cannot be added silently, and an existing one",
+    "cannot be closed without saying so here.",
+    "",
+    "WHAT 'draws' MEANS ON EACH SIDE, because they are different questions about",
+    "the same event. vt: Renderer::render returned a non-empty byte string. dom:",
+    "project() changed the State — a block created or updated, or a header/ticker",
+    "fact set. Both are 'did this projection show the human anything about this",
+    "event', which is the question a divergence is about.",
+    "",
+    "`draws` IS PER KIND, NOT PER EVENT, and it means \"at least once over this log\".",
+    "Two events of one kind can legitimately differ: `TurnStarted`'s whole output is two",
+    "newlines and `Renderer::newline` is a no-op at column 0, so whether it draws depends",
+    "on what the event before it left behind. Both sides therefore run ONE projection over",
+    "the log in order — one `Renderer`, one `State` — rather than a fresh one per event,",
+    "which would answer the question with a fact about the instrument.",
+    "",
+    "The subject is session.harness.jsonl beside this file, and both sides read it.",
+    "One line is not a HarnessEvent at all — orrerix's own `delivery`, which rides",
+    "the same batch tagged distinctly so a harness cannot forge one — so the VT side",
+    "skips it and `local_only` is what stops that exemption growing in silence."
+  ],
+  "fixture": "session.harness.jsonl",
+  "events": 28,
+  "local_only": 1,
+  "kinds": {
+    "booted": { "dom": true, "vt": true },
+    "turn_started": {
+      "dom": true,
+      "vt": false,
+      "why": "The VT projection has no turn row at all. A turn boundary there is a blank line and nothing else — and only when one is needed, because `Renderer::newline` is a no-op at column 0, so `TurnStarted` emits bytes only where the previous event left the cursor mid-line. Over this log it never does, so it draws nothing. The turn NUMBER is deliberately absent too: it is loomux's own counter (`TurnId`), and printing an internal identity on the human's screen is what that arm refuses. The DOM projection can afford what a byte stream cannot — it draws a labelled rule carrying the turn's receipt (stop reason, cumulative tokens, cost, duration), which is the unit a human scrolls by."
+    },
+    "text": { "dom": true, "vt": true },
+    "tool_call": { "dom": true, "vt": true },
+    "tool_result": { "dom": true, "vt": true },
+    "permission_request": { "dom": true, "vt": true },
+    "permission_settled": { "dom": true, "vt": true },
+    "ui_request": { "dom": true, "vt": true },
+    "ui_settled": { "dom": true, "vt": true },
+    "queue_changed": { "dom": true, "vt": true },
+    "turn_ended": { "dom": true, "vt": true },
+    "compacted": { "dom": true, "vt": true },
+    "note": { "dom": true, "vt": true },
+    "exited": { "dom": true, "vt": true },
+    "thinking": {
+      "dom": true,
+      "vt": false,
+      "why": "The VT projection draws nothing for Thinking, argued at the arm: #2891 asks for thinking to be QUIETABLE, which a VT stream cannot offer — so the choice is between always showing it and never showing it, and never is what matches every other pane. It would also put the highest-volume thing pi produces into every thumbnail. The DOM projection is where thinking gets its surface, as its own dim, foldable block on the achromatic dye."
+    },
+    "tool_output": {
+      "dom": true,
+      "vt": false,
+      "why": "Same argument by volume, plus one about harness parity: a ToolCall line and its ok/failed are what the ring has always shown for a tool on BOTH harnesses, and streaming a tool's bytes into it on pi alone would make the same session look different by harness for no reported difference. The cost is real and is not hidden — a pi tool's streamed output had no human surface at all until this slice, and the DOM projection is that surface: a mono block with its own scroll under the card, capped, with the elided byte count stated."
+    }
+  }
+}

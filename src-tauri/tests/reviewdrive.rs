@@ -13170,10 +13170,16 @@ fn a_conflict_releases_the_open_lane_it_was_about_to_strand() {
 
         // The lane ends its turn WITHOUT recording anything — the shape the issue
         // is about, and the one `releasable`'s other three reasons cannot reach:
-        // there is no verdict, no consumed report and no terminal step. Ending
-        // the turn is what `release_driven_pane`'s idle barrier requires; a lane
-        // mid-turn is the residual, pinned separately below.
-        report_as(&reg, &group, &lane, Role::Reviewer, "progress");
+        // there is no verdict, no consumed report and no terminal step.
+        //
+        // `blocked` and not `progress`, and the difference is the whole fixture:
+        // `set_agent_idle` is called with `matches!(status, "done" | "blocked")`,
+        // so a `progress` report leaves `idle_since_ms` unset and the release
+        // barrier refuses the pane — which is a fact about the reviewer still
+        // being mid-turn, not about the rule. A LANE's report carries no drive
+        // signal either way (mcp.rs: what a lane says to the drive is its verdict
+        // FILE), so this ends the turn and moves nothing.
+        report_as(&reg, &group, &lane, Role::Reviewer, "blocked");
         let session_before = live_lanes(&reg, &group)
             .first()
             .and_then(|l| l["session"].as_str().map(str::to_string))
@@ -13412,9 +13418,11 @@ fn a_lane_still_mid_turn_at_the_conflict_is_released_on_the_next_tick_it_is_idle
         "…so the reviewer mid-turn is still alive"
     );
 
-    // The reviewer ends its turn. Nothing else about the world has changed: the
-    // PR is still CONFLICTING and the drive is still waiting out the same rebase.
-    report_as(&reg, &group, &lane, Role::Reviewer, "progress");
+    // The reviewer ends its turn — `blocked`, because that and `done` are the
+    // only words `set_agent_idle` treats as the end of one. Nothing else about
+    // the world has changed: the PR is still CONFLICTING, the drive is still
+    // waiting out the same rebase, and a lane's report carries no drive signal.
+    report_as(&reg, &group, &lane, Role::Reviewer, "blocked");
     reg.rd_drive_group_with(&group, &gh, 40_000);
 
     let rows = audit_details(&reg, &group, "rd-lane-released");

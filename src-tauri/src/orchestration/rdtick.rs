@@ -3352,7 +3352,6 @@ impl OrchRegistry {
                         // `held(fix-stalled)`'s bound where it was rather than
                         // silently extending it by a whole `fix_timeout_minutes`
                         // on every restart.
-                        entry.restamp_fix_handback(now);
                         self.rd_handback_fails.lock_safe().remove(&(group.clone(), pr));
                         out.changed = true;
                         out.handback = Some(agent.clone());

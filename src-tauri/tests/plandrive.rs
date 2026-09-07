@@ -3416,3 +3416,66 @@ fn a_release_rolls_back_a_row_still_carrying_the_drives_own_claimant() {
         "a human's claim matches neither of the drive's names and is left alone: {p3:?}"
     );
 }
+
+/// **The orchestrator is TOLD it has a plan drive, and only where it has one**
+/// (#3040 P4).
+///
+/// The teaching is a conditional fragment in the playbook's
+/// `Planning and scheduling` section rather than resident prose, for
+/// `REVIEW_DRIVER_NOTE`'s reason: everything it says names machinery a group
+/// without `plan_enabled` does not have — four tools, a fence schema, a hold
+/// vocabulary — and prose about a mechanism the reader does not have is an
+/// invitation to go looking for it. The resident core is unchanged, and pays
+/// nothing.
+///
+/// **The control is the second half, and it is the one that can fail.** The
+/// gate is the SECOND switch, so the group that must not see this is not a
+/// driverless one — it is a group whose review driver is on and whose plan
+/// driver is not, which is the only reading of `plan_enabled` that is a
+/// separate consent at all. Asserting the review driver's own note is still
+/// there in that same file is what stops "not present" from meaning "the
+/// playbook did not render".
+#[test]
+fn the_playbook_names_the_plan_drive_only_where_the_second_switch_is_on() {
+    // A distinctive line of each fragment. Neither appears in the template.
+    let plan_marker = "`drive_plan(issue, planner_block?, review_minutes?, base?)`";
+    let review_marker = "`drive_review(pr, worker_session, reset_counters?, rounds_already_spent?)`";
+
+    let playbook = |workflow: &str| -> String {
+        let repo = Repo::with(workflow);
+        let (reg, _dir) = test_registry();
+        let (group, _orch) = grouped(&reg, &repo);
+        let path = reg
+            .state_root()
+            .join(group.as_str())
+            .join(loomux_lib::orchestration::ORCHESTRATOR_PLAYBOOK_FILE);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is not readable: {e}", path.display()));
+        text
+    };
+
+    let on = playbook(WORKFLOW);
+    assert!(
+        on.contains(plan_marker),
+        "a group with `plan_enabled: true` is told what `drive_plan` is: {on}"
+    );
+    assert!(
+        !on.contains("{{"),
+        "and the fragment is SUBSTITUTED, not left as template bytes: {on}"
+    );
+
+    let off = playbook(WORKFLOW_NO_PLAN_DRIVER);
+    assert!(
+        !off.contains(plan_marker),
+        "a group whose second switch is off is told nothing about a plan drive: {off}"
+    );
+    assert!(
+        off.contains(review_marker),
+        "but the REVIEW driver's own note is still there — which is what makes the \
+         assertion above about the gate rather than about a playbook that did not render"
+    );
+    assert!(
+        on.contains(review_marker),
+        "and both fragments coexist where both switches are on"
+    );
+}

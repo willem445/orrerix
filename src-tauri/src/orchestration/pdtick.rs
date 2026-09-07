@@ -299,10 +299,14 @@ impl OrchRegistry {
     /// `PLAN_DRIVER_NOTE` to gate — `REVIEW_DRIVER_NOTE` has one and this does
     /// not. The placeholder and the playbook prose are P4's.
     ///
-    /// So the visibility is narrowed to what is true now rather than to what a
-    /// later slice may want: P4 widens it, with the argument it will then
-    /// actually have.
-    fn plan_driver_enabled(&self, group: &GroupId) -> bool {
+    /// **P4 widened it**, and here is that argument. `instruction_vars` gates
+    /// the `{{PLAN_DRIVER}}` playbook fragment on this, for
+    /// `REVIEW_DRIVER_NOTE`'s reason and through the same one reader: the group
+    /// that is TOLD it has a plan driver has to be exactly the group whose four
+    /// plan tools do not answer `plan-driver-disabled`, and two readers of one
+    /// policy is how those drift apart. The tool listing is still unconditional
+    /// and still gated at dispatch — that half of the earlier note stands.
+    pub(super) fn plan_driver_enabled(&self, group: &GroupId) -> bool {
         self.pd_policy(group).0
     }
 

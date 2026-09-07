@@ -5427,6 +5427,100 @@ files are, and — unlike the human gate — **a machine account does not close 
 tell a fabricated verdict file from a real one. Full design + the honest limits:
 `doc/design/workflows.md`.
 
+### The close gate: whose PR is this? (#2985)
+
+The merge gate asks *may this land on the default branch* — a question about the repo. A
+second gate on the same shim asks a different one: *whose PR is this?*
+
+**The incident.** A worker cleaning up its own scratch branches ran
+`for n in $(seq 1 17); do gh pr close 294$n --delete-branch; done`. The number was built by
+string concatenation and expanded to #2941–#2949, closing five live PRs owned by other
+workers within six seconds. Every review drive on them was cancelled; three watchdog/blocked
+reports fired; the orchestrator had to ask the human whether the closes were deliberate,
+because `gh` runs under the human's token and the GitHub timeline could not tell an agent's
+close from a human's; and the audit log carried no row for any of it, because the shim
+logged merges and not closes. No branch was actually deleted — `--delete-branch` on a PR the
+caller did not own happened not to fire — but that is luck, not a guard.
+
+**The rule.** Ownership is a fact the group already knows: an agent's roster row carries the
+branch its worktree was cut on. So a `gh pr close` is allowed when the caller is the
+**orchestrator** (whose authority is over the group, not over a branch — it may close any PR
+in the group, and is audited for it), or when the PR's head branch **is** the caller's own
+branch or a **separated descendant** of it. Everything else is refused.
+
+The separator is not decoration. A bare prefix test would make `fix/29` the owner of
+`fix/2985-x` — another worker's branch — which is the very confusion the incident was, so
+`gh_branch_is_owned` requires the next character to be `/` or `-`. An **empty** own-branch
+owns nothing, for the widest reason: without that, every role with no branch of its own
+(planner, reviewer-without-worktree, and the orchestrator's own roster row) would own every
+branch in the repo by empty-prefix match.
+
+**The residual, stated rather than mitigated.** The separator rule is about where a prefix
+*ends*, not about who the branches belong to — so an agent whose own branch is a strict
+prefix of another's *up to a separator* does own it: a `fix/2985` holder owns
+`fix/2985-other`. That is the accepted cost of taking issue #2985's own wording ("same
+branch prefix") over exact-match, and it is bounded by what actually mints these names:
+orrerix cuts a worker's branch from the issue it is working, so two live workers whose
+branches nest that way are two workers on one issue — the case where the looser reading is
+the one wanted. `a_branch_is_owned_only_by_itself_or_by_a_separated_descendant` pins it as a
+*passing* row beside its bound (`fix/2985other`, one character short of the separator, is
+not owned), so a later narrowing to exact-match reddens there and has to argue for itself
+rather than silently falsifying this paragraph.
+
+**Fail-closed, both halves.** An unresolvable head ref and a pane the roster has no row for
+are the same epistemic state — this app cannot say whose PR this is — and are refused with a
+message that says *which* half is missing, so a real infrastructure fault does not read as a
+policy decision. So is a close reaching the shim with neither group-dir variable set: a close
+this app cannot audit is a close it cannot allow, the same shape as the merge gate's own
+missing-group-dir refusal.
+
+**`gh pr reopen` is never refused.** It destroys nothing, and it was the incident's own
+remediation. It is *audited*, which is the half that was missing.
+
+**Audit attribution is the second half of the fix, and it is not conditional on refusing
+anything.** Every close — allowed by ownership, allowed by role, or refused — appends a row
+carrying `ORRERIX_AGENT_ID`. That is what lets the next orchestrator read the audit log
+instead of asking the human, which is what actually happened here.
+
+**Not in scope, deliberately: `gh pr merge --delete-branch`.** That is the orchestrator's
+documented post-merge step (CLAUDE.md: "whoever performs the merge owns this step") and it
+already sits behind the merge gate. Adding a second condition to it would refuse the one
+branch delete this repo mandates.
+
+#### Where the shim learns who owns what
+
+The gate runs in POSIX `sh` and must be able to fail **closed**, and a shell JSON parser is
+neither of those things — it would be approximate, and an approximate reader on a security
+gate fails toward *allowing* the close it could not parse. So `persist_agent_record` writes a
+flat projection of `agents.json` beside it: `agent_owners`, one line per live agent,
+`<agent-id> <role> <branch>`. Same `tasks_lock`, same whole-file atomic replace, same record
+list — so the two files cannot disagree about who exists. It is the same shape, and the same
+argument, as the `merge_gate` spec file.
+
+Three space-separated fields are safe because of the alphabets: an agent id is a
+`PathSegment` (no whitespace), a role is one of a fixed set of lowercase words, and a git
+branch name cannot contain a space. A roster row is not *required* to be a real branch,
+though — a hand-edited `agents.json` can say anything — so `render_owner_roster` **drops** a
+row whose fields would introduce a second separator rather than writing it half-parsed. A
+dropped row makes that agent unidentifiable to the gate, which then refuses; the other
+direction would let one row's text be read as another field.
+
+#### One decision, two programs
+
+The decision is the pure `gh_close_decision`, and the shim mirrors it in shell — the same
+split the merge gate uses, and `gh_shim_harness_refuses_a_close_of_a_pr_the_caller_does_not_
+own` executes the real generated script against a fake gh to prove the two agree.
+
+The refusal *sentences* go one step further: `gh_shim_close_gate` builds the shell by calling
+`gh_close_refusal_with` / `gh_close_unverifiable_refusal_with` with the shell's own variable
+names (`"$c_pr"`, `"$c_head"`, …) as their arguments, so the string that ships in the script
+**is** the string Rust builds, with `$c_pr` where the PR number goes. A one-sided edit is not
+expressible — the same construction `RELEASE_GRANT_VALID_SH` uses, for the same reason. What
+that does *not* pin on its own is the interpolation, so
+`the_close_refusal_the_shim_prints_is_the_one_rust_builds` runs the script and compares its
+stderr to `gh_close_refusal` for every arm: with and without `--delete-branch`, with and
+without a branch of one's own, and both unverifiable causes.
+
 ### Release & tag gating
 
 Releases publish to the world — a `v*` tag push triggers `release.yml` (GitHub release + npm),

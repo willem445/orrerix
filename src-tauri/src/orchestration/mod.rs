@@ -1554,6 +1554,245 @@ const RELEASE_GRANT_VALID_SH: &str = r#"loomux_release_grant_valid() { # $1=gran
 }
 "#;
 
+/// The shim's shell positional scanner's two value-flag `case` arms, **built
+/// from [`GH_VALUE_FLAGS`] itself** (#2985 rev-std finding 1).
+///
+/// **This exists because the hand-maintained copy diverged, exactly as its own
+/// doc warned it could.** `GH_VALUE_FLAGS` said "keep this in sync with the
+/// shim's shell scanner value-flag list", the `-c`/`--comment` entry was added
+/// to the const and not to the shell, and the shim then read the comment's value
+/// as the PR selector: `gh pr close -c "7" 2942` made the close gate resolve and
+/// authorize PR **7** while the real gh closed PR **2942** — a gate deciding
+/// about a different PR from the one being closed, which is fail-OPEN whenever
+/// the caller happens to own the PR it named in the comment. The sibling failure
+/// is a wrong refusal (`--comment "why" 2942` resolves nothing and is refused as
+/// unverifiable).
+///
+/// A comment telling the next editor to update two lists is not a mechanism. So
+/// the shell arms are now GENERATED from the one const, and the divergence is not
+/// expressible — the same construction this shim already uses for the release
+/// grant check and for the close gate's refusal sentences.
+///
+/// `-R`/`--repo` are excluded: they have their own arms above these (they
+/// capture the value rather than discarding it), and a `case` takes its first
+/// matching arm, so listing them here would be dead text implying a behaviour it
+/// does not have.
+///
+/// Returns `(separate-token arm, glued `--flag=value` arm)`. Short glued forms
+/// (`-b"x"`) are deliberately NOT generated: the pre-#2985 scanner did not handle
+/// them either, and inventing that arm here would be a behaviour change riding
+/// in on a bug fix. `-R?*` stays hand-written above for the same reason it always
+/// was — it captures, it does not skip.
+fn gh_shim_value_flag_arms() -> (String, String) {
+    let sep: Vec<&str> = GH_VALUE_FLAGS
+        .iter()
+        .copied()
+        .filter(|f| *f != "-R" && *f != "--repo")
+        .collect();
+    let glued: Vec<String> = sep
+        .iter()
+        .filter(|f| f.starts_with("--"))
+        .map(|f| format!("{f}=*"))
+        .collect();
+    (sep.join("|"), glued.join("|"))
+}
+
+/// The `gh pr close` / `gh pr reopen` ownership gate, as shell (#2985) — the
+/// mirror of [`gh_close_decision`], and the one place `gh_shim_sh` gets it from.
+///
+/// **Every sentence it prints is generated from the Rust builders, not retyped
+/// here.** The refusal templates are produced by calling
+/// [`gh_close_refusal_with`] / [`gh_close_unverifiable_refusal_with`] with the
+/// SHELL's own variable names as their arguments, so the string that ships in
+/// the script is literally the string Rust builds, with `$c_pr` where the PR
+/// number goes. That is the same construction `RELEASE_GRANT_VALID_SH` uses:
+/// two programs, one guarantee, and a one-sided edit that is not expressible.
+/// `the_close_refusal_the_shim_prints_is_the_one_rust_builds` executes the real
+/// generated script and compares its stderr against the Rust function, so the
+/// interpolation itself is pinned too, not just the template.
+///
+/// **Why this is a separate gate rather than another arm of the merge gate.**
+/// The merge gate asks *may this land on the default branch* — a question about
+/// the repo. This one asks *whose PR is this* — a question about the group's
+/// roster. They share the audit helper and the fail-closed posture and nothing
+/// else; folding them together would mean a merge marker (`autonomous`,
+/// `auto_merge`, a grant) could open the close path, which is exactly the
+/// widening #2985 is about.
+fn gh_shim_close_gate() -> String {
+    const TPL: &str = r#"# ── THE PR-CLOSE OWNERSHIP GATE (#2985) ──────────────────────────────────────
+# A live incident: a worker cleaning up its own scratch PRs ran a loop over
+# COMPUTED pr numbers and closed five other workers' open PRs in six seconds.
+# Every review drive on them was cancelled; the audit log had no row for any of
+# it, because the shim logged merges and not closes; and since `gh` runs under
+# the human's token, the GitHub timeline could not tell the human's own close
+# from an agent's. Nothing here is about intent — the loop was a typo — so the
+# guard is structural: a close is refused unless the caller can be shown to own
+# the branch, and every close (allowed or refused) is a row in audit.jsonl with
+# the calling agent's id in it.
+#
+# NOT in scope, deliberately: `gh pr merge --delete-branch`. That is the
+# orchestrator's documented post-merge step (CLAUDE.md: "whoever performs the
+# merge owns this step") and it already sits behind the merge gate below;
+# adding a second condition to it would refuse the one branch delete this repo
+# mandates.
+if [ "$cmd" = "pr" ] && { [ "$sub" = "close" ] || [ "$sub" = "reopen" ]; }; then
+  # No globbing: `$c_rf`/`$sel` are word-split unquoted into the lookup below,
+  # exactly as the merge gate's `$rf` is, and a security shim should not leave
+  # the next reader working out whether a `*` could reach a filename.
+  set -f
+  c_del=0
+  for c_tok in "$@"; do
+    case "$c_tok" in --delete-branch|-d) c_del=1 ;; esac
+  done
+  # A close this app cannot AUDIT is a close it cannot allow — the same argument
+  # (and the same shape) as the merge gate's missing-group-dir refusal below.
+  # Reaching the shim with neither group-dir spelling set means they were unset
+  # on the way, which is evasion rather than a supported flow.
+  if [ -z "$ORX_GD" ]; then
+    printf '%s\n' "orrerix: refusing this gh pr $sub — neither ORRERIX_GROUP_DIR nor LOOMUX_GROUP_DIR is set, so this app cannot tell whose PR this is and cannot record who closed it. Run gh from your agent pane's normal environment; do NOT unset them." >&2
+    exit 1
+  fi
+  # Resolve the PR's HEAD branch and number via the REAL gh (one call), honoring
+  # the SAME -R/--repo the caller passed — the merge gate resolves its base the
+  # same way and for the same reason (rev-79 F2): the answer must be about the
+  # repo the caller targeted, not the cwd's.
+  c_rf=""
+  [ -n "$repo" ] && c_rf="-R $repo"
+  c_info=$("$REAL_GH" pr view $c_rf $sel --json headRefName,number --jq '.headRefName+" "+(.number|tostring)' 2>/dev/null)
+  c_head=${c_info%% *}
+  c_num=${c_info##* }
+  # What the message calls this PR. The RESOLVED number when gh gave us one —
+  # never the raw selector, which on the incident's own path was a wrong number
+  # produced by string concatenation, and echoing it back would confirm the
+  # agent's mistaken belief about which PR it was touching.
+  c_pr="$c_num"
+  [ -n "$c_pr" ] || c_pr="$sel"
+  # THE CALLER'S OWN ROW, from the roster the backend projects out of
+  # agents.json (`render_owner_roster`): `<agent-id> <role> <branch>`, branch
+  # empty for a role that has none. A `while read` fed by a REDIRECT, not a
+  # pipe, so the values survive the loop; `|| [ -n "$o_id" ]` for the same
+  # reason the gate parser has it — POSIX `read` returns non-zero at EOF, so a
+  # final line with no trailing newline would otherwise be dropped, and a
+  # dropped row here is an agent the gate cannot identify.
+  c_role=""; c_branch=""
+  if [ -n "$ORX_AID" ] && [ -f "$ORX_GD/__OWNERS__" ]; then
+    while read -r o_id o_role o_branch || [ -n "$o_id" ]; do
+      [ "$o_id" = "$ORX_AID" ] || continue
+      c_role="$o_role"; c_branch="$o_branch"
+    done < "$ORX_GD/__OWNERS__"
+  fi
+  # THE PR'S OWNER, by name (#2985 rev-std finding 4, and issue #2985's own
+  # words: "refuse with the PR's owner named"). A second pass over the same
+  # roster, asking which agent's branch owns THIS head by the same rule the
+  # gate decides with. Empty when no row owns it — a branch whose agent is
+  # gone, or the human's own branch — and the message then says so rather
+  # than naming a guess.
+  c_owner=""
+  if [ -n "$c_head" ] && [ -f "$ORX_GD/__OWNERS__" ]; then
+    while read -r o_id o_role o_branch || [ -n "$o_id" ]; do
+      [ -n "$o_branch" ] || continue
+      if [ "$c_head" = "$o_branch" ]; then
+        c_owner="$o_id"; break
+      fi
+      case "$c_head" in
+        "$o_branch"/*|"$o_branch"-*) c_owner="$o_id"; break ;;
+      esac
+    done < "$ORX_GD/__OWNERS__"
+  fi
+  # AUDIT-SAFE COPIES. A git ref name may contain a `"`, and every value below
+  # is interpolated into a JSON line in audit.jsonl. Unescaped, a branch named
+  # `x","agent":"o-1` does not merely corrupt the row, it FORGES a field — and
+  # attribution is this gate's whole second half, so a forgeable audit row
+  # would defeat the half that exists to stop the next orchestrator having to
+  # ask the human. Deleting the quote (rather than backslash-escaping it) is
+  # the choice that cannot itself produce a trailing escape, and `\` goes with
+  # it for the same reason. These copies are for the AUDIT only: the ownership
+  # comparison and the refusal text keep the real values, so nothing about the
+  # DECISION changes here.
+  a_head=$(printf '%s' "$c_head" | tr -d '"\\')
+  a_branch=$(printf '%s' "$c_branch" | tr -d '"\\')
+  a_role=$(printf '%s' "$c_role" | tr -d '"\\')
+  a_pr=$(printf '%s' "$c_pr" | tr -d '"\\')
+  a_owner=$(printf '%s' "$c_owner" | tr -d '"\\')
+  # A REOPEN destroys nothing — and the incident's own remediation was a reopen
+  # loop — so it is never refused. It is AUDITED, which is the half that was
+  # missing: the next orchestrator reads who reopened what instead of asking
+  # the human. Audited before the ownership work below, which a reopen does not
+  # need to do.
+  if [ "$sub" = "reopen" ]; then
+    loomux_audit "pr-reopen" "{\"agent\":\"$ORX_AID\",\"role\":\"$a_role\",\"pr\":\"$a_pr\",\"head\":\"$a_head\"}"
+    exec "$REAL_GH" "$@"
+  fi
+  # The ORCHESTRATOR may close any PR in its group: its authority is over the
+  # group, not over a branch, so this is settled before the head ref is even
+  # needed. Still audited — "allowed" is a record here, not a silence.
+  if [ "$c_role" = "orchestrator" ]; then
+    loomux_audit "pr-close-allowed" "{\"agent\":\"$ORX_AID\",\"role\":\"orchestrator\",\"pr\":\"$a_pr\",\"head\":\"$a_head\",\"delete_branch\":$c_del}"
+    exec "$REAL_GH" "$@"
+  fi
+  # An unknown caller (no agent id, or no roster row for it) and an unresolvable
+  # head ref are the SAME epistemic state — this app cannot say whose PR this is
+  # — and that is never "probably fine". Fail closed, and say which half is
+  # missing so a real infrastructure fault does not read as a policy decision.
+  if [ -z "$c_role" ] || [ -z "$c_head" ]; then
+    if [ -n "$c_head" ]; then c_why="__WHY_NO_AGENT__"; else c_why="__WHY_NO_HEAD__"; fi
+    printf '%s\n' "__UNVERIFIABLE__" >&2
+    loomux_audit "pr-close-blocked" "{\"agent\":\"$ORX_AID\",\"reason\":\"unverifiable\",\"pr\":\"$a_pr\",\"head\":\"$a_head\",\"delete_branch\":$c_del}"
+    exit 1
+  fi
+  # OWNERSHIP: the head branch is this agent's own branch, or a scratch branch
+  # BENEATH it under a `/` or `-` separator. The separator is the whole point —
+  # a bare prefix test would make `fix/29` the owner of `fix/2985-x`, which is
+  # another worker's branch, and refusing five other workers' PRs is the entire
+  # reason this gate exists. An EMPTY $c_branch owns nothing: a role with no
+  # branch of its own must not be handed every branch in the repo by an
+  # empty-prefix match. (`gh_branch_is_owned` is the Rust mirror.)
+  c_own=0
+  if [ -n "$c_branch" ]; then
+    if [ "$c_head" = "$c_branch" ]; then
+      c_own=1
+    else
+      case "$c_head" in
+        "$c_branch"/*|"$c_branch"-*) c_own=1 ;;
+      esac
+    fi
+  fi
+  if [ "$c_own" = "1" ]; then
+    loomux_audit "pr-close-allowed" "{\"agent\":\"$ORX_AID\",\"role\":\"$a_role\",\"pr\":\"$a_pr\",\"head\":\"$a_head\",\"delete_branch\":$c_del}"
+    exec "$REAL_GH" "$@"
+  fi
+  if [ -n "$c_branch" ]; then c_own_clause="__OWN_SOME__"; else c_own_clause="__OWN_NONE__"; fi
+  if [ -n "$c_owner" ]; then c_owner_clause="__OWNER_SOME__"; else c_owner_clause="__OWNER_NONE__"; fi
+  if [ "$c_del" = "1" ]; then c_del_clause="__DEL_YES__"; else c_del_clause=""; fi
+  printf '%s\n' "__REFUSAL__" >&2
+  loomux_audit "pr-close-blocked" "{\"agent\":\"$ORX_AID\",\"role\":\"$a_role\",\"reason\":\"not-owner\",\"pr\":\"$a_pr\",\"head\":\"$a_head\",\"own\":\"$a_branch\",\"owner\":\"$a_owner\",\"delete_branch\":$c_del}"
+  exit 1
+fi
+"#;
+    TPL.replace("__OWNERS__", OWNER_ROSTER_FILE)
+        .replace("__WHY_NO_AGENT__", gh_close_unverifiable_why(true))
+        .replace("__WHY_NO_HEAD__", gh_close_unverifiable_why(false))
+        .replace(
+            "__UNVERIFIABLE__",
+            &gh_close_unverifiable_refusal_with("$c_pr", "$c_why"),
+        )
+        .replace("__OWN_SOME__", &gh_close_own_clause("$c_branch"))
+        .replace("__OWN_NONE__", &gh_close_own_clause(""))
+        .replace("__OWNER_SOME__", &gh_close_owner_clause("$c_owner"))
+        .replace("__OWNER_NONE__", &gh_close_owner_clause(""))
+        .replace("__DEL_YES__", gh_close_del_clause(true))
+        .replace(
+            "__REFUSAL__",
+            &gh_close_refusal_with(
+                "$c_pr",
+                "$c_head",
+                "$c_own_clause",
+                "$c_owner_clause",
+                "$c_del_clause",
+            ),
+        )
+}
+
 #[doc(hidden)] // pub so the integration test can pin the security-critical guards
 pub fn gh_shim_sh(real_gh: &str, paths: &ShimPaths) -> String {
     // Template uses a placeholder (not format!) so the shell's own `$`/`{}` stay
@@ -1838,8 +2077,8 @@ for tok in "$@"; do
     -R|--repo) want="repo"; continue ;;
     --repo=*) repo="${tok#--repo=}"; continue ;;
     -R?*) repo="${tok#-R}"; continue ;;
-    -b|--body|-t|--subject|--title|-F|--body-file|--author-email|--match-head-commit|-n|--notes|--notes-file|--notes-start-tag|--target|--discussion-category) want="skip"; continue ;;
-    --body=*|--subject=*|--title=*|--body-file=*|--author-email=*|--match-head-commit=*|--notes=*|--notes-file=*|--notes-start-tag=*|--target=*|--discussion-category=*) continue ;;
+    __VF_SEP__) want="skip"; continue ;;
+    __VF_GLUED__) continue ;;
     -*) continue ;;
     *)
       if [ -z "$cmd" ]; then cmd="$tok"
@@ -2158,6 +2397,7 @@ if [ "$cmd" = "pr" ] && [ "$sub" = "create" ]; then
   exit "$a_rc"
 fi
 
+__CLOSE_GATE__
 if [ "$is_merge" = "0" ]; then
   exec "$REAL_GH" "$@"
 fi
@@ -2723,6 +2963,12 @@ loomux_block "gate-closed" "$default" "$num"
         .replace("__DEPS_PREAMBLE__\n", &shim_deps_preamble(paths.utils_dir.as_deref()))
         .replace("__RELEASE_GRANT_VALID__\n", RELEASE_GRANT_VALID_SH)
         .replace("__GIT_PLUMBING__\n", &gh_shim_git_plumbing(paths.git_dir.as_deref()))
+        .replace("__CLOSE_GATE__\n", &gh_shim_close_gate())
+        // #2985 rev-std finding 1: the shell scanner's value-flag arms are
+        // GENERATED from `GH_VALUE_FLAGS`, never retyped, so the two cannot
+        // diverge the way `-c`/`--comment` did.
+        .replace("__VF_SEP__", &gh_shim_value_flag_arms().0)
+        .replace("__VF_GLUED__", &gh_shim_value_flag_arms().1)
         .replace("\r\n", "\n")
 }
 
@@ -10294,9 +10540,21 @@ pub enum GhGate {
 /// this in sync with the shim's shell scanner value-flag list.
 const GH_VALUE_FLAGS: &[&str] = &[
     "-R", "--repo", "-b", "--body", "-t", "--subject", "--title", "-F", "--body-file",
+    // #2985: gh pr close/reopen take -c/--comment, so a positional scan blind to
+    // it reads the comment text as the PR selector.
+    "-c", "--comment",
     "--author-email", "--match-head-commit", "-n", "--notes", "--notes-file",
     "--notes-start-tag", "--target", "--discussion-category",
 ];
+
+/// [`GH_VALUE_FLAGS`], for the tests that assert the shim's GENERATED shell arms
+/// really cover every entry (#2985 rev-std finding 1). The const stays private:
+/// the point of the accessor is that a test can enumerate the ONE list, not that
+/// callers get a second way to spell it.
+#[doc(hidden)] // pub for integration tests
+pub fn gh_value_flags() -> &'static [&'static str] {
+    GH_VALUE_FLAGS
+}
 
 /// The positional (non-flag) tokens of a gh argv, in order, skipping flags and
 /// consuming the values of `GH_VALUE_FLAGS` — crucially the global `-R/--repo` that
@@ -10470,6 +10728,316 @@ pub fn release_gate_decision(
     } else {
         GhGate::Block
     }
+}
+
+/// The name of the shim-readable owner roster inside a group dir (#2985). One
+/// place, because the Rust writer and the shell reader are two programs that
+/// must agree about a path, and `the_shim_reads_the_owner_roster_the_backend_
+/// writes` pins that they do.
+pub const OWNER_ROSTER_FILE: &str = "agent_owners";
+
+/// Render the shim-readable owner roster (#2985): one line per agent, three
+/// space-separated fields — `<agent-id> <role> <branch>` — with the branch
+/// omitted where the agent has none.
+///
+/// **Why a flat file beside `agents.json` rather than the JSON itself.** The
+/// consumer is a POSIX `sh` gate that must be able to fail CLOSED, and a shell
+/// JSON parser is neither of those things: it would be approximate, and an
+/// approximate reader on a security gate fails toward *allowing* the close it
+/// could not parse. The shim's own `merge_gate` file is the same shape and the
+/// same argument. This is a projection of `agents.json`, written in the same
+/// `tasks_lock`-serialized, whole-file atomic replace, from the same record
+/// list — so the two cannot disagree about who exists.
+///
+/// **The alphabet is what makes three space-separated fields safe.** An agent
+/// id is a [`PathSegment`], whose alphabet excludes whitespace outright, and a
+/// role is one of a fixed set of lowercase words. A git branch name cannot
+/// contain a space either (`git check-ref-format` refuses one), but a roster
+/// row is not required to be a real branch — a hand-edited `agents.json` could
+/// carry anything — so a row whose branch field would introduce a second
+/// separator is DROPPED rather than written half-parsed. A dropped row makes
+/// that agent unidentifiable to the gate, which refuses; the other direction
+/// would let one row's text be read as another field.
+pub fn render_owner_roster(rows: &[(String, String, Option<String>)]) -> String {
+    let mut out = String::new();
+    for (id, role, branch) in rows {
+        let b = branch.as_deref().unwrap_or("");
+        if id.is_empty()
+            || role.is_empty()
+            || [id.as_str(), role.as_str(), b]
+                .iter()
+                .any(|f| f.chars().any(|c| c.is_whitespace()))
+        {
+            continue;
+        }
+        out.push_str(id);
+        out.push(' ');
+        out.push_str(role);
+        out.push(' ');
+        out.push_str(b);
+        out.push('\n');
+    }
+    out
+}
+
+/// Whether a `gh` argv is a PR **close** or **reopen** the shim must account for
+/// (#2985), and whether it also asks for the head branch to be deleted.
+/// `Some(("close", true))` for `gh pr close --delete-branch 7`. `None` for
+/// everything else — including `gh pr merge`, whose `--delete-branch` is the
+/// orchestrator's documented post-merge step and stays under the merge gate
+/// alone (CLAUDE.md's "whoever performs the merge owns the branch delete").
+///
+/// Pure over `gh_positionals`, so `-R/--repo` and `-c/--comment` landing before
+/// or between the command tokens parse the same way the merge path's do.
+pub fn gh_close_action(args: &[String]) -> Option<(String, bool)> {
+    let a: Vec<&str> = args.iter().map(String::as_str).collect();
+    let pos = gh_positionals(&a);
+    if pos.first().map(String::as_str) != Some("pr") {
+        return None;
+    }
+    let sub = pos.get(1).map(String::as_str)?;
+    if !matches!(sub, "close" | "reopen") {
+        return None;
+    }
+    // `-d` is gh's own shorthand for `--delete-branch`, and a bundled short
+    // cluster (`-dc "msg"`) is not a form gh accepts for a value-taking flag, so
+    // exact tokens are the whole alphabet here.
+    let delete_branch = a.iter().any(|t| *t == "--delete-branch" || *t == "-d");
+    Some((sub.to_string(), delete_branch))
+}
+
+/// Does `head` belong to the agent whose own branch is `own`? (#2985)
+///
+/// **Exact, or a descendant under a separator** — the rule issue #2985 states
+/// ("a worker's legitimate closes are its own scratch PRs, same branch prefix"),
+/// narrowed by requiring the separator. A BARE prefix test is the defect this
+/// function exists to avoid: `fix/29` would own `fix/2985-x`, which is another
+/// worker's branch, and the incident this guard was written for closed five
+/// PRs belonging to other workers. So `fix/2985-x` owns `fix/2985-x-scratch2`
+/// and `fix/2985-x/wip`, and owns nothing else.
+///
+/// An empty `own` owns NOTHING — an agent with no recorded branch (the
+/// orchestrator, a planner, a reviewer with no worktree) must not be handed
+/// every branch in the repo by an empty-prefix match. The orchestrator's
+/// authority comes from its ROLE, checked separately in [`gh_close_decision`].
+pub fn gh_branch_is_owned(head: &str, own: &str) -> bool {
+    if own.is_empty() || head.is_empty() {
+        return false;
+    }
+    if head == own {
+        return true;
+    }
+    match head.strip_prefix(own) {
+        Some(rest) => rest.starts_with('/') || rest.starts_with('-'),
+        None => false,
+    }
+}
+
+/// What the close gate decides. Every variant is audited — the incident's five
+/// closes left NO audit row at all, so "allowed" is a record here, not a silence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GhCloseGate {
+    /// Not a `gh pr close`/`reopen`: run the real gh unchanged.
+    PassThrough,
+    /// A reopen. Always allowed — reopening a PR destroys nothing, and the
+    /// incident's own remediation was a reopen loop. Audited so the next
+    /// orchestrator can read who did it instead of asking the human (#2985 §2).
+    AllowReopen,
+    /// The caller is the orchestrator, which may close any PR in its group.
+    AllowOrchestrator,
+    /// The PR's head branch is the caller's own branch (or a descendant of it).
+    AllowOwner,
+    /// A close of a PR the caller does not own — refused.
+    BlockNotOwner,
+    /// The head branch, or the caller's own identity, could not be determined.
+    /// Fail-closed, exactly as an unverifiable merge base does.
+    BlockUnverifiable,
+}
+
+/// The close-gate decision (pure spec for the shim's shell mirror), the single
+/// decision point every `gh pr close`/`reopen` routes through (#2985).
+///
+/// `action` is [`gh_close_action`]'s subcommand; `role` is the calling agent's
+/// role as recorded in the group's owner roster (empty = the caller could not be
+/// identified); `own_branch` is that agent's recorded branch (empty = none);
+/// `head` is the PR's `headRefName` as resolved by the *real* gh (`None` =
+/// couldn't determine).
+///
+/// **`delete_branch` is not an input to this decision, deliberately.** A close
+/// the caller is allowed to make is allowed to take its own branch with it, and
+/// a close it is not allowed to make is refused whether or not it asked for the
+/// delete. The flag is carried through [`gh_close_action`] because the refusal
+/// MESSAGE names it — a refused `--delete-branch` is the shape that was one flag
+/// away from being unrecoverable — and because the audit row records it.
+pub fn gh_close_decision(
+    action: Option<&str>,
+    role: &str,
+    own_branch: &str,
+    head: Option<&str>,
+) -> GhCloseGate {
+    match action {
+        None => GhCloseGate::PassThrough,
+        Some("reopen") => GhCloseGate::AllowReopen,
+        Some(_) => {
+            // The orchestrator's authority is over the GROUP, not over a branch,
+            // so it is settled before the head ref is even needed — an
+            // orchestrator closing a PR whose head gh cannot report is still the
+            // orchestrator. (It is audited either way.)
+            if role == "orchestrator" {
+                return GhCloseGate::AllowOrchestrator;
+            }
+            // Everything below needs BOTH halves of the ownership question
+            // answerable. An unknown caller (no roster row, no agent id in the
+            // environment) and an unresolvable head ref are the same epistemic
+            // state — "this app cannot say whose PR this is" — and that is never
+            // "probably fine".
+            match head {
+                Some(h) if !h.is_empty() && !role.is_empty() => {
+                    if gh_branch_is_owned(h, own_branch) {
+                        GhCloseGate::AllowOwner
+                    } else {
+                        GhCloseGate::BlockNotOwner
+                    }
+                }
+                _ => GhCloseGate::BlockUnverifiable,
+            }
+        }
+    }
+}
+
+/// The refusal a non-owning close is answered with (#2985) — the **template**,
+/// with its two variable clauses already rendered.
+///
+/// This is the level the shim is generated from, and that is the whole point:
+/// `gh_shim_sh` calls this function at shim-WRITE time with the shell's own
+/// variable names (`"$c_pr"`, `"$c_head"`, …) as the arguments, so the sentence
+/// the shim prints is emitted from this one Rust string rather than retyped in
+/// shell. A one-sided edit is not expressible — the same construction
+/// `RELEASE_GRANT_VALID_SH` uses for the release-grant check, and for the same
+/// reason (two programs, one guarantee).
+///
+/// One paragraph, per the house idiom: a `\` line continuation strips the
+/// newline AND the source indentation, so nothing here ships a hard break or a
+/// run of leading spaces to the agent reading it.
+///
+/// It names all three things the agent needs in order to do the right thing
+/// instead of retrying: WHICH PR, WHOSE branch it is, and what its own branch
+/// is — the incident's worker had none of those and did not notice for minutes.
+pub fn gh_close_refusal_with(
+    pr: &str,
+    head: &str,
+    own_clause: &str,
+    owner_clause: &str,
+    del_clause: &str,
+) -> String {
+    format!(
+        "orrerix: refusing to close PR #{pr} — its head branch is '{head}', which this agent does \
+         not own ({own_clause}), so {owner_clause}.{del_clause} \
+         A worker, reviewer or planner may close only a PR opened from its own branch or a scratch \
+         branch beneath it; anything else is the orchestrator's call or the human's. This is the \
+         guard for a live incident in which a loop over computed PR numbers closed five other \
+         workers' open PRs in six seconds. If this PR really should be closed, say so in a report \
+         and let the orchestrator or the human close it — do NOT retry, and do NOT close by \
+         computed number: enumerate what is actually yours with 'gh pr list --author @me --head \
+         <your-branch>' and close from that list."
+    )
+}
+
+/// The `({own})` clause of [`gh_close_refusal_with`]. Emitted into the shim
+/// twice — once with the shell's `$c_branch` for the has-a-branch arm, once with
+/// `""` for the arm that has none — so both spellings come from here.
+pub fn gh_close_own_clause(own_branch: &str) -> String {
+    if own_branch.is_empty() {
+        "this pane has no branch of its own recorded".to_string()
+    } else {
+        format!("your own branch is '{own_branch}'")
+    }
+}
+
+/// Who the PR belongs to, for [`gh_close_refusal_with`]. Issue #2985 asks the
+/// refusal to name the PR's **owner**, not merely the branch: "refuse with the
+/// PR's owner named". The shim resolves it from the same roster it decides
+/// with, by the same ownership rule.
+///
+/// An empty `owner` is not a failure and must not read as one: a branch whose
+/// agent has exited, or one the human pushed, legitimately belongs to nobody on
+/// the roster. That arm says so instead of naming a guess — which is what the
+/// pre-fix sentence ("belongs to another agent or to the human") did for EVERY
+/// refusal, including the ones where the owner was sitting in the roster.
+pub fn gh_close_owner_clause(owner: &str) -> String {
+    if owner.is_empty() {
+        "no agent on this group's roster owns that branch, so it is another agent's from an \
+         earlier session or the human's"
+            .to_string()
+    } else {
+        format!("it belongs to {owner}")
+    }
+}
+
+/// The `--delete-branch` sentence of [`gh_close_refusal_with`], or empty. A
+/// refused `--delete-branch` is the shape the incident was one flag away from
+/// making unrecoverable, so the refusal says out loud that it was asked for.
+pub fn gh_close_del_clause(delete_branch: bool) -> &'static str {
+    if delete_branch {
+        " This call also passed --delete-branch, which would have deleted that branch as well."
+    } else {
+        ""
+    }
+}
+
+/// The whole refusal, for callers that have the raw facts rather than rendered
+/// clauses (the Rust tests, and anything that wants the message without going
+/// through the shim). Composes the three functions above, so it cannot say
+/// anything the generated shim does not.
+pub fn gh_close_refusal(
+    pr: &str,
+    head: &str,
+    own_branch: &str,
+    owner: &str,
+    delete_branch: bool,
+) -> String {
+    gh_close_refusal_with(
+        pr,
+        head,
+        &gh_close_own_clause(own_branch),
+        &gh_close_owner_clause(owner),
+        gh_close_del_clause(delete_branch),
+    )
+}
+
+/// The refusal for a close whose ownership this app could not establish at all
+/// (#2985) — the template, with the `why` clause already rendered. Generated
+/// into the shim the same way [`gh_close_refusal_with`] is.
+///
+/// Fail-closed, and the message says which half is missing so the agent does not
+/// read a real infrastructure fault as a policy decision. One paragraph, same
+/// idiom as [`gh_close_refusal_with`].
+pub fn gh_close_unverifiable_refusal_with(pr: &str, why: &str) -> String {
+    format!(
+        "orrerix: refusing to close PR #{pr} — {why}. A close that cannot be attributed is refused \
+         rather than guessed at, the same way an unverifiable merge base is: a wrong close cancels \
+         another agent's review drive and, with --delete-branch, is not recoverable. Report this \
+         to the orchestrator or the human and let them close it."
+    )
+}
+
+/// The two `why` clauses of [`gh_close_unverifiable_refusal_with`]. `head_known`
+/// distinguishes "gh answered, but this pane is a stranger to the roster" from
+/// "gh could not tell us the head ref at all" — different faults, different
+/// things for the agent to do about them.
+pub fn gh_close_unverifiable_why(head_known: bool) -> &'static str {
+    if head_known {
+        "orrerix could not identify which agent this pane is, so it cannot tell whether this PR is \
+         yours (the group's owner roster has no row for this pane's agent id)"
+    } else {
+        "orrerix could not resolve this PR's head branch from gh, so it cannot tell whose branch \
+         it is"
+    }
+}
+
+/// The whole unverifiable refusal, composed from the two above.
+pub fn gh_close_unverifiable_refusal(pr: &str, head_known: bool) -> String {
+    gh_close_unverifiable_refusal_with(pr, gh_close_unverifiable_why(head_known))
 }
 
 /// What a `git push` publishes with respect to tags (#83). Local `git tag` is
@@ -33983,6 +34551,21 @@ impl OrchRegistry {
         // Holds `tasks_lock` (taken above), so writes are serialized.
         let body = serde_json::to_string_pretty(&list).unwrap();
         let _ = atomic_write(&path, body.as_bytes());
+        // #2985: the same roster, projected into the flat form the `gh` shim
+        // can read from POSIX `sh` — written from THIS list, under THIS lock,
+        // in the same atomic-replace style, so the close gate can never be
+        // deciding from a roster that disagrees with `agents.json`. A failed
+        // write leaves the previous file intact and the gate then refuses a
+        // close it cannot attribute, which is the safe direction.
+        let rows: Vec<(String, String, Option<String>)> = list
+            .iter()
+            .filter(|r| r.status != "dead")
+            .map(|r| (r.id.clone(), r.role.clone(), r.branch.clone()))
+            .collect();
+        let _ = atomic_write(
+            &self.group_dir(&entry.group).join(OWNER_ROSTER_FILE),
+            render_owner_roster(&rows).as_bytes(),
+        );
     }
 
     fn group_records(&self, group: &GroupId) -> Vec<AgentRecord> {
@@ -49768,7 +50351,7 @@ impl OrchRegistry {
     /// file through a `{file:...}` reference in the config document; pi points
     /// `--append-system-prompt` straight at it on argv. `ext` is the whole
     /// difference, and it exists so the two never collide in the one
-    /// `configs/` directory they share  `generated_agent_handle` is
+    /// `configs/` directory they share — `generated_agent_handle` is
     /// `loomux-<group>-<block>`, which is the SAME handle for a block whose
     /// `cli:` changed between two launches of one group.
     ///

@@ -2921,7 +2921,7 @@ impl OrchRegistry {
             // this drive really did leave stopped.
             provider_limited: state
                 .entry(pr)
-                .map(|e| e.owned_panes())
+                .map(|e| e.owned_panes().into_iter().filter(|(_, r)| matches!(r, reviewdrive::DrivenRole::Worker)).collect::<Vec<_>>())
                 .unwrap_or_default()
                 .into_iter()
                 .find_map(|(agent, _)| self.provider_limit_for_agent(&agent)),

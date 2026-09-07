@@ -25560,6 +25560,36 @@ const UNGUARDED_TR_SITES: &[(&str, &str, &str, &str)] = &[
         r#"*refs/tags/*) rest=${a_query#*refs/tags/}; rest=$(printf '%s' "$rest" | tr -d ' "'); rtag=${rest%%,*}; rtag=${rtag%%\}*}; rtag=${rtag%%)*} ;;"#,
         "the same extraction, the refs/tags literal arm",
     ),
+    (
+        "a_head",
+        "\"$c_head\" | tr",
+        r#"a_head=$(printf '%s' "$c_head" | tr -d '"\\')"#,
+        "#2985: an AUDIT-ONLY copy of the PR's head ref. The ownership DECISION a few lines below reads the unsanitised `$c_head`, which this line does not touch, so an empty result here cannot widen or narrow what the gate allows - it blanks one FIELD of one audit row. That is the inverse of #509's hazard, where an empty normalizer output matched every gate pattern. It is sanitised at all because a git ref may contain a quote, and an unescaped one FORGES a JSON field rather than merely corrupting it",
+    ),
+    (
+        "a_branch",
+        "\"$c_branch\" | tr",
+        r#"a_branch=$(printf '%s' "$c_branch" | tr -d '"\\')"#,
+        "#2985: an AUDIT-ONLY copy of the CALLER's own branch, from the roster. The ownership comparison reads the unsanitised `$c_branch`; this copy reaches only the `own` field of a blocked-close row, so emptiness costs a blank field and never a decision",
+    ),
+    (
+        "a_role",
+        "\"$c_role\" | tr",
+        r#"a_role=$(printf '%s' "$c_role" | tr -d '"\\')"#,
+        "#2985: an AUDIT-ONLY copy of the caller's role. The orchestrator test that can ALLOW a close reads `$c_role`, not this, so a failed `tr` here cannot promote or demote anyone - it blanks the `role` field of the record",
+    ),
+    (
+        "a_pr",
+        "\"$c_pr\" | tr",
+        r#"a_pr=$(printf '%s' "$c_pr" | tr -d '"\\')"#,
+        "#2985: an AUDIT-ONLY copy of the PR number. The refusal TEXT the agent reads interpolates `$c_pr`, and the gh call itself carries the caller's own argv, so emptiness here loses the `pr` field of one row and nothing else",
+    ),
+    (
+        "a_owner",
+        "\"$c_owner\" | tr",
+        r#"a_owner=$(printf '%s' "$c_owner" | tr -d '"\\')"#,
+        "#2985: an AUDIT-ONLY copy of the owning agent id. The refusal TEXT names the owner via `$c_owner_clause`, built from the unsanitised `$c_owner`; this copy is only the `owner` field of a blocked-close row. It is also the one field whose emptiness is already MEANINGFUL (nobody on the roster owns that branch), so a failed `tr` degrades to a value the reader already handles",
+    ),
 ];
 
 /// Is `text` a `tr` PIPELINE — a `|` whose command WORD is `tr`?
@@ -25825,7 +25855,12 @@ fn every_shim_normalizer_is_guarded_or_explicitly_exempted() {
         // an exception to it. The CR strip briefly added a second site and no
         // longer does — `str::lines()` drops one TRAILING `\r` and keeps the
         // rest, which is a parameter expansion, not a normalizer.
-        ("gh", gh_shim_sh("C:/gh.exe", &paths), 14usize),
+        // #2985 added five: the close gate's audit-only sanitisers, which delete
+        // `"` and `\` from the values it writes into audit.jsonl so a git ref name
+        // cannot forge a field in the row. All five are EXEMPT rather than guarded,
+        // and the list above carries the reason per site: they feed the audit, never
+        // the decision.
+        ("gh", gh_shim_sh("C:/gh.exe", &paths), 19usize),
         ("git", git_shim_sh("C:/git.exe", &paths), 1usize),
     ];
     let mut all_sites: Vec<(String, String)> = Vec::new();
@@ -66966,11 +67001,33 @@ fn a_quote_in_a_branch_name_cannot_forge_an_audit_row() {
     // the one that really called.
     assert!(!audit.is_empty(), "the refusal is audited at all (non-vacuity)");
     for line in audit.lines().filter(|l| !l.trim().is_empty()) {
-        let v: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|e| panic!("audit row is not valid JSON ({e}): {line}"));
-        assert_eq!(v["actor"], "gh-shim", "{line}");
-        assert_eq!(v["detail"]["agent"], "w-1", "the row must name the real caller: {line}");
-        assert_ne!(v["detail"]["role"], "orchestrator", "a branch name must not forge the role: {line}");
+        // The DETAIL object, parsed on its own rather than the whole row.
+        //
+        // Not a convenience: the row's `ts_ms` is written by `date +%s%3N`, and
+        // `%3N` is a GNU extension that BSD `date` emits LITERALLY - so on macOS
+        // every audit row either shim has ever written ends up with
+        // `"ts_ms":<seconds>3N`, which is not valid JSON. That is a real,
+        // PRE-EXISTING defect (present at this branch's base b8533002, in all four
+        // `date +%s%3N` sites across both shims), it is not what this test is
+        // about, and fixing it belongs in its own change rather than riding in on
+        // a close-gate PR - so it is filed as #3202 and scoped around here
+        // rather than silently absorbed. Parsing the detail object still decides
+        // this test's question completely, because every value the branch name
+        // could reach lives inside it.
+        let detail = line
+            .find("\"detail\":")
+            .map(|i| &line[i + "\"detail\":".len()..])
+            .and_then(|rest| rest.strip_suffix('}'))
+            .unwrap_or_else(|| panic!("audit row has no detail object: {line}"));
+        let v: serde_json::Value = serde_json::from_str(detail)
+            .unwrap_or_else(|e| panic!("audit detail is not valid JSON ({e}): {detail}"));
+        assert!(line.contains("\"actor\":\"gh-shim\""), "{line}");
+        assert_eq!(v["agent"], "w-1", "the row must name the real caller: {line}");
+        assert_ne!(v["role"], "orchestrator", "a branch name must not forge the role: {line}");
+        // The forged field must not exist at all - not merely hold a wrong value.
+        assert!(v.get("agent").is_some() && v["agent"] == "w-1", "{line}");
+        assert_eq!(v.as_object().map(|o| o.keys().filter(|k| *k == "agent").count()), Some(1),
+            "exactly one agent field, not a smuggled second one: {line}");
     }
     // The quote is gone from the recorded value rather than escaped into it.
     assert!(!audit.contains(r#"\""#), "no escaped quotes smuggled through: {audit}");

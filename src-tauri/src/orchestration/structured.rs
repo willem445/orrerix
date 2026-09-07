@@ -45,8 +45,16 @@ use super::GroupId;
 ///
 /// Four rather than one: a pane legitimately raising a small burst (an
 /// extension asking two things about one action) must not have the second
-/// cancelled, while a pane looping on dialogs is stopped well before the
-/// human queue is buried.
+/// cancelled, while a pane looping on dialogs stops accumulating BLOCKED
+/// turns almost at once.
+///
+/// **What this cap does NOT bound is the human's queue** — an earlier version
+/// of this paragraph claimed it did. [`super::OrchRegistry::handle_dialog`]
+/// raises a needs-you row in BOTH arms (a cancelled dialog is still something
+/// an agent asked for, §3.5), so a looping pane goes on producing rows past
+/// the cap. What bounds those is [`super::needsyou::OPEN_MAX`], which refuses
+/// a raise once too many are open. Two different bounds on two different
+/// things: this one is how many turns a pane may have blocked at once.
 pub const MAX_PENDING_UI: usize = 4;
 
 /// One dialog this pane is blocked on.

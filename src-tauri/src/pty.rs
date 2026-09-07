@@ -806,6 +806,14 @@ impl PtyManager {
     /// looks identical and is not: it extends the lock over the syscall,
     /// which is exactly what `writer_handle`'s stated lock order forbids.
     /// `kill_all` above has the same shape for the same reason.
+    pub fn kill(&self, id: u32) {
+        self.expected_exits.lock_safe().insert(id);
+        let handle = self.ptys.lock_safe().remove(&id);
+        if let Some(mut h) = handle {
+            let _ = h.killer.kill();
+        }
+    }
+
     /// Reserve a pane id that no PTY will ever use.
     ///
     /// A structured pane (#2850) has no ConPTY behind it, but it still needs
@@ -850,14 +858,6 @@ impl PtyManager {
     /// Drop a structured pane ring when the pane goes.
     pub fn drop_structured_ring(&self, id: u32) {
         self.structured_rings.lock_safe().remove(&id);
-    }
-
-    pub fn kill(&self, id: u32) {
-        self.expected_exits.lock_safe().insert(id);
-        let handle = self.ptys.lock_safe().remove(&id);
-        if let Some(mut h) = handle {
-            let _ = h.killer.kill();
-        }
     }
 
     /// Test-only harness (#420 rev-19 R3): register a pty backed by a REAL

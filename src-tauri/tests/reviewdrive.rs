@@ -13324,9 +13324,21 @@ fn a_lane_that_answered_at_this_head_is_never_released_as_a_conflict() {
             "{arm}: the fixture's premise: the drive has recorded this lane's answer at this head"
         );
 
-        // The ONE thing that differs: the body the pass was recorded against.
+        // The ONE thing that differs: the LIVE body, moved out from under the
+        // recorded pass.
+        //
+        // `gh.set_body` and not `set_pr_body_override`, and the distinction is
+        // the one the sibling release test states from the other side ("the
+        // digest a verdict binds to is computed from the body override, so it
+        // must agree with the one FakeGh serves or every pass reads as stale"):
+        // the override is what the VERDICT bound to when it was recorded, the
+        // fake's body is what the DRIVE reads live. Moving the override here
+        // moves neither — it is read at record time, which is already past — and
+        // the first draft of this test did exactly that, so
+        // `lane_verdict_is_current` stayed true, condition 2 released the lane as
+        // `verdict-recorded`, and the arm proved nothing about the carve-out.
         if move_body {
-            reg.set_pr_body_override(Some("b — and one more sentence".to_string()));
+            gh.set_body("b — and one more sentence");
         }
 
         gh.set_merge_state("CONFLICTING");

@@ -865,6 +865,25 @@ driver:
   enabled: true
 "#;
 
+/// The same roster with **no worker block at all** — the fixture the
+/// both-empty arm needs (N3): a recorded session with no block identity has
+/// only the class default to fall back to, and this roster does not declare
+/// one.
+const WORKFLOW_NO_WORKER: &str = r#"version: 1
+blocks:
+  - id: rev-std
+    name: Standard review
+    kind: reviewer
+gates:
+  merge:
+    require: all-pass
+    reviewers: [rev-std]
+merge_queue:
+  enabled: true
+driver:
+  enabled: true
+"#;
+
 /// A throwaway repo one level below its own temp root — `orchestration.rs`'s
 /// `RealRepo` rationale: a worktree is cut SIBLING to the repo, so nesting keeps
 /// it inside the root that `Drop` reclaims.
@@ -5530,6 +5549,162 @@ fn a_second_identical_handback_failure_parks_saying_second_time() {
     assert!(
         notice.contains("second time"),
         "the line the orchestrator actually reads carries it: {notice}"
+    );
+}
+
+/// **A FRESH drive on the PR starts the second-failure count over** (N2 of the
+/// review on this PR; the field doc's "cleared on a fresh drive").
+///
+/// The count belongs to the drive's history, not to the PR: #2819's reflex
+/// ("resume and lose again") is broken by a cancel-and-redrive just as much as
+/// by re-pointing, so a new drive gets one honest first failure. This is also
+/// the observable half of the field doc's clear-on-fresh-drive claim — the
+/// clear itself sits before the only `DriveEntry::new` site, so every new
+/// drive passes it; what a regression there would look like is exactly the
+/// assertion below going red (the first failure of the new drive saying
+/// "second time").
+#[test]
+fn a_fresh_drive_on_the_pr_starts_the_second_failure_count_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let session = "cafb930d-1111-2222-3333-444444444444";
+    let out = reg.drive_review_with(&group, &gh, 1758, session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "{out}");
+
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(&reg, &orch.id, 7401);
+
+    // Two identical failures: the state the second-time bound exists for.
+    to_first_handback(&reg, &group, &gh);
+    let resumed = reg.drive_review_with(&group, &gh, 1758, session, false, 0, "orch-1", 50_000);
+    assert_eq!(resumed["driving"], json!(true), "{resumed}");
+    reg.rd_drive_group_with(&group, &gh, 60_000);
+    reg.rd_drive_group_with(&group, &gh, 70_000);
+    let helds = audit_details(&reg, &group, "rd-held");
+    assert_eq!(helds.len(), 2, "the premise, two holds: {helds:?}");
+    assert!(
+        helds[1]["refusal"].as_str().unwrap_or_default().contains("second time"),
+        "the premise, the second is decorated: {:?}",
+        helds[1]
+    );
+
+    // The orchestrator's other way out: cancel, then drive the PR again. The
+    // new drive is a new entry with a clean count — its FIRST failure must not
+    // inherit the previous drive's history.
+    reg.cancel_review_drive(&group, 1758, "orch-1");
+    gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+    gh.set_facts("OPEN", HEAD_A);
+    let redrive = reg.drive_review_with(&group, &gh, 1758, session, false, 0, "orch-1", 80_000);
+    assert_eq!(redrive["driving"], json!(true), "the cancelled PR re-drives: {redrive}");
+    to_first_handback(&reg, &group, &gh);
+
+    let helds = audit_details(&reg, &group, "rd-held");
+    assert_eq!(helds.len(), 3, "one hold per failed hand-back: {helds:?}");
+    assert_eq!(helds[2]["reason"], json!("worker-unresumable"), "{helds:?}");
+    let first_of_the_new_drive = helds[2]["refusal"].as_str().unwrap_or_default();
+    assert!(
+        first_of_the_new_drive.contains("no roster record")
+            && !first_of_the_new_drive.contains("second time"),
+        "the new drive's first failure is a first, not the old drive's second: \
+         {first_of_the_new_drive}"
+    );
+}
+
+/// **The hold path §2.2 still describes is pinned: an unknown block at the
+/// hand-back, after the roster changed under a live drive** (N1 of the review
+/// on this PR).
+///
+/// S7 moved the roster question to the call for every drive that STARTS after
+/// the change — but a drive that started while the block was declared keeps
+/// running, and the human can rewrite the workflow and relaunch under it at
+/// any moment. The hand-back then refuses "unknown block" and holds, naming
+/// the block; #1961's refuse-don't-degrade rule is what that hold still
+/// enforces, and this is its only remaining pin.
+#[test]
+fn a_drive_overtaken_by_a_roster_change_holds_at_the_handback_naming_the_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::with(WORKFLOW_TWO_WORKERS);
+    let gh = FakeGh::green(HEAD_A);
+
+    // The drive starts while `worker-adv` is declared.
+    let (group, session, _w) = {
+        let reg = relaunch_registry(dir.path());
+        let (group, session, _w) = driven_as(&reg, &repo, &gh, "worker-adv");
+        (group, session, _w)
+    };
+
+    // …and the roster changes under it before the first hand-back.
+    repo.rewrite_workflow(WORKFLOW);
+    let reg = relaunch_registry(dir.path());
+    let regrouped = reg
+        .create_group_ex(&repo.path(), rails(), Launch::Fresh)
+        .expect("relaunching the same group")
+        .id;
+    assert_eq!(regrouped, group, "the relaunch resumes the same group state dir");
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(&reg, &orch.id, 7501);
+
+    let handed = to_first_handback(&reg, &group, &gh);
+    assert!(handed.handbacks.is_empty(), "no pane may be opened for a block that is gone");
+    assert_eq!(status_state(&reg, &group), "held");
+    let helds = audit_details(&reg, &group, "rd-held");
+    assert_eq!(helds.len(), 1, "one hold: {helds:?}");
+    assert_eq!(helds[0]["reason"], json!("worker-unresumable"));
+    let refusal = helds[0]["refusal"].as_str().unwrap_or_default();
+    assert!(
+        refusal.contains("unknown block") && refusal.contains("worker-adv"),
+        "the hold quotes the spawn guard's own sentence, naming the block: {refusal}"
+    );
+    assert!(
+        !refusal.contains("second time"),
+        "a FIRST failure is never decorated: {refusal}"
+    );
+    let notice = drive_notices(&reg, &group, 1758).join("\n");
+    assert!(
+        notice.contains("worker-adv"),
+        "the line the orchestrator reads names the block that is gone: {notice}"
+    );
+}
+
+/// **The both-empty arm of the call check: a record with NO block, and no
+/// worker block to fall back to** (N3 of the review on this PR; the fourth
+/// sentence §5.1 enumerates).
+///
+/// A pre-#222 roster row records a role and no block identity; `rd_handback`
+/// falls back to the class default, and when the roster declares no worker
+/// block either, the spawn dies on `no_default_block_message`. The call now
+/// answers that at drive time with the same sentence.
+#[test]
+fn drive_review_refuses_a_session_with_no_block_and_no_worker_block_to_fall_back_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    // No worker block at all — the class default the hand-back would fall
+    // back to does not exist.
+    let repo = Repo::with(WORKFLOW_NO_WORKER);
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+
+    // A pre-#222-shaped roster row: role recorded, NO block key. No spawn path
+    // produces one any more, so the fixture writes `agents.json` directly —
+    // the same seeding `tests/groupid.rs` uses — rather than pretending a
+    // modern spawn can mint the subject.
+    let session = "cafb930d-3333-4444-5555-666666666666";
+    let row = format!(
+        r#"[{{"id":"w-1","role":"worker","name":"w","session":"{session}",
+             "cwd":"{}","status":"running","updated_ms":1}}]"#,
+        repo.path()
+    );
+    std::fs::write(dir.path().join(group.as_str()).join("agents.json"), row).unwrap();
+
+    let out = reg.drive_review_with(&group, &gh, 1758, session, false, 0, "orch-1", 0);
+    assert_eq!(out["refused"], json!("worker-unresumable"), "{out}");
+    let detail = out["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("declares no worker block"),
+        "the refusal is the class default's own sentence, not an unknown-block one: {out}"
     );
 }
 

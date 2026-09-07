@@ -1293,7 +1293,16 @@ impl OrchRegistry {
                 .into_iter()
                 .find(|t| &t.id == task_id)
                 .is_some_and(|t| {
-                    plandrive::rollback_is_ours(&t.status, t.assignee.as_deref(), agent)
+                    // Both of the drive's own names, never one (#3160). The
+                    // agent is the ordinary holder; `AUDIT_ACTOR` is what the
+                    // row still carries when `pd_spawn_slice`'s post-spawn
+                    // assignee write failed, and skipping THAT row is the
+                    // stranding this release exists to prevent.
+                    plandrive::rollback_is_ours_of(
+                        &t.status,
+                        t.assignee.as_deref(),
+                        &[agent, brand::AUDIT_ACTOR],
+                    )
                 });
             if !held_by_us {
                 continue;
@@ -1881,6 +1890,9 @@ impl OrchRegistry {
         if entry.state() == PlanDriveState::Running {
             if let Some(plan) = entry.plan.clone() {
                 let base = entry.base.clone();
+                // Cloned beside `base`, and for the same reason: the spawn call
+                // below runs while `entry` is mutably borrowed by this loop.
+                let on_behalf_of = entry.on_behalf_of.clone();
                 for slice in &plan.slices {
                     let id = slice.id.as_str();
                     let Some(run) = entry.slices.get(id) else { continue };
@@ -1910,7 +1922,16 @@ impl OrchRegistry {
                     let prior = (!psession.is_empty() && !pcwd.is_empty())
                         .then_some((psession.as_str(), pcwd.as_str()));
                     match self
-                        .pd_spawn_slice(group, issue, slice, base.as_deref(), &task_id, prior, now)
+                        .pd_spawn_slice(
+                            group,
+                            issue,
+                            slice,
+                            base.as_deref(),
+                            &task_id,
+                            prior,
+                            &on_behalf_of,
+                            now,
+                        )
                     {
                         Ok(agent) => {
                             *spawn_budget -= 1;
@@ -2385,6 +2406,7 @@ impl OrchRegistry {
         base: Option<&str>,
         task_id: &str,
         prior: Option<(&str, &str)>,
+        on_behalf_of: &str,
         now: u64,
     ) -> Result<AgentEntry, String> {
         let _ = now;
@@ -2419,7 +2441,23 @@ impl OrchRegistry {
         // The row now names the pane that holds it. A plain write, deliberately:
         // the guarded transition already happened above, and re-guarding it here
         // would refuse the very row this call just claimed.
-        let _ = self.upsert_task(
+        //
+        // **Live, not dead** (#3160). The claim above sets the assignee to the
+        // ACTOR — `upsert_task`'s claim writes `assignee.unwrap_or(actor)`, and
+        // this patch carries none — so `brand::AUDIT_ACTOR` is what the row says
+        // until this write lands. Nothing else ever puts the pane's id on the
+        // row: `spawn_agent_bound`'s `task_id` is grounding metadata and
+        // explicitly not a claim on it.
+        //
+        // **And its failure is audited rather than dropped.** The spawn STANDS —
+        // a worker is running in a worktree, and unwinding that over a board
+        // write would cost the work — so this is not an error to raise. What the
+        // discarded `Result` did cost was the RECORD: the row and the entry then
+        // disagree about who holds the slice, and the release's rollback used to
+        // skip such a row for looking like a stranger's. The guard now accepts
+        // either name (`rollback_is_ours_of`), and this line is what makes the
+        // disagreement legible when it happens.
+        if let Err(e) = self.upsert_task(
             group,
             brand::AUDIT_ACTOR,
             Some(task_id),
@@ -2428,7 +2466,16 @@ impl OrchRegistry {
                 session: agent.session_id.clone(),
                 ..super::TaskPatch::default()
             },
-        );
+        ) {
+            self.pd_audit(
+                group,
+                on_behalf_of,
+                plandrive::audit_action::REFUSED,
+                json!({ "issue": issue, "slice": slice.id.as_str(), "agent": agent.id,
+                        "reason": plandrive::refusal::SLICE_ROW_UNASSIGNED,
+                        "detail": pd_fact(&e) }),
+            );
+        }
         Ok(agent)
     }
 

@@ -825,6 +825,30 @@ pub fn rollback_is_ours(status: &str, assignee: Option<&str>, claimant: &str) ->
         && assignee.map(str::trim) == Some(claimant)
 }
 
+/// The same decision against **every claimant this drive could legally have
+/// left on the row** (#3160).
+///
+/// [`rollback_is_ours`] takes the one name the caller expects, which is right
+/// for a refused spawn: the claim being undone is the one the same function
+/// just made, so `brand::AUDIT_ACTOR` is the only possible holder. The RELEASE
+/// is not that case. `pd_spawn_slice` claims as `AUDIT_ACTOR` and then rewrites
+/// the assignee to the pane it opened, and those are two separate board writes:
+/// if the second one fails, the record names the agent while the row still
+/// names the claimant. A release checking only the agent then finds a stranger,
+/// skips the rollback, and leaves the row `in-progress` with nobody on it —
+/// which is precisely the row-release defect this rollback exists to close,
+/// re-entered through the gap between the two writes.
+///
+/// So the release asks about both names. The widening is safe for a property of
+/// the NAMES rather than of the window: `AUDIT_ACTOR` is orrerix's own brand
+/// actor, never an agent id and never a human's, so a row carrying it was
+/// claimed by a driver and by nothing else. A human's claim matches neither
+/// name and is still left alone, which is the whole of what the guard was
+/// added for.
+pub fn rollback_is_ours_of(status: &str, assignee: Option<&str>, claimants: &[&str]) -> bool {
+    claimants.iter().any(|c| rollback_is_ours(status, assignee, c))
+}
+
 /// Board statuses that settle a slice **by the human's hand** (§2(c)).
 ///
 /// `done` is the row the drive itself writes on a merged PR; `cancelled` and
@@ -1617,6 +1641,13 @@ pub mod refusal {
     pub const STATE_UNWRITABLE: &str = "pd-state-unwritable";
     /// A group orrerix cannot resolve at all.
     pub const UNAVAILABLE: &str = "pd-unavailable";
+    /// The slice's pane opened and the board write that moves its row's
+    /// assignee from the claimant to that pane did not (#3160). The spawn
+    /// STANDS — a worker is running — so this is audited rather than raised:
+    /// what it records is that the row and the record now disagree about who
+    /// holds the slice, which is the fact a reader needs and the one the
+    /// discarded `Result` used to swallow.
+    pub const SLICE_ROW_UNASSIGNED: &str = "slice-row-unassigned";
 
     /// Whether a refusal names an **orrerix fault** rather than a policy
     /// decision — the distinction `queue_merge`'s contract uses capitals to
@@ -1627,7 +1658,7 @@ pub mod refusal {
 
     /// Every name above, so a test can assert the set rather than iterate a
     /// list someone has to remember to extend.
-    pub const ALL: [&str; 13] = [
+    pub const ALL: [&str; 14] = [
         DRIVER_DISABLED,
         ISSUE_NOT_OPEN,
         ISSUE_UNVERIFIABLE,
@@ -1641,6 +1672,7 @@ pub mod refusal {
         STATE_UNREADABLE,
         STATE_UNWRITABLE,
         UNAVAILABLE,
+        SLICE_ROW_UNASSIGNED,
     ];
 }
 
@@ -1751,5 +1783,46 @@ mod tests {
 
         // Whitespace is not a second spelling.
         assert!(rollback_is_ours(" in-progress ", Some(" orrerix "), "orrerix"));
+    }
+
+    /// The RELEASE's rule, which is the one-name rule asked twice (#3160).
+    ///
+    /// The first assertion is the positive control in the sense this file uses
+    /// it everywhere else: a rule answering `false` to everything would satisfy
+    /// every refusal below and pin nothing.
+    #[test]
+    fn a_release_rolls_back_a_row_left_holding_either_of_the_drives_own_names() {
+        // The agent's own name — the ordinary case, unchanged by the widening.
+        assert!(rollback_is_ours_of("in-progress", Some("w-7"), &["w-7", "orrerix"]));
+
+        // The CLAIMANT's name, which is the row a failed post-spawn assignee
+        // write leaves behind: the record names `w-7`, the row still names the
+        // claim. Before #3160 this answered `false` and the row was stranded.
+        assert!(rollback_is_ours_of("in-progress", Some("orrerix"), &["w-7", "orrerix"]));
+
+        // A human's claim matches NEITHER name. This is the property the
+        // widening must not cost, so it is asserted rather than argued.
+        assert!(!rollback_is_ours_of("in-progress", Some("a-human"), &["w-7", "orrerix"]));
+
+        // Every non-`in-progress` status is the human's decision under either
+        // name, exactly as the one-name rule has it.
+        for status in ["done", "blocked", "cancelled", "queued", "review"] {
+            assert!(
+                !rollback_is_ours_of(status, Some("orrerix"), &["w-7", "orrerix"]),
+                "a row a human moved to {status:?} is theirs now under either name"
+            );
+        }
+
+        // An EMPTY candidate never widens the set. A slice released before its
+        // pane was ever recorded carries `agent == ""`, and the empty string
+        // must not start matching an unassigned row just because it is passed
+        // alongside a real name.
+        assert!(!rollback_is_ours_of("in-progress", Some(""), &["", "orrerix"]));
+        assert!(!rollback_is_ours_of("in-progress", None, &["", "orrerix"]));
+
+        // No candidates at all is no rollback — `any` over an empty slice is
+        // `false`, and that is the answer this caller wants rather than an
+        // accident of the iterator.
+        assert!(!rollback_is_ours_of("in-progress", Some("orrerix"), &[]));
     }
 }

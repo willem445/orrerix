@@ -14,6 +14,7 @@
 //!
 //! No test here spawns a real agent CLI (constraint 3) or a real `gh` child.
 
+use loomux_lib::orchestration::brand;
 use loomux_lib::orchestration::mcp::dispatch;
 use loomux_lib::orchestration::mqdriver::CmdOut;
 use loomux_lib::orchestration::plandrive::{self, Consent, PdHeldReason, PlanDriveState};
@@ -3308,4 +3309,110 @@ fn a_late_pr_still_hands_off_and_clears_the_wait() {
     reg.pd_drive_group_with(&group, &gh, 1_500 + 3 * PR_WAIT_HOLD_MS);
     assert_eq!(slice_state(&reg, &group, "P1"), "in-review", "{}", status(&reg, &group));
     assert_eq!(slice_hold(&reg, &group, "P1"), "");
+}
+
+/// **A release rolls back a row the drive's own CLAIM is still holding** (#3160).
+///
+/// `pd_spawn_slice` writes the board twice: it claims the row as
+/// `brand::AUDIT_ACTOR`, and then — once the pane exists — rewrites the assignee
+/// to that pane's id. If the second write fails, the record names the agent
+/// while the row still names the claimant, and the release's rollback used to
+/// check the AGENT alone: it found a stranger on the row, skipped it, and left
+/// the row `in-progress` with nobody on it. Readiness is the board's, so that
+/// slice never becomes ready again and the resume silently buys nothing — the
+/// exact defect `a_resume_releases_a_held_slice_and_still_obeys_the_board`
+/// closed, re-entered through the gap between the two writes.
+///
+/// The failing write is not stageable from here (it is one `upsert_task` call
+/// inside a spawn), so this stages its RESULT, which is the whole of what the
+/// rollback sees: the row left carrying the claimant. The widened guard
+/// (`rollback_is_ours_of`) is what makes it releasable again.
+///
+/// The last half is the control the widening must not cost: a row a HUMAN holds
+/// matches neither of the drive's two names and is still left alone.
+#[test]
+fn a_release_rolls_back_a_row_still_carrying_the_drives_own_claimant() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let plan = PLAN3.replace("    hold: true\n", "");
+    let (group, orch, rows) = running(&reg, &repo, &gh, &plan);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+
+    // Stage the failed post-spawn write: the row goes back to naming the
+    // CLAIMANT, which is what it carries between the claim and the rewrite.
+    let agent = slice_agent(&reg, &group, "P1");
+    assert!(!agent.is_empty(), "the slice really did spawn: {}", status(&reg, &group));
+    reg.upsert_task(
+        &group,
+        brand::AUDIT_ACTOR,
+        Some(&rows["P1"]),
+        loomux_lib::orchestration::TaskPatch {
+            assignee: Some(brand::AUDIT_ACTOR.to_string()),
+            ..loomux_lib::orchestration::TaskPatch::default()
+        },
+    )
+    .expect("staging the row the way a failed assignee write leaves it");
+    let staged = row(&reg, &group, &rows["P1"]).expect("P1 has a row");
+    assert_eq!(staged.status, "in-progress", "the claim still stands: {staged:?}");
+    assert_eq!(
+        staged.assignee.as_deref(),
+        Some(brand::AUDIT_ACTOR),
+        "and the row names the claimant, not the pane — the state under test: {staged:?}"
+    );
+    assert_ne!(
+        staged.assignee.as_deref(),
+        Some(agent.as_str()),
+        "the record and the row really do disagree, which is this test's premise"
+    );
+
+    // Park the slice, then the drive, so there is something to resume.
+    with_pane(&reg, &agent, 7_310);
+    report(&reg, &group, &agent, "blocked", json!({ "note": "stuck" }));
+    reg.pd_drive_group_with(&group, &gh, 1_600);
+    assert_eq!(slice_hold(&reg, &group, "P1"), "worker-blocked", "{}", status(&reg, &group));
+    gh.set_labels(&["bug"]);
+    reg.pd_drive_group_with(&group, &gh, 1_700);
+    assert_eq!(drive_state(&reg, &group), "held");
+
+    gh.set_labels(&["agent-ready"]);
+    let out = reg.resume_plan_drive_with(&group, 3040, &orch, 1_800);
+    assert_eq!(out["resumed"], json!(true), "{out}");
+
+    let p1 = row(&reg, &group, &rows["P1"]).expect("P1 still has a row");
+    assert_eq!(
+        p1.status, "queued",
+        "the row is released even though it names the claimant rather than the pane: {p1:?}"
+    );
+    assert_eq!(p1.assignee, None, "and unassigned, so the re-spawn's claim can succeed: {p1:?}");
+
+    // The control: a row a HUMAN holds is neither of the drive's names, and a
+    // release must not touch it. Staged on P3, parked and resumed the same way.
+    let p3_agent = slice_agent(&reg, &group, "P3");
+    assert!(!p3_agent.is_empty(), "P3 spawned too: {}", status(&reg, &group));
+    reg.upsert_task_by_human(
+        &group,
+        "the human",
+        Some(&rows["P3"]),
+        loomux_lib::orchestration::TaskPatch {
+            assignee: Some("a-human".into()),
+            ..loomux_lib::orchestration::TaskPatch::default()
+        },
+    )
+    .expect("a human may take a row");
+    with_pane(&reg, &p3_agent, 7_311);
+    report(&reg, &group, &p3_agent, "blocked", json!({ "note": "stuck too" }));
+    reg.pd_drive_group_with(&group, &gh, 1_900);
+    assert_eq!(slice_hold(&reg, &group, "P3"), "worker-blocked");
+    gh.set_labels(&["bug"]);
+    reg.pd_drive_group_with(&group, &gh, 2_000);
+    gh.set_labels(&["agent-ready"]);
+    reg.resume_plan_drive_with(&group, 3040, &orch, 2_100);
+    let p3 = row(&reg, &group, &rows["P3"]).expect("P3 still has a row");
+    assert_eq!(
+        p3.assignee.as_deref(),
+        Some("a-human"),
+        "a human's claim matches neither of the drive's names and is left alone: {p3:?}"
+    );
 }

@@ -3861,7 +3861,14 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 // rather than claiming a note it did not write — the same
                 // answer a board-less orchestration group already gave.
                 None if report::reaches_orchestrator_pane(status) => {
-                    reg.deliver_relayed_to_root(&caller.group, &message, &caller.agent_id)?;
+                    {
+                        // RED EVIDENCE ONLY: close first, so the exit is recorded
+                        // before the report is delivered.
+                        if caller.role == Role::Planner && status == "done" {
+                            reg.close_completed_planner(&caller.agent_id);
+                        }
+                        reg.deliver_relayed_to_root(&caller.group, &message, &caller.agent_id)?
+                    };
                 }
                 None => {
                     note_outcome = reg.report_task_note(

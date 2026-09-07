@@ -1828,7 +1828,7 @@ fn report(reg: &OrchRegistry, group: &GroupId, agent: &str, status: &str, args: 
     let mut a = args;
     a["status"] = json!(status);
     dispatch(reg, &caller(group, agent, Role::Worker), "report", &a)
-        .unwrap_or_else(|e| panic!("report({status}) failed: {e}"))
+        .unwrap_or_else(|e| panic!("report({status}) failed: {e:?}"))
 }
 
 // ── §3: the brief ───────────────────────────────────────────────────────────

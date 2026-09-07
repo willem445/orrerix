@@ -883,6 +883,20 @@ fn a_refused_spawn_leaves_no_reservation_behind() {
         json!(plandrive::refusal::PLANNER_UNSPAWNABLE),
         "the cap must refuse the planner: {out}"
     );
+    // …and refused BY THE CAP. `planner-unspawnable` is ONE name for every way
+    // a spawn can fail, so the assertion above says nothing about WHY — which
+    // is the hole the first draft of this fixture fell through: it set
+    // `max_agents: 2`, the orchestrator turned out to be exempt from the count
+    // (`counts_against_max_agents`), and the planner spawned. That draft failed
+    // loudly only because it failed on this line's predecessor; a fixture that
+    // broke the spawn some OTHER way would have passed here with nothing about
+    // the cap exercised at all.
+    assert!(
+        out["detail"]
+            .as_str()
+            .is_some_and(loomux_lib::orchestration::is_live_cap_refusal),
+        "the refusal must be the live-delegate cap's own, not merely some spawn failure: {out}"
+    );
     // The rollback: no entry survives, so nothing is parked and nothing refuses
     // a later attempt with `already-driven`.
     let s = reg.plan_drive_status_with(&group, 1_100);

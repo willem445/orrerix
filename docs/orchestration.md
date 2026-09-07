@@ -1298,6 +1298,13 @@ watched by the driver, which answers a stuck lane with a hold that names the PR 
 about it (`why: driven-lane`). A stalled agent that is none of these behaves exactly as before,
 and every suppression is one audit row per stall, not one per tick.
 
+**A drive-owned suppression ends when the drive does.** However the drive goes away — cancelled,
+completed, or its driver dying — the next watchdog pass notices that nothing owns the lane any
+more, records `watchdog-rearmed`, and gives that pane a fresh full stall window from that moment.
+So a lane that really is stuck is silent-but-unreported only while a drive is actually watching
+it, never indefinitely; and because the window is fresh rather than resumed, the re-arm itself
+never fires a nudge about silence that elapsed while the drive was still in charge.
+
 The suppression is bounded by the watch's own TTL (5–240 min, default 60 — see "capped ...
 and time-bounded" above), never open-ended: a genuinely hung agent holding a watch is
 silent-but-unreported for at most that TTL plus one more stall window before the orchestrator

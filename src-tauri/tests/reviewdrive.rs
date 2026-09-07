@@ -9571,29 +9571,52 @@ fn a_stall_on_a_driven_lane_is_suppressed_with_a_reason() {
     assert_eq!(row["watch_ids"], serde_json::json!([]),
         "…and not borrow #852's field, which is about a live notify_when watch: {row}");
 
-    // The control that this is about the DRIVE and not about lanes in general:
-    // cancel it, give the pane a fresh stall window, and the same pane announces.
-    // Without this, an implementation that suppressed every reviewer's stall
-    // would pass every assertion above.
+    // ── the control, and the RE-ARM it also pins (rev-std round 1, N2) ──
+    //
+    // Two things are being asserted by the same sequence, and the second is why
+    // the first is written this way. The CONTROL is that this is about the DRIVE
+    // and not about reviewer lanes in general: end the drive and the same pane
+    // announces, so an implementation that suppressed every lane's stall fails
+    // here. The RE-ARM is that ending the drive is ENOUGH — the pane needs no
+    // activity, no new assignment and no human touch to become announceable
+    // again.
+    //
+    // An earlier draft of this test fed the lane one tick of synthetic OUTPUT
+    // before re-ticking, to clear the anti-nag latch the suppressed stall had
+    // set. That made the control pass while hiding a real defect: nothing cleared
+    // that latch when a drive ended, so a lane stalled under a drive that was
+    // then cancelled — or whose driver died — would never be nudged again, where
+    // base announced once. The synthetic tick WAS the bug's disguise, which is
+    // exactly what rev-std named. It is gone: the only thing that happens between
+    // the suppression and the announcement is the drive going away.
     assert_eq!(
         reg.cancel_review_drive(&group, 1758, "orch-1")["cancelled"],
         serde_json::json!(true),
         "the drive must actually stop, or the control is the same case again"
     );
     assert!(reg.rd_owner(&group, &lane).is_none(), "…and really stop owning the lane");
-    // One tick of ACTIVITY first, to clear the anti-nag latch the suppressed
-    // stall above set. The latch is set on both paths deliberately (a stall is
-    // spoken about once however it ends), so without this the control would read
-    // green against an implementation that suppresses nothing — it would simply
-    // be the latch talking, not the drive.
-    let mut grew = std::collections::HashMap::new();
-    grew.insert(lane.clone(), 1u64);
-    reg.watchdog_tick(FAR, &grew, &no_watch);
-    let notified = reg.watchdog_tick(FAR + 6 * 60_000, &grew, &no_watch);
+
+    // Tick 1 after the drive ends: the re-arm fires. It does NOT announce — the
+    // pane is handed a fresh FULL window from this instant, exactly as #852's
+    // watch arm does, rather than firing on the remains of the expired one.
+    let notified = reg.watchdog_tick(FAR, &no_output, &no_watch);
+    assert!(!notified.contains(&lane),
+        "the re-arm gives a fresh window, it does not fire on the old one: {notified:?}");
+    assert!(
+        audit_details(&reg, &group, "watchdog-rearmed")
+            .iter()
+            .any(|d| d["agent"] == serde_json::json!(lane)),
+        "the re-arm must be diagnosable, not silent"
+    );
+
+    // Tick 2, a full window later, with NO activity of any kind in between: now
+    // it announces. This is the assertion the synthetic output tick was standing
+    // in for, and it fails against the shipped-without-a-re-arm implementation.
+    let notified = reg.watchdog_tick(FAR + 6 * 60_000, &no_output, &no_watch);
     assert!(
         notified.contains(&lane),
-        "with no drive owning it, the same silent lane is the orchestrator's business again: \
-         {notified:?}"
+        "with no drive owning it, the same silent lane is the orchestrator's business \
+         again — and getting there took no activity, only the drive ending: {notified:?}"
     );
 }
 

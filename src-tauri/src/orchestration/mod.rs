@@ -4904,6 +4904,7 @@ fn human_pane_entry(
         last_output_total: 0,
         watchdog_notified: false,
         watchdog_watch_suppressed: false,
+        watchdog_drive_suppressed: false,
         idle_tick_notified: false,
         compact_nudge_notified: false,
         compact_nudge_last_output_total: 0,
@@ -11436,6 +11437,16 @@ pub struct AgentEntry {
     /// take the watch-resolved branch on a latch describing a stall that no
     /// longer exists (review finding on #852).
     pub watchdog_watch_suppressed: bool,
+    /// The same latch for #3040 N2's `driven-lane` suppression: set when a stall
+    /// is demoted because a live review drive owned the pane, and read on the
+    /// first tick where no drive owns it any more, to hand the pane a fresh stall
+    /// window instead of leaving it latched for good — the shape #852 gave the
+    /// watch arm, which the drive arm shipped without (rev-std round 1, N2).
+    ///
+    /// A SEPARATE flag rather than one shared "suppressed" bit, because the two
+    /// are cleared by different evidence — a watch resolving, and a drive ending
+    /// — and one bit would let either event clear the other's suppression.
+    pub watchdog_drive_suppressed: bool,
     /// Autonomous idle-tick latch (#83), meaningful only for the orchestrator:
     /// set when an idle-tick notice is delivered, cleared when the pane produces
     /// output again (the orchestrator acted on the tick). Mirrors
@@ -35852,8 +35863,26 @@ impl OrchRegistry {
     /// the lock below, because the same read drives the latch transition; the
     /// other two (`exit-initiated`, `driven-lane`) are
     /// [`watchdog_suppress_reason`]'s, applied on the lock-free second pass
-    /// because one of them costs a file read under another lock. Paused groups
-    /// are skipped entirely — delivery is suppressed
+    /// because one of them costs a file read under another lock.
+    ///
+    /// **Every suppression that can outlive its cause is BOUNDED, and the one
+    /// that cannot is stated.** `live-watch` re-arms when the watch resolves
+    /// (#852, below). `driven-lane` re-arms on the first tick where no live drive
+    /// owns the pane — released on the drive's absence rather than on elapsed
+    /// time, and audited as `watchdog-rearmed`; without it a lane stalled under a
+    /// drive that was then cancelled, or whose driver died, would be latched
+    /// silent for good, where the base announced once (rev-std round 1, N2).
+    /// `exit-initiated` deliberately does NOT re-arm: a pane something in this
+    /// process asked to end is not coming back to be nudged. The residual that
+    /// leaves is real and small — a kill whose pty teardown hangs leaves an
+    /// alive-but-dying pane suppressed with nothing bounding the window, because
+    /// `record_exit_initiator` is first-writer-wins and is never cleared. Nothing
+    /// today produces it (`kill_agent` refuses a pane with no pty, and the
+    /// teardown is milliseconds), so it is disclosed rather than guarded; a
+    /// reaper that could leave a pane in that state indefinitely would need this
+    /// arm bounded too.
+    ///
+    /// Paused groups are skipped entirely — delivery is suppressed
     /// there anyway, so we must not spend the one-notice budget while paused.
     /// Returns the notified (never suppressed) agent ids. Split from the pty
     /// read (`agent_output_totals`) so the stall / anti-nag / pause / watch
@@ -35900,6 +35929,14 @@ impl OrchRegistry {
         let mut to_notify: Vec<(String, GroupId, String, u32, Option<ExitInitiator>)> = Vec::new();
         let mut to_suppress: Vec<(String, GroupId, String, u32, Vec<String>, &'static str)> =
             Vec::new();
+        // Panes currently latched as `driven-lane`, whatever the stall clock says
+        // (rev-std round 1, N2). They are collected UNCONDITIONALLY — before the
+        // threshold is consulted — because that is the whole defect: once the
+        // latch is set, `watchdog_should_notify` answers false forever, so a pane
+        // whose drive has ended would never be looked at again. Whether the drive
+        // is still there is a `rd_owner` read, which cannot happen under this
+        // lock, so the question is carried out and answered below.
+        let mut latched_driven: Vec<(String, GroupId)> = Vec::new();
         {
             let mut agents = self.agents.lock_safe();
             for a in agents.values_mut() {
@@ -35932,6 +35969,12 @@ impl OrchRegistry {
                     || a.idle_since_ms.is_some()
                 {
                     continue;
+                }
+                // Asked before every gate below, including the paused-group one:
+                // a drive that ended while its group was paused must still
+                // re-arm, and the alternative is a latch that outlives the pause.
+                if a.watchdog_drive_suppressed {
+                    latched_driven.push((a.id.clone(), a.group.clone()));
                 }
                 // Output growth = activity: reset the clock and both latches,
                 // and this tick can't also flag or suppress the agent.
@@ -36004,9 +36047,45 @@ impl OrchRegistry {
                 killed_by,
                 || self.rd_owner(&group, &id).is_some(),
             ) {
-                Some(why) => to_suppress.push((id, group, name, minutes, Vec::new(), why)),
+                Some(why) => {
+                    // Only the DRIVE arm latches: `exit-initiated` needs no
+                    // re-arm, because a pane something asked to end is not coming
+                    // back to be nudged, and `watchdog_notified` already stops it
+                    // being announced twice on the way out.
+                    if why == WATCHDOG_SUPPRESS_DRIVEN_LANE {
+                        if let Some(a) = self.agents.lock_safe().get_mut(&id) {
+                            a.watchdog_drive_suppressed = true;
+                        }
+                    }
+                    to_suppress.push((id, group, name, minutes, Vec::new(), why))
+                }
                 None => still_news.push((id, group, name, minutes)),
             }
+        }
+
+        // The re-arm (rev-std round 1, N2), mirroring #852's watch arm: on the
+        // first tick where no live drive owns a pane we suppressed as
+        // `driven-lane`, clear both latches and give it a fresh FULL stall window
+        // from now — rather than firing immediately on whatever was left of the
+        // old, already-expired one.
+        //
+        // Released on independent evidence (the drive is gone), never on elapsed
+        // time, and it is deliberately not hooked to `cancel_review_drive_with`:
+        // a drive also ends by completing, by going terminal, or by its own
+        // entry being reconciled away, and a hook on the cancel path alone would
+        // bound exactly one of those four.
+        for (id, group) in latched_driven {
+            if self.rd_owner(&group, &id).is_some() {
+                continue;
+            }
+            if let Some(a) = self.agents.lock_safe().get_mut(&id) {
+                a.watchdog_drive_suppressed = false;
+                a.watchdog_notified = false;
+                a.last_progress_ms = now;
+            }
+            self.audit(&group, brand::AUDIT_ACTOR, "watchdog-rearmed", json!({
+                "agent": id, "why": WATCHDOG_SUPPRESS_DRIVEN_LANE,
+            }));
         }
 
         for (id, group, name, minutes, watch_ids, why) in to_suppress {
@@ -38506,6 +38585,7 @@ impl OrchRegistry {
             last_output_total: 0,
             watchdog_notified: false,
             watchdog_watch_suppressed: false,
+            watchdog_drive_suppressed: false,
             idle_tick_notified: false,
             compact_nudge_notified: false,
             compact_nudge_last_output_total: 0,
@@ -51057,6 +51137,7 @@ impl OrchRegistry {
             last_output_total: 0,
             watchdog_notified: false,
             watchdog_watch_suppressed: false,
+            watchdog_drive_suppressed: false,
             idle_tick_notified: false,
             compact_nudge_notified: false,
             compact_nudge_last_output_total: 0,
@@ -60336,6 +60417,7 @@ fn register_orchestrator_pane(
         last_output_total: 0,
         watchdog_notified: false,
         watchdog_watch_suppressed: false,
+        watchdog_drive_suppressed: false,
         idle_tick_notified: false,
         compact_nudge_notified: false,
         compact_nudge_last_output_total: 0,

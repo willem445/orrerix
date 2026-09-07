@@ -66508,7 +66508,7 @@ fn the_close_refusals_each_render_as_one_paragraph_and_name_what_the_agent_needs
     assert!(m.contains("it belongs to w-2"), "names the owning agent: {m}");
     assert!(!m.contains("another agent or to the human"), "the guess is gone: {m}");
     // &and when the roster owns that branch for nobody, it says THAT rather
-    // than naming a guess  a branch whose agent has exited, or the human's.
+    // than naming a guess — a branch whose agent has exited, or the human's.
     let u = gh_close_refusal("2942", "fix/other", "fix/mine", "", false);
     assert!(u.contains("no agent on this group's roster owns that branch"), "{u}");
     assert!(!u.contains("belongs to ."), "never an empty owner name: {u}");
@@ -66741,6 +66741,11 @@ fn the_close_refusal_the_shim_prints_is_the_one_rust_builds() {
         group.join(OWNER_ROSTER_FILE),
         render_owner_roster(&[
             ("w-1".into(), "worker".into(), Some("fix/mine".into())),
+            // w-2 owns fix/theirs, so the shim resolves an OWNER for the head
+            // these rows refuse — the parity assertions below pass "w-2" to the
+            // Rust builder, and a roster without this row would make the shim
+            // say "nobody owns it" while Rust named an agent.
+            ("w-2".into(), "worker".into(), Some("fix/theirs".into())),
             ("r-1".into(), "reviewer".into(), None),
         ]),
     )

@@ -1684,8 +1684,8 @@ if [ "$cmd" = "pr" ] && { [ "$sub" = "close" ] || [ "$sub" = "reopen" ]; }; then
   # THE PR'S OWNER, by name (#2985 rev-std finding 4, and issue #2985's own
   # words: "refuse with the PR's owner named"). A second pass over the same
   # roster, asking which agent's branch owns THIS head by the same rule the
-  # gate decides with. Empty when no row owns it  a branch whose agent is
-  # gone, or the human's own branch  and the message then says so rather
+  # gate decides with. Empty when no row owns it — a branch whose agent is
+  # gone, or the human's own branch — and the message then says so rather
   # than naming a guess.
   c_owner=""
   if [ -n "$c_head" ] && [ -f "$ORX_GD/__OWNERS__" ]; then
@@ -1701,7 +1701,7 @@ if [ "$cmd" = "pr" ] && { [ "$sub" = "close" ] || [ "$sub" = "reopen" ]; }; then
   fi
   # AUDIT-SAFE COPIES. A git ref name may contain a `"`, and every value below
   # is interpolated into a JSON line in audit.jsonl. Unescaped, a branch named
-  # `x","agent":"o-1` does not merely corrupt the row, it FORGES a field  and
+  # `x","agent":"o-1` does not merely corrupt the row, it FORGES a field — and
   # attribution is this gate's whole second half, so a forgeable audit row
   # would defeat the half that exists to stop the next orchestrator having to
   # ask the human. Deleting the quote (rather than backslash-escaping it) is
@@ -10961,7 +10961,7 @@ pub fn gh_close_own_clause(own_branch: &str) -> String {
 ///
 /// An empty `owner` is not a failure and must not read as one: a branch whose
 /// agent has exited, or one the human pushed, legitimately belongs to nobody on
-/// the roster. That arm says so instead of naming a guess  which is what the
+/// the roster. That arm says so instead of naming a guess — which is what the
 /// pre-fix sentence ("belongs to another agent or to the human") did for EVERY
 /// refusal, including the ones where the owner was sitting in the roster.
 pub fn gh_close_owner_clause(owner: &str) -> String {
@@ -34552,7 +34552,7 @@ impl OrchRegistry {
         let body = serde_json::to_string_pretty(&list).unwrap();
         let _ = atomic_write(&path, body.as_bytes());
         // #2985: the same roster, projected into the flat form the `gh` shim
-        // can read from POSIX `sh`  written from THIS list, under THIS lock,
+        // can read from POSIX `sh` — written from THIS list, under THIS lock,
         // in the same atomic-replace style, so the close gate can never be
         // deciding from a roster that disagrees with `agents.json`. A failed
         // write leaves the previous file intact and the gate then refuses a
@@ -50351,7 +50351,7 @@ impl OrchRegistry {
     /// file through a `{file:...}` reference in the config document; pi points
     /// `--append-system-prompt` straight at it on argv. `ext` is the whole
     /// difference, and it exists so the two never collide in the one
-    /// `configs/` directory they share  `generated_agent_handle` is
+    /// `configs/` directory they share — `generated_agent_handle` is
     /// `loomux-<group>-<block>`, which is the SAME handle for a block whose
     /// `cli:` changed between two launches of one group.
     ///

@@ -329,9 +329,14 @@ mod tests {
             limit_in_tail("I checked the key limit and it is fine; credits are healthy."),
             None
         );
-        // A needle's own words, scattered but never opening a line.
+        // A needle VERBATIM, in its own casing, mid-line. This case is the
+        // anchor's control and it has to carry the needle EXACTLY: an earlier
+        // revision wrote `key limit exceeded` in lower case, which no longer
+        // matches once you drop `starts_with` for `contains` — so the mutation
+        // that removes the anchor left it green and it was evidence of nothing.
+        // A control is only a control against the mutation it is aimed at.
         assert_eq!(
-            limit_in_tail("The key limit exceeded nothing today.\nCredits: fine.\n"),
+            limit_in_tail("Yesterday a Key limit exceeded warning appeared; it is fixed.\n"),
             None
         );
     }

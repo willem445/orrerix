@@ -856,18 +856,21 @@ fn a_second_drive_on_one_issue_opens_no_second_planner() {
 #[test]
 fn a_refused_spawn_leaves_no_reservation_behind() {
     let repo = Repo::new();
-    // A cap with exactly enough room for the orchestrator and nothing else.
+    // ONE delegate slot. The orchestrator does not consume one — it is a
+    // FIXTURE (`Role::is_fixture`), which is why an earlier draft of this
+    // fixture used `max_agents: 2` and watched the planner spawn happily as the
+    // second DELEGATE rather than being refused as the third agent.
     let (reg, _d) = test_registry();
     let group = reg
-        .create_group(&repo.path(), Guardrails { max_agents: 2, ..rails() })
+        .create_group(&repo.path(), Guardrails { max_agents: 1, ..rails() })
         .unwrap()
         .id;
     let orch = reg
         .spawn_agent(&group, Role::Orchestrator, "orch", "", false, None)
         .expect("the orchestrator fits");
     reg.set_pty_for_test(&orch.id, 7);
-    // The second and last slot, taken — so the planner spawn below is refused
-    // by the group's own live-delegate cap rather than by anything this test
+    // The one delegate slot, taken — so the planner spawn below is refused by
+    // the group's own live-delegate cap rather than by anything this test
     // arranged specially.
     let filler = reg
         .spawn_agent(&group, Role::Worker, "filler", "", false, None)

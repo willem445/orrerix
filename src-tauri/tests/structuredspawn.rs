@@ -246,7 +246,7 @@ fn a_delivery_becomes_the_turn_variant_its_author_and_kind_name() {
     use loomux_engine::harness::Turn;
     use loomux_engine::model::Delivery;
     use loomux_lib::orchestration::structured::turn_for;
-    let orrerix = loomux_lib::brand::AUDIT_ACTOR;
+    let orrerix = loomux_lib::orchestration::brand::AUDIT_ACTOR;
 
     assert!(matches!(turn_for(Delivery::FreshKickoff, "w-1", "hi"), Turn::Kickoff(_)));
     assert!(matches!(turn_for(Delivery::ResumeKickoff, orrerix, "hi"), Turn::Kickoff(_)));

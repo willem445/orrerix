@@ -6589,7 +6589,8 @@ fn the_reuse_readiness_predicate_is_a_confirmed_delivery_and_an_empty_queue() {
 }
 
 /// **A pane the REAPER calls idle is not thereby a pane at its prompt** (#2089,
-/// deferred out of #1967).
+/// deferred out of #1967) — and since #3203, what that buys is a NAMED refusal
+/// rather than a second pane.
 ///
 /// `idle_since_ms` is stamped when an agent reports done or is spawned without a
 /// task. A pane that then parks behind a dialog — a permission prompt, a CLI
@@ -6599,17 +6600,22 @@ fn the_reuse_readiness_predicate_is_a_confirmed_delivery_and_an_empty_queue() {
 /// `fix-stalled`. The reuse arm therefore asks delivery state as well: last
 /// delivery CONFIRMED, and nothing queued behind it.
 ///
-/// **The `ready` arm is the negative control and it carries the whole
-/// discriminator.** Three of these four arms are satisfied by an implementation
-/// that never reuses anything at all; `ready` is the one that is not, and it is
-/// the row that would still pass under the pre-#2089 code, so a run where only
-/// it goes green says the predicate is refusing everything rather than refusing
-/// the right thing.
+/// **#3203 retracts the CONSEQUENCE of that refusal and nothing else, and this
+/// test is repinned onto what survives.** The predicate is unchanged and still
+/// names why each pane is not cleanly reusable; what changed is where a refused
+/// pane falls through to. It used to be `rd_spawn`, which put a SECOND live pane
+/// on a session that already had one — measured on PR #3198 as three panes
+/// writing one worktree. It is now the take-over arm, which types the brief into
+/// that same pane anyway, because landing behind a turn costs latency that
+/// `fix-stalled` already bounds while a second pane costs the checkout. So
+/// `opened` is 0 on every row now and the assertion moved off it.
 ///
-/// The three refusing arms differ in exactly the fact the predicate reads, and
-/// each is asserted by the WORD on its `rd-reuse-declined` row — not merely by
-/// "a pane was opened" — so an implementation that refused for the right count
-/// of panes and the wrong reason fails here.
+/// **The `rd-reuse-declined` WORD is what discriminates the four arms**, and it
+/// is the whole reason the reuse arm was kept in front of the take-over arm
+/// rather than replaced by it: `ready` declines nothing, and each refusing arm
+/// names the one fact the predicate read. An implementation that dropped the
+/// readiness test altogether — the obvious way to "fix" #3203 — passes every
+/// other column here and fails these three rows, which is the point.
 ///
 /// **Every arm is walked and the whole table is compared ONCE, rather than each
 /// arm asserting as it goes.** A red evidences only the assertion it reached, and
@@ -6618,9 +6624,10 @@ fn the_reuse_readiness_predicate_is_a_confirmed_delivery_and_an_empty_queue() {
 /// or `queued` at all, so three arms would have been claimed on one arm's
 /// evidence. Collecting first makes one run say what every arm did.
 #[test]
-fn a_pane_that_is_idle_but_not_delivery_ready_is_not_reused_for_a_handback() {
-    // (arm, reused the existing pane, panes opened, decline reasons, fix brief
-    // typed into the candidate) — filled per arm, compared once at the end.
+fn a_pane_that_is_idle_but_not_delivery_ready_is_declined_by_name_then_taken_over() {
+    // (arm, the hand-back landed in the existing pane, panes opened, decline
+    // reasons, fix brief typed into the candidate) — filled per arm, compared
+    // once at the end.
     type Row = (&'static str, bool, usize, Vec<String>, bool);
     let mut observed: Vec<Row> = Vec::new();
 
@@ -6685,29 +6692,31 @@ fn a_pane_that_is_idle_but_not_delivery_ready_is_not_reused_for_a_handback() {
     }
 
     let expected: Vec<Row> = vec![
-        // The control. A confirmed last delivery with an empty queue IS reused,
-        // opening nothing and declining nothing — so the three rows below are
-        // about the predicate and not about a driver that stopped reusing
-        // anything at all.
+        // The control. A confirmed last delivery with an empty queue is reused
+        // cleanly, declining nothing — so the three rows below are about the
+        // predicate having READ something, not about a driver that declines
+        // everything and takes it over regardless.
         ("ready", true, 0, vec![], true),
         // The last delivery is on record as not having landed: its text may
         // still be sitting unsubmitted in that box.
-        ("unconfirmed", false, 1, vec!["unconfirmed".into()], false),
+        ("unconfirmed", true, 0, vec!["unconfirmed".into()], true),
         // Nothing was ever delivered to this pty, so there is no evidence
         // either way — "we could not look" is not "there was nothing there".
-        ("no-record", false, 1, vec!["no-record".into()], false),
+        ("no-record", true, 0, vec!["no-record".into()], true),
         // Something is already waiting to be pasted; a brief admitted now lands
         // behind it. Queue depth is asked first, so this arm reads `queued`
         // even though its last delivery is confirmed.
-        ("queued", false, 1, vec!["queued".into()], false),
+        ("queued", true, 0, vec!["queued".into()], true),
     ];
     assert_eq!(
         observed, expected,
-        "each row is (arm, reused the existing pane, panes opened, decline reasons, fix brief \
-         typed into it). A row whose `reused` is true under a refusing arm means the brief was \
-         typed into a pane that will not read it — it lands in the queue, `deliver_prompt` \
-         answers Ok, and the fallback-to-spawn never fires. A row with the wrong decline reason \
-         means the driver refused for a fact other than the one it read."
+        "each row is (arm, the hand-back landed in the existing pane, panes opened, decline \
+         reasons, fix brief typed into it). Since #3203 every arm lands in that pane and opens \
+         nothing — the driver may not put a second pane on a session that already has one — so \
+         the DECLINE REASONS are what separate the arms: an empty vector for the pane that was \
+         cleanly reusable, and the one word the predicate actually read for each pane that was \
+         not. An implementation that deleted the readiness test to close #3203 empties all four \
+         vectors and fails here."
     );
 }
 
@@ -6718,27 +6727,41 @@ fn a_pane_that_is_idle_but_not_delivery_ready_is_not_reused_for_a_handback() {
 /// readiness. It is narrowed instead, and this is the pin for why: a pane that
 /// is delivery-ready is exactly what one MID-TURN looks like — it took a brief,
 /// the brief confirmed, and its queue is empty because the CLI is now thinking.
-/// A swap would hand the driver a working delegate's pane, which
-/// `idle_pane_on_session`'s second bullet forbids ("is this agent mid-thought?"
-/// is not a question a driver may answer).
+/// The two conditions are therefore still asked separately, and this test is
+/// what stops them being folded into one.
+///
+/// **What #3203 retracted is the sentence "is this agent mid-thought? is not a
+/// question a driver may answer" — for the hand-back FALL-THROUGH only.** A
+/// mid-turn pane is still not something the reuse arm will take, and
+/// `rd_open_lane` still opens a fresh reviewer rather than typing into a working
+/// one. What changed is what a refused hand-back does next: it takes the pane
+/// over anyway, because the alternative it used to take was a second pane on the
+/// same session and worktree (#3198, three of them). The delivery is QUEUED, not
+/// an interrupt — the CLI reads the brief when its current turn ends.
+///
+/// **So the axis moved from `opened` to the `pane` WORD**, and it had to: since
+/// #3203 both arms land in the same pane and open nothing, so a table still
+/// keyed on those columns would be identical in every column and would pass
+/// under any implementation at all. `reused` and `taken-over` are the two arms
+/// of `handback_pane`, and which one is written is decided by exactly the fact
+/// this test varies.
 ///
 /// The two arms differ in ONE fact — whether the worker was spawned with a task,
 /// which is what stamps `idle_since_ms` — and both panes are delivery-ready, so
-/// this test is blind to the readiness half by construction and reddens only
-/// against an implementation that dropped the idle half.
+/// this test is blind to the readiness half by construction.
 ///
-/// **The empty `rd-reuse-declined` assertion says WHICH half refused**, and it
-/// is the reason this is not just "a pane was opened": a non-idle pane never
-/// reaches the readiness test at all, so a decline row for it would mean the two
-/// conditions had been folded into one.
+/// **The empty `rd-reuse-declined` assertion says WHICH half refused**: a
+/// non-idle pane never reaches the readiness test at all, so a decline row for
+/// it would mean the two conditions had been folded into one.
 ///
 /// Both arms are walked before anything is compared, for the reason
 /// `a_pane_that_is_idle_but_not_delivery_ready_is_not_reused_for_a_handback`
 /// gives: an assert-per-arm loop evidences only the arm it stopped at.
 #[test]
-fn a_delivery_ready_pane_that_is_not_idle_is_not_reused_for_a_handback() {
-    // (idle, reused the existing pane, panes opened, decline rows naming it)
-    type Row = (bool, bool, usize, usize);
+fn a_delivery_ready_pane_that_is_not_idle_is_taken_over_rather_than_reused() {
+    // (idle, the `pane` word on the hand-back row, panes opened, decline rows
+    // naming it)
+    type Row = (bool, String, usize, usize);
     let mut observed: Vec<Row> = Vec::new();
 
     for idle in [true, false] {
@@ -6787,24 +6810,37 @@ fn a_delivery_ready_pane_that_is_not_idle_is_not_reused_for_a_handback() {
             .filter(|d| d["pane"] == json!(w.id))
             .count();
 
-        observed.push((idle, agent == w.id, opened, declined));
+        assert_eq!(
+            agent, w.id,
+            "idle={idle}: both arms must land in the pane that is already on this session — \
+             a second live pane on one worktree is #3203, and it is what the `pane` word \
+             below then tells apart"
+        );
+        let pane = handback_panes(&reg, &group)
+            .pop()
+            .unwrap_or_else(|| panic!("idle={idle}: the hand-back owes an audit row"));
+        observed.push((idle, pane, opened, declined));
     }
 
     assert_eq!(
         observed,
         vec![
-            // The control: idle AND ready is the pane that gets reused.
-            (true, true, 0, 0),
-            // Delivery-ready but MID-TURN. Not reused — the brief would land
-            // behind whatever that agent is doing — and the ZERO decline rows
-            // say WHICH half refused it: a pane that is not idle is never a
-            // readiness candidate at all, so a row here would mean the two
-            // conditions had been folded into one.
-            (false, false, 1, 0),
+            // The control: idle AND ready is the pane the reuse arm takes,
+            // cleanly, and the row says so in its own word.
+            (true, "reused".to_string(), 0, 0),
+            // Delivery-ready but MID-TURN. The reuse arm still refuses it — the
+            // brief lands behind whatever that agent is doing — so the pane is
+            // TAKEN OVER instead, which is a different word for a different
+            // thing (§5.4). The ZERO decline rows say WHICH half refused it: a
+            // pane that is not idle is never a readiness candidate at all, so a
+            // row here would mean the two conditions had been folded into one.
+            (false, "taken-over".to_string(), 0, 0),
         ],
-        "each row is (idle, reused the existing pane, panes opened, `rd-reuse-declined` rows \
-         naming it). Both panes are delivery-ready, so an implementation that dropped the idle \
-         conjunct reuses the mid-turn one and the second row's `reused` goes true."
+        "each row is (idle, the `pane` word on the `rd-handback` row, panes opened, \
+         `rd-reuse-declined` rows naming it). Both panes are delivery-ready, so an \
+         implementation that dropped the idle conjunct sends the mid-turn pane through the \
+         REUSE arm and the second row's word goes `reused`; one that dropped the take-over arm \
+         opens a pane and fails the assertion above the push."
     );
 }
 
@@ -12457,3 +12493,446 @@ fn a_cancelled_drive_does_not_leave_a_restart_mark_for_the_next_one() {
 // a test asserting the property there passes whether or not the clear exists,
 // which is a decoration, not coverage. Two such tests were written, run
 // against the mutation, found green, and deleted rather than shipped.
+// ── #3203: the driver never puts a SECOND live pane on one session ──────────
+
+/// Every live pane in `group` whose session is `session` — the population
+/// #3203 is a defect in, read off the roster an orchestrator would read.
+///
+/// Sorted, so an assertion on it is order-independent: nothing about WHICH pane
+/// the driver reached is pinned here, only how many exist.
+fn live_panes_on_session(reg: &OrchRegistry, group: &GroupId, session: &str) -> Vec<String> {
+    let list = reg.list_agents(group);
+    let mut out: Vec<String> = list
+        .as_array()
+        .expect("list_agents answers an array")
+        .iter()
+        .filter(|a| a["session"] == json!(session) && a["status"] != json!("dead"))
+        .map(|a| a["id"].as_str().unwrap_or_default().to_string())
+        .collect();
+    out.sort();
+    out
+}
+
+/// The `pane` field of every `rd-handback` row this group has written, in order
+/// (#3203).
+fn handback_panes(reg: &OrchRegistry, group: &GroupId) -> Vec<String> {
+    audit_details(reg, group, "rd-handback")
+        .iter()
+        .map(|d| d["pane"].as_str().unwrap_or("<missing>").to_string())
+        .collect()
+}
+
+/// **#3203, the defect itself.** A second hand-back arriving while the pane the
+/// FIRST one resumed is still working must land in that pane, not in a third.
+///
+/// Measured on PR #3198: two red heads inside one fix produced `rd-handback`
+/// into `w-2659` and then into `w-2660`, while `w-2657` — the orchestrator's own
+/// worker pane — was still alive. Three panes on one session, all writing one
+/// worktree; the third correctly reported that another actor was editing its
+/// worktree, and no work was lost only because two panes happened to make the
+/// same edits.
+///
+/// **What makes this red on `main` is the pane going BUSY between the two
+/// hand-backs**, and it is the whole fixture. Hand-back one reuses the pane by
+/// #1960's ordinary arm, because a freshly spawned task-less pane is idle and
+/// delivery-ready. Then the worker starts fixing, `idle_since_ms` clears, and
+/// `idle_pane_on_session`'s idle half refuses it — which is `rd_reuse_pane`
+/// answering `None`, which before #3203 fell straight through to `rd_spawn`. A
+/// fixture whose pane stayed idle throughout is GREEN under the defect: both
+/// hand-backs reuse, and the test would assert nothing.
+///
+/// The pane is made busy the way the product makes any delegate busy — its
+/// orchestrator sends it a prompt, which stamps `idle_since_ms = None` before
+/// the delivery (`mcp.rs`'s `send_prompt` arm) — rather than by reaching into
+/// the registry, so the fixture is a state the running app really produces.
+///
+/// **Four assertions, and none of them is another restated.** The pane the
+/// hand-back reached; the spawn count over that tick; how many live panes are
+/// left on the session; and the two `pane` words on the audit rows. An
+/// implementation that reached the right pane and opened one anyway fails the
+/// second; one that reached it by dropping the block filter fails
+/// `a_live_idle_pane_on_the_wrong_block_is_not_reused_for_a_handback`.
+#[test]
+fn a_second_handback_takes_over_the_working_pane_instead_of_opening_a_third() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let w = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).unwrap();
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    // A terminal and a paused group so a delivery is really admitted, plus the
+    // delivery record that makes the pane READY — hand-back one has to take
+    // #1960's clean-reuse arm, or the second hand-back is not the axis.
+    make_delivery_land(&reg, &group, &w.id, 7203);
+    make_pane_ready(&reg, 7203, true);
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+
+    // Hand-back one: CI red at HEAD_A, into the pane that is already there.
+    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    let first = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let (_pr, w1) = first.handbacks.first().cloned().expect("the drive hands back");
+    assert_eq!(
+        w1, w.id,
+        "the fixture's premise: hand-back ONE reuses the worker's own pane, so what the \
+         SECOND one does is the only thing this test varies"
+    );
+
+    // …and now that pane is mid-fix.
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(&reg, &orch.id, 7001);
+    let _ = dispatch(
+        &reg,
+        &Caller {
+            agent_id: orch.id.clone(),
+            group: group.clone(),
+            role: Role::Orchestrator,
+            role_hint: None,
+        },
+        "tools/call",
+        &json!({ "name": "send_prompt", "arguments": {
+            "agent_id": w.id.clone(), "text": "carry on with the fix" } }),
+    );
+    assert!(
+        reg.agent(&w.id).is_some_and(|a| a.idle_since_ms.is_none()),
+        "the fixture's premise: the pane is WORKING, which is what the reuse arm refuses"
+    );
+
+    // Hand-back two: the worker pushed a fix that is itself red.
+    gh.set_facts("OPEN", HEAD_B);
+    reg.set_pr_head_override(Some(HEAD_B.to_string()));
+    reg.rd_drive_group_with(&group, &gh, 20_000);
+    let before = action_count(&reg, &group, "agent-spawn");
+    let second = reg.rd_drive_group_with(&group, &gh, 30_000);
+    let (_pr, w2) = second
+        .handbacks
+        .first()
+        .cloned()
+        .unwrap_or_else(|| panic!("a second red must hand back again: {second:?}"));
+    let opened = action_count(&reg, &group, "agent-spawn") - before;
+
+    assert_eq!(
+        w2, w.id,
+        "the second hand-back opened a pane on a session that already had a live one — \
+         that is #3203: two panes writing one worktree, with nothing anywhere to say so"
+    );
+    assert_eq!(opened, 0, "…and it must have opened nothing to do it");
+    assert_eq!(
+        live_panes_on_session(&reg, &group, &session),
+        vec![w.id.clone()],
+        "the invariant: the driver never leaves two live panes on one session"
+    );
+    assert_eq!(
+        handback_panes(&reg, &group),
+        vec!["reused".to_string(), "taken-over".to_string()],
+        "the two arms are told apart on the log — a busy take-over emits no \
+         `rd-reuse-declined` row, so folding them into one word would make \"the driver \
+         typed into a working delegate\" unreadable (§5.4)"
+    );
+    assert_eq!(
+        texts_to(&reg, &group, &w.id).iter().filter(|t| t.contains("is back with you at head")).count(),
+        2,
+        "…and BOTH fix briefs really reached that pane, rather than one of them going to a \
+         pane that was never opened"
+    );
+}
+
+/// **The positive control for the take-over arm**: a session with NO live pane
+/// still spawns one (#3203).
+///
+/// Load-bearing rather than decorative. Every assertion in
+/// `a_second_handback_takes_over_the_working_pane_instead_of_opening_a_third`
+/// is satisfied by an implementation that never spawns for a hand-back at all —
+/// which would park every drive whose worker pane has died on
+/// `held(worker-unresumable)` forever. This is the row that fails under it, and
+/// it is the row that already passed BEFORE #3203, so a run where only this goes
+/// green says the take-over arm is refusing everything.
+///
+/// **The pane is made DEAD by the driver's own release, which is the production
+/// sequence rather than a convenience.** #2501 releases a worker pane once the
+/// drive has consumed its report, keeping the session — "a released pane's
+/// session is what the next round resumes into" — so hand-back, report, release,
+/// red again IS how a live drive reaches a session whose only pane is dead. Two
+/// alternatives were tried and rejected: `kill_agent` needs a Tauri `AppHandle`
+/// and answers `Err` in a headless test, leaving the pane alive and the premise
+/// false (this test's own first draft, caught by CI); and a pane with no
+/// terminal would control on `live_pane_on_session`'s pty condition instead of
+/// its liveness one, which is the condition #3203 turns on.
+#[test]
+fn a_handback_to_a_session_with_no_live_pane_still_opens_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let w = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).unwrap();
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    make_delivery_land(&reg, &group, &w.id, 7204);
+    make_pane_ready(&reg, 7204, true);
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+
+    // Round one: red at HEAD_A hands back into the pane that is there, the
+    // worker reports done, and the drive releases that pane on the tick that
+    // consumes the report (#2501) — keeping the session.
+    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    let first = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let (_pr, w1) = first.handbacks.first().cloned().expect("the drive hands back");
+    assert_eq!(w1, w.id, "round one reuses the pane that is already on the session");
+    report_as(&reg, &group, &w.id, Role::Worker, "done");
+    gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+    reg.rd_drive_group_with(&group, &gh, 20_000);
+    assert_eq!(
+        reg.agent(&w.id).map(|a| a.status == AgentStatus::Dead),
+        Some(true),
+        "the fixture's premise: the drive released its worker pane, so the session it \
+         still records has no live pane on it"
+    );
+    assert!(
+        live_panes_on_session(&reg, &group, &session).is_empty(),
+        "…and the roster agrees, which is what `live_pane_on_session` reads"
+    );
+    assert_eq!(
+        driven_worker_session(&reg, &group),
+        session,
+        "…while the drive keeps the SESSION — a release that dropped it would make the \
+         hand-back below refuse rather than spawn, and this test would pass for the \
+         wrong reason"
+    );
+
+    // Round two: red again at a new head, with nothing left to take over.
+    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    gh.set_facts("OPEN", HEAD_B);
+    reg.set_pr_head_override(Some(HEAD_B.to_string()));
+    let before = action_count(&reg, &group, "agent-spawn");
+    let handed = tick_until_handback(&reg, &group, &gh, 30_000);
+    let (_pr, agent) = handed.handbacks.first().cloned().unwrap_or_else(|| {
+        panic!("a hand-back with no pane to take over must OPEN one: {handed:?}")
+    });
+    assert_eq!(
+        action_count(&reg, &group, "agent-spawn") - before,
+        1,
+        "the take-over arm must not have swallowed the spawn — a drive whose worker pane \
+         has been released would otherwise never get another one"
+    );
+    assert_ne!(agent, w.id, "…and the pane it hands to is a new one");
+    assert_eq!(
+        handback_panes(&reg, &group),
+        vec!["reused".to_string(), "spawned".to_string()],
+        "…which the audit row says in its own word, beside round one's `reused` — the \
+         two words in one drive, which is what makes this a control rather than a \
+         second copy of the reuse test"
+    );
+}
+
+/// Tick until the drive hands back, or give up — the sequence
+/// `a_handback_to_a_session_with_no_live_pane_still_opens_one` needs after a
+/// release, where the arc back into `fix-wait` may take a tick longer than the
+/// hand-back tests that never left it.
+///
+/// Bounded and loud: four ticks, then the caller's own `expect` reports an empty
+/// `handbacks`, so a drive that stopped handing back reads as a failure rather
+/// than as a hang.
+fn tick_until_handback(
+    reg: &OrchRegistry,
+    group: &GroupId,
+    gh: &FakeGh,
+    from_ms: u64,
+) -> RdDriveReport {
+    let mut last = reg.rd_drive_group_with(group, gh, from_ms);
+    for k in 1..4u64 {
+        if !last.handbacks.is_empty() {
+            return last;
+        }
+        last = reg.rd_drive_group_with(group, gh, from_ms + k * 10_000);
+    }
+    last
+}
+
+/// **#3203's other half: the release reaches every worker pane on the session,
+/// not only the one the drive last resumed.**
+///
+/// On PR #3198 the ORIGINAL worker pane sat idle through two hand-backs and two
+/// releases. `releasable` answers per ROLE, and the worker role's release read
+/// `worker_agent` alone, so a pane a hand-back had superseded stayed alive, idle
+/// and counted against the live-delegate cap for the rest of the drive.
+///
+/// **The fixture builds the superseded pane the way the driver really produced
+/// one** — `driven`'s worker has no terminal, so a hand-back cannot reuse or
+/// take over and spawns instead, and the pane it supersedes is what is left
+/// behind. Reaching into `prior_worker_agents` would pin the release against a
+/// record shape rather than against the state the tick produces.
+///
+/// **The negative control is the pane that is NOT released**, and it is what
+/// separates this from "kill everything on the session": the barrier
+/// (`release_driven_pane` — idle, alive, bound to a terminal, not a manager) is
+/// still asked per pane, so a superseded pane that is BUSY survives. An
+/// implementation that widened the population and dropped the barrier passes the
+/// first row and fails the second.
+///
+/// **What varies the arms is whether the superseded pane has FINISHED its turn,
+/// and getting that wrong is what CI caught twice.** A pane the driver spawns is
+/// given the fix brief as its task, so it is born mid-turn and `idle_since_ms`
+/// is `None` — meaning a fixture that only withholds a `send_prompt` leaves the
+/// pane busy in BOTH arms, the barrier refuses it in both, and the loop varies
+/// nothing. So the idle arm makes the pane idle the way a real one becomes idle:
+/// it `report`s. That a SUPERSEDED worker's report is consumed and moves the
+/// drive nowhere is #1871 B2's own pinned behaviour
+/// (`a_superseded_worker_pane_is_still_intercepted_and_never_moves_the_drive`),
+/// which is what makes it usable here: it changes the pane's idleness and
+/// nothing else about the drive.
+///
+/// Both arms are walked before anything is compared, for the reason
+/// `a_pane_that_is_idle_but_not_delivery_ready_is_not_reused_for_a_handback`
+/// gives: an assert-per-arm loop evidences only the arm it stopped at.
+#[test]
+fn a_release_reaches_every_worker_pane_the_drive_owns_on_that_session() {
+    // (the superseded pane is busy, panes released, that pane is still alive)
+    type Row = (bool, usize, bool);
+    let mut observed: Vec<Row> = Vec::new();
+
+    for busy in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, _s) = driven(&reg, &repo, &gh);
+        let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+        with_pane(&reg, &orch.id, 7001);
+        reg.set_pr_head_override(Some(HEAD_A.to_string()));
+
+        // Hand-back one opens a pane.
+        gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+        let first = reg.rd_drive_group_with(&group, &gh, 10_000);
+        let (_pr, w1) = first.handbacks.first().cloned().expect("the drive hands back");
+
+        // Hand-back two supersedes it — again by spawning, for the same reason.
+        gh.set_facts("OPEN", HEAD_B);
+        reg.set_pr_head_override(Some(HEAD_B.to_string()));
+        reg.rd_drive_group_with(&group, &gh, 20_000);
+        let second = reg.rd_drive_group_with(&group, &gh, 30_000);
+        let (_pr, w2) = second.handbacks.first().cloned().expect("a second red hands back");
+        assert_ne!(w1, w2, "busy={busy}: the fixture needs two panes to have two subjects");
+        assert_eq!(
+            reg.rd_owner(&group, &w1).map(|(_pr, p)| p.current),
+            Some(false),
+            "busy={busy}: the fixture's premise — w1 is superseded and still owned"
+        );
+
+        // **The terminal is given in BOTH arms**, and that is not tidying: the
+        // barrier refuses a pane bound to none, so an arm without one fails on
+        // the barrier's third condition rather than on the population this test
+        // is about — which is how the first draft of this test read red against
+        // the fix. Turn-state is then the only thing that varies.
+        with_pane(&reg, &w1, 7301);
+        if !busy {
+            // The superseded pane finishes its turn. Consumed and inert by
+            // #1871 B2, so the only thing it changes is `idle_since_ms` — which
+            // is exactly the barrier condition this arm needs to satisfy.
+            report_as(&reg, &group, &w1, Role::Worker, "done");
+        }
+        assert_eq!(
+            reg.agent(&w1).and_then(|a| a.idle_since_ms).is_none(),
+            busy,
+            "busy={busy}: the fixture's premise — the superseded pane is mid-turn in one \
+             arm and finished in the other, and a driver-spawned pane is born mid-turn, \
+             so this is the assertion that keeps the two arms from being the same arm"
+        );
+        assert_eq!(
+            reg.rd_owner(&group, &w1).map(|(_pr, p)| p.current),
+            Some(false),
+            "busy={busy}: …and it is still SUPERSEDED either way — a report that made it \
+             current again would make this a test about the current pane"
+        );
+
+        // The current worker reports done; the drive consumes it and releases.
+        report_as(&reg, &group, &w2, Role::Worker, "done");
+        let report = reg.rd_drive_group_with(&group, &gh, 40_000);
+        let released: Vec<String> = report.released.iter().map(|(_, _, a)| a.clone()).collect();
+        assert!(
+            released.contains(&w2),
+            "busy={busy}: the CURRENT pane is released either way — that is #2501, and if it \
+             stopped happening this test would be measuring the wrong thing: {released:?}"
+        );
+        observed.push((
+            busy,
+            released.len(),
+            reg.agent(&w1).map(|a| a.status != AgentStatus::Dead).unwrap_or(false),
+        ));
+    }
+
+    assert_eq!(
+        observed,
+        vec![
+            // Idle and superseded: released alongside the current pane, so the
+            // drive leaves no pane behind on a session it has finished with.
+            (false, 2, false),
+            // Busy and superseded: the barrier refuses it, exactly as it refuses
+            // a busy CURRENT pane, and the current one still goes. Widening the
+            // population is not the same as dropping the guard.
+            (true, 1, true),
+        ],
+        "the release population is every worker pane the drive owns, filtered by the same \
+         per-pane barrier — never a blanket kill of the session"
+    );
+}
+
+/// **Both `rd_handback` call sites write the `pane` field** (#3203 × #2811 S10).
+///
+/// S10 added a SECOND caller — the restart re-hand-back, which takes no arc and
+/// spends no counter — and it builds its own `rd-handback` row rather than
+/// sharing the `fail`-route arm's. A field added to one row and not the other is
+/// exactly the drift a closed vocabulary exists to prevent, and nothing about it
+/// is a compile error: the row simply ships without the key and every reader
+/// counting take-overs silently under-counts.
+///
+/// **The two arms are the two `why` values, and each carries the `pane` word its
+/// own situation earns.** A restart took every pane with the old process, so the
+/// re-hand-back finds nothing on the session and `spawned` is the honest answer —
+/// which also makes this the one place the positive control and the second call
+/// site are the same assertion.
+///
+/// The paired `why` is asserted beside it so this cannot pass by reading the
+/// wrong row: `restart` is the arm under test, and a fixture that had somehow
+/// produced an ordinary `ci-red` hand-back would be measuring the site that was
+/// already covered.
+#[test]
+fn the_restart_re_handback_row_carries_the_pane_field_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = fix_wait_across_a_restart(dir.path(), &repo, &gh);
+
+    let before = handback_panes(&reg, &group);
+    assert_eq!(
+        before,
+        vec!["spawned".to_string()],
+        "the fixture's own first hand-back, for reference — `driven`'s worker has no \
+         terminal, so there was never a pane to reuse or take over"
+    );
+
+    let out = reg.rd_drive_group_with(&group, &gh, 50_000);
+    assert!(
+        !out.handbacks.is_empty(),
+        "the fixture's premise: the first tick after a restart re-hands-back (#2811 S10): \
+         {out:?}"
+    );
+
+    let rows = audit_details(&reg, &group, "rd-handback");
+    let row = rows.last().expect("the re-hand-back owes an audit row");
+    assert_eq!(
+        row["why"],
+        json!("restart"),
+        "the row under test must be the RESTART arm's, not the fail route's: {row}"
+    );
+    assert_eq!(
+        row["pane"],
+        json!("spawned"),
+        "S10's re-hand-back row must carry #3203's `pane` field like the other call site \
+         — a restart left no pane on the session, so `spawned` is what it earns, and a \
+         missing key here is a reader silently under-counting take-overs: {row}"
+    );
+}

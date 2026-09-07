@@ -147,8 +147,6 @@ pub fn turn_for(
     use loomux_engine::model::Delivery;
     match kind {
         Delivery::FreshKickoff | Delivery::ResumeKickoff => Turn::Kickoff(text.to_string()),
-        _ if from == super::brand::AUDIT_ACTOR => Turn::Notice(text.to_string()),
-        _ if from == COMPOSE_AUTHOR => Turn::Human(text.to_string()),
         _ => Turn::Prompt(text.to_string()),
     }
 }

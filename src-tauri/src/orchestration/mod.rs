@@ -46909,7 +46909,7 @@ impl OrchRegistry {
         // playbook for that reason until #3040 P4 (a group only got it when
         // something later re-applied its workflow, which re-renders with the
         // group live).
-        let plan_driver_note = if self.plan_driver_enabled_for(&g.repo, &g.guardrails) {
+        let plan_driver_note = if self.plan_driver_enabled(&g.id) {
             PLAN_DRIVER_NOTE.to_string()
         } else {
             String::new()

@@ -1,9 +1,9 @@
 # The plan driver (#3040)
 
-**Status: the drive runs end to end.** Contracts 1–7 are in the present tense
-because they describe code in the tree; 8 is WILL-tense, and so is every
-paragraph below marked WILL. Do not act on a WILL-tense section as though it
-described the build you are looking at.
+**Status: the drive runs end to end, and every contract below is shipped.**
+Contracts 1–9 describe code in the tree and are in the present tense. No
+WILL-tense section remains: 8 was the planner's output contract, which landed
+with P2, and 9 is the orchestrator's own, which landed with P4.
 
 **What one drive does**, stated once here because every section below assumes
 it: it spawns a planner, validates and stores the plan block that planner
@@ -279,10 +279,11 @@ misunderstood what a planner does, and quietly handing it fifteen would leave
 the misunderstanding in place while the behaviour changed underneath it. That is
 `merge_queue.max_batch`'s own argument.
 
-**`plan_review_minutes` is recorded and spent on nothing in this build.** The
-review window is P3b's, and the key lands in P3a so that the repo key, the
-record field, the tool argument and the status view are one contract rather than
-four separate landings. `drive_timeout_minutes` is the review driver's own knob,
+**`plan_review_minutes` is spent by §6b**, which is the window it declares.
+The key landed one slice ahead of its executor on purpose, so that the repo key,
+the record field, the tool argument and the status view were one contract rather
+than four separate landings — and a record written by that earlier build still
+parses against this one. `drive_timeout_minutes` is the review driver's own knob,
 **reused rather than duplicated**: it bounds the same quantity, a whole drive's
 age.
 
@@ -438,6 +439,25 @@ guarded write (queued, unclaimed, deps met) that a WIP cap refuses outright;
 spawning first would open a pane the board then declined to account for. A
 refused spawn rolls the row back to `queued` and unassigned.
 
+**Which means the row carries TWO names over its life, and every rollback has to
+know both** (#3160). The claim writes the ACTOR as the assignee —
+`upsert_task`'s claim is `assignee.unwrap_or(actor)` and the driver passes
+none — so a claimed row says `brand::AUDIT_ACTOR` until a second write, made
+once the pane exists, replaces it with the agent's id. Nothing else ever puts a
+pane's id on a driven row: `spawn_agent_bound`'s `task_id` is grounding
+metadata and explicitly not a claim on the row.
+
+The second write's failure is audited (`pd-refused`,
+`reason: slice-row-unassigned`) and does **not** unwind the spawn — a worker is
+running, and a board write is not worth its work. What it leaves is a row and a
+record that disagree about who holds the slice, and the release's rollback used
+to read that row as a stranger's, skip it, and strand it `in-progress` with
+nobody on it. So `rollback_is_ours_of` asks about both of the drive's own names.
+The widening costs nothing a human holds, and for a property of the NAMES rather
+than of the window: `AUDIT_ACTOR` is orrerix's own brand actor, never an agent
+id and never a person's, so a row carrying it was claimed by a driver and by
+nothing else.
+
 **A `report(done)` from a slice's worker hands its PR to the review driver.**
 The PR number comes from the `ref` the worker named, or — when that yields
 nothing usable — from one `gh pr list --head <branch>`. The `ref` is a HINT: it
@@ -511,10 +531,68 @@ the row exactly as `pd-held`'s does. **`pd-slice-consumed` is
 `pd-planner-consumed`'s twin** and is separate for the same reason those two
 are: "the planner spoke" and "a worker spoke" are different facts.
 
-## 8. The planner's output contract — WILL (P2/P4)
+## 8. The planner's output contract
 
-`planner.md` will state that the `orrerix-plan` block is mandatory when the
-planner was spawned by a drive, and recommended otherwise. See #3040.
+`planner.md`'s step 3 states it: a planner spawned by a plan drive must post a
+comment carrying **exactly one** fenced `orrerix-plan` block, because the drive
+spawns from that block and from nothing else. Outside a drive the block is
+recommended, not required — a plan a human reads loses nothing by carrying one,
+and the planner has no way to know at write time whether a drive will later be
+started on the issue.
+
+The full schema is §1 above, which is where `planner.md` points rather than
+restating it: a schema stated twice is a schema that drifts, and the copy in a
+role template is the one nobody re-derives.
+
+## 9. What the ORCHESTRATOR is told, and where
+
+The orchestrator's teaching is a **conditional fragment**, `{{PLAN_DRIVER}}`,
+substituted into the rendered playbook's `Planning and scheduling` section and
+empty everywhere else. Three decisions, each of which is the contract:
+
+**It is gated on the SECOND switch**, through `plan_driver_enabled` — the same
+policy reader `pd_driver_tick` uses. One reader, so the group that is TOLD it
+has a plan driver is exactly the group whose four plan tools do not answer
+`plan-driver-disabled`. Two readers of one policy is how a fragment and a gate
+drift apart, and the drift is silent in the direction that matters: prose about
+a mechanism the reader does not have.
+
+**It is a fragment rather than playbook prose**, for the reason
+`the_default_rendering_never_names_the_gate_machinery` states and
+`REVIEW_DRIVER_NOTE` and `LOCKS_NOTE` are already conditional for: everything it says
+names machinery a group without `plan_enabled` lacks — four tools, a fence
+schema, a closed hold vocabulary, and a second narrowing of where a delegate's
+`report` arrives.
+
+**It is in the PLAYBOOK and not in `orchestrator.md`**, and that is a measured
+choice rather than a preference. The resident core is paid on every model call
+and stood at 44,955 B against `RESIDENT_CORE_BUDGET`'s 45,000 when P4 began —
+45 bytes — while a playbook section is paid only when its trigger fires. The
+trigger for this one is exact and was already resident: the core's own
+`Planning & scheduling` section says to read `planning-and-scheduling` "when
+planning any work item — and when deciding whether to spawn a planner", which is
+precisely the moment `drive_plan` is the alternative being weighed. So P4 adds
+no playbook section id and no new resident stub — the pairing
+`every_playbook_section_has_a_resident_stub_naming_it` polices is satisfied by
+the pointer that was already there — and `orchestrator.md` is byte-for-byte
+what it was.
+
+**No `pre222` re-bless is owed for it.** The only template change is a
+`{{...}}` registered in `LIVE`, and both default-group pins strip registered
+keys before comparing; the goldens are unchanged (precedent #859). A group with
+no plan driver reads exactly the file it read before.
+
+**What the fragment must say, and why it is not a summary of this note.** It is
+written for the reader deciding what to do next, so it carries: when
+`drive_plan` replaces hand-briefing and when it does not (the planner-or-not
+ladder above it still decides); the four tools and their one-line contracts;
+that consent is the label and is re-read before every spawn; what the driver may
+never do, enumerated, so the orchestrator never has to wonder whether a drive
+merged something; that the BOARD is the veto and works live; that one slice
+parks without parking the plan; and §7's narrowing — a driven planner's and a
+driven slice worker's `report` are consumed rather than delivered, with the
+audit log and `plan_drive_status()` as what compensates and
+`message_orchestrator` as what is never intercepted.
 
 ## What the plan driver deliberately does not do
 

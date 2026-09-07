@@ -3479,3 +3479,127 @@ fn the_playbook_names_the_plan_drive_only_where_the_second_switch_is_on() {
         "and both fragments coexist where both switches are on"
     );
 }
+
+/// **`plan_drive_status`'s description names every state a drive can be in**
+/// (#3040 P4).
+///
+/// A tool description is the orchestrator's only account of a vocabulary it
+/// cannot otherwise see, and it is prose: nothing about adding a state, a slice
+/// state or a slice hold makes it go stale LOUDLY. This build shipped with the
+/// P3a description still saying "States are planning | plan-posted | boarding |
+/// held" and calling `awaiting-p3b` "the expected end of an `agent-ready` drive
+/// in this build" — through P3b, which added `running`, `plan-review`, five
+/// slice holds and the whole executor. Every one of those was invisible to the
+/// suite.
+///
+/// So the pin derives from the enums rather than from a list someone has to
+/// remember to extend: the next state added reddens this, and the fix is to say
+/// so in the description.
+///
+/// The first assertion is the vacuity control — a description that came back
+/// empty (a renamed tool, a listing that filtered it out) would satisfy every
+/// `contains` below by satisfying none of them, and would read as a pass if the
+/// loops were all this test had.
+#[test]
+fn the_plan_status_description_names_every_state_the_record_can_hold() {
+    use loomux_lib::orchestration::plandrive::{PdSliceHold, PlanDriveState, SliceState};
+
+    let repo = Repo::with(WORKFLOW);
+    let (reg, _d) = test_registry();
+    let (group, orch) = grouped(&reg, &repo);
+    let c = caller(&group, &orch, Role::Orchestrator);
+    let listed = dispatch(&reg, &c, "tools/list", &Value::Null).expect("tools/list");
+    let desc = listed["tools"]
+        .as_array()
+        .expect("a tools array")
+        .iter()
+        .find(|t| t["name"].as_str() == Some("plan_drive_status"))
+        .and_then(|t| t["description"].as_str())
+        .expect("plan_drive_status is listed for an orchestrator")
+        .to_string();
+
+    assert!(
+        desc.len() > 200,
+        "the control: there is a description to make claims about, {} bytes",
+        desc.len()
+    );
+
+    for s in PlanDriveState::ALL {
+        assert!(
+            desc.contains(s.as_str()),
+            "the drive state `{}` is not in plan_drive_status's description — an \
+             orchestrator reading it would meet a state the tool never named: {desc}",
+            s.as_str()
+        );
+    }
+    for s in SliceState::ALL {
+        assert!(
+            desc.contains(s.as_str()),
+            "the slice state `{}` is not named: {desc}",
+            s.as_str()
+        );
+    }
+    for h in PdSliceHold::ALL {
+        assert!(
+            desc.contains(h.as_str()),
+            "the slice hold `{}` is not named, so a parked slice would report a reason \
+             the tool's own description does not list: {desc}",
+            h.as_str()
+        );
+    }
+
+    // And the retired P3a claims are gone from BOTH plan-tool descriptions —
+    // the class of staleness this test exists for, pinned as an absence beside
+    // the presences above so a re-introduction is a red rather than a re-read.
+    for name in ["drive_plan", "plan_drive_status"] {
+        let d = listed["tools"]
+            .as_array()
+            .expect("a tools array")
+            .iter()
+            .find(|t| t["name"].as_str() == Some(name))
+            .and_then(|t| t["description"].as_str())
+            .unwrap_or_else(|| panic!("{name} is listed for an orchestrator"));
+        assert!(
+            !d.contains("P3b") && !d.to_lowercase().contains("awaiting-p3b"),
+            "{name}'s description still promises a slice that has landed: {d}"
+        );
+    }
+}
+
+/// **The tool that can refuse says so on its own description** (#3040 §6).
+///
+/// `post_issue_comment` validates a driven planner's body and refuses an
+/// invalid `orrerix-plan` block with nothing posted. A planner meeting that
+/// refusal with no warning on the tool reads it as #2815 — the fix that gave
+/// planners a way to publish at all — coming apart, and the remedy it would
+/// reach for is the one that fix exists to prevent: shelling out to
+/// `gh issue comment`. `mcp.rs`'s hook comment asserts "the tool's own
+/// description says so", and that sentence was true of nothing until P4.
+///
+/// Pinned on the ONE word a refused planner searches its instructions for, not
+/// on the phrasing around it.
+#[test]
+fn the_comment_tool_warns_the_planner_that_a_driven_plan_is_validated() {
+    let repo = Repo::with(WORKFLOW);
+    let (reg, _d) = test_registry();
+    let (group, _orch) = grouped(&reg, &repo);
+    let planner = reg
+        .spawn_agent(&group, Role::Planner, "p", "", false, None)
+        .expect("a planner to read the tool list as");
+    let c = caller(&group, &planner.id, Role::Planner);
+    let listed = dispatch(&reg, &c, "tools/list", &Value::Null).expect("tools/list");
+    let desc = listed["tools"]
+        .as_array()
+        .expect("a tools array")
+        .iter()
+        .find(|t| t["name"].as_str() == Some("post_issue_comment"))
+        .and_then(|t| t["description"].as_str())
+        .expect("post_issue_comment is on a planner's surface")
+        .to_string();
+
+    assert!(desc.len() > 200, "the control: there is a description, {} bytes", desc.len());
+    assert!(
+        desc.contains("orrerix-plan"),
+        "a planner is told THIS tool checks its plan block, and refuses: {desc}"
+    );
+}

@@ -11946,14 +11946,25 @@ fn a_fix_wait_drive_left_by_a_restart_is_handed_back_again() {
          about S10"
     );
 
+    // **The whole rd-* trail, not just the hand-backs.** A re-brief that was
+    // DECIDED and then failed to reach the worker emits `rd-refused` and a hold
+    // rather than `rd-handback`, and a message quoting only the hand-backs
+    // reports that as "nothing happened" — which is the one reading that sends
+    // the next person looking in the wrong place.
+    let trail: Vec<(String, serde_json::Value)> = reg
+        .audit_log(&group)
+        .into_iter()
+        .filter(|e| e.action.starts_with("rd-"))
+        .map(|e| (e.action, e.detail))
+        .collect();
     let handbacks = audit_details(&reg, &group, "rd-handback");
     let restart: Vec<_> =
         handbacks.iter().filter(|d| d["why"] == json!("restart")).collect();
     assert_eq!(
         restart.len(),
         1,
-        "the first tick after a restart must re-brief the worker it was waiting on: \
-         {handbacks:?}"
+        "the first tick after a restart must re-brief the worker it was waiting on. \
+         The whole driver trail for this group: {trail:#?}"
     );
     assert!(
         !restart[0]["agent"].as_str().unwrap_or_default().is_empty(),

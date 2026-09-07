@@ -548,6 +548,116 @@ pub fn transition(from: DriveState, to: DriveState) -> Result<DriveState, Invali
     }
 }
 
+/// **The two reasons whose line can repeat WORD FOR WORD and still be news, so
+/// they are never suppressed** (#3040 N1; narrowed by rev-final round 3).
+///
+/// Since the key digests the rendered line, an interpolated fact that changed —
+/// a different refusal, a moved roster — already makes a different key. What
+/// this covers is the residue that survives that: `state-stalled` and
+/// `drive-stalled` report a duration ROUNDED to minutes, so two consecutive
+/// holds really can render identical text ("It was in ci-wait for 2h 30m")
+/// while meaning that the drive sat out its whole bound a second time. There
+/// the identical line is not a repeat; it is the same sentence about a new
+/// fact, and no digest can tell those apart.
+///
+/// **It is a backstop, and it is deliberately not the mechanism.** #3040 N1's
+/// first attempt made this list the whole answer — exempt the reasons whose
+/// line carries a duration — and rev-final found the same class one field over,
+/// on the three reasons whose line carries a refusal. Enumerating
+/// interpolations is that bug with a longer list; the digest in [`hold_key`] is
+/// what generalises, and this stays for the one case a digest structurally
+/// cannot see.
+///
+/// Named as a closed match over the enum rather than as a `matches!` on the
+/// two, so a sixteenth reason has to decide. The question it must answer is
+/// narrow now: *can this line render identically while meaning something new?*
+/// Anything a reader could tell apart by looking is already handled.
+pub fn repeat_carries_new_information(reason: HeldReason) -> bool {
+    match reason {
+        HeldReason::StateStalled | HeldReason::DriveStalled => true,
+        HeldReason::Escalate
+        | HeldReason::ReviewLimit
+        | HeldReason::CiLimit
+        | HeldReason::RebaseLimit
+        | HeldReason::LaneStalled
+        | HeldReason::FixStalled
+        | HeldReason::RoutingUnaccountable
+        | HeldReason::GateUnreadable
+        | HeldReason::WorkerBlocked
+        | HeldReason::WorkerUnresumable
+        | HeldReason::CapRefused
+        | HeldReason::CapFull
+        | HeldReason::Messaged => false,
+    }
+}
+
+/// **A stable digest of a notice, for [`hold_key`]** — FNV-1a, written here
+/// rather than reached for.
+///
+/// `DefaultHasher` is the obvious call and is wrong for this: the key is
+/// PERSISTED in `review_drives.json`, and std makes no promise that its hash is
+/// stable across processes or builds, so a restart could silently re-announce
+/// or (worse, if it collided differently) silently suppress. This is fifteen
+/// lines, deterministic by construction, and depends on nothing — which also
+/// keeps `src-tauri` clear of the getrandom family CLAUDE.md bans.
+///
+/// It is a digest and not a checksum: collisions are possible and their cost is
+/// bounded at one suppressed line, the same cost the key already carries when
+/// two holds genuinely are identical.
+fn notice_digest(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    h
+}
+
+/// **What makes two holds the same hold** (#3040 N1): the reason, the head it
+/// fired at, the counters the drive had spent — and a digest of the LINE the
+/// drive is about to send.
+///
+/// **The line is in the key because the structured fields are not the whole of
+/// what a notice says** (rev-final round 3). `held_notice` interpolates facts no
+/// tuple here models: `HeldFacts::refusal` on `worker-unresumable`,
+/// `cap-refused` and `cap-full` — which is #1961's whole point, the observation
+/// rather than the diagnosis — and those three reasons spend no counter and need
+/// no push, so head and counters are exactly the two things that do NOT move
+/// across such a repeat. Keyed on the tuple alone, a hand-back that failed with
+/// `unknown block "worker-adv"` and then with `Invalid session ID` announced
+/// once and audited the second, and a `cap-refused` repeat suppressed the
+/// CURRENT live-delegate roster — the list its own remedy tells the
+/// orchestrator to pick a kill target from. The tick already knows the
+/// difference (`rd_handback` renders `second time: {why}` when it does NOT),
+/// so the key was the only reader that could not see it.
+///
+/// **Enumerating the interpolations instead would be the same bug with a longer
+/// list.** #3040 N1's first attempt exempted the two reasons whose line carries
+/// a duration; this finding is the same class one field over. A digest of the
+/// rendered line generalises over every interpolation there is and over every
+/// one a sixteenth reason adds, with no list to keep in step.
+///
+/// The structured fields stay beside it, unhashed, because the audit row and a
+/// human reading `review_drives.json` want a key they can read — and because a
+/// digest alone would make a prose edit to a notice look like a new hold on
+/// every parked drive at once, where the fields say plainly that nothing about
+/// the DRIVE changed.
+///
+/// One string rather than a tuple so the entry persists it as one JSON value an
+/// older build round-trips through `extra` untouched (§11.2).
+pub fn hold_key(reason: HeldReason, head: &str, counters: &Counters, notice: &str) -> String {
+    format!(
+        "{}|{}|{}|{}|{}|{}|{:016x}",
+        reason.as_str(),
+        head,
+        counters.review_rounds,
+        counters.ci_attempts,
+        counters.rebase_attempts,
+        counters.body_only_grace,
+        notice_digest(notice),
+    )
+}
+
 // ── §2.3 the counters, and the bounds they run against ──────────────────────
 //
 // INVARIANT 9 in `templates/orchestrator.md` reads: *three CI attempts, three
@@ -1963,6 +2073,53 @@ pub struct DriveEntry {
     /// starvation already excluded — see that field.
     #[serde(default)]
     pub held_after_ms: u64,
+    /// **The key of the last hold this entry ANNOUNCED** (#3040 N1) — the
+    /// reason, the head and the counters it was spent at, as
+    /// [`hold_key`] renders them.
+    ///
+    /// A hold can only ever repeat after a resume: `transition` refuses a
+    /// `held` -> `held` self-arc, so the drive must come back through arc 11
+    /// and park again. That is exactly the shape the notice census found —
+    /// three `worker-unresumable` holds on one PR, each preceded by its own
+    /// `rd-resumed` — and where the resume changed nothing the drive can
+    /// observe (the same rendered line at the same reason, head and
+    /// counters), the second line
+    /// tells the orchestrator nothing the first did not.
+    ///
+    /// **"Nothing it can observe" is the RENDERED LINE, not the tuple**
+    /// (rev-final round 3). The key digests the notice, so an interpolated
+    /// fact no field here models — `HeldFacts::refusal` on
+    /// `worker-unresumable`, `cap-refused` and `cap-full`, which is #1961's
+    /// observation rather than a diagnosis — changes the key and announces.
+    /// Those three spend no counter and need no push, so head and counters are
+    /// exactly the two things that do not move across such a repeat; keyed on
+    /// the tuple alone, a hand-back that failed differently the second time
+    /// said nothing at all.
+    ///
+    /// **One exemption survives that**, and only one:
+    /// [`repeat_carries_new_information`] names the two reasons whose line can
+    /// render WORD FOR WORD the same and still be news, because the duration
+    /// in it is rounded to minutes.
+    ///
+    /// **The head is in the key and is what makes the suppression safe.** A
+    /// resume after the worker pushed is a hold about a different revision, so
+    /// it announces; that is the case an orchestrator most needs to see, and
+    /// it is the one a key of (pr, reason) alone would swallow.
+    ///
+    /// **The counter VALUES cannot see a spent round on their own**, which is
+    /// why [`DriveEntry::rearm_hold_notice`] exists: `reset_counters: true`
+    /// puts `review_rounds` back to zero and the next `review-limit` hold
+    /// fires at the same bound, so the key would read identical across a round
+    /// the orchestrator paid for. `drive_review` clears this on a resetting
+    /// resume, and the hold is announced again.
+    ///
+    /// Absent is the resting state, so it is not serialized when absent —
+    /// `owed_notice`'s reason, unchanged. An older build reads it as an
+    /// unknown key into `extra` and writes it back verbatim (§11.2), and a
+    /// build that predates it simply announces every hold, which is the
+    /// pre-#3040 behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_hold_key: Option<String>,
     /// Preserved unknown fields — see [`ReviewDrivesState`].
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -2003,8 +2160,46 @@ impl DriveEntry {
             starved_state_ms: 0,
             held_from: None,
             held_after_ms: 0,
+            last_hold_key: None,
             extra: BTreeMap::new(),
         }
+    }
+
+    /// **Announce this hold, or say it repeats one already announced**
+    /// (#3040 N1) — the whole of the dedup decision, on the entry that owns
+    /// the record, so the tick cannot get half of it right.
+    ///
+    /// Answers `true` when the notice is to be delivered, and stamps the key
+    /// as it does. Answers `false` when this drive already announced a hold
+    /// with this exact key and nothing it can observe has changed since — the
+    /// tick then writes `rd-hold-repeated` instead of a line into the pane.
+    ///
+    /// **It stamps on the announce and not on the hold**, so a notice the
+    /// caller decides not to build cannot silence the next one. See
+    /// [`last_hold_key`](DriveEntry::last_hold_key) for why the key is what it
+    /// is — it digests the LINE, so any fact the notice interpolates is in it —
+    /// and [`repeat_carries_new_information`] for the two reasons this never
+    /// suppresses even when the line really is identical.
+    pub fn announce_hold(&mut self, reason: HeldReason, notice: &str) -> bool {
+        let key = hold_key(reason, &self.head, &self.counters, notice);
+        // **The stamp happens whatever the answer**, so the NEXT hold compares
+        // against the one that really just fired rather than against an older
+        // one a time-bound hold happened to skip past.
+        let seen = self.last_hold_key.as_deref() == Some(key.as_str());
+        self.last_hold_key = Some(key);
+        !seen || repeat_carries_new_information(reason)
+    }
+
+    /// **Forget which hold was last announced, so the next one is** (#3040
+    /// N1) — `drive_review(reset_counters: true)`, and nothing else.
+    ///
+    /// The counters in the key cannot see this on their own: a reset puts
+    /// `review_rounds` back to zero and the next `review-limit` hold fires at
+    /// the same bound, so the key would read identical across a round the
+    /// orchestrator deliberately paid for. A plain resume is left alone on
+    /// purpose — that is the repeat this exists to suppress.
+    pub fn rearm_hold_notice(&mut self) {
+        self.last_hold_key = None;
     }
 
     pub fn state(&self) -> DriveState {
@@ -4240,6 +4435,142 @@ fn minutes_ms(minutes: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`hold_key` stays reason-blind, so the exception cannot migrate into
+    /// it** (rev-std round 2 premortem).
+    ///
+    /// The suppression is decided in two places that must stay separate: the
+    /// key says whether two holds are the same hold, and
+    /// [`repeat_carries_new_information`] says whether sameness implies
+    /// silence. Fold the exception into the KEY instead — a nonce, a clock, a
+    /// per-reason discriminator for the two — and every one of this module's
+    /// other tests still passes: the cap-repeat test still dedups, the
+    /// time-bound test still announces, and it announces for the wrong reason,
+    /// with the mutation surface moved somewhere nothing reads.
+    ///
+    /// So this pins the property that makes the split real: the key is a pure
+    /// function of what it is handed. Two calls with identical inputs are
+    /// identical for EVERY reason, the two exceptions included — and the
+    /// discriminating half is that a key still VARIES on each input it is
+    /// documented to carry, or "always equal" would satisfy the first half.
+    #[test]
+    fn the_hold_key_is_a_pure_function_of_its_inputs_for_every_reason() {
+        let head_a = "aa11bb22cc33dd44";
+        let head_b = "bb22cc33dd44ee55";
+        let c0 = Counters::default();
+        let c1 = Counters { review_rounds: 1, ..Counters::default() };
+        let n0 = "HELD — something";
+        let n1 = "HELD — something else";
+        for r in HeldReason::ALL {
+            assert_eq!(
+                hold_key(r, head_a, &c0, n0),
+                hold_key(r, head_a, &c0, n0),
+                "{}: the key must not carry a nonce or a clock — the exemption lives in \
+                 repeat_carries_new_information, never here",
+                r.as_str()
+            );
+            assert_ne!(
+                hold_key(r, head_a, &c0, n0),
+                hold_key(r, head_b, &c0, n0),
+                "{}: …and it must still vary with the head, or the first assertion is \
+                 satisfied by a constant",
+                r.as_str()
+            );
+            assert_ne!(
+                hold_key(r, head_a, &c0, n0),
+                hold_key(r, head_a, &c1, n0),
+                "{}: …and with the counters spent",
+                r.as_str()
+            );
+            // **The line itself** (rev-final round 3). Everything a notice
+            // interpolates that no field above models — the refusal above all —
+            // reaches the key only through this, so a key that ignored the
+            // notice would suppress a hold whose diagnosis had changed.
+            assert_ne!(
+                hold_key(r, head_a, &c0, n0),
+                hold_key(r, head_a, &c0, n1),
+                "{}: …and with the LINE, which is the only term that can see a changed \
+                 refusal, a moved roster, or anything a future arm interpolates",
+                r.as_str()
+            );
+        }
+        // The digest is content-addressed and not positional: two different
+        // strings of the same length must not collide by construction, and the
+        // same string must digest the same way twice. (A digest CAN collide;
+        // what this forbids is a stub that ignores its input or hashes only a
+        // length.)
+        assert_ne!(notice_digest("abcd"), notice_digest("abce"));
+        assert_eq!(notice_digest("abcd"), notice_digest("abcd"));
+        assert_ne!(notice_digest(""), notice_digest("a"));
+
+        // The surviving exemption, stated as a SET rather than as a list of
+        // calls: exactly the two rounded-duration reasons, so a sixteenth
+        // reason folded in silently fails here as well as at the match.
+        //
+        // Sorted on both sides deliberately. The set is the property; the
+        // order is `HeldReason::ALL`'s, which puts `drive-stalled` first and is
+        // no part of what this asserts — pinning it would make a reordering of
+        // that array read as an exemption changing.
+        let mut exempt: Vec<&str> = HeldReason::ALL
+            .into_iter()
+            .filter(|r| repeat_carries_new_information(*r))
+            .map(|r| r.as_str())
+            .collect();
+        exempt.sort_unstable();
+        let mut want = vec!["state-stalled", "drive-stalled"];
+        want.sort_unstable();
+        assert_eq!(exempt, want, "{exempt:?}");
+    }
+
+    /// **A repeat whose REFUSAL changed is a different hold** (rev-final round
+    /// 3) — the finding that the duration exemption was the right class on the
+    /// wrong axis.
+    ///
+    /// `worker-unresumable`, `cap-refused` and `cap-full` interpolate
+    /// `HeldFacts::refusal`, which is #1961's observation rather than a
+    /// diagnosis: `unknown block "worker-adv"` and `Invalid session ID` send an
+    /// orchestrator to different places. None of them spends a counter and none
+    /// needs a push, so head and counters are exactly what does NOT move across
+    /// such a repeat — and before the key digested the line, the second
+    /// diagnosis reached no pane at all.
+    ///
+    /// **The tuple half is asserted equal**, or this test would pass under a key
+    /// that happened to differ for some other reason and would prove nothing
+    /// about the digest.
+    #[test]
+    fn a_repeat_whose_refusal_changed_is_not_the_same_hold() {
+        let head = "aa11bb22cc33dd44";
+        let c = Counters::default();
+        for r in [HeldReason::WorkerUnresumable, HeldReason::CapRefused, HeldReason::CapFull] {
+            let facts = |refusal: &str| crate::rddrive::HeldFacts {
+                head: head.to_string(),
+                refusal: refusal.to_string(),
+                ..crate::rddrive::HeldFacts::default()
+            };
+            let n1 = crate::rddrive::held_notice(1758, r, &facts("unknown block \"worker-adv\""));
+            let n2 = crate::rddrive::held_notice(1758, r, &facts("Invalid session ID"));
+            assert_ne!(n1, n2, "{}: the fixture's premise — the LINE differs", r.as_str());
+
+            let k1 = hold_key(r, head, &c, &n1);
+            let k2 = hold_key(r, head, &c, &n2);
+            assert_ne!(
+                k1, k2,
+                "{}: a changed refusal must be a changed key, or the second diagnosis is \
+                 suppressed and the orchestrator is sent after the first one",
+                r.as_str()
+            );
+            // …and the discriminator: everything the OLD key looked at is
+            // identical across the pair, so the digest is what did the work.
+            let tuple = |k: &str| k.rsplit_once('|').map(|(head, _)| head.to_string());
+            assert_eq!(
+                tuple(&k1),
+                tuple(&k2),
+                "{}: same reason, same head, same counters — this pair is exactly the one \
+                 the tuple-only key could not tell apart",
+                r.as_str()
+            );
+        }
+    }
 
     // ── §2.1 the closed state enum ──────────────────────────────────────────
 

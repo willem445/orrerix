@@ -236,7 +236,7 @@ impl DriveState {
 /// question, and the reason travels in the notice and the audit line rather
 /// than being inferred from which counter happens to sit at its bound.
 ///
-/// Fifteen reasons. With `satisfied` and `cancelled` that is §2.2's seventeen
+/// Sixteen reasons. With `satisfied` and `cancelled` that is §2.2's eighteen
 /// exits back to the LLM orchestrator, and [`HeldReason::ALL`] is what makes
 /// that count checkable rather than asserted.
 ///
@@ -376,12 +376,44 @@ pub enum HeldReason {
     /// intercepted; the delegate's own line arrives by its own path and this
     /// hold is the routing fact beside it).
     Messaged,
+    /// **The account behind a pane this drive owns is out of budget** (#2811
+    /// S5b) — the provider printed its refusal and the pane stopped.
+    ///
+    /// Its own reason rather than [`LaneStalled`](HeldReason::LaneStalled),
+    /// which is what used to catch it, and the argument is what the
+    /// orchestrator LEARNS and what it costs to learn it. `lane-stalled` is a
+    /// sixty-minute timeout measured from the brief, so a provider outage was
+    /// reported an hour late, once per affected drive, with a hold apiece and
+    /// a remedy — "read that pane" — that does not work: nothing in the pane
+    /// clears an exhausted account. This fires on the NEXT TICK, names the
+    /// provider, and carries the remedy that does work (raise the key's limit,
+    /// add credits, or point the block at a different `model:`).
+    ///
+    /// **It spends nothing.** No round, no CI attempt, no lane timeout — the
+    /// panes are not slow, they are stopped, and charging a counter for a
+    /// vendor's billing state would make a drive that survived an outage look
+    /// like one that had burned its budget. That is why the arm sits above the
+    /// age and per-state backstops in [`decide`] rather than beside the other
+    /// waits: every bound below it is measuring a wait that is not this drive's
+    /// fault and cannot be shortened by anything the driver does.
+    ///
+    /// **One hold per affected drive, but ONE notice for all of them.** A
+    /// provider limit stops every pane on that provider at once, so N drives
+    /// hold on one cause with one remedy; N identical lines would be N times
+    /// the orchestrator's attention for one action. The per-drive `rd-held`
+    /// row is still written for each — §5.4 is a record of what happened —
+    /// and the aggregation is the TICK's, in `rdtick`, not this enum's.
+    ///
+    /// The detection is not the driver's either: it is the attention scan's
+    /// [`crate::providerlimit`] table, read off the pane's own text, which is
+    /// the one pane-text classifier (#2811 S5a).
+    ProviderLimit,
 }
 
 impl HeldReason {
     /// Every reason, so a caller — or a test counting §2.2's exits — can
     /// enumerate them without matching on the enum. Order is §2.2's table.
-    pub const ALL: [HeldReason; 15] = [
+    pub const ALL: [HeldReason; 16] = [
         HeldReason::Escalate,
         HeldReason::ReviewLimit,
         HeldReason::CiLimit,
@@ -397,6 +429,7 @@ impl HeldReason {
         HeldReason::CapRefused,
         HeldReason::CapFull,
         HeldReason::Messaged,
+        HeldReason::ProviderLimit,
     ];
 
     /// The wire/audit spelling — the same string serde writes, and the detail
@@ -418,6 +451,7 @@ impl HeldReason {
             HeldReason::CapRefused => "cap-refused",
             HeldReason::CapFull => "cap-full",
             HeldReason::Messaged => "messaged",
+            HeldReason::ProviderLimit => "provider-limit",
         }
     }
 
@@ -439,6 +473,7 @@ impl HeldReason {
             "cap-refused" => Some(HeldReason::CapRefused),
             "cap-full" => Some(HeldReason::CapFull),
             "messaged" => Some(HeldReason::Messaged),
+            "provider-limit" => Some(HeldReason::ProviderLimit),
             _ => None,
         }
     }
@@ -3260,6 +3295,24 @@ pub struct DriveFacts {
     /// (§7). Its own line was delivered unchanged, by its own arm; this is the
     /// routing fact beside it.
     pub messaged: bool,
+    /// **A pane this drive owns is stopped on a provider's spend/usage
+    /// refusal** (#2811 S5b) — the [`crate::providerlimit`] provider id, or
+    /// `None` when no owned pane is showing one.
+    ///
+    /// A DRIVE-level fact rather than a per-[`LaneFact`] one, and that is a
+    /// departure from plan-2504's wording ("`LaneFact::provider_limited`")
+    /// argued in `doc/design/review-driver.md`: a drive in `fix-wait` owns a
+    /// WORKER pane and no open lane at all, and that is precisely a drive the
+    /// hold must cover. A per-lane field cannot see it. The tick unions every
+    /// pane the drive owns — lanes and worker alike — and reports the provider,
+    /// which is also the key the notice is aggregated on.
+    ///
+    /// **`None` is "no owned pane is showing one", including "we could not
+    /// look"**, and the fail direction is the same one `pr_open` takes: a drive
+    /// is never held on a reading orrerix could not complete. The cost of a
+    /// missed detection is the pre-#2811 sixty-minute lane stall; the cost of a
+    /// false one is N drives parked on a provider that is fine.
+    pub provider_limited: Option<String>,
 }
 
 /// What the tick should do with one entry, this tick.
@@ -3620,6 +3673,27 @@ pub fn decide(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> D
     }
     if facts.messaged {
         return DriveStep::held(HeldReason::Messaged);
+    }
+    // **A provider outage outranks every bound below it** (#2811 S5b), and the
+    // placement is the whole of "no lane timeout and no round spent".
+    //
+    // Everything from the age backstop down is measuring a WAIT. When the
+    // account behind this drive's panes is out of budget those waits are not
+    // measuring anything about the drive: the panes are not slow, they are
+    // stopped, and no bound the repo can configure makes a vendor's billing
+    // resolve sooner. Letting `drive-stalled`, `state-stalled`, `lane-stalled`
+    // or `fix-stalled` answer first would report a timeout whose remedy ("read
+    // that pane") does not work, an hour late, once per affected drive — which
+    // is exactly the measured behaviour #2811 was filed for.
+    //
+    // Above them, and below `messaged`, because a delegate that actually spoke
+    // has said something specific and this has not. It spends no counter for
+    // the same reason it outranks the bounds: a drive that survived an outage
+    // must not come out of it looking like one that had burned its budget.
+    if let Some(provider) = facts.provider_limited.as_deref() {
+        if !provider.trim().is_empty() {
+            return DriveStep::held(HeldReason::ProviderLimit);
+        }
     }
     // **The bounds are clamped HERE, on the values actually read.** §2.3's
     // ranges are a capability boundary, not input hygiene: a repo's `driver:`
@@ -4714,7 +4788,7 @@ mod tests {
 
     #[test]
     fn the_held_reasons_are_the_notes_fifteen() {
-        assert_eq!(HeldReason::ALL.len(), 15);
+        assert_eq!(HeldReason::ALL.len(), 16);
         // §2.2: "There are **seventeen**" exits back to the LLM orchestrator —
         // the fifteen holds plus `satisfied` and `cancelled`.
         let exits =
@@ -5853,6 +5927,7 @@ mod tests {
             worker: WorkerSignal::Silent,
             gate: GateOutcome::NotEvaluated,
             messaged: false,
+            provider_limited: None,
         }
     }
 

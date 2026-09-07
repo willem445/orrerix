@@ -88,6 +88,7 @@ fn facts_at(head: &str) -> DriveFacts {
         worker: WorkerSignal::Silent,
         gate: GateOutcome::NotEvaluated,
         messaged: false,
+        provider_limited: None,
     }
 }
 

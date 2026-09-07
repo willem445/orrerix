@@ -2855,6 +2855,26 @@ impl OrchRegistry {
             },
             gate,
             messaged: signal.messaged,
+            // #2811 S5b: the union over every pane this drive owns — lanes
+            // AND the worker — which is why the fact is drive-level and not
+            // on `LaneFact`: a drive in `fix-wait` owns a worker pane and no
+            // open lane at all, and that is exactly a drive the hold covers.
+            //
+            // Read from the attention scan's published map, never by reading
+            // pane text here: plan-2504 keeps ONE pane-text classifier, and a
+            // second would be a second answer that can disagree with the chip
+            // the human is looking at.
+            //
+            // `prior_*` agents come with `owned_panes()` and are harmless:
+            // a pane that is gone is not in the map, so it contributes
+            // nothing, and one still alive on a limited provider is a pane
+            // this drive really did leave stopped.
+            provider_limited: state
+                .entry(pr)
+                .map(|e| e.owned_panes())
+                .unwrap_or_default()
+                .into_iter()
+                .find_map(|(agent, _)| self.provider_limit_for_agent(&agent)),
         };
         let mut out = RdOut::new(pr);
         out.backoff = obs.runner_failed;

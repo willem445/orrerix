@@ -12650,9 +12650,16 @@ fn a_second_handback_takes_over_the_working_pane_instead_of_opening_a_third() {
 /// it is the row that already passed BEFORE #3203, so a run where only this goes
 /// green says the take-over arm is refusing everything.
 ///
-/// The pane is genuinely gone rather than merely un-typeable: `kill_agent`
-/// through the registry, so `live_pane_on_session`'s `status != Dead` filter is
-/// what excludes it.
+/// **The pane is made DEAD by the driver's own release, which is the production
+/// sequence rather than a convenience.** #2501 releases a worker pane once the
+/// drive has consumed its report, keeping the session — "a released pane's
+/// session is what the next round resumes into" — so hand-back, report, release,
+/// red again IS how a live drive reaches a session whose only pane is dead. Two
+/// alternatives were tried and rejected: `kill_agent` needs a Tauri `AppHandle`
+/// and answers `Err` in a headless test, leaving the pane alive and the premise
+/// false (this test's own first draft, caught by CI); and a pane with no
+/// terminal would control on `live_pane_on_session`'s pty condition instead of
+/// its liveness one, which is the condition #3203 turns on.
 #[test]
 fn a_handback_to_a_session_with_no_live_pane_still_opens_one() {
     let dir = tempfile::tempdir().unwrap();
@@ -12668,21 +12675,40 @@ fn a_handback_to_a_session_with_no_live_pane_still_opens_one() {
     assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
     reg.set_pr_head_override(Some(HEAD_A.to_string()));
 
-    // The pane the drive would have taken over is gone.
-    let _ = reg.kill_agent(&w.id);
+    // Round one: red at HEAD_A hands back into the pane that is there, the
+    // worker reports done, and the drive releases that pane on the tick that
+    // consumes the report (#2501) — keeping the session.
+    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    let first = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let (_pr, w1) = first.handbacks.first().cloned().expect("the drive hands back");
+    assert_eq!(w1, w.id, "round one reuses the pane that is already on the session");
+    report_as(&reg, &group, &w.id, Role::Worker, "done");
+    gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+    reg.rd_drive_group_with(&group, &gh, 20_000);
     assert_eq!(
         reg.agent(&w.id).map(|a| a.status == AgentStatus::Dead),
         Some(true),
-        "the fixture's premise: there is no live pane on this session"
+        "the fixture's premise: the drive released its worker pane, so the session it \
+         still records has no live pane on it"
     );
     assert!(
         live_panes_on_session(&reg, &group, &session).is_empty(),
-        "…and the roster agrees"
+        "…and the roster agrees, which is what `live_pane_on_session` reads"
+    );
+    assert_eq!(
+        driven_worker_session(&reg, &group),
+        session,
+        "…while the drive keeps the SESSION — a release that dropped it would make the \
+         hand-back below refuse rather than spawn, and this test would pass for the \
+         wrong reason"
     );
 
+    // Round two: red again at a new head, with nothing left to take over.
     gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    gh.set_facts("OPEN", HEAD_B);
+    reg.set_pr_head_override(Some(HEAD_B.to_string()));
     let before = action_count(&reg, &group, "agent-spawn");
-    let handed = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let handed = tick_until_handback(&reg, &group, &gh, 30_000);
     let (_pr, agent) = handed.handbacks.first().cloned().unwrap_or_else(|| {
         panic!("a hand-back with no pane to take over must OPEN one: {handed:?}")
     });
@@ -12690,14 +12716,40 @@ fn a_handback_to_a_session_with_no_live_pane_still_opens_one() {
         action_count(&reg, &group, "agent-spawn") - before,
         1,
         "the take-over arm must not have swallowed the spawn — a drive whose worker pane \
-         died would otherwise never get another one"
+         has been released would otherwise never get another one"
     );
     assert_ne!(agent, w.id, "…and the pane it hands to is a new one");
     assert_eq!(
         handback_panes(&reg, &group),
-        vec!["spawned".to_string()],
-        "…which the audit row says in its own word"
+        vec!["reused".to_string(), "spawned".to_string()],
+        "…which the audit row says in its own word, beside round one's `reused` — the \
+         two words in one drive, which is what makes this a control rather than a \
+         second copy of the reuse test"
     );
+}
+
+/// Tick until the drive hands back, or give up — the sequence
+/// `a_handback_to_a_session_with_no_live_pane_still_opens_one` needs after a
+/// release, where the arc back into `fix-wait` may take a tick longer than the
+/// hand-back tests that never left it.
+///
+/// Bounded and loud: four ticks, then the caller's own `expect` reports an empty
+/// `handbacks`, so a drive that stopped handing back reads as a failure rather
+/// than as a hang.
+fn tick_until_handback(
+    reg: &OrchRegistry,
+    group: &GroupId,
+    gh: &FakeGh,
+    from_ms: u64,
+) -> RdDriveReport {
+    let mut last = reg.rd_drive_group_with(group, gh, from_ms);
+    for k in 1..4u64 {
+        if !last.handbacks.is_empty() {
+            return last;
+        }
+        last = reg.rd_drive_group_with(group, gh, from_ms + k * 10_000);
+    }
+    last
 }
 
 /// **#3203's other half: the release reaches every worker pane on the session,
@@ -12758,9 +12810,13 @@ fn a_release_reaches_every_worker_pane_the_drive_owns_on_that_session() {
             "busy={busy}: the fixture's premise — w1 is superseded and still owned"
         );
 
-        // The superseded pane's state is the only thing this loop varies.
+        // **The terminal is given in BOTH arms**, and that is not tidying: the
+        // barrier refuses a pane bound to none, so an arm without one fails on
+        // the barrier's third condition rather than on the population this test
+        // is about — which is how the first draft of this test read red against
+        // the fix. `busy` is then the only thing that varies.
+        with_pane(&reg, &w1, 7301);
         if busy {
-            with_pane(&reg, &w1, 7301);
             let _ = dispatch(
                 &reg,
                 &Caller {

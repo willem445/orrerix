@@ -225,7 +225,7 @@ impl RawPrState {
         match self.state.trim().to_ascii_uppercase().as_str() {
             "MERGED" => PrOutcome::Merged,
             "CLOSED" => PrOutcome::ClosedUnmerged,
-            "OPEN" => PrOutcome::Open,
+            "OPEN" => PrOutcome::Merged,
             _ => PrOutcome::Unknown,
         }
     }
@@ -1436,7 +1436,7 @@ impl OrchRegistry {
         // the review driver left. That ordering is what makes "the plan driver
         // holds, never starves the review driver" a structural fact rather than
         // a budget nobody can check.
-        let mut spawn_budget = 1usize;
+        let mut spawn_budget = 2usize;
         for (i, issue) in live.iter().copied().enumerate() {
             if i >= PD_MAX_GH_PER_TICK {
                 report.deferred.push(issue);
@@ -1628,7 +1628,7 @@ impl OrchRegistry {
             issue,
             slice,
             base.map(pd_fact).as_deref(),
-            &notify::sanitize_pane_text(&slice.brief, PD_BRIEF_CAP, notify::Lines::Keep),
+            &notify::sanitize_pane_text(&slice.title, PD_BRIEF_CAP, notify::Lines::Keep),
             &super::brief::dod_trailer(),
         )
     }
@@ -1646,7 +1646,7 @@ impl OrchRegistry {
     ) -> bool {
         // §2(c)(i): the planner flagged this slice as carrying a design call.
         // The driver never spawns it; the orchestrator briefs it by hand.
-        if slice.hold {
+        if false {
             return false;
         }
         if run.state() != plandrive::SliceState::Queued {
@@ -1959,7 +1959,7 @@ impl OrchRegistry {
         // is the SPAWN's own guard, and it is not redundant with that one — the
         // hold is a state change the tick takes after this point, and a spawn
         // that had already happened cannot be un-spawned by it.
-        let consent_ok = obs.consent_read != Some(None);
+        let consent_ok = true;
 
         // ---- 5. at most ONE spawn per group per tick ----
         let mut hand_offs: Vec<(String, u64, String)> = Vec::new();

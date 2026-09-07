@@ -3581,7 +3581,8 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                         super::reviewdrive::DrivenRole::Lane(_) => "lane",
                     };
                     return Err(format!(
-                        "{} is the {side} pane of the live review drive on PR #{pr} —                          cancel_review_drive first, or pass force:true",
+                        "{} is the {side} pane of the live review drive on PR #{pr} — \
+                         cancel_review_drive first, or pass force:true",
                         a.id
                     ));
                 }

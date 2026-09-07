@@ -885,13 +885,22 @@ test("the DOM projection draws exactly what the parity record says it does", () 
     .filter((l) => l.length > 0);
   assert.equal(raw.length, record.events, "parity.json is dated to a different fixture");
 
+  // ACCUMULATE PER KIND, exactly as the Rust half does (`*seen |= drew`).
+  //
+  // Review round 1 left this as the open note, and it was a real asymmetry: the
+  // record's own header says `draws` means "at least once over this log", the VT
+  // side implements that, and this side was asserting PER EVENT. Two events of one
+  // kind that legitimately differ — which is precisely why `turn_started` is a
+  // divergence at all — would therefore have failed HERE while passing THERE, and
+  // the two halves of one control would have been enforcing two different claims.
+  // A parity control whose halves disagree about what they are measuring is worse
+  // than no control, because it reads like agreement.
   const state = emptyState();
-  const seen = new Set<string>();
+  const drewByKind = new Map<string, boolean>();
   let locals = 0;
   let drewSomething = false;
   for (const line of raw) {
     const ev = decodeProjectionInput(JSON.parse(line));
-    if (ev.kind === "delivery") locals += 1;
     // "Did this projection show the human anything about this event" — a block
     // created or updated, or a header/ticker fact set. The same question the
     // Rust half asks of the VT bytes, which is what makes them comparable.
@@ -899,18 +908,77 @@ test("the DOM projection draws exactly what the parity record says it does", () 
     project(state, [ev], { nowMs: 10_000 });
     const drew = snapshot(state) !== before;
     if (drew) drewSomething = true;
-    if (ev.kind === "delivery") continue;
-
-    seen.add(ev.kind);
-    const row = record.kinds[ev.kind];
-    assert.ok(row, `parity.json has no row for kind "${ev.kind}"`);
-    assert.equal(
-      drew,
-      row.dom,
-      `the DOM projection ${drew ? "DRAWS" : "draws nothing"} for "${ev.kind}", ` +
-        `and parity.json says it ${row.dom ? "does" : "does not"}`,
-    );
+    if (ev.kind === "delivery") {
+      locals += 1;
+      continue;
+    }
+    drewByKind.set(ev.kind, (drewByKind.get(ev.kind) ?? false) || drew);
   }
+
+  const seen = new Set(drewByKind.keys());
+
+  // WHAT THIS FIXTURE CAN AND CANNOT DISTINGUISH — stated, because the honest
+  // answer is "less than you would hope", and a mutation run said so.
+  //
+  // Accumulating per kind differs from asserting per event only when some kind's
+  // events DISAGREE about whether they drew. Repetition alone is not enough: this
+  // fixture repeats seven kinds, and every one of them is unanimous, so reverting
+  // the accumulation to a per-event assignment reddens nothing here (mutation M17).
+  //
+  // The alignment is therefore a claim about SEMANTICS rather than something this
+  // log can falsify: the record's header says `draws` means "at least once over
+  // this log", the Rust half implements exactly that (`*seen |= drew`), and this
+  // half now does too — so the two halves of one control cannot enforce two
+  // different claims. The assertion below pins the condition, so the day a fixture
+  // gains a kind whose events disagree, this stops being a residual and starts
+  // being a test.
+  const drewCounts = new Map<string, { drew: number; total: number }>();
+  {
+    const probe = emptyState();
+    for (const line of raw) {
+      const ev = decodeProjectionInput(JSON.parse(line));
+      const was = snapshot(probe);
+      project(probe, [ev], { nowMs: 10_000 });
+      if (ev.kind === "delivery") continue;
+      const c = drewCounts.get(ev.kind) ?? { drew: 0, total: 0 };
+      c.total += 1;
+      if (snapshot(probe) !== was) c.drew += 1;
+      drewCounts.set(ev.kind, c);
+    }
+  }
+  const split = [...drewCounts].filter(([, c]) => c.drew > 0 && c.drew < c.total).map(([k]) => k);
+  assert.deepEqual(
+    split,
+    [],
+    `${split.join(", ")} now draws on some events and not others, so per-kind and ` +
+      "per-event no longer coincide — the residual above is stale and the alignment " +
+      "is now falsifiable by this fixture. Good news; update the note.",
+  );
+
+  const wrong: string[] = [];
+  for (const [kind, drew] of drewByKind) {
+    const row = record.kinds[kind];
+    if (!row) {
+      wrong.push(`  ${kind}: parity.json has no row for it`);
+      continue;
+    }
+    if (row.dom !== drew) {
+      wrong.push(
+        `  ${kind}: the DOM projection ${drew ? "DRAWS" : "draws nothing"}, ` +
+          `parity.json says it ${row.dom ? "does" : "does not"}`,
+      );
+    }
+  }
+  // The whole table before any assertion, so one run reports every wrong row —
+  // the same shape the Rust half uses, for the same reason (it cost a CI round to
+  // learn there).
+  assert.deepEqual(
+    wrong,
+    [],
+    `the DOM projection no longer draws what the record says:\n${wrong.join("\n")}\n\n` +
+      "A row that moved is a DESIGN change, not a test fix — update " +
+      "test/fixtures/structuredview/parity.json and say why in its `why`.",
+  );
 
   assert.ok(drewSomething, "positive control: nothing drew at all, so the projection never ran");
   assert.equal(locals, record.local_only, "the local-event exemption grew without being written down");

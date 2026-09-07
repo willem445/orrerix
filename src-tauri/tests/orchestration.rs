@@ -69,7 +69,7 @@ use loomux_lib::orchestration::{
     // #2985: the PR-close ownership gate and the roster the shim reads.
     gh_branch_is_owned, gh_close_action, gh_close_decision, gh_close_refusal,
     gh_close_unverifiable_refusal, render_owner_roster, GhCloseGate, OWNER_ROSTER_FILE,
-    gh_close_owner_clause, gh_value_flags,
+    gh_value_flags,
     gh_shim_cmd, gh_shim_sh, git_shim_cmd, git_shim_sh, git_tag_push, grant_segment, grant_unexpired, hold_for_human_input,
     resolve_shim_toolchain, ShimPaths,
     hold_until_quiet, idle_output_is_activity, idle_should_kill, idle_tick_should_fire,
@@ -66905,7 +66905,7 @@ fn the_close_gate_resolves_the_pr_being_closed_not_a_comment_value() {
     // the next flag being added to the const and not to the shim, which is the
     // divergence that produced the defect above.
     let sh = gh_shim_sh("/usr/bin/gh", &shim_paths());
-    for flag in gh_value_flags() {
+    for &flag in gh_value_flags() {
         if flag == "-R" || flag == "--repo" {
             continue; // their own capture arms, above the skip arm
         }

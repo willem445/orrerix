@@ -11267,24 +11267,40 @@ fn driver_structured_is_refused_at_spawn_when_the_block_inherits_its_cli() {
 }
 
 #[test]
-fn an_inherited_cli_that_does_carry_a_driver_spawns() {
+fn an_inherited_cli_that_does_carry_a_driver_passes_the_driver_gate() {
     // The positive control for the test above, and the half that keeps it from
-    // passing by refusing everything: same file, same absent `cli:`, only the
-    // inherited value differs. Without this, "refuse every structured block"
-    // would satisfy that assertion just as well as "refuse the wrong CLI".
-    let (reg, _dir) = test_registry();
-    let repo = Repo::new().workflow(
-        "version: 1\nblocks:\n  - id: inherits\n    kind: worker\n    driver: structured\n",
+    // passing by refusing everything: without this, "refuse every structured
+    // block" would satisfy that assertion just as well as "refuse the wrong
+    // CLI".
+    //
+    // It asks the GATE rather than driving a spawn, and that is a constraint-3
+    // requirement rather than a convenience. Once #2850 S3b wired the
+    // structured arm, a spawn on an inherited `pi` stops being inert: it
+    // resolves a program and starts it. On CI that fails with "pi is not on
+    // PATH" — which is how this test was caught — but on a developer machine
+    // with pi installed it would START A REAL AGENT CLI. A test that passes
+    // everywhere and spawns a paid agent on one machine is worse than one that
+    // fails, so the spawn half of this control is deliberately not taken.
+    //
+    // The refusal case above is unaffected and still drives the real spawn
+    // path: it is REFUSED before anything is resolved or started.
+    let want = workflow::structured_harness_for(Some("structured"), "pi")
+        .expect("pi has a structured driver, so the gate must admit it");
+    assert_eq!(
+        want,
+        Some(loomux_engine::harness::Harness::Pi),
+        "the gate admitted the block but resolved the wrong harness"
     );
-    let mut rails = rails();
-    rails.agent_cli = "pi".into();
-    let g = reg.create_group(&repo.path(), rails).unwrap();
 
-    reg.spawn_agent_ex(
-        &g.id, Role::Worker, Some("inherits".into()), "", "t", false,
-        None, None, None, None, None,
-    )
-    .expect("an inherited pi DOES carry a structured driver — this must spawn");
+    // And the same question asked of the inherited value the refusal test uses,
+    // so the two halves are provably about the same predicate rather than two
+    // spellings that happen to agree.
+    let refused = workflow::structured_harness_for(Some("structured"), "claude")
+        .expect_err("claude carries no structured driver yet (#84 R2)");
+    assert!(
+        refused.to_string().contains("no structured driver"),
+        "the refusal must say WHY: {refused}"
+    );
 }
 
 #[test]

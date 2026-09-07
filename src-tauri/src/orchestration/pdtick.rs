@@ -1251,13 +1251,13 @@ impl OrchRegistry {
             // Released to `queued`, so readiness is re-derived from the BOARD
             // rather than assumed — a row the human meanwhile marked `blocked`
             // still will not spawn, and one they marked `done` settles.
-            let released: Vec<String> = entry
+            let released: Vec<(String, String, String)> = entry
                 .slices
                 .iter()
                 .filter(|(_, s)| s.state() == plandrive::SliceState::Held)
-                .map(|(id, _)| id.clone())
+                .map(|(id, s)| (id.clone(), s.task_id.clone(), s.agent.clone()))
                 .collect();
-            for id in &released {
+            for (id, _, _) in &released {
                 if let Some(s) = entry.slices.get_mut(id) {
                     s.advance(plandrive::SliceState::Queued, None);
                     s.cap_starved_since_ms = 0;
@@ -1271,6 +1271,49 @@ impl OrchRegistry {
             }
             (from, to, released)
         };
+        // **The BOARD row is released too, and forgetting it made the record's
+        // release a no-op.** A slice parks with its row still `in-progress` and
+        // assigned to the pane that held it, and readiness is the BOARD's — so a
+        // record set back to `queued` over a row that is not simply never
+        // becomes ready again, and the resume silently buys nothing.
+        //
+        // Outside `pd_state_lock`, and guarded: only a row still carrying THIS
+        // slice's own agent is rolled back. A row the human has meanwhile marked
+        // `blocked`, `cancelled` or `done`, or handed to somebody else, is their
+        // decision, and a resume must not spawn over it — which is the same rule
+        // the released record obeys by going to `queued` rather than to
+        // `running`.
+        for (id, task_id, agent) in &released {
+            let held_by_us = self
+                .tasks(group)
+                .into_iter()
+                .find(|t| &t.id == task_id)
+                .is_some_and(|t| {
+                    t.status == "in-progress" && t.assignee.as_deref() == Some(agent.as_str())
+                });
+            if !held_by_us {
+                continue;
+            }
+            if let Err(e) = self.upsert_task(
+                group,
+                brand::AUDIT_ACTOR,
+                Some(task_id),
+                super::TaskPatch {
+                    status: Some("queued".into()),
+                    assignee: Some(String::new()),
+                    ..super::TaskPatch::default()
+                },
+            ) {
+                self.pd_audit(
+                    group,
+                    on_behalf_of,
+                    plandrive::audit_action::REFUSED,
+                    json!({ "issue": issue, "slice": id, "reason": "row-not-released",
+                            "detail": pd_fact(&e) }),
+                );
+            }
+        }
+        let released: Vec<String> = released.into_iter().map(|(id, _, _)| id).collect();
         self.pd_audit(
             group,
             on_behalf_of,

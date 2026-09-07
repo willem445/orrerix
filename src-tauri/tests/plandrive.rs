@@ -2333,7 +2333,7 @@ fn a_merged_pr_marks_done_and_spawns_the_dependent() {
     let agent = slice_agent(&reg, &group, "P1");
     with_pane(&reg, &agent, 7_101);
     gh.set_pr(4_100, "OPEN", None);
-    report(&reg, &group, &agent, "done", json!({ "ref": "#4100" }));
+    report(&reg, &group, &agent, "done", json!({ "ref": "#4100", "note": "green" }));
     reg.pd_drive_group_with(&group, &gh, 1_500);
     assert_eq!(slice_state(&reg, &group, "P1"), "in-review");
 
@@ -2553,11 +2553,18 @@ fn a_review_window_posts_exactly_one_notice() {
     );
     let attempts = reg.audit_log(&group).into_iter().filter(|e| e.action == "pd-notice").count();
     assert!(attempts >= 2, "the population control: delivery really was attempted more than once");
+    assert!(
+        owed["failures"].as_u64().is_some_and(|f| f >= 1),
+        "those attempts are RETRIES of this notice, counted on it: {owed}"
+    );
+    // The exact pin, and the one an extra notice could not survive: `owed_ms`
+    // is stamped when a notice is OWED and never touched by a retry, so it is
+    // still the tick that entered `plan-review`. A second notice — one per
+    // tick, say — would have replaced this one and re-stamped it.
     assert_eq!(
-        owed["failures"].as_u64().map(|f| f + 1),
-        Some(attempts as u64),
-        "every one of those attempts is a RETRY of the same notice — a second notice would have \
-         replaced this one and reset its failure count: {owed}"
+        owed["owed_ms"],
+        json!(1_200),
+        "still the notice owed on the tick that entered the window, not a later one: {owed}"
     );
 
     // Past the window: the drive boards and runs, so the wait was a wait and not
@@ -2659,7 +2666,7 @@ fn the_pr_poll_is_bounded_per_tick() {
     let agent = slice_agent(&reg, &group, "P1");
     with_pane(&reg, &agent, 7_101);
     gh.set_pr(4_100, "OPEN", None);
-    report(&reg, &group, &agent, "done", json!({ "ref": "#4100" }));
+    report(&reg, &group, &agent, "done", json!({ "ref": "#4100", "note": "green" }));
     reg.pd_drive_group_with(&group, &gh, 1_500);
     assert_eq!(slice_state(&reg, &group, "P1"), "in-review", "{}", status(&reg, &group));
 
@@ -2763,6 +2770,19 @@ fn a_resume_releases_a_held_slice_and_still_obeys_the_board() {
     assert_eq!(out["resumed"], json!(true), "{out}");
     assert_eq!(slice_hold(&reg, &group, "P1"), "", "the slice hold is released: {}", status(&reg, &group));
     assert_eq!(slice_state(&reg, &group, "P1"), "queued");
+    // **And the BOARD row with it**, which is the half that makes the release
+    // mean anything: readiness is the board's, so a record set back to `queued`
+    // over a row still `in-progress` and assigned to the pane that held it is a
+    // release that buys nothing at all — the slice never becomes ready again and
+    // the resume is silently a no-op. This assertion is what caught that.
+    let p1 = row(&reg, &group, &rows["P1"]).expect("P1 still has a row");
+    assert_eq!(p1.status, "queued", "the row is released too: {p1:?}");
+    assert_eq!(p1.assignee, None, "and unassigned, so a claim can succeed: {p1:?}");
+    // The row the human parked is NOT rolled back — a resume must not spawn
+    // over their decision. Read here rather than only via the spawn below, so
+    // the property is pinned on the row itself.
+    let p3 = row(&reg, &group, &rows["P3"]).expect("P3 still has a row");
+    assert_eq!(p3.status, "blocked", "the human's own row status stands: {p3:?}");
 
     reg.pd_drive_group_with(&group, &gh, 1_900);
     assert_eq!(

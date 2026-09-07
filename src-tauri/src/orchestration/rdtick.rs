@@ -729,7 +729,7 @@ impl OrchRegistry {
     pub(crate) fn rd_driven_panes(
         &self,
         group: &GroupId,
-    ) -> std::collections::BTreeMap<String, (u64, reviewdrive::DrivenRole)> {
+    ) -> Result<std::collections::BTreeMap<String, (u64, reviewdrive::DrivenRole)>, ()> {
         let _state_guard = self.rd_state_lock.lock_safe();
         self.rd_driven_panes_locked(group)
     }
@@ -742,7 +742,7 @@ impl OrchRegistry {
     /// thread already holds, without the `lock-reentrant` refusal a blocking
     /// acquire would take) and another group's tick the rest — **and empty when
     /// the record is unreadable**, which the guards refuse on and this does not.
-    /// All three fail toward an UNMARKED roster — the message this repo shipped
+    /// All three of those fail toward an UNMARKED roster — the message this repo shipped
     /// before S2 — never toward a row falsely marked driven, and never toward a
     /// kill going through: no guard reads this. The argument for why the driver
     /// does not need the marker is on [`Self::rd_driven_panes`], under
@@ -767,7 +767,10 @@ impl OrchRegistry {
     /// means no pane is driven; one that is present and unparseable — the
     /// downgrade case, where a newer build wrote a schema this one reads as
     /// `Unsupported` — means orrerix does not KNOW, and this repo's settled
-    /// posture for that fact is to refuse rather than to read it as "undriven":
+    /// posture for that fact is to refuse rather than to read it as "undriven"
+    /// (the `Err` is `()` because there is nothing for a caller to branch on —
+    /// "could not read" is the whole of it, and the caller's answer is a refusal
+    /// either way):
     /// `queue_merge` answers rd-state-unreadable on the same input, pinned by
     /// `a_torn_drive_record_refuses_the_enqueue_instead_of_reading_as_undriven`,
     /// and §2.4 says the tick refuses too. Collapsing the two here would have

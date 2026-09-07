@@ -1382,7 +1382,15 @@ impl OrchRegistry {
         for pr in &flush.pruned {
             self.rd_audit(group, "", rddrive::audit_action::PRUNED, json!({ "pr": pr }));
             self.rd_signals.lock_safe().remove(&(group.clone(), *pr));
-            // #2811 S10: the entry is gone, so a mark about it describes nothing.
+            // #2811 S10: the entry is gone, so a mark about it describes
+            // nothing. **Defence in depth, and unreachable today** — an entry
+            // becomes terminal either by a tick (whose own spend clears the
+            // mark on that same tick) or by `cancel_review_drive` (which
+            // clears it), and a reconcile-cancel never marks at all. Kept
+            // because the spend rule is one edit away from stopping being
+            // exhaustive and this is where `rd_signals` is already cleared;
+            // NOT pinned by a test, because one would pass either way
+            // (measured: run `34156057201`).
             self.rd_forget_restart_mark(group, *pr);
         }
         flush
@@ -4287,7 +4295,9 @@ impl OrchRegistry {
         self.rd_signals.lock_safe().remove(&(group.clone(), pr));
         // #2811 S10, same argument one fact over: this call establishes a drive
         // the orchestrator is starting NOW, so a restart mark left by whatever
-        // was on this PR before is not about it.
+        // was on this PR before is not about it. Defence in depth on the same
+        // measurement as the prune's clear — unreachable today, unpinned, and
+        // kept for the same reason.
         self.rd_forget_restart_mark(group, pr);
         self.rd_audit(group, on_behalf_of, audit_action, detail);
         // Service this group on the very next wake rather than after a backoff
@@ -4413,6 +4423,9 @@ impl OrchRegistry {
         }
         self.rd_signals.lock_safe().remove(&(group.clone(), pr));
         // #2811 S10: cancelled is terminal, so nothing is owed a re-brief.
+        // **This is the reachable one**: the tool takes no tick, so the tick's
+        // own spend never runs and the mark would otherwise stand. Pinned by
+        // `a_cancelled_drive_does_not_leave_a_restart_mark_for_the_next_one`.
         self.rd_forget_restart_mark(group, pr);
         self.rd_audit(
             group,

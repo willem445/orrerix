@@ -12435,82 +12435,25 @@ fn a_cancelled_drive_does_not_leave_a_restart_mark_for_the_next_one() {
     );
 }
 
-/// **Review 3, the ruling.** Same property at the PRUNE, which is a different
-/// site: a terminal entry is dropped from `review_drives.json` after its notice
-/// is delivered, and the mark is keyed on the PR rather than on the entry.
-#[test]
-fn a_pruned_drive_does_not_leave_a_restart_mark_for_the_next_one() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = Repo::new();
-    let gh = FakeGh::green(HEAD_A);
-    let (reg, group) = restarted_with_a_standing_mark(dir.path(), &repo, &gh);
-    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
-    make_delivery_land(&reg, &group, &orch.id, 7501);
-
-    // The PR is positively gone, so the next tick cancels and the tick after
-    // that prunes the entry once its notice has landed.
-    gh.set_facts("CLOSED", HEAD_A);
-    reg.rd_drive_group_with(&group, &gh, 60_000);
-    reg.rd_drive_group_with(&group, &gh, 70_000);
-    assert!(
-        action_count(&reg, &group, "rd-pruned") >= 1,
-        "the fixture must actually PRUNE, or this test is about the cancel path again"
-    );
-
-    let w = reg.spawn_agent(&group, Role::Worker, "w2", "", false, None).unwrap();
-    let session = w.session_id.clone().expect("claude mints a session id at spawn");
-    assert_eq!(
-        redrive_to_fix_wait(&reg, &group, &gh, &session),
-        0,
-        "a prune must forget the mark: the entry it described no longer exists"
-    );
-}
-
-/// **Review 3, the ruling.** And at `drive_review` itself — the one path that
-/// neither of the two above can reach.
-///
-/// The first draft of this test assumed `drive_review` displaces a LIVE drive.
-/// It does not (it answered `driving: null`, and the fixture caught it), so the
-/// real shape is the one `a_re_drive_that_displaces_a_still_owing_entry_...`
-/// describes: an entry that is TERMINAL but not yet pruned, retained because
-/// its notice has not been delivered. That is reachable with the mark still
-/// standing because a reconcile-cancel takes no tick — `rd_step_entry` returns
-/// early for a terminal entry, so the tick's own discharge never runs — and
-/// with no orchestrator pane the notice cannot land, so the prune does not fire
-/// either. Neither the cancel path nor the prune path clears it here; only
-/// `drive_review` can.
-#[test]
-fn a_fresh_drive_review_does_not_inherit_the_previous_drives_restart_mark() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = Repo::new();
-    let gh = FakeGh::green(HEAD_A);
-    let (reg, group) = restarted_with_a_standing_mark(dir.path(), &repo, &gh);
-
-    // The PR is positively gone, so the reconcile cancels the entry — and with
-    // no orchestrator pane the cancelled notice is owed rather than delivered,
-    // so the entry is RETAINED instead of pruned.
-    gh.set_facts("CLOSED", HEAD_A);
-    reg.rd_drive_group_with(&group, &gh, 60_000);
-    reg.rd_drive_group_with(&group, &gh, 70_000);
-    assert_eq!(
-        action_count(&reg, &group, "rd-pruned"),
-        0,
-        "the entry must be RETAINED, or this test is the prune path again"
-    );
-    assert_eq!(
-        reg.review_drive_status_with(&group, 70_000)["drives"]
-            .as_array()
-            .map(|a| a.len()),
-        Some(0),
-        "and terminal, so `drive_review` can displace it"
-    );
-
-    let w = reg.spawn_agent(&group, Role::Worker, "w2", "", false, None).unwrap();
-    let session = w.session_id.clone().expect("claude mints a session id at spawn");
-    assert_eq!(
-        redrive_to_fix_wait(&reg, &group, &gh, &session),
-        0,
-        "`drive_review` starts a drive NOW; a mark about whatever was on this PR before \
-         is not about it"
-    );
-}
+// **The prune and `drive_review` clears are NOT pinned, and cannot be.**
+//
+// Review 3 asked for a test per path. Two of the three paths turn out to be
+// unreachable, and the mutation is what proved it: with all three clears
+// reverted, only the cancel test above reddens (run `34156057201`, 142 passed
+// / 1 failed). The reason is the review-2 spend rule one function over — it
+// discharges the mark on any tick whose entry ends outside `fix-wait`:
+//
+// - A drive becomes terminal either by a TICK (`pr_open == Some(false)` takes
+//   it to `cancelled`, and the spend clears the mark on that same tick,
+//   before the prune can ever see it) or by `cancel_review_drive`, which has
+//   its own clear — the one the test above pins.
+// - A reconcile-cancel never marks in the first place: the mark is written in
+//   the branch the cancel arm skips.
+//
+// So no reachable sequence leaves a standing mark on an entry that then
+// reaches the prune or a displacing `drive_review`. The two clears are kept as
+// defence in depth — the spend rule is one edit away from stopping being
+// exhaustive, and both sites are where `rd_signals` is already cleared — but
+// a test asserting the property there passes whether or not the clear exists,
+// which is a decoration, not coverage. Two such tests were written, run
+// against the mutation, found green, and deleted rather than shipped.

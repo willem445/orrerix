@@ -2688,38 +2688,6 @@ impl OrchRegistry {
     /// `{{WHAT}}` is **loomux-authored text chosen from a closed set of three**,
     /// with facts orrerix read interpolated into it — never delegate- or
     /// repo-authored prose (§3.1 item 4). The three are the three ways a PR
-    /// **What a busy reviewer lane is told when its PR stops merging** (#3176).
-    ///
-    /// One paragraph on one source line, for [`Self::rd_lane_brief`]'s reason: a
-    /// newline plus the source indent ships both into a delegate's pane, and a
-    /// `.contains` of any single fragment steps straight over it. The shape is
-    /// pinned beside the content, as the lane briefs' is.
-    ///
-    /// **It deliberately does NOT reuse `rd_lane_brief`'s CONFLICTING arm.**
-    /// That sentence ends *"Review the change on its merits; the conflict is the
-    /// worker's to answer"* — an instruction to CARRY ON, which is the opposite
-    /// of this one, and gluing a stop onto it would hand a reviewer a paragraph
-    /// that contradicts itself. What the two share is the FACT, not the wording.
-    ///
-    /// It asks for a report, and that is the mechanism rather than politeness: a
-    /// reviewer's report is what stamps `idle_since_ms`, which is what
-    /// `release_driven_pane`'s barrier requires — so this line is what makes the
-    /// pane releasable at all. The release then happens on an ordinary later
-    /// tick through [`reviewdrive::ReleaseReason::Conflict`], with no second
-    /// mechanism and no second decision.
-    ///
-    /// And it says the conversation survives, because it does: the next round
-    /// resumes this same session against the rebased head, so a reviewer that
-    /// drops what it is holding loses nothing it will not be asked for again.
-    fn rd_lane_stop_brief(&self, brief: &RdBrief) -> String {
-        format!(
-            "STOP this review — orrerix is standing it down. PR #{} does not merge cleanly against {} at the head you were briefed on ({}), so that head is about to be rebased away and any verdict recorded against it goes stale the moment the worker pushes. Do not finish the review, do not record a verdict for this head, and do not report findings: call report with outcome done, and stop there. Nothing is lost — orrerix briefs you again against the rebased head, in this same conversation, and no review round is charged for this one.",
-            brief.pr,
-            rd_fact(&brief.base),
-            rd_fact(&brief.head),
-        )
-    }
-
     /// comes back: a lane's findings, a red run, and a conflict.
     fn rd_fix_brief(
         &self,
@@ -3417,86 +3385,6 @@ impl OrchRegistry {
         // pane out of the record and the entry no longer names it — and because
         // only a release that the barrier actually PERFORMED may be reported as
         // one, which is the same honesty `out.releases` keeps.
-        // **#3176's other half: a lane the release CANNOT take is told to stop
-        // instead.**
-        //
-        // `release_driven_pane` refuses a pane that is not idle, and §3 is why —
-        // the driver does not kill a reviewer mid-turn. But a reviewer mid-turn
-        // on a PR that does not merge is precisely the case #3176 is about: it
-        // is spending a paid round reading a head the rebase is about to
-        // replace. So the two arms are complementary rather than alternatives,
-        // and exactly one of them applies to a lane on a tick — the idle test
-        // below is the same question `release_driven_pane` asks, asked first so
-        // the two cannot both fire.
-        //
-        // **A queued delivery, never an interrupt** — `Delivery::MidSession`,
-        // the same mechanism `rd_reuse_pane` types a re-brief with. It lands on
-        // the pane's own queue and is pasted when the CLI next takes input;
-        // nothing is cancelled, no signal is sent, and a reviewer mid-thought
-        // finishes it and then reads this. That is the only kind of text orrerix
-        // puts into a delegate's pane, and this adds no second kind.
-        //
-        // **Once per revision, not once per tick.** The rule is a standing
-        // property of the facts — that is what makes the release arm work at all
-        // — so `stopped_head` marks the lane, and the mark is written on the
-        // delivery SUCCEEDING rather than on the intent, so a line that did not
-        // reach the pane is one the next tick still owes.
-        //
-        // A lane with no pane on record, and one whose stop line has already
-        // landed at this head, are skipped. So is a lane the candidate list does
-        // not carry, which is the carve-out doing its work one function over: a
-        // reviewer whose verdict is already on record is not mid-review and has
-        // nothing to stand down from.
-        for cand in &releases {
-            if cand.reason != reviewdrive::ReleaseReason::Conflict {
-                continue;
-            }
-            let reviewdrive::DrivenRole::Lane(block) = &cand.role else { continue };
-            let agent = entry.lane(block).map(|r| r.agent.clone()).unwrap_or_default();
-            if agent.trim().is_empty() {
-                continue;
-            }
-            // Idle: the release arm below takes this one, and telling a pane to
-            // stop and then killing it on the same tick would be two events for
-            // one decision.
-            if self.agent(&agent).is_some_and(|a| a.idle_since_ms.is_some()) {
-                continue;
-            }
-            if entry.lane_stopped_at(block, &brief.head) {
-                continue;
-            }
-            let text = self.rd_lane_stop_brief(&brief);
-            // **A refusal is AUDITED, not swallowed** (#3176, aligned with
-            // #3203's `rd_take_over_pane`). `deliver_prompt` can refuse for
-            // reasons that say nothing about the drive, but one is reachable
-            // with nothing wrong at all — a pane at `QUEUE_MAX_PER_PANE` — and
-            // on a silent `continue` that is indistinguishable from "there was
-            // no busy lane to tell", which is the exact indistinguishability
-            // `rd-reuse-declined` and `rd-takeover-declined` were both added to
-            // remove. The mark is not written on this path, so the next tick
-            // tries again and these rows say how many ticks it took.
-            if let Err(why) = self.deliver_prompt(
-                &agent,
-                &text,
-                brand::AUDIT_ACTOR,
-                Delivery::MidSession,
-            ) {
-                out.audits.push((
-                    rddrive::audit_action::LANE_STOP_DECLINED,
-                    json!({ "pr": pr, "block": block, "agent": agent,
-                            "head": brief.head, "reason": why }),
-                ));
-                continue;
-            }
-            if entry.mark_lane_stopped(block, &brief.head) {
-                out.changed = true;
-            }
-            out.audits.push((
-                rddrive::audit_action::LANE_STOPPED,
-                json!({ "pr": pr, "block": block, "agent": agent,
-                        "head": brief.head, "why": "conflict" }),
-            ));
-        }
         let mut released_worker_session = String::new();
         for cand in &releases {
             // **A WORKER candidate names every pane this drive owns on that
@@ -3562,26 +3450,7 @@ impl OrchRegistry {
                 } else if cand.role == reviewdrive::DrivenRole::Worker {
                     agent.clone()
                 } else {
-                    // **A conflict release also forgets the revision the lane
-                    // was briefed at** (#3176) — see
-                    // [`reviewdrive::DriveEntry::reseed_lane`] for why a plain
-                    // `release_pane` here leaves `review-wait` waiting on a lane
-                    // it can see is open and cannot see has no pane. Every other
-                    // reason releases a lane that has ANSWERED, where the field
-                    // is inert.
-                    //
-                    // This is the LANE arm: the two above it are the worker's
-                    // (#3203's per-pane widening), and a lane candidate names
-                    // exactly one pane, so the reseed cannot reach a superseded
-                    // id it was not decided for.
-                    let freed = match (&cand.role, cand.reason) {
-                        (
-                            reviewdrive::DrivenRole::Lane(block),
-                            reviewdrive::ReleaseReason::Conflict,
-                        ) => entry.reseed_lane(block, &session),
-                        _ => entry.release_pane(&cand.role, &session),
-                    };
-                    match freed {
+                    match entry.release_pane(&cand.role, &session) {
                         Some(freed) => freed,
                         None => continue,
                     }

@@ -2530,12 +2530,35 @@ fn a_resume_releases_a_held_slice_and_still_obeys_the_board() {
     let p3 = row(&reg, &group, &rows["P3"]).expect("P3 still has a row");
     assert_eq!(p3.status, "blocked", "the human's own row status stands: {p3:?}");
 
+    let cwd_before = read_record(&reg, &group)["entries"][0]["slices"]["P1"]["cwd"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!cwd_before.is_empty(), "the first spawn recorded a workspace");
+
     reg.pd_drive_group_with(&group, &gh, 1_900);
     assert_eq!(
         slice_state(&reg, &group, "P1"),
         "running",
         "and it really does run again: {}",
         status(&reg, &group)
+    );
+    // **In the workspace it already had.** Cutting a second worktree for a
+    // branch that is already checked out is not slower, it is REFUSED by git —
+    // so a released slice that tried to would fail to spawn forever, which is
+    // how this defect actually presented. The pin is the path, not the fact
+    // that a pane opened.
+    assert_eq!(
+        read_record(&reg, &group)["entries"][0]["slices"]["P1"]["cwd"].as_str(),
+        Some(cwd_before.as_str()),
+        "the re-spawn resumed into the same worktree: {}",
+        status(&reg, &group)
+    );
+    let respawned = slice_agent(&reg, &group, "P1");
+    assert_eq!(
+        reg.agent(&respawned).expect("the re-spawned pane is on the roster").cwd,
+        cwd_before,
+        "and the PANE really is there, not merely the record saying so"
     );
     assert_eq!(
         slice_state(&reg, &group, "P3"),

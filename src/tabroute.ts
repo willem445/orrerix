@@ -6,7 +6,8 @@
 // NB: a tested module can't runtime-import a sibling src module (Node's ESM
 // loader won't resolve the extensionless path), so the urgency rule is inlined
 // below rather than imported from attention.ts. It is the SAME rule
-// attentionPresentation uses — `blocked` and `stranded` (#496 PR-C) are the
+// attentionPresentation uses — `blocked`, `provider-limit` (#2811 S5a) and
+// `stranded` (#496 PR-C) are the
 // urgent reasons — and the pane header / dock chip still render via
 // attentionPresentation verbatim (main.ts applies pane.setAttention, which uses
 // it). Keep the two in lockstep.
@@ -21,7 +22,10 @@ export type PreviewNode =
 
 /** Whether an attention reason is urgent, mirroring attention.ts. */
 const isUrgentReason = (reason: string): boolean =>
-  reason === "held-dialog" || reason === "blocked" || reason === "stranded";
+  reason === "held-dialog" ||
+  reason === "blocked" ||
+  reason === "provider-limit" ||
+  reason === "stranded";
 
 // Priority when several panes in one tab need attention: show the most urgent
 // reason on the tab chip. This is its OWN cross-pane ranking, not a literal
@@ -36,6 +40,12 @@ const isUrgentReason = (reason: string): boolean =>
 const REASON_PRIORITY: Record<string, number> = {
   "held-dialog": 6,
   blocked: 5,
+  // #2811 S5a: 4.5, not a renumber, for the reason `question: 1.5` below gives
+  // — every pre-existing value stays exactly where it was, so no open branch's
+  // hunk can collide on an integer here. It sits under `blocked` and over
+  // `stranded` because a provider limit is the wedge nothing done in the
+  // terminal can clear, which mirrors the backend chain in `attention_tick`.
+  "provider-limit": 4.5,
   stranded: 4,
   waiting: 3,
   gate: 2,
@@ -52,7 +62,9 @@ const REASON_PRIORITY: Record<string, number> = {
   // than intent. Leaving `blocked` untouched removes that hazard regardless
   // of which PR's hunk the catch-up resolves toward. Target merged ladder
   // once #1114 lands: `held-dialog` (6) > `blocked` (5) > `stranded` (4) >
-  // `waiting` (3) > `gate` (2) > `question` (1.5) > `report` (1).
+  // `waiting` (3) > `gate` (2) > `question` (1.5) > `report` (1). #2811 S5a
+  // then slotted `provider-limit` (4.5) between `blocked` and `stranded` on
+  // the same no-renumber rule; the ladder above is the pre-S5a one.
   question: 1.5,
   report: 1,
 };

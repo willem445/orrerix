@@ -140,7 +140,7 @@ number on the button are the same set of panes, never two answers.
 
 | State | What it means |
 | --- | --- |
-| **needs you** | The pane is wedged and will not un-wedge itself — blocked, stranded on an unsubmitted prompt, or held on a dialog. |
+| **needs you** | The pane is wedged and will not un-wedge itself — blocked, stranded on an unsubmitted prompt, held on a dialog, or stopped by its model provider's spend limit. |
 | **question** | The agent is asking you something: a question or a gate. |
 | **reported** | The agent has called in — its report is waiting on its orchestrator, not on you. The same word the pane header's chip uses. |
 | **held** | Orrerix is withholding a delivery to this pane because its input box looks occupied. It clears itself. |

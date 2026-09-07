@@ -1,0 +1,11 @@
+  ┃  Claude usage limit reached — every Claude-based delegate is stopped at "
+  ┃  /usage-credits to finish what you're working on" (all Opus panes: worker
+  ┃  s w-2007 E1, w-2016 #2116-D, w-2021 #2199 fix, w-2022 #2198 fix; rev-fin
+  ┃  al lanes rev-2019, rev-2023). GLM (rev-std / worker-std) lanes are unaff
+  ┃  ected, so #2234/#2236 rounds continue, but nothing needing rev-final can
+  ┃   reach its gate, and #84 R1, slice B and E1 are paused. Panes and sessio
+  ┃  ns are intact; once the limit clears I re-prompt each to continue (no re
+  ┃  spawn). Which do you want: (a) run /limit-reset in one pane (uses the 1/
+  ┃  week weekly reset — the CLI says so), (b) add usage credits, or (c) wait
+  ┃   for the rolling window to reset (I hold everything Claude-side and keep
+  ┃   GLM rounds going)?

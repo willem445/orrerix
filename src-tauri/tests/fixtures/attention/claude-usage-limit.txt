@@ -1,0 +1,10 @@
+     /usage-credits to finish what you’re working on.
+
+✻ Cooked for 2m 17s · done 10:28 PM
+
+──────────────────────────────────────────── loomux-loomux-68435179-worker-adv ─
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⚠ /limit-reset to reset your session limit now · uses weekly limit · 1/week
+                                                                           /rc
+  ⏵⏵ auto mode on (shift+tab to cycle) · PR #2198 · ← for agents

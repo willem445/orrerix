@@ -690,6 +690,16 @@
 //! beside the usage collector they read; only the shape and the maths live
 //! here, which is also what `crates/loomux-server` will need when
 //! `group_metrics` reads this file.
+//!
+//! [`providerlimit`] (#2811 S5a) is the per-provider spend/usage-limit table and
+//! the pane-tail reader over it — data plus `match`, the same class as
+//! [`model`], with no I/O, no clock and no registry. Plan-2504 filed the slice
+//! as `src-tauri` work; it is here because its two consumers straddle the seam.
+//! `OrchRegistry::attention_tick` raises the `provider-limit` chip from it on
+//! the host side, and #2811 S5b's `HeldReason::ProviderLimit` decision is an
+//! engine-side one — putting the table in `src-tauri` would have pointed that
+//! decision's arrow back across the boundary, which is the one thing this crate
+//! exists to prevent. See `doc/design/attention-provider-limit.md`.
 
 pub mod brand;
 pub mod budget;
@@ -712,6 +722,7 @@ pub mod pathseg;
 pub mod plandoc;
 pub mod plandrive;
 pub mod profiles;
+pub mod providerlimit;
 pub mod published;
 pub mod queue;
 pub mod queuestate;

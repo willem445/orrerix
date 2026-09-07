@@ -140,6 +140,12 @@ pub use loomux_engine::mailbox;
 
 pub use loomux_engine::{locks, profiles, workflow};
 
+/// #2811 S5a: the per-provider spend/usage-limit table the attention scan reads
+/// a pane tail against. Re-exported here beside `workflow` because the two
+/// consumers straddle the seam — `attention_tick` below raises the
+/// `provider-limit` chip from it, and S5b's driver hold reads the same rows.
+pub use loomux_engine::providerlimit;
+
 // Batch 5's one revision to a batch-4 decision, and the reason it is here
 // rather than above with the templates: `Block::instructions_file` is a
 // `workflow` method, so the function it calls had to be on the engine side or
@@ -12066,6 +12072,13 @@ pub struct AgentEntry {
 ///   is holding the ORCHESTRATOR's own delivery pipe, stranding every
 ///   delegate report queued behind it
 /// - `blocked` — a worker reported it is blocked
+/// - `provider-limit` — #2811 S5a: the account behind this pane's model is out
+///   of budget and its CLI is sitting on the provider's refusal. Raised ONCE
+///   per (group, provider) however many panes it stopped, and the only URGENT
+///   reason here that no gesture inside the terminal can clear — the remedy is
+///   billing, or a different `model:`. (`gate` is not terminal-clearable
+///   either, but it is an amber decision on the human's own pace rather than a
+///   wedged pane, which is the distinction this sentence is drawing.)
 /// - `stranded` — a delivered prompt was never submitted (#496 PR-C): either
 ///   loomux is self-healing it, or it needs the human's Enter
 /// - `waiting` — the pane is parked on a prompt (idle-with-prompt)
@@ -19394,6 +19407,23 @@ pub fn resolve_output_text(live: Option<String>, last_exit_tail: Option<&str>) -
         // last resort rather than inventing content that was never seen.
         _ => Err("terminal already closed".to_string()),
     }
+}
+
+/// Everything `attention_tick`'s phase 2 reads out of ONE pane's masked tail.
+///
+/// A struct rather than two parallel `HashMap`s (#2811 S5a) because both
+/// answers come from the same `mask_loomux_notices_with_record` call, and
+/// keeping them together is what makes that literal: two maps built in one
+/// closure invite a later edit to compute one of them somewhere else, off a
+/// tail that was never masked — which is precisely the defect the mask exists
+/// to prevent.
+struct PaneTailSignals {
+    /// The pane's tail looks like an interactive prompt awaiting an answer
+    /// (`prompt_wait_detected`) — one input to the `waiting` reason.
+    shaped: bool,
+    /// The provider spend/usage limit this pane is sitting on, if any
+    /// (`providerlimit::limit_in_tail`).
+    limit: Option<&'static providerlimit::LimitPattern>,
 }
 
 /// One pane's attention-scan tail: a BOUNDED raw read of its output ring,
@@ -44073,7 +44103,10 @@ impl OrchRegistry {
     /// priority order, are `held-dialog` (#946 Q4 / #1091 slice H — a live
     /// interactive dialog is holding the ORCHESTRATOR's own delivery pipe;
     /// see `attn_question_held`'s doc for why this outranks even `blocked`),
-    /// `blocked` (reported), `stranded` (a delivered prompt never submitted),
+    /// `blocked` (reported), `provider-limit` (#2811 S5a — the account behind
+    /// this pane's model is out of budget and its CLI is parked on the
+    /// provider's refusal; raised once per group per provider), `stranded` (a
+    /// delivered prompt never submitted),
     /// `waiting` (parked on a prompt: output quiet past `ATTENTION_QUIET_MS`,
     /// a prompt-shaped tail, and no recent human keystroke), `report`
     /// (reported done), `question` (#1091 slice D — this agent has a pending
@@ -44214,7 +44247,17 @@ impl OrchRegistry {
         // the truth rather than a gap — the same `unwrap_or_default` the old
         // in-loop expression had, kept here so an agent with a tail and no pty
         // is still masked against an empty record rather than skipped.
-        let prompt_shaped: HashMap<String, bool> = roster
+        //
+        // #2811 S5a: the provider-limit read shares this phase and this masked
+        // text. It is the same subject (the pane's own tail) asked a second
+        // question, so computing it here costs one extra pass over ~100 rows
+        // and — the part that matters — inherits the MASK for free. Without it
+        // the orchestrator's own pane, which types a provider's refusal into
+        // `ask_human` while asking the human to top the account up, and any
+        // delegate whose kickoff quotes one, would raise the chip for a limit
+        // they are merely talking about (#576's self-latch, arriving at a
+        // third consumer).
+        let signals: HashMap<String, PaneTailSignals> = roster
             .iter()
             .filter(|a| a.status == AgentStatus::Running)
             // #2850 S3b: never scrape a structured pane. Section 5.4 — orrerix
@@ -44239,11 +44282,41 @@ impl OrchRegistry {
                     .pty_id
                     .map(|p| self.delivered_mask_lines(p, a.session_id.as_deref()))
                     .unwrap_or_default();
-                let shaped =
-                    prompt_wait_detected(&mask_loomux_notices_with_record(t, &delivered));
-                (a.id.clone(), shaped)
+                let masked = mask_loomux_notices_with_record(t, &delivered);
+                let shaped = prompt_wait_detected(&masked);
+                let limit = providerlimit::limit_in_tail(&masked);
+                (a.id.clone(), PaneTailSignals { shaped, limit })
             })
             .collect();
+
+        // #2811 S5a, still lock-free — WHICH pane wears the chip.
+        //
+        // A provider limit stops every pane on that provider at once (four in
+        // this repo's own Sep-5 incident), and four identical red chips plus
+        // four toasts is worse than one: they say the same thing, they need
+        // the same single remedy, and dismissing three of them is busywork the
+        // human did not earn. So the item is raised ONCE per (group, provider)
+        // — the plan's rule — on the lowest-sorting affected agent id, which is
+        // deterministic where the roster's own iteration order is not
+        // (`agents` is a `HashMap`), and its `detail` carries how many panes
+        // are affected so the one chip still tells the truth about the blast
+        // radius.
+        //
+        // Keyed on the provider DETECTED IN THE TEXT rather than on the
+        // block's model prefix, which is the one place this deviates from
+        // plan-2504 §3 S5a — see `doc/design/attention-provider-limit.md`. pi
+        // and opencode surface OpenRouter's refusal verbatim, so a pane whose
+        // model reads `opencode/...` is stopped by OpenRouter's limit; keying
+        // on the prefix would file it under a third "provider" that has no
+        // remedy and would not merge with the OpenRouter panes it must be
+        // counted with.
+        // The selection itself is in PHASE 3, below, and that placement is the
+        // whole of #3178 review B1: choosing a carrier needs to know what would
+        // OUTRANK the chip on each candidate, and those are the latched maps
+        // phase 3 owns. Picking here — before `attn_reports` and
+        // `attn_question_held` are read — meant the group's only chip could
+        // land on a pane whose `blocked` latch then swallowed it, leaving ZERO
+        // provider-limit chips for a group where three panes were stopped.
 
         // #1702, phase 3 — decide and apply, under one short hold of the
         // attention maps. Nothing below reads a pty, a board file or a delivery
@@ -44277,6 +44350,89 @@ impl OrchRegistry {
         // in this phase at all any more (#1702), and describing an order that
         // no longer exists is how the next reader re-creates it.
         let mut question_held = self.attn_question_held.lock_safe();
+
+        // #2811 S5a — WHICH pane wears the single provider-limit chip, decided
+        // here because this is the first point that can see what would outrank
+        // it (#3178 review B1).
+        //
+        // A provider limit stops every pane on that provider at once, and four
+        // identical red chips need one remedy once — so the item is raised ONCE
+        // per (group, provider), with `detail` carrying how many panes were
+        // stopped so the one chip still tells the truth about the blast radius.
+        //
+        // But the reason chain below runs PER PANE, and `held-dialog` and
+        // `blocked` both outrank `provider-limit`. Only the carrier holds a
+        // `limit_chip` entry; every other affected pane falls through. So a
+        // carrier chosen without consulting those latches could be a pane that
+        // then renders `blocked`, and the group would show NO provider-limit
+        // chip at all while three of its panes sat stopped — the change's own
+        // rationale, inverted, and #576's self-latch one layer up.
+        //
+        // Hence: prefer a candidate that nothing outranks, and fall back to the
+        // lowest id only when EVERY affected pane is outranked. Within each
+        // class the pick is the lowest-sorting agent id, which is deterministic
+        // where the roster's own iteration order (a `HashMap`'s) is not.
+        //
+        // **The fallback still loses the chip, and that is disclosed rather
+        // than hidden**: when every affected pane is already showing `blocked`
+        // or `held-dialog`, those are urgent reasons that summon the human to
+        // this same group anyway, so what is lost is the provider attribution,
+        // not the alarm. Raising a second chip instead would reintroduce
+        // exactly the per-pane spam the one-chip rule exists to prevent.
+        // `a_provider_limit_is_subsumed_when_every_affected_pane_is_outranked`
+        // pins that arm so the disclosure cannot go quietly false.
+        //
+        // Keyed on the provider DETECTED IN THE TEXT rather than on the block's
+        // model prefix, which is the one place this deviates from plan-2504 §3
+        // S5a — see `doc/design/attention-provider-limit.md`. pi and opencode
+        // surface OpenRouter's refusal verbatim, so a pane whose model reads
+        // `opencode/...` is stopped by OpenRouter's limit; keying on the prefix
+        // would file it under a third "provider" that has no remedy and would
+        // not merge with the OpenRouter panes it must be counted with.
+        // Computed as an owned set rather than read through a closure over the
+        // `question_held` guard: the per-agent loop below MUTATES that guard,
+        // and a closure still holding a shared borrow of it is a borrowck
+        // question this does not need to have.
+        //
+        // The membership rule is exactly the arms ABOVE `provider-limit` in the
+        // chain below. A reason added above it must be added here too, or the
+        // carrier can be swallowed again — `provider_limit_sits_under_blocked_
+        // and_over_stranded_and_waiting` and
+        // `the_single_chip_avoids_a_pane_whose_blocked_latch_would_swallow_it`
+        // are what fail if the two drift.
+        let outranked: HashSet<&str> = roster
+            .iter()
+            .map(|a| a.id.as_str())
+            .filter(|id| question_held.contains(*id) || reports.get(*id).copied() == Some("blocked"))
+            .collect();
+        let mut limited_by_key: HashMap<(String, &'static str), (Option<String>, String, usize)> =
+            HashMap::new();
+        for a in &roster {
+            if a.status != AgentStatus::Running {
+                continue;
+            }
+            let Some(limit) = signals.get(&a.id).and_then(|s| s.limit) else { continue };
+            let entry = limited_by_key
+                .entry((a.group.to_string(), limit.provider))
+                .or_insert_with(|| (None, a.id.clone(), 0));
+            entry.2 += 1;
+            // `.0` is the best UNOUTRANKED candidate, `.1` the best of any.
+            if !outranked.contains(a.id.as_str()) && entry.0.as_ref().is_none_or(|best| a.id < *best) {
+                entry.0 = Some(a.id.clone());
+            }
+            if a.id < entry.1 {
+                entry.1 = a.id.clone();
+            }
+        }
+        // agent id -> (the provider row, how many panes in its group it stopped).
+        let limit_chip: HashMap<String, (&'static providerlimit::Provider, usize)> = limited_by_key
+            .into_iter()
+            .filter_map(|((_, provider_id), (unblocked, any, panes))| {
+                providerlimit::provider(provider_id)
+                    .map(|p| (unblocked.unwrap_or(any), (p, panes)))
+            })
+            .collect();
+
         let mut out = Vec::new();
         for a in &roster {
             if a.status != AgentStatus::Running {
@@ -44323,7 +44479,7 @@ impl OrchRegistry {
                 // #1702: computed in phase 2, off every lock. `unwrap_or(false)`
                 // is the same default the in-loop expression had — no entry
                 // means this agent had no tail this tick.
-                && prompt_shaped.get(&a.id).copied().unwrap_or(false);
+                && signals.get(&a.id).map(|s| s.shaped).unwrap_or(false);
 
             let report = reports.get(a.id.as_str()).copied();
             let (reason, detail): (&'static str, String) = if question_held.contains(a.id.as_str()) {
@@ -44340,6 +44496,24 @@ impl OrchRegistry {
                 ))
             } else if report == Some("blocked") {
                 ("blocked", format!("{} reported blocked — it needs you", a.name))
+            } else if let Some((p, panes)) = limit_chip.get(a.id.as_str()) {
+                // #2811 S5a. Ranked directly under `blocked` and above every
+                // other wedge, on the same argument `stranded` makes against
+                // `waiting` and one step further: a provider-limited pane will
+                // not un-wedge itself, and — unlike `stranded` or `dialog`,
+                // which one Enter in that pane clears — nothing done IN the
+                // terminal clears this one at all. It is also the only reason
+                // here whose blast radius is the whole group. Only `blocked`
+                // (an agent that explicitly said so) and `held-dialog` (which
+                // strands every other pane's reports too) outrank it.
+                let noun = if *panes == 1 { "pane" } else { "panes" };
+                (
+                    "provider-limit",
+                    format!(
+                        "{} limit reached — {panes} {noun} stopped; {}",
+                        p.display, p.remedy
+                    ),
+                )
             } else if self
                 .structured_pane(&a.id)
                 .is_some_and(|p| p.awaiting_human())

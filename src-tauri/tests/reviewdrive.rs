@@ -11518,7 +11518,7 @@ fn a_limit_on_a_pane_this_drive_does_not_own_parks_nothing() {
 /// the outage, not `lane-stalled`, because the pane is not slow — it is stopped,
 /// and "read that pane" is a remedy that does not work.
 #[test]
-fn a_provider_limit_outranks_the_stall_timeouts() {
+fn a_provider_limit_outranks_the_lane_stall_timeout() {
     let dir = tempfile::tempdir().unwrap();
     let reg = relaunch_registry(dir.path());
     let repo = Repo::new();
@@ -11667,5 +11667,54 @@ fn a_limited_worker_pane_parks_a_drive_in_fix_wait() {
     assert!(
         s["drives"][0]["counters"]["review_rounds"].as_u64().unwrap_or(99) <= 1,
         "a provider limit spends no round of its own: {s}"
+    );
+}
+
+/// **The placement the `decide` comment claims, pinned.** The arm sits above
+/// the drive-age backstop and the per-state bound, and until #3191's own
+/// mutation round nothing tested that: the sibling test above runs at
+/// sixty-one minutes, where neither of those bounds has fired, so what it
+/// really pins is precedence over `lane-stalled`. Moving the arm below the
+/// backstops reddened nothing — which is how this gap was found.
+///
+/// At thirteen hours the age backstop is past and `drive-stalled` is what a
+/// drive reports. A provider-limited one must still report the outage: the age
+/// is measuring a wait that is not this drive's fault, and "the drive has been
+/// running twelve hours" is a remedy an orchestrator cannot act on while every
+/// pane it owns is stopped on a vendor's billing.
+#[test]
+fn a_provider_limit_outranks_the_drive_age_backstop() {
+    let past_drive_timeout = 721 * 60 * 1000;
+
+    // With the limit: the outage wins.
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, lane) = briefed(&reg, &repo, &gh);
+    reg.set_provider_limit_for_test(&lane, "openrouter");
+    reg.rd_drive_group_with(&group, &gh, past_drive_timeout);
+    let s = reg.review_drive_status(&group);
+    assert_eq!(
+        s["drives"][0]["held_reason"],
+        json!("provider-limit"),
+        "the outage must outrank the twelve-hour age backstop: {s}"
+    );
+
+    // Without it: the SAME clock reports the age. This is what makes the row
+    // above a precedence claim rather than a statement about a bound that
+    // never fires — the mutation that demoted the arm passed the sixty-one
+    // minute test for exactly that reason.
+    let dir2 = tempfile::tempdir().unwrap();
+    let reg2 = relaunch_registry(dir2.path());
+    let repo2 = Repo::new();
+    let gh2 = FakeGh::green(HEAD_A);
+    let (group2, _lane2) = briefed(&reg2, &repo2, &gh2);
+    reg2.rd_drive_group_with(&group2, &gh2, past_drive_timeout);
+    let s2 = reg2.review_drive_status(&group2);
+    assert_eq!(
+        s2["drives"][0]["held_reason"],
+        json!("drive-stalled"),
+        "control: with no limit published the same clock reports the age: {s2}"
     );
 }

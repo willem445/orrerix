@@ -255,6 +255,21 @@ impl PdHeldReason {
     }
 }
 
+/// How long a slice whose worker reported `done` waits for a PR to appear on
+/// its branch before parking on [`PdSliceHold::PrMissing`].
+///
+/// **Its own constant, not [`crate::reviewdrive::CAP_HOLD_MS`] reused**, though
+/// the two are the same figure today. That one bounds a delegate cap — a
+/// condition orrerix cannot influence and can only wait out; this bounds a
+/// worker's own claim to have finished, which is a different thing to be
+/// patient about. One name per meaning, so a later change to either does not
+/// silently move the other.
+///
+/// Fifteen minutes is generous for what it measures: a worker reports `done`
+/// after pushing, so the PR is normally visible on the very next tick, and the
+/// retry that covers the ordinary lag is the same one this bounds.
+pub const PR_WAIT_HOLD_MS: u64 = 15 * 60_000;
+
 /// How many refused plan blocks one drive tolerates before parking (§2(e)).
 ///
 /// The planner is still inside its own turn when a post is refused, so a fix
@@ -584,6 +599,27 @@ pub enum PdSliceHold {
     /// on a positively-established MERGED PR, so this is the other positive
     /// answer and it gets its own name rather than being waited out.
     PrClosed,
+    /// The slice's worker reported `done` and **no PR ever appeared** on its
+    /// branch, for longer than [`PR_WAIT_HOLD_MS`].
+    ///
+    /// The worker violated its own definition of done, which is exactly the
+    /// wrongness this driver is built to survive — a `ref` is a HINT and a
+    /// missing one is meant to cost a `gh pr list` and no more. What it must
+    /// not cost is silence: without this bound the slice sits in
+    /// [`SliceState::Running`] forever, retrying a lookup that will never
+    /// succeed, and because a slice in `Running` makes
+    /// [`PdFacts::running_idle`] false the whole-drive backstop cannot see it
+    /// either. [`WorkerGone`](Self::WorkerGone) does not reach this one: that
+    /// arm skips a slice whose worker HAS reported, because a worker that
+    /// reports and then exits is a worker that did its job.
+    ///
+    /// **Held whether the pane is alive or dead**, and that is one rule rather
+    /// than two: a worker that said it was finished a quarter of an hour ago
+    /// and produced no PR is not about to, and a live pane makes the claim no
+    /// truer. The bound is what distinguishes it from a worker that reports
+    /// `done` a moment before its PR is visible, which is the common case and
+    /// is retried exactly as before.
+    PrMissing,
     /// The slice's worker PANE DIED without ever reporting — a CLI crash, a
     /// kill, a machine that went away.
     ///
@@ -601,10 +637,11 @@ pub enum PdSliceHold {
 
 impl PdSliceHold {
     /// Every reason, so the notice table is checked against the enum.
-    pub const ALL: [PdSliceHold; 4] = [
+    pub const ALL: [PdSliceHold; 5] = [
         PdSliceHold::CapFull,
         PdSliceHold::WorkerBlocked,
         PdSliceHold::PrClosed,
+        PdSliceHold::PrMissing,
         PdSliceHold::WorkerGone,
     ];
 
@@ -614,6 +651,7 @@ impl PdSliceHold {
             PdSliceHold::CapFull => "cap-full",
             PdSliceHold::WorkerBlocked => "worker-blocked",
             PdSliceHold::PrClosed => "pr-closed",
+            PdSliceHold::PrMissing => "pr-missing",
             PdSliceHold::WorkerGone => "worker-gone",
         }
     }
@@ -637,6 +675,10 @@ impl PdSliceHold {
             PdSliceHold::PrClosed => {
                 "its PR was closed without merging, so the slice is not done and its dependents \
                  will never become ready on their own"
+            }
+            PdSliceHold::PrMissing => {
+                "its worker reported done and no PR ever appeared on its branch, so there is \
+                 nothing to hand to the review driver — check what that worker actually pushed"
             }
             PdSliceHold::WorkerGone => {
                 "its worker's pane died without ever reporting, so nothing is going to finish this \
@@ -680,6 +722,14 @@ pub struct PdSlice {
     /// When the worker pane was opened.
     #[serde(default)]
     pub spawned_ms: u64,
+    /// When this slice started waiting for a PR that has not appeared — stamped
+    /// the first tick it is `reported_done` with no PR, cleared the moment one
+    /// resolves. `0` means "not waiting", which is why every read is guarded
+    /// rather than subtracted from blindly: an unset anchor is not an ancient
+    /// one, the rule [`cap_starved_since_ms`](Self::cap_starved_since_ms)
+    /// follows.
+    #[serde(default)]
+    pub pr_wait_since_ms: u64,
     /// The worktree this slice was given, remembered so a slice released from a
     /// hold RESUMES in the workspace it already had.
     ///
@@ -721,6 +771,7 @@ impl PdSlice {
             pr: 0,
             cap_starved_since_ms: 0,
             spawned_ms: 0,
+            pr_wait_since_ms: 0,
             cwd: String::new(),
             reported_done: false,
             extra: BTreeMap::new(),

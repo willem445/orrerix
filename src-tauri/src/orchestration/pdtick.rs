@@ -1261,6 +1261,7 @@ impl OrchRegistry {
                 if let Some(s) = entry.slices.get_mut(id) {
                     s.advance(plandrive::SliceState::Queued, None);
                     s.cap_starved_since_ms = 0;
+                    s.pr_wait_since_ms = 0;
                     s.reported_done = false;
                     // The PANE is forgotten and the WORKSPACE is not. A released
                     // slice resumes the session it already had, in the worktree
@@ -2119,6 +2120,10 @@ impl OrchRegistry {
         for (id, pr) in &reads.resolved {
             if let Some(run) = entry.slices.get_mut(id) {
                 run.pr = *pr;
+                // The wait is over the moment a PR resolves, however long it
+                // took — the bound below is on a PR that never appears, not on
+                // one that was slow.
+                run.pr_wait_since_ms = 0;
                 out.audits.push((
                     plandrive::audit_action::SLICE_PR,
                     json!({ "issue": issue, "slice": id, "pr": pr }),
@@ -2138,6 +2143,48 @@ impl OrchRegistry {
                     run.reported_done = true;
                 }
             }
+        }
+
+        // **A `done` with no PR is BOUNDED** (rev-std round 2, finding 6). The
+        // `worker-gone` arm below deliberately skips a slice whose worker has
+        // reported — a worker that reports and then exits did its job — so a
+        // worker that reports `done` and produces no PR fell through every arc:
+        // the resolution loop retried a `gh pr list` that will never find one,
+        // the hand-off needs `pr > 0`, and a slice in `Running` makes
+        // `running_idle` false, so the whole-drive backstop could not see it
+        // either. Silent forever, which is the outcome this design exists to
+        // prevent, and it is the same outcome round 1's finding was filed for.
+        //
+        // Stamped on the first tick that observes the wait, so the bound
+        // measures the wait rather than the age of the drive.
+        let waiting: Vec<String> = entry
+            .slices
+            .iter()
+            .filter(|(_, s)| {
+                s.state() == plandrive::SliceState::Running && s.reported_done && s.pr == 0
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &waiting {
+            let Some(run) = entry.slices.get_mut(id) else { continue };
+            if run.pr_wait_since_ms == 0 {
+                run.pr_wait_since_ms = now;
+            }
+            if now.saturating_sub(run.pr_wait_since_ms) < plandrive::PR_WAIT_HOLD_MS {
+                continue;
+            }
+            run.advance(plandrive::SliceState::Held, Some(plandrive::PdSliceHold::PrMissing));
+            entry.note_progress(now);
+            out.audits.push((
+                plandrive::audit_action::SLICE_HELD,
+                json!({ "issue": issue, "slice": id,
+                        "reason": plandrive::PdSliceHold::PrMissing.as_str() }),
+            ));
+            out.notices.push(format!(
+                "[orrerix] plan drive #{issue}: slice {id} HELD ({}) — {}",
+                plandrive::PdSliceHold::PrMissing.as_str(),
+                plandrive::PdSliceHold::PrMissing.notice_line(),
+            ));
         }
 
         // A worker's `blocked` parks ITS slice and nothing else (§2(e)).

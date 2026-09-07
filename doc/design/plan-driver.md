@@ -243,6 +243,7 @@ worker cost one slice rather than a plan.
 | `cap-full` | the live-delegate cap refused this slice's spawn for longer than `CAP_HOLD_MS` |
 | `worker-blocked` | this slice's worker reported `blocked`; the notice carries its own note |
 | `pr-closed` | this slice's PR was CLOSED without merging |
+| `pr-missing` | this slice's worker reported `done` and no PR ever appeared on its branch, for longer than `PR_WAIT_HOLD_MS` (15 min) |
 | `worker-gone` | this slice's worker pane died without ever reporting |
 
 **A cap refusal is not an error.** The row stays `queued` and is retried every

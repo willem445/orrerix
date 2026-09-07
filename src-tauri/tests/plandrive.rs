@@ -18,6 +18,7 @@ use loomux_lib::orchestration::mcp::dispatch;
 use loomux_lib::orchestration::mqdriver::CmdOut;
 use loomux_lib::orchestration::plandrive::{self, Consent, PdHeldReason, PlanDriveState};
 use loomux_lib::orchestration::rddrive::RdRunner;
+use loomux_lib::orchestration::plandrive::PR_WAIT_HOLD_MS;
 use loomux_lib::orchestration::reviewdrive::CAP_HOLD_MS;
 use loomux_lib::orchestration::{
     Caller, GroupId, Guardrails, OrchRegistry, PdPlanCheck, Role, PD_MAX_GH_PER_TICK,
@@ -3198,4 +3199,113 @@ fn a_review_window_longer_than_the_drive_timeout_is_not_a_stall() {
         "past the window the drive boards — a bounded wait, not an exemption: {}",
         status(&reg, &group)
     );
+}
+
+// ── rev-std round 2 ─────────────────────────────────────────────────────────
+
+/// **A worker that reports `done` and produces NO PR is bounded** (round 2,
+/// finding 6).
+///
+/// The `worker-gone` arm deliberately skips a slice whose worker has reported,
+/// so this input fell through every arc at once: the resolution loop retried a
+/// `gh pr list` that will never find anything, the hand-off needs `pr > 0`, and
+/// a slice in `running` makes `running_idle` false so the whole-drive backstop
+/// could not see it either. Silent forever — the outcome round 1's finding was
+/// filed for, on the round-1 fix's own blind side.
+///
+/// Three assertions, and the middle one is the point: BEFORE the bound the
+/// slice is still `running`, so the hold is the bound's doing and not merely
+/// "any tick after a report parks it" — which would break the ordinary case of
+/// a worker reporting a moment before its PR is visible.
+#[test]
+fn a_done_that_never_produces_a_pr_is_parked_once_the_wait_bound_trips() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, PLAN3);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+
+    let agent = slice_agent(&reg, &group, "P1");
+    with_pane(&reg, &agent, 7_101);
+    // `done` with a ref that resolves to nothing, and no PR on the branch — the
+    // worker violated its own definition of done. Then its pane exits.
+    report(&reg, &group, &agent, "done", json!({ "ref": "not-a-pr", "note": "pushed I think" }));
+    assert!(reg.mark_agent_dead_for_test(&agent), "the worker pane must exist to be ended");
+
+    // Inside the bound: still running, still retrying, NOT parked.
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    assert_eq!(
+        slice_state(&reg, &group, "P1"),
+        "running",
+        "a PR that is merely slow must not be parked: {}",
+        status(&reg, &group)
+    );
+    let waiting = read_record(&reg, &group)["entries"][0]["slices"]["P1"]["pr_wait_since_ms"]
+        .as_u64()
+        .unwrap_or(0);
+    assert!(waiting > 0, "the wait is stamped on the first tick that observes it");
+
+    reg.pd_drive_group_with(&group, &gh, waiting + PR_WAIT_HOLD_MS - 1);
+    assert_eq!(slice_state(&reg, &group, "P1"), "running", "still inside the bound");
+
+    // Past it.
+    reg.pd_drive_group_with(&group, &gh, waiting + PR_WAIT_HOLD_MS);
+    assert_eq!(slice_state(&reg, &group, "P1"), "held", "{}", status(&reg, &group));
+    assert_eq!(slice_hold(&reg, &group, "P1"), "pr-missing");
+    assert_eq!(
+        drive_state(&reg, &group),
+        "running",
+        "one slice, not the drive — the other slices are unaffected"
+    );
+    assert!(
+        reg.audit_log(&group)
+            .into_iter()
+            .any(|e| e.action == "pd-slice-held" && e.detail["reason"] == json!("pr-missing")),
+        "the hold is on the record with its reason: {:?}",
+        audit_actions(&reg, &group)
+    );
+}
+
+/// **A PR that is merely LATE still gets its hand-off, and the wait is
+/// forgotten** (round 2, finding 6 — the other side).
+///
+/// The bound above must not cost the ordinary case: a worker reports `done` the
+/// moment it pushes, and the PR is visible a tick later. This is that case
+/// carried past the point where a bound keyed on the report rather than on the
+/// wait would have parked it.
+#[test]
+fn a_late_pr_still_hands_off_and_clears_the_wait() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, PLAN3);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+
+    let agent = slice_agent(&reg, &group, "P1");
+    with_pane(&reg, &agent, 7_101);
+    report(&reg, &group, &agent, "done", json!({ "note": "pushed, PR opening" }));
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    assert!(
+        read_record(&reg, &group)["entries"][0]["slices"]["P1"]["pr_wait_since_ms"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "the control: this slice really is waiting"
+    );
+
+    // The PR appears, late but inside the bound.
+    gh.set_head_pr("feat/3040-p1", 4_777);
+    gh.set_pr(4_777, "OPEN", None);
+    reg.pd_drive_group_with(&group, &gh, 1_500 + PR_WAIT_HOLD_MS / 2);
+    assert_eq!(slice_state(&reg, &group, "P1"), "in-review", "{}", status(&reg, &group));
+    assert_eq!(
+        read_record(&reg, &group)["entries"][0]["slices"]["P1"]["pr_wait_since_ms"],
+        json!(0),
+        "and the wait is forgotten, so a later slow tick cannot park a slice already handed off"
+    );
+
+    // Well past the bound, with the slice in review: still not parked.
+    reg.pd_drive_group_with(&group, &gh, 1_500 + 3 * PR_WAIT_HOLD_MS);
+    assert_eq!(slice_state(&reg, &group, "P1"), "in-review", "{}", status(&reg, &group));
+    assert_eq!(slice_hold(&reg, &group, "P1"), "");
 }

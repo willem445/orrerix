@@ -277,13 +277,15 @@ For anything beyond the frontend-only and `rustfmt --check` steps above:
    gh run list --branch <branch> --json headSha,databaseId,conclusion,workflowName
    git rev-parse HEAD
    ```
-   **That listing is newest-first across EVERY workflow, so its first row is
-   routinely another workflow's run** — Docs, pages or code-metrics fires on the
-   same `pull_request` a few seconds after `ci.yml`. Filter on `workflowName` and
-   read every matching row (`--workflow CI` is the short form). Taking the top row
-   reads another workflow's verdict for yours, and it fails toward GREEN, so nothing
-   looks wrong. Signature: a cited run id whose `workflowName` is not the build
-   (#1264 — two rounds silently read as `success`).
+   **That listing is newest-first across EVERY workflow, not just `ci.yml`.** Three
+   workflows here run on `pull_request` — CI, Docs and Actionlint — and the latter two
+   are path-scoped, so the moment your diff touches `docs/` or `.github/workflows/**`
+   a sibling run appears at your head seconds after CI's and can sort above it.
+   (`Code metrics` is a JOB inside CI, not a workflow, and never a separate row.)
+   Filter on `workflowName` and read every matching row — `--workflow CI` is the short
+   form. Taking the top row reads a sibling workflow's verdict for yours, and it fails
+   toward GREEN, so nothing looks wrong. Signature: a cited run id whose `workflowName`
+   is not the build (#1264 — two rounds silently read as `success`).
 
    A run counts as this PR's evidence only when its `headSha` **is** the head
    you are reporting on. A citation that survives a rebase untouched is the

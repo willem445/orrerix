@@ -1752,8 +1752,9 @@ this drive no longer owns.
 All of these — the five S3 added, the two #1871 B2 added beside them,
 `owed_notice`, which #1857 adds and *Retention* below describes, and
 `last_hold_key` (#3040 N1, §6: the key of the last hold this entry ANNOUNCED,
-so a resume that changed nothing the drive can observe does not re-announce
-one) — are optional on
+so a resume that changed nothing the drive can observe does not re-announce one
+— except for the two reasons `repeat_carries_new_information` names, whose line
+reports a duration and so is news every time) — are optional on
 read, so a file written against the shape as first published still parses. An
 entry predating `owed_notice` owes nothing, which is the direction that cannot
 retain a record forever. `counters` is **not** optional: an absent counter block

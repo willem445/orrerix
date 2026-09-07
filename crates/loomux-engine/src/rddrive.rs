@@ -606,7 +606,14 @@ pub mod audit_action {
     pub const STATE_UNREADABLE: &str = "rd-state-unreadable";
     /// A hold fired whose notice was **not delivered**, because this drive had
     /// already announced a hold with the same key — same reason, same head,
-    /// same counters spent (#3040 N1).
+    /// same counters spent — and that reason is one whose line says nothing new
+    /// on a repeat (#3040 N1).
+    ///
+    /// **Key equality is necessary and not sufficient**, and the difference is
+    /// `reviewdrive::repeat_carries_new_information`: `state-stalled` and
+    /// `drive-stalled` interpolate a duration the key cannot see, so a second
+    /// one at an identical key is a fresh stall and is delivered. No row is
+    /// written for those.
     ///
     /// Carries `pr`, `reason`, `head` and the `notice` it did not send. The
     /// text is the point rather than a convenience, on [`NOTICE_DROPPED`]'s

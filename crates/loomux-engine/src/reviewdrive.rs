@@ -4377,6 +4377,62 @@ fn minutes_ms(minutes: u64) -> u64 {
 mod tests {
     use super::*;
 
+    /// **`hold_key` stays reason-blind, so the exception cannot migrate into
+    /// it** (rev-std round 2 premortem).
+    ///
+    /// The suppression is decided in two places that must stay separate: the
+    /// key says whether two holds are the same hold, and
+    /// [`repeat_carries_new_information`] says whether sameness implies
+    /// silence. Fold the exception into the KEY instead — a nonce, a clock, a
+    /// per-reason discriminator for the two — and every one of this module's
+    /// other tests still passes: the cap-repeat test still dedups, the
+    /// time-bound test still announces, and it announces for the wrong reason,
+    /// with the mutation surface moved somewhere nothing reads.
+    ///
+    /// So this pins the property that makes the split real: the key is a pure
+    /// function of what it is handed. Two calls with identical inputs are
+    /// identical for EVERY reason, the two exceptions included — and the
+    /// discriminating half is that a key still VARIES on each input it is
+    /// documented to carry, or "always equal" would satisfy the first half.
+    #[test]
+    fn the_hold_key_is_a_pure_function_of_its_inputs_for_every_reason() {
+        let head_a = "aa11bb22cc33dd44";
+        let head_b = "bb22cc33dd44ee55";
+        let c0 = Counters::default();
+        let c1 = Counters { review_rounds: 1, ..Counters::default() };
+        for r in HeldReason::ALL {
+            assert_eq!(
+                hold_key(r, head_a, &c0),
+                hold_key(r, head_a, &c0),
+                "{}: the key must not carry a nonce or a clock — the exception lives in \
+                 repeat_carries_new_information, never here",
+                r.as_str()
+            );
+            assert_ne!(
+                hold_key(r, head_a, &c0),
+                hold_key(r, head_b, &c0),
+                "{}: …and it must still vary with the head, or the first assertion is \
+                 satisfied by a constant",
+                r.as_str()
+            );
+            assert_ne!(
+                hold_key(r, head_a, &c0),
+                hold_key(r, head_a, &c1),
+                "{}: …and with the counters spent",
+                r.as_str()
+            );
+        }
+        // The other half of the split, stated as a set rather than as a list of
+        // calls: exactly the two time-bound reasons are exempt, so a sixteenth
+        // reason folded in silently fails here as well as at the match.
+        let exempt: Vec<&str> = HeldReason::ALL
+            .into_iter()
+            .filter(|r| repeat_carries_new_information(*r))
+            .map(|r| r.as_str())
+            .collect();
+        assert_eq!(exempt, vec!["state-stalled", "drive-stalled"], "{exempt:?}");
+    }
+
     // ── §2.1 the closed state enum ──────────────────────────────────────────
 
     #[test]

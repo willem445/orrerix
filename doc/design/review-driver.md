@@ -719,6 +719,75 @@ broken by a mechanism it could not see. Every exit therefore NAMES the panes
 notice whose delivery fails is lost (#1857) and a cancel is the one exit whose
 caller is holding a return value at the moment those panes stop being anyone's.
 
+**The ORCHESTRATOR's kill authority is narrowed by exactly one refusal, and it
+is overridable** (#2811 S2). Everything above is about
+what the DRIVER may do to a pane. The other half went unwritten until #3038 made
+it expensive: nothing told the orchestrator that a pane belonged to a live drive.
+`kill_agent` checked group membership and nothing else, `list_agents` said
+nothing at all, and the cap-refusal roster — whose own remedy is "reuse an idle
+agent or kill one first" — listed a drive's idle worker beside every other
+reclaimable slot. Measured on the beta9 session: `w-2460` reported, sat idle
+because its release condition could not fire (#2811 S1), and was killed to free a
+slot 42 seconds before the round-2 fail needed it. The drive held
+`worker-unresumable`, and the recovery cost a notice, a resume and an
+orchestrator turn.
+
+Three surfaces now answer the question, off ONE ownership read
+(`OrchRegistry::rd_driven_panes`, which asks `DriveEntry::driven_role` — the same
+predicate `rd_owner` asks for §7's interception, so "the drive owns this pane"
+has one definition rather than a second written for the roster):
+
+- **`list_agents`** rows carry `driven_by: "#<pr>"`, `null` otherwise. The key is
+  always present, so "not driven" never has to be told apart from an older build.
+- **`kill_agent`** (the MCP arm) refuses such a pane, naming the PR and both ways
+  out — cancel the drive, or `force: true`. It is a refusal rather than a veto
+  because the orchestrator is still the party that owns the fleet: what was
+  missing was never authority, it was the fact.
+- **The cap-refusal roster** marks the row `(worker, idle, driven #<pr>)`, so the
+  notice's own remedy cannot point at the one pane it must not.
+
+**One read, two acquisition disciplines, split by failure direction.** The
+driver's tick holds `rd_state_lock` across its whole read-modify-write and
+performs its spawns inside it (§2.4), so the cap-refusal roster — which the
+driver's OWN lane spawn and hand-back reach — cannot take that lock blockingly:
+the first CI run of this slice refused it `lock-reentrant` across the whole
+`reviewdrive` suite. The two roster sites therefore use a non-blocking read that
+answers empty when the lock is busy, and the two GUARD sites (`list_agents`, the
+`kill_agent` refusal) block. The asymmetry is the point: a guard that skipped its
+check because a lock was momentarily busy would let through exactly the kill this
+exists to refuse, silently, while an unmarked roster row is the sentence this
+repo shipped before — a decoration lost, never a wrong claim made, and never a
+kill admitted. And the caller that loses it is the one that does not need it: a
+cap refusal the DRIVER gets becomes `held(cap-refused)` / `cap-full`, whose
+notice already names this drive's own panes.
+
+**An unreadable record is a fault, not an answer.** The read distinguishes "I
+looked and nothing owns this pane" from "I could not look" — a
+`review_drives.json` that is present and unparseable, which is what a downgrade
+produces. The guards refuse on the second (`kill_agent` says so and names
+`force`; a roster row reads `unreadable` rather than `null`, because `null` is a
+claim), and that is the posture `queue_merge` already takes on the same file and
+§2.4 gives the tick. The roster marker, which guards nothing, treats it as
+unmarked like the other two.
+
+**#2555 item 1 is not closed by this.** That item asks that
+`release_driven_pane` itself refuse a pane the drive's records do not name, or
+that a `ReleaseTicket` only the driver can mint replace the one-call-site source
+scan that stands in for it. What lands here is the shared ownership read that
+fix needs, consumed by three other surfaces; the release path does not read it
+and that function's refusals are unchanged. Wiring it there runs under
+`rd_state_lock` and moves a signature two source scans pin, which is its own
+change. The item stays open, as item 2 does.
+
+Three things this does NOT do, each deliberate. **The human's kill is untouched**
+— that is the UI path, and a human closing a pane is not a party orrerix may
+refuse. **A superseded pane is neither marked nor guarded**: the drive will never
+speak to it again (`DrivenPane::current` is exactly that distinction), so
+refusing its kill would hold a slot the drive is finished with, which is the cost
+this is about, pointed the other way. And **nothing here kills or releases
+anything** — §3.1 item 5's closed list is untouched, and the driver's one kill
+capability is still `release_driven_pane`.
+
 ### 3.1 What the driver may never do — the closed list, honestly labelled
 
 Seven items. **Five of them are promises today**, and this section labels each
@@ -1241,6 +1310,33 @@ review_drive_status()
                   grace_used: bool,
                   since_ms }] }
 ```
+
+
+**A fourth tool is CONSTRAINED by the driver without belonging to it**
+(#2811 S2). `kill_agent` is the orchestrator's own fleet-control tool, not one of
+the three above, and it gains one optional argument:
+
+```
+kill_agent(agent_id: string, force?: boolean)
+  -> "kill signal sent to <id>" | Err("<sentence>")
+  new refusal: "<id> is the worker|lane pane of the live review drive on
+                PR #<n> — cancel_review_drive first, or pass force:true"
+```
+
+`force` defaults to `false`, and `true` skips only THIS refusal — every other
+one `kill_agent` has (the orchestrator's own pane, a lead pane, a pane still
+binding) is unchanged and is not overridable. The refusal names both remedies in
+the sentence that refuses, because an orchestrator freeing a slot at the cap has
+a reason and needs the alternative in the same breath, not a dead end. What
+`force` costs is stated by the drive on its next tick: the pane is gone, and
+`fix-wait` holds `worker-unresumable` quoting `(ended by orchestrator)` — the
+override's outcome, read back to the party that chose it. §3's kill-authority
+paragraph carries the argument.
+
+`list_agents` gains the field the refusal is derived from — `driven_by: "#<pr>"`,
+`null` otherwise, always present — which is the contract half of this: a refusal
+whose input the caller cannot see is a surprise, and one it can look up first is
+a rule.
 
 **`grace_used` sits beside the counters rather than inside them, because it is
 not one** (#2509). `review_rounds` is what this drive has spent of INVARIANT 9's

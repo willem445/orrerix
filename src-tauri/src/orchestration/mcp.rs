@@ -959,6 +959,18 @@ fn group_usage_tool() -> Value {
 /// pane" carry nothing orchestration-specific — no board, no review gate, no
 /// merge queue — so two copies would be two places for one sentence to drift.
 ///
+/// **One clause is now an exception, stated rather than left for a reader to
+/// find** (#2811 S2): `kill_agent` describes the review-drive refusal and its
+/// `force` override, and a LEAD group has no review driver at all — no board,
+/// no gate, nothing that could write a `review_drives.json` — so that clause is
+/// inert there. It stays in the shared description rather than earning
+/// `spawn_agent`'s split below, and the difference is size: that one is three
+/// screens of contract a lead is refused every line of, which is what makes
+/// advertising it the failure its doc names. This is one sentence of one
+/// description, and the alternative — two spellings of a refusal whose wording
+/// a test pins — is the drift this function exists to prevent. Should a second
+/// orchestration-only clause land here, split it then.
+///
 /// **`spawn_agent` is deliberately NOT in here**, and that asymmetry is the
 /// design rather than an oversight. Its description is three screens of
 /// orchestrator-specific contract — reviewer and planner classes, board-task
@@ -983,8 +995,13 @@ fn fleet_control_tool_defs() -> [Value; 5] {
                 "lines": { "type": "integer", "description": "default 60, max 500" },
             }),
             &["agent_id"]),
-        tool("kill_agent", "Terminate an agent and close its pane.",
-            json!({ "agent_id": { "type": "string" } }), &["agent_id"]),
+        tool("kill_agent",
+            "Terminate an agent and close its pane. REFUSED for a pane a live review drive is currently using — its worker or one of its reviewer lanes, which list_agents marks `driven_by: \"#<pr>\"`: killing one strands the drive until it holds. Cancel the drive first (cancel_review_drive), or pass force:true if you mean to end that pane anyway.",
+            json!({
+                "agent_id": { "type": "string" },
+                "force": { "type": "boolean", "description": "default false. Kill the pane even if a live review drive owns it — the drive will hold on its next tick." },
+            }),
+            &["agent_id"]),
         tool("focus_agent", "Bring an agent's pane into focus for the human.",
             json!({ "agent_id": { "type": "string" } }), &["agent_id"]),
         tool("rename_agent",
@@ -3536,7 +3553,59 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
         "kill_agent" => {
             require_spawner(caller)?;
             let target = arg_str(args, "agent_id").ok_or("agent_id required")?;
+            let force = arg_bool(args, "force")?;
             let a = require_in_group(reg, caller, target)?;
+            // #2811 S2, the #3038 class. Group membership was
+            // the only thing this arm checked, so a pane a live drive was
+            // holding for its next round looked exactly like an idle delegate
+            // to reclaim — and on a cap refusal the driver's own notice ASKS
+            // the orchestrator to kill one. Measured: w-2460 killed 42 s
+            // before the drive needed it, recovered by a hold, a notice and a
+            // resume.
+            //
+            // **Refused, not silently declined**, and overridable in the same
+            // sentence: an orchestrator that genuinely means to end a driven
+            // pane says so with `force`, and the drive then holds
+            // `worker-unresumable` naming the kill — the honest outcome, one
+            // the reader chose. §3.1's guarantee that the DRIVER never kills a
+            // pane is untouched; what narrows here is the orchestrator's kill
+            // authority, by one refusal it can override.
+            //
+            // **The human's own kill is untouched.** This is the MCP arm; the
+            // UI's kill path never comes through here, and a human closing a
+            // pane is not a party this may refuse.
+            if !force {
+                // **An unreadable record is a FAULT, not evidence that the pane
+                // is undriven** (rev round 1, N1). `Ok` of an empty map means
+                // orrerix looked and nothing owns this pane; `Err` means it
+                // could not look, and reading the second as the first would
+                // admit exactly the kill this refuses, on the one input where
+                // nothing else can tell. It is the posture `queue_merge` already
+                // takes on the same file (rd-state-unreadable, "unknown is never
+                // treated as safe here either") and the one §2.4 gives the tick.
+                // `force` overrides this refusal as it does the other, so a group
+                // whose record is genuinely broken is never wedged.
+                let Ok(driven) = reg.rd_driven_panes(&caller.group) else {
+                    return Err(format!(
+                        "orrerix cannot read this group's review-drive record, so it cannot \
+                         tell whether a live drive is using {} — and an unreadable record is \
+                         not evidence that nothing is. Retry, or pass force:true to kill it \
+                         anyway.",
+                        a.id
+                    ));
+                };
+                if let Some((pr, role)) = driven.get(&a.id) {
+                    let side = match role {
+                        super::reviewdrive::DrivenRole::Worker => "worker",
+                        super::reviewdrive::DrivenRole::Lane(_) => "lane",
+                    };
+                    return Err(format!(
+                        "{} is the {side} pane of the live review drive on PR #{pr} — \
+                         cancel_review_drive first, or pass force:true",
+                        a.id
+                    ));
+                }
+            }
             reg.kill_agent(&a.id)?;
             Ok(format!("kill signal sent to {}", a.id))
         }

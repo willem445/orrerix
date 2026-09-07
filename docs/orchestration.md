@@ -3189,6 +3189,21 @@ the drive parks as `fix-stalled` with a line naming the pane to read. A worker t
 waited out. None of this applies to a drive that has not handed anything back yet — the first pass
 over a PR you drove after your worker already reported is unchanged.
 
+**A pane a live drive is using is marked, and killing it takes a deliberate override.** The
+driver holds panes between rounds — the worker it handed the fix to, the reviewer lanes it opened
+— and an idle one of those looks exactly like a delegate to reclaim. It is not: killing it strands
+the drive until the next tick notices and parks. So `list_agents` marks each such row
+`driven_by: "#<pr>"`, and `kill_agent` refuses one, naming the PR and both ways out — cancel the
+drive first, or pass `force: true`. The field has exactly three shapes and is always present:
+`"#<pr>"` when a live drive is using that pane, `null` when none is, and `"unreadable"` when
+orrerix could not read this group's drive record at all — which is not the same as "nothing is
+driven", and is why `kill_agent` refuses on it too. This matters most at the live-delegate cap,
+whose own refusal says to kill an idle delegate and lists who is idle: that list now marks the
+rows the advice does not apply to. If you do force it, the drive says what it cost on its next
+tick — the hold names the pane and reads `(ended by orchestrator)`, so the outcome comes back to
+whoever chose it. **Closing a pane yourself, from the UI, is untouched** — this is the
+orchestrator's tool, and orrerix does not refuse you your own panes.
+
 **A drive stops, it does not drift.** There are seventeen ways out and each produces at most one
 line in the orchestrator's pane: the gate being satisfied, the drive being cancelled — by you, or
 by orrerix on its own when it sees the PR has been closed — or one of

@@ -8652,17 +8652,40 @@ pub fn idle_should_kill(idle_since_ms: Option<u64>, now_ms: u64, threshold_min: 
 }
 
 /// Format the live-delegate roster line for the cap-rejection guardrail message
-/// (#203) from `(id, role, idle)` triples, sorted by id for a stable message:
-/// `id (role, idle|working), …`. `idle` (`idle_since_ms.is_some()`) is the
+/// (#203) from `(id, role, idle, driven)` rows, sorted by id for a stable
+/// message: `id (role, idle|working[, driven #<pr>]), …`. `idle`
+/// (`idle_since_ms.is_some()`) is the
 /// same signal the idle-reaper kills on, so it genuinely means "safe to
 /// reclaim". Pure and free-standing so both `spawn_agent` cap checks can format
 /// an identical message — the fast path via [`OrchRegistry::live_delegate_roster`],
 /// the race-safe path directly against its already-held `agents` guard (no
 /// re-lock). Empty string for no rows (the cap can't be hit then, but stay total).
-fn format_delegate_roster(mut rows: Vec<(String, &'static str, bool)>) -> String {
+///
+/// # `driven` (#2811 S2)
+///
+/// The refusal's remedy is "reuse an idle agent or kill one first", and an idle
+/// pane a live review drive is holding for its next round is the one row on this
+/// list for which that advice is WRONG — following it strands the drive, which
+/// is #3038 measured. So a driven pane says so, next to the `idle` that would
+/// otherwise recommend it. `None` renders exactly the bytes this function
+/// produced before, which is what keeps the existing pins on undriven rows
+/// (`w-… (worker, working)`) their own negative control.
+///
+/// It is a plain `Option<u64>` per row rather than a lookup this function does,
+/// because the race-safe caller formats under the `agents` guard and the
+/// ownership read must not be called there. Both roster callers resolve it
+/// beforehand through [`OrchRegistry::rd_driven_panes_now`] — the non-blocking
+/// form, since the DRIVER's own spawn reaches this function from inside a tick
+/// that already holds `rd_state_lock`; an unmarked row is the documented answer
+/// for that caller, and [`OrchRegistry::rd_driven_panes`]'s locking note carries
+/// why.
+fn format_delegate_roster(mut rows: Vec<(String, &'static str, bool, Option<u64>)>) -> String {
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     rows.into_iter()
-        .map(|(id, role, idle)| format!("{id} ({role}, {})", if idle { "idle" } else { "working" }))
+        .map(|(id, role, idle, driven)| {
+            let driven = driven.map(|pr| format!(", driven #{pr}")).unwrap_or_default();
+            format!("{id} ({role}, {}{driven})", if idle { "idle" } else { "working" })
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -48580,12 +48603,25 @@ impl OrchRegistry {
     /// pane the cap does not count is not holding one — naming it here would
     /// point a refused orchestrator at a pane it must not reuse or kill.
     fn live_delegate_roster(&self, group: &GroupId) -> String {
+        // #2811 S2: the NON-BLOCKING read, and taken before the `agents` lock.
+        // This is reachable from inside the driver's own tick, which holds
+        // `rd_state_lock` across its spawns — see `rd_driven_panes`'s locking
+        // note for why that means `try` here and a blocking acquire on the two
+        // guard surfaces.
+        let driven = self.rd_driven_panes_now(group);
         let rows = self
             .agents
             .lock_safe()
             .values()
             .filter(|a| a.group == group && counts_against_max_agents(a.role) && a.status != AgentStatus::Dead)
-            .map(|a| (a.id.clone(), a.role.as_str(), a.idle_since_ms.is_some()))
+            .map(|a| {
+                (
+                    a.id.clone(),
+                    a.role.as_str(),
+                    a.idle_since_ms.is_some(),
+                    driven.get(&a.id).map(|(pr, _)| *pr),
+                )
+            })
             .collect();
         format_delegate_roster(rows)
     }
@@ -51557,6 +51593,22 @@ impl OrchRegistry {
             last_exit_tail: None,
             killed_by: None,
         };
+        // #2811 S2: the driven-pane markers the race-safe cap refusal below
+        // needs, resolved HERE because the read takes `rd_state_lock` and the
+        // block below holds `agents` — the inversion `rd_driven_panes`'s locking
+        // note forbids. It is the NON-BLOCKING form because this function is
+        // also how the DRIVER spawns, from inside a tick that already holds
+        // `rd_state_lock`; the same note carries why an unmarked roster is the
+        // right answer for that caller. Gated on the same predicate as the cap
+        // itself, so a spawn the cap does not police (the orchestrator, the
+        // manager) pays nothing; a delegate spawn pays one `stat` on a group
+        // with no `review_drives.json`, which is every group that runs no
+        // driver.
+        let driven_at_cap = if counts_against_max_agents(role) {
+            self.rd_driven_panes_now(group_id)
+        } else {
+            std::collections::BTreeMap::new()
+        };
         {
             // Re-check the cap under the same lock as the insert: the early
             // check above fast-fails before worktree creation, but only this
@@ -51602,7 +51654,14 @@ impl OrchRegistry {
                                     && counts_against_max_agents(a.role)
                                     && a.status != AgentStatus::Dead
                             })
-                            .map(|a| (a.id.clone(), a.role.as_str(), a.idle_since_ms.is_some()))
+                            .map(|a| {
+                                (
+                                    a.id.clone(),
+                                    a.role.as_str(),
+                                    a.idle_since_ms.is_some(),
+                                    driven_at_cap.get(&a.id).map(|(pr, _)| *pr),
+                                )
+                            })
                             .collect(),
                     );
                     let _ = fs::remove_file(&cfg.path);
@@ -57002,6 +57061,15 @@ impl OrchRegistry {
     }
 
     pub fn list_agents(&self, group: &GroupId) -> Value {
+        // #2811 S2: which of these panes a live review drive owns. Read BEFORE
+        // the `agents` lock and never under it — the driver holds
+        // `rd_state_lock` and then reaches `agents` through
+        // [`Self::release_driven_pane`], so the reverse nesting would invert an
+        // ordering that exists in production. See
+        // [`Self::rd_driven_panes`] for why it is one read and what it excludes.
+        // `Err` is "orrerix could not read the drive record", which is NOT
+        // "nothing is driven" — see the `driven_by` comment on the row below.
+        let driven = self.rd_driven_panes(group);
         let agents = self.agents.lock_safe();
         let mut list: Vec<Value> = agents
             .values()
@@ -57029,6 +57097,26 @@ impl OrchRegistry {
                     "session": a.session_id, "cwd": a.cwd,
                     "idle_since_ms": a.idle_since_ms,
                     "task": task_excerpt(&a.task, TASK_EXCERPT_CHARS),
+                    // #2811 S2: `"#<pr>"` when a live review drive is currently
+                    // using this pane as its worker or one of its lanes,
+                    // `null` when nothing is, and `"unreadable"` when orrerix
+                    // could not read this group's drive record at all. The KEY
+                    // IS ALWAYS PRESENT, the way `wip` and `current_sprint` are
+                    // on the board read, so "not driven" never has to be told
+                    // apart from "this build does not report it".
+                    //
+                    // **Three states, not two** (rev round 1, N1): `null` is a
+                    // CLAIM — orrerix looked and nothing owns this pane — and
+                    // publishing it off a read that FAILED would put a false
+                    // claim on the roster the `kill_agent` refusal is derived
+                    // from, which is the one place a reader checks before
+                    // killing. The MCP arm refuses outright on the same fact;
+                    // a roster read is not a guard, so it reports rather than
+                    // refuses — but it must not lie.
+                    "driven_by": match &driven {
+                        Ok(d) => d.get(&a.id).map(|(pr, _)| format!("#{pr}")),
+                        Err(()) => Some("unreadable".to_string()),
+                    },
                 })
             })
             .collect();

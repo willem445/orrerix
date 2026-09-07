@@ -814,7 +814,7 @@ went.
   forgotten is still running.
 - `cancel_plan_drive(issue)` — stop one. It kills nothing: panes keep running under you, and their
   reports start reaching this one again. Ending a pane is still `kill_agent`.
-- `resume_plan_drive(issue)` — restart a parked drive, releasing its parked slices with it.
+- `resume_plan_drive(issue, skip?)` — restart a parked drive, releasing its parked slices with it.
 
 **The plan is a fenced `orrerix-plan` block, and it is validated before anything is posted.** An
 invalid one comes back to the planner as a tool error with line numbers, nothing reaches the issue,

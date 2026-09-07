@@ -3484,6 +3484,29 @@ Enforced by orrerix, not the model:
 - the permission mode fixed at group creation (native auto mode or acceptEdits —
   never bypass).
 
+### Who can close a PR
+
+`gh pr close` goes through the same shim as `gh pr merge`, and it is decided before it
+reaches GitHub. A worker, reviewer or planner may close only a PR whose head branch is
+its own — or a scratch branch beneath it, under a `/` or `-` (so `fix/2985-x` covers
+`fix/2985-x-scratch2`, and a bare prefix like `fix/29` covers nothing). The orchestrator
+may close any PR in its group. Anything else is refused, with a message naming the PR, the
+branch it belongs to, and what the calling agent does own.
+
+This exists because of a live incident: a worker cleaning up its own scratch PRs looped
+over PR numbers it had built by string concatenation, and closed five other workers' open
+PRs in six seconds. Every review drive on them was cancelled, and because `gh` runs under
+your own token, the GitHub timeline could not tell an agent's close from yours.
+
+Two more things follow from that. Every close — allowed or refused — is now an audit row
+carrying the calling agent's id, so the next orchestrator reads the audit log instead of
+asking you whether the closes were deliberate; and `gh pr reopen` is never refused (it
+destroys nothing, and it is the remediation) but is audited the same way. Your own closes
+from the GitHub UI are untouched: the shim only ever sits on an agent pane's `PATH`.
+
+`gh pr merge --delete-branch` is deliberately outside this — it is the branch cleanup that
+belongs with a merge, and it already sits behind the merge gate.
+
 ### Compact-nudge
 
 The orchestrator pane lives for the whole session and every turn re-reads its entire

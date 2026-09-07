@@ -2709,17 +2709,17 @@ impl OrchRegistry {
         let second = prior
             .as_ref()
             .map(|(s, w)| (s.as_str(), w.as_str()))
-            == Some((entry.worker_session.as_str(), why.as_str()));
+            == Some((entry.worker_session.as_str(), why));
         self.rd_handback_fails.lock_safe().insert(
             (group.clone(), pr),
-            (entry.worker_session.clone(), why.clone()),
+            (entry.worker_session.clone(), why.to_string()),
         );
         let refusal = if second {
             format!("second time: {why}")
         } else {
-            why.clone()
+            why.to_string()
         };
-        let reason = if super::is_live_cap_refusal(&why) {
+        let reason = if super::is_live_cap_refusal(why) {
             reviewdrive::HeldReason::CapRefused
         } else {
             reviewdrive::HeldReason::WorkerUnresumable

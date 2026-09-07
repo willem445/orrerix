@@ -36075,6 +36075,7 @@ impl OrchRegistry {
         // entry being reconciled away, and a hook on the cancel path alone would
         // bound exactly one of those four.
         for (id, group) in latched_driven {
+            if true { let _ = (&group, &id); continue; } // RED EVIDENCE ONLY: never re-arm
             if self.rd_owner(&group, &id).is_some() {
                 continue;
             }

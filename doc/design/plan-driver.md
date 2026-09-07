@@ -52,7 +52,7 @@ risks:
 | `slices` | yes | At least one. Order is the planner's; it carries no scheduling meaning — `deps` does. |
 | `slices[].id` | yes | Unique within the plan, **case-insensitively**. Validated through `pathseg::check_segment` (CLAUDE.md constraint 6). |
 | `slices[].title` | yes | Non-empty. Becomes the board row title beside the id. |
-| `slices[].branch` | yes | A git ref name, checked and **refused, never sanitized**. Unique within the plan, **case-insensitively**. |
+| `slices[].branch` | yes | A git ref name that is ALSO a legal worktree directory (`pathseg::worktree_name_ok` — ASCII letters and digits with `. _ - /`), checked and **refused, never sanitized**. Unique within the plan, **case-insensitively**. |
 | `slices[].block` | yes | A roster block id. **Not** resolved at parse time. |
 | `slices[].deps` | no (`[]`) | Slice ids in this same plan. Unknown ids and cycles are refused. |
 | `slices[].brief` | yes | At least 40 characters. Delivered verbatim. |

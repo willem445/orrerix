@@ -528,8 +528,12 @@ fn check_document(doc: &PlanDoc, text: &str, first_line: usize, errs: &mut Vec<S
     // two-strings-name-one-thing hazard this module's own rationale refuses to
     // create by rewriting; it would be odd to refuse to *create* it and then
     // wave it through when a planner writes it directly. `to_ascii_lowercase`
-    // is the whole fold: `check_segment` has already made the alphabet ASCII,
-    // and `BranchName` has already refused every non-printable byte.
+    // is the whole fold, and BOTH halves of that are now enforced rather than
+    // assumed: `check_segment` makes a slice id ASCII, and `worktree_name_ok`
+    // above makes a branch ASCII. Before that second check existed this comment
+    // was half wrong — `BranchName` refuses non-printable bytes and permits
+    // every non-ASCII letter, so a pair differing only by such a letter's case
+    // folded to two keys here and named one directory on disk (#3040 P3b).
     let mut ids: BTreeMap<String, (usize, &str)> = BTreeMap::new();
     let mut branches: BTreeMap<String, (usize, &str)> = BTreeMap::new();
     for (i, s) in doc.slices.iter().enumerate() {
@@ -607,6 +611,38 @@ fn check_slices(doc: &PlanDoc, text: &str, first_line: usize, errs: &mut Vec<Str
                 first_line,
                 probe::line_of(text, probe::Target::SliceId(i)),
                 &format!("slices[{i}] ({}): block is empty", s.id),
+            ));
+        }
+        // A slice's branch becomes a WORKTREE DIRECTORY, and `BranchName` alone
+        // does not make it one: that type is git's ref-name rule, which permits
+        // every non-ASCII letter, while `git worktree add`'s own name check has
+        // always been ASCII (#3040).
+        //
+        // Refused HERE rather than at the spawn, and the difference is the whole
+        // of what this check buys. At the spawn it is a plan that validated,
+        // boarded every row, and then fails every slice on that branch with a
+        // message about a name nobody can change any more. Here it is a tool
+        // error with a line number, inside the planner's own turn, before
+        // anything at all has been posted.
+        //
+        // **This is also where the non-ASCII case-collision question ends.** The
+        // duplicate check below folds ASCII because a slice id's alphabet is
+        // ASCII by construction; a branch's was not, so two branches differing
+        // only by a non-ASCII letter's case would be two names and one directory
+        // on a case-insensitive filesystem. Refusing the alphabet makes that
+        // pair unrepresentable rather than something a later comparison has to
+        // be careful about.
+        if !crate::pathseg::worktree_name_ok(s.branch.as_str()) {
+            errs.push(reason(
+                first_line,
+                probe::line_of(text, probe::Target::Branch(i)),
+                &format!(
+                    "slices[{i}] ({}): branch {:?} cannot be a worktree directory — orrerix cuts \
+                     one per slice, and that name allows only ASCII letters and digits with \
+                     `. _ - /`, no leading `-` or `/`, no trailing `/`, and no \"..\"",
+                    s.id,
+                    s.branch.as_str()
+                ),
             ));
         }
         // `chars`, not `len`: the floor is about how much a worker was told, and
@@ -1286,6 +1322,58 @@ slices:
         assert!(errs[0].starts_with("plan block line 11: "), "{}", errs[0]);
         // Refused, not repaired: no rewritten name appears in the reason.
         assert!(!errs[0].contains("feat/etc"), "{}", errs[0]);
+    }
+
+    /// **A branch git would accept but a WORKTREE could not is refused here**,
+    /// where it costs the planner one tool call — not at the spawn, where it
+    /// would be a plan that boarded every row and then failed every slice on
+    /// that branch.
+    ///
+    /// The positive control is the second half: the same plan with the same
+    /// letter romanised validates. So the refusal is about the ALPHABET rather
+    /// than about this fixture being unacceptable for some other reason — and
+    /// the two halves differ in exactly that one character.
+    #[test]
+    fn a_branch_that_cannot_be_a_worktree_directory_is_refused() {
+        // Built rather than written as a literal, so nothing between here and
+        // the compiler can silently re-encode it.
+        let e_acute = char::from_u32(0x00E9).unwrap();
+        let plan = |branch: &str| {
+            format!(
+                "\
+version: 1
+issue: 3040
+slices:
+  - id: P1
+    title: one
+    branch: {branch}
+    block: worker-adv
+    brief: a brief long enough to clear the forty character floor
+"
+            )
+        };
+
+        // The premise: `BranchName` — git's own ref-name rule — accepts it, so
+        // this refusal is genuinely a second question and not a duplicate.
+        let name = format!("feat/caf{e_acute}");
+        assert!(
+            BranchName::parse(&name).is_ok(),
+            "git's ref-name rule accepts this; the worktree rule is what does not"
+        );
+
+        let errs = refuse(&plan(&name));
+        assert_eq!(errs.len(), 1, "{errs:#?}");
+        assert!(errs[0].contains("cannot be a worktree directory"), "{}", errs[0]);
+        // `branch:` is block line 6 → comment line 11, as above.
+        assert!(errs[0].starts_with("plan block line 11: "), "{}", errs[0]);
+        // Refused, never repaired — the reason must not offer a rewritten name.
+        assert!(!errs[0].contains("feat/cafe"), "{}", errs[0]);
+
+        // The control.
+        assert!(
+            parse(&plan("feat/cafe"), 6).is_ok(),
+            "the same plan with an ASCII branch validates"
+        );
     }
 
     #[test]

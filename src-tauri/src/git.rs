@@ -816,15 +816,15 @@ pub async fn git_discard(repo: String, path: String, untracked: bool) -> Result<
 
 /// Names must be usable both as a branch name and as a relative directory:
 /// letters, digits, `. _ - /`, no leading `-` or `/`, no `..`, no trailing `/`.
+///
+/// **The rule itself lives in the engine now** (#3040), so that a PLAN choosing
+/// a branch can be refused against it at post time — with a line number the
+/// planner can act on inside its own turn — rather than validating, boarding
+/// every row, and then failing every spawn here with a message about a name
+/// nobody can change any more. Delegating rather than re-spelling is what keeps
+/// that one rule; two copies is the drift `pathseg` exists to end.
 fn valid_worktree_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.starts_with('-')
-        && !name.starts_with('/')
-        && !name.ends_with('/')
-        && !name.contains("..")
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+    loomux_engine::pathseg::worktree_name_ok(name)
 }
 
 /// Resolve the ref a fresh agent branch should be cut from when the caller
@@ -988,74 +988,6 @@ fn symbolic_origin_head(repo: &str) -> Option<String> {
     Some(name)
 }
 
-/// Whether two worktree directory names would be **one directory** on a
-/// case-insensitive filesystem.
-///
-/// **Unicode case folding, not `eq_ignore_ascii_case`**, and the difference is
-/// the whole point of this function existing. The plan document's own duplicate
-/// check (`plandoc`, #3040 P1) folds ASCII, because `check_segment` has already
-/// narrowed a slice id's alphabet to ASCII — but a BRANCH name has not been so
-/// narrowed: `BranchName` refuses git's forbidden bytes and nothing else, so a
-/// pair differing only by a non-ASCII letter's case both pass it and reach here
-/// as two names.
-///
-/// On this project's Windows baseline they are one directory, so the second
-/// `worktree add` lands in the first one's tree — or is refused by a message
-/// naming a path rather than the collision. On a case-sensitive filesystem they
-/// are two directories and the collision never happens at all, which is worse
-/// rather than better: the same plan then behaves differently on two machines,
-/// and the difference shows up on whichever one nobody is watching.
-///
-/// So the check is **platform-independent and deliberately stricter than any
-/// filesystem**: `to_lowercase`, which is full Unicode and locale-independent.
-/// A refusal is safe in the direction that matters — the caller is told the two
-/// names collide and picks another.
-///
-/// The separator is normalized with them, so `a/b` and `a\b` — which name one
-/// directory everywhere — are caught too.
-pub fn worktree_names_collide(a: &str, b: &str) -> bool {
-    fn fold(s: &str) -> String {
-        s.replace('\\', "/").to_lowercase()
-    }
-    fold(a) == fold(b)
-}
-
-/// The existing worktree directory `name` would collide with, if any.
-///
-/// Walks `name`'s components against what is really on disk, so a collision at
-/// any level is caught rather than only on the leaf. Answers the EXISTING
-/// spelling, because that is the half the caller does not already know.
-///
-/// A directory it cannot read contributes nothing: this refuses on a positive
-/// finding, and an unreadable directory is not one. The `dest.exists()` guard
-/// and git's own refusal stay where they were as the backstops.
-fn colliding_worktree(worktrees: &Path, name: &str) -> Option<String> {
-    let mut here = worktrees.to_path_buf();
-    let mut prefix = String::new();
-    for part in name.split('/').filter(|p| !p.is_empty()) {
-        let entries = std::fs::read_dir(&here).ok()?;
-        let mut exact: Option<String> = None;
-        for e in entries.flatten() {
-            let found = e.file_name().to_string_lossy().into_owned();
-            if found == part {
-                exact = Some(found);
-                continue;
-            }
-            if worktree_names_collide(&found, part) {
-                return Some(format!("{prefix}{found}"));
-            }
-        }
-        // Descend only through a component that really is there under exactly
-        // this spelling; anything else means the rest of the path does not
-        // exist yet, so there is nothing below it to collide with.
-        let exact = exact?;
-        here = here.join(&exact);
-        prefix.push_str(&exact);
-        prefix.push('/');
-    }
-    None
-}
-
 /// Create a worktree for an agent session at
 /// `<repo-parent>/<repo-name>-worktrees/<name>`, on a new branch named `name`
 /// cut from `base`.
@@ -1095,21 +1027,9 @@ pub fn git_worktree_add_sync(
         .map(|s| s.to_string_lossy().into_owned())
         .ok_or("cannot resolve repository name")?;
     let parent = root.parent().ok_or("repository has no parent directory")?;
-    let worktrees = parent.join(format!("{repo_name}-worktrees"));
-    let dest = worktrees.join(&name);
+    let dest = parent.join(format!("{repo_name}-worktrees")).join(&name);
     if dest.exists() {
         return Err(format!("worktree path already exists: {}", dest.display()));
-    }
-    // #3040: and the one `exists()` cannot answer — a name that is a DIFFERENT
-    // string and the SAME directory. See `worktree_names_collide`. The scan is
-    // one shallow `read_dir` per component of the requested name, so a name
-    // with no separator costs exactly one.
-    if let Some(clash) = colliding_worktree(&worktrees, &name) {
-        return Err(format!(
-            "worktree name {name:?} collides with the existing {clash:?} — the two differ only \
-             by case or separator, and name one directory on a case-insensitive filesystem. \
-             Pick a name that differs by more than that."
-        ));
     }
     let dest_str = dest.to_string_lossy().into_owned();
 
@@ -2288,78 +2208,6 @@ mod tests {
         let wt = git_worktree_add_sync(p(d), "agent/x".into(), Some("feat/base".into())).unwrap();
         assert!(Path::new(&wt).join("extra.txt").exists());
         assert!(Path::new(&wt).join("feat.txt").exists());
-    }
-
-    /// **The fold is Unicode, and `eq_ignore_ascii_case` is what it must not
-    /// be** (#3040).
-    ///
-    /// The ASCII row is the control: a build that folded nothing at all fails
-    /// there, so the non-ASCII rows are a statement about the ALPHABET rather
-    /// than about folding happening at all. The last row is the negative
-    /// control — two names that really are different must not be refused, or
-    /// this guard would block every second worktree.
-    #[test]
-    fn worktree_names_collide_folds_unicode_not_just_ascii() {
-        // ASCII — the control, which `eq_ignore_ascii_case` would also pass.
-        assert!(worktree_names_collide("feat/x", "feat/X"));
-        // Non-ASCII — the row that separates the two implementations. Written
-        // through `char::from_u32` so the literal cannot be silently
-        // re-encoded by a tool between here and the compiler.
-        let a_umlaut_lower = char::from_u32(0x00E4).unwrap(); // ä
-        let a_umlaut_upper = char::from_u32(0x00C4).unwrap(); // Ä
-        assert!(!a_umlaut_lower.eq_ignore_ascii_case(&a_umlaut_upper),
-                "the premise: ASCII folding does NOT relate these two");
-        assert!(worktree_names_collide(
-            &format!("feat/{a_umlaut_lower}"),
-            &format!("feat/{a_umlaut_upper}")
-        ));
-        // The separator, which names one directory either way.
-        assert!(worktree_names_collide("feat/x", "feat\\x"));
-        // The negative control.
-        assert!(!worktree_names_collide("feat/x", "feat/y"));
-        assert!(!worktree_names_collide("feat/x", "feat/xx"));
-    }
-
-    /// **A worktree name that case-folds onto an existing one is refused**, on
-    /// every platform and with a message naming both.
-    ///
-    /// This is the residual #3040 P1 pinned and could not close: `plandoc`
-    /// folds a plan's own slice ids and branches ASCII-only, because a slice id
-    /// is ASCII by construction — a BRANCH is not, so two branches differing
-    /// only by a non-ASCII letter's case reach `git worktree add` as two names
-    /// that are one directory on this project's Windows baseline and two on a
-    /// case-sensitive one. Either answer is wrong; a refusal is the same answer
-    /// everywhere.
-    ///
-    /// The control is the first `unwrap()`: the same call with the same repo
-    /// SUCCEEDS for the first name, so the refusal below is about the collision
-    /// rather than about a repo that cannot cut a worktree.
-    #[test]
-    fn worktree_add_refuses_a_name_that_case_folds_onto_an_existing_one() {
-        let repo = new_repo();
-        let d = repo.path();
-        commit(d, "f.txt", "a\n", "A");
-
-        let lower = char::from_u32(0x00E4).unwrap();
-        let upper = char::from_u32(0x00C4).unwrap();
-        let first = format!("feat/caf{lower}");
-        let second = format!("feat/CAF{upper}");
-
-        // The control.
-        git_worktree_add_sync(p(d), first.clone(), None)
-            .expect("the first name must cut a worktree, or this test measures nothing");
-
-        let err = git_worktree_add_sync(p(d), second.clone(), None)
-            .expect_err("the second name collides and must be refused");
-        assert!(
-            err.contains("collides with the existing"),
-            "the refusal must name the collision rather than a path: {err}"
-        );
-        assert!(err.contains(&first), "and name the EXISTING spelling: {err}");
-        assert!(
-            !git_worktree_list_sync(p(d)).unwrap().contains(&second),
-            "and leave no worktree behind"
-        );
     }
 
     #[test]

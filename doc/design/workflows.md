@@ -1884,7 +1884,8 @@ task board's Approve control, the groupview workflow row):
    push-to-merge paths, not GitHub's own merge button.
 
 The shipped text: the shim and the Rust-side status line share
-`GATE_REFUSAL_EXITS` (`src-tauri/src/orchestration/mod.rs`) verbatim —
+`GATE_REFUSAL_EXITS` (`src-tauri/src/orchestration/mod.rs`) verbatim — with
+one #1889 exception in the status line only, below —
 `"Three ways forward: (1) get the named reviewer(s) to run and record a
 verdict, (2) have the human turn workflow mode off for this session (clears
 the gate), or (3) merge this PR from the GitHub UI, which is not gated."`

@@ -11918,7 +11918,27 @@ fn fix_wait_across_a_restart(
         );
         group
     };
-    (relaunch_registry(dir), group)
+    let reg = relaunch_registry(dir);
+    reattach(&reg, repo, &group);
+    (reg, group)
+}
+
+/// Re-register a group with a restarted registry — the half of a restart that
+/// happens in memory.
+///
+/// `create_group`'s id is repo-derived "so a relaunch resumes the same state
+/// dir", which is how the app reattaches on startup. A fixture that skips it
+/// leaves `self.groups` empty, and then `driver_policy` answers `None` and
+/// `rd_drive_group_with` returns before the reconcile it is supposed to be
+/// testing — a tick that does NOTHING, which reads on the audit log exactly
+/// like a reconcile that decided nothing.
+fn reattach(reg: &OrchRegistry, repo: &Repo, group: &GroupId) {
+    let again = reg.create_group(&repo.path(), rails()).expect("the relaunch reattaches");
+    assert_eq!(
+        &again.id, group,
+        "the relaunch must resume the SAME group dir, or the drive under test is not the \
+         one this registry is now driving"
+    );
 }
 
 /// **The red.** On `main` the first tick after a restart does not hand the
@@ -11936,14 +11956,18 @@ fn a_fix_wait_drive_left_by_a_restart_is_handed_back_again() {
     reg.rd_drive_group_with(&group, &gh, 50_000);
 
     // The control: this test is about what the RECONCILE marked, so a zero
-    // below must not be able to mean "the reconcile never ran in this
-    // registry at all".
-    assert!(
-        reg.audit_log(&group)
-            .into_iter()
-            .any(|e| e.action == "rd-recovered" && e.detail["at"] == json!("reconcile")),
-        "the restarted registry must actually reconcile this group, or nothing below is \
-         about S10"
+    // below must not be able to mean "the reconcile never ran in this registry
+    // at all".
+    //
+    // **Counted, not `any`.** The audit log lives on disk and both registries
+    // append to it, so the FIRST one's own reconcile row satisfies an
+    // existence check for ever — a control that cannot fail. Two rows is the
+    // property: one reconcile per registry that drove this group.
+    assert_eq!(
+        action_count(&reg, &group, "rd-recovered"),
+        2,
+        "one reconcile per registry: the restarted one must reconcile too, or nothing \
+         below is about S10"
     );
 
     // **The whole rd-* trail, not just the hand-backs.** A re-brief that was
@@ -12154,6 +12178,7 @@ fn a_review_wait_drive_recovers_across_a_restart_by_the_path_it_already_had() {
         group
     };
     let reg = relaunch_registry(dir.path());
+    reattach(&reg, &repo, &group);
 
     let status = reg.review_drive_status_with(&group, 30_000);
     assert_eq!(

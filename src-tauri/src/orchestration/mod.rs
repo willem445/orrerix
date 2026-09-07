@@ -59736,7 +59736,42 @@ pub async fn orch_answer_pane_ui(
             )
         }
     };
-    run_blocking(move || reg.answer_pane_ui(&group_id, &agent_id, &request, answer)).await
+    run_blocking(move || {
+        let row = reg.answer_pane_ui(&group_id, &agent_id, &request, answer)?;
+        // The human answered, so their own queue row is discharged — a row
+        // that outlived the dialog it describes is a queue that only grows.
+        //
+        // Done HERE rather than in `structured.rs` because `ResolveSource` is
+        // pinned by a source scan to `needsyou.rs` and this file, and a third
+        // file naming it is a new resolving surface rather than a list to
+        // extend. This is the same trusted-command layer
+        // `orch_needs_you_resolve` settles from.
+        //
+        // `Webview` is the party and the surface: the human, in loomux's own
+        // webview, through a command no agent can reach. WHICH gesture it was
+        // goes in the resolution note rather than into a new provenance tag —
+        // see the PR for why a fifth `resolved_by` spelling was considered and
+        // left to a reviewer's call rather than taken unilaterally on a trust
+        // boundary.
+        //
+        // Best-effort: a row already cleared by hand, or pruned, must not turn
+        // a dialog that really was answered into an error the human sees.
+        if let Some(row) = row.as_deref() {
+            if let Err(e) = reg.resolve_needs_you(
+                &group_id,
+                row,
+                Some("answered in the pane dialog"),
+                needsyou::ResolveSource::Webview,
+            ) {
+                crate::obs::breadcrumb(
+                    "structured-dialog-row-unresolved",
+                    &format!("row={row} err={e}"),
+                );
+            }
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]

@@ -890,7 +890,7 @@ impl super::OrchRegistry {
         agent: &str,
         request: &str,
         answer: UiAnswer,
-    ) -> Result<(), String> {
+    ) -> Result<Option<String>, String> {
         let pane = self
             .structured
             .get(agent)
@@ -915,26 +915,17 @@ impl super::OrchRegistry {
                 "by": format!("{:?}", settle.by),
             }),
         );
-        // The human answered, so their own queue row is done. A dialog whose
-        // needs-you row outlived it would be a queue that only grows.
+        // The needs-you row this answer discharges, returned rather than
+        // resolved HERE.
         //
-        // Best-effort: a row that has already been resolved by hand, or
-        // pruned, must not turn a successful answer into an error the human
-        // sees. The dialog is settled either way.
-        if let Some(row) = pending.needs_you.as_deref() {
-            if let Err(e) = self.resolve_needs_you(
-                group,
-                row,
-                Some("answered in the pane dialog"),
-                super::needsyou::ResolveSource::Webview,
-            ) {
-                crate::obs::breadcrumb(
-                    "structured-dialog-row-unresolved",
-                    &format!("agent={agent} row={row} err={e}"),
-                );
-            }
-        }
-        Ok(())
+        // The resolve-provenance type is pinned to `needsyou.rs` (which
+        // defines it) and
+        // `mod.rs` (whose trusted command supplies it) by a source scan; a
+        // third file naming it is a NEW RESOLVING SURFACE, which that scan
+        // says is "never accidental". This module has no business being one,
+        // so the row id goes back to the caller and `orch_answer_pane_ui`
+        // does the resolve beside the one that already lives there.
+        Ok(pending.needs_you)
     }
 
     /// Tear a structured pane down: end the turn, close stdin, wait, kill,

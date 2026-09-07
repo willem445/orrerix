@@ -1533,6 +1533,214 @@ fn a_tick_services_at_most_four_drives() {
     assert_eq!(report.deferred.len(), 1, "the drive it could not reach is NAMED, not dropped");
 }
 
+/// One paragraph, both shapes — the assertion every pd notice goes through.
+///
+/// CLAUDE.md's rule, and it has now caught this branch twice: a `\n` plus
+/// indentation ships the source's own leading spaces to the reader, and a `\`
+/// continuation that collapsed leaves the same run with no `\n` to notice.
+fn assert_one_paragraph(what: &str, text: &str) {
+    assert!(!text.contains('\n'), "{what} must not carry a newline: {text:?}");
+    assert!(
+        !text.contains("          "),
+        "{what} must not carry a ten-space run — a `\\` continuation that collapsed leaves one \
+         with no newline to notice: {text:?}"
+    );
+}
+
+/// **Every notice this drive can put in the orchestrator's pane is ONE
+/// PARAGRAPH** (rev-std round 3, finding 1).
+///
+/// The population nothing covered, and the gap is not theoretical: finding 1 of
+/// round 1 fixed this class in `parse_workflow`'s refusals and added
+/// `every_parse_error_is_one_paragraph` for THAT population — and the same
+/// commit shipped a fresh 26-space instance in `pdtick.rs`'s
+/// `reservation-unspawned` notice, because pd notices were a third population
+/// with no pin at all. `every_listing_finding_is_one_paragraph` covers a fourth.
+/// Three pinned populations and one unpinned is how a class survives being
+/// fixed.
+///
+/// Two halves, because the texts come from two places. The STATIC half is
+/// `PdHeldReason::notice_line`, which the engine owns. The COMPOSED half is
+/// what `pdtick` actually hands to `owe_notice`, and it is collected by driving
+/// the real arcs and reading the delivered prompts — a literal that only the
+/// wiring builds is exactly where the last one hid.
+#[test]
+fn every_pd_notice_is_one_paragraph() {
+    // (a) the static half.
+    for r in PdHeldReason::ALL {
+        assert_one_paragraph(&format!("PdHeldReason::{}'s notice_line", r.as_str()), r.notice_line());
+    }
+
+    // (b) the composed half. Each of these drives a real arc to the point where
+    // it owes a notice, and the notice is read off the delivery the
+    // orchestrator's pane really received.
+    let mut seen = 0usize;
+
+    // held(awaiting-p3b) — the end of every `agent-ready` drive in this build.
+    {
+        let repo = Repo::new();
+        let (reg, _d) = test_registry();
+        let gh = FakeGh::open(&["agent-ready"]);
+        let (group, _orch, _planner) = driven(&reg, &repo, &gh);
+        let doc = plandrive::validate_for_drive(&in_comment(PLAN), 3040, &roster()).unwrap();
+        reg.pd_store_posted_plan_at(&group, 3040, doc, "https://example/c/1", 1_100);
+        reg.pd_drive_group_with(&group, &gh, 1_200);
+        reg.pd_drive_group_with(&group, &gh, 1_300);
+        for t in pane_texts(&reg, &group) {
+            assert_one_paragraph("an awaiting-p3b notice", &t);
+            seen += 1;
+        }
+    }
+    // complete — the `agent-investigation` end, whose notice interpolates a URL.
+    {
+        let repo = Repo::new();
+        let (reg, _d) = test_registry();
+        let gh = FakeGh::open(&["agent-investigation"]);
+        let (group, _orch, _planner) = driven(&reg, &repo, &gh);
+        let doc = plandrive::validate_for_drive(&in_comment(PLAN), 3040, &roster()).unwrap();
+        reg.pd_store_posted_plan_at(&group, 3040, doc, "https://example/c/1", 1_100);
+        reg.pd_drive_group_with(&group, &gh, 1_200);
+        for t in pane_texts(&reg, &group) {
+            assert_one_paragraph("a plan-posted-complete notice", &t);
+            seen += 1;
+        }
+    }
+    // cancelled — the reconcile's closed-issue notice.
+    {
+        let repo = Repo::new();
+        let (reg, _d) = test_registry();
+        let gh = FakeGh::open(&["agent-ready"]);
+        let (group, _orch, _planner) = driven(&reg, &repo, &gh);
+        gh.set_state("CLOSED");
+        reg.pd_drive_group_with(&group, &gh, 1_200);
+        for t in pane_texts(&reg, &group) {
+            assert_one_paragraph("an issue-closed notice", &t);
+            seen += 1;
+        }
+    }
+    // held(plan-invalid) — the notice the hook itself owes, which is composed in
+    // a different function again and interpolates the planner's own reasons.
+    {
+        let repo = Repo::new();
+        let (reg, _d) = test_registry();
+        let gh = FakeGh::open(&["agent-ready"]);
+        let (group, _orch, planner) = driven(&reg, &repo, &gh);
+        for at in [1_100u64, 1_200, 1_300] {
+            let _ = reg.pd_plan_check_at(&group, &planner, 3040, "no block here\n", at);
+        }
+        for t in pane_texts(&reg, &group) {
+            assert_one_paragraph("a plan-invalid notice", &t);
+            seen += 1;
+        }
+    }
+    // held(plan-missing) via the RESERVATION arm — the literal that shipped
+    // broken, reached the only way it can be: through the reconcile.
+    {
+        let (reg, group, _repo, _d) = reserved_drive();
+        let gh = FakeGh::open(&["agent-ready"]);
+        reg.pd_drive_group_with(&group, &gh, 9_000);
+        for t in pane_texts(&reg, &group) {
+            assert_one_paragraph("a reservation-unspawned notice", &t);
+            seen += 1;
+        }
+    }
+
+    // THE POSITIVE CONTROL, and this test needs it more than most: every
+    // assertion above is inside a loop over a list that may be empty, so a
+    // fixture that delivered nothing would satisfy all of them.
+    assert!(
+        seen >= 5,
+        "the fixtures must really have delivered notices — an empty list passes every assertion \
+         in this test: seen={seen}"
+    );
+}
+
+/// Every notice this group's orchestrator pane actually received.
+fn pane_texts(reg: &OrchRegistry, group: &GroupId) -> Vec<String> {
+    reg.audit_log(group)
+        .into_iter()
+        .filter(|e| e.action == "prompt")
+        .filter_map(|e| e.detail["text"].as_str().map(str::to_string))
+        .filter(|t| t.contains("plan drive #"))
+        .collect()
+}
+
+/// A group whose record carries a BARE RESERVATION: an entry `drive_plan` wrote
+/// and never completed, with no planner recorded on it.
+///
+/// Built by writing the record rather than by driving, because the state is one
+/// only a process that ENDED mid-call can leave behind — `drive_plan_with`
+/// either attaches the pane or rolls the reservation back, so no sequence of
+/// calls produces it. That is exactly why the arm exists, and why nothing but a
+/// hand-built record can reach it.
+fn reserved_drive() -> (OrchRegistry, GroupId, Repo, tempfile::TempDir) {
+    let repo = Repo::new();
+    let (reg, dir) = test_registry();
+    let (group, _orch) = grouped(&reg, &repo);
+
+    let mut state = plandrive::PlanDrivesState::default();
+    let entry = plandrive::PdEntry::new(3040, "orch-1", "plan-lead", Consent::Ready, None, 0, 1_000);
+    // The shape the arm keys on, asserted here so the fixture cannot drift into
+    // some other state and take the test's meaning with it.
+    assert!(entry.planner_agent.is_empty() && entry.spawned_ms == 0, "a BARE reservation");
+    state.entries.push(entry);
+    std::fs::create_dir_all(record_path(&reg, &group).parent().unwrap()).unwrap();
+    std::fs::write(record_path(&reg, &group), serde_json::to_string(&state).unwrap()).unwrap();
+
+    (reg, group, repo, dir)
+}
+
+/// **A reservation nobody completed is held, named and explained on restart**
+/// (rev-std round 3, finding 2).
+///
+/// Without this arm the entry sits in `planning` with no clock to charge it —
+/// `spawned_ms` is 0, which `planner_age_ms` reads as "no pane yet", so the
+/// planner-stall bound never fires — until the whole-drive backstop parks it
+/// hours later with a reason that describes something else.
+#[test]
+fn a_reservation_nobody_completed_is_held_on_restart() {
+    let (reg, group, _repo, _d) = reserved_drive();
+    let gh = FakeGh::open(&["agent-ready"]);
+
+    // The control: before the reconcile it really is a live `planning` drive,
+    // so the hold below is this arm's doing and not the fixture's.
+    assert_eq!(drive_state(&reg, &group), "planning");
+
+    reg.pd_drive_group_with(&group, &gh, 9_000);
+
+    assert_eq!(drive_state(&reg, &group), "held");
+    assert_eq!(held_reason(&reg, &group), PdHeldReason::PlanMissing.as_str());
+    let rows: Vec<String> = reg
+        .audit_log(&group)
+        .into_iter()
+        .filter(|e| e.action == plandrive::audit_action::RECOVERED)
+        .filter_map(|e| e.detail["why"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(
+        rows,
+        vec!["reservation-unspawned".to_string()],
+        "the reconcile names WHY it recovered this entry, not merely that it did"
+    );
+
+    // The notice reaches the pane, says what happened, and is one paragraph —
+    // the shape that shipped broken here.
+    let texts = pane_texts(&reg, &group);
+    assert_eq!(texts.len(), 1, "exactly one notice is owed: {texts:?}");
+    assert_one_paragraph("the reservation-unspawned notice", &texts[0]);
+    assert!(
+        texts[0].contains("no planner was ever recorded"),
+        "the notice says what is actually wrong: {:?}",
+        texts[0]
+    );
+    // And it does NOT claim a pane cannot exist: this arm also fires when the
+    // process ended between the spawn and the attach, where one does.
+    assert!(
+        !texts[0].contains("nothing to hear from"),
+        "the notice must not overclaim — a pane may have been opened and lost: {:?}",
+        texts[0]
+    );
+}
+
 // ── helpers that touch the record itself ────────────────────────────────────
 
 fn record_path(reg: &OrchRegistry, group: &GroupId) -> std::path::PathBuf {

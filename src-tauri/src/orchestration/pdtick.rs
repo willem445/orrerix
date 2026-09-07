@@ -1398,9 +1398,22 @@ impl OrchRegistry {
                 // with no stall clock to charge (`spawned_ms` is 0, which
                 // `planner_age_ms` reads as "no pane yet") until the whole-drive
                 // backstop fires hours later.
+                // ONE LINE. This literal shipped with two 26-space runs — a
+                // `\` continuation that collapsed in an authoring path, which
+                // is the very class the same commit fixed two files over. A
+                // line cannot collapse.
+                //
+                // The WORDING is corrected with it. "Nothing to hear from" was
+                // false for half of this state: the arm fires whenever no
+                // planner was RECORDED, which covers both a process that ended
+                // before the spawn (no pane) and one that ended between the
+                // spawn and the attach (a live pane orrerix cannot name). And
+                // "resume it" was useless advice: a resume returns to
+                // `planning` with no planner, and nothing in this build
+                // re-spawns one, so the drive would sit exactly here again.
                 entry.owe_notice(
                     &format!(
-                        "[orrerix] plan drive #{issue}: HELD ({}) — the drive was reserved and                          its planner was never opened, so there is nothing to hear from.                          Resume it to try again, or cancel it.",
+                        "[orrerix] plan drive #{issue}: HELD ({}) — the drive was reserved and no planner was ever recorded on it, so nothing will report to it. A pane may still have been opened before orrerix stopped; check your agent list. Cancel this drive and call drive_plan again.",
                         PdHeldReason::PlanMissing.as_str()
                     ),
                     now,

@@ -2189,7 +2189,13 @@ fn a_dep_free_slice_spawns_and_a_dependent_does_not() {
     assert!(slice_agent(&reg, &group, "P2").is_empty(), "and no pane was opened for it");
 }
 
-/// **At most ONE spawn per group per tick**, whatever the board says is ready.
+/// **At most one spawn per tick within ONE drive**, whatever the board says is
+/// ready — enforced by the spawn loop stopping after its first ATTEMPT, refused
+/// or not.
+///
+/// The GROUP-wide half of the same bound is a different property with a
+/// different enforcement point, and a mutation run showed this test does not
+/// reach it: see `one_spawn_per_group_per_tick_across_two_drives`.
 ///
 /// The plan's third slice is `hold: true`, so the ready set here is one — which
 /// would make this test vacuous. It therefore un-holds P3 by hand first (the
@@ -2876,4 +2882,86 @@ fn a_done_whose_pr_is_not_resolvable_yet_is_retried_not_lost() {
         json!(false),
         "and the flag is cleared by the thing it was waiting for"
     );
+}
+
+/// **The one-spawn-per-tick bound is per GROUP, not per drive** (§2(b) step 6),
+/// and it is what makes "the plan driver holds, never starves the review
+/// driver" a fact rather than a hope: the review driver has already spent its
+/// own budget by the time this runs, so a plan driver that spawned once per
+/// DRIVE would scale its appetite with how many issues an orchestrator handed
+/// over.
+///
+/// **This test exists because a mutation run said the property was unpinned.**
+/// Setting `spawn_budget` to 2 reddened nothing:
+/// `only_one_spawn_per_tick_even_with_three_ready_slices` passes under it,
+/// because within ONE drive the bound is enforced by the loop's `break` and not
+/// by the budget at all. Two drives is the only shape that can tell them apart.
+#[test]
+fn one_spawn_per_group_per_tick_across_two_drives() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, orch) = grouped(&reg, &repo);
+
+    // Two drives in one group, each with a dep-free slice ready to go.
+    for issue in [3040u64, 3041] {
+        let plan = PLAN3.replace("issue: 3040", &format!("issue: {issue}")).replace("    hold: true\n", "");
+        // Distinct branches per drive: two slices on one branch is refused, and
+        // it would also be a second reason for the second not to spawn.
+        let plan = plan.replace("feat/3040-", &format!("feat/{issue}-"));
+        let out = reg.drive_plan_with(&group, &gh, issue, None, None, None, &orch, 1_000);
+        assert_eq!(out["driving"], json!(true), "#{issue}: {out}");
+        let doc = plandrive::validate_for_drive(&in_comment(&plan), issue, &roster3())
+            .unwrap_or_else(|e| panic!("#{issue}: {e:#?}"));
+        reg.pd_store_posted_plan_at(&group, issue, doc, "https://example/c/1", 1_100);
+    }
+    reg.pd_drive_group_with(&group, &gh, 1_200);
+    reg.pd_drive_group_with(&group, &gh, 1_300);
+
+    // The premise: BOTH drives are running with a ready slice each, so the tick
+    // below genuinely has two candidates. Without this the assertion would hold
+    // for a build that had nothing to spawn at all.
+    let record = read_record(&reg, &group);
+    let entries = record["entries"].as_array().expect("two entries");
+    assert_eq!(entries.len(), 2, "{record}");
+    for e in entries {
+        assert_eq!(e["state"], json!("running"), "both drives must be running: {e}");
+        assert!(
+            e["slices"].as_object().is_some_and(|m| m.len() == 3),
+            "and boarded: {e}"
+        );
+    }
+
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    let spawned: usize = read_record(&reg, &group)["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            e["slices"]
+                .as_object()
+                .map(|m| m.values().filter(|s| s["state"] == json!("running")).count())
+                .unwrap_or(0)
+        })
+        .sum();
+    assert_eq!(
+        spawned, 1,
+        "one spawn for the GROUP, not one per drive: {}",
+        read_record(&reg, &group)
+    );
+
+    // And the other drive is not starved — it takes the next tick's slot.
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    let spawned: usize = read_record(&reg, &group)["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            e["slices"]
+                .as_object()
+                .map(|m| m.values().filter(|s| s["state"] == json!("running")).count())
+                .unwrap_or(0)
+        })
+        .sum();
+    assert_eq!(spawned, 2, "the deferred drive gets the next tick: {}", read_record(&reg, &group));
 }

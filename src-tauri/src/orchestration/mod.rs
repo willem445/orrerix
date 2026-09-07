@@ -47751,13 +47751,23 @@ impl OrchRegistry {
         // below). `body_drift` reports every verdict file on disk, and a block
         // the gate does not name — left behind by an edited `reviewers:` list —
         // must not flip the headline to NOT YET SATISFIED while the shim passes
-        // the clause and the merge is not refused. Liveness needs no separate
-        // check here: outcome == Satisfied already means every required lane
-        // covers the head. The FULL drift list is kept for the caveat notes,
+        // the clause and the merge is not refused. **Nor may a stale lane**
+        // (review round 4, W1): `Satisfied` implies full head coverage only
+        // under `all-pass` — on a `threshold: N` gate `evaluate_merge_gate`
+        // counts live passes against N, so a required lane sitting stale does
+        // not stop it — so the filter applies the same liveness predicate the
+        // enforcing halves use (`reviewed(head)`, exactly what
+        // `mergeq::body_unchanged` and `body_unchanged_failing` below ask) and
+        // never the outcome. The FULL drift list is kept for the caveat notes,
         // where reporting all drift is the point.
         let required_drift: Vec<String> = drift_passed
             .iter()
             .filter(|b| gate.reviewers.contains(b))
+            .filter(|b| {
+                head.as_ref()
+                    .ok()
+                    .is_some_and(|h| verdict_map.get(b.as_str()).is_some_and(|v| v.reviewed(h)))
+            })
             .cloned()
             .collect();
         let drift_headline = matches!(outcome, workflow::GateOutcome::Satisfied)
@@ -47768,7 +47778,10 @@ impl OrchRegistry {
         // as far as this line can see. The one condition it has the inputs to
         // evaluate is `body-unchanged`, and it asks exactly what the enforcing
         // halves ask (the shim's clause and `mergeq::body_unchanged`): an
-        // unreadable body refuses, and so does any LIVE pass — bound to the head
+        // unreadable — or EMPTY, the shape review round 4's premortem names, a
+        // `gh` read that returned nothing rather than failing — body refuses
+        // (`now.filter(|d| !d.is_empty())` is the one normalization both
+        // enforcing halves apply), and so does any LIVE pass — bound to the head
         // that would merge — whose digest no longer covers the body as it
         // stands, unless a required reviewer's verification pass covers it.
         // `ci-green` and `base-green` are checked against real `gh` at merge
@@ -47776,7 +47789,7 @@ impl OrchRegistry {
         // cannot claim to know they fail and keeps the exit; an unknown clause
         // cannot reach a parsed gate (`sanitize_condition` refuses it at parse).
         let body_unchanged_failing = gate.also.iter().any(|c| c == "body-unchanged")
-            && (body_digest.is_none()
+            && (body_digest.filter(|d| !d.is_empty()).is_none()
                 || head.as_ref().ok().is_some_and(|h| {
                     let covered =
                         mergeq::body_verified_by_required(&gate, &verdict_map, h, body_digest);

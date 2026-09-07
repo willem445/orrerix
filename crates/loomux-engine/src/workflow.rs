@@ -2696,8 +2696,8 @@ impl std::fmt::Display for StructuredDriverRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "cli {:?} has no structured driver — driver: structured needs a CLI \r
-             loomux drives over its structured protocol. Fix: drop the key (the \r
+            "cli {:?} has no structured driver — driver: structured needs a CLI \
+             loomux drives over its structured protocol. Fix: drop the key (the \
              block runs as a PTY pane), or give this block a cli: that has one — {}",
             self.cli,
             self.with_driver.join(", ")

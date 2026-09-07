@@ -51298,11 +51298,36 @@ impl OrchRegistry {
             // nothing at all for a native image.
             let path_env = crate::winpath::launch_path();
             let pathext = crate::winpath::launch_pathext();
-            let resolved = crate::winpath::resolve_program(&cli, &path_env, &pathext)
-                .ok_or_else(|| format!("guardrail: block {} — {cli} is not on PATH", block.id))?;
+
+            // Both failures below happen AFTER the roster insert and the
+            // `running` persist, so neither may simply `?` out: the row would
+            // survive as a `Starting` ghost that counts against `max_agents`,
+            // that `kill_agent` refuses ("no terminal yet"), and that nothing
+            // expires — the spawn-expiry paths key on `orch-spawn-request`,
+            // which this arm deliberately never emits. A machine without `pi`
+            // on PATH is the ordinary case, so the capacity would fill with
+            // ghosts on repeated attempts and nothing would say why.
+            //
+            // The PTY arm's own bind-timeout failure does exactly this
+            // teardown; this is the same one, not a second convention.
+            let resolved = match crate::winpath::resolve_program(&cli, &path_env, &pathext) {
+                Some(p) => p,
+                None => {
+                    return Err(self.abandon_structured_spawn(
+                        group_id,
+                        &agent_id,
+                        &token,
+                        format!("guardrail: block {} — {cli} is not on PATH", block.id),
+                    ))
+                }
+            };
             let (program, prefix) = crate::winpath::launch_form(&resolved);
 
-            let pane = self.spawn_structured_pane(harness, &entry, &spec, &program, &prefix)?;
+            let pane = match self.spawn_structured_pane(harness, &entry, &spec, &program, &prefix)
+            {
+                Ok(p) => p,
+                Err(e) => return Err(self.abandon_structured_spawn(group_id, &agent_id, &token, e)),
+            };
             if let Some(app) = self.app.lock_safe().clone() {
                 use tauri::Manager;
                 app.state::<crate::pty::PtyManager>()

@@ -399,6 +399,60 @@ impl super::OrchRegistry {
     pub fn pane_id_is_structured(&self, pane_id: u32) -> bool {
         self.structured.is_structured(pane_id)
     }
+
+    /// Free a structured pane's output ring.
+    ///
+    /// Called from BOTH removal sites. The ring is a projection, so nothing
+    /// breaks when it outlives its pane — which is exactly why a leak here
+    /// would be invisible: bounded per pane (the ring cap), unbounded across
+    /// pane generations, and never load-bearing enough for anything to fail.
+    fn free_structured_ring(&self, pane_id: u32) {
+        if let Some(app) = self.app.lock_safe().clone() {
+            use tauri::Manager;
+            app.state::<crate::pty::PtyManager>().drop_structured_ring(pane_id);
+        }
+    }
+
+    /// Undo a structured spawn that failed AFTER the roster row was inserted,
+    /// and hand back the error to return.
+    ///
+    /// **Every failure past the insert must come through here.** The row is
+    /// already in `agents` and already persisted as `running`, and nothing else
+    /// will ever clear it: it counts against `max_agents` (the cap counts every
+    /// row that is not `Dead`), `kill_agent` refuses it because it has no
+    /// `pty_id` ("no terminal yet"), and the spawn-expiry paths key on
+    /// `orch-spawn-request` — which this arm deliberately never emits. So a
+    /// bare `?` here does not fail a spawn, it leaks a slot, permanently and
+    /// silently.
+    ///
+    /// The ordinary case is a machine with no `pi` on PATH, where every attempt
+    /// would leave one behind until the group could spawn nothing at all.
+    ///
+    /// This is the PTY arm's own bind-timeout teardown, not a second
+    /// convention: `mark_dead` (which drops the `by_token` entry with it) plus
+    /// the cancelled notice. `token` is taken so a row that vanished between
+    /// the insert and here — a concurrent reap — still has its token cleared.
+    #[doc(hidden)] // pub for the integration test that pins the teardown
+    pub fn abandon_structured_spawn(
+        &self,
+        group: &GroupId,
+        agent: &str,
+        token: &str,
+        err: String,
+    ) -> String {
+        self.mark_dead(agent, None);
+        // Belt and braces: `mark_dead` removes the token off its own snapshot,
+        // which it cannot take if the row is already gone.
+        self.by_token.lock_safe().remove(token);
+        self.emit_spawn_cancelled(group, agent);
+        self.audit(
+            group,
+            super::brand::AUDIT_ACTOR,
+            "agent-spawn-abandoned",
+            serde_json::json!({ "agent": agent, "kind": "structured", "error": err }),
+        );
+        err
+    }
 }
 
 /// How long a batch may wait, and how big it may get, before it is emitted.
@@ -941,7 +995,9 @@ impl super::OrchRegistry {
         // abandoned mid-tool. The rest of the ladder is `PiPane::drop`, which
         // runs when the last `Arc` goes.
         let _ = pane.pane.interrupt();
+        let pane_id = pane.pane_id;
         drop(pane);
+        self.free_structured_ring(pane_id);
         self.mark_dead(agent, None);
         Ok(())
     }
@@ -959,6 +1015,7 @@ impl super::OrchRegistry {
             serde_json::json!({ "agent": pane.agent, "code": code }),
         );
         self.structured.remove(&pane.agent);
+        self.free_structured_ring(pane.pane_id);
         self.mark_dead(&pane.agent, code.map(|c| c as u32));
     }
 }

@@ -11396,3 +11396,115 @@ fn the_driver_key_survives_a_group_json_round_trip() {
         "a block that never declared one must not acquire one on the way back"
     );
 }
+
+#[test]
+fn the_structured_driver_refusal_renders_as_one_paragraph() {
+    // The #1426 B2 shape, on a message a HUMAN reads: once as a parse error in
+    // the workflow surface, and again prefixed `guardrail:` at spawn.
+    //
+    // This exists because the review round found the message shipping CR + LF
+    // + 13 spaces, and NOTHING went red -- the pins on this refusal all assert
+    // `.contains(<substring>)`, and no asserted substring straddles a line
+    // break, so a fully green suite said nothing about its shape. That is the
+    // gap `is_one_paragraph` was written for on the manager refusals; the same
+    // gap, on a message added later.
+    //
+    // Shape BESIDE content, not instead of it: the content assertions below
+    // would pass on a message broken across three lines.
+    let refusal = workflow::structured_harness_for(Some("structured"), "claude")
+        .expect_err("claude carries no structured driver yet");
+    let msg = refusal.to_string();
+
+    assert!(
+        !msg.contains('\n'),
+        "the refusal ships a hard line break: {msg:?}"
+    );
+    assert!(
+        !msg.contains('\r'),
+        "the refusal ships a carriage return -- the `\r` escape at a source line \
+         end, which also stops the newline being a continuation: {msg:?}"
+    );
+    assert!(
+        !msg.contains("          "),
+        "the refusal leaked its source indentation: {msg:?}"
+    );
+
+    // And it still says the three things it is for.
+    assert!(msg.contains("claude"), "{msg}");
+    assert!(msg.contains("no structured driver"), "{msg}");
+    assert!(msg.contains("pi"), "the remedy must name a CLI that has one: {msg}");
+}
+
+
+#[test]
+fn a_structured_spawn_that_fails_after_the_insert_leaves_no_ghost_row() {
+    // Review round 1, finding 2. Both structured failure paths happen AFTER
+    // `agents.insert` + `persist_agent_record(.., "running")`, so a bare `?`
+    // does not fail a spawn -- it leaks a slot.
+    //
+    // The leak is silent and permanent: the row counts against `max_agents`
+    // (the cap counts every row that is not Dead), `kill_agent` refuses it
+    // because it has no `pty_id`, and nothing expires it -- the spawn-expiry
+    // paths key on `orch-spawn-request`, which the structured arm never emits.
+    // The trigger is the ORDINARY case: a machine with no `pi` on PATH, where
+    // every attempt would leave another ghost until the group could spawn
+    // nothing at all.
+    //
+    // Driven through the teardown itself rather than through a failing spawn,
+    // and that is a deliberate trade with its cost stated. Reaching the real
+    // Err arm needs `resolve_program` to fail, which needs an empty `PATH`: a
+    // PROCESS-global mutation, in a binary whose other tests run in parallel
+    // and shell out to git. That test would pass and break its neighbours
+    // intermittently, which is a worse defect than the one it covers. So this
+    // pins the teardown deterministically, and that the two Err arms route
+    // through it is held by reading rather than by execution.
+    let (reg, _dir) = test_registry();
+    let repo = Repo::new().workflow(
+        "version: 1\nblocks:\n  - id: w\n    kind: worker\n    cli: claude\n",
+    );
+    let g = reg.create_group(&repo.path(), rails()).unwrap();
+
+    // A real, live roster row -- the state a structured spawn is in at the
+    // moment its program fails to resolve.
+    let a = reg
+        .spawn_agent_ex(
+            &g.id, Role::Worker, Some("w".into()), "", "t", false,
+            None, None, None, None, None,
+        )
+        .expect("a PTY block spawns in test mode");
+
+    let status_of = |id: &str| -> String {
+        reg.list_agents(&g.id)
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == json!(id))
+            .map(|r| r["status"].as_str().unwrap_or("?").to_string())
+            .unwrap_or_else(|| "(absent)".into())
+    };
+    assert_ne!(
+        status_of(&a.id),
+        "dead",
+        "the row must start alive, or this test proves nothing"
+    );
+    assert!(
+        reg.resolve_token(&a.token).is_some(),
+        "the token must start resolvable, or the assertion below is vacuous"
+    );
+
+    let err = reg.abandon_structured_spawn(&g.id, &a.id, &a.token, "pi is not on PATH".into());
+
+    assert!(err.contains("not on PATH"), "the error is handed back to be returned: {err}");
+    assert_eq!(
+        status_of(&a.id),
+        "dead",
+        "the abandoned row must be Dead -- a Starting ghost counts against max_agents and \
+         kill_agent refuses it"
+    );
+    // The token is what an agent authenticates its MCP calls with. A row that
+    // is Dead but still resolvable by token is a worse leak than the slot.
+    assert!(
+        reg.resolve_token(&a.token).is_none(),
+        "the abandoned row is still reachable by its token"
+    );
+}

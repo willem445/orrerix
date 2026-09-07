@@ -228,8 +228,8 @@ fn app_commands_len_is_171() {
          then bind the pty and type the lead's kickoff), added in #2519 slice B, \
          +1 for orch_usage_series - the persisted usage time series the token time-plot \
          reads, added in #2011 slice B) — \
-         +1 for orch_answer_pane_ui — the one trusted door that settles a \r
-         structured pane's extension-UI dialog, added in #2850 S3b — \r
+         +1 for orch_answer_pane_ui — the one trusted door that settles a \
+         structured pane's extension-UI dialog, added in #2850 S3b — \
          if this is an intentional addition/removal, update this tripwire's count too"
     );
 }

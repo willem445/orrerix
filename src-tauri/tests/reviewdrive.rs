@@ -12936,3 +12936,194 @@ fn the_restart_re_handback_row_carries_the_pane_field_too() {
          missing key here is a reader silently under-counting take-overs: {row}"
     );
 }
+
+// ── review round 1: the two residuals, pinned ───────────────────────────────
+
+/// **Finding 1, pinned.** The take-over arm falls through to a spawn when the
+/// DELIVERY is refused, and a full queue is a refusal that needs nothing to be
+/// wrong — so a hand-back landing on a pane at `QUEUE_MAX_PER_PANE` still opens
+/// a second pane on a live session.
+///
+/// **A disclosed residual is a counterfactual, and only a test that performs
+/// the edit pins one.** The code comment, the design note and the PR body all
+/// now say this corner exists; without this test the suite pins only the arms
+/// that work, and the disclosure could go false — in either direction — with
+/// nothing red to say so. Both directions are asserted: the pane really is
+/// still live afterwards (so this is genuinely a second pane on a live session,
+/// not a replacement for a dead one), and the refusal really is on the audit log
+/// (so the one remaining route to a duplicate is not silent, which is the whole
+/// of what #2089 asked of the reuse arm).
+///
+/// **The negative control is the `depth = 7` arm**, and it carries the
+/// discriminator. Seven queued entries is a pane just as far behind, just as
+/// un-ready, and just as mid-turn — the take-over arm takes it anyway. So an
+/// implementation that stopped taking over "backed-up" panes generally, or one
+/// whose predicate refused on queue depth rather than on the delivery's own
+/// answer, passes the `depth = 8` row and fails this one. Without it this test
+/// would pass against a driver that had quietly reverted to spawning.
+///
+/// The queue is filled through `deliver_prompt` on a paused group, which is how
+/// `a_pane_that_is_idle_but_not_delivery_ready_is_declined_by_name_then_taken_over`
+/// builds its own `queued` arm — a real admitted queue, not a fabricated depth.
+#[test]
+fn a_takeover_refused_by_a_full_queue_says_so_and_falls_through() {
+    // (queued depth, the hand-back landed in the existing pane, panes opened,
+    //  `rd-takeover-declined` rows naming it, that pane still live)
+    type Row = (usize, bool, usize, usize, bool);
+    let mut observed: Vec<Row> = Vec::new();
+
+    for depth in [7usize, 8] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+        let w = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).unwrap();
+        let session = w.session_id.clone().expect("claude mints a session id at spawn");
+        make_delivery_land(&reg, &group, &w.id, 7601);
+        make_pane_ready(&reg, 7601, true);
+        let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+        assert_eq!(out["driving"], json!(true), "depth={depth}: drive_review refused: {out}");
+        reg.set_pr_head_override(Some(HEAD_A.to_string()));
+
+        // Back the pane up to this arm's depth, through the real admission path.
+        for k in 0..depth {
+            reg.deliver_prompt(&w.id, &format!("[test] backlog {k}"), "orch-1", Delivery::MidSession)
+                .unwrap_or_else(|e| panic!("depth={depth}: entry {k} must be admitted: {e}"));
+        }
+        assert_eq!(
+            reg.queue_depth(7601),
+            depth,
+            "depth={depth}: the fixture's premise — the pane is backed up to exactly this depth"
+        );
+
+        gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+        let before = action_count(&reg, &group, "agent-spawn");
+        let handed = reg.rd_drive_group_with(&group, &gh, 10_000);
+        let (_pr, agent) = handed
+            .handbacks
+            .first()
+            .cloned()
+            .unwrap_or_else(|| panic!("depth={depth}: the drive hands back: {handed:?}"));
+        let declined = audit_details(&reg, &group, "rd-takeover-declined")
+            .iter()
+            .filter(|d| d["pane"] == json!(w.id))
+            .count();
+
+        observed.push((
+            depth,
+            agent == w.id,
+            action_count(&reg, &group, "agent-spawn") - before,
+            declined,
+            reg.agent(&w.id).is_some_and(|a| a.status != AgentStatus::Dead),
+        ));
+    }
+
+    assert_eq!(
+        observed,
+        vec![
+            // Below the cap: the delivery is admitted behind the backlog and the
+            // take-over happens, declining nothing. This is the control — it is
+            // what stops the row below being satisfied by a driver that spawns
+            // for any backed-up pane.
+            (7, true, 0, 0, true),
+            // At the cap: `deliver_prompt` answers `Err`, the arm falls through,
+            // and a SECOND pane is opened on a session whose first pane is still
+            // live. That is #3203's own shape, narrowed to this corner and
+            // disclosed rather than closed — and the `rd-takeover-declined` row
+            // is what keeps it from looking like a session that had no pane.
+            (8, false, 1, 1, true),
+        ],
+        "each row is (queued depth, the hand-back landed in the existing pane, panes opened, \
+         `rd-takeover-declined` rows naming it, that pane still live). The second row is a \
+         DISCLOSED residual, not a target to fix silently: if a later change closes it, this \
+         test reddens and the code comment, the design note and the user docs all have to \
+         stop saying the corner exists."
+    );
+}
+
+/// **Finding 3, pinned.** A superseded pane the release barrier SKIPS is never
+/// re-asked on a later tick.
+///
+/// `releasable` gates its worker candidate on `!entry.worker_agent.is_empty()`,
+/// and the release that just happened cleared that field — so once the current
+/// pane goes, no later tick names the worker role again. A superseded pane that
+/// was mid-turn at the release tick therefore stays owned and counting against
+/// the cap until its own turn ends and the idle reaper takes it.
+///
+/// **This pins the residual the design note now discloses, in the direction that
+/// can go quietly false.** The busy arm of
+/// `a_release_reaches_every_worker_pane_the_drive_owns_on_that_session` shows the
+/// skip happening on ONE tick; what it cannot show is that no LATER tick fixes
+/// it, because it never runs another. This runs three more and asserts the pane
+/// is still there, so the note's "not re-asked" is a checked claim rather than
+/// an assumption about code nobody exercised past that point.
+///
+/// The `rd-worker-released` count is asserted as well as the liveness, because
+/// the two fail differently: a later tick that released the pane moves both, and
+/// a later tick that emitted a row without a kill moves only the count — which
+/// is the "a row means a pane went" rule §5.4 rests on.
+#[test]
+fn a_superseded_pane_the_barrier_skips_is_not_re_asked_on_a_later_tick() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _s) = driven(&reg, &repo, &gh);
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(&reg, &orch.id, 7001);
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+
+    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    let first = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let (_pr, w1) = first.handbacks.first().cloned().expect("the drive hands back");
+
+    gh.set_facts("OPEN", HEAD_B);
+    reg.set_pr_head_override(Some(HEAD_B.to_string()));
+    reg.rd_drive_group_with(&group, &gh, 20_000);
+    let second = reg.rd_drive_group_with(&group, &gh, 30_000);
+    let (_pr, w2) = second.handbacks.first().cloned().expect("a second red hands back");
+    assert_ne!(w1, w2, "the fixture needs two panes to have two subjects");
+
+    // w1 is superseded and left MID-TURN — the state the barrier skips. It keeps
+    // the task it was spawned with, so nothing has to be done to it; the pane is
+    // given a terminal so that the terminal is not what refuses it.
+    with_pane(&reg, &w1, 7302);
+    assert!(
+        reg.agent(&w1).is_some_and(|a| a.idle_since_ms.is_none()),
+        "the fixture's premise: the superseded pane is mid-turn, so the barrier skips it"
+    );
+
+    report_as(&reg, &group, &w2, Role::Worker, "done");
+    let release = reg.rd_drive_group_with(&group, &gh, 40_000);
+    let released: Vec<String> = release.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(released, vec![w2.clone()], "the release tick takes the current pane only");
+    let rows_after_release = audit_details(&reg, &group, "rd-worker-released").len();
+    assert!(
+        reg.agent(&w1).is_some_and(|a| a.status != AgentStatus::Dead),
+        "the fixture's premise: the skipped pane survived the release tick"
+    );
+
+    // Three more ticks. Nothing re-asks.
+    for (k, at) in [50_000u64, 60_000, 70_000].into_iter().enumerate() {
+        let out = reg.rd_drive_group_with(&group, &gh, at);
+        assert!(
+            out.released.is_empty(),
+            "tick {k} released something after the worker role had already gone: {:?}",
+            out.released
+        );
+    }
+
+    assert!(
+        reg.agent(&w1).is_some_and(|a| a.status != AgentStatus::Dead),
+        "the residual the design note discloses: a superseded pane the barrier skipped is \
+         never re-asked, so it is still live — reclaimed by the idle reaper once its own \
+         turn ends, not by the driver. If this goes red the driver has started re-asking, \
+         which is better behaviour but makes the note's disclosure false"
+    );
+    assert_eq!(
+        audit_details(&reg, &group, "rd-worker-released").len(),
+        rows_after_release,
+        "…and no later tick wrote a release row for it either — a row means a pane went (§5.4)"
+    );
+}

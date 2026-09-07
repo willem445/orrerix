@@ -2221,9 +2221,23 @@ impl OrchRegistry {
         // above answers only for a pane that is idle AND delivery-ready; every
         // other live pane on this session used to fall through to the spawn,
         // which is how PR #3198 ended with `w-2657`, `w-2659` and `w-2660` all
-        // alive on one session and one worktree. The invariant this restores is
-        // that the DRIVER never puts a second live pane on a session it is
-        // handing back to: if there is one, the brief goes into it.
+        // alive on one session and one worktree. What this restores is that a
+        // live pane on the session gets the brief instead of a new pane being
+        // opened beside it.
+        //
+        // **That is not an unconditional invariant, and saying it was is the
+        // review's finding 1.** `rd_take_over_pane` falls through to the spawn
+        // when the DELIVERY is refused, and one refusal is reachable without
+        // anything being wrong: a pane whose queue is already at
+        // `QUEUE_MAX_PER_PANE` (8) answers `Err`, so a hand-back landing on a
+        // pane that far behind still opens a second pane on a live session.
+        // The window is strictly narrower than the defect this fixes — the old
+        // arm spawned at queue depth >= 1, this one only at depth 8 — and the
+        // refusal is on the audit log as `rd-takeover-declined` rather than
+        // being visible only as a fresh pane, which is the whole of what
+        // #2089 asked of the reuse arm. It is a disclosed corner, pinned by
+        // `a_takeover_refused_by_a_full_queue_says_so_and_falls_through`, not a
+        // guarantee.
         //
         // Ordered after the reuse rather than replacing it, so #2089's
         // `rd-reuse-declined` rows are still written for the pane this then
@@ -2238,7 +2252,7 @@ impl OrchRegistry {
         // pane since that issue, so the state is reachable only through an
         // explicit `spawn_agent(block:, resume_session:)`.
         let taken_over = match (&reused, block.as_deref()) {
-            (None, Some(b)) => self.rd_take_over_pane(group, &session, b, &text),
+            (None, Some(b)) => self.rd_take_over_pane(group, &on_behalf, &session, b, &text),
             _ => None,
         };
         let (agent, pane) = match (reused, taken_over) {
@@ -2272,20 +2286,43 @@ impl OrchRegistry {
     /// alternative the driver used to take was a SECOND pane on the same
     /// worktree — measured as silent work loss on #3203.
     ///
-    /// A failed delivery answers `None` and falls through to the spawn, for
-    /// `rd_reuse_pane`'s own reason: `deliver_prompt` can refuse for reasons
-    /// that say nothing about the drive, and the spawn is the path that already
-    /// existed.
+    /// **A failed delivery answers `None` and falls through to the spawn, and
+    /// it is AUDITED rather than silent** (review round 1, finding 1).
+    /// `deliver_prompt` can refuse for reasons that say nothing about the drive
+    /// — a pane that died between the lookup and the write — and the spawn is
+    /// the path that already existed, which is `rd_reuse_pane`'s own argument.
+    /// But one refusal is reachable with nothing wrong at all: a pane whose
+    /// queue is at `QUEUE_MAX_PER_PANE` answers `Err`, and the fall-through
+    /// then puts a second live pane on a session that has one — the very shape
+    /// #3203 exists to stop, narrowed (the old arm spawned at depth >= 1) but
+    /// not closed.
+    ///
+    /// So the refusal gets `rd-takeover-declined` (§5.4). Leaving it silent
+    /// would make the one remaining route to a duplicate pane look identical on
+    /// the log to "this session had no live pane" — which is exactly the
+    /// indistinguishability #2089 added `rd-reuse-declined` to remove, one arm
+    /// over.
     fn rd_take_over_pane(
         &self,
         group: &GroupId,
+        on_behalf_of: &str,
         session: &str,
         block: &str,
         text: &str,
     ) -> Option<String> {
         let agent = self.live_pane_on_session(group, session, block)?;
-        self.deliver_prompt(&agent, text, brand::AUDIT_ACTOR, Delivery::MidSession).ok()?;
-        Some(agent)
+        match self.deliver_prompt(&agent, text, brand::AUDIT_ACTOR, Delivery::MidSession) {
+            Ok(_) => Some(agent),
+            Err(why) => {
+                self.rd_audit(group, on_behalf_of, rddrive::audit_action::TAKEOVER_DECLINED, json!({
+                    "pane": agent,
+                    "session": session,
+                    "block": block,
+                    "reason": why,
+                }));
+                None
+            }
+        }
     }
 
     /// The workspace a driver-initiated resume inherits.

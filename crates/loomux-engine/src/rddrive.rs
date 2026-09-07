@@ -602,6 +602,25 @@ pub mod audit_action {
     /// reason — a filter looking for the thing that happened must not match the
     /// thing that did not.
     pub const NOTICE_DROPPED: &str = "rd-notice-dropped";
+    /// A hand-back had a live pane to TAKE OVER and the delivery into it was
+    /// REFUSED, so the hand-back opened a pane instead (#3203). Carries the
+    /// `pane` that refused, the `session`, the `block`, and the `reason`
+    /// `deliver_prompt` gave.
+    ///
+    /// Its own action for `rd-reuse-declined`'s reason, which is #2089's and
+    /// applies here unchanged: the refusal's only other visible effect is a
+    /// fresh pane, and on this log a fresh pane is exactly what "there was no
+    /// live pane at all" looks like. Without this row the one case that can
+    /// still put a second pane on a live session is INVISIBLE — which is the
+    /// shape §3 objects to, and the reason the take-over arm's residual is a
+    /// disclosed corner rather than a silent one.
+    ///
+    /// Distinct from `rd-reuse-declined`: that row means a candidate failed the
+    /// READINESS predicate and was not typed into, which is a decision the
+    /// driver made; this one means the driver decided to type and the delivery
+    /// machinery refused. The commonest cause is a pane whose queue is at
+    /// `QUEUE_MAX_PER_PANE`.
+    pub const TAKEOVER_DECLINED: &str = "rd-takeover-declined";
     /// The drive answered a worker's `report(progress)` in the worker's own
     /// pane (#1959) — one line, one per hand-back, no orchestrator turn.
     ///

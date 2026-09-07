@@ -3418,15 +3418,19 @@ it. A pane that is idle but parked — behind a permission prompt, a CLI questio
 fails that test, and the refusal is on the group's audit log as `rd-reuse-declined`, naming the
 pane and why.
 
-**But a hand-back never opens a second pane on a session that already has a live one**, whatever
-that pane is doing. Where the pane is working, or failed the readiness test above, the driver
-types the brief into it anyway rather than spawning beside it: two panes on one session are two
+**A hand-back hands the brief to the pane that is already on the session** rather than opening a
+second one beside it, whatever that pane is doing. Where the pane is working, or failed the
+readiness test above, the driver types the brief into it anyway: two panes on one session are two
 agents editing one worktree, and the pane that notices is the one that finds commits it did not
 write. The brief is queued, not an interrupt — the pane reads it when its current turn ends, the
 way any prompt you send a working delegate does. A pane running a *different* block is still not
 taken over, because that would be handing the fix to a different persona on a different model; a
-session in that state gets a new pane, as it did before. The `rd-handback` row says which happened
-in its `pane` field: `reused`, `taken-over` or `spawned`.
+session in that state gets a new pane, as it did before. So does one whose pane is so far behind
+that the delivery itself is refused — a queue already holding its maximum — which is the one case
+left where a hand-back can put a second pane on a live session; it is on the audit log as
+`rd-takeover-declined`, naming the pane and why, rather than looking like a session that had no
+pane at all. The `rd-handback` row says which happened in its `pane` field: `reused`,
+`taken-over` or `spawned`.
 
 **A reviewer is asked again in its own conversation, not replaced by a stranger.** Every round
 after the first is a delta brief — "your previous verdict was `fail`; here is what changed" — and

@@ -1046,9 +1046,21 @@ this note first.
    of them happened to make the same edits. So the hand-back now has a **take-over
    arm** below the reuse arm: if `rd_reuse_pane` answers `None` and there is any
    live pane on the session under the resolved block, the brief is typed into
-   THAT pane. The invariant is flat — *the driver never puts a second live pane on
-   a session it is handing back to* — and `rd_spawn` is reached only when the
-   session genuinely has none.
+   THAT pane, and `rd_spawn` is reached when the session has no live pane under
+   that block — or when the delivery into the one it has is REFUSED.
+   **That second clause is not a footnote, and an earlier draft of this note
+   omitted it and claimed a flat invariant instead** (review round 1, finding 1).
+   `rd_take_over_pane` answers `None` on any `deliver_prompt` failure, and one
+   failure needs nothing to be wrong: a pane whose queue already holds
+   `QUEUE_MAX_PER_PANE` (8) entries is refused, so a hand-back landing on a pane
+   that far behind still opens a second pane on a live session. Two things bound
+   it and neither closes it. The window is strictly narrower than the defect
+   this section fixes — the pre-#3203 arm spawned at queue depth >= 1, this one
+   only at depth 8 — and the refusal is on the audit log as
+   `rd-takeover-declined` (§5.4) rather than being visible only as a fresh pane,
+   which is #2089's own requirement of the reuse arm applied one arm over. So
+   what this section promises is a NARROWED and OBSERVABLE duplicate, not the
+   absence of one.
    **The trade this reverses is a real one, and it reverses because the
    alternative changed.** #2089's argument for refusing an unready pane, and
    #2162's for refusing a working one, are both "the brief lands behind whatever
@@ -2187,6 +2199,7 @@ like `mq-*` and the rest:
 `rd-verdict` · `rd-handback` · `rd-consumed` ·
 `rd-satisfied` · `rd-held` · `rd-resumed` · `rd-cancelled` · `rd-pruned` ·
 `rd-kickback` · `rd-recovered` · `rd-state-unreadable` · `rd-reuse-declined` ·
+`rd-takeover-declined` ·
 `rd-lane-reopened` · `rd-lane-released` · `rd-worker-released` ·
 `rd-round-grace` · `rd-hold-repeated` · `rd-notice-demoted` ·
 `rd-provider-limit`
@@ -2297,6 +2310,19 @@ working, already gone, or never bound to a terminal — so this is not a blanket
 kill of a session. One `rd-worker-released` row per pane that actually went, on
 the rule below that a row means a pane went.
 
+**A pane the barrier skips is not re-asked later, and that is a residual rather
+than an oversight** (review round 1, finding 3). `releasable` gates its worker
+candidate on `!entry.worker_agent.is_empty()`, and the release that just
+happened cleared that field — so once the current pane goes, no later tick names
+the worker role again, and a SUPERSEDED pane that was mid-turn at the release
+tick stays owned and cap-counting. It is not leaked: `forget_dead_panes` drops
+it once it dies, and the idle reaper reclaims it once its own turn ends, which
+is the same path any idle delegate takes. Re-asking would mean giving
+`releasable` a worker candidate with no current pane to hang it on — a shape
+that arm has never had — so it is disclosed and bounded here instead, and pinned
+by `a_superseded_pane_the_barrier_skips_is_not_re_asked_on_a_later_tick` so the
+disclosure cannot go quietly false.
+
 `rd-lane-released` and `rd-worker-released` (#2501, #2811 S1) are the rows for §3.1
 item 5's narrowed states: a pane the driver KILLED, with the conversation kept.
 Each carries `pr`, `agent`, the `session` the next round resumes, the `head` it
@@ -2314,6 +2340,17 @@ is the point of the rows — #2501 is a measurement and its follow-up will be
 another one — so they are written on the release SUCCEEDING, never on the intent:
 a pane the barrier refused (still working, already gone, never bound to a
 terminal) produces no row, because nothing happened.
+
+`rd-takeover-declined` is the take-over arm's twin of `rd-reuse-declined`, and
+the two are separate for §5.4's usual reason rather than for symmetry. A
+`rd-reuse-declined` row means a candidate failed the READINESS predicate and was
+never typed into — a decision the driver made, and one that now costs nothing
+because the take-over arm picks the pane up anyway. A `rd-takeover-declined` row
+means the driver decided to type and the DELIVERY machinery refused, which is
+the one remaining route to a second live pane on one session; a reader asking
+"did this drive ever duplicate a pane" needs the second and must not have to
+infer it from the absence of the first. Carries the `pane` that refused, the
+`session`, the `block` and `deliver_prompt`'s own `reason`.
 
 `rd-handback` carries **`pane`**, which says whether that hand-back cost a new
 pane and, when it did not, which arm kept it from doing so (#3203): `reused` is

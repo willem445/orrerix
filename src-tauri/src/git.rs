@@ -2290,6 +2290,78 @@ mod tests {
         assert!(Path::new(&wt).join("feat.txt").exists());
     }
 
+    /// **The fold is Unicode, and `eq_ignore_ascii_case` is what it must not
+    /// be** (#3040).
+    ///
+    /// The ASCII row is the control: a build that folded nothing at all fails
+    /// there, so the non-ASCII rows are a statement about the ALPHABET rather
+    /// than about folding happening at all. The last row is the negative
+    /// control — two names that really are different must not be refused, or
+    /// this guard would block every second worktree.
+    #[test]
+    fn worktree_names_collide_folds_unicode_not_just_ascii() {
+        // ASCII — the control, which `eq_ignore_ascii_case` would also pass.
+        assert!(worktree_names_collide("feat/x", "feat/X"));
+        // Non-ASCII — the row that separates the two implementations. Written
+        // through `char::from_u32` so the literal cannot be silently
+        // re-encoded by a tool between here and the compiler.
+        let a_umlaut_lower = char::from_u32(0x00E4).unwrap(); // ä
+        let a_umlaut_upper = char::from_u32(0x00C4).unwrap(); // Ä
+        assert!(!a_umlaut_lower.eq_ignore_ascii_case(&a_umlaut_upper),
+                "the premise: ASCII folding does NOT relate these two");
+        assert!(worktree_names_collide(
+            &format!("feat/{a_umlaut_lower}"),
+            &format!("feat/{a_umlaut_upper}")
+        ));
+        // The separator, which names one directory either way.
+        assert!(worktree_names_collide("feat/x", "feat\\x"));
+        // The negative control.
+        assert!(!worktree_names_collide("feat/x", "feat/y"));
+        assert!(!worktree_names_collide("feat/x", "feat/xx"));
+    }
+
+    /// **A worktree name that case-folds onto an existing one is refused**, on
+    /// every platform and with a message naming both.
+    ///
+    /// This is the residual #3040 P1 pinned and could not close: `plandoc`
+    /// folds a plan's own slice ids and branches ASCII-only, because a slice id
+    /// is ASCII by construction — a BRANCH is not, so two branches differing
+    /// only by a non-ASCII letter's case reach `git worktree add` as two names
+    /// that are one directory on this project's Windows baseline and two on a
+    /// case-sensitive one. Either answer is wrong; a refusal is the same answer
+    /// everywhere.
+    ///
+    /// The control is the first `unwrap()`: the same call with the same repo
+    /// SUCCEEDS for the first name, so the refusal below is about the collision
+    /// rather than about a repo that cannot cut a worktree.
+    #[test]
+    fn worktree_add_refuses_a_name_that_case_folds_onto_an_existing_one() {
+        let repo = new_repo();
+        let d = repo.path();
+        commit(d, "f.txt", "a\n", "A");
+
+        let lower = char::from_u32(0x00E4).unwrap();
+        let upper = char::from_u32(0x00C4).unwrap();
+        let first = format!("feat/caf{lower}");
+        let second = format!("feat/CAF{upper}");
+
+        // The control.
+        git_worktree_add_sync(p(d), first.clone(), None)
+            .expect("the first name must cut a worktree, or this test measures nothing");
+
+        let err = git_worktree_add_sync(p(d), second.clone(), None)
+            .expect_err("the second name collides and must be refused");
+        assert!(
+            err.contains("collides with the existing"),
+            "the refusal must name the collision rather than a path: {err}"
+        );
+        assert!(err.contains(&first), "and name the EXISTING spelling: {err}");
+        assert!(
+            !git_worktree_list_sync(p(d)).unwrap().contains(&second),
+            "and leave no worktree behind"
+        );
+    }
+
     #[test]
     fn worktree_add_fails_loudly_on_unresolvable_base() {
         let repo = new_repo();

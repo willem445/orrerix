@@ -18,8 +18,10 @@ use loomux_lib::orchestration::mcp::dispatch;
 use loomux_lib::orchestration::mqdriver::CmdOut;
 use loomux_lib::orchestration::plandrive::{self, Consent, PdHeldReason, PlanDriveState};
 use loomux_lib::orchestration::rddrive::RdRunner;
+use loomux_lib::orchestration::reviewdrive::CAP_HOLD_MS;
 use loomux_lib::orchestration::{
     Caller, GroupId, Guardrails, OrchRegistry, PdPlanCheck, Role, PD_MAX_GH_PER_TICK,
+    PD_MAX_PR_CHECKS_PER_TICK,
 };
 use serde_json::{json, Value};
 
@@ -135,7 +137,33 @@ impl Repo {
         let wf = loomux_lib::orchestration::workflow::workflow_file(&path);
         std::fs::create_dir_all(wf.parent().unwrap()).unwrap();
         std::fs::write(&wf, yaml).unwrap();
-        Repo { _root: root, repo }
+        let r = Repo { _root: root, repo };
+        r.git_init();
+        r
+    }
+    /// A minimal real git repo, and the repo sits one level BELOW its own temp
+    /// root so that the worktrees `git worktree add` cuts as its SIBLING land
+    /// inside the directory `Drop` reclaims (#464's leak check is what makes
+    /// that placement load-bearing rather than tidy).
+    ///
+    /// Needed because a slice's worker is spawned WITH a worktree — that is
+    /// what a worker gets — and `git_worktree_add_sync` needs real git under
+    /// the repo to cut one.
+    fn git_init(&self) {
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .current_dir(&self.repo)
+                .args(args)
+                .output()
+                .expect("git must be installed for this test");
+            assert!(ok.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&ok.stderr));
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        std::fs::write(self.repo.join("f.txt"), "hi").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "init"]);
     }
     fn path(&self) -> String {
         self.repo.to_string_lossy().replace('\\', "/")
@@ -289,6 +317,12 @@ struct FakeGh {
     /// The seam itself failing — `gh` missing, or a child killed at the command
     /// timeout. Not a `gh` refusal, and not a fact about the issue.
     down: std::sync::Mutex<bool>,
+    /// PR number -> (state, mergedAt). What `gh pr view` answers, keyed on the
+    /// number rather than on call order so a test states what the driver
+    /// concluded and not the sequence it happened to read in.
+    prs: std::sync::Mutex<std::collections::BTreeMap<u64, (String, Option<String>)>>,
+    /// Branch -> PR number, for the `gh pr list --head` fallback.
+    heads: std::sync::Mutex<std::collections::BTreeMap<String, u64>>,
     calls: std::sync::Mutex<Vec<Vec<String>>>,
     /// Set by `hold_first`: the first N callers of `gh` wait here for each
     /// other, so a test can FORCE an interleaving instead of hoping for one.
@@ -304,10 +338,33 @@ impl FakeGh {
             labels: std::sync::Mutex::new(labels.iter().map(|s| s.to_string()).collect()),
             title: std::sync::Mutex::new("plan me".into()),
             down: std::sync::Mutex::new(false),
+            prs: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            heads: std::sync::Mutex::new(std::collections::BTreeMap::new()),
             calls: std::sync::Mutex::new(Vec::new()),
             barrier: std::sync::Mutex::new(None),
             held: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+    fn set_pr(&self, pr: u64, state: &str, merged_at: Option<&str>) {
+        self.prs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(pr, (state.to_string(), merged_at.map(str::to_string)));
+    }
+    fn set_head_pr(&self, branch: &str, pr: u64) {
+        self.heads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(branch.to_string(), pr);
+    }
+    /// How many `gh pr view` calls this fake has answered — the population
+    /// figure a "the budget bounded it" assertion is measured against.
+    fn pr_views(&self) -> usize {
+        self.calls()
+            .iter()
+            .filter(|a| a.first().map(String::as_str) == Some("pr")
+                && a.get(1).map(String::as_str) == Some("view"))
+            .count()
     }
     fn set_state(&self, s: &str) {
         *self.state.lock().unwrap_or_else(|e| e.into_inner()) = s.to_string();
@@ -357,9 +414,10 @@ impl FakeGh {
 
 impl RdRunner for FakeGh {
     fn gh(&self, args: &[&str]) -> Result<CmdOut, String> {
-        self.calls.lock().unwrap_or_else(|e| e.into_inner()).push(
-            args.iter().map(|s| s.to_string()).collect(),
-        );
+        // Owned up front, because the subcommand match below reads them after
+        // the call log has taken its copy.
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        self.calls.lock().unwrap_or_else(|e| e.into_inner()).push(args.clone());
         // Taken and RELEASED before waiting: holding the barrier's own lock
         // across the wait would deadlock every caller on the second one.
         let barrier = self.barrier.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -369,6 +427,43 @@ impl RdRunner for FakeGh {
         }
         if *self.down.lock().unwrap_or_else(|e| e.into_inner()) {
             return Err("gh-not-found".into());
+        }
+        // Keyed on the SUBCOMMAND rather than on call order, so a test asserts
+        // what the driver concluded and not the sequence it happened to read in.
+        // Everything below the match is the `issue view` answer, which is the
+        // shape P3a modelled and still the only other one this driver makes.
+        match (args.first().map(String::as_str), args.get(1).map(String::as_str)) {
+            (Some("pr"), Some("view")) => {
+                let n: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let prs = self.prs.lock().unwrap_or_else(|e| e.into_inner());
+                let Some((state, merged)) = prs.get(&n) else {
+                    return Ok(CmdOut {
+                        code: Some(1),
+                        stdout: String::new(),
+                        stderr: format!("no pull request found for {n}"),
+                    });
+                };
+                let body = json!({ "state": state, "mergedAt": merged });
+                return Ok(CmdOut { code: Some(0), stdout: body.to_string(), stderr: String::new() });
+            }
+            (Some("pr"), Some("list")) => {
+                let head = args
+                    .iter()
+                    .position(|a| a == "--head")
+                    .and_then(|i| args.get(i + 1))
+                    .cloned()
+                    .unwrap_or_default();
+                let rows: Vec<Value> = self
+                    .heads
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&head)
+                    .map(|n| vec![json!({ "number": n })])
+                    .unwrap_or_default();
+                let body = Value::Array(rows);
+                return Ok(CmdOut { code: Some(0), stdout: body.to_string(), stderr: String::new() });
+            }
+            _ => {}
         }
         let labels: Vec<Value> = self
             .labels
@@ -522,7 +617,7 @@ fn an_investigation_issue_never_boards() {
     let file = read_record(&reg, &group);
     assert_eq!(file["entries"][0]["state"], json!("complete"));
     assert_eq!(
-        file["entries"][0]["slice_tasks"],
+        file["entries"][0]["slices"],
         json!({}),
         "an investigation drive boards no row at all"
     );
@@ -539,8 +634,8 @@ fn an_investigation_issue_never_boards() {
     reg2.pd_store_posted_plan_at(&g2, 3040, doc, "https://example/c/1", 1_100);
     // TWO ticks, and the second one is the point: `decide` answers ONE step per
     // entry per tick — the review driver's own shape — so `plan-posted` →
-    // `boarding` and `boarding` → `held(awaiting-p3b)` are two of them. The
-    // intermediate state is real and a status read can catch it.
+    // `boarding` and `boarding` → `running` are two of them. The intermediate
+    // state is real and a status read can catch it.
     reg2.pd_drive_group_with(&g2, &gh2, 1_200);
     assert_eq!(
         drive_state(&reg2, &g2),
@@ -550,9 +645,9 @@ fn an_investigation_issue_never_boards() {
     );
     reg2.pd_drive_group_with(&g2, &gh2, 1_300);
     assert_eq!(
-        held_reason(&reg2, &g2),
-        PdHeldReason::AwaitingP3b.as_str(),
-        "an agent-ready drive parks on the named hold, not on `complete`: {}",
+        drive_state(&reg2, &g2),
+        "running",
+        "an agent-ready drive boards and RUNS, where the investigation one completed: {}",
         status(&reg2, &g2)
     );
     let _ = orch2;
@@ -1844,4 +1939,744 @@ fn every_state_and_reason_word_round_trips() {
     );
     assert_eq!(Consent::from_labels(&["agent-investigation"]), Some(Consent::Investigation));
     assert_eq!(Consent::from_labels(&["bug"]), None);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// #3040 P3b — the executor: boarding, spawning, and the hand-off to the review
+// driver. Everything below runs against the same seam P3a built: a canned `gh`,
+// real `spawn_agent_bound` panes, and `mcp::dispatch` for the delegates' own
+// reports. No test here spawns a real agent CLI (CLAUDE.md constraint 3).
+// ════════════════════════════════════════════════════════════════════════════
+
+/// A three-slice plan: two independent, one dependent, and one of the
+/// independents flagged `hold: true`.
+///
+/// The `hold: true` slice is on an INDEPENDENT slice on purpose. Flagging a
+/// dependent one would make "it never spawned" true for two reasons at once —
+/// the flag, and its unmet dep — and a test cannot tell those apart.
+const PLAN3: &str = "\
+version: 1
+issue: 3040
+slices:
+  - id: P1
+    title: the parser
+    branch: feat/3040-p1
+    block: worker-adv
+    deps: []
+    avoid_files: [src-tauri/src/orchestration/mod.rs]
+    red_before_green: cargo test --locked -p loomux-engine plandoc
+    brief: |
+      Write the parser, refuse everything you cannot read, and repair nothing.
+      The second paragraph is here so the verbatim pin has a blank line in it.
+  - id: P2
+    title: the core
+    branch: feat/3040-p2
+    block: worker-adv
+    deps: [P1]
+    brief: |
+      The record and the state machine, mirroring the review driver's own core.
+  - id: P3
+    title: the judgement call
+    branch: feat/3040-p3
+    block: worker-adv
+    deps: []
+    hold: true
+    brief: |
+      This one carries a design decision the planner deliberately left open for
+      a human, so orrerix must never spawn it by itself.
+";
+
+/// The planner's `brief:` for P1, exactly as YAML will have decoded it. Written
+/// out rather than re-derived from [`PLAN3`], so the verbatim pin compares
+/// against a literal a human can read instead of against the parser's own
+/// output — which would pass however the parser mangled it.
+const P1_BRIEF: &str = "Write the parser, refuse everything you cannot read, and repair nothing.\n\
+The second paragraph is here so the verbatim pin has a blank line in it.\n";
+
+fn roster3() -> Vec<(String, bool)> {
+    roster()
+}
+
+/// A pane for an agent. In test mode nothing binds one, and an agent without a
+/// pane silently receives nothing — so a test asserting a delivery would read
+/// an empty log rather than a missing feature.
+fn with_pane(reg: &OrchRegistry, agent_id: &str, pty: u32) {
+    reg.set_pty_for_test(agent_id, pty);
+}
+
+/// A drive taken all the way to `running`, with its rows on the board.
+///
+/// Two ticks, and both are real: `plan-posted` -> `boarding` writes the rows,
+/// `boarding` -> `running` is `decide` seeing them. Returns the group, the
+/// orchestrator and the slice-id -> task-id map read back off the record.
+fn running(
+    reg: &OrchRegistry,
+    repo: &Repo,
+    gh: &FakeGh,
+    plan: &str,
+) -> (GroupId, String, std::collections::BTreeMap<String, String>) {
+    let (group, orch) = grouped(reg, repo);
+    let out = reg.drive_plan_with(&group, gh, 3040, None, None, None, &orch, 1_000);
+    assert_eq!(out["driving"], json!(true), "drive_plan refused: {out}");
+    let doc = plandrive::validate_for_drive(&in_comment(plan), 3040, &roster3())
+        .expect("the specimen plan must validate");
+    reg.pd_store_posted_plan_at(&group, 3040, doc, "https://example/c/1", 1_100);
+    reg.pd_drive_group_with(&group, gh, 1_200);
+    reg.pd_drive_group_with(&group, gh, 1_300);
+    assert_eq!(
+        drive_state(reg, &group),
+        "running",
+        "the drive must reach `running` before a test about running it means anything: {}",
+        status(reg, &group)
+    );
+    let map = slice_rows(reg, &group);
+    assert!(!map.is_empty(), "boarding wrote no rows at all");
+    (group, orch, map)
+}
+
+/// Slice id -> board task id, read off the record.
+fn slice_rows(
+    reg: &OrchRegistry,
+    group: &GroupId,
+) -> std::collections::BTreeMap<String, String> {
+    read_record(reg, group)["entries"][0]["slices"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| {
+                    v["task_id"].as_str().map(|t| (k.clone(), t.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One slice's run state, off the record.
+fn slice_state(reg: &OrchRegistry, group: &GroupId, slice: &str) -> String {
+    read_record(reg, group)["entries"][0]["slices"][slice]["state"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn slice_hold(reg: &OrchRegistry, group: &GroupId, slice: &str) -> String {
+    read_record(reg, group)["entries"][0]["slices"][slice]["hold"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn slice_agent(reg: &OrchRegistry, group: &GroupId, slice: &str) -> String {
+    read_record(reg, group)["entries"][0]["slices"][slice]["agent"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn row(reg: &OrchRegistry, group: &GroupId, id: &str) -> Option<loomux_lib::orchestration::Task> {
+    reg.tasks(group).into_iter().find(|t| t.id == id)
+}
+
+/// The `report` one of this group's delegates makes, through the real MCP arm.
+fn report(reg: &OrchRegistry, group: &GroupId, agent: &str, status: &str, args: Value) -> Value {
+    let mut a = args;
+    a["status"] = json!(status);
+    dispatch(reg, &caller(group, agent, Role::Worker), "report", &a)
+        .unwrap_or_else(|e| panic!("report({status}) failed: {e}"))
+}
+
+// ── §3: the brief ───────────────────────────────────────────────────────────
+
+/// **The planner's text is delivered VERBATIM**, between an orrerix-written
+/// header and the one copy of the definition of done.
+///
+/// The three assertions are deliberately different in kind. `contains` on the
+/// brief would pass against a build that quoted it twice or wrapped it; what is
+/// pinned instead is the DECOMPOSITION — the brief splits the kickoff into
+/// exactly a header, the planner's bytes and the DoD, in that order and with
+/// nothing between them — which is the property §3 actually states.
+///
+/// The positive control is the header itself: a spawn that carried no brief at
+/// all would satisfy "the planner's text is not mangled" trivially, so the
+/// header's own facts (the branch, the base, the `Do not touch:` line) are
+/// asserted present in the same breath.
+#[test]
+fn the_brief_carries_the_planner_text_verbatim_between_header_and_dod() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, PLAN3);
+
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    let agent = slice_agent(&reg, &group, "P1");
+    assert!(!agent.is_empty(), "P1 must have spawned: {}", status(&reg, &group));
+    let kickoff = reg.agent(&agent).expect("the spawned pane is on the roster").task;
+
+    // The header, first, and it is the population control for everything below:
+    // an empty kickoff would pass a "not mangled" test and fails this one.
+    assert!(kickoff.starts_with("You are slice `P1` of the plan for issue #3040: the parser."),
+            "the header leads: {kickoff:?}");
+    assert!(kickoff.contains("Branch: `feat/3040-p1`"), "{kickoff:?}");
+    assert!(
+        kickoff.contains("Do not touch: src-tauri/src/orchestration/mod.rs"),
+        "the plan's avoid_files reach the worker: {kickoff:?}"
+    );
+    assert!(
+        kickoff.contains("Red before green: cargo test --locked -p loomux-engine plandoc"),
+        "{kickoff:?}"
+    );
+
+    // The decomposition. `\n\n` is the joint §3 names, so the kickoff must be
+    // exactly header + planner + DoD with those two joints and no third.
+    let dod = loomux_lib::orchestration::brief::dod_trailer();
+    let body = kickoff
+        .strip_suffix(&format!("\n\n{dod}"))
+        .unwrap_or_else(|| panic!("the DoD must be the trailer, byte for byte: {kickoff:?}"));
+    let planner = body
+        .strip_suffix(&format!("\n\n{P1_BRIEF}"))
+        .map(|_| &body[body.len() - P1_BRIEF.len()..])
+        .unwrap_or_else(|| {
+            panic!("the planner's brief must sit VERBATIM between the two: {body:?}")
+        });
+    assert_eq!(planner, P1_BRIEF, "verbatim means byte for byte");
+    assert!(
+        !body[..body.len() - P1_BRIEF.len()].contains(P1_BRIEF),
+        "the planner's text appears ONCE, not quoted into the header as well"
+    );
+}
+
+// ── §2(b) step 6: readiness, and one spawn a tick ───────────────────────────
+
+/// **A dep-free slice spawns; its dependent does not.**
+///
+/// The two halves are the control for each other: both slices are boarded, both
+/// are `queued` in the record, and only one of them has an unmet dep — so a
+/// build that spawned nothing, or one that spawned everything, fails a
+/// different half of this test.
+#[test]
+fn a_dep_free_slice_spawns_and_a_dependent_does_not() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, rows) = running(&reg, &repo, &gh, PLAN3);
+
+    // The board really does carry the dep edge — the premise of the half below.
+    let p2 = row(&reg, &group, &rows["P2"]).expect("P2 has a row");
+    assert_eq!(p2.deps, vec![rows["P1"].clone()], "P2's row depends on P1's");
+
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    assert_eq!(slice_state(&reg, &group, "P1"), "running", "{}", status(&reg, &group));
+    assert_eq!(
+        slice_state(&reg, &group, "P2"),
+        "queued",
+        "a dependent must not spawn while its dep is open: {}",
+        status(&reg, &group)
+    );
+    assert!(slice_agent(&reg, &group, "P2").is_empty(), "and no pane was opened for it");
+}
+
+/// **At most ONE spawn per group per tick**, whatever the board says is ready.
+///
+/// The plan's third slice is `hold: true`, so the ready set here is one — which
+/// would make this test vacuous. It therefore un-holds P3 by hand first (the
+/// plan is re-posted with the flag cleared), giving TWO ready slices, and the
+/// assertion is that the tick spawned exactly one of them and the next tick
+/// spawned the other. A build that spawned both fails on the count; one that
+/// spawned neither fails on the second tick.
+#[test]
+fn only_one_spawn_per_tick_even_with_three_ready_slices() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let plan = PLAN3.replace("    hold: true\n", "");
+    assert!(!plan.contains("hold: true"), "the un-hold really happened");
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, &plan);
+
+    let ready = ["P1", "P3"];
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    let spawned: Vec<&str> =
+        ready.iter().copied().filter(|s| slice_state(&reg, &group, s) == "running").collect();
+    assert_eq!(
+        spawned.len(),
+        1,
+        "exactly one of the two ready slices spawned this tick, not {spawned:?}: {}",
+        status(&reg, &group)
+    );
+
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    let spawned: Vec<&str> =
+        ready.iter().copied().filter(|s| slice_state(&reg, &group, s) == "running").collect();
+    assert_eq!(
+        spawned.len(),
+        2,
+        "and the second tick spawns the other — the bound is per tick, not a cap on the plan: {}",
+        status(&reg, &group)
+    );
+}
+
+/// **A `hold: true` slice is never spawned** (§2(c)(i)) — the planner's own
+/// veto, exercised on a surface that costs no orchestrator turn.
+///
+/// The control is P1 in the same drive: it is dep-free exactly as P3 is, and it
+/// does spawn. So "P3 never spawned" is a statement about the flag rather than
+/// about a build that spawns nothing.
+#[test]
+fn a_hold_true_slice_is_never_spawned() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, rows) = running(&reg, &repo, &gh, PLAN3);
+
+    // The row exists and is ready by every measure the BOARD has: what stops it
+    // is the plan, not the board, which is the whole point of the flag.
+    let p3 = row(&reg, &group, &rows["P3"]).expect("P3 is boarded like any other slice");
+    assert_eq!(p3.status, "queued");
+    assert!(p3.deps.is_empty(), "P3 has no dep to be waiting on");
+
+    for (i, now) in [1_400u64, 1_500, 1_600, 1_700].into_iter().enumerate() {
+        reg.pd_drive_group_with(&group, &gh, now);
+        assert_eq!(
+            slice_state(&reg, &group, "P3"),
+            "queued",
+            "tick {i}: a hold: true slice must never spawn: {}",
+            status(&reg, &group)
+        );
+    }
+    // The control.
+    assert_eq!(
+        slice_state(&reg, &group, "P1"),
+        "running",
+        "the dep-free slice WITHOUT the flag did spawn, so the flag is what stopped P3"
+    );
+}
+
+// ── §2(b) step 6: the hand-off, and what merging releases ───────────────────
+
+/// **A worker's `report(done)` hands its PR to the REVIEW driver**, on behalf of
+/// the orchestrator this plan drive acts for.
+///
+/// Asserted on the `rd-started` audit row and its `on_behalf_of`, because that
+/// is the fact the design turns on: the review drive exists, and it is doing the
+/// work for the same orchestrator — not for the plan driver, which is not a
+/// principal.
+#[test]
+fn a_worker_done_hands_the_pr_to_drive_review_on_behalf_of_the_orchestrator() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, orch, _rows) = running(&reg, &repo, &gh, PLAN3);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+
+    let agent = slice_agent(&reg, &group, "P1");
+    with_pane(&reg, &agent, 7_101);
+    gh.set_pr(4_100, "OPEN", None);
+    report(&reg, &group, &agent, "done", json!({ "ref": "#4100", "note": "green" }));
+
+    // The report was CONSUMED by the plan driver, not delivered — the
+    // interception this slice adds. Read before the tick, because the tick is
+    // what turns it into a hand-off.
+    assert!(
+        audit_actions(&reg, &group).iter().any(|a| a == "pd-slice-consumed"),
+        "a driven slice's worker reports to its drive: {:?}",
+        audit_actions(&reg, &group)
+    );
+
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    assert_eq!(slice_state(&reg, &group, "P1"), "in-review", "{}", status(&reg, &group));
+
+    let rd = reg
+        .audit_log(&group)
+        .into_iter()
+        .find(|e| e.action == "rd-started")
+        .expect("the review driver was started for this PR");
+    assert_eq!(
+        rd.detail.get("on_behalf_of").and_then(Value::as_str),
+        Some(orch.as_str()),
+        "the review drive acts for the ORCHESTRATOR, not for the plan driver: {:?}",
+        rd.detail
+    );
+    assert!(
+        audit_actions(&reg, &group).iter().any(|a| a == "pd-review-driven"),
+        "{:?}",
+        audit_actions(&reg, &group)
+    );
+}
+
+/// **A MERGED PR marks the row `done`, and that is what releases the dependent.**
+///
+/// The negative control is in the same test and is the whole reason it is worth
+/// writing: the tick BEFORE the merge is read, with the PR open, and P2 is still
+/// queued there. So "the dependent spawned" is caused by the merge rather than
+/// by time passing.
+#[test]
+fn a_merged_pr_marks_done_and_spawns_the_dependent() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, rows) = running(&reg, &repo, &gh, PLAN3);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+
+    let agent = slice_agent(&reg, &group, "P1");
+    with_pane(&reg, &agent, 7_101);
+    gh.set_pr(4_100, "OPEN", None);
+    report(&reg, &group, &agent, "done", json!({ "ref": "#4100" }));
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    assert_eq!(slice_state(&reg, &group, "P1"), "in-review");
+
+    // The control: an OPEN PR moves nothing.
+    reg.pd_drive_group_with(&group, &gh, 1_600);
+    assert_eq!(slice_state(&reg, &group, "P1"), "in-review", "an open PR is not done");
+    assert_eq!(slice_state(&reg, &group, "P2"), "queued", "so its dependent stays queued");
+
+    gh.set_pr(4_100, "MERGED", Some("2026-01-01T00:00:00Z"));
+    reg.pd_drive_group_with(&group, &gh, 1_700);
+    assert_eq!(slice_state(&reg, &group, "P1"), "done", "{}", status(&reg, &group));
+    assert_eq!(
+        row(&reg, &group, &rows["P1"]).map(|t| t.status),
+        Some("done".into()),
+        "the BOARD row is what the dependent's readiness is read from"
+    );
+    assert!(
+        audit_actions(&reg, &group).iter().any(|a| a == "pd-slice-merged"),
+        "{:?}",
+        audit_actions(&reg, &group)
+    );
+
+    reg.pd_drive_group_with(&group, &gh, 1_800);
+    assert_eq!(
+        slice_state(&reg, &group, "P2"),
+        "running",
+        "the dependent spawns once its dep's row is done: {}",
+        status(&reg, &group)
+    );
+}
+
+/// **A worker's `report(blocked)` parks ITS slice and nothing else** (§2(e)).
+///
+/// The control is P3 — un-held for this test so there is a second slice that
+/// could have been affected — which keeps running through the same ticks. A
+/// build that parked the whole drive fails on the drive state; one that parked
+/// every slice fails on P3.
+#[test]
+fn a_worker_blocked_holds_only_its_slice() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let plan = PLAN3.replace("    hold: true\n", "");
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, &plan);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    for s in ["P1", "P3"] {
+        assert_eq!(slice_state(&reg, &group, s), "running", "both independents are up first");
+    }
+
+    let agent = slice_agent(&reg, &group, "P1");
+    with_pane(&reg, &agent, 7_101);
+    report(&reg, &group, &agent, "blocked", json!({ "note": "the API contract is ambiguous" }));
+    reg.pd_drive_group_with(&group, &gh, 1_600);
+
+    assert_eq!(slice_state(&reg, &group, "P1"), "held");
+    assert_eq!(slice_hold(&reg, &group, "P1"), "worker-blocked", "{}", status(&reg, &group));
+    assert_eq!(
+        slice_state(&reg, &group, "P3"),
+        "running",
+        "the independent slice keeps going: {}",
+        status(&reg, &group)
+    );
+    assert_eq!(
+        drive_state(&reg, &group),
+        "running",
+        "and so does the DRIVE — a worker's block is not a drive-level hold"
+    );
+    let notice = reg
+        .audit_log(&group)
+        .into_iter()
+        .filter(|e| e.action == "pd-notice")
+        .count();
+    assert!(notice >= 1, "the hold is told to the orchestrator: {:?}", audit_actions(&reg, &group));
+}
+
+// ── §2(c): the human's board is the veto ────────────────────────────────────
+
+/// **A struck row holds the drive on `row-removed`.**
+///
+/// Deleting a slice's row leaves its dependents naming a task that no longer
+/// exists — an unmet dep forever — so the drive says so rather than ticking on
+/// against work that can never become ready.
+#[test]
+fn a_struck_row_holds_row_removed() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, rows) = running(&reg, &repo, &gh, PLAN3);
+
+    // The control: with every row present, the same tick does NOT hold.
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    assert_eq!(drive_state(&reg, &group), "running", "{}", status(&reg, &group));
+
+    reg.delete_task(&group, "the human", &rows["P2"]).expect("the human strikes a row");
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    assert_eq!(drive_state(&reg, &group), "held", "{}", status(&reg, &group));
+    assert_eq!(held_reason(&reg, &group), PdHeldReason::RowRemoved.as_str());
+}
+
+/// **A row a human marks `done` by hand releases its dependents**, with no PR
+/// and no merge anywhere in sight.
+///
+/// This is §2(c)'s claim that the driver keeps no private copy of readiness: it
+/// re-reads `tasks.json` every tick and asks `task_ready`, so an edit made on
+/// the board is simply what the next tick sees.
+#[test]
+fn a_hand_marked_done_row_releases_its_dependents() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, rows) = running(&reg, &repo, &gh, PLAN3);
+
+    // The control: P2 is not ready while P1's row is open, and the drive has
+    // been ticked, so "P2 did not spawn" is not merely "nothing has run yet".
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    assert_eq!(slice_state(&reg, &group, "P2"), "queued");
+
+    reg.upsert_task_by_human(
+        &group,
+        "the human",
+        Some(&rows["P1"]),
+        loomux_lib::orchestration::TaskPatch {
+            status: Some("done".into()),
+            ..loomux_lib::orchestration::TaskPatch::default()
+        },
+    )
+    .expect("a human may mark a row done");
+
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    assert_eq!(
+        slice_state(&reg, &group, "P2"),
+        "running",
+        "a hand-marked row releases its dependents — readiness is the BOARD's: {}",
+        status(&reg, &group)
+    );
+}
+
+// ── §2(d): consent is re-read, never remembered ─────────────────────────────
+
+/// **A label withdrawn mid-drive holds the drive BEFORE the next spawn.**
+///
+/// The control is the tick immediately before: the same drive, the same ready
+/// slice, and the label still on — it spawns. So the refusal is about the label
+/// rather than about the drive having run out of work.
+#[test]
+fn a_withdrawn_label_holds_before_the_next_spawn() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let plan = PLAN3.replace("    hold: true\n", "");
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, &plan);
+
+    // The control.
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    assert_eq!(slice_state(&reg, &group, "P1"), "running", "{}", status(&reg, &group));
+    assert_eq!(slice_state(&reg, &group, "P3"), "queued", "P3 is next in line");
+
+    gh.set_labels(&["bug"]);
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    assert_eq!(drive_state(&reg, &group), "held", "{}", status(&reg, &group));
+    assert_eq!(held_reason(&reg, &group), PdHeldReason::ConsentWithdrawn.as_str());
+    assert_eq!(
+        slice_state(&reg, &group, "P3"),
+        "queued",
+        "and the slice that was next was NOT spawned: {}",
+        status(&reg, &group)
+    );
+    assert!(slice_agent(&reg, &group, "P3").is_empty(), "no pane was opened for it");
+}
+
+// ── §2(c): the declared review window ───────────────────────────────────────
+
+/// **A declared review window posts EXACTLY ONE notice**, and spawns nothing
+/// until it has run.
+///
+/// The count is the assertion, not merely "a notice was sent": the window's
+/// whole cost is one orchestrator interruption, and a driver that re-announced
+/// itself every tick would be spending the turns this design exists to remove.
+#[test]
+fn a_review_window_posts_exactly_one_notice() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, orch) = grouped(&reg, &repo);
+    let out = reg.drive_plan_with(&group, &gh, 3040, None, Some(30), None, &orch, 1_000);
+    assert_eq!(out["driving"], json!(true), "{out}");
+    let doc = plandrive::validate_for_drive(&in_comment(PLAN3), 3040, &roster3()).unwrap();
+    reg.pd_store_posted_plan_at(&group, 3040, doc, "https://example/c/1", 1_100);
+
+    // Into the window, and then three more ticks well inside it.
+    let mut now = 1_200u64;
+    for _ in 0..4 {
+        reg.pd_drive_group_with(&group, &gh, now);
+        now += 60_000;
+    }
+    assert_eq!(drive_state(&reg, &group), "plan-review", "{}", status(&reg, &group));
+    assert_eq!(
+        slice_rows(&reg, &group).len(),
+        0,
+        "nothing is boarded and nothing is spawned inside the window"
+    );
+    let notices = reg
+        .audit_log(&group)
+        .into_iter()
+        .filter(|e| {
+            e.action == "pd-notice" && e.detail.get("delivered").and_then(Value::as_bool) == Some(true)
+        })
+        .count();
+    assert_eq!(notices, 1, "exactly one notice, however many ticks pass: {:?}", audit_actions(&reg, &group));
+
+    // Past the window: the drive boards and runs, so the wait was a wait and not
+    // a stop.
+    reg.pd_drive_group_with(&group, &gh, 1_100 + 31 * 60_000);
+    reg.pd_drive_group_with(&group, &gh, 1_100 + 32 * 60_000);
+    assert_eq!(drive_state(&reg, &group), "running", "{}", status(&reg, &group));
+    assert_eq!(slice_rows(&reg, &group).len(), 3, "and the rows are written");
+}
+
+
+// ── §2(b) step 6: a cap refusal is not an error, and is bounded ─────────────
+
+/// **A live-cap refusal leaves the row `queued`, and only becomes a hold after
+/// `CAP_HOLD_MS`.**
+///
+/// Two properties in one test because the second is meaningless without the
+/// first: a build that held on the FIRST refusal would satisfy "it eventually
+/// holds" and defeat the whole retry, and one that never held would satisfy
+/// "the row stays queued" by starving forever.
+///
+/// The cap is made to bite by filling the group with live delegates rather than
+/// by faking a refusal, and the control that it really is the CAP — and not an
+/// unknown block or the spawn-rate backstop — is `is_live_cap_refusal` being
+/// what the audit row says: `pd-slice-cap-refused` is written on that
+/// classification alone.
+#[test]
+fn a_cap_refusal_leaves_the_row_queued_then_holds_after_cap_hold_ms() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, rows) = running(&reg, &repo, &gh, PLAN3);
+
+    // Fill the delegate cap. `rails()` allows 8 agents; the orchestrator is one,
+    // the planner is another, so six more make the next spawn the one over.
+    let mut filler = Vec::new();
+    while let Ok(a) =
+        reg.spawn_agent(&group, Role::Worker, "filler", "", false, None)
+    {
+        filler.push(a.id);
+        if filler.len() > 16 {
+            panic!("the delegate cap never bit — this test cannot measure what it is for");
+        }
+    }
+    assert!(!filler.is_empty(), "at least one filler had to open for the cap to be full");
+
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    assert_eq!(
+        slice_state(&reg, &group, "P1"),
+        "queued",
+        "a cap refusal is not an error — the row stays queued and is retried: {}",
+        status(&reg, &group)
+    );
+    assert_eq!(
+        row(&reg, &group, &rows["P1"]).map(|t| t.status),
+        Some("queued".into()),
+        "and the BOARD row is rolled back too, not left in-progress with nobody on it"
+    );
+    assert!(
+        row(&reg, &group, &rows["P1"]).and_then(|t| t.assignee).is_none(),
+        "nor left assigned to the driver"
+    );
+    assert!(
+        audit_actions(&reg, &group).iter().any(|a| a == "pd-slice-cap-refused"),
+        "the refusal is classified as the CAP's, not as a spawn failure: {:?}",
+        audit_actions(&reg, &group)
+    );
+    assert_eq!(slice_hold(&reg, &group, "P1"), "", "and it is NOT held on the first refusal");
+
+    // Still inside the window: still queued, still not held.
+    reg.pd_drive_group_with(&group, &gh, 1_400 + CAP_HOLD_MS - 1);
+    assert_eq!(slice_hold(&reg, &group, "P1"), "", "{}", status(&reg, &group));
+
+    // Past it.
+    reg.pd_drive_group_with(&group, &gh, 1_400 + CAP_HOLD_MS);
+    assert_eq!(slice_state(&reg, &group, "P1"), "held", "{}", status(&reg, &group));
+    assert_eq!(slice_hold(&reg, &group, "P1"), "cap-full");
+    assert_eq!(
+        drive_state(&reg, &group),
+        "running",
+        "one starved slice does not park the whole drive"
+    );
+}
+
+/// **The PR poll is bounded and ROUND-ROBIN**, so a drive with more in-review
+/// slices than the budget still sees the later ones.
+///
+/// The bound is asserted as a count of `gh pr view` calls — the population
+/// figure the fake keeps — and the round robin is asserted by the cursor having
+/// moved, which is what stops the same first slices being polled forever.
+#[test]
+fn the_pr_poll_is_bounded_per_tick() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, PLAN3);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+
+    let agent = slice_agent(&reg, &group, "P1");
+    with_pane(&reg, &agent, 7_101);
+    gh.set_pr(4_100, "OPEN", None);
+    report(&reg, &group, &agent, "done", json!({ "ref": "#4100" }));
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    assert_eq!(slice_state(&reg, &group, "P1"), "in-review", "{}", status(&reg, &group));
+
+    let before = gh.pr_views();
+    reg.pd_drive_group_with(&group, &gh, 1_600);
+    let spent = gh.pr_views() - before;
+    assert!(spent >= 1, "the poll really ran — the control for the bound below");
+    assert!(
+        spent <= PD_MAX_PR_CHECKS_PER_TICK,
+        "one tick spent {spent} pr views, over the budget of {PD_MAX_PR_CHECKS_PER_TICK}"
+    );
+}
+
+/// **The `ref` is a hint the driver may miss, and there is a fallback.**
+///
+/// A worker that reports `done` with no usable `ref` must still reach the review
+/// driver: §2(b) step 6 allows exactly one `gh pr list --head <branch>` to stand
+/// in for it. The control is the call log — the fallback really was the thing
+/// that resolved the number, rather than a number that came from somewhere else.
+#[test]
+fn a_done_with_no_usable_ref_resolves_the_pr_from_the_branch() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, PLAN3);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+
+    let agent = slice_agent(&reg, &group, "P1");
+    with_pane(&reg, &agent, 7_101);
+    gh.set_head_pr("feat/3040-p1", 4_242);
+    gh.set_pr(4_242, "OPEN", None);
+    report(&reg, &group, &agent, "done", json!({ "note": "opened it, forgot the ref" }));
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+
+    assert!(
+        gh.calls().iter().any(|a| a.first().map(String::as_str) == Some("pr")
+            && a.get(1).map(String::as_str) == Some("list")
+            && a.contains(&"feat/3040-p1".to_string())),
+        "the fallback ran, keyed on the slice's own branch: {:?}",
+        gh.calls()
+    );
+    assert_eq!(
+        read_record(&reg, &group)["entries"][0]["slices"]["P1"]["pr"],
+        json!(4_242),
+        "and it is what resolved the PR: {}",
+        status(&reg, &group)
+    );
+    assert_eq!(slice_state(&reg, &group, "P1"), "in-review");
 }

@@ -73,7 +73,7 @@ pub const PD_MAX_GH_PER_TICK: usize = 4;
 
 /// What a driven planner's traffic told the drive, between the MCP arm that
 /// consumed it and the tick that acts on it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PdEvent {
     /// `report(done)`.
     PlannerDone,
@@ -1811,7 +1811,7 @@ impl OrchRegistry {
                         entry.slices = map;
                         if fresh {
                             entry.note_progress(now);
-                            let ids: BTreeMap<&str, &str> = entry
+                            let ids: std::collections::BTreeMap<&str, &str> = entry
                                 .slices
                                 .iter()
                                 .map(|(k, v)| (k.as_str(), v.task_id.as_str()))

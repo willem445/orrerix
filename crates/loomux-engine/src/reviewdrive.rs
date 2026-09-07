@@ -3485,52 +3485,6 @@ pub fn decide(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> D
     if facts.head.is_empty() {
         return DriveStep::Wait;
     }
-    // **6. A CONFLICTING PR takes arc 3 wherever it is observed** (#2311).
-    //
-    // Read here rather than inside a state, because a conflict is a fact about
-    // the PR and not about what the drive happens to be waiting for, and every
-    // state that read it separately was a state that could answer something
-    // else first:
-    //
-    // - `gate-check` read only `facts.gate`, so a base that moved while the
-    //   lanes reviewed reached `satisfied` with every lane passed and the PR
-    //   unmergeable — #2942, where `rev-final` passed carrying
-    //   `mergeable:CONFLICTING` in its own summary and the cost (a hand rebase,
-    //   a re-drive at `rounds_already_spent 3`, two fresh whole-diff lanes, ten
-    //   minutes of cap starvation, three orchestrator turns) was paid outside
-    //   the driver.
-    // - `review-wait` asks `route_reviewers` FIRST, and routing needs the
-    //   changed-file list, which GitHub does not compute for a conflicted head.
-    //   So the same conflict parked the drive `held(routing-unaccountable)` —
-    //   a hold whose notice says *which reviewers are required is unknown* for
-    //   a PR whose real problem is that it does not merge, and whose remedy
-    //   (`drive_review` again) reproduces it. Measured on #3118.
-    //
-    // Above the routing check for exactly that reason: routing being
-    // unaccountable is a CONSEQUENCE of the conflict there, not an independent
-    // fact, and the honest report is the one naming the cause. It stays BELOW
-    // the bounds and the `messaged` hold above — those are about the drive
-    // rather than the PR, and a drive already past its clock is not made young
-    // by a rebase — and below the empty-head guard, which is "we could not read
-    // this PR at all".
-    //
-    // **`fix-wait` is the one state excluded, and it is excluded by the arc
-    // table rather than by an opinion**: a rebase hand-back is already
-    // outstanding there, `(fix-wait, fix-wait)` is not a transition, and the
-    // worker's own signals are what that state waits on. Spending a second
-    // `rebase_attempts` on the conflict the worker was just asked to fix would
-    // park `rebase-limit` before the worker had a chance to push.
-    //
-    // `Pending`/`Unknown` are NOT conflicts: §8's posture is that an unknown is
-    // never a fact about the PR, so a mergeability orrerix could not read is
-    // not evidence that a rebase is owed.
-    if facts.ci == CiObservation::Conflicting && state != DriveState::FixWait {
-        return if counter_exhausted(entry.counters.rebase_attempts, limits.max_rebase_attempts) {
-            DriveStep::held(HeldReason::RebaseLimit)
-        } else {
-            DriveStep::spend(DriveState::FixWait, Counter::RebaseAttempts)
-        };
-    }
     match state {
         DriveState::CiWait => decide_ci_wait(entry, facts, limits),
         DriveState::ReviewWait => decide_review_wait(entry, facts, limits),
@@ -3574,9 +3528,14 @@ fn decide_ci_wait(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) 
         // `Pending`/`Unknown` are neither an answer nor a reason to move. §8:
         // unknown is never treated as safe, and it is never treated as a fact
         // about the PR either.
-        CiObservation::Conflicting | CiObservation::Pending | CiObservation::Unknown => {
-            DriveStep::Wait
+        CiObservation::Conflicting => {
+            if counter_exhausted(entry.counters.rebase_attempts, limits.max_rebase_attempts) {
+                DriveStep::held(HeldReason::RebaseLimit)
+            } else {
+                DriveStep::spend(DriveState::FixWait, Counter::RebaseAttempts)
+            }
         }
+        CiObservation::Pending | CiObservation::Unknown => DriveStep::Wait,
     }
 }
 

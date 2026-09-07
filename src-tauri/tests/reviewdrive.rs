@@ -10326,3 +10326,348 @@ fn a_stall_on_a_driven_lane_is_suppressed_with_a_reason() {
 /// the real wall clock. (`tests/orchestration.rs` has its own copy for its own
 /// watchdog suite; the two files share no module.)
 const FAR: u64 = 1_000_000_000_000_000;
+
+// ── #2811 S2: a live drive's panes are visible and guarded (#2555 item 1) ───
+
+/// A live drive in `fix-wait`, and the WORKER pane it handed the fix to:
+/// `(group, orchestrator pane, worker pane)`.
+///
+/// Built on [`to_first_handback`] rather than on a fresh tick sequence, because
+/// that helper is this file's proven route to a hand-back and the arcs it takes
+/// are not this section's subject. Its lane-side twin is [`driven_lane`].
+///
+/// **No `with_pane` on the worker, deliberately.** `kill_agent_as` refuses a
+/// pane with no pty ("has no terminal yet") BEFORE it reaches the `AppHandle`
+/// test mode does not have, and that refusal is this section's positive control
+/// for "the guard was passed and the real kill was reached" — a distinct,
+/// deterministic error rather than the absence of one.
+fn driven_worker(reg: &OrchRegistry, repo: &Repo, gh: &FakeGh) -> (GroupId, String, String) {
+    let (group, _session) = driven(reg, repo, gh);
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(reg, &orch.id, 7801);
+    let handed = to_first_handback(reg, &group, gh);
+    let (_pr, worker) = handed
+        .handbacks
+        .first()
+        .cloned()
+        .unwrap_or_else(|| panic!("the drive must hand back: {handed:?}"));
+    assert_eq!(status_state(reg, &group), "fix-wait", "the fixture's own premise");
+    (group, orch.id, worker)
+}
+
+/// A live drive in `review-wait`, and the reviewer LANE pane it opened:
+/// `(group, orchestrator pane, lane pane)` — [`driven_worker`]'s twin, built on
+/// [`lane_round_one`] for the same reason.
+fn driven_lane(reg: &OrchRegistry, repo: &Repo, gh: &FakeGh) -> (GroupId, String, String) {
+    let (group, orch, lane) = lane_round_one(reg, repo, gh);
+    assert_eq!(status_state(reg, &group), "review-wait", "the fixture's own premise");
+    (group, orch, lane)
+}
+
+/// The roster row for `agent_id` as `list_agents` publishes it.
+fn roster_row(reg: &OrchRegistry, group: &GroupId, agent_id: &str) -> serde_json::Value {
+    reg.list_agents(group)
+        .as_array()
+        .expect("list_agents answers an array")
+        .iter()
+        .find(|r| r["id"] == json!(agent_id))
+        .cloned()
+        .unwrap_or_else(|| panic!("{agent_id} is not on the roster"))
+}
+
+/// `kill_agent` as the group's ORCHESTRATOR, through the real MCP dispatch, and
+/// the refusal it produced.
+///
+/// **A tool refusal is an `Ok` here, not an `Err`** — `dispatch` answers
+/// `{content: [{text}], isError: true}` for a tool that declined, and reserves
+/// `Err` for the protocol layer. Reading it the other way made every assertion
+/// below fire on the helper rather than on the guard, which the red round
+/// caught: the panic quoted `has no terminal yet` — the very sentence the test
+/// wanted to read — from inside an `expect_err`.
+///
+/// Always a refusal in test mode, whichever branch produced it: no integration
+/// test has the `AppHandle` `kill_agent_as` needs, so it stops at the pane's
+/// missing pty and a kill this guard PASSES still declines — with a DIFFERENT
+/// sentence, which is exactly what the assertions below tell apart.
+fn orch_kill_err(
+    reg: &OrchRegistry,
+    group: &GroupId,
+    orch: &str,
+    args: serde_json::Value,
+) -> String {
+    let caller = Caller {
+        agent_id: orch.to_string(),
+        group: group.clone(),
+        role: Role::Orchestrator,
+        role_hint: None,
+    };
+    let out = dispatch(
+        reg,
+        &caller,
+        "tools/call",
+        &json!({ "name": "kill_agent", "arguments": args }),
+    )
+    .expect("the MCP protocol layer accepts this call");
+    assert_eq!(
+        out["isError"],
+        json!(true),
+        "test mode has no PtyManager, so no kill can succeed: {out}"
+    );
+    out["content"][0]["text"].as_str().unwrap_or_default().to_string()
+}
+
+/// **#2811 S2 (i).** Every roster row says whether a live drive is using that
+/// pane, so the question `kill_agent` now refuses on is one the orchestrator
+/// could have asked first.
+///
+/// Both sides of a drive and a delegate it has nothing to do with. The third is
+/// the control that makes the first two mean something — a build that stamped
+/// `driven_by` on every row would satisfy them both.
+///
+/// The KEY is asserted present on the undriven row too, with `null` as its
+/// value: "not driven" must never have to be told apart from "this build does
+/// not report it", which is the rule `wip` and `current_sprint` already follow
+/// on the board read.
+#[test]
+fn every_roster_row_says_whether_a_live_drive_is_using_that_pane() {
+    // (arm, the driven pane's `driven_by`, a bystander's)
+    type Row = (&'static str, serde_json::Value, serde_json::Value);
+    let mut observed: Vec<Row> = Vec::new();
+
+    for arm in ["worker", "lane"] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, _orch, pane) = if arm == "worker" {
+            driven_worker(&reg, &repo, &gh)
+        } else {
+            driven_lane(&reg, &repo, &gh)
+        };
+        let bystander = reg
+            .spawn_agent(&group, Role::Worker, "unrelated", "", false, None)
+            .expect("a delegate this drive never touched");
+
+        let row = roster_row(&reg, &group, &bystander.id);
+        assert!(
+            row.get("driven_by").is_some(),
+            "{arm}: the key is always present — `null` is the answer, not the absence of one"
+        );
+        observed.push((
+            arm,
+            roster_row(&reg, &group, &pane)["driven_by"].clone(),
+            row["driven_by"].clone(),
+        ));
+    }
+
+    let expected: Vec<Row> = vec![
+        ("worker", json!("#1758"), json!(null)),
+        ("lane", json!("#1758"), json!(null)),
+    ];
+    assert_eq!(
+        observed, expected,
+        "each row is (arm, the driven pane's `driven_by`, a bystander's). A `null` in the \
+         middle column is the #3038 class — nothing on the roster says that pane belongs to \
+         a drive. A `\"#1758\"` in the last is a marker that means nothing."
+    );
+}
+
+/// **#2811 S2 (ii).** The orchestrator's `kill_agent` refuses a pane a live
+/// drive is using, names the PR and the side, and says both ways out.
+///
+/// This is #3038 in one test: the orchestrator killed w-2460 to free a slot 42
+/// seconds before the drive needed it, and nothing in `kill_agent` — which
+/// checked group membership and nothing else — could have told it. The refusal
+/// is not a veto: `force: true` goes through, in the same sentence that
+/// refuses.
+///
+/// **`force: true` is asserted by the error it REACHES, not by an `Ok`.**
+/// `kill_agent_as` needs an `AppHandle` to reach `PtyManager`, which no
+/// integration test has, so it refuses a pane with no pty first — "has no
+/// terminal yet". That refusal is a precise positive control: it is produced
+/// only BELOW the guard, so reading it proves the guard was passed and the real
+/// kill was reached, while its absence on the unforced arm proves the guard
+/// stopped short of it. The bystander arm pins that a pane no drive owns has
+/// never been able to reach anything else.
+#[test]
+fn a_kill_of_a_pane_a_live_drive_is_using_is_refused_unless_forced() {
+    for arm in ["worker", "lane"] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, orch, pane) = if arm == "worker" {
+            driven_worker(&reg, &repo, &gh)
+        } else {
+            driven_lane(&reg, &repo, &gh)
+        };
+        let bystander = reg
+            .spawn_agent(&group, Role::Worker, "unrelated", "", false, None)
+            .expect("a delegate this drive never touched");
+
+        let refused = orch_kill_err(&reg, &group, &orch, json!({ "agent_id": pane }));
+        assert!(
+            refused.contains(&format!(
+                "{pane} is the {arm} pane of the live review drive on PR #1758"
+            )),
+            "{arm}: the refusal names the pane, its side of the drive, and the PR: {refused}"
+        );
+        assert!(
+            refused.contains("cancel_review_drive first, or pass force:true"),
+            "{arm}: …and both ways out, in the sentence that refuses: {refused}"
+        );
+        assert_ne!(
+            reg.agent(&pane).expect("still on the roster").status,
+            AgentStatus::Dead,
+            "{arm}: a refusal that killed the pane anyway is not a refusal"
+        );
+
+        // The control: a pane no drive owns reaches the kill exactly as it
+        // always did, and the only thing standing between it and death is test
+        // mode.
+        let free = orch_kill_err(&reg, &group, &orch, json!({ "agent_id": bystander.id }));
+        assert!(
+            free.contains("has no terminal yet"),
+            "{arm}: an undriven delegate is not guarded — it reaches the kill: {free}"
+        );
+        assert!(
+            !free.contains("review drive"),
+            "{arm}: …and is not refused by this guard at all: {free}"
+        );
+
+        // `force` goes through the guard and into the kill. Same pane, same
+        // tool, one added argument, and the error moves from the guard's to the
+        // kill's.
+        let forced = orch_kill_err(&reg, &group, &orch, json!({ "agent_id": pane, "force": true }));
+        assert!(
+            forced.contains("has no terminal yet"),
+            "{arm}: `force: true` reaches the real kill: {forced}"
+        );
+        assert!(
+            !forced.contains("review drive"),
+            "{arm}: …and is not stopped by the guard: {forced}"
+        );
+
+        // And the guard is a fact about the DRIVE, not about the pane: the
+        // refusal's own first remedy makes the same kill go through. This is
+        // also what pins the `is_live` half of the ownership read — a drive
+        // that has ended owns nothing.
+        assert_eq!(
+            reg.cancel_review_drive(&group, 1758, "orch-1")["cancelled"],
+            json!(true),
+            "{arm}: the drive cancels"
+        );
+        let after = orch_kill_err(&reg, &group, &orch, json!({ "agent_id": pane }));
+        assert!(
+            after.contains("has no terminal yet") && !after.contains("review drive"),
+            "{arm}: `cancel_review_drive` is the remedy the refusal names, so it must work: \
+             {after}"
+        );
+        assert_eq!(
+            roster_row(&reg, &group, &pane)["driven_by"],
+            json!(null),
+            "{arm}: …and the roster stops claiming a drive owns it"
+        );
+    }
+}
+
+/// **#2811 S2 (ii), the other half.** What `force: true` COSTS, so the
+/// orchestrator that overrode the refusal reads back the outcome it chose.
+///
+/// The drive does not silently limp on: the pane is gone, `fix-wait` observes
+/// it on the next tick, and the hold quotes who ended it — the sentence
+/// `rd_pane_exit` builds from `killed_by`, which is exactly what `kill_agent`
+/// stamps. That is #3038's own audit line (`(w-2460) is gone (ended by
+/// orchestrator)`), reproduced deliberately instead of by accident.
+///
+/// **The kill is completed the way `a_dead_lane_pane_is_re_opened_next_tick…`
+/// completes one**, through the real initiator recorder plus
+/// `mark_agent_dead_for_test`: `kill_agent_as` cannot finish in test mode (no
+/// `AppHandle`), and the test above already pins that `force: true` reaches it.
+/// So the `killed_by` read here is the field `kill_agent` writes, not a literal
+/// this test invented.
+#[test]
+fn a_forced_kill_of_a_driven_worker_holds_the_drive_naming_the_kill() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, orch, worker) = driven_worker(&reg, &repo, &gh);
+
+    let forced = orch_kill_err(&reg, &group, &orch, json!({ "agent_id": worker, "force": true }));
+    assert!(forced.contains("has no terminal yet"), "the premise: `force` got past the guard");
+    reg.record_exit_initiator(&worker, ExitInitiator::Orchestrator);
+    assert!(reg.mark_agent_dead_for_test(&worker), "the pane really goes");
+
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+    assert_eq!(status_state(&reg, &group), "held", "the drive cannot hand a fix to a dead pane");
+    let helds = audit_details(&reg, &group, "rd-held");
+    let last = helds.last().cloned().unwrap_or_default();
+    assert_eq!(last["reason"], json!("worker-unresumable"), "{helds:?}");
+    let why = format!("{last}");
+    assert!(
+        why.contains(&format!("({worker}) is gone (ended by orchestrator)")),
+        "the hold names the pane and who ended it — the orchestrator reads back what it \
+         chose, not a resume that appears to have died: {why}"
+    );
+}
+
+/// **#2811 S2 (iii).** The cap refusal's remedy — "reuse an idle agent or kill
+/// one first" — cannot point at a pane a live drive is holding.
+///
+/// This is the composition that made #3038 reachable on the driver's OWN
+/// advice: a cap-full notice lists the live delegates, half of them idle
+/// workers a drive is between rounds with, and the orchestrator picks one. The
+/// list now says which of those rows the advice does not apply to.
+///
+/// The bystander row is the negative control, and it is byte-for-byte what this
+/// function produced before S2 — which `orchestration.rs`'s existing
+/// `(worker, working)` pins already assert from the other side.
+#[test]
+fn the_cap_refusal_roster_marks_a_pane_a_live_drive_is_holding() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _orch, worker) = driven_worker(&reg, &repo, &gh);
+    let bystander = reg
+        .spawn_agent(&group, Role::Worker, "unrelated", "", false, None)
+        .expect("a delegate this drive never touched");
+
+    // Fill the group to its cap and read the refusal that comes back.
+    let mut refusal = String::new();
+    for i in 0..12 {
+        match reg.spawn_agent(&group, Role::Worker, &format!("filler{i}"), "", false, None) {
+            Ok(_) => continue,
+            Err(e) => {
+                refusal = e;
+                break;
+            }
+        }
+    }
+    assert!(
+        loomux_lib::orchestration::is_live_cap_refusal(&refusal),
+        "the control: this spawn was refused by the CAP and not by something else: {refusal}"
+    );
+
+    let word = |id: &str| -> &'static str {
+        if reg.agent(id).expect("on the roster").idle_since_ms.is_some() {
+            "idle"
+        } else {
+            "working"
+        }
+    };
+    assert!(
+        refusal.contains(&format!("{worker} (worker, {}, driven #1758)", word(&worker))),
+        "the drive's worker is marked, next to the `idle` that would otherwise recommend \
+         it: {refusal}"
+    );
+    assert!(
+        refusal.contains(&format!("{} (worker, {})", bystander.id, word(&bystander.id))),
+        "…and a pane no drive owns reads exactly as it did before: {refusal}"
+    );
+    assert!(
+        !refusal.contains(&format!("{} (worker, {}, driven", bystander.id, word(&bystander.id))),
+        "a marker on every row is a marker that means nothing: {refusal}"
+    );
+}

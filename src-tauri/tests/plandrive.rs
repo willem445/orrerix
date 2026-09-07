@@ -1655,7 +1655,18 @@ fn every_pd_notice_is_one_paragraph() {
     );
 }
 
-/// Every notice this group's orchestrator pane actually received.
+/// Every notice-delivery ATTEMPT this group made, in order.
+///
+/// **Attempts, not notices, and the distinction is this harness's.**
+/// `deliver_prompt` writes its `prompt` audit row and THEN fails with
+/// "no app handle" — there is no Tauri app in a test — so every flush audits a
+/// row and reports failure, the drive KEEPS the undelivered notice by design
+/// ("a hold nobody was told about is a drive that stopped in silence"), and the
+/// next flush retries it. One notice therefore shows up once per flush.
+///
+/// So a COUNT of these says how many times orrerix tried, which is a fact about
+/// the harness. What a test wants is the set of DISTINCT texts —
+/// [`distinct_pane_texts`].
 fn pane_texts(reg: &OrchRegistry, group: &GroupId) -> Vec<String> {
     reg.audit_log(group)
         .into_iter()
@@ -1663,6 +1674,20 @@ fn pane_texts(reg: &OrchRegistry, group: &GroupId) -> Vec<String> {
         .filter_map(|e| e.detail["text"].as_str().map(str::to_string))
         .filter(|t| t.contains("plan drive #"))
         .collect()
+}
+
+/// The distinct notices this group produced, order-preserving.
+///
+/// The set a test means when it says "one notice is owed" — see
+/// [`pane_texts`] for why the raw row count is not that.
+fn distinct_pane_texts(reg: &OrchRegistry, group: &GroupId) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in pane_texts(reg, group) {
+        if !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    out
 }
 
 /// A group whose record carries a BARE RESERVATION: an entry `drive_plan` wrote
@@ -1722,10 +1747,21 @@ fn a_reservation_nobody_completed_is_held_on_restart() {
         "the reconcile names WHY it recovered this entry, not merely that it did"
     );
 
-    // The notice reaches the pane, says what happened, and is one paragraph —
-    // the shape that shipped broken here.
-    let texts = pane_texts(&reg, &group);
+    // The notice says what happened and is one paragraph — the shape that
+    // shipped broken here.
+    //
+    // DISTINCT texts, because the raw `prompt` rows are delivery ATTEMPTS: this
+    // harness has no app handle, so every attempt fails, the drive keeps the
+    // notice (deliberately — see `pd_flush_notices`) and retries it on the next
+    // flush. An earlier draft asserted the row count was 1 and read the retry as
+    // a duplicated notice.
+    let texts = distinct_pane_texts(&reg, &group);
     assert_eq!(texts.len(), 1, "exactly one notice is owed: {texts:?}");
+    // …and the retry really is a retry of THAT notice rather than a second one.
+    assert!(
+        pane_texts(&reg, &group).iter().all(|t| t == &texts[0]),
+        "every attempt must be the same notice"
+    );
     assert_one_paragraph("the reservation-unspawned notice", &texts[0]);
     assert!(
         texts[0].contains("no planner was ever recorded"),

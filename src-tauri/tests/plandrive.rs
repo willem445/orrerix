@@ -952,6 +952,10 @@ fn a_refused_spawn_leaves_no_reservation_behind() {
     let filler = reg
         .spawn_agent(&group, Role::Worker, "filler", "", false, None)
         .expect("the filler fits");
+    // `kill_agent` refuses a pane with no terminal bound — "still binding",
+    // which is every agent in test mode, because nothing binds one here. The
+    // filler is killed below to free its slot, so it needs one to be killable.
+    reg.set_pty_for_test(&filler.id, 8);
     let gh = FakeGh::open(&["agent-ready"]);
 
     let out = reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch.id, 1_000);

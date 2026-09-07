@@ -9602,21 +9602,33 @@ fn a_stall_on_a_driven_lane_is_suppressed_with_a_reason() {
     let notified = reg.watchdog_tick(FAR, &no_output, &no_watch);
     assert!(!notified.contains(&lane),
         "the re-arm gives a fresh window, it does not fire on the old one: {notified:?}");
-    assert!(
-        audit_details(&reg, &group, "watchdog-rearmed")
-            .iter()
-            .any(|d| d["agent"] == serde_json::json!(lane)),
-        "the re-arm must be diagnosable, not silent"
-    );
 
     // Tick 2, a full window later, with NO activity of any kind in between: now
     // it announces. This is the assertion the synthetic output tick was standing
-    // in for, and it fails against the shipped-without-a-re-arm implementation.
+    // in for, and it is what fails against the shipped-without-a-re-arm
+    // implementation.
+    //
+    // It is deliberately the FIRST of the two claims below. A red evidences only
+    // the assertion it reached and MOVED, and the `watchdog-rearmed` pin used to
+    // sit above this one — so the red instrument aborted on the audit row and
+    // never reached the behavioural claim at all, which is the claim worth
+    // proving fail-able.
     let notified = reg.watchdog_tick(FAR + 6 * 60_000, &no_output, &no_watch);
     assert!(
         notified.contains(&lane),
         "with no drive owning it, the same silent lane is the orchestrator's business \
          again — and getting there took no activity, only the drive ending: {notified:?}"
+    );
+
+    // …and the re-arm is diagnosable rather than silent. Second, for the reason
+    // above; its own red is therefore not separately evidenced — the same
+    // mutation removes both, and this one is reached only once the behaviour is
+    // right.
+    assert!(
+        audit_details(&reg, &group, "watchdog-rearmed")
+            .iter()
+            .any(|d| d["agent"] == serde_json::json!(lane)),
+        "the re-arm must be diagnosable, not silent"
     );
 }
 

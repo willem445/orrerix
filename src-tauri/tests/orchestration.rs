@@ -42189,6 +42189,51 @@ fn an_unreadable_body_keeps_the_satisfied_headline_while_the_condition_knows_it_
         "an unreadable body is a failing condition — the bypass is withheld: {s}");
 }
 
+/// Review round 4, W1: on a `threshold: N` gate, `Satisfied` does NOT imply
+/// every required lane covers the head — `evaluate_merge_gate` counts live
+/// passes against N, so a required lane sitting stale does not stop it. The
+/// headline's drift population therefore needs the same liveness predicate the
+/// enforcing halves apply (`mergeq::body_unchanged` skips a pass stale at the
+/// head, and so does the merge-time evaluation here), not the outcome: without
+/// it, `rev-security` — stale at an earlier head, body drifted — is named by a
+/// NOT YET SATISFIED headline beside an offered GitHub-UI exit, while the shim
+/// refuses nothing. (Round 1's fix pinned the required-vs-all axis; this pins
+/// the liveness axis, the `require` axis no test varied before.)
+#[test]
+fn a_stale_drifted_lane_on_a_threshold_gate_keeps_the_satisfied_headline() {
+    let (reg, _d, _repo, gid) =
+        gated_group("    threshold: 1\n    also: [body-unchanged]\n");
+    // Positive control on the axis: the fixture really is a threshold gate —
+    // every other headline test runs all-pass, where this defect cannot occur.
+    let gate = reg.merge_gate(&gid).expect("the fixture declares a gate");
+    assert_eq!(gate.require, workflow::GateRequire::Threshold(1),
+        "the test must run the axis it witnesses");
+
+    // rev-security passes at the first head and body; the worker pushes a new
+    // head AND edits the body; rev-tests passes at the new head and body.
+    reg.set_pr_body_override(Some("the body they reviewed\n".into()));
+    let sec = reviewer_caller(&reg, &gid, "rev-security");
+    recorded(&reg, &sec, "7", "pass", "fine");
+    reg.set_pr_head_override(Some(NEW_HEAD.into()));
+    reg.set_pr_body_override(Some("the body as it stands now\n".into()));
+    let tests = reviewer_caller(&reg, &gid, "rev-tests");
+    recorded(&reg, &tests, "7", "pass", "fine");
+
+    // The gate is SATISFIED (one live pass >= threshold 1) and the body clause
+    // passes (the live pass covers the body; the stale lane is not asked). The
+    // stale lane's drift is still REPORTED — by the caveat, never the headline.
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.starts_with("merge gate for PR #7: SATISFIED"),
+        "a stale lane does not stop a threshold gate, so the headline cannot \
+         claim otherwise: {s}");
+    assert!(!s.contains("NOT YET SATISFIED"),
+        "NOT YET SATISFIED would claim a refusal the shim does not make: {s}");
+    assert!(!s.contains("gh pr merge` is refused"),
+        "and would state a refusal that is not happening: {s}");
+    assert!(s.contains("BODY CHANGED SINCE PASS: rev-security"),
+        "the stale lane's drift is still reported — by the caveat: {s}");
+}
+
 #[test]
 fn gh_shim_script_enforces_the_workflow_merge_gate() {
     // A source-text pin of the shape. Every behavioural claim is EXECUTED below.

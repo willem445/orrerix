@@ -232,3 +232,232 @@ fn the_structured_launch_line_is_the_pty_arm_plus_mode_rpc() {
         "the edit-deny tool list must survive the structured derivation"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The policy this slice adds, as pure functions. No process, no pane, no clock.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_delivery_becomes_the_turn_variant_its_author_and_kind_name() {
+    // The variant is not decoration: a driver renders `Notice` with its marker
+    // prefix and `Human` without one, and R2's permissions policy may read it.
+    // All four crossings, because three of them share one `Delivery` kind and
+    // are told apart ONLY by the author.
+    use loomux_engine::harness::Turn;
+    use loomux_engine::model::Delivery;
+    use loomux_lib::orchestration::structured::turn_for;
+    let orrerix = loomux_lib::brand::AUDIT_ACTOR;
+
+    assert!(matches!(turn_for(Delivery::FreshKickoff, "w-1", "hi"), Turn::Kickoff(_)));
+    assert!(matches!(turn_for(Delivery::ResumeKickoff, orrerix, "hi"), Turn::Kickoff(_)));
+    // A kickoff stays a kickoff whoever sent it: the kind decides first.
+    assert!(
+        matches!(turn_for(Delivery::FreshKickoff, "human", "hi"), Turn::Kickoff(_)),
+        "the author must not override a kickoff kind"
+    );
+
+    // One kind, three authors.
+    assert!(matches!(turn_for(Delivery::MidSession, orrerix, "x"), Turn::Notice(_)));
+    assert!(matches!(turn_for(Delivery::MidSession, "human", "x"), Turn::Human(_)));
+    assert!(matches!(turn_for(Delivery::MidSession, "orch-1", "x"), Turn::Prompt(_)));
+
+    // The text survives every arm. A mapping that dropped it would satisfy
+    // every `matches!` above.
+    for t in [
+        turn_for(Delivery::FreshKickoff, "w-1", "payload"),
+        turn_for(Delivery::MidSession, orrerix, "payload"),
+        turn_for(Delivery::MidSession, "human", "payload"),
+        turn_for(Delivery::MidSession, "orch-1", "payload"),
+    ] {
+        assert_eq!(t.text(), "payload");
+    }
+}
+
+#[test]
+fn a_dialog_parks_for_a_delegate_and_is_cancelled_for_an_orchestrator() {
+    // harness-adapters.md section 3.5 role asymmetry, as a table. A parked
+    // orchestrator is #946 -- machine progress must never stop on human
+    // absence -- while a parked worker is the correct scope.
+    use loomux_engine::model::Role;
+    use loomux_lib::orchestration::structured::{decide_dialog, CancelReason, DialogOutcome};
+
+    for role in [Role::Worker, Role::Reviewer, Role::Planner] {
+        assert_eq!(decide_dialog(role, 0), DialogOutcome::Park, "{role:?} must PARK on a dialog");
+    }
+    for role in [Role::Orchestrator, Role::Manager] {
+        assert_eq!(
+            decide_dialog(role, 0),
+            DialogOutcome::CancelNow(CancelReason::RoleNeverParks),
+            "{role:?} must never park (#946)"
+        );
+    }
+}
+
+#[test]
+fn the_cap_is_checked_for_both_role_classes_and_not_only_the_parking_one() {
+    // The one-rule-per-input rule. A cap checked only on the parking branch
+    // would let an orchestrator accumulate rows for ever, and the asymmetry
+    // would be invisible: every assertion in the test above would still pass.
+    use loomux_engine::model::Role;
+    use loomux_lib::orchestration::structured::{
+        decide_dialog, CancelReason, DialogOutcome, MAX_PENDING_UI,
+    };
+
+    for role in [Role::Worker, Role::Orchestrator] {
+        assert_eq!(
+            decide_dialog(role, MAX_PENDING_UI),
+            DialogOutcome::CancelNow(CancelReason::TooManyPending),
+            "{role:?} at the cap must be cancelled FOR THE CAP, however it settles below it"
+        );
+        // One under the cap still takes the role's own answer, so the
+        // assertion above is about the CAP rather than about refusing all.
+        assert_ne!(
+            decide_dialog(role, MAX_PENDING_UI - 1),
+            DialogOutcome::CancelNow(CancelReason::TooManyPending),
+            "{role:?} one under the cap must not be cap-cancelled"
+        );
+    }
+}
+
+#[test]
+fn the_needs_you_text_says_what_was_asked_and_what_happened_to_it() {
+    use loomux_engine::harness::{RequestId, UiMethod};
+    use loomux_lib::orchestration::structured::{
+        dialog_needs_you_text, CancelReason, DialogOutcome, PendingUi,
+    };
+
+    let ask = PendingUi {
+        id: RequestId("uuid-1".into()),
+        method: UiMethod::Select,
+        title: Some("Allow dangerous command?".into()),
+        message: None,
+        options: vec!["Allow".into(), "Block".into()],
+        needs_you: None,
+        raised_ms: 0,
+    };
+
+    let parked = dialog_needs_you_text("w-1", &ask, &DialogOutcome::Park);
+    assert!(parked.contains("w-1"), "the row must name the pane: {parked}");
+    assert!(parked.contains("Allow dangerous command?"), "{parked}");
+    assert!(parked.contains("Allow / Block"), "the options are the ask: {parked}");
+
+    // A cancelled dialog still reaches the human -- #946 is about not BLOCKING
+    // on them, never about hiding the question -- and it says it was
+    // cancelled, because a row reading identically would have them answer a
+    // dead ask.
+    let cancelled = dialog_needs_you_text(
+        "orch-1",
+        &ask,
+        &DialogOutcome::CancelNow(CancelReason::RoleNeverParks),
+    );
+    assert!(cancelled.contains("cancelled"), "{cancelled}");
+    assert!(cancelled.contains("role-never-parks"), "the reason is on the row: {cancelled}");
+    assert_ne!(parked, cancelled, "the two outcomes must not read the same");
+}
+
+#[test]
+fn the_audit_column_agrees_with_the_engine_and_is_not_a_second_list() {
+    // section 4.3 states the decision-grade split ONCE, in
+    // `HarnessEvent::is_decision_grade`. `route` must READ it rather than
+    // restate it: a second enumeration here is the divergence that rule exists
+    // to stop, and it would drift silently, because both lists would be green
+    // on the day they were written.
+    use loomux_engine::harness::{
+        CompactTrigger, Decision, DecisionSource, HarnessEvent, NoteKind, RequestId, StopReason,
+        ToolUseId, TurnId, UiAnswer, UiMethod,
+    };
+    use loomux_lib::orchestration::structured::route;
+
+    let sample = [
+        HarnessEvent::Booted { session: None, model: None, capabilities: vec![] },
+        HarnessEvent::TurnStarted { turn: TurnId(1) },
+        HarnessEvent::Text { turn: TurnId(1), delta: "x".into() },
+        HarnessEvent::Thinking { turn: TurnId(1), delta: "x".into() },
+        HarnessEvent::ToolCall {
+            turn: TurnId(1),
+            id: ToolUseId("t".into()),
+            name: "bash".into(),
+            input: serde_json::Value::Null,
+        },
+        HarnessEvent::ToolOutput {
+            turn: TurnId(1),
+            id: ToolUseId("t".into()),
+            delta: "o".into(),
+            is_error: false,
+            replaces: false,
+        },
+        HarnessEvent::ToolResult { turn: TurnId(1), id: ToolUseId("t".into()), ok: true },
+        HarnessEvent::PermissionRequest {
+            id: RequestId("r".into()),
+            tool: "bash".into(),
+            input: serde_json::Value::Null,
+        },
+        HarnessEvent::PermissionSettled {
+            id: RequestId("r".into()),
+            decision: Decision::Allow,
+            by: DecisionSource::Policy,
+        },
+        HarnessEvent::UiRequest {
+            id: RequestId("u".into()),
+            method: UiMethod::Confirm,
+            title: None,
+            message: None,
+            options: vec![],
+            timeout_ms: None,
+        },
+        HarnessEvent::UiSettled {
+            id: RequestId("u".into()),
+            answer: UiAnswer::Cancelled,
+            by: DecisionSource::Policy,
+        },
+        HarnessEvent::QueueChanged { steering: vec![], follow_up: vec![] },
+        HarnessEvent::TurnEnded {
+            turn: TurnId(1),
+            usage: None,
+            cost: None,
+            stop: StopReason::Completed,
+        },
+        HarnessEvent::Compacted { trigger: CompactTrigger::Auto, pre_tokens: None },
+        HarnessEvent::Note { turn: None, note: NoteKind::Retry, text: "x".into() },
+        HarnessEvent::Exited { code: Some(0) },
+    ];
+
+    for ev in &sample {
+        assert_eq!(
+            route(ev).audit,
+            ev.is_decision_grade(),
+            "route disagreed with the engine about {ev:?}"
+        );
+    }
+
+    // Non-vacuity: the sample must actually contain both answers, or the loop
+    // above would pass over a `route` that returned a constant.
+    assert!(sample.iter().any(|e| route(e).audit), "no decision-grade event in the sample");
+    assert!(sample.iter().any(|e| !route(e).audit), "no per-pane-only event in the sample");
+
+    // Every event reaches the ring and the frontend: both projections are fed
+    // from one drain (section 5.1), so neither can show what the other has not.
+    assert!(sample.iter().all(|e| route(e).ring && route(e).frontend));
+}
+
+#[test]
+fn a_reserved_pane_id_is_not_a_pty_and_the_pty_side_cannot_find_it() {
+    // The structural guard, measured rather than asserted in prose. A
+    // structured pane id comes from the SAME counter `spawn_pty` mints from,
+    // so it looks like any other id, and `PtyManager` has no entry for it, so
+    // every pty-side lookup misses. That missing entry is what makes
+    // `write_pty`, `resize_pty` and `kill` unable to reach a structured pane.
+    let ptys = loomux_lib::pty::PtyManager::default();
+    let a = ptys.reserve_id();
+    let b = ptys.reserve_id();
+    assert_ne!(a, b, "the allocator handed out one id twice");
+    assert_eq!(
+        ptys.output_total(a),
+        None,
+        "a reserved pane id resolved to a pty -- the two kinds share an allocator, not a map"
+    );
+    assert_eq!(ptys.output_total(b), None);
+
+    // Killing one is a no-op rather than a panic or a wrong-pane kill.
+    ptys.kill(a);
+}

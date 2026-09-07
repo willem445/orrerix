@@ -499,10 +499,10 @@ impl CancelReason {
 /// accumulate rows, and a role check that short-circuited the cap would be the
 /// one-rule-per-input asymmetry a guard is supposed to avoid.
 pub fn decide_dialog(role: super::Role, pending: usize) -> DialogOutcome {
-    if pending >= MAX_PENDING_UI {
-        return DialogOutcome::CancelNow(CancelReason::TooManyPending);
-    }
     if parks_on_dialog(role) {
+        if pending >= MAX_PENDING_UI {
+            return DialogOutcome::CancelNow(CancelReason::TooManyPending);
+        }
         DialogOutcome::Park
     } else {
         DialogOutcome::CancelNow(CancelReason::RoleNeverParks)

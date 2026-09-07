@@ -3699,11 +3699,7 @@ pub fn decide(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> D
     // has said something specific and this has not. It spends no counter for
     // the same reason it outranks the bounds: a drive that survived an outage
     // must not come out of it looking like one that had burned its budget.
-    if let Some(provider) = facts.provider_limited.as_deref() {
-        if !provider.trim().is_empty() {
-            return DriveStep::held(HeldReason::ProviderLimit);
-        }
-    }
+    // M2: arm removed from here, re-inserted below the backstops.
     // **The bounds are clamped HERE, on the values actually read.** §2.3's
     // ranges are a capability boundary, not input hygiene: a repo's `driver:`
     // block may run a tighter loop than INVARIANT 9 and may never run a looser
@@ -3737,6 +3733,11 @@ pub fn decide(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> D
     // answer this tick could not produce, and that drive holds
     // `routing-unaccountable` in `decide_review_wait` below on this same tick.
     let lanes = facts.required_lanes.as_deref().map_or(0, |l| l.len());
+    if let Some(provider) = facts.provider_limited.as_deref() {
+        if !provider.trim().is_empty() {
+            return DriveStep::held(HeldReason::ProviderLimit);
+        }
+    }
     if let Some(bound) = state_bound_ms(state, limits, lanes) {
         if entry.state_elapsed_ms(facts.now_ms) >= bound {
             return DriveStep::held(HeldReason::StateStalled);

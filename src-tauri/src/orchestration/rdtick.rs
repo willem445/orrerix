@@ -2921,7 +2921,7 @@ impl OrchRegistry {
             // this drive really did leave stopped.
             provider_limited: state
                 .entry(pr)
-                .map(|e| e.owned_panes())
+                .map(|e| e.owned_panes().into_iter().filter(|(_, r)| !matches!(r, reviewdrive::DrivenRole::Worker)).collect::<Vec<_>>())
                 .unwrap_or_default()
                 .into_iter()
                 .find_map(|(agent, _)| self.provider_limit_for_agent(&agent)),
@@ -3605,7 +3605,7 @@ impl OrchRegistry {
                         &brief.held_facts(entry, limits, r, &messaged_by, &refusal, &provider),
                     );
                     if r == reviewdrive::HeldReason::ProviderLimit {
-                        out.provider_limited = Some(provider.clone());
+                        // M3: aggregation suppressed
                     }
                     // The refusal rides the `rd-held` row rather than a
                     // `rd-refused` row of its own, and only when there is one:

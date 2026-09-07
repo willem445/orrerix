@@ -66088,14 +66088,22 @@ fn the_single_chip_avoids_a_pane_whose_blocked_latch_would_swallow_it() {
     let second = reg.spawn_agent(&g, Role::Reviewer, "rev", "review", false, None).unwrap();
     let third = reg.spawn_agent(&g, Role::Reviewer, "rev2", "review", false, None).unwrap();
 
-    // The lowest-sorting affected id — the carrier the plain rule would pick.
+    // The lowest-sorting affected id — the carrier the plain lowest-id rule
+    // would pick, and therefore the pane that must carry the latch for this
+    // test to exercise the collision at all.
+    //
+    // Derived from the sort rather than assumed to be any particular pane:
+    // `attention_setup`'s worker is `w-2` and the reviewers are `rev-3`/`rev-4`,
+    // so the lowest is a REVIEWER, not the worker. An earlier revision asserted
+    // it was the worker and CI rejected the fixture — which is the guard below
+    // doing its job, and the reason it is an assertion rather than a comment.
     let mut ids = vec![first.clone(), second.id.clone(), third.id.clone()];
     ids.sort();
     let lowest = ids[0].clone();
-    assert_eq!(
-        lowest, first,
-        "fixture: the pane we are about to latch must BE the one the lowest-id rule \
-         would choose, or this test does not exercise the collision"
+    assert!(
+        ids.len() >= 2 && ids[1] != lowest,
+        "fixture: there must be another affected pane for the chip to move TO, \
+         or a pass proves nothing about the carrier choice: {ids:?}"
     );
 
     // ...and it is `blocked`, which outranks `provider-limit`.

@@ -243,6 +243,7 @@ worker cost one slice rather than a plan.
 | `cap-full` | the live-delegate cap refused this slice's spawn for longer than `CAP_HOLD_MS` |
 | `worker-blocked` | this slice's worker reported `blocked`; the notice carries its own note |
 | `pr-closed` | this slice's PR was CLOSED without merging |
+| `worker-gone` | this slice's worker pane died without ever reporting |
 
 **A cap refusal is not an error.** The row stays `queued` and is retried every
 tick — with the board row rolled back to `queued` and unassigned, so a full

@@ -584,12 +584,29 @@ pub enum PdSliceHold {
     /// on a positively-established MERGED PR, so this is the other positive
     /// answer and it gets its own name rather than being waited out.
     PrClosed,
+    /// The slice's worker PANE DIED without ever reporting — a CLI crash, a
+    /// kill, a machine that went away.
+    ///
+    /// **Without this arc the drive runs forever in silence**, which is the one
+    /// outcome the whole design exists to avoid. Nothing synthesizes a report
+    /// for a dead pane: the interception in `mcp.rs` fires only when the worker
+    /// itself calls `report`, so a crashed worker leaves its slice in
+    /// [`SliceState::Running`] — and a slice in `Running` is exactly what makes
+    /// [`PdFacts::running_idle`] false, so even the stall backstop cannot see
+    /// it. The planner has had this arm since P3a
+    /// ([`PdHeldReason::PlanMissing`] via `planner_live`); this is the
+    /// worker's, and it is the same rule.
+    WorkerGone,
 }
 
 impl PdSliceHold {
     /// Every reason, so the notice table is checked against the enum.
-    pub const ALL: [PdSliceHold; 3] =
-        [PdSliceHold::CapFull, PdSliceHold::WorkerBlocked, PdSliceHold::PrClosed];
+    pub const ALL: [PdSliceHold; 4] = [
+        PdSliceHold::CapFull,
+        PdSliceHold::WorkerBlocked,
+        PdSliceHold::PrClosed,
+        PdSliceHold::WorkerGone,
+    ];
 
     /// The wire/audit spelling.
     pub fn as_str(self) -> &'static str {
@@ -597,6 +614,7 @@ impl PdSliceHold {
             PdSliceHold::CapFull => "cap-full",
             PdSliceHold::WorkerBlocked => "worker-blocked",
             PdSliceHold::PrClosed => "pr-closed",
+            PdSliceHold::WorkerGone => "worker-gone",
         }
     }
 
@@ -619,6 +637,10 @@ impl PdSliceHold {
             PdSliceHold::PrClosed => {
                 "its PR was closed without merging, so the slice is not done and its dependents \
                  will never become ready on their own"
+            }
+            PdSliceHold::WorkerGone => {
+                "its worker's pane died without ever reporting, so nothing is going to finish this \
+                 slice — free its board row and resume the drive, or brief it by hand"
             }
         }
     }
@@ -728,6 +750,28 @@ impl PdSlice {
     pub fn is_done(&self) -> bool {
         self.state == SliceState::Done
     }
+}
+
+/// Whether a board row is one **this drive's own claim is still holding**, and
+/// therefore one the driver may roll back (rev-std round 1, finding 3).
+///
+/// The driver rolls a row back in exactly two places — a refused spawn, and a
+/// released slice hold — and they had two different rules: the release checked
+/// the row still carried its slice's agent, the refusal checked nothing at all.
+/// A refused spawn would then reset a row a human had claimed in the window
+/// between the tick's board snapshot and `pd_spawn_slice`'s own claim, wiping
+/// their assignment over a cap refusal that had nothing to do with them.
+///
+/// One rule, and it is a `pub fn` over plain values rather than a condition
+/// spelled twice, because the race it guards is sub-second and not stageable
+/// from a test: the *decision* is pinnable here even though the *situation* is
+/// not. `claimant` is who the driver expects to find — `brand::AUDIT_ACTOR` for
+/// a spawn it just claimed, the slice's own agent for a pane that is being
+/// released.
+pub fn rollback_is_ours(status: &str, assignee: Option<&str>, claimant: &str) -> bool {
+    !claimant.is_empty()
+        && status.trim() == "in-progress"
+        && assignee.map(str::trim) == Some(claimant)
 }
 
 /// Board statuses that settle a slice **by the human's hand** (§2(c)).
@@ -1309,9 +1353,21 @@ pub fn decide(entry: &PdEntry, facts: &PdFacts, limits: &PdLimits) -> Option<PdS
     if step.is_some() {
         return step;
     }
-    // 6.
+    // 6. **A declared review window is not a stall** (rev-std round 1, finding
+    //    4). The backstop outside `running` measures whole-drive AGE, which
+    //    includes a window the caller deliberately asked to wait out — so
+    //    `drive_plan(review_minutes: 2000)` against the 720-minute default
+    //    parked the drive on `drive-stalled` for doing exactly what it was
+    //    told, with a notice naming the wrong cause. A drive inside its window
+    //    is bounded by the window ITSELF: the `plan-review -> boarding` arc
+    //    above fires on the tick it elapses, so this is a suppression with an
+    //    end rather than an exemption.
+    let in_window = state == PlanReview
+        && entry.state_elapsed_ms(facts.now_ms) < entry.review_window_ms();
     let stalled = if state == Running {
         facts.running_idle && entry.idle_ms(facts.now_ms) >= limits.drive_timeout_ms()
+    } else if in_window {
+        false
     } else {
         entry.age_ms(facts.now_ms) >= limits.drive_timeout_ms()
     };
@@ -1603,5 +1659,46 @@ pub fn validate_for_drive(
         Ok(doc)
     } else {
         Err(errs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **All four crossings of {status} × {assignee}**, plus the empty-claimant
+    /// guard — the decision `rollback_is_ours` exists to make, pinned here
+    /// because the SITUATION it guards is not stageable from an integration
+    /// test (a human claiming a row inside a sub-second window) while the
+    /// decision is (rev-std round 1, finding 3).
+    ///
+    /// The first row is the positive control: a rule that answered `false` to
+    /// everything would satisfy every other assertion here.
+    #[test]
+    fn a_rollback_touches_only_a_row_this_drive_still_holds() {
+        // Ours: claimed by us, still in progress.
+        assert!(rollback_is_ours("in-progress", Some("orrerix"), "orrerix"));
+
+        // Somebody else's claim — the case the unguarded rollback wiped.
+        assert!(!rollback_is_ours("in-progress", Some("a-human"), "orrerix"));
+        // Moved on by hand: done, blocked, cancelled, or back to queued.
+        for status in ["done", "blocked", "cancelled", "queued", "review"] {
+            assert!(
+                !rollback_is_ours(status, Some("orrerix"), "orrerix"),
+                "a row a human moved to {status:?} is theirs now, not ours"
+            );
+        }
+        // Unassigned — nothing to roll back, and no claim of ours to find.
+        assert!(!rollback_is_ours("in-progress", None, "orrerix"));
+        assert!(!rollback_is_ours("in-progress", Some(""), "orrerix"));
+
+        // An EMPTY claimant matches nobody, which is `driven_role`'s property
+        // and is here for its reason: a slice with no agent recorded yet must
+        // not match a row whose assignee is also empty.
+        assert!(!rollback_is_ours("in-progress", Some(""), ""));
+        assert!(!rollback_is_ours("in-progress", None, ""));
+
+        // Whitespace is not a second spelling.
+        assert!(rollback_is_ours(" in-progress ", Some(" orrerix "), "orrerix"));
     }
 }

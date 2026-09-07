@@ -71,6 +71,34 @@ driver:
   enabled: true
 "#;
 
+/// The same roster with a SHORT whole-drive timeout — the only axis it varies.
+///
+/// A declared review window is clamped at 120 minutes and the default timeout
+/// is 720, so a window can never outrun the backstop on its own; shortening the
+/// TIMEOUT crosses the same two knobs from the side a repo can actually declare.
+const WORKFLOW_SHORT_TIMEOUT: &str = r#"version: 1
+name: driven
+blocks:
+  - id: orch
+    kind: orchestrator
+  - id: plan-lead
+    name: The planner
+    kind: planner
+  - id: worker-adv
+    kind: worker
+  - id: rev-std
+    kind: reviewer
+gates:
+  merge:
+    require: all-pass
+    reviewers: [rev-std]
+driver:
+  enabled: true
+  plan_enabled: true
+  planner_timeout_minutes: 60
+  drive_timeout_minutes: 5
+"#;
+
 /// A roster with no `kind: planner` block at all.
 const WORKFLOW_NO_PLANNER: &str = r#"version: 1
 name: driven
@@ -189,6 +217,7 @@ fn every_fixture_workflow_parses() {
         ("WORKFLOW", WORKFLOW),
         ("WORKFLOW_NO_PLAN_DRIVER", WORKFLOW_NO_PLAN_DRIVER),
         ("WORKFLOW_NO_PLANNER", WORKFLOW_NO_PLANNER),
+        ("WORKFLOW_SHORT_TIMEOUT", WORKFLOW_SHORT_TIMEOUT),
     ] {
         let parsed = loomux_lib::orchestration::workflow::parse_workflow(yaml);
         assert!(
@@ -228,6 +257,18 @@ fn every_fixture_workflow_parses() {
         no_planner.driver.plan_enabled,
         "…and nothing else: the plan driver is still ON, so `no-planner-block` is what that \
          test can possibly be measuring"
+    );
+
+    let short =
+        loomux_lib::orchestration::workflow::parse_workflow(WORKFLOW_SHORT_TIMEOUT).unwrap();
+    assert_eq!(
+        short.driver.drive_timeout_minutes, 5,
+        "WORKFLOW_SHORT_TIMEOUT varies exactly the whole-drive backstop"
+    );
+    assert!(
+        short.driver.plan_enabled && short.blocks.iter().any(|b| b.kind == Role::Planner),
+        "…and nothing else: the plan driver and its planner block are still there, so a test \
+         using it is about the TIMEOUT rather than about the driver being off"
     );
 }
 
@@ -1684,9 +1725,15 @@ fn assert_block_notices(what: &str, reg: &OrchRegistry, group: &GroupId) -> usiz
 /// wiring builds is exactly where the last one hid.
 #[test]
 fn every_pd_notice_is_one_paragraph() {
-    // (a) the static half.
+    // (a) the static half — BOTH enums. A slice hold parks one slice where a
+    // drive hold parks the drive, but its text lands in the same pane under the
+    // same rule; iterating only the drive reasons left every `PdSliceHold`
+    // notice line unpinned, including the `worker-gone` one this round adds.
     for r in PdHeldReason::ALL {
         assert_one_paragraph(&format!("PdHeldReason::{}'s notice_line", r.as_str()), r.notice_line());
+    }
+    for r in loomux_lib::orchestration::plandrive::PdSliceHold::ALL {
+        assert_one_paragraph(&format!("PdSliceHold::{}'s notice_line", r.as_str()), r.notice_line());
     }
 
     // (b) the composed half. Each of these drives a real arc to the point where
@@ -3012,4 +3059,143 @@ fn one_spawn_per_group_per_tick_across_two_drives() {
         })
         .sum();
     assert_eq!(spawned, 2, "the deferred drive gets the next tick: {}", read_record(&reg, &group));
+}
+
+// ── rev-std round 1 ─────────────────────────────────────────────────────────
+
+/// **A worker pane that DIES without reporting parks its slice** (finding 1).
+///
+/// Nothing synthesizes a report for a dead pane, so before this arc the slice
+/// stayed `running` forever — and a slice in `running` is exactly what makes
+/// `running_idle` false, so the stall backstop could not see it either. The
+/// drive ran on in silence, which is the one outcome the design exists to
+/// avoid, and `resume_plan_drive` refused `not-held` because the drive was
+/// never parked.
+///
+/// The control is the tick BEFORE the kill: same drive, same slice, pane alive
+/// — still `running`. So the hold is the death's doing and not the tick's.
+#[test]
+fn a_dead_worker_pane_parks_its_slice() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let plan = PLAN3.replace("    hold: true\n", "");
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, &plan);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+
+    let agent = slice_agent(&reg, &group, "P1");
+    assert!(!agent.is_empty(), "P1 must have spawned: {}", status(&reg, &group));
+
+    // The control.
+    reg.pd_drive_group_with(&group, &gh, 1_600);
+    assert_eq!(
+        slice_state(&reg, &group, "P1"),
+        "running",
+        "a LIVE worker's slice keeps running: {}",
+        status(&reg, &group)
+    );
+
+    assert!(reg.mark_agent_dead_for_test(&agent), "the worker pane must exist to be ended");
+    reg.pd_drive_group_with(&group, &gh, 1_700);
+
+    assert_eq!(slice_state(&reg, &group, "P1"), "held", "{}", status(&reg, &group));
+    assert_eq!(slice_hold(&reg, &group, "P1"), "worker-gone");
+    assert_eq!(
+        slice_state(&reg, &group, "P3"),
+        "running",
+        "and only ITS slice — the independent one is untouched: {}",
+        status(&reg, &group)
+    );
+    assert_eq!(drive_state(&reg, &group), "running", "the drive is not parked by one dead worker");
+    assert!(
+        reg.audit_log(&group).into_iter().any(|e| {
+            e.action == "pd-slice-held"
+                && e.detail["reason"] == json!("worker-gone")
+        }),
+        "the hold is on the record with its reason: {:?}",
+        audit_actions(&reg, &group)
+    );
+}
+
+/// **A worker that reported `done` and then exited is NOT parked** (finding 1,
+/// the ordering half).
+///
+/// A pane exits after its work; parking on `Dead` alone would throw away the
+/// hand-off the worker had just earned, on the very tick the PR is resolved.
+/// `reported_done` is read before liveness, and this is what pins that order —
+/// the mutation that swaps them reddens here and nowhere else.
+#[test]
+fn a_worker_that_reported_done_and_exited_is_handed_off_not_parked() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, PLAN3);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+
+    let agent = slice_agent(&reg, &group, "P1");
+    with_pane(&reg, &agent, 7_101);
+    gh.set_pr(4_100, "OPEN", None);
+    report(&reg, &group, &agent, "done", json!({ "ref": "#4100", "note": "green" }));
+    // The pane exits, as a finished worker's does, BEFORE the tick runs.
+    assert!(reg.mark_agent_dead_for_test(&agent), "the worker pane must exist to be ended");
+
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    assert_eq!(
+        slice_state(&reg, &group, "P1"),
+        "in-review",
+        "a finished worker's death must not cost it the hand-off: {}",
+        status(&reg, &group)
+    );
+    assert_eq!(slice_hold(&reg, &group, "P1"), "");
+}
+
+/// **A declared window longer than the stall timeout is not a stall**
+/// (finding 4).
+///
+/// The backstop outside `running` measures whole-drive AGE, which includes a
+/// window the caller deliberately asked for — so a window past the timeout
+/// parked the drive on `drive-stalled` for doing exactly what it was told, with
+/// a notice naming the wrong cause.
+///
+/// The control is the second half: the suppression ENDS. Past the window the
+/// drive boards, so this is a bounded wait rather than an exemption from the
+/// backstop.
+#[test]
+fn a_review_window_longer_than_the_drive_timeout_is_not_a_stall() {
+    // The window is clamped to `PLAN_REVIEW_MINUTES_MAX` (120) and the default
+    // drive timeout is 720 minutes, so a window alone can never outrun it. The
+    // fixture shortens the TIMEOUT instead — the same crossing from the other
+    // side, and the one a repo can actually declare.
+    let repo = Repo::with(WORKFLOW_SHORT_TIMEOUT);
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, orch) = grouped(&reg, &repo);
+
+
+    let out = reg.drive_plan_with(&group, &gh, 3040, None, Some(60), None, &orch, 1_000);
+    assert_eq!(out["driving"], json!(true), "{out}");
+    let doc = plandrive::validate_for_drive(&in_comment(PLAN3), 3040, &roster()).unwrap();
+    reg.pd_store_posted_plan_at(&group, 3040, doc, "https://example/c/1", 1_100);
+    reg.pd_drive_group_with(&group, &gh, 1_200);
+    assert_eq!(drive_state(&reg, &group), "plan-review", "{}", status(&reg, &group));
+
+    // Well past the 5-minute drive timeout, still inside the 60-minute window.
+    reg.pd_drive_group_with(&group, &gh, 1_200 + 30 * 60_000);
+    assert_eq!(
+        drive_state(&reg, &group),
+        "plan-review",
+        "a drive doing what it was told is not stalled: {}",
+        status(&reg, &group)
+    );
+    assert_eq!(held_reason(&reg, &group), "", "and carries no hold reason at all");
+
+    // The control: the suppression ends with the window.
+    reg.pd_drive_group_with(&group, &gh, 1_200 + 61 * 60_000);
+    assert_eq!(
+        drive_state(&reg, &group),
+        "boarding",
+        "past the window the drive boards — a bounded wait, not an exemption: {}",
+        status(&reg, &group)
+    );
 }

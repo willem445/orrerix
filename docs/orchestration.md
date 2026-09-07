@@ -2606,9 +2606,9 @@ re-read from the board every 30 seconds and never cached:
   that is the planner telling you it carries a decision that is yours.
 
 **What parks one slice, and what parks the whole drive.** A worker reporting
-`blocked`, a PR closed without merging, or a delegate cap that stays full for 15
-minutes park that one slice and leave the rest of the plan running; you get one
-notice per slice. Withdrawn consent, a struck row, and the whole-drive stall
+`blocked`, a worker whose pane dies without ever reporting, a PR closed without
+merging, or a delegate cap that stays full for 15 minutes park that one slice
+and leave the rest of the plan running; you get one notice per slice. Withdrawn consent, a struck row, and the whole-drive stall
 backstop park the drive.
 
 **By default nothing pauses between the plan and the first spawn.** You already

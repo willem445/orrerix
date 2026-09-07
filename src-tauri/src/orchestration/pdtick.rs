@@ -1292,7 +1292,7 @@ impl OrchRegistry {
                 .into_iter()
                 .find(|t| &t.id == task_id)
                 .is_some_and(|t| {
-                    t.status == "in-progress" && t.assignee.as_deref() == Some(agent.as_str())
+                    plandrive::rollback_is_ours(&t.status, t.assignee.as_deref(), agent)
                 });
             if !held_by_us {
                 continue;
@@ -1854,6 +1854,54 @@ impl OrchRegistry {
             ));
         }
 
+        // **A worker pane that DIED without reporting parks its slice**, the
+        // planner's own `plan-missing` arm applied to the other side (rev-std
+        // round 1, finding 1).
+        //
+        // Without it the drive runs forever in silence: nothing synthesizes a
+        // report for a dead pane, so the slice stays `Running` — and a slice in
+        // `Running` is exactly what makes `running_idle` false, so the stall
+        // backstop cannot see it either. A drive nobody is told about is the one
+        // outcome this design exists to avoid.
+        //
+        // **`reported_done` is checked first, and that ordering is the point.**
+        // A worker that reports `done` and then exits is a worker that did its
+        // job; parking it would throw away the hand-off it just earned, on the
+        // tick where the PR is about to be resolved.
+        //
+        // **No grace period, deliberately.** `AgentStatus::Dead` is terminal,
+        // and a pane that has not bound yet is NOT dead — which is the same
+        // reading `pd_planner_live` takes, and a grace here would be a second
+        // rule for one question. A record that has gone entirely counts as gone.
+        let gone: Vec<String> = entry
+            .slices
+            .iter()
+            .filter(|(_, s)| {
+                s.state() == plandrive::SliceState::Running
+                    && !s.reported_done
+                    && !s.agent.is_empty()
+            })
+            .filter(|(_, s)| {
+                self.agent(&s.agent).is_none_or(|a| a.status == AgentStatus::Dead)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &gone {
+            let Some(run) = entry.slices.get_mut(id) else { continue };
+            run.advance(plandrive::SliceState::Held, Some(plandrive::PdSliceHold::WorkerGone));
+            entry.note_progress(now);
+            out.audits.push((
+                plandrive::audit_action::SLICE_HELD,
+                json!({ "issue": issue, "slice": id,
+                        "reason": plandrive::PdSliceHold::WorkerGone.as_str() }),
+            ));
+            out.notices.push(format!(
+                "[orrerix] plan drive #{issue}: slice {id} HELD ({}) — {}",
+                plandrive::PdSliceHold::WorkerGone.as_str(),
+                plandrive::PdSliceHold::WorkerGone.notice_line(),
+            ));
+        }
+
         // A PR that positively MERGED marks its row done; one positively CLOSED
         // without merging parks the slice. **Only those two are positive** — a
         // PR orrerix could not read leaves the slice exactly where it was.
@@ -2064,16 +2112,41 @@ impl OrchRegistry {
                             // A refused spawn must leave the row exactly as the
                             // drive found it, or a WIP cap would strand a row
                             // `in-progress` with nobody on it.
-                            let _ = self.upsert_task(
-                                group,
-                                brand::AUDIT_ACTOR,
-                                Some(&task_id),
-                                super::TaskPatch {
-                                    status: Some("queued".into()),
-                                    assignee: Some(String::new()),
-                                    ..super::TaskPatch::default()
-                                },
-                            );
+                            //
+                            // **Guarded, exactly as the resume's twin rollback
+                            // is** (rev-std round 1, finding 3): only a row this
+                            // drive's own claim is still holding is rolled back.
+                            // `pd_spawn_slice` claims as `AUDIT_ACTOR` with no
+                            // assignee, so that is the claimant to look for — and
+                            // a human who claimed the row in the window between
+                            // this tick's board snapshot and that claim would
+                            // otherwise have their assignment wiped by a refusal
+                            // that has nothing to do with them. One comparison,
+                            // and it makes the two rollbacks one rule instead of
+                            // two.
+                            let ours = self
+                                .tasks(group)
+                                .into_iter()
+                                .find(|t| t.id == task_id)
+                                .is_some_and(|t| {
+                                    plandrive::rollback_is_ours(
+                                        &t.status,
+                                        t.assignee.as_deref(),
+                                        brand::AUDIT_ACTOR,
+                                    )
+                                });
+                            if ours {
+                                let _ = self.upsert_task(
+                                    group,
+                                    brand::AUDIT_ACTOR,
+                                    Some(&task_id),
+                                    super::TaskPatch {
+                                        status: Some("queued".into()),
+                                        assignee: Some(String::new()),
+                                        ..super::TaskPatch::default()
+                                    },
+                                );
+                            }
                         }
                     }
                     // ONE spawn attempt per tick, refused or not: a tick that

@@ -453,7 +453,14 @@ pub fn route(ev: &HarnessEvent) -> EventRouting {
     EventRouting {
         ring: true,
         frontend: goes_to_frontend(ev),
-        audit: ev.is_decision_grade(),
+        audit: matches!(
+            ev,
+            HarnessEvent::ToolCall { .. }
+                | HarnessEvent::PermissionRequest { .. }
+                | HarnessEvent::PermissionSettled { .. }
+                | HarnessEvent::TurnEnded { .. }
+                | HarnessEvent::Exited { .. }
+        ),
         usage: matches!(ev, HarnessEvent::TurnEnded { usage: Some(_), .. }),
         binds_session: matches!(ev, HarnessEvent::Booted { .. }),
         exits: matches!(ev, HarnessEvent::Exited { .. }),

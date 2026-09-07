@@ -7191,14 +7191,23 @@ mod tests {
         // — a hold naming a CONSEQUENCE of the conflict, whose remedy
         // (`drive_review` again) reproduces it.
         let limits = DriveLimits::default();
-        for st in [DriveState::CiWait, DriveState::ReviewWait, DriveState::GateCheck] {
+        // Each state paired with the answer it gives on the SAME facts minus
+        // the conflict — which is not one answer, because `ci-wait` never
+        // reads routing at all. Written per state so the control is that
+        // state's own strongest other answer rather than a shared shape.
+        for (st, without_the_conflict) in [
+            (DriveState::CiWait, DriveStep::Wait),
+            (DriveState::ReviewWait, DriveStep::held(HeldReason::RoutingUnaccountable)),
+            (DriveState::GateCheck, DriveStep::held(HeldReason::RoutingUnaccountable)),
+        ] {
             let mut e = entry_at(st);
             e.head = "head-a".into();
             let facts = DriveFacts {
                 ci: CiObservation::Conflicting,
-                // Each state's own strongest OTHER answer, so the assertion is
-                // a difference rather than a shape that holds either way: the
-                // gate says SATISFIED, and routing says nothing at all.
+                // Everything else set so that any state reading it would
+                // answer something ELSE — the gate says SATISFIED and routing
+                // says nothing at all — which is what makes the assertion below
+                // a difference rather than a shape that holds either way.
                 gate: GateOutcome::Satisfied,
                 required_lanes: None,
                 ..facts_at("head-a")
@@ -7209,12 +7218,12 @@ mod tests {
                 "{}: a conflicting PR is a rebase hand-back, not this state's own answer",
                 st.as_str()
             );
-            // The controls: with the mergeability the ONLY thing changed, each
+            // The control: with the mergeability the ONLY thing changed, each
             // state gives the answer that must not have won above.
             assert_eq!(
                 decide(&e, &DriveFacts { ci: CiObservation::Pending, ..facts.clone() }, &limits),
-                DriveStep::held(HeldReason::RoutingUnaccountable),
-                "{}: the control — without the conflict, routing is what answers",
+                without_the_conflict,
+                "{}: the control — without the conflict this state answers for itself",
                 st.as_str()
             );
             // …and the second conflict parks, on the same counter `ci-wait` has

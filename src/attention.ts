@@ -7,6 +7,7 @@
 export type AttentionReason =
   | "held-dialog"
   | "blocked"
+  | "provider-limit"
   | "stranded"
   | "waiting"
   | "report"
@@ -16,8 +17,8 @@ export type AttentionReason =
 export interface AttentionPresentation {
   /** Short glyph+word label shown in the header chip / dock chip tooltip. */
   label: string;
-  /** `held-dialog`, `blocked` and `stranded` are the urgent ones — callers
-   *  tint them red rather than amber. */
+  /** `held-dialog`, `blocked`, `provider-limit` and `stranded` are the urgent
+   *  ones — callers tint them red rather than amber. */
   urgent: boolean;
 }
 
@@ -28,6 +29,14 @@ const LABELS: Record<string, string> = {
   // strands every OTHER agent's report too, not just this pane's own status.
   "held-dialog": "⛔ held on a dialog",
   blocked: "⚠ blocked",
+  // #2811 S5a: the account behind this pane's model is out of budget and its
+  // CLI is parked on the provider's own refusal. Urgent, and the only reason
+  // in this table that no gesture INSIDE the terminal can clear — the remedy
+  // is billing, or a different `model:` in the workflow file, which is why the
+  // backend `detail` always names it. Raised once per group per provider
+  // however many panes were stopped, so the chip is on one pane and the count
+  // is in the detail.
+  "provider-limit": "⛔ provider limit",
   // #496 PR-C: a delivered prompt that was never submitted. Distinct from
   // `waiting` on purpose — a waiting pane is asking something and will keep
   // asking; a stranded one is wedged and stays wedged until an Enter lands.
@@ -50,7 +59,12 @@ export const KNOWN_ATTENTION_REASONS: readonly string[] = Object.keys(LABELS);
 /** Attention reasons rendered as urgent (red, not amber): the pane is stuck
  *  and will not un-stick itself. Kept as a set so adding a reason is one edit
  *  — `tabroute.ts` mirrors this rule (see its note on why it can't import). */
-const URGENT: ReadonlySet<string> = new Set(["held-dialog", "blocked", "stranded"]);
+const URGENT: ReadonlySet<string> = new Set([
+  "held-dialog",
+  "blocked",
+  "provider-limit",
+  "stranded",
+]);
 
 /** Attention reasons that are a DECISION waiting on the human's own pace rather
  *  than a wedged pane — amber, not red, and the ones a "needs you" count is

@@ -117,15 +117,23 @@ test("'question' slots strictly between the pre-existing 'gate' and 'report' (#1
   );
 });
 
-test("every attention class badges the tab, urgent for held-dialog/blocked/stranded", () => {
-  for (const reason of ["held-dialog", "blocked", "stranded", "waiting", "report", "question", "gate"]) {
+test("every attention class badges the tab, urgent for held-dialog/blocked/provider-limit/stranded", () => {
+  const urgent = new Set(["held-dialog", "blocked", "provider-limit", "stranded"]);
+  const all = ["held-dialog", "blocked", "provider-limit", "stranded", "waiting", "report", "question", "gate"];
+  for (const reason of all) {
     const out = tabAttention([{ pty_id: 1, reason }], ptyMap([[1, "ws-a"]]));
     assert.deepEqual(
       out.get("ws-a"),
-      { urgent: reason === "held-dialog" || reason === "blocked" || reason === "stranded", reason },
+      { urgent: urgent.has(reason), reason },
       `${reason} must badge the tab`
     );
   }
+  // Non-vacuity, and the half that would otherwise go silent: this list is a
+  // hand-maintained mirror of `attention.ts`'s `LABELS`, and a reason added
+  // there but not here is simply never exercised. `attention.ts` cannot be
+  // imported from a tested module (see `tabroute.ts`'s own note), so the
+  // population is pinned by COUNT instead — 8 as of #2811 S5a.
+  assert.equal(all.length, 8, "the mirrored reason list has drifted from attention.ts's LABELS");
 });
 
 test("a held-dialog pane outranks even blocked on the tab chip (#946 Q4 / #1091 slice H)", () => {
@@ -164,6 +172,36 @@ test("a stranded pane outranks waiting on the tab chip but not blocked", () => {
   const underBlocked = tabAttention(
     [
       { pty_id: 1, reason: "stranded" },
+      { pty_id: 2, reason: "blocked" },
+    ],
+    ptyMap([
+      [1, "ws-a"],
+      [2, "ws-a"],
+    ])
+  );
+  assert.deepEqual(underBlocked.get("ws-a"), { urgent: true, reason: "blocked" });
+});
+
+test("a provider-limited pane outranks stranded on the tab chip but not blocked", () => {
+  // #2811 S5a: the tab chip mirrors `attention_tick`'s own chain. A stranded
+  // prompt clears on one Enter in that pane; a provider limit clears on
+  // nothing that happens in a terminal at all, so it wins — and an agent that
+  // explicitly reported blocked still wins over it.
+  const overStranded = tabAttention(
+    [
+      { pty_id: 1, reason: "stranded" },
+      { pty_id: 2, reason: "provider-limit" },
+    ],
+    ptyMap([
+      [1, "ws-a"],
+      [2, "ws-a"],
+    ])
+  );
+  assert.deepEqual(overStranded.get("ws-a"), { urgent: true, reason: "provider-limit" });
+
+  const underBlocked = tabAttention(
+    [
+      { pty_id: 1, reason: "provider-limit" },
       { pty_id: 2, reason: "blocked" },
     ],
     ptyMap([

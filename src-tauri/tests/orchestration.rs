@@ -26,6 +26,7 @@ use loomux_lib::orchestration::mergeq;
 use loomux_lib::orchestration::report;
 use loomux_lib::orchestration::reviewdrive;
 use loomux_lib::orchestration::workflow;
+use loomux_lib::orchestration::providerlimit;
 // #2011 slice B: the tuning fingerprint behind the series' marks, and the
 // engine's pure core the sampler writes through.
 use loomux_lib::orchestration::tuningfp;
@@ -65788,4 +65789,237 @@ fn the_watchdog_suppression_reason_covers_every_crossing_of_its_two_inputs() {
         assert_eq!(exit_notice_route(Some(init)), ExitNoticeRoute::AuditOnly,
             "fixture: {init:?} must be one exit_notice_route demotes, or this row proves nothing");
     }
+}
+
+// ── #2811 S5a: the `provider-limit` attention reason ────────────────────────
+//
+// Every fixture below is a REAL pane tail, lifted out of this group's own
+// audit log for the Sep-5/Sep-6 incidents (`q-35`, `q-39`, `q-40`, `q-45`) and
+// written to disk unmodified. That matters twice over: the OpenRouter credits
+// message really is broken mid-word behind pi's box gutter, and the Claude one
+// really does end in a CURLY apostrophe — two shapes a hand-typed specimen
+// would have smoothed away, and each one enough on its own to make a
+// plausible-looking detector see nothing.
+const FIX_LIMIT_CLAUDE: &str = include_str!("fixtures/attention/claude-usage-limit.txt");
+const FIX_LIMIT_OR_KEY: &str = include_str!("fixtures/attention/openrouter-key-limit.txt");
+const FIX_LIMIT_OR_CREDITS: &str =
+    include_str!("fixtures/attention/openrouter-credits-exhausted.txt");
+/// The negative control, and it is not a synthetic one either: this is the
+/// ORCHESTRATOR's own `ask_human` text from `q-39`, in which it quotes the
+/// Claude refusal while asking the human to top the account up. A detector that
+/// searched the tail for its needles anywhere would badge the orchestrator's
+/// pane as out of credit for talking about being out of credit.
+const FIX_LIMIT_NEGATIVE: &str =
+    include_str!("fixtures/attention/negative-orchestrator-quotes-a-limit.txt");
+
+/// A group with one worker, plus the tail maps `attention_tick` consumes.
+/// `attention_setup` gives the worker a pty; nothing here needs a real one.
+fn limit_scan(
+    reg: &OrchRegistry,
+    now: u64,
+    tails: &[(&str, &str)],
+) -> Vec<AttentionItem> {
+    let outputs: HashMap<String, u64> =
+        tails.iter().map(|(id, _)| ((*id).to_string(), 1u64)).collect();
+    let tails: HashMap<String, String> = tails
+        .iter()
+        .map(|(id, t)| ((*id).to_string(), strip_ansi(t.as_bytes())))
+        .collect();
+    reg.attention_tick(now, &outputs, &tails, &HashMap::new())
+}
+
+#[test]
+fn a_captured_pane_raises_its_providers_limit_with_the_remedy() {
+    // The three captured refusals, each on its own pane in its own group so
+    // the once-per-group-per-provider dedup cannot mask a miss as a merge.
+    for (fixture, provider_id, display, label) in [
+        (FIX_LIMIT_CLAUDE, "anthropic", "Anthropic (Claude)", "claude usage credits"),
+        (FIX_LIMIT_OR_KEY, "openrouter", "OpenRouter", "openrouter key limit"),
+        (FIX_LIMIT_OR_CREDITS, "openrouter", "OpenRouter", "openrouter credits"),
+    ] {
+        let (reg, _d, _g, wid) = attention_setup();
+        let items = limit_scan(&reg, 1_000_000_000_000, &[(wid.as_str(), fixture)]);
+        let item = items
+            .iter()
+            .find(|i| i.agent_id == wid)
+            .unwrap_or_else(|| panic!("{label}: the captured pane raised no attention item at all"));
+        assert_eq!(
+            item.reason, "provider-limit",
+            "{label}: a pane parked on a provider refusal must read as provider-limit, not {:?}",
+            item.reason
+        );
+        assert!(
+            item.detail.contains(display),
+            "{label}: the detail must NAME the provider — {}",
+            item.detail
+        );
+        let remedy = providerlimit::provider(provider_id).expect("declared provider").remedy;
+        assert!(
+            item.detail.contains(remedy),
+            "{label}: the detail must tell the human what to DO — {}",
+            item.detail
+        );
+        assert_eq!(
+            item.pty_id,
+            reg.agent(&wid).unwrap().pty_id,
+            "{label}: the badge must carry the pty the header chip and dock dot key off"
+        );
+    }
+}
+
+#[test]
+fn the_orchestrator_quoting_a_refusal_raises_no_limit() {
+    // The false positive the line-initial anchor exists for, on the real text
+    // (`q-39`). This pane is not out of credit; it is ASKING about a pane that
+    // is, and badging it would send the human to the wrong terminal.
+    let (reg, _d, _g, wid) = attention_setup();
+    let items = limit_scan(&reg, 1_000_000_000_000, &[(wid.as_str(), FIX_LIMIT_NEGATIVE)]);
+    assert!(
+        items.iter().all(|i| i.reason != "provider-limit"),
+        "quoting a refusal must not raise one: {items:?}"
+    );
+    // Non-vacuity: the SAME scan, same pane, same registry, does raise one for
+    // a tail that really is a refusal — so the empty result above is the
+    // anchor working rather than the scan never running.
+    let live = limit_scan(&reg, 1_000_000_005_000, &[(wid.as_str(), FIX_LIMIT_OR_KEY)]);
+    assert!(
+        live.iter().any(|i| i.agent_id == wid && i.reason == "provider-limit"),
+        "control: the scan does raise the reason when the tail really carries one"
+    );
+}
+
+#[test]
+fn one_chip_per_group_per_provider_however_many_panes_stopped() {
+    // The plan's rule, and the reason for it: an OpenRouter key cap stops
+    // every GLM pane in the group at the same instant (four of them, on
+    // Sep 5). Four identical red chips and four toasts say one thing four
+    // times and need one remedy once.
+    let (reg, _d, g, first) = attention_setup();
+    let second = reg.spawn_agent(&g, Role::Reviewer, "rev", "review", false, None).unwrap();
+    let third = reg.spawn_agent(&g, Role::Reviewer, "rev2", "review", false, None).unwrap();
+
+    let items = limit_scan(
+        &reg,
+        1_000_000_000_000,
+        &[
+            (first.as_str(), FIX_LIMIT_OR_KEY),
+            (second.id.as_str(), FIX_LIMIT_OR_CREDITS),
+            (third.id.as_str(), FIX_LIMIT_OR_KEY),
+        ],
+    );
+    let raised: Vec<&AttentionItem> =
+        items.iter().filter(|i| i.reason == "provider-limit").collect();
+    assert_eq!(
+        raised.len(),
+        1,
+        "three OpenRouter-stopped panes must produce ONE chip, not three: {raised:?}"
+    );
+    // On the lowest-sorting affected agent id — deterministic, where the
+    // roster's own iteration order is a `HashMap`'s and is not.
+    let mut ids = vec![first.clone(), second.id.clone(), third.id.clone()];
+    ids.sort();
+    assert_eq!(raised[0].agent_id, ids[0], "the chip lands on a deterministic pane");
+    assert!(
+        raised[0].detail.contains("3 panes"),
+        "the one chip must still tell the truth about the blast radius: {}",
+        raised[0].detail
+    );
+
+    // And a SECOND provider in the same group is its own chip: the dedup key
+    // is (group, provider), not (group).
+    let mixed = limit_scan(
+        &reg,
+        1_000_000_005_000,
+        &[(first.as_str(), FIX_LIMIT_OR_KEY), (second.id.as_str(), FIX_LIMIT_CLAUDE)],
+    );
+    let providers: HashSet<&str> = mixed
+        .iter()
+        .filter(|i| i.reason == "provider-limit")
+        .map(|i| if i.detail.contains("OpenRouter") { "openrouter" } else { "anthropic" })
+        .collect();
+    assert_eq!(
+        providers.len(),
+        2,
+        "two providers limited at once are two chips: {mixed:?}"
+    );
+    // Singular/plural is read, not glued on: a one-pane limit says "1 pane".
+    let alone = limit_scan(&reg, 1_000_000_010_000, &[(first.as_str(), FIX_LIMIT_OR_KEY)]);
+    assert!(
+        alone.iter().any(|i| i.reason == "provider-limit" && i.detail.contains("1 pane stopped")),
+        "{alone:?}"
+    );
+}
+
+#[test]
+fn provider_limit_sits_under_blocked_and_over_stranded_and_waiting() {
+    // The chain in `attention_tick`, pinned where a reader can fail it. An
+    // agent that SAID it is blocked outranks a diagnosis loomux made from pane
+    // text; a wedge one Enter clears does not outrank one nothing typed in the
+    // terminal can clear.
+    let (reg, _d, g, wid) = attention_setup();
+    let now = 1_000_000_000_000u64;
+
+    // Over `waiting`: park the pane long enough that `waiting` would fire, on
+    // a tail that is ALSO a refusal.
+    let tails = [(wid.as_str(), FIX_LIMIT_OR_KEY)];
+    limit_scan(&reg, now, &tails);
+    let over_waiting = limit_scan(&reg, now + 5_000, &tails);
+    assert_eq!(
+        over_waiting.iter().find(|i| i.agent_id == wid).map(|i| i.reason),
+        Some("provider-limit"),
+        "a provider limit outranks a pane merely parked on a prompt"
+    );
+
+    // Over `stranded`, which is latched and outranks `waiting` itself.
+    reg.mark_stranded(&g, &wid, Some(StrandedBlocker::HumanInput));
+    let over_stranded = limit_scan(&reg, now + 6_000, &tails);
+    assert_eq!(
+        over_stranded.iter().find(|i| i.agent_id == wid).map(|i| i.reason),
+        Some("provider-limit"),
+        "a provider limit outranks a stranded prompt: one Enter clears that, nothing clears this"
+    );
+    reg.clear_stranded(&g, &wid, "test");
+
+    // Under `blocked`.
+    reg.note_report_attention(&wid, "blocked");
+    let under_blocked = limit_scan(&reg, now + 7_000, &tails);
+    assert_eq!(
+        under_blocked.iter().find(|i| i.agent_id == wid).map(|i| i.reason),
+        Some("blocked"),
+        "an agent that explicitly reported blocked still outranks the diagnosis"
+    );
+}
+
+#[test]
+fn a_refusal_loomux_itself_delivered_into_the_pane_raises_nothing() {
+    // #576's self-latch, arriving at a third consumer. The orchestrator relays
+    // "[orch] rev-2313 stopped: Key limit exceeded (total limit)" into a
+    // worker's pane; that line is now in the worker's own tail, line-initial
+    // once the relay's prefix wraps. The worker is not out of credit.
+    let (reg, _d, g, _w) = attention_setup();
+    let session = "5f3a9d02-1111-4222-8333-444455556666";
+    let a = reg.spawn_agent(&g, Role::Reviewer, "rev", "review", false, None).unwrap();
+    reg.set_session_for_test(&a.id, session);
+    reg.set_pty_for_test(&a.id, 4101);
+
+    let relayed = "Key limit exceeded (total limit) — that is rev-2313, not you; hold.";
+    reg.record_delivered_prompt(4101, relayed, Delivery::MidSession);
+    let tail = format!("$ cargo test\n{relayed}\n");
+
+    let items = limit_scan(&reg, 1_000_000_000_000, &[(a.id.as_str(), &tail)]);
+    assert!(
+        items.iter().all(|i| i.reason != "provider-limit"),
+        "a refusal loomux itself typed into the pane must be masked out: {items:?}"
+    );
+    // Non-vacuity: the identical tail on a pane with NO delivery record for it
+    // does raise the reason, so the silence above is the mask and not the
+    // detector failing on this string.
+    let bare = reg.spawn_agent(&g, Role::Reviewer, "rev-bare", "review", false, None).unwrap();
+    reg.set_session_for_test(&bare.id, "6a4b0e13-2222-4333-8444-555566667777");
+    reg.set_pty_for_test(&bare.id, 4102);
+    let unmasked = limit_scan(&reg, 1_000_000_005_000, &[(bare.id.as_str(), &tail)]);
+    assert!(
+        unmasked.iter().any(|i| i.agent_id == bare.id && i.reason == "provider-limit"),
+        "control: the same text with no delivery record behind it DOES raise one"
+    );
 }

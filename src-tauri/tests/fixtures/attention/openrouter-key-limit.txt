@@ -1,0 +1,18 @@
+  ┃  a `{ skip: true }` placeholder when `cmd.exe`/`sh` is a…
+  ┃
+  ┃  Click to expand
+  ┃
+
+  ┃
+  ┃  Key limit exceeded (total limit). Manage it using https://openrouter.ai/
+  ┃  workspaces/default/keys/
+  ┃  fd2eff87220643028dc5fbf4b5cb941cbfcd25dfe7260b2cbfbced3a96bd5c97
+  ┃
+
+     ▣  Loomux-Loomux-68435179-Rev-Std · GLM-5.3-Flash
+
+  ┃
+  ┃
+  ┃
+  ┃  Loomux-Loomux-68435179-Rev-Std auto · GLM-5.3-Flash OpenRouter · high
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

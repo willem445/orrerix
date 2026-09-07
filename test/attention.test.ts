@@ -17,6 +17,8 @@ test("each known reason maps to its label", () => {
   assert.equal(attentionPresentation("held-dialog").label, "⛔ held on a dialog");
   assert.equal(attentionPresentation("blocked").label, "⚠ blocked");
   assert.equal(attentionPresentation("stranded").label, "⚠ stuck prompt");
+  // #2811 S5a: the account behind the pane's model is out of budget.
+  assert.equal(attentionPresentation("provider-limit").label, "⛔ provider limit");
   assert.equal(attentionPresentation("waiting").label, "⚠ waiting");
   assert.equal(attentionPresentation("report").label, "✓ reported");
   // #1091 slice D: a pending `ask_human` row on this pane's own asker.
@@ -24,7 +26,7 @@ test("each known reason maps to its label", () => {
   assert.equal(attentionPresentation("gate").label, "⚑ your call");
 });
 
-test("'held-dialog', 'blocked', and 'stranded' are the urgent reasons", () => {
+test("'held-dialog', 'blocked', 'provider-limit' and 'stranded' are the urgent reasons", () => {
   // #946 Q4 / #1091 slice H: a blocking dialog holding the orchestrator's own
   // delivery pipe strands every OTHER agent's report behind it too — at
   // least as urgent as a plain `blocked` report, never merely amber.
@@ -34,6 +36,10 @@ test("'held-dialog', 'blocked', and 'stranded' are the urgent reasons", () => {
   // pane until an Enter lands — red, not the amber of a pane that is merely
   // parked on a question it is happy to keep asking.
   assert.equal(attentionPresentation("stranded").urgent, true);
+  // #2811 S5a: red, and for a reason stronger than `stranded`'s — an Enter in
+  // the pane clears a stranded prompt, and nothing typed into a
+  // provider-limited pane clears that at all.
+  assert.equal(attentionPresentation("provider-limit").urgent, true);
   for (const reason of ["waiting", "report", "question", "gate"]) {
     assert.equal(attentionPresentation(reason).urgent, false, `${reason} not urgent`);
   }
@@ -220,7 +226,11 @@ test("every known attention reason is classified exactly once", () => {
   assert.deepEqual(doubled, [], "reason(s) claimed by more than one class");
   // Non-vacuity: the loop must have SEEN the population, and seen every class
   // in it. An empty or one-class LABELS would satisfy both assertions above.
-  assert.ok(KNOWN_ATTENTION_REASONS.length >= 7, `only ${KNOWN_ATTENTION_REASONS.length} reasons scanned`);
+  assert.ok(KNOWN_ATTENTION_REASONS.length >= 8, `only ${KNOWN_ATTENTION_REASONS.length} reasons scanned`);
+  assert.ok(
+    KNOWN_ATTENTION_REASONS.includes("provider-limit"),
+    "#2811 S5a's reason must be in the scanned population, not merely labelled",
+  );
   assert.ok(KNOWN_ATTENTION_REASONS.some((r) => attentionPresentation(r).urgent));
   assert.ok(KNOWN_ATTENTION_REASONS.some((r) => DECISION_REASONS.has(r)));
   assert.ok(KNOWN_ATTENTION_REASONS.some((r) => REPORT_REASONS.has(r)));

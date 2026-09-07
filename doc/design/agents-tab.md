@@ -141,7 +141,7 @@ wins, and each rung is a strictly more urgent claim than the one below it.
 | 1 | `dead` | not alive, not dormant, not welcome |
 | 2 | `dormant` | a restore placeholder |
 | 3 | `held` | `held !== null` — loomux is withholding a delivery (#246) |
-| 4 | `attention` | the reason is urgent per `attention.ts` (`held-dialog`, `blocked`, `stranded`) |
+| 4 | `attention` | the reason is urgent per `attention.ts` (`held-dialog`, `blocked`, `provider-limit`, `stranded`) |
 | 5 | `question` | the reason is in `attention.ts`'s `DECISION_REASONS` (`question`, `gate`) |
 | 6 | `reported` | the reason is in `attention.ts`'s `REPORT_REASONS` (`report`) — waiting on the ORCHESTRATOR, not on a human decision (#2367) |
 | 7 | `turn-done` | the reason is `waiting` **or** the latch is set |

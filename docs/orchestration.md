@@ -988,6 +988,16 @@ These deserve their own detail — see:
   the pane and acknowledges the chip — acknowledging only tells orrerix you've
   seen it, so a chip that's still genuinely true comes right back on the next
   scan.
+  - **Provider limits.** When the account behind a pane's model runs out of
+    budget — an OpenRouter key at its spend cap, Claude usage credits
+    exhausted — the CLI prints the provider's refusal and simply stops. Nothing
+    else about that pane looks wrong, so orrerix reads the refusal off the
+    pane's own text and raises a red **⛔ provider limit** chip naming the
+    provider, how many panes it stopped, and what clears it (add credits, raise
+    the key's limit, or point the block at a different `model:`). Because one
+    limit stops every pane on that provider at once, you get **one** chip per
+    provider per group rather than one per stopped pane. It is the only
+    attention chip nothing you type in the terminal can clear.
   - **The NEEDS-YOU panel** (`Alt+Q`, or the raised-hand icon in an
     orchestrator pane's header) is everything currently waiting on you, in
     **one list**, badged with a running total in its own header. The newest

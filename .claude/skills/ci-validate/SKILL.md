@@ -277,6 +277,15 @@ For anything beyond the frontend-only and `rustfmt --check` steps above:
    gh run list --branch <branch> --json headSha,databaseId,conclusion,workflowName
    git rev-parse HEAD
    ```
+   **That listing is newest-first across EVERY workflow, so its first row is
+   routinely another workflow's run** — Docs, pages or code-metrics fires on the
+   same `pull_request` a few seconds after `ci.yml`. Filter on `workflowName` and
+   read every matching row (`--workflow CI` is the short form). Taking the top row
+   reads another workflow's verdict for yours, and it fails toward GREEN, so nothing
+   looks wrong. Signature: a cited run id whose `workflowName` is not the build
+   (#1264 — two rounds silently read as `success`; #3139, a Docs run cited as the
+   build's).
+
    A run counts as this PR's evidence only when its `headSha` **is** the head
    you are reporting on. A citation that survives a rebase untouched is the
    defect a reviewer catches and its author never does (#571, #588, #596).
@@ -903,6 +912,21 @@ with side effects, a flake, a test added or removed between the two runs, or the
 fail-fast truncation that stops a red run reaching later binaries. The extra reds
 are the ones you would otherwise quote. Signature: a round reddens three tests
 where one was expected (#1236 — eight rounds, each reconciling to 376).
+
+**A head count reconciles against the MERGE REF, not against your branch.** `ci.yml`
+gives a non-`main` branch no `push` run, so every PR figure is measured on
+`refs/pull/N/merge` — your head merged with `main`'s tip at run-creation time — while
+the `headSha` reported is your branch head alone. Tests `main` gained since your merge
+base are therefore in CI's total and in none of your arithmetic, and the gap is a clean
+integer that reads exactly like a miscount. Re-derive the tip from the run's own
+`createdAt`, bracketed against `gh run list --branch main`, rather than reusing `main`'s
+current tip or the last one you named; and state the absorbed delta for EVERY row, not
+just the one you noticed. Diff the two runs' test **NAMES**, not their totals — that
+names the absorbed file in one step, where totals only say the number is wrong.
+Signature: a head figure that will not reconcile, or a `delta 0` or negative delta on a
+diff that ADDS tests (#2747, a delta of -2 for a diff adding 2; #2834, seven tests from
+a file not in the worktree; #3161, head `1602 / delta 0` against a run log's `1608 /
++6`; #2197, the right total from the wrong baseline by coincidence).
 
 **A round that reddens NOTHING is a finding; a round that reddens EVERYTHING is not
 evidence.** Publish the zero-red row rather than dropping it — a dropped row leaves the

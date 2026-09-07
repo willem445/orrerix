@@ -3140,8 +3140,9 @@ A drive *you* cancelled with `cancel_review_drive` is not announced: that call a
 you, synchronously, with the panes it released, so a prompt arriving afterwards would be a
 wake-up about something you are holding. A cancel orrerix decided on its own — it saw the PR
 closed or merged — still lands in your pane, because nothing else would tell you. And a hold that
-repeats one the drive has already announced — same reason, same commit, same counters spent, which
-is what a resume that changed nothing produces — is not sent a second time. The two holds whose line
+repeats one the drive has already announced — the same LINE, word for word, which
+is what a resume that changed nothing produces — is not sent a second time. Anything the line says
+differently still reaches you, a changed refusal included. The two holds whose line
 reports how LONG the drive sat (`state-stalled`, `drive-stalled`) are the exception and always reach
 you: a second one means it sat out the whole bound again, so the repeat is news. Both are on the audit
 log with the full text of the line (`rd-notice-demoted`, `rd-hold-repeated`), and a parked drive is

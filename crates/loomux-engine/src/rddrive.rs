@@ -605,9 +605,9 @@ pub mod audit_action {
     /// and never repairs or deletes it (§2.4).
     pub const STATE_UNREADABLE: &str = "rd-state-unreadable";
     /// A hold fired whose notice was **not delivered**, because this drive had
-    /// already announced a hold with the same key — same reason, same head,
-    /// same counters spent — and that reason is one whose line says nothing new
-    /// on a repeat (#3040 N1).
+    /// already announced a hold with the same key — the same rendered LINE at
+    /// the same reason, head and counters — and that reason is one whose line
+    /// says nothing new on a repeat (#3040 N1).
     ///
     /// **Key equality is necessary and not sufficient**, and the difference is
     /// `reviewdrive::repeat_carries_new_information`: `state-stalled` and

@@ -10475,6 +10475,13 @@ fn a_pr_gone_cancel_still_announces() {
 /// Both halves are asserted: the pane got ONE line, and the log carries the
 /// second with its text — a suppression with no record of what was suppressed
 /// is a line an operator cannot get back.
+///
+/// **Why this fixture still dedups after rev-final round 3.** The key digests
+/// the rendered line, and `cap-full`'s two lines here are identical: the cap
+/// refuses with the same message both times, so the drive genuinely has
+/// nothing new to say. Its sibling
+/// `a_repeat_whose_refusal_changed_is_not_the_same_hold` is the other half —
+/// vary the refusal and the same reason at the same head announces.
 #[test]
 fn a_re_hold_on_the_same_reason_and_head_is_announced_once() {
     let dir = tempfile::tempdir().unwrap();

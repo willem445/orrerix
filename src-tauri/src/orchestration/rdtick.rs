@@ -3321,7 +3321,13 @@ impl OrchRegistry {
                     // silence the next one; `rd-held` above is written
                     // whatever it answers, because the hold HAPPENED and §5.4
                     // is a record of what happened, not of what was said.
-                    if entry.announce_hold(r) {
+                    //
+                    // **The LINE is what the key digests** (rev-final round 3),
+                    // so a repeat whose refusal changed — a hand-back that
+                    // failed differently, a cap refusal quoting a roster that
+                    // has moved — is a different key and announces. The tuple
+                    // alone could not see any of that.
+                    if entry.announce_hold(r, &n) {
                         out.notices.push(n);
                     } else {
                         out.audits.push((

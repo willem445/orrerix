@@ -1752,9 +1752,10 @@ this drive no longer owns.
 All of these — the five S3 added, the two #1871 B2 added beside them,
 `owed_notice`, which #1857 adds and *Retention* below describes, and
 `last_hold_key` (#3040 N1, §6: the key of the last hold this entry ANNOUNCED,
-so a resume that changed nothing the drive can observe does not re-announce one
-— except for the two reasons `repeat_carries_new_information` names, whose line
-reports a duration and so is news every time) — are optional on
+so a resume that changed nothing the drive can observe does not re-announce one.
+The key digests the rendered line, so any fact the notice carries is in it; the
+two reasons `repeat_carries_new_information` names announce even when the line
+is identical, their duration being rounded) — are optional on
 read, so a file written against the shape as first published still parses. An
 entry predating `owed_notice` owes nothing, which is the direction that cannot
 retain a record forever. `counters` is **not** optional: an absent counter block
@@ -2343,18 +2344,26 @@ text:
 - **A hold repeating one this drive already announced is audited**
   (`rd-hold-repeated`, §5.4). A hold can only recur after a resume, because
   §2.1's arc list has no `held` -> `held` self-arc, so the repeat is a resume
-  that changed nothing the drive can observe: same reason, same head, same
-  counters spent. `DriveEntry::last_hold_key` (§11.2) is what remembers, the
+  that changed nothing the drive can observe: the same rendered LINE, at the
+  same reason, head and counters spent. `DriveEntry::last_hold_key` (§11.2) is what remembers, the
   head in the key is what keeps a hold about a NEW revision announcing, and
   `drive_review(reset_counters: true)` re-arms it explicitly — the counter
   values cannot see a spent round on their own, since a reset puts them back
   where the previous hold found them.
-  **Two reasons are never suppressed however equal their key**
+  **The key digests the LINE, not just the tuple** (rev-final round 3), so any
+  fact a notice interpolates is in it: `HeldFacts::refusal` above all, which
+  `worker-unresumable`, `cap-refused` and `cap-full` carry and which is #1961's
+  observation rather than a diagnosis. Those three spend no counter and need no
+  push, so head and counters are exactly what does NOT move across such a
+  repeat — a hand-back that failed with `unknown block "worker-adv"` and then
+  with `Invalid session ID`, or a cap refusal quoting a live-delegate roster
+  that has since moved, is a different key and announces. Enumerating the
+  interpolations instead would be the same defect with a longer list.
+  **One exemption survives that** and only one
   (`reviewdrive::repeat_carries_new_information`): `state-stalled` and
-  `drive-stalled` interpolate a DURATION, and the duration is exactly what has
-  changed — `advance` re-stamps `state_since_ms` on the arc out of `held`, so a
-  second one means the drive sat out its bound all over again. For those two
-  the repeat is news, not repetition.
+  `drive-stalled` report a duration ROUNDED to minutes, so two holds really can
+  render identical text while meaning the drive sat out its whole bound a
+  second time — the one case no digest can see.
 
 **What the diet does NOT do is drop a wake nobody else gives.** Every
 suppression above rides a caller that already has the fact, or a record the

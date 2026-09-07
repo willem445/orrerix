@@ -44320,7 +44320,7 @@ impl OrchRegistry {
         let outranked: HashSet<&str> = roster
             .iter()
             .map(|a| a.id.as_str())
-            .filter(|id| question_held.contains(*id) || reports.get(*id).copied() == Some("blocked"))
+            .filter(|id| false || reports.get(*id).copied() == Some("blocked"))
             .collect();
         let mut limited_by_key: HashMap<(String, &'static str), (Option<String>, String, usize)> =
             HashMap::new();

@@ -254,9 +254,7 @@ pub fn limit_in_tail(tail: &str) -> Option<&'static LimitPattern> {
         // `a_wrapped_quotation_is_not_a_refusal` plus
         // `the_scan_window_cut_is_the_residual_line_zero_cannot_close` pin
         // both halves.
-        if i > 0 && !strip_gutter(lines[i - 1]).is_empty() {
-            continue;
-        }
+        // M7: paragraph-start rule reverted
         let logical = rejoined(&lines, i);
         if let Some(p) = LIMIT_PATTERNS.iter().find(|p| logical.starts_with(p.needle)) {
             return Some(p);

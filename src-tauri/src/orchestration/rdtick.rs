@@ -1382,8 +1382,6 @@ impl OrchRegistry {
         for pr in &flush.pruned {
             self.rd_audit(group, "", rddrive::audit_action::PRUNED, json!({ "pr": pr }));
             self.rd_signals.lock_safe().remove(&(group.clone(), *pr));
-            // #2811 S10: the entry is gone, so a mark about it describes nothing.
-            self.rd_forget_restart_mark(group, *pr);
         }
         flush
     }
@@ -4285,10 +4283,6 @@ impl OrchRegistry {
         // A resume that carried a stale signal would re-hold on the reason it
         // was resumed out of — `messaged` most obviously.
         self.rd_signals.lock_safe().remove(&(group.clone(), pr));
-        // #2811 S10, same argument one fact over: this call establishes a drive
-        // the orchestrator is starting NOW, so a restart mark left by whatever
-        // was on this PR before is not about it.
-        self.rd_forget_restart_mark(group, pr);
         self.rd_audit(group, on_behalf_of, audit_action, detail);
         // Service this group on the very next wake rather than after a backoff
         // window that predates the drive.
@@ -4412,8 +4406,6 @@ impl OrchRegistry {
             }
         }
         self.rd_signals.lock_safe().remove(&(group.clone(), pr));
-        // #2811 S10: cancelled is terminal, so nothing is owed a re-brief.
-        self.rd_forget_restart_mark(group, pr);
         self.rd_audit(
             group,
             on_behalf_of,

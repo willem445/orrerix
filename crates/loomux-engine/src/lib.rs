@@ -710,6 +710,7 @@ pub mod notify;
 pub mod obs;
 pub mod pathseg;
 pub mod plandoc;
+pub mod plandrive;
 pub mod profiles;
 pub mod published;
 pub mod queue;

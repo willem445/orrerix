@@ -2778,7 +2778,9 @@ export class WorkflowView {
       | "max_rebase_attempts"
       | "lane_timeout_minutes"
       | "fix_timeout_minutes"
-      | "drive_timeout_minutes";
+      | "drive_timeout_minutes"
+      | "plan_review_minutes"
+      | "planner_timeout_minutes";
     const bounded = (label: string, field: DriverCounter, help: string): void => {
       box.append(
         this.field(
@@ -2830,6 +2832,58 @@ export class WorkflowView {
       "drive_timeout_minutes",
       "Backstop on the drive's whole age, from the entry's start - no idle clock resets it. " +
         "The default is this range's ceiling."
+    );
+    // The PLAN driver (#3040), under the same block and the same enable gate.
+    //
+    // Its own switch rather than a widening of the one above, and the form says
+    // so in the same words the engine does: turning the review driver on
+    // consented to loomux running a review loop you already had an orchestrator
+    // for, not to loomux spawning a planner and turning its output into work.
+    // Written as a plain field rather than through `setDriverEnabled`, which is
+    // the SECTION's rule (delete a bare block, keep a configured one) and would
+    // be the wrong gesture for a key inside it.
+    box.append(
+      el(
+        "p",
+        "wf-note",
+        "The plan driver: loomux spawns a planner on a labelled issue, validates the plan " +
+          "block it posts, and turns the plan into board rows and worker spawns. It is a " +
+          "second switch, and it is read UNDER the one above — so it is off wherever the " +
+          "review driver is."
+      )
+    );
+    box.append(
+      this.sectionToggle(
+        "The plan driver is on for this repo",
+        dv.plan_enabled === true,
+        (on) =>
+          this.mutate((next) => {
+            const d = next.driver!;
+            // OFF deletes the key rather than writing `plan_enabled: false`:
+            // absent and false are the same state to the engine, and the
+            // enclosing block is not at stake here — the section toggle above
+            // owns that decision, and a line this form invented would be a
+            // policy statement the human never made.
+            if (on) d.plan_enabled = true;
+            else delete d.plan_enabled;
+          })
+      )
+    );
+    bounded(
+      "Plan review window (min)",
+      "plan_review_minutes",
+      "How long a posted plan waits before the drive acts on it, so you can veto. 0 - the " +
+        "default - means no window: the label already said go. Any non-zero value costs " +
+        "exactly one notice in your pane, which is the price of the window. Refused out of " +
+        "range, not clamped."
+    );
+    bounded(
+      "Planner timeout (min)",
+      "planner_timeout_minutes",
+      "Backstop on a driven planner posting its plan, so a planner that stopped surfaces as " +
+        "held(planner-stalled) instead of silence. Refused out of range, not clamped: five " +
+        "minutes is a misunderstanding of what a planner does, and quietly giving you " +
+        "fifteen would leave it in place."
     );
     // The escape hatch the narrowed toggle no longer provides (#1876 P1): removal
     // is its own destructive gesture, behind its own confirmation, because it

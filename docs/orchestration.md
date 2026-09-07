@@ -2146,10 +2146,12 @@ family — read each row as its own policy, never inferred from a neighbour:
   value reaches you as a finding.
 - **Merge queue** (`merge_queue:`): `max_batch` is 1 or more, refused below,
   no ceiling; `checks_timeout_minutes` is 5–240 minutes, **clamped**.
-- **Review driver** (`driver:`): `max_review_rounds` and `max_ci_attempts` are
-  1–3 rounds each and `max_rebase_attempts` is 0–1 rebases, all **refused**
-  outside; `lane_timeout_minutes` and `fix_timeout_minutes` are 5–240 minutes
-  and `drive_timeout_minutes` is 5–1440 minutes, all **clamped**.
+- **Review driver** (`driver:`): `max_review_rounds` and
+  `max_ci_attempts` are 1–3 rounds each, `max_rebase_attempts` is 0–1 rebases,
+  `plan_review_minutes` is 0–120 minutes and `planner_timeout_minutes` is
+  15–180 minutes, all **refused** outside; `lane_timeout_minutes` and
+  `fix_timeout_minutes` are 5–240 minutes and `drive_timeout_minutes` is
+  5–1440 minutes, all **clamped**.
 - **Lock resources** (`resources:`): `slots` is 1–64 and `max_hold_minutes`
   is 1–480 minutes, both refused outside; at most 32 resources may be
   declared. These are the fields the inputs themselves enforce — they cannot
@@ -2474,12 +2476,22 @@ driver:
   lane_timeout_minutes: 60
   fix_timeout_minutes: 60
   drive_timeout_minutes: 720
+  plan_enabled: true
+  plan_review_minutes: 0
+  planner_timeout_minutes: 60
 ```
 
 Every number in that example is its field's own default, so a block naming only
-`enabled: true` behaves exactly like the one above. `enabled:` is the one line the
-example does not show at its default - it defaults to **false**, and an absent
-`driver:` block means the feature is off.
+`enabled: true` behaves exactly like the one above. The two switches are the lines
+the example does not show at their defaults: `enabled:` and `plan_enabled:` both
+default to **false**, and an absent `driver:` block means the whole feature is off.
+
+`plan_enabled` is a **second switch, not a widening of the first**, and it is read
+UNDER it: the plan driver is off wherever the review driver is. The separation is
+the consent. Turning the review driver on says orrerix may run a review loop you
+already had an orchestrator for; it does not say orrerix may spawn a **planner** and
+turn its output into work. See [The plan driver](#the-plan-driver) below for what the
+second switch actually buys.
 
 <!-- pinned-to-schema: sections.driver - test/docsdriverbounds.test.ts (#1872) -->
 
@@ -2492,6 +2504,9 @@ example does not show at its default - it defaults to **false**, and an absent
 | `lane_timeout_minutes` | 5–240 | 60 | clamp |
 | `fix_timeout_minutes` | 5–240 | 60 | clamp |
 | `drive_timeout_minutes` | 5–1440 | 720 | clamp |
+| `plan_enabled` | — | false | — |
+| `plan_review_minutes` | 0–120 | 0 | refuse |
+| `planner_timeout_minutes` | 15–180 | 60 | refuse |
 
 **refuse** fails the parse of the whole file: a value outside the range is a policy
 you believe is in force and is not, so orrerix will not load the file at all.
@@ -2531,6 +2546,45 @@ The block **enables** the feature; it can never start, target or widen a drive -
 exists until an orchestrator makes its own role-gated `drive_review` call naming one PR.
 (The workflow pane edits this block too: an enable-toggle whose state is the `enabled:`
 line, plus number fields bounded to the ranges shown above - #1869.)
+
+### The plan driver
+
+The second switch in that block, `plan_enabled`, turns on a different driver
+that shares its record and tick discipline. Where the review driver takes one PR
+through review and CI, the plan driver takes one **labelled issue** through
+planning: your orchestrator calls `drive_plan(issue)`, and orrerix spawns a
+planner from your roster, briefs it, and reads the plan it writes.
+
+**The plan arrives as a fenced `orrerix-plan` block** in the planner's issue
+comment, and orrerix validates it *before anything is posted*. An invalid block
+comes back to the planner as a tool error with line numbers, nothing reaches the
+issue, and the planner fixes it inside the same turn — which costs your
+orchestrator no turn at all. Three refused blocks park the drive with the last
+reasons, so a planner that will not converge stops costing tool calls and starts
+costing you one notice. Nothing is ever repaired: an id, a branch or a
+dependency orrerix refuses is refused, never rewritten.
+
+**Consent is the label, and it is re-read rather than remembered.**
+`agent-ready` means build it; `agent-investigation` means the plan *is* the
+deliverable and no worker is ever spawned off it. Take the label off mid-drive
+and the drive stops with a notice. There is no repo setting that turns that off,
+and `drive_plan` on an unlabelled issue is refused.
+
+**In this release the drive stops at the plan.** An `agent-investigation` issue
+completes — that is the drive finishing, not falling short. An `agent-ready` one
+parks on `held(awaiting-p3b)` with its plan on the issue and its slices in
+`plan_drive_status`: the board rows and the worker spawns are still yours, and
+the hold says so in your orchestrator's pane rather than leaving you to notice.
+
+`plan_drive_status` is how you recover a drive after a compaction, and
+`cancel_plan_drive` stops one. **Cancelling kills nothing**: a planner pane that
+is still open keeps running under your orchestrator, and its reports start
+reaching that pane again the moment the drive stops being live. Ending a pane is
+`kill_agent`, unchanged. `resume_plan_drive` restarts a parked drive from
+whatever it was doing when it parked, and gives a re-briefed planner a fresh
+three attempts rather than resuming straight onto the bound.
+
+The design note is `doc/design/plan-driver.md`.
 
 ### Setting up a cross-model reviewer
 

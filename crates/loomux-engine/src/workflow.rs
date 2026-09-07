@@ -1173,6 +1173,33 @@ pub struct DriverPolicy {
     /// Backstop on a resumed worker pushing or reporting (§2.1's
     /// `held(fix-stalled)`). Same clamp family as [`Self::lane_timeout_minutes`].
     pub fix_timeout_minutes: u32,
+    /// Whether the PLAN driver is on (#3040 §2(b)). A SECOND key rather than a
+    /// widening of [`Self::enabled`], and the separation IS the consent: a repo
+    /// that turned the review driver on consented to orrerix running a review
+    /// loop it already had an orchestrator for — not to orrerix spawning a
+    /// PLANNER and turning its output into work. Default **false**, and read
+    /// under `enabled` as well, because the plan driver reuses the review
+    /// driver's whole tick, record and backoff discipline: it is off wherever
+    /// that is.
+    pub plan_enabled: bool,
+    /// The plan-review window in minutes (#3040 §2(c)). Refused outside
+    /// [`crate::plandrive::PLAN_REVIEW_MINUTES_MIN`]
+    /// ..=[`crate::plandrive::PLAN_REVIEW_MINUTES_MAX`], the posture
+    /// [`Self::max_review_rounds`] takes. `0` — the default — means no window:
+    /// the human already pressed go with the label, and a window nobody is told
+    /// about is unused.
+    pub plan_review_minutes: u32,
+    /// Backstop on a driven planner posting a plan (#3040 §2(e)). Refused
+    /// outside [`crate::plandrive::PLANNER_TIMEOUT_MINUTES_MIN`]
+    /// ..=[`crate::plandrive::PLANNER_TIMEOUT_MINUTES_MAX`].
+    ///
+    /// **Refused rather than clamped**, unlike the two lane/fix backstops
+    /// above: those are the notify-TTL family and share its clamp, and this one
+    /// is not in that family. A repo asking for a five-minute planner timeout
+    /// has misunderstood what a planner does, and silently handing it fifteen
+    /// would leave the misunderstanding in place while the behaviour changed
+    /// underneath it — `merge_queue.max_batch`'s own argument.
+    pub planner_timeout_minutes: u32,
     /// Backstop on the drive's whole age (§2.1's `held(drive-stalled)` — age
     /// since the entry began, never an idle clock reset by each state
     /// advance). Same clamp family; the default is the family's ceiling
@@ -1192,6 +1219,9 @@ impl Default for DriverPolicy {
             lane_timeout_minutes: NOTIFY_EXPIRES_DEFAULT_MIN,
             fix_timeout_minutes: NOTIFY_EXPIRES_DEFAULT_MIN,
             drive_timeout_minutes: DRIVER_DRIVE_TIMEOUT_DEFAULT_MIN,
+            plan_enabled: false,
+            plan_review_minutes: crate::plandrive::PLAN_REVIEW_MINUTES_DEFAULT,
+            planner_timeout_minutes: crate::plandrive::PLANNER_TIMEOUT_MINUTES_DEFAULT,
         }
     }
 }
@@ -2004,6 +2034,17 @@ struct RawDriver {
     fix_timeout_minutes: Option<u32>,
     #[serde(default)]
     drive_timeout_minutes: Option<u32>,
+    /// The plan driver's three keys (#3040 §2). `plan_enabled` is a bare bool
+    /// like [`Self::enabled`]; the two minute figures are `Option` for the
+    /// reason the counters above are — "omitted" and "written as the default"
+    /// must stay distinguishable, so the parse can refuse an out-of-range value
+    /// instead of silently substituting one.
+    #[serde(default)]
+    plan_enabled: bool,
+    #[serde(default)]
+    plan_review_minutes: Option<u32>,
+    #[serde(default)]
+    planner_timeout_minutes: Option<u32>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2207,6 +2248,9 @@ pub fn workflow_schema_keys() -> BTreeMap<String, Vec<String>> {
         lane_timeout_minutes: Some(60),
         fix_timeout_minutes: Some(60),
         drive_timeout_minutes: Some(240),
+        plan_enabled: true,
+        plan_review_minutes: Some(15),
+        planner_timeout_minutes: Some(60),
     };
     let resource = RawResource { slots: Some(1), max_hold_minutes: Some(30) };
     // Every field populated, per this function's docblock: a `None` here would
@@ -2385,6 +2429,9 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
     fact("driver.lane_timeout_minutes", "default", json!(dv.lane_timeout_minutes));
     fact("driver.fix_timeout_minutes", "default", json!(dv.fix_timeout_minutes));
     fact("driver.drive_timeout_minutes", "default", json!(dv.drive_timeout_minutes));
+    fact("driver.plan_enabled", "default", json!(dv.plan_enabled));
+    fact("driver.plan_review_minutes", "default", json!(dv.plan_review_minutes));
+    fact("driver.planner_timeout_minutes", "default", json!(dv.planner_timeout_minutes));
     let res = ResourcePolicy::default();
     fact("resource.slots", "default", json!(res.slots));
     fact("resource.max_hold_minutes", "default", json!(res.max_hold_minutes));
@@ -2421,6 +2468,18 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
     fact("driver.fix_timeout_minutes", "max", json!(NOTIFY_EXPIRES_MAX));
     fact("driver.drive_timeout_minutes", "min", json!(DRIVER_DRIVE_TIMEOUT_MIN));
     fact("driver.drive_timeout_minutes", "max", json!(DRIVER_DRIVE_TIMEOUT_MAX));
+    fact("driver.plan_review_minutes", "min", json!(crate::plandrive::PLAN_REVIEW_MINUTES_MIN));
+    fact("driver.plan_review_minutes", "max", json!(crate::plandrive::PLAN_REVIEW_MINUTES_MAX));
+    fact(
+        "driver.planner_timeout_minutes",
+        "min",
+        json!(crate::plandrive::PLANNER_TIMEOUT_MINUTES_MIN),
+    );
+    fact(
+        "driver.planner_timeout_minutes",
+        "max",
+        json!(crate::plandrive::PLANNER_TIMEOUT_MINUTES_MAX),
+    );
     // #1457. A LENGTH bound on a string, so it is `maxLength` rather than `max`:
     // this manifest documents `max` as "highest accepted number", and a generated
     // text control needs a maxlength, not a numeric ceiling. Stated here because
@@ -3608,6 +3667,32 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
             lane_timeout_minutes: clamp_expires_minutes(rd.lane_timeout_minutes),
             fix_timeout_minutes: clamp_expires_minutes(rd.fix_timeout_minutes),
             drive_timeout_minutes: clamp_drive_timeout_minutes(rd.drive_timeout_minutes),
+            plan_enabled: rd.plan_enabled,
+            // Through `driver_counter`, the REFUSING helper, rather than
+            // through the notify-TTL clamp the lane/fix backstops use. The two
+            // fields' docs on [`DriverPolicy`] carry why.
+            plan_review_minutes: driver_counter(
+                "driver.plan_review_minutes",
+                rd.plan_review_minutes,
+                (
+                    crate::plandrive::PLAN_REVIEW_MINUTES_MIN,
+                    crate::plandrive::PLAN_REVIEW_MINUTES_MAX,
+                ),
+                crate::plandrive::PLAN_REVIEW_MINUTES_DEFAULT,
+                "a plan-review window past two hours is a drive nobody is coming back to, and the window costs one orchestrator notice to announce",
+                &mut errs,
+            ),
+            planner_timeout_minutes: driver_counter(
+                "driver.planner_timeout_minutes",
+                rd.planner_timeout_minutes,
+                (
+                    crate::plandrive::PLANNER_TIMEOUT_MINUTES_MIN,
+                    crate::plandrive::PLANNER_TIMEOUT_MINUTES_MAX,
+                ),
+                crate::plandrive::PLANNER_TIMEOUT_MINUTES_DEFAULT,
+                "a planner reading a large issue legitimately spends a quarter of an hour before its first tool call, and three hours is the point past which it is not coming back at all",
+                &mut errs,
+            ),
         },
     };
 
@@ -5754,6 +5839,73 @@ mod tests {
     }
 
 
+    /// Every `parse_workflow` ERROR is one paragraph too — the twin population
+    /// [`every_listing_finding_is_one_paragraph`] does not reach.
+    ///
+    /// That test pins `list_workflows`' own findings; these are a different set,
+    /// produced by a different function, and reaching a human by a different
+    /// route: `parse_workflow`'s `errs` surface as `WorkflowEntry::errors` in
+    /// the picker and as the refusal a spawn gate reports. Nothing pinned their
+    /// shape, and that gap is exactly how two new eighteen-space runs shipped
+    /// green in #3040 P3a's `plan_review_minutes` and `planner_timeout_minutes`
+    /// refusals — in a PR whose own body was, at the time, describing this bug
+    /// class as something someone else should fix.
+    ///
+    /// Both shapes, for the reason the sibling gives: a `\n` plus indentation
+    /// ships the source's leading spaces, and a continuation that collapsed
+    /// leaves the same run with no `\n` to notice.
+    #[test]
+    fn every_parse_error_is_one_paragraph() {
+        // One document that trips as many refusing checks as it can, so the
+        // population is wide rather than the two keys this test was written for.
+        let doc = "\
+version: 1
+name: broken
+blocks:
+  - id: w
+    kind: worker
+  - id: p
+    kind: planner
+gates:
+  merge:
+    require: all-pass
+driver:
+  enabled: true
+  plan_enabled: true
+  max_review_rounds: 9
+  max_ci_attempts: 0
+  max_rebase_attempts: 7
+  plan_review_minutes: 500
+  planner_timeout_minutes: 2
+";
+        let errs = parse_workflow(doc).expect_err("this document must be refused");
+
+        // The positive control, and it is load-bearing twice over: an empty
+        // list satisfies the loop below just as well, and a list of two would
+        // mean the document stopped tripping most of what it was built to trip.
+        assert!(
+            errs.len() >= 5,
+            "the fixture must really produce a wide error set, or this pins almost nothing: {errs:?}"
+        );
+        // …and the two this test exists for are in it by NAME, so a fixture edit
+        // that stopped reaching them fails here rather than passing vacuously.
+        for key in ["driver.plan_review_minutes", "driver.planner_timeout_minutes"] {
+            assert!(
+                errs.iter().any(|e| e.starts_with(key)),
+                "the fixture no longer reaches {key}: {errs:?}"
+            );
+        }
+
+        for m in &errs {
+            assert!(!m.contains('\n'), "a parse error must not carry a newline: {m:?}");
+            assert!(
+                !m.contains("          "),
+                "a parse error must not carry a ten-space run — a `\\` continuation that \
+                 collapsed leaves one with no newline to notice: {m:?}"
+            );
+        }
+    }
+
     // ── the listing's two bounds, and the names-only walk (#1689 slice B) ──
     //
     // #2658 recorded `list_workflows` as an unbounded read against slice A:
@@ -6539,6 +6691,14 @@ mod tests {
                 lane_timeout_minutes: _,
                 fix_timeout_minutes: _,
                 drive_timeout_minutes: _,
+                // #3040: the plan driver's three, under the same inventory
+                // rule and with the sharper version of its reason — this
+                // schema's second switch can turn on a driver that SPAWNS A
+                // PLANNER and turns its output into work, so a key added
+                // beside it must be a visible change here.
+                plan_enabled: _,
+                plan_review_minutes: _,
+                planner_timeout_minutes: _,
             } = v;
         }
         // Referenced, never called — the compiler still type-checks (and

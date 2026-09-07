@@ -10190,3 +10190,156 @@ fn the_one_shot_grace_has_one_writer_and_one_proposal_site() {
         "the variant counter must see a real proposal"
     );
 }
+
+/// **A CONFLICTING PR is never `satisfied`, even with every lane passed and the
+/// gate agreeing** (#2311) — the seam half of the engine's `decide_gate_check`
+/// pins, driven through the real tick.
+///
+/// The fixture is the measured incident (§1(d), #2942): a drive whose lanes
+/// reviewed a clean PR and whose base moved under it, so mergeability turns
+/// CONFLICTING between the `review-wait` tick and the `gate-check` one. Before
+/// this the drive answered GATE SATISFIED, and the cost was paid outside the
+/// driver: a hand rebase, a re-drive at `rounds_already_spent 3`, two fresh
+/// whole-diff lanes and about ten minutes of cap starvation.
+///
+/// Three things are asserted together because each alone has a passing
+/// implementation that is wrong: the STATE (a drive that merely waited would
+/// also not be `satisfied`), the COUNTER (a conflict misread as a red run
+/// reaches `fix-wait` too, so only `rebase_attempts` discriminates the arc), and
+/// the BRIEF (the worker must be told to rebase, not sent to findings that do
+/// not exist).
+#[test]
+fn a_conflicting_pr_at_gate_check_is_handed_back_for_a_rebase_not_declared_satisfied() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, lane) = briefed(&reg, &repo, &gh);
+
+    // The lane passes at the live head, so the gate really is satisfied — the
+    // premise that makes the assertions below about mergeability and nothing
+    // else.
+    record_pass_for(&reg, &group, &lane);
+    reg.rd_drive_group_with(&group, &gh, 30_000);
+    assert_eq!(status_state(&reg, &group), "gate-check", "arc 4: the last required lane passed");
+
+    // The base moves under the drive. Nothing else changes: same head, same
+    // body, the same recorded pass.
+    gh.set_merge_state("CONFLICTING");
+    let audits_before = audit_actions(&reg, &group).len();
+    let report = reg.rd_drive_group_with(&group, &gh, 40_000);
+
+    assert_eq!(
+        status_state(&reg, &group),
+        "fix-wait",
+        "arc 3 from `gate-check`: a conflicting PR is handed back, not declared satisfied"
+    );
+    let s = reg.review_drive_status(&group);
+    assert_eq!(
+        s["drives"][0]["counters"]["rebase_attempts"],
+        json!(1),
+        "the REBASE budget is what a conflict spends — a red run reaches `fix-wait` too, so the state alone does not say which arc was taken: {s}"
+    );
+    assert_eq!(
+        s["drives"][0]["counters"]["ci_attempts"],
+        json!(0),
+        "…and the CI budget is untouched, which is the other half of that discrimination: {s}"
+    );
+
+    let mut all = audit_actions(&reg, &group);
+    let after = all.split_off(audits_before);
+    assert!(
+        after.iter().any(|a| a == "rd-conflicting"),
+        "the tick that classified the conflict must say so in the audit, or the `rd-handback why:conflict` beside it accounts for nothing (§5.4): {after:?}"
+    );
+    assert!(
+        !after.iter().any(|a| a == "rd-satisfied"),
+        "…and it must not ALSO have declared the gate satisfied: {after:?}"
+    );
+
+    let (_pr, worker) =
+        report.handbacks.first().cloned().expect("the conflict hand-back resumed a worker pane");
+    let fix = lane_brief(&reg, &worker);
+    assert!(
+        fix.contains("It is CONFLICTING against main."),
+        "the hand-back must name the conflict — the brief is keyed on the observation, so the arm that renders here is the same one `ci-wait` renders: {fix}"
+    );
+    assert!(
+        !fix.contains("Review requested changes"),
+        "…and NOT the review-findings arm, which would send the worker to findings that do not exist: {fix}"
+    );
+
+    // **The second conflict parks**, exactly as it does from `ci-wait`: §2.2's
+    // `rebase-limit` is "a second conflict after the one rebase hand-back". The
+    // worker answers `done` with nothing pushed, so the drive re-enters
+    // `review-wait` on arc 8, the pass still stands at this head, and it is
+    // back at `gate-check` with the conflict unresolved.
+    report_as(&reg, &group, &worker, Role::Worker, "done");
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+    assert_eq!(status_state(&reg, &group), "review-wait", "arc 8: a fix that pushed nothing");
+    reg.rd_drive_group_with(&group, &gh, 60_000);
+    assert_eq!(status_state(&reg, &group), "gate-check", "…and the standing pass re-satisfies");
+    reg.rd_drive_group_with(&group, &gh, 70_000);
+    let s = reg.review_drive_status(&group);
+    assert_eq!(status_state(&reg, &group), "held", "the second conflict parks: {s}");
+    assert_eq!(s["drives"][0]["held_reason"], json!("rebase-limit"), "{s}");
+}
+
+/// **The same arc from `review-wait`, which is where the hold was WRONG rather
+/// than merely late** (#2311, widened past plan-2504's S4 by the measurement on
+/// #3118).
+///
+/// `decide_review_wait` asks `route_reviewers` first, and routing reads the
+/// changed-file list — which GitHub does not compute for a conflicted head. So a
+/// PR that went CONFLICTING with a lane mid-review parked
+/// `held(routing-unaccountable)`: a notice saying *which reviewers are required
+/// is unknown* about a PR whose actual problem is that it does not merge, and
+/// whose stated remedy (`drive_review` again) re-reads the same unreadable
+/// routing and re-holds. Reading mergeability above the per-state logic reports
+/// the cause instead, and the cause has a hand-back.
+///
+/// The lane is deliberately left mid-review with no verdict, so the ONLY thing
+/// that can move this drive is the conflict.
+#[test]
+fn a_conflicting_pr_in_review_wait_is_handed_back_rather_than_held_on_routing() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _lane) = briefed(&reg, &repo, &gh);
+    assert_eq!(
+        status_state(&reg, &group),
+        "review-wait",
+        "the fixture's premise: a lane is open and has recorded nothing"
+    );
+
+    gh.set_merge_state("CONFLICTING");
+    let report = reg.rd_drive_group_with(&group, &gh, 30_000);
+
+    let s = reg.review_drive_status(&group);
+    assert_eq!(
+        status_state(&reg, &group),
+        "fix-wait",
+        "arc 3 from `review-wait`: the conflict is read before the routing question it makes unanswerable: {s}"
+    );
+    assert_ne!(
+        s["drives"][0]["held_reason"],
+        json!("routing-unaccountable"),
+        "the hold this replaces names a CONSEQUENCE of the conflict, and its remedy reproduces it: {s}"
+    );
+    assert_eq!(s["drives"][0]["counters"]["rebase_attempts"], json!(1), "{s}");
+    assert_eq!(
+        s["drives"][0]["counters"]["review_rounds"],
+        json!(0),
+        "…and no review round is spent: no lane delivered any findings"
+    );
+
+    let (_pr, worker) =
+        report.handbacks.first().cloned().expect("the conflict hand-back resumed a worker pane");
+    let fix = lane_brief(&reg, &worker);
+    assert!(fix.contains("It is CONFLICTING against main."), "{fix}");
+    assert!(
+        !fix.contains("Review requested changes"),
+        "the review-findings arm must not render: no lane recorded anything: {fix}"
+    );
+}

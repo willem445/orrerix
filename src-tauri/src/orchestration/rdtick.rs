@@ -3010,22 +3010,38 @@ impl OrchRegistry {
                 // arc is taken, so a green and a red are separate actions in the
                 // order they were observed (§5.4: a filter looking for the thing
                 // that happened must not match the thing that did not).
-                if entry.state() == reviewdrive::DriveState::CiWait {
-                    match obs.ci {
-                        reviewdrive::CiObservation::Green => out.audits.push((
+                match (entry.state(), obs.ci) {
+                    (reviewdrive::DriveState::CiWait, reviewdrive::CiObservation::Green) => {
+                        out.audits.push((
                             rddrive::audit_action::CI_GREEN,
                             json!({ "pr": pr, "head": brief.head }),
-                        )),
-                        reviewdrive::CiObservation::Red => out.audits.push((
+                        ))
+                    }
+                    (reviewdrive::DriveState::CiWait, reviewdrive::CiObservation::Red) => {
+                        out.audits.push((
                             rddrive::audit_action::CI_RED,
                             json!({ "pr": pr, "head": brief.head, "failing": brief.failing_jobs }),
-                        )),
-                        reviewdrive::CiObservation::Conflicting => out.audits.push((
+                        ))
+                    }
+                    // **Every state the engine lets act on a conflict**, not
+                    // `ci-wait` alone (#2311): `decide` reads mergeability above the
+                    // per-state logic, so `gate-check` and `review-wait` take the
+                    // same arc 3 and owe the same row. It is what accounts for the
+                    // hand-back that follows — an `rd-handback` `why:conflict` with
+                    // no `rd-conflicting` above it is a spent `rebase_attempts` a
+                    // §5.4 reader cannot explain, and this row is the one
+                    // `scripts/orch-scorecard.cjs` counts. `fix-wait` is excluded
+                    // for the engine's reason: the rebase is already outstanding
+                    // there, so no arc is taken and there is nothing to account for.
+                    (st, reviewdrive::CiObservation::Conflicting)
+                        if st != reviewdrive::DriveState::FixWait =>
+                    {
+                        out.audits.push((
                             rddrive::audit_action::CONFLICTING,
                             json!({ "pr": pr, "base": brief.base }),
-                        )),
-                        _ => {}
+                        ))
                     }
+                    _ => {}
                 }
                 if let Err(bad) = entry.take(&step, now) {
                     // Unreachable through `decide`, which only proposes arcs the

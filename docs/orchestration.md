@@ -3037,6 +3037,16 @@ the drive parks as `fix-stalled` with a line naming the pane to read. A worker t
 waited out. None of this applies to a drive that has not handed anything back yet — the first pass
 over a PR you drove after your worker already reported is unchanged.
 
+**A finished drive means gated AND mergeable.** A PR can go CONFLICTING at any point — someone else's
+branch lands on the base while yours is being reviewed — and the driver now reads that wherever it sees
+it, not only while it is watching CI. Before, a conflict that arrived after the lanes had passed was
+reported as a satisfied gate, because the gate genuinely was satisfied and only the merge was not; and a
+conflict that arrived mid-review parked the drive saying it could not work out which reviewers were
+required, which is true (GitHub computes no file list for a conflicted head) and is a symptom rather than
+the problem. Both are now the same thing that a red run is: the worker is handed back and asked to rebase,
+on its own one-attempt budget, and a second conflict parks the drive as `rebase-limit`. A mergeability
+GitHub has not finished computing is not a conflict and changes nothing.
+
 **A drive stops, it does not drift.** There are seventeen ways out and each produces exactly one
 line in the orchestrator's pane: the gate being satisfied, the drive being cancelled — by you, or
 by orrerix on its own when it sees the PR has been closed — or one of

@@ -16330,6 +16330,27 @@ pub struct OrchRegistry {
     /// Driven delegates' events, between the MCP arm that consumed one (§7) and
     /// the tick that acts on it. In memory; `rd_ingest` carries why.
     rd_signals: Arc<TrackedMutex<HashMap<(GroupId, u64), RdSignal>>>,
+    /// Drives the restart reconcile found parked in `fix-wait`, waiting for the
+    /// first tick to re-hand-back (#2811 S10).
+    ///
+    /// In memory, like [`rd_signals`](Self::rd_signals), and deliberately so:
+    /// the mark says "this PROCESS restarted under this drive", which is only
+    /// ever true until this process answers it. Persisting it would outlive the
+    /// fact — a mark written now and read after the NEXT restart would re-brief
+    /// a worker on a process boundary it already answered — and it needs no
+    /// persistence to be reliable, because a process that dies before the tick
+    /// runs simply reconciles again on the way back up.
+    ///
+    /// **An entry is removed by the tick that ACTED on it — never by one that
+    /// merely read it** (#3196 review 2). A tick can be preempted above
+    /// `decide_fix_wait` by the empty-head guard (`observe_pr` could not read
+    /// the PR) or by the age and state backstops, and none of those re-brief
+    /// anybody; since the reconcile runs once per registry instance, a mark
+    /// spent by such a tick is never re-issued and the drive keeps its dead pane
+    /// until `fix_timeout_minutes` expires. So the mark survives every tick that
+    /// decided nothing, and is discharged when the worker was re-briefed or the
+    /// drive has left `fix-wait`.
+    rd_restart_handback: Arc<TrackedMutex<HashSet<(GroupId, u64)>>>,
     /// The last hand-back failure of each drive — the session it failed FOR and
     /// the failure line — so a SECOND identical failure (#2555 item 2) can be
     /// told apart from the first and said so: the hold's quoted refusal gains
@@ -30581,6 +30602,7 @@ impl OrchRegistry {
             rd_service_ms: Arc::new(TrackedMutex::new("rd_service_ms", HashMap::new())),
             rd_runner_override: TrackedMutex::new("rd_runner_override", None),
             rd_signals: Arc::new(TrackedMutex::new("rd_signals", HashMap::new())),
+            rd_restart_handback: Arc::new(TrackedMutex::new("rd_restart_handback", HashSet::new())),
             rd_handback_fails: Arc::new(TrackedMutex::new("rd_handback_fails", HashMap::new())),
             rd_reconciled: Arc::new(TrackedMutex::new("rd_reconciled", HashSet::new())),
             pd_state_lock: Arc::new(TrackedMutex::new("pd_state_lock", ())),

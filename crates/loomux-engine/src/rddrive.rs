@@ -555,7 +555,7 @@ pub mod audit_action {
     pub const ROUND_GRACE: &str = "rd-round-grace";
     /// A lane's verdict was read at this revision.
     pub const VERDICT: &str = "rd-verdict";
-    /// The worker's session was resumed with a hand-back brief.
+    /// The worker's session was resumed with a hand-back brief. Its `why` is one of [`handback_why`].
     pub const HANDBACK: &str = "rd-handback";
     /// A driven delegate's `report` or `review_verdict` was consumed by the
     /// driver instead of being delivered to the orchestrator (§7).
@@ -645,6 +645,32 @@ pub mod audit_action {
     ///
     /// Carries `pr`, `reason` (why the route was taken) and `notice`.
     pub const NOTICE_DEMOTED: &str = "rd-notice-demoted";
+}
+
+/// The closed vocabulary of `rd-handback`'s `why` (§5.4).
+///
+/// Four values, and they answer different questions about the same row, which
+/// is why the scorecard reads this field rather than counting hand-backs: the
+/// first three name something the WORLD did (a review found something, the
+/// checks went red, the base moved), and [`RESTART`] names something ORRERIX
+/// did. A reader totting up how much work a PR cost its reviewers must be able
+/// to leave the last one out.
+pub mod handback_why {
+    /// A required lane recorded `fail`; the findings are on the PR.
+    pub const REVIEW_FINDINGS: &str = "review-findings";
+    /// The checks are red at the head the worker pushed.
+    pub const CI_RED: &str = "ci-red";
+    /// The PR no longer merges cleanly.
+    pub const CONFLICT: &str = "conflict";
+    /// **orrerix restarted while this drive was in `fix-wait`** (#2811 S10), so
+    /// the pane holding the worker's turn died with the previous process. The
+    /// drive re-briefs the recorded session and stays where it is.
+    ///
+    /// It spends NO counter, and that is the whole reason this value exists
+    /// separately rather than reusing whichever `why` the original hand-back
+    /// carried: a reader counting review rounds off these rows would otherwise
+    /// bill a PR for orrerix being restarted under it.
+    pub const RESTART: &str = "restart";
 }
 
 /// The closed refusal vocabulary the three MCP tools answer in (§5.1).

@@ -3275,6 +3275,14 @@ Fix the billing — or point the block at a different `model:` — then `drive_r
 restart it. orrerix does not restart them for you: a pane going quiet again is not proof the
 account was topped up.
 
+**A drive waiting on a worker survives a restart of orrerix.** Panes do not — they die with the
+process — so on the first tick after a restart the driver re-briefs that worker by resuming its
+recorded session, and the drive carries on where it was. It costs the PR nothing: no review round,
+no CI attempt, no timeout, and the wait for the fix is measured from the brief the worker can
+actually answer rather than from the one that went down with the old pane. If the session really
+has been lost, that attempt is what discovers it, and you get the fix-handback hold below instead
+of an hour of silence.
+
 **The fix-handback hold** — a fix that could not be handed back to its worker — quotes what
 actually refused rather than
 diagnosing one cause: the session may no longer resolve, the block it was minted under may no

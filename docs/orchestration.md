@@ -997,7 +997,12 @@ These deserve their own detail — see:
     the key's limit, or point the block at a different `model:`). Because one
     limit stops every pane on that provider at once, you get **one** chip per
     provider per group rather than one per stopped pane. It is the only
-    attention chip nothing you type in the terminal can clear.
+    attention chip nothing you type in the terminal can clear — and because it
+    is read off what is currently on the pane, it stays up until that pane runs
+    again and its output scrolls the refusal away. So it comes down when you
+    have fixed the billing *and* nudged the pane, which is the honest reading:
+    topping up an account does not by itself restart an agent that already
+    stopped.
   - **The NEEDS-YOU panel** (`Alt+Q`, or the raised-hand icon in an
     orchestrator pane's header) is everything currently waiting on you, in
     **one list**, badged with a running total in its own header. The newest

@@ -2581,9 +2581,18 @@ impl DriveEntry {
     /// spawned session id, which is exactly the I/O this module does not do —
     /// S3 calls [`open_lane`](DriveEntry::open_lane) with what the spawn
     /// returned.
+    ///
+    /// [`DriveStep::Rehandback`] joins them for the same reason and is listed
+    /// EXPLICITLY rather than swept into a wildcard: it takes no arc, so there
+    /// is nothing here to apply, and what it does need — resuming the recorded
+    /// worker session, then
+    /// [`restamp_fix_handback`](DriveEntry::restamp_fix_handback) once that
+    /// worker has actually been reached — is the tick's, in the order only the
+    /// tick can know. A wildcard would silently make the NEXT variant a no-op
+    /// too, which is the one way a step can be decided and never applied.
     pub fn take(&mut self, step: &DriveStep, now_ms: u64) -> Result<(), InvalidTransition> {
         match step {
-            DriveStep::Wait | DriveStep::OpenLane { .. } => Ok(()),
+            DriveStep::Wait | DriveStep::OpenLane { .. } | DriveStep::Rehandback => Ok(()),
             DriveStep::Advance { to, held_reason, bump } => {
                 self.advance(*to, *held_reason, *bump, now_ms)
             }

@@ -66070,3 +66070,110 @@ fn a_refusal_loomux_itself_delivered_into_the_pane_raises_nothing() {
         "control: the same text with no delivery record behind it DOES raise one"
     );
 }
+
+/// #3178 review B1 — the single chip must not be handed to a pane that
+/// something else will outrank, because only the CARRIER holds a `limit_chip`
+/// entry and every other affected pane falls through the chain.
+///
+/// The sequence the review traced: a worker reported `blocked` (the latch lives
+/// in `attn_reports` and clears on new-work assignment, human focus, or the
+/// agent's next report — none of which happen while it silently retries), then
+/// hit the provider limit as the LOWEST-sorting of three stopped panes. Under
+/// the first revision it rendered `blocked`, the other two rendered nothing,
+/// and the group showed ZERO provider-limit chips while three panes sat
+/// stopped — the feature's own rationale inverted.
+#[test]
+fn the_single_chip_avoids_a_pane_whose_blocked_latch_would_swallow_it() {
+    let (reg, _d, g, first) = attention_setup();
+    let second = reg.spawn_agent(&g, Role::Reviewer, "rev", "review", false, None).unwrap();
+    let third = reg.spawn_agent(&g, Role::Reviewer, "rev2", "review", false, None).unwrap();
+
+    // The lowest-sorting affected id — the carrier the plain rule would pick.
+    let mut ids = vec![first.clone(), second.id.clone(), third.id.clone()];
+    ids.sort();
+    let lowest = ids[0].clone();
+    assert_eq!(
+        lowest, first,
+        "fixture: the pane we are about to latch must BE the one the lowest-id rule \
+         would choose, or this test does not exercise the collision"
+    );
+
+    // ...and it is `blocked`, which outranks `provider-limit`.
+    reg.note_report_attention(&lowest, "blocked");
+
+    let tails = [
+        (first.as_str(), FIX_LIMIT_OR_KEY),
+        (second.id.as_str(), FIX_LIMIT_OR_KEY),
+        (third.id.as_str(), FIX_LIMIT_OR_CREDITS),
+    ];
+    let items = limit_scan(&reg, 1_000_000_000_000, &tails);
+
+    let raised: Vec<&AttentionItem> =
+        items.iter().filter(|i| i.reason == "provider-limit").collect();
+    assert_eq!(
+        raised.len(),
+        1,
+        "the group must still show its one provider-limit chip: {items:?}"
+    );
+    assert_ne!(
+        raised[0].agent_id, lowest,
+        "the chip must not be parked on the pane whose `blocked` latch outranks it"
+    );
+    // It still counts every stopped pane, the latched one included — the latch
+    // changes who WEARS the chip, not how many panes the provider stopped.
+    assert!(
+        raised[0].detail.contains("3 panes"),
+        "the blast radius still counts the latched pane: {}",
+        raised[0].detail
+    );
+    // And the latched pane keeps its own, more urgent reason.
+    assert_eq!(
+        items.iter().find(|i| i.agent_id == lowest).map(|i| i.reason),
+        Some("blocked"),
+        "the outranking reason is untouched — this is a carrier choice, not a demotion"
+    );
+}
+
+/// The other half of B1's fix, and the arm that DISCLOSES a residual rather
+/// than hiding it: when EVERY affected pane is outranked there is no
+/// un-outranked carrier to choose, and the provider attribution really is lost.
+///
+/// That is a chosen trade, not an oversight. Every affected pane is already
+/// showing an urgent chip that summons the human to this same group, so what
+/// goes missing is which provider stopped them — and raising a second chip
+/// instead would reintroduce exactly the per-pane spam the one-chip rule
+/// exists to prevent. Pinned here so the disclosure in `attention_tick`'s
+/// comment and in `doc/design/attention-provider-limit.md` cannot go quietly
+/// false under a later edit.
+#[test]
+fn a_provider_limit_is_subsumed_when_every_affected_pane_is_outranked() {
+    let (reg, _d, g, first) = attention_setup();
+    let second = reg.spawn_agent(&g, Role::Reviewer, "rev", "review", false, None).unwrap();
+    reg.note_report_attention(&first, "blocked");
+    reg.note_report_attention(&second.id, "blocked");
+
+    let tails = [(first.as_str(), FIX_LIMIT_OR_KEY), (second.id.as_str(), FIX_LIMIT_OR_KEY)];
+    let items = limit_scan(&reg, 1_000_000_000_000, &tails);
+
+    assert!(
+        items.iter().all(|i| i.reason != "provider-limit"),
+        "documented residual: with every affected pane outranked the attribution is lost: {items:?}"
+    );
+    // Non-vacuity, and the reason the residual is survivable: both panes ARE
+    // still wearing an urgent chip, so nothing goes unreported to the human —
+    // only the provider attribution does.
+    assert_eq!(
+        items.iter().filter(|i| i.reason == "blocked").count(),
+        2,
+        "both panes must still be flagged urgently: {items:?}"
+    );
+    // The control for the whole test: drop ONE latch and the chip comes back,
+    // so the silence above is the all-outranked arm and not the scan failing.
+    reg.ack_attention(&second.id);
+    let after = limit_scan(&reg, 1_000_000_005_000, &tails);
+    assert_eq!(
+        after.iter().find(|i| i.reason == "provider-limit").map(|i| i.agent_id.as_str()),
+        Some(second.id.as_str()),
+        "with one candidate un-outranked, that candidate carries the chip: {after:?}"
+    );
+}

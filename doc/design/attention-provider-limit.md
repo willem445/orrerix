@@ -123,6 +123,31 @@ half kept is the one the brief argues for. Model-prefix resolution still has a
 job in S5b — deciding which *drives* run on a limited provider is a question
 about a roster, not about a tail — and lands there.
 
+## Why the chip names the provider and not the key
+
+#2811 item 1 asks for a state naming "the provider **and the key**", and the key
+id is right there in the captured OpenRouter refusal. The chip names only the
+provider, and that is a decision rather than an omission — plan-2504 §3 S5a
+dropped the clause silently, so it is argued here instead.
+
+**The chip's unit is the provider, by construction.** It is raised once per
+`(group, provider)` and its `detail` counts every pane that provider stopped.
+Nothing guarantees those panes share one key: a roster can run two blocks on two
+OpenRouter keys, and a group can hold panes from several. Naming one key on an
+item that covers all of them would be a precise-looking falsehood — worse than
+the omission, because a human would go and check the wrong key's balance.
+
+Naming *every* key instead would either split the chip per key, which is the
+per-pane spam the one-chip rule exists to prevent, or produce a detail no chip
+tooltip can carry. And the remedy does not need the key: "raise the key's total
+limit or add credits at openrouter.ai" gets the human to the page where the
+limited key is the one that is over.
+
+**Where the key does belong is S5b's notice.** That is per-drive, addressed to
+the orchestrator rather than to a tooltip, and can name the exact block, its
+`model:` and the key its refusal quoted — the granularity #2811 item 1 is really
+asking for. Recorded here so the clause is picked up there rather than lost.
+
 ## Ranking
 
 Under `blocked`, over `stranded`:
@@ -131,7 +156,7 @@ Under `blocked`, over `stranded`:
 | --- | --- | --- |
 | 1 | `held-dialog` | the human answering the dialog |
 | 2 | `blocked` | the agent said so itself — a report, not a diagnosis |
-| 3 | `provider-limit` | **nothing inside the terminal** |
+| 3 | `provider-limit` | **nothing inside the terminal** — billing, or a different `model:` |
 | 4 | `stranded` | one Enter in that pane |
 | 5 | `waiting` | the human answering the prompt |
 

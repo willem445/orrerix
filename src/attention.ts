@@ -30,8 +30,11 @@ const LABELS: Record<string, string> = {
   "held-dialog": "⛔ held on a dialog",
   blocked: "⚠ blocked",
   // #2811 S5a: the account behind this pane's model is out of budget and its
-  // CLI is parked on the provider's own refusal. Urgent, and the only reason
-  // in this table that no gesture INSIDE the terminal can clear — the remedy
+  // CLI is parked on the provider's own refusal. Urgent, and the only URGENT
+  // reason here that no gesture INSIDE the terminal can clear — `gate` is not
+  // terminal-clearable either (it is board state, cleared by moving the task),
+  // but it is an amber decision rather than a wedged pane, which is the
+  // distinction being drawn. The remedy
   // is billing, or a different `model:` in the workflow file, which is why the
   // backend `detail` always names it. Raised once per group per provider
   // however many panes were stopped, so the chip is on one pane and the count

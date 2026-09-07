@@ -11993,8 +11993,11 @@ pub struct AgentEntry {
 /// - `blocked` — a worker reported it is blocked
 /// - `provider-limit` — #2811 S5a: the account behind this pane's model is out
 ///   of budget and its CLI is sitting on the provider's refusal. Raised ONCE
-///   per (group, provider) however many panes it stopped, and the only reason
-///   here that no gesture inside the terminal can clear
+///   per (group, provider) however many panes it stopped, and the only URGENT
+///   reason here that no gesture inside the terminal can clear — the remedy is
+///   billing, or a different `model:`. (`gate` is not terminal-clearable
+///   either, but it is an amber decision on the human's own pace rather than a
+///   wedged pane, which is the distinction this sentence is drawing.)
 /// - `stranded` — a delivered prompt was never submitted (#496 PR-C): either
 ///   loomux is self-healing it, or it needs the human's Enter
 /// - `waiting` — the pane is parked on a prompt (idle-with-prompt)
@@ -44224,27 +44227,13 @@ impl OrchRegistry {
         // on the prefix would file it under a third "provider" that has no
         // remedy and would not merge with the OpenRouter panes it must be
         // counted with.
-        let mut limited_by_key: HashMap<(String, &'static str), (String, usize)> = HashMap::new();
-        for a in &roster {
-            if a.status != AgentStatus::Running {
-                continue;
-            }
-            let Some(limit) = signals.get(&a.id).and_then(|s| s.limit) else { continue };
-            let entry = limited_by_key
-                .entry((a.group.to_string(), limit.provider))
-                .or_insert_with(|| (a.id.clone(), 0));
-            entry.1 += 1;
-            if a.id < entry.0 {
-                entry.0 = a.id.clone();
-            }
-        }
-        // agent id -> (the provider row, how many panes in its group it stopped).
-        let limit_chip: HashMap<String, (&'static providerlimit::Provider, usize)> = limited_by_key
-            .into_iter()
-            .filter_map(|((_, provider_id), (agent_id, panes))| {
-                providerlimit::provider(provider_id).map(|p| (agent_id, (p, panes)))
-            })
-            .collect();
+        // The selection itself is in PHASE 3, below, and that placement is the
+        // whole of #3178 review B1: choosing a carrier needs to know what would
+        // OUTRANK the chip on each candidate, and those are the latched maps
+        // phase 3 owns. Picking here — before `attn_reports` and
+        // `attn_question_held` are read — meant the group's only chip could
+        // land on a pane whose `blocked` latch then swallowed it, leaving ZERO
+        // provider-limit chips for a group where three panes were stopped.
 
         // #1702, phase 3 — decide and apply, under one short hold of the
         // attention maps. Nothing below reads a pty, a board file or a delivery
@@ -44278,6 +44267,89 @@ impl OrchRegistry {
         // in this phase at all any more (#1702), and describing an order that
         // no longer exists is how the next reader re-creates it.
         let mut question_held = self.attn_question_held.lock_safe();
+
+        // #2811 S5a — WHICH pane wears the single provider-limit chip, decided
+        // here because this is the first point that can see what would outrank
+        // it (#3178 review B1).
+        //
+        // A provider limit stops every pane on that provider at once, and four
+        // identical red chips need one remedy once — so the item is raised ONCE
+        // per (group, provider), with `detail` carrying how many panes were
+        // stopped so the one chip still tells the truth about the blast radius.
+        //
+        // But the reason chain below runs PER PANE, and `held-dialog` and
+        // `blocked` both outrank `provider-limit`. Only the carrier holds a
+        // `limit_chip` entry; every other affected pane falls through. So a
+        // carrier chosen without consulting those latches could be a pane that
+        // then renders `blocked`, and the group would show NO provider-limit
+        // chip at all while three of its panes sat stopped — the change's own
+        // rationale, inverted, and #576's self-latch one layer up.
+        //
+        // Hence: prefer a candidate that nothing outranks, and fall back to the
+        // lowest id only when EVERY affected pane is outranked. Within each
+        // class the pick is the lowest-sorting agent id, which is deterministic
+        // where the roster's own iteration order (a `HashMap`'s) is not.
+        //
+        // **The fallback still loses the chip, and that is disclosed rather
+        // than hidden**: when every affected pane is already showing `blocked`
+        // or `held-dialog`, those are urgent reasons that summon the human to
+        // this same group anyway, so what is lost is the provider attribution,
+        // not the alarm. Raising a second chip instead would reintroduce
+        // exactly the per-pane spam the one-chip rule exists to prevent.
+        // `a_provider_limit_is_subsumed_when_every_affected_pane_is_outranked`
+        // pins that arm so the disclosure cannot go quietly false.
+        //
+        // Keyed on the provider DETECTED IN THE TEXT rather than on the block's
+        // model prefix, which is the one place this deviates from plan-2504 §3
+        // S5a — see `doc/design/attention-provider-limit.md`. pi and opencode
+        // surface OpenRouter's refusal verbatim, so a pane whose model reads
+        // `opencode/...` is stopped by OpenRouter's limit; keying on the prefix
+        // would file it under a third "provider" that has no remedy and would
+        // not merge with the OpenRouter panes it must be counted with.
+        // Computed as an owned set rather than read through a closure over the
+        // `question_held` guard: the per-agent loop below MUTATES that guard,
+        // and a closure still holding a shared borrow of it is a borrowck
+        // question this does not need to have.
+        //
+        // The membership rule is exactly the arms ABOVE `provider-limit` in the
+        // chain below. A reason added above it must be added here too, or the
+        // carrier can be swallowed again — `provider_limit_sits_under_blocked_
+        // and_over_stranded_and_waiting` and
+        // `the_single_chip_avoids_a_pane_whose_blocked_latch_would_swallow_it`
+        // are what fail if the two drift.
+        let outranked: HashSet<&str> = roster
+            .iter()
+            .map(|a| a.id.as_str())
+            .filter(|id| question_held.contains(*id) || reports.get(*id).copied() == Some("blocked"))
+            .collect();
+        let mut limited_by_key: HashMap<(String, &'static str), (Option<String>, String, usize)> =
+            HashMap::new();
+        for a in &roster {
+            if a.status != AgentStatus::Running {
+                continue;
+            }
+            let Some(limit) = signals.get(&a.id).and_then(|s| s.limit) else { continue };
+            let entry = limited_by_key
+                .entry((a.group.to_string(), limit.provider))
+                .or_insert_with(|| (None, a.id.clone(), 0));
+            entry.2 += 1;
+            // `.0` is the best UNOUTRANKED candidate, `.1` the best of any.
+            if !outranked.contains(a.id.as_str()) && entry.0.as_ref().is_none_or(|best| a.id < *best) {
+                entry.0 = Some(a.id.clone());
+            }
+            if a.id < entry.1 {
+                entry.1 = a.id.clone();
+            }
+        }
+        // agent id -> (the provider row, how many panes in its group it stopped).
+        let limit_chip: HashMap<String, (&'static providerlimit::Provider, usize)> = limited_by_key
+            .into_iter()
+            .filter_map(|((_, provider_id), (unblocked, any, panes))| {
+                providerlimit::provider(provider_id)
+                    .map(|p| (unblocked.unwrap_or(any), (p, panes)))
+            })
+            .collect();
+
         let mut out = Vec::new();
         for a in &roster {
             if a.status != AgentStatus::Running {

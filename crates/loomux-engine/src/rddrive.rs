@@ -555,7 +555,9 @@ pub mod audit_action {
     pub const ROUND_GRACE: &str = "rd-round-grace";
     /// A lane's verdict was read at this revision.
     pub const VERDICT: &str = "rd-verdict";
-    /// The worker's session was resumed with a hand-back brief. Its `why` is one of [`handback_why`].
+    /// The worker's session was resumed with a hand-back brief. Its `why` is one
+    /// of [`handback_why`], and its `pane` — which says whether that resume cost a
+    /// new pane — is one of [`handback_pane`] (#3203).
     pub const HANDBACK: &str = "rd-handback";
     /// A driven delegate's `report` or `review_verdict` was consumed by the
     /// driver instead of being delivered to the orchestrator (§7).
@@ -600,6 +602,25 @@ pub mod audit_action {
     /// reason — a filter looking for the thing that happened must not match the
     /// thing that did not.
     pub const NOTICE_DROPPED: &str = "rd-notice-dropped";
+    /// A hand-back had a live pane to TAKE OVER and the delivery into it was
+    /// REFUSED, so the hand-back opened a pane instead (#3203). Carries the
+    /// `pane` that refused, the `session`, the `block`, and the `reason`
+    /// `deliver_prompt` gave.
+    ///
+    /// Its own action for `rd-reuse-declined`'s reason, which is #2089's and
+    /// applies here unchanged: the refusal's only other visible effect is a
+    /// fresh pane, and on this log a fresh pane is exactly what "there was no
+    /// live pane at all" looks like. Without this row the one case that can
+    /// still put a second pane on a live session is INVISIBLE — which is the
+    /// shape §3 objects to, and the reason the take-over arm's residual is a
+    /// disclosed corner rather than a silent one.
+    ///
+    /// Distinct from `rd-reuse-declined`: that row means a candidate failed the
+    /// READINESS predicate and was not typed into, which is a decision the
+    /// driver made; this one means the driver decided to type and the delivery
+    /// machinery refused. The commonest cause is a pane whose queue is at
+    /// `QUEUE_MAX_PER_PANE`.
+    pub const TAKEOVER_DECLINED: &str = "rd-takeover-declined";
     /// The drive answered a worker's `report(progress)` in the worker's own
     /// pane (#1959) — one line, one per hand-back, no orchestrator turn.
     ///
@@ -671,6 +692,40 @@ pub mod handback_why {
     /// carried: a reader counting review rounds off these rows would otherwise
     /// bill a PR for orrerix being restarted under it.
     pub const RESTART: &str = "restart";
+}
+
+/// How a hand-back reached its worker's pane — the `pane` field on an
+/// [`audit_action::HANDBACK`] row (§5.4, #3203).
+///
+/// **Three values rather than a boolean**, and the third is why. "Did this
+/// hand-back open a pane" is the question #3203 is measured on, and
+/// `reused`/`spawned` answers it; but the two non-spawning arms are reached
+/// under different conditions and only one of them leaves a second row behind.
+/// A clean reuse is preceded by nothing; a take-over of a pane refused on
+/// READINESS is preceded by an `rd-reuse-declined` row naming it,
+/// and a take-over of a pane that is simply MID-TURN is preceded by nothing at
+/// all — a non-idle pane never reaches the readiness test. So folding the two
+/// into one word would make "the driver typed into a working delegate" —
+/// the thing #2162 argued a driver may not do, and which #3203 licenses on the
+/// hand-back path alone — unreadable from the log, which is §5.4's own rule
+/// against a filter matching the thing that did not happen.
+///
+/// Constants rather than literals, [`audit_action`]'s reason: a typo'd value is
+/// a row no filter will ever match.
+pub mod handback_pane {
+    /// A live, idle, delivery-READY pane on the session took the brief — the
+    /// #1960 arm, unchanged.
+    pub const REUSED: &str = "reused";
+    /// A live pane on the session took the brief although the reuse arm had
+    /// declined it or never considered it: mid-turn, or with a last delivery
+    /// that is unconfirmed, queued or unrecorded (#3203).
+    ///
+    /// The delivery is QUEUED, not an interrupt: the pane reads the brief when
+    /// its current turn ends.
+    pub const TAKEN_OVER: &str = "taken-over";
+    /// There was no live pane on this session under the resolved block, so the
+    /// hand-back opened one.
+    pub const SPAWNED: &str = "spawned";
 }
 
 /// The closed refusal vocabulary the three MCP tools answer in (§5.1).

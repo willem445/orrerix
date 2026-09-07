@@ -2186,7 +2186,7 @@ impl OrchRegistry {
         brief: &RdBrief,
         limits: &reviewdrive::DriveLimits,
         grace: bool,
-    ) -> Result<String, String> {
+    ) -> Result<(String, &'static str), String> {
         let text = self.rd_fix_brief(entry, brief, limits, grace);
         let session = entry.worker_session.clone();
         if session.is_empty() {
@@ -2217,9 +2217,51 @@ impl OrchRegistry {
         let reused = block
             .as_deref()
             .and_then(|b| self.rd_reuse_pane(group, &on_behalf, &session, b, &text));
-        let agent = match reused {
-            Some(a) => a,
-            None => self.rd_spawn(group, Role::Worker, block, Some(session), &text)?.id,
+        // **And below the reuse arm, the TAKE-OVER arm** (#3203). The reuse
+        // above answers only for a pane that is idle AND delivery-ready; every
+        // other live pane on this session used to fall through to the spawn,
+        // which is how PR #3198 ended with `w-2657`, `w-2659` and `w-2660` all
+        // alive on one session and one worktree. What this restores is that a
+        // live pane on the session gets the brief instead of a new pane being
+        // opened beside it.
+        //
+        // **That is not an unconditional invariant, and saying it was is the
+        // review's finding 1.** `rd_take_over_pane` falls through to the spawn
+        // when the DELIVERY is refused, and one refusal is reachable without
+        // anything being wrong: a pane whose queue is already at
+        // `QUEUE_MAX_PER_PANE` (8) answers `Err`, so a hand-back landing on a
+        // pane that far behind still opens a second pane on a live session.
+        // The window is strictly narrower than the defect this fixes — the old
+        // arm spawned at queue depth >= 1, this one only at depth 8 — and the
+        // refusal is on the audit log as `rd-takeover-declined` rather than
+        // being visible only as a fresh pane, which is the whole of what
+        // #2089 asked of the reuse arm. It is a disclosed corner, pinned by
+        // `a_takeover_refused_by_a_full_queue_says_so_and_falls_through`, not a
+        // guarantee.
+        //
+        // Ordered after the reuse rather than replacing it, so #2089's
+        // `rd-reuse-declined` rows are still written for the pane this then
+        // takes over — the diagnosis of WHY a pane was not cleanly reusable is
+        // what that row is for, and it is exactly as useful now that the
+        // consequence is a take-over instead of a spawn.
+        //
+        // **The block filter is not dropped with the rest** — see
+        // `live_pane_on_session`. The residual is a live pane on this session
+        // under a DIFFERENT block, which still spawns: reusing one is #1961's
+        // wrong persona on the wrong model, and the driver has minted no such
+        // pane since that issue, so the state is reachable only through an
+        // explicit `spawn_agent(block:, resume_session:)`.
+        let taken_over = match (&reused, block.as_deref()) {
+            (None, Some(b)) => self.rd_take_over_pane(group, &on_behalf, &session, b, &text),
+            _ => None,
+        };
+        let (agent, pane) = match (reused, taken_over) {
+            (Some(a), _) => (a, rddrive::handback_pane::REUSED),
+            (None, Some(a)) => (a, rddrive::handback_pane::TAKEN_OVER),
+            (None, None) => (
+                self.rd_spawn(group, Role::Worker, block, Some(session), &text)?.id,
+                rddrive::handback_pane::SPAWNED,
+            ),
         };
         // Through the method, never a field write: the pane this supersedes is
         // still the drive's and still live (#1871 B2). Idempotent when the pane
@@ -2227,7 +2269,60 @@ impl OrchRegistry {
         // superseded list on the way past — so a second hand-back into one pane
         // does not file that pane as its own predecessor.
         entry.record_worker_pane(&agent);
-        Ok(agent)
+        Ok((agent, pane))
+    }
+
+    /// **Take over** the pane already running this drive's worker session when
+    /// [`rd_reuse_pane`](Self::rd_reuse_pane) declined every candidate (#3203):
+    /// type the hand-back brief into it and answer which pane took it. `None`
+    /// means there is genuinely no live pane on this session under this block,
+    /// so the caller opens one.
+    ///
+    /// The one thing this does that the reuse arm will not is deliver into a
+    /// pane that is mid-turn or whose last delivery is unconfirmed. That is
+    /// deliberate and is argued where the predicate lives
+    /// (`live_pane_on_session`): the brief lands in the pane's queue and is read
+    /// when the turn ends, which `fix-stalled` already bounds, and the
+    /// alternative the driver used to take was a SECOND pane on the same
+    /// worktree — measured as silent work loss on #3203.
+    ///
+    /// **A failed delivery answers `None` and falls through to the spawn, and
+    /// it is AUDITED rather than silent** (review round 1, finding 1).
+    /// `deliver_prompt` can refuse for reasons that say nothing about the drive
+    /// — a pane that died between the lookup and the write — and the spawn is
+    /// the path that already existed, which is `rd_reuse_pane`'s own argument.
+    /// But one refusal is reachable with nothing wrong at all: a pane whose
+    /// queue is at `QUEUE_MAX_PER_PANE` answers `Err`, and the fall-through
+    /// then puts a second live pane on a session that has one — the very shape
+    /// #3203 exists to stop, narrowed (the old arm spawned at depth >= 1) but
+    /// not closed.
+    ///
+    /// So the refusal gets `rd-takeover-declined` (§5.4). Leaving it silent
+    /// would make the one remaining route to a duplicate pane look identical on
+    /// the log to "this session had no live pane" — which is exactly the
+    /// indistinguishability #2089 added `rd-reuse-declined` to remove, one arm
+    /// over.
+    fn rd_take_over_pane(
+        &self,
+        group: &GroupId,
+        on_behalf_of: &str,
+        session: &str,
+        block: &str,
+        text: &str,
+    ) -> Option<String> {
+        let agent = self.live_pane_on_session(group, session, block)?;
+        match self.deliver_prompt(&agent, text, brand::AUDIT_ACTOR, Delivery::MidSession) {
+            Ok(_) => Some(agent),
+            Err(why) => {
+                self.rd_audit(group, on_behalf_of, rddrive::audit_action::TAKEOVER_DECLINED, json!({
+                    "pane": agent,
+                    "session": session,
+                    "block": block,
+                    "reason": why,
+                }));
+                None
+            }
+        }
     }
 
     /// The workspace a driver-initiated resume inherits.
@@ -3292,43 +3387,94 @@ impl OrchRegistry {
         // one, which is the same honesty `out.releases` keeps.
         let mut released_worker_session = String::new();
         for cand in &releases {
-            let (agent, session) = match &cand.role {
-                reviewdrive::DrivenRole::Worker => {
-                    (entry.worker_agent.clone(), entry.worker_session.clone())
-                }
+            // **A WORKER candidate names every pane this drive owns on that
+            // session, not only the current one** (#3203). `releasable` decides
+            // per ROLE, and the worker role is one conversation that may have
+            // more than one pane sitting on it: a hand-back that superseded a
+            // pane left the old one alive and owned, and before #3203's other
+            // half a second hand-back minted one more. Releasing only
+            // `worker_agent` left those behind idle and counted against the
+            // cap for the rest of the drive — measured on PR #3198, where the
+            // ORIGINAL worker pane sat idle through two hand-backs and two
+            // releases.
+            //
+            // Nothing here decides WHETHER a pane may go: `release_driven_pane`
+            // is still the barrier (idle, alive, bound to a terminal, not a
+            // manager), applied per pane, so a superseded pane that is somehow
+            // busy is skipped exactly as the current one would be. What widens
+            // is only the population the barrier is asked about.
+            //
+            // Ordered oldest-first, which is `owned_panes`'s own order, so the
+            // audit rows read as the history they are.
+            let (agents, session) = match &cand.role {
+                reviewdrive::DrivenRole::Worker => (
+                    entry
+                        .owned_panes()
+                        .into_iter()
+                        .filter(|(_, role)| *role == reviewdrive::DrivenRole::Worker)
+                        .map(|(agent, _)| agent)
+                        .collect::<Vec<String>>(),
+                    entry.worker_session.clone(),
+                ),
                 reviewdrive::DrivenRole::Lane(block) => {
                     let rec = entry.lane(block);
                     let agent = rec.map(|r| r.agent.clone()).unwrap_or_default();
                     let session = self.rd_lane_session(group, rec).unwrap_or_default();
-                    (agent, session)
+                    (vec![agent], session)
                 }
             };
-            if agent.trim().is_empty() || session.trim().is_empty() {
+            if session.trim().is_empty() {
                 continue;
             }
-            if self.release_driven_pane(&agent).is_err() {
-                continue;
+            for agent in agents {
+                if agent.trim().is_empty() {
+                    continue;
+                }
+                if self.release_driven_pane(&agent).is_err() {
+                    continue;
+                }
+                // **The record drop, and why a superseded pane needs none.**
+                // `release_pane` clears the CURRENT pane out of the entry, which
+                // is what keeps a live pane from ever being unowned (§7). A
+                // superseded id is already on a list bounded by LIVENESS, and
+                // `release_driven_pane` has just made this one dead, so
+                // `forget_dead_panes` drops it — writing it out here as well
+                // would be a write whose only effect is to be undone, which is
+                // the argument `release_pane`'s own doc makes about the lane it
+                // does not push.
+                let freed = if entry.worker_agent == agent {
+                    match entry.release_pane(&cand.role, &session) {
+                        Some(freed) => freed,
+                        None => continue,
+                    }
+                } else if cand.role == reviewdrive::DrivenRole::Worker {
+                    agent.clone()
+                } else {
+                    match entry.release_pane(&cand.role, &session) {
+                        Some(freed) => freed,
+                        None => continue,
+                    }
+                };
+                if cand.role == reviewdrive::DrivenRole::Worker {
+                    released_worker_session = session.clone();
+                }
+                out.changed = true;
+                let (action, mut detail) = match &cand.role {
+                    reviewdrive::DrivenRole::Worker => (
+                        rddrive::audit_action::WORKER_RELEASED,
+                        json!({ "pr": pr, "agent": freed, "session": session,
+                                "reason": cand.reason.as_str() }),
+                    ),
+                    reviewdrive::DrivenRole::Lane(block) => (
+                        rddrive::audit_action::LANE_RELEASED,
+                        json!({ "pr": pr, "block": block, "agent": freed, "session": session,
+                                "reason": cand.reason.as_str() }),
+                    ),
+                };
+                detail["head"] = Value::String(brief.head.clone());
+                out.audits.push((action, detail));
+                out.releases.push((cand.role.clone(), freed));
             }
-            let Some(freed) = entry.release_pane(&cand.role, &session) else { continue };
-            if cand.role == reviewdrive::DrivenRole::Worker {
-                released_worker_session = session.clone();
-            }
-            out.changed = true;
-            let (action, mut detail) = match &cand.role {
-                reviewdrive::DrivenRole::Worker => (
-                    rddrive::audit_action::WORKER_RELEASED,
-                    json!({ "pr": pr, "agent": freed, "session": session,
-                            "reason": cand.reason.as_str() }),
-                ),
-                reviewdrive::DrivenRole::Lane(block) => (
-                    rddrive::audit_action::LANE_RELEASED,
-                    json!({ "pr": pr, "block": block, "agent": freed, "session": session,
-                            "reason": cand.reason.as_str() }),
-                ),
-            };
-            detail["head"] = Value::String(brief.head.clone());
-            out.audits.push((action, detail));
-            out.releases.push((cand.role.clone(), freed));
         }
         // #2811 S10: set by the `Rehandback` arm, read by the spend below.
         let mut re_briefed = false;
@@ -3388,7 +3534,7 @@ impl OrchRegistry {
             reviewdrive::DriveStep::Rehandback => {
                 re_briefed = true;
                 match self.rd_handback(group, entry, &brief, limits, false) {
-                    Ok(agent) => {
+                    Ok((agent, pane)) => {
                         // The clock moves only once the worker has actually
                         // been reached, so a hand-back that failed leaves
                         // `held(fix-stalled)`'s bound where it was rather than
@@ -3401,7 +3547,16 @@ impl OrchRegistry {
                         out.audits.push((
                             rddrive::audit_action::HANDBACK,
                             json!({ "pr": pr, "agent": agent, "head": brief.head,
-                                    "why": rddrive::handback_why::RESTART }),
+                                    "why": rddrive::handback_why::RESTART,
+                                    // #3203: written on THIS arm too. A restart
+                                    // took every pane with the old process, so
+                                    // this is normally `spawned` — but the arm
+                                    // runs whenever a restart MARK is standing,
+                                    // and the orchestrator may already have
+                                    // reopened that session by hand, in which
+                                    // case the take-over arm reaches that pane
+                                    // rather than opening a second one beside it.
+                                    "pane": pane }),
                         ));
                     }
                     Err(why) => {
@@ -3650,7 +3805,7 @@ impl OrchRegistry {
                             ));
                         }
                         match self.rd_handback(group, entry, &brief, limits, grace) {
-                            Ok(agent) => {
+                            Ok((agent, pane)) => {
                                 // A hand-back that WORKED ends the second-failure
                                 // count (#2555 item 2): the next failure, whenever it
                                 // comes, is a first one again.
@@ -3659,7 +3814,11 @@ impl OrchRegistry {
                                 out.audits.push((
                                     rddrive::audit_action::HANDBACK,
                                     json!({ "pr": pr, "agent": agent, "head": brief.head,
-                                            "why": brief.handback_kind() }),
+                                            "why": brief.handback_kind(),
+                                            // #3203: whether this hand-back put a
+                                            // NEW pane on the session, and if not,
+                                            // which arm kept it from doing so.
+                                            "pane": pane }),
                                 ));
                             }
                             Err(why) => {

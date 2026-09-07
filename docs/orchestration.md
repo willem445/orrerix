@@ -3362,6 +3362,11 @@ sentence a drive owes when it is starved, with its line listing the panes that d
 so you can see whether the pressure is even its own. What changed is how often that happens: a
 drive between rounds now holds no reviewer slot at all.
 
+When it releases a worker it releases every pane it still holds on that session, not only the one
+it resumed last — a pane an earlier hand-back superseded was otherwise left sitting idle in a
+delegate slot for the rest of the drive. The same per-pane test decides each one, so a superseded
+pane that is busy stays exactly as a busy current pane does.
+
 Each release is on the audit log as `rd-lane-released` or `rd-worker-released`, naming the pane,
 the session kept and why — so it costs you no line in your pane and is still there to count.
 
@@ -3410,8 +3415,18 @@ it instead of opening a second pane on one conversation — so a review round no
 delegate slot at all. "Ready" is a fact about deliveries, not about what is on the screen: the last
 thing orrerix typed into that pane is on record as having landed, and nothing is still queued for
 it. A pane that is idle but parked — behind a permission prompt, a CLI question, an install gate —
-fails that test, and the driver opens a fresh pane rather than adding a brief to a queue nobody is
-draining. The refusal is on the group's audit log as `rd-reuse-declined`, naming the pane and why.
+fails that test, and the refusal is on the group's audit log as `rd-reuse-declined`, naming the
+pane and why.
+
+**But a hand-back never opens a second pane on a session that already has a live one**, whatever
+that pane is doing. Where the pane is working, or failed the readiness test above, the driver
+types the brief into it anyway rather than spawning beside it: two panes on one session are two
+agents editing one worktree, and the pane that notices is the one that finds commits it did not
+write. The brief is queued, not an interrupt — the pane reads it when its current turn ends, the
+way any prompt you send a working delegate does. A pane running a *different* block is still not
+taken over, because that would be handing the fix to a different persona on a different model; a
+session in that state gets a new pane, as it did before. The `rd-handback` row says which happened
+in its `pane` field: `reused`, `taken-over` or `spawned`.
 
 **A reviewer is asked again in its own conversation, not replaced by a stranger.** Every round
 after the first is a delta brief — "your previous verdict was `fail`; here is what changed" — and

@@ -1035,6 +1035,47 @@ this note first.
    closing it means holding a per-pane lock across the whole reuse decision,
    which `rd_state_lock` already spans a delivery under; it is named so a later
    slice does not read "the brief will be read" as stronger than it is.
+   **#3203 retracts what a refused pane FALLS THROUGH to, and nothing else about
+   the predicate above.** Every refusal in the four paragraphs before this one —
+   wrong block aside — used to end at `rd_spawn`, and a spawn onto a session that
+   already has a live pane is a second pane on one worktree. Measured on PR
+   #3198: two red heads arriving inside one fix produced `w-2659` and then
+   `w-2660` while `w-2657`, the orchestrator's own worker pane, was still alive.
+   Three panes, one session, one checkout; the third pane correctly reported that
+   another actor was editing its worktree, and nothing was lost only because two
+   of them happened to make the same edits. So the hand-back now has a **take-over
+   arm** below the reuse arm: if `rd_reuse_pane` answers `None` and there is any
+   live pane on the session under the resolved block, the brief is typed into
+   THAT pane. The invariant is flat — *the driver never puts a second live pane on
+   a session it is handing back to* — and `rd_spawn` is reached only when the
+   session genuinely has none.
+   **The trade this reverses is a real one, and it reverses because the
+   alternative changed.** #2089's argument for refusing an unready pane, and
+   #2162's for refusing a working one, are both "the brief lands behind whatever
+   is in front of it and the drive waits" — true, and the better trade while the
+   alternative was a pane that reads it now. It is not the alternative here: a
+   delayed brief costs latency that `fix-stalled` already bounds, and a second
+   pane costs the worktree. **The delivery is QUEUED, not an interrupt** — the
+   CLI is not signalled, nothing is injected mid-turn, and the pane reads the
+   brief when its current turn ends, exactly as any `send_prompt` to a working
+   delegate does.
+   **The reuse arm is kept in FRONT of the take-over arm rather than replaced by
+   it**, so the `rd-reuse-declined` rows above are still written for the very pane
+   the driver then takes over. That row diagnoses *why* a pane was not cleanly
+   reusable, which is as useful now that the consequence is a take-over as it was
+   when the consequence was a spawn — and deleting the predicate is the obvious
+   wrong way to close #3203, so the ordering is what a test can pin. The
+   `rd-handback` row says which arm ran, in `pane`: `reused` | `taken-over` |
+   `spawned` (§5.4).
+   **The BLOCK filter is the one condition that does not relax**, and it is the
+   residual. A live pane on this session under a DIFFERENT block still opens a new
+   one, because taking it over is #1961 — the wrong persona on the wrong model,
+   with `rd_resume_block` never consulted — and #3203 is a worktree problem, not a
+   licence to hand a fix to whoever happens to be on the conversation. The driver
+   has minted no cross-block pane since #1961, so the state is reachable only
+   through an explicit `spawn_agent(block:, resume_session:)`; it is disclosed
+   here rather than closed, and it is bounded the same way everything else in this
+   section is, by `fix-stalled`.
    **#2109 re-asked this item, and the answer was again NO — with what releases
    the cap named instead. Read it with the #2501 paragraph below, which
    supersedes its conclusion and keeps its reasoning:** what #2109 established is
@@ -2245,6 +2286,17 @@ one who ended it. Written on the spawn SUCCEEDING, never on the intent: a
 re-open the cap refused has re-opened nothing, and that tick's record is
 `rd-refused` with `cap: true` as it always was.
 
+**A worker release reaches every pane the drive owns on that session** (#3203),
+not only `worker_agent`. `releasable` decides per ROLE, and the worker role is one
+conversation that may carry more than one pane: a hand-back that superseded a pane
+left the old one alive and owned, so on PR #3198 the ORIGINAL worker pane sat idle
+through two hand-backs and two releases, holding a delegate slot for the rest of
+the drive. What widens is only the POPULATION the barrier is asked about —
+`release_driven_pane` is still asked per pane, and still refuses one that is
+working, already gone, or never bound to a terminal — so this is not a blanket
+kill of a session. One `rd-worker-released` row per pane that actually went, on
+the rule below that a row means a pane went.
+
 `rd-lane-released` and `rd-worker-released` (#2501, #2811 S1) are the rows for §3.1
 item 5's narrowed states: a pane the driver KILLED, with the conversation kept.
 Each carries `pr`, `agent`, the `session` the next round resumes, the `head` it
@@ -2262,6 +2314,22 @@ is the point of the rows — #2501 is a measurement and its follow-up will be
 another one — so they are written on the release SUCCEEDING, never on the intent:
 a pane the barrier refused (still working, already gone, never bound to a
 terminal) produces no row, because nothing happened.
+
+`rd-handback` carries **`pane`**, which says whether that hand-back cost a new
+pane and, when it did not, which arm kept it from doing so (#3203): `reused` is
+#1960's clean arm — a live, idle, delivery-READY pane on the session took the
+brief; `taken-over` is a live pane that the reuse arm had declined or never
+considered (mid-turn, or a last delivery that is unconfirmed, queued or
+unrecorded); `spawned` is a session with no live pane on it at all. **Three values
+rather than a boolean**, on `rd-ci-red`'s own argument. "Did this hand-back open a
+pane" is what #3203 is measured on and a boolean answers it — but the two
+non-spawning arms are not equally visible elsewhere on the log. A clean reuse is
+preceded by nothing; a take-over of a pane refused on READINESS is preceded by an
+`rd-reuse-declined` row naming it; and a take-over of a pane that is simply
+MID-TURN is preceded by nothing at all, because a non-idle pane never reaches the
+readiness test. Folding the two into one word would make "the driver typed into a
+working delegate" — the thing #2162 argued a driver may not do, and which #3203
+licenses on the hand-back path alone — unreadable from the record.
 
 **A release is emphatically not an `rd-lane-reopened`.** That row means the drive
 LOST a pane and had to replace it, and its `killed_by` is what an orchestrator

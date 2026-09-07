@@ -988,6 +988,74 @@ fn symbolic_origin_head(repo: &str) -> Option<String> {
     Some(name)
 }
 
+/// Whether two worktree directory names would be **one directory** on a
+/// case-insensitive filesystem.
+///
+/// **Unicode case folding, not `eq_ignore_ascii_case`**, and the difference is
+/// the whole point of this function existing. The plan document's own duplicate
+/// check (`plandoc`, #3040 P1) folds ASCII, because `check_segment` has already
+/// narrowed a slice id's alphabet to ASCII — but a BRANCH name has not been so
+/// narrowed: `BranchName` refuses git's forbidden bytes and nothing else, so a
+/// pair differing only by a non-ASCII letter's case both pass it and reach here
+/// as two names.
+///
+/// On this project's Windows baseline they are one directory, so the second
+/// `worktree add` lands in the first one's tree — or is refused by a message
+/// naming a path rather than the collision. On a case-sensitive filesystem they
+/// are two directories and the collision never happens at all, which is worse
+/// rather than better: the same plan then behaves differently on two machines,
+/// and the difference shows up on whichever one nobody is watching.
+///
+/// So the check is **platform-independent and deliberately stricter than any
+/// filesystem**: `to_lowercase`, which is full Unicode and locale-independent.
+/// A refusal is safe in the direction that matters — the caller is told the two
+/// names collide and picks another.
+///
+/// The separator is normalized with them, so `a/b` and `a\b` — which name one
+/// directory everywhere — are caught too.
+pub fn worktree_names_collide(a: &str, b: &str) -> bool {
+    fn fold(s: &str) -> String {
+        s.replace('\\', "/").to_lowercase()
+    }
+    fold(a) == fold(b)
+}
+
+/// The existing worktree directory `name` would collide with, if any.
+///
+/// Walks `name`'s components against what is really on disk, so a collision at
+/// any level is caught rather than only on the leaf. Answers the EXISTING
+/// spelling, because that is the half the caller does not already know.
+///
+/// A directory it cannot read contributes nothing: this refuses on a positive
+/// finding, and an unreadable directory is not one. The `dest.exists()` guard
+/// and git's own refusal stay where they were as the backstops.
+fn colliding_worktree(worktrees: &Path, name: &str) -> Option<String> {
+    let mut here = worktrees.to_path_buf();
+    let mut prefix = String::new();
+    for part in name.split('/').filter(|p| !p.is_empty()) {
+        let entries = std::fs::read_dir(&here).ok()?;
+        let mut exact: Option<String> = None;
+        for e in entries.flatten() {
+            let found = e.file_name().to_string_lossy().into_owned();
+            if found == part {
+                exact = Some(found);
+                continue;
+            }
+            if worktree_names_collide(&found, part) {
+                return Some(format!("{prefix}{found}"));
+            }
+        }
+        // Descend only through a component that really is there under exactly
+        // this spelling; anything else means the rest of the path does not
+        // exist yet, so there is nothing below it to collide with.
+        let exact = exact?;
+        here = here.join(&exact);
+        prefix.push_str(&exact);
+        prefix.push('/');
+    }
+    None
+}
+
 /// Create a worktree for an agent session at
 /// `<repo-parent>/<repo-name>-worktrees/<name>`, on a new branch named `name`
 /// cut from `base`.
@@ -1027,9 +1095,21 @@ pub fn git_worktree_add_sync(
         .map(|s| s.to_string_lossy().into_owned())
         .ok_or("cannot resolve repository name")?;
     let parent = root.parent().ok_or("repository has no parent directory")?;
-    let dest = parent.join(format!("{repo_name}-worktrees")).join(&name);
+    let worktrees = parent.join(format!("{repo_name}-worktrees"));
+    let dest = worktrees.join(&name);
     if dest.exists() {
         return Err(format!("worktree path already exists: {}", dest.display()));
+    }
+    // #3040: and the one `exists()` cannot answer — a name that is a DIFFERENT
+    // string and the SAME directory. See `worktree_names_collide`. The scan is
+    // one shallow `read_dir` per component of the requested name, so a name
+    // with no separator costs exactly one.
+    if let Some(clash) = colliding_worktree(&worktrees, &name) {
+        return Err(format!(
+            "worktree name {name:?} collides with the existing {clash:?} — the two differ only \
+             by case or separator, and name one directory on a case-insensitive filesystem. \
+             Pick a name that differs by more than that."
+        ));
     }
     let dest_str = dest.to_string_lossy().into_owned();
 

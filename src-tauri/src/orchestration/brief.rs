@@ -6,7 +6,7 @@
 //! `[header] + "\n\n" + <the planner's text, verbatim> + "\n\n" + <the DoD>`,
 //! and the orchestrator's hand-written briefs must quote the same bytes. A
 //! shared function is what makes "the same bytes" checkable rather than
-//! asserted — `the_dod_trailer_is_the_worker_s_own_definition_of_done`
+//! asserted — `the_dod_trailer_is_the_workers_own_definition_of_done`
 //! (`src-tauri/tests/prompts.rs`) is that check.
 //!
 //! **Why one copy at all.** The DoD used to live twice: the full

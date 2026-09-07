@@ -3253,9 +3253,10 @@ required, which is true (GitHub computes no file list for a conflicted head) and
 the problem. Both are now the same thing that a red run is: the worker is handed back and asked to rebase,
 on its own one-attempt budget, and a second conflict parks the drive as `rebase-limit`. A mergeability
 GitHub has not finished computing is not a conflict and changes nothing. **A reviewer still open on that
-head is released rather than left to finish** — its pane goes as soon as it is between turns (never
-mid-turn), its conversation is kept for the re-brief at the rebased head, and no review round is charged
-for the reading it never got to deliver.
+head is stood down rather than left to finish** — one line is queued into its pane asking it to stop and
+record no verdict (queued, never an interrupt: it reads it when it next takes input), and its pane is
+freed once it reports. Its conversation is kept for the re-brief at the rebased head, and no review round
+is charged for the reading it never got to deliver.
 
 **A drive stops, it does not drift.** There are eighteen ways out and each produces at most one
 line in the orchestrator's pane: the gate being satisfied, the drive being cancelled — by you, or

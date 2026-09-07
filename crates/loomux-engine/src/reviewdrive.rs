@@ -1176,6 +1176,28 @@ pub struct LaneRecord {
     /// that never happened. See [`lane_open_for`].
     #[serde(default)]
     pub briefed_digest: String,
+    /// **The head this lane has been told to STOP reviewing** (#3176) — empty
+    /// until the driver has sent that line, and per-revision like the two keys
+    /// above.
+    ///
+    /// It exists to make the stop line arrive exactly ONCE. The rule that sends
+    /// it is a standing property of the tick's facts (a conflicted PR with an
+    /// open lane), so without a mark it would re-send on every tick the drive
+    /// spends waiting out the same conflict — a reviewer's context re-filled
+    /// with the same paragraph every thirty seconds, which is the cost §6 makes
+    /// about notices applied to a delegate's own pane.
+    ///
+    /// **Persisted, and that is the point rather than an incidental**: a restart
+    /// must not re-send a line the previous process already sent, and orrerix
+    /// cannot read a pane's transcript to find out whether it did.
+    ///
+    /// **A mark, never a permission.** Nothing decides a release or an arc from
+    /// this field: the release rule asks the pane whether it is idle, and a lane
+    /// that was told to stop and has not yet reported is still that drive's to
+    /// wait on. Cleared by [`LaneRecord::reseeded`] with the rest of the
+    /// per-revision fields, so the lane is tellable again at the rebased head.
+    #[serde(default)]
+    pub stopped_head: String,
     /// When this lane's delegate was last spawned or resumed — the
     /// `lane-stalled` anchor. Beyond §5.2's example; see the module header.
     #[serde(default)]
@@ -1329,6 +1351,7 @@ impl LaneRecord {
             at_head: String::new(),
             briefed_head: String::new(),
             briefed_digest: String::new(),
+            stopped_head: String::new(),
             spawned_ms: 0,
             briefed_verify: false,
             briefed_body_only: false,
@@ -2651,6 +2674,10 @@ impl DriveEntry {
             at_head: String::new(),
             briefed_head: head.to_string(),
             briefed_digest: body_digest.unwrap_or_default().to_string(),
+            // #3176. A brief is the start of a round, so it cannot also be a
+            // lane that has been told to stop one: `open_lane` replaces the
+            // record wholesale and the mark goes with the revision it was about.
+            stopped_head: String::new(),
             spawned_ms,
             // #2168 E2. Recorded from the STEP rather than re-derived here: the
             // decision is `decide_review_wait`'s, taken on the same facts that
@@ -2977,6 +3004,37 @@ impl DriveEntry {
                 }
                 Some(std::mem::take(&mut rec.agent))
             }
+        }
+    }
+
+    /// **Has this lane already been told to stop reviewing `head`?** (#3176.)
+    ///
+    /// Asked before the stop line is sent, so it arrives once per revision
+    /// rather than once per tick. An empty `head` is never "already told": an
+    /// unresolved head is not a head, and [`decide`] refuses to act on one at
+    /// all one screen up.
+    pub fn lane_stopped_at(&self, block: &str, head: &str) -> bool {
+        !head.is_empty()
+            && self.lane(block).is_some_and(|l| l.stopped_head == head)
+    }
+
+    /// Record that this lane has been told to stop reviewing `head` (#3176).
+    ///
+    /// Written on the delivery SUCCEEDING and never on the intent — the same
+    /// rule the release rows follow, and for the same reason: a line that did
+    /// not reach the pane is one the next tick still owes. Answers whether the
+    /// mark actually moved, so a caller can decide whether the entry needs
+    /// storing.
+    pub fn mark_lane_stopped(&mut self, block: &str, head: &str) -> bool {
+        if head.is_empty() {
+            return false;
+        }
+        match self.lanes.iter_mut().find(|l| l.block == block) {
+            Some(rec) if rec.stopped_head != head => {
+                rec.stopped_head = head.to_string();
+                true
+            }
+            _ => false,
         }
     }
 
@@ -7712,6 +7770,7 @@ mod tests {
             at_head: String::new(),
             briefed_head: head.into(),
             briefed_digest: digest.into(),
+            stopped_head: String::new(),
             spawned_ms: 0,
             briefed_verify: false,
             briefed_body_only: false,

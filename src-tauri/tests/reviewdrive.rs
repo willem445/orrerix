@@ -13465,3 +13465,109 @@ fn a_lane_still_mid_turn_at_the_conflict_is_released_on_the_next_tick_it_is_idle
     assert_eq!(rows[0]["reason"], json!("conflict"), "{:?}", rows[0]);
     assert_eq!(rows[0]["agent"], json!(lane), "{:?}", rows[0]);
 }
+
+/// **A busy open lane is TOLD to stop, exactly once, and a lane that has
+/// already recorded is told nothing** (#3176) — the arm that saves the round
+/// rather than the slot.
+///
+/// The release arm cannot reach a reviewer mid-review: `release_driven_pane`
+/// refuses a pane that is not idle, which is §3 forbidding the driver to kill a
+/// pane mid-turn, and a reviewer is idle only after it reports. So on the case
+/// the issue is actually about — a lane spawned, working, and reading a head the
+/// rebase is about to replace — a release-only fix does nothing at all. This is
+/// the other half: one QUEUED delivery into that lane's own pane
+/// (`Delivery::MidSession` — the mechanism `rd_reuse_pane` types a re-brief
+/// with, never an interrupt), telling it to stand down and report.
+///
+/// Four things are asserted, and the last two are what stop this being a
+/// decoration. **Exactly one delivery** — the rule is a standing property of the
+/// facts, so without `stopped_head` it would re-send on every tick the drive
+/// spends waiting out the same conflict; the second tick is the control for
+/// that, and it is a tick on which nothing about the world changed. **None to a
+/// lane that has already recorded a verdict** — that lane is not mid-review and
+/// has nothing to stand down from, and telling it would be the same false claim
+/// the `conflict` release reason avoids. And the pane is **still alive**: this
+/// arm delivers, it does not kill.
+#[test]
+fn a_busy_lane_on_a_conflicted_pr_is_told_to_stop_once_and_an_answered_one_is_not() {
+    for (arm, answered) in [("busy mid-review", false), ("already recorded", true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, lane) = briefed(&reg, &repo, &gh);
+        reg.set_pr_body_override(Some("b".to_string()));
+        reg.set_pr_head_override(Some(HEAD_A.to_string()));
+        // A delivery needs a pane and a queue that holds — `pause_with_pane`,
+        // the same probe every other delivery test in this file uses.
+        make_delivery_land(&reg, &group, &lane, 4321);
+
+        if answered {
+            record_pass_for(&reg, &group, &lane);
+            reg.rd_drive_group_with(&group, &gh, 25_000);
+            assert_eq!(
+                live_lanes(&reg, &group).first().and_then(|l| l["at_head"].as_str()),
+                Some(HEAD_A),
+                "{arm}: the fixture's premise: the drive has read this lane's verdict"
+            );
+        }
+        // Both arms are MID-TURN — `record_pass_for` writes a verdict file and
+        // does not stamp `idle_since_ms`, so the difference between the arms is
+        // the verdict and nothing else.
+        assert!(
+            reg.agent(&lane).expect("the lane is on the roster").idle_since_ms.is_none(),
+            "{arm}: the fixture's premise: the reviewer has not ended a turn"
+        );
+
+        gh.set_merge_state("CONFLICTING");
+        reg.rd_drive_group_with(&group, &gh, 30_000);
+        // A second tick on which NOTHING about the world has changed: still
+        // CONFLICTING, still the same busy pane, still the same head.
+        reg.rd_drive_group_with(&group, &gh, 40_000);
+
+        let rows = audit_details(&reg, &group, "rd-lane-stopped");
+        assert_eq!(
+            rows.len(),
+            usize::from(!answered),
+            "{arm}: rd-lane-stopped rows — exactly one for a lane mid-review across TWO ticks, \
+             and none at all for one whose verdict is already on record: {rows:?}"
+        );
+        assert_eq!(
+            reg.agent(&lane).map(|a| a.status == AgentStatus::Dead),
+            Some(false),
+            "{arm}: this arm DELIVERS; it never kills, and the pane is busy in both arms"
+        );
+
+        if !answered {
+            let row = &rows[0];
+            assert_eq!(row["pr"], json!(1758), "{arm}: {row}");
+            assert_eq!(row["block"], json!("rev-std"), "{arm}: {row}");
+            assert_eq!(row["agent"], json!(lane), "{arm}: {row}");
+            assert_eq!(row["head"], json!(HEAD_A), "{arm}: {row}");
+            assert_eq!(row["why"], json!("conflict"), "{arm}: {row}");
+
+            // **The line the reviewer actually receives**, read off the pane's
+            // own queue rather than off the renderer — a test that called
+            // `rd_lane_stop_brief` itself would pass just as well if nothing
+            // were ever delivered.
+            let sent = texts_to(&reg, &group, &lane).join("\n---\n");
+            assert!(
+                sent.contains("STOP this review"),
+                "{arm}: the stop line reaches the pane: {sent}"
+            );
+            assert!(
+                sent.contains("call report with outcome done"),
+                "{arm}: …and asks for the report that is what makes the pane releasable: {sent}"
+            );
+            assert!(
+                !sent.contains("Review the change on its merits"),
+                "{arm}: …and NOT `rd_lane_brief`'s carry-on arm, which would contradict it in \
+                 the same paragraph: {sent}"
+            );
+            assert!(
+                !sent.contains('\r'),
+                "{arm}: one paragraph, no stray control characters: {sent}"
+            );
+        }
+    }
+}

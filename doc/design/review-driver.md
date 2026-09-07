@@ -1199,6 +1199,39 @@ this note first.
      **It spends no counter of its own.** #2311 already spends `rebase_attempts`
      for the conflict and hands the worker back; `review_rounds` is untouched here
      exactly as it is there, because no lane delivered any findings.
+     **A lane the release cannot TAKE is TOLD instead, and that is the half that
+     saves the round rather than the slot** (#3176). `release_driven_pane` refuses
+     a pane that is not idle — §3, the driver does not kill a reviewer mid-turn —
+     and a reviewer is idle only once it has reported, so on the case the issue is
+     actually about (a lane spawned, working, reading a doomed head) a
+     release-only rule does nothing at all. So the same candidate list has two
+     arms and exactly one applies per lane per tick: an idle pane is RELEASED, a
+     busy one gets ONE queued delivery telling it to stand down, record no verdict
+     for this head and report — `rd-lane-stopped`, `why: conflict`. The report is
+     what stamps `idle_since_ms`, so the telling is what makes the release
+     possible on a later tick; there is no second mechanism and no second
+     decision.
+     **A queued delivery, never an interrupt.** `Delivery::MidSession`, the same
+     mechanism `rd_reuse_pane` types a re-brief with and the same one #3203 uses
+     for a take-over: it lands on the pane's own queue and is pasted when the CLI
+     next takes input. Nothing is cancelled and no signal is sent, so a reviewer
+     mid-thought finishes it and then reads this — which is the only kind of text
+     orrerix puts into a delegate's pane, and this adds no second kind.
+     **Once per revision, not once per tick**, marked by `LaneRecord::stopped_head`
+     and written on the delivery SUCCEEDING rather than on the intent. The rule is
+     a standing property of the facts (that is what makes the release arm work),
+     so without the mark it would re-send the same paragraph every thirty seconds
+     into a reviewer's own context. The mark is persisted, so a restart does not
+     re-send a line the previous process sent — orrerix cannot read a pane's
+     transcript to find out — and it is cleared by `reseeded`, so the lane is
+     tellable again at the rebased head. It is a MARK and never a permission:
+     nothing decides a release or an arc from it, and a lane told to stop that has
+     not yet reported is still the drive's to wait on.
+     **The stop line does not reuse `rd_lane_brief`'s CONFLICTING arm**, which
+     ends *"Review the change on its merits; the conflict is the worker's to
+     answer"* — an instruction to carry on. What the two share is the fact, not
+     the wording; gluing a stop onto that sentence would hand a reviewer a
+     paragraph that contradicts itself.
    - either of them at the **step that ENDS the drive** — `DriveEnded` for the
      worker, `VerdictRecorded` for the lane; see the STEP condition below.
    Three conditions bound them, and each excludes a case the previous version of
@@ -2247,7 +2280,7 @@ like `mq-*` and the rest:
 `rd-satisfied` · `rd-held` · `rd-resumed` · `rd-cancelled` · `rd-pruned` ·
 `rd-kickback` · `rd-recovered` · `rd-state-unreadable` · `rd-reuse-declined` ·
 `rd-takeover-declined` ·
-`rd-lane-reopened` · `rd-lane-released` · `rd-worker-released` ·
+`rd-lane-reopened` · `rd-lane-released` · `rd-lane-stopped` · `rd-worker-released` ·
 `rd-round-grace` · `rd-hold-repeated` · `rd-notice-demoted` ·
 `rd-provider-limit`
 
@@ -2375,6 +2408,17 @@ item 5's narrowed states: a pane the driver KILLED, with the conversation kept.
 Each carries `pr`, `agent`, the `session` the next round resumes, the `head` it
 was released at, and a `reason` from the closed set `verdict-recorded` |
 `report-consumed` | `drive-ended` | `conflict`; the lane row adds `block`.
+`rd-lane-stopped` (#3176) is the sibling of a `conflict` release rather than a
+variant of it, and the two are mutually exclusive per lane per tick: the release
+frees a delegate SLOT, this frees the ROUND — the reading the lane would
+otherwise finish and record against a head the rebase is about to replace. It
+carries `pr`, `block`, `agent`, the `head` it was told about, and `why:
+conflict` (`why`, as `rd-handback` has it, because like that row it names
+something the WORLD did rather than a state the drive reached). Written on the
+delivery succeeding, once per revision — `LaneRecord::stopped_head` is the mark
+— so a reader counting these is counting reviews actually stood down, not ticks
+that wanted to.
+
 `conflict` (#3176) is a LANE row only, and it is the one reason that does not
 mean a finished review: the PR does not merge, so the lane was reviewing a head
 the rebase is about to replace and had recorded nothing at it. A reader counting

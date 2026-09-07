@@ -526,6 +526,17 @@ pub mod audit_action {
     /// that. Written on the release SUCCEEDING, never on the intent — a pane the
     /// registry refused to release has been released by nobody.
     pub const LANE_RELEASED: &str = "rd-lane-released";
+    /// **A busy reviewer lane was told to STOP** (#3176) — one queued delivery
+    /// into its own pane, because the PR it is reviewing does not merge and the
+    /// head it is reading is about to be rebased away.
+    ///
+    /// A separate action from [`LANE_RELEASED`] because the two are different
+    /// events with different costs: a release frees a delegate slot, and this
+    /// frees the REVIEW — the round the lane would otherwise spend producing a
+    /// verdict that goes stale on arrival. They are also mutually exclusive per
+    /// lane per tick: an idle pane is released, a busy one is told, and the
+    /// telling is what makes the release possible on a later tick.
+    pub const LANE_STOPPED: &str = "rd-lane-stopped";
     /// The worker's pane was **released** — the same event on the other side
     /// (#2501), after the drive consumed that worker's `report` and moved on.
     /// Carries `pr`, `agent`, `session` and `reason`.

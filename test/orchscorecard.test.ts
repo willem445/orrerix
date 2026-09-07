@@ -1436,3 +1436,276 @@ test('indexSpawnCli: `spawned` counts the ROW, a `cli` field on it or not', () =
   // A non-spawn row is not a spawn record however it is shaped.
   assert.equal(idx.spawned.has('w-9'), false);
 });
+
+// ---------------------------------------------------------------------------
+// Driver S0 counters (plan-2504 §3 S0, board t-769) — over the `s0` corpus,
+// whose rows are REAL audit rows of this group's beta9 session (see
+// fixtures/orchscorecard/s0/README.md for which row witnesses which counter).
+// ---------------------------------------------------------------------------
+
+const S0 = path.join(fixtures, 's0');
+
+function runS0(extraArgs: string[] = []): any {
+  const out = execFileSync(process.execPath, [
+    scriptPath,
+    '--audit', path.join(S0, 'audit.jsonl'),
+    '--usage', path.join(S0, 'usage.json'),
+    '--agents', path.join(S0, 'agents.json'),
+    '--pr', '2941', '--pr', '2942', '--pr', '2945', '--pr', '2946', '--pr', '3061',
+    ...extraArgs,
+  ], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  return JSON.parse(out);
+}
+
+const S0REPORT = runS0();
+const s0card = (pr: number) => S0REPORT.prs.find((c: any) => c.pr === pr);
+const s0totals = () => S0REPORT.driver_totals;
+const s0file = () => S0REPORT.group.files[0];
+
+test('classifyOrchPrompt: each class is decided by its leading shape', () => {
+  // Real texts of the beta9 session (the s0 corpus carries the same rows).
+  assert.equal(sc.classifyOrchPrompt('[orrerix] review drive PR #2941: GATE SATISFIED at abb59874 (body 04bd8f4c).'), 'driver-gate-satisfied');
+  assert.equal(sc.classifyOrchPrompt('[orrerix] review drive PR #2941: HELD — this group\'s live-delegate cap has refused this drive\'s next reviewer lane for the whole hold window.'), 'driver-held');
+  assert.equal(sc.classifyOrchPrompt('[orrerix] review drive PR #2942: CANCELLED — the PR is closed or merged — positively established, not inferred.'), 'driver-cancelled');
+  assert.equal(sc.classifyOrchPrompt('[orrerix] run 34049144904: completed — conclusion: success.'), 'run-completed');
+  assert.equal(sc.classifyOrchPrompt('[orrerix] w-2391 reports done (#2941): Ready for review.'), 'delegate-report');
+  assert.equal(sc.classifyOrchPrompt('[orrerix] rev-2468 reports request_changes (#2941): rev-std round 2.'), 'delegate-report');
+  // NEGATIVE CONTROLS: a human-typed line, an unrelated system notice, empty and
+  // absent text are `other` — never a driver class, however much they mention PRs.
+  assert.equal(sc.classifyOrchPrompt('We are now on beta9, please proceed with sprint 3'), 'other');
+  assert.equal(sc.classifyOrchPrompt('[orrerix] PR #2941 checks: SUCCESS — all 5 checks passed.'), 'other');
+  assert.equal(sc.classifyOrchPrompt(''), 'other');
+  assert.equal(sc.classifyOrchPrompt(undefined), 'other');
+  // The driver classes must not swallow each other: a HELD notice is not a
+  // GATE SATISFIED one, and a cancelled drive is neither.
+  assert.notEqual(sc.classifyOrchPrompt('[orrerix] review drive PR #2941: HELD — cap.'), 'driver-gate-satisfied');
+  assert.notEqual(sc.classifyOrchPrompt('[orrerix] review drive PR #2941: CANCELLED — closed.'), 'driver-held');
+  // Every class the script declares is reachable by some shape above.
+  assert.deepEqual(sc.ORCH_PROMPT_KINDS, [
+    'driver-gate-satisfied', 'driver-held', 'driver-cancelled',
+    'delegate-report', 'run-completed', 'other',
+  ]);
+});
+
+test('laneScopeBucket: the scope string decides, and an unknown scope is reported, not dropped', () => {
+  assert.equal(sc.laneScopeBucket('scope: whole-diff'), 'whole_diff');
+  assert.equal(sc.laneScopeBucket('scope: delta since 6a5b44adabce948035876f23c8e8ce12c9062000'), 'delta');
+  assert.equal(sc.laneScopeBucket('scope: body-only'), 'body_only');
+  // An unrecognised scope lands in `other` — visible, never folded into a known one.
+  assert.equal(sc.laneScopeBucket('scope: single-file src/main.rs'), 'other');
+  assert.equal(sc.laneScopeBucket(undefined), 'other');
+});
+
+test('s0: rd-refused cap count and starved_ms max/sum, per PR and as totals', () => {
+  const a = s0card(2941).driver;
+  // Real values: #2941 was refused four times, starved 0/315733/631091/689089 ms —
+  // 689089 is the max the plan-2504 §1 hand tally quotes for this PR.
+  assert.equal(a.refused, 4);
+  assert.equal(a.refused_cap, 4);
+  assert.equal(a.starved_ms_max, 689089);
+  assert.equal(a.starved_ms_sum, 315733 + 631091 + 689089);
+  const b = s0card(2942).driver;
+  assert.equal(b.refused, 2);
+  assert.equal(b.refused_cap, 2);
+  assert.equal(b.starved_ms_max, 629023);
+  assert.equal(b.starved_ms_sum, 313290 + 629023);
+  // The non-cap refusal: #3061's `already-driven` row is a refusal but NOT a cap
+  // refusal, and it carries no starved_ms — so cap 0, max null (nothing measured),
+  // sum 0. A null says "no refusal carried a starvation"; 0 would claim a 0 ms one.
+  const c = s0card(3061).driver;
+  assert.equal(c.refused, 1);
+  assert.equal(c.refused_cap, 0);
+  assert.equal(c.starved_ms_max, null);
+  assert.equal(c.starved_ms_sum, 0);
+  // Totals: the cap refusals pool, the starvation maxes pool, the sums add.
+  const t = s0totals();
+  assert.equal(t.refused_cap, 6);
+  assert.equal(t.starved_ms_max, 689089);
+  assert.equal(t.starved_ms_sum, (315733 + 631091 + 689089) + (313290 + 629023));
+  // NEGATIVE CONTROL on the shared corpus: its three refusals carry neither
+  // `cap` nor `starved_ms`, so the new counters read zero/nothing there — and the
+  // nothing-named PR reads the same.
+  for (const pr of [900, 902]) {
+    const d = card(pr).driver;
+    assert.equal(d.refused_cap, 0);
+    assert.equal(d.starved_ms_max, null);
+    assert.equal(d.starved_ms_sum, 0);
+  }
+});
+
+test('s0: lane scope histogram dedupes on (pr, block, round) — a replaced pane counts once', () => {
+  // #2942 rev-std round 4 spawned rev-2438 (body-only) and later rev-2465
+  // (whole-diff): TWO rows, ONE triple, counted once under the FIRST scope.
+  const b = s0card(2942).driver;
+  assert.equal(b.lane_spawns, 2);
+  assert.equal(b.lane_scope_triples, 1);
+  assert.deepEqual(b.lane_scope, { whole_diff: 0, delta: 0, body_only: 1, other: 0 });
+  // #2946 rev-std round 1: rev-2400 then rev-2410, both whole-diff — one triple.
+  const n = s0card(2946).driver;
+  assert.equal(n.lane_spawns, 2);
+  assert.equal(n.lane_scope_triples, 1);
+  assert.deepEqual(n.lane_scope, { whole_diff: 1, delta: 0, body_only: 0, other: 0 });
+  // #3061 rev-std round 1: rev-2491 (whole-diff) then rev-2498 (delta) — the
+  // replaced pane counts once, as a whole-diff, and the delta second row does NOT
+  // add a delta cell.
+  const c = s0card(3061).driver;
+  assert.equal(c.lane_spawns, 2);
+  assert.equal(c.lane_scope_triples, 1);
+  assert.deepEqual(c.lane_scope, { whole_diff: 1, delta: 0, body_only: 0, other: 0 });
+  // #2941: two DISTINCT triples (round 1 and round 2), both whole-diff — no dedup.
+  const a = s0card(2941).driver;
+  assert.equal(a.lane_spawns, 2);
+  assert.equal(a.lane_scope_triples, 2);
+  assert.deepEqual(a.lane_scope, { whole_diff: 2, delta: 0, body_only: 0, other: 0 });
+  // #2945: the delta triple.
+  const e = s0card(2945).driver;
+  assert.deepEqual(e.lane_scope, { whole_diff: 0, delta: 1, body_only: 0, other: 0 });
+  // Totals: rows are not triples — 9 spawn rows dedupe to 6 (pr, block, round)
+  // triples across the five PRs, and the buckets re-sum to that.
+  const t = s0totals();
+  assert.equal(t.lane_scope_rows, 9);
+  assert.equal(t.lane_scope_triples, 6);
+  assert.equal(t.lane_scope.whole_diff + t.lane_scope.delta + t.lane_scope.body_only + t.lane_scope.other, 6);
+  assert.deepEqual(t.lane_scope, { whole_diff: 4, delta: 1, body_only: 1, other: 0 });
+  // NEGATIVE CONTROL: the shared corpus has three spawn rows without a `scope`
+  // field — they land in `other`, reported; rev-11-prev and rev-11 share the
+  // (900, rev-std, 1) triple, so three rows dedupe to two. And #902 (named by
+  // nothing) reads all zeros.
+  assert.deepEqual(card(902).driver.lane_scope, { whole_diff: 0, delta: 0, body_only: 0, other: 0 });
+  assert.equal(card(902).driver.lane_scope_triples, 0);
+  assert.equal(card(900).driver.lane_spawns, 3);
+  assert.equal(card(900).driver.lane_scope_triples, 2);
+  assert.equal(card(900).driver.lane_scope.other, 2);
+});
+
+test('s0: rd-handback vs rd-worker-released ratio, null where nothing was released', () => {
+  // #2941: one hand-back, the worker NEVER released (plan-2504 §1 finding (b) —
+  // the orchestrator killed w-2476 by hand). A null denominator must read null,
+  // not 0: 0 would claim "no hand-backs".
+  const a = s0card(2941).driver;
+  assert.equal(a.hand_backs, 1);
+  assert.equal(a.workers_released, 0);
+  assert.equal(a.handback_ratio, null);
+  // #2942 and #2945: released exactly as often as handed back (the body-only /
+  // pushed-report releases), ratio 1.
+  assert.equal(s0card(2942).driver.handback_ratio, 1);
+  assert.equal(s0card(2945).driver.handback_ratio, 1);
+  // Totals: 3 hand-backs, 2 releases.
+  const t = s0totals();
+  assert.equal(t.hand_backs, 3);
+  assert.equal(t.workers_released, 2);
+  assert.equal(t.handback_ratio, 1.5);
+  // NEGATIVE CONTROL: the shared corpus released nothing, so the ratio is null
+  // there too — for the denominator, never for a missing numerator.
+  assert.equal(card(900).driver.hand_backs, 1);
+  assert.equal(card(900).driver.workers_released, 0);
+  assert.equal(card(900).driver.handback_ratio, null);
+});
+
+test('s0: agent-kill by initiator — per PR via attribution, the rest named', () => {
+  // #2941: the driver released its own lanes (rev-2416, rev-2468), and the
+  // orchestrator killed w-2476 — attributed to #2941 because the hand-back row
+  // names that agent and no other PR.
+  const a = s0card(2941).driver.kills_by_initiator;
+  assert.deepEqual(a, { 'driver-release': 2, orchestrator: 1 });
+  // #2942, #2945, #2946: driver-release of a hand-back-named worker / a lane.
+  assert.deepEqual(s0card(2942).driver.kills_by_initiator, { 'driver-release': 1 });
+  assert.deepEqual(s0card(2945).driver.kills_by_initiator, { 'driver-release': 1 });
+  assert.deepEqual(s0card(2946).driver.kills_by_initiator, { 'driver-release': 1 });
+  // #3061: no kill of any agent attributed solely to it.
+  assert.deepEqual(s0card(3061).driver.kills_by_initiator, {});
+  // Totals count EVERY kill row by its initiator — including the two the cards
+  // cannot take: w-2388 (no spawn row in this corpus) and w-2391 (its real spawn
+  // brief names #2011, not a selected PR). 8 rows = 6 in cards + 2 not.
+  const t = s0totals();
+  assert.equal(t.kills_total, 8);
+  assert.deepEqual(t.kills_by_initiator, { 'driver-release': 5, orchestrator: 3 });
+  assert.equal(t.kills_in_cards, 6);
+  assert.equal(t.kills_not_in_cards, 2);
+  assert.deepEqual(t.kills_agents_not_in_cards, ['w-2388', 'w-2391']);
+  // The reconciliation holds: initiator totals = in-cards + not-in-cards.
+  const sum = Object.values(t.kills_by_initiator).reduce((x: any, y: any) => x + y, 0);
+  assert.equal(sum, t.kills_in_cards + t.kills_not_in_cards);
+  // NEGATIVE CONTROL: no kill rows name the shared corpus's PRs — the bucket is
+  // empty rather than absent, like every untouched driver counter.
+  assert.deepEqual(card(902).driver.kills_by_initiator, {});
+  assert.deepEqual(card(900).driver.kills_by_initiator, {});
+});
+
+test('s0: prompt rows into the orchestrator pane by class, per PR and per file', () => {
+  // #2941: two GATE SATISFIED notices, one HELD, one worker report — all prompt
+  // rows delivered to the orchestrator pane naming the PR inside its window.
+  const a = s0card(2941).orchestrator.prompt_classes;
+  assert.deepEqual(a, {
+    'driver-gate-satisfied': 2, 'driver-held': 1, 'driver-cancelled': 0,
+    'delegate-report': 1, 'run-completed': 0, other: 0,
+  });
+  // #2942 and #2946: one CANCELLED each.
+  assert.equal(s0card(2942).orchestrator.prompt_classes['driver-cancelled'], 1);
+  assert.equal(s0card(2946).orchestrator.prompt_classes['driver-cancelled'], 1);
+  // Per-file totals: every prompt row to an orchestrator pane, classed — 8 rows
+  // here (2 gate + 1 held + 2 cancelled + 1 report + 1 run check + 1 typed), and
+  // the buckets re-sum to the total.
+  const f = s0file();
+  assert.equal(f.orch_prompt_total, 8);
+  assert.deepEqual(f.orch_prompt_classes, {
+    'driver-gate-satisfied': 2, 'driver-held': 1, 'driver-cancelled': 2,
+    'delegate-report': 1, 'run-completed': 1, other: 1,
+  });
+  const sum = Object.values(f.orch_prompt_classes).reduce((x: any, y: any) => x + y, 0);
+  assert.equal(sum, f.orch_prompt_total);
+  // NEGATIVE CONTROL: the shared corpus's orchestrator-prompt classes sit beside
+  // the wake classes it already pins, and #902 sees none of them.
+  assert.equal(card(902).orchestrator.prompt_classes['driver-gate-satisfied'], 0);
+  assert.equal(card(902).orchestrator.prompt_classes.other, 0);
+});
+
+test('s0: the driver totals block pools the per-PR drive outcomes the baseline quotes', () => {
+  const t = s0totals();
+  // From the fixture rows: two #2941 drives (one re-drive), one #2942 drive;
+  // two satisfied rows on #2941; one hand-back each on 2941/2942/2945.
+  assert.equal(t.drives, 3);
+  assert.equal(t.satisfied, 2);
+  assert.equal(t.held, 0);
+  assert.equal(t.cancelled, 0);
+  // `orch_prompt_total` pools the per-file figures, so a comment quotes one number.
+  assert.equal(t.orch_prompt_total, 8);
+});
+
+test('--from bounds the log backward, and with --cut it windows the plan-2504 §1 session', () => {
+  // The shared corpus's rows run 1700000000000..1700002000000. A --from past the
+  // first rows drops them everywhere — including counters that never windowed
+  // before: #900's rd-started (ts 1700000120000) is gone, so the drive count
+  // falls to 0 while its later refusal rows survive.
+  const report = JSON.parse(runScorecard(['--from', '1700000300000']));
+  const d = report.prs.find((c: any) => c.pr === 900).driver;
+  assert.equal(d.drives, 0);
+  assert.equal(d.refused, 3);
+  // The window is reported on the run, so a reader knows which slice a table is.
+  assert.equal(report.inputs.from_ms, 1700000300000);
+  // And the default is null — an unbounded start is a fact, not a zero.
+  assert.equal(REPORT.inputs.from_ms, null);
+  // ISO parses the same way --cut's does.
+  const iso = JSON.parse(runScorecard(['--from', '2023-11-14T22:18:20.000Z']));
+  assert.equal(iso.inputs.from_ms, 1700000300000);
+});
+
+test('driverTotals pools the pre-S0 release counters the §1 table quotes beside the new ones', () => {
+  // Built directly on the exported function: lanes_released and rounds_grace
+  // predate S0, but the §1 control quotes them as totals, so the totals block
+  // carries them pooled — one instrument for the whole comparison table.
+  const t = sc.driverTotals([
+    { driver: { drives: 1, satisfied: 1, held: 0, cancelled: 0, refused: 0, refused_cap: 0,
+      starved_ms_max: null, starved_ms_sum: 0, lane_spawns: 2, lane_scope: { whole_diff: 1, delta: 0, body_only: 0, other: 0 },
+      lane_scope_triples: 1, hand_backs: 1, workers_released: 0, lanes_released: 2, rounds_grace: 1,
+      kills_by_initiator: {} }, orchestrator: { prompt_classes: sc.emptyOrchPromptCounts() } },
+    { driver: { drives: 0, satisfied: 0, held: 0, cancelled: 0, refused: 0, refused_cap: 0,
+      starved_ms_max: null, starved_ms_sum: 0, lane_spawns: 0, lane_scope: { whole_diff: 0, delta: 0, body_only: 0, other: 0 },
+      lane_scope_triples: 0, hand_backs: 0, workers_released: 1, lanes_released: 3, rounds_grace: 0,
+      kills_by_initiator: {} }, orchestrator: { prompt_classes: sc.emptyOrchPromptCounts() } },
+  ], [], [], new Map());
+  assert.equal(t.lanes_released, 5);
+  assert.equal(t.rounds_grace, 1);
+  assert.equal(t.hand_backs, 1);
+  assert.equal(t.workers_released, 1);
+});

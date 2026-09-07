@@ -219,14 +219,14 @@ reported. It exists because the plan-2504 §1 hand tally (issue #2811, comment
 5562317136) is quoted as session totals, and a table that cannot add up to the
 figure it is checked against is not a table — it is a quiz.
 
-#### The §1 control, reconciled (measured 2026-09-06, head 4638ae3f; two rows
-corrected 2026-09-06 at head 25dae25c — satisfied and lane-released, whose
-first-written explanations were contradicted by a per-drive trace and a
-boundary check; both now state "does not reconstruct")
+#### The §1 control, reconciled
 
-The baseline run (`--all --from 1788706648042 --cut 1788729593887` over both
-audit generations, 5,024 rows; posted on #2812 as "beta9 baseline (S0)") against
-the plan-2504 §1 hand tally, figure by figure:
+Measured 2026-09-06 at head 4638ae3f; the satisfied and lane-released rows
+corrected 2026-09-06 at head 25dae25c, whose first-written explanations were
+contradicted by a per-drive trace and a boundary check — both now state "does
+not reconstruct". The baseline run (`--all --from 1788706648042 --cut
+1788729593887` over both audit generations, 5,024 rows; posted on #2812 as
+"beta9 baseline (S0)") against the plan-2504 §1 hand tally, figure by figure:
 
 | Figure | §1 (hand) | S0 (mechanical) | Verdict |
 | --- | --- | --- | --- |
@@ -235,7 +235,7 @@ the plan-2504 §1 hand tally, figure by figure:
 | refused (cap) + max starved_ms | 22 / 689,089 | 22 / 689,089 | reproduces, all three quoted per-PR maxima included |
 | worker-released / round-grace | 5 / 0 | 5 / 0 | reproduces |
 | orchestrator prompt rows / driver G+H+C | 126 / 29 | 126 / 29 | reproduces |
-| satisfied | 20 | 23 rows | does not reconstruct — a finding about the hand tally: the 23 rows are 23 terminal satisfied endings (all 8 gaps between consecutive satisfactions carry an intervening re-drive — 0 same-drive resatisfications), held is non-terminal (all 3 held drives resumed to a satisfied tail), and 26 drives = 23 satisfied + 3 cancelled with 0 unresolved; no unit on this log yields 20 |
+| satisfied | 20 | 23 rows | does not reconstruct — a finding about the hand tally: the 23 rows are 23 terminal satisfied endings (all 8 gaps between consecutive satisfactions carry an intervening re-drive — 0 same-drive resatisfactions), held is non-terminal (all 3 held drives resumed to a satisfied tail), and 26 drives = 23 satisfied + 3 cancelled with 0 unresolved; no unit on this log yields 20 |
 | hand-backs | 20 | 21 rows | unit: one hand-back was written twice (#3038's w-2460, after the orchestrator kill and again after the recovery — §1(c)); 21 − 1 double-written event = 20 |
 | lane-released | 67 | 66 at the stated cut | does not reconstruct — 0 releases fall between the window end (21:19:53.887Z) and the plan's posting (21:32:01Z, never edited), and the first after-cut release (21:34:48Z) postdates the tally, so §1's 67 is not a window artefact; no window on this log yields 67 |
 | lane scope W/D/B | 30 / 19 / 7 (56) | 42 / 16 / 6 (64 triples; 68 raw rows) | unreconstructable: 56 is below the raw row count, and no dedup variant on these rows yields 30/19/7 — a finding about the hand tally's unit or population |

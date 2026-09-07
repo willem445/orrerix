@@ -11601,3 +11601,71 @@ fn drive_review_resumes_a_provider_limited_drive() {
         "a cleared limit must not re-hold on the next tick"
     );
 }
+
+/// **The half of the union the design argument rests on**, and the one no other
+/// test here reaches: a drive in `fix-wait` owns a WORKER pane and no open lane
+/// at all, so a per-`LaneFact` field — which is how plan-2504 words this —
+/// structurally could not see it. That is why `provider_limited` is a
+/// drive-level fact, and this is what makes the claim falsifiable rather than
+/// merely argued in a design note.
+#[test]
+fn a_limited_worker_pane_parks_a_drive_in_fix_wait() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _session) = driven(&reg, &repo, &gh);
+
+    let handed = to_first_handback(&reg, &group, &gh);
+    let (_pr, worker) = handed
+        .handbacks
+        .first()
+        .cloned()
+        .expect("the drive hands the fix back to a worker");
+    assert_eq!(
+        status_state(&reg, &group),
+        "fix-wait",
+        "fixture: the drive must be in the state whose only owned pane is the worker"
+    );
+    // ...and it must genuinely have NO open lane, or this test would pass
+    // through the lane half of the union and prove nothing about the worker.
+    let s = reg.review_drive_status(&group);
+    let lane_agents: Vec<String> = s["drives"][0]["lanes"]
+        .as_array()
+        .map(|ls| {
+            ls.iter()
+                .filter_map(|l| l["agent"].as_str())
+                .filter(|a| !a.is_empty())
+                .map(|a| a.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    for a in &lane_agents {
+        assert_ne!(
+            *a, worker,
+            "fixture: the worker must not also be a lane agent, or the union is not being split"
+        );
+        assert!(
+            reg.provider_limit_for_agent(a).is_none(),
+            "fixture: no lane pane may be limited here — only the worker is"
+        );
+    }
+
+    reg.set_provider_limit_for_test(&worker, "anthropic");
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+
+    let s = reg.review_drive_status(&group);
+    assert_eq!(s["drives"][0]["state"], json!("held"), "the drive must park: {s}");
+    assert_eq!(
+        s["drives"][0]["held_reason"],
+        json!("provider-limit"),
+        "…on the worker pane's provider, which no per-lane fact could see: {s}"
+    );
+    // The other provider, named — so this is not passing on a hard-coded one.
+    let notices = reg.rd_drive_group_with(&group, &gh, 60_000);
+    let _ = notices;
+    assert!(
+        s["drives"][0]["counters"]["review_rounds"].as_u64().unwrap_or(99) <= 1,
+        "a provider limit spends no round of its own: {s}"
+    );
+}

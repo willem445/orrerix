@@ -51316,7 +51316,7 @@ impl OrchRegistry {
                     return Err(self.abandon_structured_spawn(
                         group_id,
                         &agent_id,
-                        &token,
+                        &entry.token,
                         format!("guardrail: block {} — {cli} is not on PATH", block.id),
                     ))
                 }
@@ -51326,7 +51326,7 @@ impl OrchRegistry {
             let pane = match self.spawn_structured_pane(harness, &entry, &spec, &program, &prefix)
             {
                 Ok(p) => p,
-                Err(e) => return Err(self.abandon_structured_spawn(group_id, &agent_id, &token, e)),
+                Err(e) => return Err(self.abandon_structured_spawn(group_id, &agent_id, &entry.token, e)),
             };
             if let Some(app) = self.app.lock_safe().clone() {
                 use tauri::Manager;

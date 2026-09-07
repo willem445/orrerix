@@ -658,6 +658,15 @@ pub struct PdSlice {
     /// When the worker pane was opened.
     #[serde(default)]
     pub spawned_ms: u64,
+    /// The worktree this slice was given, remembered so a slice released from a
+    /// hold RESUMES in the workspace it already had.
+    ///
+    /// Without it a released slice tries to cut its branch a second time and
+    ///  refuses the path that is already there — which made
+    /// the release fail silently, one layer below the board rollback that made
+    /// it fail silently the first time.
+    #[serde(default)]
+    pub cwd: String,
     /// This slice's worker has reported `done`, and the hand-off to the review
     /// driver has not happened yet.
     ///
@@ -690,6 +699,7 @@ impl PdSlice {
             pr: 0,
             cap_starved_since_ms: 0,
             spawned_ms: 0,
+            cwd: String::new(),
             reported_done: false,
             extra: BTreeMap::new(),
         }

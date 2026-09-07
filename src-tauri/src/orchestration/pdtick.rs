@@ -1262,8 +1262,11 @@ impl OrchRegistry {
                     s.advance(plandrive::SliceState::Queued, None);
                     s.cap_starved_since_ms = 0;
                     s.reported_done = false;
+                    // The PANE is forgotten and the WORKSPACE is not. A released
+                    // slice resumes the session it already had, in the worktree
+                    // its branch is already checked out at — cutting a second
+                    // one is refused by git, not merely wasteful.
                     s.agent.clear();
-                    s.session.clear();
                 }
             }
             if plandrive::store_state(&dir, &state).is_err() {
@@ -1988,7 +1991,12 @@ impl OrchRegistry {
                         continue;
                     }
                     let task_id = run.task_id.clone();
-                    match self.pd_spawn_slice(group, issue, slice, base.as_deref(), &task_id, now) {
+                    let (psession, pcwd) = (run.session.clone(), run.cwd.clone());
+                    let prior = (!psession.is_empty() && !pcwd.is_empty())
+                        .then_some((psession.as_str(), pcwd.as_str()));
+                    match self
+                        .pd_spawn_slice(group, issue, slice, base.as_deref(), &task_id, prior, now)
+                    {
                         Ok(agent) => {
                             *spawn_budget -= 1;
                             // `else break`, never `?`: an early return here
@@ -2000,6 +2008,7 @@ impl OrchRegistry {
                             let Some(run) = entry.slices.get_mut(id) else { break };
                             run.agent = agent.id.clone();
                             run.session = agent.session_id.clone().unwrap_or_default();
+                            run.cwd = agent.cwd.clone();
                             run.spawned_ms = now;
                             run.cap_starved_since_ms = 0;
                             run.advance(plandrive::SliceState::Running, None);
@@ -2186,6 +2195,15 @@ impl OrchRegistry {
     /// refused outright by a WIP cap. Spawning first and claiming second would
     /// open a pane the board then refused to account for; this way a full board
     /// costs nothing but a retry next tick.
+    ///
+    /// **A slice that already HAS a workspace resumes into it**, and this is not
+    /// an optimisation: a released slice's branch is already checked out at a
+    /// path, and `git worktree add` refuses a path that exists — so cutting a
+    /// second one is not a slower way to succeed, it is a failure. `prior` is
+    /// the review driver's own resume shape (`rd_spawn`): `use_worktree: false`
+    /// beside a `cwd_override`, which says "this spawn cuts nothing" rather than
+    /// relying on a later branch to ignore a `true`.
+    #[allow(clippy::too_many_arguments)]
     fn pd_spawn_slice(
         &self,
         group: &GroupId,
@@ -2193,6 +2211,7 @@ impl OrchRegistry {
         slice: &plandoc::Slice,
         base: Option<&str>,
         task_id: &str,
+        prior: Option<(&str, &str)>,
         now: u64,
     ) -> Result<AgentEntry, String> {
         let _ = now;
@@ -2203,17 +2222,24 @@ impl OrchRegistry {
             super::TaskPatch { claim: true, ..super::TaskPatch::default() },
         )?;
         let brief = self.pd_slice_brief(issue, slice, base);
+        let (resume, cwd) = match prior {
+            Some((s, c)) if !s.is_empty() && !c.is_empty() => {
+                (Some(s.to_string()), Some(c.to_string()))
+            }
+            _ => (None, None),
+        };
+        let fresh = cwd.is_none();
         let agent = self.spawn_agent_bound(
             group,
             Role::Worker,
             Some(slice.block.clone()),
             &format!("{} {}", slice.id.as_str(), slice.title),
             &brief,
-            true,
-            Some(slice.branch.as_str().to_string()),
+            fresh,
+            fresh.then(|| slice.branch.as_str().to_string()),
             base.map(str::to_string).filter(|b| !b.trim().is_empty()),
-            None,
-            None,
+            resume,
+            cwd,
             None,
             Some(task_id.to_string()),
         )?;

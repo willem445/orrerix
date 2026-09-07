@@ -2231,6 +2231,16 @@ impl OrchRegistry {
         let ci = match brief.ci {
             reviewdrive::CiObservation::Green => "This PR's checks are green at that head.",
             reviewdrive::CiObservation::Red => "This PR's checks are RED at that head. Review the change on its merits; the failure is the worker's to answer.",
+            // **Unreachable through `decide` since #2311, and kept anyway.**
+            // Arc 8 was the one route that briefed a lane on a conflicting PR;
+            // mergeability is now read above the per-state logic, so that tick
+            // hands the worker back instead — which is the better trade, since
+            // reviewing a PR that must be rebased anyway spends a paid round on
+            // a revision that will not survive. The arm stays because the match
+            // is over a closed enum and a future arc could reach `review-wait`
+            // without consulting mergeability again; what stops it coming back
+            // to life unnoticed is `a_conflicting_pr_briefs_no_lane_at_all`,
+            // which performs the counterfactual rather than describing it.
             reviewdrive::CiObservation::Conflicting => "This PR does not merge cleanly at that head. Review the change on its merits; the conflict is the worker's to answer.",
             // Pending and Unknown share one sentence on purpose: §8 says unknown
             // is never reported as a fact about the PR, and not-green-yet is the

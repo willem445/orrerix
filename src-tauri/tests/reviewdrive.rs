@@ -12026,11 +12026,16 @@ fn the_restart_hand_back_charges_no_counter() {
         after, before,
         "a restart must spend none of INVARIANT 9's budget: {before} -> {after}"
     );
-    assert_eq!(
-        action_count(&reg, &group, "rd-handback"),
-        1,
-        "and exactly one hand-back happened in this process"
-    );
+    // **Counted by `why`, not in total.** The audit log is on disk and both
+    // registries append to it, so the total also carries the fixture's own
+    // `ci-red` hand-back from before the restart; what this test is about is
+    // that the restart produced exactly one re-brief and charged nothing for
+    // it.
+    let restarts = audit_details(&reg, &group, "rd-handback")
+        .into_iter()
+        .filter(|d| d["why"] == json!("restart"))
+        .count();
+    assert_eq!(restarts, 1, "exactly one restart re-brief, and it spent nothing");
 }
 
 /// The mark the reconcile leaves is worth **one tick**, and the second tick is

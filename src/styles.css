@@ -5736,6 +5736,11 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tokens-row-total td { color: var(--ink); font-weight: 600; }
 .tokens-cell-key { font-family: var(--font-mono); }
 .tokens-cell-num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* The scorecard section (slice D) reuses the readout's table vocabulary —
+   same table, same cells — and adds only its own spacing. */
+.tokens-scorecard { padding: 8px 12px 0; }
+.tokens-scorecard .tokens-note { margin-top: 4px; }
 /* Direction is a STATE (is this better or worse), so it takes state dyes —
    never an identity hue, which would mix two channels in one position. */
 .tokens-cell-num.up { color: var(--state-attention); }

@@ -51,6 +51,13 @@ import {
   type Metric,
 } from "./tokencharts";
 import { makeScale, niceTicks, xForTs, type TimelineScale } from "./timelinelayout";
+import { scorecardTable, type ScorecardTable } from "./tokenscorecard";
+import type { AuditEntry } from "./auditsummary";
+
+/** Structural stand-ins for the memo's keys — the real `AuditEntry[]` and
+ *  `UsageSeries["agents"]` pass straight in. */
+type AuditEntryLike = AuditEntry;
+type AgentRosterLike = UsageSeries["agents"][number];
 
 /** Re-poll cadence while following. See the header: the series advances once
  *  per five-minute bucket, so 30 s is already far finer than the data. */
@@ -153,6 +160,16 @@ const fmtTime = (ms: number): string =>
     minute: "2-digit",
   });
 
+/** One scorecard cell — `orch-scorecard.cjs`'s `fmtCell`, pane-widthed: the
+ *  median, then the IQR and n that say whether the middle moved and whether
+ *  the spread swamps it. A cell below the median's floor is `n/a (n=…)` —
+ *  legible as "not enough data", never as a missing measurement, and never
+ *  a plausible zero. */
+function fmtCell(c: { n: number; median: number | null; q1: number | null; q3: number | null }): string {
+  if (c.median === null) return `n/a (n=${c.n})`;
+  return `${c.median} (IQR ${c.q1}–${c.q3}, n=${c.n})`;
+}
+
 export class TokenChartsView {
   readonly el: HTMLElement;
   private countEl: HTMLElement;
@@ -168,12 +185,25 @@ export class TokenChartsView {
   private plotEl: HTMLElement;
   private barsEl: HTMLElement;
   private readoutEl: HTMLElement;
+  private scorecardEl: HTMLElement;
   private notesEl: HTMLElement;
 
   /** The last successful read, kept whole. Null before the first one lands —
    *  which is a THIRD state beside "empty" and "failed", and the empty text
    *  below distinguishes all three. */
   private series: UsageSeries | null = null;
+  /** The scorecard table is a pure function of the audit read and the series
+   *  roster, and NEITHER enters the render signature's geometry — but
+   *  `widthPx` does, so a window drag re-renders per rAF step. Memoized on
+   *  the two inputs' array identities (the `AuditStore` replaces its array
+   *  wholesale per read and hands out the same reference otherwise), so a
+   *  drag reuses the table and only a fresh read recomputes it (#3131
+   *  review N1). The table is never mutated after computing. */
+  private scorecardMemo: {
+    audit: readonly AuditEntryLike[];
+    agents: readonly AgentRosterLike[] | undefined;
+    table: ScorecardTable;
+  } | null = null;
   private readError: unknown = null;
   /** The last board read failed, so the bar attribution is the previous
    *  one. Surfaced as a note — a stale split is fine, a silent one is not. */
@@ -306,8 +336,9 @@ export class TokenChartsView {
     this.plotEl = el("div", "tokens-plot");
     this.barsEl = el("div", "tokens-bars");
     this.readoutEl = el("div", "tokens-readout");
+    this.scorecardEl = el("div", "tokens-scorecard");
     this.notesEl = el("div", "tokens-notes");
-    this.bodyEl.append(this.legendEl, this.plotEl, this.barsEl, this.readoutEl, this.notesEl);
+    this.bodyEl.append(this.legendEl, this.plotEl, this.barsEl, this.readoutEl, this.scorecardEl, this.notesEl);
 
     this.el.append(head, this.controlsEl, this.bodyEl);
 
@@ -495,6 +526,8 @@ export class TokenChartsView {
       rows.length,
       this.series?.first_ts_ms ?? "",
       this.series?.skipped ?? "",
+      this.store.cached.length,
+      this.series?.agents.length ?? "",
       this.board.length,
       this.boardStale ? "1" : "0",
       this.windowId,
@@ -539,6 +572,7 @@ export class TokenChartsView {
     this.renderPlot(series, markList, widthPx);
     this.renderBars(bars);
     this.renderReadout(series, markList);
+    this.renderScorecard();
     this.renderNotes(series, bars);
   }
 
@@ -999,6 +1033,129 @@ export class TokenChartsView {
           }`;
     tr.append(change);
     return tr;
+  }
+
+  /** The scorecard table (#2011 slice D): one row per `block/cli` lane with
+   *  the review-loop columns beside it, computed by `tokenscorecard.ts` (a
+   *  port of `scripts/orch-scorecard.cjs`, which stays the spec) over the
+   *  SAME reads this view already holds — the shared `AuditStore` and the
+   *  series roster. The caption is the coverage floor's spawn-row-missing
+   *  rule: a window credited with a delegate whose `agent-spawn` row did
+   *  not survive the read has lost rows, and says so rather than reading as
+   *  complete. */
+  private renderScorecard(): void {
+    this.scorecardEl.replaceChildren();
+    const auditRows = this.store.cached;
+    const agents = this.series?.agents;
+    if (
+      !this.scorecardMemo ||
+      this.scorecardMemo.audit !== auditRows ||
+      this.scorecardMemo.agents !== agents
+    ) {
+      this.scorecardMemo = { audit: auditRows, agents, table: scorecardTable(auditRows, agents ?? []) };
+    }
+    const sc = this.scorecardMemo.table;
+    if (!this.store.attempted) {
+      // "We have not looked" — distinguishable from a genuinely quiet log
+      // only by saying which of the two it is. The store carries all three
+      // states (#1317): not yet read, read failed, and a real (possibly
+      // empty) answer — each gets its own sentence (#3131 review N2).
+      this.scorecardEl.append(
+        el("div", "tokens-section-title", "scorecard — per block × cli"),
+        el("div", "tokens-note", "The audit log has not been read yet, so there is nothing to score."),
+      );
+      return;
+    }
+    if (!this.store.loaded) {
+      this.scorecardEl.append(
+        el("div", "tokens-section-title", "scorecard — per block × cli"),
+        el("div", "tokens-note", "The last audit read failed, so there is nothing to score; the table returns when a read succeeds."),
+      );
+      return;
+    }
+    if (sc.floor.rowsRead === 0) {
+      // A real answer: the read succeeded and the log holds no rows.
+      this.scorecardEl.append(
+        el("div", "tokens-section-title", "scorecard — per block × cli"),
+        el("div", "tokens-note", "The audit log was read and has no rows, so there is nothing to score."),
+      );
+      return;
+    }
+    this.scorecardEl.append(el("div", "tokens-section-title", "scorecard — per block × cli"));
+    if (sc.cards.length === 0) {
+      this.scorecardEl.append(
+        el(
+          "div",
+          "tokens-note",
+          "No PR in the audit window has a review loop yet — the table appears when review verdicts do."
+        ),
+      );
+      return;
+    }
+    const table = el("table", "tokens-table");
+    const thead = el("thead", "");
+    const hr = el("tr", "");
+    for (const h of ["lane", "PRs", "median rounds to pass", "fail rate", "median wall-clock (h)"]) {
+      hr.append(el("th", "", h));
+    }
+    thead.append(hr);
+    table.append(thead);
+    const tbody = el("tbody", "");
+    for (const r of sc.rows) {
+      const tr = el("tr", "");
+      tr.append(el("td", "tokens-cell-key", r.key));
+      const prs = el("td", "tokens-cell-num", String(r.prs.length));
+      prs.title = `PRs scored for this lane: ${r.prs.map((p) => `#${p}`).join(", ")}`;
+      tr.append(prs);
+      tr.append(el("td", "tokens-cell-num", fmtCell(r.roundsToPass)));
+      tr.append(el("td", "tokens-cell-num", fmtCell(r.failRate)));
+      tr.append(el("td", "tokens-cell-num", fmtCell(r.wallClockH)));
+      tbody.append(tr);
+    }
+    table.append(tbody);
+    this.scorecardEl.append(table);
+
+    // The coverage floor caption (slice A's `coverageFloor`, spawn-row
+    // half). Stated even when empty — a caption that only speaks when it
+    // has bad news reads as vacuous the first time it has none.
+    if (sc.floor.missingSpawn.length > 0) {
+      const parts = sc.floor.missingSpawn.map(
+        (m) => `#${m.pr} (${m.agents.join(", ")})`,
+      );
+      this.scorecardEl.append(
+        el(
+          "div",
+          "tokens-note",
+          `${fmtInt.format(sc.floor.missingSpawn.length)} window(s) PROVEN truncated — a credited ` +
+            `delegate's agent-spawn row did not survive the read, so rows for it were dropped: ` +
+            `${parts.join("; ")}. Those counters are a lower bound.`
+        ),
+      );
+    } else {
+      this.scorecardEl.append(
+        el(
+          "div",
+          "tokens-note",
+          "No window is proven truncated: every credited delegate's agent-spawn row survived the read."
+        ),
+      );
+    }
+    if (sc.excluded.length > 0) {
+      const shown = sc.excluded
+        .slice(0, 3)
+        .map((x) => `#${x.pr} ${x.block}: ${x.why}`);
+      const rest = sc.excluded.length - shown.length;
+      this.scorecardEl.append(
+        el(
+          "div",
+          "tokens-note",
+          `${fmtInt.format(sc.excluded.length)} lane(s) not on the table — the lane's CLI could not be ` +
+            `resolved to one, and nothing is guessed: ${shown.join("; ")}` +
+            (rest > 0 ? `; +${fmtInt.format(rest)} more` : "") +
+            "."
+        ),
+      );
+    }
   }
 
   /** Everything this chart is NOT showing. The coverage floor above all — a

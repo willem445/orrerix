@@ -1224,6 +1224,29 @@ for the hour before against the hour after, per series and in total. That is
 the "did this help?" number. It reads **n/a**, never zero, when there is not a
 full hour on one side — the chart will not invent a comparison it cannot make.
 
+**The scorecard table.** Below the readout, one row per **block and CLI** that
+carried a review lane in the audit window (`rev-std/pi`, `rev-final/claude`,
+…), with four columns: how many PRs that lane was credited on, the **median
+rounds to first pass**, the **median fail rate** (fails ÷ decided verdicts,
+per PR, then the median of those), and the **median wall-clock** in hours —
+first audit row naming a PR to the last `rd-*` row carrying it. The
+arithmetic is the same script's that produced the #2011 comparison table
+(medians, never totals — different PRs are different work), and a column with
+fewer than three PRs behind it reads **n/a (n=…)** rather than a number: two
+points is an average of a pair, and one is an anecdote. A lane whose CLI
+cannot be resolved to exactly one — two clis on one PR, or a delegate the
+roster does not name — is left **off** the table and listed in the caption
+underneath, never guessed from the block's declared CLI. Everything here is
+computed from the audit log the pane already shows, so it sees the same
+window the audit viewer does.
+
+Under the table, a **coverage caption** states whether the read is complete:
+a PR credited with a delegate whose `agent-spawn` row did not survive the
+read has provably lost rows (the log rotated them away), and its counters —
+here and everywhere else in this panel — are a lower bound. When no window
+is missing a spawn row, the caption says that too, so "nothing to report"
+is a claim you can check rather than an absence you have to trust.
+
 #### What it is deliberately honest about
 
 All of these are printed under the charts rather than left for you to
@@ -1254,6 +1277,11 @@ discover:
 - **Costs say whether they were reported or estimated.** A dollar figure with
   no provenance is claiming a precision it has not got, and a bar whose cost
   cannot be known reads *n/a* rather than `$0.00`.
+- **The scorecard's counts are a lower bound over the audit window.** The
+  pane reads at most a few thousand rows of a rotating log, so "2 review
+  rounds" for an old PR may mean "2 that survived". The coverage caption
+  names every window that provably lost rows, and the audit-floor note in
+  the list below names the window's start.
 
 Follow re-reads every 30 seconds. The underlying series only advances every
 five minutes, so there is nothing to gain by looking harder.

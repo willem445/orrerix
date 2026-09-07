@@ -620,6 +620,75 @@ impl OrchRegistry {
             .find_map(|e| e.driven_role(agent_id).map(|r| (e.pr, r)))
     }
 
+    /// **Every pane a live drive CURRENTLY owns**, agent id -> (PR, side)
+    /// (#2811 S2) — the roster-wide form of the question [`rd_owner`] answers
+    /// for one caller.
+    ///
+    /// # One ownership read, not a second definition
+    ///
+    /// #2555 item 1 is the class this closes: three surfaces that had to know
+    /// whether a pane belongs to a drive — the roster row, the kill refusal and
+    /// the cap-refusal roster — and no shared answer for them to read, so the
+    /// orchestrator killed a drive's idle worker 42 s before the drive needed it
+    /// (#3038). The answer is derived HERE, through
+    /// [`reviewdrive::DriveEntry::driven_role`] — the same predicate `rd_owner`
+    /// uses, asked of the panes [`reviewdrive::DriveEntry::owned_panes`] names —
+    /// so "the drive owns this pane" has one definition and a fourth consumer
+    /// gets it by calling this rather than by re-reading the file its own way.
+    ///
+    /// **`current` panes only, and that is a narrowing with a reason.** A
+    /// superseded pane is one the drive will never speak to again
+    /// ([`reviewdrive::DrivenPane::current`] is exactly that distinction): its
+    /// traffic is still intercepted, which is what `rd_owner` is for, but the
+    /// drive needs nothing further from it, and refusing an orchestrator's kill
+    /// on it would hold a slot the drive has finished with — the opposite of the
+    /// cost #3038 is about. So a superseded pane is killable and unmarked.
+    ///
+    /// That narrowing is pinned as the `current` filter below and NOT
+    /// behaviourally, and the residual is stated rather than implied: no fixture
+    /// in `tests/reviewdrive.rs` can reach a live superseded pane, because a
+    /// hand-back REUSES a live idle pane on the same session
+    /// ([`Self::rd_reuse_pane`]) and [`reviewdrive::DriveEntry::forget_dead_panes`]
+    /// drops the ones that are not. What IS pinned is the other filter,
+    /// `is_live` — `cancel_review_drive` makes the same pane killable and
+    /// unmarked again, which is the refusal's own stated remedy working.
+    ///
+    /// # Locking
+    ///
+    /// Takes `rd_state_lock` and NOTHING else, and every caller must have
+    /// released the `agents` lock before asking. The driver's own release path
+    /// holds `rd_state_lock` and then reaches `agents` (`release_driven_pane`),
+    /// so `agents` -> `rd_state_lock` is an inversion of an ordering that
+    /// already exists in production. All three callers therefore take this
+    /// snapshot FIRST and read the roster afterwards; nothing here needs the two
+    /// to overlap, because a pane that dies between the two reads is reported as
+    /// driven and refused, which is the safe direction.
+    ///
+    /// One small JSON read per call, on the same file [`rd_owner`] reads on
+    /// every `report` — and an absent `review_drives.json` (the product
+    /// default, and every group with no driver at all) costs a `stat` and
+    /// answers empty.
+    pub(crate) fn rd_driven_panes(
+        &self,
+        group: &GroupId,
+    ) -> std::collections::BTreeMap<String, (u64, reviewdrive::DrivenRole)> {
+        let dir = self.group_dir(group);
+        let _state_guard = self.rd_state_lock.lock_safe();
+        let mut out = std::collections::BTreeMap::new();
+        let Ok(state) = reviewdrive::load_state(&dir) else { return out };
+        for e in state.entries.iter().filter(|e| e.state().is_live()) {
+            for (agent, _) in e.owned_panes() {
+                match e.driven_role(&agent) {
+                    Some(p) if p.current => {
+                        out.insert(agent, (e.pr, p.role));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
     /// **Was this lane's outstanding brief a body-verification delta at exactly
     /// this revision?** (#2168 E2.) `review_verdict` asks before it writes, and
     /// the answer becomes

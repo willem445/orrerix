@@ -983,8 +983,13 @@ fn fleet_control_tool_defs() -> [Value; 5] {
                 "lines": { "type": "integer", "description": "default 60, max 500" },
             }),
             &["agent_id"]),
-        tool("kill_agent", "Terminate an agent and close its pane.",
-            json!({ "agent_id": { "type": "string" } }), &["agent_id"]),
+        tool("kill_agent",
+            "Terminate an agent and close its pane. REFUSED for a pane a live review drive is currently using — its worker or one of its reviewer lanes, which list_agents marks `driven_by: \"#<pr>\"`: killing one strands the drive until it holds. Cancel the drive first (cancel_review_drive), or pass force:true if you mean to end that pane anyway.",
+            json!({
+                "agent_id": { "type": "string" },
+                "force": { "type": "boolean", "description": "default false. Kill the pane even if a live review drive owns it — the drive will hold on its next tick." },
+            }),
+            &["agent_id"]),
         tool("focus_agent", "Bring an agent's pane into focus for the human.",
             json!({ "agent_id": { "type": "string" } }), &["agent_id"]),
         tool("rename_agent",
@@ -3536,7 +3541,39 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
         "kill_agent" => {
             require_spawner(caller)?;
             let target = arg_str(args, "agent_id").ok_or("agent_id required")?;
+            let force = arg_bool(args, "force")?;
             let a = require_in_group(reg, caller, target)?;
+            // #2811 S2 (#2555 item 1, the #3038 class). Group membership was
+            // the only thing this arm checked, so a pane a live drive was
+            // holding for its next round looked exactly like an idle delegate
+            // to reclaim — and on a cap refusal the driver's own notice ASKS
+            // the orchestrator to kill one. Measured: w-2460 killed 42 s
+            // before the drive needed it, recovered by a hold, a notice and a
+            // resume.
+            //
+            // **Refused, not silently declined**, and overridable in the same
+            // sentence: an orchestrator that genuinely means to end a driven
+            // pane says so with `force`, and the drive then holds
+            // `worker-unresumable` naming the kill — the honest outcome, one
+            // the reader chose. §3.1's guarantee that the DRIVER never kills a
+            // pane is untouched; what narrows here is the orchestrator's kill
+            // authority, by one refusal it can override.
+            //
+            // **The human's own kill is untouched.** This is the MCP arm; the
+            // UI's kill path never comes through here, and a human closing a
+            // pane is not a party this may refuse.
+            if !force {
+                if let Some((pr, role)) = reg.rd_driven_panes(&caller.group).get(&a.id) {
+                    let side = match role {
+                        super::reviewdrive::DrivenRole::Worker => "worker",
+                        super::reviewdrive::DrivenRole::Lane(_) => "lane",
+                    };
+                    return Err(format!(
+                        "{} is the {side} pane of the live review drive on PR #{pr} —                          cancel_review_drive first, or pass force:true",
+                        a.id
+                    ));
+                }
+            }
             reg.kill_agent(&a.id)?;
             Ok(format!("kill signal sent to {}", a.id))
         }

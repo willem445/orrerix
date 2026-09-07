@@ -8649,17 +8649,36 @@ pub fn idle_should_kill(idle_since_ms: Option<u64>, now_ms: u64, threshold_min: 
 }
 
 /// Format the live-delegate roster line for the cap-rejection guardrail message
-/// (#203) from `(id, role, idle)` triples, sorted by id for a stable message:
-/// `id (role, idle|working), …`. `idle` (`idle_since_ms.is_some()`) is the
+/// (#203) from `(id, role, idle, driven)` rows, sorted by id for a stable
+/// message: `id (role, idle|working[, driven #<pr>]), …`. `idle`
+/// (`idle_since_ms.is_some()`) is the
 /// same signal the idle-reaper kills on, so it genuinely means "safe to
 /// reclaim". Pure and free-standing so both `spawn_agent` cap checks can format
 /// an identical message — the fast path via [`OrchRegistry::live_delegate_roster`],
 /// the race-safe path directly against its already-held `agents` guard (no
 /// re-lock). Empty string for no rows (the cap can't be hit then, but stay total).
-fn format_delegate_roster(mut rows: Vec<(String, &'static str, bool)>) -> String {
+///
+/// # `driven` (#2811 S2)
+///
+/// The refusal's remedy is "reuse an idle agent or kill one first", and an idle
+/// pane a live review drive is holding for its next round is the one row on this
+/// list for which that advice is WRONG — following it strands the drive, which
+/// is #3038 measured. So a driven pane says so, next to the `idle` that would
+/// otherwise recommend it. `None` renders exactly the bytes this function
+/// produced before, which is what keeps the existing pins on undriven rows
+/// (`w-… (worker, working)`) their own negative control.
+///
+/// It is a plain `Option<u64>` per row rather than a lookup this function does,
+/// because the race-safe caller formats under the `agents` guard and
+/// [`OrchRegistry::rd_driven_panes`] must not be called there — see its
+/// locking note.
+fn format_delegate_roster(mut rows: Vec<(String, &'static str, bool, Option<u64>)>) -> String {
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     rows.into_iter()
-        .map(|(id, role, idle)| format!("{id} ({role}, {})", if idle { "idle" } else { "working" }))
+        .map(|(id, role, idle, driven)| {
+            let driven = driven.map(|pr| format!(", driven #{pr}")).unwrap_or_default();
+            format!("{id} ({role}, {}{driven})", if idle { "idle" } else { "working" })
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -48577,12 +48596,22 @@ impl OrchRegistry {
     /// pane the cap does not count is not holding one — naming it here would
     /// point a refused orchestrator at a pane it must not reuse or kill.
     fn live_delegate_roster(&self, group: &GroupId) -> String {
+        // #2811 S2: taken before the `agents` lock, for
+        // [`Self::rd_driven_panes`]'s locking reason.
+        let driven = self.rd_driven_panes(group);
         let rows = self
             .agents
             .lock_safe()
             .values()
             .filter(|a| a.group == group && counts_against_max_agents(a.role) && a.status != AgentStatus::Dead)
-            .map(|a| (a.id.clone(), a.role.as_str(), a.idle_since_ms.is_some()))
+            .map(|a| {
+                (
+                    a.id.clone(),
+                    a.role.as_str(),
+                    a.idle_since_ms.is_some(),
+                    driven.get(&a.id).map(|(pr, _)| *pr),
+                )
+            })
             .collect();
         format_delegate_roster(rows)
     }
@@ -51554,6 +51583,18 @@ impl OrchRegistry {
             last_exit_tail: None,
             killed_by: None,
         };
+        // #2811 S2: the driven-pane markers the race-safe cap refusal below
+        // needs, resolved HERE because [`Self::rd_driven_panes`] takes
+        // `rd_state_lock` and the block below holds `agents` — the inversion its
+        // locking note forbids. Gated on the same predicate as the cap itself,
+        // so a spawn the cap does not police (the orchestrator, the manager)
+        // pays nothing; a delegate spawn pays one `stat` on a group with no
+        // `review_drives.json`, which is every group that runs no driver.
+        let driven_at_cap = if counts_against_max_agents(role) {
+            self.rd_driven_panes(group_id)
+        } else {
+            std::collections::BTreeMap::new()
+        };
         {
             // Re-check the cap under the same lock as the insert: the early
             // check above fast-fails before worktree creation, but only this
@@ -51599,7 +51640,14 @@ impl OrchRegistry {
                                     && counts_against_max_agents(a.role)
                                     && a.status != AgentStatus::Dead
                             })
-                            .map(|a| (a.id.clone(), a.role.as_str(), a.idle_since_ms.is_some()))
+                            .map(|a| {
+                                (
+                                    a.id.clone(),
+                                    a.role.as_str(),
+                                    a.idle_since_ms.is_some(),
+                                    driven_at_cap.get(&a.id).map(|(pr, _)| *pr),
+                                )
+                            })
                             .collect(),
                     );
                     let _ = fs::remove_file(&cfg.path);
@@ -56999,6 +57047,13 @@ impl OrchRegistry {
     }
 
     pub fn list_agents(&self, group: &GroupId) -> Value {
+        // #2811 S2: which of these panes a live review drive owns. Read BEFORE
+        // the `agents` lock and never under it — the driver holds
+        // `rd_state_lock` and then reaches `agents` through
+        // [`Self::release_driven_pane`], so the reverse nesting would invert an
+        // ordering that exists in production. See
+        // [`Self::rd_driven_panes`] for why it is one read and what it excludes.
+        let driven = self.rd_driven_panes(group);
         let agents = self.agents.lock_safe();
         let mut list: Vec<Value> = agents
             .values()
@@ -57026,6 +57081,13 @@ impl OrchRegistry {
                     "session": a.session_id, "cwd": a.cwd,
                     "idle_since_ms": a.idle_since_ms,
                     "task": task_excerpt(&a.task, TASK_EXCERPT_CHARS),
+                    // #2811 S2 (#2555 item 1): `"#<pr>"` when a live review
+                    // drive is currently using this pane as its worker or one
+                    // of its lanes, `null` otherwise. The KEY IS ALWAYS
+                    // PRESENT, the way `wip` and `current_sprint` are on the
+                    // board read, so "not driven" never has to be told apart
+                    // from "this build does not report it".
+                    "driven_by": driven.get(&a.id).map(|(pr, _)| format!("#{pr}")),
                 })
             })
             .collect();

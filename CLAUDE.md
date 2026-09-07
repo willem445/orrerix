@@ -284,6 +284,16 @@ compiles.
   and `the_toggle_off_leaves_every_instruction_file_byte_for_byte_what_it_was` go red
   alone, on a round where nothing else moved. Procedure and re-bless log:
   `src-tauri/tests/fixtures/pre222/README.md` (#867, #868, #874).
+- **That same strip makes a registered fragment's RENDERED value unpinnable by any golden.**
+  The pins remove every `LIVE` key before comparing and a gated fragment's off-group value is the
+  empty string, so a golden cannot separate *correctly absent* from *the lookup failed* — and an
+  absence-only pin (`!off.contains(marker)`) passes against a playbook that rendered nothing at all.
+  Pin it by rendering a REAL group and asserting the on-group file CONTAINS the marker and carries
+  no `{{`. Signature: a `{{...}}` gated on state its own renderer's caller has not registered yet —
+  `create_group` rendered ~100 lines before inserting into `self.groups`, so `{{REVIEW_DRIVER}}` was
+  empty in every group made since #1778, and the same combined key hid a stale `{{MERGE_QUEUE}}`
+  until a review round rendered it (#3161 `the_playbook_names_the_plan_drive_only_where_the_second_switch_is_on`;
+  #1844 `the_rendered_merge_queue_note_does_not_revive_the_retracted_rebase_rule`).
 - **A source-scanning guard must not decide from a binding's *name*** — a rename
   steps over it, so it enforces nothing. Decide on name-independent axes and
   default-deny: the receiver (anything building a path off a declared root is

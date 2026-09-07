@@ -221,6 +221,42 @@ pub fn limit_in_tail(tail: &str) -> Option<&'static LimitPattern> {
         if strip_gutter(lines[i]).is_empty() {
             continue;
         }
+        // A candidate may start only at a PARAGRAPH start: line 0, or a line
+        // whose predecessor stripped to nothing.
+        //
+        // Without this the anchor is worth much less than it looks (#3178
+        // review round 3). "Line-initial" would mean "initial on a RENDERED
+        // line", and a rendered line boundary is a hard wrap — which falls at
+        // an arbitrary column, mid-token, wherever the pane happens to be
+        // wide. So a pane merely QUOTING a refusal becomes indistinguishable
+        // from one printing it as soon as the wrap lands just before the
+        // needle. Measured on this repo's own negative-control fixture, hard-
+        // wrapped behind a gutter the way that message really renders: at
+        // width 72 (and only 72, of 40..200) `/usage-credits to finish what
+        // you` opens a rendered line and the orchestrator's pane reports an
+        // `anthropic` limit for TALKING about one — the exact outcome this
+        // module removed two needles to prevent, and the one #2811 S5b turns
+        // into a spurious hold across every drive in the group.
+        //
+        // A wrap continuation can never be a paragraph start, so the rule
+        // costs nothing on the real captures: all three have their needle at
+        // line 0 or after a blank gutter row, because these TUIs render an
+        // error as its own block.
+        //
+        // **Line 0 stays a candidate, and that is the residual.** The scan
+        // window is a byte-bounded tail (`ATTENTION_SCAN_BYTES`), so its first
+        // line is a FRAGMENT whose provenance is unknowable — it may be the
+        // start of a paragraph or the middle of one. It has to stay eligible:
+        // `claude-usage-limit.txt` is a real refusal whose needle IS line 0,
+        // cut exactly that way. So a quotation remains detectable as a limit
+        // when the tail's cut lands immediately before a needle — one byte
+        // offset rather than one pane width in ~160, and
+        // `a_wrapped_quotation_is_not_a_refusal` plus
+        // `the_scan_window_cut_is_the_residual_line_zero_cannot_close` pin
+        // both halves.
+        if i > 0 && !strip_gutter(lines[i - 1]).is_empty() {
+            continue;
+        }
         let logical = rejoined(&lines, i);
         if let Some(p) = LIMIT_PATTERNS.iter().find(|p| logical.starts_with(p.needle)) {
             return Some(p);

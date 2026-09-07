@@ -66205,3 +66205,179 @@ fn a_provider_limit_is_subsumed_when_every_affected_pane_is_outranked() {
         "the chip goes to the un-outranked pane, not to the lowest-sorting one: {after:?}"
     );
 }
+
+/// The SAME text as `negative-orchestrator-quotes-a-limit.txt`, hard-wrapped at
+/// 72 columns behind a `┃` gutter — the form the orchestrator's pane actually
+/// renders it in, and the form `attention_tail` actually reads.
+///
+/// #3178 review round 3 found the whole class through this: the unwrapped
+/// control was the only fixture in the set that was NOT a pane render (the body
+/// sources it to the `ask_human` audit row `q-39`), and that asymmetry is what
+/// hid the defect. A terminal hard-wraps at the column, mid-token, so a
+/// rendered line boundary falls at an arbitrary character — and at width 72,
+/// and only 72 of the widths 40..200, the wrap puts `/usage-credits to finish
+/// what you` at the start of a rendered line.
+const FIX_LIMIT_NEGATIVE_WRAPPED: &str =
+    include_str!("fixtures/attention/negative-orchestrator-quotes-a-limit-wrapped72.txt");
+
+/// #3178 review round 3, B1 — a wrap must not synthesise a line-initial match.
+///
+/// Before the paragraph-start rule this returned `Some(anthropic)`: the
+/// orchestrator's pane badged itself for TALKING about a provider limit, which
+/// is the exact outcome the table dropped two needles to prevent, and which
+/// #2811 S5b would turn into a spurious hold across every drive in the group.
+#[test]
+fn a_wrapped_quotation_is_not_a_refusal() {
+    let (reg, _d, _g, wid) = attention_setup();
+    let items = limit_scan(
+        &reg,
+        1_000_000_000_000,
+        &[(wid.as_str(), FIX_LIMIT_NEGATIVE_WRAPPED)],
+    );
+    assert!(
+        items.iter().all(|i| i.reason != "provider-limit"),
+        "a quotation whose wrap happens to start a line with a needle must not raise \
+         a limit: {items:?}"
+    );
+
+    // NON-VACUITY, and the reason this fixture is worth its bytes: the hazard
+    // really is present in it. Some rendered line DOES begin with a needle
+    // (line 1: `/usage-credits to finish what you're working on" (all Opus…`),
+    // so the silence above is the paragraph-start rule working — not a fixture
+    // that lost the shape it was cut to carry.
+    let starts_a_line = FIX_LIMIT_NEGATIVE_WRAPPED.lines().any(|l| {
+        let s = l.trim_matches(|c: char| c.is_whitespace() || c == '\u{2503}');
+        providerlimit::LIMIT_PATTERNS.iter().any(|p| s.starts_with(p.needle))
+    });
+    assert!(
+        starts_a_line,
+        "fixture: some rendered line must open with a needle, or this test is asserting \
+         the absence of a hazard that is not there"
+    );
+
+    // ...and the unwrapped sibling still reads the same way, so the fix did not
+    // merely move the problem.
+    let flat = limit_scan(&reg, 1_000_000_005_000, &[(wid.as_str(), FIX_LIMIT_NEGATIVE)]);
+    assert!(flat.iter().all(|i| i.reason != "provider-limit"), "{flat:?}");
+}
+
+/// The residual the paragraph-start rule CANNOT close, pinned so the disclosure
+/// in `limit_in_tail`'s doc and in `doc/design/attention-provider-limit.md`
+/// cannot go quietly false.
+///
+/// `attention_tail` returns a byte-bounded tail, so line 0 of the scan window
+/// is a fragment whose provenance is unknowable — it may open a paragraph or
+/// sit mid-sentence. It must stay an eligible candidate, because
+/// `claude-usage-limit.txt` is a REAL refusal whose needle is line 0, cut
+/// exactly that way. The cost is that a quotation is still readable as a
+/// refusal when the cut lands immediately before a needle: one byte offset,
+/// where the pre-fix rule was one pane width in ~160.
+#[test]
+fn the_scan_window_cut_is_the_residual_line_zero_cannot_close() {
+    let (reg, _d, _g, wid) = attention_setup();
+    // A tail whose first line is the MIDDLE of a quoted sentence, cut so the
+    // needle opens it — what a byte-bounded window can hand the scan.
+    let cut_mid_quotation =
+        "/usage-credits to finish what you're working on\" — that is rev-2313, not you.\n";
+    let items = limit_scan(&reg, 1_000_000_000_000, &[(wid.as_str(), cut_mid_quotation)]);
+    assert!(
+        items.iter().any(|i| i.reason == "provider-limit"),
+        "documented residual: a cut landing before a needle is indistinguishable from a \
+         refusal, because line 0's provenance is unknowable: {items:?}"
+    );
+    // The bound on it: move the same text one line down, behind any other
+    // output, and the paragraph rule refuses it again. So the residual really
+    // is the FIRST line only, not any line.
+    let one_line_down = format!("$ gh pr view 2747\n{cut_mid_quotation}");
+    let bounded = limit_scan(&reg, 1_000_000_005_000, &[(wid.as_str(), &one_line_down)]);
+    assert!(
+        bounded.iter().all(|i| i.reason != "provider-limit"),
+        "the residual is line 0 alone — one line down, the same text raises nothing: {bounded:?}"
+    );
+}
+
+/// The other side of the same trade, pinned rather than left to be discovered:
+/// the paragraph-start rule makes the scan MISS a refusal printed directly
+/// under other output with no blank line between.
+///
+/// That is a deliberate direction. A false positive costs a spurious chip now
+/// and, under #2811 S5b, a spurious hold across every drive on that provider; a
+/// false negative costs the sixty-minute lane stall that existed before this
+/// feature. Failing toward silence is the survivable half. It also costs
+/// nothing on the real captures — all three agent CLIs render an error as its
+/// own block, which is why every captured needle sits at line 0 or after a
+/// blank gutter row.
+#[test]
+fn a_refusal_glued_under_other_output_is_not_detected() {
+    let (reg, _d, _g, wid) = attention_setup();
+    let glued = "  ┃  building the workspace, this takes a while\n  ┃  Key limit exceeded (total limit).\n";
+    let items = limit_scan(&reg, 1_000_000_000_000, &[(wid.as_str(), glued)]);
+    assert!(
+        items.iter().all(|i| i.reason != "provider-limit"),
+        "documented false negative: a refusal with no blank line above it is missed: {items:?}"
+    );
+    // Control: the identical refusal with the blank gutter row the real panes
+    // actually draw IS detected, so this pins the paragraph rule and not a
+    // detector that has stopped working on that needle.
+    let blocked_out = "  ┃  building the workspace, this takes a while\n  ┃\n  ┃  Key limit exceeded (total limit).\n";
+    let seen = limit_scan(&reg, 1_000_000_005_000, &[(wid.as_str(), blocked_out)]);
+    assert!(
+        seen.iter().any(|i| i.reason == "provider-limit"),
+        "control: with the blank row the real TUIs draw, the same refusal is seen: {seen:?}"
+    );
+}
+
+/// #3178 review round 2, N4 — the `held-dialog` arm of the `outranked` set had
+/// no test, so deleting `question_held.contains(*id)` from it reddened nothing
+/// while the comment claimed both arms were pinned.
+///
+/// Same shape as the `blocked` case: only the carrier holds a `limit_chip`
+/// entry, and `held-dialog` outranks `provider-limit`, so a carrier chosen
+/// without consulting that latch is a carrier whose chip is swallowed.
+#[test]
+fn the_single_chip_avoids_a_pane_whose_held_dialog_latch_would_swallow_it() {
+    let (reg, _d, g, first) = attention_setup();
+    let second = reg.spawn_agent(&g, Role::Reviewer, "rev", "review", false, None).unwrap();
+    let third = reg.spawn_agent(&g, Role::Reviewer, "rev2", "review", false, None).unwrap();
+
+    let mut ids = vec![first.clone(), second.id.clone(), third.id.clone()];
+    ids.sort();
+    let lowest = ids[0].clone();
+    assert!(
+        ids.len() >= 2 && ids[1] != lowest,
+        "fixture: another affected pane must exist for the chip to move to: {ids:?}"
+    );
+
+    // The latch this test exists for — the arm N4 found unpinned.
+    reg.latch_question_held(&lowest);
+
+    let tails = [
+        (first.as_str(), FIX_LIMIT_OR_KEY),
+        (second.id.as_str(), FIX_LIMIT_OR_KEY),
+        (third.id.as_str(), FIX_LIMIT_OR_KEY),
+    ];
+    let items = limit_scan(&reg, 1_000_000_000_000, &tails);
+    let raised: Vec<&AttentionItem> =
+        items.iter().filter(|i| i.reason == "provider-limit").collect();
+    assert_eq!(raised.len(), 1, "the group must still show its one chip: {items:?}");
+    assert_ne!(
+        raised[0].agent_id, lowest,
+        "the chip must not be parked on the pane whose held-dialog latch outranks it"
+    );
+    assert_eq!(
+        items.iter().find(|i| i.agent_id == lowest).map(|i| i.reason),
+        Some("held-dialog"),
+        "the outranking reason is untouched — a carrier choice, not a demotion"
+    );
+
+    // Control: drop the latch and the lowest-sorting pane becomes the carrier
+    // again, so this test discriminates the `question_held` arm specifically
+    // rather than passing for any reason at all.
+    reg.unlatch_question_held(&lowest);
+    let after = limit_scan(&reg, 1_000_000_005_000, &tails);
+    assert_eq!(
+        after.iter().find(|i| i.reason == "provider-limit").map(|i| i.agent_id.as_str()),
+        Some(lowest.as_str()),
+        "with the latch gone the lowest-sorting pane carries the chip again: {after:?}"
+    );
+}

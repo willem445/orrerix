@@ -93,12 +93,57 @@ the strip removes. A quotation of one normally sits mid-sentence, behind a
 on any pane's name, role or CLI, so the match is anchored to the start of a
 reassembled line.
 
-**The residual is pinned, not implied.** The anchor cannot separate a pane's
-refusal from prose that *opens* with the same words —
-`a_quotation_of_a_refusal_is_not_a_refusal` asserts that blind spot directly, so
-the disclosure cannot go quietly false. What bounds it is the mask above (the
-orchestrator's relayed text is removed before the match) and the dedup below (a
-false positive raises one chip, not one per pane).
+**A candidate may start only at a PARAGRAPH start** — line 0, or a line whose
+predecessor stripped to nothing. Without that clause the anchor is worth far
+less than it looks, and the gap is not theoretical.
+
+"Line-initial" would otherwise mean "initial on a *rendered* line", and a
+rendered line boundary is a **hard wrap**: a terminal breaks at the column,
+mid-token, wherever the pane happens to be wide. A pane that merely quotes a
+refusal therefore becomes indistinguishable from one printing it as soon as the
+wrap lands just before the needle. Measured on this repo's own negative-control
+text, hard-wrapped behind a gutter the way that message really renders: at
+**width 72** — and only 72, of the widths 40..200 — `/usage-credits to finish
+what you` opens a rendered line, and the orchestrator's pane reports an
+`anthropic` limit for *talking about* one. That is the outcome this module
+dropped two needles to prevent, and the one S5b would turn into a spurious hold
+across every drive in the group.
+
+The clause costs nothing on the real captures, because a wrap continuation can
+never be a paragraph start and every captured needle sits at line 0 or after a
+blank gutter row — these TUIs render an error as its own block.
+
+**Two residuals, both pinned rather than implied.**
+
+*Prose that opens with a needle* is still indistinguishable from a refusal —
+`a_quotation_of_a_refusal_is_not_a_refusal` asserts that directly. What bounds
+it is the captured-fixture rule above (which removed the one needle that was an
+ordinary sentence opener), the loomux delivery mask, and the dedup.
+
+*Line 0 is a fragment.* The scan window is a byte-bounded tail, so its first
+line may open a paragraph or sit mid-sentence, and the scan cannot tell. It has
+to stay eligible: `claude-usage-limit.txt` is a real refusal whose needle *is*
+line 0, cut exactly that way. So a quotation is still readable as a limit when
+the tail's cut lands immediately before a needle — one byte offset, where the
+pre-fix rule was one pane width in ~160.
+`the_scan_window_cut_is_the_residual_line_zero_cannot_close` pins both that it
+happens and that it is confined to line 0.
+
+**And the cost, in the other direction.** The rule makes the scan miss a refusal
+printed directly under other output with no blank line between it
+(`a_refusal_glued_under_other_output_is_not_detected`). That direction is
+chosen: a false positive costs a spurious chip and, under S5b, a spurious hold
+across every drive on that provider, while a false negative costs the
+sixty-minute lane stall that existed before this feature. Failing toward silence
+is the survivable half.
+
+**The negative control is now a pane render.** The unwrapped fixture was the only
+one in the set that was not — it is an `ask_human` audit row — and that
+asymmetry is exactly what hid the wrap defect from every test and every reading
+of the anchor. `negative-orchestrator-quotes-a-limit-wrapped72.txt` is the same
+text in the form `attention_tail` actually delivers, and its test asserts that
+some rendered line really does open with a needle, so the fixture cannot quietly
+stop carrying the hazard it was cut for.
 
 ## One chip per (group, provider)
 

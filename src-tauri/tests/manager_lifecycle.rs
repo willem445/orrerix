@@ -644,6 +644,8 @@ fn a_bare_resume_of_a_pre_222_manager_row_is_refused() {
         updated_ms: 0,
         task: String::new(),
         branch: None,
+        // A pre-#2850 roster row, which is what absent means.
+        pane_kind: None,
     };
     // Written alongside the live rows rather than over them: the launch's own
     // manager row must survive, or the singleton check would be what refuses

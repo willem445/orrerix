@@ -283,8 +283,7 @@ For anything beyond the frontend-only and `rustfmt --check` steps above:
    read every matching row (`--workflow CI` is the short form). Taking the top row
    reads another workflow's verdict for yours, and it fails toward GREEN, so nothing
    looks wrong. Signature: a cited run id whose `workflowName` is not the build
-   (#1264 — two rounds silently read as `success`; #3139, a Docs run cited as the
-   build's).
+   (#1264 — two rounds silently read as `success`).
 
    A run counts as this PR's evidence only when its `headSha` **is** the head
    you are reporting on. A citation that survives a rebase untouched is the
@@ -920,9 +919,16 @@ the `headSha` reported is your branch head alone. Tests `main` gained since your
 base are therefore in CI's total and in none of your arithmetic, and the gap is a clean
 integer that reads exactly like a miscount. Re-derive the tip from the run's own
 `createdAt`, bracketed against `gh run list --branch main`, rather than reusing `main`'s
-current tip or the last one you named; and state the absorbed delta for EVERY row, not
-just the one you noticed. Diff the two runs' test **NAMES**, not their totals — that
-names the absorbed file in one step, where totals only say the number is wrong.
+current tip or the last one you named — and where several `main` commits land inside that
+bracket it does not decide, so read the tip off the merge ref itself: the FIRST parent of
+`refs/pull/N/merge` is the `main` tip merged in, the second is your head
+(`git fetch origin +refs/pull/N/merge:refs/tmp/m && git log -1 --format=%P refs/tmp/m`).
+That ref is recomputed on every PR update, so it is exact for the CURRENT run and not for
+an older one — if the bracket is ambiguous for a run the ref has since moved past, re-run
+at the head you are reporting rather than guess a baseline. State the absorbed delta for
+EVERY row, not just the one you noticed. Diff the two runs' test **NAMES**, not their
+totals — that names the absorbed file in one step, where totals only say the number
+is wrong.
 Signature: a head figure that will not reconcile, or a `delta 0` or negative delta on a
 diff that ADDS tests (#2747, a delta of -2 for a diff adding 2; #2834, seven tests from
 a file not in the worktree; #3161, head `1602 / delta 0` against a run log's `1608 /

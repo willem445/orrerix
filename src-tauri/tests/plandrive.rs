@@ -326,6 +326,12 @@ impl FakeGh {
     /// through, and it sits after the pre-fix unlocked `already-driven` check
     /// and before the reservation — which is what makes it the one place a
     /// concurrency pin can stand.
+    ///
+    /// **A `Barrier` is REUSABLE**, so a test that arms this and then makes a
+    /// number of `gh` calls that is not a multiple of `n` parks the leftovers
+    /// forever. The one caller today makes exactly two, one per
+    /// `drive_plan_with`. Arm it per test, not per fixture, and count the calls
+    /// the test will really make.
     fn hold_first(&self, n: usize) {
         *self.barrier.lock().unwrap_or_else(|e| e.into_inner()) =
             Some(std::sync::Arc::new(std::sync::Barrier::new(n)));

@@ -2880,11 +2880,6 @@ impl OrchRegistry {
                     // the hand-back here would spend a `gh` round trip per live
                     // drive at startup and duplicate the whole hand-back path,
                     // cap refusal and `worker-unresumable` handling included.
-                    if entry.state() == reviewdrive::DriveState::FixWait {
-                        self.rd_restart_handback
-                            .lock_safe()
-                            .insert((group.clone(), pr));
-                    }
                     audits.push((on_behalf, pr, false, forgot_cap_run));
                 }
             }

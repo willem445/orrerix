@@ -53836,6 +53836,14 @@ impl OrchRegistry {
             .insert(agent_id.to_string(), provider.to_string());
     }
 
+    /// Test seam: the pane recovered. Production has no such call — the scan
+    /// rewrites the map WHOLE, so a pane that is no longer showing a refusal
+    /// simply stops appearing in it. This exists so a test can reach the same
+    /// state without running a scan.
+    pub fn clear_provider_limit_for_test(&self, agent_id: &str) {
+        self.attn_provider_limit.lock_safe().remove(agent_id);
+    }
+
     pub fn latch_question_held(&self, agent_id: &str) {
         self.attn_question_held.lock_safe().insert(agent_id.to_string());
     }

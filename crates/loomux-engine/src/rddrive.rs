@@ -1744,6 +1744,12 @@ mod tests {
             failing_jobs: vec!["build (windows)".into()],
             messaged_by: "w-7".into(),
             refusal: "unknown block \"worker-adv\"".into(),
+            // #2811 S5b: a real provider id, so the ProviderLimit arm renders
+            // its display name and remedy rather than the bare-id fallback —
+            // the loop below asserts every arm names a tool, and an arm that
+            // silently took the fallback path would still pass while wording
+            // the one thing an orchestrator acts on wrongly.
+            provider: "openrouter".into(),
             panes: vec![
                 ("w-1715".into(), DrivenRole::Worker),
                 ("rev-1714".into(), DrivenRole::Lane("rev-std".into())),

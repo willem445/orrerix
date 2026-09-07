@@ -11403,3 +11403,213 @@ fn a_conflicting_pr_briefs_no_lane_at_all() {
         }
     }
 }
+
+// ── #2811 S5b: HeldReason::ProviderLimit ────────────────────────────────────
+//
+// The seam is the attention scan's published map, not pane text: the scan owns
+// the one pane-text classifier (S5a), and these tests write the map through
+// `set_provider_limit_for_test` for the reason `with_pane` exists — a fake
+// runner has no pty tails for a real scan to read.
+
+/// The lane pane a drive just opened, which is the pane a provider limit stops.
+fn opened_lane_agent(report: &RdDriveReport) -> String {
+    report
+        .lanes_opened
+        .first()
+        .cloned()
+        .map(|(_pr, _block, agent)| agent)
+        .expect("the tick opens a lane")
+}
+
+/// A drive whose lane pane is stopped on a provider's refusal holds
+/// `provider-limit` on the NEXT TICK — not sixty minutes later on
+/// `lane-stalled`, which is the whole of #2811.
+#[test]
+fn a_limited_lane_pane_parks_the_drive_on_the_next_tick() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _session) = driven(&reg, &repo, &gh);
+
+    // Get the drive to review-wait with a lane open.
+    let report = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let lane = opened_lane_agent(&report);
+    assert_eq!(status_state(&reg, &group), "review-wait", "precondition");
+
+    // The provider stops that pane.
+    reg.set_provider_limit_for_test(&lane, "openrouter");
+
+    let out = reg.rd_drive_group_with(&group, &gh, 20_000);
+    assert_eq!(status_state(&reg, &group), "held", "the drive must park");
+    let s = reg.review_drive_status(&group);
+    assert_eq!(
+        s["drives"][0]["held_reason"],
+        json!("provider-limit"),
+        "…naming the provider outage, not a timeout: {s}"
+    );
+
+    // **Nothing was spent.** The hold exists because the panes are stopped, not
+    // slow: charging a counter would make a drive that survived an outage look
+    // like one that had burned its budget.
+    assert_eq!(
+        s["drives"][0]["counters"]["review_rounds"], json!(0),
+        "a provider limit must spend no review round: {s}"
+    );
+    assert_eq!(
+        s["drives"][0]["counters"]["ci_attempts"], json!(0),
+        "…and no CI attempt: {s}"
+    );
+
+    // The orchestrator's line names the provider and the remedy.
+    let n = out
+        .notices
+        .iter()
+        .find(|n| n.contains("provider limit"))
+        .unwrap_or_else(|| panic!("no provider-limit notice: {:?}", out.notices));
+    assert!(n.contains("OpenRouter"), "the notice must NAME the provider: {n}");
+    assert!(n.contains("#1758"), "…and the drive it held: {n}");
+    assert!(
+        n.contains("add credits") || n.contains("total limit"),
+        "…and the remedy that actually clears it: {n}"
+    );
+    assert!(
+        n.contains("no round or CI attempt was spent"),
+        "…and that it cost the drive nothing: {n}"
+    );
+}
+
+/// The negative control, and the one that would fail if the fact were wired to
+/// "any pane in the group" rather than to the panes THIS drive owns: a limit on
+/// an unrelated pane must not park anything.
+#[test]
+fn a_limit_on_a_pane_this_drive_does_not_own_parks_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _session) = driven(&reg, &repo, &gh);
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    assert_eq!(status_state(&reg, &group), "review-wait", "precondition");
+
+    // A pane in the same group that this drive never opened.
+    let bystander = reg
+        .spawn_agent(&group, Role::Worker, "w-other", "", false, None)
+        .expect("a bystander pane");
+    reg.set_provider_limit_for_test(&bystander.id, "openrouter");
+
+    let out = reg.rd_drive_group_with(&group, &gh, 20_000);
+    assert_eq!(
+        status_state(&reg, &group),
+        "review-wait",
+        "a limit on a pane the drive does not own must not park it"
+    );
+    assert!(
+        out.notices.iter().all(|n| !n.contains("provider limit")),
+        "…and must raise no notice: {:?}",
+        out.notices
+    );
+
+    // Non-vacuity: the SAME registry parks the drive once the limit lands on a
+    // pane it DOES own, so the silence above is the ownership test working
+    // rather than the fact never being read.
+    let lane = reg.review_drive_status(&group)["drives"][0]["lanes"][0]["agent"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!lane.is_empty(), "fixture: the drive must have a lane pane to limit");
+    reg.set_provider_limit_for_test(&lane, "openrouter");
+    reg.rd_drive_group_with(&group, &gh, 30_000);
+    assert_eq!(
+        status_state(&reg, &group),
+        "held",
+        "control: the drive's OWN pane on the same provider does park it"
+    );
+}
+
+/// A provider limit outranks the time bounds, and this is what "no lane
+/// timeout" means: at a `now` past `lane_timeout_minutes` the drive must report
+/// the outage, not `lane-stalled`, because the pane is not slow — it is stopped,
+/// and "read that pane" is a remedy that does not work.
+#[test]
+fn a_provider_limit_outranks_the_stall_timeouts() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _session) = driven(&reg, &repo, &gh);
+    let report = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let lane = opened_lane_agent(&report);
+
+    // Past the lane bound — where the pre-#2811 behaviour lived.
+    let past_lane_timeout = 61 * 60 * 1000;
+    reg.set_provider_limit_for_test(&lane, "openrouter");
+    reg.rd_drive_group_with(&group, &gh, past_lane_timeout);
+
+    let s = reg.review_drive_status(&group);
+    assert_eq!(
+        s["drives"][0]["held_reason"],
+        json!("provider-limit"),
+        "the outage must outrank every bound below it: {s}"
+    );
+
+    // The control that makes the row above mean something: WITHOUT the limit,
+    // the same clock really does produce a stall hold — so this test is about
+    // precedence and not about a timeout that never fires.
+    let dir2 = tempfile::tempdir().unwrap();
+    let reg2 = relaunch_registry(dir2.path());
+    let repo2 = Repo::new();
+    let gh2 = FakeGh::green(HEAD_A);
+    let (group2, _s2) = driven(&reg2, &repo2, &gh2);
+    reg2.rd_drive_group_with(&group2, &gh2, 10_000);
+    reg2.rd_drive_group_with(&group2, &gh2, past_lane_timeout);
+    let s2 = reg2.review_drive_status(&group2);
+    assert_ne!(
+        s2["drives"][0]["held_reason"],
+        json!("provider-limit"),
+        "control: with no limit published, the same clock holds for a time reason: {s2}"
+    );
+    assert_eq!(s2["drives"][0]["state"], json!("held"), "control: it does hold: {s2}");
+}
+
+/// `drive_review` resumes a provider-limited drive, and the hold does not
+/// come back while the limit is gone.
+///
+/// **The resume is explicit, deliberately.** plan-2504 also floats "a pane on
+/// that provider completing a turn resumes all"; that is not shipped, and the
+/// reason is in `doc/design/review-driver.md`: a pane completing a turn does
+/// not prove the account was topped up. The refusal can simply have scrolled
+/// out of the tail window — which is exactly how S5a's own chip clears — so
+/// self-resuming on it would restart N drives against an account that is still
+/// empty, and re-hold them one tick later.
+#[test]
+fn drive_review_resumes_a_provider_limited_drive() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, session) = driven(&reg, &repo, &gh);
+    let report = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let lane = opened_lane_agent(&report);
+    reg.set_provider_limit_for_test(&lane, "openrouter");
+    reg.rd_drive_group_with(&group, &gh, 20_000);
+    assert_eq!(status_state(&reg, &group), "held", "precondition");
+
+    // The human raised the limit; the scan stops publishing it.
+    reg.clear_provider_limit_for_test(&lane);
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 30_000);
+    assert_eq!(out["driving"], json!(true), "the resume must take: {out}");
+    assert_ne!(
+        status_state(&reg, &group),
+        "held",
+        "…and put the drive back to work"
+    );
+
+    // And it stays at work: the hold is not re-armed by a stale map.
+    reg.rd_drive_group_with(&group, &gh, 40_000);
+    assert_ne!(
+        reg.review_drive_status(&group)["drives"][0]["held_reason"],
+        json!("provider-limit"),
+        "a cleared limit must not re-hold on the next tick"
+    );
+}

@@ -40713,6 +40713,24 @@ fn shim_with_fake_gh(bin: &Path) -> PathBuf {
         "#!/bin/sh\n\
          if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n\
          \x20 case \"$*\" in *headRefOid*) printf '%s\\n' \"$FAKE_HEAD\"; exit 0 ;; esac\n\
+         \x20 # S6 (#2943): answer `pr view --json mergeStateStatus`. With FAKE_MSS_TIMES set\n\
+         \x20 # the first N reads print FAKE_MSS (UNKNOWN while GitHub recomputes) and\n\
+         \x20 # every later read prints FAKE_MSS_THEN (the state settling); the read\n\
+         \x20 # count lands in FAKE_MSS_COUNT so a test can pin that the shim POLLED\n\
+         \x20 # rather than skipped the arm. Without it, one constant answer —\n\
+         \x20 # FAKE_MSS, or BLOCKED when the test never said: an unscripted answer\n\
+         \x20 # must not read as the settling CLEAN, which would green-light a red PR.\n\
+         \x20 case \"$*\" in *mergeStateStatus*)\n\
+         \x20   c=0\n\
+         \x20   if [ -n \"${FAKE_MSS_COUNT:-}\" ]; then\n\
+         \x20     fc=$(cat \"$FAKE_MSS_COUNT\" 2>/dev/null); [ -z \"$fc\" ] || c=$fc\n\
+         \x20     c=$((c+1)); printf '%s' \"$c\" > \"$FAKE_MSS_COUNT\" 2>/dev/null\n\
+         \x20   fi\n\
+         \x20   if [ -n \"${FAKE_MSS_TIMES:-}\" ]; then\n\
+         \x20     if [ \"$c\" -le \"$FAKE_MSS_TIMES\" ]; then printf '%s\\n' \"${FAKE_MSS:-UNKNOWN}\"\n\
+         \x20     else printf '%s\\n' \"${FAKE_MSS_THEN:-CLEAN}\"; fi\n\
+         \x20   else printf '%s\\n' \"${FAKE_MSS:-BLOCKED}\"; fi\n\
+         \x20   exit 0 ;; esac\n\
          \x20 case \"$*\" in *\"--json body\"*) printf '%s\\n' \"$FAKE_BODY\"; exit 0 ;; esac\n\
          \x20 case \"$*\" in *additions*) printf '%s\\n' \"${FAKE_DIFF_LINES-10}\"; exit 0 ;; esac\n\
          \x20 case \"$*\" in *changedFiles*) printf '%s\\n' \"${FAKE_FILES-ok}\"; exit 0 ;; esac\n\
@@ -42014,6 +42032,8 @@ fn gh_shim_script_enforces_the_workflow_merge_gate() {
     assert!(sh.contains("set -f"), "no pathname expansion over gate-file tokens");
     assert!(sh.contains("unknown-condition"), "an also: condition this build can't check refuses");
     assert!(sh.contains("ci-green") && sh.contains("pr checks"), "ci-green is checked with the real gh");
+    assert!(sh.contains("--json mergeStateStatus") && sh.contains("mergeability-unknown"),
+        "a non-zero `pr checks` is disambiguated: GitHub still recomputing mergeability polls and refuses `mergeability-unknown`, a real red stays `ci-not-green` (#2943)");
     assert!(sh.contains("body-unchanged") && sh.contains("--json body"),
         "and the opt-in body-unchanged condition re-reads the PR body with the real gh (#565)");
     // #1174. Both behavioural claims are EXECUTED in the two harness tests below;
@@ -42169,6 +42189,156 @@ fn gh_shim_harness_refuses_the_merge_until_every_named_reviewer_has_passed() {
     assert!(audit.contains("merge-gate-workflow-ok"), "and so is a satisfied gate");
     assert!(audit.contains("\"reason\":\"verdict-outstanding\"") && audit.contains("\"reason\":\"verdict-blocks\""),
         "with the reason, so a human can reconstruct the run: {audit}");
+}
+
+/// S6 (#2943, plan-2504): a non-zero `gh pr checks` right after a base move can be
+/// GitHub still recomputing mergeability — `mergeStateStatus` reads UNKNOWN — not a
+/// red. The shim asks which of the three it is, polls through UNKNOWN, and proceeds
+/// on CLEAN; a state that never settles refuses the NEW reason `mergeability-unknown`;
+/// a genuinely failing check stays `ci-not-green`. Skipped (not failed) where no
+/// POSIX `sh` exists.
+#[test]
+fn gh_shim_harness_proceeds_when_an_unknown_merge_state_settles_clean_on_a_poll() {
+    if !have_sh() {
+        eprintln!("SKIP gh_shim_harness_proceeds_when_an_unknown_merge_state_settles_clean_on_a_poll: no POSIX sh");
+        return;
+    }
+    let (reg, d, _repo, gid) = gated_group("    also: [ci-green]\n");
+    let group_dir = d.path().join(gid.as_str());
+    let bin = tempfile::tempdir().unwrap();
+    let shim = shim_with_fake_gh(bin.path());
+    // Verdicts + a human grant, so the ONLY thing that can refuse below is the
+    // ci-green arm — the poll decides this test, nothing else in the gate.
+    let sec = reviewer_caller(&reg, &gid, "rev-security");
+    let tests = reviewer_caller(&reg, &gid, "rev-tests");
+    recorded(&reg, &sec, "7", "pass", "reviewed the rebase");
+    recorded(&reg, &tests, "7", "pass", "reviewed the rebase");
+    reg.grant_merge(&gid, "7", None, "human").unwrap();
+
+    // Read 1 UNKNOWN (GitHub recomputing after the base moved), read 2 CLEAN — the
+    // shape #2943 actually hit, one poll apart. The interval is 0 so the test does
+    // not sleep out the real 20 s.
+    let count = bin.path().join("mss_count");
+    let (ok, err) = merge_env(&shim, &group_dir, "main", HEAD, "1", &[
+            ("ORRERIX_MSS_POLL_SECS", "0"),
+            ("FAKE_MSS_COUNT", count.to_str().unwrap()),
+            ("FAKE_MSS_TIMES", "1"),
+            ("FAKE_MSS", "UNKNOWN"),
+            ("FAKE_MSS_THEN", "CLEAN"),
+    ]);
+    assert!(ok, "UNKNOWN then CLEAN must proceed to the rest of the gate, not refuse: {err}");
+    assert_eq!(fs::read_to_string(&count).unwrap(), "2",
+        "the second mergeStateStatus read answered CLEAN — the shim polled, it did not skip the arm");
+    let audit = fs::read_to_string(group_dir.join("audit.jsonl")).unwrap();
+    assert!(audit.contains("merge-gate-workflow-ok"), "the merge is audited as allowed: {audit}");
+    assert!(!audit.contains("ci-not-green") && !audit.contains("mergeability-unknown"),
+        "a settled state must not leave a refusal-shaped record: {audit}");
+}
+
+#[test]
+fn gh_shim_harness_refuses_a_merge_state_that_never_settles_as_mergeability_unknown() {
+    if !have_sh() {
+        eprintln!("SKIP gh_shim_harness_refuses_a_merge_state_that_never_settles_as_mergeability_unknown: no POSIX sh");
+        return;
+    }
+    let (reg, d, _repo, gid) = gated_group("    also: [ci-green]\n");
+    let group_dir = d.path().join(gid.as_str());
+    let bin = tempfile::tempdir().unwrap();
+    let shim = shim_with_fake_gh(bin.path());
+    let sec = reviewer_caller(&reg, &gid, "rev-security");
+    let tests = reviewer_caller(&reg, &gid, "rev-tests");
+    recorded(&reg, &sec, "7", "pass", "reviewed the rebase");
+    recorded(&reg, &tests, "7", "pass", "reviewed the rebase");
+    reg.grant_merge(&gid, "7", None, "human").unwrap();
+
+    // UNKNOWN on every read: poll 0 plus all 3 polls, then the refusal.
+    let count = bin.path().join("mss_count");
+    let (ok, err) = merge_env(&shim, &group_dir, "main", HEAD, "1", &[
+            ("ORRERIX_MSS_POLL_SECS", "0"),
+            ("FAKE_MSS_COUNT", count.to_str().unwrap()),
+            ("FAKE_MSS", "UNKNOWN"),
+    ]);
+    assert!(!ok, "a merge state that never settles must not merge");
+    assert!(err.contains("still computing mergeability") && err.contains("retry in a minute"),
+        "the refusal must tell the agent this is a retry, not a defect: {err}");
+    assert_eq!(fs::read_to_string(&count).unwrap(), "4",
+        "poll 0 plus 3 polls, then refuse");
+    let audit = fs::read_to_string(group_dir.join("audit.jsonl")).unwrap();
+    assert!(audit.contains("\"reason\":\"mergeability-unknown\""),
+        "the NEW reason is audited: {audit}");
+    assert!(!audit.contains("\"reason\":\"ci-not-green\""),
+        "a never-settling UNKNOWN is not the red reason — the orchestrator must retry, not re-plan: {audit}");
+}
+
+#[test]
+fn gh_shim_harness_still_refuses_a_real_red_as_ci_not_green() {
+    if !have_sh() {
+        eprintln!("SKIP gh_shim_harness_still_refuses_a_real_red_as_ci_not_green: no POSIX sh");
+        return;
+    }
+    let (reg, d, _repo, gid) = gated_group("    also: [ci-green]\n");
+    let group_dir = d.path().join(gid.as_str());
+    let bin = tempfile::tempdir().unwrap();
+    let shim = shim_with_fake_gh(bin.path());
+    let sec = reviewer_caller(&reg, &gid, "rev-security");
+    let tests = reviewer_caller(&reg, &gid, "rev-tests");
+    recorded(&reg, &sec, "7", "pass", "reviewed the rebase");
+    recorded(&reg, &tests, "7", "pass", "reviewed the rebase");
+    reg.grant_merge(&gid, "7", None, "human").unwrap();
+
+    // A check that really failed reads DIRTY/BLOCKED, never UNKNOWN. The old
+    // refusal must stand — the retry is for recomputation, not for red.
+    let count = bin.path().join("mss_count");
+    let (ok, err) = merge_env(&shim, &group_dir, "main", HEAD, "1", &[
+            ("ORRERIX_MSS_POLL_SECS", "0"),
+            ("FAKE_MSS_COUNT", count.to_str().unwrap()),
+            ("FAKE_MSS", "DIRTY"),
+    ]);
+    assert!(!ok, "a real red must not merge");
+    assert!(err.contains("not all-green"), "the red refusal is unchanged: {err}");
+    let audit = fs::read_to_string(group_dir.join("audit.jsonl")).unwrap();
+    assert!(audit.contains("\"reason\":\"ci-not-green\""), "still the red reason: {audit}");
+    assert!(!audit.contains("mergeability-unknown"),
+        "a failing check must not be reclassified as a retry: {audit}");
+}
+
+#[test]
+fn gh_shim_harness_refuses_a_first_read_clean_as_ci_not_green() {
+    if !have_sh() {
+        eprintln!("SKIP gh_shim_harness_refuses_a_first_read_clean_as_ci_not_green: no POSIX sh");
+        return;
+    }
+    let (reg, d, _repo, gid) = gated_group("    also: [ci-green]\n");
+    let group_dir = d.path().join(gid.as_str());
+    let bin = tempfile::tempdir().unwrap();
+    let shim = shim_with_fake_gh(bin.path());
+    let sec = reviewer_caller(&reg, &gid, "rev-security");
+    let tests = reviewer_caller(&reg, &gid, "rev-tests");
+    recorded(&reg, &sec, "7", "pass", "reviewed the rebase");
+    recorded(&reg, &tests, "7", "pass", "reviewed the rebase");
+    reg.grant_merge(&gid, "7", None, "human").unwrap();
+
+    // CLEAN on read 1 with no poll behind it is the NO-CHECKS-REPORTED case:
+    // checks exit non-zero with the merge state already settled means nothing
+    // ran, and a gate asking for green CI is not satisfied by an absent check.
+    // Only CLEAN that terminates an UNKNOWN poll proceeds (review-driver §8.1).
+    let count = bin.path().join("mss_count");
+    let (ok, err) = merge_env(&shim, &group_dir, "main", HEAD, "1", &[
+            ("ORRERIX_MSS_POLL_SECS", "0"),
+            ("FAKE_MSS_COUNT", count.to_str().unwrap()),
+            ("FAKE_MSS", "CLEAN"),
+    ]);
+    assert!(!ok, "a first-read CLEAN must not merge — absent checks are not green CI: {err}");
+    assert!(err.contains("not all-green"), "the refusal is the red one, not a retry: {err}");
+    let audit = fs::read_to_string(group_dir.join("audit.jsonl")).unwrap();
+    assert!(audit.contains("\"reason\":\"ci-not-green\""), "refused as red: {audit}");
+    assert!(!audit.contains("mergeability-unknown"),
+        "an absent check must not be reclassified as a retry: {audit}");
+    // Positive control, because every refusal assertion above is absence-shaped
+    // and would pass just as well if the ci-green arm never ran at all: the arm
+    // WAS entered — exactly one mergeStateStatus read, zero polls behind it.
+    assert_eq!(fs::read_to_string(&count).unwrap(), "1",
+        "one mergeStateStatus read, no poll: the refusal came from the first-read-CLEAN guard");
 }
 
 /// #1174 A1, executed: the small-batch clause through the REAL shim.

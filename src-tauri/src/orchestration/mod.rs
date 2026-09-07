@@ -2376,7 +2376,37 @@ if [ -f "$ORX_GD/merge_gate" ]; then
     case "$g_c" in
       ci-green)
         if ! "$REAL_GH" pr checks $rf "$num" >/dev/null 2>&1; then
-          loomux_block_wf "ci-not-green" "the gate requires ci-green and 'gh pr checks $num' is not all-green (failing, still running, or no checks reported)"
+          # A non-zero `pr checks` is three different facts: a check failed, one
+          # is still pending, or — right after the base moved (#2943) — GitHub is
+          # still RECOMPUTING mergeability and `mergeStateStatus` reads UNKNOWN.
+          # Only the recomputation is retry: ask gh which of the three it is. The
+          # first read is poll 0; each UNKNOWN buys one more read, up to 3, spaced
+          # 20 s apart. ORRERIX_MSS_POLL_SECS exists so a test does not sleep out
+          # the real interval; nothing else sets or reads it.
+          g_mss_tries=0
+          while :; do
+            g_mss=$("$REAL_GH" pr view $rf "$num" --json mergeStateStatus --jq .mergeStateStatus 2>/dev/null)
+            case "$g_mss" in
+              # GitHub settled and calls the PR mergeable — the checks "failure"
+              # was the recomputation, so the gate proceeds to its remaining arms.
+              # CLEAN reached WITHOUT a poll (checks non-zero, state already
+              # settled) is the no-checks-reported case and refuses as before: a
+              # gate asking for green CI is not satisfied by an absent check.
+              CLEAN)
+                if [ "$g_mss_tries" -gt 0 ]; then break; fi
+                loomux_block_wf "ci-not-green" "the gate requires ci-green and 'gh pr checks $num' is not all-green (failing, still running, or no checks reported)" ;;
+              UNKNOWN)
+                if [ "$g_mss_tries" -ge 3 ]; then
+                  loomux_block_wf "mergeability-unknown" "the gate requires ci-green and 'gh pr checks $num' is not green because GitHub is still computing mergeability after a base move — retry in a minute. No check has failed; the merge state is simply not computed yet"
+                fi
+                g_mss_tries=$((g_mss_tries+1))
+                sleep "${ORRERIX_MSS_POLL_SECS:-20}" ;;
+              # A genuinely failing check — or a merge state gh cannot read
+              # (DIRTY, BLOCKED, BEHIND, an empty answer): unknown is never
+              # treated as green here either.
+              *) loomux_block_wf "ci-not-green" "the gate requires ci-green and 'gh pr checks $num' is not all-green (failing, still running, or no checks reported)" ;;
+            esac
+          done
         fi ;;
       # #565: the head oid pins the CODE a verdict reviewed. It does not pin the PR
       # BODY — which a squash merge turns into the permanent commit message, so a

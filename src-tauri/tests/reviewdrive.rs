@@ -13616,3 +13616,79 @@ fn a_busy_lane_on_a_conflicted_pr_is_told_to_stop_once_and_an_answered_one_is_no
         }
     }
 }
+
+/// **A stop line the pane's queue refuses says so, and the next tick tries
+/// again** (#3176) — the mirror of `a_takeover_refused_by_a_full_queue_says_so_
+/// and_falls_through`, for the arm this PR adds.
+///
+/// The refusal is reachable with nothing wrong at all: `deliver_prompt` answers
+/// `Err` at `QUEUE_MAX_PER_PANE`, and that is precisely the case where a
+/// reviewer goes on burning a round nobody can see it burning. On a silent skip
+/// it would be indistinguishable from "there was no busy lane to tell" — the
+/// indistinguishability `rd-reuse-declined` and `rd-takeover-declined` were both
+/// added to remove.
+///
+/// **Two depths, and the shallower one is the control.** At 7 the delivery is
+/// admitted, so a row is written and the mark is set; at 8 it is refused, so
+/// there is no `rd-lane-stopped` row, no mark, and a `rd-lane-stop-declined` row
+/// naming the pane instead. Without the depth-7 arm, "no row at 8" is satisfied
+/// by a fixture that never reached the conflict.
+///
+/// **The mark is what makes the retry true**, so it is asserted rather than
+/// described: it is written on the delivery SUCCEEDING, so a refused tick leaves
+/// the lane tellable and the next tick — with the queue drained — really does
+/// tell it.
+#[test]
+fn a_stop_line_the_queue_refuses_is_audited_and_retried() {
+    // (depth, rd-lane-stopped rows, rd-lane-stop-declined rows, mark set)
+    type Row = (usize, usize, usize, bool);
+    let mut observed: Vec<Row> = Vec::new();
+
+    for depth in [7usize, 8] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, lane) = briefed(&reg, &repo, &gh);
+        reg.set_pr_body_override(Some("b".to_string()));
+        reg.set_pr_head_override(Some(HEAD_A.to_string()));
+        make_delivery_land(&reg, &group, &lane, 7701);
+
+        // Back the LANE's pane up to this arm's depth, through the real
+        // admission path — the same way the take-over test does it.
+        for k in 0..depth {
+            reg.deliver_prompt(&lane, &format!("[test] backlog {k}"), "orch-1", Delivery::MidSession)
+                .unwrap_or_else(|e| panic!("depth={depth}: entry {k} must be admitted: {e}"));
+        }
+        assert_eq!(
+            reg.queue_depth(7701),
+            depth,
+            "depth={depth}: the fixture's premise — the pane is backed up to exactly this depth"
+        );
+
+        gh.set_merge_state("CONFLICTING");
+        let before = reg.audit_log(&group).len();
+        reg.rd_drive_group_with(&group, &gh, 30_000);
+        let mut log = reg.audit_log(&group);
+        let after: Vec<_> = log.split_off(before);
+        let rows = |action: &str| after.iter().filter(|e| e.action == action).count();
+
+        observed.push((
+            depth,
+            rows("rd-lane-stopped"),
+            rows("rd-lane-stop-declined"),
+            live_lanes(&reg, &group)
+                .first()
+                .and_then(|l| l["stopped_head"].as_str())
+                .is_some_and(|h| h == HEAD_A),
+        ));
+    }
+
+    assert_eq!(
+        observed,
+        vec![(7, 1, 0, true), (8, 0, 1, false)],
+        "at 7 the stop line lands, is audited and marks the revision; at 8 the queue refuses it, \
+         which is AUDITED rather than swallowed, and the mark is left unset so the next tick \
+         tells the lane again: {observed:?}"
+    );
+}

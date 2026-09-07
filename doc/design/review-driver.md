@@ -76,7 +76,7 @@ resumes it; `cancel_review_drive` cancels it), and only `satisfied` and
 | --- | --- | --- | --- |
 | `ci-wait` | PR head and mergeability (`mqdriver::resolve_pr_detailed`, whose raw output `notify::pr_mergeability_result` classifies — this is how CONFLICTING is learned); checks (`mqdriver::pr_ci_green_detailed` over `notify::pr_checks_result`, which already reads "no checks reported" as pending); **on a head that arrived by arc 7, the worker's intercepted `report` as well** (#2168 E1 — green says the checks settled, not that the round is over) | `head`; `ci_attempts` on a red; `rebase_attempts` on a conflict; `fix_pushed_ms` (§5.2, written by every arc and re-stamped by a further push); `rd-ci-green`, `rd-ci-red` or `rd-conflicting` | `review-wait` on green — **on an arc-7 head, only once the worker has also reported done** (#2168 E1); `fix-wait` on red or conflicting; `held(ci-limit)`, `held(rebase-limit)`, `held(worker-blocked)`, `held(worker-unresumable)`, `held(fix-stalled)` (all three #2168 E1, on an arc-7 head only), `held(state-stalled)` (#2110 — time in THIS state, reset by every transition), `held(drive-stalled)` |
 | `review-wait` (lane *k*) | PR mergeability (as `ci-wait` reads it — #2311); the required lane list at **this** head (`workflow::route_reviewers` over `pr_changed_files`, then `RoutingDecision::gate`); the lane's verdict file via `verdict_map` (`workflow::parse_verdict_file`: line 1 the verdict, line 2 the head it binds to, line 5 the body digest and, since #2168 E2, the `verified-body` mark beside it); the live head and body digest; **whether the pane it recorded for that lane is still alive** (#2163 — the lane-side twin of `fix-wait`'s own exit read, and for the same reason: a dead pane can never produce the verdict this state is waiting for, and `lane-stalled` is an hour away anchored at the brief rather than at the death) | the lane's spawned or resumed session id; the current lane index; **`briefed_verify` when the brief is a body-verification delta** (#2168 E2); **`briefed_body_only` when the brief is a re-brief at an unchanged head that every required lane has already answered at** (#2509); `review_rounds` on a `fail`; `body_only_grace` on a body-only `fail` AT the bound, with `rd-round-grace` (#2509); `cap_starved_since_ms` on a lane spawn the cap refuses (#2109); `rd-lane-spawned`, `rd-lane-resume-failed`, `rd-lane-duplicate-refused`, `rd-lane-reopened`, `rd-verdict`; `rebase_attempts` and `rd-conflicting` on a conflict (#2311) | `fix-wait` on a CONFLICTING PR, read BEFORE the routing question a conflicted head makes unanswerable (#2311 — see §8); `gate-check` once the last required lane has passed — **or, after a body-only move, once ONE lane's body-verification pass settles the rest** (#2168 E2); `fix-wait` on a `fail`; `ci-wait` when the head moves under a lane; `held(escalate)`, `held(review-limit)`, `held(rebase-limit)` (#2311), `held(lane-stalled)`, `held(cap-full)` (#2109 — the cap has refused this lane for `CAP_HOLD_MS`), `held(routing-unaccountable)`, `held(state-stalled)` (#2110 — time in THIS state, reset by every transition), `held(drive-stalled)` |
-| `fix-wait` | the worker's intercepted `report`; the live head; **whether the pane it resumed is still alive** (#1961 — a resumed pane that exits before reporting is a hand-back that failed, not a wait, and waiting it out costs a whole `fix_timeout_minutes` on a dead process) | `rd-handback`; `rd-kickback` and `fix_kickback_ms` when it answers a worker's `report(progress)` (#1959) | `ci-wait` when the head moves; `review-wait` on a `report(done)` with the head unchanged (a body-only fix); `held(worker-blocked)`, `held(worker-unresumable)`, `held(cap-refused)` (the hand-back's spawn refused by the live-delegate cap, #1960), `held(fix-stalled)`, `held(state-stalled)` (#2110 — time in THIS state, reset by every transition), `held(drive-stalled)` |
+| `fix-wait` | the worker's intercepted `report`; the live head; **whether the pane it resumed is still alive** (#1961 — a resumed pane that exits before reporting is a hand-back that failed, not a wait, and waiting it out costs a whole `fix_timeout_minutes` on a dead process) | `rd-handback` — whose `why` is `restart` on the first tick after a restart, a re-brief of the recorded session that takes no arc and spends no counter (#2811 S10, §2.4); `rd-kickback` and `fix_kickback_ms` when it answers a worker's `report(progress)` (#1959) | `ci-wait` when the head moves; `review-wait` on a `report(done)` with the head unchanged (a body-only fix); `held(worker-blocked)`, `held(worker-unresumable)`, `held(cap-refused)` (the hand-back's spawn refused by the live-delegate cap, #1960), `held(fix-stalled)`, `held(state-stalled)` (#2110 — time in THIS state, reset by every transition), `held(drive-stalled)` |
 | `gate-check` | PR mergeability (as `ci-wait` reads it — #2311); the same parsers the shim and the queue read — `route_reviewers`, then `RoutingDecision::gate`, then `mergeq::recheck_gate`, which is `workflow::evaluate_merge_gate(gate, verdicts, Some(head))` plus the `also:` clauses including `body-unchanged` (§4 — one gate decision, so the delegation of #2168 E2 is decided here and in the shim by the same rule) | `rebase_attempts` and `rd-conflicting` on a conflict (#2311) | `fix-wait` on a CONFLICTING PR, read before the gate is evaluated, which is what makes `satisfied` mean **gated AND mergeable** (#2311); `satisfied`; `ci-wait` when the gate is not satisfied for any reason; `held(rebase-limit)` (#2311), `held(routing-unaccountable)`, `held(gate-unreadable)`, `held(state-stalled)` (#2110 — time in THIS state, reset by every transition), `held(drive-stalled)` |
 | `held{reason}` (parked) | nothing; the tick does not advance it | one `deliver_to_orchestrator` notice and one `rd-held` line, on entry only | `ci-wait` on `drive_review`; `cancelled` on `cancel_review_drive` |
 | `satisfied`, `cancelled` (terminal) | — | **every release `releasable` allows, performed BEFORE the notice is built** (#2811 S1 — the lane whose verdict is current and the worker, unless a hand-back is still outstanding); then one notice, one `rd-satisfied` / `rd-cancelled` line, one `TaskNote`. The notice's pane clause therefore names what the barrier REFUSED, and the released worker is named by SESSION instead (`released_worker_clause`) — a pane id is no use to a reader and a session id is what `spawn_agent(resume:)` takes. `cancel_review_drive` is outside this: it takes no tick, so nothing is released and its caller is the party disposing of the panes | nothing |
@@ -536,6 +536,46 @@ against the head the file remembers. A PR whose state could not be determined is
 neither — `mqloop::draft_pr_open` returns `None` there and its doc says reconcile
 treats that as "the world does not match", never as "probably fine", and §8's
 row says what the driver does with it.
+
+The reconcile also **re-hands-back every drive it finds in `fix-wait`** (#2811
+S10). That drive is waiting on a worker pane, and every pane died with the
+process: the signals map is per-process and empty, and the pane whose `report`
+would fill it is gone, so nothing can ever arrive and the drive waits out
+`fix_timeout_minutes` into `held(fix-stalled)` — a row claiming a worker was
+silent when what happened is that orrerix was restarted under it. **The
+reconcile is the only place that fact is knowable**: a pane missing mid-session
+is the ambiguous reading §8's `LaneFact::pane_dead` row declines to make, while
+a pane missing on the first tick after a restart is not ambiguous at all.
+
+So the reconcile MARKS the entry and the tick acts on it, which is the same
+split the rest of this section keeps — the reconcile reads no more than
+`pr_is_open`, and observing the PR, rendering a brief and resuming a session are
+the tick's job. The mark is in memory (it says "this PROCESS restarted under
+this drive", which is only true between one reconcile and the tick that follows
+it) and it is TAKEN by that tick, so it cannot re-brief a worker on some later
+round of the same process. `DriveStep::Rehandback` then takes **no arc and
+spends no counter**: nothing about the review, the checks or the base changed,
+and charging INVARIANT 9 for a restart would bill a PR for its host going down.
+The `rd-handback` row carries `why: restart` (§5.4) so a reader totting up what
+a PR cost its reviewers can leave it out. Two orderings carry the argument:
+the re-brief sits BELOW arcs 7 and 8, because a worker that pushed or reported
+before the shutdown has already answered, and ABOVE the `fix-stalled` check,
+because `fix_handback_ms` predates the restart and most of the gap it measures
+is downtime in which no worker could have answered. The clock is re-anchored
+only once the worker has actually been reached, so a failed re-brief does not
+silently extend the bound by a whole `fix_timeout_minutes` per restart.
+
+**The dead-pane `worker-unresumable` hold is bypassed on that one tick, and
+only there.** The tick derives that signal from the worker pane having exited
+(#1961), and after a restart every pane has — so the signal is true of the
+process rather than of the session, and holding on it would park every resumable
+drive orrerix came back up under. The hand-back is the probe that tells the two
+apart: a session that genuinely will not resume makes `rd_handback` fail, and
+that lands on the same `held(worker-unresumable)` (or `held(cap-refused)`) by
+the ordinary path, through the one shared `rd_handback_failed`. §2.4's older
+sentence above — "an unresolvable worker or lane session becomes `held`" — is
+still what happens; what changed is that the reconcile no longer has to GUESS
+which it is, because the attempt answers.
 
 The reconcile also **drops any cap-starvation run the previous process left
 standing** (#2135), on every **non-terminal** entry — parked ones included —
@@ -2083,6 +2123,12 @@ like `mq-*` and the rest:
 `rd-lane-reopened` · `rd-lane-released` · `rd-worker-released` ·
 `rd-round-grace` · `rd-hold-repeated` · `rd-notice-demoted` ·
 `rd-provider-limit`
+
+`rd-handback`'s `why` is a closed vocabulary of four (`rddrive::handback_why`):
+`review-findings`, `ci-red` and `conflict` name something the WORLD did, and
+`restart` (#2811 S10) names something orrerix did — a re-brief that took no arc
+and spent no counter. The split is the point: a reader counting review rounds
+off these rows must be able to leave the last one out.
 
 Every state transition, every spawn or resume, and every consumed delegate event
 (§7) appears here, each carrying `on_behalf_of`. `rd-provider-limit` (#2811 S5b)

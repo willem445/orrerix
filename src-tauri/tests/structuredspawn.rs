@@ -25,6 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use loomux_engine::harness::pi::{full_argv, LaunchSpec};
+use loomux_engine::harness::AgentPane;
 use loomux_engine::model::Containment;
 
 /// The JSONL the fake pi replays: the engine's own fixture, so the two sides

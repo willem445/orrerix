@@ -290,6 +290,11 @@ struct FakeGh {
     /// timeout. Not a `gh` refusal, and not a fact about the issue.
     down: std::sync::Mutex<bool>,
     calls: std::sync::Mutex<Vec<Vec<String>>>,
+    /// Set by `hold_first`: the first N callers of `gh` wait here for each
+    /// other, so a test can FORCE an interleaving instead of hoping for one.
+    barrier: std::sync::Mutex<Option<std::sync::Arc<std::sync::Barrier>>>,
+    /// How many callers the barrier actually held — the positive control.
+    held: std::sync::atomic::AtomicUsize,
 }
 
 impl FakeGh {
@@ -300,6 +305,8 @@ impl FakeGh {
             title: std::sync::Mutex::new("plan me".into()),
             down: std::sync::Mutex::new(false),
             calls: std::sync::Mutex::new(Vec::new()),
+            barrier: std::sync::Mutex::new(None),
+            held: std::sync::atomic::AtomicUsize::new(0),
         }
     }
     fn set_state(&self, s: &str) {
@@ -312,6 +319,25 @@ impl FakeGh {
     fn set_down(&self, down: bool) {
         *self.down.lock().unwrap_or_else(|e| e.into_inner()) = down;
     }
+    /// Hold the first `n` callers of [`gh`](RdRunner::gh) together on a
+    /// barrier, so a test can force an interleaving rather than hope for one.
+    ///
+    /// The issue read is the point both orderings of `drive_plan_with` pass
+    /// through, and it sits after the pre-fix unlocked `already-driven` check
+    /// and before the reservation — which is what makes it the one place a
+    /// concurrency pin can stand.
+    fn hold_first(&self, n: usize) {
+        *self.barrier.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(std::sync::Arc::new(std::sync::Barrier::new(n)));
+    }
+
+    /// How many callers the barrier actually held — the positive control for
+    /// any test that uses it. A barrier that was never reached leaves this at
+    /// zero, and the test is then measuring a sequential run.
+    fn held(&self) -> usize {
+        self.held.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     fn calls(&self) -> Vec<Vec<String>> {
         self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -328,6 +354,13 @@ impl RdRunner for FakeGh {
         self.calls.lock().unwrap_or_else(|e| e.into_inner()).push(
             args.iter().map(|s| s.to_string()).collect(),
         );
+        // Taken and RELEASED before waiting: holding the barrier's own lock
+        // across the wait would deadlock every caller on the second one.
+        let barrier = self.barrier.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(b) = barrier {
+            self.held.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            b.wait();
+        }
         if *self.down.lock().unwrap_or_else(|e| e.into_inner()) {
             return Err("gh-not-found".into());
         }
@@ -786,28 +819,46 @@ fn an_invalid_block_is_refused_in_the_tool_and_nothing_is_posted() {
     );
 }
 
-/// **Two `drive_plan` calls on one issue open exactly ONE planner** (rev-std
-/// round 1, finding 5).
+/// **Two CONCURRENT `drive_plan` calls on one issue open exactly ONE planner**
+/// (rev-std round 1, finding 5).
 ///
-/// The input is ordinary: an orchestrator batching two calls for the same issue
-/// in one turn. Before the reservation, both passed the unlocked
-/// `already-driven` read and both SPAWNED; only the loser's entry was rejected
-/// under the lock, leaving its pane running, unowned and unaudited — so
-/// `pd_plan_check` answered `NotDriven` for it and it could publish a second
-/// plan comment beside the winner's.
+/// # Why this test is threaded, and why the obvious version was worthless
 ///
-/// The pane count is the assertion, not the refusal: a refusal was already
-/// returned before the fix, and asserting only that would have passed against
-/// the defect.
+/// The first draft called `drive_plan_with` twice in a row and asserted one
+/// pane. It passed against the defect. Sequentially there is no race at all:
+/// call 1 completes its store before call 2 starts, so call 2's unlocked
+/// `already-driven` read sees the entry and refuses before spawning anything.
+/// A red-before-green run on the pre-fix head proved exactly that — the pin
+/// was green on the code it was written to catch, which is a test that pins
+/// nothing while looking like it pins the fix.
+///
+/// The defect only exists when both calls pass the unlocked check before either
+/// writes. So the interleaving is FORCED rather than hoped for: the fake `gh`
+/// holds the first two callers on a barrier inside the issue read, which is a
+/// point both orderings pass through and — crucially — sits on the far side of
+/// the pre-fix `already-driven` check and on the NEAR side of the reservation.
+/// Both threads are therefore inside `drive_plan_with`, past the unlocked read,
+/// when they are released.
+///
+/// - **Pre-fix**: both are past the check, both spawn, and the loser's pane is
+///   left running, unowned and unaudited — free to publish a second plan
+///   comment on the issue.
+/// - **Fixed**: both reach the reservation, one wins under the lock, the loser
+///   refuses `already-driven` having opened nothing.
+///
+/// The pane COUNT is the assertion. The refusal is not: a refusal was already
+/// returned before the fix, so asserting it alone is what made the first draft
+/// pass.
 #[test]
-fn a_second_drive_on_one_issue_opens_no_second_planner() {
+fn two_concurrent_drives_on_one_issue_open_no_second_planner() {
     let repo = Repo::new();
     let (reg, _d) = test_registry();
     let gh = FakeGh::open(&["agent-ready"]);
+    // Hold the first two `gh` callers together, so both are inside
+    // `drive_plan_with` and past its unlocked read when either proceeds.
+    gh.hold_first(2);
     let (group, orch) = grouped(&reg, &repo);
 
-    // Read through `list_agents` — the same surface an orchestrator sees, so
-    // the count asserted is the count a human would find in the pane list.
     let planners = || -> Vec<String> {
         reg.list_agents(&group)
             .as_array()
@@ -819,34 +870,54 @@ fn a_second_drive_on_one_issue_opens_no_second_planner() {
             })
             .unwrap_or_default()
     };
-    assert_eq!(planners().len(), 0, "no planner exists before the first call");
+    assert_eq!(planners().len(), 0, "no planner exists before either call");
 
-    let first = reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch, 1_000);
-    assert_eq!(first["driving"], json!(true), "{first}");
-    let second = reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch, 1_100);
-    assert_eq!(
-        second["refused"],
-        json!(plandrive::refusal::ALREADY_DRIVEN),
-        "the second call must be refused: {second}"
+    let outs: Vec<Value> = std::thread::scope(|s| {
+        let a = s.spawn(|| reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch, 1_000));
+        let b = s.spawn(|| reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch, 1_000));
+        vec![a.join().unwrap(), b.join().unwrap()]
+    });
+
+    // The barrier really did hold both — the positive control for the whole
+    // test. Without it the two calls could have run end to end and this would
+    // be the sequential test again, which passes against the defect.
+    assert!(
+        gh.held() >= 2,
+        "both calls must have been inside the issue read together, or this is not the race: \
+         held={}",
+        gh.held()
     );
 
-    // THE assertion. One pane, and it is the winner's.
+    // Exactly one drove and exactly one refused — whichever won.
+    let driving = outs.iter().filter(|o| o["driving"] == json!(true)).count();
+    let refused = outs.iter().filter(|o| !o["refused"].is_null()).count();
+    assert_eq!((driving, refused), (1, 1), "one winner, one refusal: {outs:?}");
+    assert!(
+        outs.iter().any(|o| o["refused"] == json!(plandrive::refusal::ALREADY_DRIVEN)),
+        "and the loser's refusal names the reason: {outs:?}"
+    );
+
+    // THE assertion.
     let panes = planners();
     assert_eq!(
         panes.len(),
         1,
-        "the losing call must open no pane at all — an unowned planner can publish a second \
-         plan comment on the issue: {panes:?}"
+        "the losing call must open no pane at all — an unowned planner is free to publish a \
+         second plan comment on the issue: {panes:?}"
     );
-    assert_eq!(panes[0], first["planner"].as_str().unwrap_or_default());
-    // …and it is the drive's, so the one pane that exists is owned.
+    // The one pane that exists is the winner's, and it is OWNED.
+    let winner = outs
+        .iter()
+        .find(|o| o["driving"] == json!(true))
+        .and_then(|o| o["planner"].as_str())
+        .expect("the winner names its planner");
+    assert_eq!(panes[0], winner);
     assert_eq!(reg.pd_owner(&group, &panes[0]), Some(3040));
 
-    // One entry too, so the reservation did not leave a duplicate behind.
+    // One entry, so the reservation left no duplicate behind.
     let file = read_record(&reg, &group);
     assert_eq!(file["entries"].as_array().map(Vec::len), Some(1), "{file}");
 }
-
 /// A spawn this group's cap refuses **rolls the reservation back**, so the issue
 /// is driveable again rather than parked on a drive whose planner never opened.
 ///

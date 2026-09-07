@@ -1211,7 +1211,7 @@ impl OrchRegistry {
             return self.pd_refuse(group, issue, r::DRIVER_DISABLED);
         }
         let dir = self.group_dir(group);
-        let (from, to) = {
+        let (from, to, released) = {
             let _state_guard = self.pd_state_lock.lock_safe();
             let mut state = match plandrive::load_state(&dir) {
                 Ok(s) => s,
@@ -1234,21 +1234,48 @@ impl OrchRegistry {
             if entry.advance(to, None, now).is_err() {
                 return self.pd_refuse(group, issue, r::NOT_HELD);
             }
-            // The refusal counter is the one thing a resume clears: a human who
-            // has read the reasons and resumed anyway is spending a fresh three,
-            // visibly, rather than resuming straight back onto the bound.
+            // The refusal counter is one of the two things a resume clears: a
+            // human who has read the reasons and resumed anyway is spending a
+            // fresh three, visibly, rather than resuming straight back onto the
+            // bound.
             entry.invalid_count = 0;
             entry.last_invalid.clear();
+            // And the SLICE holds, which is the other. Without this a drive
+            // resumed after `cap-full` comes back with that slice still parked
+            // and no second way out — `resume_plan_drive` moves the DRIVE, and
+            // nothing else in this build ever un-parks a slice. A slice held on
+            // `worker-blocked` or `pr-closed` is released the same way and for
+            // the same reason: the human resuming has seen the notice, and a
+            // hold they cannot clear is a hold that is really a deletion.
+            //
+            // Released to `queued`, so readiness is re-derived from the BOARD
+            // rather than assumed — a row the human meanwhile marked `blocked`
+            // still will not spawn, and one they marked `done` settles.
+            let released: Vec<String> = entry
+                .slices
+                .iter()
+                .filter(|(_, s)| s.state() == plandrive::SliceState::Held)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in &released {
+                if let Some(s) = entry.slices.get_mut(id) {
+                    s.advance(plandrive::SliceState::Queued, None);
+                    s.cap_starved_since_ms = 0;
+                    s.agent.clear();
+                    s.session.clear();
+                }
+            }
             if plandrive::store_state(&dir, &state).is_err() {
                 return self.pd_refuse(group, issue, r::STATE_UNWRITABLE);
             }
-            (from, to)
+            (from, to, released)
         };
         self.pd_audit(
             group,
             on_behalf_of,
             plandrive::audit_action::RESUMED,
-            json!({ "issue": issue, "from": from.map(|f| f.as_str()), "to": to.as_str() }),
+            json!({ "issue": issue, "from": from.map(|f| f.as_str()), "to": to.as_str(),
+                    "slices_released": released }),
         );
         json!({ "resumed": true, "issue": issue, "state": to.as_str() })
     }
@@ -1808,7 +1835,7 @@ impl OrchRegistry {
                 let existing = entry.slices.clone();
                 match self.pd_board(group, issue, &obs.title, &plan, &comment_url, &existing) {
                     Ok(map) => {
-                        let entry = state.entry_mut(issue)?;
+                        let Some(entry) = state.entry_mut(issue) else { return None };
                         let fresh = map.len() != entry.slices.len();
                         entry.slices = map;
                         if fresh {
@@ -1855,7 +1882,7 @@ impl OrchRegistry {
             }
         }
         let board = self.tasks(group);
-        let entry = state.entry_mut(issue)?;
+        let Some(entry) = state.entry_mut(issue) else { return None };
 
         // ---- 4. §2(d): consent is re-read before every spawn ----
         // The label was read this tick, by the same `issue view` the drive's own
@@ -1894,7 +1921,13 @@ impl OrchRegistry {
                     match self.pd_spawn_slice(group, issue, slice, base.as_deref(), &task_id, now) {
                         Ok(agent) => {
                             *spawn_budget -= 1;
-                            let run = entry.slices.get_mut(id)?;
+                            // `else break`, never `?`: an early return here
+                            // would abandon the tick before `store_state`,
+                            // leaving rows on the board the record does not
+                            // know about — which the next tick would board
+                            // again. It cannot be `None` (the key was read two
+                            // lines up), and the shape is what matters.
+                            let Some(run) = entry.slices.get_mut(id) else { break };
                             run.agent = agent.id.clone();
                             run.session = agent.session_id.clone().unwrap_or_default();
                             run.spawned_ms = now;
@@ -1914,7 +1947,7 @@ impl OrchRegistry {
                             // clock this starts is the bound on retrying
                             // forever.
                             let capped = super::is_live_cap_refusal(&e);
-                            let run = entry.slices.get_mut(id)?;
+                            let Some(run) = entry.slices.get_mut(id) else { break };
                             if capped {
                                 if run.cap_starved_since_ms == 0 {
                                     run.cap_starved_since_ms = now;

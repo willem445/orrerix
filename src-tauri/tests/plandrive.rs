@@ -2426,3 +2426,73 @@ fn a_done_with_no_usable_ref_resolves_the_pr_from_the_branch() {
     );
     assert_eq!(slice_state(&reg, &group, "P1"), "in-review");
 }
+
+/// **A resume releases the SLICE holds, not just the drive's.**
+///
+/// Without this there is no second way out of a slice hold at all:
+/// `resume_plan_drive` moves the DRIVE, and nothing else in the build ever
+/// un-parks a slice — so a `worker-blocked` slice would be a deletion wearing a
+/// hold's name.
+///
+/// Released to `queued` rather than straight back to `running`, which is the
+/// half worth pinning: readiness is re-derived from the BOARD, so a row the
+/// human marked `blocked` in the meantime still does not spawn. That second
+/// assertion is what stops a resume from being a way to spawn over a human's
+/// own decision.
+#[test]
+fn a_resume_releases_a_held_slice_and_still_obeys_the_board() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let plan = PLAN3.replace("    hold: true\n", "");
+    let (group, orch, rows) = running(&reg, &repo, &gh, &plan);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+
+    // Park both independents: one by its worker, one by the human's board.
+    for s in ["P1", "P3"] {
+        let agent = slice_agent(&reg, &group, s);
+        with_pane(&reg, &agent, 7_100 + s.len() as u32);
+        report(&reg, &group, &agent, "blocked", json!({ "note": "stuck" }));
+    }
+    reg.pd_drive_group_with(&group, &gh, 1_600);
+    assert_eq!(slice_hold(&reg, &group, "P1"), "worker-blocked", "{}", status(&reg, &group));
+    assert_eq!(slice_hold(&reg, &group, "P3"), "worker-blocked");
+
+    // The human decides P3 is not happening, and parks the whole drive by
+    // taking the label off so there is something to resume.
+    reg.upsert_task_by_human(
+        &group,
+        "the human",
+        Some(&rows["P3"]),
+        loomux_lib::orchestration::TaskPatch {
+            status: Some("blocked".into()),
+            ..loomux_lib::orchestration::TaskPatch::default()
+        },
+    )
+    .expect("a human may park a row");
+    gh.set_labels(&["bug"]);
+    reg.pd_drive_group_with(&group, &gh, 1_700);
+    assert_eq!(drive_state(&reg, &group), "held");
+
+    gh.set_labels(&["agent-ready"]);
+    let out = reg.resume_plan_drive_with(&group, 3040, &orch, 1_800);
+    assert_eq!(out["resumed"], json!(true), "{out}");
+    assert_eq!(slice_hold(&reg, &group, "P1"), "", "the slice hold is released: {}", status(&reg, &group));
+    assert_eq!(slice_state(&reg, &group, "P1"), "queued");
+
+    reg.pd_drive_group_with(&group, &gh, 1_900);
+    assert_eq!(
+        slice_state(&reg, &group, "P1"),
+        "running",
+        "and it really does run again: {}",
+        status(&reg, &group)
+    );
+    assert_eq!(
+        slice_state(&reg, &group, "P3"),
+        "queued",
+        "but a row the HUMAN parked does not spawn, resume or no resume: {}",
+        status(&reg, &group)
+    );
+    assert!(slice_agent(&reg, &group, "P3").is_empty(), "no pane was opened for it");
+}

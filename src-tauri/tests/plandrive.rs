@@ -14,6 +14,7 @@
 //!
 //! No test here spawns a real agent CLI (constraint 3) or a real `gh` child.
 
+use loomux_lib::orchestration::brand;
 use loomux_lib::orchestration::mcp::dispatch;
 use loomux_lib::orchestration::mqdriver::CmdOut;
 use loomux_lib::orchestration::plandrive::{self, Consent, PdHeldReason, PlanDriveState};
@@ -3308,4 +3309,443 @@ fn a_late_pr_still_hands_off_and_clears_the_wait() {
     reg.pd_drive_group_with(&group, &gh, 1_500 + 3 * PR_WAIT_HOLD_MS);
     assert_eq!(slice_state(&reg, &group, "P1"), "in-review", "{}", status(&reg, &group));
     assert_eq!(slice_hold(&reg, &group, "P1"), "");
+}
+
+/// **A release rolls back a row the drive's own CLAIM is still holding** (#3160).
+///
+/// `pd_spawn_slice` writes the board twice: it claims the row as
+/// `brand::AUDIT_ACTOR`, and then — once the pane exists — rewrites the assignee
+/// to that pane's id. If the second write fails, the record names the agent
+/// while the row still names the claimant, and the release's rollback used to
+/// check the AGENT alone: it found a stranger on the row, skipped it, and left
+/// the row `in-progress` with nobody on it. Readiness is the board's, so that
+/// slice never becomes ready again and the resume silently buys nothing — the
+/// exact defect `a_resume_releases_a_held_slice_and_still_obeys_the_board`
+/// closed, re-entered through the gap between the two writes.
+///
+/// The failing write is not stageable from here (it is one `upsert_task` call
+/// inside a spawn), so this stages its RESULT, which is the whole of what the
+/// rollback sees: the row left carrying the claimant. The widened guard
+/// (`rollback_is_ours_of`) is what makes it releasable again.
+///
+/// The last half is the control the widening must not cost: a row a HUMAN holds
+/// matches neither of the drive's two names and is still left alone.
+#[test]
+fn a_release_rolls_back_a_row_still_carrying_the_drives_own_claimant() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let plan = PLAN3.replace("    hold: true\n", "");
+    let (group, orch, rows) = running(&reg, &repo, &gh, &plan);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+
+    // Stage the failed post-spawn write: the row goes back to naming the
+    // CLAIMANT, which is what it carries between the claim and the rewrite.
+    let agent = slice_agent(&reg, &group, "P1");
+    assert!(!agent.is_empty(), "the slice really did spawn: {}", status(&reg, &group));
+    reg.upsert_task(
+        &group,
+        brand::AUDIT_ACTOR,
+        Some(&rows["P1"]),
+        loomux_lib::orchestration::TaskPatch {
+            assignee: Some(brand::AUDIT_ACTOR.to_string()),
+            ..loomux_lib::orchestration::TaskPatch::default()
+        },
+    )
+    .expect("staging the row the way a failed assignee write leaves it");
+    let staged = row(&reg, &group, &rows["P1"]).expect("P1 has a row");
+    assert_eq!(staged.status, "in-progress", "the claim still stands: {staged:?}");
+    assert_eq!(
+        staged.assignee.as_deref(),
+        Some(brand::AUDIT_ACTOR),
+        "and the row names the claimant, not the pane — the state under test: {staged:?}"
+    );
+    assert_ne!(
+        staged.assignee.as_deref(),
+        Some(agent.as_str()),
+        "the record and the row really do disagree, which is this test's premise"
+    );
+
+    // Park the slice, then the drive, so there is something to resume.
+    with_pane(&reg, &agent, 7_310);
+    report(&reg, &group, &agent, "blocked", json!({ "note": "stuck" }));
+    reg.pd_drive_group_with(&group, &gh, 1_600);
+    assert_eq!(slice_hold(&reg, &group, "P1"), "worker-blocked", "{}", status(&reg, &group));
+    gh.set_labels(&["bug"]);
+    reg.pd_drive_group_with(&group, &gh, 1_700);
+    assert_eq!(drive_state(&reg, &group), "held");
+
+    gh.set_labels(&["agent-ready"]);
+    let out = reg.resume_plan_drive_with(&group, 3040, &orch, 1_800);
+    assert_eq!(out["resumed"], json!(true), "{out}");
+
+    let p1 = row(&reg, &group, &rows["P1"]).expect("P1 still has a row");
+    assert_eq!(
+        p1.status, "queued",
+        "the row is released even though it names the claimant rather than the pane: {p1:?}"
+    );
+    assert_eq!(p1.assignee, None, "and unassigned, so the re-spawn's claim can succeed: {p1:?}");
+
+    // The control: a row a HUMAN holds is neither of the drive's names, and a
+    // release must not touch it. Staged on P3, parked and resumed the same way.
+    let p3_agent = slice_agent(&reg, &group, "P3");
+    assert!(!p3_agent.is_empty(), "P3 spawned too: {}", status(&reg, &group));
+    reg.upsert_task_by_human(
+        &group,
+        "the human",
+        Some(&rows["P3"]),
+        loomux_lib::orchestration::TaskPatch {
+            assignee: Some("a-human".into()),
+            ..loomux_lib::orchestration::TaskPatch::default()
+        },
+    )
+    .expect("a human may take a row");
+    with_pane(&reg, &p3_agent, 7_311);
+    report(&reg, &group, &p3_agent, "blocked", json!({ "note": "stuck too" }));
+    reg.pd_drive_group_with(&group, &gh, 1_900);
+    assert_eq!(slice_hold(&reg, &group, "P3"), "worker-blocked");
+    gh.set_labels(&["bug"]);
+    reg.pd_drive_group_with(&group, &gh, 2_000);
+    gh.set_labels(&["agent-ready"]);
+    reg.resume_plan_drive_with(&group, 3040, &orch, 2_100);
+    let p3 = row(&reg, &group, &rows["P3"]).expect("P3 still has a row");
+    assert_eq!(
+        p3.assignee.as_deref(),
+        Some("a-human"),
+        "a human's claim matches neither of the drive's names and is left alone: {p3:?}"
+    );
+}
+
+/// **The orchestrator is TOLD it has a plan drive, and only where it has one**
+/// (#3040 P4).
+///
+/// The teaching is a conditional fragment in the playbook's
+/// `Planning and scheduling` section rather than resident prose, for
+/// `REVIEW_DRIVER_NOTE`'s reason: everything it says names machinery a group
+/// without `plan_enabled` does not have — four tools, a fence schema, a hold
+/// vocabulary — and prose about a mechanism the reader does not have is an
+/// invitation to go looking for it. The resident core is unchanged, and pays
+/// nothing.
+///
+/// **The control is the second half, and it is the one that can fail.** The
+/// gate is the SECOND switch, so the group that must not see this is not a
+/// driverless one — it is a group whose review driver is on and whose plan
+/// driver is not, which is the only reading of `plan_enabled` that is a
+/// separate consent at all. Asserting the review driver's own note is still
+/// there in that same file is what stops "not present" from meaning "the
+/// playbook did not render".
+#[test]
+fn the_playbook_names_the_plan_drive_only_where_the_second_switch_is_on() {
+    // A distinctive line of each fragment. Neither appears in the template.
+    let plan_marker = "`drive_plan(issue, planner_block?, review_minutes?, base?)`";
+    let review_marker = "`drive_review(pr, worker_session, reset_counters?, rounds_already_spent?)`";
+
+    let playbook = |workflow: &str| -> String {
+        let repo = Repo::with(workflow);
+        let (reg, _dir) = test_registry();
+        let (group, _orch) = grouped(&reg, &repo);
+        let path = reg
+            .state_root()
+            .join(group.as_str())
+            .join(loomux_lib::orchestration::ORCHESTRATOR_PLAYBOOK_FILE);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is not readable: {e}", path.display()));
+        text
+    };
+
+    let on = playbook(WORKFLOW);
+    assert!(
+        on.contains(plan_marker),
+        "a group with `plan_enabled: true` is told what `drive_plan` is: {on}"
+    );
+    assert!(
+        !on.contains("{{"),
+        "and the fragment is SUBSTITUTED, not left as template bytes: {on}"
+    );
+
+    let off = playbook(WORKFLOW_NO_PLAN_DRIVER);
+    assert!(
+        !off.contains(plan_marker),
+        "a group whose second switch is off is told nothing about a plan drive: {off}"
+    );
+    assert!(
+        off.contains(review_marker),
+        "but the REVIEW driver's own note is still there — which is what makes the \
+         assertion above about the gate rather than about a playbook that did not render"
+    );
+    assert!(
+        on.contains(review_marker),
+        "and both fragments coexist where both switches are on"
+    );
+}
+
+/// **`plan_drive_status`'s description names every state a drive can be in**
+/// (#3040 P4).
+///
+/// A tool description is the orchestrator's only account of a vocabulary it
+/// cannot otherwise see, and it is prose: nothing about adding a state, a slice
+/// state or a slice hold makes it go stale LOUDLY. This build shipped with the
+/// P3a description still saying "States are planning | plan-posted | boarding |
+/// held" and calling `awaiting-p3b` "the expected end of an `agent-ready` drive
+/// in this build" — through P3b, which added `running`, `plan-review`, five
+/// slice holds and the whole executor. Every one of those was invisible to the
+/// suite.
+///
+/// So the pin derives from the enums rather than from a list someone has to
+/// remember to extend: the next state added reddens this, and the fix is to say
+/// so in the description.
+///
+/// The first assertion is the vacuity control — a description that came back
+/// empty (a renamed tool, a listing that filtered it out) would satisfy every
+/// `contains` below by satisfying none of them, and would read as a pass if the
+/// loops were all this test had.
+#[test]
+fn the_plan_status_description_names_every_state_the_record_can_hold() {
+    use loomux_lib::orchestration::plandrive::{PdSliceHold, PlanDriveState, SliceState};
+
+    let repo = Repo::with(WORKFLOW);
+    let (reg, _d) = test_registry();
+    let (group, orch) = grouped(&reg, &repo);
+    let c = caller(&group, &orch, Role::Orchestrator);
+    let listed = dispatch(&reg, &c, "tools/list", &Value::Null).expect("tools/list");
+    let desc = listed["tools"]
+        .as_array()
+        .expect("a tools array")
+        .iter()
+        .find(|t| t["name"].as_str() == Some("plan_drive_status"))
+        .and_then(|t| t["description"].as_str())
+        .expect("plan_drive_status is listed for an orchestrator")
+        .to_string();
+
+    assert!(
+        desc.len() > 200,
+        "the control: there is a description to make claims about, {} bytes",
+        desc.len()
+    );
+
+    for s in PlanDriveState::ALL {
+        assert!(
+            desc.contains(s.as_str()),
+            "the drive state `{}` is not in plan_drive_status's description — an \
+             orchestrator reading it would meet a state the tool never named: {desc}",
+            s.as_str()
+        );
+    }
+    for s in SliceState::ALL {
+        assert!(
+            desc.contains(s.as_str()),
+            "the slice state `{}` is not named: {desc}",
+            s.as_str()
+        );
+    }
+    for h in PdSliceHold::ALL {
+        assert!(
+            desc.contains(h.as_str()),
+            "the slice hold `{}` is not named, so a parked slice would report a reason \
+             the tool's own description does not list: {desc}",
+            h.as_str()
+        );
+    }
+
+    // And the retired P3a claims are gone from BOTH plan-tool descriptions —
+    // the class of staleness this test exists for, pinned as an absence beside
+    // the presences above so a re-introduction is a red rather than a re-read.
+    for name in ["drive_plan", "plan_drive_status"] {
+        let d = listed["tools"]
+            .as_array()
+            .expect("a tools array")
+            .iter()
+            .find(|t| t["name"].as_str() == Some(name))
+            .and_then(|t| t["description"].as_str())
+            .unwrap_or_else(|| panic!("{name} is listed for an orchestrator"));
+        assert!(
+            !d.contains("P3b") && !d.to_lowercase().contains("awaiting-p3b"),
+            "{name}'s description still promises a slice that has landed: {d}"
+        );
+    }
+}
+
+/// **The tool that can refuse says so on its own description** (#3040 §6).
+///
+/// `post_issue_comment` validates a driven planner's body and refuses an
+/// invalid `orrerix-plan` block with nothing posted. A planner meeting that
+/// refusal with no warning on the tool reads it as #2815 — the fix that gave
+/// planners a way to publish at all — coming apart, and the remedy it would
+/// reach for is the one that fix exists to prevent: shelling out to
+/// `gh issue comment`. `mcp.rs`'s hook comment asserts "the tool's own
+/// description says so", and that sentence was true of nothing until P4.
+///
+/// Pinned on the ONE word a refused planner searches its instructions for, not
+/// on the phrasing around it.
+#[test]
+fn the_comment_tool_warns_the_planner_that_a_driven_plan_is_validated() {
+    let repo = Repo::with(WORKFLOW);
+    let (reg, _d) = test_registry();
+    let (group, _orch) = grouped(&reg, &repo);
+    let planner = reg
+        .spawn_agent(&group, Role::Planner, "p", "", false, None)
+        .expect("a planner to read the tool list as");
+    let c = caller(&group, &planner.id, Role::Planner);
+    let listed = dispatch(&reg, &c, "tools/list", &Value::Null).expect("tools/list");
+    let desc = listed["tools"]
+        .as_array()
+        .expect("a tools array")
+        .iter()
+        .find(|t| t["name"].as_str() == Some("post_issue_comment"))
+        .and_then(|t| t["description"].as_str())
+        .expect("post_issue_comment is on a planner's surface")
+        .to_string();
+
+    assert!(desc.len() > 200, "the control: there is a description, {} bytes", desc.len());
+    assert!(
+        desc.contains("orrerix-plan"),
+        "a planner is told THIS tool checks its plan block, and refuses: {desc}"
+    );
+}
+
+/// **Every tool signature the plan-drive fragment states is one the tool really
+/// has** (#3161 review round 1, finding 1).
+///
+/// The fragment is prose about a JSON schema, so nothing connects the two: it
+/// shipped naming `resume_plan_drive(issue, skip?)`, a parameter that exists in
+/// #3040's plan comment and in no build — the schema takes `issue` alone. That
+/// is the drift `plan-driver.md` §8 warns about ("a schema stated twice is a
+/// schema that drifts"), landing inside the PR that wrote the second copy.
+///
+/// So the copy is checked against the original rather than proof-read: pull
+/// every `<tool>(…)` signature out of the RENDERED playbook — the artifact an
+/// orchestrator reads, not the template — and assert each parameter it names is
+/// a property of that tool's own schema.
+///
+/// **Name-independent, and default-deny**: the trigger is the shape
+/// `` `<tool>( `` for a tool this group lists, so a fragment that grows a fifth
+/// signature is checked without anyone remembering to extend a list, and a
+/// parameter nobody declared is a red rather than a re-read. The two controls
+/// are the population (some signature was actually found, per tool that has
+/// one) and a negative (a parameter this loop would reject really is rejected),
+/// so a regex that matched nothing cannot pass.
+#[test]
+fn every_plan_tool_signature_in_the_playbook_names_parameters_the_tool_has() {
+    let repo = Repo::with(WORKFLOW);
+    let (reg, _d) = test_registry();
+    let (group, orch) = grouped(&reg, &repo);
+    let c = caller(&group, &orch, Role::Orchestrator);
+    let listed = dispatch(&reg, &c, "tools/list", &Value::Null).expect("tools/list");
+    let playbook = std::fs::read_to_string(
+        reg.state_root()
+            .join(group.as_str())
+            .join(loomux_lib::orchestration::ORCHESTRATOR_PLAYBOOK_FILE),
+    )
+    .expect("the rendered playbook");
+
+    // The parameters a signature may legally name, read off the tool's own
+    // schema rather than restated here.
+    let props = |tool: &str| -> Vec<String> {
+        listed["tools"]
+            .as_array()
+            .expect("a tools array")
+            .iter()
+            .find(|t| t["name"].as_str() == Some(tool))
+            .unwrap_or_else(|| panic!("{tool} is listed for an orchestrator"))["inputSchema"]
+            ["properties"]
+            .as_object()
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default()
+    };
+
+    // `foo(a, b: N, c?)` -> ["a", "b", "c"]. A value after `:` and a trailing
+    // `?` are prose, not part of the name.
+    let params = |sig: &str| -> Vec<String> {
+        sig.split(',')
+            .map(|p| p.split(':').next().unwrap_or("").trim().trim_end_matches('?').trim())
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+
+    let mut checked = 0usize;
+    for tool in ["drive_plan", "plan_drive_status", "cancel_plan_drive", "resume_plan_drive"] {
+        let declared = props(tool);
+        let needle = format!("`{tool}(");
+        let mut found = 0usize;
+        let mut rest = playbook.as_str();
+        while let Some(at) = rest.find(&needle) {
+            let after = &rest[at + needle.len()..];
+            let close = after.find(')').expect("a signature closes on its own line");
+            for p in params(&after[..close]) {
+                assert!(
+                    declared.contains(&p),
+                    "the playbook tells the orchestrator to call {tool}({p}…), and {tool}'s \
+                     schema declares only {declared:?} — a parameter that exists in prose and \
+                     in no build"
+                );
+                checked += 1;
+            }
+            found += 1;
+            rest = &after[close..];
+        }
+        // Population control, per tool: `plan_drive_status()` legitimately takes
+        // nothing, so the floor is that the fragment MENTIONS each tool at all.
+        assert!(found > 0, "the fragment states no signature for {tool} — did the marker change?");
+    }
+    assert!(checked >= 4, "only {checked} parameters were checked — the extractor read nothing");
+
+    // The negative control: the loop's own rule really does reject a parameter
+    // no schema declares. Without this, an extractor that produced an empty
+    // parameter list every time would satisfy every assertion above.
+    assert!(
+        !props("resume_plan_drive").contains(&"skip".to_string()),
+        "`skip` is the parameter this test was written for: it is in #3040's plan comment \
+         and in no build, so a schema that grows one means this control must be re-pointed"
+    );
+    assert!(
+        params("issue, skip?").contains(&"skip".to_string()),
+        "and the extractor really would have surfaced it — the control that makes the \
+         assertion above about the schema rather than about a parser that reads nothing"
+    );
+}
+
+/// **`planner.md` points at the schema's one home, in the present tense**
+/// (#3161 review round 1, finding 2).
+///
+/// P2 shipped that pointer in WILL tense — "the full schema … WILL live in
+/// `doc/design/plan-driver.md` (#3040 P1); until then this paragraph is the
+/// whole schema you have" — which was correct when written and false the moment
+/// P1 merged as #3062. Nothing went red: a WILL-tense promise decays silently,
+/// and every planner spawned in between was told to treat a summary as the
+/// contract and not to look for the real one.
+///
+/// The golden byte-pin cannot catch it — the golden is re-blessed to whatever
+/// the template says, so it passes identically for both texts and only proves
+/// the edit rode along nowhere else. This reads `PLANNER_TPL` directly, which is
+/// the surface the claim lives on.
+#[test]
+fn the_planner_is_pointed_at_the_schemas_one_home_and_not_promised_one() {
+    let tpl = loomux_lib::orchestration::PLANNER_TPL;
+
+    // The control: the paragraph this is about is present at all. Without it a
+    // renamed section would satisfy both assertions below by deleting the
+    // subject rather than by keeping it correct.
+    assert!(
+        tpl.contains("orrerix-plan"),
+        "the planner's plan-block contract is still in its instructions"
+    );
+    assert!(
+        tpl.contains("doc/design/plan-driver.md"),
+        "and it names where the full schema lives, so a planner can read the contract \
+         rather than a summary of it"
+    );
+    // The WILL tense is the defect, and it is pinned as an absence beside the
+    // presence above: a future edit that re-promises a landed slice is a red.
+    assert!(
+        !tpl.contains("WILL live"),
+        "the schema has landed (#3062) — a planner told it WILL live somewhere is told to \
+         wait for a file that is already there"
+    );
+    assert!(
+        !tpl.contains("whole schema you have"),
+        "and it is no longer told this paragraph IS the schema, which is what made the \
+         summary read as the contract"
+    );
 }

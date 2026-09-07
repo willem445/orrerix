@@ -6000,7 +6000,16 @@ const LIVE: [(&str, &str, &[&str]); 8] = [
         // halves of every combined entry must still be adjacent in one file, or
         // the entry becomes two. Checked here: `{{MERGE_QUEUE}}` and
         // `{{REVIEW_DRIVER}}` are in this file and nowhere else.
-        &["{{MERGE_QUEUE}}{{REVIEW_DRIVER}}", "{{POST_MERGE_WORKFLOW_HOOK}}"],
+        //
+        // `{{PLAN_DRIVER}}` (#3040 P4) is registered SEPARATELY rather than
+        // combined with either: it sits in the Planning-and-scheduling section,
+        // several hundred lines above the merge gate's pair, so the adjacency
+        // that makes a combined key strippable does not hold for it.
+        &[
+            "{{MERGE_QUEUE}}{{REVIEW_DRIVER}}",
+            "{{POST_MERGE_WORKFLOW_HOOK}}",
+            "{{PLAN_DRIVER}}",
+        ],
     ),
     // #2519 slice B. An EMPTY key list, and that is a statement rather than a
     // gap: `lead.md` carries no workflow-conditional prose at all, so nothing

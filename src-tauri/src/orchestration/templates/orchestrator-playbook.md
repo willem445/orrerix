@@ -409,7 +409,7 @@ read the plan there. Before #2815 it could not: a plan is thousands of character
 permission engine will not match a shell command that long, and every `gh issue comment`
 route was denied — so plans were smuggled out through `message_orchestrator` and re-posted
 by hand, at two full turns of plan text each. If a planner ever reports `blocked` because it
-cannot post, that is a regression in the tool, not a task for you to work around by pasting.
+cannot post, that is a regression in the tool, not a task for you to work around by pasting.{{PLAN_DRIVER}}
 
 **One task per worker** (INVARIANT 10). Idle just-spawned workers may receive their first task
 via `send_prompt`; once a worker's PR is settled, `kill_agent` it (record its session id on the

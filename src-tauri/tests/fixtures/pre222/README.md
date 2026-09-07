@@ -1419,3 +1419,34 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   core's *pointer* (that the brief carries the DoD verbatim, and where that one copy is) and
   the playbook section's *evidence duty* — the specimen followed the rule to the surface that
   now carries it.
+
+- **#3040 P4, the plan drive taught to the orchestrator** — `planner.md` only.
+  `orchestrator.md`, `worker.md`, `reviewer.md`, `manager.md`, `lead.md` and `dod.md` did not
+  move, and `orchestrator-playbook.md`'s golden did not either.
+
+  **`planner.md`'s pointer to the schema was WILL-tense and the schema had landed.** Step 3's
+  `orrerix-plan` bullet ended "The full schema, field by field, WILL live in
+  `doc/design/plan-driver.md` (#3040 P1); once it lands, read it there before you write one.
+  Until then this paragraph is the whole schema you have." P1 merged as #3062, so every planner
+  spawned since has been told to treat a summary as the contract and not to go looking for the
+  real one — the exact failure the WILL-tense convention exists to make temporary. It now points
+  at `doc/design/plan-driver.md` §1 in the present tense and says why to read it (a refusal costs
+  a tool call), which is the only change to any golden in this re-bless.
+
+  **The orchestrator's own plan-drive teaching moved no golden, and that is the design.** It is a
+  conditional fragment, `{{PLAN_DRIVER}}`, added to `orchestrator-playbook.md` and registered in
+  `LIVE` — so the pins strip it before comparing and the golden is unchanged, which is #859's
+  precedent for a placeholder-only template edit. A group that does not declare
+  `driver.plan_enabled: true` reads exactly the playbook it read before, because that is what an
+  empty substitution leaves. The reason it is conditional at all is
+  `the_default_rendering_never_names_the_gate_machinery`'s: it names four tools, a fence schema
+  and a hold vocabulary a group without the switch does not have.
+
+  **The resident core did not grow, and the number is why.** `orchestrator.md` stood at 44,955 B
+  against `RESIDENT_CORE_BUDGET`'s 45,000 — 45 bytes, the margin #3040 P2 left — and it is paid
+  on every model call. The fragment went to the playbook, whose trigger for it was already
+  resident: the core's `Planning & scheduling` section points at
+  `read_playbook("planning-and-scheduling")` "when planning any work item — and when deciding
+  whether to spawn a planner", which is the one moment `drive_plan` is the alternative being
+  weighed. So no new section id, no new stub, and no byte of the core. The contract is
+  `doc/design/plan-driver.md` §9.

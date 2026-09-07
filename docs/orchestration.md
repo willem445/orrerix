@@ -2614,6 +2614,15 @@ deliverable and no worker is ever spawned off it. Take the label off mid-drive
 and the drive stops with a notice. There is no repo setting that turns that off,
 and `drive_plan` on an unlabelled issue is refused.
 
+**Turning the switch on also changes what your orchestrator reads.** Its
+instructions gain a plan-drive section — when `drive_plan` replaces briefing a
+worker by hand and when it does not, the four tools, what the driver may never
+do, and how to read the board as a veto — and a group without the switch gains
+nothing, because prose about a mechanism you do not have is an invitation to go
+looking for it. Nothing about it is resident: the section is served on demand
+when the orchestrator is deciding how to plan a work item, so a group that has
+the switch on pays for the words when it needs them and never otherwise.
+
 ### Watching a plan drive
 
 Once a plan is stored, an `agent-ready` drive boards it and runs it. (An

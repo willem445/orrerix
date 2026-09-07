@@ -765,6 +765,87 @@ a queued PR may not be driven — `drive_review` refuses `in-merge-queue`, `queu
 `in-review-drive`. Let the drive reach gate-satisfied, disposition its findings (INVARIANT 3 —
 that is still yours), and *then* queue."#;
 
+
+/// The `{{PLAN_DRIVER}}` fragment (#3040 P4) — substituted into the
+/// **playbook's** `Planning and scheduling` section, and only when the repo
+/// declares `driver: enabled: true` AND `plan_enabled: true`.
+///
+/// **Why the playbook and not the resident core.** `orchestrator.md` sat 45
+/// bytes under `RESIDENT_CORE_BUDGET` at #3040 P2, and the core is paid on
+/// every model call while a playbook section is paid when its trigger fires.
+/// The trigger here is exact and already resident: the core's Planning &
+/// scheduling section says to read `planning-and-scheduling` "when planning any
+/// work item — and when deciding whether to spawn a planner", which is the one
+/// moment `drive_plan` is the alternative being weighed. So no new section id
+/// and no new stub: the pairing
+/// `every_playbook_section_has_a_resident_stub_naming_it` polices is already
+/// satisfied by the pointer that was there, and the core does not grow.
+///
+/// **A fragment rather than playbook prose**, on `REVIEW_DRIVER_NOTE`'s test:
+/// everything here names machinery a group without `plan_enabled` does not
+/// have — four tools, a fence schema, a closed hold vocabulary, and a second
+/// narrowing of where a delegate's report arrives. Prose about a mechanism the
+/// reader does not have is an invitation to go looking for it.
+///
+/// It brings its own leading newline for `MERGE_QUEUE_NOTE`'s reason: the
+/// placeholder sits at the end of the preceding paragraph's last line, so an
+/// empty substitution has to leave that line exactly as it was
+/// (`a_workflow_placeholder_must_sit_at_the_end_of_a_line_it_shares`).
+const PLAN_DRIVER_NOTE: &str = r#"
+**This repo also runs an engine PLAN driver, and it can carry a labelled issue from planning to
+merged slices without a turn from you.** Where the review driver takes one PR through review, this
+takes one ISSUE through planning: `drive_plan(issue)` spawns a planner from your roster, validates
+the plan it writes, boards it, and spawns each slice's worker as its dependencies clear — handing
+every PR to the review driver itself, so the first thing you usually hear about a driven issue is
+that driver's own `GATE SATISFIED`.
+
+**Call it instead of hand-briefing when the issue is one you would have spawned a planner for
+anyway.** The ladder above is unchanged and still decides: contained work you could already write
+the brief for is still a worker you spawn yourself, and `drive_plan` on it would buy a planner
+nobody needed. What it replaces is the sequence AFTER a plan — reading it, boarding it, writing k
+briefs, spawning k workers, and calling `drive_review` k times — which is where the turns actually
+went.
+
+- `drive_plan(issue, planner_block?, review_minutes?, base?)` — start one. Refused unless the issue
+  is open and carries `agent-ready` or `agent-investigation`; the label is consent and it is
+  **re-read before every spawn**, so taking it off mid-drive parks the drive. An
+  `agent-investigation` drive stops at the posted plan and never boards or spawns anything.
+- `plan_drive_status()` — where your drives stand. **Read it after a compaction**: a drive you have
+  forgotten is still running.
+- `cancel_plan_drive(issue)` — stop one. It kills nothing: panes keep running under you, and their
+  reports start reaching this one again. Ending a pane is still `kill_agent`.
+- `resume_plan_drive(issue)` — restart a parked drive, releasing its parked slices with it.
+
+**The plan is a fenced `orrerix-plan` block, and it is validated before anything is posted.** An
+invalid one comes back to the planner as a tool error with line numbers, nothing reaches the issue,
+and it fixes it inside its own turn — which costs you nothing. Three refusals park the drive with
+the reasons. Nothing is ever repaired: an id, a branch or a dependency orrerix refuses is refused,
+never rewritten. A worker's brief is a header orrerix writes, the planner's own words **verbatim**,
+then the same definition of done every brief here quotes.
+
+**What the driver may never do**, so you never have to wonder: merge, or mark a slice done on
+anything but a merge it positively read; write or widen a brief; spawn past the delegate cap or the
+board's WIP limits, which refuse it exactly as they refuse you; touch an issue, a PR or a label;
+decide a disposition. Every one of those is still yours, and INVARIANT 3 in particular is untouched
+— a drive reaching gate-satisfied is a gate for you to disposition, not a merge.
+
+**Your veto is the BOARD, and it works while the drive runs.** Readiness is re-read from the rows
+every tick and never cached: mark a row `done` and its dependents start; set one `blocked` or
+`cancelled` and it never spawns; edit its deps and they are respected; delete it and the drive
+parks with a notice naming it. A slice the planner flagged `hold: true` is boarded and never
+spawned — that is the planner telling you it carries a decision that is yours to make, and briefing
+it by hand is what you do with it. If you want a pause between the plan and the first spawn,
+`drive_plan(issue, review_minutes: N)` posts exactly one notice and waits.
+
+**One slice parks without parking the plan.** A worker that reports `blocked`, one whose pane dies
+without reporting, one that says done and never opens a PR, a PR closed unmerged, or a delegate cap
+that stays full — each parks that slice, with one notice, and the independent slices keep going.
+Withdrawn consent, a struck row and the whole-drive stall backstop park the drive.
+
+**The same narrowing the review driver has, for the same reason.** A driven planner's and a driven
+slice worker's `report` are consumed by the driver instead of arriving here as prompts; the audit
+log (`pd-*`) and `plan_drive_status()` are what compensate, and `message_orchestrator` is never
+intercepted, so a delegate's own words always reach you."#;
 /// The `{{LOCKS}}` / `{{LOCKS_ORCH}}` fragments (#858) — substituted into
 /// `worker.md`/`reviewer.md` and `orchestrator.md` respectively, **only** when
 /// the repo declares a non-empty `resources:` block, and empty otherwise.
@@ -29780,6 +29861,7 @@ struct InstructionVars {
     post_merge_workflow_hook: String,
     merge_queue_note: String,
     review_driver_note: String,
+    plan_driver_note: String,
     locks_note: &'static str,
     locks_orch_note: &'static str,
 }
@@ -29829,6 +29911,7 @@ impl InstructionVars {
             // last on purpose (see the comment there).
             ("MERGE_QUEUE", self.merge_queue_note.as_str()),
             ("REVIEW_DRIVER", self.review_driver_note.as_str()),
+            ("PLAN_DRIVER", self.plan_driver_note.as_str()),
             // #3040 P2. A per-group VALUE like HOLD_LABEL and LESSONS_PATH,
             // NOT one of `LIVE`'s workflow-conditional keys: it resolves to the
             // same real text for every group, so a golden fixture carries the
@@ -46844,8 +46927,30 @@ impl OrchRegistry {
         // `driver-disabled` cannot be told it has a driver, and a group that
         // has one cannot be left to discover §7's narrowing from a notice that
         // does not arrive.
-        let review_driver_note = if self.driver_enabled(&g.id) {
+        let review_driver_note = if self.driver_enabled_for(&g.repo, &g.guardrails) {
             REVIEW_DRIVER_NOTE.to_string()
+        } else {
+            String::new()
+        };
+        // #3040 P4, gated on the SECOND switch and read through `pd_policy`,
+        // the one policy reader the plan tick uses — so the group that is told
+        // it has a plan driver is exactly the group whose four plan tools do not
+        // answer `plan-driver-disabled`. A repo that turned the review driver on
+        // and not this one consented to a review loop, not to orrerix spawning a
+        // planner and turning its output into work, and its instructions say so
+        // by saying nothing.
+        //
+        // Both fragments read the policy off `g` rather than by id, and that is
+        // load-bearing rather than a style: `create_group` renders these files
+        // BEFORE it inserts the group into `self.groups`, so an id-keyed read
+        // answers `None` here and every fragment comes out empty — which is
+        // exactly what a driverless group's playbook looks like, so nothing says
+        // so. `{{REVIEW_DRIVER}}` had been empty in every newly created group's
+        // playbook for that reason until #3040 P4 (a group only got it when
+        // something later re-applied its workflow, which re-renders with the
+        // group live).
+        let plan_driver_note = if self.plan_driver_enabled_for(&g.repo, &g.guardrails) {
+            PLAN_DRIVER_NOTE.to_string()
         } else {
             String::new()
         };
@@ -46867,6 +46972,7 @@ impl OrchRegistry {
             post_merge_workflow_hook,
             merge_queue_note,
             review_driver_note,
+            plan_driver_note,
             locks_note: if locks_declared { LOCKS_NOTE } else { "" },
             locks_orch_note: if locks_declared { LOCKS_ORCH_NOTE } else { "" },
         }

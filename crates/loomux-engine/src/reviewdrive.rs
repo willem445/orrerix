@@ -612,7 +612,8 @@ pub fn transition(from: DriveState, to: DriveState) -> Result<DriveState, Invali
 /// cannot see.
 ///
 /// Named as a closed match over the enum rather than as a `matches!` on the
-/// two, so a sixteenth reason has to decide. The question it must answer is
+/// two, so a seventeenth reason has to decide (the sixteenth, #2811 S5b's
+/// `provider-limit`, did — below). The question it must answer is
 /// narrow now: *can this line render identically while meaning something new?*
 /// Anything a reader could tell apart by looking is already handled.
 pub fn repeat_carries_new_information(reason: HeldReason) -> bool {
@@ -630,7 +631,15 @@ pub fn repeat_carries_new_information(reason: HeldReason) -> bool {
         | HeldReason::WorkerUnresumable
         | HeldReason::CapRefused
         | HeldReason::CapFull
-        | HeldReason::Messaged => false,
+        | HeldReason::Messaged
+        // #2811 S5b. `false`, and the question the doc above poses answers
+        // itself here: this line carries a provider name and a remedy, and
+        // no interpolated quantity at all. A repeat renders identically
+        // BECAUSE it means the same thing — the account is still out of
+        // budget — so re-announcing it would be the duplicate-line problem
+        // #3040 N1 exists to stop, on the one hold that by construction
+        // arrives N times at once.
+        | HeldReason::ProviderLimit => false,
     }
 }
 

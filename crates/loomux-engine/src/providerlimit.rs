@@ -224,7 +224,7 @@ pub fn limit_in_tail(tail: &str) -> Option<&'static LimitPattern> {
             continue;
         }
         let logical = rejoined(&lines, i);
-        if let Some(p) = LIMIT_PATTERNS.iter().find(|p| logical.starts_with(p.needle)) {
+        if let Some(p) = LIMIT_PATTERNS.iter().find(|p| logical.contains(p.needle)) {
             return Some(p);
         }
     }

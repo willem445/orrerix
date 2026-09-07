@@ -44231,7 +44231,7 @@ impl OrchRegistry {
             }
             let Some(limit) = signals.get(&a.id).and_then(|s| s.limit) else { continue };
             let entry = limited_by_key
-                .entry((a.group.to_string(), limit.provider))
+                .entry((format!("{}/{}", a.group, a.id), limit.provider)) // MUTATION M2: no dedup
                 .or_insert_with(|| (a.id.clone(), 0));
             entry.1 += 1;
             if a.id < entry.0 {

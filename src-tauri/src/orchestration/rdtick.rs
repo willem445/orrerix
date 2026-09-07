@@ -3186,22 +3186,33 @@ impl OrchRegistry {
                 // arc is taken, so a green and a red are separate actions in the
                 // order they were observed (§5.4: a filter looking for the thing
                 // that happened must not match the thing that did not).
-                if entry.state() == reviewdrive::DriveState::CiWait {
-                    match obs.ci {
-                        reviewdrive::CiObservation::Green => out.audits.push((
+                match (entry.state(), obs.ci) {
+                    (reviewdrive::DriveState::CiWait, reviewdrive::CiObservation::Green) => {
+                        out.audits.push((
                             rddrive::audit_action::CI_GREEN,
                             json!({ "pr": pr, "head": brief.head }),
-                        )),
-                        reviewdrive::CiObservation::Red => out.audits.push((
+                        ))
+                    }
+                    (reviewdrive::DriveState::CiWait, reviewdrive::CiObservation::Red) => {
+                        out.audits.push((
                             rddrive::audit_action::CI_RED,
                             json!({ "pr": pr, "head": brief.head, "failing": brief.failing_jobs }),
-                        )),
-                        reviewdrive::CiObservation::Conflicting => out.audits.push((
-                            rddrive::audit_action::CONFLICTING,
-                            json!({ "pr": pr, "base": brief.base }),
-                        )),
-                        _ => {}
+                        ))
                     }
+                    // **`gate-check` too since #2311**, where the same
+                    // observation drives the same arc 3. The row is what accounts
+                    // for the hand-back that follows: an `rd-handback`
+                    // `why:conflict` with no `rd-conflicting` above it is a spent
+                    // `rebase_attempts` a §5.4 reader cannot explain — and the
+                    // row is the one `scripts/orch-scorecard.cjs` counts.
+                    (
+                        reviewdrive::DriveState::CiWait | reviewdrive::DriveState::GateCheck,
+                        reviewdrive::CiObservation::Conflicting,
+                    ) => out.audits.push((
+                        rddrive::audit_action::CONFLICTING,
+                        json!({ "pr": pr, "base": brief.base }),
+                    )),
+                    _ => {}
                 }
                 if let Err(bad) = entry.take(&step, now) {
                     // Unreachable through `decide`, which only proposes arcs the

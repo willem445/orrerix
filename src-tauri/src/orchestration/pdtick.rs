@@ -271,12 +271,25 @@ impl OrchRegistry {
     /// for one; a plan driver that failed open spawns a planner and then spawns
     /// workers off what it writes.
     fn pd_policy(&self, group: &GroupId) -> (bool, PdLimits) {
+        let Some(g) = self.group(group) else { return (false, PdLimits::default()) };
+        self.pd_policy_for(&g.repo, &g.guardrails)
+    }
+
+    /// The same policy from a group's own record — `driver_policy_for`'s twin,
+    /// and for its reason (#3040 P4): `create_group` renders the instruction
+    /// files before the group is in `self.groups`, so the id-taking form reads
+    /// `off` there and the fragment renders empty, which is indistinguishable
+    /// from a group that really has no plan driver.
+    pub(super) fn pd_policy_for(
+        &self,
+        repo: &str,
+        guardrails: &super::Guardrails,
+    ) -> (bool, PdLimits) {
         let off = (false, PdLimits::default());
-        let Some(g) = self.group(group) else { return off };
-        if !g.guardrails.advanced_orchestrator {
+        if !guardrails.advanced_orchestrator {
             return off;
         }
-        let Ok(Some(wf)) = super::load_active_workflow(&g.repo, &g.guardrails) else { return off };
+        let Ok(Some(wf)) = super::load_active_workflow(repo, guardrails) else { return off };
         let d = wf.driver;
         (
             d.enabled && d.plan_enabled,
@@ -300,14 +313,26 @@ impl OrchRegistry {
     /// not. The placeholder and the playbook prose are P4's.
     ///
     /// **P4 widened it**, and here is that argument. `instruction_vars` gates
-    /// the `{{PLAN_DRIVER}}` playbook fragment on this, for
-    /// `REVIEW_DRIVER_NOTE`'s reason and through the same one reader: the group
-    /// that is TOLD it has a plan driver has to be exactly the group whose four
-    /// plan tools do not answer `plan-driver-disabled`, and two readers of one
-    /// policy is how those drift apart. The tool listing is still unconditional
-    /// and still gated at dispatch — that half of the earlier note stands.
+    /// the `{{PLAN_DRIVER}}` playbook fragment on this policy, for
+    /// `REVIEW_DRIVER_NOTE`'s reason: the group that is TOLD it has a plan
+    /// driver has to be exactly the group whose four plan tools do not answer
+    /// `plan-driver-disabled`, and two readers of one policy is how those drift
+    /// apart. It reaches it through [`plan_driver_enabled_for`] rather than
+    /// through this, because the render runs before the group is in the map —
+    /// one policy, two ways in. The tool listing is still unconditional and
+    /// still gated at dispatch; that half of the earlier note stands.
     pub(super) fn plan_driver_enabled(&self, group: &GroupId) -> bool {
         self.pd_policy(group).0
+    }
+
+    /// [`plan_driver_enabled`](Self::plan_driver_enabled) for a group not yet
+    /// in the map — the one `instruction_vars` uses.
+    pub(super) fn plan_driver_enabled_for(
+        &self,
+        repo: &str,
+        guardrails: &super::Guardrails,
+    ) -> bool {
+        self.pd_policy_for(repo, guardrails).0
     }
 
     /// Hold `group` off until `at`.

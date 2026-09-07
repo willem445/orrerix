@@ -550,12 +550,24 @@ The orchestrator's teaching is a **conditional fragment**, `{{PLAN_DRIVER}}`,
 substituted into the rendered playbook's `Planning and scheduling` section and
 empty everywhere else. Three decisions, each of which is the contract:
 
-**It is gated on the SECOND switch**, through `plan_driver_enabled` — the same
-policy reader `pd_driver_tick` uses. One reader, so the group that is TOLD it
-has a plan driver is exactly the group whose four plan tools do not answer
-`plan-driver-disabled`. Two readers of one policy is how a fragment and a gate
-drift apart, and the drift is silent in the direction that matters: prose about
-a mechanism the reader does not have.
+**It is gated on the SECOND switch**, through `pd_policy` — the same policy
+the tick reads. One policy, so the group that is TOLD it has a plan driver is
+exactly the group whose four plan tools do not answer `plan-driver-disabled`.
+Two readers of one policy is how a fragment and a gate drift apart, and the
+drift is silent in the direction that matters: prose about a mechanism the
+reader does not have.
+
+**It reaches that policy from the group's own record, not by id, and that is
+load-bearing.** `create_group` renders the instruction files BEFORE it inserts
+the group into the registry's map, so an id-keyed policy read answers `None`
+there and every conditional fragment renders EMPTY — which is precisely what a
+group without the feature looks like, so nothing announces it.
+`{{REVIEW_DRIVER}}` had been empty in every newly created group's playbook for
+that reason: a group only got the review driver's own note once something
+re-applied its workflow, which re-renders with the group live. P4 fixes it for
+both fragments (`driver_policy_for` / `pd_policy_for`), and
+`the_playbook_names_the_plan_drive_only_where_the_second_switch_is_on` is what
+found it — it reads the file a launch actually writes.
 
 **It is a fragment rather than playbook prose**, for the reason
 `the_default_rendering_never_names_the_gate_machinery` states and

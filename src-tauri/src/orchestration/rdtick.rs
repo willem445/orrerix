@@ -499,12 +499,33 @@ impl OrchRegistry {
     /// against INVARIANT 9 — they are pacing, not budget, and S2 clamps them to
     /// the notify-TTL family as it parses.
     fn driver_policy(&self, group: &GroupId) -> (bool, reviewdrive::DriveLimits) {
+        let Some(g) = self.group(group) else {
+            return (false, reviewdrive::DriveLimits::default());
+        };
+        self.driver_policy_for(&g.repo, &g.guardrails)
+    }
+
+    /// The same policy read from a group's OWN record rather than from the
+    /// registry's map (#3040 P4).
+    ///
+    /// `instruction_vars` needs this and the id-taking form cannot serve it:
+    /// `create_group` renders the instruction files BEFORE it inserts the group
+    /// into `self.groups`, so `self.group(id)` answers `None` there and every
+    /// policy read off it comes back `off`. That is silent in the direction
+    /// that matters — the fragment renders EMPTY, which is exactly what a
+    /// driverless group's playbook looks like — so a group created with a driver
+    /// read a playbook that never mentioned it until something re-applied its
+    /// workflow. One policy, two ways in.
+    pub(super) fn driver_policy_for(
+        &self,
+        repo: &str,
+        guardrails: &super::Guardrails,
+    ) -> (bool, reviewdrive::DriveLimits) {
         let off = (false, reviewdrive::DriveLimits::default());
-        let Some(g) = self.group(group) else { return off };
-        if !g.guardrails.advanced_orchestrator {
+        if !guardrails.advanced_orchestrator {
             return off;
         }
-        let Ok(Some(wf)) = super::load_active_workflow(&g.repo, &g.guardrails) else { return off };
+        let Ok(Some(wf)) = super::load_active_workflow(repo, guardrails) else { return off };
         let d = wf.driver;
         (
             d.enabled,
@@ -530,6 +551,11 @@ impl OrchRegistry {
     /// `driver-disabled` could be told in its instructions that it has a driver.
     pub(super) fn driver_enabled(&self, group: &GroupId) -> bool {
         self.driver_policy(group).0
+    }
+
+    /// [`driver_enabled`](Self::driver_enabled) for a group not yet in the map.
+    pub(super) fn driver_enabled_for(&self, repo: &str, guardrails: &super::Guardrails) -> bool {
+        self.driver_policy_for(repo, guardrails).0
     }
 
     /// Install (or clear) the canned `gh` the driver reads through —

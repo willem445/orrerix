@@ -46887,19 +46887,29 @@ impl OrchRegistry {
         // `driver-disabled` cannot be told it has a driver, and a group that
         // has one cannot be left to discover §7's narrowing from a notice that
         // does not arrive.
-        let review_driver_note = if self.driver_enabled(&g.id) {
+        let review_driver_note = if self.driver_enabled_for(&g.repo, &g.guardrails) {
             REVIEW_DRIVER_NOTE.to_string()
         } else {
             String::new()
         };
-        // #3040 P4, gated on the SECOND switch and read through the one policy
-        // reader the plan tick uses — so the group that is told it has a plan
-        // driver is exactly the group whose four plan tools do not answer
-        // `plan-driver-disabled`. A repo that turned the review driver on and
-        // not this one consented to a review loop, not to orrerix spawning a
+        // #3040 P4, gated on the SECOND switch and read through `pd_policy`,
+        // the one policy reader the plan tick uses — so the group that is told
+        // it has a plan driver is exactly the group whose four plan tools do not
+        // answer `plan-driver-disabled`. A repo that turned the review driver on
+        // and not this one consented to a review loop, not to orrerix spawning a
         // planner and turning its output into work, and its instructions say so
         // by saying nothing.
-        let plan_driver_note = if self.plan_driver_enabled(&g.id) {
+        //
+        // Both fragments read the policy off `g` rather than by id, and that is
+        // load-bearing rather than a style: `create_group` renders these files
+        // BEFORE it inserts the group into `self.groups`, so an id-keyed read
+        // answers `None` here and every fragment comes out empty — which is
+        // exactly what a driverless group's playbook looks like, so nothing says
+        // so. `{{REVIEW_DRIVER}}` had been empty in every newly created group's
+        // playbook for that reason until #3040 P4 (a group only got it when
+        // something later re-applied its workflow, which re-renders with the
+        // group live).
+        let plan_driver_note = if self.plan_driver_enabled_for(&g.repo, &g.guardrails) {
             PLAN_DRIVER_NOTE.to_string()
         } else {
             String::new()

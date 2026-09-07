@@ -1884,13 +1884,44 @@ task board's Approve control, the groupview workflow row):
    push-to-merge paths, not GitHub's own merge button.
 
 The shipped text: the shim and the Rust-side status line share
-`GATE_REFUSAL_EXITS` (`src-tauri/src/orchestration/mod.rs`) verbatim —
+`GATE_REFUSAL_EXITS` (`src-tauri/src/orchestration/mod.rs`) verbatim — with
+one #1889 exception in the status line only, below —
 `"Three ways forward: (1) get the named reviewer(s) to run and record a
 verdict, (2) have the human turn workflow mode off for this session (clears
 the gate), or (3) merge this PR from the GitHub UI, which is not gated."`
 The board tooltip is its own wording of the same three exits —
 `gateExitsMessage()` (`src/workflowstatus.ts`) — since a shell string and a
 TypeScript string can't share one constant.
+
+**One exit is withheld while a merge-time condition is failing (#1889).** The
+gate status line — the half an orchestrator and the task board read, and the
+half that summarizes what a merge would commit — swaps in
+`GATE_REFUSAL_EXITS_WITHOUT_UI_BYPASS` when the state it is reporting includes
+a merge-time condition currently failing. The one condition it has the inputs
+to evaluate is `body-unchanged`, asked exactly as the enforcing halves ask it
+(an unreadable body refuses, and so does any live pass whose digest no longer
+covers the body as it stands, unless a #2168 E2 verification pass covers it).
+Exit (3) is the one suggestion that turns a failing condition into an action
+AROUND it: a drifted pass means nobody approved the text a squash merge would
+commit, and the UI merge button commits exactly that. So while one fails, the
+line offers only the two ways through the gate and does not name the withheld
+exit at all — advertising the bypass in the same breath as withholding it
+would defeat the point. `ci-green` and `base-green` are evaluated by the shim
+against real `gh` at merge time; the status line never spends a `gh` call on
+them (#791) and so cannot claim to know they fail — it keeps exit (3) there.
+The shim always names all three: its refusal fires on the human's own
+`gh pr merge`, where the human is already acting directly, and reproducing the
+Rust body-drift evaluation in shell would be a second copy of the question.
+The MALFORMED and routing-unaccountable early returns keep exit (3) as well —
+a gate unreadable enough to refuse there has no evaluable conditions to speak
+of. The same #1889 rule moves the HEADLINE, not only the exits: on a gate that
+declares `body-unchanged`, a drifted pass by one of the gate's REQUIRED
+reviewers — the population every enforcing half asks; drift on a block the
+gate does not name is reported in the caveat, never in the headline — that no
+verification round covers makes the status line read NOT YET SATISFIED, naming
+the lane, instead of SATISFIED with a caveat underneath that contradicts it; a
+verification round covering the body keeps SATISFIED, because that is the case
+the clause accepts.
 
 ### loomux never silently arms a gate the roster can't satisfy (#316)
 

@@ -991,13 +991,30 @@ pub fn idle_tick_notice(intake_summary: Option<&str>, summary_incomplete: bool) 
 /// The three ways forward when a workflow merge gate refuses a merge (#316,
 /// scope point 3 — a human "Approve" grant never opens THIS gate, #197/#222, so
 /// a refusal must never leave the exit unnamed). Shared, word-for-word, between
-/// the Rust-side gate status (`gate_status_line`) and the shim's own refusal
-/// (`gh_shim_sh`'s `loomux_block_wf` — duplicated there since a shell template
-/// can't call into this constant, but kept in sync with it) so a human sees the
-/// identical three exits wherever the refusal surfaces.
+/// the shim's own refusal (`gh_shim_sh`'s `loomux_block_wf` — duplicated there
+/// since a shell template can't call into this constant, but kept in sync with
+/// it) and the DEFAULT form of the Rust-side gate status (`gate_status_line`).
+/// The gate status has one deliberate exception: while a merge-time condition
+/// is failing, it speaks [`GATE_REFUSAL_EXITS_WITHOUT_UI_BYPASS`] instead, so
+/// the exit that goes around the failing condition is not offered by the line
+/// that just described it failing. The shim keeps all three — it fires on the
+/// human's own `gh pr merge`, where the human is already acting directly.
 const GATE_REFUSAL_EXITS: &str = "Three ways forward: (1) get the named reviewer(s) to run and \
      record a verdict, (2) have the human turn workflow mode off for this session (clears the \
      gate), or (3) merge this PR from the GitHub UI, which is not gated.";
+
+/// [`GATE_REFUSAL_EXITS`] with exit (3) withheld (#1889): the GitHub-UI merge is
+/// the one suggestion that turns a failing merge-time condition into an action
+/// AROUND it — a reader who takes it merges past the very condition the caveat
+/// just warned about — so while one is failing the gate status line offers only
+/// the two ways that go through the gate. The withheld exit is deliberately NOT
+/// named here: advertising the bypass in the same breath as withholding it would
+/// defeat the point. The shim is not taught this (see the doc above): its
+/// refusal fires on the human's own merge attempt, and reproducing the Rust
+/// body-drift evaluation in shell would be a second copy of the question.
+const GATE_REFUSAL_EXITS_WITHOUT_UI_BYPASS: &str = "Two ways forward: (1) get the named \
+     reviewer(s) to run and record a verdict, or (2) have the human turn workflow mode off for \
+     this session (clears the gate).";
 
 /// One-line notice delivered to the orchestrator when the advanced-orchestrator
 /// (workflow-mode) toggle changes LIVE mid-session (#316), so it re-plans its
@@ -48295,20 +48312,84 @@ impl OrchRegistry {
         // No declared `body-unchanged`: on such a repo the clause accepts
         // nothing because it is never checked, so the sentence would be a claim
         // about a condition this gate does not have — the drift is still
-        // REPORTED there, exactly as it always was. And the read itself walks
-        // the verdict directory a second time, after `body_drift` has already
-        // walked it, which is the cost #791 spent a slice removing from this
-        // very function.
+        // REPORTED there, exactly as it always was. And the read walks the
+        // verdict directory once, into the shared `verdict_map` helper, which
+        // the #1889 merge-time evaluation below reuses — the cost #791 spent a
+        // slice removing from this very function is not paid a third time.
+        let verdict_map = self.verdict_map(group, pr);
         let verified = !drift_passed.is_empty()
             && gate.also.iter().any(|c| c == "body-unchanged")
             && head.as_ref().ok().is_some_and(|h| {
-                mergeq::body_verified_by_required(
-                    &gate,
-                    &self.verdict_map(group, pr),
-                    h,
-                    body_digest,
-                )
+                mergeq::body_verified_by_required(&gate, &verdict_map, h, body_digest)
             });
+        // #1889 (option 1): a drifted pass that no #2168 E2 round covers, on a
+        // gate that DECLARES `body-unchanged`, is as blocking as a stale head —
+        // the body is what a squash merge records — so the SATISFIED headline
+        // below gives way to NOT YET SATISFIED naming the lane. `verified` is
+        // false precisely when no verification round covers the body, which is
+        // the accepted case this must not disturb.
+        //
+        // **The population is the gate's REQUIRED reviewers** (review round 1,
+        // finding 1) — the same one every enforcing half asks
+        // (`mergeq::body_unchanged`, `evaluate_merge_gate`, the evaluation
+        // below). `body_drift` reports every verdict file on disk, and a block
+        // the gate does not name — left behind by an edited `reviewers:` list —
+        // must not flip the headline to NOT YET SATISFIED while the shim passes
+        // the clause and the merge is not refused. **Nor may a stale lane**
+        // (review round 4, W1): `Satisfied` implies full head coverage only
+        // under `all-pass` — on a `threshold: N` gate `evaluate_merge_gate`
+        // counts live passes against N, so a required lane sitting stale does
+        // not stop it — so the filter applies the same liveness predicate the
+        // enforcing halves use (`reviewed(head)`, exactly what
+        // `mergeq::body_unchanged` and `body_unchanged_failing` below ask) and
+        // never the outcome. The FULL drift list is kept for the caveat notes,
+        // where reporting all drift is the point.
+        let required_drift: Vec<String> = drift_passed
+            .iter()
+            .filter(|b| gate.reviewers.contains(b))
+            .filter(|b| {
+                head.as_ref()
+                    .ok()
+                    .is_some_and(|h| verdict_map.get(b.as_str()).is_some_and(|v| v.reviewed(h)))
+            })
+            .cloned()
+            .collect();
+        let drift_headline = matches!(outcome, workflow::GateOutcome::Satisfied)
+            && !required_drift.is_empty()
+            && gate.also.iter().any(|c| c == "body-unchanged")
+            && !verified;
+        // #1889 (option 3): which merge-time conditions are failing RIGHT NOW,
+        // as far as this line can see. The one condition it has the inputs to
+        // evaluate is `body-unchanged`, and it asks exactly what the enforcing
+        // halves ask (the shim's clause and `mergeq::body_unchanged`): an
+        // unreadable — or EMPTY, the shape review round 4's premortem names, a
+        // `gh` read that returned nothing rather than failing — body refuses
+        // (`now.filter(|d| !d.is_empty())` is the one normalization both
+        // enforcing halves apply), and so does any LIVE pass — bound to the head
+        // that would merge — whose digest no longer covers the body as it
+        // stands, unless a required reviewer's verification pass covers it.
+        // `ci-green` and `base-green` are checked against real `gh` at merge
+        // time and this line never spends a `gh` call on them (#791), so it
+        // cannot claim to know they fail and keeps the exit; an unknown clause
+        // cannot reach a parsed gate (`sanitize_condition` refuses it at parse).
+        let body_unchanged_failing = gate.also.iter().any(|c| c == "body-unchanged")
+            && (body_digest.filter(|d| !d.is_empty()).is_none()
+                || head.as_ref().ok().is_some_and(|h| {
+                    let covered =
+                        mergeq::body_verified_by_required(&gate, &verdict_map, h, body_digest);
+                    gate.reviewers.iter().any(|r| {
+                        verdict_map.get(r).is_some_and(|v| {
+                            !v.verdict.is_blocking()
+                                && v.reviewed(h)
+                                && !v.pass_covers_body(h, body_digest, covered)
+                        })
+                    })
+                }));
+        let exits = if body_unchanged_failing {
+            GATE_REFUSAL_EXITS_WITHOUT_UI_BYPASS
+        } else {
+            GATE_REFUSAL_EXITS
+        };
         let mut body_note = String::new();
         if verified {
             body_note.push_str(&format!(
@@ -48318,7 +48399,11 @@ impl OrchRegistry {
                  owed a re-read — the code they passed has not moved.",
                 drift_passed.join(", ")
             ));
-        } else if !drift_passed.is_empty() {
+        } else if !drift_passed.is_empty() && !drift_headline {
+            // `drift_headline` suppresses this: when the headline already says
+            // NOT YET SATISFIED and names the lanes (#1889), the same sentence
+            // would repeat it. The gate-does-not-declare case (headline still
+            // SATISFIED) keeps it — there it is the only report there is.
             body_note.push_str(&format!(
                 " BODY CHANGED SINCE PASS: {} passed a DIFFERENT PR body than the one on the PR \
                  now — and the body is what a squash merge records as the commit message. Have \
@@ -48335,6 +48420,11 @@ impl OrchRegistry {
             ));
         }
         let line = match outcome {
+            workflow::GateOutcome::Satisfied if drift_headline => format!(
+                "merge gate for PR #{pr}: NOT YET SATISFIED — {} passed a different body; \
+                 re-record. `gh pr merge` is refused until then.{also} {exits}",
+                required_drift.join(", ")
+            ),
             workflow::GateOutcome::Satisfied => format!(
                 "merge gate for PR #{pr}: SATISFIED by the reviewer verdicts ({}) for the current \
                  revision.{also} The human merge gate still applies on the default branch.",
@@ -48343,13 +48433,13 @@ impl OrchRegistry {
             workflow::GateOutcome::Blocked { blocking } => format!(
                 "merge gate for PR #{pr}: BLOCKED — {} recorded a fail/escalate verdict. A \
                  blocking verdict beats any number of passes; the PR must be fixed and \
-                 re-reviewed. {GATE_REFUSAL_EXITS}",
+                 re-reviewed. {exits}",
                 blocking.join(", ")
             ),
             workflow::GateOutcome::Short { passes, need, outstanding, stale } => format!(
                 "merge gate for PR #{pr}: NOT YET SATISFIED — {passes} of {need} required PASS \
                  verdicts cover the PR's current head; still waiting on {}. `gh pr merge` is \
-                 refused until then.{also} {GATE_REFUSAL_EXITS}",
+                 refused until then.{also} {exits}",
                 waiting(&outstanding, &stale)
             ),
             // #791: name the reason. "Cannot resolve the head" reads the same
@@ -48367,7 +48457,7 @@ impl OrchRegistry {
             workflow::GateOutcome::UnknownRevision => format!(
                 "merge gate for PR #{pr}: loomux cannot resolve the PR's current head commit, so \
                  it cannot tell whether the recorded verdicts reviewed the code that would merge. \
-                 The merge is refused until it can.{} {GATE_REFUSAL_EXITS}",
+                 The merge is refused until it can.{} {exits}",
                 head.as_ref().err().map(|e| format!(" (gh pr view #{pr}: {e})")).unwrap_or_default()
             ),
         };

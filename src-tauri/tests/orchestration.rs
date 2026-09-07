@@ -42156,6 +42156,239 @@ fn the_rust_gate_status_never_reports_satisfied_when_the_shim_would_refuse() {
     assert!(s.contains("turn workflow mode off"), "a MALFORMED refusal must name the exits too: {s}");
 }
 
+/// #1889: the headline must agree with the body-drift caveat. On a gate that
+/// DECLARES `body-unchanged`, a pass whose body has moved — with no
+/// body-verification round covering it (#2168 E2) — is exactly as blocking as a
+/// stale head: the body is what a squash merge records as the commit message. So
+/// the headline reads NOT YET SATISFIED and names the lane, instead of SATISFIED
+/// with a warning underneath that contradicts it. And because a merge-time
+/// condition is failing, the "merge this PR from the GitHub UI, which is not
+/// gated" exit is withheld: it is the one line that turns the caveat into an
+/// action around the very condition it warns about.
+#[test]
+fn a_drifted_uncovered_pass_on_a_body_unchanged_gate_reads_not_yet_satisfied() {
+    let (reg, _d, _repo, gid) = gated_group("    also: [body-unchanged]\n");
+    reg.set_pr_body_override(Some("the body they reviewed\n".into()));
+    for block in ["rev-security", "rev-tests"] {
+        let c = reviewer_caller(&reg, &gid, block);
+        recorded(&reg, &c, "7", "pass", "fine");
+    }
+    assert!(
+        reg.gate_status_line(&gid, 7).unwrap().starts_with("merge gate for PR #7: SATISFIED"),
+        "the control: an unedited body is satisfied, and nothing is warned about"
+    );
+
+    // The worker edits the body. Both passes drift, and no verification round
+    // covers them — `body-unchanged` is failing RIGHT NOW.
+    reg.set_pr_body_override(Some("the body after a worker fixed a finding in it\n".into()));
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.contains("NOT YET SATISFIED"), "the headline must agree with the caveat: {s}");
+    assert!(!s.contains("SATISFIED by the reviewer verdicts"),
+        "SATISFIED beside a have-them-re-record caveat is the #1889 defect: {s}");
+    assert!(s.contains("rev-security") && s.contains("rev-tests"),
+        "the headline names the lane(s) that must re-record: {s}");
+    assert!(s.contains("passed a different body"), "the headline says what moved: {s}");
+    assert!(s.contains("`gh pr merge` is refused until then"),
+        "the refusal is stated like any other NOT YET SATISFIED: {s}");
+    // The GitHub-UI exit is the documented path PAST the failing condition, so a
+    // failing merge-time condition is exactly when it must not be offered. The
+    // other exits stay — only the bypass is withheld.
+    assert!(!s.contains("GitHub UI"), "{s}");
+    assert!(s.contains("turn workflow mode off"), "{s}");
+}
+
+/// The #2168 E2 rule, on the #1889 headline: a drifted pass covered by a
+/// body-VERIFICATION round is one the `body-unchanged` clause ACCEPTS, so the
+/// headline stays SATISFIED — "re-record" beside a gate that accepts them would
+/// be the false instruction #2168 E2 removed, now in the headline itself.
+#[test]
+fn a_drifted_pass_covered_by_a_verification_round_keeps_the_satisfied_headline() {
+    const REVIEWED: &str = "the body they reviewed\n";
+    const EDITED: &str = "the body as it stands now\n";
+    let (reg, d, _repo, gid) = gated_group("    also: [body-unchanged]\n");
+    reg.set_pr_body_override(Some(REVIEWED.into()));
+    for block in ["rev-security", "rev-tests"] {
+        let c = reviewer_caller(&reg, &gid, block);
+        recorded(&reg, &c, "7", "pass", "fine");
+    }
+    reg.set_pr_body_override(Some(EDITED.into()));
+
+    // rev-security is re-briefed as a verification delta and passes the body as
+    // it stands. Planted as the same bytes `verdict_file_text` writes — line 5's
+    // digest plus the mark — with the positive control below proving the plant
+    // really parses as a verification pass, so the SATISFIED headline below is
+    // the delegation deciding and not a mark this build failed to read.
+    let now = workflow::body_digest(EDITED);
+    let vf = d.path().join(gid.as_str()).join("verdicts").join("pr-7").join("rev-security");
+    fs::write(
+        &vf,
+        format!("pass\n{HEAD}\n1\nrev-9\n{now} {}\nverified\n", workflow::VERIFIED_BODY_MARK),
+    )
+    .unwrap();
+    let planted =
+        workflow::parse_verdict_file(7, "rev-security", &fs::read_to_string(&vf).unwrap()).unwrap();
+    assert!(planted.verified_body && planted.body_digest == now,
+        "positive control: the plant parses as a body-verification pass: {planted:?}");
+
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.starts_with("merge gate for PR #7: SATISFIED"),
+        "a covered drift is accepted, so the headline must not say otherwise: {s}");
+    assert!(!s.contains("NOT YET SATISFIED"), "{s}");
+    assert!(s.contains("VERIFIED SINCE"), "the acceptance is still reported: {s}");
+}
+
+/// The GitHub-UI exit is not withheld only in the drifted-Satisfied state: ANY
+/// failing merge-time condition withholds it, in whatever state the line is
+/// reporting. Here one lane is live with a drifted body while the other is
+/// stale at an earlier head, so the verdict half is what refuses — and the line
+/// still must not offer the merge that would skip the body condition the live
+/// lane is failing. The second half is the positive control for the absence:
+/// with no condition failing, the exit is named again.
+#[test]
+fn a_failing_merge_time_condition_drops_the_github_ui_exit_wherever_the_line_reports() {
+    let (reg, _d, _repo, gid) = gated_group("    also: [body-unchanged]\n");
+    reg.set_pr_body_override(Some("the body they reviewed\n".into()));
+    let sec = reviewer_caller(&reg, &gid, "rev-security");
+    recorded(&reg, &sec, "7", "pass", "fine");
+    // The worker pushes; rev-tests reviews the new head while the body still
+    // reads exactly as both lanes reviewed it.
+    reg.set_pr_head_override(Some(NEW_HEAD.into()));
+    let tests = reviewer_caller(&reg, &gid, "rev-tests");
+    recorded(&reg, &tests, "7", "pass", "fine");
+    // Then the body moves: rev-tests is the live pass, and its approval no
+    // longer covers what would be committed.
+    reg.set_pr_body_override(Some("the body after a worker fixed a finding in it\n".into()));
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.contains("NOT YET SATISFIED") && s.contains("EARLIER revision"),
+        "the verdict half is what refuses here: {s}");
+    assert!(!s.contains("GitHub UI"), "a failing merge-time condition withholds the bypass: {s}");
+    assert!(s.contains("turn workflow mode off"), "the other exits are still named: {s}");
+
+    // The control, in the same state: body restored to what the live pass read,
+    // so no merge-time condition is failing and the exit is named again.
+    reg.set_pr_body_override(Some("the body they reviewed\n".into()));
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.contains("GitHub UI"),
+        "an intact body is no condition failing — all three exits come back: {s}");
+}
+
+/// Review round 1, finding 1: the headline's population is the gate's REQUIRED
+/// reviewers, the same one every enforcing half asks (`mergeq::body_unchanged`,
+/// `evaluate_merge_gate`, the merge-time evaluation below). `body_drift` reports
+/// every verdict file on disk, and a block the gate does NOT name — the shape
+/// left behind by an edited reviewer list, or a reviewer-kind block that simply
+/// is not required — must not flip the headline to NOT YET SATISFIED while the
+/// shim passes the clause and the merge is not refused: that would be #1889's
+/// headline-vs-exits contradiction in a new state, with `rev-extra` named as a
+/// blocker that blocks nothing. The drift is still REPORTED — the caveat note
+/// keeps the full population, where reporting all drift is the point.
+#[test]
+fn a_drifted_pass_on_a_block_the_gate_does_not_name_keeps_the_satisfied_headline() {
+    let (reg, d, _repo, gid) = gated_group("    also: [body-unchanged]\n");
+    // The required lanes record against the body AS IT STANDS, so the clause
+    // passes for them — the merge is genuinely not refused here.
+    reg.set_pr_body_override(Some("the body as it stands\n".into()));
+    for block in ["rev-security", "rev-tests"] {
+        let c = reviewer_caller(&reg, &gid, block);
+        recorded(&reg, &c, "7", "pass", "fine");
+    }
+    // A verdict from a block the gate does not name, at the body that used to
+    // be — the orphaned file an edited `reviewers:` list leaves behind.
+    let old = workflow::body_digest("the body they reviewed\n");
+    let vf = d.path().join(gid.as_str()).join("verdicts").join("pr-7").join("rev-extra");
+    fs::write(&vf, format!("pass\n{HEAD}\n1\nrev-9\n{old}\nfine\n")).unwrap();
+    let planted =
+        workflow::parse_verdict_file(7, "rev-extra", &fs::read_to_string(&vf).unwrap()).unwrap();
+    assert!(planted.verdict == workflow::Verdict::Pass && planted.body_digest == old,
+        "positive control: the orphaned verdict file parses as a drifted pass: {planted:?}");
+
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.starts_with("merge gate for PR #7: SATISFIED"),
+        "a block the gate does not require cannot flip the headline: {s}");
+    assert!(!s.contains("NOT YET SATISFIED"),
+        "NOT YET SATISFIED would claim a refusal the shim does not make: {s}");
+    assert!(!s.contains("gh pr merge` is refused"),
+        "and would state a refusal that is not happening: {s}");
+    assert!(s.contains("BODY CHANGED SINCE PASS: rev-extra"),
+        "the drift is still reported — the caveat keeps the full population: {s}");
+}
+
+/// Residual 4 of the PR body, pinned rather than left aspirational: with the
+/// body UNREADABLE, no drift is computable, so the headline stays SATISFIED
+/// even on a gate declaring `body-unchanged` — while the shim refuses
+/// (`unresolved-body`, fail-closed). The second half is the arm of the
+/// merge-time evaluation this state does drive: a state whose line carries the
+/// exits withholds the GitHub-UI one, because an unreadable body IS a failing
+/// merge-time condition.
+#[test]
+fn an_unreadable_body_keeps_the_satisfied_headline_while_the_condition_knows_it_fails() {
+    let (reg, _d, _repo, gid) = gated_group("    also: [body-unchanged]\n");
+    reg.set_pr_body_override(Some("the body they reviewed\n".into()));
+    for block in ["rev-security", "rev-tests"] {
+        let c = reviewer_caller(&reg, &gid, block);
+        recorded(&reg, &c, "7", "pass", "fine");
+    }
+    reg.set_pr_body_override(None);
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.starts_with("merge gate for PR #7: SATISFIED"),
+        "the disclosed residual: no drift is computable without a body, so the \
+         headline stays SATISFIED while the shim would refuse: {s}");
+    assert!(!s.contains("BODY CHANGED"),
+        "and no drift claim is made — cannot tell is never reads as either: {s}");
+
+    // The half the merge-time evaluation does see: with one lane stale so the
+    // line is a refusal shape, the unreadable body withholds the bypass.
+    reg.set_pr_head_override(Some(NEW_HEAD.into()));
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.contains("NOT YET SATISFIED") && !s.contains("GitHub UI"),
+        "an unreadable body is a failing condition — the bypass is withheld: {s}");
+}
+
+/// Review round 4, W1: on a `threshold: N` gate, `Satisfied` does NOT imply
+/// every required lane covers the head — `evaluate_merge_gate` counts live
+/// passes against N, so a required lane sitting stale does not stop it. The
+/// headline's drift population therefore needs the same liveness predicate the
+/// enforcing halves apply (`mergeq::body_unchanged` skips a pass stale at the
+/// head, and so does the merge-time evaluation here), not the outcome: without
+/// it, `rev-security` — stale at an earlier head, body drifted — is named by a
+/// NOT YET SATISFIED headline beside an offered GitHub-UI exit, while the shim
+/// refuses nothing. (Round 1's fix pinned the required-vs-all axis; this pins
+/// the liveness axis, the `require` axis no test varied before.)
+#[test]
+fn a_stale_drifted_lane_on_a_threshold_gate_keeps_the_satisfied_headline() {
+    let (reg, _d, _repo, gid) =
+        gated_group("    threshold: 1\n    also: [body-unchanged]\n");
+    // Positive control on the axis: the fixture really is a threshold gate —
+    // every other headline test runs all-pass, where this defect cannot occur.
+    let gate = reg.merge_gate(&gid).expect("the fixture declares a gate");
+    assert_eq!(gate.require, workflow::GateRequire::Threshold(1),
+        "the test must run the axis it witnesses");
+
+    // rev-security passes at the first head and body; the worker pushes a new
+    // head AND edits the body; rev-tests passes at the new head and body.
+    reg.set_pr_body_override(Some("the body they reviewed\n".into()));
+    let sec = reviewer_caller(&reg, &gid, "rev-security");
+    recorded(&reg, &sec, "7", "pass", "fine");
+    reg.set_pr_head_override(Some(NEW_HEAD.into()));
+    reg.set_pr_body_override(Some("the body as it stands now\n".into()));
+    let tests = reviewer_caller(&reg, &gid, "rev-tests");
+    recorded(&reg, &tests, "7", "pass", "fine");
+
+    // The gate is SATISFIED (one live pass >= threshold 1) and the body clause
+    // passes (the live pass covers the body; the stale lane is not asked). The
+    // stale lane's drift is still REPORTED — by the caveat, never the headline.
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.starts_with("merge gate for PR #7: SATISFIED"),
+        "a stale lane does not stop a threshold gate, so the headline cannot \
+         claim otherwise: {s}");
+    assert!(!s.contains("NOT YET SATISFIED"),
+        "NOT YET SATISFIED would claim a refusal the shim does not make: {s}");
+    assert!(!s.contains("gh pr merge` is refused"),
+        "and would state a refusal that is not happening: {s}");
+    assert!(s.contains("BODY CHANGED SINCE PASS: rev-security"),
+        "the stale lane's drift is still reported — by the caveat: {s}");
+}
+
 #[test]
 fn gh_shim_script_enforces_the_workflow_merge_gate() {
     // A source-text pin of the shape. Every behavioural claim is EXECUTED below.

@@ -4796,16 +4796,18 @@ mod tests {
     }
 
     #[test]
-    fn the_held_reasons_are_the_notes_fifteen() {
+    fn the_held_reasons_are_the_notes_sixteen() {
         assert_eq!(HeldReason::ALL.len(), 16);
-        // §2.2: "There are **seventeen**" exits back to the LLM orchestrator —
-        // the fifteen holds plus `satisfied` and `cancelled`.
+        // §2.2: "There are **eighteen**" exits back to the LLM orchestrator —
+        // the sixteen holds plus `satisfied` and `cancelled`. #2811 S5b added
+        // `provider-limit`; the test NAME carries the count too, so a reason
+        // added without touching the note fails here twice over.
         let exits =
             HeldReason::ALL.len() + DriveState::ALL.iter().filter(|s| s.is_terminal()).count();
-        assert_eq!(exits, 17);
+        assert_eq!(exits, 18);
         // The two cap reasons are DIFFERENT exits, and nothing else here would
         // notice them collapsing into one spelling: `ALL` would still hold
-        // fifteen entries and every one of them would still round-trip.
+        // sixteen entries and every one of them would still round-trip.
         assert_ne!(
             HeldReason::CapFull.as_str(),
             HeldReason::CapRefused.as_str(),

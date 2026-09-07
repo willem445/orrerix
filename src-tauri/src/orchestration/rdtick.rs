@@ -31,9 +31,10 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use super::{
-    brand, mergeq, mqloop, notify, now_ms, pr_number, rddrive, render_template,
-    resolve_session_ref, resolve_worker_resume_cwd, reviewdrive, tail_snippet, workflow,
-    AgentEntry, AgentStatus, Delivery, GroupId, LockExt, OrchRegistry, Role, TaskPatch,
+    brand, manager_block_refusal, mergeq, mqloop, notify, now_ms, orchestrator_block_refusal,
+    pr_number, rddrive, render_template, resolve_session_ref, resolve_worker_resume_cwd,
+    reviewdrive, tail_snippet, unknown_block_refusal, workflow, AgentEntry, AgentStatus, Delivery,
+    GroupId, LockExt, OrchRegistry, Role, TaskPatch,
 };
 
 // ---------- the review driver's registry-side types (#1778 S3) ----------
@@ -1775,6 +1776,58 @@ impl OrchRegistry {
         Some((id.to_string(), a.killed_by.map(|who| who.as_str())))
     }
 
+    /// **Why the call refuses what the hand-back would refuse** (#2819 (g),
+    /// S7): a `drive_review` whose worker session can never take a hand-back
+    /// used to be ACCEPTED and then held `worker-unresumable` on every resume —
+    /// measured on #2819's incident as three holds and three orchestrator turns
+    /// for a PR that could never be handed back. This resolves the block the
+    /// hand-back would resolve, from the same roster record, at the call.
+    ///
+    /// Returns the sentence the hold would have quoted — never a second wording
+    /// of it: the orchestrator/manager sentences and the unknown-block sentence
+    /// are the spawn guards' own ([`orchestrator_block_refusal`],
+    /// [`manager_block_refusal`], [`unknown_block_refusal`]), shared rather
+    /// than re-spelled, and the no-default-block case reads
+    /// [`Guardrails::no_default_block_message`] the way the spawn does.
+    /// `None` means a hand-back can at least be attempted.
+    ///
+    /// **A session this group has no record of is deliberately not refused
+    /// here.** That is §5.1's passthrough arm, documented as accepted: there is
+    /// no roster record to read a block off, and resolving is still not proving
+    /// resumable. Its unresumability surfaces at the first hand-back as before,
+    /// bounded instead by the second-failure park at the hand-back site.
+    fn rd_unhandbackable_block(&self, group: &GroupId, session: &str) -> Option<String> {
+        let rec = self.session_identity_record(group, session)?;
+        let g = self.group(group)?;
+        // The same resolution `rd_handback` performs: a recorded block, or —
+        // for a pre-#222 row that records a role and no block identity — the
+        // class default, which is what the hand-back's `or_else` falls back to.
+        let block = if rec.block.trim().is_empty() {
+            g.guardrails.block_for(Role::Worker).map(|b| b.id.clone())
+        } else {
+            Some(rec.block.clone())
+        };
+        let why = match block.as_deref() {
+            // Both halves empty — no recorded block and no worker block in the
+            // roster — is the no-default-block refusal the hand-back's spawn
+            // would die on.
+            None => Some(g.guardrails.no_default_block_message(Role::Worker)),
+            Some(id) => match g.guardrails.block(id).cloned() {
+                None => {
+                    let known: Vec<&str> =
+                        g.guardrails.blocks.iter().map(|b| b.id.as_str()).collect();
+                    Some(unknown_block_refusal(id, &known))
+                }
+                Some(b) if b.kind == Role::Orchestrator => {
+                    Some(orchestrator_block_refusal(id))
+                }
+                Some(b) if b.kind == Role::Manager => Some(manager_block_refusal(id)),
+                Some(_) => None,
+            },
+        };
+        why
+    }
+
     /// The block a driver-initiated resume of `session` must run under (#1961).
     ///
     /// **The driver resolves this rather than leaving it to be defaulted, and
@@ -3022,6 +3075,10 @@ impl OrchRegistry {
                         }
                         match self.rd_handback(group, entry, &brief, limits, grace) {
                             Ok(agent) => {
+                                // A hand-back that WORKED ends the second-failure
+                                // count (#2555 item 2): the next failure, whenever it
+                                // comes, is a first one again.
+                                self.rd_handback_fails.lock_safe().remove(&(group.clone(), pr));
                                 out.handback = Some(agent.clone());
                                 out.audits.push((
                                     rddrive::audit_action::HANDBACK,
@@ -3049,12 +3106,45 @@ impl OrchRegistry {
                                 // different actions. Classified on the shared
                                 // literal `live_cap_refusal` writes, so the
                                 // producer and this reader cannot drift.
+                                //
+                                // **A SECOND identical failure says so** (#2555
+                                // item 2, S7). The refusal is recorded per drive
+                                // — the session it failed for and the failure
+                                // line — and a repeat with the same pair is told
+                                // apart from the first: "second time" prefixes
+                                // the quoted refusal, so the notice an
+                                // orchestrator reads after resuming and losing
+                                // again is a decision (re-point the drive, or
+                                // cancel) rather than the same reflex the first
+                                // notice invited. The reason still names the
+                                // failure's own CLASS; what recurs is the fact.
+                                // In-memory (the field's doc carries the bounded
+                                // restart consequence), and cleared by the `Ok`
+                                // arm above, so a recovery restarts the count.
+                                let prior = self
+                                    .rd_handback_fails
+                                    .lock_safe()
+                                    .get(&(group.clone(), pr))
+                                    .cloned();
+                                let second = prior
+                                    .as_ref()
+                                    .map(|(s, w)| (s.as_str(), w.as_str()))
+                                    == Some((entry.worker_session.as_str(), why.as_str()));
+                                self.rd_handback_fails.lock_safe().insert(
+                                    (group.clone(), pr),
+                                    (entry.worker_session.clone(), why.clone()),
+                                );
+                                let refusal = if second {
+                                    format!("second time: {why}")
+                                } else {
+                                    why.clone()
+                                };
                                 let reason = if super::is_live_cap_refusal(&why) {
                                     reviewdrive::HeldReason::CapRefused
                                 } else {
                                     reviewdrive::HeldReason::WorkerUnresumable
                                 };
-                                out.refusal = why.clone();
+                                out.refusal = refusal;
                                 out.audits.push((
                                     rddrive::audit_action::REFUSED,
                                     json!({ "pr": pr, "reason": reason.as_str(),
@@ -3330,6 +3420,16 @@ impl OrchRegistry {
             }
             Err(_) => return self.rd_refuse(group, pr, r::RESUME_NOT_FOUND),
         };
+        // **The block the hand-back would resume under, resolved AT the call**
+        // (#2819 (g), S7) — see [`rd_unhandbackable_block`]. Accepting a
+        // session whose block is the orchestrator's or the manager's, or one
+        // this roster no longer declares, cost #2819 three `worker-unresumable`
+        // holds and three orchestrator turns for a PR that could never be
+        // handed back; this is the one refusal instead, quoting the SAME
+        // sentence the hold would have carried.
+        if let Some(why) = self.rd_unhandbackable_block(group, &session) {
+            return self.rd_refuse_detail(group, pr, r::WORKER_UNRESUMABLE, &why);
+        }
         // The gate, from the same two files the shim reads. `gate-unreadable` is
         // NOT `gate-not-configured`: a wrong label sends the reader somewhere
         // else, which is #681's own lesson and the queue's posture.
@@ -3579,6 +3679,11 @@ impl OrchRegistry {
                     })
                     .collect();
                 state.entries.retain(|e| e.pr != pr);
+                // A fresh drive is a fresh second-failure count (#2555 item 2):
+                // the displaced entry's hand-back failures were ITS history, and
+                // a new drive on the same PR with the same session starts with
+                // one honest chance to succeed before the hold says anything.
+                self.rd_handback_fails.lock_safe().remove(&(group.clone(), pr));
                 // **The clock is the caller's, and that is what makes the age
                 // bound testable at all.** `started_ms` is the anchor §2.2
                 // measures `drive-stalled` from, and stamping it from the wall
@@ -3917,6 +4022,22 @@ impl OrchRegistry {
                     "orrerix_fault": rddrive::refusal::is_orrerix_fault(reason) }),
         );
         json!({ "refused": reason })
+    }
+
+    /// [`rd_refuse`](Self::rd_refuse), with the sentence that says why — the
+    /// quoted refusal a hold would have carried (#1961's rule, at the call).
+    /// The `reason` stays a closed-vocabulary name an agent branches on; the
+    /// detail rides beside it, the same shape the `rd-held` row gives a hold's
+    /// refusal.
+    fn rd_refuse_detail(&self, group: &GroupId, pr: u64, reason: &'static str, detail: &str) -> Value {
+        self.rd_audit(
+            group,
+            "",
+            rddrive::audit_action::REFUSED,
+            json!({ "pr": pr, "reason": reason, "detail": detail,
+                    "orrerix_fault": rddrive::refusal::is_orrerix_fault(reason) }),
+        );
+        json!({ "refused": reason, "detail": detail })
     }
 
 }

@@ -2986,6 +2986,17 @@ and in particular a drive does **not** start when a worker reports it is done, b
 where a drive would be wrong are ordinary ones: a scratch PR, a release bump, a PR you said you
 would read yourself.
 
+**The call checks that the session can actually take a hand-back.** `drive_review` refuses at the
+moment of the call — with the same line the hold would have printed — when the session you named
+is the orchestrator's or the manager's own, or the roster no longer declares the block that
+session was minted under. Before that check existed, such a call was accepted and then held
+`worker-unresumable` on every resume: three holds and three orchestrator turns for a PR that
+could never be handed back, which is why the check is at the call rather than at the first
+failure. And when a hand-back does fail the same way twice — same session, same failure — the
+second hold's quoted refusal is prefixed `second time`, because the remedy the first notice
+suggested (a session that resolves) is the one that just failed: re-point the drive at a
+different session, or cancel it.
+
 **The driver never merges, and never grants what your gate would not.** It cannot merge, push,
 mark a PR ready, delete a branch, edit or relabel a PR or an issue, write a merge grant, kill a
 pane, or record a verdict — only a reviewer's own verdict opens your gate, and a finished drive is
@@ -3038,7 +3049,9 @@ long enough that the drive cannot get started at all, or a fix that could not be
 its worker. The last of those quotes what actually refused rather than
 diagnosing one cause: the session may no longer resolve, the block it was minted under may no
 longer be declared in this group's roster, or the pane the driver resumed may have opened and then
-exited without saying anything. The cap one (`cap-refused`) is deliberately separate from it,
+exited without saying anything — and when the same hand-back has failed the same way twice, the
+line says so (`second time`), since the remedy is then a different session or a cancel, not
+another resume. The cap one (`cap-refused`) is deliberately separate from it,
 because its remedy is: the recorded session is fine and what is exhausted is a *slot*, so freeing
 one — `kill_agent` on an idle delegate, and the notice names which are idle — is what clears it,
 not re-pointing the drive at a different session. It is the one hold reason named here by its own

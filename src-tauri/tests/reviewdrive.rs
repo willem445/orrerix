@@ -842,6 +842,48 @@ driver:
   enabled: true
 "#;
 
+/// The same roster with a **manager** block declared — the fixture the
+/// manager-session refusal test needs (#1161 M3's class only exists when a
+/// workflow declares it, and only then can a manager session be in the roster
+/// for `drive_review` to resolve).
+const WORKFLOW_WITH_MANAGER: &str = r#"version: 1
+blocks:
+  - id: manager
+    kind: manager
+  - id: worker
+    kind: worker
+  - id: rev-std
+    name: Standard review
+    kind: reviewer
+gates:
+  merge:
+    require: all-pass
+    reviewers: [rev-std]
+merge_queue:
+  enabled: true
+driver:
+  enabled: true
+"#;
+
+/// The same roster with **no worker block at all** — the fixture the
+/// both-empty arm needs (N3): a recorded session with no block identity has
+/// only the class default to fall back to, and this roster does not declare
+/// one.
+const WORKFLOW_NO_WORKER: &str = r#"version: 1
+blocks:
+  - id: rev-std
+    name: Standard review
+    kind: reviewer
+gates:
+  merge:
+    require: all-pass
+    reviewers: [rev-std]
+merge_queue:
+  enabled: true
+driver:
+  enabled: true
+"#;
+
 /// A throwaway repo one level below its own temp root — `orchestration.rs`'s
 /// `RealRepo` rationale: a worktree is cut SIBLING to the repo, so nesting keeps
 /// it inside the root that `Drop` reclaims.
@@ -5309,20 +5351,24 @@ fn a_bare_resume_inherits_the_block_the_session_was_minted_under() {
     );
 }
 
-/// **The hand-back that cannot be made**: a session whose recorded block is no
-/// longer declared parks the drive and NAMES the block (#1961).
+/// **The hand-back that cannot be made is refused at the CALL** (#2819 (g),
+/// S7): a session whose recorded block is no longer declared in this group's
+/// roster is refused by `drive_review` with the sentence the eventual hold
+/// would have quoted — one refusal instead of the hold every resume used to
+/// buy (#1961 left the acceptance in place, deferring the block question to
+/// the hand-back; #2819 measured what that costs when the block can never
+/// come back: three holds and three orchestrator turns for one PR).
 ///
 /// Degrading to the class default is what the session browser's rejoin does,
 /// and it is right there — a human is present, and losing the persona beats
 /// losing the session. Here nobody is watching, and a silently re-personad
-/// worker is the whole of #1961, so the driver refuses instead.
+/// worker is the whole of #1961, so orrerix refuses rather than guesses —
+/// and since S7 it refuses at the call, before the drive exists to hold.
 ///
-/// The pre-#1961 notice could not have carried this: it said "the recorded
-/// worker session no longer resolves" whatever had actually happened, which
-/// sends the orchestrator after a replacement session for a session that is
-/// fine.
+/// The session still RESOLVES — that is what makes this a block question and
+/// not a session one — so the refusal names the block.
 #[test]
-fn a_handback_whose_block_left_the_roster_holds_and_names_it() {
+fn drive_review_refuses_a_session_whose_block_left_the_roster() {
     let dir = tempfile::tempdir().unwrap();
     let repo = Repo::with(WORKFLOW_TWO_WORKERS);
     let gh = FakeGh::green(HEAD_A);
@@ -5356,31 +5402,309 @@ fn a_handback_whose_block_left_the_roster_holds_and_names_it() {
         "the fixture's premise: `worker-adv` is no longer declared in this group"
     );
     let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
-    assert_eq!(out["driving"], json!(true), "the session still RESOLVES — that is the point: {out}");
+    assert_eq!(out["refused"], json!("worker-unresumable"), "{out}");
+    let detail = out["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("unknown block") && detail.contains("worker-adv"),
+        "the refusal quotes the spawn guard's own sentence naming the block that is gone: \
+         {out}"
+    );
+    // A roster read answered this — the refusal comes before the one `gh`
+    // round trip the call's cheapest-first ladder spends, and no drive exists
+    // to hold or tick over.
+    assert!(gh.calls().is_empty(), "a block question costs no `gh` call: {:?}", gh.calls());
+    let refused = audit_details(&reg, &group, "rd-refused");
+    assert!(
+        refused.iter().any(|d| d["reason"] == json!("worker-unresumable")
+            && d["detail"].as_str().unwrap_or_default().contains("worker-adv")),
+        "the audit row carries the same pair the tool answered with: {refused:?}"
+    );
+}
+
+/// **A drive whose worker session is the ORCHESTRATOR's or the MANAGER's is
+/// refused at the call** (#2819 (g), S7).
+///
+/// #2819's incident: the orchestrator passed its OWN session to
+/// `drive_review`, the call accepted it, and the drive held
+/// `worker-unresumable` on every resume — `block "orchestrator" is an
+/// orchestrator block` — three holds and three orchestrator turns for a PR
+/// that could never be handed back. The call now reads the same roster record
+/// the hand-back reads and refuses with the SAME sentence the hold would have
+/// quoted, for the manager's pane too (#1161 M3's rule is the same shape:
+/// no agent-reachable route resumes one).
+///
+/// The worker arm is the control and it is load-bearing rather than
+/// decorative: it is what distinguishes this refusal from one that refuses
+/// every session, and it is the row that would still pass under a build that
+/// broke the driver's hand-back entirely.
+#[test]
+fn drive_review_refuses_the_orchestrator_or_manager_session_at_the_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+
+    // The orchestrator's own session — exactly what #2819's orchestrator
+    // passed, believing the driver would hand a fix back to it.
+    let orch =
+        reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let orch_session =
+        orch.session_id.clone().expect("claude mints a session id at spawn");
+    let out = reg.drive_review_with(&group, &gh, 1758, &orch_session, false, 0, "orch-1", 0);
+    assert_eq!(out["refused"], json!("worker-unresumable"), "{out}");
+    let detail = out["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("orchestrator") && detail.contains("is an orchestrator block"),
+        "the refusal quotes the spawn guard's own sentence, naming the block: {out}"
+    );
+
+    // The manager's twin, on a roster that declares one — a manager session is
+    // resolvable in the roster too, which is exactly what made the acceptance
+    // dangerous.
+    let dir2 = tempfile::tempdir().unwrap();
+    let reg2 = relaunch_registry(dir2.path());
+    let repo2 = Repo::with(WORKFLOW_WITH_MANAGER);
+    let gh2 = FakeGh::green(HEAD_A);
+    let group2 = reg2.create_group(&repo2.path(), rails()).unwrap().id;
+    let mgr = reg2.spawn_agent(&group2, Role::Manager, "mgr", "", false, None).unwrap();
+    let mgr_session = mgr.session_id.clone().expect("claude mints a session id at spawn");
+    let out2 = reg2.drive_review_with(&group2, &gh2, 1758, &mgr_session, false, 0, "orch-1", 0);
+    assert_eq!(out2["refused"], json!("worker-unresumable"), "{out2}");
+    let detail2 = out2["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail2.contains("manager") && detail2.contains("is this group's manager"),
+        "the manager refusal is the manager guard's own sentence, not the orchestrator's: {out2}"
+    );
+
+    // The control: a roster worker session — the thing a drive exists to hand
+    // back to — is accepted, on the SAME registry the orchestrator refusal
+    // came from.
+    let w = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).unwrap();
+    let w_session = w.session_id.clone().expect("claude mints a session id at spawn");
+    let ok = reg.drive_review_with(&group, &gh, 1758, &w_session, false, 0, "orch-1", 0);
+    assert_eq!(ok["driving"], json!(true), "the control must pass: {ok}");
+}
+
+/// **A hand-back that fails the same way twice says so** (#2555 item 2, S7).
+///
+/// §5.1's passthrough arm — a full, well-shaped session id this roster never
+/// recorded — is accepted at the call BY DESIGN ("resolving is not proving
+/// resumable"), and its unresumability surfaces at the first hand-back. What
+/// the first hold used to invite was another resume, which failed the same
+/// way and held again: the reflex #2819 measured at three holds. The second
+/// identical failure — same session, same failure line — now prefixes
+/// "second time" onto the quoted refusal, so the notice reads as a decision
+/// (re-point the drive, or cancel) rather than the same invitation again.
+#[test]
+fn a_second_identical_handback_failure_parks_saying_second_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    // Well-shaped and never recorded: the passthrough arm's exact subject.
+    let session = "cafb930d-1111-2222-3333-444444444444";
+    let out = reg.drive_review_with(&group, &gh, 1758, session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "the passthrough arm still accepts: {out}");
+
     let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
-    with_pane(&reg, &orch.id, 7101);
+    with_pane(&reg, &orch.id, 7301);
+
+    to_first_handback(&reg, &group, &gh);
+    assert_eq!(status_state(&reg, &group), "held");
+    let helds = audit_details(&reg, &group, "rd-held");
+    assert_eq!(helds.len(), 1, "one hold: {helds:?}");
+    assert_eq!(helds[0]["reason"], json!("worker-unresumable"));
+    let first = helds[0]["refusal"].as_str().unwrap_or_default();
+    assert!(
+        !first.contains("second time"),
+        "the FIRST failure is a first, and the notice must not claim otherwise: {first}"
+    );
+    assert!(
+        first.contains("no roster record"),
+        "and it quotes what actually refused: {first}"
+    );
+
+    // The resume the first notice invites — same session, same drive, same
+    // failure. ONE hand-back attempt per resume, then the hold again.
+    let resumed = reg.drive_review_with(&group, &gh, 1758, session, false, 0, "orch-1", 50_000);
+    assert_eq!(resumed["driving"], json!(true), "the held drive resumes: {resumed}");
+    reg.rd_drive_group_with(&group, &gh, 60_000);
+    reg.rd_drive_group_with(&group, &gh, 70_000);
+
+    let helds = audit_details(&reg, &group, "rd-held");
+    assert_eq!(helds.len(), 2, "two holds, one per failed hand-back: {helds:?}");
+    assert_eq!(helds[1]["reason"], json!("worker-unresumable"), "{helds:?}");
+    let second = helds[1]["refusal"].as_str().unwrap_or_default();
+    assert!(
+        second.contains("second time"),
+        "the SECOND identical failure says so: {second}"
+    );
+    assert!(
+        second.contains("no roster record"),
+        "…and still quotes the failure itself beside it: {second}"
+    );
+    let notice = drive_notices(&reg, &group, 1758).join("\n");
+    assert!(
+        notice.contains("second time"),
+        "the line the orchestrator actually reads carries it: {notice}"
+    );
+}
+
+/// **A FRESH drive on the PR starts the second-failure count over** (N2 of the
+/// review on this PR; the field doc's "cleared on a fresh drive").
+///
+/// The count belongs to the drive's history, not to the PR: #2819's reflex
+/// ("resume and lose again") is broken by a cancel-and-redrive just as much as
+/// by re-pointing, so a new drive gets one honest first failure. This is also
+/// the observable half of the field doc's clear-on-fresh-drive claim — the
+/// clear itself sits before the only `DriveEntry::new` site, so every new
+/// drive passes it; what a regression there would look like is exactly the
+/// assertion below going red (the first failure of the new drive saying
+/// "second time").
+#[test]
+fn a_fresh_drive_on_the_pr_starts_the_second_failure_count_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let session = "cafb930d-1111-2222-3333-444444444444";
+    let out = reg.drive_review_with(&group, &gh, 1758, session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "{out}");
+
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(&reg, &orch.id, 7401);
+
+    // Two identical failures: the state the second-time bound exists for.
+    to_first_handback(&reg, &group, &gh);
+    let resumed = reg.drive_review_with(&group, &gh, 1758, session, false, 0, "orch-1", 50_000);
+    assert_eq!(resumed["driving"], json!(true), "{resumed}");
+    reg.rd_drive_group_with(&group, &gh, 60_000);
+    reg.rd_drive_group_with(&group, &gh, 70_000);
+    let helds = audit_details(&reg, &group, "rd-held");
+    assert_eq!(helds.len(), 2, "the premise, two holds: {helds:?}");
+    assert!(
+        helds[1]["refusal"].as_str().unwrap_or_default().contains("second time"),
+        "the premise, the second is decorated: {:?}",
+        helds[1]
+    );
+
+    // The orchestrator's other way out: cancel, then drive the PR again. The
+    // new drive is a new entry with a clean count — its FIRST failure must not
+    // inherit the previous drive's history.
+    reg.cancel_review_drive(&group, 1758, "orch-1");
+    gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+    gh.set_facts("OPEN", HEAD_A);
+    let redrive = reg.drive_review_with(&group, &gh, 1758, session, false, 0, "orch-1", 80_000);
+    assert_eq!(redrive["driving"], json!(true), "the cancelled PR re-drives: {redrive}");
+    to_first_handback(&reg, &group, &gh);
+
+    let helds = audit_details(&reg, &group, "rd-held");
+    assert_eq!(helds.len(), 3, "one hold per failed hand-back: {helds:?}");
+    assert_eq!(helds[2]["reason"], json!("worker-unresumable"), "{helds:?}");
+    let first_of_the_new_drive = helds[2]["refusal"].as_str().unwrap_or_default();
+    assert!(
+        first_of_the_new_drive.contains("no roster record")
+            && !first_of_the_new_drive.contains("second time"),
+        "the new drive's first failure is a first, not the old drive's second: \
+         {first_of_the_new_drive}"
+    );
+}
+
+/// **The hold path §2.2 still describes is pinned: an unknown block at the
+/// hand-back, after the roster changed under a live drive** (N1 of the review
+/// on this PR).
+///
+/// S7 moved the roster question to the call for every drive that STARTS after
+/// the change — but a drive that started while the block was declared keeps
+/// running, and the human can rewrite the workflow and relaunch under it at
+/// any moment. The hand-back then refuses "unknown block" and holds, naming
+/// the block; #1961's refuse-don't-degrade rule is what that hold still
+/// enforces, and this is its only remaining pin.
+#[test]
+fn a_drive_overtaken_by_a_roster_change_holds_at_the_handback_naming_the_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::with(WORKFLOW_TWO_WORKERS);
+    let gh = FakeGh::green(HEAD_A);
+
+    // The drive starts while `worker-adv` is declared.
+    let (group, session, _w) = {
+        let reg = relaunch_registry(dir.path());
+        let (group, session, _w) = driven_as(&reg, &repo, &gh, "worker-adv");
+        (group, session, _w)
+    };
+
+    // …and the roster changes under it before the first hand-back.
+    repo.rewrite_workflow(WORKFLOW);
+    let reg = relaunch_registry(dir.path());
+    let regrouped = reg
+        .create_group_ex(&repo.path(), rails(), Launch::Fresh)
+        .expect("relaunching the same group")
+        .id;
+    assert_eq!(regrouped, group, "the relaunch resumes the same group state dir");
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(&reg, &orch.id, 7501);
 
     let handed = to_first_handback(&reg, &group, &gh);
     assert!(handed.handbacks.is_empty(), "no pane may be opened for a block that is gone");
     assert_eq!(status_state(&reg, &group), "held");
-
-    let held = audit_details(&reg, &group, "rd-held");
-    assert_eq!(held.len(), 1, "one hold: {held:?}");
-    assert_eq!(held[0]["reason"], json!("worker-unresumable"));
-    let refusal = held[0]["refusal"].as_str().unwrap_or_default();
+    let helds = audit_details(&reg, &group, "rd-held");
+    assert_eq!(helds.len(), 1, "one hold: {helds:?}");
+    assert_eq!(helds[0]["reason"], json!("worker-unresumable"));
+    let refusal = helds[0]["refusal"].as_str().unwrap_or_default();
     assert!(
-        refusal.contains("worker-adv"),
-        "the audit row must name the block that could not be resolved: {refusal:?}"
+        refusal.contains("unknown block") && refusal.contains("worker-adv"),
+        "the hold quotes the spawn guard's own sentence, naming the block: {refusal}"
+    );
+    assert!(
+        !refusal.contains("second time"),
+        "a FIRST failure is never decorated: {refusal}"
     );
     let notice = drive_notices(&reg, &group, 1758).join("\n");
     assert!(
         notice.contains("worker-adv"),
-        "…and so must the line the orchestrator actually reads: {notice}"
+        "the line the orchestrator reads names the block that is gone: {notice}"
     );
+}
+
+/// **The both-empty arm of the call check: a record with NO block, and no
+/// worker block to fall back to** (N3 of the review on this PR; the fourth
+/// sentence §5.1 enumerates).
+///
+/// A pre-#222 roster row records a role and no block identity; `rd_handback`
+/// falls back to the class default, and when the roster declares no worker
+/// block either, the spawn dies on `no_default_block_message`. The call now
+/// answers that at drive time with the same sentence.
+#[test]
+fn drive_review_refuses_a_session_with_no_block_and_no_worker_block_to_fall_back_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    // No worker block at all — the class default the hand-back would fall
+    // back to does not exist.
+    let repo = Repo::with(WORKFLOW_NO_WORKER);
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+
+    // A pre-#222-shaped roster row: role recorded, NO block key. No spawn path
+    // produces one any more, so the fixture writes `agents.json` directly —
+    // the same seeding `tests/groupid.rs` uses — rather than pretending a
+    // modern spawn can mint the subject.
+    let session = "cafb930d-3333-4444-5555-666666666666";
+    let row = format!(
+        r#"[{{"id":"w-1","role":"worker","name":"w","session":"{session}",
+             "cwd":"{}","status":"running","updated_ms":1}}]"#,
+        repo.path()
+    );
+    std::fs::write(dir.path().join(group.as_str()).join("agents.json"), row).unwrap();
+
+    let out = reg.drive_review_with(&group, &gh, 1758, session, false, 0, "orch-1", 0);
+    assert_eq!(out["refused"], json!("worker-unresumable"), "{out}");
+    let detail = out["detail"].as_str().unwrap_or_default();
     assert!(
-        !notice.contains("the recorded worker session no longer resolves"),
-        "the retracted sentence sent the orchestrator after a replacement session for a \
-         session that resolves fine: {notice}"
+        detail.contains("declares no worker block"),
+        "the refusal is the class default's own sentence, not an unknown-block one: {out}"
     );
 }
 

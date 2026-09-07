@@ -1767,14 +1767,16 @@ impl OrchRegistry {
             if run.state() != plandrive::SliceState::InReview {
                 continue;
             }
+            let pr = run.pr;
             match outcome {
                 PrOutcome::Merged => {
                     run.advance(plandrive::SliceState::Done, None);
-                    mark_done.push((id.clone(), run.task_id.clone()));
+                    let task_id = run.task_id.clone();
+                    mark_done.push((id.clone(), task_id));
                     entry.note_progress(now);
                     out.audits.push((
                         plandrive::audit_action::SLICE_MERGED,
-                        json!({ "issue": issue, "slice": id, "pr": run.pr }),
+                        json!({ "issue": issue, "slice": id, "pr": pr }),
                     ));
                 }
                 PrOutcome::ClosedUnmerged => {
@@ -1785,7 +1787,7 @@ impl OrchRegistry {
                     entry.note_progress(now);
                     out.audits.push((
                         plandrive::audit_action::SLICE_HELD,
-                        json!({ "issue": issue, "slice": id, "pr": run.pr,
+                        json!({ "issue": issue, "slice": id, "pr": pr,
                                 "reason": plandrive::PdSliceHold::PrClosed.as_str() }),
                     ));
                     out.notices.push(format!(

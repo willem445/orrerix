@@ -2570,11 +2570,54 @@ deliverable and no worker is ever spawned off it. Take the label off mid-drive
 and the drive stops with a notice. There is no repo setting that turns that off,
 and `drive_plan` on an unlabelled issue is refused.
 
-**In this release the drive stops at the plan.** An `agent-investigation` issue
-completes — that is the drive finishing, not falling short. An `agent-ready` one
-parks on `held(awaiting-p3b)` with its plan on the issue and its slices in
-`plan_drive_status`: the board rows and the worker spawns are still yours, and
-the hold says so in your orchestrator's pane rather than leaving you to notice.
+### Watching a plan drive
+
+Once a plan is stored, an `agent-ready` drive boards it and runs it. (An
+`agent-investigation` one completes right there — the plan *is* what it wanted.)
+
+**Boarding** writes one parent row for the issue — reusing one your orchestrator
+already made, if it did — and one child row per slice, dep-linked to each other
+exactly as the plan says. The rows are written the way an agent writes them, so
+your WIP limits refuse them and a dependency cycle is caught, the same as for
+any other board write.
+
+**Then it runs them, one spawn per tick.** A slice whose row the board says is
+ready gets a worker from the block the plan named, on the branch the plan named,
+in its own worktree. The worker's brief is a header orrerix writes, then the
+planner's own words **verbatim**, then the same definition of done every other
+brief in your repo quotes. Nothing rewrites the planner's text.
+
+When that worker reports done, orrerix hands its PR straight to the **review
+driver** — so the first thing you hear about a slice is usually that review
+driver's own `GATE SATISFIED`. A slice's row is marked `done` only when orrerix
+has positively read its PR as **merged**, and that is what lets the slices
+depending on it start.
+
+**Your board is the veto, and it works while the drive runs.** Readiness is
+re-read from the board every 30 seconds and never cached:
+
+- mark a row `done` by hand and its dependents start, PR or no PR;
+- set a row `blocked` or `cancelled` and the drive never spawns it, and stops
+  waiting for it;
+- edit a row's dependencies and the drive respects them;
+- delete a row and the drive stops with a notice naming it, because its
+  dependents can no longer ever become ready;
+- a slice the planner flagged `hold: true` is boarded and **never** spawned —
+  that is the planner telling you it carries a decision that is yours.
+
+**What parks one slice, and what parks the whole drive.** A worker reporting
+`blocked`, a PR closed without merging, or a delegate cap that stays full for 15
+minutes park that one slice and leave the rest of the plan running; you get one
+notice per slice. Withdrawn consent, a struck row, and the whole-drive stall
+backstop park the drive.
+
+**By default nothing pauses between the plan and the first spawn.** You already
+pressed go when you put `agent-ready` on the issue, and an announcement nobody
+asked for costs your orchestrator a turn. If you want a window,
+`drive_plan(issue, review_minutes: N)` — or `driver.plan_review_minutes` for
+every drive — posts **exactly one** notice and waits N minutes before boarding
+anything, and `cancel_plan_drive` during it stops the drive with nothing
+spawned.
 
 `plan_drive_status` is how you recover a drive after a compaction, and
 `cancel_plan_drive` stops one. **Cancelling kills nothing**: a planner pane that

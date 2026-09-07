@@ -3603,3 +3603,149 @@ fn the_comment_tool_warns_the_planner_that_a_driven_plan_is_validated() {
         "a planner is told THIS tool checks its plan block, and refuses: {desc}"
     );
 }
+
+/// **Every tool signature the plan-drive fragment states is one the tool really
+/// has** (#3161 review round 1, finding 1).
+///
+/// The fragment is prose about a JSON schema, so nothing connects the two: it
+/// shipped naming `resume_plan_drive(issue, skip?)`, a parameter that exists in
+/// #3040's plan comment and in no build — the schema takes `issue` alone. That
+/// is the drift `plan-driver.md` §8 warns about ("a schema stated twice is a
+/// schema that drifts"), landing inside the PR that wrote the second copy.
+///
+/// So the copy is checked against the original rather than proof-read: pull
+/// every `<tool>(…)` signature out of the RENDERED playbook — the artifact an
+/// orchestrator reads, not the template — and assert each parameter it names is
+/// a property of that tool's own schema.
+///
+/// **Name-independent, and default-deny**: the trigger is the shape
+/// `` `<tool>( `` for a tool this group lists, so a fragment that grows a fifth
+/// signature is checked without anyone remembering to extend a list, and a
+/// parameter nobody declared is a red rather than a re-read. The two controls
+/// are the population (some signature was actually found, per tool that has
+/// one) and a negative (a parameter this loop would reject really is rejected),
+/// so a regex that matched nothing cannot pass.
+#[test]
+fn every_plan_tool_signature_in_the_playbook_names_parameters_the_tool_has() {
+    let repo = Repo::with(WORKFLOW);
+    let (reg, _d) = test_registry();
+    let (group, orch) = grouped(&reg, &repo);
+    let c = caller(&group, &orch, Role::Orchestrator);
+    let listed = dispatch(&reg, &c, "tools/list", &Value::Null).expect("tools/list");
+    let playbook = std::fs::read_to_string(
+        reg.state_root()
+            .join(group.as_str())
+            .join(loomux_lib::orchestration::ORCHESTRATOR_PLAYBOOK_FILE),
+    )
+    .expect("the rendered playbook");
+
+    // The parameters a signature may legally name, read off the tool's own
+    // schema rather than restated here.
+    let props = |tool: &str| -> Vec<String> {
+        listed["tools"]
+            .as_array()
+            .expect("a tools array")
+            .iter()
+            .find(|t| t["name"].as_str() == Some(tool))
+            .unwrap_or_else(|| panic!("{tool} is listed for an orchestrator"))["inputSchema"]
+            ["properties"]
+            .as_object()
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default()
+    };
+
+    // `foo(a, b: N, c?)` -> ["a", "b", "c"]. A value after `:` and a trailing
+    // `?` are prose, not part of the name.
+    let params = |sig: &str| -> Vec<String> {
+        sig.split(',')
+            .map(|p| p.split(':').next().unwrap_or("").trim().trim_end_matches('?').trim())
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+
+    let mut checked = 0usize;
+    for tool in ["drive_plan", "plan_drive_status", "cancel_plan_drive", "resume_plan_drive"] {
+        let declared = props(tool);
+        let needle = format!("`{tool}(");
+        let mut found = 0usize;
+        let mut rest = playbook.as_str();
+        while let Some(at) = rest.find(&needle) {
+            let after = &rest[at + needle.len()..];
+            let close = after.find(')').expect("a signature closes on its own line");
+            for p in params(&after[..close]) {
+                assert!(
+                    declared.contains(&p),
+                    "the playbook tells the orchestrator to call {tool}({p}…), and {tool}'s \
+                     schema declares only {declared:?} — a parameter that exists in prose and \
+                     in no build"
+                );
+                checked += 1;
+            }
+            found += 1;
+            rest = &after[close..];
+        }
+        // Population control, per tool: `plan_drive_status()` legitimately takes
+        // nothing, so the floor is that the fragment MENTIONS each tool at all.
+        assert!(found > 0, "the fragment states no signature for {tool} — did the marker change?");
+    }
+    assert!(checked >= 4, "only {checked} parameters were checked — the extractor read nothing");
+
+    // The negative control: the loop's own rule really does reject a parameter
+    // no schema declares. Without this, an extractor that produced an empty
+    // parameter list every time would satisfy every assertion above.
+    assert!(
+        !props("resume_plan_drive").contains(&"skip".to_string()),
+        "`skip` is the parameter this test was written for: it is in #3040's plan comment \
+         and in no build, so a schema that grows one means this control must be re-pointed"
+    );
+    assert!(
+        params("issue, skip?").contains(&"skip".to_string()),
+        "and the extractor really would have surfaced it — the control that makes the \
+         assertion above about the schema rather than about a parser that reads nothing"
+    );
+}
+
+/// **`planner.md` points at the schema's one home, in the present tense**
+/// (#3161 review round 1, finding 2).
+///
+/// P2 shipped that pointer in WILL tense — "the full schema … WILL live in
+/// `doc/design/plan-driver.md` (#3040 P1); until then this paragraph is the
+/// whole schema you have" — which was correct when written and false the moment
+/// P1 merged as #3062. Nothing went red: a WILL-tense promise decays silently,
+/// and every planner spawned in between was told to treat a summary as the
+/// contract and not to look for the real one.
+///
+/// The golden byte-pin cannot catch it — the golden is re-blessed to whatever
+/// the template says, so it passes identically for both texts and only proves
+/// the edit rode along nowhere else. This reads `PLANNER_TPL` directly, which is
+/// the surface the claim lives on.
+#[test]
+fn the_planner_is_pointed_at_the_schemas_one_home_and_not_promised_one() {
+    let tpl = loomux_lib::orchestration::PLANNER_TPL;
+
+    // The control: the paragraph this is about is present at all. Without it a
+    // renamed section would satisfy both assertions below by deleting the
+    // subject rather than by keeping it correct.
+    assert!(
+        tpl.contains("orrerix-plan"),
+        "the planner's plan-block contract is still in its instructions"
+    );
+    assert!(
+        tpl.contains("doc/design/plan-driver.md"),
+        "and it names where the full schema lives, so a planner can read the contract \
+         rather than a summary of it"
+    );
+    // The WILL tense is the defect, and it is pinned as an absence beside the
+    // presence above: a future edit that re-promises a landed slice is a red.
+    assert!(
+        !tpl.contains("WILL live"),
+        "the schema has landed (#3062) — a planner told it WILL live somewhere is told to \
+         wait for a file that is already there"
+    );
+    assert!(
+        !tpl.contains("whole schema you have"),
+        "and it is no longer told this paragraph IS the schema, which is what made the \
+         summary read as the contract"
+    );
+}

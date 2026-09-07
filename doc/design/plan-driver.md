@@ -458,6 +458,19 @@ than of the window: `AUDIT_ACTOR` is orrerix's own brand actor, never an agent
 id and never a person's, so a row carrying it was claimed by a driver and by
 nothing else.
 
+**`cancel_plan_drive` does NOT roll that row back, and the asymmetry is the
+contract rather than an omission.** A cancel releases OWNERSHIP and touches
+nothing else — no pane, no worktree, no board row — which is what
+`cancel_kills_nothing` pins and what lets an orchestrator take a drive over
+mid-flight without anything moving under it. A resume is the opposite promise: it
+puts the drive back to work, and a record set to `queued` over a row that is not
+buys nothing, so there the rollback is the point. The consequence to know is that
+a cancel after a failed assignee write leaves a row `in-progress` carrying
+`AUDIT_ACTOR` — visible on the board, audited as `slice-row-unassigned`, and the
+orchestrator's to re-claim or clear like any other row it now owns. Making cancel
+tidy it instead would be a cancel that edits the board, which is the thing this
+tool promises not to do.
+
 **A `report(done)` from a slice's worker hands its PR to the review driver.**
 The PR number comes from the `ref` the worker named, or — when that yields
 nothing usable — from one `gh pr list --head <branch>`. The `ref` is a HINT: it
@@ -568,6 +581,18 @@ re-applied its workflow, which re-renders with the group live. P4 fixes it for
 both fragments (`driver_policy_for` / `pd_policy_for`), and
 `the_playbook_names_the_plan_drive_only_where_the_second_switch_is_on` is what
 found it — it reads the file a launch actually writes.
+
+**What that leaves, stated because it is a property of the design and not a
+bug to find later: the fragment is RENDERED state and the tools are LIVE.** The
+playbook is written when a group is created and re-written when its workflow is
+re-applied; the four tools read `pd_policy` on every dispatch. So a repo that
+flips `plan_enabled` while a group is running is briefly inconsistent in
+whichever direction it flipped — a playbook still carrying the fragment whose
+tools now refuse `plan-driver-disabled`, or tools that work with nothing in the
+playbook saying so — until something re-renders. Both ends are safe: the gate is
+always the tool, never the prose, so the stale direction costs a wasted call and
+never an ungated one. Re-applying the workflow is what closes it, and that is the
+same gesture that changed the switch.
 
 **It is a fragment rather than playbook prose**, for the reason
 `the_default_rendering_never_names_the_gate_machinery` states and

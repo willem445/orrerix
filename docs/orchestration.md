@@ -1886,7 +1886,15 @@ covers what would be committed; on a `fail`: the finding may already be fixed).
 Adding `body-unchanged` to your gate's `also:` list also *refuses the merge*
 until the reviewers whose passes are live have re-recorded against the body as
 it stands. It is opt-in because it is only true of squash-merging repos; where
-merges keep the PR body as discussion rather than history, leave it out.
+merges keep the PR body as discussion rather than history, leave it out. On a
+gate that declares the condition, the gate line the orchestrator reads agrees
+with the refusal: while a pass has drifted and no verification round has
+superseded it, the line reads **NOT YET SATISFIED**, names the lane, and says
+`gh pr merge` is refused — a body nobody approved is as blocking as a commit
+nobody reviewed, because the squash message is unamendable after merge. While
+any merge-time condition is failing, the gate line also withholds the
+"merge this PR from the GitHub UI" exit and offers the two ways that go
+through the gate instead; the exit comes back once the condition is met.
 
 **One case does not cost every reviewer a re-read.** When the review driver is
 running a PR and the body changes after *every* required lane has already passed
@@ -1895,11 +1903,13 @@ the code at that head, it re-briefs one lane — the first in your gate's
 diff again. That lane's pass is recorded as a body *verification*, and the gate
 then accepts the other lanes' passes: they are bound to the same commit, so the
 code they approved has not moved, and a reviewer you named has read the text
-that would be committed. Everything else is unchanged — a `fail` still blocks, a
-lane that has recorded nothing still keeps the gate shut, a pass at an older
-commit is still stale, and a further body edit spends the verification and
-re-opens the question. Only the driver can produce one of these, so if you record
-verdicts by hand the clause behaves exactly as described above.
+that would be committed — so the gate line keeps saying SATISFIED, with a note
+that the drift was accepted rather than a warning to re-record. Everything
+else is unchanged — a `fail` still blocks, a lane that has recorded nothing
+still keeps the gate shut, a pass at an older commit is still stale, and a
+further body edit spends the verification and re-opens the question. Only the
+driver can produce one of these, so if you record verdicts by hand the clause
+behaves exactly as described above.
 
 **Keep the batches small: `max_diff_lines`.** A merge gate can also declare a
 size limit — `gates.merge: { max_diff_lines: 800 }` — and orrerix refuses any

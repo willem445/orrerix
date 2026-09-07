@@ -66051,7 +66051,15 @@ fn a_refusal_loomux_itself_delivered_into_the_pane_raises_nothing() {
 
     let relayed = "Key limit exceeded (total limit) — that is rev-2313, not you; hold.";
     reg.record_delivered_prompt(4101, relayed, Delivery::MidSession);
-    let tail = format!("$ cargo test\n{relayed}\n");
+    // The blank line is load-bearing, and it is the paragraph-start rule
+    // (#3178 review round 3) showing up in an older fixture: with the relayed
+    // line glued directly under `$ cargo test`, it is a wrap continuation as
+    // far as the scan can tell, so NEITHER pane raises the reason and the
+    // control below passes for the wrong reason — the detector never fires at
+    // all rather than the mask suppressing it. Written as its own paragraph,
+    // the way a real pane renders a relayed notice, this test discriminates
+    // the mask again.
+    let tail = format!("$ cargo test\n\n{relayed}\n");
 
     let items = limit_scan(&reg, 1_000_000_000_000, &[(a.id.as_str(), &tail)]);
     assert!(

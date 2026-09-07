@@ -746,6 +746,21 @@ has one definition rather than a second written for the roster):
 - **The cap-refusal roster** marks the row `(worker, idle, driven #<pr>)`, so the
   notice's own remedy cannot point at the one pane it must not.
 
+**One read, two acquisition disciplines, split by failure direction.** The
+driver's tick holds `rd_state_lock` across its whole read-modify-write and
+performs its spawns inside it (§2.4), so the cap-refusal roster — which the
+driver's OWN lane spawn and hand-back reach — cannot take that lock blockingly:
+the first CI run of this slice refused it `lock-reentrant` across the whole
+`reviewdrive` suite. The two roster sites therefore use a non-blocking read that
+answers empty when the lock is busy, and the two GUARD sites (`list_agents`, the
+`kill_agent` refusal) block. The asymmetry is the point: a guard that skipped its
+check because a lock was momentarily busy would let through exactly the kill this
+exists to refuse, silently, while an unmarked roster row is the sentence this
+repo shipped before — a decoration lost, never a wrong claim made, and never a
+kill admitted. And the caller that loses it is the one that does not need it: a
+cap refusal the DRIVER gets becomes `held(cap-refused)` / `cap-full`, whose
+notice already names this drive's own panes.
+
 Three things this does NOT do, each deliberate. **The human's kill is untouched**
 — that is the UI path, and a human closing a pane is not a party orrerix may
 refuse. **A superseded pane is neither marked nor guarded**: the drive will never

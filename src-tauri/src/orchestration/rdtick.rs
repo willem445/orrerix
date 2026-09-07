@@ -653,16 +653,41 @@ impl OrchRegistry {
     /// `is_live` — `cancel_review_drive` makes the same pane killable and
     /// unmarked again, which is the refusal's own stated remedy working.
     ///
-    /// # Locking
+    /// # Locking — TWO entry points, because two callers need opposite failures
     ///
     /// Takes `rd_state_lock` and NOTHING else, and every caller must have
     /// released the `agents` lock before asking. The driver's own release path
     /// holds `rd_state_lock` and then reaches `agents` (`release_driven_pane`),
     /// so `agents` -> `rd_state_lock` is an inversion of an ordering that
-    /// already exists in production. All three callers therefore take this
-    /// snapshot FIRST and read the roster afterwards; nothing here needs the two
-    /// to overlap, because a pane that dies between the two reads is reported as
-    /// driven and refused, which is the safe direction.
+    /// already exists in production. Callers therefore take this snapshot FIRST
+    /// and read the roster afterwards; nothing here needs the two to overlap,
+    /// because a pane that dies between the two reads is reported as driven and
+    /// refused, which is the safe direction.
+    ///
+    /// **The hazard that actually fired is RE-ENTRANCY, not that inversion**,
+    /// and it is why [`Self::rd_driven_panes_now`] exists. `rd_drive_group_with`
+    /// holds `rd_state_lock` across its whole read-modify-write (`rdtick.rs`'s
+    /// `let _state_guard` before `load_state`) and performs its spawns INSIDE
+    /// it — §2.4's ordering, deliberate — so the driver's own lane spawn and
+    /// hand-back reach `spawn_agent_bound`, and any cap refusal formatted there
+    /// would re-take a mutex this thread already holds. `lockwatch` refuses that
+    /// rather than self-deadlocking, so the whole `reviewdrive` suite panicked
+    /// `lock-reentrant` on the first CI run of this slice.
+    ///
+    /// So the two cap-refusal roster sites use the non-blocking sibling and the
+    /// two guard sites use this one, and the split is by FAILURE DIRECTION:
+    ///
+    /// - **This one blocks**, because [`Self::list_agents`] and the MCP
+    ///   `kill_agent` arm must never fail open. A guard that skipped its check
+    ///   because a lock was momentarily busy would let exactly the kill this
+    ///   slice exists to refuse through, under contention, silently. Neither
+    ///   runs under the tick: nothing in `rd_drive_group_with` calls either.
+    /// - **[`Self::rd_driven_panes_now`] does not**, because its output is a
+    ///   MESSAGE decoration and its `None` case is almost exactly the driver's
+    ///   own spawn — for which the marker is redundant, since a cap refusal the
+    ///   DRIVER gets becomes `held(cap-refused)` / `cap-full`, whose notice
+    ///   already names this drive's own panes. Losing the marker there costs the
+    ///   pre-#2811-S2 sentence; it can never produce a wrong one.
     ///
     /// One small JSON read per call, on the same file [`rd_owner`] reads on
     /// every `report` — and an absent `review_drives.json` (the product
@@ -672,8 +697,38 @@ impl OrchRegistry {
         &self,
         group: &GroupId,
     ) -> std::collections::BTreeMap<String, (u64, reviewdrive::DrivenRole)> {
-        let dir = self.group_dir(group);
         let _state_guard = self.rd_state_lock.lock_safe();
+        self.rd_driven_panes_locked(group)
+    }
+
+    /// [`Self::rd_driven_panes`] for a caller that may already be holding
+    /// `rd_state_lock` — the two cap-refusal roster sites (#2811 S2).
+    ///
+    /// **Empty when the lock is not free RIGHT NOW**, which is the driver's own
+    /// tick nine times in ten (`try_lock_safe` answers `None` for a mutex this
+    /// thread already holds, without the `lock-reentrant` refusal a blocking
+    /// acquire would take) and another group's tick the rest. Both fail toward
+    /// an UNMARKED roster — the message this repo shipped before S2 — never
+    /// toward a row falsely marked driven, and never toward a kill going
+    /// through: no guard reads this. The argument for why the driver does not
+    /// need the marker is on [`Self::rd_driven_panes`], under *Locking*.
+    pub(crate) fn rd_driven_panes_now(
+        &self,
+        group: &GroupId,
+    ) -> std::collections::BTreeMap<String, (u64, reviewdrive::DrivenRole)> {
+        let Some(_state_guard) = self.rd_state_lock.try_lock_safe() else {
+            return std::collections::BTreeMap::new();
+        };
+        self.rd_driven_panes_locked(group)
+    }
+
+    /// The read itself, with `rd_state_lock` already held by the caller — ONE
+    /// body, so the two acquisition disciplines above cannot become two answers.
+    fn rd_driven_panes_locked(
+        &self,
+        group: &GroupId,
+    ) -> std::collections::BTreeMap<String, (u64, reviewdrive::DrivenRole)> {
+        let dir = self.group_dir(group);
         let mut out = std::collections::BTreeMap::new();
         let Ok(state) = reviewdrive::load_state(&dir) else { return out };
         for e in state.entries.iter().filter(|e| e.state().is_live()) {

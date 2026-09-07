@@ -8669,9 +8669,13 @@ pub fn idle_should_kill(idle_since_ms: Option<u64>, now_ms: u64, threshold_min: 
 /// (`w-… (worker, working)`) their own negative control.
 ///
 /// It is a plain `Option<u64>` per row rather than a lookup this function does,
-/// because the race-safe caller formats under the `agents` guard and
-/// [`OrchRegistry::rd_driven_panes`] must not be called there — see its
-/// locking note.
+/// because the race-safe caller formats under the `agents` guard and the
+/// ownership read must not be called there. Both roster callers resolve it
+/// beforehand through [`OrchRegistry::rd_driven_panes_now`] — the non-blocking
+/// form, since the DRIVER's own spawn reaches this function from inside a tick
+/// that already holds `rd_state_lock`; an unmarked row is the documented answer
+/// for that caller, and [`OrchRegistry::rd_driven_panes`]'s locking note carries
+/// why.
 fn format_delegate_roster(mut rows: Vec<(String, &'static str, bool, Option<u64>)>) -> String {
     rows.sort_by(|a, b| a.0.cmp(&b.0));
     rows.into_iter()
@@ -48596,9 +48600,12 @@ impl OrchRegistry {
     /// pane the cap does not count is not holding one — naming it here would
     /// point a refused orchestrator at a pane it must not reuse or kill.
     fn live_delegate_roster(&self, group: &GroupId) -> String {
-        // #2811 S2: taken before the `agents` lock, for
-        // [`Self::rd_driven_panes`]'s locking reason.
-        let driven = self.rd_driven_panes(group);
+        // #2811 S2: the NON-BLOCKING read, and taken before the `agents` lock.
+        // This is reachable from inside the driver's own tick, which holds
+        // `rd_state_lock` across its spawns — see `rd_driven_panes`'s locking
+        // note for why that means `try` here and a blocking acquire on the two
+        // guard surfaces.
+        let driven = self.rd_driven_panes_now(group);
         let rows = self
             .agents
             .lock_safe()
@@ -51584,14 +51591,18 @@ impl OrchRegistry {
             killed_by: None,
         };
         // #2811 S2: the driven-pane markers the race-safe cap refusal below
-        // needs, resolved HERE because [`Self::rd_driven_panes`] takes
-        // `rd_state_lock` and the block below holds `agents` — the inversion its
-        // locking note forbids. Gated on the same predicate as the cap itself,
-        // so a spawn the cap does not police (the orchestrator, the manager)
-        // pays nothing; a delegate spawn pays one `stat` on a group with no
-        // `review_drives.json`, which is every group that runs no driver.
+        // needs, resolved HERE because the read takes `rd_state_lock` and the
+        // block below holds `agents` — the inversion `rd_driven_panes`'s locking
+        // note forbids. It is the NON-BLOCKING form because this function is
+        // also how the DRIVER spawns, from inside a tick that already holds
+        // `rd_state_lock`; the same note carries why an unmarked roster is the
+        // right answer for that caller. Gated on the same predicate as the cap
+        // itself, so a spawn the cap does not police (the orchestrator, the
+        // manager) pays nothing; a delegate spawn pays one `stat` on a group
+        // with no `review_drives.json`, which is every group that runs no
+        // driver.
         let driven_at_cap = if counts_against_max_agents(role) {
-            self.rd_driven_panes(group_id)
+            self.rd_driven_panes_now(group_id)
         } else {
             std::collections::BTreeMap::new()
         };

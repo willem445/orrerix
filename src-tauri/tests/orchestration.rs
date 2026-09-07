@@ -42302,6 +42302,45 @@ fn gh_shim_harness_still_refuses_a_real_red_as_ci_not_green() {
         "a failing check must not be reclassified as a retry: {audit}");
 }
 
+#[test]
+fn gh_shim_harness_refuses_a_first_read_clean_as_ci_not_green() {
+    if !have_sh() {
+        eprintln!("SKIP gh_shim_harness_refuses_a_first_read_clean_as_ci_not_green: no POSIX sh");
+        return;
+    }
+    let (reg, d, _repo, gid) = gated_group("    also: [ci-green]\n");
+    let group_dir = d.path().join(gid.as_str());
+    let bin = tempfile::tempdir().unwrap();
+    let shim = shim_with_fake_gh(bin.path());
+    let sec = reviewer_caller(&reg, &gid, "rev-security");
+    let tests = reviewer_caller(&reg, &gid, "rev-tests");
+    recorded(&reg, &sec, "7", "pass", "reviewed the rebase");
+    recorded(&reg, &tests, "7", "pass", "reviewed the rebase");
+    reg.grant_merge(&gid, "7", None, "human").unwrap();
+
+    // CLEAN on read 1 with no poll behind it is the NO-CHECKS-REPORTED case:
+    // checks exit non-zero with the merge state already settled means nothing
+    // ran, and a gate asking for green CI is not satisfied by an absent check.
+    // Only CLEAN that terminates an UNKNOWN poll proceeds (review-driver §8.1).
+    let count = bin.path().join("mss_count");
+    let (ok, err) = merge_env(&shim, &group_dir, "main", HEAD, "1", &[
+            ("ORRERIX_MSS_POLL_SECS", "0"),
+            ("FAKE_MSS_COUNT", count.to_str().unwrap()),
+            ("FAKE_MSS", "CLEAN"),
+    ]);
+    assert!(!ok, "a first-read CLEAN must not merge — absent checks are not green CI: {err}");
+    assert!(err.contains("not all-green"), "the refusal is the red one, not a retry: {err}");
+    let audit = fs::read_to_string(group_dir.join("audit.jsonl")).unwrap();
+    assert!(audit.contains("\"reason\":\"ci-not-green\""), "refused as red: {audit}");
+    assert!(!audit.contains("mergeability-unknown"),
+        "an absent check must not be reclassified as a retry: {audit}");
+    // Positive control, because every refusal assertion above is absence-shaped
+    // and would pass just as well if the ci-green arm never ran at all: the arm
+    // WAS entered — exactly one mergeStateStatus read, zero polls behind it.
+    assert_eq!(fs::read_to_string(&count).unwrap(), "1",
+        "one mergeStateStatus read, no poll: the refusal came from the first-read-CLEAN guard");
+}
+
 /// #1174 A1, executed: the small-batch clause through the REAL shim.
 #[test]
 fn gh_shim_harness_refuses_a_merge_over_max_diff_lines() {

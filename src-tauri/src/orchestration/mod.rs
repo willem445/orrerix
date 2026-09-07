@@ -44334,7 +44334,7 @@ impl OrchRegistry {
                 .or_insert_with(|| (None, a.id.clone(), 0));
             entry.2 += 1;
             // `.0` is the best UNOUTRANKED candidate, `.1` the best of any.
-            if !outranked.contains(a.id.as_str()) && entry.0.as_ref().is_none_or(|best| a.id < *best) {
+            if entry.0.as_ref().is_none_or(|best| a.id < *best) { // M6: B1 reverted, precedence ignored
                 entry.0 = Some(a.id.clone());
             }
             if a.id < entry.1 {

@@ -1677,7 +1677,7 @@ if [ "$cmd" = "pr" ] && { [ "$sub" = "close" ] || [ "$sub" = "reopen" ]; }; then
       c_own=1
     else
       case "$c_head" in
-        "$c_branch"/*|"$c_branch"-*) c_own=1 ;;
+        "$c_branch"*) c_own=1 ;;
       esac
     fi
   fi

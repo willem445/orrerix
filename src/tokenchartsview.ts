@@ -51,7 +51,13 @@ import {
   type Metric,
 } from "./tokencharts";
 import { makeScale, niceTicks, xForTs, type TimelineScale } from "./timelinelayout";
-import { scorecardTable } from "./tokenscorecard";
+import { scorecardTable, type ScorecardTable } from "./tokenscorecard";
+import type { AuditEntry } from "./auditsummary";
+
+/** Structural stand-ins for the memo's keys — the real `AuditEntry[]` and
+ *  `UsageSeries["agents"]` pass straight in. */
+type AuditEntryLike = AuditEntry;
+type AgentRosterLike = UsageSeries["agents"][number];
 
 /** Re-poll cadence while following. See the header: the series advances once
  *  per five-minute bucket, so 30 s is already far finer than the data. */
@@ -186,6 +192,18 @@ export class TokenChartsView {
    *  which is a THIRD state beside "empty" and "failed", and the empty text
    *  below distinguishes all three. */
   private series: UsageSeries | null = null;
+  /** The scorecard table is a pure function of the audit read and the series
+   *  roster, and NEITHER enters the render signature's geometry — but
+   *  `widthPx` does, so a window drag re-renders per rAF step. Memoized on
+   *  the two inputs' array identities (the `AuditStore` replaces its array
+   *  wholesale per read and hands out the same reference otherwise), so a
+   *  drag reuses the table and only a fresh read recomputes it (#3131
+   *  review N1). The table is never mutated after computing. */
+  private scorecardMemo: {
+    audit: readonly AuditEntryLike[];
+    agents: readonly AgentRosterLike[] | undefined;
+    table: ScorecardTable;
+  } | null = null;
   private readError: unknown = null;
   /** The last board read failed, so the bar attribution is the previous
    *  one. Surfaced as a note — a stale split is fine, a silent one is not. */
@@ -1027,13 +1045,39 @@ export class TokenChartsView {
    *  complete. */
   private renderScorecard(): void {
     this.scorecardEl.replaceChildren();
-    const sc = scorecardTable(this.store.cached, this.series?.agents ?? []);
-    if (sc.floor.rowsRead === 0) {
+    const auditRows = this.store.cached;
+    const agents = this.series?.agents;
+    if (
+      !this.scorecardMemo ||
+      this.scorecardMemo.audit !== auditRows ||
+      this.scorecardMemo.agents !== agents
+    ) {
+      this.scorecardMemo = { audit: auditRows, agents, table: scorecardTable(auditRows, agents ?? []) };
+    }
+    const sc = this.scorecardMemo.table;
+    if (!this.store.attempted) {
       // "We have not looked" — distinguishable from a genuinely quiet log
-      // only by saying which of the two it is.
+      // only by saying which of the two it is. The store carries all three
+      // states (#1317): not yet read, read failed, and a real (possibly
+      // empty) answer — each gets its own sentence (#3131 review N2).
       this.scorecardEl.append(
         el("div", "tokens-section-title", "scorecard — per block × cli"),
         el("div", "tokens-note", "The audit log has not been read yet, so there is nothing to score."),
+      );
+      return;
+    }
+    if (!this.store.loaded) {
+      this.scorecardEl.append(
+        el("div", "tokens-section-title", "scorecard — per block × cli"),
+        el("div", "tokens-note", "The last audit read failed, so there is nothing to score; the table returns when a read succeeds."),
+      );
+      return;
+    }
+    if (sc.floor.rowsRead === 0) {
+      // A real answer: the read succeeded and the log holds no rows.
+      this.scorecardEl.append(
+        el("div", "tokens-section-title", "scorecard — per block × cli"),
+        el("div", "tokens-note", "The audit log was read and has no rows, so there is nothing to score."),
       );
       return;
     }

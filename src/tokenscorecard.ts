@@ -45,6 +45,13 @@
 //                      depended on it would be exact-looking and wrong. Which
 //                      tier a lane's population came from is this file's
 //                      stated residual, not a hidden one.
+//   `blockCliKey`    — the row key, empty fields rendered as `unknown`.
+//   `scorePr`'s      — the verdict INGEST lowercases (`toLowerCase` before
+//   verdict ingest    the lane filter), which the script does in `scorePr`
+//                      and this port does at the same point: `laneStats`
+//                      itself matches `'pass'|'fail'` literally in both, so
+//                      a mixed-case verdict scores identically in pane and
+//                      script (#3131 review N4).
 //   `coverageFloor`  — the spawn-row-missing half: a PR credited with a
 //                      delegate whose `agent-spawn` row did not survive the
 //                      read has LOST rows — proof of truncation, not a
@@ -197,16 +204,6 @@ function prTokenRe(pr: string): RegExp {
   return new RegExp("#" + pr + "(?![0-9])");
 }
 
-/** `rowNamesPr` — structurally (`detail.pr === pr`) or by the `#N` token
- *  anywhere in the serialized detail. Slice A's PRs are numbers; this port's
- *  are numeric strings, so the structural arm normalizes through
- *  `structuralPr` before comparing. */
-function rowNamesPr(detail: unknown, pr: string, re: RegExp): boolean {
-  if (!detail || typeof detail !== "object") return false;
-  if (structuralPr(detail as DetailRec) === pr) return true;
-  return re.test(JSON.stringify(detail));
-}
-
 /** `medianOf` — input already sorted; `null` for an empty sample. */
 function medianOf(sorted: readonly number[]): number | null {
   if (sorted.length === 0) return null;
@@ -312,6 +309,10 @@ export function scorecardTable(
   // the rows come from an append-only log — but a caller may hand an
   // unsorted array, so sort defensively the way slice A's `main` does.
   const rows = [...auditRows].sort((a, b) => a.ts_ms - b.ts_ms);
+  // Each row's serialized detail, ONCE — the only stringify this function
+  // does per row. Everything downstream (the per-PR window walks) tests
+  // cached strings (#3131 review N1).
+  const blobs = rows.map((r) => JSON.stringify(r.detail ?? null));
 
   const roster = new Map<string, ScorecardAgentLike>();
   for (const a of agents) if (!roster.has(a.id)) roster.set(a.id, a);
@@ -339,8 +340,37 @@ export function scorecardTable(
   }
 
   const cards: PrCard[] = [];
+  // The rows each PR can name, ONE pass over the read: a structural PR
+  // assigns directly; otherwise the combined alternation prefilter (one scan
+  // of the blob) gates the individual `prTokenRe` tests. Appended in ts
+  // order, which is what the walk below needs. This is what keeps a drag's
+  // re-renders off the stringify/regex quadratic (#3131 review N1).
+  const namedIdx = new Map<string, number[]>();
+  // Compiled ONCE per call: a RegExp literal per (row, PR) pair costs an
+  // order of magnitude more than the scans it enables (measured, #3131 N1).
+  const combinedRe = prs.size > 0 ? prTokenRe([...prs].join("|")) : null;
+  const perPrRe = new Map([...prs].map((p) => [p, prTokenRe(p)]));
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const structural = structuralPr(detailOf(row));
+    if (structural !== null && prs.has(structural)) {
+      const list = namedIdx.get(structural) ?? [];
+      list.push(i);
+      namedIdx.set(structural, list);
+      continue;
+    }
+    if (!row.detail || typeof row.detail !== "object") continue;
+    if (combinedRe === null || !combinedRe.test(blobs[i])) continue;
+    for (const pr of prs) {
+      if (perPrRe.get(pr)!.test(blobs[i])) {
+        const list = namedIdx.get(pr) ?? [];
+        list.push(i);
+        namedIdx.set(pr, list);
+      }
+    }
+  }
+
   for (const pr of [...prs].sort((a, b) => Number(a) - Number(b) || (a < b ? -1 : 1))) {
-    const re = prTokenRe(pr);
     // `computeWindows`, without the `merged_at` arm: first row NAMING the
     // PR, to the last `rd-*` row carrying it, falling back to the last
     // naming row. `end_source` says which fallback answered.
@@ -364,9 +394,9 @@ export function scorecardTable(
       if (!list.includes(agent)) list.push(agent);
       credited.set(block || UNKNOWN, list);
     };
-    for (const row of rows) {
+    for (const i of namedIdx.get(pr) ?? []) {
+      const row = rows[i];
       const d = detailOf(row);
-      if (!rowNamesPr(row.detail, pr, re)) continue;
       if (namedFirst === null) namedFirst = row.ts_ms;
       namedLast = row.ts_ms;
       const rowPr = structuralPr(d);

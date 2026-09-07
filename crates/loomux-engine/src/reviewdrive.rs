@@ -645,16 +645,15 @@ fn notice_digest(s: &str) -> u64 {
 ///
 /// One string rather than a tuple so the entry persists it as one JSON value an
 /// older build round-trips through `extra` untouched (§11.2).
-pub fn hold_key(reason: HeldReason, head: &str, counters: &Counters, notice: &str) -> String {
+pub fn hold_key(reason: HeldReason, head: &str, counters: &Counters, _notice: &str) -> String {
     format!(
-        "{}|{}|{}|{}|{}|{}|{:016x}",
+        "{}|{}|{}|{}|{}|{}",
         reason.as_str(),
         head,
         counters.review_rounds,
         counters.ci_attempts,
         counters.rebase_attempts,
         counters.body_only_grace,
-        notice_digest(notice),
     )
 }
 

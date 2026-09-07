@@ -4542,10 +4542,10 @@ mod tests {
         let head = "aa11bb22cc33dd44";
         let c = Counters::default();
         for r in [HeldReason::WorkerUnresumable, HeldReason::CapRefused, HeldReason::CapFull] {
-            let facts = |refusal: &str| HeldFacts {
+            let facts = |refusal: &str| crate::rddrive::HeldFacts {
                 head: head.to_string(),
                 refusal: refusal.to_string(),
-                ..HeldFacts::default()
+                ..crate::rddrive::HeldFacts::default()
             };
             let n1 = crate::rddrive::held_notice(1758, r, &facts("unknown block \"worker-adv\""));
             let n2 = crate::rddrive::held_notice(1758, r, &facts("Invalid session ID"));

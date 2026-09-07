@@ -3096,7 +3096,7 @@ impl OrchRegistry {
             restart_handback: self
                 .rd_restart_handback
                 .lock_safe()
-                .remove(&(group.clone(), pr)),
+                .contains(&(group.clone(), pr)),
             // #2811 S5b: the union over every pane this drive owns — lanes
             // AND the worker — which is why the fact is drive-level and not
             // on `LaneFact`: a drive in `fix-wait` owns a worker pane and no

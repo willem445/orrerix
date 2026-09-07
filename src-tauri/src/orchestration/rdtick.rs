@@ -3466,10 +3466,26 @@ impl OrchRegistry {
                 continue;
             }
             let text = self.rd_lane_stop_brief(&brief);
-            if self
-                .deliver_prompt(&agent, &text, brand::AUDIT_ACTOR, Delivery::MidSession)
-                .is_err()
-            {
+            // **A refusal is AUDITED, not swallowed** (#3176, aligned with
+            // #3203's `rd_take_over_pane`). `deliver_prompt` can refuse for
+            // reasons that say nothing about the drive, but one is reachable
+            // with nothing wrong at all — a pane at `QUEUE_MAX_PER_PANE` — and
+            // on a silent `continue` that is indistinguishable from "there was
+            // no busy lane to tell", which is the exact indistinguishability
+            // `rd-reuse-declined` and `rd-takeover-declined` were both added to
+            // remove. The mark is not written on this path, so the next tick
+            // tries again and these rows say how many ticks it took.
+            if let Err(why) = self.deliver_prompt(
+                &agent,
+                &text,
+                brand::AUDIT_ACTOR,
+                Delivery::MidSession,
+            ) {
+                out.audits.push((
+                    rddrive::audit_action::LANE_STOP_DECLINED,
+                    json!({ "pr": pr, "block": block, "agent": agent,
+                            "head": brief.head, "reason": why }),
+                ));
                 continue;
             }
             if entry.mark_lane_stopped(block, &brief.head) {

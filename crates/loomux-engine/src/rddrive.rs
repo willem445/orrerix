@@ -537,6 +537,17 @@ pub mod audit_action {
     /// lane per tick: an idle pane is released, a busy one is told, and the
     /// telling is what makes the release possible on a later tick.
     pub const LANE_STOPPED: &str = "rd-lane-stopped";
+    /// **A stop line orrerix could not deliver** (#3176), mirroring
+    /// [`TAKEOVER_DECLINED`] and for that row's argument exactly.
+    ///
+    /// A refused delivery is not "there was no busy lane to tell", and on a
+    /// silent `continue` the two are indistinguishable on the one surface §5.4
+    /// asks a reader to count from. One refusal is reachable with nothing wrong
+    /// at all — a pane whose queue is at `QUEUE_MAX_PER_PANE` answers `Err` —
+    /// and that is precisely the case where a reviewer keeps burning a round
+    /// nobody can see it burning. The mark is not written either, so the next
+    /// tick tries again; this row is what says how many ticks it took.
+    pub const LANE_STOP_DECLINED: &str = "rd-lane-stop-declined";
     /// The worker's pane was **released** — the same event on the other side
     /// (#2501), after the drive consumed that worker's `report` and moved on.
     /// Carries `pr`, `agent`, `session` and `reason`.

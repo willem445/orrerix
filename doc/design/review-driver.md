@@ -2280,7 +2280,8 @@ like `mq-*` and the rest:
 `rd-satisfied` · `rd-held` · `rd-resumed` · `rd-cancelled` · `rd-pruned` ·
 `rd-kickback` · `rd-recovered` · `rd-state-unreadable` · `rd-reuse-declined` ·
 `rd-takeover-declined` ·
-`rd-lane-reopened` · `rd-lane-released` · `rd-lane-stopped` · `rd-worker-released` ·
+`rd-lane-reopened` · `rd-lane-released` · `rd-lane-stopped` ·
+`rd-lane-stop-declined` · `rd-worker-released` ·
 `rd-round-grace` · `rd-hold-repeated` · `rd-notice-demoted` ·
 `rd-provider-limit`
 
@@ -2418,6 +2419,15 @@ something the WORLD did rather than a state the drive reached). Written on the
 delivery succeeding, once per revision — `LaneRecord::stopped_head` is the mark
 — so a reader counting these is counting reviews actually stood down, not ticks
 that wanted to.
+
+`rd-lane-stop-declined` is the other half of that, and it exists for
+`rd-takeover-declined`'s argument exactly: a stop line orrerix could not deliver
+is not "there was no busy lane to tell", and on a silent skip the two are
+indistinguishable on the surface this section asks a reader to count from. One
+refusal is reachable with nothing wrong at all — a pane whose queue is at
+`QUEUE_MAX_PER_PANE` — and that is precisely the case where a reviewer goes on
+burning a round nobody can see it burning. The mark is not written on that path,
+so the next tick tries again and these rows say how many ticks it took.
 
 `conflict` (#3176) is a LANE row only, and it is the one reason that does not
 mean a finished review: the PR does not merge, so the lane was reviewing a head

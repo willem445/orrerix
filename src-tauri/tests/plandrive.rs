@@ -2750,3 +2750,58 @@ fn a_resume_releases_a_held_slice_and_still_obeys_the_board() {
     );
     assert!(slice_agent(&reg, &group, "P3").is_empty(), "no pane was opened for it");
 }
+
+/// **A `done` whose PR cannot be resolved yet is RETRIED, not lost.**
+///
+/// A `report` is an event, and the tick that consumes it clears it whether or
+/// not it could act — so a `done` with no usable `ref`, on a tick where
+/// `gh pr list --head` has not seen the branch yet, would otherwise leave the
+/// slice `running` until the whole-drive stall backstop hours later. The record
+/// carries the report instead.
+///
+/// The first tick is the control and is the whole point: it must genuinely FAIL
+/// to resolve the PR — asserted on the slice still being `running` with no PR —
+/// or the second tick proves nothing.
+#[test]
+fn a_done_whose_pr_is_not_resolvable_yet_is_retried_not_lost() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, _rows) = running(&reg, &repo, &gh, PLAN3);
+    reg.pd_drive_group_with(&group, &gh, 1_400);
+
+    let agent = slice_agent(&reg, &group, "P1");
+    with_pane(&reg, &agent, 7_101);
+    // No `ref`, and `gh` knows about no PR on that branch yet.
+    report(&reg, &group, &agent, "done", json!({ "note": "pushed, PR opening" }));
+
+    // The control: this tick really cannot resolve it.
+    reg.pd_drive_group_with(&group, &gh, 1_500);
+    assert_eq!(
+        slice_state(&reg, &group, "P1"),
+        "running",
+        "the PR was not resolvable, so nothing was handed off: {}",
+        status(&reg, &group)
+    );
+    assert_eq!(
+        read_record(&reg, &group)["entries"][0]["slices"]["P1"]["reported_done"],
+        json!(true),
+        "but the report is on the RECORD, not only in the tick's signal map"
+    );
+
+    // The PR appears. No second `report` — the worker said `done` once.
+    gh.set_head_pr("feat/3040-p1", 4_777);
+    gh.set_pr(4_777, "OPEN", None);
+    reg.pd_drive_group_with(&group, &gh, 1_600);
+    assert_eq!(
+        slice_state(&reg, &group, "P1"),
+        "in-review",
+        "the retry found it and handed it off: {}",
+        status(&reg, &group)
+    );
+    assert_eq!(
+        read_record(&reg, &group)["entries"][0]["slices"]["P1"]["reported_done"],
+        json!(false),
+        "and the flag is cleared by the thing it was waiting for"
+    );
+}

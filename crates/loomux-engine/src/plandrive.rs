@@ -658,6 +658,21 @@ pub struct PdSlice {
     /// When the worker pane was opened.
     #[serde(default)]
     pub spawned_ms: u64,
+    /// This slice's worker has reported `done`, and the hand-off to the review
+    /// driver has not happened yet.
+    ///
+    /// **On the RECORD rather than only in the tick's signal map**, and the
+    /// difference is a lost hand-off. A `report(done)` arrives as an event; the
+    /// tick that consumes it clears it whether or not it could act on it, and
+    /// the PR may not be resolvable on that tick at all — the worker named no
+    /// `ref` and `gh pr list --head` has not seen the branch yet, or `gh` was
+    /// down. Left in the signal map, that `done` is gone and the slice sits
+    /// `running` until the whole-drive stall backstop. Written here, the next
+    /// tick simply tries again.
+    ///
+    /// Cleared by the hand-off, which is the thing it is waiting for.
+    #[serde(default)]
+    pub reported_done: bool,
     /// Fields written by a newer build, preserved verbatim.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -675,6 +690,7 @@ impl PdSlice {
             pr: 0,
             cap_starved_since_ms: 0,
             spawned_ms: 0,
+            reported_done: false,
             extra: BTreeMap::new(),
         }
     }

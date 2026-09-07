@@ -2744,6 +2744,27 @@ impl DriveEntry {
         self.fix_kickback_ms = now_ms.max(self.fix_handback_ms);
     }
 
+    /// Re-anchor the `fix-stalled` clock on a restart hand-back (#2811 S10),
+    /// **without an arc and without a counter**.
+    ///
+    /// [`advance`](DriveEntry::advance) stamps `fix_handback_ms` only on an arc
+    /// INTO `fix-wait`, and a restart hand-back takes no arc — the drive is
+    /// already there. Without this the drive would be re-briefed against a clock
+    /// that started before the shutdown, so a long downtime would hold it
+    /// `fix-stalled` on the very next tick, naming a worker that had a fresh
+    /// brief and no time at all to answer it.
+    ///
+    /// It writes `fix_handback_ms` and NOTHING else, which is exactly what the
+    /// arc into `fix-wait` writes — so a restart hand-back leaves the entry in
+    /// the same shape an ordinary one does, including a `fix_kickback_ms` older
+    /// than it, which is what makes [`kickback_owed`](DriveEntry::kickback_owed)
+    /// true for the fresh brief. It is a method rather than a field write at the
+    /// call site for [`record_worker_pane`](DriveEntry::record_worker_pane)'s
+    /// reason: the fact and its one writer stay together.
+    pub fn restamp_fix_handback(&mut self, now_ms: u64) {
+        self.fix_handback_ms = now_ms;
+    }
+
     /// Record that this drive has resumed its worker into `agent` — the
     /// hand-back's twin of [`open_lane`](DriveEntry::open_lane), and the reason
     /// the assignment is a method rather than a field write at the call site.
@@ -3322,6 +3343,23 @@ pub struct DriveFacts {
     /// missed detection is the pre-#2811 sixty-minute lane stall; the cost of a
     /// false one is N drives parked on a provider that is fine.
     pub provider_limited: Option<String>,
+    /// **This process restarted while the drive was in `fix-wait`, and the
+    /// worker pane it was waiting on died with the previous one** (#2811 S10).
+    ///
+    /// Set by the restart reconcile and by nothing else, because the reconcile
+    /// is the only place the fact is KNOWN. A pane missing from the agent map
+    /// mid-session is the ambiguous reading [`LaneFact::pane_dead`] declines to
+    /// make; a pane missing on the first tick after a restart is not ambiguous
+    /// at all, because every pane dies with the process. So the reconcile marks
+    /// the entry and the decision below reads the mark, rather than either of
+    /// them re-deriving "is this pane gone" from a map that cannot tell the two
+    /// apart.
+    ///
+    /// It is a fact about the PROCESS, not about the session: whether the
+    /// recorded worker session can actually be resumed is what the hand-back
+    /// itself discovers, and a hand-back that cannot reach it still lands on
+    /// `held(worker-unresumable)` by the ordinary path.
+    pub restart_handback: bool,
 }
 
 /// What the tick should do with one entry, this tick.
@@ -3363,6 +3401,23 @@ pub enum DriveStep {
         held_reason: Option<HeldReason>,
         bump: Option<Counter>,
     },
+    /// Hand the worker back again from `fix-wait`, **taking no arc and
+    /// spending no counter** (#2811 S10).
+    ///
+    /// The drive is already in `fix-wait` and stays there: the previous
+    /// process handed this worker back, and only the PANE was lost. Re-briefing
+    /// the recorded session is the cheapest thing that makes the drive live
+    /// again, and it is not a new round — nothing about the review or the CI
+    /// changed, so charging `review_rounds` for it would bill INVARIANT 9 for a
+    /// restart. That is why this is a variant of its own rather than an
+    /// `Advance` into the state the entry is already in: `advance` pairs an arc
+    /// with its cost by construction, and there is no arc here to pair.
+    ///
+    /// The tick re-stamps [`DriveEntry::restamp_fix_handback`] when the
+    /// hand-back reaches the worker, so `held(fix-stalled)` is measured from
+    /// the brief the worker can actually answer rather than from one delivered
+    /// to a pane that no longer exists.
+    Rehandback,
 }
 
 impl DriveStep {
@@ -4240,7 +4295,21 @@ fn decide_fix_wait(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits)
     match facts.worker {
         // Nothing to hand back to. Checked first: every other arm here presumes
         // a worker that can be reached.
-        WorkerSignal::Unresumable => return DriveStep::held(HeldReason::WorkerUnresumable),
+        //
+        // **Except on the first tick after a restart** (#2811 S10). The tick
+        // derives `Unresumable` here from the worker PANE having exited, and
+        // after a restart every pane has exited — so the signal is true of the
+        // process rather than of the session, and holding on it would park every
+        // resumable fix-wait drive the moment orrerix came back up. Falling
+        // through to the re-hand-back below is what tells the two apart: it
+        // resumes the recorded session, and a session that genuinely cannot be
+        // resumed makes `rd_handback` fail, which lands on this same hold by the
+        // ordinary path one tick later. The probe is the answer, not a guess
+        // about it.
+        WorkerSignal::Unresumable if !facts.restart_handback => {
+            return DriveStep::held(HeldReason::WorkerUnresumable)
+        }
+        WorkerSignal::Unresumable => {}
         // INVARIANT 3 territory — a blocked worker is the orchestrator's call.
         WorkerSignal::Blocked => return DriveStep::held(HeldReason::WorkerBlocked),
         WorkerSignal::Done | WorkerSignal::Silent => {}
@@ -4253,6 +4322,16 @@ fn decide_fix_wait(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits)
     // Arc 8: `report(done)` with the head unchanged — a body-only fix.
     if facts.worker == WorkerSignal::Done {
         return DriveStep::to(DriveState::ReviewWait);
+    }
+    // #2811 S10, BELOW arcs 7 and 8 and ABOVE the stall. Below them because a
+    // worker that pushed or reported before the process went down has already
+    // answered, and re-briefing it would ask again for work that is done. Above
+    // the stall because `fix_handback_ms` predates the restart: most of the gap
+    // it measures is downtime in which no worker could have answered, so
+    // `held(fix-stalled)` — a claim about a WORKER being silent — would be
+    // false. Nothing is charged either way; see [`DriveStep::Rehandback`].
+    if facts.restart_handback {
+        return DriveStep::Rehandback;
     }
     if facts.now_ms.saturating_sub(entry.fix_handback_ms) >= minutes_ms(limits.fix_timeout_minutes)
     {
@@ -5939,6 +6018,7 @@ mod tests {
             gate: GateOutcome::NotEvaluated,
             messaged: false,
             provider_limited: None,
+            restart_handback: false,
         }
     }
 

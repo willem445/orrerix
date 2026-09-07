@@ -89,6 +89,7 @@ fn facts_at(head: &str) -> DriveFacts {
         gate: GateOutcome::NotEvaluated,
         messaged: false,
         provider_limited: None,
+        restart_handback: false,
     }
 }
 
@@ -11887,4 +11888,265 @@ fn a_provider_limit_outranks_the_per_state_bound() {
         json!("provider-limit"),
         "control: with no limit the same clock holds for a time reason: {s2}"
     );
+}
+
+// ── #2811 S10: a drive parked in `fix-wait` across a restart ────────────────
+
+/// Persist a drive at its first hand-back, then hand the same group dir to a
+/// **new registry** — which is what a restart is, and the only fixture that can
+/// produce the fact S10 rests on: every pane died with the previous process.
+///
+/// The two registries are deliberately not the same object. A test that reused
+/// one and merely cleared a map would be exercising the mid-session reading
+/// `LaneFact::pane_dead` declines to make, and would pass against a reconcile
+/// that had never run.
+fn fix_wait_across_a_restart(
+    dir: &std::path::Path,
+    repo: &Repo,
+    gh: &FakeGh,
+) -> (OrchRegistry, GroupId) {
+    let group = {
+        let reg = relaunch_registry(dir);
+        let (group, _session) = driven(&reg, repo, gh);
+        to_first_handback(&reg, &group, gh);
+        let status = reg.review_drive_status_with(&group, 40_000);
+        assert_eq!(
+            status["drives"][0]["state"],
+            json!("fix-wait"),
+            "the fixture must actually persist a FIX-WAIT drive, or nothing below is about \
+             S10: {status}"
+        );
+        group
+    };
+    (relaunch_registry(dir), group)
+}
+
+/// **The red.** On `main` the first tick after a restart does not hand the
+/// worker back at all: the drive sits in `fix-wait` waiting on a pane that died
+/// with the previous process, and the only thing that ever moves it is
+/// `fix_timeout_minutes` expiring into `held(fix-stalled)` — a row that says a
+/// worker was silent when what happened is that orrerix was restarted under it.
+#[test]
+fn a_fix_wait_drive_left_by_a_restart_is_handed_back_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = fix_wait_across_a_restart(dir.path(), &repo, &gh);
+
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+
+    let handbacks = audit_details(&reg, &group, "rd-handback");
+    let restart: Vec<_> =
+        handbacks.iter().filter(|d| d["why"] == json!("restart")).collect();
+    assert_eq!(
+        restart.len(),
+        1,
+        "the first tick after a restart must re-brief the worker it was waiting on: \
+         {handbacks:?}"
+    );
+    assert!(
+        !restart[0]["agent"].as_str().unwrap_or_default().is_empty(),
+        "and name the pane it reached, which is what says the resume worked: {restart:?}"
+    );
+
+    // Still in `fix-wait`: a re-brief is not an arc, and the drive is waiting on
+    // the same worker for the same fix it was waiting on before the restart.
+    let status = reg.review_drive_status_with(&group, 50_000);
+    assert_eq!(status["drives"][0]["state"], json!("fix-wait"), "{status}");
+}
+
+/// **A restart is not a round** — the property that makes the new `why` value
+/// worth having rather than reusing the original hand-back's.
+///
+/// Measured as a DIFFERENCE across the restart, not against literals: the
+/// fixture's own counters are whatever `to_first_handback` spent, and pinning
+/// those numbers here would make this test fail for a change to the fixture
+/// rather than for the property it is about.
+#[test]
+fn the_restart_hand_back_charges_no_counter() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+
+    let (reg, group) = fix_wait_across_a_restart(dir.path(), &repo, &gh);
+    // Read from the RESTARTED registry before it ticks: reconcile does not touch
+    // the counters, so this is the pre-restart figure, read where the comparison
+    // is made rather than carried across two registries by hand.
+    let before = reg.review_drive_status_with(&group, 45_000)["drives"][0]["counters"].clone();
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+
+    let after = reg.review_drive_status_with(&group, 50_000)["drives"][0]["counters"].clone();
+    assert_eq!(
+        after, before,
+        "a restart must spend none of INVARIANT 9's budget: {before} -> {after}"
+    );
+    assert_eq!(
+        action_count(&reg, &group, "rd-handback"),
+        1,
+        "and exactly one hand-back happened in this process"
+    );
+}
+
+/// The mark the reconcile leaves is worth **one tick**, and the second tick is
+/// the one that says so.
+///
+/// Without the take, the mark would stand for the life of the process and
+/// re-brief the worker on every tick for as long as the drive stayed in
+/// `fix-wait` — which is a hand-back loop, not a recovery.
+#[test]
+fn the_restart_mark_is_spent_by_the_tick_that_reads_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = fix_wait_across_a_restart(dir.path(), &repo, &gh);
+
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+    let after_one = action_count(&reg, &group, "rd-handback");
+    reg.rd_drive_group_with(&group, &gh, 60_000);
+    reg.rd_drive_group_with(&group, &gh, 70_000);
+
+    assert_eq!(
+        action_count(&reg, &group, "rd-handback"),
+        after_one,
+        "the mark is consumed by the tick that reads it; later ticks re-brief nobody"
+    );
+}
+
+/// The `fix-stalled` clock is re-anchored on the re-brief, so the bound is
+/// measured from a brief the worker can actually answer.
+///
+/// The fixture handed back at 40s and the drive is re-briefed at 50s; a tick
+/// one `fix_timeout_minutes` past the ORIGINAL hand-back must therefore still
+/// find the drive working. Without the re-stamp the same tick parks it
+/// `held(fix-stalled)`, which is the whole failure S10 removes arriving through
+/// the fix for it.
+#[test]
+fn the_restart_hand_back_re_anchors_the_fix_stalled_clock() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = fix_wait_across_a_restart(dir.path(), &repo, &gh);
+
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+    // Just past the default 60-minute bound as measured from the fixture's own
+    // hand-back at 40s, and short of it as measured from the re-brief at 50s.
+    let past_original = 40_000 + 60 * 60_000 + 1_000;
+    reg.rd_drive_group_with(&group, &gh, past_original);
+
+    let status = reg.review_drive_status_with(&group, past_original);
+    assert_eq!(
+        status["drives"][0]["state"],
+        json!("fix-wait"),
+        "the bound must run from the brief the worker was actually given: {status}"
+    );
+}
+
+/// The guarded bypass, both ways, at the level the decision is made.
+///
+/// The tick derives `WorkerSignal::Unresumable` from the worker PANE having
+/// exited, and after a restart every pane has — so on that one tick the signal
+/// is a fact about the process and holding on it would park every resumable
+/// drive orrerix came back up under. The mark is what tells the two apart, and
+/// the second half here is the control: with no mark, the same facts still hold.
+#[test]
+fn a_dead_pane_holds_the_drive_unless_the_restart_mark_says_why_it_is_dead() {
+    let e = entry_at(DriveState::FixWait);
+    let limits = DriveLimits::default();
+    let dead = DriveFacts { worker: WorkerSignal::Unresumable, ..facts_at("head-a") };
+
+    assert_eq!(
+        reviewdrive::decide(&e, &DriveFacts { restart_handback: true, ..dead.clone() }, &limits),
+        DriveStep::Rehandback,
+        "a pane that died with the process is probed, not held: the hand-back is what \
+         discovers whether the SESSION survived"
+    );
+    assert_eq!(
+        reviewdrive::decide(&e, &dead, &limits),
+        held(HeldReason::WorkerUnresumable),
+        "control: with no restart under it, a dead worker pane is still the hold it was"
+    );
+}
+
+/// Arc 7 outranks the restart re-brief.
+///
+/// A worker that pushed before the process went down has already answered; CI
+/// is what has to speak next, and re-briefing it would ask again for work that
+/// is done. The control is the same facts at the UNMOVED head, which is the
+/// only difference between the two.
+#[test]
+fn a_push_that_landed_before_the_shutdown_outranks_the_restart_re_brief() {
+    let e = entry_at(DriveState::FixWait);
+    let limits = DriveLimits::default();
+    let moved = DriveFacts { restart_handback: true, ..facts_at("head-b") };
+    assert_ne!(e.head, "head-b", "the fixture must actually move the head");
+
+    assert_eq!(
+        reviewdrive::decide(&e, &moved, &limits),
+        DriveStep::Advance { to: DriveState::CiWait, held_reason: None, bump: None },
+        "the push is the answer; the restart does not un-ask for it"
+    );
+    assert_eq!(
+        reviewdrive::decide(&e, &DriveFacts { restart_handback: true, ..facts_at(&e.head) }, &limits),
+        DriveStep::Rehandback,
+        "control: at the unmoved head the same facts DO re-brief, so the arm above is \
+         precedence and not an arc that never fires"
+    );
+}
+
+/// **Coverage, not a claim.** The two other working states a restart can leave
+/// a drive in already recover by paths that predate S10, and this pins that they
+/// do — so nothing here is read as having made them work.
+///
+/// A `review-wait` drive re-opens its lane by the ordinary path (the record's
+/// pane is gone, so `open_lane` resumes the recorded session), and a
+/// `gate-check` drive re-evaluates the gate on its next tick against the LIVE
+/// head rather than the one the file remembers. Both survive the restart on
+/// disk in the state they were parked in, neither reaches `fix-stalled`, and
+/// neither emits the re-brief `fix-wait` gets: the mark is that state's alone.
+#[test]
+fn the_other_states_a_restart_can_interrupt_recover_by_the_paths_they_already_had() {
+    for (state, expected) in [
+        (DriveState::ReviewWait, "review-wait"),
+        (DriveState::GateCheck, "gate-check"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let group = {
+            let reg = relaunch_registry(dir.path());
+            let (group, _s) = driven(&reg, &repo, &gh);
+            reg.rd_drive_group_with(&group, &gh, 10_000);
+            if state == DriveState::GateCheck {
+                reg.rd_drive_group_with(&group, &gh, 20_000);
+            }
+            group
+        };
+        let reg = relaunch_registry(dir.path());
+        let status = reg.review_drive_status_with(&group, 30_000);
+        assert_eq!(
+            status["drives"].as_array().map(|a| a.len()),
+            Some(1),
+            "a live drive survives the restart on disk: {status}"
+        );
+        assert_eq!(
+            status["drives"][0]["state"],
+            json!(expected),
+            "and in the state it was parked in: {status}"
+        );
+        reg.rd_drive_group_with(&group, &gh, 40_000);
+        let after = reg.review_drive_status_with(&group, 40_000);
+        assert_ne!(
+            after["drives"][0]["held_reason"],
+            json!("fix-stalled"),
+            "no state but `fix-wait` may reach the bound S10 is about: {after}"
+        );
+        let restarted = audit_details(&reg, &group, "rd-handback")
+            .into_iter()
+            .filter(|d| d["why"] == json!("restart"))
+            .count();
+        assert_eq!(
+            restarted, 0,
+            "and the restart re-brief is `fix-wait`'s alone: {expected} emitted one"
+        );
+    }
 }

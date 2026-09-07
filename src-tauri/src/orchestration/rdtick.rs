@@ -183,9 +183,9 @@ impl RdBrief {
     /// Which of the three hand-back shapes this is, for the audit line.
     fn handback_kind(&self) -> &'static str {
         match self.ci {
-            reviewdrive::CiObservation::Conflicting => "conflict",
-            reviewdrive::CiObservation::Red => "ci-red",
-            _ => "review-findings",
+            reviewdrive::CiObservation::Conflicting => rddrive::handback_why::CONFLICT,
+            reviewdrive::CiObservation::Red => rddrive::handback_why::CI_RED,
+            _ => rddrive::handback_why::REVIEW_FINDINGS,
         }
     }
 
@@ -2647,6 +2647,120 @@ impl OrchRegistry {
         )
     }
 
+    /// The one place a failed hand-back becomes `held(worker-unresumable)` or
+    /// `held(cap-refused)` — shared by the arc into `fix-wait` and by #2811 S10's
+    /// restart re-hand-back.
+    ///
+    /// Extracted rather than copied because it is not one decision but four that
+    /// have to agree: which HeldReason the refusal text classifies to, the
+    /// second-failure bookkeeping that turns a repeat into a decision, the
+    /// refusal the NOTICE quotes, and the arc — whose result is what
+    /// `out.advanced` may claim. A second copy is a second answer to each, and
+    /// the design note's “no second way to hold” is exactly this.
+    #[allow(clippy::too_many_arguments)]
+    fn rd_handback_failed(
+        &self,
+        group: &GroupId,
+        entry: &mut reviewdrive::DriveEntry,
+        pr: u64,
+        why: &str,
+        out: &mut RdOut,
+        now: u64,
+    ) {
+        // A worker that will not resume is §2.2's
+        // `worker-unresumable`, learned exactly here —
+        // §5.1 says so, and says the deferral is
+        // deliberate: resolving a session at drive time
+        // is not the same as proving it resumable.
+        // The refusal reaches the NOTICE as well as the
+        // audit row (#1961). It used to reach the audit
+        // alone, and the pane got one fixed sentence
+        // diagnosing a session that no longer resolves
+        // — for a block that had left the roster, for a
+        // pane that opened and died on `Invalid session
+        // ID`, and (#1960) for a cap refusal.
+        //
+        // **And a cap refusal is now its own reason**
+        // (#1960): the session resolves fine, a slot is
+        // what is exhausted, and the two remedies are
+        // different actions. Classified on the shared
+        // literal `live_cap_refusal` writes, so the
+        // producer and this reader cannot drift.
+        //
+        // **A SECOND identical failure says so** (#2555
+        // item 2, S7). The refusal is recorded per drive
+        // — the session it failed for and the failure
+        // line — and a repeat with the same pair is told
+        // apart from the first: "second time" prefixes
+        // the quoted refusal, so the notice an
+        // orchestrator reads after resuming and losing
+        // again is a decision (re-point the drive, or
+        // cancel) rather than the same reflex the first
+        // notice invited. The reason still names the
+        // failure's own CLASS; what recurs is the fact.
+        // In-memory (the field's doc carries the bounded
+        // restart consequence), and cleared by the `Ok`
+        // arm above, so a recovery restarts the count.
+        let prior = self
+            .rd_handback_fails
+            .lock_safe()
+            .get(&(group.clone(), pr))
+            .cloned();
+        let second = prior
+            .as_ref()
+            .map(|(s, w)| (s.as_str(), w.as_str()))
+            == Some((entry.worker_session.as_str(), why.as_str()));
+        self.rd_handback_fails.lock_safe().insert(
+            (group.clone(), pr),
+            (entry.worker_session.clone(), why.clone()),
+        );
+        let refusal = if second {
+            format!("second time: {why}")
+        } else {
+            why.clone()
+        };
+        let reason = if super::is_live_cap_refusal(&why) {
+            reviewdrive::HeldReason::CapRefused
+        } else {
+            reviewdrive::HeldReason::WorkerUnresumable
+        };
+        out.refusal = refusal;
+        out.audits.push((
+            rddrive::audit_action::REFUSED,
+            json!({ "pr": pr, "reason": reason.as_str(),
+                    "detail": why }),
+        ));
+        // **The arc's result decides what the notice may
+        // claim.** Discarding it let `out.advanced`
+        // announce a hold the entry had not taken — the
+        // notice says parked, the file says `fix-wait`,
+        // and the next tick hands back again. A value
+        // computed and dropped at a boundary, which is
+        // the axis this round is about.
+        match entry.advance(
+            reviewdrive::DriveState::Held,
+            Some(reason),
+            None,
+            now,
+        ) {
+            Ok(()) => {
+                out.advanced =
+                    Some((reviewdrive::DriveState::Held, Some(reason)));
+            }
+            Err(bad) => {
+                // Unreachable — `fix-wait -> held` is arc
+                // 12 — and handled rather than claimed:
+                // the drive stays where it is and says so.
+                out.advanced = None;
+                out.audits.push((
+                    rddrive::audit_action::REFUSED,
+                    json!({ "pr": pr, "reason": "invalid-transition",
+                            "detail": bad.to_string() }),
+                ));
+            }
+        }
+    }
+
     /// §2.4's restart reconcile, once per group per registry instance, before
     /// driving — `rd_reconciled` is a field of the registry, so "per process"
     /// holds only while a process builds one of these (#2135 review 2).
@@ -2749,6 +2863,28 @@ impl OrchRegistry {
                     entry.owe_notice(&n, now);
                     audits.push((on_behalf, pr, true, forgot_cap_run));
                 } else {
+                    // **#2811 S10: a drive parked in `fix-wait` is waiting on a
+                    // pane that died with the previous process.** Nothing will
+                    // ever arrive for it — the signals map is per-process and
+                    // empty, and the pane whose `report` would fill it is gone —
+                    // so without this the drive waits out `fix_timeout_minutes`
+                    // and exits `held(fix-stalled)`, a claim about a worker's
+                    // silence that is really a claim about a restart.
+                    //
+                    // The mark is recorded here and acted on by the tick, which
+                    // is the split the rest of this function already keeps: the
+                    // reconcile is the only place the fact is KNOWN (every pane
+                    // died, so a missing one is not the ambiguous mid-session
+                    // reading), and the tick is the only place that can afford to
+                    // observe the PR, render a brief and resume a session. Doing
+                    // the hand-back here would spend a `gh` round trip per live
+                    // drive at startup and duplicate the whole hand-back path,
+                    // cap refusal and `worker-unresumable` handling included.
+                    if entry.state() == reviewdrive::DriveState::FixWait {
+                        self.rd_restart_handback
+                            .lock_safe()
+                            .insert((group.clone(), pr));
+                    }
                     audits.push((on_behalf, pr, false, forgot_cap_run));
                 }
             }
@@ -2947,6 +3083,20 @@ impl OrchRegistry {
             },
             gate,
             messaged: signal.messaged,
+            // #2811 S10, and TAKEN rather than read: the mark is worth exactly
+            // one tick of this entry. Whatever that tick decides, the fact it
+            // records — that the process restarted while this drive was parked
+            // — has been acted on: `decide_fix_wait` re-briefs the worker, or an
+            // arc the restart does not change (7 or 8, a worker that pushed or
+            // reported before the shutdown) takes precedence and no re-brief is
+            // owed at all. Leaving it standing is the defect the take avoids:
+            // this drive can re-enter `fix-wait` many times later in the same
+            // process, and a stale mark would hand the worker an unasked-for
+            // second brief on the first tick of one of those rounds.
+            restart_handback: self
+                .rd_restart_handback
+                .lock_safe()
+                .remove(&(group.clone(), pr)),
             // #2811 S5b: the union over every pane this drive owns — lanes
             // AND the worker — which is why the fact is drive-level and not
             // on `LaneFact`: a drive in `fix-wait` owns a worker pane and no
@@ -3179,6 +3329,48 @@ impl OrchRegistry {
                             rddrive::audit_action::KICKBACK,
                             json!({ "pr": pr, "agent": agent }),
                         ));
+                    }
+                }
+            }
+            // #2811 S10: the restart re-hand-back. **No arc, no counter.**
+            //
+            // The drive stays in `fix-wait`; what was lost across the process
+            // boundary is the worker's PANE, not its session and not anything
+            // it had been told. So this re-renders the same fix brief and
+            // resumes the recorded session, exactly as the arc into `fix-wait`
+            // does — and charges nothing for it, because no review round, CI
+            // run or rebase happened. A restart is not a round.
+            //
+            // `grace: false`: #2509's one-shot grace is granted by an arc that
+            // spends it, and this takes no arc. Passing `true` here would print
+            // a grant the entry's counters do not record.
+            reviewdrive::DriveStep::Rehandback => {
+                match self.rd_handback(group, entry, &brief, limits, false) {
+                    Ok(agent) => {
+                        // The clock moves only once the worker has actually
+                        // been reached, so a hand-back that failed leaves
+                        // `held(fix-stalled)`'s bound where it was rather than
+                        // silently extending it by a whole `fix_timeout_minutes`
+                        // on every restart.
+                        entry.restamp_fix_handback(now);
+                        self.rd_handback_fails.lock_safe().remove(&(group.clone(), pr));
+                        out.changed = true;
+                        out.handback = Some(agent.clone());
+                        out.audits.push((
+                            rddrive::audit_action::HANDBACK,
+                            json!({ "pr": pr, "agent": agent, "head": brief.head,
+                                    "why": rddrive::handback_why::RESTART }),
+                        ));
+                    }
+                    Err(why) => {
+                        // A session that will not resume really is
+                        // `worker-unresumable`, and it is learned HERE rather
+                        // than assumed at reconcile: the mark says the process
+                        // restarted, and only the attempt can say whether the
+                        // session survived it. Held through the same arc every
+                        // other failed hand-back takes, so the notice, the
+                        // second-failure wording and `rd-held` are one path.
+                        self.rd_handback_failed(group, entry, pr, &why, &mut out, now);
                     }
                 }
             }
@@ -3429,98 +3621,7 @@ impl OrchRegistry {
                                 ));
                             }
                             Err(why) => {
-                                // A worker that will not resume is §2.2's
-                                // `worker-unresumable`, learned exactly here —
-                                // §5.1 says so, and says the deferral is
-                                // deliberate: resolving a session at drive time
-                                // is not the same as proving it resumable.
-                                // The refusal reaches the NOTICE as well as the
-                                // audit row (#1961). It used to reach the audit
-                                // alone, and the pane got one fixed sentence
-                                // diagnosing a session that no longer resolves
-                                // — for a block that had left the roster, for a
-                                // pane that opened and died on `Invalid session
-                                // ID`, and (#1960) for a cap refusal.
-                                //
-                                // **And a cap refusal is now its own reason**
-                                // (#1960): the session resolves fine, a slot is
-                                // what is exhausted, and the two remedies are
-                                // different actions. Classified on the shared
-                                // literal `live_cap_refusal` writes, so the
-                                // producer and this reader cannot drift.
-                                //
-                                // **A SECOND identical failure says so** (#2555
-                                // item 2, S7). The refusal is recorded per drive
-                                // — the session it failed for and the failure
-                                // line — and a repeat with the same pair is told
-                                // apart from the first: "second time" prefixes
-                                // the quoted refusal, so the notice an
-                                // orchestrator reads after resuming and losing
-                                // again is a decision (re-point the drive, or
-                                // cancel) rather than the same reflex the first
-                                // notice invited. The reason still names the
-                                // failure's own CLASS; what recurs is the fact.
-                                // In-memory (the field's doc carries the bounded
-                                // restart consequence), and cleared by the `Ok`
-                                // arm above, so a recovery restarts the count.
-                                let prior = self
-                                    .rd_handback_fails
-                                    .lock_safe()
-                                    .get(&(group.clone(), pr))
-                                    .cloned();
-                                let second = prior
-                                    .as_ref()
-                                    .map(|(s, w)| (s.as_str(), w.as_str()))
-                                    == Some((entry.worker_session.as_str(), why.as_str()));
-                                self.rd_handback_fails.lock_safe().insert(
-                                    (group.clone(), pr),
-                                    (entry.worker_session.clone(), why.clone()),
-                                );
-                                let refusal = if second {
-                                    format!("second time: {why}")
-                                } else {
-                                    why.clone()
-                                };
-                                let reason = if super::is_live_cap_refusal(&why) {
-                                    reviewdrive::HeldReason::CapRefused
-                                } else {
-                                    reviewdrive::HeldReason::WorkerUnresumable
-                                };
-                                out.refusal = refusal;
-                                out.audits.push((
-                                    rddrive::audit_action::REFUSED,
-                                    json!({ "pr": pr, "reason": reason.as_str(),
-                                            "detail": why }),
-                                ));
-                                // **The arc's result decides what the notice may
-                                // claim.** Discarding it let `out.advanced`
-                                // announce a hold the entry had not taken — the
-                                // notice says parked, the file says `fix-wait`,
-                                // and the next tick hands back again. A value
-                                // computed and dropped at a boundary, which is
-                                // the axis this round is about.
-                                match entry.advance(
-                                    reviewdrive::DriveState::Held,
-                                    Some(reason),
-                                    None,
-                                    now,
-                                ) {
-                                    Ok(()) => {
-                                        out.advanced =
-                                            Some((reviewdrive::DriveState::Held, Some(reason)));
-                                    }
-                                    Err(bad) => {
-                                        // Unreachable — `fix-wait -> held` is arc
-                                        // 12 — and handled rather than claimed:
-                                        // the drive stays where it is and says so.
-                                        out.advanced = None;
-                                        out.audits.push((
-                                            rddrive::audit_action::REFUSED,
-                                            json!({ "pr": pr, "reason": "invalid-transition",
-                                                    "detail": bad.to_string() }),
-                                        ));
-                                    }
-                                }
+                                self.rd_handback_failed(group, entry, pr, &why, &mut out, now);
                             }
                         }
                     }

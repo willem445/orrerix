@@ -42117,6 +42117,78 @@ fn a_failing_merge_time_condition_drops_the_github_ui_exit_wherever_the_line_rep
         "an intact body is no condition failing — all three exits come back: {s}");
 }
 
+/// Review round 1, finding 1: the headline's population is the gate's REQUIRED
+/// reviewers, the same one every enforcing half asks (`mergeq::body_unchanged`,
+/// `evaluate_merge_gate`, the merge-time evaluation below). `body_drift` reports
+/// every verdict file on disk, and a block the gate does NOT name — the shape
+/// left behind by an edited reviewer list, or a reviewer-kind block that simply
+/// is not required — must not flip the headline to NOT YET SATISFIED while the
+/// shim passes the clause and the merge is not refused: that would be #1889's
+/// headline-vs-exits contradiction in a new state, with `rev-extra` named as a
+/// blocker that blocks nothing. The drift is still REPORTED — the caveat note
+/// keeps the full population, where reporting all drift is the point.
+#[test]
+fn a_drifted_pass_on_a_block_the_gate_does_not_name_keeps_the_satisfied_headline() {
+    let (reg, d, _repo, gid) = gated_group("    also: [body-unchanged]\n");
+    // The required lanes record against the body AS IT STANDS, so the clause
+    // passes for them — the merge is genuinely not refused here.
+    reg.set_pr_body_override(Some("the body as it stands\n".into()));
+    for block in ["rev-security", "rev-tests"] {
+        let c = reviewer_caller(&reg, &gid, block);
+        recorded(&reg, &c, "7", "pass", "fine");
+    }
+    // A verdict from a block the gate does not name, at the body that used to
+    // be — the orphaned file an edited `reviewers:` list leaves behind.
+    let old = workflow::body_digest("the body they reviewed\n");
+    let vf = d.path().join(gid.as_str()).join("verdicts").join("pr-7").join("rev-extra");
+    fs::write(&vf, format!("pass\n{HEAD}\n1\nrev-9\n{old}\nfine\n")).unwrap();
+    let planted =
+        workflow::parse_verdict_file(7, "rev-extra", &fs::read_to_string(&vf).unwrap()).unwrap();
+    assert!(planted.verdict == workflow::Verdict::Pass && planted.body_digest == old,
+        "positive control: the orphaned verdict file parses as a drifted pass: {planted:?}");
+
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.starts_with("merge gate for PR #7: SATISFIED"),
+        "a block the gate does not require cannot flip the headline: {s}");
+    assert!(!s.contains("NOT YET SATISFIED"),
+        "NOT YET SATISFIED would claim a refusal the shim does not make: {s}");
+    assert!(!s.contains("gh pr merge` is refused"),
+        "and would state a refusal that is not happening: {s}");
+    assert!(s.contains("BODY CHANGED SINCE PASS: rev-extra"),
+        "the drift is still reported — the caveat keeps the full population: {s}");
+}
+
+/// Residual 4 of the PR body, pinned rather than left aspirational: with the
+/// body UNREADABLE, no drift is computable, so the headline stays SATISFIED
+/// even on a gate declaring `body-unchanged` — while the shim refuses
+/// (`unresolved-body`, fail-closed). The second half is the arm of the
+/// merge-time evaluation this state does drive: a state whose line carries the
+/// exits withholds the GitHub-UI one, because an unreadable body IS a failing
+/// merge-time condition.
+#[test]
+fn an_unreadable_body_keeps_the_satisfied_headline_while_the_condition_knows_it_fails() {
+    let (reg, _d, _repo, gid) = gated_group("    also: [body-unchanged]\n");
+    reg.set_pr_body_override(Some("the body they reviewed\n".into()));
+    for block in ["rev-security", "rev-tests"] {
+        let c = reviewer_caller(&reg, &gid, block);
+        recorded(&reg, &c, "7", "pass", "fine");
+    }
+    reg.set_pr_body_override(None);
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.starts_with("merge gate for PR #7: SATISFIED"),
+        "the disclosed residual: no drift is computable without a body, so the \
+         headline stays SATISFIED while the shim would refuse: {s}");
+    assert!(!s.contains("BODY CHANGED"),
+        "and no drift claim is made — cannot tell is never reads as either: {s}");
+
+    // The half the merge-time evaluation does see: with one lane stale so the
+    // line is a refusal shape, the unreadable body withholds the bypass.
+    reg.set_pr_head_override(Some(NEW_HEAD.into()));
+    let s = reg.gate_status_line(&gid, 7).unwrap();
+    assert!(s.contains("NOT YET SATISFIED") && !s.contains("GitHub UI"),
+        "an unreadable body is a failing condition — the bypass is withheld: {s}");
+}
+
 #[test]
 fn gh_shim_script_enforces_the_workflow_merge_gate() {
     // A source-text pin of the shape. Every behavioural claim is EXECUTED below.

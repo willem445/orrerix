@@ -295,9 +295,23 @@ fn a_dialog_parks_for_a_delegate_and_is_cancelled_for_an_orchestrator() {
 
 #[test]
 fn the_cap_is_checked_for_both_role_classes_and_not_only_the_parking_one() {
-    // The one-rule-per-input rule. A cap checked only on the parking branch
-    // would let an orchestrator accumulate rows for ever, and the asymmetry
-    // would be invisible: every assertion in the test above would still pass.
+    // The cap DOMINATES the role, and this pins the ordering rather than the
+    // consequence -- because the consequence is not what it first looks like.
+    //
+    // An earlier version of this comment claimed a parking-branch-only cap
+    // "would let an orchestrator accumulate rows for ever". That is FALSE, and
+    // the mutation round is what showed it: `pending_ui.push` happens only in
+    // the `Park` arm, so a never-parking role's count never grows and
+    // `decide_dialog(Orchestrator, MAX_PENDING_UI)` is not a state this build
+    // can reach. What the mutation actually changes is the RECORDED REASON --
+    // `RoleNeverParks` where the pane is also at its cap.
+    //
+    // Pinned anyway, for two reasons that are about the function rather than
+    // about today's caller. The audit reason is a claim about why loomux did
+    // something, and this registry keeps those honest. And the day anything
+    // starts parking a dialog for a role that does not park today -- a manager
+    // pane the human is actually watching, say -- it inherits a bound that
+    // already holds, instead of a cap sitting on the wrong side of a branch.
     use loomux_engine::model::Role;
     use loomux_lib::orchestration::structured::{
         decide_dialog, CancelReason, DialogOutcome, MAX_PENDING_UI,

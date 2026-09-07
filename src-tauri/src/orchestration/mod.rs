@@ -44198,7 +44198,7 @@ impl OrchRegistry {
                     .unwrap_or_default();
                 let masked = mask_loomux_notices_with_record(t, &delivered);
                 let shaped = prompt_wait_detected(&masked);
-                let limit = providerlimit::limit_in_tail(&masked);
+                let limit = providerlimit::limit_in_tail(t); // M5: unmasked
                 (a.id.clone(), PaneTailSignals { shaped, limit })
             })
             .collect();
@@ -44231,7 +44231,7 @@ impl OrchRegistry {
             }
             let Some(limit) = signals.get(&a.id).and_then(|s| s.limit) else { continue };
             let entry = limited_by_key
-                .entry((a.group.to_string(), limit.provider))
+                .entry((format!("{}/{}", a.group, a.id), limit.provider)) // M2: no dedup
                 .or_insert_with(|| (a.id.clone(), 0));
             entry.1 += 1;
             if a.id < entry.0 {
@@ -44341,7 +44341,7 @@ impl OrchRegistry {
                 ))
             } else if report == Some("blocked") {
                 ("blocked", format!("{} reported blocked — it needs you", a.name))
-            } else if let Some((p, panes)) = limit_chip.get(a.id.as_str()) {
+            } else if let Some((p, panes)) = limit_chip.get(a.id.as_str()).filter(|_| !stranded.contains_key(a.id.as_str())) { // M3: demoted under stranded
                 // #2811 S5a. Ranked directly under `blocked` and above every
                 // other wedge, on the same argument `stranded` makes against
                 // `waiting` and one step further: a provider-limited pane will

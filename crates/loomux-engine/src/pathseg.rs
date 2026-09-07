@@ -188,6 +188,37 @@ pub fn check_segment(s: &str) -> Result<(), SegmentError> {
     Ok(())
 }
 
+/// Whether a string is usable **both** as a git branch name and as the relative
+/// directory a worktree is cut at — the multi-segment cousin of
+/// [`check_segment`], and this module's home for the same reason that one is
+/// here (#3040).
+///
+/// `src-tauri`'s `git::git_worktree_add_sync` has always enforced this on the
+/// name it is handed; it lives here so that the PLAN which chooses that name
+/// can be refused against the same rule, at post time, with a line number the
+/// planner can act on inside its own turn. A second copy of the rule would be
+/// exactly the drift `check_segment` was consolidated to end: the failure it
+/// would produce is a plan that validates, boards every row, and then fails
+/// every single spawn with a message about a name nobody can now change.
+///
+/// **ASCII, deliberately**, and this is the whole of the non-ASCII
+/// case-collision question. `plandoc`'s duplicate check folds ASCII because a
+/// slice id's alphabet is ASCII by construction; a branch name's is not, so a
+/// pair differing only by a non-ASCII letter's case would be two names and one
+/// directory on a case-insensitive filesystem. Refusing the alphabet outright
+/// is what makes that pair unrepresentable, rather than something a later
+/// comparison has to be careful about.
+pub fn worktree_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name.starts_with('/')
+        && !name.ends_with('/')
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+}
+
 /// A validated single path component.
 ///
 /// The only constructor is [`PathSegment::parse`]. Holding one is proof the

@@ -3199,19 +3199,24 @@ impl OrchRegistry {
                             json!({ "pr": pr, "head": brief.head, "failing": brief.failing_jobs }),
                         ))
                     }
-                    // **`gate-check` too since #2311**, where the same
-                    // observation drives the same arc 3. The row is what accounts
-                    // for the hand-back that follows: an `rd-handback`
-                    // `why:conflict` with no `rd-conflicting` above it is a spent
-                    // `rebase_attempts` a §5.4 reader cannot explain — and the
-                    // row is the one `scripts/orch-scorecard.cjs` counts.
-                    (
-                        reviewdrive::DriveState::CiWait | reviewdrive::DriveState::GateCheck,
-                        reviewdrive::CiObservation::Conflicting,
-                    ) => out.audits.push((
-                        rddrive::audit_action::CONFLICTING,
-                        json!({ "pr": pr, "base": brief.base }),
-                    )),
+                    // **Every state the engine lets act on a conflict**, not
+                    // `ci-wait` alone (#2311): `decide` reads mergeability above the
+                    // per-state logic, so `gate-check` and `review-wait` take the
+                    // same arc 3 and owe the same row. It is what accounts for the
+                    // hand-back that follows — an `rd-handback` `why:conflict` with
+                    // no `rd-conflicting` above it is a spent `rebase_attempts` a
+                    // §5.4 reader cannot explain, and this row is the one
+                    // `scripts/orch-scorecard.cjs` counts. `fix-wait` is excluded
+                    // for the engine's reason: the rebase is already outstanding
+                    // there, so no arc is taken and there is nothing to account for.
+                    (st, reviewdrive::CiObservation::Conflicting)
+                        if st != reviewdrive::DriveState::FixWait =>
+                    {
+                        out.audits.push((
+                            rddrive::audit_action::CONFLICTING,
+                            json!({ "pr": pr, "base": brief.base }),
+                        ))
+                    }
                     _ => {}
                 }
                 if let Err(bad) = entry.take(&step, now) {

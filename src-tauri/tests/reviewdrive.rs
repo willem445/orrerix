@@ -11252,3 +11252,62 @@ fn a_conflicting_pr_at_gate_check_is_handed_back_for_a_rebase_not_declared_satis
     assert_eq!(status_state(&reg, &group), "held", "the second conflict parks: {s}");
     assert_eq!(s["drives"][0]["held_reason"], json!("rebase-limit"), "{s}");
 }
+
+/// **The same arc from `review-wait`, which is where the hold was WRONG rather
+/// than merely late** (#2311, widened past plan-2504's S4 by the measurement on
+/// #3118).
+///
+/// `decide_review_wait` asks `route_reviewers` first, and routing reads the
+/// changed-file list — which GitHub does not compute for a conflicted head. So a
+/// PR that went CONFLICTING with a lane mid-review parked
+/// `held(routing-unaccountable)`: a notice saying *which reviewers are required
+/// is unknown* about a PR whose actual problem is that it does not merge, and
+/// whose stated remedy (`drive_review` again) re-reads the same unreadable
+/// routing and re-holds. Reading mergeability above the per-state logic reports
+/// the cause instead, and the cause has a hand-back.
+///
+/// The lane is deliberately left mid-review with no verdict, so the ONLY thing
+/// that can move this drive is the conflict.
+#[test]
+fn a_conflicting_pr_in_review_wait_is_handed_back_rather_than_held_on_routing() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _lane) = briefed(&reg, &repo, &gh);
+    assert_eq!(
+        status_state(&reg, &group),
+        "review-wait",
+        "the fixture's premise: a lane is open and has recorded nothing"
+    );
+
+    gh.set_merge_state("CONFLICTING");
+    let report = reg.rd_drive_group_with(&group, &gh, 30_000);
+
+    let s = reg.review_drive_status(&group);
+    assert_eq!(
+        status_state(&reg, &group),
+        "fix-wait",
+        "arc 3 from `review-wait`: the conflict is read before the routing question it makes unanswerable: {s}"
+    );
+    assert_ne!(
+        s["drives"][0]["held_reason"],
+        json!("routing-unaccountable"),
+        "the hold this replaces names a CONSEQUENCE of the conflict, and its remedy reproduces it: {s}"
+    );
+    assert_eq!(s["drives"][0]["counters"]["rebase_attempts"], json!(1), "{s}");
+    assert_eq!(
+        s["drives"][0]["counters"]["review_rounds"],
+        json!(0),
+        "…and no review round is spent: no lane delivered any findings"
+    );
+
+    let (_pr, worker) =
+        report.handbacks.first().cloned().expect("the conflict hand-back resumed a worker pane");
+    let fix = lane_brief(&reg, &worker);
+    assert!(fix.contains("It is CONFLICTING against main."), "{fix}");
+    assert!(
+        !fix.contains("Review requested changes"),
+        "the review-findings arm must not render: no lane recorded anything: {fix}"
+    );
+}

@@ -2231,6 +2231,16 @@ impl OrchRegistry {
         let ci = match brief.ci {
             reviewdrive::CiObservation::Green => "This PR's checks are green at that head.",
             reviewdrive::CiObservation::Red => "This PR's checks are RED at that head. Review the change on its merits; the failure is the worker's to answer.",
+            // **Unreachable through `decide` since #2311, and kept anyway.**
+            // Arc 8 was the one route that briefed a lane on a conflicting PR;
+            // mergeability is now read above the per-state logic, so that tick
+            // hands the worker back instead — which is the better trade, since
+            // reviewing a PR that must be rebased anyway spends a paid round on
+            // a revision that will not survive. The arm stays because the match
+            // is over a closed enum and a future arc could reach `review-wait`
+            // without consulting mergeability again; what stops it coming back
+            // to life unnoticed is `a_conflicting_pr_briefs_no_lane_at_all`,
+            // which performs the counterfactual rather than describing it.
             reviewdrive::CiObservation::Conflicting => "This PR does not merge cleanly at that head. Review the change on its merits; the conflict is the worker's to answer.",
             // Pending and Unknown share one sentence on purpose: §8 says unknown
             // is never reported as a fact about the PR, and not-green-yet is the
@@ -3186,22 +3196,40 @@ impl OrchRegistry {
                 // arc is taken, so a green and a red are separate actions in the
                 // order they were observed (§5.4: a filter looking for the thing
                 // that happened must not match the thing that did not).
-                if entry.state() == reviewdrive::DriveState::CiWait {
-                    match obs.ci {
-                        reviewdrive::CiObservation::Green => out.audits.push((
+                match (entry.state(), obs.ci) {
+                    (reviewdrive::DriveState::CiWait, reviewdrive::CiObservation::Green) => {
+                        out.audits.push((
                             rddrive::audit_action::CI_GREEN,
                             json!({ "pr": pr, "head": brief.head }),
-                        )),
-                        reviewdrive::CiObservation::Red => out.audits.push((
+                        ))
+                    }
+                    (reviewdrive::DriveState::CiWait, reviewdrive::CiObservation::Red) => {
+                        out.audits.push((
                             rddrive::audit_action::CI_RED,
                             json!({ "pr": pr, "head": brief.head, "failing": brief.failing_jobs }),
-                        )),
-                        reviewdrive::CiObservation::Conflicting => out.audits.push((
+                        ))
+                    }
+                    // **Every state the engine lets act on a conflict**, not
+                    // `ci-wait` alone (#2311): `decide` reads mergeability above the
+                    // per-state logic, so `gate-check` and `review-wait` take the
+                    // same arc 3 and owe the same row. It is what accounts for the
+                    // hand-back that follows — an `rd-handback` `why:conflict` with
+                    // no `rd-conflicting` above it is a spent `rebase_attempts` a
+                    // §5.4 reader cannot explain, and this row is the one
+                    // `scripts/orch-scorecard.cjs` counts. `fix-wait` is excluded
+                    // by the same explicit clause the engine uses (`state !=
+                    // FixWait`, not the arc table): the rebase is already
+                    // outstanding there, so no arc is taken and there is nothing
+                    // to account for.
+                    (st, reviewdrive::CiObservation::Conflicting)
+                        if st != reviewdrive::DriveState::FixWait =>
+                    {
+                        out.audits.push((
                             rddrive::audit_action::CONFLICTING,
                             json!({ "pr": pr, "base": brief.base }),
-                        )),
-                        _ => {}
+                        ))
                     }
+                    _ => {}
                 }
                 if let Err(bad) = entry.take(&step, now) {
                     // Unreachable through `decide`, which only proposes arcs the

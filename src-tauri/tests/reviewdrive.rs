@@ -3235,14 +3235,23 @@ fn a_lane_brief_reports_the_ci_it_saw_and_never_asserts_a_green_it_did_not() {
     );
 }
 
-/// The four CI observations `rd_lane_brief` renders, named so a shape pin can
-/// be run against each rather than against whichever one the fixture happened
-/// to produce (#1863 D2).
+/// The CI observations a lane brief can be rendered under, named so a shape pin
+/// can be run against each rather than against whichever one the fixture
+/// happened to produce (#1863 D2).
+///
+/// **`Conflicting` left this list in #2311 and is not an omission.** `decide`
+/// now reads mergeability above the per-state logic, so a conflicting PR takes
+/// arc 3 out of `review-wait` instead of opening a lane there — the one route
+/// that used to brief a reviewer about a conflict. `rd_lane_brief` keeps the
+/// sentence (its match over a closed enum must stay exhaustive), and
+/// `a_conflicting_pr_briefs_no_lane_at_all` is what pins the unreachability,
+/// so the arm cannot come back to life unnoticed. Relocating the witness rather
+/// than relaxing this list is `CLAUDE.md`'s rule about a specimen that has left
+/// the class it witnessed.
 #[derive(Clone, Copy, Debug)]
 enum CiArm {
     Green,
     Red,
-    Conflicting,
     Pending,
 }
 
@@ -3259,7 +3268,7 @@ impl CiArm {
     /// ([`CiArm::sentence`] and `lane_brief_under`), so what this list can go
     /// wrong by is omission or padding, not by silently absorbing a new arm —
     /// and `every_arm_states_a_different_sentence` is what refuses the padding.
-    const ALL: [CiArm; 4] = [CiArm::Green, CiArm::Red, CiArm::Conflicting, CiArm::Pending];
+    const ALL: [CiArm; 3] = [CiArm::Green, CiArm::Red, CiArm::Pending];
 
     /// The sentence this arm must render, verbatim. It is the CONTENT pin that
     /// makes each fixture discriminating: a `Conflicting` fixture that quietly
@@ -3269,7 +3278,6 @@ impl CiArm {
         match self {
             CiArm::Green => "This PR's checks are green at that head.",
             CiArm::Red => "This PR's checks are RED at that head.",
-            CiArm::Conflicting => "This PR does not merge cleanly at that head.",
             CiArm::Pending => {
                 "This PR's checks are not green at that head (orrerix could not read a settled result)."
             }
@@ -3281,7 +3289,7 @@ impl CiArm {
 /// brief.
 ///
 /// **`Green` is the only arm with a direct route**, because `ci-wait` leaves for
-/// `review-wait` on green and on nothing else. The other three reach a lane
+/// `review-wait` on green and on nothing else. The other two reach a lane
 /// through **arc 8**: a red CI hands the PR back, the worker reports `done`
 /// WITHOUT pushing, and `fix-wait -> review-wait` is taken without consulting
 /// `facts.ci` at all — the "that failure was unrelated" turn. That is the one
@@ -3337,7 +3345,6 @@ fn lane_brief_under(arm: CiArm) -> String {
         CiArm::Green => {}
         // The red payload set for the hand-back is already what this arm wants.
         CiArm::Red => {}
-        CiArm::Conflicting => gh.set_merge_state("CONFLICTING"),
         CiArm::Pending => gh.set_checks(r#"[{"name":"build","state":"IN_PROGRESS","link":"x"}]"#),
     }
     let opened = reg.rd_drive_group_with(&group, &gh, 30_000);
@@ -3364,15 +3371,22 @@ fn lane_brief_under(arm: CiArm) -> String {
 /// `FakeGh::green(HEAD_A)`, so `brief.ci` was `Green` — the one short literal
 /// that never had the defect. The `\n` plus seventeen spaces lived in the `Red`,
 /// `Conflicting` and `Pending`/`Unknown` arms exclusively, so a regression on
-/// the three arms that carry the risk would have shipped under a green test
-/// whose own doc said it existed to catch it. That is #1344's rule pointed at a
-/// test rather than at a guard: a green is evidence about the POPULATION it ran
+/// the arms that carry the risk would have shipped under a green test whose own
+/// doc said it existed to catch it. That is #1344's rule pointed at a test
+/// rather than at a guard: a green is evidence about the POPULATION it ran
 /// over, never about the property.
 ///
+/// **The population is three since #2311**, not because the risk went away but
+/// because the `Conflicting` arm is no longer reachable: a conflicting PR takes
+/// arc 3 out of `review-wait` and never opens a lane. Its sentence still exists
+/// in `rd_lane_brief` and is pinned unreachable by
+/// `a_conflicting_pr_briefs_no_lane_at_all`, so nothing about the defect class
+/// is un-witnessed — what moved is which test witnesses it.
+///
 /// Each arm also asserts its own sentence verbatim, which is what stops the
-/// widened population from being four runs of one fixture: a route that silently
-/// produced the `Green` sentence under `CiArm::Conflicting` passes every shape
-/// assertion and fails the content one.
+/// widened population from being three runs of one fixture: a route that
+/// silently produced the `Green` sentence under `CiArm::Pending` passes every
+/// shape assertion and fails the content one.
 ///
 /// Both shape halves are checked. A hard break is the obvious form; a run of ten
 /// spaces is the one a collapsed `\` continuation leaves behind, with no newline
@@ -3436,7 +3450,7 @@ fn a_lane_brief_is_one_paragraph_per_sentence() {
         CiArm::ALL.len(),
         "every CI arm must have been rendered AND checked, not merely enumerated"
     );
-    assert_eq!(arms_checked, 4, "…and the population is the four the note names");
+    assert_eq!(arms_checked, 3, "…and the population is the three still reachable (#2311)");
 }
 
 /// The guard on [`CiArm::ALL`] itself: it can go wrong by omission, and padding
@@ -3559,18 +3573,15 @@ fn a_conflicting_pr_is_classified_through_the_seam_and_the_checks_call_is_skippe
     // ── CONFLICTING, with the SAME green checks payload ─────────────────────
     gh.set_merge_state("CONFLICTING");
     gh.set_facts("OPEN", HEAD_B);
-    reg.rd_drive_group_with(&group, &gh, 20_000);
-    assert_eq!(
-        status_state(&reg, &group),
-        "ci-wait",
-        "arc 6: the head moved under the lane, which is what returns the drive to the state \
-         the conflict is read in"
-    );
 
+    // **One tick, not two, since #2311.** The head moved as well, so this used
+    // to take arc 6 back to `ci-wait` and read the conflict on the tick after.
+    // `decide` now reads mergeability above the per-state logic, so the arc-6
+    // return is never taken and the hand-back happens on THIS tick — same
+    // destination, same counter, one tick and one `gh` round-trip earlier.
     let checks_before = gh.checks_calls();
     let audits_before = audit_actions(&reg, &group).len();
-    let report = reg.rd_drive_group_with(&group, &gh, 30_000);
-
+    let report = reg.rd_drive_group_with(&group, &gh, 20_000);
     assert_eq!(
         gh.checks_calls(),
         checks_before,
@@ -3580,7 +3591,8 @@ fn a_conflicting_pr_is_classified_through_the_seam_and_the_checks_call_is_skippe
     assert_eq!(
         status_state(&reg, &group),
         "fix-wait",
-        "arc 3: a conflict is a hand-back for a rebase"
+        "arc 3: a conflict is a hand-back for a rebase — taken here rather than after the \
+         arc-6 return to `ci-wait` this moved head would otherwise have caused"
     );
 
     let mut all = audit_actions(&reg, &group);
@@ -11157,4 +11169,236 @@ fn a_drive_record_orrerix_cannot_read_refuses_the_kill_rather_than_admitting_it(
          evidence that nothing is driven. A `null` there is the same mistake on the roster \
          the refusal is derived from."
     );
+}
+
+/// **A CONFLICTING PR is never `satisfied`, even with every lane passed and the
+/// gate agreeing** (#2311) — the seam half of the engine's pins, driven through
+/// the real tick.
+///
+/// The fixture is the measured incident (§1(d), #2942): a drive whose lanes
+/// reviewed a clean PR and whose base moved under it, so mergeability turns
+/// CONFLICTING while the drive sits in `gate-check`. Before this the drive
+/// answered GATE SATISFIED, and the cost was paid outside the driver — a hand
+/// rebase, a re-drive at `rounds_already_spent 3`, two fresh whole-diff lanes,
+/// about ten minutes of cap starvation and three orchestrator turns.
+///
+/// It reuses `at_gate_check_holding_both_panes` rather than sequencing its own
+/// ticks, so the premise "this drive really is one tick short of `satisfied`" is
+/// the one that fixture already asserts.
+///
+/// Three things are asserted together because each alone has a passing
+/// implementation that is wrong: the STATE (a drive that merely waited would
+/// also not be `satisfied`), the COUNTER (a conflict misread as a red run
+/// reaches `fix-wait` too, so only `rebase_attempts` discriminates the arc), and
+/// the BRIEF (the worker must be told to rebase, not sent to findings that do
+/// not exist).
+#[test]
+fn a_conflicting_pr_at_gate_check_is_handed_back_for_a_rebase_not_declared_satisfied() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _worker, _lane, _session) = at_gate_check_holding_both_panes(&reg, &repo, &gh);
+    let before = reg.review_drive_status(&group);
+    assert_eq!(
+        before["drives"][0]["counters"]["rebase_attempts"],
+        json!(0),
+        "the fixture's premise: no rebase has been asked for yet: {before}"
+    );
+
+    // The base moves under the drive. Nothing else changes: same head, same
+    // body, the same recorded pass — so the gate still says SATISFIED and
+    // mergeability is the only thing that can have decided what follows.
+    gh.set_merge_state("CONFLICTING");
+    let audits_before = audit_actions(&reg, &group).len();
+    let report = reg.rd_drive_group_with(&group, &gh, 90_000);
+
+    let s = reg.review_drive_status(&group);
+    assert_eq!(
+        status_state(&reg, &group),
+        "fix-wait",
+        "arc 3 from `gate-check`: a conflicting PR is handed back, not declared satisfied: {s}"
+    );
+    assert_eq!(
+        s["drives"][0]["counters"]["rebase_attempts"],
+        json!(1),
+        "the REBASE budget is what a conflict spends — a red run reaches `fix-wait` too, so the state alone does not say which arc was taken: {s}"
+    );
+
+    let mut all = audit_actions(&reg, &group);
+    let after = all.split_off(audits_before);
+    assert!(
+        after.iter().any(|a| a == "rd-conflicting"),
+        "the tick that classified the conflict must say so in the audit, or the `rd-handback why:conflict` beside it accounts for nothing (§5.4): {after:?}"
+    );
+    assert!(
+        !after.iter().any(|a| a == "rd-satisfied"),
+        "…and it must not ALSO have declared the gate satisfied: {after:?}"
+    );
+
+    let (_pr, worker) =
+        report.handbacks.first().cloned().expect("the conflict hand-back resumed a worker pane");
+    let fix = lane_brief(&reg, &worker);
+    assert!(
+        fix.contains("It is CONFLICTING against main."),
+        "the hand-back must name the conflict — the brief is keyed on the observation, so the arm that renders here is the same one `ci-wait` renders: {fix}"
+    );
+    assert!(
+        !fix.contains("Review requested changes"),
+        "…and NOT the review-findings arm, which would send the worker to findings that do not exist: {fix}"
+    );
+}
+
+/// **The same arc from `review-wait`, which is where the hold was WRONG rather
+/// than merely late** (#2311, widened past plan-2504's S4 by the measurement on
+/// #3118).
+///
+/// `decide_review_wait` asks `route_reviewers` first, and routing reads the
+/// changed-file list — which GitHub does not compute for a conflicted head. So a
+/// PR that went CONFLICTING with a lane mid-review parked
+/// `held(routing-unaccountable)`: a notice saying *which reviewers are required
+/// is unknown* about a PR whose actual problem is that it does not merge, and
+/// whose stated remedy (`drive_review` again) re-reads the same unreadable
+/// routing and re-holds. Reading mergeability above the per-state logic reports
+/// the cause instead, and the cause has a hand-back.
+///
+/// The lane is deliberately left mid-review with no verdict, so the ONLY thing
+/// that can move this drive is the conflict.
+#[test]
+fn a_conflicting_pr_in_review_wait_is_handed_back_rather_than_held_on_routing() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _lane) = briefed(&reg, &repo, &gh);
+    assert_eq!(
+        status_state(&reg, &group),
+        "review-wait",
+        "the fixture's premise: a lane is open and has recorded nothing"
+    );
+
+    gh.set_merge_state("CONFLICTING");
+    let report = reg.rd_drive_group_with(&group, &gh, 30_000);
+
+    let s = reg.review_drive_status(&group);
+    assert_eq!(
+        status_state(&reg, &group),
+        "fix-wait",
+        "arc 3 from `review-wait`: the conflict is read before the routing question it makes unanswerable: {s}"
+    );
+    assert_ne!(
+        s["drives"][0]["held_reason"],
+        json!("routing-unaccountable"),
+        "the hold this replaces names a CONSEQUENCE of the conflict, and its remedy reproduces it: {s}"
+    );
+    assert_eq!(s["drives"][0]["counters"]["rebase_attempts"], json!(1), "{s}");
+    assert_eq!(
+        s["drives"][0]["counters"]["review_rounds"],
+        json!(0),
+        "…and no review round is spent: no lane delivered any findings"
+    );
+
+    let (_pr, worker) =
+        report.handbacks.first().cloned().expect("the conflict hand-back resumed a worker pane");
+    let fix = lane_brief(&reg, &worker);
+    assert!(fix.contains("It is CONFLICTING against main."), "{fix}");
+    assert!(
+        !fix.contains("Review requested changes"),
+        "the review-findings arm must not render: no lane recorded anything: {fix}"
+    );
+}
+
+/// **A conflicting PR briefs NO lane, on the one route that used to** (#2311) —
+/// the pin that keeps `CiArm`'s dropped arm honest.
+///
+/// `rd_lane_brief` still carries a CONFLICTING sentence, and its match over a
+/// closed enum must, so nothing about that arm's existence says whether a
+/// reviewer can ever receive it. The route that could was arc 8: `fix-wait ->
+/// review-wait` on a `report(done)` at an unchanged head, taken **without**
+/// consulting `facts.ci`, so the next tick opened a lane and told a reviewer to
+/// review a PR that does not merge on its merits. `decide` now reads
+/// mergeability above the per-state logic, so that tick hands the worker back
+/// instead — a paid review round saved on a PR that must be rebased anyway.
+///
+/// This is a counterfactual, so it is asserted by PERFORMING it rather than by
+/// describing it: the identical fixture with the mergeability left CLEAN is the
+/// positive control, and it must open a lane. Without that control "no lane
+/// opened" is satisfied by a fixture that never reached `review-wait` at all.
+#[test]
+fn a_conflicting_pr_briefs_no_lane_at_all() {
+    for conflicting in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, _session) = driven(&reg, &repo, &gh);
+
+        // A red CI hands the PR back before any lane has opened.
+        gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+        let handed = reg.rd_drive_group_with(&group, &gh, 10_000);
+        let (_pr, worker) =
+            handed.handbacks.first().cloned().expect("a red CI hands the PR back");
+        assert_eq!(status_state(&reg, &group), "fix-wait");
+
+        // The worker reports done WITHOUT pushing, so arc 8 is what answers and
+        // the drive reaches `review-wait` at a head whose CI is not green.
+        dispatch(
+            &reg,
+            &Caller {
+                agent_id: worker.clone(),
+                group: group.clone(),
+                role: Role::Worker,
+                role_hint: None,
+            },
+            "tools/call",
+            &json!({ "name": "report", "arguments": {
+                "status": "done", "summary": "that failure was unrelated" } }),
+        )
+        .expect("the driven worker reports");
+        reg.rd_drive_group_with(&group, &gh, 20_000);
+        assert_eq!(
+            status_state(&reg, &group),
+            "review-wait",
+            "the fixture's premise: arc 8 reaches review-wait at an unchanged head"
+        );
+
+        // The ONE thing that differs between the two runs.
+        if conflicting {
+            gh.set_merge_state("CONFLICTING");
+        }
+        let opened = reg.rd_drive_group_with(&group, &gh, 30_000);
+
+        if conflicting {
+            assert!(
+                opened.lanes_opened.is_empty(),
+                "a conflicting PR must not have a reviewer briefed on it: {:?}",
+                opened.lanes_opened
+            );
+            assert_eq!(
+                status_state(&reg, &group),
+                "fix-wait",
+                "…and what it does instead is hand the worker back for the rebase"
+            );
+            let s = reg.review_drive_status(&group);
+            assert_eq!(s["drives"][0]["counters"]["rebase_attempts"], json!(1), "{s}");
+        } else {
+            // The positive control: the same fixture, CLEAN, DOES open a lane —
+            // so the emptiness above is the conflict and not a walk that never
+            // got here.
+            let (_pr, _b, lane) = opened
+                .lanes_opened
+                .first()
+                .cloned()
+                .expect("the control: a CLEAN PR at this point opens its lane");
+            let brief = lane_brief(&reg, &lane);
+            assert!(
+                brief.contains("This PR's checks are RED at that head."),
+                "…and briefs the reviewer with the CI it observed: {brief}"
+            );
+            assert!(
+                !brief.contains("does not merge cleanly"),
+                "…which is not the conflict sentence: {brief}"
+            );
+        }
+    }
 }

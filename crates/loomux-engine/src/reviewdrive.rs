@@ -476,9 +476,10 @@ impl fmt::Display for InvalidTransition {
 /// arc §2 never named does not fail as a documentation gap, it fails at
 /// runtime, on the degradation path, where nothing is watching.
 ///
-/// Thirteen arc *rows* are nineteen legal `(from, to)` pairs, because two rows
-/// are written over a set of froms — arc 12 (`-> held`) over the four working
-/// and gate states, arc 13 (`-> cancelled`) over all five non-terminals. Both
+/// Thirteen arc *rows* are twenty legal `(from, to)` pairs, because three rows
+/// are written over a set of froms — arc 3 (`-> fix-wait` on a conflict) over
+/// `ci-wait` and `gate-check`, arc 12 (`-> held`) over the four working
+/// and gate states, arc 13 (`-> cancelled`) over all five non-terminals. All
 /// are spelled here as explicit variant lists rather than as a predicate like
 /// `!from.is_terminal()`: the two spellings coincide today, and the enumerated
 /// one is what makes an eighth state a compile-time decision instead of
@@ -504,11 +505,18 @@ pub fn transition(from: DriveState, to: DriveState) -> Result<DriveState, Invali
     let ok = match (from, to) {
         // 2. Checks green (§2.1).
         (CiWait, ReviewWait) => true,
-        // 3. Checks red, or CONFLICTING (§2.1, §8).
-        (CiWait, FixWait) => true,
+        // 3. Checks red, or CONFLICTING (§2.1) — and CONFLICTING from
+        //    `gate-check` as well since #2311, which is the whole of what makes
+        //    `satisfied` mean "gated AND mergeable". Red is a `ci-wait`
+        //    observation only: this state does not read the check matrix.
+        (CiWait | GateCheck, FixWait) => true,
         // 4. The last required lane passed at (head, digest).
         (ReviewWait, GateCheck) => true,
-        // 5. A lane recorded `fail` (§2.1).
+        // 5. A lane recorded `fail` (§2.1) — and, since #2311, the pair arc 3
+        //    also uses when this state observes a CONFLICTING PR. One pair, two
+        //    arcs: what tells them apart is the counter each spends, which is
+        //    what `a_conflicting_pr_takes_the_rebase_arc_from_every_state_that_can`
+        //    asserts.
         (ReviewWait, FixWait) => true,
         // 6. The head moved under a lane mid-review (§8 row 4). The verdict
         //    that lands binds to the old head; a `fail` there still routes, a
@@ -3593,7 +3601,15 @@ pub fn first_stale_lane(required: &[LaneFact], head: &str, body_digest: Option<&
 ///    Below the age for the reason argued at the line itself: both are past
 ///    only for a drive resumed out of a very long park, where the twelve-hour
 ///    figure is the more important of the two.
-/// 6. Then the state's own logic.
+/// 6. **A CONFLICTING PR takes arc 3, from every state that can leave for
+///    `fix-wait`** (#2311) — argued at the line itself. It is a fact about the
+///    PR rather than about the wait, so it outranks each state's own reading:
+///    at `gate-check` the gate's own `satisfied`, and at `review-wait` the
+///    routing question, which cannot be answered for a conflicted head at all
+///    (no changed-file list) and therefore reports a CONSEQUENCE of the
+///    conflict as if it were an independent fact. Below the bounds above,
+///    which are about the drive rather than the PR.
+/// 7. Then the state's own logic.
 pub fn decide(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> DriveStep {
     let state = entry.state();
     if state.is_terminal() || state.is_parked() {
@@ -3695,9 +3711,18 @@ fn decide_ci_wait(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) 
                 DriveStep::spend(DriveState::FixWait, Counter::CiAttempts)
             }
         }
-        // Arc 3 again: a conflict is a hand-back for a rebase, on its own
-        // counter. §2.2's `rebase-limit` is "a second conflict after the one
-        // rebase hand-back", which is [`counter_exhausted`]'s ordering.
+        // Arc 3 again — **answered by [`decide`] before this function is
+        // reached** (#2311), which is why it is not a second ladder here: a
+        // conflict is a fact about the PR, so every state that can act on one
+        // acts through the same rule, with the same counter and the same
+        // `held(rebase-limit)`. Kept as an explicit arm rather than folded
+        // into the catch-all because the enum is closed and §2.1 forbids a
+        // catch-all; `Wait` is what it degrades to if a caller ever reaches
+        // this function directly, which is the conservative direction.
+        //
+        // `Pending`/`Unknown` are neither an answer nor a reason to move. §8:
+        // unknown is never treated as safe, and it is never treated as a fact
+        // about the PR either.
         CiObservation::Conflicting => {
             if counter_exhausted(entry.counters.rebase_attempts, limits.max_rebase_attempts) {
                 DriveStep::held(HeldReason::RebaseLimit)
@@ -3705,8 +3730,6 @@ fn decide_ci_wait(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) 
                 DriveStep::spend(DriveState::FixWait, Counter::RebaseAttempts)
             }
         }
-        // Neither an answer nor a reason to move. §8: unknown is never treated
-        // as safe, and it is never treated as a fact about the PR either.
         CiObservation::Pending | CiObservation::Unknown => DriveStep::Wait,
     }
 }
@@ -4664,7 +4687,7 @@ mod tests {
 
     // ── §2.1 the enumerated transition table ────────────────────────────────
 
-    /// The nineteen legal `(from, to)` pairs §2.1's thirteen arc rows name.
+    /// The twenty legal `(from, to)` pairs §2.1's thirteen arc rows name.
     /// Written out as data so the test below can assert the machine's legal set
     /// is *exactly* this: "get all 13, and add none the note does not name" is
     /// two claims, and a table of only-the-legal-ones would check one.
@@ -4673,6 +4696,7 @@ mod tests {
         vec![
             (CiWait, ReviewWait),     // 2
             (CiWait, FixWait),        // 3
+            (GateCheck, FixWait),     // 3, CONFLICTING at gate-check (#2311)
             (ReviewWait, GateCheck),  // 4
             (ReviewWait, FixWait),    // 5
             (ReviewWait, CiWait),     // 6
@@ -4696,7 +4720,7 @@ mod tests {
     #[test]
     fn the_transition_table_is_exactly_the_notes_arcs() {
         let expected = expected_legal_pairs();
-        assert_eq!(expected.len(), 19, "13 arc rows are 19 (from, to) pairs");
+        assert_eq!(expected.len(), 20, "13 arc rows are 20 (from, to) pairs");
         let mut actual = Vec::new();
         for from in DriveState::ALL {
             for to in DriveState::ALL {
@@ -4722,7 +4746,7 @@ mod tests {
                 pair.1.as_str()
             );
         }
-        assert_eq!(actual.len(), 19);
+        assert_eq!(actual.len(), 20);
     }
 
     #[test]
@@ -7447,6 +7471,187 @@ mod tests {
         // Nothing was evaluated, so nothing is known — and in particular this
         // is not `satisfied`.
         assert_eq!(with(GateOutcome::NotEvaluated), DriveStep::Wait);
+    }
+
+    /// **The bounds and the `messaged` hold outrank a conflict** — the ordering
+    /// `decide` states in prose, asserted (#2311 review round 2).
+    ///
+    /// A precedence written in a comment and pinned nowhere is a claim about the
+    /// order of two `if`s, and any edit reverses it silently: every one of these
+    /// facts reaches `decide` on the same tick, so which answer comes back is
+    /// decided by line order alone.
+    ///
+    /// The direction matters. A drive already past its clock is not made young
+    /// by a rebase, and `message_orchestrator` is a delegate's own words already
+    /// in the pane — reporting a rebase hand-back instead of either would be a
+    /// notice that does not account for what actually stopped the drive.
+    #[test]
+    #[ignore]
+    fn the_bounds_and_the_messaged_hold_outrank_a_conflict() {
+        let limits = DriveLimits::default();
+        let conflict = |e: &DriveEntry, f: DriveFacts| decide(e, &f, &limits);
+
+        // The positive control FIRST, so every refusal below is a difference:
+        // on these facts, minus the thing under test, the conflict wins.
+        let mut fresh = entry_at(DriveState::GateCheck);
+        fresh.head = "head-a".into();
+        let base = || DriveFacts { ci: CiObservation::Conflicting, ..facts_at("head-a") };
+        assert_eq!(
+            conflict(&fresh, base()),
+            DriveStep::spend(DriveState::FixWait, Counter::RebaseAttempts),
+            "the control: a conflict on an otherwise healthy drive IS the rebase arc"
+        );
+
+        // 3. `messaged` outranks it.
+        assert_eq!(
+            conflict(&fresh, DriveFacts { messaged: true, ..base() }),
+            DriveStep::held(HeldReason::Messaged)
+        );
+
+        // 2. A positively-closed PR outranks it — a PR that is gone has nothing
+        //    to rebase onto.
+        assert_eq!(
+            conflict(&fresh, DriveFacts { pr_open: Some(false), ..base() }),
+            DriveStep::to(DriveState::Cancelled)
+        );
+
+        // 4. The drive's AGE outranks it.
+        let aged = DriveFacts {
+            now_ms: 1_000 + minutes_ms(limits.drive_timeout_minutes),
+            ..base()
+        };
+        assert_eq!(conflict(&fresh, aged), DriveStep::held(HeldReason::DriveStalled));
+
+        // 5. Time in THIS state outranks it. Under the age bound, so the answer
+        //    is this clock and not the backstop above.
+        let bound = state_bound_ms(DriveState::GateCheck, &limits, 0).expect("gate-check is bounded");
+        let stuck = DriveFacts { now_ms: 1_000 + bound, ..base() };
+        assert!(
+            bound < minutes_ms(limits.drive_timeout_minutes),
+            "the fixture's premise: the state bound must fire before the age backstop"
+        );
+        assert_eq!(conflict(&fresh, stuck), DriveStep::held(HeldReason::StateStalled));
+
+        // …and the empty-head guard, which is "we could not read this PR at
+        // all" — below the bounds, still above the conflict.
+        assert_eq!(
+            conflict(&fresh, DriveFacts { head: String::new(), ..base() }),
+            DriveStep::Wait
+        );
+
+        // A terminal or parked entry still yields `Wait`, conflict or not: the
+        // tick does not move a drive `drive_review` owns.
+        for st in [DriveState::Held, DriveState::Satisfied, DriveState::Cancelled] {
+            let mut e = entry_at(st);
+            e.head = "head-a".into();
+            assert_eq!(conflict(&e, base()), DriveStep::Wait, "{}", st.as_str());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn a_conflicting_pr_takes_the_rebase_arc_from_every_state_that_can() {
+        // #2311, widened past the plan's `gate-check` scope by the measurement
+        // on #3118: routing needs a changed-file list, GitHub computes none for
+        // a conflicted head, so `review-wait` answered `routing-unaccountable`
+        // — a hold naming a CONSEQUENCE of the conflict, whose remedy
+        // (`drive_review` again) reproduces it.
+        let limits = DriveLimits::default();
+        // Each state paired with the answer it gives on the SAME facts minus
+        // the conflict — which is not one answer, because `ci-wait` never
+        // reads routing at all. Written per state so the control is that
+        // state's own strongest other answer rather than a shared shape.
+        for (st, without_the_conflict) in [
+            (DriveState::CiWait, DriveStep::Wait),
+            (DriveState::ReviewWait, DriveStep::held(HeldReason::RoutingUnaccountable)),
+            (DriveState::GateCheck, DriveStep::held(HeldReason::RoutingUnaccountable)),
+        ] {
+            let mut e = entry_at(st);
+            e.head = "head-a".into();
+            let facts = DriveFacts {
+                ci: CiObservation::Conflicting,
+                // Everything else set so that any state reading it would
+                // answer something ELSE — the gate says SATISFIED and routing
+                // says nothing at all — which is what makes the assertion below
+                // a difference rather than a shape that holds either way.
+                gate: GateOutcome::Satisfied,
+                required_lanes: None,
+                ..facts_at("head-a")
+            };
+            assert_eq!(
+                decide(&e, &facts, &limits),
+                DriveStep::spend(DriveState::FixWait, Counter::RebaseAttempts),
+                "{}: a conflicting PR is a rebase hand-back, not this state's own answer",
+                st.as_str()
+            );
+            // The control: with the mergeability the ONLY thing changed, each
+            // state gives the answer that must not have won above.
+            assert_eq!(
+                decide(&e, &DriveFacts { ci: CiObservation::Pending, ..facts.clone() }, &limits),
+                without_the_conflict,
+                "{}: the control — without the conflict this state answers for itself",
+                st.as_str()
+            );
+            // …and the second conflict parks, on the same counter `ci-wait` has
+            // always spent (`counter_exhausted`'s ordering).
+            let mut spent = e.clone();
+            spent.counters.rebase_attempts = limits.max_rebase_attempts;
+            assert_eq!(
+                decide(&spent, &facts, &limits),
+                DriveStep::held(HeldReason::RebaseLimit),
+                "{}",
+                st.as_str()
+            );
+            // The machine really accepts the arc: a step `decide` proposes and
+            // `transition` refuses fails at runtime, on the degradation path.
+            assert!(transition(st, DriveState::FixWait).is_ok(), "{}", st.as_str());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn fix_wait_is_the_one_state_a_conflict_does_not_divert() {
+        // A rebase hand-back is already outstanding there — `(fix-wait,
+        // fix-wait)` is not a transition, and spending a second
+        // `rebase_attempts` on the conflict the worker was just asked to fix
+        // would park `rebase-limit` before it could push.
+        let limits = DriveLimits::default();
+        let mut e = entry_at(DriveState::FixWait);
+        e.head = "head-a".into();
+        let facts = DriveFacts { ci: CiObservation::Conflicting, ..facts_at("head-a") };
+        assert_eq!(decide(&e, &facts, &limits), DriveStep::Wait);
+        assert!(transition(DriveState::FixWait, DriveState::FixWait).is_err());
+        // And the worker's own signals still decide the state, unchanged by the
+        // mergeability beside them — the positive control for "this state was
+        // reached at all".
+        assert_eq!(
+            decide(&e, &DriveFacts { worker: WorkerSignal::Done, ..facts }, &limits),
+            DriveStep::to(DriveState::ReviewWait)
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn an_unreadable_or_unevaluated_mergeability_is_never_a_conflict() {
+        // §8: an unknown is never a fact about the PR. Each state still gives
+        // its own answer, both ways, so neither reading is "it waits anyway".
+        let limits = DriveLimits::default();
+        let mut e = entry_at(DriveState::GateCheck);
+        e.head = "head-a".into();
+        for ci in [CiObservation::Pending, CiObservation::Unknown, CiObservation::Green] {
+            for (gate, want) in [
+                (GateOutcome::Satisfied, DriveStep::to(DriveState::Satisfied)),
+                (GateOutcome::Unsatisfied, DriveStep::to(DriveState::CiWait)),
+                (GateOutcome::Unreadable, DriveStep::held(HeldReason::GateUnreadable)),
+                (GateOutcome::NotEvaluated, DriveStep::Wait),
+            ] {
+                assert_eq!(
+                    decide(&e, &DriveFacts { ci, gate, ..facts_at("head-a") }, &limits),
+                    want,
+                    "{ci:?} at gate-check must leave the gate to answer"
+                );
+            }
+        }
     }
 
     // ── the two carried-over gate properties (§2.1) ─────────────────────────

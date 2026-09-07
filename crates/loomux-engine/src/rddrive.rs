@@ -786,6 +786,7 @@ pub fn satisfied_notice(
     lanes: &[LaneNotice],
     counters: &Counters,
     panes: &[(String, DrivenRole)],
+    released_worker_session: &str,
 ) -> String {
     let verdicts = lanes
         .iter()
@@ -805,7 +806,11 @@ pub fn satisfied_notice(
     };
     let body = short_digest(body_digest);
     let body = if body.is_empty() { String::new() } else { format!(" (body {body})") };
-    let panes = panes_clause(panes, PaneStanding::Released);
+    let panes = format!(
+        "{}{}",
+        released_worker_clause(released_worker_session),
+        panes_clause(panes, PaneStanding::Released)
+    );
     format!(
         "[orrerix] review drive PR #{pr}: GATE SATISFIED at {}{body} — {verdicts}; \
          {} review rounds, {} CI runs, {} rebases.{open}{panes} Disposition is yours \
@@ -1184,15 +1189,52 @@ pub fn fix_kickback_notice(pr: u64) -> String {
 }
 
 /// §2.2's `cancelled` exit.
-pub fn cancelled_notice(pr: u64, why: CancelCause, panes: &[(String, DrivenRole)]) -> String {
+pub fn cancelled_notice(
+    pr: u64,
+    why: CancelCause,
+    panes: &[(String, DrivenRole)],
+    released_worker_session: &str,
+) -> String {
     let clause = match why {
         CancelCause::Tool => "cancel_review_drive".to_string(),
         CancelCause::PrGone => "the PR is closed or merged — positively established, \
                                 not inferred from a lookup that failed"
             .to_string(),
     };
-    let panes = panes_clause(panes, PaneStanding::Released);
+    let panes = format!(
+        "{}{}",
+        released_worker_clause(released_worker_session),
+        panes_clause(panes, PaneStanding::Released)
+    );
     format!("[orrerix] review drive PR #{pr}: CANCELLED — {clause}. Its counters are gone; a fresh drive_review starts a new drive.{panes}")
+}
+
+/// **The worker pane a terminal exit released by KILLING it, named by the one
+/// thing that survives it** (#2811 S1) — its session.
+///
+/// [`panes_clause`] lists what is still THERE; this names what is not, and the
+/// two are complementary rather than alternatives. The distinction is the whole
+/// of the measured saving: before #2811 S1 the satisfied notice named the worker
+/// pane for the orchestrator to kill, and it did — in the same second it started
+/// the next drive, 4 times in one session — after which the next hand-back had
+/// to spawn a fresh pane. The driver now does the kill itself, one tick earlier
+/// and without an orchestrator turn, so what the notice owes the reader is not a
+/// pane id it can no longer use but the handle it can: `spawn_agent(resume:)` on
+/// the session brings the same conversation back whenever it is wanted.
+///
+/// The session id is sanitized like every other fact that reaches a pane (§5.5)
+/// even though it is loomux-generated: the rule is about the SURFACE, not about
+/// which values happen to be trustworthy today. Empty renders as nothing at all,
+/// so an exit that released no worker says nothing about one — the same silence
+/// [`panes_clause`] keeps for an empty list, and for the same reason.
+pub fn released_worker_clause(session: &str) -> String {
+    if session.trim().is_empty() {
+        return String::new();
+    }
+    format!(
+        " The worker pane was released; worker session {} resumes with spawn_agent(resume:).",
+        crate::notify::sanitize_pane_text(session, 64, crate::notify::Lines::Collapse),
+    )
 }
 
 /// Why a drive ended at `cancelled` (§2.2's last row).
@@ -1233,10 +1275,11 @@ pub enum PaneStanding {
 ///
 /// **Every pane in this list is one the drive still HOLDS at the exit, and none
 /// of them was killed by it.** That is a narrower sentence than it used to be:
-/// §3.1 item 5 forbade the driver killing a pane at all, and since #2501 it
-/// forbids all but two states — a lane whose verdict is recorded at the drive's
-/// current head, and a worker that reported and went idle after the drive
-/// consumed the report. A pane released that way is DEAD and its slot is already
+/// §3.1 item 5 forbade the driver killing a pane at all; since #2501 it forbids
+/// all but a lane whose verdict is recorded at the drive's current head and a
+/// worker that reported and went idle after the drive consumed the report, and
+/// since #2811 S1 all but those two plus either of them at the step that ENDS the
+/// drive. A pane released any of those ways is DEAD and its slot is already
 /// free, so [`crate::reviewdrive::DriveEntry::release_pane`] drops it from the
 /// record and it is not in this list at all. What is left is exactly what the
 /// two sentences below promise: panes that are still running, for the
@@ -1260,7 +1303,17 @@ pub enum PaneStanding {
 ///
 /// One clause for all three exits, with the one difference between them stated:
 /// a `held` drive still OWNS its panes, a `satisfied` or `cancelled` one has
-/// RELEASED them. Empty renders as nothing at all rather than as "0 panes" — a
+/// RELEASED them.
+///
+/// **Since #2811 S1 a terminal exit usually has fewer panes to name here**, because
+/// the tick that ends the drive first performs every release
+/// [`crate::reviewdrive::releasable`] allows at a terminal step — so what
+/// reaches this list is what the barrier REFUSED (a pane still mid-turn, one
+/// already gone) plus anything the rules do not cover, which is precisely the
+/// set an orchestrator still has a decision to make about. The clause's promise
+/// is unchanged and stays true of exactly the panes it names: they are still
+/// running and the drive did not kill them. What the drive DID kill is named by
+/// [`released_worker_clause`], by session rather than by pane. Empty renders as nothing at all rather than as "0 panes" — a
 /// drive that ended before it opened anything has nothing to disclose.
 pub fn panes_clause(panes: &[(String, DrivenRole)], standing: PaneStanding) -> String {
     if panes.is_empty() {
@@ -1470,7 +1523,8 @@ mod tests {
             at_head: HEAD.into(),
         }];
         let panes = vec![("w-1715".to_string(), DrivenRole::Worker)];
-        let n = satisfied_notice(1758, HEAD, "3f1abbcc", &lanes, &Counters::default(), &panes);
+        let n =
+            satisfied_notice(1758, HEAD, "3f1abbcc", &lanes, &Counters::default(), &panes, "");
         assert!(n.starts_with("[orrerix] review drive PR #1758: GATE SATISFIED at df6a73d0"));
         assert!(n.contains("(body 3f1a..)"));
         assert!(
@@ -1483,7 +1537,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_body_prints_no_digest_rather_than_a_wrong_one() {
-        let n = satisfied_notice(1758, HEAD, "", &[], &Counters::default(), &[]);
+        let n = satisfied_notice(1758, HEAD, "", &[], &Counters::default(), &[], "");
         assert!(!n.contains("(body"), "an unknown digest is absent, never rendered: {n}");
         assert!(
             !n.contains("Panes this drive"),
@@ -1572,9 +1626,9 @@ mod tests {
             ("rev-1714".to_string(), DrivenRole::Lane("rev-std".into())),
         ];
         for n in [
-            cancelled_notice(1870, CancelCause::Tool, &panes),
-            cancelled_notice(1870, CancelCause::PrGone, &panes),
-            satisfied_notice(1870, HEAD, "", &[], &Counters::default(), &panes),
+            cancelled_notice(1870, CancelCause::Tool, &panes, ""),
+            cancelled_notice(1870, CancelCause::PrGone, &panes, ""),
+            satisfied_notice(1870, HEAD, "", &[], &Counters::default(), &panes, ""),
         ] {
             for p in ["w-1715 (worker)", "w-1716 (worker)", "rev-1714 (rev-std)"] {
                 assert!(n.contains(p), "an exit must name {p}: {n}");
@@ -1588,7 +1642,15 @@ mod tests {
         // The negative control on the other side of the same function: an empty
         // list is silence, so the assertions above are not matching boilerplate
         // the clause emits unconditionally.
-        assert!(!cancelled_notice(1870, CancelCause::Tool, &[]).contains("Panes this drive"));
+        assert!(!cancelled_notice(1870, CancelCause::Tool, &[], "").contains("Panes this drive"));
+        // ...and the release clause keeps the same silence, so neither is
+        // boilerplate the other could be mistaken for (#2811 S1).
+        assert!(released_worker_clause("   ").is_empty());
+        let r = released_worker_clause("6d1f993c-0000-4000-8000-000000000001");
+        assert!(r.contains("6d1f993c-0000-4000-8000-000000000001"), "{r}");
+        assert!(r.contains("spawn_agent(resume:)"), "{r}");
+        assert!(!r.contains('\n'), "one paragraph: {r:?}");
+        assert!(!r.contains("          "), "no source indentation reaches the reader: {r:?}");
     }
 
     /// A pane named twice is a pane a human goes looking for twice, and the

@@ -3055,18 +3055,34 @@ from `cap-refused` above even though the remedy is the same, because the two say
 about how long: one is a single refusal on the spot, this is a run of them, and telling a drive
 that has just hit the cap from one that has been stuck all afternoon is the whole point.
 
-**The driver releases the two kinds of pane it is finished with, and nothing else.** A reviewer
-whose verdict is recorded at the commit the PR is on now has answered the only question the drive
-asks it, and a worker that reported done has had that report read and acted on. In both cases the
-pane is idle, what it produced is already on disk, and the conversation is kept — so the driver
-closes the pane, the slot frees immediately, and the next round reopens that same session in a
-fresh pane. Nothing is lost but the pane: a reviewer asked again comes back to a PR it has already
-read, exactly as it did before.
+**The driver releases the panes it is finished with, and nothing else.** A reviewer whose verdict
+is recorded at the commit the PR is on now has answered the only question the drive asks it, and a
+worker that reported done has had that report read and acted on. In both cases the pane is idle,
+what it produced is already on disk, and the conversation is kept — so the driver closes the pane,
+the slot frees immediately, and the next round reopens that same session in a fresh pane. Nothing
+is lost but the pane: a reviewer asked again comes back to a PR it has already read, exactly as it
+did before.
+
+**A worker's report counts wherever it lands.** The usual round is push, then wait for the checks,
+then report — so the report reaches the drive while it is watching CI rather than while it is
+waiting for the fix, and for a while the release only fired on the other ordering (a body-only fix,
+with nothing to push). The measured effect was that three quarters of hand-backs kept their worker
+pane through the whole of the next review round, and the orchestrator ended up killing them by
+hand. Both orderings release now; the drive holds the worker pane only while it is actually waiting
+on that worker.
+
+**And a drive that ENDS releases before it tells you it ended.** A satisfied or cancelled drive
+used to list its panes for you to dispose of, which is a turn spent doing what the drive could do
+itself — so the last lane and the worker go first, and the notice names what is really left. The
+worker's line then reads `worker session <id> resumes with spawn_agent(resume:)`: the pane is gone,
+the conversation is not, and that session id is what brings it back.
 
 It kills nothing else. A reviewer that has not answered, one whose verdict belongs to an older
-commit, a worker that is still working or that reported blocked, a drive that is being parked or
-ended by the move it is making this tick — all keep their panes, and so does every pane in the
-group that is not this drive's.
+commit, a worker that is still working or that reported blocked, a worker that still owes a round
+to a drive being cancelled under it, a drive that is being PARKED by the move it is making this
+tick — all keep their panes, and so does every pane in the group that is not this drive's.
+`cancel_review_drive` releases nothing either: you called it, so the panes are yours, and its
+result lists them.
 The driver never goes looking for a pane to free because it is short of slots: it releases on
 facts about the pane, never on how full the group is. Killing anything else is still yours or the
 orchestrator's — or the idle reaper's, where you have set one — and `cap-full` is still the

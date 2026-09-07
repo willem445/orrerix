@@ -18861,10 +18861,11 @@ pub enum ExitInitiator {
     /// no task in flight, nothing to lose — which is what makes it safe to
     /// demote alongside an orchestrator-initiated kill.
     IdleTimeout,
-    /// The review driver releasing a pane it no longer needs (#2501) — a
-    /// reviewer lane whose verdict is recorded at the drive's current head, or a
+    /// The review driver releasing a pane it no longer needs (#2501, #2811 S1) — a
+    /// reviewer lane whose verdict is recorded at the drive's current head, a
     /// worker that reported and went idle once the drive had consumed the
-    /// report. `reviewdrive::releasable` is the closed rule and
+    /// report, or either of them at the step that ENDS the drive.
+    /// `reviewdrive::releasable` is the closed rule and
     /// `OrchRegistry::release_driven_pane` is the only thing that stamps this.
     DriverRelease,
     /// The LEAD pane of this delegate's group, by dying (#2519). A lead group
@@ -18920,13 +18921,15 @@ pub enum ExitNoticeRoute {
 /// "kill to reclaim a slot" case that sentence turns away** (#2501). That
 /// case is a reaper choosing a victim to make room; this is a drive
 /// disposing of a pane whose work it has already taken delivery of, in one
-/// of two states `reviewdrive::releasable` closes over: a lane whose
-/// verdict is recorded at the drive's current head, or a worker whose
-/// `report` the drive has consumed. Both carry `IdleTimeout`'s own
-/// property — the pane is idle, so nothing is in flight — and add the one
-/// it does not: the output is already durable (a verdict file, a consumed
-/// report) and the conversation is resumable by session, so nothing is
-/// lost rather than merely nothing in progress.
+/// of the states `reviewdrive::releasable` closes over: a lane whose
+/// verdict is recorded at the drive's current head, a worker whose
+/// `report` the drive has consumed, or — since #2811 S1 — either of them at
+/// the step that ends the drive, where there is nothing left to wait for.
+/// All carry `IdleTimeout`'s own property — the pane is idle, so nothing
+/// is in flight — and add the one it does not: the output is already
+/// durable (a verdict file, a consumed report) and the conversation is
+/// resumable by session, so nothing is lost rather than merely nothing in
+/// progress.
 ///
 /// The orchestrator can reconstruct it, which is the actual test this
 /// function applies: `rd-lane-released` / `rd-worker-released` name the
@@ -56489,14 +56492,19 @@ impl OrchRegistry {
     /// `review-driver.md` §3.1 item 5 was a closed guarantee — the driver may
     /// never kill a pane — enforced by a default-deny source scan over the
     /// driver's three files that denies `kill_agent` and the reaper entry
-    /// points. #2501 narrows the guarantee to two states, and the honest way to
-    /// narrow it is to give the driver exactly one named capability rather than
-    /// to let it reach a kill primitive by some other name: the scan keeps
-    /// denying `kill_agent`, `kill_agent_as`, `mark_dead` and
-    /// `reap_idle_agents` inside those files, and permits this one call, whose
-    /// site count it pins. A kill the driver reached any other way still fails
-    /// the scan, which is what makes "only these two states" reviewable instead
-    /// of merely intended.
+    /// points. #2501 narrows the guarantee to a lane whose verdict is recorded
+    /// at the drive's current head and a worker whose `report` the drive has
+    /// consumed; #2811 S1 adds either of them at the step that ENDS the drive.
+    /// The closed set is `reviewdrive::ReleaseReason` — three variants — and
+    /// naming the arity here rather than restating it was the mistake #2811 S1
+    /// had to correct on five other surfaces, so this doc points at the enum.
+    /// The honest way to narrow a guarantee is to give the driver exactly one
+    /// named capability rather than to let it reach a kill primitive by some
+    /// other name: the scan keeps denying `kill_agent`, `kill_agent_as`,
+    /// `mark_dead` and `reap_idle_agents` inside those files, and permits this
+    /// one call, whose site count it pins. A kill the driver reached any other
+    /// way still fails the scan, which is what makes "only the states
+    /// `ReleaseReason` spells" reviewable instead of merely intended.
     ///
     /// This function lives here, beside `kill_agent_as` and `mark_dead`, for the
     /// same reason: it is a lifecycle capability, and a barrier a caller must

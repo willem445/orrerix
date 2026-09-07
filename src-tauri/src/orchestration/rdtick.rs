@@ -2385,7 +2385,10 @@ impl OrchRegistry {
                     // twice. The panes are read before `owe_notice`'s mutable
                     // borrow.
                     let panes = entry.owned_panes();
-                    let n = rddrive::cancelled_notice(pr, rddrive::CancelCause::PrGone, &panes);
+                    // No release clause: reconcile takes no tick, so
+                    // `releasable` is never asked and nothing was killed here.
+                    let n =
+                        rddrive::cancelled_notice(pr, rddrive::CancelCause::PrGone, &panes, "");
                     entry.owe_notice(&n, now);
                     audits.push((on_behalf, pr, true, forgot_cap_run));
                 } else {
@@ -2631,9 +2634,11 @@ impl OrchRegistry {
         }
         let step = reviewdrive::decide(entry, &facts, limits);
         // **Read BEFORE the arc is taken, applied after it** (#2501). Both
-        // halves matter. `releasable`'s worker rule is "this entry is in
-        // `fix-wait` and the report it was waiting for arrived", which stops
-        // being true the instant `entry.take` moves it to `ci-wait`; and the
+        // halves matter. `releasable`'s worker rule is "a hand-back is
+        // outstanding and the report it was waiting for arrived", which stops
+        // being true the instant `entry.take` takes the arc out of that wait;
+        // its terminal rule reads the entry the step is about to END, which
+        // `take` equally destroys (#2811 S1); and the
         // lane rule must not see a lane this very tick re-briefed, which the
         // `OpenLane` arm below is about to do. Computed here, the answer is
         // about the world the decision was made in.
@@ -2713,6 +2718,13 @@ impl OrchRegistry {
         // The audit row is written last, on the fact rather than the intent:
         // §5.4 says a release row means a pane went, and a reader counting freed
         // slots must be able to trust the count.
+        // **The session of the worker pane this tick released, for the terminal
+        // notice** (#2811 S1). Read out of the loop rather than recomputed below,
+        // because by the time the notice is built `release_pane` has taken the
+        // pane out of the record and the entry no longer names it — and because
+        // only a release that the barrier actually PERFORMED may be reported as
+        // one, which is the same honesty `out.releases` keeps.
+        let mut released_worker_session = String::new();
         for cand in &releases {
             let (agent, session) = match &cand.role {
                 reviewdrive::DrivenRole::Worker => {
@@ -2732,6 +2744,9 @@ impl OrchRegistry {
                 continue;
             }
             let Some(freed) = entry.release_pane(&cand.role, &session) else { continue };
+            if cand.role == reviewdrive::DrivenRole::Worker {
+                released_worker_session = session.clone();
+            }
             out.changed = true;
             let (action, mut detail) = match &cand.role {
                 reviewdrive::DrivenRole::Worker => (
@@ -3178,6 +3193,7 @@ impl OrchRegistry {
                         &brief.lane_notices,
                         &entry.counters,
                         &entry.owned_panes(),
+                        &released_worker_session,
                     );
                     out.audits.push((
                         rddrive::audit_action::SATISFIED,
@@ -3213,7 +3229,12 @@ impl OrchRegistry {
                     // panes thread into the construction, and #1857's owe
                     // replaces the direct push rather than sitting beside it.
                     let panes = entry.owned_panes();
-                    let n = rddrive::cancelled_notice(pr, rddrive::CancelCause::PrGone, &panes);
+                    let n = rddrive::cancelled_notice(
+                        pr,
+                        rddrive::CancelCause::PrGone,
+                        &panes,
+                        &released_worker_session,
+                    );
                     entry.owe_notice(&n, now);
                 }
                 _ => {}
@@ -3696,7 +3717,10 @@ impl OrchRegistry {
             // notice was built after the write and handed to a `let _ =`, so a
             // cancel into a pane that was down was a drive that vanished with no
             // line and nothing to reproduce one from.
-            let notice = rddrive::cancelled_notice(pr, rddrive::CancelCause::Tool, &panes);
+            // Empty for the reason `releasable`'s residual states: a tool cancel
+            // is not a tick, so no step is decided, nothing is released, and the
+            // orchestrator that called it is the party disposing of the panes.
+            let notice = rddrive::cancelled_notice(pr, rddrive::CancelCause::Tool, &panes, "");
             entry.owe_notice(&notice, now);
             if reviewdrive::store_state(&dir, &state).is_err() {
                 return self.rd_refuse(group, pr, r::STATE_UNWRITABLE);

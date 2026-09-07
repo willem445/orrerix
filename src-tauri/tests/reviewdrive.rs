@@ -334,23 +334,23 @@ const FORBIDDEN_CALLS: [(&str, &str); 7] = [
 /// its call sites.
 ///
 /// §3.1 item 5 used to be a closed sentence, and the rows above were the whole
-/// of its enforcement. #2501 narrows it to two states — a lane whose verdict is
-/// recorded at the drive's current head, and a worker whose `report` the drive
-/// has consumed — and the narrowing is a capability rather than a licence: the
-/// rows above still deny every kill primitive inside the driver's files, and
-/// this permits exactly one call to the one barrier, which lives outside them
-/// (`OrchRegistry::release_driven_pane`, in `mod.rs`, beside `kill_agent_as` and
-/// `mark_dead`).
+/// of its enforcement. #2501 narrows it to a lane whose verdict is recorded at
+/// the drive's current head and a worker whose `report` the drive has consumed;
+/// #2811 S1 adds either of them at the step that ENDS the drive. The narrowing
+/// is a capability rather than a licence: the rows above still deny every kill
+/// primitive inside the driver's files, and this permits exactly one call to the
+/// one barrier, which lives outside them (`OrchRegistry::release_driven_pane`,
+/// in `mod.rs`, beside `kill_agent_as` and `mark_dead`).
 ///
 /// **The COUNT is the pin, not the presence.** A second call site is a second
-/// place the two-state rule can be broken, and a scan that only asked "is it
+/// place the release rule can be broken, and a scan that only asked "is it
 /// called" would pass a driver that released a pane from anywhere in the tick.
 /// So the site count is stated here and asserted, and a slice that genuinely
 /// needs a second one argues it onto this row — which is the same discipline
 /// `ALLOWED_ASKS` applies to a `gh` verb.
 ///
 /// **What this scan does NOT enforce, stated because it is the interesting
-/// half.** Which two states may release is a property of a state machine, and no
+/// half.** Which states may release is a property of a state machine, and no
 /// source scan can see one. It is pinned behaviourally instead, by
 /// `reviewdrive::releasable`'s own unit tests and by the integration tests in
 /// this file that drive a real tick over a real registry and assert what
@@ -362,7 +362,7 @@ const PERMITTED_RELEASE: (&str, &str, usize, &str) = (
     "release_driven_pane",
     "src/orchestration/rdtick.rs",
     1,
-    "#2501: §3.1 item 5's two narrowed states, through the one barrier in mod.rs",
+    "#2501/#2811 S1: §3.1 item 5's narrowed states, through the one barrier in mod.rs",
 );
 
 /// One driver file as the scan reads it: **production source only**.
@@ -421,7 +421,7 @@ fn names_call(src: &str, ident: &str) -> bool {
 ///
 /// #2501 needs the number: the driver is permitted exactly one call to
 /// `release_driven_pane` and a second one is a second place §3.1 item 5's
-/// two-state rule can be broken, so a boolean would pass the thing the row is
+/// release rule can be broken, so a boolean would pass the thing the row is
 /// written to catch. `names_call` delegates here rather than the two matching in
 /// parallel — a guard and its counter that can disagree are two guards.
 fn count_calls(src: &str, ident: &str) -> usize {
@@ -544,7 +544,7 @@ fn the_driver_never_builds_a_landing_verb_and_never_grants_a_merge() {
             findings.push(format!(
                 "{rel}: calls {release} {found} time(s), and the permitted count for this file \
                  is {want} — {why}. §3.1 item 5 permits ONE site; a second is a second place \
-                 the two-state rule can be broken, and must be argued onto PERMITTED_RELEASE."
+                 the release rule can be broken, and must be argued onto PERMITTED_RELEASE."
             ));
         }
     }
@@ -660,7 +660,7 @@ fn the_landing_verb_scan_fires_on_a_real_merge_and_not_on_a_lookalike() {
 ///
 /// The interesting failure is not "the scan stopped catching `kill_agent`" — it
 /// is a driver that reaches a kill by some OTHER name now that one route is
-/// permitted, or one that releases a pane from a second site the two-state rule
+/// permitted, or one that releases a pane from a second site the release rule
 /// was never argued for. Both are checked by performing them.
 #[test]
 fn the_kill_scan_permits_exactly_one_release_site_and_no_other_route_to_a_kill() {
@@ -8775,6 +8775,371 @@ fn the_worker_pane_is_released_on_a_done_report_and_kept_on_a_blocked_one() {
     }
 }
 
+/// **The worker pane is released on the tick that consumes its report even when
+/// that tick is in `ci-wait`** (#2811 S1) — the ordinary push-then-report round,
+/// which is 15 of the 20 hand-backs the measured session produced and every one
+/// of the ones that held a slot for a whole review round.
+///
+/// The test above is the same rule on the OTHER route: a body-only fix, where
+/// there is nothing to push, so the report lands while the drive is still in
+/// `fix-wait`. That route was the only one #2501 covered, and it is exactly the
+/// 5 releases the audit recorded — which is how a rule that never fired for
+/// three quarters of its subjects stayed green for a month.
+///
+/// Both arms here PUSH; they differ in the word the worker then reports, which
+/// is the axis that decides. `blocked` in `ci-wait` is INVARIANT 3 territory
+/// just as it is in `fix-wait`, so the pane the hold hands to the orchestrator
+/// must still be there.
+#[test]
+fn the_worker_pane_is_released_when_its_report_lands_in_ci_wait_after_a_push() {
+    // The third head this file needs: the hand-back is at HEAD_B and the fix is
+    // pushed on top of it, so arc 7 has a head move to see.
+    const HEAD_C: &str = "cc33dd44ee55ff6677889900aabbccddeeff0011";
+    for (arm, outcome, released) in [("done", "done", true), ("blocked", "blocked", false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new();
+        let gh = FakeGh::green(HEAD_A);
+        let (group, _lane) = briefed(&reg, &repo, &gh);
+        let session_before = driven_worker_session(&reg, &group);
+
+        // Red checks at a new head take the drive to `fix-wait` and hand back.
+        gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+        gh.set_facts("OPEN", HEAD_B);
+        reg.rd_drive_group_with(&group, &gh, 30_000);
+        let handed = reg.rd_drive_group_with(&group, &gh, 40_000);
+        assert_eq!(status_state(&reg, &group), "fix-wait", "{arm}");
+        let (_pr, worker) =
+            handed.handbacks.first().cloned().expect("the hand-back resumed a worker");
+
+        // **The worker PUSHES.** The head moves under `fix-wait`, which is arc 7,
+        // and the drive goes back to `ci-wait` to watch the new matrix. The
+        // report has not arrived yet, so this tick must release nothing — the
+        // negative control that keeps the assertion below about the REPORT.
+        //
+        // The new matrix is GREEN, which is what lets arc 2 be taken once the
+        // report lands. An empty check list is not green — it is "no checks
+        // reported", which `ci-wait` waits on — so the payload is the one
+        // `FakeGh::green` uses.
+        gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+        gh.set_facts("OPEN", HEAD_C);
+        let pushed = reg.rd_drive_group_with(&group, &gh, 50_000);
+        assert_eq!(status_state(&reg, &group), "ci-wait", "{arm}: arc 7 puts it back in ci-wait");
+        assert!(
+            pushed.released.is_empty(),
+            "{arm}: a push is not a report — released {:?}",
+            pushed.released
+        );
+
+        report_as(&reg, &group, &worker, Role::Worker, outcome);
+        let report = reg.rd_drive_group_with(&group, &gh, 60_000);
+
+        let got: Vec<String> = report.released.iter().map(|(_, _, a)| a.clone()).collect();
+        let rows = audit_details(&reg, &group, "rd-worker-released");
+        let dead = reg.agent(&worker).map(|a| a.status == AgentStatus::Dead).unwrap_or(false);
+
+        assert_eq!(got, if released { vec![worker.clone()] } else { vec![] }, "{arm}");
+        assert_eq!(rows.len(), usize::from(released), "{arm}: rows {rows:?}");
+        assert_eq!(dead, released, "{arm}: the worker pane's liveness");
+        if released {
+            let row = &rows[0];
+            assert_eq!(row["agent"], json!(worker), "{arm}: {row}");
+            assert_eq!(row["reason"], json!("report-consumed"), "{arm}: {row}");
+            assert_eq!(row["session"], json!(session_before), "{arm}: {row}");
+            // **At the PUSHED head**, which is what says the release belongs to
+            // this round rather than to the hand-back that preceded it — the
+            // audit shape §1(b) used to tell the two apart, and the one that
+            // showed all five pre-#2811 S1 releases were body-only fixes.
+            assert_eq!(row["head"], json!(HEAD_C), "{arm}: {row}");
+            assert_eq!(
+                status_state(&reg, &group),
+                "review-wait",
+                "{arm}: …and the same tick took arc 2, so the release rides the arc that \
+                 consumed the report rather than a tick of its own"
+            );
+        } else {
+            assert_eq!(
+                status_state(&reg, &group),
+                "held",
+                "{arm}: a blocked worker parks the drive, and the pane the orchestrator is \
+                 about to speak to must still be there"
+            );
+        }
+    }
+}
+
+/// Drive to a `gate-check` tick that is **still holding both panes** — the one
+/// route that reaches #2811 S1's terminal rule with a worker to release.
+///
+/// A satisfied drive normally has no worker pane left: the `ci-wait` rule
+/// releases it on the tick that consumes its report. So the worker here reported
+/// `blocked`, which parks the drive and KEEPS the pane (INVARIANT 3); the
+/// orchestrator dispositioned it and resumed; and the drive then finished
+/// without ever asking that worker for anything again. Arc 11 clears the arc-7
+/// anchor, so no hand-back is outstanding at the exit.
+///
+/// The lane is kept the other way: `review_verdict` does not end a turn
+/// (`idle_since_ms` is stamped by `report`), so the release barrier refuses it
+/// on the `review-wait` tick and the pane survives into `gate-check`.
+///
+/// Returns `(group, worker pane, lane pane, worker session)` with the drive in
+/// `gate-check`, one tick short of `satisfied`. Whether the lane then ENDS its
+/// turn is the caller's to decide, and it is the axis the two tests below
+/// differ on.
+fn at_gate_check_holding_both_panes(
+    reg: &OrchRegistry,
+    repo: &Repo,
+    gh: &FakeGh,
+) -> (GroupId, String, String, String) {
+    let (group, _lane0) = briefed(reg, repo, gh);
+    let session = driven_worker_session(reg, &group);
+    reg.set_pr_body_override(Some("b".to_string()));
+
+    // Red at a new head: hand-back, and the worker answers `blocked`.
+    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    gh.set_facts("OPEN", HEAD_B);
+    reg.set_pr_head_override(Some(HEAD_B.to_string()));
+    reg.rd_drive_group_with(&group, gh, 30_000);
+    let handed = reg.rd_drive_group_with(&group, gh, 40_000);
+    let (_pr, worker) = handed.handbacks.first().cloned().expect("the hand-back resumed a worker");
+    report_as(reg, &group, &worker, Role::Worker, "blocked");
+    reg.rd_drive_group_with(&group, gh, 50_000);
+    assert_eq!(
+        status_state(reg, &group),
+        "held",
+        "the fixture's premise: a blocked worker parks the drive"
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status != AgentStatus::Dead),
+        "…and its pane is KEPT, which is what makes it available at the exit"
+    );
+
+    // The orchestrator dispositions and resumes; CI is green at the same head.
+    gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+    let out = reg.drive_review_with(&group, gh, 1758, &session, false, 0, "orch-1", 60_000);
+    assert_eq!(out["driving"], json!(true), "the resume was refused: {out}");
+    // Two ticks, as `briefed` takes: arc 11 re-enters `ci-wait`, the first tick
+    // reads green and advances to `review-wait`, the second opens the lane.
+    reg.rd_drive_group_with(&group, gh, 65_000);
+    let reopened = reg.rd_drive_group_with(&group, gh, 70_000);
+    let lane = reopened
+        .lanes_opened
+        .first()
+        .cloned()
+        .map(|(_, _, a)| a)
+        .unwrap_or_else(|| panic!("the resumed drive briefs its lane: {reopened:?}"));
+
+    // The lane answers but does not end its turn, so the `review-wait` tick's
+    // release is refused and the pane survives into `gate-check`.
+    record_pass_for(reg, &group, &lane);
+    let to_gate = reg.rd_drive_group_with(&group, gh, 80_000);
+    assert_eq!(status_state(reg, &group), "gate-check");
+    assert!(
+        to_gate.released.is_empty(),
+        "the control: a lane mid-turn is not released, so what a caller observes at the \
+         terminal step is the TERMINAL rule and not condition 2 firing early: {:?}",
+        to_gate.released
+    );
+    (group, worker, lane, session)
+}
+
+/// **A TERMINAL step releases the panes it is finished with BEFORE the exit
+/// notice is built** (#2811 S1) — so the notice names what is really left, and
+/// the orchestrator is not handed a list of panes to kill by hand.
+///
+/// §1(f) measured what that hand-off cost: the orchestrator killed the reporting
+/// worker in the same second it started 4 of one session's 16 drives, and each
+/// following hand-back then resumed the session into a FRESH pane. The pane was
+/// resumable the whole time; nobody was going to speak to it again.
+#[test]
+fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, worker, lane, session) = at_gate_check_holding_both_panes(&reg, &repo, &gh);
+
+    // The lane ENDS its turn, so both panes are idle at the tick that satisfies.
+    report_as(&reg, &group, &lane, Role::Reviewer, "done");
+
+    let before = audit_actions(&reg, &group).len();
+    let end = reg.rd_drive_group_with(&group, &gh, 90_000);
+    let actions: Vec<String> = audit_actions(&reg, &group).split_off(before);
+
+    let pos = |a: &str| actions.iter().position(|x| x == a);
+    let sat = pos("rd-satisfied").unwrap_or_else(|| panic!("the drive must satisfy: {actions:?}"));
+    let lane_row =
+        pos("rd-lane-released").unwrap_or_else(|| panic!("the lane must be released: {actions:?}"));
+    let worker_row = pos("rd-worker-released")
+        .unwrap_or_else(|| panic!("the worker must be released: {actions:?}"));
+    assert!(lane_row < sat, "the lane's release precedes the satisfied row: {actions:?}");
+    assert!(worker_row < sat, "…and so does the worker's: {actions:?}");
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert!(released.contains(&lane), "the lane pane went: {released:?}");
+    assert!(released.contains(&worker), "the worker pane went: {released:?}");
+    assert_eq!(
+        audit_details(&reg, &group, "rd-worker-released")[0]["reason"],
+        json!("drive-ended"),
+        "the reason is not `report-consumed`: no report was consumed on this path, and an \
+         audit reason is a claim"
+    );
+
+    // **The notice, which is the whole point of doing this before it is built.**
+    let notice = end
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("a satisfied drive owes a notice: {:?}", end.notices));
+    assert!(!notice.contains(&lane), "a released pane is not named as still running: {notice}");
+    assert!(!notice.contains(&worker), "…nor is the worker: {notice}");
+    assert!(
+        notice.contains(&format!("worker session {session} resumes with spawn_agent(resume:)")),
+        "…and what replaces it is the handle that still works: {notice}"
+    );
+}
+
+/// **A terminal release the BARRIER refuses leaves that pane exactly where it
+/// was — named in the notice, alive, and the orchestrator's** (#2811 S1) — the
+/// residual `releasable`'s doc discloses, pinned rather than described.
+///
+/// A disclosed residual is a counterfactual, and only a test that performs the
+/// edit pins one: without this, the suite covers the arms that work and the
+/// disclosure could go false with nothing red to say so. The one difference from
+/// the test above is that the lane never `report`s, so `idle_since_ms` is never
+/// stamped and `release_driven_pane` refuses it — the same refusal that protects
+/// a reviewer mid-review, arriving at an exit.
+///
+/// **The worker is still released in the same tick**, and that is the load-
+/// bearing half rather than a bonus: it says the two candidates are decided and
+/// applied per pane, so one refusal does not abandon the other release. An
+/// implementation that gave up on the whole terminal list at the first `Err`
+/// would pass every assertion in the test above and fail here.
+#[test]
+fn a_terminal_release_the_barrier_refuses_leaves_that_pane_named_and_alive() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, worker, lane, session) = at_gate_check_holding_both_panes(&reg, &repo, &gh);
+
+    // The lane does NOT end its turn. Everything else is the test above.
+    let end = reg.rd_drive_group_with(&group, &gh, 90_000);
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(released, vec![worker.clone()], "the worker goes, the busy lane does not");
+    assert!(
+        audit_details(&reg, &group, "rd-lane-released").is_empty(),
+        "a release row is written on the kill SUCCEEDING, never on the intent"
+    );
+    assert_eq!(
+        reg.agent(&lane).map(|a| a.status == AgentStatus::Dead),
+        Some(false),
+        "a lane mid-turn is not killed by its drive ending — the judgment §3 forbids"
+    );
+
+    let notice = end
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("a satisfied drive owes a notice: {:?}", end.notices));
+    assert!(
+        notice.contains(&lane),
+        "the refused pane is named, so the orchestrator can still dispose of it: {notice}"
+    );
+    assert!(
+        notice.contains(&format!("worker session {session} resumes with spawn_agent(resume:)")),
+        "…and the released worker is named by session in the same notice: {notice}"
+    );
+    assert!(!notice.contains(&worker), "…but not by a pane id that is gone: {notice}");
+}
+
+/// **A terminal tick whose WORKER release is refused still releases the lane**
+/// (#2811 S1) — the other refusal cell, and the one that makes the pair
+/// discriminate on more than one mutation operator.
+///
+/// The test above refuses the LANE, and `releasable` pushes the worker candidate
+/// FIRST ("Condition 3, first, so the list reads worker-first exactly as
+/// `owned_panes` does"), so there the worker's release is already done before
+/// the refusal is reached. That fixture therefore cannot see a release loop that
+/// `break`s at the first `Err` instead of `continue`ing — it produces identical
+/// output. rev-std round 2 caught the overclaim; this is the fixture that closes
+/// it rather than a reworded sentence.
+///
+/// Here the refusal comes FIRST. A `break` releases nothing and fails
+/// `released == vec![lane]`; an all-or-nothing pre-check fails it the same way;
+/// only the shipped per-candidate `continue` passes. Between the two tests, both
+/// orderings of {refused, released} are covered.
+///
+/// The worker is made busy the way the product makes any delegate busy — the
+/// orchestrator sends it a prompt, which stamps `idle_since_ms = None` before
+/// the delivery (`mcp.rs`'s `send_prompt` arm) — rather than by reaching into
+/// the registry, so the fixture is a state the running app really produces.
+#[test]
+fn a_terminal_tick_whose_worker_release_is_refused_still_releases_the_lane() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, worker, lane, session) = at_gate_check_holding_both_panes(&reg, &repo, &gh);
+
+    // The lane ends its turn; the worker is put back to work by its
+    // orchestrator, so the barrier will refuse it and take the lane instead.
+    report_as(&reg, &group, &lane, Role::Reviewer, "done");
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    with_pane(&reg, &orch.id, 7001);
+    // The delivery itself may fail in a headless test; `idle_since_ms` is
+    // cleared BEFORE it either way, which is the fact this fixture needs and is
+    // the product's own ordering ("the intent to assign counts regardless of
+    // delivery timing").
+    let _ = dispatch(
+        &reg,
+        &Caller {
+            agent_id: orch.id.clone(),
+            group: group.clone(),
+            role: Role::Orchestrator,
+            role_hint: None,
+        },
+        "tools/call",
+        &json!({ "name": "send_prompt", "arguments": {
+            "agent_id": worker.clone(), "text": "one more thing while I have you" } }),
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.idle_since_ms.is_none()),
+        "the fixture's premise: the worker is working again, so the barrier must refuse it"
+    );
+
+    let end = reg.rd_drive_group_with(&group, &gh, 90_000);
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(
+        released,
+        vec![lane.clone()],
+        "the lane goes even though the candidate BEFORE it was refused"
+    );
+    assert!(
+        audit_details(&reg, &group, "rd-worker-released").is_empty(),
+        "and no row claims a worker release that did not happen"
+    );
+    assert_eq!(
+        reg.agent(&worker).map(|a| a.status == AgentStatus::Dead),
+        Some(false),
+        "a worker mid-turn is not killed by its drive ending, at a terminal step either"
+    );
+
+    let notice = end
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("a satisfied drive owes a notice: {:?}", end.notices));
+    assert!(notice.contains(&worker), "the refused worker pane is named: {notice}");
+    assert!(!notice.contains(&lane), "…and the released lane is not: {notice}");
+    assert!(
+        !notice.contains(&format!("worker session {session} resumes")),
+        "…and no resume clause is offered for a pane that is still running: {notice}"
+    );
+}
+
 /// **A released lane comes back on its own session** — the claim the whole
 /// narrowing rests on, performed rather than asserted.
 ///
@@ -8834,15 +9199,15 @@ fn a_released_lane_is_resumed_on_its_own_session_for_the_next_round() {
     );
 }
 
-/// **The driver kills nothing outside the two states**, over the shapes that are
-/// closest to being releasable and are not.
+/// **The driver kills nothing outside the narrowed states**, over the shapes
+/// that are closest to being releasable and are not.
 ///
 /// Each arm is a lane or a worker the drive owns, idle or not, whose ONE
 /// difference from a releasable pane is named in its label. The positive control
 /// is the other tests above; what this adds is that a tick over each of these
 /// leaves every pane in the group alive.
 #[test]
-fn the_driver_releases_nothing_outside_the_two_narrowed_states() {
+fn the_driver_releases_nothing_outside_the_narrowed_states() {
     for arm in ["silent lane", "stale verdict", "parking step"] {
         let dir = tempfile::tempdir().unwrap();
         let reg = relaunch_registry(dir.path());

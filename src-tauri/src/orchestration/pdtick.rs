@@ -54,13 +54,19 @@ const PD_FACT_CAP: usize = 2_000;
 ///
 /// **It bounds the STEADY-STATE wake, and one wake per process is not one.**
 /// [`pd_reconcile_with`](OrchRegistry::pd_reconcile_with) runs once per group
-/// per process, before this loop, and reads one issue per live entry without
-/// consulting this figure — so the first wake after a restart spends
-/// `live + min(live, PD_MAX_GH_PER_TICK)` round trips rather than four. That is
-/// bounded by the number of live drives, which is bounded by how many issues an
-/// orchestrator chose to drive, and it is a startup cost paid once; it is stated
-/// here rather than fixed because a reconcile that serviced only four entries
-/// would leave the rest unreconciled with nothing scheduled to finish the job.
+/// per process, before this loop, and reads one issue per NON-TERMINAL entry
+/// without consulting this figure — so the first wake after a restart spends
+/// `non_terminal + min(live, PD_MAX_GH_PER_TICK)` round trips rather than four.
+///
+/// **Non-terminal, not live**, and the difference is deliberate rather than
+/// sloppy: a `held` entry is not live and is still reconciled, because the one
+/// thing a restart must be able to learn about a parked drive is that its issue
+/// was closed while orrerix was down (`Held -> Cancelled`). So a group carrying
+/// holds spends more than its live count here. That is bounded by how many
+/// issues an orchestrator chose to drive, and it is a startup cost paid once; it
+/// is stated rather than fixed because a reconcile that serviced only four
+/// entries would leave the rest unreconciled with nothing scheduled to finish
+/// the job.
 /// `a_tick_services_at_most_four_drives` measures BOTH figures, so this
 /// paragraph cannot go quietly false.
 pub const PD_MAX_GH_PER_TICK: usize = 4;
@@ -163,12 +169,19 @@ impl OrchRegistry {
 
     /// Whether this group runs a plan driver at all.
     ///
-    /// `pub(super)` for `driver_enabled`'s reason and no wider: the parent
-    /// module gates the tool listing and the instruction placeholder on it, and
-    /// those have to read the same policy the tick does — a group whose tools
-    /// all refuse `plan-driver-disabled` must not be told in its instructions
-    /// that it has a plan driver.
-    pub(super) fn plan_driver_enabled(&self, group: &GroupId) -> bool {
+    /// **Private, because every caller is in this file** — the five sites below
+    /// it. An earlier draft made it `pub(super)` and justified that by
+    /// `driver_enabled`'s reason: the parent module gates the tool listing and
+    /// an instruction placeholder on it. That reason describes a mechanism this
+    /// build does not have. The four plan tools are listed unconditionally and
+    /// gated at dispatch (the `queue_merge` pattern), and there is no
+    /// `PLAN_DRIVER_NOTE` to gate — `REVIEW_DRIVER_NOTE` has one and this does
+    /// not. The placeholder and the playbook prose are P4's.
+    ///
+    /// So the visibility is narrowed to what is true now rather than to what a
+    /// later slice may want: P4 widens it, with the argument it will then
+    /// actually have.
+    fn plan_driver_enabled(&self, group: &GroupId) -> bool {
         self.pd_policy(group).0
     }
 
@@ -203,6 +216,32 @@ impl OrchRegistry {
                     "orrerix_fault": plandrive::refusal::is_orrerix_fault(reason) }),
         );
         json!({ "refused": reason })
+    }
+
+    /// Drop a reservation whose planner never opened.
+    ///
+    /// Best-effort by construction, and that is the honest posture rather than a
+    /// shortcut: the caller is already returning `planner-unspawnable`, and a
+    /// reservation this fails to remove is a drive with no planner that the
+    /// restart reconcile names (`reservation-unspawned`) and the drive-age
+    /// backstop eventually parks. Turning a failed rollback into a second,
+    /// different refusal would tell the caller less than the one it is already
+    /// getting.
+    ///
+    /// **Only a reservation** — an entry with no planner recorded. Anything else
+    /// is a drive that got further than this call did, and removing it would
+    /// erase work on a spawn failure.
+    fn pd_release_reservation(&self, dir: &std::path::Path, issue: u64) {
+        let _state_guard = self.pd_state_lock.lock_safe();
+        let Ok(mut state) = plandrive::load_state(dir) else { return };
+        let is_reservation = state
+            .entry(issue)
+            .is_some_and(|e| e.planner_agent.is_empty() && e.spawned_ms == 0);
+        if !is_reservation {
+            return;
+        }
+        state.entries.retain(|e| e.issue != issue);
+        let _ = plandrive::store_state(dir, &state);
     }
 
     /// Where this group's `plan_drives.json` lives — a TEST seam, and the only
@@ -707,18 +746,6 @@ impl OrchRegistry {
         };
 
         let dir = self.group_dir(group);
-        {
-            let _state_guard = self.pd_state_lock.lock_safe();
-            match plandrive::load_state(&dir) {
-                // **NOT `not-driven`.** A torn file cannot tell you an issue is
-                // not driven; it can only tell you orrerix cannot say.
-                Err(_) => return self.pd_refuse(group, issue, r::STATE_UNREADABLE),
-                Ok(state) if state.is_driven(issue) => {
-                    return self.pd_refuse(group, issue, r::ALREADY_DRIVEN)
-                }
-                Ok(_) => {}
-            }
-        }
 
         // §2(d): consent is the label, read here and re-read every tick.
         let facts = pd_issue_facts(runner, issue);
@@ -731,14 +758,72 @@ impl OrchRegistry {
             return self.pd_refuse(group, issue, r::NOT_LABELLED);
         };
 
-        // The spawn is the last thing before the write, and its failure is a
-        // refusal rather than a half-created drive: an entry whose planner never
-        // opened would sit in `planning` until `planner-stalled`, which is a
-        // notice an hour later for something the caller could be told now.
+        // **RESERVE THE ISSUE BEFORE SPAWNING** (rev-std round 1, finding 5).
+        //
+        // The entry is written first, with no planner on it, and the pane is
+        // opened afterwards. The obvious order — spawn, then write — has a race
+        // with a concrete input: an orchestrator batching two `drive_plan` calls
+        // for one issue in a single turn. Both passed the unlocked
+        // `already-driven` read, both opened a planner, and only the loser's
+        // ENTRY was rejected under the lock. Its PANE was left running, unowned
+        // and unaudited, so `pd_plan_check` answered `NotDriven` for it and it
+        // published a second plan comment on the issue beside the winner's.
+        // Killing the loser's pane afterwards would be the other repair, and it
+        // is worse: it spends a delegate slot and a model's turn to undo work
+        // that never needed doing.
+        //
+        // Reserving closes it at the only point where "is this issue driven"
+        // and "does this issue have an entry" can be made the same question —
+        // under the lock, before anything irreversible. The loser now refuses
+        // `already-driven` having spawned nothing at all.
+        //
+        // **The lock still spans no spawn and no delivery**, which is the
+        // property this file's tick doc rests on: the reservation is a
+        // load-modify-store and nothing else, and the spawn happens after it is
+        // released.
+        let reserved = PdEntry::new(
+            issue,
+            on_behalf_of,
+            &block,
+            consent,
+            base.map(str::to_string).filter(|b| !b.trim().is_empty()),
+            review_minutes.unwrap_or(limits.plan_review_minutes),
+            now,
+        );
+        let reservation = {
+            let _state_guard = self.pd_state_lock.lock_safe();
+            match plandrive::load_state(&dir) {
+                // **NOT `not-driven`.** A torn file cannot tell you an issue is
+                // not driven; it can only tell you orrerix cannot say.
+                Err(_) => Err(r::STATE_UNREADABLE),
+                Ok(mut state) => {
+                    if state.is_driven(issue) {
+                        Err(r::ALREADY_DRIVEN)
+                    } else {
+                        // A terminal entry for this issue is replaced: a drive
+                        // that finished or was cancelled does not stop the issue
+                        // being driven again, and `is_driven` above already said
+                        // no live one exists.
+                        state.entries.retain(|e| e.issue != issue);
+                        state.entries.push(reserved);
+                        plandrive::store_state(&dir, &state).map_err(|_| r::STATE_UNWRITABLE)
+                    }
+                }
+            }
+        };
+        if let Err(reason) = reservation {
+            return self.pd_refuse(group, issue, reason);
+        }
+
+        // The spawn, outside the lock. Its failure ROLLS THE RESERVATION BACK
+        // rather than leaving a drive whose planner never opened — that entry
+        // would sit in `planning` until `drive-stalled` hours later, for
+        // something the caller can be told about now.
         let brief = self.pd_planner_brief(issue, consent, base);
         let agent = match self.pd_spawn(group, &block, &brief) {
             Ok(a) => a,
             Err(e) => {
+                self.pd_release_reservation(&dir, issue);
                 self.pd_audit(
                     group,
                     on_behalf_of,
@@ -749,41 +834,49 @@ impl OrchRegistry {
             }
         };
 
-        let mut entry = PdEntry::new(
-            issue,
-            on_behalf_of,
-            &block,
-            consent,
-            base.map(str::to_string).filter(|b| !b.trim().is_empty()),
-            review_minutes.unwrap_or(limits.plan_review_minutes),
-            now,
-        );
-        entry.planner_agent = agent.id.clone();
-        entry.planner_session = agent.session_id.clone().unwrap_or_default();
-        entry.spawned_ms = now;
-
+        // The pane, recorded onto the reservation.
+        //
+        // **A failure here is the one case that still leaves a live pane the
+        // record does not name**, and it is bounded and audited rather than
+        // fixed. It needs the record to become unreadable or unwritable BETWEEN
+        // the two locks of one call. Releasing the reservation on this path
+        // would be the wrong repair — it would re-open the very hole this
+        // ordering closes, since the pane is already open by now — so instead
+        // the entry stays (which keeps a second `drive_plan` refusing
+        // `already-driven`) and the audit row below names the pane, so the
+        // orchestrator can kill it. Across a restart the reconcile names the
+        // reservation itself; within a process the drive-age backstop is what
+        // bounds it.
         let stored = {
             let _state_guard = self.pd_state_lock.lock_safe();
             match plandrive::load_state(&dir) {
-                Ok(mut state) => {
-                    // Re-checked under the lock this time: `already-driven` was
-                    // read above without one, and a second `drive_plan` landing
-                    // between the two would otherwise append a second entry for
-                    // one issue.
-                    if state.is_driven(issue) {
-                        Err(r::ALREADY_DRIVEN)
-                    } else {
-                        state.entries.retain(|e| e.issue != issue);
-                        state.entries.push(entry);
-                        plandrive::store_state(&dir, &state)
-                            .map_err(|_| r::STATE_UNWRITABLE)
+                Ok(mut state) => match state.entry_mut(issue) {
+                    Some(entry) => {
+                        entry.planner_agent = agent.id.clone();
+                        entry.planner_session = agent.session_id.clone().unwrap_or_default();
+                        entry.spawned_ms = now;
+                        plandrive::store_state(&dir, &state).map_err(|_| r::STATE_UNWRITABLE)
                     }
-                }
+                    // Cancelled out from under this call between the two locks.
+                    // Nothing to attach the pane to, and nothing to roll back.
+                    None => Err(r::NOT_DRIVEN),
+                },
                 Err(_) => Err(r::STATE_UNREADABLE),
             }
         };
         if let Err(reason) = stored {
-            return self.pd_refuse(group, issue, reason);
+            self.pd_audit(
+                group,
+                on_behalf_of,
+                plandrive::audit_action::REFUSED,
+                json!({ "issue": issue, "reason": reason,
+                        "orrerix_fault": plandrive::refusal::is_orrerix_fault(reason),
+                        // The pane this call opened and could not record. Named
+                        // rather than left for someone to find, because it is
+                        // live and nothing else knows about it.
+                        "orphaned_pane": agent.id }),
+            );
+            return json!({ "refused": reason, "orphaned_pane": agent.id });
         }
 
         self.pd_audit(
@@ -1289,6 +1382,30 @@ impl OrchRegistry {
                     now,
                 );
                 changed = Some("issue-closed");
+            } else if entry.state() == PlanDriveState::Planning
+                && entry.planner_agent.is_empty()
+                && entry.spawned_ms == 0
+                && entry
+                    .advance(PlanDriveState::Held, Some(PdHeldReason::PlanMissing), now)
+                    .is_ok()
+            {
+                // A RESERVATION nobody completed: `drive_plan` wrote the entry,
+                // and the process ended before the pane it was reserving for was
+                // recorded on it. There is no planner and there never will be,
+                // so this is `plan-missing` for the same reason a pane that went
+                // away is — what is absent is the plan, and nothing is going to
+                // produce it. Without this arm the entry sits in `planning`
+                // with no stall clock to charge (`spawned_ms` is 0, which
+                // `planner_age_ms` reads as "no pane yet") until the whole-drive
+                // backstop fires hours later.
+                entry.owe_notice(
+                    &format!(
+                        "[orrerix] plan drive #{issue}: HELD ({}) — the drive was reserved and                          its planner was never opened, so there is nothing to hear from.                          Resume it to try again, or cancel it.",
+                        PdHeldReason::PlanMissing.as_str()
+                    ),
+                    now,
+                );
+                changed = Some("reservation-unspawned");
             } else if entry.state() == PlanDriveState::Planning
                 && entry.plan.is_none()
                 && entry.spawned_ms > 0

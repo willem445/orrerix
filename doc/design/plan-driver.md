@@ -270,13 +270,18 @@ after `rd_driver_tick`, one group per wake, at most `PD_MAX_GH_PER_TICK` (4)
 
 **One wake per process is not steady-state**, and the bound does not cover it:
 the once-per-group restart reconcile runs before that loop and reads one issue
-per live entry, so the first wake after a restart spends
-`live + min(live, 4)` round trips. That is bounded by how many issues an
-orchestrator chose to drive, and it is a startup cost paid once. It is stated
-rather than fixed because a reconcile that serviced only four entries would
-leave the rest unreconciled with nothing scheduled to finish the job.
-`a_tick_services_at_most_four_drives` measures both figures, so this paragraph
-cannot go quietly false. Running second is the bound rather than a preference: the plan
+per **non-terminal** entry, so the first wake after a restart spends
+`non_terminal + min(live, 4)` round trips.
+
+Non-terminal rather than live, deliberately: a `held` entry is not live and is
+still reconciled, because the one thing a restart must be able to learn about a
+parked drive is that its issue was closed while orrerix was down. A group
+carrying holds therefore spends more here than its live count. That is bounded
+by how many issues an orchestrator chose to drive, and it is a startup cost paid
+once; it is stated rather than fixed because a reconcile that serviced only four
+entries would leave the rest unreconciled with nothing scheduled to finish the
+job. `a_tick_services_at_most_four_drives` measures both figures, so this
+paragraph cannot go quietly false. Running second is the bound rather than a preference: the plan
 driver can only ever take the budget the review driver left, which makes "the
 plan driver holds, never starves the review driver" structural instead of a
 counter nobody can check.

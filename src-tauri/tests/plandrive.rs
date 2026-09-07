@@ -786,6 +786,226 @@ fn an_invalid_block_is_refused_in_the_tool_and_nothing_is_posted() {
     );
 }
 
+/// **Two `drive_plan` calls on one issue open exactly ONE planner** (rev-std
+/// round 1, finding 5).
+///
+/// The input is ordinary: an orchestrator batching two calls for the same issue
+/// in one turn. Before the reservation, both passed the unlocked
+/// `already-driven` read and both SPAWNED; only the loser's entry was rejected
+/// under the lock, leaving its pane running, unowned and unaudited — so
+/// `pd_plan_check` answered `NotDriven` for it and it could publish a second
+/// plan comment beside the winner's.
+///
+/// The pane count is the assertion, not the refusal: a refusal was already
+/// returned before the fix, and asserting only that would have passed against
+/// the defect.
+#[test]
+fn a_second_drive_on_one_issue_opens_no_second_planner() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, orch) = grouped(&reg, &repo);
+
+    // Read through `list_agents` — the same surface an orchestrator sees, so
+    // the count asserted is the count a human would find in the pane list.
+    let planners = || -> Vec<String> {
+        reg.list_agents(&group)
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .filter(|a| a["role"] == json!("planner"))
+                    .filter_map(|a| a["id"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(planners().len(), 0, "no planner exists before the first call");
+
+    let first = reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch, 1_000);
+    assert_eq!(first["driving"], json!(true), "{first}");
+    let second = reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch, 1_100);
+    assert_eq!(
+        second["refused"],
+        json!(plandrive::refusal::ALREADY_DRIVEN),
+        "the second call must be refused: {second}"
+    );
+
+    // THE assertion. One pane, and it is the winner's.
+    let panes = planners();
+    assert_eq!(
+        panes.len(),
+        1,
+        "the losing call must open no pane at all — an unowned planner can publish a second \
+         plan comment on the issue: {panes:?}"
+    );
+    assert_eq!(panes[0], first["planner"].as_str().unwrap_or_default());
+    // …and it is the drive's, so the one pane that exists is owned.
+    assert_eq!(reg.pd_owner(&group, &panes[0]), Some(3040));
+
+    // One entry too, so the reservation did not leave a duplicate behind.
+    let file = read_record(&reg, &group);
+    assert_eq!(file["entries"].as_array().map(Vec::len), Some(1), "{file}");
+}
+
+/// A spawn this group's cap refuses **rolls the reservation back**, so the issue
+/// is driveable again rather than parked on a drive whose planner never opened.
+///
+/// The control is the retry: the same call succeeds once the cap has room, which
+/// is what makes the first half a statement about the rollback rather than about
+/// a `drive_plan` that refuses twice for its own reasons.
+#[test]
+fn a_refused_spawn_leaves_no_reservation_behind() {
+    let repo = Repo::new();
+    // A cap with exactly enough room for the orchestrator and nothing else.
+    let (reg, _d) = test_registry();
+    let group = reg
+        .create_group(&repo.path(), Guardrails { max_agents: 2, ..rails() })
+        .unwrap()
+        .id;
+    let orch = reg
+        .spawn_agent(&group, Role::Orchestrator, "orch", "", false, None)
+        .expect("the orchestrator fits");
+    reg.set_pty_for_test(&orch.id, 7);
+    // The second and last slot, taken — so the planner spawn below is refused
+    // by the group's own live-delegate cap rather than by anything this test
+    // arranged specially.
+    let filler = reg
+        .spawn_agent(&group, Role::Worker, "filler", "", false, None)
+        .expect("the filler fits");
+    let gh = FakeGh::open(&["agent-ready"]);
+
+    let out = reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch.id, 1_000);
+    assert_eq!(
+        out["refused"],
+        json!(plandrive::refusal::PLANNER_UNSPAWNABLE),
+        "the cap must refuse the planner: {out}"
+    );
+    // The rollback: no entry survives, so nothing is parked and nothing refuses
+    // a later attempt with `already-driven`.
+    let s = reg.plan_drive_status_with(&group, 1_100);
+    assert!(
+        s["drives"].as_array().is_none_or(|d| d.is_empty()),
+        "a refused spawn must leave no reservation: {s}"
+    );
+    assert!(!record_path(&reg, &group).exists() || read_record(&reg, &group)["entries"]
+        .as_array()
+        .is_none_or(|e| e.is_empty()));
+
+    // THE CONTROL: with room — freed the way an orchestrator frees one — the
+    // identical call drives.
+    reg.kill_agent(&filler.id).expect("the filler can be killed");
+    let out = reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch.id, 1_200);
+    assert_eq!(out["driving"], json!(true), "the same call must drive once there is room: {out}");
+}
+
+/// **The restart reconcile reads NON-TERMINAL entries, not live ones** — the
+/// figure `PD_MAX_GH_PER_TICK`'s doc and the design note both state.
+///
+/// A fixture where every entry is live cannot tell the two readings apart, which
+/// is the non-discriminating shape a corrected claim is most likely to ship
+/// with. Here one of the five is HELD, so `live` is 4 and `non_terminal` is 5
+/// and the two predictions differ by exactly one round trip.
+#[test]
+fn the_reconcile_reads_held_entries_too() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, orch) = grouped(&reg, &repo);
+
+    for issue in [1u64, 2, 3, 4, 5] {
+        let out = reg.drive_plan_with(&group, &gh, issue, None, None, None, &orch, 1_000);
+        assert_eq!(out["driving"], json!(true), "#{issue}: {out}");
+    }
+    // Park #5 — through the real refusal bound, so the hold is one the machine
+    // produces rather than one a fixture wrote into the file.
+    let planner = reg
+        .plan_drive_status_with(&group, 1_010)["drives"]
+        .as_array()
+        .and_then(|d| d.iter().find(|e| e["issue"] == json!(5)))
+        .and_then(|e| e["planner"].as_str())
+        .expect("#5 has a planner")
+        .to_string();
+    for at in [1_010u64, 1_020, 1_030] {
+        let _ = reg.pd_plan_check_at(&group, &planner, 5, "no block here\n", at);
+    }
+    let held: Vec<u64> = reg.plan_drive_status_with(&group, 1_040)["drives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["state"] == json!("held"))
+        .filter_map(|e| e["issue"].as_u64())
+        .collect();
+    assert_eq!(held, vec![5], "exactly one entry is parked, and it is #5");
+
+    let before = gh.issue_views();
+    reg.pd_drive_group_with(&group, &gh, 1_100);
+    assert_eq!(
+        gh.issue_views() - before,
+        5 + 4,
+        "the reconcile reads all FIVE non-terminal entries (the held one included, because a \
+         restart must be able to learn its issue was closed), and the tick then services the \
+         four live ones — a `live` reading would predict 4 + 4: {:?}",
+        gh.calls()
+    );
+}
+
+/// **A store that fails after the post succeeded leaves no false record**, and
+/// the drive is recoverable rather than stuck (rev-std round 1, premortem).
+///
+/// The corner: a driven planner's block validates, `gh` posts it, and
+/// `plan_drives.json` is torn at that instant. The plan is live on GitHub and
+/// the record cannot be updated. What must NOT happen is a record claiming a
+/// plan it does not have, or one claiming a state the plan is not in.
+#[test]
+fn a_store_that_fails_after_the_post_records_nothing_false() {
+    let repo = Repo::new();
+    let (reg, _d) = test_registry();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, _orch, planner) = driven(&reg, &repo, &gh);
+
+    let doc = plandrive::validate_for_drive(&in_comment(PLAN), 3040, &roster()).unwrap();
+    // The record goes unreadable between the validate and the store — which is
+    // exactly where `post_issue_comment` has already reached `gh`.
+    std::fs::write(record_path(&reg, &group), "{ not json").unwrap();
+    reg.pd_store_posted_plan_at(&group, 3040, doc, "https://example/c/9", 1_100);
+
+    // Unrepaired, and no invented entry.
+    assert_eq!(
+        std::fs::read_to_string(record_path(&reg, &group)).unwrap(),
+        "{ not json",
+        "a store that could not read the record must not rewrite it"
+    );
+    // The tool answered success and the plan IS on the issue, so the honest
+    // state is "orrerix cannot read its record" — never "no plan was posted".
+    let s = reg.plan_drive_status_with(&group, 1_200);
+    assert_eq!(s["refused"], json!(plandrive::refusal::STATE_UNREADABLE), "{s}");
+
+    // And it is recoverable: with the record restored by hand, the drive is
+    // still `planning` — the plan is on GitHub and the record never claimed
+    // otherwise, so a human re-runs the planner or boards it themselves. The
+    // control is that this same status call reads normally again, so the
+    // assertion above was about the torn file rather than about a drive that
+    // had gone missing.
+    let mut fixed = plandrive::PlanDrivesState::default();
+    let mut entry = plandrive::PdEntry::new(
+        3040,
+        "orch-1",
+        "plan-lead",
+        Consent::Ready,
+        None,
+        0,
+        1_000,
+    );
+    entry.planner_agent = planner.clone();
+    fixed.entries.push(entry);
+    std::fs::write(
+        record_path(&reg, &group),
+        serde_json::to_string(&fixed).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(drive_state(&reg, &group), "planning");
+}
+
 // ── §2(b) step 4 / §2(e): the planner's own end ─────────────────────────────
 
 
@@ -1142,24 +1362,6 @@ fn resuming_a_live_drive_is_not_held_and_not_not_driven() {
     assert_eq!(out["refused"], json!(plandrive::refusal::NOT_DRIVEN), "{out}");
 }
 
-/// A second `drive_plan` on a live drive is refused, so one issue never gets
-/// two planners.
-#[test]
-fn a_second_drive_on_one_issue_is_refused() {
-    let repo = Repo::new();
-    let (reg, _d) = test_registry();
-    let gh = FakeGh::open(&["agent-ready"]);
-    let (group, orch, _planner) = driven(&reg, &repo, &gh);
-
-    let out = reg.drive_plan_with(&group, &gh, 3040, None, None, None, &orch, 1_100);
-    assert_eq!(out["refused"], json!(plandrive::refusal::ALREADY_DRIVEN), "{out}");
-    let file = read_record(&reg, &group);
-    assert_eq!(
-        file["entries"].as_array().map(Vec::len),
-        Some(1),
-        "one issue, one entry: {file}"
-    );
-}
 
 // ── the tick's own bounds ───────────────────────────────────────────────────
 

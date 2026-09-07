@@ -3679,7 +3679,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                     crate::plandrive::PLAN_REVIEW_MINUTES_MAX,
                 ),
                 crate::plandrive::PLAN_REVIEW_MINUTES_DEFAULT,
-                "a plan-review window past two hours is a drive nobody is coming back to, and                  the window costs one orchestrator notice to announce",
+                "a plan-review window past two hours is a drive nobody is coming back to, and the window costs one orchestrator notice to announce",
                 &mut errs,
             ),
             planner_timeout_minutes: driver_counter(
@@ -3690,7 +3690,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                     crate::plandrive::PLANNER_TIMEOUT_MINUTES_MAX,
                 ),
                 crate::plandrive::PLANNER_TIMEOUT_MINUTES_DEFAULT,
-                "a planner reading a large issue legitimately spends a quarter of an hour before                  its first tool call, and three hours is the point past which it is not coming                  back at all",
+                "a planner reading a large issue legitimately spends a quarter of an hour before its first tool call, and three hours is the point past which it is not coming back at all",
                 &mut errs,
             ),
         },
@@ -5838,6 +5838,73 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+
+    /// Every `parse_workflow` ERROR is one paragraph too — the twin population
+    /// [`every_listing_finding_is_one_paragraph`] does not reach.
+    ///
+    /// That test pins `list_workflows`' own findings; these are a different set,
+    /// produced by a different function, and reaching a human by a different
+    /// route: `parse_workflow`'s `errs` surface as `WorkflowEntry::errors` in
+    /// the picker and as the refusal a spawn gate reports. Nothing pinned their
+    /// shape, and that gap is exactly how two new eighteen-space runs shipped
+    /// green in #3040 P3a's `plan_review_minutes` and `planner_timeout_minutes`
+    /// refusals — in a PR whose own body was, at the time, describing this bug
+    /// class as something someone else should fix.
+    ///
+    /// Both shapes, for the reason the sibling gives: a `\n` plus indentation
+    /// ships the source's leading spaces, and a continuation that collapsed
+    /// leaves the same run with no `\n` to notice.
+    #[test]
+    fn every_parse_error_is_one_paragraph() {
+        // One document that trips as many refusing checks as it can, so the
+        // population is wide rather than the two keys this test was written for.
+        let doc = "\
+version: 1
+name: broken
+blocks:
+  - id: w
+    kind: worker
+  - id: p
+    kind: planner
+gates:
+  merge:
+    require: all-pass
+driver:
+  enabled: true
+  plan_enabled: true
+  max_review_rounds: 9
+  max_ci_attempts: 0
+  max_rebase_attempts: 7
+  plan_review_minutes: 500
+  planner_timeout_minutes: 2
+";
+        let errs = parse_workflow(doc).expect_err("this document must be refused");
+
+        // The positive control, and it is load-bearing twice over: an empty
+        // list satisfies the loop below just as well, and a list of two would
+        // mean the document stopped tripping most of what it was built to trip.
+        assert!(
+            errs.len() >= 5,
+            "the fixture must really produce a wide error set, or this pins almost nothing: {errs:?}"
+        );
+        // …and the two this test exists for are in it by NAME, so a fixture edit
+        // that stopped reaching them fails here rather than passing vacuously.
+        for key in ["driver.plan_review_minutes", "driver.planner_timeout_minutes"] {
+            assert!(
+                errs.iter().any(|e| e.starts_with(key)),
+                "the fixture no longer reaches {key}: {errs:?}"
+            );
+        }
+
+        for m in &errs {
+            assert!(!m.contains('\n'), "a parse error must not carry a newline: {m:?}");
+            assert!(
+                !m.contains("          "),
+                "a parse error must not carry a ten-space run — a `\\` continuation that \
+                 collapsed leaves one with no newline to notice: {m:?}"
+            );
+        }
+    }
 
     // ── the listing's two bounds, and the names-only walk (#1689 slice B) ──
     //

@@ -3883,10 +3883,23 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // id it minted at spawn, so the two sets are disjoint by
             // construction, not by precedence.
             //
-            // Only asked for a PLANNER caller, so every other report pays one
-            // comparison rather than a file read.
-            let pd_issue = if caller.role == Role::Planner {
+            // #3040 P3b: **and a driven SLICE's worker reports to its plan
+            // drive too**, for the window between its spawn and the moment its
+            // PR reaches the review driver. After that hand-off the worker is
+            // `rd_owner`'s, and the match below asks that FIRST — so the plan
+            // driver only ever sees a worker `rd_owner` answered `None` for,
+            // which is exactly the window this interception is for. The two
+            // sets are disjoint by construction rather than by precedence.
+            //
+            // Asked only for a planner or a worker, so every other report pays
+            // one comparison rather than a file read.
+            let pd_planner = if caller.role == Role::Planner {
                 reg.pd_owner(&caller.group, &caller.agent_id)
+            } else {
+                None
+            };
+            let pd_slice = if caller.role == Role::Worker && pd_planner.is_none() {
+                reg.pd_slice_owner(&caller.group, &caller.agent_id)
             } else {
                 None
             };
@@ -4004,8 +4017,8 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 // saying it is still writing — but it is still CONSUMED and
                 // audited, because a driven planner's traffic reaching this pane
                 // is the leak the interception exists to stop.
-                None if pd_issue.is_some() => {
-                    let issue = pd_issue.unwrap_or_default();
+                None if pd_planner.is_some() => {
+                    let issue = pd_planner.unwrap_or_default();
                     let event = match status {
                         "done" => Some(super::PdEvent::PlannerDone),
                         "blocked" => Some(super::PdEvent::PlannerBlocked),
@@ -4016,6 +4029,36 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                         issue,
                         &caller.agent_id,
                         &format!("report:planner:{status}"),
+                        event,
+                    );
+                }
+                // #3040 P3b: a driven SLICE's worker. `done` carries the `ref`
+                // it named, which the driver may resolve a PR number out of —
+                // a HINT, never the thing that decided this report was
+                // intercepted, which was the agent id orrerix minted at spawn.
+                // `blocked` carries the note, because a hold whose notice does
+                // not say what the worker said is a hold nobody can act on.
+                // `progress` carries nothing: a plan drive advances on PRs and
+                // on the board, never on a delegate saying it is still going.
+                None if pd_slice.is_some() => {
+                    let (issue, slice) = pd_slice.clone().unwrap_or_default();
+                    let event = match status {
+                        "done" => Some(super::PdEvent::WorkerDone {
+                            slice: slice.clone(),
+                            pr_ref: arg_str(args, "ref").unwrap_or_default().to_string(),
+                        }),
+                        "blocked" => Some(super::PdEvent::WorkerBlocked {
+                            slice: slice.clone(),
+                            note: note.or(summary).unwrap_or_default().to_string(),
+                        }),
+                        _ => None,
+                    };
+                    reg.pd_consume_slice(
+                        &caller.group,
+                        issue,
+                        &slice,
+                        &caller.agent_id,
+                        &format!("report:slice:{status}"),
                         event,
                     );
                 }

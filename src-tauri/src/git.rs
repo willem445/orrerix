@@ -816,15 +816,15 @@ pub async fn git_discard(repo: String, path: String, untracked: bool) -> Result<
 
 /// Names must be usable both as a branch name and as a relative directory:
 /// letters, digits, `. _ - /`, no leading `-` or `/`, no `..`, no trailing `/`.
+///
+/// **The rule itself lives in the engine now** (#3040), so that a PLAN choosing
+/// a branch can be refused against it at post time — with a line number the
+/// planner can act on inside its own turn — rather than validating, boarding
+/// every row, and then failing every spawn here with a message about a name
+/// nobody can change any more. Delegating rather than re-spelling is what keeps
+/// that one rule; two copies is the drift `pathseg` exists to end.
 fn valid_worktree_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.starts_with('-')
-        && !name.starts_with('/')
-        && !name.ends_with('/')
-        && !name.contains("..")
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+    loomux_engine::pathseg::worktree_name_ok(name)
 }
 
 /// Resolve the ref a fresh agent branch should be cut from when the caller

@@ -1,4 +1,4 @@
-//! The plan driver's pure core (#3040 P3a) — the state machine, the persisted
+//! The plan driver's pure core (#3040) — the state machine, the persisted
 //! shape, and the per-tick decision. `crates/loomux-engine/src/reviewdrive.rs`
 //! is the twin this file is deliberately shaped after, and the registry-side
 //! wiring is `src-tauri/src/orchestration/pdtick.rs`, `rdtick.rs`'s twin.
@@ -17,18 +17,26 @@
 //! spawns panes, writes the record and delivers notices; it makes no state
 //! decision.
 //!
-//! # The scope line, stated because a reader will look for the missing half
+//! # The two halves, and where the second one's work happens
 //!
-//! P3a ships the drive as far as a plan: refuse, spawn a planner, validate and
-//! store the block the planner posts, and then STOP — an `agent-investigation`
-//! issue completes at that point by design (it never wanted workers), and an
-//! `agent-ready` one parks at [`PdHeldReason::AwaitingP3b`], which is a named
-//! hold with a notice rather than a drive that silently does nothing. P3b adds
-//! the executor: board rows, slice spawns, and the hand-off to the review
-//! driver. The state and reason vocabularies here are therefore exactly what
-//! P3a *produces*; P3b extends both, and an older build reading a newer file
-//! refuses it loudly through [`parse_state`] rather than acting on a word it
-//! cannot read.
+//! The drive runs in two halves. The first reaches a PLAN: refuse, spawn a
+//! planner, and store the block the planner posts — at which point an
+//! `agent-investigation` issue is finished by design, because the plan is what
+//! it wanted. The second EXECUTES that plan for an `agent-ready` issue: board
+//! rows, spawn a worker per ready slice, hand each PR to the review driver, and
+//! mark a row `done` on a positively MERGED PR.
+//!
+//! **Only the first half's decisions are all here.** A board write, a spawn and
+//! a `gh pr view` are things only the registry can do, so the executor's arcs
+//! ([`PlanDriveState::Boarding`], [`PlanDriveState::Running`]) are decided here
+//! off FACTS the wiring reads — `boarded`, `row_removed`, `slices_settled`,
+//! `running_idle` — and performed there. Per-SLICE state ([`PdSlice`]) is a
+//! record of what happened rather than a second machine: it has no `decide`,
+//! because every one of its transitions is caused by something the wiring
+//! observed.
+//!
+//! An older build reading a record this one wrote refuses it loudly through
+//! [`parse_state`] rather than acting on a state word it cannot read.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -55,11 +63,24 @@ pub enum PlanDriveState {
     Planning,
     /// A valid plan block has been stored, with the comment it was posted as.
     PlanPosted,
-    /// The plan is being turned into board rows. **P3a parks here** — see the
-    /// module doc and [`PdHeldReason::AwaitingP3b`].
+    /// The declared review window (§2(c)): the plan is posted, ONE notice has
+    /// been sent, and the drive is waiting out `plan_review_minutes` so the
+    /// orchestrator can `cancel_plan_drive` before a single worker is spawned.
+    /// Skipped entirely when the window is zero, which is the default — a
+    /// window nobody is told about is unused, and the notice is the price.
+    PlanReview,
+    /// The plan is being turned into board rows: one parent row for the issue
+    /// and one child row per slice, written through `upsert_task` as an agent
+    /// so `find_dep_cycle` and the WIP caps run exactly as they do for the
+    /// orchestrator's own boarding.
     Boarding,
-    /// Terminal: the drive did everything it was going to do. In P3a that is an
-    /// `agent-investigation` issue whose plan is posted.
+    /// The rows are on the board and the drive is executing them: claim, spawn,
+    /// hand the PR to the review driver, mark `done` on a positively MERGED
+    /// PR, and let the dependents become ready. **At most one spawn per group
+    /// per tick**, after the review driver has spent its own.
+    Running,
+    /// Terminal: the drive did everything it was going to do — every slice row
+    /// settled, or an `agent-investigation` issue whose plan is posted.
     Complete,
     /// Terminal: cancelled by tool, or reconcile positively established the
     /// issue is closed.
@@ -73,10 +94,12 @@ impl PlanDriveState {
     /// Every state, so a test can walk the machine without matching on the
     /// enum — which is what lets it fail when a seventh is added rather than
     /// silently keep checking six.
-    pub const ALL: [PlanDriveState; 6] = [
+    pub const ALL: [PlanDriveState; 8] = [
         PlanDriveState::Planning,
         PlanDriveState::PlanPosted,
+        PlanDriveState::PlanReview,
         PlanDriveState::Boarding,
+        PlanDriveState::Running,
         PlanDriveState::Complete,
         PlanDriveState::Cancelled,
         PlanDriveState::Held,
@@ -87,7 +110,9 @@ impl PlanDriveState {
         match self {
             PlanDriveState::Planning => "planning",
             PlanDriveState::PlanPosted => "plan-posted",
+            PlanDriveState::PlanReview => "plan-review",
             PlanDriveState::Boarding => "boarding",
+            PlanDriveState::Running => "running",
             PlanDriveState::Complete => "complete",
             PlanDriveState::Cancelled => "cancelled",
             PlanDriveState::Held => "held",
@@ -144,9 +169,17 @@ pub enum PdHeldReason {
     /// The issue's `agent-ready`/`agent-investigation` label was withdrawn
     /// while the drive was live (§2(d)). Consent is re-read, not remembered.
     ConsentWithdrawn,
-    /// The plan is boarded no further because **this build has no executor**
-    /// (#3040 P3b). A named, audited, notice-bearing park — never a tick that
-    /// quietly does nothing.
+    /// A slice's board row was **struck by hand** while the drive was running
+    /// (§2(c)). Its dependents now carry a dangling dep, which is unmet
+    /// forever, so the drive parks naming the row rather than waiting out a
+    /// timeout it can already see coming.
+    RowRemoved,
+    /// **Nothing this build produces.** Kept because a `plan_drives.json`
+    /// written by the build that shipped #3040 P3a can carry it, and a hold
+    /// whose reason this build could not read would be a hold it could not
+    /// explain. A drive resumed off such a record re-enters `boarding` and
+    /// this build boards it — which is exactly what the reason said was
+    /// missing.
     AwaitingP3b,
     /// The whole drive outran `driver.drive_timeout_minutes` (the review
     /// driver's own knob, reused) without reaching a terminal state.
@@ -157,12 +190,13 @@ impl PdHeldReason {
     /// Every reason, so the notice table and the audit vocabulary can be
     /// checked against the enum rather than against a list someone has to
     /// remember to extend.
-    pub const ALL: [PdHeldReason; 7] = [
+    pub const ALL: [PdHeldReason; 8] = [
         PdHeldReason::PlanInvalid,
         PdHeldReason::PlanMissing,
         PdHeldReason::PlannerStalled,
         PdHeldReason::PlannerBlocked,
         PdHeldReason::ConsentWithdrawn,
+        PdHeldReason::RowRemoved,
         PdHeldReason::AwaitingP3b,
         PdHeldReason::DriveStalled,
     ];
@@ -175,6 +209,7 @@ impl PdHeldReason {
             PdHeldReason::PlannerStalled => "planner-stalled",
             PdHeldReason::PlannerBlocked => "planner-blocked",
             PdHeldReason::ConsentWithdrawn => "consent-withdrawn",
+            PdHeldReason::RowRemoved => "row-removed",
             PdHeldReason::AwaitingP3b => "awaiting-p3b",
             PdHeldReason::DriveStalled => "drive-stalled",
         }
@@ -205,9 +240,13 @@ impl PdHeldReason {
                 "the issue no longer carries agent-ready or agent-investigation, so the drive \
                  stopped — consent is the label, and it is re-read rather than remembered"
             }
+            PdHeldReason::RowRemoved => {
+                "a slice's board row was struck, so its dependents can never become ready — re-dep \
+                 them by hand, or resume the drive once the board says what you meant"
+            }
             PdHeldReason::AwaitingP3b => {
-                "the plan is posted and validated; boarding it and spawning its slices is not in \
-                 this build (#3040 P3b), so the rows and the briefs are yours"
+                "the plan is posted and validated; boarding it and spawning its slices was not in \
+                 the build that parked it — resume the drive and this build boards it"
             }
             PdHeldReason::DriveStalled => {
                 "the drive outran driver.drive_timeout_minutes without finishing"
@@ -215,6 +254,21 @@ impl PdHeldReason {
         }
     }
 }
+
+/// How long a slice whose worker reported `done` waits for a PR to appear on
+/// its branch before parking on [`PdSliceHold::PrMissing`].
+///
+/// **Its own constant, not [`crate::reviewdrive::CAP_HOLD_MS`] reused**, though
+/// the two are the same figure today. That one bounds a delegate cap — a
+/// condition orrerix cannot influence and can only wait out; this bounds a
+/// worker's own claim to have finished, which is a different thing to be
+/// patient about. One name per meaning, so a later change to either does not
+/// silently move the other.
+///
+/// Fifteen minutes is generous for what it measures: a worker reports `done`
+/// after pushing, so the PR is normally visible on the very next tick, and the
+/// retry that covers the ordinary lag is the same one this bounds.
+pub const PR_WAIT_HOLD_MS: u64 = 15 * 60_000;
 
 /// How many refused plan blocks one drive tolerates before parking (§2(e)).
 ///
@@ -255,16 +309,28 @@ pub fn transition(
         (Planning, PlanPosted) => true,
         // 2. `agent-investigation`: the plan IS the deliverable (§2(d)).
         (PlanPosted, Complete) => true,
-        // 3. `agent-ready`: the plan becomes board rows.
-        (PlanPosted, Boarding) => true,
-        // 4. Every hold, from every live state.
-        (Planning | PlanPosted | Boarding, Held) => true,
-        // 5. `resume_plan_drive`, back into the state the hold came from.
-        (Held, Planning) | (Held, PlanPosted) | (Held, Boarding) => true,
-        // 6. `cancel_plan_drive`, or reconcile positively established the issue
+        // 3. `agent-ready` with a declared window: ONE notice, then wait.
+        (PlanPosted, PlanReview) => true,
+        // 4. `agent-ready`: the plan becomes board rows — straight from
+        //    `plan-posted` when no window is declared (the default), or out of
+        //    the window once it has run.
+        (PlanPosted, Boarding) | (PlanReview, Boarding) => true,
+        // 5. The rows are written; the drive executes them.
+        (Boarding, Running) => true,
+        // 6. Every slice row settled.
+        (Running, Complete) => true,
+        // 7. Every hold, from every live state.
+        (Planning | PlanPosted | PlanReview | Boarding | Running, Held) => true,
+        // 8. `resume_plan_drive`, back into the state the hold came from.
+        (Held, Planning)
+        | (Held, PlanPosted)
+        | (Held, PlanReview)
+        | (Held, Boarding)
+        | (Held, Running) => true,
+        // 9. `cancel_plan_drive`, or reconcile positively established the issue
         //    is closed. From any non-terminal, `held` included: cancelling is a
         //    parked drive's second way out.
-        (Planning | PlanPosted | Boarding | Held, Cancelled) => true,
+        (Planning | PlanPosted | PlanReview | Boarding | Running | Held, Cancelled) => true,
         _ => false,
     };
     if ok {
@@ -353,13 +419,11 @@ pub const PLANNER_TIMEOUT_MINUTES_DEFAULT: u32 = 60;
 pub struct PdLimits {
     /// `driver.planner_timeout_minutes`.
     pub planner_timeout_minutes: u32,
-    /// `driver.plan_review_minutes`. **P3a stores it and spends it on
-    /// nothing** — the review window is P3b's — and it lands here in P3a so
-    /// that the repo key, the record and the status view are one contract
-    /// rather than three separate landings.
-    /// `the_declared_review_window_moves_no_arc_in_this_build` pins that it
-    /// changes no decision here, which is a counterfactual a later slice can
-    /// invert rather than a promise nothing checks.
+    /// `driver.plan_review_minutes` — the DEFAULT for a `drive_plan` call that
+    /// names no window of its own. Resolved once, at `drive_plan`, into
+    /// [`PdEntry::review_minutes`], so a tick reads ONE number rather than
+    /// reconciling two; `decide` therefore never reads this field, and that is
+    /// why a repo key and a per-call argument cannot disagree at run time.
     pub plan_review_minutes: u32,
     /// `driver.drive_timeout_minutes` — the review driver's own knob, reused
     /// rather than duplicated (§3): it bounds the same quantity, a whole
@@ -469,6 +533,312 @@ impl PlanDrivesState {
     }
 }
 
+/// Where one SLICE of a running plan stands (§2(b) step 6).
+///
+/// **Per slice, and that is the whole point of the state living here rather
+/// than on the drive.** A worker reporting `blocked` parks ITS slice; the
+/// independent slices keep going. A drive-level hold is for the three things
+/// that really are drive-wide — consent withdrawn, a struck row, the stall
+/// backstop — and nothing else is allowed to stop a plan wholesale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SliceState {
+    /// Boarded, waiting for its deps and for the one spawn slot a tick has.
+    Queued,
+    /// A worker pane is open on it.
+    Running,
+    /// Its PR was handed to the review driver, which owns the pane from there.
+    InReview,
+    /// Its PR is positively MERGED and its board row says `done`.
+    Done,
+    /// Parked, carrying a [`PdSliceHold`]. The drive keeps running.
+    Held,
+}
+
+impl SliceState {
+    /// Every state, so a test walks the machine rather than a remembered list.
+    pub const ALL: [SliceState; 5] = [
+        SliceState::Queued,
+        SliceState::Running,
+        SliceState::InReview,
+        SliceState::Done,
+        SliceState::Held,
+    ];
+
+    /// The wire/audit spelling — the string serde writes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SliceState::Queued => "queued",
+            SliceState::Running => "running",
+            SliceState::InReview => "in-review",
+            SliceState::Done => "done",
+            SliceState::Held => "held",
+        }
+    }
+
+    /// Parse a state word; `None` for anything unrecognized.
+    pub fn parse(s: &str) -> Option<SliceState> {
+        SliceState::ALL.into_iter().find(|st| st.as_str() == s.trim())
+    }
+}
+
+/// Why one slice is parked while its drive keeps running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PdSliceHold {
+    /// The live-delegate cap refused this slice's spawn for longer than
+    /// [`crate::reviewdrive::CAP_HOLD_MS`]. **A cap refusal is not an error** —
+    /// the row stays `queued` and is retried every tick; this is the bound on
+    /// retrying forever, and it is the review driver's own `cap-full` with its
+    /// own constant, reused rather than re-chosen.
+    CapFull,
+    /// The slice's worker reported `blocked`. One notice, carrying the
+    /// worker's own note, and the other slices keep going.
+    WorkerBlocked,
+    /// The slice's PR was CLOSED without merging. A row is marked `done` only
+    /// on a positively-established MERGED PR, so this is the other positive
+    /// answer and it gets its own name rather than being waited out.
+    PrClosed,
+    /// The slice's worker reported `done` and **no PR ever appeared** on its
+    /// branch, for longer than [`PR_WAIT_HOLD_MS`].
+    ///
+    /// The worker violated its own definition of done, which is exactly the
+    /// wrongness this driver is built to survive — a `ref` is a HINT and a
+    /// missing one is meant to cost a `gh pr list` and no more. What it must
+    /// not cost is silence: without this bound the slice sits in
+    /// [`SliceState::Running`] forever, retrying a lookup that will never
+    /// succeed, and because a slice in `Running` makes
+    /// [`PdFacts::running_idle`] false the whole-drive backstop cannot see it
+    /// either. [`WorkerGone`](Self::WorkerGone) does not reach this one: that
+    /// arm skips a slice whose worker HAS reported, because a worker that
+    /// reports and then exits is a worker that did its job.
+    ///
+    /// **Held whether the pane is alive or dead**, and that is one rule rather
+    /// than two: a worker that said it was finished a quarter of an hour ago
+    /// and produced no PR is not about to, and a live pane makes the claim no
+    /// truer. The bound is what distinguishes it from a worker that reports
+    /// `done` a moment before its PR is visible, which is the common case and
+    /// is retried exactly as before.
+    PrMissing,
+    /// The slice's worker PANE DIED without ever reporting — a CLI crash, a
+    /// kill, a machine that went away.
+    ///
+    /// **Without this arc the drive runs forever in silence**, which is the one
+    /// outcome the whole design exists to avoid. Nothing synthesizes a report
+    /// for a dead pane: the interception in `mcp.rs` fires only when the worker
+    /// itself calls `report`, so a crashed worker leaves its slice in
+    /// [`SliceState::Running`] — and a slice in `Running` is exactly what makes
+    /// [`PdFacts::running_idle`] false, so even the stall backstop cannot see
+    /// it. The planner has had this arm since P3a
+    /// ([`PdHeldReason::PlanMissing`] via `planner_live`); this is the
+    /// worker's, and it is the same rule.
+    WorkerGone,
+}
+
+impl PdSliceHold {
+    /// Every reason, so the notice table is checked against the enum.
+    pub const ALL: [PdSliceHold; 5] = [
+        PdSliceHold::CapFull,
+        PdSliceHold::WorkerBlocked,
+        PdSliceHold::PrClosed,
+        PdSliceHold::PrMissing,
+        PdSliceHold::WorkerGone,
+    ];
+
+    /// The wire/audit spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PdSliceHold::CapFull => "cap-full",
+            PdSliceHold::WorkerBlocked => "worker-blocked",
+            PdSliceHold::PrClosed => "pr-closed",
+            PdSliceHold::PrMissing => "pr-missing",
+            PdSliceHold::WorkerGone => "worker-gone",
+        }
+    }
+
+    /// Parse a reason word; `None` for anything unrecognized.
+    pub fn parse(s: &str) -> Option<PdSliceHold> {
+        PdSliceHold::ALL.into_iter().find(|r| r.as_str() == s.trim())
+    }
+
+    /// The one sentence this slice hold's notice leads with. Held beside the
+    /// reason for [`PdHeldReason::notice_line`]'s reason.
+    pub fn notice_line(self) -> &'static str {
+        match self {
+            PdSliceHold::CapFull => {
+                "the live-delegate cap refused this slice's worker for long enough that the \
+                 drive stopped retrying — free a delegate and resume the drive"
+            }
+            PdSliceHold::WorkerBlocked => {
+                "its worker reported blocked; the other slices are still going"
+            }
+            PdSliceHold::PrClosed => {
+                "its PR was closed without merging, so the slice is not done and its dependents \
+                 will never become ready on their own"
+            }
+            PdSliceHold::PrMissing => {
+                "its worker reported done and no PR ever appeared on its branch, so there is \
+                 nothing to hand to the review driver — check what that worker actually pushed"
+            }
+            PdSliceHold::WorkerGone => {
+                "its worker's pane died without ever reporting, so nothing is going to finish this \
+                 slice — free its board row and resume the drive, or brief it by hand"
+            }
+        }
+    }
+}
+
+/// One slice's run state, keyed in [`PdEntry::slices`] by the slice id.
+///
+/// **The plan is not copied in here.** Everything a slice IS — its title,
+/// branch, block, deps, brief and `hold` flag — is read off the stored
+/// [`PlanDoc`] every tick, so there is exactly one copy of it and a plan and
+/// its run state cannot drift. What lives here is only what HAPPENED: the row
+/// it was boarded as, how far it got, and the pane and PR it produced.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PdSlice {
+    /// The board row this slice was boarded as.
+    pub task_id: String,
+    /// Private, so every write goes through [`PdSlice::advance`].
+    state: SliceState,
+    /// Set exactly when `state == Held`.
+    #[serde(default)]
+    pub hold: Option<PdSliceHold>,
+    /// The worker pane's agent id — the interception key, and empty until a
+    /// spawn succeeds.
+    #[serde(default)]
+    pub agent: String,
+    /// The worker's session, which is what the review driver resumes.
+    #[serde(default)]
+    pub session: String,
+    /// The slice's PR. `0` means "none yet"; a PR number is never zero.
+    #[serde(default)]
+    pub pr: u64,
+    /// When the live-delegate cap first refused this slice's spawn, or `0`.
+    /// **Cleared the moment a spawn succeeds**, so a slice that was starved and
+    /// then ran does not carry a clock toward a hold it has already escaped.
+    #[serde(default)]
+    pub cap_starved_since_ms: u64,
+    /// When the worker pane was opened.
+    #[serde(default)]
+    pub spawned_ms: u64,
+    /// When this slice started waiting for a PR that has not appeared — stamped
+    /// the first tick it is `reported_done` with no PR, cleared the moment one
+    /// resolves. `0` means "not waiting", which is why every read is guarded
+    /// rather than subtracted from blindly: an unset anchor is not an ancient
+    /// one, the rule [`cap_starved_since_ms`](Self::cap_starved_since_ms)
+    /// follows.
+    #[serde(default)]
+    pub pr_wait_since_ms: u64,
+    /// The worktree this slice was given, remembered so a slice released from a
+    /// hold RESUMES in the workspace it already had.
+    ///
+    /// Without it a released slice tries to cut its branch a second time and
+    ///  refuses the path that is already there — which made
+    /// the release fail silently, one layer below the board rollback that made
+    /// it fail silently the first time.
+    #[serde(default)]
+    pub cwd: String,
+    /// This slice's worker has reported `done`, and the hand-off to the review
+    /// driver has not happened yet.
+    ///
+    /// **On the RECORD rather than only in the tick's signal map**, and the
+    /// difference is a lost hand-off. A `report(done)` arrives as an event; the
+    /// tick that consumes it clears it whether or not it could act on it, and
+    /// the PR may not be resolvable on that tick at all — the worker named no
+    /// `ref` and `gh pr list --head` has not seen the branch yet, or `gh` was
+    /// down. Left in the signal map, that `done` is gone and the slice sits
+    /// `running` until the whole-drive stall backstop. Written here, the next
+    /// tick simply tries again.
+    ///
+    /// Cleared by the hand-off, which is the thing it is waiting for.
+    #[serde(default)]
+    pub reported_done: bool,
+    /// Fields written by a newer build, preserved verbatim.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl PdSlice {
+    /// A freshly boarded slice.
+    pub fn boarded(task_id: &str) -> PdSlice {
+        PdSlice {
+            task_id: task_id.to_string(),
+            state: SliceState::Queued,
+            hold: None,
+            agent: String::new(),
+            session: String::new(),
+            pr: 0,
+            cap_starved_since_ms: 0,
+            spawned_ms: 0,
+            pr_wait_since_ms: 0,
+            cwd: String::new(),
+            reported_done: false,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    /// This slice's state.
+    pub fn state(&self) -> SliceState {
+        self.state
+    }
+
+    /// Move to `to`, keeping `hold` set exactly when the destination is
+    /// `Held` — [`PdEntry::advance`]'s rule, for its reason: "parked with no
+    /// reason" and "working with a stale reason" are both unrepresentable
+    /// rather than merely unlikely.
+    pub fn advance(&mut self, to: SliceState, hold: Option<PdSliceHold>) {
+        self.hold = if to == SliceState::Held { hold } else { None };
+        self.state = to;
+    }
+
+    /// Whether this slice is finished as far as the DRIVE is concerned — the
+    /// only state that counts is `done`.
+    ///
+    /// A `held` slice is deliberately NOT settled: a drive that completed over
+    /// a parked slice would report success for work nobody did. What settles a
+    /// held slice is a human, on the board — see [`slice_settled_by_board`].
+    pub fn is_done(&self) -> bool {
+        self.state == SliceState::Done
+    }
+}
+
+/// Whether a board row is one **this drive's own claim is still holding**, and
+/// therefore one the driver may roll back (rev-std round 1, finding 3).
+///
+/// The driver rolls a row back in exactly two places — a refused spawn, and a
+/// released slice hold — and they had two different rules: the release checked
+/// the row still carried its slice's agent, the refusal checked nothing at all.
+/// A refused spawn would then reset a row a human had claimed in the window
+/// between the tick's board snapshot and `pd_spawn_slice`'s own claim, wiping
+/// their assignment over a cap refusal that had nothing to do with them.
+///
+/// One rule, and it is a `pub fn` over plain values rather than a condition
+/// spelled twice, because the race it guards is sub-second and not stageable
+/// from a test: the *decision* is pinnable here even though the *situation* is
+/// not. `claimant` is who the driver expects to find — `brand::AUDIT_ACTOR` for
+/// a spawn it just claimed, the slice's own agent for a pane that is being
+/// released.
+pub fn rollback_is_ours(status: &str, assignee: Option<&str>, claimant: &str) -> bool {
+    !claimant.is_empty()
+        && status.trim() == "in-progress"
+        && assignee.map(str::trim) == Some(claimant)
+}
+
+/// Board statuses that settle a slice **by the human's hand** (§2(c)).
+///
+/// `done` is the row the drive itself writes on a merged PR; `cancelled` and
+/// `blocked` are a human's terminal verdicts, and a drive must respect them
+/// rather than spawning over them — only `queued` is ever ready, so a row in
+/// either never spawns, and counting it as settled is what stops the drive
+/// waiting forever on a decision that has already been made.
+pub const SETTLED_ROW_STATUSES: [&str; 3] = ["done", "cancelled", "blocked"];
+
+/// Whether a board row's status settles its slice for the human.
+pub fn slice_settled_by_board(status: &str) -> bool {
+    SETTLED_ROW_STATUSES.contains(&status.trim())
+}
+
 /// One driven issue (§2(f)).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PdEntry {
@@ -533,10 +903,42 @@ pub struct PdEntry {
     /// When the plan was posted.
     #[serde(default)]
     pub posted_ms: u64,
-    /// Slice id -> board task id. **P3b fills this**; P3a persists the field so
-    /// that the record's shape does not change under a running fleet.
+    /// Slice id -> what has HAPPENED to that slice: its board row, how far it
+    /// got, the pane and the PR. Empty until [`PlanDriveState::Boarding`] has
+    /// run, and empty forever on an `agent-investigation` drive, which never
+    /// boards.
+    ///
+    /// A map rather than a `Vec` keyed by position because the plan is the
+    /// only thing that says what slices there ARE: a positional record would
+    /// go wrong the first time somebody resumed a drive off a record whose
+    /// plan had been re-posted, and a slice id is already a
+    /// `PathSegment`-checked value.
     #[serde(default)]
-    pub slice_tasks: BTreeMap<String, String>,
+    pub slices: BTreeMap<String, PdSlice>,
+    /// Where the in-review PR poll's round robin got to.
+    ///
+    /// **Persisted rather than restarted at zero every tick**, which is what
+    /// makes the poll fair: a drive with more in-review slices than the
+    /// per-tick budget would otherwise look at the same first few forever and
+    /// never notice a later one merging. Monotonic and taken modulo the list
+    /// length at read time, so a plan that shrinks cannot make it point off the
+    /// end.
+    #[serde(default)]
+    pub pr_poll_cursor: u64,
+    /// When the drive last made progress — a slice spawned, reached review,
+    /// merged or parked.
+    ///
+    /// **The stall meter for [`PlanDriveState::Running`], and it is a different
+    /// meter from the one the other states use** (§2(e)). A whole-drive AGE
+    /// bound is right for a drive that has not started work yet; for one that
+    /// is executing a plan it would park a perfectly healthy multi-day plan on
+    /// `drive-stalled` for the crime of being big. What is actually wrong in
+    /// `running` is a drive that has nothing spawnable, nothing in review, and
+    /// has not moved — which is what this measures. `0` means "never moved",
+    /// and every read falls back to `started_ms` rather than subtracting from
+    /// an unset anchor.
+    #[serde(default)]
+    pub last_progress_ms: u64,
     /// A notice this drive owes the orchestrator and has not delivered.
     #[serde(default)]
     pub owed: Option<OwedNotice>,
@@ -576,7 +978,9 @@ impl PdEntry {
             plan: None,
             comment_url: String::new(),
             posted_ms: 0,
-            slice_tasks: BTreeMap::new(),
+            slices: BTreeMap::new(),
+            pr_poll_cursor: 0,
+            last_progress_ms: 0,
             owed: None,
             extra: BTreeMap::new(),
         }
@@ -674,6 +1078,43 @@ impl PdEntry {
     /// How long the planner pane has been open, or `None` if there is none.
     pub fn planner_age_ms(&self, now_ms: u64) -> Option<u64> {
         (self.spawned_ms > 0).then(|| now_ms.saturating_sub(self.spawned_ms))
+    }
+
+    /// Stamp progress. Called by the wiring on every slice spawn, hand-off,
+    /// merge and park — the four things that mean this drive is alive.
+    pub fn note_progress(&mut self, now_ms: u64) {
+        self.last_progress_ms = now_ms;
+    }
+
+    /// How long since this drive last moved, measured from
+    /// [`last_progress_ms`](Self::last_progress_ms) and falling back to
+    /// `started_ms` for a drive that has not moved yet.
+    pub fn idle_ms(&self, now_ms: u64) -> u64 {
+        let anchor = if self.last_progress_ms > 0 { self.last_progress_ms } else { self.started_ms };
+        now_ms.saturating_sub(anchor)
+    }
+
+    /// This drive's own review window in milliseconds (§2(c)). Resolved at
+    /// `drive_plan` from the call's argument or the repo key, so there is one
+    /// number here rather than two to reconcile every tick.
+    pub fn review_window_ms(&self) -> u64 {
+        self.review_minutes as u64 * 60_000
+    }
+
+    /// Is this agent the worker of one of this drive's slices? Answers the
+    /// slice id.
+    ///
+    /// [`driven_role`](Self::driven_role)'s property, unchanged and for its
+    /// reason: keyed on the agent id orrerix minted at spawn, never on text a
+    /// caller supplies, and an empty `agent` matches nobody.
+    pub fn slice_of_agent(&self, agent_id: &str) -> Option<&str> {
+        if agent_id.is_empty() {
+            return None;
+        }
+        self.slices
+            .iter()
+            .find(|(_, s)| !s.agent.is_empty() && s.agent == agent_id)
+            .map(|(id, _)| id.as_str())
     }
 
     /// Owe the orchestrator a notice.
@@ -809,6 +1250,21 @@ pub struct PdFacts {
     pub planner_live: bool,
     /// What the planner reported this window.
     pub planner: PlannerSignal,
+    /// Every slice in the plan has a board row (§2(b) step 5). The wiring
+    /// writes the rows; this is how it says the writing is finished.
+    pub boarded: bool,
+    /// A slice this drive boarded no longer has a row — struck by hand
+    /// (§2(c)). Its dependents now carry a dangling dep, unmet forever.
+    pub row_removed: bool,
+    /// Every slice is settled: the record says `done`, or the human's own row
+    /// status does (`done`/`cancelled`/`blocked`). See
+    /// [`slice_settled_by_board`].
+    pub slices_settled: bool,
+    /// Nothing is spawnable and nothing is in review — the condition §2(e)
+    /// bounds with `drive_timeout_minutes`. A drive whose slices are all with
+    /// the review driver is waiting on THAT driver's clock, not on this one,
+    /// so it is not idle here.
+    pub running_idle: bool,
 }
 
 /// One tick's decision.
@@ -852,8 +1308,13 @@ impl PdStep {
 /// 4. **`blocked` outranks `done`.** The two can only both be present if the
 ///    planner said one and then the other, and `blocked` is the one that needs
 ///    a human — [`crate::reviewdrive`]'s own rule.
-/// 5. **The whole-drive backstop is last**, so a drive that has just moved is
-///    never parked for being old on the tick it did something.
+/// 5. **A struck row outranks everything the executor could otherwise do.** A
+///    dependent whose dep names no row is unmet forever, so carrying on would
+///    be spending ticks on work that cannot become ready.
+/// 6. **The stall backstop is last**, so a drive that has just moved is never
+///    parked for being old on the tick it did something — and in `running` it
+///    measures IDLENESS rather than age, because a big plan legitimately runs
+///    for days (see [`PdEntry::last_progress_ms`]).
 pub fn decide(entry: &PdEntry, facts: &PdFacts, limits: &PdLimits) -> Option<PdStep> {
     use PlanDriveState::*;
     let state = entry.state();
@@ -912,24 +1373,111 @@ pub fn decide(entry: &PdEntry, facts: &PdFacts, limits: &PdLimits) -> Option<PdS
             // §2(d): research only. The plan IS the deliverable; the drive
             // never boards and never spawns a worker.
             Consent::Investigation => Some(PdStep::to(Complete)),
+            // §2(c): the declared review window, and the DEFAULT is no window
+            // at all. Under `agent-ready` the human has already pressed go, and
+            // a window costs the orchestrator turn this whole design exists to
+            // remove — so it is paid only when somebody asked for it.
+            Consent::Ready if entry.review_window_ms() > 0 => Some(PdStep::to(PlanReview)),
             Consent::Ready => Some(PdStep::to(Boarding)),
         },
-        // P3a has no executor. A named, audited, notice-bearing park — never a
-        // tick that quietly does nothing. See the module doc.
-        Boarding => Some(PdStep::held(PdHeldReason::AwaitingP3b)),
+        // The window, waited out against the state clock rather than the
+        // drive's: it is time in THIS state that was promised.
+        PlanReview => (entry.state_elapsed_ms(facts.now_ms) >= entry.review_window_ms())
+            .then(|| PdStep::to(Boarding)),
+        // The wiring writes the rows; this arc is it saying they are written.
+        // A drive that cannot board — a WIP cap, an unwritable board — simply
+        // stays here and is bounded by the backstop below, which is the same
+        // shape a cap-starved slice gets.
+        Boarding => facts.boarded.then(|| PdStep::to(Running)),
+        Running => facts.slices_settled.then(|| PdStep::to(Complete)),
         // Unreachable: `is_live` excluded all three above. Spelled out rather
-        // than caught by a `_` arm so that a seventh state cannot land here
+        // than caught by a `_` arm so that a ninth state cannot land here
         // silently.
         Complete | Cancelled | Held => None,
     };
+    // 5. Above the arcs' own answer, but below the state match, because a
+    // struck row is only meaningful once there are rows: it is read off the
+    // board against the slices this drive boarded.
+    if facts.row_removed && matches!(state, Boarding | Running) {
+        return Some(PdStep::held(PdHeldReason::RowRemoved));
+    }
     if step.is_some() {
         return step;
     }
-    // 5.
-    if entry.age_ms(facts.now_ms) >= limits.drive_timeout_ms() {
+    // 6. **A declared review window is not a stall** (rev-std round 1, finding
+    //    4). The backstop outside `running` measures whole-drive AGE, which
+    //    includes a window the caller deliberately asked to wait out — so
+    //    `drive_plan(review_minutes: 2000)` against the 720-minute default
+    //    parked the drive on `drive-stalled` for doing exactly what it was
+    //    told, with a notice naming the wrong cause. A drive inside its window
+    //    is bounded by the window ITSELF: the `plan-review -> boarding` arc
+    //    above fires on the tick it elapses, so this is a suppression with an
+    //    end rather than an exemption.
+    let in_window = state == PlanReview
+        && entry.state_elapsed_ms(facts.now_ms) < entry.review_window_ms();
+    let stalled = if state == Running {
+        facts.running_idle && entry.idle_ms(facts.now_ms) >= limits.drive_timeout_ms()
+    } else if in_window {
+        false
+    } else {
+        entry.age_ms(facts.now_ms) >= limits.drive_timeout_ms()
+    };
+    if stalled {
         return Some(PdStep::held(PdHeldReason::DriveStalled));
     }
     None
+}
+
+// ── §3 the brief ────────────────────────────────────────────────────────────
+
+/// **The brief one slice's worker is kicked off with** (§3), composed here so
+/// that its layout is pinnable from a Tauri-free test.
+///
+/// Three parts, in this order and separated by one blank line each:
+///
+/// 1. a HEADER orrerix writes — the issue, the slice, the branch it is cut
+///    from and to, the files the plan asked it not to touch, and the
+///    red-before-green line the planner named;
+/// 2. the planner's own `brief:`, **VERBATIM**. Nobody rewrites it, nothing is
+///    truncated, and the only thing that touches it is the pane-text
+///    sanitizer — which the CALLER applies, and passes in already applied, so
+///    that a test of this function cannot accidentally certify a composition
+///    the live site does not perform;
+/// 3. the definition of done, the one copy every brief in this repo quotes.
+///
+/// `brief` and `dod` arrive as values for that second reason and for a third:
+/// this crate cannot see `src-tauri`'s templates at all.
+pub fn slice_brief(
+    issue: u64,
+    slice: &plandoc::Slice,
+    base: Option<&str>,
+    brief_sanitized: &str,
+    dod: &str,
+) -> String {
+    let mut header = vec![
+        format!(
+            "You are slice `{}` of the plan for issue #{issue}: {}.",
+            slice.id.as_str(),
+            slice.title
+        ),
+        format!("Branch: `{}`", slice.branch.as_str()),
+        format!(
+            "Base: `{}`",
+            base.map(str::trim)
+                .filter(|b| !b.is_empty())
+                .unwrap_or("the repository default branch")
+        ),
+    ];
+    if !slice.avoid_files.is_empty() {
+        header.push(format!("Do not touch: {}", slice.avoid_files.join(", ")));
+    }
+    if let Some(r) = slice.red_before_green.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        header.push(format!("Red before green: {r}"));
+    }
+    // The header is joined and the two joints are fixed. **The planner's text is
+    // neither trimmed nor wrapped nor re-indented** — "verbatim" is the whole
+    // contract, and a trim is a rewrite however small.
+    format!("{}\n\n{brief_sanitized}\n\n{dod}", header.join("\n"))
 }
 
 // ── §2(f) the audit vocabulary ──────────────────────────────────────────────
@@ -954,6 +1502,33 @@ pub mod audit_action {
     /// The planner's `report` was consumed by the driver rather than delivered
     /// to the orchestrator. "Consumed" is a different word from "dropped".
     pub const PLANNER_CONSUMED: &str = "pd-planner-consumed";
+    /// The plan became board rows, carrying the slice-id -> task-id map.
+    pub const BOARDED: &str = "pd-boarded";
+    /// One slice's worker pane was opened.
+    pub const SLICE_SPAWNED: &str = "pd-slice-spawned";
+    /// The live-delegate cap refused one slice's spawn. **Not an error row** —
+    /// the slice stays queued and is retried; its own action so that a reader
+    /// counting starvation does not have to match the rows where a spawn went
+    /// through.
+    pub const SLICE_CAP_REFUSED: &str = "pd-slice-cap-refused";
+    /// One slice parked, with its closed [`PdSliceHold`]. Distinct from
+    /// [`HELD`], which is the whole drive: a reader asking "did this plan
+    /// stop" must not have to sort a slice's park out of the drive's.
+    pub const SLICE_HELD: &str = "pd-slice-held";
+    /// A slice's PR number was resolved, from the worker's `ref` or from the
+    /// one `gh pr list --head` that stands in for it.
+    pub const SLICE_PR: &str = "pd-slice-pr";
+    /// A slice's PR was handed to the REVIEW driver, which owns the pane from
+    /// there.
+    pub const REVIEW_DRIVEN: &str = "pd-review-driven";
+    /// A slice's PR is positively MERGED and its row is `done`.
+    pub const SLICE_MERGED: &str = "pd-slice-merged";
+    /// One slice's WORKER `report` was consumed by the driver rather than
+    /// delivered to the orchestrator. Its own action beside
+    /// [`PLANNER_CONSUMED`], because "the planner spoke" and "a worker spoke"
+    /// are different facts and a reader chasing a drive needs to tell them
+    /// apart.
+    pub const SLICE_CONSUMED: &str = "pd-slice-consumed";
     /// The drive parked, with its closed reason.
     pub const HELD: &str = "pd-held";
     /// A parked drive was resumed.
@@ -971,13 +1546,21 @@ pub mod audit_action {
 
     /// Every action above, so a test can assert the set rather than iterate a
     /// list someone has to remember to extend.
-    pub const ALL: [&str; 13] = [
+    pub const ALL: [&str; 21] = [
         STARTED,
         REFUSED,
         PLANNER_SPAWNED,
         PLAN_INVALID,
         PLAN_POSTED,
         PLANNER_CONSUMED,
+        BOARDED,
+        SLICE_SPAWNED,
+        SLICE_CAP_REFUSED,
+        SLICE_HELD,
+        SLICE_PR,
+        REVIEW_DRIVEN,
+        SLICE_MERGED,
+        SLICE_CONSUMED,
         HELD,
         RESUMED,
         CANCELLED,
@@ -1015,6 +1598,11 @@ pub mod refusal {
     /// `cancel_plan_drive` / `resume_plan_drive`: this issue has no entry, or
     /// only a terminal one.
     pub const NOT_DRIVEN: &str = "not-driven";
+    /// One slice's worker pane could not be opened for a reason that is NOT
+    /// the live-delegate cap — an unknown block, a spawn-rate backstop. The cap
+    /// has its own path (`pd-slice-cap-refused`, then
+    /// [`PdSliceHold::CapFull`]) because a cap is transient and this is not.
+    pub const SLICE_UNSPAWNABLE: &str = "slice-unspawnable";
     /// `resume_plan_drive`: the drive is live, so there is nothing to resume.
     /// Distinct from [`NOT_DRIVEN`], which is a drive that is not there at all;
     /// the two want different things from the orchestrator.
@@ -1039,7 +1627,7 @@ pub mod refusal {
 
     /// Every name above, so a test can assert the set rather than iterate a
     /// list someone has to remember to extend.
-    pub const ALL: [&str; 12] = [
+    pub const ALL: [&str; 13] = [
         DRIVER_DISABLED,
         ISSUE_NOT_OPEN,
         ISSUE_UNVERIFIABLE,
@@ -1047,6 +1635,7 @@ pub mod refusal {
         ALREADY_DRIVEN,
         NO_PLANNER_BLOCK,
         PLANNER_UNSPAWNABLE,
+        SLICE_UNSPAWNABLE,
         NOT_DRIVEN,
         NOT_HELD,
         STATE_UNREADABLE,
@@ -1121,5 +1710,46 @@ pub fn validate_for_drive(
         Ok(doc)
     } else {
         Err(errs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **All four crossings of {status} × {assignee}**, plus the empty-claimant
+    /// guard — the decision `rollback_is_ours` exists to make, pinned here
+    /// because the SITUATION it guards is not stageable from an integration
+    /// test (a human claiming a row inside a sub-second window) while the
+    /// decision is (rev-std round 1, finding 3).
+    ///
+    /// The first row is the positive control: a rule that answered `false` to
+    /// everything would satisfy every other assertion here.
+    #[test]
+    fn a_rollback_touches_only_a_row_this_drive_still_holds() {
+        // Ours: claimed by us, still in progress.
+        assert!(rollback_is_ours("in-progress", Some("orrerix"), "orrerix"));
+
+        // Somebody else's claim — the case the unguarded rollback wiped.
+        assert!(!rollback_is_ours("in-progress", Some("a-human"), "orrerix"));
+        // Moved on by hand: done, blocked, cancelled, or back to queued.
+        for status in ["done", "blocked", "cancelled", "queued", "review"] {
+            assert!(
+                !rollback_is_ours(status, Some("orrerix"), "orrerix"),
+                "a row a human moved to {status:?} is theirs now, not ours"
+            );
+        }
+        // Unassigned — nothing to roll back, and no claim of ours to find.
+        assert!(!rollback_is_ours("in-progress", None, "orrerix"));
+        assert!(!rollback_is_ours("in-progress", Some(""), "orrerix"));
+
+        // An EMPTY claimant matches nobody, which is `driven_role`'s property
+        // and is here for its reason: a slice with no agent recorded yet must
+        // not match a row whose assignee is also empty.
+        assert!(!rollback_is_ours("in-progress", Some(""), ""));
+        assert!(!rollback_is_ours("in-progress", None, ""));
+
+        // Whitespace is not a second spelling.
+        assert!(rollback_is_ours(" in-progress ", Some(" orrerix "), "orrerix"));
     }
 }

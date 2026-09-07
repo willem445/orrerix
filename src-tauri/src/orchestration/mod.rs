@@ -462,7 +462,10 @@ pub use loomux_engine::{plandoc, plandrive};
 // `rdtick`'s reason above, which is a FILE being a scope a rename cannot step
 // over. `tests/plandrive.rs` default-denies the whole of it.
 mod pdtick;
-pub use pdtick::{PdDriveReport, PdEvent, PdPlanCheck, PdSignal, PD_MAX_GH_PER_TICK};
+pub use pdtick::{
+    PdDriveReport, PdEvent, PdPlanCheck, PdSignal, PdWorkerSignal, PD_MAX_GH_PER_TICK,
+    PD_MAX_PR_CHECKS_PER_TICK,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

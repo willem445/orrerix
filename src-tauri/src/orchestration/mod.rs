@@ -57064,6 +57064,8 @@ impl OrchRegistry {
         // [`Self::release_driven_pane`], so the reverse nesting would invert an
         // ordering that exists in production. See
         // [`Self::rd_driven_panes`] for why it is one read and what it excludes.
+        // `Err` is "orrerix could not read the drive record", which is NOT
+        // "nothing is driven" — see the `driven_by` comment on the row below.
         let driven = self.rd_driven_panes(group);
         let agents = self.agents.lock_safe();
         let mut list: Vec<Value> = agents
@@ -57092,13 +57094,26 @@ impl OrchRegistry {
                     "session": a.session_id, "cwd": a.cwd,
                     "idle_since_ms": a.idle_since_ms,
                     "task": task_excerpt(&a.task, TASK_EXCERPT_CHARS),
-                    // #2811 S2 (#2555 item 1): `"#<pr>"` when a live review
-                    // drive is currently using this pane as its worker or one
-                    // of its lanes, `null` otherwise. The KEY IS ALWAYS
-                    // PRESENT, the way `wip` and `current_sprint` are on the
-                    // board read, so "not driven" never has to be told apart
-                    // from "this build does not report it".
-                    "driven_by": driven.get(&a.id).map(|(pr, _)| format!("#{pr}")),
+                    // #2811 S2: `"#<pr>"` when a live review drive is currently
+                    // using this pane as its worker or one of its lanes,
+                    // `null` when nothing is, and `"unreadable"` when orrerix
+                    // could not read this group's drive record at all. The KEY
+                    // IS ALWAYS PRESENT, the way `wip` and `current_sprint` are
+                    // on the board read, so "not driven" never has to be told
+                    // apart from "this build does not report it".
+                    //
+                    // **Three states, not two** (rev round 1, N1): `null` is a
+                    // CLAIM — orrerix looked and nothing owns this pane — and
+                    // publishing it off a read that FAILED would put a false
+                    // claim on the roster the `kill_agent` refusal is derived
+                    // from, which is the one place a reader checks before
+                    // killing. The MCP arm refuses outright on the same fact;
+                    // a roster read is not a guard, so it reports rather than
+                    // refuses — but it must not lie.
+                    "driven_by": match &driven {
+                        Ok(d) => d.get(&a.id).map(|(pr, _)| format!("#{pr}")),
+                        Err(()) => Some("unreadable".to_string()),
+                    },
                 })
             })
             .collect();

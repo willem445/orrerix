@@ -720,7 +720,7 @@ notice whose delivery fails is lost (#1857) and a cancel is the one exit whose
 caller is holding a return value at the moment those panes stop being anyone's.
 
 **The ORCHESTRATOR's kill authority is narrowed by exactly one refusal, and it
-is overridable** (#2811 S2, closing #2555 item 1). Everything above is about
+is overridable** (#2811 S2). Everything above is about
 what the DRIVER may do to a pane. The other half went unwritten until #3038 made
 it expensive: nothing told the orchestrator that a pane belonged to a live drive.
 `kill_agent` checked group membership and nothing else, `list_agents` said
@@ -760,6 +760,24 @@ repo shipped before — a decoration lost, never a wrong claim made, and never a
 kill admitted. And the caller that loses it is the one that does not need it: a
 cap refusal the DRIVER gets becomes `held(cap-refused)` / `cap-full`, whose
 notice already names this drive's own panes.
+
+**An unreadable record is a fault, not an answer.** The read distinguishes "I
+looked and nothing owns this pane" from "I could not look" — a
+`review_drives.json` that is present and unparseable, which is what a downgrade
+produces. The guards refuse on the second (`kill_agent` says so and names
+`force`; a roster row reads `unreadable` rather than `null`, because `null` is a
+claim), and that is the posture `queue_merge` already takes on the same file and
+§2.4 gives the tick. The roster marker, which guards nothing, treats it as
+unmarked like the other two.
+
+**#2555 item 1 is not closed by this.** That item asks that
+`release_driven_pane` itself refuse a pane the drive's records do not name, or
+that a `ReleaseTicket` only the driver can mint replace the one-call-site source
+scan that stands in for it. What lands here is the shared ownership read that
+fix needs, consumed by three other surfaces; the release path does not read it
+and that function's refusals are unchanged. Wiring it there runs under
+`rd_state_lock` and moves a signature two source scans pin, which is its own
+change. The item stays open, as item 2 does.
 
 Three things this does NOT do, each deliberate. **The human's kill is untouched**
 — that is the UI path, and a human closing a pane is not a party orrerix may

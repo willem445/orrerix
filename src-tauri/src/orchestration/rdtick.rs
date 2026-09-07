@@ -626,15 +626,27 @@ impl OrchRegistry {
     ///
     /// # One ownership read, not a second definition
     ///
-    /// #2555 item 1 is the class this closes: three surfaces that had to know
-    /// whether a pane belongs to a drive — the roster row, the kill refusal and
-    /// the cap-refusal roster — and no shared answer for them to read, so the
-    /// orchestrator killed a drive's idle worker 42 s before the drive needed it
-    /// (#3038). The answer is derived HERE, through
+    /// The class: three surfaces that had to know whether a pane belongs to a
+    /// drive — the roster row, the kill refusal and the cap-refusal roster —
+    /// and no shared answer for them to read, so the orchestrator killed a
+    /// drive's idle worker 42 s before the drive needed it (#3038). The answer
+    /// is derived HERE, through
     /// [`reviewdrive::DriveEntry::driven_role`] — the same predicate `rd_owner`
     /// uses, asked of the panes [`reviewdrive::DriveEntry::owned_panes`] names —
     /// so "the drive owns this pane" has one definition and a fourth consumer
     /// gets it by calling this rather than by re-reading the file its own way.
+    ///
+    /// **#2555 item 1 is NOT closed by this, and an earlier draft of this note
+    /// said it was** (rev round 1, B1). That item asks that
+    /// [`OrchRegistry::release_driven_pane`] itself refuse a pane the drive's
+    /// records do not name — or that a `ReleaseTicket` only the driver can mint
+    /// replace the one-call-site source scan. This builds the shared read that
+    /// fix needs and consumes it on three OTHER surfaces; nothing on the release
+    /// path reads it, and `release_driven_pane`'s refusals are exactly what they
+    /// were. Wiring it there is a different change — the release runs UNDER
+    /// `rd_state_lock` (see *Locking*), so it would take the already-held form
+    /// plus a proof that it is always called that way, and it moves a signature
+    /// two source scans in `tests/reviewdrive.rs` pin. #2555 keeps item 1.
     ///
     /// **`current` panes only, and that is a narrowing with a reason.** A
     /// superseded pane is one the drive will never speak to again
@@ -693,6 +705,27 @@ impl OrchRegistry {
     /// every `report` — and an absent `review_drives.json` (the product
     /// default, and every group with no driver at all) costs a `stat` and
     /// answers empty.
+    ///
+    /// # Two costs of that choice, disclosed rather than argued away
+    ///
+    /// Both were named in review round 1's premortem, and neither is closable by
+    /// a test:
+    ///
+    /// - **The snapshot is not held across the caller's decision.** The MCP
+    ///   `kill_agent` arm reads this and then calls `kill_agent`, so a pane that
+    ///   BECOMES driven in between — the tick's `rd_reuse_pane` claiming an idle
+    ///   pane concurrently — is killed with no refusal. That is the reverse of
+    ///   the direction the paragraph above promises, it is sub-millisecond, and
+    ///   `force` is the honest override for it. Closing it would mean holding
+    ///   `rd_state_lock` across the kill, which is `release_driven_pane`'s own
+    ///   `rd_state_lock` -> `agents` edge taken from the other side.
+    /// - **The blocking form makes the orchestrator's most frequent read wait on
+    ///   the tick.** `list_agents` now blocks on a lock a drive tick holds across
+    ///   its whole read-modify-write, spawns included (§2.4) — worktree creation
+    ///   among them. Nothing here measures that hold, and if it ever grows to
+    ///   seconds the roster read stalls with it. The discipline is still the
+    ///   right one — a guard may not fail open — and this is its price, said
+    ///   out loud rather than discovered.
     pub(crate) fn rd_driven_panes(
         &self,
         group: &GroupId,
@@ -707,11 +740,13 @@ impl OrchRegistry {
     /// **Empty when the lock is not free RIGHT NOW**, which is the driver's own
     /// tick nine times in ten (`try_lock_safe` answers `None` for a mutex this
     /// thread already holds, without the `lock-reentrant` refusal a blocking
-    /// acquire would take) and another group's tick the rest. Both fail toward
-    /// an UNMARKED roster — the message this repo shipped before S2 — never
-    /// toward a row falsely marked driven, and never toward a kill going
-    /// through: no guard reads this. The argument for why the driver does not
-    /// need the marker is on [`Self::rd_driven_panes`], under *Locking*.
+    /// acquire would take) and another group's tick the rest — **and empty when
+    /// the record is unreadable**, which the guards refuse on and this does not.
+    /// All three fail toward an UNMARKED roster — the message this repo shipped
+    /// before S2 — never toward a row falsely marked driven, and never toward a
+    /// kill going through: no guard reads this. The argument for why the driver
+    /// does not need the marker is on [`Self::rd_driven_panes`], under
+    /// *Locking*.
     pub(crate) fn rd_driven_panes_now(
         &self,
         group: &GroupId,
@@ -719,18 +754,32 @@ impl OrchRegistry {
         let Some(_state_guard) = self.rd_state_lock.try_lock_safe() else {
             return std::collections::BTreeMap::new();
         };
-        self.rd_driven_panes_locked(group)
+        self.rd_driven_panes_locked(group).unwrap_or_default()
     }
 
     /// The read itself, with `rd_state_lock` already held by the caller — ONE
-    /// body, so the two acquisition disciplines above cannot become two answers.
+    /// body, so the three acquisition disciplines above cannot become three
+    /// answers.
+    ///
+    /// **`Err` is "orrerix could not read this group's drive record", and it is
+    /// a different fact from `Ok` of an empty map** (rev round 1, N1). A
+    /// `review_drives.json` that is absent is the product default and genuinely
+    /// means no pane is driven; one that is present and unparseable — the
+    /// downgrade case, where a newer build wrote a schema this one reads as
+    /// `Unsupported` — means orrerix does not KNOW, and this repo's settled
+    /// posture for that fact is to refuse rather than to read it as "undriven":
+    /// `queue_merge` answers rd-state-unreadable on the same input, pinned by
+    /// `a_torn_drive_record_refuses_the_enqueue_instead_of_reading_as_undriven`,
+    /// and §2.4 says the tick refuses too. Collapsing the two here would have
+    /// made the guard admit exactly the kill it exists to refuse, on the one
+    /// input where nothing else can tell.
     fn rd_driven_panes_locked(
         &self,
         group: &GroupId,
-    ) -> std::collections::BTreeMap<String, (u64, reviewdrive::DrivenRole)> {
+    ) -> Result<std::collections::BTreeMap<String, (u64, reviewdrive::DrivenRole)>, ()> {
         let dir = self.group_dir(group);
         let mut out = std::collections::BTreeMap::new();
-        let Ok(state) = reviewdrive::load_state(&dir) else { return out };
+        let Ok(state) = reviewdrive::load_state(&dir) else { return Err(()) };
         for e in state.entries.iter().filter(|e| e.state().is_live()) {
             for (agent, _) in e.owned_panes() {
                 match e.driven_role(&agent) {
@@ -741,7 +790,7 @@ impl OrchRegistry {
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// **Was this lane's outstanding brief a body-verification delta at exactly

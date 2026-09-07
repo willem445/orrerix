@@ -3555,7 +3555,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             let target = arg_str(args, "agent_id").ok_or("agent_id required")?;
             let force = arg_bool(args, "force")?;
             let a = require_in_group(reg, caller, target)?;
-            // #2811 S2 (#2555 item 1, the #3038 class). Group membership was
+            // #2811 S2, the #3038 class. Group membership was
             // the only thing this arm checked, so a pane a live drive was
             // holding for its next round looked exactly like an idle delegate
             // to reclaim — and on a cap refusal the driver's own notice ASKS
@@ -3575,7 +3575,26 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // UI's kill path never comes through here, and a human closing a
             // pane is not a party this may refuse.
             if !force {
-                if let Some((pr, role)) = reg.rd_driven_panes(&caller.group).get(&a.id) {
+                // **An unreadable record is a FAULT, not evidence that the pane
+                // is undriven** (rev round 1, N1). `Ok` of an empty map means
+                // orrerix looked and nothing owns this pane; `Err` means it
+                // could not look, and reading the second as the first would
+                // admit exactly the kill this refuses, on the one input where
+                // nothing else can tell. It is the posture `queue_merge` already
+                // takes on the same file (rd-state-unreadable, "unknown is never
+                // treated as safe here either") and the one §2.4 gives the tick.
+                // `force` overrides this refusal as it does the other, so a group
+                // whose record is genuinely broken is never wedged.
+                let Ok(driven) = reg.rd_driven_panes(&caller.group) else {
+                    return Err(format!(
+                        "orrerix cannot read this group's review-drive record, so it cannot \
+                         tell whether a live drive is using {} — and an unreadable record is \
+                         not evidence that nothing is. Retry, or pass force:true to kill it \
+                         anyway.",
+                        a.id
+                    ));
+                };
+                if let Some((pr, role)) = driven.get(&a.id) {
                     let side = match role {
                         super::reviewdrive::DrivenRole::Worker => "worker",
                         super::reviewdrive::DrivenRole::Lane(_) => "lane",

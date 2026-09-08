@@ -4839,7 +4839,12 @@ pub fn releasable(
     // mattered. `LaneRecord::at_head` is a record of what the drive READ rather
     // than a gate input, and it is read here only to DECLINE a release: it can
     // cost a slot, never a review.
-    if !terminal && facts.ci == CiObservation::Conflicting {
+    // MUTATION M3: keyed on the ARC rather than on the facts.
+    let conflict_arc = matches!(
+        step,
+        DriveStep::Advance { to: DriveState::FixWait, bump: Some(Counter::RebaseAttempts), .. }
+    );
+    if !terminal && facts.ci == CiObservation::Conflicting && conflict_arc {
         for l in &entry.lanes {
             if l.agent.trim().is_empty() {
                 continue;

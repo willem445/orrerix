@@ -3481,11 +3481,17 @@ impl OrchRegistry {
             // slice's to alter.
             match self.agent(&agent) {
                 Some(a) if a.idle_since_ms.is_some() => continue,
-                Some(a) if a.status == AgentStatus::Dead => continue,
+                // MUTATION M8: a dead pane is told anyway, so the futile retry
+                // writes one declined row per tick again.
+                Some(a) if a.status == AgentStatus::Dead && false => continue,
                 Some(_) => {}
                 None => continue,
             }
             if entry.lane_stopped_at(block, &brief.head) {
+                continue;
+            }
+            // MUTATION M7: the stop arm never runs.
+            if true {
                 continue;
             }
             let text = self.rd_lane_stop_brief(&brief);
@@ -3601,7 +3607,11 @@ impl OrchRegistry {
                         (
                             reviewdrive::DrivenRole::Lane(block),
                             reviewdrive::ReleaseReason::Conflict,
-                        ) => entry.reseed_lane(block, &session),
+                        ) => {
+                    // MUTATION M4: a plain release, leaving the revision key.
+                    let _ = block;
+                    entry.release_pane(&cand.role, &session)
+                }
                         _ => entry.release_pane(&cand.role, &session),
                     };
                     match freed {

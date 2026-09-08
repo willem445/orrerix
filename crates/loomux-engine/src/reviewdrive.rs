@@ -2848,10 +2848,19 @@ impl DriveEntry {
     /// already limits.
     ///
     /// `is_live` is injected because liveness is the registry's fact and this
-    /// crate is Tauri-free. A predicate that cannot answer must answer **true** —
-    /// "we could not check" is not "it is dead", and the fail-closed direction
-    /// here is to KEEP a pane, since keeping one costs a string and dropping a
-    /// live one costs the leak.
+    /// crate is Tauri-free, and a predicate that genuinely cannot answer must
+    /// answer **true** — "we could not check" is not "it is dead", and the
+    /// fail-closed direction here is to KEEP a pane, since keeping one costs a
+    /// string and dropping a live one costs the leak.
+    ///
+    /// **Both live callers answer FALSE for an id the agent map has no row for,
+    /// and that is not that case** (#3225). `rd_pane_is_live` reads the map,
+    /// which is not a fallible probe: an absent row means `resolve_token` refuses
+    /// that caller and no traffic can reach the seam under it, so this list is
+    /// retaining a string nothing can ever use. The reading that IS ambiguous —
+    /// and stays refused — is `pane_dead`'s and `rd_pane_exit`'s, which decide
+    /// whether a drive is WAITING on a pane; this decides only what a bounded
+    /// list keeps.
     pub fn forget_dead_panes(&mut self, is_live: &dyn Fn(&str) -> bool) -> bool {
         let before = self.prior_worker_agents.len()
             + self.lanes.iter().map(|l| l.prior_agents.len()).sum::<usize>();

@@ -14104,7 +14104,7 @@ fn a_live_pusher_is_still_waited_for_and_only_the_restart_mark_changes_that() {
     e.advance(DriveState::CiWait, None, None, 1_500).unwrap();
     assert!(
         e.fix_pushed(),
-        "the fixture must actually be waiting on a push's receipts, or neither half \n         below is about #3225"
+        "the fixture must actually be waiting on a push's receipts, or neither half below is about #3225"
     );
     let limits = DriveLimits::default();
     let green = DriveFacts { ci: CiObservation::Green, ..facts_at("head-a") };

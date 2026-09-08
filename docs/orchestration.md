@@ -1135,11 +1135,13 @@ These deserve their own detail — see:
   - **⛔ dialog** is a different dialog chip about a different dialog: not the
     orchestrator's delivery pipe (the chip above) but a **driven pane's own**
     question — a choice, confirmation or text prompt its CLI raised over the
-    structured protocol, which blocks that pane until it's answered. The ask
-    lands in your NEEDS-YOU queue, and the pane wears this red chip while it
-    waits — red for the same reason a stuck prompt is red: nothing the pane can
-    do on its own will un-wedge it. Answer it from NEEDS-YOU; typing into a
-    driven pane is refused, so the queue is the only way to answer one.
+    structured protocol, which blocks that pane until it's answered. The pane
+    wears this red chip while it waits — red for the same reason a stuck prompt
+    is red: nothing the pane can do on its own will un-wedge it. NEEDS-YOU only
+    tells you the dialog is parked; the answer itself goes through the pane's
+    own dialog card — the `answer_pane_ui` boundary, the trusted path a button
+    in your own window takes (typing into a driven pane is refused: it has no
+    terminal).
   - **The orchestrator can't use its CLI's own question dialog at all, on Claude.**
     A single stuck question dialog on the orchestrator's pane once held a whole
     run overnight — the in-flight workers finished their PRs, and then nothing

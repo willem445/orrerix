@@ -96,6 +96,17 @@ test("the test's backend list is read off attention_tick's own chain", () => {
   assert.ok(start >= 0, "attention_tick not found in orchestration/mod.rs");
   assert.ok(end > start, "the function bound after attention_tick vanished");
   const region = source.slice(start, end);
+  // The bounds are two symbol names, and the one shape the limits above do not
+  // cover is the bounds themselves moving — the #1702 idiom extracting a phase
+  // of `attention_tick` to a helper placed past `plain_pane_attention` drops the
+  // chain's tail out of the region while a decoy tuple keeps the count floor
+  // green. Pin the chain's TAIL inside the region, so a bound that drifts past
+  // the real chain fails here instead of scanning a decoy.
+  assert.ok(
+    region.includes('("gate", format!'),
+    'attention_tick\'s chain tail (("gate", format!) is outside the scanned ' +
+      "region — the function bounds moved; re-pin them",
+  );
   const scanned = new Set<string>();
   for (const m of region.matchAll(/\(\s*"([a-z][a-z-]+)"\s*,/g)) {
     scanned.add(m[1]);

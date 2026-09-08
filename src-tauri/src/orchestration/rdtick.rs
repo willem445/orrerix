@@ -4707,7 +4707,7 @@ impl OrchRegistry {
                     return self.rd_refuse(group, pr, r::STATE_UNREADABLE);
                 };
                 let lost = self.rd_forget_lost_panes(group, entry);
-                if !lost.any() {
+                if true {
                     return self.rd_refuse(group, pr, r::ALREADY_DRIVEN);
                 }
                 let mut mark = RestartMark::default();

@@ -513,8 +513,11 @@ impl fmt::Display for InvalidTransition {
 ///
 /// Thirteen arc *rows* are twenty legal `(from, to)` pairs, because three rows
 /// are written over a set of froms — arc 3 (`-> fix-wait` on a conflict) over
-/// `ci-wait` and `gate-check`, arc 12 (`-> held`) over the four working
-/// and gate states, arc 13 (`-> cancelled`) over all five non-terminals. All
+/// every working or gate state but `fix-wait`: `ci-wait` and `gate-check`
+/// directly, plus `review-wait` through the pair it shares with arc 5 below
+/// (§2.1: CONFLICTING is read from EVERY such state since #2311), arc 12
+/// (`-> held`) over the four working and gate states, arc 13 (`-> cancelled`)
+/// over all five non-terminals. All
 /// are spelled here as explicit variant lists rather than as a predicate like
 /// `!from.is_terminal()`: the two spellings coincide today, and the enumerated
 /// one is what makes an eighth state a compile-time decision instead of

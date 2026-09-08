@@ -49,7 +49,9 @@ and costs the human a debugging session later.
    in `src-tauri/tests/` (integration tests only). Frontend logic gets a DOM-free
    pure module + `test/*.test.ts`.
    Then prove it: run the new test without your change — **never via `git stash`** (#299, #493:
-   commit your work first, then set the behaviour aside on a throwaway scratch branch; for Rust
+   commit your work first, then set the behaviour aside on a throwaway scratch branch named
+   `<worker-branch>-scratchN`, the shape the close-ownership rule (#3198) lets you close and
+   delete yourself; for Rust
    that is a scratch draft PR read through CI, see the `ci-validate` skill).
    Watch it fail for the reason you expect, and paste that command + failure line into the PR
    body beside the passing run. It costs a minute, and it is the difference between a test and a

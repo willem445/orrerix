@@ -5446,7 +5446,12 @@ caller did not own happened not to fire — but that is luck, not a guard.
 branch its worktree was cut on. So a `gh pr close` is allowed when the caller is the
 **orchestrator** (whose authority is over the group, not over a branch — it may close any PR
 in the group, and is audited for it), or when the PR's head branch **is** the caller's own
-branch or a **separated descendant** of it. Everything else is refused.
+branch or a **separated descendant** of it. Everything else is refused. One naming
+consequence falls out of this: a worker producing red-before-green evidence must cut its
+scratch branch as `<worker-branch>-scratchN` — a `-`-separated descendant it owns, so it can
+close the scratch PR and delete the branch itself once cited — and not
+`scratch/<issue>-red-N`, whose cleanup the gate would push back to the orchestrator
+(the `ci-validate` skill carries this in its red-evidence recipe).
 
 The separator is not decoration. A bare prefix test would make `fix/29` the owner of
 `fix/2985-x` — another worker's branch — which is the very confusion the incident was, so

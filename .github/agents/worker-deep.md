@@ -45,7 +45,10 @@ tell the orchestrator, so the next one like it goes to `worker-quick`.
    **Red before green, evidenced.** Run your new tests without the change and confirm they fail
    for the *expected* reason — not on a compile error, which proves nothing about behaviour.
    **Never `git stash` to produce that red** (#299, #493): commit your real work first, then set
-   the behaviour aside on a throwaway scratch branch — for Rust that is a scratch draft PR read
+   the behaviour aside on a throwaway scratch branch named
+   `<worker-branch>-scratchN` — under the close-ownership rule (#3198) that is
+   the shape you can close and delete yourself when the red is cited — for Rust
+   that is a scratch draft PR read
    through CI, since local `cargo` is banned. The `ci-validate` skill carries the procedure and
    the trap that costs a round (to redden an *integration* test, neuter the wiring, not the lib
    function). Paste the command and the failure line into the PR body's agent layer (below),

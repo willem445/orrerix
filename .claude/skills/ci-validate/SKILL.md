@@ -718,9 +718,14 @@ own draft PR**, and CI's log is the failure line you quote.
 1. **Commit your real work first** (#493) — the scratch edits are destructive
    and a `git checkout --` to undo them takes everything uncommitted in the
    file with it.
-2. Cut `scratch/<issue>-red-<n>` from your branch head, set **one** behaviour
+2. Cut `<worker-branch>-scratchN` from your branch head (e.g. `fix/42-scratch1`
+   off `fix/42`), set **one** behaviour
    aside — leave everything else wired — and push. One branch per behaviour,
-   numbered, so a wave can go out together (see below).
+   numbered, so a wave can go out together (see below). The name is not free:
+   under the close-ownership rule (#3198) you may close a PR and delete its
+   branch only when its head is your own branch or a `/`- or `-`-separated
+   descendant of it, so a scratch branch named anything else —
+   `scratch/<issue>-red-N`, say — is one the orchestrator has to clean up.
 3. Open it as a draft titled `[scratch] … — do not merge`, body saying which
    single behaviour is neutered and that every failure line will be quoted in
    the real PR.

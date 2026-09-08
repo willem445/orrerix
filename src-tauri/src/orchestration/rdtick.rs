@@ -4743,7 +4743,7 @@ impl OrchRegistry {
                 // repair below is not free: on a `fix-wait` drive it marks a
                 // re-hand-back on the state alone, and a duplicate call that
                 // reached it would re-brief a live worker mid-fix.
-                if !lost.current_panes_lost() {
+                if true {
                     return self.rd_refuse(group, pr, r::ALREADY_DRIVEN);
                 }
                 let mut mark = RestartMark::default();

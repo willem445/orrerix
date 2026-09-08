@@ -66385,6 +66385,20 @@ fn a_refusal_glued_under_other_output_is_not_detected() {
     );
 }
 
+/// The convention itself, pinned on the fixture: the needle's rendered
+/// line sits directly under a line that strips to nothing — the blank
+/// gutter row these TUIs draw before a refusal block. (Same inline
+/// strip as `a_wrapped_quotation_is_not_a_refusal`; these fixtures use
+/// pi's U+2503 and no other gutter glyph.) A free fn, not a stored
+/// closure: the closure form failed to infer its return lifetime at
+/// the definition site (E0521-adjacent, "lifetime may not live long
+/// enough" on the nested pattern closure), and the fix CI suggested
+/// was a `move` the code does not need — the fn signature states
+/// `&str -> &str` and the body uses the pattern closure immediately.
+fn strip_conv_line(l: &str) -> &str {
+    l.trim_matches(|c: char| c.is_whitespace() || c == '\u{2503}')
+}
+
 /// The positive control the paragraph-start rule owes its own premise (#3190).
 ///
 /// The rule above is exact about what it costs: a refusal glued under other
@@ -66435,7 +66449,7 @@ fn the_current_convention_positive_controls_are_detected() {
         // pi's U+2503 and no other gutter glyph.) Asserted per fixture so a
         // re-bless that loses the row fails HERE, naming the convention.
         let lines: Vec<&str> = fixture.lines().collect();
-        let strip = |l: &str| l.trim_matches(|c: char| c.is_whitespace() || c == '\u{2503}');
+        let strip = strip_conv_line;
         let hit_line = lines
             .iter()
             .position(|l| {

@@ -1300,16 +1300,8 @@ impl OrchRegistry {
                     }
                 }
             }
-            // Fail-safe: if the state could not be re-read, say what THIS tick
-            // saw rather than nothing. An under-count beats silence, and the
-            // per-drive `rd-held` rows are already on the record either way.
-            if by_provider.is_empty() {
-                for o in &outs {
-                    if let Some(p) = &o.provider_limited {
-                        by_provider.entry(p.clone()).or_default().push(o.pr);
-                    }
-                }
-            }
+            // [scratch mutation 3 -- #3195 item 2 red run] the fail-safe arm
+            // is DELETED here, so a failed re-read silences the notice.
             for (provider, mut prs) in by_provider {
                 prs.sort_unstable();
                 prs.dedup();

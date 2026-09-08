@@ -1351,7 +1351,8 @@ impl LaneRecord {
             at_head: String::new(),
             briefed_head: String::new(),
             briefed_digest: String::new(),
-            stopped_head: String::new(),
+            // MUTATION M6: the mark survives a reseed.
+            stopped_head: self.stopped_head.clone(),
             spawned_ms: 0,
             briefed_verify: false,
             briefed_body_only: false,
@@ -3014,8 +3015,9 @@ impl DriveEntry {
     /// unresolved head is not a head, and [`decide`] refuses to act on one at
     /// all one screen up.
     pub fn lane_stopped_at(&self, block: &str, head: &str) -> bool {
-        !head.is_empty()
-            && self.lane(block).is_some_and(|l| l.stopped_head == head)
+        // MUTATION M5: head-blind — any mark silences every head.
+        let _ = head;
+        self.lane(block).is_some_and(|l| !l.stopped_head.is_empty())
     }
 
     /// Record that this lane has been told to stop reviewing `head` (#3176).

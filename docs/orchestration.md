@@ -2613,6 +2613,14 @@ would be loosening the orchestrator's own invariant. The same forward-compat war
 merge queue carries applies here too: on a build that predates the block, `driver:` fails
 the parse of the whole file rather than being ignored.
 
+**A restart does not cost a live drive its round.** Panes do not survive an app restart
+and sessions do: on the first tick back up the driver drops every pane its record names
+that the live roster no longer has, keeps the conversations, and picks the drive up where
+it was - the reviewer is re-briefed on its own session, a worker mid-fix is handed the fix
+back, and a drive that was waiting on the CI receipts of a push its worker had already
+made goes straight on to review at that head. None of it is charged as a review round, and
+`drive_review` on such a drive resumes it rather than answering "already driven".
+
 The block **enables** the feature; it can never start, target or widen a drive - no drive
 exists until an orchestrator makes its own role-gated `drive_review` call naming one PR.
 (The workflow pane edits this block too: an enable-toggle whose state is the `enabled:`

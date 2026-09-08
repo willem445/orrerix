@@ -303,6 +303,90 @@ struct RdLaneOpen {
     scope: String,
 }
 
+
+/// **What a restart cost ONE drive, decided where the answer is not ambiguous**
+/// (#2811 S10, #3225, #3226).
+///
+/// Every field is a fact about a PROCESS boundary, and each licenses exactly one
+/// recovery the ordinary tick cannot reach on its own. The mark is per
+/// `(group, pr)`, in memory, and each field is discharged by the tick that ACTED
+/// on it — see the spend sites in `rd_step_entry`, and `rd_forget_restart_mark`
+/// for why the whole entry is dropped wherever the drive it describes is.
+///
+/// It is one struct rather than three maps because the three are one question:
+/// what did this drive lose when the panes died. A reader chasing a drive that
+/// came back up looks in one place, and a site that clears one field cannot
+/// silently clear the other two — which a single `HashSet` keyed on the PR made
+/// easy to do by accident.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RestartMark {
+    /// #2811 S10: `fix-wait`, so the worker is re-briefed (`why: restart`).
+    pub(crate) handback: bool,
+    /// #3225: `ci-wait` after a push whose worker pane is gone, so the push is
+    /// read as the fix delivered rather than waited on.
+    pub(crate) push_delivered: bool,
+    /// #3226: the lane blocks whose panes died, so each re-brief says
+    /// `why: restart` on its `rd-lane-spawned` row. Re-briefing them is the
+    /// *reseed's* doing, not this field's — the record no longer names a head
+    /// they were briefed at, so `decide_review_wait` opens them by the ordinary
+    /// path. What this carries is only why.
+    pub(crate) lanes: Vec<String>,
+}
+
+impl RestartMark {
+    /// Nothing left to say — the key is dropped rather than kept as an empty
+    /// record, so `contains` and `is_empty` cannot disagree.
+    fn is_empty(&self) -> bool {
+        !self.handback && !self.push_delivered && self.lanes.is_empty()
+    }
+}
+
+/// The panes a drive owned that are **not in the live roster**, dropped from its
+/// record (#3225, #3226).
+///
+/// The sessions survive; only the panes are un-owned. That is the whole of the
+/// second half of #3225: `held(fix-stalled)`'s notice enumerates
+/// [`reviewdrive::DriveEntry::owned_panes`] as "still OWNED", and after a restart
+/// every one of them named a pane that died with the previous process — which
+/// sent an orchestrator to look at panes that were not there.
+#[derive(Debug, Default)]
+struct RdLostPanes {
+    /// Worker panes dropped, current first-and-only (the priors are dropped by
+    /// `forget_dead_panes` and counted in `superseded`).
+    worker: Vec<String>,
+    /// `(block, pane)` per lane whose current pane was dropped.
+    lanes: Vec<(String, String)>,
+    /// Whether any SUPERSEDED pane was dropped as well.
+    superseded: bool,
+}
+
+impl RdLostPanes {
+    /// **Did the RECORD change** — the persistence question, so the superseded
+    /// lists count.
+    fn any(&self) -> bool {
+        !self.worker.is_empty() || !self.lanes.is_empty() || self.superseded
+    }
+
+    /// **Was a pane this drive is still USING lost** — the recovery question,
+    /// and the superseded lists deliberately do not count (#3228 review 2, W1).
+    ///
+    /// The two are different questions and conflating them was a live defect. A
+    /// drive between a pane replacement and the next tick's own
+    /// [`reviewdrive::DriveEntry::forget_dead_panes`] prune has a dead pane on
+    /// `prior_worker_agents` as its ORDINARY state — nothing is wrong, nothing
+    /// was lost, and the next tick tidies it. Gating the `drive_review` repair
+    /// on `any()` therefore took an ordinary duplicate call into the repair arm,
+    /// which on a `fix-wait` drive mints `RestartMark { handback: true }` and
+    /// re-briefs a LIVE worker mid-fix with `why: restart` — a paid turn and a
+    /// duplicated brief on a drive that lost nothing.
+    ///
+    /// A superseded pane is not one the drive would ever speak to again, so
+    /// nothing about it is recoverable: what it is owed is the prune it already
+    /// gets on the tick.
+    fn current_panes_lost(&self) -> bool {
+        !self.worker.is_empty() || !self.lanes.is_empty()
+    }
+}
 /// What one entry's step produced, for the caller to emit outside the lock.
 #[derive(Debug, Default)]
 struct RdOut {
@@ -2919,6 +3003,143 @@ impl OrchRegistry {
         self.rd_restart_handback.lock_safe().remove(&(group.clone(), pr));
     }
 
+    /// This drive's restart mark, or the empty one — read at facts-build time,
+    /// spent by [`rd_spend_restart_mark`](Self::rd_spend_restart_mark).
+    fn rd_restart_mark(&self, group: &GroupId, pr: u64) -> RestartMark {
+        self.rd_restart_handback
+            .lock_safe()
+            .get(&(group.clone(), pr))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Discharge part of a restart mark, dropping the key once nothing is left
+    /// to say.
+    ///
+    /// **Per field, never wholesale.** A drive can carry more than one — a
+    /// `review-wait` drive that lost its lane AND a superseded worker pane — and
+    /// the tick that acts on one has decided nothing about the others. Clearing
+    /// the whole entry from the site that re-briefed a lane is how #2811 S10's
+    /// own discharge would have silently un-marked #3225's push.
+    fn rd_spend_restart_mark(&self, group: &GroupId, pr: u64, f: impl FnOnce(&mut RestartMark)) {
+        let mut marks = self.rd_restart_handback.lock_safe();
+        let key = (group.clone(), pr);
+        let Some(mark) = marks.get_mut(&key) else { return };
+        f(mark);
+        if mark.is_empty() {
+            marks.remove(&key);
+        }
+    }
+
+    /// Whether this pane is in the **live roster** — the one liveness rule the
+    /// driver's record-repair uses (#3225, #3226).
+    ///
+    /// An agent this registry has no record of answers `false` here, and that is
+    /// the opposite reading from [`rd_pane_exit`](Self::rd_pane_exit)'s
+    /// deliberately — which is why this is only ever asked from the two places
+    /// where absence is unambiguous. See
+    /// [`rd_forget_lost_panes`](Self::rd_forget_lost_panes).
+    fn rd_pane_is_live(&self, agent_id: &str) -> bool {
+        self.agent(agent_id).is_some_and(|a| a.status != AgentStatus::Dead)
+    }
+
+    /// **Drop every pane this drive owns that the live roster does not have, and
+    /// keep the conversations** (#3225, #3226). Answers what went.
+    ///
+    /// # Where this may be asked, and why not on every tick
+    ///
+    /// A pane missing from the agent map is normally "we could not check" — the
+    /// asymmetry [`reviewdrive::DriveEntry::forget_dead_panes`],
+    /// [`rd_pane_exit`](Self::rd_pane_exit) and [`reviewdrive::LaneFact::pane_dead`] all
+    /// state, and the fail-direction that keeps a transient gap from un-owning
+    /// live panes across the whole group.
+    ///
+    /// There are exactly two places the reading is not ambiguous, and this is
+    /// called from both: the **restart reconcile**, where every pane of the
+    /// previous process is gone by construction, and a **`drive_review` an
+    /// orchestrator issued against a live drive**, which is an operator saying
+    /// in as many words that this drive needs looking at. Nothing on the tick
+    /// path calls it — and after either of those has run, no later tick names a
+    /// dead pane anyway, because the ownership is gone.
+    ///
+    /// # What each drop leaves behind
+    ///
+    /// A lane is **reseeded** rather than merely emptied
+    /// ([`reviewdrive::DriveEntry::reseed_lane`], #3176's half of the release):
+    /// clearing the pane alone would leave `briefed_head` standing, and
+    /// `decide_review_wait`'s wait arm reads that as *open at this revision, pane
+    /// alive* — the drive then waits out its state bound for a verdict no pane
+    /// can produce, which is #3226's incident exactly. The reseed carries the
+    /// session, so the re-brief resumes the same reviewer conversation.
+    ///
+    /// The **worker** keeps `worker_session`, which is what the hand-back and
+    /// #3225's push-delivered read both resume from; only `worker_agent` goes.
+    ///
+    /// **A pane whose session cannot be named is KEPT**, by both
+    /// `reseed_lane`'s and `release_pane`'s own refusal: dropping it would cost
+    /// the conversation rather than a slot, and the drive is still bounded by
+    /// `lane-stalled` / `fix-stalled` as it was before. That is the residual —
+    /// rare, since `rd_lane_session` resolves from the record, the live map and
+    /// the roster, of which the roster survives a restart.
+    fn rd_forget_lost_panes(
+        &self,
+        group: &GroupId,
+        entry: &mut reviewdrive::DriveEntry,
+    ) -> RdLostPanes {
+        let mut lost = RdLostPanes::default();
+        // Lanes first: resolving a lane's session borrows `entry` immutably and
+        // reads three sources, so it is done before anything mutates the record.
+        let blocks: Vec<String> = entry
+            .lanes
+            .iter()
+            .filter(|l| !l.agent.trim().is_empty())
+            .map(|l| l.block.clone())
+            .collect();
+        for block in blocks {
+            let Some(pane) = entry.lane(&block).map(|r| r.agent.clone()) else { continue };
+            if self.rd_pane_is_live(&pane) {
+                continue;
+            }
+            let session = self.rd_lane_session(group, entry.lane(&block)).unwrap_or_default();
+            if let Some(freed) = entry.reseed_lane(&block, &session) {
+                lost.lanes.push((block, freed));
+            }
+        }
+        let worker = entry.worker_agent.clone();
+        if !worker.trim().is_empty() && !self.rd_pane_is_live(&worker) {
+            let session = entry.worker_session.clone();
+            if let Some(freed) = entry.release_pane(&reviewdrive::DrivenRole::Worker, &session) {
+                lost.worker.push(freed);
+            }
+        }
+        // The superseded lists, by the same predicate — including the pane the
+        // reseed just moved onto one of them.
+        if entry.forget_dead_panes(&|id| self.rd_pane_is_live(id)) {
+            lost.superseded = true;
+        }
+        lost
+    }
+
+    /// Whether this drive is still USING a pane the live roster does not have —
+    /// the cheap question [`drive_review_with`](Self::drive_review_with) asks
+    /// before refusing `already-driven` (#3226).
+    ///
+    /// Reads the same predicate as [`rd_forget_lost_panes`](Self::rd_forget_lost_panes)
+    /// over the same population as the locked gate below it
+    /// ([`RdLostPanes::current_panes_lost`]), and repairs nothing — so the cheap
+    /// check and the authoritative one cannot disagree about what a repair would
+    /// find.
+    ///
+    /// **The CURRENT worker and lane panes, never `owned_panes()`** (#3228
+    /// review 2, W1): that one includes the superseded lists, whose dead entries
+    /// are the ordinary state of a drive between a pane replacement and the next
+    /// tick's prune. See `current_panes_lost` for what reading them here cost.
+    fn rd_has_lost_panes(&self, entry: &reviewdrive::DriveEntry) -> bool {
+        let current = std::iter::once(entry.worker_agent.clone())
+            .chain(entry.lanes.iter().map(|l| l.agent.clone()));
+        current.filter(|a| !a.trim().is_empty()).any(|a| !self.rd_pane_is_live(&a))
+    }
+
     /// §2.4's restart reconcile, once per group per registry instance, before
     /// driving — `rd_reconciled` is a field of the registry, so "per process"
     /// holds only while a process builds one of these (#2135 review 2).
@@ -2946,7 +3167,8 @@ impl OrchRegistry {
             return;
         }
         let dir = self.group_dir(group);
-        let mut audits: Vec<(String, u64, bool, bool)> = Vec::new();
+        // `(on_behalf, pr, cancelled, forgot_cap_run, panes_dropped)`.
+        let mut audits: Vec<(String, u64, bool, bool, usize)> = Vec::new();
         // #2135 N2: set false only when a write this reconcile NEEDED actually
         // failed. It stays true when nothing had to be written, which is the
         // honest reading — there was no durable outcome to miss.
@@ -3019,17 +3241,13 @@ impl OrchRegistry {
                     let n =
                         rddrive::cancelled_notice(pr, rddrive::CancelCause::PrGone, &panes, "");
                     entry.owe_notice(&n, now);
-                    audits.push((on_behalf, pr, true, forgot_cap_run));
+                    audits.push((on_behalf, pr, true, forgot_cap_run, 0));
                 } else {
-                    // **#2811 S10: a drive parked in `fix-wait` is waiting on a
-                    // pane that died with the previous process.** Nothing will
-                    // ever arrive for it — the signals map is per-process and
-                    // empty, and the pane whose `report` would fill it is gone —
-                    // so without this the drive waits out `fix_timeout_minutes`
-                    // and exits `held(fix-stalled)`, a claim about a worker's
-                    // silence that is really a claim about a restart.
+                    // **What a restart cost this drive, and what recovers it**
+                    // (#2811 S10, #3225, #3226) — the three marks below, each
+                    // argued at its own arm.
                     //
-                    // The mark is recorded here and acted on by the tick, which
+                    // Every mark is recorded here and acted on by the tick, which
                     // is the split the rest of this function already keeps: the
                     // reconcile is the only place the fact is KNOWN (every pane
                     // died, so a missing one is not the ambiguous mid-session
@@ -3038,12 +3256,74 @@ impl OrchRegistry {
                     // the hand-back here would spend a `gh` round trip per live
                     // drive at startup and duplicate the whole hand-back path,
                     // cap refusal and `worker-unresumable` handling included.
-                    if entry.state() == reviewdrive::DriveState::FixWait {
-                        self.rd_restart_handback
-                            .lock_safe()
-                            .insert((group.clone(), pr));
+                    //
+                    // **The panes, read from the LIVE ROSTER rather than from
+                    // this file** (#3225, #3226). Every pane of the previous
+                    // process died with it, so a recorded pane the roster does
+                    // not have is GONE — not "we could not check", which is the
+                    // reading every mid-session site makes and the reason this
+                    // one is here rather than on the tick. Their SESSIONS
+                    // survive, and are what each recovery below resumes.
+                    //
+                    // Ownership is dropped first, so nothing downstream can name
+                    // a dead pane: `held(fix-stalled)`'s notice enumerates
+                    // `owned_panes()` as "still OWNED", and on #3225's incident
+                    // every entry in that list had died with the process.
+                    let lost = self.rd_forget_lost_panes(group, entry);
+                    if lost.any() {
+                        changed = true;
                     }
-                    audits.push((on_behalf, pr, false, forgot_cap_run));
+                    let mut mark = RestartMark::default();
+                    match entry.state() {
+                        // **#2811 S10: a drive parked in `fix-wait` is waiting on
+                        // a pane that died with the previous process.** Nothing
+                        // will ever arrive for it — the signals map is
+                        // per-process and empty, and the pane whose `report`
+                        // would fill it is gone — so without this the drive waits
+                        // out `fix_timeout_minutes` and exits
+                        // `held(fix-stalled)`, a claim about a worker's silence
+                        // that is really a claim about a restart.
+                        //
+                        // Unconditional on the state alone, and NOT on the pane
+                        // having been dropped above: the hand-back is what
+                        // discovers whether the SESSION survived, and a
+                        // `fix-wait` drive whose pane somehow did survive is
+                        // re-briefed into it by `rd_reuse_pane` at no cost.
+                        reviewdrive::DriveState::FixWait => mark.handback = true,
+                        // **#3225: `ci-wait` after a push, whose worker is
+                        // gone.** `decide_fix_receipts` waits for that worker's
+                        // `report(done)` before briefing a lane, and it cannot
+                        // come; the push is durable and is the fix. Gated on the
+                        // pane ACTUALLY having been lost, because unlike the
+                        // hand-back there is no probe here — this mark makes the
+                        // drive advance without the report, so it must rest on
+                        // the pane really being gone rather than on the process
+                        // having restarted.
+                        reviewdrive::DriveState::CiWait
+                            if entry.fix_pushed() && !lost.worker.is_empty() =>
+                        {
+                            mark.push_delivered = true
+                        }
+                        _ => {}
+                    }
+                    // **#3226: the lanes.** The reseed above already puts each
+                    // one back in `lane_open_for`'s false branch, so
+                    // `decide_review_wait` re-opens it on the next tick by the
+                    // ordinary path and `rd_open_lane` resumes its recorded
+                    // session. What the mark carries is the WHY, for the
+                    // `rd-lane-spawned` row — without it a restart recovery is
+                    // indistinguishable on the audit log from an ordinary
+                    // re-brief.
+                    mark.lanes = lost.lanes.iter().map(|(block, _)| block.clone()).collect();
+                    // On the row, because the only other visible effect of
+                    // dropping a pane is a notice that does NOT name it —
+                    // which reads exactly like a drive that never owned one
+                    // (`rd-lane-duplicate-refused`s reason, one surface over).
+                    let dropped = lost.worker.len() + lost.lanes.len();
+                    if !mark.is_empty() {
+                        self.rd_restart_handback.lock_safe().insert((group.clone(), pr), mark);
+                    }
+                    audits.push((on_behalf, pr, false, forgot_cap_run, dropped));
                 }
             }
             // #2135 N2: whether this reconcile's decisions reached DISK. The
@@ -3064,7 +3344,7 @@ impl OrchRegistry {
                 persisted = reviewdrive::store_state(&dir, &state).is_ok();
             }
         }
-        for (on_behalf, pr, cancelled, forgot_cap_run) in audits {
+        for (on_behalf, pr, cancelled, forgot_cap_run, dropped) in audits {
             let action = if cancelled {
                 rddrive::audit_action::CANCELLED
             } else {
@@ -3080,7 +3360,8 @@ impl OrchRegistry {
                 &on_behalf,
                 action,
                 json!({ "pr": pr, "at": "reconcile",
-                        "cap_run_forgotten": forgot_cap_run && persisted }),
+                        "cap_run_forgotten": forgot_cap_run && persisted,
+                        "panes_dropped": dropped }),
             );
         }
     }
@@ -3222,6 +3503,9 @@ impl OrchRegistry {
             .then(|| state.entry(pr).map(|e| e.worker_agent.clone()).unwrap_or_default())
             .filter(|a| !a.is_empty())
             .and_then(|a| self.rd_pane_exit(&a));
+        // **The restart marks, read ONCE** (#3196 review 2, #3225, #3226) —
+        // each is SPENT below by the arm that acted on it, never here.
+        let restart = self.rd_restart_mark(group, pr);
         let facts = reviewdrive::DriveFacts {
             now_ms: now,
             pr_open: obs.open,
@@ -3259,10 +3543,12 @@ impl OrchRegistry {
             //
             // So the mark now survives every such tick and is discharged only by
             // one that RESOLVED the restart question — see the spend below.
-            restart_handback: self
-                .rd_restart_handback
-                .lock_safe()
-                .contains(&(group.clone(), pr)),
+            restart_handback: restart.handback,
+            // #3225: the sibling one state later — a push whose worker pane
+            // died with the process is the fix delivered, not a report to
+            // keep waiting for. Set by the same reconcile, on the same
+            // roster reading, and spent by the arc it produces.
+            restart_push_delivered: restart.push_delivered,
             // #2811 S5b: the union over every pane this drive owns — lanes
             // AND the worker — which is why the fact is drive-level and not
             // on `LaneFact`: a drive in `fix-wait` owns a worker pane and no
@@ -3743,6 +4029,26 @@ impl OrchRegistry {
                 {
                     Ok(RdLaneOpen { agent, session, resumed, scope }) => {
                         entry.lane_index = *index;
+                        // **#3226: why this lane was re-briefed, where the
+                        // answer is not derivable from the row.** A lane
+                        // whose pane died with the process is reseeded by
+                        // the reconcile, so what arrives here is an
+                        // ordinary first-brief-of-a-round — same shape,
+                        // same resumed session, same pane kind — and on
+                        // #3226s incident the only way to tell a restart
+                        // recovery from a normal round was to notice that
+                        // no head had moved between them.
+                        //
+                        // Spent HERE rather than at the end of the tick:
+                        // this lane has been re-briefed, and the other
+                        // lanes of the same drive have not.
+                        let mut why_restart = false;
+                        self.rd_spend_restart_mark(group, pr, |mark| {
+                            if let Some(k) = mark.lanes.iter().position(|b| b == &block) {
+                                mark.lanes.remove(k);
+                                why_restart = true;
+                            }
+                        });
                         if let Some((pane, killed_by)) = replaced {
                             out.audits.push((
                                 rddrive::audit_action::LANE_REOPENED,
@@ -3760,8 +4066,7 @@ impl OrchRegistry {
                         entry.clear_cap_starvation(now);
                         out.changed = true;
                         out.lanes_opened.push((block.clone(), agent.clone()));
-                        out.audits.push((
-                            rddrive::audit_action::LANE_SPAWNED,
+                        let mut spawned =
                             // #2109: `head`, `session` and `resumed` on the
                             // row. `resumed` is the fact the issue is about and
                             // the one nothing else records — a resumed lane and
@@ -3776,8 +4081,16 @@ impl OrchRegistry {
                             json!({ "pr": pr, "block": block, "agent": agent,
                                     "head": brief.head, "session": session,
                                     "resumed": resumed, "scope": scope,
-                                    "round": entry.counters.review_rounds + 1 }),
-                        ));
+                                    "round": entry.counters.review_rounds + 1 });
+                        // #3226, and ABSENT on an ordinary round rather than
+                        // null: `why` is a claim about a restart, and a key
+                        // present on every row would say nothing on the ones
+                        // it is really about. Same shape as `rd-handback`s
+                        // own `why`.
+                        if why_restart {
+                            spawned["why"] = Value::String("restart".to_string());
+                        }
+                        out.audits.push((rddrive::audit_action::LANE_SPAWNED, spawned));
                     }
                     Err(why) => {
                         // §8's live-delegate-cap row: a refused spawn is a
@@ -4013,9 +4326,34 @@ impl OrchRegistry {
         // tick is owed the same re-brief. That cannot loop — the first tick that
         // succeeds sets `re_briefed` and discharges it, which is what
         // `the_restart_mark_is_spent_by_the_tick_that_reads_it` pins.
-        if re_briefed || entry.state() != reviewdrive::DriveState::FixWait {
-            self.rd_forget_restart_mark(group, pr);
-        }
+        //
+        // **Per FIELD since #3225/#3226**, because a drive can carry more
+        // than one and a tick that acted on the lanes has decided nothing
+        // about the worker. Each clause below is the same rule read for its
+        // own recovery: acted, or the drive has left the state that recovery
+        // was about.
+        // Read once, before the closure borrows nothing of the entry.
+        let here_after = entry.state();
+        self.rd_spend_restart_mark(group, pr, |mark| {
+            if re_briefed || here_after != reviewdrive::DriveState::FixWait {
+                mark.handback = false;
+            }
+            // #3225: the arc out of `ci-wait` IS the act — it briefs the
+            // lane at the pushed head, which is the whole recovery. A tick
+            // that could not read the PR leaves `ci-wait` standing and the
+            // mark with it, for `a_restart_tick_that_cannot_read_the_pr…`s
+            // reason one field over.
+            if here_after != reviewdrive::DriveState::CiWait {
+                mark.push_delivered = false;
+            }
+            // #3226: a lane is spent by the OpenLane arm that re-briefed it
+            // (above), so what is left here is the drive having left
+            // `review-wait` — where no lane of this round will be opened at
+            // all and the why has nothing to ride on.
+            if here_after != reviewdrive::DriveState::ReviewWait {
+                mark.lanes.clear();
+            }
+        });
 
         // **THE HEAD, PERSISTED — the line two reviewers named on S1 as the one
         // that would be forgotten.** `DriveEntry::head` is only ever *compared*
@@ -4066,9 +4404,7 @@ impl OrchRegistry {
         // rather than being reached for next door. `agent()` answers `None` for
         // an id that is gone; both that and `Dead` are states in which
         // `resolve_token` refuses the caller, so neither can reach the MCP seam.
-        if entry.forget_dead_panes(&|id| {
-            self.agent(id).is_some_and(|a| a.status != AgentStatus::Dead)
-        }) {
+        if entry.forget_dead_panes(&|id| self.rd_pane_is_live(id)) {
             out.changed = true;
         }
         if let Some(d) = obs.body_digest.as_deref() {
@@ -4336,7 +4672,20 @@ impl OrchRegistry {
         // AUTHORITATIVE check is still the one under the lock below: this read
         // is unsynchronized, so it can only ever be stale in the direction of
         // doing more work, never of starting a second drive.
-        if reviewdrive::load_state(&self.group_dir(group)).map(|s| s.is_driven(pr)).unwrap_or(false)
+        //
+        // **Unless this drive has lost a pane** (#3226). A `drive_review` on
+        // a live drive whose panes all died is not a duplicate at all — it
+        // is an orchestrator asking for exactly the recovery the locked arm
+        // below performs, and refusing it was why the only manual route out
+        // of #3226s incident was `cancel_review_drive` plus a fresh drive,
+        // which loses the counters. The predicate is an agent-map read, so
+        // this stays a cheap check with no round trip in it.
+        if reviewdrive::load_state(&self.group_dir(group))
+            .map(|s| {
+                s.is_driven(pr)
+                    && !s.entry(pr).is_some_and(|e| self.rd_has_lost_panes(e))
+            })
+            .unwrap_or(false)
         {
             return self.rd_refuse(group, pr, r::ALREADY_DRIVEN);
         }
@@ -4365,7 +4714,71 @@ impl OrchRegistry {
                 Err(_) => return self.rd_refuse(group, pr, r::STATE_UNREADABLE),
             };
             if state.is_driven(pr) {
-                return self.rd_refuse(group, pr, r::ALREADY_DRIVEN);
+                // **A live drive whose panes are gone RESUMES rather than
+                // refusing** (#3226).
+                //
+                // The refusal is right for the ordinary duplicate — an
+                // orchestrator retrying, or re-reading its own state after a
+                // compact — and stays for it: a drive whose panes are all live
+                // has nothing here to repair and falls through to
+                // `already-driven` below. What it was wrong for is the drive
+                // this call is really about, where every pane died with a
+                // previous process and the only recovery left was
+                // `cancel_review_drive` plus a fresh `drive_review`, which
+                // starts the counters over — three lost review rounds on
+                // #3226s incident.
+                //
+                // **The repair is the reconcile s, called rather than
+                // re-spelled**, so the two cannot answer the pane question
+                // differently: drop what the roster does not have, keep every
+                // session, and leave the marks the tick acts on. No arc, no
+                // counter, and the state is untouched — this is not arc 11,
+                // which is `held`s resume and is the branch below.
+                let Some(entry) = state.entry_mut(pr) else {
+                    return self.rd_refuse(group, pr, r::STATE_UNREADABLE);
+                };
+                let lost = self.rd_forget_lost_panes(group, entry);
+                // **A superseded pane is not a loss to recover from** (#3228
+                // review 2, W1) — see `RdLostPanes::current_panes_lost`. The
+                // repair below is not free: on a `fix-wait` drive it marks a
+                // re-hand-back on the state alone, and a duplicate call that
+                // reached it would re-brief a live worker mid-fix.
+                if !lost.current_panes_lost() {
+                    return self.rd_refuse(group, pr, r::ALREADY_DRIVEN);
+                }
+                let mut mark = RestartMark::default();
+                match entry.state() {
+                    reviewdrive::DriveState::FixWait => mark.handback = true,
+                    reviewdrive::DriveState::CiWait
+                        if entry.fix_pushed() && !lost.worker.is_empty() =>
+                    {
+                        mark.push_delivered = true
+                    }
+                    _ => {}
+                }
+                mark.lanes = lost.lanes.iter().map(|(block, _)| block.clone()).collect();
+                let here = entry.state();
+                if reviewdrive::store_state(&dir, &state).is_err() {
+                    return self.rd_refuse(group, pr, r::STATE_UNWRITABLE);
+                }
+                // Marked only once the drop is DURABLE. A mark whose pane the
+                // record still names would re-brief a lane the next reconcile
+                // would then re-brief again.
+                if !mark.is_empty() {
+                    self.rd_restart_handback.lock_safe().insert((group.clone(), pr), mark);
+                }
+                self.rd_audit(
+                    group,
+                    on_behalf_of,
+                    rddrive::audit_action::RECOVERED,
+                    json!({ "pr": pr, "at": "drive_review",
+                            "panes_dropped": lost.worker.len() + lost.lanes.len() }),
+                );
+                // Serviced on the very next wake, for the same reason the
+                // accepted path below clears it.
+                self.rd_service_ms.lock_safe().remove(group);
+                return json!({ "driving": true, "state": here.as_str(),
+                               "recovered": "panes" });
             }
             let resumed = match state.entry(pr).map(|e| e.state()) {
                 // A parked drive RESUMES, carrying its counters — §2.3's

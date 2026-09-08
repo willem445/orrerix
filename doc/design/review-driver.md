@@ -537,6 +537,33 @@ neither — `mqloop::draft_pr_open` returns `None` there and its doc says reconc
 treats that as "the world does not match", never as "probably fine", and §8's
 row says what the driver does with it.
 
+**The reconcile reads pane liveness from the LIVE ROSTER, and drops what is
+not there** (#3225, #3226). Every recovery below rests on one fact, so it is
+established once: a pane the roster does not have is GONE. Mid-session that
+reading is ambiguous — §8's `LaneFact::pane_dead` row and `forget_dead_panes`
+both decline to make it, because an emptied map must not un-own live panes
+across a whole group — and on the first tick after a restart it is not
+ambiguous at all, because every pane died with the process. So the reconcile
+un-owns each of them: the worker's pane, each lane's pane (via
+`reseed_lane`, which also forgets the revision that lane was briefed at, or
+`review-wait` reads it as *open at this revision, pane alive* and waits out its
+state bound for a verdict no pane can produce), and every superseded pane on
+either list. **The SESSIONS are untouched**, and they are what each recovery
+resumes; a pane whose session cannot be named is kept rather than dropped, by
+`reseed_lane`'s and `release_pane`'s own refusal, because losing the
+conversation costs the review while keeping a stale id costs a string.
+
+Dropping the ownership is itself half of #3225. `held(fix-stalled)`'s notice
+enumerates §5.2's `owned_panes()` as "still OWNED", and on the beta11 drill
+every id it printed had died with the previous process — a remedy that sent an
+orchestrator to look at panes that were not there. A notice cannot name a pane
+the record no longer holds.
+
+Three recoveries are then MARKED on the entry, one per state, and the tick acts
+on them. `RestartMark` carries all three together because they are one question
+— what did this drive lose when the panes died — and each is discharged
+separately by the tick that acted on it.
+
 The reconcile also **re-hands-back the drives it finds in `fix-wait`** (#2811
 S10). That drive is waiting on a worker pane, and every pane died with the
 process: the signals map is per-process and empty, and the pane whose `report`
@@ -603,6 +630,36 @@ sentence above — "an unresolvable worker or lane session becomes `held`" — i
 still what happens; what changed is that the reconcile no longer has to GUESS
 which it is, because the attempt answers.
 
+**A `review-wait` drive whose lane pane died is re-briefed immediately, and no
+round is charged** (#3226). The reseed above is the whole mechanism: the lane
+record no longer names a head it was briefed at, so `decide_review_wait` opens
+it on the next tick by the ordinary path and `rd_open_lane` resumes the
+recorded session. What the mark carries is only the WHY — the
+`rd-lane-spawned` row gains `why: restart` (§5.4), because a restart recovery
+is otherwise indistinguishable on the audit log from an ordinary round: same
+row, same resumed session, same pane kind. Measured on PRs #3221 and #3222,
+where both drives sat in `review-wait` for forty-five minutes on reviewers that
+no longer existed, with no rd-\* row of any kind, until an orchestrator issued
+`drive_review` by hand. Opening a lane is not an arc (§2.1), so nothing is spent
+— a restart is not a round, the same property `Rehandback` has.
+
+**A `ci-wait` drive that is waiting for the RECEIPTS of a push its worker
+already made treats that push as the fix delivered** (#3225). §2.1's `ci-wait`
+row waits, on a green head the worker pushed under arc 7, for that worker's
+`report(done)` before briefing a lane — green is not the end of the round, and
+the CI receipts still have to reach the body (`decide_fix_receipts`). That
+report can never come from a pane that died with the process, so the wait ran
+out `fix_timeout_minutes` and parked `held(fix-stalled)`: measured on PR #3220,
+where the drive had the fix, had the green matrix and had a CLEAN merge state,
+and parked anyway. The push is durable and is at the head CI just went green
+on, so the mark advances the drive to `review-wait` and the lane is briefed
+there. What that costs is the receipts round — the lane is briefed at the
+pre-receipts digest and re-briefed if a human fills them in — which is one
+re-brief against a whole fix timeout and an orchestrator turn. It is gated on
+the worker pane ACTUALLY having been lost rather than on the process having
+restarted, because unlike the hand-back there is no probe here: this mark makes
+a drive advance without the report, so it must rest on the pane really being
+gone.
 The reconcile also **drops any cap-starvation run the previous process left
 standing** (#2135), on every **non-terminal** entry — parked ones included —
 and whatever else it decides about the PR. Not "every live entry": `is_parked`
@@ -1604,6 +1661,22 @@ Four are new, and each closes a case that would otherwise have no answer:
 - **`resume-session-empty`.** `resolve_session_ref` answers an empty string with
   an **untagged** `"resume_session must not be empty"`, which no closed
   vocabulary covers. Given a name here rather than leaked as prose.
+- **`already-driven` is narrowed to a drive that has lost a pane it is still USING** (#3226).
+  A `drive_review` on a live drive that has lost a pane is not a duplicate at
+  all: it is an orchestrator asking for §2.4's repair, and refusing it left
+  `cancel_review_drive` plus a fresh `drive_review` as the only recovery — which
+  reports the dead panes as "released" and starts the counters over. So the call
+  performs the reconcile's own repair instead, on the same live-roster reading:
+  un-own every pane the roster does not have, keep every session, mark the
+  state's recovery for the next tick, and answer `driving: true` with
+  `recovered: "panes"` and the state UNCHANGED — no arc, no counter, and not arc
+  11, which is the `held` resume above. A drive whose CURRENT worker and lane
+  panes are all alive still gets the refusal, which is the ordinary duplicate the
+  check exists for — and "current" is the whole population, deliberately: a dead
+  pane on a **superseded** list is the ordinary state of a drive between a pane
+  replacement and the next tick's own prune, so counting one here would take
+  every such duplicate into the repair arm and, on a `fix-wait` drive, re-brief
+  a live worker mid-fix with `why: restart`.
 - **`already-driven` covers the working and `gate-check` states only.** A
   `held` entry is *parked*, and §2.3 calls resuming it the default — so a flat
   `already-driven` would make that path unreachable and `reset_counters` a
@@ -2291,6 +2364,19 @@ like `mq-*` and the rest:
 and spent no counter. The split is the point: a reader counting review rounds
 off these rows must be able to leave the last one out.
 
+`rd-lane-spawned` carries the same `why: restart` on the one round that is not
+one (#3226): a lane re-briefed because its pane died with the process produces a
+row identical in every other field to an ordinary round's — same resumed
+session, same pane kind, same scope — and the key is ABSENT on every other row,
+because a `why` present everywhere says nothing where it matters. `rd-recovered`
+carries `at` (`reconcile`, or `drive_review` for the repair §5.1 performs on a
+live drive whose panes are gone) and `panes_dropped` — the count of **current**
+pane ownerships the live-roster read un-owned, the worker's and each lane's. A
+superseded pane dropped in the same pass is not counted, because the number
+exists to say what the drive LOST rather than what the record tidied: the only other visible effect of that
+drop is a notice that does NOT name a pane, which reads exactly like a drive
+that never owned one.
+
 Every state transition, every spawn or resume, and every consumed delegate event
 (§7) appears here, each carrying `on_behalf_of`. `rd-provider-limit` (#2811 S5b)
 is the one row that is about the GROUP rather than about a drive: it carries the
@@ -2921,7 +3007,7 @@ orchestrator recovers its drives) and the audit log.
 | The live-delegate cap refuses a lane spawn | A runner-class outcome: back off `RD_BACKOFF_MS` and retry on a later tick, with `cap: true` on the `rd-refused` row so a reader can tell a capped lane (which usually clears itself) from a broken one. **A run of refusals that outlasts `CAP_HOLD_MS` is `held(cap-full)`** (#2109) — the bound used to be `drive_timeout_minutes` alone, whose notice says nothing about slots, and the measured drive spent three hours below it emitting one of these rows per tick and no §2.2 exit at all. The driver **still never kills a pane to make room** (§3.1 item 5), and #2501 does not change that: it releases panes it no longer NEEDS — a lane whose verdict is recorded at this head, a worker whose report it has consumed — on facts about those panes, never on how full the group is, so a starved drive cannot go looking for a victim. What it does change is how often the cap is reached at all: a drive that is between rounds now holds no reviewer slot. **#2811 S1 is the second such measurement and the larger one.** #2501's worker rule read `fix-wait` alone, and #2168 E1 had already moved the report's consumption into `ci-wait` for every hand-back that PUSHES — so the rule and its consumer never met, and 15 of one 6.4-hour session's 20 hand-backs held a slot through ci-wait and the whole next review round: 22 `rd-refused` rows, two `held(cap-full)`, about 39 minutes of measured starvation, and 33 panes killed by hand, one of which stranded a live drive (`worker-unresumable` "ended by orchestrator"). Asking `DriveEntry::handback_outstanding` instead — the same predicate `kickback_owed` already had to use for E1's two states — closes it, and a terminal step now releases before its notice instead of listing panes for the orchestrator to kill. Since #1960 the driver also does not need a new slot per round (a lane whose reviewer is idle in a live pane is re-briefed IN that pane), and since #2109 a lane that is BUSY is not superseded either. A refusal that reaches a **hand-back** is `held(cap-refused)`, not `worker-unresumable` (§2.2). |
 | An idle reviewer or worker is reaped between rounds | Recoverable, but **not exempt**: `idle_reap_candidates` exempts exactly two things — the orchestrator/manager roles, and blocks whose `role_hint` is `liaison` — so a driver-spawned lane is reapable like any other agent wherever an operator sets `idle_kill_minutes`, and the driver's own waits — 60 minutes per lane and per fix, and hours in `review-wait` before `state-stalled` — are long enough to cross a typical threshold. Recovery leans on the generic resume machinery, not on anything drive-aware: the entry stores the **full** resolved session id, so the next round resumes it; if it no longer resolves, a **lane** respawns fresh by block id and a **worker** becomes `held(worker-unresumable)`. A fresh lane respawn does **not** consume a `review_rounds` increment — the counter counts rounds of *findings*, and a reaped reviewer produced none. No `notify_when` watch is held anywhere — watches die with their agent — so the tick polls the PR itself. |
 | A lane must be re-briefed while its own pane is still working | The re-brief is REFUSED, not doubled: `rd-lane-duplicate-refused` names the pane that holds the round and the tick backs off, so the delta lands in that pane the moment it goes idle and the reuse arm can reach it (#2109). Before this the reuse declined on readiness and the spawn minted a second pane on the same conversation — two paid reviews for one verdict slot, and two panes against the cap. Bounded by the clock the refusal does NOT re-arm: `spawned_ms` stays where the original brief put it, so a pane that never comes back is `held(lane-stalled)` naming it. Keyed on `(pr, block, head)`, so a **head change** still supersedes — there the recorded pane is reviewing a revision the drive has moved past. **"Still working" is the actual condition since #2162, not a description of one.** The refusal used to key on `briefed_head == head` plus liveness, which is as true of a pane that has FINISHED its turn as of one still writing — and a body-only fix cannot move the head, so every round of #1875's class arrived here. Composed with the readiness decline above it that is a hard deadlock, and the two are about ONE pane: the reuse arm only ever considers an **idle** pane, so an `rd-reuse-declined` row proves the pane was idle, and this refusal then called that same pane live-and-briefed-at-this-head. Too `unconfirmed` to reuse and too live to replace. Measured on PR #2140: 38 minutes with no lane open, the same three rows every tick, no notice, ended by a human killing the pane — and `lane-stalled` was structurally unreachable throughout, because that lane had answered. So the guard now also requires the pane to have no `idle_since_ms`: the reuse arm takes idle panes and this refusal takes busy ones, the two do not overlap, and #2109 loses nothing — its measured duplicate (`rev-1825`/`rev-1826`) was a pane mid-review. A declined idle pane is superseded into a new pane on its own session through `prior_agents`, exactly as a head change does. **The residual is unchanged** and is the busy case this still covers: a lane that answered here and whose pane then took other work retries and is bounded by `review-wait`'s state bound. `a_body_only_fix_round_re_opens_the_lane_whose_pane_went_idle` pins the fix, `a_block_that_already_has_a_live_pane_at_this_head_is_refused_a_second_lane` is its negative control (same body move, same head, the one difference being that pane is still working), and `an_answered_lane_whose_re_brief_is_refused_is_bounded_by_the_review_wait_state_bound` pins the residual and its exit. |
-| A lane's pane is killed or exits mid-round | **Observed on the next tick and the lane RE-OPENED** (#2163), not waited out. A pane exit was read only for the worker and only in `fix-wait`, on the argument that "`review-wait` has `lane-stalled` for its own panes" — true, and an hour away, anchored at the brief rather than at the death. Measured on PR #2140: a rev-final pane killed at 20:12 left the drive with no rd-* row for the PR for 25+ minutes, and it was killed on the driver's OWN advice, since a `cap-refused` notice tells an orchestrator to free a slot by killing an idle delegate and a lane that has finished its turn is on that list. `LaneFact::pane_dead` carries the fact into `decide`, the lane's session is resumed into a fresh pane, and `rd-lane-reopened` names the dead pane and `killed_by` (§5.4). Only a positive `AgentStatus::Dead` counts — an emptied agent map after a restart is "we could not check", the same asymmetry `forget_dead_panes` states — and a session that no longer resolves falls to the existing `rd-lane-resume-failed` → fresh-spawn path. **Bounded**: the stall arm is read FIRST and the replacement inherits `spawned_ms` (§5.2), so a pane that dies on every spawn reaches `held(lane-stalled)` at `lane_timeout_minutes` from the original brief instead of being replaced for ever. |
+| A lane's pane is killed or exits mid-round | **Observed on the next tick and the lane RE-OPENED** (#2163), not waited out. A pane exit was read only for the worker and only in `fix-wait`, on the argument that "`review-wait` has `lane-stalled` for its own panes" — true, and an hour away, anchored at the brief rather than at the death. Measured on PR #2140: a rev-final pane killed at 20:12 left the drive with no rd-* row for the PR for 25+ minutes, and it was killed on the driver's OWN advice, since a `cap-refused` notice tells an orchestrator to free a slot by killing an idle delegate and a lane that has finished its turn is on that list. `LaneFact::pane_dead` carries the fact into `decide`, the lane's session is resumed into a fresh pane, and `rd-lane-reopened` names the dead pane and `killed_by` (§5.4). Only a positive `AgentStatus::Dead` counts ON THE TICK — an agent map that has no row for the pane is "we could not check" there, the same asymmetry `forget_dead_panes` states; the one place absence IS decisive is §2.4's restart reconcile, which un-owns every pane the live roster does not have and re-briefs the lane through the same path (#3226) — and a session that no longer resolves falls to the existing `rd-lane-resume-failed` → fresh-spawn path. **Bounded**: the stall arm is read FIRST and the replacement inherits `spawned_ms` (§5.2), so a pane that dies on every spawn reaches `held(lane-stalled)` at `lane_timeout_minutes` from the original brief instead of being replaced for ever. |
 | A PR is driven again after its previous drive ended | The lanes keep their CONVERSATIONS (#2153). Lane memory lives on the entry, and a re-drive replaces a terminal entry, so before this every lane of every re-drive was spawned cold — on the ordinary path (satisfied → the orchestrator dispositions the findings → re-drive) rather than on an edge, and on the round where the warm session is cheapest, since that reviewer has already read the PR once. Measured on PR #2141: four cold lanes where two warm ones would have done. §5.1's `already-driven` bullet has the shape; what a reader chasing this row wants is the fail direction, which is toward COLD: a lane with no resolvable session is not seeded, and a seeded session that no longer resolves falls to `rd-lane-resume-failed` → fresh spawn. The RECORD carries no verdict, so nothing this drive has not read decides anything; the verdict FILE outlives the drive and is re-read as always, so a lane that really did answer is still briefed with §5.5's delta naming the head it answered at. |
 | A lane's recorded session is empty because its CLI mints one late | The pane is asked instead (#2109). `spawn_agent_bound` returns a session id only for `cli == "claude"`, which pre-assigns a uuid; copilot and opencode mint theirs after boot and the watcher binds the discovered id to the PANE and the roster row, never to the lane record — so reading the record alone answered "no session" for every non-claude reviewer and every round opened a fresh conversation. `rd_lane_session` falls back to the live agent map and then the roster, in that order; the roster is what survives a pane that has since exited, which is exactly the lane a resume is FOR. Where neither knows one, the lane spawns fresh, as it always did. |
 | The worker pushes while a lane is mid-review | The head moves, so the drive re-enters `ci-wait` (§2.1 arc 6); the verdict that lands binds to the old head, so it decides nothing here — `fail`, `pass` and `escalate` alike read as absent and the lane is re-briefed after CI (§2.1's carried-over properties, as #1871 B1 rewrote them). One wasted review, bounded by the round counter; the re-brief itself spends no round, because a round counts findings delivered and this delivers none. This race is not designed away — it is the race the verdict binding already exists to handle. |
@@ -2935,7 +3021,7 @@ orchestrator recovers its drives) and the audit log.
 | A PR goes CONFLICTING while its lanes are reviewing, or after they have all passed | **The rebase arc, from wherever the conflict is observed** (#2311) — the drive hands the worker back with `rebase_attempts` spent, and a second conflict is `held(rebase-limit)`, exactly as `ci-wait` has always answered one. Two states used to answer something else first, and both were measured. At `gate-check` the answer was `satisfied`: the gate had genuinely been met and the PR simply did not merge, so #2942 reported GATE SATISFIED on a PR `rev-final` had itself called `mergeable:CONFLICTING`, and the cost was paid outside the driver — a hand rebase, a re-drive at `rounds_already_spent 3`, two fresh whole-diff lanes, about ten minutes of cap starvation and three orchestrator turns. At `review-wait` the answer was `held(routing-unaccountable)`, which is worse than late rather than merely slower: routing reads the changed-file list, GitHub computes none for a conflicted head, so the notice said *which reviewers are required is unknown* about a PR whose real problem was that it did not merge — and its stated remedy, `drive_review` again, re-read the same unreadable routing and re-held (#3118). Reading mergeability above the per-state logic reports the CAUSE, and the cause has a hand-back. `fix-wait` is the one state excluded, and the exclusion is an explicit `state != FixWait` clause — an ARGUED OPINION, not a fall-out of the arc table. The table is the backstop: `(fix-wait, fix-wait)` is not a legal transition, so without that clause the tick would propose a step `take` refuses and audit `invalid-transition` every time instead of waiting. The opinion is that a rebase hand-back is already outstanding there, so a second `rebase_attempts` would park the drive before the worker could push. `Pending`/`Unknown` mergeability is NOT a conflict — the unknown row above applies unchanged. |
 | `route_reviewers` returns `None` at `gate-check` | `held(routing-unaccountable)` (§2.1 arc 12) — **never** `satisfied`. This is the one degradation whose absence would be a security defect rather than an inconvenience: the gate would answer *allowed* on a reviewer list nobody could compute, and §3.1 names that outcome "a bypass with better telemetry". |
 | `review_drives.json` is torn or hand-edited | The **tick** refuses, audits `rd-state-unreadable`, backs off (§2.4). The **tools** answer `rd-state-unreadable` rather than `not-driven`, which would assert something orrerix cannot know (§5.1). |
-| orrerix restarts mid-drive | Reconcile before driving: positively-closed PR to `cancelled`, unresolvable session to `held`, everything else resumed against the **live** head (§2.4). |
+| orrerix restarts mid-drive | Reconcile before driving: positively-closed PR to `cancelled`, unresolvable session to `held`, everything else resumed against the **live** head (§2.4). Pane liveness is read from the live ROSTER, never from the drive's own file: every pane it names died with the process, so each is un-owned (the sessions are kept) and the state's own recovery is marked — a `fix-wait` drive is re-handed-back (#2811 S10), a `review-wait` lane is re-briefed on its recorded session (#3226), and a `ci-wait` drive waiting on the receipts of a push its worker already made treats that push as the fix delivered (#3225). None of the three charges a counter. |
 | The orchestrator compacts and forgets its drives | `review_drive_status()` is in the re-sync list, and every §6 notice names the tool that acts on it. |
 
 ### 8.1 The merge queue, which runs in the same tick

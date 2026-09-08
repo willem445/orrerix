@@ -13729,7 +13729,12 @@ fn a_lane_whose_pane_died_is_not_told_to_stop_and_writes_no_declined_row() {
             // The pane dies mid-review, the way a human kill or the idle reaper
             // ends one — the lane record still names it, which is the whole
             // point: the drive has an agent id to try and it is futile.
-            reg.kill_agent(&lane).expect("the lane's pane is killable");
+            // `mark_dead` and not `kill_agent`: the latter needs an app handle to
+            // kill the pty and a headless test has none ("no app handle"). This is
+            // the same primitive `release_driven_pane` claims a pane with, and the
+            // §3.1 scan that forbids it covers the three DRIVER source files, not
+            // this one.
+            reg.mark_dead(&lane, Some(0)).expect("the lane's pane is claimable");
             assert_eq!(
                 reg.agent(&lane).map(|a| a.status == AgentStatus::Dead),
                 Some(true),

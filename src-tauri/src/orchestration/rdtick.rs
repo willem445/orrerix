@@ -1277,49 +1277,18 @@ impl OrchRegistry {
         // show that provider. A drive whose panes recovered drops out of the
         // list even though it is still parked, which is the honest reading —
         // it is held awaiting a `drive_review`, not held by the outage.
-        {
-            let mut by_provider: std::collections::BTreeMap<String, Vec<u64>> =
-                std::collections::BTreeMap::new();
-            let newly: std::collections::BTreeSet<String> =
-                outs.iter().filter_map(|o| o.provider_limited.clone()).collect();
-            if !newly.is_empty() {
-                if let Ok(live) = reviewdrive::load_state(&self.group_dir(group)) {
-                    for e in &live.entries {
-                        if e.state() != reviewdrive::DriveState::Held
-                            || e.held_reason != Some(reviewdrive::HeldReason::ProviderLimit)
-                        {
-                            continue;
-                        }
-                        let still = e
-                            .owned_panes()
-                            .into_iter()
-                            .find_map(|(a, _)| self.provider_limit_for_agent(&a));
-                        if let Some(p) = still.filter(|p| newly.contains(p)) {
-                            by_provider.entry(p).or_default().push(e.pr);
-                        }
-                    }
-                }
-            }
-            // Fail-safe: if the state could not be re-read, say what THIS tick
-            // saw rather than nothing. An under-count beats silence, and the
-            // per-drive `rd-held` rows are already on the record either way.
-            if by_provider.is_empty() {
-                for o in &outs {
-                    if let Some(p) = &o.provider_limited {
-                        by_provider.entry(p.clone()).or_default().push(o.pr);
-                    }
-                }
-            }
-            for (provider, mut prs) in by_provider {
-                prs.sort_unstable();
-                prs.dedup();
-                let n = rddrive::provider_limit_notice(&provider, &prs);
+        // [scratch mutation 1 -- #3195 item 3] the SET aggregation is deleted:
+        // one notice PER newly-held drive, which is the outcome the
+        // one-line rule exists to prevent.
+        for o in &outs {
+            if let Some(p) = &o.provider_limited {
+                let n = rddrive::provider_limit_notice(p, &[o.pr]);
                 let _ = self.deliver_to_orchestrator(group, &n, brand::AUDIT_ACTOR);
                 self.rd_audit(
                     group,
                     brand::AUDIT_ACTOR,
                     rddrive::audit_action::PROVIDER_LIMIT,
-                    json!({ "provider": provider, "prs": prs, "drives": prs.len() }),
+                    json!({ "provider": p, "prs": [o.pr], "drives": 1 }),
                 );
                 report.notices.push(n);
             }

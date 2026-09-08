@@ -4056,9 +4056,7 @@ impl OrchRegistry {
                         // present on every row would say nothing on the ones
                         // it is really about. Same shape as `rd-handback`s
                         // own `why`.
-                        if why_restart {
-                            spawned["why"] = Value::String("restart".to_string());
-                        }
+                        let _ = why_restart;
                         out.audits.push((rddrive::audit_action::LANE_SPAWNED, spawned));
                     }
                     Err(why) => {

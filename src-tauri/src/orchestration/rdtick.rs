@@ -3893,11 +3893,15 @@ impl OrchRegistry {
                     // **Every state the engine lets act on a conflict**, not
                     // `ci-wait` alone (#2311): `decide` reads mergeability above the
                     // per-state logic, so `gate-check` and `review-wait` take the
-                    // same arc 3 and owe the same row. It is what accounts for the
-                    // hand-back that follows — an `rd-handback` `why:conflict` with
-                    // no `rd-conflicting` above it is a spent `rebase_attempts` a
-                    // §5.4 reader cannot explain, and this row is the one
-                    // `scripts/orch-scorecard.cjs` counts. `fix-wait` is excluded
+                    // same arc 3 and owe the same row. It accounts for whichever
+                    // step the same tick takes: the `rd-handback` `why:conflict`
+                    // while `rebase_attempts` lasts, or the `rd-held`
+                    // `rebase-limit` park once it is spent. Either way, an
+                    // `rd-handback` `why:conflict` with no `rd-conflicting` above
+                    // it is a spent `rebase_attempts` a §5.4 reader cannot
+                    // explain, and `scripts/orch-scorecard.cjs` classifies it
+                    // only in the generic `rd-*` census — no named case counts
+                    // it. `fix-wait` is excluded
                     // by the same explicit clause the engine uses (`state !=
                     // FixWait`, not the arc table): the rebase is already
                     // outstanding there, so no arc is taken and there is nothing

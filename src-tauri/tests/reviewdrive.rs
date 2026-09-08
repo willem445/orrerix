@@ -90,6 +90,7 @@ fn facts_at(head: &str) -> DriveFacts {
         messaged: false,
         provider_limited: None,
         restart_handback: false,
+        restart_push_delivered: false,
     }
 }
 
@@ -13766,4 +13767,385 @@ fn a_lane_whose_pane_died_is_not_told_to_stop_and_writes_no_declined_row() {
          nothing and writes no declined row for either tick — retrying a dead pane is provably \
          futile, so the row would be noise rather than a record: {observed:?}"
     );
+}
+
+// ── #3225 / #3226: the restart reconcile reads the LIVE ROSTER ───────────────
+//
+// The beta11 restart drill's two siblings. Every pane died with the previous
+// process, and the drive's own file still named them: a `review-wait` drive
+// waited on a reviewer that no longer existed (#3226), and a `ci-wait` drive
+// waited for the `report(done)` of a worker that had already pushed and could
+// no longer speak (#3225), out to `held(fix-stalled)` naming both dead panes as
+// "still OWNED".
+//
+// The fixtures below are `fix_wait_across_a_restart`'s shape — two registries
+// over one state dir, never one registry with a cleared map, because only the
+// first produces the fact these recoveries rest on.
+
+/// The lane record of the one live drive, or a panic naming what was there.
+fn live_lane(reg: &OrchRegistry, group: &GroupId) -> serde_json::Value {
+    let lanes = live_lanes(reg, group);
+    assert_eq!(
+        lanes.len(),
+        1,
+        "the fixture must have opened exactly one lane, or the reads below are about \
+         whichever one came first: {lanes:?}"
+    );
+    lanes[0].clone()
+}
+
+fn lane_pane(reg: &OrchRegistry, group: &GroupId) -> String {
+    live_lane(reg, group)["agent"].as_str().unwrap_or_default().to_string()
+}
+
+fn worker_pane(reg: &OrchRegistry, group: &GroupId) -> String {
+    drives_json(reg, group)["entries"][0]["worker_agent"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The group this repo resolves to, for a fixture whose registry the test no
+/// longer holds. `create_group` is repo-derived and idempotent, which is how the
+/// app reattaches at startup.
+fn group_of(reg: &OrchRegistry, repo: &Repo) -> GroupId {
+    reg.create_group(&repo.path(), rails()).expect("the relaunch reattaches").id
+}
+
+/// Walk a drive to `review-wait` with a lane genuinely OPEN — a lane record
+/// naming a pane and a session — and answer the registry it was built in, so a
+/// caller can run the LIVE control before restarting.
+fn review_wait_with_an_open_lane(
+    dir: &std::path::Path,
+    repo: &Repo,
+    gh: &FakeGh,
+) -> (OrchRegistry, GroupId) {
+    let reg = relaunch_registry(dir);
+    let (group, _session) = driven(&reg, repo, gh);
+    reg.rd_drive_group_with(&group, gh, 10_000);
+    let pane = tick_until_lane(&reg, gh, &group, 20_000)
+        .expect("the fixture must actually brief a lane, or nothing below is about #3226");
+    assert_eq!(
+        lane_pane(&reg, &group),
+        pane,
+        "the lane RECORD must name the pane the tick briefed — a record with no pane is \
+         the one shape #3226 cannot be about"
+    );
+    assert_eq!(status_state(&reg, &group), "review-wait");
+    (reg, group)
+}
+
+/// **#3226, and its own positive control.**
+///
+/// Both halves run against the same drive, which is what makes the second one
+/// evidence: a lane whose reviewer is alive and thinking must be left alone, and
+/// a re-brief rule that could not tell the two apart would show up here as a
+/// doubled brief on the live half rather than as a passing test.
+///
+/// **The red.** On `main` the restarted registry re-briefs nobody: the lane
+/// record still names the dead pane, `rd_dead_lane_pane` answers `None` for an
+/// agent the roster has no entry for ("we could not check", the mid-session
+/// reading), so `LaneFact::pane_dead` is false, `lane_open_for` is true, and
+/// `decide_review_wait` waits — for the whole `review-wait` state bound, on a
+/// reviewer that no longer exists. Measured on PRs #3221 and #3222: forty-five
+/// minutes, no `rd-lane-spawned`, no hold, no row of any kind.
+#[test]
+fn a_review_wait_lane_whose_pane_died_with_the_process_is_re_briefed_and_a_live_one_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = {
+        // **The control: the same drive, still running.** Four more ticks with
+        // the lane's pane alive and briefed at this head must brief nobody.
+        let (reg, group) = review_wait_with_an_open_lane(dir.path(), &repo, &gh);
+        let spawns = action_count(&reg, &group, "rd-lane-spawned");
+        for i in 0..4 {
+            reg.rd_drive_group_with(&group, &gh, 60_000 + i * 5_000);
+        }
+        assert_eq!(
+            action_count(&reg, &group, "rd-lane-spawned"),
+            spawns,
+            "a LIVE lane must be waited for, not re-briefed — a rule that cannot tell the \
+             two apart doubles every round's reviewer"
+        );
+        group
+    };
+    let reg = relaunch_registry(dir.path());
+    reattach(&reg, &repo, &group);
+
+    // The premise, asserted rather than assumed: the recorded pane is not in
+    // this registry's roster, and the recorded SESSION is still on the record.
+    let dead = lane_pane(&reg, &group);
+    assert!(!dead.is_empty(), "the record must still name the pane that died");
+    assert_eq!(
+        roster_row(&reg, &group, &dead),
+        serde_json::Value::Null,
+        "the pane died with the previous process, so the live roster must not have it — \
+         if it does, this test is not about a restart"
+    );
+    let session = live_lane(&reg, &group)["session"].as_str().unwrap_or_default().to_string();
+    assert!(!session.is_empty(), "the lane's conversation is what survives the restart");
+
+    let spawns_before = action_count(&reg, &group, "rd-lane-spawned");
+    let rounds_before = review_rounds(&reg, &group);
+    let brief_pane = tick_until_lane(&reg, &gh, &group, 100_000)
+        .expect("the first tick after a restart must re-brief the lane whose pane is gone");
+
+    let rows = audit_details(&reg, &group, "rd-lane-spawned");
+    assert_eq!(
+        rows.len(),
+        spawns_before + 1,
+        "exactly one re-brief, not one per tick: {rows:#?}"
+    );
+    let row = rows.last().expect("the row just asserted");
+    assert_eq!(row["resumed"], json!(true), "the lane's own conversation is resumed: {row}");
+    assert_eq!(row["session"], json!(session), "…and it is the recorded one: {row}");
+    assert_eq!(
+        row["why"],
+        json!("restart"),
+        "the row must say WHY, or a restart recovery reads on this log exactly like an \
+         ordinary round: {row}"
+    );
+    assert_ne!(brief_pane, dead, "the record must be re-pointed at the pane that now holds it");
+    assert_eq!(
+        lane_pane(&reg, &group),
+        brief_pane,
+        "and §7's interception key must follow it"
+    );
+    // **A restart is not a round** — the same property S10's re-hand-back has.
+    assert_eq!(
+        review_rounds(&reg, &group),
+        rounds_before,
+        "re-briefing a lane the restart killed must spend none of INVARIANT 9's budget"
+    );
+}
+
+/// **#3225's second half, which is the one an orchestrator READS.**
+///
+/// `held(fix-stalled)`'s notice enumerates `owned_panes()` as "still OWNED", and
+/// on the drill every id in that list had died with the process — so the remedy
+/// it printed sent a human to look at panes that were not there. The ownership
+/// is dropped at the reconcile, before any notice can be built from it; the
+/// sessions are what survive, and the second assertion is that they do.
+///
+/// The pre-restart read is the positive control: a LIVE worker pane is owned and
+/// stays owned, so the drop afterwards is caused by the restart rather than by a
+/// field nothing ever writes.
+#[test]
+fn the_reconcile_drops_ownership_of_panes_the_roster_does_not_have_and_keeps_the_sessions() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+
+    let live_worker = {
+        let reg = relaunch_registry(dir.path());
+        let (group, _s) = driven(&reg, &repo, &gh);
+        to_first_handback(&reg, &group, &gh);
+        let owned = worker_pane(&reg, &group);
+        assert!(
+            !owned.is_empty(),
+            "control: a live drive owns the pane it handed the fix to, so the drop below \
+             is the restart's doing"
+        );
+        owned
+    };
+
+    let reg = relaunch_registry(dir.path());
+    let group = group_of(&reg, &repo);
+    let session_before = driven_worker_session(&reg, &group);
+
+    // The reconcile runs on the first tick of the restarted registry.
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+
+    let record = drives_json(&reg, &group)["entries"][0].clone();
+    let owned_now: Vec<String> = record["prior_worker_agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(std::iter::once(&record["worker_agent"]))
+        .filter_map(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    assert!(
+        !owned_now.contains(&live_worker),
+        "a pane that died with the process is not this drive's to name: {record}"
+    );
+    assert_eq!(
+        driven_worker_session(&reg, &group),
+        session_before,
+        "the CONVERSATION is what survives a restart — dropping it would cost the fix, not \
+         a slot: {record}"
+    );
+}
+
+/// A drive in `ci-wait` for a head its worker PUSHED, handed to a new registry
+/// — #3225's state exactly: the push is on record (`fix_pushed`), the receipts
+/// are not, and the pane that would have reported them is gone.
+fn ci_wait_after_a_push_across_a_restart(
+    dir: &std::path::Path,
+    repo: &Repo,
+    gh: &FakeGh,
+) -> (OrchRegistry, GroupId) {
+    let group = {
+        let reg = relaunch_registry(dir);
+        let (group, _session) = driven(&reg, repo, gh);
+        to_first_handback(&reg, &group, gh);
+        // The worker pushes its fix: a head the drive has not seen. CI has not
+        // settled on it yet, which is what keeps the drive in `ci-wait` rather
+        // than advancing on the same tick.
+        gh.set_checks(r#"[{"name":"build","state":"IN_PROGRESS","link":"x"}]"#);
+        gh.set_facts("OPEN", HEAD_C);
+        reg.rd_drive_group_with(&group, gh, 50_000);
+        let status = reg.review_drive_status_with(&group, 50_000);
+        assert_eq!(
+            status["drives"][0]["state"],
+            json!("ci-wait"),
+            "the fixture must actually park the drive in `ci-wait` on the pushed head: \
+             {status}"
+        );
+        assert_eq!(status["drives"][0]["head"], json!(HEAD_C), "…at the pushed head: {status}");
+        group
+    };
+    let reg = relaunch_registry(dir);
+    reattach(&reg, repo, &group);
+    (reg, group)
+}
+
+/// **#3225's red.** On `main` the restarted drive goes green and then waits for
+/// a `report(done)` from a pane that died with the previous process:
+/// `decide_fix_receipts` reads `WorkerSignal::Silent`, the per-process signal map
+/// is empty and can never fill, and one `fix_timeout_minutes` later the drive
+/// parks `held(fix-stalled)` — a claim that a worker went silent, about a worker
+/// orrerix was restarted under. Measured on PR #3220.
+///
+/// The push is the fix: it is durable, it is the head CI just went green on, and
+/// the only thing missing is a message no pane can send.
+#[test]
+fn a_ci_wait_drive_whose_pusher_died_with_the_process_briefs_the_lane_on_the_green_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = ci_wait_after_a_push_across_a_restart(dir.path(), &repo, &gh);
+
+    // The premise: the drive's worker pane is not in this registry's roster.
+    let dead = worker_pane(&reg, &group);
+    assert!(!dead.is_empty(), "the record must still name the pane that pushed");
+    assert_eq!(
+        roster_row(&reg, &group, &dead),
+        serde_json::Value::Null,
+        "the pusher died with the previous process — if the roster has it, this test is \
+         not about a restart"
+    );
+
+    // CI settles green on the pushed head.
+    gh.set_checks(r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#);
+    reg.rd_drive_group_with(&group, &gh, 60_000);
+    assert_eq!(
+        status_state(&reg, &group),
+        "review-wait",
+        "green on a head this drive's own worker pushed, with nobody left to report it, is \
+         the fix delivered"
+    );
+
+    let pane = tick_until_lane(&reg, &gh, &group, 70_000)
+        .expect("and the lane must actually be briefed at that head");
+    assert!(!pane.is_empty());
+    assert_eq!(
+        live_lane(&reg, &group)["briefed_head"],
+        json!(HEAD_C),
+        "…at the head the worker pushed, not the one it was handed back from"
+    );
+
+    // Well past `fix_timeout_minutes` measured from the push: the bound this
+    // drive used to die on must not fire at all.
+    let past_the_bound = 60_000 + 90 * 60_000;
+    reg.rd_drive_group_with(&group, &gh, past_the_bound);
+    let status = reg.review_drive_status_with(&group, past_the_bound);
+    assert_ne!(
+        status["drives"][0]["held_reason"],
+        json!("fix-stalled"),
+        "no wait for a report that cannot come, so no hold about a silence that never \
+         happened: {status}"
+    );
+}
+
+/// The control for the arm above, at the level the decision is made: a `ci-wait`
+/// drive whose worker is ALIVE still waits for its receipts (#2168 E1), which is
+/// the property the restart mark must not have deleted.
+#[test]
+fn a_live_pusher_is_still_waited_for_and_only_the_restart_mark_changes_that() {
+    let mut e = entry_at(DriveState::CiWait);
+    e.head = "head-a".to_string();
+    e.note_fix_push(1_500);
+    let limits = DriveLimits::default();
+    let green = DriveFacts { ci: CiObservation::Green, ..facts_at("head-a") };
+
+    assert_eq!(
+        reviewdrive::decide(&e, &green, &limits),
+        DriveStep::Wait,
+        "control: green is not the end of the round — the receipts still have to reach the \
+         body, and a live worker is the one that writes them"
+    );
+    assert_eq!(
+        reviewdrive::decide(&e, &DriveFacts { restart_push_delivered: true, ..green }, &limits),
+        DriveStep::Advance { to: DriveState::ReviewWait, held_reason: None, bump: None },
+        "and with the pusher gone, the push IS the fix delivered"
+    );
+}
+
+/// **#3226's recovery-detail comment.** `drive_review` on a stuck `review-wait`
+/// drive was refused `already-driven`, so the only manual route out was
+/// `cancel_review_drive` — which reports the dead panes as "released" — plus a
+/// fresh `drive_review`, and the counters go with it.
+///
+/// The second half is the positive control and it is load-bearing: the refusal is
+/// NARROWED, not removed. Once the repair has run there is nothing dead left, so
+/// the very next identical call is the ordinary duplicate again.
+#[test]
+fn drive_review_on_a_live_drive_whose_panes_died_resumes_instead_of_refusing() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = review_wait_with_an_open_lane(dir.path(), &repo, &gh).1;
+    let reg = relaunch_registry(dir.path());
+    reattach(&reg, &repo, &group);
+    let session = driven_worker_session(&reg, &group);
+    let rounds_before = review_rounds(&reg, &group);
+
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 45_000);
+    assert_eq!(
+        out["driving"],
+        json!(true),
+        "a drive whose panes all died is not a duplicate — refusing it leaves \
+         `cancel_review_drive` as the only recovery, and that one loses the counters: {out}"
+    );
+    assert_eq!(
+        out["state"],
+        json!("review-wait"),
+        "and it is a REPAIR, not arc 11: the drive stays in the state it was in: {out}"
+    );
+    assert_eq!(
+        review_rounds(&reg, &group),
+        rounds_before,
+        "…carrying the counters the cancel-and-re-drive workaround threw away"
+    );
+    assert_eq!(
+        lane_pane(&reg, &group),
+        "",
+        "the dead lane pane is un-owned, which is what makes the next tick re-brief it"
+    );
+
+    let again = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 46_000);
+    assert_eq!(
+        again["refused"],
+        json!("already-driven"),
+        "control: with nothing left dead, a second call is the ordinary duplicate and is \
+         still refused: {again}"
+    );
+
+    // And the repair is what the drive needed: the lane comes back.
+    let pane = tick_until_lane(&reg, &gh, &group, 50_000)
+        .expect("the tick after the repair must re-brief the lane");
+    assert!(!pane.is_empty());
 }

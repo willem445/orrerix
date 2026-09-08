@@ -16371,7 +16371,13 @@ pub struct OrchRegistry {
     /// until `fix_timeout_minutes` expires. So the mark survives every tick that
     /// decided nothing, and is discharged when the worker was re-briefed or the
     /// drive has left `fix-wait`.
-    rd_restart_handback: Arc<TrackedMutex<HashSet<(GroupId, u64)>>>,
+    ///
+    /// **A record per drive rather than a bare set** (#3225, #3226): a restart
+    /// costs a `review-wait` drive its lane panes and a `ci-wait` drive the
+    /// worker whose receipts it is waiting on, and those are three recoveries
+    /// of one fact. [`rdtick::RestartMark`] carries them together and each is
+    /// discharged by the tick that acted on it.
+    rd_restart_handback: Arc<TrackedMutex<HashMap<(GroupId, u64), rdtick::RestartMark>>>,
     /// The last hand-back failure of each drive — the session it failed FOR and
     /// the failure line — so a SECOND identical failure (#2555 item 2) can be
     /// told apart from the first and said so: the hold's quoted refusal gains
@@ -30623,7 +30629,10 @@ impl OrchRegistry {
             rd_service_ms: Arc::new(TrackedMutex::new("rd_service_ms", HashMap::new())),
             rd_runner_override: TrackedMutex::new("rd_runner_override", None),
             rd_signals: Arc::new(TrackedMutex::new("rd_signals", HashMap::new())),
-            rd_restart_handback: Arc::new(TrackedMutex::new("rd_restart_handback", HashSet::new())),
+            rd_restart_handback: Arc::new(TrackedMutex::new(
+                "rd_restart_handback",
+                HashMap::new(),
+            )),
             rd_handback_fails: Arc::new(TrackedMutex::new("rd_handback_fails", HashMap::new())),
             rd_reconciled: Arc::new(TrackedMutex::new("rd_reconciled", HashSet::new())),
             pd_state_lock: Arc::new(TrackedMutex::new("pd_state_lock", ())),

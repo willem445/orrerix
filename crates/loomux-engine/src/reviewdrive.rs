@@ -3476,6 +3476,29 @@ pub struct DriveFacts {
     /// itself discovers, and a hand-back that cannot reach it still lands on
     /// `held(worker-unresumable)` by the ordinary path.
     pub restart_handback: bool,
+    /// **This process restarted while the drive was in `ci-wait` waiting on the
+    /// receipts for a push the worker had already made, and that worker's pane
+    /// died with the previous process** (#3225).
+    ///
+    /// The sibling of [`restart_handback`](DriveFacts::restart_handback) one
+    /// state later, and set by the same two places for the same reason: a pane
+    /// absent from the roster is only unambiguously GONE where every pane is —
+    /// the restart reconcile, and a `drive_review` an orchestrator issued
+    /// against a live drive.
+    ///
+    /// What it licenses is narrow. [`decide_fix_receipts`] waits for the
+    /// pushing worker's `report(done)` before briefing a lane, because green is
+    /// not the end of the round — the receipts still have to reach the body.
+    /// That report can never arrive from a pane that no longer exists, so the
+    /// wait runs out `fix_timeout_minutes` and parks `held(fix-stalled)`: a
+    /// claim that a worker went silent, about a worker orrerix was restarted
+    /// under. The push itself is durable and is already at the head CI just went
+    /// green on, so the mark says to treat that push as the fix delivered and
+    /// brief the lane at that head.
+    ///
+    /// **What it does not do is charge anything.** A restart is not a round —
+    /// [`DriveStep::Rehandback`]'s argument, applied to the arc this one takes.
+    pub restart_push_delivered: bool,
 }
 
 /// What the tick should do with one entry, this tick.
@@ -4123,6 +4146,14 @@ fn decide_ci_wait(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) 
 /// widening the exit read is an S3 change to what a tick OBSERVES, and this
 /// slice changes what `decide` does with what it is already given.
 ///
+/// **#3225 closed the RESTART half of that, and only that half.** A pane that
+/// died because the process did is not ambiguous — every pane did — so the
+/// reconcile marks the entry and the `Silent` arm below treats the recorded
+/// push as the fix delivered. A pane killed mid-session while orrerix keeps
+/// running is still the slower notice, for the reason above: nothing in
+/// `ci-wait` observes that exit, and an absent agent mid-session is "we could
+/// not check" rather than "it is gone".
+///
 /// **A worker that pushes and reports inside ONE tick window.** Both facts
 /// reach the same tick, [`decide_fix_wait`]'s arc 7 outranks the report on
 /// purpose ("the code moved and CI is what has to answer next"), and `rdtick`
@@ -4154,6 +4185,29 @@ fn decide_fix_receipts(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLim
         // briefed at a `(head, digest)` that will still be current when it
         // records.
         WorkerSignal::Done => DriveStep::to(DriveState::ReviewWait),
+        // **#3225: the pane whose report this wait is for died with the
+        // previous process, so the push it already made IS the fix delivered.**
+        //
+        // Above the timeout below rather than beside it, and the difference is
+        // the whole issue: the timeout's exit is `held(fix-stalled)`, which says
+        // a worker went silent, and the worker did not — orrerix was restarted
+        // under it. The push is durable, it is at the head CI has just gone
+        // green on, and the only thing missing is a `report` no pane can send.
+        //
+        // What the lane loses by being briefed here is the CI receipts the
+        // worker would have written into the body first — so the lane is briefed
+        // at digest `d1` and re-briefed at `d2` if a human or a later worker
+        // fills them in, which is exactly the round [`decide_fix_receipts`]'s
+        // own header describes and is bounded by the same `(head, digest)` key.
+        // That is one re-brief; the alternative measured on #3225's incident was
+        // a whole `fix_timeout_minutes` and an orchestrator turn.
+        //
+        // **Only under `Silent`**: a `Done`, a `Blocked` or an `Unresumable`
+        // signal is something this drive was actually told, and the arms above
+        // answer each of them. The mark cannot manufacture one.
+        WorkerSignal::Silent if facts.restart_push_delivered => {
+            DriveStep::to(DriveState::ReviewWait)
+        }
         WorkerSignal::Silent => {
             // **The LATEST push in this `ci-wait` stay**, which is what
             // `fix_pushed_ms` exists to carry — see that field, and
@@ -6288,6 +6342,7 @@ mod tests {
             messaged: false,
             provider_limited: None,
             restart_handback: false,
+            restart_push_delivered: false,
         }
     }
 

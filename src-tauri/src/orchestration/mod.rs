@@ -1687,16 +1687,35 @@ if [ "$cmd" = "pr" ] && { [ "$sub" = "close" ] || [ "$sub" = "reopen" ]; }; then
   # gate decides with. Empty when no row owns it — a branch whose agent is
   # gone, or the human's own branch — and the message then says so rather
   # than naming a guess.
-  c_owner=""
+  #
+  # Several rows can match one head: the descendant rule accepts a head that
+  # is a separated descendant of ANY roster branch, so `fix/team` and
+  # `fix/team-alpha` both match `fix/team-alpha-2` (#3206). The owner to NAME
+  # is the agent whose branch is the closest thing to the head — the longest
+  # match — so the scan runs to the end and keeps the longest match it saw
+  # instead of taking the first row that matches. Exact and descendant arms
+  # score the branch's own length: an exact match's length equals the head's,
+  # which is maximal, so it beats every descendant of the same branch.
+  # "Closest", not "true owner": the roster cannot know who actually pushed a
+  # descendant branch — the human can push one beneath another row's prefix —
+  # so this names the closest match the roster HAS, never a git-derived fact.
+  # (Decision logic is untouched — this picks the NAME the refusal carries,
+  # and the gate's own-ownership test below is the caller's single row.)
+  c_owner=""; c_owner_len=-1
   if [ -n "$c_head" ] && [ -f "$ORX_GD/__OWNERS__" ]; then
     while read -r o_id o_role o_branch || [ -n "$o_id" ]; do
       [ -n "$o_branch" ] || continue
-      if [ "$c_head" = "$o_branch" ]; then
-        c_owner="$o_id"; break
-      fi
+      o_hit=0
+      [ "$c_head" = "$o_branch" ] && o_hit=1
       case "$c_head" in
-        "$o_branch"/*|"$o_branch"-*) c_owner="$o_id"; break ;;
+        "$o_branch"/*|"$o_branch"-*) o_hit=1 ;;
       esac
+      # Longest matching branch wins (#3206): do not stop at the first row —
+      # a longer match later in the roster names a different agent.
+      if [ "$o_hit" = "1" ]; then
+        o_len=${#o_branch}
+        [ "$o_len" -gt "$c_owner_len" ] && { c_owner="$o_id"; c_owner_len=$o_len; }
+      fi
     done < "$ORX_GD/__OWNERS__"
   fi
   # AUDIT-SAFE COPIES. A git ref name may contain a `"`, and every value below
@@ -10920,9 +10939,11 @@ pub fn gh_close_decision(
 /// newline AND the source indentation, so nothing here ships a hard break or a
 /// run of leading spaces to the agent reading it.
 ///
-/// It names all three things the agent needs in order to do the right thing
-/// instead of retrying: WHICH PR, WHOSE branch it is, and what its own branch
-/// is — the incident's worker had none of those and did not notice for minutes.
+/// It names all four things the agent needs in order to do the right thing
+/// instead of retrying: WHICH PR, WHICH branch it is, WHOSE it is (the owning
+/// agent, by name, where the roster knows one — and that nobody on it does
+/// where it does not), and what its own branch is — the incident's worker
+/// had none of those and did not notice for minutes.
 pub fn gh_close_refusal_with(
     pr: &str,
     head: &str,

@@ -4214,9 +4214,6 @@ fn decide_fix_receipts(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLim
         // **Only under `Silent`**: a `Done`, a `Blocked` or an `Unresumable`
         // signal is something this drive was actually told, and the arms above
         // answer each of them. The mark cannot manufacture one.
-        WorkerSignal::Silent if facts.restart_push_delivered => {
-            DriveStep::to(DriveState::ReviewWait)
-        }
         WorkerSignal::Silent => {
             // **The LATEST push in this `ci-wait` stay**, which is what
             // `fix_pushed_ms` exists to carry — see that field, and

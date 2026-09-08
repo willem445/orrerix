@@ -13824,13 +13824,6 @@ fn worker_pane(reg: &OrchRegistry, group: &GroupId) -> String {
         .to_string()
 }
 
-/// The group this repo resolves to, for a fixture whose registry the test no
-/// longer holds. `create_group` is repo-derived and idempotent, which is how the
-/// app reattaches at startup.
-fn group_of(reg: &OrchRegistry, repo: &Repo) -> GroupId {
-    reg.create_group(&repo.path(), rails()).expect("the relaunch reattaches").id
-}
-
 /// Walk a drive to `review-wait` with a lane genuinely OPEN — a lane record
 /// naming a pane and a session — and answer the registry it was built in, so a
 /// caller can run the LIVE control before restarting.
@@ -13942,39 +13935,42 @@ fn a_review_wait_lane_whose_pane_died_with_the_process_is_re_briefed_and_a_live_
 /// **#3225's second half, which is the one an orchestrator READS.**
 ///
 /// `held(fix-stalled)`'s notice enumerates `owned_panes()` as "still OWNED", and
-/// on the drill every id in that list had died with the process — so the remedy
-/// it printed sent a human to look at panes that were not there. The ownership
-/// is dropped at the reconcile, before any notice can be built from it; the
-/// sessions are what survive, and the second assertion is that they do.
+/// on the drill every id it printed had died with the process — so the remedy it
+/// printed sent a human to look at panes that were not there. The ownership is
+/// dropped at the reconcile, before any notice can be built from it; the sessions
+/// are what survive, and the second assertion is that they do.
 ///
-/// The pre-restart read is the positive control: a LIVE worker pane is owned and
-/// stays owned, so the drop afterwards is caused by the restart rather than by a
-/// field nothing ever writes.
+/// **The fixture is the `ci-wait` one, and that is load-bearing rather than
+/// incidental.** A `fix-wait` drive cannot witness this at all: its first tick
+/// after the restart re-briefs the worker, which mints a NEW pane and pushes the
+/// old one onto `prior_worker_agents`, where `forget_dead_panes` — which
+/// predates this change — drops it. The property would hold there with the
+/// reconcile doing nothing, which is a test that passes for someone else's
+/// reason. Here CI has not settled on the pushed head, so the tick reconciles
+/// and decides nothing else.
+///
+/// The read BEFORE the tick is the control: the record really does still name
+/// that pane, so the drop afterwards is caused by the reconcile rather than by a
+/// field nothing ever wrote.
 #[test]
 fn the_reconcile_drops_ownership_of_panes_the_roster_does_not_have_and_keeps_the_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let repo = Repo::new();
     let gh = FakeGh::green(HEAD_A);
+    let (reg, group) = ci_wait_after_a_push_across_a_restart(dir.path(), &repo, &gh);
 
-    let live_worker = {
-        let reg = relaunch_registry(dir.path());
-        let (group, _s) = driven(&reg, &repo, &gh);
-        to_first_handback(&reg, &group, &gh);
-        let owned = worker_pane(&reg, &group);
-        assert!(
-            !owned.is_empty(),
-            "control: a live drive owns the pane it handed the fix to, so the drop below \
-             is the restart's doing"
-        );
-        owned
-    };
-
-    let reg = relaunch_registry(dir.path());
-    let group = group_of(&reg, &repo);
+    let dead = worker_pane(&reg, &group);
+    assert!(
+        !dead.is_empty(),
+        "control: the record still names the pane it handed the fix to, so the drop below          is the reconcile's doing"
+    );
+    assert!(
+        roster_row_opt(&reg, &group, &dead).is_none(),
+        "…and that pane died with the previous process"
+    );
     let session_before = driven_worker_session(&reg, &group);
 
-    // The reconcile runs on the first tick of the restarted registry.
-    reg.rd_drive_group_with(&group, &gh, 50_000);
+    reg.rd_drive_group_with(&group, &gh, 60_000);
 
     let record = drives_json(&reg, &group)["entries"][0].clone();
     let owned_now: Vec<String> = record["prior_worker_agents"]
@@ -13987,14 +13983,18 @@ fn the_reconcile_drops_ownership_of_panes_the_roster_does_not_have_and_keeps_the
         .map(|s| s.to_string())
         .collect();
     assert!(
-        !owned_now.contains(&live_worker),
-        "a pane that died with the process is not this drive's to name: {record}"
+        !owned_now.contains(&dead),
+        "a pane that died with the process is not this drive's to name — and a notice          cannot enumerate what the record no longer holds: {record}"
     );
     assert_eq!(
         driven_worker_session(&reg, &group),
         session_before,
-        "the CONVERSATION is what survives a restart — dropping it would cost the fix, not \
-         a slot: {record}"
+        "the CONVERSATION is what survives a restart — dropping it would cost the fix, not          a slot: {record}"
+    );
+    assert_eq!(
+        status_state(&reg, &group),
+        "ci-wait",
+        "the tick that dropped it decided nothing else, which is what makes the drop          attributable to the reconcile: {record}"
     );
 }
 

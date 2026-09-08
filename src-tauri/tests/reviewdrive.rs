@@ -12021,8 +12021,8 @@ fn a_failed_held_set_reread_still_says_what_this_tick_saw() {
     assert!(n.contains("#1758"), "…and the drive it saw park: {n}");
 
     // And the aggregated notice keeps its own audit row, as on the happy path.
-    let row = reg
-        .audit_log(&group)
+    let audit = reg.audit_log(&group);
+    let row = audit
         .iter()
         .find(|e| e.action == "rd-provider-limit")
         .expect("the fail-safe notice records its own row");

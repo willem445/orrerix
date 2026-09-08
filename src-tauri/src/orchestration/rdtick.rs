@@ -3074,14 +3074,7 @@ impl OrchRegistry {
             .map(|l| l.block.clone())
             .collect();
         for block in blocks {
-            let Some(pane) = entry.lane(&block).map(|r| r.agent.clone()) else { continue };
-            if self.rd_pane_is_live(&pane) {
-                continue;
-            }
-            let session = self.rd_lane_session(group, entry.lane(&block)).unwrap_or_default();
-            if let Some(freed) = entry.reseed_lane(&block, &session) {
-                lost.lanes.push((block, freed));
-            }
+            let _ = block;
         }
         let worker = entry.worker_agent.clone();
         if !worker.trim().is_empty() && !self.rd_pane_is_live(&worker) {

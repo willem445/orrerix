@@ -11927,6 +11927,144 @@ fn a_provider_limit_outranks_the_per_state_bound() {
     );
 }
 
+// ── #3195 item 2: the aggregate's fail-safe arm ─────────────────────────────
+
+/// A runner that makes the group's `review_drives.json` unreadable on its first
+/// `gh` call, then answers exactly as the `FakeGh` it wraps.
+///
+/// The first call is the tick's own first step read: the tick's opening
+/// `load_state` has already succeeded by then (a tick that cannot read the
+/// record refuses outright, so a sabotage any earlier tests the refusal, not
+/// the arm), and reconcile is already latched by the fixture's earlier ticks.
+/// Swapping the FILE for a DIRECTORY is the one sabotage that survives to the
+/// re-read: the store before the re-read is the last writer, so the re-read
+/// can only fail on a store that failed too, and a directory defeats both —
+/// the store's rename falls through `fsatomic`'s fallback into a write that
+/// cannot open a directory, and `load_state` answers `Err` (not `NotFound`,
+/// which would read as an empty record and succeed).
+struct RereadKiller {
+    inner: FakeGh,
+    state_file: std::path::PathBuf,
+    fired: std::sync::atomic::AtomicBool,
+}
+
+impl RdRunner for RereadKiller {
+    fn gh(&self, args: &[&str]) -> Result<CmdOut, String> {
+        if !self.fired.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            std::fs::remove_file(&self.state_file)
+                .expect("fixture: the old state file must be removable");
+            std::fs::create_dir(&self.state_file)
+                .expect("fixture: the state path must accept a directory");
+        }
+        self.inner.gh(args)
+    }
+}
+
+/// **The fail-safe arm: a held-set re-read that fails still says what this
+/// tick saw** (#3195 item 2). The aggregate is built from the live held set
+/// re-read from state at notice time, and that read can fail — so the branch
+/// under it falls back to the tick's own outs, on the argument that an
+/// under-count beats silence and the per-drive `rd-held` rows are on the
+/// record either way. Pinned by nothing before #3195: the two round-2 tests
+/// both run the read that succeeds, so deleting the arm left the suite green.
+///
+/// The control beside it, `the_happy_reread_still_aggregates`, runs the
+/// identical fixture without the sabotage, so the only delta between the two
+/// is the failed re-read — and not some other breakage the sabotage dragged
+/// in.
+#[test]
+fn a_failed_held_set_reread_still_says_what_this_tick_saw() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, lane) = briefed(&reg, &repo, &gh);
+    assert_eq!(status_state(&reg, &group), "review-wait", "precondition");
+
+    // The path the test reaches the state file by is the one `drives_json`
+    // already uses — the registry hands out no directory (constraint 6), and
+    // the sabotage needs the FILE, not the group dir, for the same reason
+    // `corrupt_drive_record_for_test` writes a fixed payload rather than
+    // taking one.
+    let state_file =
+        reg.state_root().join(group.as_str()).join(reviewdrive::REVIEW_DRIVES_FILE);
+    assert!(state_file.is_file(), "fixture: the record must exist before the tick");
+
+    reg.set_provider_limit_for_test(&lane, "openrouter");
+    let killer =
+        RereadKiller { inner: gh, state_file: state_file.clone(), fired: Default::default() };
+    let out = reg.rd_drive_group_with(&group, &killer, 30_000);
+
+    // The sabotage really ran, and really left the re-read nothing to read —
+    // without this the test below could pass on a tick where the failure never
+    // happened and the happy path produced the line.
+    assert!(state_file.is_dir(), "fixture: the state path must now be a directory");
+    assert_eq!(out.refused, None, "the tick must not refuse on the opening read: {:?}", out);
+    let store_failed = reg
+        .audit_log(&group)
+        .iter()
+        .any(|e| e.action == "rd-state-unreadable"
+            && e.detail["reason"] == json!("review_drives.json could not be written"));
+    assert!(store_failed, "fixture: the store must be the writer that failed");
+
+    // The promise: the line still goes out, built from what THIS tick saw.
+    let lines: Vec<&String> =
+        out.notices.iter().filter(|n| n.contains("provider limit")).collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "the failed re-read must not silence the notice: {:?}",
+        out.notices
+    );
+    let n = lines[0];
+    assert!(n.contains("OpenRouter"), "…naming the provider: {n}");
+    assert!(n.contains("#1758"), "…and the drive it saw park: {n}");
+
+    // And the aggregated notice keeps its own audit row, as on the happy path.
+    let row = reg
+        .audit_log(&group)
+        .iter()
+        .find(|e| e.action == "rd-provider-limit")
+        .expect("the fail-safe notice records its own row");
+    assert_eq!(row.detail["provider"], json!("openrouter"), "{:?}", row.detail);
+    assert_eq!(row.detail["drives"], json!(1), "{:?}", row.detail);
+}
+
+/// **The positive control for the fail-safe arm**: the identical fixture, no
+/// sabotage. This is what separates "the arm carried the notice through the
+/// failed re-read" from "aggregation is broken and the sabotage test passed on
+/// some other path" — the happy re-read still aggregates, from state, the
+/// same one line.
+#[test]
+fn the_happy_reread_still_aggregates() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, lane) = briefed(&reg, &repo, &gh);
+    assert_eq!(status_state(&reg, &group), "review-wait", "precondition");
+
+    let state_file =
+        reg.state_root().join(group.as_str()).join(reviewdrive::REVIEW_DRIVES_FILE);
+    reg.set_provider_limit_for_test(&lane, "openrouter");
+    let out = reg.rd_drive_group_with(&group, &gh, 30_000);
+
+    // The record survived the tick, and nothing audited a failed store — the
+    // exact inverse of the sabotage test's fixture guards.
+    assert!(state_file.is_file(), "control: the record must still be a file");
+    assert!(
+        !reg.audit_log(&group).iter().any(|e| e.action == "rd-state-unreadable"),
+        "control: no store failure, so the line below came off the re-read"
+    );
+
+    let lines: Vec<&String> =
+        out.notices.iter().filter(|n| n.contains("provider limit")).collect();
+    assert_eq!(lines.len(), 1, "control: the happy path still aggregates: {:?}", out.notices);
+    let n = lines[0];
+    assert!(n.contains("OpenRouter"), "…naming the provider: {n}");
+    assert!(n.contains("#1758") && n.contains("1 drive held"), "…from the re-read: {n}");
+}
+
 // ── #2811 S10: a drive parked in `fix-wait` across a restart ────────────────
 
 /// Persist a drive at its first hand-back, then hand the same group dir to a

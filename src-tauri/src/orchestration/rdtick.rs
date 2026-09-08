@@ -3899,8 +3899,9 @@ impl OrchRegistry {
                     // `rebase-limit` park once it is spent. Either way, an
                     // `rd-handback` `why:conflict` with no `rd-conflicting` above
                     // it is a spent `rebase_attempts` a §5.4 reader cannot
-                    // explain, and this row is the one
-                    // `scripts/orch-scorecard.cjs` counts. `fix-wait` is excluded
+                    // explain, and `scripts/orch-scorecard.cjs` classifies it
+                    // only in the generic `rd-*` census — no named case counts
+                    // it. `fix-wait` is excluded
                     // by the same explicit clause the engine uses (`state !=
                     // FixWait`, not the arc table): the rebase is already
                     // outstanding there, so no arc is taken and there is nothing

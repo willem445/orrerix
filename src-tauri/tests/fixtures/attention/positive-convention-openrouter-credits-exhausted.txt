@@ -1,4 +1,3 @@
   ┃  Building the workspace, this takes a while
-  ┃
   ┃  This request would exceed your available credits given your current in-
   ┃  flight requests. Retry after in-flight requests settle, or add credits.

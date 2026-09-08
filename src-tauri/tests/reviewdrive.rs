@@ -14177,3 +14177,81 @@ fn drive_review_on_a_live_drive_whose_panes_died_resumes_instead_of_refusing() {
         .expect("the tick after the repair must re-brief the lane");
     assert!(!pane.is_empty());
 }
+
+/// **#3228 review 2, W1: a dead SUPERSEDED pane is not a loss to recover from.**
+///
+/// A drive between a pane replacement and the next tick's own `forget_dead_panes`
+/// prune has a dead id on `prior_worker_agents` as its ORDINARY state — nothing
+/// was lost and the next tick tidies it. Reading that as a lost pane took an
+/// ordinary duplicate `drive_review` into the repair arm, and on a `fix-wait`
+/// drive the repair marks a re-hand-back **on the state alone**: the next tick
+/// then re-briefs a live worker mid-fix with `why: restart` — a paid turn and a
+/// duplicated brief on a drive that lost nothing.
+///
+/// **The existing narrowed-refusal control cannot reach this**, which is why this
+/// is its own test: in `drive_review_on_a_live_drive_whose_panes_died_resumes_instead_of_refusing`
+/// the second call refuses because the repair already emptied the record, so it
+/// would pass under the defect too.
+///
+/// The fixture builds the superseded pane the way the driver really produces one
+/// — two hand-backs, the first pane made busy in between so #3203's take-over
+/// arm cannot reuse it — and kills it WITHOUT ticking, because a tick would
+/// prune the prior list and dissolve the very state under test.
+#[test]
+fn a_dead_superseded_pane_does_not_turn_an_ordinary_duplicate_drive_review_into_a_repair() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, session) = driven(&reg, &repo, &gh);
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+
+    // Hand-back one.
+    gh.set_checks(r#"[{"name":"build","state":"FAILURE","link":"x"}]"#);
+    let first = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let (_pr, w1) = first.handbacks.first().cloned().expect("the drive hands back");
+
+    // Hand-back two supersedes it.
+    gh.set_facts("OPEN", HEAD_B);
+    reg.set_pr_head_override(Some(HEAD_B.to_string()));
+    reg.rd_drive_group_with(&group, &gh, 20_000);
+    let second = reg.rd_drive_group_with(&group, &gh, 30_000);
+    let (_pr, w2) = second.handbacks.first().cloned().expect("a second red hands back");
+    assert_ne!(w1, w2, "the fixture needs two panes, or there is no superseded one");
+    assert_eq!(
+        reg.rd_owner(&group, &w1).map(|(_pr, p)| p.current),
+        Some(false),
+        "the fixture's premise: w1 is SUPERSEDED and still owned"
+    );
+
+    // It dies, and nothing ticks afterwards — a tick would prune the prior list
+    // and dissolve the state this test is about.
+    assert!(reg.mark_agent_dead_for_test(&w1), "the superseded pane must exist to be killed");
+    assert_eq!(
+        reg.rd_owner(&group, &w2).map(|(_pr, p)| p.current),
+        Some(true),
+        "…while the CURRENT pane is untouched, which is what makes this an ordinary \
+         duplicate rather than a drive that lost something"
+    );
+
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 40_000);
+    assert_eq!(
+        out["refused"],
+        json!("already-driven"),
+        "a drive whose CURRENT panes are alive is the ordinary duplicate, whatever a \
+         superseded list still names: {out}"
+    );
+    assert!(
+        reg.review_drive_status_with(&group, 40_000)["drives"][0]["state"] == json!("fix-wait"),
+        "the fixture must still be the fix-wait drive the consequence is about"
+    );
+    // The consequence, pinned where it would actually be paid: no restart mark
+    // was minted, so the next tick re-briefs nobody.
+    let restarts_before = restart_handbacks(&reg, &group);
+    reg.rd_drive_group_with(&group, &gh, 50_000);
+    assert_eq!(
+        restart_handbacks(&reg, &group),
+        restarts_before,
+        "and no `why: restart` re-brief of a worker that is alive and mid-fix"
+    );
+}

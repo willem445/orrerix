@@ -1661,7 +1661,7 @@ Four are new, and each closes a case that would otherwise have no answer:
 - **`resume-session-empty`.** `resolve_session_ref` answers an empty string with
   an **untagged** `"resume_session must not be empty"`, which no closed
   vocabulary covers. Given a name here rather than leaked as prose.
-- **`already-driven` is narrowed to a drive whose panes are all LIVE** (#3226).
+- **`already-driven` is narrowed to a drive that has lost a pane it is still USING** (#3226).
   A `drive_review` on a live drive that has lost a pane is not a duplicate at
   all: it is an orchestrator asking for §2.4's repair, and refusing it left
   `cancel_review_drive` plus a fresh `drive_review` as the only recovery — which
@@ -1670,8 +1670,13 @@ Four are new, and each closes a case that would otherwise have no answer:
   un-own every pane the roster does not have, keep every session, mark the
   state's recovery for the next tick, and answer `driving: true` with
   `recovered: "panes"` and the state UNCHANGED — no arc, no counter, and not arc
-  11, which is the `held` resume above. A drive whose panes are all alive still
-  gets the refusal, which is the ordinary duplicate the check exists for.
+  11, which is the `held` resume above. A drive whose CURRENT worker and lane
+  panes are all alive still gets the refusal, which is the ordinary duplicate the
+  check exists for — and "current" is the whole population, deliberately: a dead
+  pane on a **superseded** list is the ordinary state of a drive between a pane
+  replacement and the next tick's own prune, so counting one here would take
+  every such duplicate into the repair arm and, on a `fix-wait` drive, re-brief
+  a live worker mid-fix with `why: restart`.
 - **`already-driven` covers the working and `gate-check` states only.** A
   `held` entry is *parked*, and §2.3 calls resuming it the default — so a flat
   `already-driven` would make that path unreachable and `reset_counters` a
@@ -2365,8 +2370,10 @@ row identical in every other field to an ordinary round's — same resumed
 session, same pane kind, same scope — and the key is ABSENT on every other row,
 because a `why` present everywhere says nothing where it matters. `rd-recovered`
 carries `at` (`reconcile`, or `drive_review` for the repair §5.1 performs on a
-live drive whose panes are gone) and `panes_dropped`, the count of pane
-ownerships the live-roster read un-owned: the only other visible effect of that
+live drive whose panes are gone) and `panes_dropped` — the count of **current**
+pane ownerships the live-roster read un-owned, the worker's and each lane's. A
+superseded pane dropped in the same pass is not counted, because the number
+exists to say what the drive LOST rather than what the record tidied: the only other visible effect of that
 drop is a notice that does NOT name a pane, which reads exactly like a drive
 that never owned one.
 

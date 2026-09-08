@@ -361,8 +361,30 @@ struct RdLostPanes {
 }
 
 impl RdLostPanes {
+    /// **Did the RECORD change** — the persistence question, so the superseded
+    /// lists count.
     fn any(&self) -> bool {
         !self.worker.is_empty() || !self.lanes.is_empty() || self.superseded
+    }
+
+    /// **Was a pane this drive is still USING lost** — the recovery question,
+    /// and the superseded lists deliberately do not count (#3228 review 2, W1).
+    ///
+    /// The two are different questions and conflating them was a live defect. A
+    /// drive between a pane replacement and the next tick's own
+    /// [`reviewdrive::DriveEntry::forget_dead_panes`] prune has a dead pane on
+    /// `prior_worker_agents` as its ORDINARY state — nothing is wrong, nothing
+    /// was lost, and the next tick tidies it. Gating the `drive_review` repair
+    /// on `any()` therefore took an ordinary duplicate call into the repair arm,
+    /// which on a `fix-wait` drive mints `RestartMark { handback: true }` and
+    /// re-briefs a LIVE worker mid-fix with `why: restart` — a paid turn and a
+    /// duplicated brief on a drive that lost nothing.
+    ///
+    /// A superseded pane is not one the drive would ever speak to again, so
+    /// nothing about it is recoverable: what it is owed is the prune it already
+    /// gets on the tick.
+    fn current_panes_lost(&self) -> bool {
+        !self.worker.is_empty() || !self.lanes.is_empty()
     }
 }
 /// What one entry's step produced, for the caller to emit outside the lock.
@@ -3098,15 +3120,24 @@ impl OrchRegistry {
         lost
     }
 
-    /// Whether this drive owns a pane the live roster does not have — the cheap
-    /// question [`drive_review_with`](Self::drive_review_with) asks before
-    /// refusing `already-driven` (#3226).
+    /// Whether this drive is still USING a pane the live roster does not have —
+    /// the cheap question [`drive_review_with`](Self::drive_review_with) asks
+    /// before refusing `already-driven` (#3226).
     ///
     /// Reads the same predicate as [`rd_forget_lost_panes`](Self::rd_forget_lost_panes)
-    /// and repairs nothing, so the two cannot disagree about what a repair would
+    /// over the same population as the locked gate below it
+    /// ([`RdLostPanes::current_panes_lost`]), and repairs nothing — so the cheap
+    /// check and the authoritative one cannot disagree about what a repair would
     /// find.
+    ///
+    /// **The CURRENT worker and lane panes, never `owned_panes()`** (#3228
+    /// review 2, W1): that one includes the superseded lists, whose dead entries
+    /// are the ordinary state of a drive between a pane replacement and the next
+    /// tick's prune. See `current_panes_lost` for what reading them here cost.
     fn rd_has_lost_panes(&self, entry: &reviewdrive::DriveEntry) -> bool {
-        entry.owned_panes().into_iter().any(|(agent, _)| !self.rd_pane_is_live(&agent))
+        let current = std::iter::once(entry.worker_agent.clone())
+            .chain(entry.lanes.iter().map(|l| l.agent.clone()));
+        current.filter(|a| !a.trim().is_empty()).any(|a| !self.rd_pane_is_live(&a))
     }
 
     /// §2.4's restart reconcile, once per group per registry instance, before
@@ -4707,7 +4738,12 @@ impl OrchRegistry {
                     return self.rd_refuse(group, pr, r::STATE_UNREADABLE);
                 };
                 let lost = self.rd_forget_lost_panes(group, entry);
-                if !lost.any() {
+                // **A superseded pane is not a loss to recover from** (#3228
+                // review 2, W1) — see `RdLostPanes::current_panes_lost`. The
+                // repair below is not free: on a `fix-wait` drive it marks a
+                // re-hand-back on the state alone, and a duplicate call that
+                // reached it would re-brief a live worker mid-fix.
+                if !lost.current_panes_lost() {
                     return self.rd_refuse(group, pr, r::ALREADY_DRIVEN);
                 }
                 let mut mark = RestartMark::default();

@@ -66749,6 +66749,60 @@ fn gh_shim_harness_refuses_a_close_of_a_pr_the_caller_does_not_own() {
     assert!(!out.status.success(), "a close this app cannot audit is a close it cannot allow");
 }
 
+/// The owner the refusal NAMES is the roster's most specific match, not its
+/// first (#3206). Two rows can both own a head by the separated-descendant
+/// rule — a `fix/team` holder and a `fix/team-alpha` holder both match head
+/// `fix/team-alpha-2` — and a first-match lookup names whichever row comes
+/// first in the roster, which need not be the agent the branch belongs to.
+/// The refusal decision is the same either way (a non-owner's close is
+/// refused); this pins the NAME: the LONGEST matching roster branch wins.
+#[test]
+fn gh_shim_names_the_longest_matching_roster_branch_as_the_pr_owner() {
+    use std::process::Command;
+    if Command::new("sh").arg("-c").arg("exit 0").status().map(|s| !s.success()).unwrap_or(true) {
+        eprintln!("SKIP gh_shim_names_the_longest_matching…: no POSIX sh");
+        return;
+    }
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let group = root.join("group");
+    std::fs::create_dir_all(&group).unwrap();
+    let log = root.join("gh.log");
+    let fake = write_fake_gh_head(root, &log);
+    let shim = root.join("gh");
+    std::fs::write(&shim, gh_shim_sh(&fake.display().to_string(), &shim_paths())).unwrap();
+    let _ = Command::new("sh").arg("-c").arg(format!("chmod +x '{}' '{}'", fake.display(), shim.display())).status();
+
+    // TWO rows the descendant rule accepts for the same head: w-2's
+    // `fix/team-alpha` is itself a separated descendant of w-1's `fix/team`,
+    // so head `fix/team-alpha-2` matches BOTH. w-1 is written FIRST, so a
+    // first-match lookup names w-1 — the wrong agent. The caller is w-9,
+    // whose own branch owns nothing here, so the close is refused and the
+    // message must name the owner.
+    std::fs::write(
+        group.join(OWNER_ROSTER_FILE),
+        render_owner_roster(&[
+            ("w-1".into(), "worker".into(), Some("fix/team".into())),
+            ("w-2".into(), "worker".into(), Some("fix/team-alpha".into())),
+            ("w-9".into(), "worker".into(), Some("fix/other".into())),
+        ]),
+    )
+    .unwrap();
+
+    let out = Command::new("sh").arg(&shim).args(["pr", "close", "2942"])
+        .env("LOOMUX_GROUP_DIR", &group).env("LOOMUX_AGENT_ID", "w-9")
+        .env("FAKE_HEAD", "fix/team-alpha-2").env("FAKE_NUM", "2942")
+        .output().unwrap();
+    assert!(!out.status.success(), "a non-owner's close is still refused");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.contains("it belongs to w-2"), "the longest matching roster branch is the owner named: {err}");
+    assert!(!err.contains("it belongs to w-1"), "the shorter prefix's row must not be named instead: {err}");
+    // The decision half is untouched: still refused, still an audit row.
+    let audit = std::fs::read_to_string(group.join("audit.jsonl")).unwrap_or_default();
+    assert!(audit.contains("pr-close-blocked") && audit.contains("\"reason\":\"not-owner\""),
+        "only the name changes, never the decision: {audit}");
+}
+
 /// The shim's refusal is the string Rust builds — executed, not inspected.
 ///
 /// `gh_shim_close_gate` generates the sentence by CALLING `gh_close_refusal_with`

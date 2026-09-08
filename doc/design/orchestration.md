@@ -5505,6 +5505,13 @@ row whose fields would introduce a second separator rather than writing it half-
 dropped row makes that agent unidentifiable to the gate, which then refuses; the other
 direction would let one row's text be read as another field.
 
+Which row owns a head is answered over the WHOLE roster, never by the first matching row
+(#3206): the separated-descendant rule lets several rows own one head — `fix/team` and
+`fix/team-alpha` both own `fix/team-alpha-2` — and the first match need not be the branch's
+own agent. The gate therefore names the agent behind the LONGEST matching roster branch, the
+closest thing the roster has to the head. The decision is untouched: a non-owner's close is
+refused whichever row is named; only the name in the refusal message changes.
+
 #### One decision, two programs
 
 The decision is the pure `gh_close_decision`, and the shim mirrors it in shell — the same

@@ -4848,12 +4848,7 @@ pub fn releasable(
             if out.iter().any(|c| c.role == role) {
                 continue;
             }
-            let answered_here = l.last_verdict.is_some()
-                && !l.at_head.is_empty()
-                && l.at_head == facts.head;
-            if answered_here {
-                continue;
-            }
+            // MUTATION M2 (#3176 red B3): the carve-out dropped.
             out.push(ReleaseCandidate { role, reason: ReleaseReason::Conflict });
         }
     }

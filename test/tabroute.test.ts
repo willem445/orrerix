@@ -117,9 +117,9 @@ test("'question' slots strictly between the pre-existing 'gate' and 'report' (#1
   );
 });
 
-test("every attention class badges the tab, urgent for held-dialog/blocked/provider-limit/stranded", () => {
-  const urgent = new Set(["held-dialog", "blocked", "provider-limit", "stranded"]);
-  const all = ["held-dialog", "blocked", "provider-limit", "stranded", "waiting", "report", "question", "gate"];
+test("every attention class badges the tab, urgent for held-dialog/blocked/provider-limit/dialog/stranded", () => {
+  const urgent = new Set(["held-dialog", "blocked", "provider-limit", "dialog", "stranded"]);
+  const all = ["held-dialog", "blocked", "provider-limit", "dialog", "stranded", "waiting", "report", "question", "gate"];
   for (const reason of all) {
     const out = tabAttention([{ pty_id: 1, reason }], ptyMap([[1, "ws-a"]]));
     assert.deepEqual(
@@ -132,8 +132,9 @@ test("every attention class badges the tab, urgent for held-dialog/blocked/provi
   // hand-maintained mirror of `attention.ts`'s `LABELS`, and a reason added
   // there but not here is simply never exercised. `attention.ts` cannot be
   // imported from a tested module (see `tabroute.ts`'s own note), so the
-  // population is pinned by COUNT instead — 8 as of #2811 S5a.
-  assert.equal(all.length, 8, "the mirrored reason list has drifted from attention.ts's LABELS");
+  // population is pinned by COUNT instead — 9 as of #3190 adding `dialog`
+  // (#2850 S3b's reason, missing from every frontend table until then).
+  assert.equal(all.length, 9, "the mirrored reason list has drifted from attention.ts's LABELS");
 });
 
 test("a held-dialog pane outranks even blocked on the tab chip (#946 Q4 / #1091 slice H)", () => {
@@ -210,6 +211,38 @@ test("a provider-limited pane outranks stranded on the tab chip but not blocked"
     ])
   );
   assert.deepEqual(underBlocked.get("ws-a"), { urgent: true, reason: "blocked" });
+});
+
+test("a dialog pane outranks stranded on the tab chip but not provider-limit", () => {
+  // #2850 S3b / #3190: the tab chip mirrors `attention_tick`'s own chain. A
+  // parked dialog is ranked with `stranded` — both are wedges the pane will
+  // not clear itself — and one rung under `provider-limit`, the only wedge
+  // nothing in the terminal clears. REASON_PRIORITY slots it between them
+  // without renumbering anything, the same rule `provider-limit`'s 4.5 went
+  // in on.
+  const overStranded = tabAttention(
+    [
+      { pty_id: 1, reason: "stranded" },
+      { pty_id: 2, reason: "dialog" },
+    ],
+    ptyMap([
+      [1, "ws-a"],
+      [2, "ws-a"],
+    ])
+  );
+  assert.deepEqual(overStranded.get("ws-a"), { urgent: true, reason: "dialog" });
+
+  const underProviderLimit = tabAttention(
+    [
+      { pty_id: 1, reason: "dialog" },
+      { pty_id: 2, reason: "provider-limit" },
+    ],
+    ptyMap([
+      [1, "ws-a"],
+      [2, "ws-a"],
+    ])
+  );
+  assert.deepEqual(underProviderLimit.get("ws-a"), { urgent: true, reason: "provider-limit" });
 });
 
 test("tabAttention ignores null-pty items and ptys not mapped to a tab", () => {

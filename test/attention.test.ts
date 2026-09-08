@@ -2,6 +2,8 @@
 // pane header chip and the minimize-dock chip. Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   attentionPresentation,
   dockChipAttention,
@@ -26,7 +28,108 @@ test("each known reason maps to its label", () => {
   assert.equal(attentionPresentation("gate").label, "⚑ your call");
 });
 
-test("'held-dialog', 'blocked', 'provider-limit' and 'stranded' are the urgent reasons", () => {
+/** Every reason the backend attention scan emits — the mirror of
+ *  `attention_tick`'s reason chain (src-tauri/src/orchestration/mod.rs), in
+ *  chain order. Shared by the two completeness tests below. */
+const BACKEND_REASONS = [
+  "held-dialog",
+  "blocked",
+  "provider-limit",
+  "dialog",
+  "stranded",
+  "waiting",
+  "report",
+  "question",
+  "gate",
+];
+
+test("every reason the backend attention scan emits has a table row", () => {
+  // `KNOWN_ATTENTION_REASONS` is read off `LABELS`, so it cannot catch a reason
+  // the backend emits that this table never added: #2850 S3b added `dialog`
+  // backend-side and no row landed here (#3190), so those panes' chips fell
+  // through `attentionPresentation` to the generic "⚠ attention" default.
+  // Enumerate the backend's reasons and refuse that fallback for each.
+  for (const reason of BACKEND_REASONS) {
+    assert.notEqual(
+      attentionPresentation(reason).label,
+      "⚠ attention",
+      `${reason} has no row in LABELS — it renders the generic fallback`,
+    );
+  }
+  // Lockstep, both directions: a reason in LABELS but missing from the list
+  // above is enumeration drift, and a list longer than LABELS is a backend
+  // reason the table still has not added.
+  for (const known of KNOWN_ATTENTION_REASONS) {
+    assert.ok(
+      BACKEND_REASONS.includes(known),
+      `${known} is in LABELS but not in this test's backend enumeration — update the list`,
+    );
+  }
+  assert.ok(
+    KNOWN_ATTENTION_REASONS.length >= 9,
+    `only ${KNOWN_ATTENTION_REASONS.length} reasons in LABELS`,
+  );
+});
+
+test("the test's backend list is read off attention_tick's own chain", () => {
+  // #3190 rev-std finding 3 (non-blocking, taken): BACKEND_REASONS above is a
+  // hand-maintained copy, so it enforces LABELS↔list lockstep but not
+  // backend↔list — the next reason `attention_tick` emits would miss both and
+  // every table stays green, the exact #3190 class one hop later. So the chain
+  // is read off the source, the repo's established idiom
+  // (test/transport.test.ts scans `src/`; CLAUDE.md's source-scanning guard
+  // convention): every reason literal is a tuple whose FIRST element is a
+  // string literal — `("held-dialog", format!(…))` — and a scan for that shape
+  // over `attention_tick`'s region extracts exactly the chain, no noise.
+  //
+  // Scan limits, stated: a reason raised OUTSIDE `attention_tick` (today only
+  // the plain-pane path, which emits just `waiting`) is not seen; a
+  // commented-out arm IS still seen and fails loud rather than silently
+  // shrinking the population. Either way this test fails naming the reason,
+  // and the fix is the table row, not the assertion.
+  const MOD = fileURLToPath(
+    new URL("../src-tauri/src/orchestration/mod.rs", import.meta.url),
+  );
+  const source = readFileSync(MOD, "utf8");
+  const start = source.indexOf("pub fn attention_tick(");
+  const end = source.indexOf("pub fn plain_pane_attention(", start);
+  assert.ok(start >= 0, "attention_tick not found in orchestration/mod.rs");
+  assert.ok(end > start, "the function bound after attention_tick vanished");
+  const region = source.slice(start, end);
+  // The bounds are two symbol names, and the one shape the limits above do not
+  // cover is the bounds themselves moving — the #1702 idiom extracting a phase
+  // of `attention_tick` to a helper placed past `plain_pane_attention` drops the
+  // chain's tail out of the region while a decoy tuple keeps the count floor
+  // green. Pin the chain's TAIL inside the region, so a bound that drifts past
+  // the real chain fails here instead of scanning a decoy.
+  assert.ok(
+    region.includes('("gate", format!'),
+    'attention_tick\'s chain tail (("gate", format!) is outside the scanned ' +
+      "region — the function bounds moved; re-pin them",
+  );
+  const scanned = new Set<string>();
+  for (const m of region.matchAll(/\(\s*"([a-z][a-z-]+)"\s*,/g)) {
+    scanned.add(m[1]);
+  }
+  const unknown = [...scanned].filter((r) => !BACKEND_REASONS.includes(r));
+  assert.deepEqual(
+    unknown,
+    [],
+    `attention_tick emits ${unknown.join(", ")} and no table row covers it — ` +
+      "add the row to attention.ts (LABELS/URGENT), tabroute.ts, and BACKEND_REASONS above",
+  );
+  // Non-vacuity: the scan must have SEEN the chain, not a stub of it — and
+  // must include the two reasons that historically slipped through.
+  assert.ok(scanned.size >= 9, `only ${scanned.size} chain reasons scanned`);
+  for (const required of ["dialog", "provider-limit"]) {
+    assert.ok(
+      scanned.has(required),
+      `attention_tick's chain no longer emits ${required} — re-pin this test's scan`,
+    );
+  }
+});
+
+test("'held-dialog', 'blocked', 'provider-limit', 'dialog' and 'stranded' are the urgent reasons", () => {
   // #946 Q4 / #1091 slice H: a blocking dialog holding the orchestrator's own
   // delivery pipe strands every OTHER agent's report behind it too — at
   // least as urgent as a plain `blocked` report, never merely amber.
@@ -40,6 +143,10 @@ test("'held-dialog', 'blocked', 'provider-limit' and 'stranded' are the urgent r
   // the pane clears a stranded prompt, and nothing typed into a
   // provider-limited pane clears that at all.
   assert.equal(attentionPresentation("provider-limit").urgent, true);
+  // #2850 S3b: a structured pane parked on an extension-UI dialog. Ranked with
+  // `stranded` backend-side — pi waits on stdin indefinitely, so the pane will
+  // not un-wedge itself, and every delivery behind it waits too.
+  assert.equal(attentionPresentation("dialog").urgent, true);
   for (const reason of ["waiting", "report", "question", "gate"]) {
     assert.equal(attentionPresentation(reason).urgent, false, `${reason} not urgent`);
   }

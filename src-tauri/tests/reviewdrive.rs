@@ -13798,6 +13798,25 @@ fn lane_pane(reg: &OrchRegistry, group: &GroupId) -> String {
     live_lane(reg, group)["agent"].as_str().unwrap_or_default().to_string()
 }
 
+/// The roster row for `agent_id`, or `None` when the live roster has none.
+///
+/// [`roster_row`] panics for an id it cannot find, which is precisely the state
+/// the restart tests are about: a pane that died with the previous process
+/// leaves no row behind, and "there is no row" is the assertion rather than the
+/// accident.
+fn roster_row_opt(
+    reg: &OrchRegistry,
+    group: &GroupId,
+    agent_id: &str,
+) -> Option<serde_json::Value> {
+    reg.list_agents(group)
+        .as_array()
+        .expect("list_agents answers an array")
+        .iter()
+        .find(|r| r["id"] == json!(agent_id))
+        .cloned()
+}
+
 fn worker_pane(reg: &OrchRegistry, group: &GroupId) -> String {
     drives_json(reg, group)["entries"][0]["worker_agent"]
         .as_str()
@@ -13878,8 +13897,8 @@ fn a_review_wait_lane_whose_pane_died_with_the_process_is_re_briefed_and_a_live_
     let dead = lane_pane(&reg, &group);
     assert!(!dead.is_empty(), "the record must still name the pane that died");
     assert_eq!(
-        roster_row(&reg, &group, &dead),
-        serde_json::Value::Null,
+        roster_row_opt(&reg, &group, &dead),
+        None,
         "the pane died with the previous process, so the live roster must not have it — \
          if it does, this test is not about a restart"
     );
@@ -14032,8 +14051,8 @@ fn a_ci_wait_drive_whose_pusher_died_with_the_process_briefs_the_lane_on_the_gre
     let dead = worker_pane(&reg, &group);
     assert!(!dead.is_empty(), "the record must still name the pane that pushed");
     assert_eq!(
-        roster_row(&reg, &group, &dead),
-        serde_json::Value::Null,
+        roster_row_opt(&reg, &group, &dead),
+        None,
         "the pusher died with the previous process — if the roster has it, this test is \
          not about a restart"
     );
@@ -14075,9 +14094,18 @@ fn a_ci_wait_drive_whose_pusher_died_with_the_process_briefs_the_lane_on_the_gre
 /// the property the restart mark must not have deleted.
 #[test]
 fn a_live_pusher_is_still_waited_for_and_only_the_restart_mark_changes_that() {
-    let mut e = entry_at(DriveState::CiWait);
+    let mut e = entry_at(DriveState::FixWait);
     e.head = "head-a".to_string();
-    e.note_fix_push(1_500);
+    // **Arc 7 is the only way into the receipts wait**, and the fixture asserts
+    // it landed. note_fix_push re-stamps an anchor that already exists and does
+    // nothing when there is none, so calling it on a fresh ci-wait entry leaves
+    // fix_pushed() false — decide_ci_wait then takes the plain green arc, and
+    // BOTH halves below pass for a reason that has nothing to do with the mark.
+    e.advance(DriveState::CiWait, None, None, 1_500).unwrap();
+    assert!(
+        e.fix_pushed(),
+        "the fixture must actually be waiting on a push's receipts, or neither half \n         below is about #3225"
+    );
     let limits = DriveLimits::default();
     let green = DriveFacts { ci: CiObservation::Green, ..facts_at("head-a") };
 

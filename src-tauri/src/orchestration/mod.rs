@@ -30629,10 +30629,10 @@ impl OrchRegistry {
             rd_service_ms: Arc::new(TrackedMutex::new("rd_service_ms", HashMap::new())),
             rd_runner_override: TrackedMutex::new("rd_runner_override", None),
             rd_signals: Arc::new(TrackedMutex::new("rd_signals", HashMap::new())),
-            rd_restart_handback: Arc::new(TrackedMutex::new(
-                "rd_restart_handback",
-                HashMap::new(),
-            )),
+            // One line, name literal first: `every_registry_lock_is_constructed_with_a_name`
+            // classifies what FOLLOWS `TrackedMutex::new`, so a wrapped constructor reads as
+            // one built with no name at all.
+            rd_restart_handback: Arc::new(TrackedMutex::new("rd_restart_handback", HashMap::new())),
             rd_handback_fails: Arc::new(TrackedMutex::new("rd_handback_fails", HashMap::new())),
             rd_reconciled: Arc::new(TrackedMutex::new("rd_reconciled", HashSet::new())),
             pd_state_lock: Arc::new(TrackedMutex::new("pd_state_lock", ())),

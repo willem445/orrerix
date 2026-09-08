@@ -1176,6 +1176,28 @@ pub struct LaneRecord {
     /// that never happened. See [`lane_open_for`].
     #[serde(default)]
     pub briefed_digest: String,
+    /// **The head this lane has been told to STOP reviewing** (#3176) — empty
+    /// until the driver has sent that line, and per-revision like the two keys
+    /// above.
+    ///
+    /// It exists to make the stop line arrive exactly ONCE. The rule that sends
+    /// it is a standing property of the tick's facts (a conflicted PR with an
+    /// open lane), so without a mark it would re-send on every tick the drive
+    /// spends waiting out the same conflict — a reviewer's context re-filled
+    /// with the same paragraph every thirty seconds, which is the cost §6 makes
+    /// about notices applied to a delegate's own pane.
+    ///
+    /// **Persisted, and that is the point rather than an incidental**: a restart
+    /// must not re-send a line the previous process already sent, and orrerix
+    /// cannot read a pane's transcript to find out whether it did.
+    ///
+    /// **A mark, never a permission.** Nothing decides a release or an arc from
+    /// this field: the release rule asks the pane whether it is idle, and a lane
+    /// that was told to stop and has not yet reported is still that drive's to
+    /// wait on. Cleared by [`LaneRecord::reseeded`] with the rest of the
+    /// per-revision fields, so the lane is tellable again at the rebased head.
+    #[serde(default)]
+    pub stopped_head: String,
     /// When this lane's delegate was last spawned or resumed — the
     /// `lane-stalled` anchor. Beyond §5.2's example; see the module header.
     #[serde(default)]
@@ -1329,6 +1351,7 @@ impl LaneRecord {
             at_head: String::new(),
             briefed_head: String::new(),
             briefed_digest: String::new(),
+            stopped_head: String::new(),
             spawned_ms: 0,
             briefed_verify: false,
             briefed_body_only: false,
@@ -2651,6 +2674,10 @@ impl DriveEntry {
             at_head: String::new(),
             briefed_head: head.to_string(),
             briefed_digest: body_digest.unwrap_or_default().to_string(),
+            // #3176. A brief is the start of a round, so it cannot also be a
+            // lane that has been told to stop one: `open_lane` replaces the
+            // record wholesale and the mark goes with the revision it was about.
+            stopped_head: String::new(),
             spawned_ms,
             // #2168 E2. Recorded from the STEP rather than re-derived here: the
             // decision is `decide_review_wait`'s, taken on the same facts that
@@ -2978,6 +3005,83 @@ impl DriveEntry {
                 Some(std::mem::take(&mut rec.agent))
             }
         }
+    }
+
+    /// **Has this lane already been told to stop reviewing `head`?** (#3176.)
+    ///
+    /// Asked before the stop line is sent, so it arrives once per revision
+    /// rather than once per tick. An empty `head` is never "already told": an
+    /// unresolved head is not a head, and [`decide`] refuses to act on one at
+    /// all one screen up.
+    pub fn lane_stopped_at(&self, block: &str, head: &str) -> bool {
+        !head.is_empty()
+            && self.lane(block).is_some_and(|l| l.stopped_head == head)
+    }
+
+    /// Record that this lane has been told to stop reviewing `head` (#3176).
+    ///
+    /// Written on the delivery SUCCEEDING and never on the intent — the same
+    /// rule the release rows follow, and for the same reason: a line that did
+    /// not reach the pane is one the next tick still owes. Answers whether the
+    /// mark actually moved, so a caller can decide whether the entry needs
+    /// storing.
+    pub fn mark_lane_stopped(&mut self, block: &str, head: &str) -> bool {
+        if head.is_empty() {
+            return false;
+        }
+        match self.lanes.iter_mut().find(|l| l.block == block) {
+            Some(rec) if rec.stopped_head != head => {
+                rec.stopped_head = head.to_string();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Release this lane's pane AND forget the revision it was briefed at —
+    /// [`ReleaseReason::Conflict`]'s half of the release (#3176).
+    ///
+    /// **Why this is not [`release_pane`](DriveEntry::release_pane).** That one
+    /// takes the pane and leaves `briefed_head`/`briefed_digest` standing, which
+    /// is right for a lane that has ANSWERED: `first_stale_lane` skips it, so
+    /// nothing ever asks whether it is still open. A lane released with nothing
+    /// recorded is the opposite case, and the field it leaves behind is a trap:
+    /// `decide_review_wait`'s wait arm is `lane_open_for(rec, head, digest) &&
+    /// !lane.pane_dead`, and `pane_dead` is derived from the recorded pane, which
+    /// a plain release empties — so the lane reads as *open at this revision, pane
+    /// alive*, and the drive waits out `state-stalled` for a verdict no pane can
+    /// produce. That is #2163's defect with the pane removed by the driver's own
+    /// hand instead of by a human's kill.
+    ///
+    /// [`LaneRecord::reseeded`] is the existing answer to exactly that question
+    /// — it is what a re-drive seeds a fresh entry's lanes with — and it is reused
+    /// rather than re-spelled: the pane moves to
+    /// [`prior_agents`](LaneRecord::prior_agents) so §7 still intercepts anything
+    /// it manages to say on its way out, the revision key and `spawned_ms` are
+    /// cleared so the next round is an ordinary fresh brief, and the session is
+    /// carried so that brief resumes the same conversation.
+    ///
+    /// Returns the pane it freed, for the audit row, or `None` when there was no
+    /// pane or no session to carry — the same two refusals `release_pane` makes,
+    /// and for the same reason: a release that lost the conversation would cost
+    /// the review rather than a slot.
+    pub fn reseed_lane(&mut self, block: &str, session: &str) -> Option<String> {
+        let rec = self.lanes.iter_mut().find(|l| l.block == block)?;
+        if rec.agent.trim().is_empty() {
+            return None;
+        }
+        let sess = if rec.session.trim().is_empty() {
+            session.trim().to_string()
+        } else {
+            rec.session.clone()
+        };
+        if sess.is_empty() {
+            return None;
+        }
+        let freed = rec.agent.clone();
+        let next = rec.reseeded(&sess);
+        *rec = next;
+        Some(freed)
     }
 
     /// Which side of this drive `agent_id` is, if any — §7's interception key.
@@ -4430,6 +4534,37 @@ pub enum ReleaseReason {
     /// a drive cancelled while its worker is mid-round is still waiting on that
     /// worker, and releases nothing.
     DriveEnded,
+    /// **A reviewer lane reviewing a head that is about to be rebased away**
+    /// (#3176) — the PR is CONFLICTING and the lane has recorded nothing at this
+    /// revision.
+    ///
+    /// The fourth variant, and the first whose safety argument is NOT the one
+    /// the other three share. Their pane's output is already on durable record;
+    /// this pane has produced none, and that is the whole point. A verdict
+    /// recorded against a conflicted head binds to a commit the rebase is about
+    /// to replace, so [`lane_verdict_is_current`] is false for it the moment the
+    /// worker pushes: the round is spent and the drive re-briefs that lane at the
+    /// new head anyway. What a release destroys here is therefore a review whose
+    /// only possible product is a stale verdict — measured on #3150, which paid a
+    /// whole `rev-std` pass exactly that way.
+    ///
+    /// It is a fourth WORD rather than a reuse for the reason
+    /// [`DriveEnded`](ReleaseReason::DriveEnded) is one: a reason is a claim on
+    /// the surface §5.4 asks a reader to count from, and a reader counting the
+    /// releases that followed a finished review must be able to leave this one
+    /// out.
+    ///
+    /// **It spends no counter and proposes no arc.** #2311's hoist already spends
+    /// `rebase_attempts` for the conflict and hands the worker back;
+    /// `review_rounds` is untouched here exactly as it is there, because no lane
+    /// delivered any findings.
+    ///
+    /// A lane that has ALREADY answered at this head is deliberately left to
+    /// [`VerdictRecorded`](ReleaseReason::VerdictRecorded) and to the ordinary
+    /// stale-verdict handling: its pane is finished either way, and labelling
+    /// that release `conflict` would be the false row this variant exists to
+    /// avoid.
+    Conflict,
 }
 
 impl ReleaseReason {
@@ -4438,6 +4573,7 @@ impl ReleaseReason {
             ReleaseReason::VerdictRecorded => "verdict-recorded",
             ReleaseReason::ReportConsumed => "report-consumed",
             ReleaseReason::DriveEnded => "drive-ended",
+            ReleaseReason::Conflict => "conflict",
         }
     }
 }
@@ -4670,6 +4806,52 @@ pub fn releasable(
             reason: ReleaseReason::VerdictRecorded,
         });
     }
+    // **Condition 4: the PR does not merge, so every open lane is reviewing a
+    // head that is about to be rebased away** (#3176).
+    //
+    // Keyed on `facts.ci` and not on the STEP, and that is the difference
+    // between a fix and a coin flip. #2311's hoist takes arc 3 on the first tick
+    // that observes the conflict, and on that tick the lane's pane is whatever it
+    // happened to be doing — mid-turn as often as not, which
+    // `release_driven_pane`'s idle barrier refuses (§3.1 item 5). Asked of the
+    // FACTS, the rule is a standing property the way condition 2's is: it is
+    // re-asked on every later tick the drive spends waiting out the same
+    // conflict, so the pane goes on the first tick it is between turns instead of
+    // on the one tick that took the arc. It is bounded by the conflict itself —
+    // the worker's rebase moves the head, mergeability clears, and the rule stops
+    // matching — and by `rebase-limit` / `fix-stalled` under it.
+    //
+    // Conditions 1's exclusions still apply above: a step that PARKS the drive
+    // returned empty, so a `held(rebase-limit)` conflict releases nothing and §6's
+    // notice keeps naming panes that are really there. A TERMINAL step is excluded
+    // here rather than there — `satisfied` cannot be reached on a conflict since
+    // #2311, and at `cancelled` the panes are the orchestrator's to dispose of,
+    // named on the way out.
+    //
+    // **The lane that has answered is not this variant's.** It is condition 2's
+    // when the routing could be read, and the ordinary stale-verdict handling's
+    // when it could not; either way its pane is finished, and a `conflict` row on
+    // it would be the false claim [`ReleaseReason::Conflict`] exists to avoid. The
+    // record is what answers, because `facts.required_lanes` is `None` in exactly
+    // the states a conflicted PR is usually observed in — GitHub computes no
+    // changed-file list for a head that does not merge, which is #2311's own
+    // measurement — so a rule that could only read `facts` would fire nowhere it
+    // mattered. `LaneRecord::at_head` is a record of what the drive READ rather
+    // than a gate input, and it is read here only to DECLINE a release: it can
+    // cost a slot, never a review.
+    if !terminal && facts.ci == CiObservation::Conflicting {
+        for l in &entry.lanes {
+            if l.agent.trim().is_empty() {
+                continue;
+            }
+            let role = DrivenRole::Lane(l.block.clone());
+            if out.iter().any(|c| c.role == role) {
+                continue;
+            }
+            // MUTATION M2 (#3176 red B3): the carve-out dropped.
+            out.push(ReleaseCandidate { role, reason: ReleaseReason::Conflict });
+        }
+    }
     out
 }
 
@@ -4680,6 +4862,76 @@ fn minutes_ms(minutes: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// **The once-per-revision stop mark, pinned where it is decidable** (#3176).
+    ///
+    /// The integration test asserts the observable property — one
+    /// `rd-lane-stopped` row across two ticks — and measured against a mutation
+    /// that DELETES the `lane_stopped_at` check it does not discriminate: the
+    /// second delivery does not duplicate anyway, for a reason further down the
+    /// delivery stack. So the guard's own coverage is here, where the question
+    /// is a pure one and every answer is reachable.
+    ///
+    /// Four properties, and the second and fourth are what stop the first being
+    /// satisfiable by a constant: the mark does not stand before it is written,
+    /// it DOES once it is, it is keyed on the REVISION rather than on the lane,
+    /// and `reseeded` clears it so the lane is tellable again at the rebased
+    /// head — which is the whole reason the field can be persisted without
+    /// silencing the next round.
+    #[test]
+    fn the_stop_mark_is_per_revision_and_a_reseed_clears_it() {
+        let head_a = "aa11bb22cc33dd44";
+        let head_b = "bb22cc33dd44ee55";
+        let mut e = entry_at(DriveState::ReviewWait);
+        e.open_lane("rev-std", "s1", "rev-1", head_a, Some("d1"), 1_000, false, false);
+
+        // 1. Not marked before anything writes it — the negative control, and
+        //    what makes the assertion below about the WRITE rather than about a
+        //    predicate that answers `true` for everything.
+        assert!(!e.lane_stopped_at("rev-std", head_a), "nothing has told this lane anything yet");
+
+        // 2. The write lands, and says it moved.
+        assert!(e.mark_lane_stopped("rev-std", head_a), "the first mark moves the field");
+        assert!(e.lane_stopped_at("rev-std", head_a), "…and the predicate now answers for it");
+        assert!(
+            !e.mark_lane_stopped("rev-std", head_a),
+            "…and a second mark at the same revision moves nothing, so a caller can tell whether \
+             the entry needs storing"
+        );
+
+        // 3. Keyed on the REVISION. A lane told about one head has not been told
+        //    about the next, which is what makes the mark safe to persist: the
+        //    rebase produces a new head and the lane is tellable again.
+        assert!(
+            !e.lane_stopped_at("rev-std", head_b),
+            "the mark is per-revision — a head-blind mark would silence the lane for the whole \
+             drive, including the rebased head this whole feature exists to re-brief at"
+        );
+        // …and it is keyed on the LANE, so one lane's mark is not another's.
+        assert!(!e.lane_stopped_at("rev-final", head_a), "a mark belongs to one lane");
+        assert!(
+            !e.mark_lane_stopped("rev-final", head_a),
+            "…and marking a lane with no record writes nothing at all"
+        );
+
+        // 4. An unresolved head is never "already told": §8's posture, and the
+        //    same one `decide`'s empty-head guard takes one screen up.
+        assert!(!e.lane_stopped_at("rev-std", ""), "an empty head is not a head");
+        assert!(!e.mark_lane_stopped("rev-std", ""), "…and is never written as one");
+        assert!(
+            e.lane_stopped_at("rev-std", head_a),
+            "…and that refusal left the real mark alone"
+        );
+
+        // 5. `reseeded` clears it with the rest of the per-revision fields.
+        let rec = e.lane("rev-std").expect("the lane is on record").reseeded("s1");
+        assert_eq!(
+            rec.stopped_head, "",
+            "a reseeded lane is tellable again — the release path reseeds, so a lane released at \
+             a conflicted head must not carry a mark that silences its next round"
+        );
+    }
 
     /// **`hold_key` stays reason-blind, so the exception cannot migrate into
     /// it** (rev-std round 2 premortem).
@@ -7583,6 +7835,7 @@ mod tests {
             at_head: String::new(),
             briefed_head: head.into(),
             briefed_digest: digest.into(),
+            stopped_head: String::new(),
             spawned_ms: 0,
             briefed_verify: false,
             briefed_body_only: false,

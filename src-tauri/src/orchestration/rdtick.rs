@@ -3106,12 +3106,7 @@ impl OrchRegistry {
             }
         }
         let worker = entry.worker_agent.clone();
-        if !worker.trim().is_empty() && !self.rd_pane_is_live(&worker) {
-            let session = entry.worker_session.clone();
-            if let Some(freed) = entry.release_pane(&reviewdrive::DrivenRole::Worker, &session) {
-                lost.worker.push(freed);
-            }
-        }
+        let _ = worker;
         // The superseded lists, by the same predicate — including the pane the
         // reseed just moved onto one of them.
         if entry.forget_dead_panes(&|id| self.rd_pane_is_live(id)) {

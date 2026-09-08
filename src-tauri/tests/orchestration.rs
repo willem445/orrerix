@@ -65860,6 +65860,17 @@ const FIX_LIMIT_OR_CREDITS: &str =
 /// might write.
 const FIX_LIMIT_NEGATIVE: &str =
     include_str!("fixtures/attention/negative-orchestrator-quotes-a-limit.txt");
+/// #3190 item 2: positive controls for the paragraph-start rule's own premise.
+/// The refusal lines are verbatim from the captured fixtures above; the
+/// context line above the blank row is representative, not a capture. What
+/// these files pin is the convention — see the test below and
+/// `fixtures/attention/README.md` for the re-bless step.
+const FIX_CONV_CLAUDE: &str =
+    include_str!("fixtures/attention/positive-convention-claude-usage-limit.txt");
+const FIX_CONV_OR_KEY: &str =
+    include_str!("fixtures/attention/positive-convention-openrouter-key-limit.txt");
+const FIX_CONV_OR_CREDITS: &str =
+    include_str!("fixtures/attention/positive-convention-openrouter-credits-exhausted.txt");
 
 /// A group with one worker, plus the tail maps `attention_tick` consumes.
 /// `attention_setup` gives the worker a pty; nothing here needs a real one.
@@ -66372,6 +66383,83 @@ fn a_refusal_glued_under_other_output_is_not_detected() {
         seen.iter().any(|i| i.reason == "provider-limit"),
         "control: with the blank row the real TUIs draw, the same refusal is seen: {seen:?}"
     );
+}
+
+/// The positive control the paragraph-start rule owes its own premise (#3190).
+///
+/// The rule above is exact about what it costs: a refusal glued under other
+/// output is missed, and `a_refusal_glued_under_other_output_is_not_detected`
+/// pins that miss as EXPECTED — so a CLI update that changed its rendering
+/// convention would leave that guard green straight through the regression.
+/// These three fixtures are the other horn: each carries one refusal VERBATIM
+/// from its captured fixture (`FIX_LIMIT_*` above), rendered the way the CLI
+/// prints it TODAY — its own block, a blank gutter row before it. The test
+/// demands detection on each, so a re-blessed fixture whose convention moved
+/// reddens here instead of passing silently through the guard that documents
+/// the miss. Re-bless procedure: `fixtures/attention/README.md`.
+#[test]
+fn the_current_convention_positive_controls_are_detected() {
+    for (fixture, needle, provider_id, label) in [
+        (
+            FIX_CONV_CLAUDE,
+            "/usage-credits to finish what you",
+            "anthropic",
+            "claude usage limit",
+        ),
+        (
+            FIX_CONV_OR_KEY,
+            "Key limit exceeded",
+            "openrouter",
+            "openrouter key limit",
+        ),
+        (
+            FIX_CONV_OR_CREDITS,
+            "This request would exceed your available credits",
+            "openrouter",
+            "openrouter credits",
+        ),
+    ] {
+        // The needle we demand must be a row of the table it claims to
+        // control — otherwise this loop could demand detection of a spelling
+        // nothing matches any more and fail for the wrong reason.
+        assert!(
+            providerlimit::LIMIT_PATTERNS
+                .iter()
+                .any(|p| p.needle == needle),
+            "{label}: needle is not a LIMIT_PATTERNS row"
+        );
+        // The convention itself, pinned on the fixture: the needle's rendered
+        // line sits directly under a line that strips to nothing — the blank
+        // gutter row these TUIs draw before a refusal block. (Same inline
+        // strip as `a_wrapped_quotation_is_not_a_refusal`; these fixtures use
+        // pi's U+2503 and no other gutter glyph.) Asserted per fixture so a
+        // re-bless that loses the row fails HERE, naming the convention.
+        let lines: Vec<&str> = fixture.lines().collect();
+        let strip = |l: &str| l.trim_matches(|c: char| c.is_whitespace() || c == '\u{2503}');
+        let hit_line = lines
+            .iter()
+            .position(|l| {
+                providerlimit::LIMIT_PATTERNS
+                    .iter()
+                    .any(|p| strip(l).starts_with(p.needle))
+            })
+            .unwrap_or_else(|| panic!("{label}: fixture carries no line-initial needle at all"));
+        assert!(
+            hit_line > 0 && strip(lines[hit_line - 1]).is_empty(),
+            "{label}: the needle's line must sit directly under a blank gutter row — \
+             the rendering convention `limit_in_tail`'s paragraph-start rule depends on"
+        );
+        assert!(
+            strip(lines[hit_line]).starts_with(needle),
+            "{label}: the fixture's line-initial needle drifted from the row it controls"
+        );
+        // ...and the scan really does see it — the positive control: the same
+        // needle glued one row higher is pinned above as NOT detected.
+        let hit = providerlimit::limit_in_tail(fixture)
+            .unwrap_or_else(|| panic!("{label}: the current-convention refusal is not detected"));
+        assert_eq!(hit.needle, needle, "{label}: wrong row matched");
+        assert_eq!(hit.provider, provider_id, "{label}: wrong provider matched");
+    }
 }
 
 /// #3178 review round 2, N4 — the `held-dialog` arm of the `outranked` set had

@@ -719,13 +719,13 @@ own draft PR**, and CI's log is the failure line you quote.
    and a `git checkout --` to undo them takes everything uncommitted in the
    file with it.
 2. Cut `<worker-branch>-scratchN` from your branch head (e.g. `fix/42-scratch1`
-   off `fix/42`), set **one** behaviour
-   aside — leave everything else wired — and push. One branch per behaviour,
-   numbered, so a wave can go out together (see below). The name is not free:
-   under the close-ownership rule (#3198) you may close a PR and delete its
-   branch only when its head is your own branch or a `/`- or `-`-separated
-   descendant of it, so a scratch branch named anything else —
-   `scratch/<issue>-red-N`, say — is one the orchestrator has to clean up.
+   off `fix/42`), set **one** behaviour aside — leave everything else
+   wired — and push. One branch per behaviour, numbered, so a wave can go
+   out together (see below). The name is not free: under the close-ownership
+   rule (#3198) you may close a PR and delete its branch only when its head
+   is your own branch or a `/`- or `-`-separated descendant of it, so a
+   scratch branch named anything else — `scratch/<issue>-red-N`, say — is
+   one the orchestrator has to clean up.
 3. Open it as a draft titled `[scratch] … — do not merge`, body saying which
    single behaviour is neutered and that every failure line will be quoted in
    the real PR.
@@ -776,7 +776,8 @@ If a check fails, re-cut rather than disclose. One CI cycle is cheaper than a
 review round, and far cheaper than a false evidence table in a squash message
 that cannot be edited afterwards.
 
-**Prefer one branch per round, pushed as a wave.** Reusing one scratch branch
+**Prefer one branch per round, pushed as a wave — each cut as
+`<worker-branch>-scratchN`, numbered per round.** Reusing one scratch branch
 (below) still works — it just serialises rounds that are independent, at a full
 CI cycle each: #1196 cut five branches instead, queued within 14 s of each other
 and all conclusive 14 min later, against ~64 min of serialised run time. A branch
@@ -895,7 +896,8 @@ while a PR is open on it: over the last 400 runs NOT ONE `push` run is on a bran
 than `main` or a `v*` tag. Measure that zero, not the pass/fail split beside it — the
 window slides with every run in the repo, so a total quoted here is stale on arrival.
 Step 4 above closes the scratch PR
-and deletes its branch once cited, which is what makes the second wave the dangerous one
+and deletes its branch once cited (each fresh wave cut as fresh
+`<worker-branch>-scratchN` branches), which is what makes the second wave the dangerous one
 — re-pushing those branches and reusing their PR numbers builds nothing at all, and
 `gh pr checks` keeps answering for the round you already quoted. Assert `state == OPEN`
 before reusing a scratch PR and open fresh ones otherwise; step 6's `headSha` cross-check

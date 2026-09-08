@@ -66750,12 +66750,15 @@ fn gh_shim_harness_refuses_a_close_of_a_pr_the_caller_does_not_own() {
 }
 
 /// The owner the refusal NAMES is the roster's most specific match, not its
-/// first (#3206). Two rows can both own a head by the separated-descendant
+/// first (#3206). Two rows can both match a head by the separated-descendant
 /// rule — a `fix/team` holder and a `fix/team-alpha` holder both match head
 /// `fix/team-alpha-2` — and a first-match lookup names whichever row comes
-/// first in the roster, which need not be the agent the branch belongs to.
-/// The refusal decision is the same either way (a non-owner's close is
-/// refused); this pins the NAME: the LONGEST matching roster branch wins.
+/// first in the roster, which need not be the roster's closest match.
+/// "Closest", not "true owner": the roster cannot know who actually pushed a
+/// descendant branch — the human can push one beneath another row's prefix —
+/// so the longest match names the best the roster HAS, and the refusal
+/// decision is the same either way (a non-owner's close is refused). This
+/// pins the NAME: the LONGEST matching roster branch wins.
 #[test]
 fn gh_shim_names_the_longest_matching_roster_branch_as_the_pr_owner() {
     use std::process::Command;

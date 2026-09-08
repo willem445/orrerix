@@ -1688,14 +1688,17 @@ if [ "$cmd" = "pr" ] && { [ "$sub" = "close" ] || [ "$sub" = "reopen" ]; }; then
   # gone, or the human's own branch — and the message then says so rather
   # than naming a guess.
   #
-  # Several rows can own one head: the descendant rule accepts a head that is
-  # a separated descendant of ANY roster branch, so `fix/team` and
-  # `fix/team-alpha` both own `fix/team-alpha-2` (#3206). The owner to NAME
+  # Several rows can match one head: the descendant rule accepts a head that
+  # is a separated descendant of ANY roster branch, so `fix/team` and
+  # `fix/team-alpha` both match `fix/team-alpha-2` (#3206). The owner to NAME
   # is the agent whose branch is the closest thing to the head — the longest
   # match — so the scan runs to the end and keeps the longest match it saw
   # instead of taking the first row that matches. Exact and descendant arms
   # score the branch's own length: an exact match's length equals the head's,
   # which is maximal, so it beats every descendant of the same branch.
+  # "Closest", not "true owner": the roster cannot know who actually pushed a
+  # descendant branch — the human can push one beneath another row's prefix —
+  # so this names the closest match the roster HAS, never a git-derived fact.
   # (Decision logic is untouched — this picks the NAME the refusal carries,
   # and the gate's own-ownership test below is the caller's single row.)
   c_owner=""; c_owner_len=-1

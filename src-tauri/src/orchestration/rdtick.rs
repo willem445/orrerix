@@ -3135,9 +3135,7 @@ impl OrchRegistry {
     /// are the ordinary state of a drive between a pane replacement and the next
     /// tick's prune. See `current_panes_lost` for what reading them here cost.
     fn rd_has_lost_panes(&self, entry: &reviewdrive::DriveEntry) -> bool {
-        let current = std::iter::once(entry.worker_agent.clone())
-            .chain(entry.lanes.iter().map(|l| l.agent.clone()));
-        current.filter(|a| !a.trim().is_empty()).any(|a| !self.rd_pane_is_live(&a))
+        entry.owned_panes().into_iter().any(|(agent, _)| !self.rd_pane_is_live(&agent))
     }
 
     /// §2.4's restart reconcile, once per group per registry instance, before
@@ -4743,7 +4741,7 @@ impl OrchRegistry {
                 // repair below is not free: on a `fix-wait` drive it marks a
                 // re-hand-back on the state alone, and a duplicate call that
                 // reached it would re-brief a live worker mid-fix.
-                if !lost.current_panes_lost() {
+                if !lost.any() {
                     return self.rd_refuse(group, pr, r::ALREADY_DRIVEN);
                 }
                 let mut mark = RestartMark::default();

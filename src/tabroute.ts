@@ -6,8 +6,8 @@
 // NB: a tested module can't runtime-import a sibling src module (Node's ESM
 // loader won't resolve the extensionless path), so the urgency rule is inlined
 // below rather than imported from attention.ts. It is the SAME rule
-// attentionPresentation uses — `blocked`, `provider-limit` (#2811 S5a) and
-// `stranded` (#496 PR-C) are the
+// attentionPresentation uses — `blocked`, `provider-limit` (#2811 S5a),
+// `dialog` (#2850 S3b) and `stranded` (#496 PR-C) are the
 // urgent reasons — and the pane header / dock chip still render via
 // attentionPresentation verbatim (main.ts applies pane.setAttention, which uses
 // it). Keep the two in lockstep.
@@ -25,6 +25,7 @@ const isUrgentReason = (reason: string): boolean =>
   reason === "held-dialog" ||
   reason === "blocked" ||
   reason === "provider-limit" ||
+  reason === "dialog" ||
   reason === "stranded";
 
 // Priority when several panes in one tab need attention: show the most urgent
@@ -46,6 +47,13 @@ const REASON_PRIORITY: Record<string, number> = {
   // `stranded` because a provider limit is the wedge nothing done in the
   // terminal can clear, which mirrors the backend chain in `attention_tick`.
   "provider-limit": 4.5,
+  // #2850 S3b / #3190: a structured pane parked on an extension-UI dialog.
+  // The backend chain ranks it directly above `stranded` — both are wedges the
+  // pane will not clear itself — and directly under `provider-limit`. 4.25, not
+  // a renumber, on the same rule as `provider-limit`'s 4.5 above: every
+  // pre-existing value stays exactly where it was, so no open branch's hunk
+  // can collide on an integer here.
+  dialog: 4.25,
   stranded: 4,
   waiting: 3,
   gate: 2,

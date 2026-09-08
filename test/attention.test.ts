@@ -26,7 +26,48 @@ test("each known reason maps to its label", () => {
   assert.equal(attentionPresentation("gate").label, "⚑ your call");
 });
 
-test("'held-dialog', 'blocked', 'provider-limit' and 'stranded' are the urgent reasons", () => {
+test("every reason the backend attention scan emits has a table row", () => {
+  // The mirror of `attention_tick`'s reason chain (src-tauri/src/orchestration/
+  // mod.rs), in chain order. `KNOWN_ATTENTION_REASONS` is read off `LABELS`, so
+  // it cannot catch a reason the backend emits that this table never added:
+  // #2850 S3b added `dialog` backend-side and no row landed here (#3190), so
+  // those panes' chips fell through `attentionPresentation` to the generic
+  // "⚠ attention" default. Enumerate the backend's reasons and refuse that
+  // fallback for each.
+  const backendReasons = [
+    "held-dialog",
+    "blocked",
+    "provider-limit",
+    "dialog",
+    "stranded",
+    "waiting",
+    "report",
+    "question",
+    "gate",
+  ];
+  for (const reason of backendReasons) {
+    assert.notEqual(
+      attentionPresentation(reason).label,
+      "⚠ attention",
+      `${reason} has no row in LABELS — it renders the generic fallback`,
+    );
+  }
+  // Lockstep, both directions: a reason in LABELS but missing from the list
+  // above is enumeration drift, and a list longer than LABELS is a backend
+  // reason the table still has not added.
+  for (const known of KNOWN_ATTENTION_REASONS) {
+    assert.ok(
+      backendReasons.includes(known),
+      `${known} is in LABELS but not in this test's backend enumeration — update the list`,
+    );
+  }
+  assert.ok(
+    KNOWN_ATTENTION_REASONS.length >= 9,
+    `only ${KNOWN_ATTENTION_REASONS.length} reasons in LABELS`,
+  );
+});
+
+test("'held-dialog', 'blocked', 'provider-limit', 'dialog' and 'stranded' are the urgent reasons", () => {
   // #946 Q4 / #1091 slice H: a blocking dialog holding the orchestrator's own
   // delivery pipe strands every OTHER agent's report behind it too — at
   // least as urgent as a plain `blocked` report, never merely amber.
@@ -40,6 +81,10 @@ test("'held-dialog', 'blocked', 'provider-limit' and 'stranded' are the urgent r
   // the pane clears a stranded prompt, and nothing typed into a
   // provider-limited pane clears that at all.
   assert.equal(attentionPresentation("provider-limit").urgent, true);
+  // #2850 S3b: a structured pane parked on an extension-UI dialog. Ranked with
+  // `stranded` backend-side — pi waits on stdin indefinitely, so the pane will
+  // not un-wedge itself, and every delivery behind it waits too.
+  assert.equal(attentionPresentation("dialog").urgent, true);
   for (const reason of ["waiting", "report", "question", "gate"]) {
     assert.equal(attentionPresentation(reason).urgent, false, `${reason} not urgent`);
   }

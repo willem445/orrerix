@@ -8,6 +8,7 @@ export type AttentionReason =
   | "held-dialog"
   | "blocked"
   | "provider-limit"
+  | "dialog"
   | "stranded"
   | "waiting"
   | "report"
@@ -17,7 +18,8 @@ export type AttentionReason =
 export interface AttentionPresentation {
   /** Short glyph+word label shown in the header chip / dock chip tooltip. */
   label: string;
-  /** `held-dialog`, `blocked`, `provider-limit` and `stranded` are the urgent
+  /** `held-dialog`, `blocked`, `provider-limit`, `dialog` and `stranded` are the
+   *  urgent
    *  ones — callers tint them red rather than amber. */
   urgent: boolean;
 }
@@ -40,6 +42,14 @@ const LABELS: Record<string, string> = {
   // however many panes were stopped, so the chip is on one pane and the count
   // is in the detail.
   "provider-limit": "⛔ provider limit",
+  // #2850 S3b / #3190: a structured pane parked on an extension-UI dialog.
+  // Ranked with `stranded` in `attention_tick` — pi waits on stdin
+  // indefinitely, so the pane will not un-wedge itself and every delivery
+  // behind it waits too — and one rung under `provider-limit`, the only wedge
+  // here nothing done IN the terminal clears at all. Distinct from
+  // `held-dialog` (the orchestrator's own delivery pipe being held); this is
+  // the pane's own dialog, answered through the pane.
+  dialog: "⛔ dialog",
   // #496 PR-C: a delivered prompt that was never submitted. Distinct from
   // `waiting` on purpose — a waiting pane is asking something and will keep
   // asking; a stranded one is wedged and stays wedged until an Enter lands.
@@ -66,6 +76,7 @@ const URGENT: ReadonlySet<string> = new Set([
   "held-dialog",
   "blocked",
   "provider-limit",
+  "dialog",
   "stranded",
 ]);
 

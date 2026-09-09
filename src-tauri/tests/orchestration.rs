@@ -23643,6 +23643,81 @@ fn git_shim_script_bakes_real_git_and_gates_tag_push() {
     assert!(!sh.contains("\r"), "the POSIX git shim must be LF-only");
 }
 
+/// #3202: `%3N` (milliseconds) is a GNU coreutils extension. BSD `date` — which
+/// macOS ships as /bin/date — does not implement `%N` at all and does not fail
+/// on it either: `+%s%3N` yields `<seconds>3N`, so every audit row the gh or
+/// git shim wrote on macOS carried a garbage `ts_ms` that made the whole line
+/// unparseable JSON. The `[ -z "$ts" ]` fallback the audit functions had is
+/// exactly the check that cannot see this failure — it catches `date` printing
+/// NOTHING, never `date` printing the WRONG thing — and the defect is invisible
+/// on every platform the behavioural harness tests run on (Linux and Git-Bash
+/// carry GNU `date`, whose `%s%3N` is true milliseconds), which is why those
+/// tests stayed green. The self-launch shim already timestamps portably: take
+/// an all-digit `%s%3N` result or nothing, then fall back to whole
+/// seconds×1000, then to 0. Every rendered POSIX shim must carry that ONE form
+/// at every ts site — pinned as text so it is red on every platform, not only
+/// where BSD `date` runs. (The .cmd shims never shell out to `date`: their
+/// degraded rows hardcode `"ts_ms":0`, so there is no ts site to pin there.)
+#[test]
+fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
+    let shims: [(&str, String); 3] = [
+        ("gh", gh_shim_sh("C:/Program Files/GitHub CLI/gh.exe", &shim_paths())),
+        ("git", git_shim_sh("C:/Program Files/Git/cmd/git.exe", &shim_paths())),
+        ("loomux", loomux_shim_sh()),
+    ];
+    for (name, sh) in &shims {
+        // The `%s%3N` attempt itself MUST survive: GNU's all-digit result is used
+        // as-is, so removing it would cost Linux and Git-Bash true millisecond
+        // precision. What must be gone is a `%s%3N` value trusted with only an
+        // emptiness check.
+        const BROKEN: &str = "[ -z \"$ts\" ] && ts=0";
+        // The reused fallback's inner arm: whole seconds → `…000`, anything
+        // non-digit or empty → 0.
+        const FALLBACK: &str =
+            "case \"$ts\" in *[!0-9]*|\"\") ts=0 ;; *) ts=\"${ts}000\" ;; esac ;;";
+        let sites = sh.matches("ts=$(date +%s%3N 2>/dev/null)").count();
+        assert!(sites > 0, "the {name} shim must timestamp its audit rows (non-vacuity)");
+        assert_eq!(
+            sites,
+            sh.matches(FALLBACK).count(),
+            "the {name} shim has {sites} `%s%3N` site(s) but {} all-digit fallback(s) — every ts site must reuse the self-launch shim's portable form (#3202)",
+            sh.matches(FALLBACK).count()
+        );
+        assert!(!sh.contains(BROKEN),
+            "the {name} shim still trusts `%s%3N` with only an emptiness check — on BSD `date` (macOS) that prints a literal `3N` tail and every audit row stops being JSON (#3202)");
+    }
+    // Review round 1 (#3248): the array above is hand-enumerated, so a FOURTH
+    // shim renderer added to orchestration/mod.rs would be silently unpinned —
+    // this pin would pass with its population frozen at three. Count the
+    // renderer functions the module actually declares and hold the array to
+    // them: adding `something_shim_sh` without a test entry goes red here, and
+    // so does renaming one. (A widening, not a fix — the original three-entry
+    // pin was already correct for the code that existed.)
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"),
+        "/src/orchestration/mod.rs")).expect("read orchestration/mod.rs source");
+    // Name = the first identifier token after `pub fn `, so a generic renderer
+    // (`something_shim_sh<T>`) is still named and still counted.
+    let renderers: Vec<&str> = src
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("pub fn "))
+        .filter_map(|rest| {
+            let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_')?;
+            let name = &rest[..end];
+            name.ends_with("_shim_sh").then_some(name)
+        })
+        .collect();
+    assert_eq!(
+        renderers.len(),
+        shims.len(),
+        "orchestration/mod.rs declares {renderers:?} shim renderers but this pin covers {shims_len} — every renderer that stamps audit rows must have an entry above, or a fourth shim regresses to the bare `%s%3N` timestamp unseen (#3202)",
+        shims_len = shims.len()
+    );
+    for (name, _) in &shims {
+        assert!(renderers.contains(&format!("{name}_shim_sh").as_str()),
+            "the pin covers `{name}` but no renderer named `{name}_shim_sh` is declared — the pin's array and the module's renderers have drifted");
+    }
+}
+
 /// #815: the launcher block is a refusal, not a gate — the properties worth
 /// pinning are the ones whose absence would quietly turn it back into a launch.
 #[test]
@@ -67162,17 +67237,19 @@ fn a_quote_in_a_branch_name_cannot_forge_an_audit_row() {
     for line in audit.lines().filter(|l| !l.trim().is_empty()) {
         // The DETAIL object, parsed on its own rather than the whole row.
         //
-        // Not a convenience: the row's `ts_ms` is written by `date +%s%3N`, and
-        // `%3N` is a GNU extension that BSD `date` emits LITERALLY - so on macOS
-        // every audit row either shim has ever written ends up with
-        // `"ts_ms":<seconds>3N`, which is not valid JSON. That is a real,
-        // PRE-EXISTING defect (present at this branch's base b8533002, in all four
-        // `date +%s%3N` sites across both shims), it is not what this test is
-        // about, and fixing it belongs in its own change rather than riding in on
-        // a close-gate PR - so it is filed as #3202 and scoped around here
-        // rather than silently absorbed. Parsing the detail object still decides
-        // this test's question completely, because every value the branch name
-        // could reach lives inside it.
+        // Not a convenience: the row's `ts_ms` used to be written by
+        // `date +%s%3N`, and `%3N` is a GNU extension that BSD `date` emits
+        // LITERALLY - so on macOS every audit row either shim wrote before #3202
+        // ended up with `"ts_ms":<seconds>3N`, which is not valid JSON. That was
+        // a real, PRE-EXISTING defect (in the audit functions of both shims), it
+        // was not what this test is about, and fixing it belonged in its own
+        // change rather than riding in on a close-gate PR - so it was filed as
+        // #3202 and scoped around here rather than silently absorbed. #3202 is
+        // now fixed: every rendered shim timestamps with the self-launch shim's
+        // all-digit fallback, pinned by
+        // every_rendered_shim_timestamps_with_the_portable_ms_fallback. Parsing
+        // the detail object still decides this test's question completely,
+        // because every value the branch name could reach lives inside it.
         let detail = line
             .find("\"detail\":")
             .map(|i| &line[i + "\"detail\":".len()..])

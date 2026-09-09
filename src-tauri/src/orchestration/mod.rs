@@ -1826,7 +1826,17 @@ ORX_GD="${ORRERIX_GROUP_DIR:-$LOOMUX_GROUP_DIR}"
 ORX_AID="${ORRERIX_AGENT_ID:-$LOOMUX_AGENT_ID}"
 
 loomux_audit() { # $1=action $2=detail-json
-  ts=$(date +%s%3N 2>/dev/null); [ -z "$ts" ] && ts=0
+  # Same portable form as the self-launch shim (#3202):
+  # BSD date (macOS) has no %N, and does not fail on it: `+%s%3N` returns the
+  # epoch with a literal `3N` glued on, which lands in ts_ms and makes the whole
+  # line unparseable JSON. Emptiness is not the only bad answer — take an
+  # all-digit result or nothing, then fall back to whole seconds, then to 0.
+  ts=$(date +%s%3N 2>/dev/null)
+  case "$ts" in
+    *[!0-9]*|"")
+      ts=$(date +%s 2>/dev/null)
+      case "$ts" in *[!0-9]*|"") ts=0 ;; *) ts="${ts}000" ;; esac ;;
+  esac
   if [ -n "$ORX_GD" ]; then
     # ONE printf of the whole line (record + \n) — O_APPEND is atomic per write,
     # and the backend can't lock us out of another process. Splitting this across
@@ -3188,7 +3198,17 @@ ORX_GD="${ORRERIX_GROUP_DIR:-$LOOMUX_GROUP_DIR}"
 ORX_AID="${ORRERIX_AGENT_ID:-$LOOMUX_AGENT_ID}"
 
 loomux_audit() { # $1=action $2=detail-json
-  ts=$(date +%s%3N 2>/dev/null); [ -z "$ts" ] && ts=0
+  # Same portable form as the self-launch shim (#3202):
+  # BSD date (macOS) has no %N, and does not fail on it: `+%s%3N` returns the
+  # epoch with a literal `3N` glued on, which lands in ts_ms and makes the whole
+  # line unparseable JSON. Emptiness is not the only bad answer — take an
+  # all-digit result or nothing, then fall back to whole seconds, then to 0.
+  ts=$(date +%s%3N 2>/dev/null)
+  case "$ts" in
+    *[!0-9]*|"")
+      ts=$(date +%s 2>/dev/null)
+      case "$ts" in *[!0-9]*|"") ts=0 ;; *) ts="${ts}000" ;; esac ;;
+  esac
   if [ -n "$ORX_GD" ]; then
     # ONE printf of the whole line — see the gh shim's note (#240): cross-process
     # append atomicity is per write syscall, and no backend mutex reaches here.

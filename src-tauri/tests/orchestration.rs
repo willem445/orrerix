@@ -23686,6 +23686,36 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
         assert!(!sh.contains(BROKEN),
             "the {name} shim still trusts `%s%3N` with only an emptiness check — on BSD `date` (macOS) that prints a literal `3N` tail and every audit row stops being JSON (#3202)");
     }
+    // Review round 1 (#3248): the array above is hand-enumerated, so a FOURTH
+    // shim renderer added to orchestration/mod.rs would be silently unpinned —
+    // this pin would pass with its population frozen at three. Count the
+    // renderer functions the module actually declares and hold the array to
+    // them: adding `something_shim_sh` without a test entry goes red here, and
+    // so does renaming one. (A widening, not a fix — the original three-entry
+    // pin was already correct for the code that existed.)
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"),
+        "/src/orchestration/mod.rs")).expect("read orchestration/mod.rs source");
+    // Name = the first identifier token after `pub fn `, so a generic renderer
+    // (`something_shim_sh<T>`) is still named and still counted.
+    let renderers: Vec<&str> = src
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("pub fn "))
+        .filter_map(|rest| {
+            let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_')?;
+            let name = &rest[..end];
+            name.ends_with("_shim_sh").then_some(name)
+        })
+        .collect();
+    assert_eq!(
+        renderers.len(),
+        shims.len(),
+        "orchestration/mod.rs declares {renderers:?} shim renderers but this pin covers {shims_len} — every renderer that stamps audit rows must have an entry above, or a fourth shim regresses to the bare `%s%3N` timestamp unseen (#3202)",
+        shims_len = shims.len()
+    );
+    for (name, _) in &shims {
+        assert!(renderers.contains(&format!("{name}_shim_sh").as_str()),
+            "the pin covers `{name}` but no renderer named `{name}_shim_sh` is declared — the pin's array and the module's renderers have drifted");
+    }
 }
 
 /// #815: the launcher block is a refusal, not a gate — the properties worth

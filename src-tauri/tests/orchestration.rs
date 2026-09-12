@@ -23704,8 +23704,12 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
         const MS_ARM: &str = "?????????????) ;;";
         // #3249 residual 1: the whole-seconds rung takes EXACTLY a 10-digit
         // epoch-second answer — a 9- or 11-digit `%s` must not be appended
-        // `000` into a wrong-magnitude ts_ms.
-        const SECONDS_ARM: &str = "?????????) ts=\"${ts}000\" ;;";
+        // `000` into a wrong-magnitude ts_ms. The const is LEFT-ANCHORED on
+        // the rung's own preceding `;; ` AND carries exactly ten `?`: a bare
+        // `?`-run is a substring of any wider run, so a merely-widened const
+        // would still match an 11-digit arm. Width 9 and width 11 arms count
+        // 0 against it (measured, see the PR body's width table).
+        const SECONDS_ARM: &str = ";; ??????????) ts=\"${ts}000\" ;;";
         // The bare reject arm appears TWICE per ts site once the whole-seconds
         // rung carries its own magnitude guard: the rung's reject and the
         // outer all-other-magnitude reject.
@@ -23727,7 +23731,7 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
         assert_eq!(
             sites,
             sh.matches(SECONDS_ARM).count(),
-            "the {name} shim has {sites} ts site(s) but {} exactly-10-digit whole-seconds arm(s) — the whole-seconds rung must refuse a wrong-magnitude `%s` answer (9 or 11 digits) instead of appending `000` (#3249 residual 1)",
+            "the {name} shim has {sites} ts site(s) but {} exactly-10-digit whole-seconds arm(s) (the const is left-anchored on the rung's preceding `;; ` and carries ten `?`, so an arm of width 9 or 11 matches 0) — the whole-seconds rung must refuse a wrong-magnitude `%s` answer (9 or 11 digits) instead of appending `000` (#3249 residual 1)",
             sh.matches(SECONDS_ARM).count()
         );
         assert_eq!(

@@ -23734,7 +23734,7 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
 /// arm in every_rendered_shim_timestamps_with_the_portable_ms_fallback
 /// panics there, so the two populations cannot drift apart (rev-final
 /// round 2 finding 1).
-const PINNED_SHIMS: [&str; 3] = ["gh", "git", "loomux"];
+const PINNED_SHIMS: [&str; 4] = ["gh", "git", "loomux", "fake"];
 
 /// #3249 item 1: the census the #3248 review round added counted renderer
 /// functions in ONE hard-named file (`orchestration/mod.rs`) by ONE name
@@ -23779,7 +23779,7 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
     const SANCTIONED: &[(&str, usize, &str)] = &[
         (
             "const TPL: &str = r#\"#!/bin/sh",
-            3,
+            4,
             "the gh/git/loomux shim templates — every pinned renderer renders from one",
         ),
         (
@@ -23958,7 +23958,11 @@ fn gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date() {
         &shim,
         gh_shim_sh(
             &fake.display().to_string(),
-            &ShimPaths { utils_dir: Some(msys_dir_for_fixture(&utils)), git_dir: None },
+            // MUTATED for the scratch round: no utils_dir, so the shim's PATH
+            // repair has nothing to prepend and the real GNU `date` answers —
+            // the exact PATH-repair change finding 3 says the exact-0 assertion
+            // must redden on.
+            &shim_paths(),
         ),
     )
     .unwrap();

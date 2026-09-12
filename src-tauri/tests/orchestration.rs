@@ -23711,6 +23711,176 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
     }
 }
 
+/// The rendered POSIX shims this file pins — one entry per renderer. The
+/// population is held to a scan of BOTH production source roots by
+/// `a_rendered_shim_renderer_cannot_hide_from_the_ts_pin` below.
+const PINNED_SHIMS: [&str; 3] = ["gh", "git", "loomux"];
+
+/// #3249 item 1: the census the #3248 review round added counted renderer
+/// functions in ONE hard-named file (`orchestration/mod.rs`) by ONE name
+/// suffix — a shim renderer added in another module of `orchestration/`, or
+/// in `loomux-engine`, escaped both. This census scans every production
+/// source root, default-deny in the shape `tests/groupid.rs` uses: the
+/// anchor is name-independent — a rendered POSIX shim IS a `#!/bin/sh`
+/// script, so every shebang on a code line must be a declared template on
+/// SANCTIONED (exact whitespace-collapsed line + expected count + reason,
+/// the ROOT_USES convention) — and the population must agree three ways:
+/// template sites found == renderer functions found == entries in
+/// PINNED_SHIMS.
+///
+/// Residuals, stated because a guard that implies completeness it does not
+/// have is how the previous two versions of the join guard came to be
+/// trusted while broken (tests/groupid.rs's identical honesty): a shim
+/// script built by `format!` or `include_str!` carries no template-const
+/// shebang line, so the shebang axis cannot see it — the name-based census
+/// below is the SUPPLEMENT that catches it there (a #922-labelled
+/// supplement, not the load-bearing axis).
+///
+/// Positive control: the scratch red for this item added `fake_shim_sh`
+/// (with a template const) under `loomux-engine` — outside every path the
+/// old one-file census read — and this pin went red on the template-count
+/// check.
+#[test]
+fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
+    /// Sanctioned shebang-bearing lines, exact text after whitespace
+    /// collapse, each with its expected count and the reason it is allowed.
+    const SANCTIONED: &[(&str, usize, &str)] = &[
+        (
+            "const TPL: &str = r#\"#!/bin/sh",
+            3,
+            "the gh/git/loomux shim templates — every pinned renderer renders from one",
+        ),
+        (
+            "pub const COMPACT_HOOK_SCRIPT: &str = \"#!/bin/sh\\n\\",
+            1,
+            "the compact hook — event-driven marker files, no audit rows, no ts site",
+        ),
+    ];
+    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files: Vec<(&str, std::path::PathBuf)> = Vec::new();
+    for (label, root) in [
+        ("src-tauri", concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+        (
+            "loomux-engine",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/loomux-engine/src"),
+        ),
+    ] {
+        let mut found = Vec::new();
+        collect_rs_files(std::path::Path::new(root), &mut found);
+        // Asserted PER ROOT rather than on the total: a mistyped or stale
+        // root contributes nothing and would hide behind the other root's
+        // file count (the tests/groupid.rs rule).
+        assert!(
+            !found.is_empty(),
+            "no `.rs` found under the {label} source root ({root}) — a root that scans \
+             nothing is a tripwire that cannot fire"
+        );
+        files.extend(found.into_iter().map(|p| (*label, p)));
+    }
+    assert!(
+        files.len() > 5,
+        "the source scan found almost nothing — check the paths"
+    );
+    // The anchor, content-matched like tests/groupid.rs's GroupId check: a
+    // file count cannot tell "both roots scanned" from "one root scanned
+    // twice", so the scan must demonstrably reach the file that DEFINES the
+    // renderers.
+    assert!(
+        files.iter().any(|(_, p)| std::fs::read_to_string(p)
+            .is_ok_and(|s| s.contains("pub fn gh_shim_sh("))),
+        "the scan never reached the file that defines the shim renderers — wherever \
+         that file lives is a root this census must scan; add it to the ROOTS list"
+    );
+    let normalize = |line: &str| line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut offenders: Vec<String> = Vec::new();
+    let mut seen = vec![0usize; SANCTIONED.len()];
+    let mut renderers: Vec<String> = Vec::new();
+    for (label, path) in &files {
+        let src = std::fs::read_to_string(path).unwrap();
+        let name = format!("{label}/{}", path.file_name().unwrap().to_string_lossy());
+        for (i, line) in src.lines().enumerate() {
+            let trimmed = line.trim_start();
+            // A comment may spell the shebang literally — several do.
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            // The name-based SUPPLEMENT (a labelled heuristic, per #922): a
+            // `pub fn`/`pub(crate) fn` whose name ends in `_shim_sh` is a
+            // renderer candidate for the population checks below.
+            for kw in ["pub fn ", "pub(crate) fn "] {
+                if let Some(rest) = trimmed.strip_prefix(kw) {
+                    let end = rest
+                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .unwrap_or(rest.len());
+                    if rest[..end].ends_with("_shim_sh") {
+                        renderers.push(rest[..end].to_string());
+                    }
+                }
+            }
+            if trimmed.contains("#!/bin/sh") {
+                match SANCTIONED.iter().position(|(text, _, _)| *text == normalize(line)) {
+                    Some(idx) => seen[idx] += 1,
+                    None => offenders.push(format!("{name}:{}: {trimmed}", i + 1)),
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "a `#!/bin/sh` script must be a declared template on the SANCTIONED list \
+         (default-deny, the tests/groupid.rs convention). Found {} unplanned site(s):\n{}\n\n\
+         If one is legitimate, add its exact whitespace-collapsed line to SANCTIONED with \
+         an expected count and a reason — that argument is the point of this test.",
+        offenders.len(),
+        offenders.join("\n")
+    );
+    for (idx, (text, expected, whose)) in SANCTIONED.iter().enumerate() {
+        assert_eq!(
+            seen[idx],
+            *expected,
+            "expected exactly {expected} occurrence(s) of `{text}` — {whose} — found {}. \
+             Zero means the declared template was renamed or deleted and this scan is \
+             watching nothing; more than the expected count means a new shebang site grew \
+             without being argued in.",
+            seen[idx]
+        );
+    }
+    // The population must agree three ways — templates, renderer functions,
+    // and the entries the text pin above covers.
+    assert_eq!(
+        seen[0],
+        PINNED_SHIMS.len(),
+        "the pinned shim templates must equal the {} entries the text pin's array carries",
+        PINNED_SHIMS.len()
+    );
+    assert_eq!(
+        renderers.len(),
+        PINNED_SHIMS.len(),
+        "the renderer census found {renderers:?} but the pin covers {} — every renderer \
+         must render from a template this pin knows about: a format!-built or \
+         include_str!-built shim script carries no shebang line and hides from the \
+         shebang axis, which is why this name-based supplement exists (#922)",
+        PINNED_SHIMS.len()
+    );
+    for name in PINNED_SHIMS {
+        assert!(
+            renderers.contains(&format!("{name}_shim_sh")),
+            "the pin covers `{name}` but no renderer named `{name}_shim_sh` is declared — \
+             the census and the renderers have drifted"
+        );
+    }
+}
+
 /// #3249 item 2 — the behavioural twin of the text pin above, for the one
 /// adversary the text pin cannot run: a `date` that answers `%s%3N` with a
 /// plain seconds value (all-digit, 10 digits — the #3248 premortem's
@@ -53461,6 +53631,7 @@ fn a_kill_snapshot_invalidates_the_polled_usage_memo() {
     );
 }
 
+
 // ---------------------------------------------------------------------------
 // #762 (F2 of #743) — concurrency pins for the two behaviour changes the
 // dispatch conversion required. Both exist because moving these command bodies
@@ -55196,6 +55367,7 @@ fn h13_a_pointerless_dialog_above_our_composer_still_holds() {
     assert!(pred(), "…and the pre-Enter gate withholds the Enter (#420/#532)");
 }
 
+
 // ═══════════════════════════════════════════════════════════════════════════
 // J. #903 / #871: loomux's OWN delivered text, replayed onto a resumed pane
 //
@@ -56110,6 +56282,7 @@ fn j16_the_record_takes_each_entrys_own_text_never_the_framed_paste() {
         "a StrandedSubmit marker has no payload text to contribute"
     );
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // The human-question registry (#946 slice Q1)
@@ -59440,6 +59613,7 @@ fn the_wip_guard_reads_the_policy_only_for_a_write_that_could_move_a_count() {
     ));
 }
 
+
 /// **rev-2 B4: a row this write is ADDING is not part of the board it started
 /// from.**
 ///
@@ -60600,6 +60774,7 @@ fn gh_shim_harness_executes_path_routing_and_refuses_a_diff_it_cannot_account_fo
     assert!(audit.contains("routing-unaccountable"), "audited: {audit}");
 }
 
+
 #[test]
 fn the_rust_gate_status_names_the_routing_rules_that_fired_and_refuses_what_the_shim_refuses() {
     // The SATISFACTION side of #1176 — the shim owns the refusal side (above),
@@ -61436,6 +61611,7 @@ fn a_manager_may_raise_a_needs_you_item_but_may_not_withdraw_one() {
     assert_eq!(denied["isError"], json!(true), "the liaison is still refused: {}", q_text(&denied));
     assert!(q_text(&denied).contains("orchestrator-only"), "{}", q_text(&denied));
 }
+
 
 // ---------------------------------------------------------------------------
 // Sprints (#1272) and typed grounding links (#1273) — one combined additive

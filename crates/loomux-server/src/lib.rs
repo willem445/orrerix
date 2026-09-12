@@ -40,3 +40,12 @@
 
 pub mod cli;
 pub mod config;
+
+/// [scratch] fake renderer — the residual-2 positive control (#3249):
+/// a shim renderer added under the server leaf must be seen by the census.
+pub fn fake_shim_sh() -> String {
+    const TPL: &str = r#"#!/bin/sh
+echo fake
+"#;
+    TPL.to_string()
+}

@@ -23661,17 +23661,33 @@ fn git_shim_script_bakes_real_git_and_gates_tag_push() {
 /// magnitude-blind, exactly the adversary the #3248 premortem flagged: a
 /// `date` that answers `%s%3N` with plain seconds is all-digit, and trusting
 /// it stamps ts_ms a thousandfold too small. The rendered block must carry a
-/// 13-digit accept arm (the epoch-ms width for 2001–2286) and send every
-/// other all-digit magnitude to the fallback ladder; the behavioural twin
+/// 13-digit accept arm (the epoch-ms width for 2001–2286) and refuse every
+/// other all-digit magnitude outright (`ts=0`) — a value that already
+/// misbehaved is not re-consulted, so the whole-seconds rung runs only for
+/// a non-digit or empty answer; the behavioural twin
 /// (`gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date`, below) runs
 /// that adversary through the rendered shim.
 #[test]
 fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
-    let shims: [(&str, String); 3] = [
-        ("gh", gh_shim_sh("C:/Program Files/GitHub CLI/gh.exe", &shim_paths())),
-        ("git", git_shim_sh("C:/Program Files/Git/cmd/git.exe", &shim_paths())),
-        ("loomux", loomux_shim_sh()),
-    ];
+    // The array is BUILT from PINNED_SHIMS, not hand-enumerated beside it
+    // (rev-final round 2 finding 1): a name added to the population const
+    // without an arm here panics below, so the census's failure sequence —
+    // add a renderer, bump the const, bump the SANCTIONED count — dead-ends
+    // red here, where the ts sites are actually checked, instead of ending
+    // green with a fourth shim pinned by nothing.
+    let shims: Vec<(&str, String)> = PINNED_SHIMS
+        .iter()
+        .map(|name| match *name {
+            "gh" => ("gh", gh_shim_sh("C:/Program Files/GitHub CLI/gh.exe", &shim_paths())),
+            "git" => ("git", git_shim_sh("C:/Program Files/Git/cmd/git.exe", &shim_paths())),
+            "loomux" => ("loomux", loomux_shim_sh()),
+            other => panic!(
+                "PINNED_SHIMS names `{other}` but this pin renders no shim for it — \
+                 the census holds the population to the const, so a name added there \
+                 without an arm above has its ts sites checked by nothing (#3249)"
+            ),
+        })
+        .collect();
     for (name, sh) in &shims {
         // The `%s%3N` attempt itself MUST survive: GNU's all-digit result is
         // used as-is, so removing it would cost Linux and Git-Bash true
@@ -23711,16 +23727,24 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
     }
 }
 
-/// The rendered POSIX shims this file pins — one entry per renderer. The
-/// population is held to a scan of BOTH production source roots by
-/// `a_rendered_shim_renderer_cannot_hide_from_the_ts_pin` below.
+/// The POSIX shims this file pins, by name — one entry per renderer, the
+/// population the census (`a_rendered_shim_renderer_cannot_hide_from_the_ts_pin`)
+/// holds to a scan of both production source roots, and the const the text
+/// pin above BUILDS its entries from: a name added here without a rendering
+/// arm in every_rendered_shim_timestamps_with_the_portable_ms_fallback
+/// panics there, so the two populations cannot drift apart (rev-final
+/// round 2 finding 1).
 const PINNED_SHIMS: [&str; 3] = ["gh", "git", "loomux"];
 
 /// #3249 item 1: the census the #3248 review round added counted renderer
 /// functions in ONE hard-named file (`orchestration/mod.rs`) by ONE name
 /// suffix — a shim renderer added in another module of `orchestration/`, or
-/// in `loomux-engine`, escaped both. This census scans every production
-/// source root, default-deny in the shape `tests/groupid.rs` uses: the
+/// in `loomux-engine`, escaped both. This census scans both production
+/// source roots — the `tests/groupid.rs` set, `src-tauri/src` and
+/// `crates/loomux-engine/src`; the workspace's third root,
+/// `crates/loomux-server/src`, is a leaf binary with no shim code today and
+/// is deliberately outside the scan the same way that test's ROOTS list is
+/// — default-deny in the shape `tests/groupid.rs` uses: the
 /// anchor is name-independent — a rendered POSIX shim IS a `#!/bin/sh`
 /// script, so every shebang on a code line must be a declared template on
 /// SANCTIONED (exact whitespace-collapsed line + expected count + reason,
@@ -23734,12 +23758,20 @@ const PINNED_SHIMS: [&str; 3] = ["gh", "git", "loomux"];
 /// script built by `format!` or `include_str!` carries no template-const
 /// shebang line, so the shebang axis cannot see it — the name-based census
 /// below is the SUPPLEMENT that catches it there (a #922-labelled
-/// supplement, not the load-bearing axis).
+/// supplement, not the load-bearing axis). Two more, one per axis: the
+/// shebang axis matches the literal `#!/bin/sh`, so a template opening
+/// `#!/bin/bash` or `#!/usr/bin/env sh` escapes it; and the supplement
+/// reads only `pub fn`/`pub(crate) fn` lines whose name sits on the
+/// declaration line, so a private `fn` or a wrapped signature hides from
+/// it (rev-final round 2 findings 2 and 4; rev-std round 1 finding 2).
 ///
-/// Positive control: the scratch red for this item added `fake_shim_sh`
-/// (with a template const) under `loomux-engine` — outside every path the
-/// old one-file census read — and this pin went red on the template-count
-/// check.
+/// Positive control (round 1): the scratch red added `fake_shim_sh` (with
+/// a template const) under `loomux-engine` — outside every path the old
+/// one-file census read — and this pin went red on the template-count
+/// check. Round 2 closes the reviewer's follow-on: with the census lists
+/// bumped alongside the fake renderer, THIS census goes green and the text
+/// pin is what reddens (its array is built from PINNED_SHIMS), so the
+/// bump-the-counts path dead-ends where the ts sites are checked.
 #[test]
 fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
     /// Sanctioned shebang-bearing lines, exact text after whitespace
@@ -23868,9 +23900,13 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
         renderers.len(),
         PINNED_SHIMS.len(),
         "the renderer census found {renderers:?} but the pin covers {} — every renderer \
-         must render from a template this pin knows about: a format!-built or \
-         include_str!-built shim script carries no shebang line and hides from the \
-         shebang axis, which is why this name-based supplement exists (#922)",
+         must render from a template this pin knows about, AND its ts sites must be \
+         checked by the text pin above: add the renderer there too (the pin's array is \
+         built from PINNED_SHIMS, so a name with no rendering arm reds \
+         every_rendered_shim_timestamps_with_the_portable_ms_fallback). A \
+         format!-built or include_str!-built shim script carries no shebang line and \
+         hides from the shebang axis, which is why this name-based supplement exists \
+         (#922, #3249).",
         PINNED_SHIMS.len()
     );
     for name in PINNED_SHIMS {
@@ -23888,10 +23924,13 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
 /// magnitude-blind case). Fed through the PATH repair the shim itself
 /// performs (the same fixture shape as
 /// `gh_shim_refuses_when_tr_resolves_but_cannot_run`, so it arms on every
-/// platform), the rendered gh shim's audit row must carry 0 or a true
-/// millisecond magnitude — never the 10-digit value it was handed. (Item 3
-/// of #3249 — running the ts block against a `3N`-printing `date`, the BSD
-/// polarity — stays open on the issue.)
+/// platform), the rendered gh shim's audit row must carry EXACTLY the ts=0
+/// sentinel — the adversary refused, and the proof the fake really reached
+/// the shim: a PATH repair that stopped putting the fixture ahead of the
+/// system would let the real GNU `date` answer 13 digits and this exact-0
+/// assertion reddens rather than passing (rev-final round 2 finding 3).
+/// (Item 3 of #3249 — running the ts block against a `3N`-printing `date`,
+/// the BSD polarity — stays open on the issue.)
 #[test]
 fn gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date() {
     use std::process::Command;
@@ -23951,11 +23990,14 @@ fn gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date() {
         let ts = v["ts_ms"]
             .as_u64()
             .unwrap_or_else(|| panic!("ts_ms must be numeric: {line}"));
-        let digits = ts.to_string().len();
-        assert!(
-            ts == 0 || digits == 13,
-            "a date that answers %s%3N with plain seconds must never be trusted as \
-             milliseconds: got {ts} ({digits} digits) in {line}"
+        // THE positive control (rev-final round 2 finding 3): exact `0` — the
+        // refusal value — cannot be produced by the real GNU `date` (13
+        // digits), so this pins not only that the adversary was refused but
+        // that the fake `date` is the one the shim actually found.
+        assert_eq!(
+            ts, 0,
+            "a date that answers %s%3N with plain seconds must be refused outright \
+             (ts=0), not trusted as milliseconds: got {ts} in {line}"
         );
     }
 }

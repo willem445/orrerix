@@ -1837,8 +1837,10 @@ loomux_audit() { # $1=action $2=detail-json
   # line unparseable JSON. Emptiness is not the only bad answer — and neither
   # is magnitude: a date that answers %s%3N with plain SECONDS (all-digit, 10
   # digits) passes an all-digit check a thousandfold too small (#3249), so take
-  # a 13-digit all-digit result or nothing, then fall back to whole seconds,
-  # then to 0.
+  # a 13-digit all-digit result or nothing and refuse every other all-digit
+  # magnitude outright (ts=0) — a value that already misbehaved is not
+  # re-consulted; the whole-seconds rung answers only a non-digit or empty
+  # %s%3N, then to 0.
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")
@@ -3214,8 +3216,10 @@ loomux_audit() { # $1=action $2=detail-json
   # line unparseable JSON. Emptiness is not the only bad answer — and neither
   # is magnitude: a date that answers %s%3N with plain SECONDS (all-digit, 10
   # digits) passes an all-digit check a thousandfold too small (#3249), so take
-  # a 13-digit all-digit result or nothing, then fall back to whole seconds,
-  # then to 0.
+  # a 13-digit all-digit result or nothing and refuse every other all-digit
+  # magnitude outright (ts=0) — a value that already misbehaved is not
+  # re-consulted; the whole-seconds rung answers only a non-digit or empty
+  # %s%3N, then to 0.
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")
@@ -3371,8 +3375,10 @@ if [ -n "$ORX_GD" ]; then
   # line unparseable JSON. Emptiness is not the only bad answer — and neither
   # is magnitude: a date that answers %s%3N with plain SECONDS (all-digit, 10
   # digits) passes an all-digit check a thousandfold too small (#3249), so take
-  # a 13-digit all-digit result or nothing, then fall back to whole seconds,
-  # then to 0.
+  # a 13-digit all-digit result or nothing and refuse every other all-digit
+  # magnitude outright (ts=0) — a value that already misbehaved is not
+  # re-consulted; the whole-seconds rung answers only a non-digit or empty
+  # %s%3N, then to 0.
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")

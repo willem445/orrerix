@@ -23767,14 +23767,15 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
             }
         }
     }
-    let mut files: Vec<(&str, std::path::PathBuf)> = Vec::new();
-    for (label, root) in [
+    const ROOTS: &[(&str, &str)] = &[
         ("src-tauri", concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
         (
             "loomux-engine",
             concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/loomux-engine/src"),
         ),
-    ] {
+    ];
+    let mut files: Vec<(&str, std::path::PathBuf)> = Vec::new();
+    for (label, root) in ROOTS {
         let mut found = Vec::new();
         collect_rs_files(std::path::Path::new(root), &mut found);
         // Asserted PER ROOT rather than on the total: a mistyped or stale

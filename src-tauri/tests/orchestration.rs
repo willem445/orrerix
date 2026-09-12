@@ -24027,11 +24027,9 @@ fn run_gh_shim_audit_with_fake_date(
     std::fs::create_dir_all(&group).unwrap();
     let utils = root.join("utils");
     std::fs::create_dir_all(&utils).unwrap();
-    let marker = root.join("date-invocations.log");
     let fake_date = utils.join("date");
     let mut script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n",
-        marker.display()
+        "#!/bin/sh\ncase \"$1\" in\n",
     );
     for (fmt, answer) in date_answers {
         script.push_str(&format!("  \"{fmt}\") printf '%s\\n' \"{answer}\" ;;\n"));
@@ -24068,7 +24066,7 @@ fn run_gh_shim_audit_with_fake_date(
     assert!(!out.status.success(), "no grant → blocked");
     (
         std::fs::read_to_string(group.join("audit.jsonl")).unwrap_or_default(),
-        std::fs::read_to_string(&marker).unwrap_or_default(),
+        String::new(),
     )
 }
 

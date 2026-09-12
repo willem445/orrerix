@@ -23694,13 +23694,21 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
         // millisecond precision. What must be gone is a `%s%3N` value trusted
         // with only an emptiness check.
         const BROKEN: &str = "[ -z \"$ts\" ] && ts=0";
-        // The reused fallback's inner arm: whole seconds → `…000`, anything
-        // non-digit or empty → 0.
+        // The reused fallback's inner arm: whole seconds → `…000` when the
+        // seconds value is EXACTLY 10 digits; anything non-digit, empty or
+        // wrong-magnitude → 0 (#3249 residual 1).
         const FALLBACK: &str =
-            "case \"$ts\" in *[!0-9]*|\"\") ts=0 ;; *) ts=\"${ts}000\" ;; esac ;;";
+            "case \"$ts\" in *[!0-9]*|\"\") ts=0 ;; ??????????) ts=\"${ts}000\" ;; *) ts=0 ;; esac ;;";
         // #3249 item 2: exactly 13 digits (epoch ms) is the only all-digit
         // value trusted as-is; every other all-digit magnitude is refused.
         const MS_ARM: &str = "?????????????) ;;";
+        // #3249 residual 1: the whole-seconds rung takes EXACTLY a 10-digit
+        // epoch-second answer — a 9- or 11-digit `%s` must not be appended
+        // `000` into a wrong-magnitude ts_ms.
+        const SECONDS_ARM: &str = "?????????) ts=\"${ts}000\" ;;";
+        // The bare reject arm appears TWICE per ts site once the whole-seconds
+        // rung carries its own magnitude guard: the rung's reject and the
+        // outer all-other-magnitude reject.
         const NOT_MS: &str = "*) ts=0 ;;";
         let sites = sh.matches("ts=$(date +%s%3N 2>/dev/null)").count();
         assert!(sites > 0, "the {name} shim must timestamp its audit rows (non-vacuity)");
@@ -23718,8 +23726,14 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
         );
         assert_eq!(
             sites,
+            sh.matches(SECONDS_ARM).count(),
+            "the {name} shim has {sites} ts site(s) but {} exactly-10-digit whole-seconds arm(s) — the whole-seconds rung must refuse a wrong-magnitude `%s` answer (9 or 11 digits) instead of appending `000` (#3249 residual 1)",
+            sh.matches(SECONDS_ARM).count()
+        );
+        assert_eq!(
+            2 * sites,
             sh.matches(NOT_MS).count(),
-            "the {name} shim has {sites} ts site(s) but {} reject-other-magnitude arm(s) — a 10- or 12-digit all-digit result must not reach ts_ms as-is (#3249)",
+            "the {name} shim has {sites} ts site(s) but {} bare reject arm(s) — there are two per site once the whole-seconds rung carries its own magnitude guard (#3249 residual 1): the rung's reject and the outer all-other-magnitude reject",
             sh.matches(NOT_MS).count()
         );
         assert!(!sh.contains(BROKEN),
@@ -23729,7 +23743,7 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
 
 /// The POSIX shims this file pins, by name — one entry per renderer, the
 /// population the census (`a_rendered_shim_renderer_cannot_hide_from_the_ts_pin`)
-/// holds to a scan of both production source roots, and the const the text
+/// holds to a scan of every production source root, and the const the text
 /// pin above BUILDS its entries from: a name added here without a rendering
 /// arm in every_rendered_shim_timestamps_with_the_portable_ms_fallback
 /// panics there, so the two populations cannot drift apart (rev-final
@@ -23739,12 +23753,12 @@ const PINNED_SHIMS: [&str; 3] = ["gh", "git", "loomux"];
 /// #3249 item 1: the census the #3248 review round added counted renderer
 /// functions in ONE hard-named file (`orchestration/mod.rs`) by ONE name
 /// suffix — a shim renderer added in another module of `orchestration/`, or
-/// in `loomux-engine`, escaped both. This census scans both production
-/// source roots — the `tests/groupid.rs` set, `src-tauri/src` and
-/// `crates/loomux-engine/src`; the workspace's third root,
-/// `crates/loomux-server/src`, is a leaf binary with no shim code today and
-/// is deliberately outside the scan the same way that test's ROOTS list is
-/// — default-deny in the shape `tests/groupid.rs` uses: the
+/// in `loomux-engine`, escaped both. This census scans every production
+/// source root the workspace has — `src-tauri/src`,
+/// `crates/loomux-engine/src` and `crates/loomux-server/src` (#3249
+/// residual 2: the server leaf had no shim code, but a renderer added there
+/// would have gone unseen) — default-deny in the shape `tests/groupid.rs`
+/// uses: the
 /// anchor is name-independent — a rendered POSIX shim IS a `#!/bin/sh`
 /// script, so every shebang on a code line must be a declared template on
 /// SANCTIONED (exact whitespace-collapsed line + expected count + reason,
@@ -23771,7 +23785,10 @@ const PINNED_SHIMS: [&str; 3] = ["gh", "git", "loomux"];
 /// check. Round 2 closes the reviewer's follow-on: with the census lists
 /// bumped alongside the fake renderer, THIS census goes green and the text
 /// pin is what reddens (its array is built from PINNED_SHIMS), so the
-/// bump-the-counts path dead-ends where the ts sites are checked.
+/// bump-the-counts path dead-ends where the ts sites are checked. The same
+/// control works from the third root: a fake renderer under
+/// `crates/loomux-server/src` reds this pin's template-count check the
+/// same way (#3249 residual 2).
 #[test]
 fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
     /// Sanctioned shebang-bearing lines, exact text after whitespace
@@ -23804,6 +23821,10 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
         (
             "loomux-engine",
             concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/loomux-engine/src"),
+        ),
+        (
+            "loomux-server",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/loomux-server/src"),
         ),
     ];
     let mut files: Vec<(&str, std::path::PathBuf)> = Vec::new();
@@ -23929,11 +23950,12 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
 /// the shim: a PATH repair that stopped putting the fixture ahead of the
 /// system would let the real GNU `date` answer 13 digits and this exact-0
 /// assertion reddens rather than passing (rev-final round 2 finding 3).
-/// (Item 3 of #3249 — running the ts block against a `3N`-printing `date`,
-/// the BSD polarity — stays open on the issue.)
+/// The 3N polarity (item 3) is pinned by
+/// `gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n`,
+/// below, and the whole-seconds rung's own magnitude by
+/// `gh_shim_audit_ts_refuses_a_wrong_magnitude_whole_seconds_answer`.
 #[test]
 fn gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date() {
-    use std::process::Command;
     let Some(sh) = any_posix_sh() else {
         pin_could_not_arm(
             "gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date",
@@ -23942,43 +23964,26 @@ fn gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date() {
         return;
     };
     let td = tempfile::tempdir().unwrap();
-    let root = td.path();
-    let group = root.join("group");
-    std::fs::create_dir_all(&group).unwrap();
     // The premortem adversary: a `date` that prints plain seconds for every
     // format, so `%s%3N` is all-digit — and 10 digits, not 13.
-    let utils = root.join("utils");
-    std::fs::create_dir_all(&utils).unwrap();
-    let fake_date = utils.join("date");
-    std::fs::write(&fake_date, "#!/bin/sh\nprintf '1700000000\\n'\n").unwrap();
-    let log = root.join("gh.log");
-    let fake = write_fake_gh(root, &log);
-    let shim = root.join("gh");
-    std::fs::write(
-        &shim,
-        gh_shim_sh(
-            &fake.display().to_string(),
-            &ShimPaths { utils_dir: Some(msys_dir_for_fixture(&utils)), git_dir: None },
-        ),
-    )
-    .unwrap();
-    let _ = Command::new(&sh)
-        .arg("-c")
-        .arg(format!("chmod +x '{}' '{}'", fake.display(), fake_date.display()))
-        .status();
-    // No merge grant: `pr merge` takes the refusal path — exactly the one
-    // that audits — so the row's ts_ms is what this test is about.
-    let out = Command::new(&sh)
-        .arg(&shim)
-        .args(["pr", "merge", "5"])
-        .env("LOOMUX_GROUP_DIR", &group)
-        .env("FAKE_BASE", "main")
-        .env("FAKE_DEFAULT", "main")
-        .env("FAKE_NUM", "5")
-        .output()
-        .unwrap();
-    assert!(!out.status.success(), "no grant → blocked");
-    let audit = std::fs::read_to_string(group.join("audit.jsonl")).unwrap_or_default();
+    let (audit, marker) = run_gh_shim_audit_with_fake_date(
+        &sh,
+        td.path(),
+        &[("+%s%3N", "1700000000"), ("+%s", "1700000000")],
+        "1700000000",
+    );
+    // THE positive control (#3249 residual 3): the fake must actually have
+    // run — a host that reaches NO `date` at all also lands on the exact-0
+    // refusal, and without this control the test could not tell "the guard
+    // refused a bad value" from "there was nothing to refuse". And exactly
+    // one invocation, for the `%s%3N` attempt alone: a value that already
+    // misbehaved is not re-consulted.
+    assert_eq!(
+        marker.lines().collect::<Vec<_>>(),
+        ["+%s%3N"],
+        "the fake date must have been invoked exactly once, for the `%s%3N` attempt \
+         alone (positive control against a vacuous green when no date runs): {marker:?}"
+    );
     assert_eq!(
         audit.lines().filter(|l| l.contains("merge-gate-blocked")).count(),
         1,
@@ -23999,6 +24004,181 @@ fn gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date() {
             "a date that answers %s%3N with plain seconds must be refused outright \
              (ts=0), not trusted as milliseconds: got {ts} in {line}"
         );
+    }
+}
+
+/// One rendered-gh-shim audit run against a scripted fake `date`, shared by
+/// the three ts behavioural pins. The fake logs every invocation to a
+/// marker file — the positive control that separates "the guard refused a
+/// bad value" from "no `date` was reached at all" (#3249 residual 3): the
+/// ts=0 sentinel reads green either way, so a caller asserts on the marker
+/// before asserting on ts. `date_answers` maps the formats the shim uses
+/// (`+%s%3N`, `+%s`) to their scripted outputs; any other format gets
+/// `other_answer`. Runs the no-grant refusal path (the one that audits)
+/// exactly once and returns `(audit text, marker text)`.
+fn run_gh_shim_audit_with_fake_date(
+    sh: &str,
+    root: &std::path::Path,
+    date_answers: &[(&str, &str)],
+    other_answer: &str,
+) -> (String, String) {
+    use std::process::Command;
+    let group = root.join("group");
+    std::fs::create_dir_all(&group).unwrap();
+    let utils = root.join("utils");
+    std::fs::create_dir_all(&utils).unwrap();
+    let marker = root.join("date-invocations.log");
+    let fake_date = utils.join("date");
+    let mut script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\ncase \"$1\" in\n",
+        marker.display()
+    );
+    for (fmt, answer) in date_answers {
+        script.push_str(&format!("  \"{fmt}\") printf '%s\\n' \"{answer}\" ;;\n"));
+    }
+    script
+        .push_str(&format!("  *) printf '%s\\n' \"{other_answer}\" ;;\nesac\n"));
+    std::fs::write(&fake_date, script).unwrap();
+    let log = root.join("gh.log");
+    let fake = write_fake_gh(root, &log);
+    let shim = root.join("gh");
+    std::fs::write(
+        &shim,
+        gh_shim_sh(
+            &fake.display().to_string(),
+            &ShimPaths { utils_dir: Some(msys_dir_for_fixture(&utils)), git_dir: None },
+        ),
+    )
+    .unwrap();
+    let _ = Command::new(sh)
+        .arg("-c")
+        .arg(format!("chmod +x '{}' '{}'", fake.display(), fake_date.display()))
+        .status();
+    // No merge grant: `pr merge` takes the refusal path — exactly the one
+    // that audits — so the row's ts_ms is what the callers are about.
+    let out = Command::new(sh)
+        .arg(&shim)
+        .args(["pr", "merge", "5"])
+        .env("LOOMUX_GROUP_DIR", &group)
+        .env("FAKE_BASE", "main")
+        .env("FAKE_DEFAULT", "main")
+        .env("FAKE_NUM", "5")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "no grant → blocked");
+    (
+        std::fs::read_to_string(group.join("audit.jsonl")).unwrap_or_default(),
+        std::fs::read_to_string(&marker).unwrap_or_default(),
+    )
+}
+
+/// #3249 item 3 — the pin for the polarity the text pin cannot see: a
+/// `date` with no `%N` support (BSD's polarity, the whole #3202 defect)
+/// answers `%s%3N` with the epoch seconds plus a literal `3N` tail — a
+/// NON-digit answer — so the outer case's junk arm must route it to the
+/// whole-seconds rung, and the rung's answer (a known 10-digit epoch) must
+/// land ts_ms on an all-digit 13-DIGIT millisecond value. A polarity edit to
+/// the outer case arm (junk accepted, digits refused) sends the `3N` junk
+/// straight into `ts_ms` or the value to the refuse arm, and either flip
+/// reddens here — the text pin's fixed strings stay untouched by it.
+/// The rung's ACCEPT side (exactly 10 digits) is pinned by this same run.
+#[test]
+fn gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n() {
+    let Some(sh) = any_posix_sh() else {
+        pin_could_not_arm(
+            "gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n",
+            "no POSIX sh on this host",
+        );
+        return;
+    };
+    let td = tempfile::tempdir().unwrap();
+    // BSD polarity: `%s%3N` is the epoch with a literal `3N` glued on;
+    // `%s` is a known 10-digit epoch second.
+    let (audit, marker) = run_gh_shim_audit_with_fake_date(
+        &sh,
+        td.path(),
+        &[("+%s%3N", "17000000003N"), ("+%s", "1700000000")],
+        "2025-01-01 00:00:00",
+    );
+    // Positive control (#3249 residual 3) and the fallback rung's receipt:
+    // the fake answered `%s%3N` AND the junk arm consulted `date +%s` —
+    // a shim that never reached `date` could produce neither line.
+    assert_eq!(
+        marker.lines().collect::<Vec<_>>(),
+        ["+%s%3N", "+%s"],
+        "the fake date must have been invoked for both rungs (positive control \
+         against a vacuous green when no date runs): {marker:?}"
+    );
+    assert_eq!(
+        audit.lines().filter(|l| l.contains("merge-gate-blocked")).count(),
+        1,
+        "the refusal must be audited exactly once (non-vacuity): {audit}"
+    );
+    for line in audit.lines().filter(|l| !l.trim().is_empty()) {
+        let v: serde_json::Value =
+            serde_json::from_str(line).expect("each audit line is valid JSON");
+        let ts = v["ts_ms"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("ts_ms must be numeric: {line}"));
+        assert_eq!(
+            ts, 1700000000000,
+            "a date without %N must fall through the junk arm to the whole-seconds \
+             rung and stamp 13-digit epoch-ms: got {ts} in {line}"
+        );
+    }
+}
+
+/// #3249 residual 1 — the whole-seconds rung's own magnitude guard. Its
+/// `%s` answer is a DIFFERENT adversary from the 13-digit accept arm: all-
+/// digit by construction here, so only a magnitude check can refuse it, and
+/// without one a 9-digit (pre-2001 epoch) or 11-digit (year ~2286+) answer
+/// becomes a 12- or 14-digit ts_ms. Both wrong sides are run through the
+/// rendered shim and must land on the ts=0 sentinel; the rung's accept side
+/// (exactly 10 digits) is pinned by
+/// `gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n`.
+#[test]
+fn gh_shim_audit_ts_refuses_a_wrong_magnitude_whole_seconds_answer() {
+    let Some(sh) = any_posix_sh() else {
+        pin_could_not_arm(
+            "gh_shim_audit_ts_refuses_a_wrong_magnitude_whole_seconds_answer",
+            "no POSIX sh on this host",
+        );
+        return;
+    };
+    for (label, seconds) in [("9-digit", "170000000"), ("11-digit", "17000000000")] {
+        let td = tempfile::tempdir().unwrap();
+        // The `3N` junk answer is what sends the guard down the
+        // whole-seconds rung — the rung is the adversary's second chance,
+        // so its own answer is what must be magnitude-checked.
+        let (audit, marker) = run_gh_shim_audit_with_fake_date(
+            &sh,
+            td.path(),
+            &[("+%s%3N", "17000000003N"), ("+%s", seconds)],
+            "3N",
+        );
+        assert_eq!(
+            marker.lines().collect::<Vec<_>>(),
+            ["+%s%3N", "+%s"],
+            "the fake date must have been invoked for both rungs (positive control, \
+             #3249 residual 3): {marker:?}"
+        );
+        assert_eq!(
+            audit.lines().filter(|l| l.contains("merge-gate-blocked")).count(),
+            1,
+            "the {label} refusal must be audited exactly once (non-vacuity): {audit}"
+        );
+        for line in audit.lines().filter(|l| !l.trim().is_empty()) {
+            let v: serde_json::Value =
+                serde_json::from_str(line).expect("each audit line is valid JSON");
+            let ts = v["ts_ms"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("ts_ms must be numeric: {line}"));
+            assert_eq!(
+                ts, 0,
+                "a {label} whole-seconds answer must be refused outright (ts=0), not \
+                 appended `000` into a wrong-magnitude ts_ms: got {ts} in {line}"
+            );
+        }
     }
 }
 

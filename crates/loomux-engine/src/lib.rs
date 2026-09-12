@@ -738,3 +738,16 @@ pub mod text;
 pub mod usageseries;
 pub mod winpath;
 pub mod workflow;
+
+// [scratch #3249 item 1 — positive control, never merged] a shim renderer
+// hidden from the #3248 one-file census: a different root, a different
+// module, a name the pin never enumerated. The widened census
+// (a_rendered_shim_renderer_cannot_hide_from_the_ts_pin) must go red on
+// this file's template line.
+pub fn fake_shim_sh() -> String {
+    const TPL: &str = r#"#!/bin/sh
+ts=$(date +%s%3N 2>/dev/null)
+printf '%s\n' "$ts"
+"#;
+    TPL.replace("\r\n", "\n")
+}

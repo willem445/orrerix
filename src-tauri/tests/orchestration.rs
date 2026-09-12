@@ -23652,69 +23652,357 @@ fn git_shim_script_bakes_real_git_and_gates_tag_push() {
 /// NOTHING, never `date` printing the WRONG thing — and the defect is invisible
 /// on every platform the behavioural harness tests run on (Linux and Git-Bash
 /// carry GNU `date`, whose `%s%3N` is true milliseconds), which is why those
-/// tests stayed green. The self-launch shim already timestamps portably: take
-/// an all-digit `%s%3N` result or nothing, then fall back to whole
-/// seconds×1000, then to 0. Every rendered POSIX shim must carry that ONE form
-/// at every ts site — pinned as text so it is red on every platform, not only
-/// where BSD `date` runs. (The .cmd shims never shell out to `date`: their
+/// tests stayed green. Every rendered POSIX shim must carry that ONE portable
+/// form at every ts site — pinned as text so it is red on every platform, not
+/// only where BSD `date` runs. (The .cmd shims never shell out to `date`: their
 /// degraded rows hardcode `"ts_ms":0`, so there is no ts site to pin there.)
+///
+/// #3249 item 2: the guard used to accept ANY all-digit `%s%3N` result —
+/// magnitude-blind, exactly the adversary the #3248 premortem flagged: a
+/// `date` that answers `%s%3N` with plain seconds is all-digit, and trusting
+/// it stamps ts_ms a thousandfold too small. The rendered block must carry a
+/// 13-digit accept arm (the epoch-ms width for 2001–2286) and refuse every
+/// other all-digit magnitude outright (`ts=0`) — a value that already
+/// misbehaved is not re-consulted, so the whole-seconds rung runs only for
+/// a non-digit or empty answer; the behavioural twin
+/// (`gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date`, below) runs
+/// that adversary through the rendered shim.
 #[test]
 fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
-    let shims: [(&str, String); 3] = [
-        ("gh", gh_shim_sh("C:/Program Files/GitHub CLI/gh.exe", &shim_paths())),
-        ("git", git_shim_sh("C:/Program Files/Git/cmd/git.exe", &shim_paths())),
-        ("loomux", loomux_shim_sh()),
-    ];
+    // The array is BUILT from PINNED_SHIMS, not hand-enumerated beside it
+    // (rev-final round 2 finding 1): a name added to the population const
+    // without an arm here panics below, so the census's failure sequence —
+    // add a renderer, bump the const, bump the SANCTIONED count — dead-ends
+    // red here, where the ts sites are actually checked, instead of ending
+    // green with a fourth shim pinned by nothing.
+    let shims: Vec<(&str, String)> = PINNED_SHIMS
+        .iter()
+        .map(|name| match *name {
+            "gh" => ("gh", gh_shim_sh("C:/Program Files/GitHub CLI/gh.exe", &shim_paths())),
+            "git" => ("git", git_shim_sh("C:/Program Files/Git/cmd/git.exe", &shim_paths())),
+            "loomux" => ("loomux", loomux_shim_sh()),
+            other => panic!(
+                "PINNED_SHIMS names `{other}` but this pin renders no shim for it — \
+                 the census holds the population to the const, so a name added there \
+                 without an arm above has its ts sites checked by nothing (#3249)"
+            ),
+        })
+        .collect();
     for (name, sh) in &shims {
-        // The `%s%3N` attempt itself MUST survive: GNU's all-digit result is used
-        // as-is, so removing it would cost Linux and Git-Bash true millisecond
-        // precision. What must be gone is a `%s%3N` value trusted with only an
-        // emptiness check.
+        // The `%s%3N` attempt itself MUST survive: GNU's all-digit result is
+        // used as-is, so removing it would cost Linux and Git-Bash true
+        // millisecond precision. What must be gone is a `%s%3N` value trusted
+        // with only an emptiness check.
         const BROKEN: &str = "[ -z \"$ts\" ] && ts=0";
         // The reused fallback's inner arm: whole seconds → `…000`, anything
         // non-digit or empty → 0.
         const FALLBACK: &str =
             "case \"$ts\" in *[!0-9]*|\"\") ts=0 ;; *) ts=\"${ts}000\" ;; esac ;;";
+        // #3249 item 2: exactly 13 digits (epoch ms) is the only all-digit
+        // value trusted as-is; every other all-digit magnitude is refused.
+        const MS_ARM: &str = "?????????????) ;;";
+        const NOT_MS: &str = "*) ts=0 ;;";
         let sites = sh.matches("ts=$(date +%s%3N 2>/dev/null)").count();
         assert!(sites > 0, "the {name} shim must timestamp its audit rows (non-vacuity)");
         assert_eq!(
             sites,
             sh.matches(FALLBACK).count(),
-            "the {name} shim has {sites} `%s%3N` site(s) but {} all-digit fallback(s) — every ts site must reuse the self-launch shim's portable form (#3202)",
+            "the {name} shim has {sites} `%s%3N` site(s) but {} fallback(s) — every ts site must reuse the self-launch shim's portable form (#3202)",
             sh.matches(FALLBACK).count()
+        );
+        assert_eq!(
+            sites,
+            sh.matches(MS_ARM).count(),
+            "the {name} shim has {sites} ts site(s) but {} 13-digit accept arm(s) — an all-digit guard is magnitude-blind: a date answering `%s%3N` with plain seconds is trusted as milliseconds and stamps ts_ms a thousandfold too small (#3248 premortem, #3249)",
+            sh.matches(MS_ARM).count()
+        );
+        assert_eq!(
+            sites,
+            sh.matches(NOT_MS).count(),
+            "the {name} shim has {sites} ts site(s) but {} reject-other-magnitude arm(s) — a 10- or 12-digit all-digit result must not reach ts_ms as-is (#3249)",
+            sh.matches(NOT_MS).count()
         );
         assert!(!sh.contains(BROKEN),
             "the {name} shim still trusts `%s%3N` with only an emptiness check — on BSD `date` (macOS) that prints a literal `3N` tail and every audit row stops being JSON (#3202)");
     }
-    // Review round 1 (#3248): the array above is hand-enumerated, so a FOURTH
-    // shim renderer added to orchestration/mod.rs would be silently unpinned —
-    // this pin would pass with its population frozen at three. Count the
-    // renderer functions the module actually declares and hold the array to
-    // them: adding `something_shim_sh` without a test entry goes red here, and
-    // so does renaming one. (A widening, not a fix — the original three-entry
-    // pin was already correct for the code that existed.)
-    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"),
-        "/src/orchestration/mod.rs")).expect("read orchestration/mod.rs source");
-    // Name = the first identifier token after `pub fn `, so a generic renderer
-    // (`something_shim_sh<T>`) is still named and still counted.
-    let renderers: Vec<&str> = src
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("pub fn "))
-        .filter_map(|rest| {
-            let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_')?;
-            let name = &rest[..end];
-            name.ends_with("_shim_sh").then_some(name)
-        })
-        .collect();
+}
+
+/// The POSIX shims this file pins, by name — one entry per renderer, the
+/// population the census (`a_rendered_shim_renderer_cannot_hide_from_the_ts_pin`)
+/// holds to a scan of both production source roots, and the const the text
+/// pin above BUILDS its entries from: a name added here without a rendering
+/// arm in every_rendered_shim_timestamps_with_the_portable_ms_fallback
+/// panics there, so the two populations cannot drift apart (rev-final
+/// round 2 finding 1).
+const PINNED_SHIMS: [&str; 4] = ["gh", "git", "loomux", "fake"];
+
+/// #3249 item 1: the census the #3248 review round added counted renderer
+/// functions in ONE hard-named file (`orchestration/mod.rs`) by ONE name
+/// suffix — a shim renderer added in another module of `orchestration/`, or
+/// in `loomux-engine`, escaped both. This census scans both production
+/// source roots — the `tests/groupid.rs` set, `src-tauri/src` and
+/// `crates/loomux-engine/src`; the workspace's third root,
+/// `crates/loomux-server/src`, is a leaf binary with no shim code today and
+/// is deliberately outside the scan the same way that test's ROOTS list is
+/// — default-deny in the shape `tests/groupid.rs` uses: the
+/// anchor is name-independent — a rendered POSIX shim IS a `#!/bin/sh`
+/// script, so every shebang on a code line must be a declared template on
+/// SANCTIONED (exact whitespace-collapsed line + expected count + reason,
+/// the ROOT_USES convention) — and the population must agree three ways:
+/// template sites found == renderer functions found == entries in
+/// PINNED_SHIMS.
+///
+/// Residuals, stated because a guard that implies completeness it does not
+/// have is how the previous two versions of the join guard came to be
+/// trusted while broken (tests/groupid.rs's identical honesty): a shim
+/// script built by `format!` or `include_str!` carries no template-const
+/// shebang line, so the shebang axis cannot see it — the name-based census
+/// below is the SUPPLEMENT that catches it there (a #922-labelled
+/// supplement, not the load-bearing axis). Two more, one per axis: the
+/// shebang axis matches the literal `#!/bin/sh`, so a template opening
+/// `#!/bin/bash` or `#!/usr/bin/env sh` escapes it; and the supplement
+/// reads only `pub fn`/`pub(crate) fn` lines whose name sits on the
+/// declaration line, so a private `fn` or a wrapped signature hides from
+/// it (rev-final round 2 findings 2 and 4; rev-std round 1 finding 2).
+///
+/// Positive control (round 1): the scratch red added `fake_shim_sh` (with
+/// a template const) under `loomux-engine` — outside every path the old
+/// one-file census read — and this pin went red on the template-count
+/// check. Round 2 closes the reviewer's follow-on: with the census lists
+/// bumped alongside the fake renderer, THIS census goes green and the text
+/// pin is what reddens (its array is built from PINNED_SHIMS), so the
+/// bump-the-counts path dead-ends where the ts sites are checked.
+#[test]
+fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
+    /// Sanctioned shebang-bearing lines, exact text after whitespace
+    /// collapse, each with its expected count and the reason it is allowed.
+    const SANCTIONED: &[(&str, usize, &str)] = &[
+        (
+            "const TPL: &str = r#\"#!/bin/sh",
+            4,
+            "the gh/git/loomux shim templates — every pinned renderer renders from one",
+        ),
+        (
+            "pub const COMPACT_HOOK_SCRIPT: &str = \"#!/bin/sh\\n\\",
+            1,
+            "the compact hook — event-driven marker files, no audit rows, no ts site",
+        ),
+    ];
+    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
+    const ROOTS: &[(&str, &str)] = &[
+        ("src-tauri", concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+        (
+            "loomux-engine",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/loomux-engine/src"),
+        ),
+    ];
+    let mut files: Vec<(&str, std::path::PathBuf)> = Vec::new();
+    for (label, root) in ROOTS {
+        let mut found = Vec::new();
+        collect_rs_files(std::path::Path::new(root), &mut found);
+        // Asserted PER ROOT rather than on the total: a mistyped or stale
+        // root contributes nothing and would hide behind the other root's
+        // file count (the tests/groupid.rs rule).
+        assert!(
+            !found.is_empty(),
+            "no `.rs` found under the {label} source root ({root}) — a root that scans \
+             nothing is a tripwire that cannot fire"
+        );
+        files.extend(found.into_iter().map(|p| (*label, p)));
+    }
+    assert!(
+        files.len() > 5,
+        "the source scan found almost nothing — check the paths"
+    );
+    // The anchor, content-matched like tests/groupid.rs's GroupId check: a
+    // file count cannot tell "both roots scanned" from "one root scanned
+    // twice", so the scan must demonstrably reach the file that DEFINES the
+    // renderers.
+    assert!(
+        files.iter().any(|(_, p)| std::fs::read_to_string(p)
+            .is_ok_and(|s| s.contains("pub fn gh_shim_sh("))),
+        "the scan never reached the file that defines the shim renderers — wherever \
+         that file lives is a root this census must scan; add it to the ROOTS list"
+    );
+    let normalize = |line: &str| line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut offenders: Vec<String> = Vec::new();
+    let mut seen = vec![0usize; SANCTIONED.len()];
+    let mut renderers: Vec<String> = Vec::new();
+    for (label, path) in &files {
+        let src = std::fs::read_to_string(path).unwrap();
+        let name = format!("{label}/{}", path.file_name().unwrap().to_string_lossy());
+        for (i, line) in src.lines().enumerate() {
+            let trimmed = line.trim_start();
+            // A comment may spell the shebang literally — several do.
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            // The name-based SUPPLEMENT (a labelled heuristic, per #922): a
+            // `pub fn`/`pub(crate) fn` whose name ends in `_shim_sh` is a
+            // renderer candidate for the population checks below.
+            for kw in ["pub fn ", "pub(crate) fn "] {
+                if let Some(rest) = trimmed.strip_prefix(kw) {
+                    let end = rest
+                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .unwrap_or(rest.len());
+                    if rest[..end].ends_with("_shim_sh") {
+                        renderers.push(rest[..end].to_string());
+                    }
+                }
+            }
+            if trimmed.contains("#!/bin/sh") {
+                match SANCTIONED.iter().position(|(text, _, _)| *text == normalize(line)) {
+                    Some(idx) => seen[idx] += 1,
+                    None => offenders.push(format!("{name}:{}: {trimmed}", i + 1)),
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "a `#!/bin/sh` script must be a declared template on the SANCTIONED list \
+         (default-deny, the tests/groupid.rs convention). Found {} unplanned site(s):\n{}\n\n\
+         If one is legitimate, add its exact whitespace-collapsed line to SANCTIONED with \
+         an expected count and a reason — that argument is the point of this test.",
+        offenders.len(),
+        offenders.join("\n")
+    );
+    for (idx, (text, expected, whose)) in SANCTIONED.iter().enumerate() {
+        assert_eq!(
+            seen[idx],
+            *expected,
+            "expected exactly {expected} occurrence(s) of `{text}` — {whose} — found {}. \
+             Zero means the declared template was renamed or deleted and this scan is \
+             watching nothing; more than the expected count means a new shebang site grew \
+             without being argued in.",
+            seen[idx]
+        );
+    }
+    // The population must agree three ways — templates, renderer functions,
+    // and the entries the text pin above covers.
+    assert_eq!(
+        seen[0],
+        PINNED_SHIMS.len(),
+        "the pinned shim templates must equal the {} entries the text pin's array carries",
+        PINNED_SHIMS.len()
+    );
     assert_eq!(
         renderers.len(),
-        shims.len(),
-        "orchestration/mod.rs declares {renderers:?} shim renderers but this pin covers {shims_len} — every renderer that stamps audit rows must have an entry above, or a fourth shim regresses to the bare `%s%3N` timestamp unseen (#3202)",
-        shims_len = shims.len()
+        PINNED_SHIMS.len(),
+        "the renderer census found {renderers:?} but the pin covers {} — every renderer \
+         must render from a template this pin knows about, AND its ts sites must be \
+         checked by the text pin above: add the renderer there too (the pin's array is \
+         built from PINNED_SHIMS, so a name with no rendering arm reds \
+         every_rendered_shim_timestamps_with_the_portable_ms_fallback). A \
+         format!-built or include_str!-built shim script carries no shebang line and \
+         hides from the shebang axis, which is why this name-based supplement exists \
+         (#922, #3249).",
+        PINNED_SHIMS.len()
     );
-    for (name, _) in &shims {
-        assert!(renderers.contains(&format!("{name}_shim_sh").as_str()),
-            "the pin covers `{name}` but no renderer named `{name}_shim_sh` is declared — the pin's array and the module's renderers have drifted");
+    for name in PINNED_SHIMS {
+        assert!(
+            renderers.contains(&format!("{name}_shim_sh")),
+            "the pin covers `{name}` but no renderer named `{name}_shim_sh` is declared — \
+             the census and the renderers have drifted"
+        );
+    }
+}
+
+/// #3249 item 2 — the behavioural twin of the text pin above, for the one
+/// adversary the text pin cannot run: a `date` that answers `%s%3N` with a
+/// plain seconds value (all-digit, 10 digits — the #3248 premortem's
+/// magnitude-blind case). Fed through the PATH repair the shim itself
+/// performs (the same fixture shape as
+/// `gh_shim_refuses_when_tr_resolves_but_cannot_run`, so it arms on every
+/// platform), the rendered gh shim's audit row must carry EXACTLY the ts=0
+/// sentinel — the adversary refused, and the proof the fake really reached
+/// the shim: a PATH repair that stopped putting the fixture ahead of the
+/// system would let the real GNU `date` answer 13 digits and this exact-0
+/// assertion reddens rather than passing (rev-final round 2 finding 3).
+/// (Item 3 of #3249 — running the ts block against a `3N`-printing `date`,
+/// the BSD polarity — stays open on the issue.)
+#[test]
+fn gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date() {
+    use std::process::Command;
+    let Some(sh) = any_posix_sh() else {
+        pin_could_not_arm(
+            "gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date",
+            "no POSIX sh on this host",
+        );
+        return;
+    };
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let group = root.join("group");
+    std::fs::create_dir_all(&group).unwrap();
+    // The premortem adversary: a `date` that prints plain seconds for every
+    // format, so `%s%3N` is all-digit — and 10 digits, not 13.
+    let utils = root.join("utils");
+    std::fs::create_dir_all(&utils).unwrap();
+    let fake_date = utils.join("date");
+    std::fs::write(&fake_date, "#!/bin/sh\nprintf '1700000000\\n'\n").unwrap();
+    let log = root.join("gh.log");
+    let fake = write_fake_gh(root, &log);
+    let shim = root.join("gh");
+    std::fs::write(
+        &shim,
+        gh_shim_sh(
+            &fake.display().to_string(),
+            // MUTATED for the scratch round: no utils_dir, so the shim's PATH
+            // repair has nothing to prepend and the real GNU `date` answers —
+            // the exact PATH-repair change finding 3 says the exact-0 assertion
+            // must redden on.
+            &shim_paths(),
+        ),
+    )
+    .unwrap();
+    let _ = Command::new(&sh)
+        .arg("-c")
+        .arg(format!("chmod +x '{}' '{}'", fake.display(), fake_date.display()))
+        .status();
+    // No merge grant: `pr merge` takes the refusal path — exactly the one
+    // that audits — so the row's ts_ms is what this test is about.
+    let out = Command::new(&sh)
+        .arg(&shim)
+        .args(["pr", "merge", "5"])
+        .env("LOOMUX_GROUP_DIR", &group)
+        .env("FAKE_BASE", "main")
+        .env("FAKE_DEFAULT", "main")
+        .env("FAKE_NUM", "5")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "no grant → blocked");
+    let audit = std::fs::read_to_string(group.join("audit.jsonl")).unwrap_or_default();
+    assert_eq!(
+        audit.lines().filter(|l| l.contains("merge-gate-blocked")).count(),
+        1,
+        "the refusal must be audited exactly once (non-vacuity): {audit}"
+    );
+    for line in audit.lines().filter(|l| !l.trim().is_empty()) {
+        let v: serde_json::Value =
+            serde_json::from_str(line).expect("each audit line is valid JSON");
+        let ts = v["ts_ms"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("ts_ms must be numeric: {line}"));
+        // THE positive control (rev-final round 2 finding 3): exact `0` — the
+        // refusal value — cannot be produced by the real GNU `date` (13
+        // digits), so this pins not only that the adversary was refused but
+        // that the fake `date` is the one the shim actually found.
+        assert_eq!(
+            ts, 0,
+            "a date that answers %s%3N with plain seconds must be refused outright \
+             (ts=0), not trusted as milliseconds: got {ts} in {line}"
+        );
     }
 }
 

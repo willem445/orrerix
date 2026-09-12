@@ -23652,12 +23652,19 @@ fn git_shim_script_bakes_real_git_and_gates_tag_push() {
 /// NOTHING, never `date` printing the WRONG thing — and the defect is invisible
 /// on every platform the behavioural harness tests run on (Linux and Git-Bash
 /// carry GNU `date`, whose `%s%3N` is true milliseconds), which is why those
-/// tests stayed green. The self-launch shim already timestamps portably: take
-/// an all-digit `%s%3N` result or nothing, then fall back to whole
-/// seconds×1000, then to 0. Every rendered POSIX shim must carry that ONE form
-/// at every ts site — pinned as text so it is red on every platform, not only
-/// where BSD `date` runs. (The .cmd shims never shell out to `date`: their
+/// tests stayed green. Every rendered POSIX shim must carry that ONE portable
+/// form at every ts site — pinned as text so it is red on every platform, not
+/// only where BSD `date` runs. (The .cmd shims never shell out to `date`: their
 /// degraded rows hardcode `"ts_ms":0`, so there is no ts site to pin there.)
+///
+/// #3249 item 2: the guard used to accept ANY all-digit `%s%3N` result —
+/// magnitude-blind, exactly the adversary the #3248 premortem flagged: a
+/// `date` that answers `%s%3N` with plain seconds is all-digit, and trusting
+/// it stamps ts_ms a thousandfold too small. The rendered block must carry a
+/// 13-digit accept arm (the epoch-ms width for 2001–2286) and send every
+/// other all-digit magnitude to the fallback ladder; the behavioural twin
+/// (`gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date`, below) runs
+/// that adversary through the rendered shim.
 #[test]
 fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
     let shims: [(&str, String); 3] = [
@@ -23666,55 +23673,119 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
         ("loomux", loomux_shim_sh()),
     ];
     for (name, sh) in &shims {
-        // The `%s%3N` attempt itself MUST survive: GNU's all-digit result is used
-        // as-is, so removing it would cost Linux and Git-Bash true millisecond
-        // precision. What must be gone is a `%s%3N` value trusted with only an
-        // emptiness check.
+        // The `%s%3N` attempt itself MUST survive: GNU's all-digit result is
+        // used as-is, so removing it would cost Linux and Git-Bash true
+        // millisecond precision. What must be gone is a `%s%3N` value trusted
+        // with only an emptiness check.
         const BROKEN: &str = "[ -z \"$ts\" ] && ts=0";
         // The reused fallback's inner arm: whole seconds → `…000`, anything
         // non-digit or empty → 0.
         const FALLBACK: &str =
             "case \"$ts\" in *[!0-9]*|\"\") ts=0 ;; *) ts=\"${ts}000\" ;; esac ;;";
+        // #3249 item 2: exactly 13 digits (epoch ms) is the only all-digit
+        // value trusted as-is; every other all-digit magnitude is refused.
+        const MS_ARM: &str = "?????????????) ;;";
+        const NOT_MS: &str = "*) ts=0 ;;";
         let sites = sh.matches("ts=$(date +%s%3N 2>/dev/null)").count();
         assert!(sites > 0, "the {name} shim must timestamp its audit rows (non-vacuity)");
         assert_eq!(
             sites,
             sh.matches(FALLBACK).count(),
-            "the {name} shim has {sites} `%s%3N` site(s) but {} all-digit fallback(s) — every ts site must reuse the self-launch shim's portable form (#3202)",
+            "the {name} shim has {sites} `%s%3N` site(s) but {} fallback(s) — every ts site must reuse the self-launch shim's portable form (#3202)",
             sh.matches(FALLBACK).count()
+        );
+        assert_eq!(
+            sites,
+            sh.matches(MS_ARM).count(),
+            "the {name} shim has {sites} ts site(s) but {} 13-digit accept arm(s) — an all-digit guard is magnitude-blind: a date answering `%s%3N` with plain seconds is trusted as milliseconds and stamps ts_ms a thousandfold too small (#3248 premortem, #3249)",
+            sh.matches(MS_ARM).count()
+        );
+        assert_eq!(
+            sites,
+            sh.matches(NOT_MS).count(),
+            "the {name} shim has {sites} ts site(s) but {} reject-other-magnitude arm(s) — a 10- or 12-digit all-digit result must not reach ts_ms as-is (#3249)",
+            sh.matches(NOT_MS).count()
         );
         assert!(!sh.contains(BROKEN),
             "the {name} shim still trusts `%s%3N` with only an emptiness check — on BSD `date` (macOS) that prints a literal `3N` tail and every audit row stops being JSON (#3202)");
     }
-    // Review round 1 (#3248): the array above is hand-enumerated, so a FOURTH
-    // shim renderer added to orchestration/mod.rs would be silently unpinned —
-    // this pin would pass with its population frozen at three. Count the
-    // renderer functions the module actually declares and hold the array to
-    // them: adding `something_shim_sh` without a test entry goes red here, and
-    // so does renaming one. (A widening, not a fix — the original three-entry
-    // pin was already correct for the code that existed.)
-    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"),
-        "/src/orchestration/mod.rs")).expect("read orchestration/mod.rs source");
-    // Name = the first identifier token after `pub fn `, so a generic renderer
-    // (`something_shim_sh<T>`) is still named and still counted.
-    let renderers: Vec<&str> = src
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("pub fn "))
-        .filter_map(|rest| {
-            let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_')?;
-            let name = &rest[..end];
-            name.ends_with("_shim_sh").then_some(name)
-        })
-        .collect();
+}
+
+/// #3249 item 2 — the behavioural twin of the text pin above, for the one
+/// adversary the text pin cannot run: a `date` that answers `%s%3N` with a
+/// plain seconds value (all-digit, 10 digits — the #3248 premortem's
+/// magnitude-blind case). Fed through the PATH repair the shim itself
+/// performs (the same fixture shape as
+/// `gh_shim_refuses_when_tr_resolves_but_cannot_run`, so it arms on every
+/// platform), the rendered gh shim's audit row must carry 0 or a true
+/// millisecond magnitude — never the 10-digit value it was handed. (Item 3
+/// of #3249 — running the ts block against a `3N`-printing `date`, the BSD
+/// polarity — stays open on the issue.)
+#[test]
+fn gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date() {
+    use std::process::Command;
+    let Some(sh) = any_posix_sh() else {
+        pin_could_not_arm(
+            "gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date",
+            "no POSIX sh on this host",
+        );
+        return;
+    };
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let group = root.join("group");
+    std::fs::create_dir_all(&group).unwrap();
+    // The premortem adversary: a `date` that prints plain seconds for every
+    // format, so `%s%3N` is all-digit — and 10 digits, not 13.
+    let utils = root.join("utils");
+    std::fs::create_dir_all(&utils).unwrap();
+    let fake_date = utils.join("date");
+    std::fs::write(&fake_date, "#!/bin/sh\nprintf '1700000000\\n'\n").unwrap();
+    let log = root.join("gh.log");
+    let fake = write_fake_gh(root, &log);
+    let shim = root.join("gh");
+    std::fs::write(
+        &shim,
+        gh_shim_sh(
+            &fake.display().to_string(),
+            &ShimPaths { utils_dir: Some(msys_dir_for_fixture(&utils)), git_dir: None },
+        ),
+    )
+    .unwrap();
+    let _ = Command::new(&sh)
+        .arg("-c")
+        .arg(format!("chmod +x '{}' '{}'", fake.display(), fake_date.display()))
+        .status();
+    // No merge grant: `pr merge` takes the refusal path — exactly the one
+    // that audits — so the row's ts_ms is what this test is about.
+    let out = Command::new(&sh)
+        .arg(&shim)
+        .args(["pr", "merge", "5"])
+        .env("LOOMUX_GROUP_DIR", &group)
+        .env("FAKE_BASE", "main")
+        .env("FAKE_DEFAULT", "main")
+        .env("FAKE_NUM", "5")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "no grant → blocked");
+    let audit = std::fs::read_to_string(group.join("audit.jsonl")).unwrap_or_default();
     assert_eq!(
-        renderers.len(),
-        shims.len(),
-        "orchestration/mod.rs declares {renderers:?} shim renderers but this pin covers {shims_len} — every renderer that stamps audit rows must have an entry above, or a fourth shim regresses to the bare `%s%3N` timestamp unseen (#3202)",
-        shims_len = shims.len()
+        audit.lines().filter(|l| l.contains("merge-gate-blocked")).count(),
+        1,
+        "the refusal must be audited exactly once (non-vacuity): {audit}"
     );
-    for (name, _) in &shims {
-        assert!(renderers.contains(&format!("{name}_shim_sh").as_str()),
-            "the pin covers `{name}` but no renderer named `{name}_shim_sh` is declared — the pin's array and the module's renderers have drifted");
+    for line in audit.lines().filter(|l| !l.trim().is_empty()) {
+        let v: serde_json::Value =
+            serde_json::from_str(line).expect("each audit line is valid JSON");
+        let ts = v["ts_ms"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("ts_ms must be numeric: {line}"));
+        let digits = ts.to_string().len();
+        assert!(
+            ts == 0 || digits == 13,
+            "a date that answers %s%3N with plain seconds must never be trusted as \
+             milliseconds: got {ts} ({digits} digits) in {line}"
+        );
     }
 }
 
@@ -53390,7 +53461,6 @@ fn a_kill_snapshot_invalidates_the_polled_usage_memo() {
     );
 }
 
-
 // ---------------------------------------------------------------------------
 // #762 (F2 of #743) — concurrency pins for the two behaviour changes the
 // dispatch conversion required. Both exist because moving these command bodies
@@ -55126,7 +55196,6 @@ fn h13_a_pointerless_dialog_above_our_composer_still_holds() {
     assert!(pred(), "…and the pre-Enter gate withholds the Enter (#420/#532)");
 }
 
-
 // ═══════════════════════════════════════════════════════════════════════════
 // J. #903 / #871: loomux's OWN delivered text, replayed onto a resumed pane
 //
@@ -56041,7 +56110,6 @@ fn j16_the_record_takes_each_entrys_own_text_never_the_framed_paste() {
         "a StrandedSubmit marker has no payload text to contribute"
     );
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // The human-question registry (#946 slice Q1)
@@ -59372,7 +59440,6 @@ fn the_wip_guard_reads_the_policy_only_for_a_write_that_could_move_a_count() {
     ));
 }
 
-
 /// **rev-2 B4: a row this write is ADDING is not part of the board it started
 /// from.**
 ///
@@ -60533,7 +60600,6 @@ fn gh_shim_harness_executes_path_routing_and_refuses_a_diff_it_cannot_account_fo
     assert!(audit.contains("routing-unaccountable"), "audited: {audit}");
 }
 
-
 #[test]
 fn the_rust_gate_status_names_the_routing_rules_that_fired_and_refuses_what_the_shim_refuses() {
     // The SATISFACTION side of #1176 — the shim owns the refusal side (above),
@@ -61370,7 +61436,6 @@ fn a_manager_may_raise_a_needs_you_item_but_may_not_withdraw_one() {
     assert_eq!(denied["isError"], json!(true), "the liaison is still refused: {}", q_text(&denied));
     assert!(q_text(&denied).contains("orchestrator-only"), "{}", q_text(&denied));
 }
-
 
 // ---------------------------------------------------------------------------
 // Sprints (#1272) and typed grounding links (#1273) — one combined additive

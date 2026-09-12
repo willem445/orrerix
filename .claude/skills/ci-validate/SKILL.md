@@ -600,6 +600,40 @@ its shape calls for (#1758 — "no new constants" verified in three rounds, then
 falsified by the round-3 fix that added `READY_GRID_REPLAY_BYTES`; #1751 B2, #505
 B1, #976, each blocking).
 
+### A count over a RUN of repeated characters is anchored, or it counts nothing
+
+**RULE** — never pin or measure a run of one repeated character (`??????????)`, a
+dash rule, a `#` heading depth) by a bare literal of that run: a shorter run is a
+SUBSTRING of a longer one, so the pattern matches 1 against every wider arm and the
+count is blind in exactly the direction the pin exists to guard. Anchor on the
+neighbouring non-member byte the run abuts (`;; ??????????)`), and prove the anchoring
+with the negative control — the same pattern one character SHORT must count 0:
+
+```sh
+printf ';; ??????????) ts=1 ;;\n' > q.txt
+grep -oF '?????????)'      q.txt | wc -l   # 1  <- the false clean: 9 matches inside 10
+grep -oF ';; ?????????)'   q.txt | wc -l   # 0  <- anchored, correctly refuses
+grep -oF ';; ??????????)'  q.txt | wc -l   # 1  <- anchored, matches the real arm
+```
+
+The same run defeats a *verification* instrument, so a two-instrument receipt over one
+is not two readings but one reading and its restatement: pair the grep with a walk that
+reports the run WIDTH (node `[...s.matchAll(/\?+/g)].map(m => m[0].length)`) and state a
+width table (9/10/11/12) rather than a bare occurrence count. A `grep -oF` fed a pattern
+cut from a **Rust string literal** is a third reading of nothing — the literal carries
+`\"` where the rendered bytes carry `"`, so it returns 0 on a file that does contain the
+run.
+
+**FAILURE SIGNATURE** — a text pin whose assertion message claims a width ("takes
+EXACTLY a 10-digit answer") beside a pattern that is a bare run, staying green under the
+very edit that message forbids; or a body citing two instruments where one of them is
+`grep -o` over a self-similar literal.
+
+**POINTER** — #3255 (rev-std N1 / rev-final R1: a 9-`?` `SECONDS_ARM` const pinning a
+10-`?` shim arm, plus the rev-final `grep -o` self-blinding disclosed in the same
+round). CLAUDE.md's *a validity check is evidence about the bytes it READS* (#1361 B1)
+is the general rule this is the counting instance of.
+
 ### A claim-purge sweep is wrap-insensitive, or it is blind — and its receipt is NON-ZERO
 
 CLAUDE.md's *correcting a false claim is a multi-surface edit* sends you to grep the

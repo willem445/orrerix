@@ -1840,12 +1840,15 @@ loomux_audit() { # $1=action $2=detail-json
   # a 13-digit all-digit result or nothing and refuse every other all-digit
   # magnitude outright (ts=0) — a value that already misbehaved is not
   # re-consulted; the whole-seconds rung answers only a non-digit or empty
-  # %s%3N, then to 0.
+  # %s%3N, then to 0 — and the whole-seconds answer must itself carry the
+  # right magnitude: exactly a 10-digit epoch-second value becomes ts+000;
+  # every other all-digit magnitude is the same lie one rung lower and is
+  # refused outright (ts=0) (#3249).
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")
       ts=$(date +%s 2>/dev/null)
-      case "$ts" in *[!0-9]*|"") ts=0 ;; *) ts="${ts}000" ;; esac ;;
+      case "$ts" in *[!0-9]*|"") ts=0 ;; ??????????) ts="${ts}000" ;; *) ts=0 ;; esac ;;
     ?????????????) ;;
     *) ts=0 ;;
   esac
@@ -3219,12 +3222,15 @@ loomux_audit() { # $1=action $2=detail-json
   # a 13-digit all-digit result or nothing and refuse every other all-digit
   # magnitude outright (ts=0) — a value that already misbehaved is not
   # re-consulted; the whole-seconds rung answers only a non-digit or empty
-  # %s%3N, then to 0.
+  # %s%3N, then to 0 — and the whole-seconds answer must itself carry the
+  # right magnitude: exactly a 10-digit epoch-second value becomes ts+000;
+  # every other all-digit magnitude is the same lie one rung lower and is
+  # refused outright (ts=0) (#3249).
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")
       ts=$(date +%s 2>/dev/null)
-      case "$ts" in *[!0-9]*|"") ts=0 ;; *) ts="${ts}000" ;; esac ;;
+      case "$ts" in *[!0-9]*|"") ts=0 ;; ??????????) ts="${ts}000" ;; *) ts=0 ;; esac ;;
     ?????????????) ;;
     *) ts=0 ;;
   esac
@@ -3378,12 +3384,15 @@ if [ -n "$ORX_GD" ]; then
   # a 13-digit all-digit result or nothing and refuse every other all-digit
   # magnitude outright (ts=0) — a value that already misbehaved is not
   # re-consulted; the whole-seconds rung answers only a non-digit or empty
-  # %s%3N, then to 0.
+  # %s%3N, then to 0 — and the whole-seconds answer must itself carry the
+  # right magnitude: exactly a 10-digit epoch-second value becomes ts+000;
+  # every other all-digit magnitude is the same lie one rung lower and is
+  # refused outright (ts=0) (#3249).
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")
       ts=$(date +%s 2>/dev/null)
-      case "$ts" in *[!0-9]*|"") ts=0 ;; *) ts="${ts}000" ;; esac ;;
+      case "$ts" in *[!0-9]*|"") ts=0 ;; ??????????) ts="${ts}000" ;; *) ts=0 ;; esac ;;
     ?????????????) ;;
     *) ts=0 ;;
   esac

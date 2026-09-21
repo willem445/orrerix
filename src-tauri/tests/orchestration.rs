@@ -38858,6 +38858,7 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
         // asserts the helper really applies all four agent/hook dir overrides,
         // so this row's premise fails loudly in that binary if it ever stops.
         ("codexusage.rs", 1),     // test_registry (#2515 C3) — proof test in that file
+        ("todo.rs", 1),           // relaunch_registry (#3263 S2) - red-before-green scratch
     ];
     let mut files = Vec::new();
     collect_rs_files(tests_dir, &mut files);

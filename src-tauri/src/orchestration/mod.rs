@@ -13590,6 +13590,8 @@ pub struct TaskSummary {
     /// trip per candidate row to learn what a task is even about.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<TaskLink>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// This row's link-array fingerprint (#1349) — see `link_etag`. Echo it back
     /// as `upsert_task`'s `expect_link_etag` when you replace `deps`, `related`
     /// or `links` with a list you composed from THIS read, and the write is
@@ -14194,6 +14196,7 @@ pub fn task_summary(t: &Task, ready: bool, children: usize, children_done: usize
         kind: t.kind.clone(),
         sprint: t.sprint,
         links: t.links.clone(),
+        description: t.description.clone(),
         link_etag: link_etag(t),
         children,
         children_done,

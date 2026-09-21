@@ -14,6 +14,7 @@ import {
   REMINDER_WINDOW_MS,
   pruneFired,
   reminderKey,
+  reminderSummary,
   reminderText,
   scanReminders,
 } from "../src/todoreminders.ts";
@@ -203,6 +204,68 @@ test("pruneFired drops keys for items that are gone or rescheduled, and keeps li
   const cleared = { ...live, remind_ms: null };
   pruneFired(fired, [cleared]);
   assert.deepEqual([...fired], []);
+});
+
+test("ONE toast per tick: several notices coalesce, and none is silently lost", () => {
+  // #3301 review round 1 (rev-std). The app has ONE toast element, so the
+  // pane's old `for (const n of notices) showToast(n)` had each call overwrite
+  // the last: three reminders at 09:00 showed the third and the human never
+  // learned the other two existed. That is a silent loss of exactly the thing
+  // the feature is for, so the whole tick becomes one sentence.
+  const mk = (title: string, at: number) => item({ title, remind_ms: at });
+  const three = [mk("ship the notes", NOW - 3 * MIN), mk("pay rent", NOW - 2 * MIN), mk("call bob", NOW - MIN)];
+  const notices = scanReminders(three, NOW, new Set()).notices;
+  assert.equal(notices.length, 3, "precondition: all three came due on this tick");
+
+  const text = reminderSummary(notices);
+  // THE COUNT IS THE TRUE TOTAL, which is the half that makes coalescing
+  // honest rather than merely tidy: what is not named is still accounted for.
+  assert.match(text, /^3 reminders due/, text);
+  assert.ok(text.includes("ship the notes"), "the soonest must be named: " + text);
+  assert.ok(text.includes("pay rent"), "the second must be named: " + text);
+  assert.ok(text.includes("and 1 more"), "the rest must be counted: " + text);
+  assert.ok(!text.includes("call bob"), "a toast that lists every title is a dialog: " + text);
+});
+
+test("a single notice reads as a single notice, not as a list of one", () => {
+  // The discriminator for the test above: if `reminderSummary` always used the
+  // plural form, every assertion there would still pass and the ordinary case
+  // would read "1 reminders due — …".
+  const one = scanReminders([item({ title: "ship it", remind_ms: NOW - MIN })], NOW, new Set());
+  assert.equal(reminderSummary(one.notices), "Reminder: ship it");
+  assert.equal(reminderSummary(one.notices), reminderText(one.notices[0]));
+
+  const due = scanReminders([item({ title: "ship it", due_ms: NOW - MIN })], NOW, new Set());
+  assert.equal(reminderSummary(due.notices), "Due now: ship it");
+});
+
+test("exactly two notices name both and count nothing", () => {
+  const two = [
+    item({ title: "first", remind_ms: NOW - 2 * MIN }),
+    item({ title: "second", remind_ms: NOW - MIN }),
+  ];
+  const text = reminderSummary(scanReminders(two, NOW, new Set()).notices);
+  assert.equal(text, "2 reminders due — first, second");
+  assert.ok(!text.includes("more"), "two fit, so nothing is elided: " + text);
+});
+
+test("a coalesced toast stays bounded however long the titles are", () => {
+  // One very long to-do must not push the toast's action button off the strip,
+  // and the multi-notice form has a tighter per-title budget than the single
+  // one because it carries two of them plus a count.
+  const long = [
+    item({ title: "x".repeat(300), remind_ms: NOW - 2 * MIN }),
+    item({ title: "y".repeat(300), remind_ms: NOW - MIN }),
+    item({ title: "z".repeat(300), remind_ms: NOW - MIN }),
+  ];
+  const text = reminderSummary(scanReminders(long, NOW, new Set()).notices);
+  assert.ok(text.length < 110, `a 3x300-char tick produced a ${text.length}-char toast`);
+  assert.ok(text.includes("…"), "a truncated title must say it was truncated: " + text);
+  assert.ok(text.includes("and 1 more"), text);
+});
+
+test("an empty tick produces no sentence at all, rather than an empty one", () => {
+  assert.equal(reminderSummary([]), "");
 });
 
 test("the sentence says WHICH field fired, and a very long title is cut", () => {

@@ -1799,6 +1799,13 @@ struct DataRoot {
 }
 
 impl DataRoot {
+    /// The redirected data root, so a test can reach the store FILE the tools
+    /// are reading — needed to age a tombstone past the purge window, which no
+    /// injectable clock can do on this path (`todo_apply` reads `now_ms()`).
+    fn path(&self) -> &Path {
+        self._dir.path()
+    }
+
     fn install() -> DataRoot {
         let _guard = MCP_SERIAL.lock_safe();
         let dir = tempfile::tempdir().unwrap();
@@ -3209,10 +3216,17 @@ fn mcp_a_tombstone_in_another_workspace_reads_exactly_as_an_id_that_never_existe
     assert_eq!(back["id"], json!(id), "{back}");
 }
 
-/// The two refusals the engine makes, reaching the caller with the engine's own
-/// words — which is what lets an agent act on them rather than guess.
+/// The refusals that reach the caller with the ENGINE's own words, which is
+/// what lets an agent act on one rather than guess.
+///
+/// Renamed at #3301 review round 1: this used to promise "an expired
+/// tombstone" and run an id that had never existed — a different refusal
+/// reaching the same words by a different route, so the name was a claim the
+/// body did not support. The expired-tombstone arm now has its own test
+/// (`mcp_an_expired_tombstone_is_refused_as_unknown_through_the_tool`), which
+/// ages a real tombstone on disk.
 #[test]
-fn mcp_restoring_a_live_row_and_an_expired_tombstone_each_say_which_it_is() {
+fn mcp_restoring_a_live_row_and_an_absent_id_each_say_which_it_is() {
     let _root = DataRoot::install();
     let dir = tempfile::tempdir().unwrap();
     let reg = relaunch_registry(dir.path());
@@ -3233,9 +3247,10 @@ fn mcp_restoring_a_live_row_and_an_expired_tombstone_each_say_which_it_is() {
         "and must NOT read as a missing id — the caller asked precisely because it did not know: {msg}"
     );
 
-    // An id that was never here at all.
+    // An id that was never here at all — NOT an expired tombstone, which is a
+    // different route to the same words and has its own test below.
     let msg = mcp_refusal(&reg, &w, "todo_restore", json!({ "id": "td-ffffffffffffffff" }));
-    assert!(msg.contains("unknown todo"), "got: {msg}");
+    assert_eq!(msg, "unknown todo: td-ffffffffffffffff", "got: {msg}");
 
     // A malformed call, so the argument check is not mistaken for the gate.
     let msg = mcp_refusal(&reg, &w, "todo_restore", json!({}));
@@ -3310,4 +3325,209 @@ fn mcp_todo_list_omits_an_archived_row_while_todo_get_still_returns_it() {
     );
     let got = ok_json(&reg, &w, "todo_get", json!({ "id": kept }));
     assert!(got["archived_ms"].is_null(), "{got}");
+}
+
+// ============ #3301 review round 1 ============
+
+/// **A batch spanning two lists is refused, not silently attributed to the
+/// first** (rev-final).
+///
+/// `Applied` carries ONE `scope`. An earlier revision took it from `ids[0]`
+/// while its own comment claimed the scope was "derived rather than assumed" —
+/// which was false of exactly the case that matters, a mixed batch, where it
+/// would have named one list for a write that moved rows in two. The code now
+/// matches the claim by refusing.
+#[test]
+fn an_archive_spanning_two_lists_is_refused_rather_than_attributed_to_the_first() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    let ws = Scope::Workspace("c--projects-loomux".to_string());
+
+    let global = apply_to(&path, add("in the global list"), &human(), T0, None)
+        .unwrap()
+        .ids[0]
+        .clone();
+    let scoped = apply_to(
+        &path,
+        TodoOp::Add(TodoAdd {
+            scope: ws.clone(),
+            title: "in a workspace list".to_string(),
+            ..TodoAdd::default()
+        }),
+        &human(),
+        T0,
+        None,
+    )
+    .unwrap()
+    .ids[0]
+        .clone();
+    let before = read_raw(&path);
+
+    let e = unwrap_err_for(
+        apply_to(
+            &path,
+            TodoOp::Archive {
+                ids: vec![global.clone(), scoped.clone()],
+                archived: true,
+            },
+            &human(),
+            T0 + 1,
+            None,
+        ),
+        "a batch spanning two lists",
+    );
+    let msg = e.to_string();
+    assert!(
+        msg.contains("more than one list"),
+        "the refusal must say WHY, so a caller can split the batch: {msg}"
+    );
+    // It names both, so the caller does not have to bisect its own id list to
+    // find out which two lists it mixed.
+    assert!(msg.contains("global"), "{msg}");
+    assert!(msg.contains("c--projects-loomux"), "{msg}");
+    assert_eq!(
+        read_raw(&path),
+        before,
+        "a refused archive must leave the store byte-identical — this one refuses AFTER \
+         resolving every id, so it is the arm most likely to have written first"
+    );
+
+    // THE ORDER DOES NOT MATTER, which is the half that would pass anyway if
+    // the check only ever compared against `ids[0]` and stopped at the first
+    // mismatch. Reversed, it must refuse identically.
+    let e = unwrap_err_for(
+        apply_to(
+            &path,
+            TodoOp::Archive {
+                ids: vec![scoped.clone(), global.clone()],
+                archived: true,
+            },
+            &human(),
+            T0 + 1,
+            None,
+        ),
+        "the same batch, reversed",
+    );
+    assert!(e.to_string().contains("more than one list"), "{e}");
+    assert_eq!(read_raw(&path), before);
+
+    // THE TWO POSITIVE CONTROLS. Without them every assertion above passes
+    // against an archive that refuses every batch of two, and the refusal
+    // would be about the COUNT rather than about the scopes.
+    apply_to(
+        &path,
+        TodoOp::Archive {
+            ids: vec![global.clone()],
+            archived: true,
+        },
+        &human(),
+        T0 + 2,
+        None,
+    )
+    .expect("control: a single-scope batch must still succeed");
+    let second = apply_to(
+        &path,
+        TodoOp::Add(TodoAdd {
+            scope: ws.clone(),
+            title: "another in the same workspace".to_string(),
+            ..TodoAdd::default()
+        }),
+        &human(),
+        T0 + 2,
+        None,
+    )
+    .unwrap()
+    .ids[0]
+        .clone();
+    let applied = apply_to(
+        &path,
+        TodoOp::Archive {
+            ids: vec![scoped, second],
+            archived: true,
+        },
+        &human(),
+        T0 + 3,
+        None,
+    )
+    .expect("control: TWO ids in ONE workspace list must succeed");
+    assert_eq!(
+        applied.scope, ws,
+        "and the scope it answers with is that list's, not the global one"
+    );
+}
+
+/// **An EXPIRED tombstone, through the MCP arm** (rev-std).
+///
+/// `mcp_restoring_a_live_row_and_an_absent_id_each_say_which_it_is` (renamed
+/// in this round) promised this arm in its name and ran an id that had never
+/// existed instead —
+/// a different refusal reaching the same words by a different route. The engine
+/// test for the window exists (`a_restore_after_the_purge_window_is_refused_as_unknown`);
+/// what had no coverage was that the MCP layer's own tombstone-visible read
+/// hands an expired one to the engine rather than short-circuiting it.
+///
+/// The clock cannot be injected through this path — `todo_apply` reads
+/// `now_ms()` — so the tombstone is aged on DISK instead: the row is deleted
+/// through the real tool, then its `deleted_ms` is rewritten to more than
+/// `PURGE_AFTER_MS` ago, which is what an item deleted last month genuinely
+/// looks like.
+#[test]
+fn mcp_an_expired_tombstone_is_refused_as_unknown_through_the_tool() {
+    let root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let (_g, _orch, w) = mcp_group(&reg, repo.path());
+
+    let id = ok_json(&reg, &w, "todo_add", json!({ "title": "deleted last month" }))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ok_json(&reg, &w, "todo_delete", json!({ "id": id }));
+
+    // Inside the window it restores — the control, and it runs FIRST so the
+    // refusal below cannot be "restore never works through this tool".
+    let back = ok_json(&reg, &w, "todo_restore", json!({ "id": id }));
+    assert_eq!(back["id"], json!(id), "control: a fresh tombstone restores: {back}");
+    ok_json(&reg, &w, "todo_delete", json!({ "id": id }));
+
+    // Age it past the window, on disk, through the same file the tool reads.
+    let store_file = todo_path_in(root.path());
+    let raw = std::fs::read_to_string(&store_file).expect("the store must exist by now");
+    let mut store: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let expired = now - PURGE_AFTER_MS - 60_000;
+    let mut aged = 0;
+    for item in store["items"].as_array_mut().unwrap() {
+        if item["id"] == json!(id) {
+            item["deleted_ms"] = json!(expired);
+            aged += 1;
+        }
+    }
+    assert_eq!(aged, 1, "the fixture must have aged exactly one row, not zero");
+    std::fs::write(&store_file, serde_json::to_string(&store).unwrap()).unwrap();
+
+    let msg = mcp_refusal(&reg, &w, "todo_restore", json!({ "id": id }));
+    assert_eq!(
+        msg,
+        format!("unknown todo: {id}"),
+        "an expired tombstone must read exactly as an id that never existed"
+    );
+
+    // AND THE ROW IS STILL THERE, untouched, which is what makes this the
+    // WINDOW's refusal rather than the purge having already dropped it: the
+    // refusal came before any write, so nothing purged.
+    let raw = std::fs::read_to_string(&store_file).unwrap();
+    let store: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(
+        store["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == json!(id)),
+        "a refused restore must not rewrite the file — not even to purge"
+    );
 }

@@ -185,7 +185,7 @@ op the engine does not have.
 | `complete` | sets or clears `status` and `done_ms`; steps untouched | unknown or tombstoned id |
 | `delete` | writes a `deleted_ms` tombstone | unknown or already-tombstoned id |
 | `restore` | clears the tombstone, putting the row back where it was | unknown id; a tombstone the purge window has passed (as **unknown**, not as its own error); an item that is already live; a scope already at `ITEMS_MAX` |
-| `archive` (S5) | sets or clears `archived_ms` on every id it names | an empty id list; an id named twice; any unknown or tombstoned id; more than `ARCHIVE_IDS_MAX` ids. Refuses **before** it writes anything, so a refused archive leaves the store byte-identical |
+| `archive` (S5) | sets or clears `archived_ms` on every id it names | an empty id list; an id named twice; any unknown or tombstoned id; ids from **more than one scope**; more than `ARCHIVE_IDS_MAX` ids. Refuses **before** it writes anything, so a refused archive leaves the store byte-identical |
 
 **`restore` is what makes a soft delete an inverse** rather than a
 one-way door. Without it `apply` treats a tombstone as unknown, so nothing —
@@ -233,7 +233,16 @@ nobody asked for. The pane re-derives the ids from the current projection at
 click time rather than from the button's own label, so the window between them
 is closed too.
 
-Two consequences are deliberate and read as inconsistencies unless stated.
+**One batch, one list.** `Applied` carries a single `scope`, so a batch
+spanning two has no honest value for that field. An earlier revision took it
+from `ids[0]` and said in its own comment that the scope was "derived rather
+than assumed" — which was true of every batch except the one that mattered:
+a mixed batch would have reported one list for a write that moved rows in two.
+It now refuses, naming both lists so the caller need not bisect its own id list
+to find the mix (#3301 review round 1). This costs the pane nothing:
+`archiveShown` builds its ids from ONE projection of ONE scope.
+
+Two further consequences are deliberate and read as inconsistencies unless stated.
 **Archiving an already-archived row is accepted**, which is the opposite of
 `restore`'s "a no-op is indistinguishable from a success": a bulk op names a
 state it wants a set to end in, not a question about one row, and refusing the
@@ -991,10 +1000,30 @@ than `REMINDER_WINDOW_MS` (4 h) is CONSUMED without being shown — a pane opene
 at 17:00 must not stack up everything the day already passed, and marking it
 fired is what stops it arriving whenever the window next slides over it.
 
-The toast carries one action ("Show"), which selects the row, expands it, and
-moves the view if the row is not currently rendered. A toast whose button does
-nothing visible is the silently-dead control this note argues against
-everywhere else.
+**One toast per TICK, however many came due.** The app has a single toast
+element, so a loop calling `showToast` per notice has each call overwrite the
+last: three reminders at 09:00 showed the third and the human never learned the
+other two existed — a silent loss of exactly the thing the feature is for
+(#3301 review round 1). `reminderSummary` coalesces the tick into one
+sentence: two titles named, the rest counted, and the count is always the true
+total so nothing is hidden without being accounted for. Coalescing rather than
+a queue, because five queued toasts hold the human's attention for
+twenty-five seconds over events that happened at the same moment — they are one
+event, and a toast that listed eight titles would be a dialog.
+
+The toast carries one action ("Show", or "Show first" when the tick coalesced),
+which selects the row, expands it, and moves the view if the row is not
+currently rendered. A toast whose button does nothing visible is the
+silently-dead control this note argues against everywhere else.
+
+**That move does NOT become a preference.** The stored view is "what a fresh
+pane opens on", which the human sets by clicking the strip; jumping to All
+because a reminder fired is navigation the pane did on its own. Persisting it
+would let a notification silently redefine a setting — every pane opened
+afterwards, in every window, starting on All because something came due once
+while this one happened to be on Important. `setView` therefore takes a
+`persist` flag, false on exactly the call sites the pane initiates
+(#3301 review round 1).
 
 ### What a maximal list costs, measured
 

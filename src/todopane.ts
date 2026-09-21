@@ -62,7 +62,7 @@ import {
   visibleItems,
   type SmartView,
 } from "./todomodel";
-import { pruneFired, reminderText, scanReminders } from "./todoreminders";
+import { pruneFired, reminderSummary, scanReminders } from "./todoreminders";
 import {
   beginRead,
   initialScope,
@@ -382,10 +382,17 @@ export class TodoPaneView {
     pruneFired(this.fired, items);
     const scan = scanReminders(items, this.now(), this.fired);
     for (const key of scan.fired) this.fired.add(key);
-    for (const notice of scan.notices) {
-      showToast(reminderText(notice), "info", {
-        label: "Show",
-        run: () => this.revealRow(notice.id),
+    // ONE TOAST PER TICK, however many came due. The app has one toast
+    // element, so a loop here would have each call overwrite the last and the
+    // human would see only the final notice — a silent loss of the thing the
+    // feature exists for (#3301 review round 1). `reminderSummary` owns the
+    // wording; the action opens the SOONEST, which is `notices[0]` because the
+    // scan returns them soonest-first.
+    if (scan.notices.length > 0) {
+      const first = scan.notices[0];
+      showToast(reminderSummary(scan.notices), "info", {
+        label: scan.notices.length > 1 ? "Show first" : "Show",
+        run: () => this.revealRow(first.id),
       });
     }
     this.render();
@@ -411,7 +418,14 @@ export class TodoPaneView {
     this.tagFilter = null;
     this.searchOpen = false;
     if (!renderedRows(this.project(this.now())).some((i) => i.id === id)) {
-      this.setView("all");
+      // NOT PERSISTED (#3301 review round 1, rev-final). The stored view is
+      // "what a fresh pane opens on" — a preference the human expressed by
+      // clicking the strip. Jumping to All because a reminder fired is
+      // navigation the pane did on its own, and writing it to `localStorage`
+      // would let a notification silently redefine a setting: every pane
+      // opened afterwards, in every window, would start on All because
+      // something came due once while this one happened to be on Important.
+      this.setView("all", { persist: false });
     }
     this.selected = id;
     this.expanded.add(id);
@@ -1733,10 +1747,16 @@ export class TodoPaneView {
     this.render();
   }
 
-  private setView(next: SmartView): void {
+  /**
+   * Move to `next`.
+   *
+   * `persist` is true for every gesture the HUMAN made — the strip, the digit
+   * keys — and false for a move the pane made on its own. See `revealRow`.
+   */
+  private setView(next: SmartView, opts: { persist?: boolean } = {}): void {
     if (this.prefs.view === next) return;
     this.prefs = { ...this.prefs, view: next };
-    this.writePrefs();
+    if (opts.persist !== false) this.writePrefs();
     // The archived toggle belongs to the Completed view and nothing else shows
     // an archived row, so it is dropped on the way out rather than left armed
     // for the next visit (the "reading position, not a preference" rule).

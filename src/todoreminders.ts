@@ -164,15 +164,48 @@ export function pruneFired(fired: Set<string>, items: readonly TodoItem[]): void
   for (const key of [...fired]) if (!live.has(key)) fired.delete(key);
 }
 
+/** One title, bounded, so a single very long to-do cannot push the toast's
+ *  action button off the end of the strip. */
+function shortTitle(title: string, max: number): string {
+  return title.length > max ? `${title.slice(0, max - 1)}…` : title;
+}
+
 /**
  * The sentence one notice becomes.
  *
  * Here rather than in `todopane.ts` because it is a decision (which of the two
  * fields fired, and how a human hears that) and this module is the testable
- * half. The title is truncated so one very long to-do cannot push the toast's
- * action button off the end of the strip.
+ * half.
  */
 export function reminderText(notice: ReminderNotice): string {
-  const title = notice.title.length > 60 ? `${notice.title.slice(0, 59)}…` : notice.title;
+  const title = shortTitle(notice.title, 60);
   return notice.kind === "remind" ? `Reminder: ${title}` : `Due now: ${title}`;
+}
+
+/**
+ * The sentence a WHOLE tick becomes — one toast, however many came due.
+ *
+ * **Because the app has ONE toast element**, and a loop calling `showToast`
+ * per notice makes each call overwrite the last: with three reminders due at
+ * 09:00 the human sees the third and never learns the other two existed. That
+ * is a silent loss of exactly the thing this feature is for (#3301 review
+ * round 1, rev-std). Coalescing is the fix rather than a queue: a queue would
+ * hold the human's attention for fifteen seconds at five seconds a toast, and
+ * they came due together — they are one event.
+ *
+ * Two are NAMED, because two fit and a name is what makes a reminder
+ * actionable; beyond that the rest are counted, because a toast that lists
+ * eight titles is a dialog. The count is always the TRUE total, so nothing is
+ * hidden without being accounted for.
+ *
+ * `notices` must be non-empty — the caller has just checked, and an empty
+ * tick produces no toast at all rather than an empty one.
+ */
+export function reminderSummary(notices: readonly ReminderNotice[]): string {
+  if (notices.length === 0) return "";
+  if (notices.length === 1) return reminderText(notices[0]);
+  const named = notices.slice(0, 2).map((n) => shortTitle(n.title, 28));
+  const rest = notices.length - named.length;
+  const tail = rest > 0 ? `, and ${rest} more` : "";
+  return `${notices.length} reminders due — ${named.join(", ")}${tail}`;
 }

@@ -199,7 +199,9 @@ Three things are worth knowing, because they are choices rather than gaps:
   reloading starts the day's reminders over. The upside is that nothing about
   reminders can change your list.
 - **You will not get a wall of them.** Anything more than four hours late is
-  dropped rather than shown when you open the pane.
+  dropped rather than shown when you open the pane, and several tasks coming
+  due at the same moment arrive as **one** notice naming the first two and
+  counting the rest — **Show first** opens the soonest.
 
 ## Undo
 

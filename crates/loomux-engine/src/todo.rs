@@ -1093,6 +1093,15 @@ fn apply_restore(
 ///  * **an unknown or tombstoned id** — [`TodoError::Unknown`], through the
 ///    same [`live_index`] every other op uses, so a deleted id reads exactly
 ///    as one that never existed.
+///  * **ids from more than one scope** — [`TodoError::Invalid`]. [`Applied`]
+///    carries ONE `scope`, and the pane archives what one list showed, so a
+///    mixed batch has no honest answer for that field. An earlier revision
+///    took the scope from `ids[0]` and said it was "derived rather than
+///    assumed", which was not true of a mixed batch: it would have reported
+///    the first id's scope for a write that moved rows in two (#3301 review
+///    round 1, rev-final). Refusing is the honest answer, and it costs
+///    nothing the pane wanted — the frontend's `archiveShown` builds its ids
+///    from ONE projection of ONE scope.
 ///
 /// # Idempotent per id, deliberately
 ///
@@ -1127,10 +1136,24 @@ fn apply_archive(
         }
         indices.push(live_index(store, id)?);
     }
-    // Every scope the batch touched. One in practice — the pane archives what
-    // one list showed — but the op is addressed by id and the engine does no
-    // scope check, so the answer is derived rather than assumed.
+    // THE SCOPE IS DERIVED FROM EVERY ID, NOT FROM THE FIRST. `Applied` carries
+    // one `scope`, so a batch spanning two has no honest value for it — and
+    // reporting `ids[0]`'s would name one list for a write that moved rows in
+    // two. Refused rather than guessed, which is the rule the rest of this
+    // module follows.
     let scope = store.items[indices[0]].scope.clone();
+    for ix in &indices {
+        if store.items[*ix].scope != scope {
+            return Err(TodoError::Invalid(
+                "archive",
+                format!(
+                    "names items in more than one list ({} and {}); archive one list at a time",
+                    scope_label(&scope),
+                    scope_label(&store.items[*ix].scope)
+                ),
+            ));
+        }
+    }
     for ix in &indices {
         let item = &mut store.items[*ix];
         item.archived_ms = if archived { Some(now_ms) } else { None };
@@ -1146,6 +1169,17 @@ fn apply_archive(
         item: None,
         purged: 0,
     })
+}
+
+/// A scope, for a refusal a human or an agent has to act on. The workspace KEY
+/// rather than the root: the key is what the store holds, and a refusal that
+/// named a root would be inventing one (CLAUDE.md constraint 6 — nothing but
+/// `workspace_key` turns a path into an identity, and nothing turns one back).
+fn scope_label(scope: &Scope) -> String {
+    match scope {
+        Scope::Global => "global".to_string(),
+        Scope::Workspace(k) => format!("workspace {k}"),
+    }
 }
 
 /// Record a workspace the store has now seen, so the pane's scope switch has a

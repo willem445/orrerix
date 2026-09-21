@@ -279,7 +279,7 @@ pub fn classify(text: &str) -> Kind {
         if tail.starts_with("CANCELLED") {
             return Kind::DriveCancelled;
         }
-        return Kind::SystemNotice;
+        return Kind::DriveCancelled;
     }
     if after_agent_token(rest, "reports progress").is_some() {
         return Kind::DelegateProgress;

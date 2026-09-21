@@ -361,3 +361,430 @@ impl OrchRegistry {
         }
     }
 }
+
+// ===================== the command layer (#3263 slice S3) =====================
+//
+// Two `#[tauri::command]`s, and the strict JSON decoder that stands between the
+// webview and [`loomux_engine::todo::TodoOp`].
+//
+// # Why a hand-written decoder and not `#[derive(Deserialize)]`
+//
+// The op types in the engine crate are deliberately `Serialize`-only — their
+// own doc comment says so, and this is the half of that decision that lives
+// here. A derived decoder on `TodoUpdate` would be a THIRD way into the store,
+// and a laxer one than either caller wants:
+//
+//  * `TodoUpdate`'s nullable fields are `Option<Option<u64>>`, where the outer
+//    `None` means "leave alone" and `Some(None)` means "clear it". Serde's
+//    derived decoder collapses both onto `None` — a JSON `null` deserialises an
+//    `Option` to `None` — so the derive cannot express "clear this due date" at
+//    all. Recovering it needs a `deserialize_with` helper per field, which is
+//    more code than the explicit reader below and hides the rule instead of
+//    stating it.
+//  * A derive accepts every field it knows and silently ignores the rest, so a
+//    typo (`due` for `due_ms`) is a write that succeeds and does nothing. The
+//    reader below is DEFAULT-DENY: an unknown key is an error naming itself,
+//    which is what makes a frontend bug a red test rather than a mystery.
+//  * `scope` is not a field the caller may send AT ALL (see [`scope_for`]): the
+//    workspace key is derived from the root the caller names, never accepted as
+//    a key. A derive would happily take one.
+//
+// # The wire shape
+//
+// One single-key object per op, so the tag cannot be omitted:
+//
+// ```json
+// {"add":      {"title": "pay rent", "due_ms": 1750000000000, "tags": ["home"]}}
+// {"update":   {"id": "td-...", "if_rev": 3, "due_ms": null}}
+// {"complete": {"id": "td-...", "done": true}}
+// {"delete":   {"id": "td-..."}}
+// ```
+//
+// In an `update`, an ABSENT key leaves the field alone and an explicit `null`
+// clears it — the distinction `TodoUpdate` exists to carry.
+
+use serde_json::Value;
+use tauri::AppHandle;
+
+/// Every key [`parse_add`] accepts, for the unknown-key refusal's message.
+const ADD_KEYS: &[&str] = &[
+    "title", "notes", "due_ms", "remind_ms", "priority", "important", "tags", "steps", "my_day",
+];
+
+/// Every key [`parse_update`] accepts.
+const UPDATE_KEYS: &[&str] = &[
+    "id",
+    "if_rev",
+    "title",
+    "notes",
+    "due_ms",
+    "remind_ms",
+    "my_day",
+    "priority",
+    "important",
+    "tags",
+    "steps",
+    "order_after",
+];
+
+fn invalid(field: &'static str, detail: impl Into<String>) -> TodoError {
+    TodoError::Invalid(field, detail.into())
+}
+
+/// The one key a single-key tagged op carries, and its body.
+fn tagged<'a>(v: &'a Value, field: &'static str) -> Result<(&'a str, &'a Value), TodoError> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| invalid(field, "must be an object"))?;
+    let mut it = obj.iter();
+    match (it.next(), it.next()) {
+        (Some((k, payload)), None) => Ok((k.as_str(), payload)),
+        (None, _) => Err(invalid(
+            field,
+            "must name exactly one of add/update/complete/delete",
+        )),
+        (Some(_), Some(_)) => Err(invalid(
+            field,
+            "names more than one op; send exactly one of add/update/complete/delete",
+        )),
+    }
+}
+
+/// The body of a tagged op, refusing any key outside `allowed`.
+///
+/// Default-deny is the point: a misspelt field is a refusal that names itself,
+/// not a write that quietly does nothing.
+fn body<'a>(
+    v: &'a Value,
+    field: &'static str,
+    allowed: &[&str],
+) -> Result<&'a serde_json::Map<String, Value>, TodoError> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| invalid(field, "body must be an object"))?;
+    for k in obj.keys() {
+        if !allowed.contains(&k.as_str()) {
+            return Err(invalid(
+                field,
+                format!("has no field {k:?} (accepts: {})", allowed.join(", ")),
+            ));
+        }
+    }
+    Ok(obj)
+}
+
+/// A required string.
+fn req_str(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    field: &'static str,
+) -> Result<String, TodoError> {
+    match obj.get(key) {
+        Some(Value::String(s)) => Ok(s.clone()),
+        Some(_) => Err(invalid(field, format!("{key} must be a string"))),
+        None => Err(invalid(field, format!("{key} is required"))),
+    }
+}
+
+/// An optional string. An explicit `null` reads as absent.
+fn opt_str(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    field: &'static str,
+) -> Result<Option<String>, TodoError> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(invalid(field, format!("{key} must be a string"))),
+    }
+}
+
+/// An optional bool. An explicit `null` reads as absent.
+fn opt_bool(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    field: &'static str,
+) -> Result<Option<bool>, TodoError> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(invalid(field, format!("{key} must be a boolean"))),
+    }
+}
+
+/// An optional non-negative whole number, refusing a float or a negative rather
+/// than truncating one — a timestamp that silently became a different instant
+/// is worse than a refusal the pane can show.
+fn opt_u64(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    field: &'static str,
+) -> Result<Option<u64>, TodoError> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| invalid(field, format!("{key} must be a non-negative whole number"))),
+        Some(_) => Err(invalid(field, format!("{key} must be a number"))),
+    }
+}
+
+/// [`opt_u64`]'s nullable-field sibling: the outer `None` is "leave alone", an
+/// inner `None` is an explicit `null` meaning CLEAR. This distinction is the
+/// whole reason a derived decoder would not do.
+fn nullable_u64(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    field: &'static str,
+) -> Result<Option<Option<u64>>, TodoError> {
+    match obj.get(key) {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .map(|v| Some(Some(v)))
+            .ok_or_else(|| invalid(field, format!("{key} must be a non-negative whole number"))),
+        Some(_) => Err(invalid(field, format!("{key} must be a number or null"))),
+    }
+}
+
+/// An optional priority, range-checked here so the message names the field the
+/// caller sent.
+fn opt_priority(
+    obj: &serde_json::Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<u8>, TodoError> {
+    match opt_u64(obj, "priority", field)? {
+        None => Ok(None),
+        Some(v) if v <= u64::from(todo::PRIORITY_MAX) => Ok(Some(v as u8)),
+        Some(v) => Err(invalid(
+            field,
+            format!(
+                "priority {v} is above the maximum of {}",
+                todo::PRIORITY_MAX
+            ),
+        )),
+    }
+}
+
+/// An optional array of strings.
+fn opt_strs(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    field: &'static str,
+) -> Result<Option<Vec<String>>, TodoError> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| match v {
+                Value::String(s) => Ok(s.clone()),
+                _ => Err(invalid(field, format!("every {key} entry must be a string"))),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(_) => Err(invalid(field, format!("{key} must be an array of strings"))),
+    }
+}
+
+/// `steps` on an update: `[{"id"?: "...", "title": "...", "done": false}]`.
+fn opt_steps(
+    obj: &serde_json::Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<Vec<todo::StepPatch>>, TodoError> {
+    let arr = match obj.get("steps") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Array(a)) => a,
+        Some(_) => return Err(invalid(field, "steps must be an array of objects")),
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for v in arr {
+        let step = body(v, field, &["id", "title", "done"])?;
+        out.push(todo::StepPatch {
+            id: opt_str(step, "id", field)?,
+            title: req_str(step, "title", field)?,
+            done: opt_bool(step, "done", field)?.unwrap_or(false),
+        });
+    }
+    Ok(Some(out))
+}
+
+/// `order_after`: the string `"start"`, or `{"item": "<id>"}`.
+///
+/// Two shapes rather than a nullable string because `null` already has a
+/// meaning on this wire ("leave alone"), and "first in the list" is a
+/// destination rather than the absence of one.
+fn opt_order_after(
+    obj: &serde_json::Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<todo::OrderAfter>, TodoError> {
+    match obj.get("order_after") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s == "start" => Ok(Some(todo::OrderAfter::Start)),
+        Some(v @ Value::Object(_)) => {
+            let o = body(v, field, &["item"])?;
+            Ok(Some(todo::OrderAfter::Item(req_str(o, "item", field)?)))
+        }
+        Some(_) => Err(invalid(
+            field,
+            "order_after must be \"start\" or {\"item\": \"<id>\"}",
+        )),
+    }
+}
+
+fn parse_add(v: &Value, scope: Scope) -> Result<TodoOp, TodoError> {
+    let o = body(v, "add", ADD_KEYS)?;
+    Ok(TodoOp::Add(todo::TodoAdd {
+        // Never from the caller: see `scope_for`.
+        scope,
+        title: req_str(o, "title", "add")?,
+        notes: opt_str(o, "notes", "add")?,
+        due_ms: opt_u64(o, "due_ms", "add")?,
+        remind_ms: opt_u64(o, "remind_ms", "add")?,
+        priority: opt_priority(o, "add")?,
+        important: opt_bool(o, "important", "add")?,
+        tags: opt_strs(o, "tags", "add")?,
+        steps: opt_strs(o, "steps", "add")?,
+        my_day: opt_u64(o, "my_day", "add")?,
+    }))
+}
+
+fn parse_update(v: &Value) -> Result<TodoOp, TodoError> {
+    let o = body(v, "update", UPDATE_KEYS)?;
+    Ok(TodoOp::Update(todo::TodoUpdate {
+        id: req_str(o, "id", "update")?,
+        if_rev: opt_u64(o, "if_rev", "update")?,
+        title: opt_str(o, "title", "update")?,
+        notes: opt_str(o, "notes", "update")?,
+        due_ms: nullable_u64(o, "due_ms", "update")?,
+        remind_ms: nullable_u64(o, "remind_ms", "update")?,
+        my_day: nullable_u64(o, "my_day", "update")?,
+        priority: opt_priority(o, "update")?,
+        important: opt_bool(o, "important", "update")?,
+        tags: opt_strs(o, "tags", "update")?,
+        steps: opt_steps(o, "update")?,
+        order_after: opt_order_after(o, "update")?,
+    }))
+}
+
+/// Decode one op from the webview, with `scope` supplied by the command rather
+/// than by the caller.
+///
+/// Public so `src-tauri/tests/todo.rs` can pin the refusals without a webview:
+/// every message below is a contract `src/todo.ts` is written against, and an
+/// untested error string is a claim like any other.
+pub fn parse_op(v: &Value, scope: Scope) -> Result<TodoOp, TodoError> {
+    let (tag, payload) = tagged(v, "op")?;
+    match tag {
+        "add" => parse_add(payload, scope),
+        "update" => parse_update(payload),
+        "complete" => {
+            let o = body(payload, "complete", &["id", "done"])?;
+            Ok(TodoOp::Complete {
+                id: req_str(o, "id", "complete")?,
+                done: opt_bool(o, "done", "complete")?.unwrap_or(true),
+            })
+        }
+        "delete" => {
+            let o = body(payload, "delete", &["id"])?;
+            Ok(TodoOp::Delete {
+                id: req_str(o, "id", "delete")?,
+            })
+        }
+        other => Err(invalid(
+            "op",
+            format!("unknown op {other:?}; expected add, update, complete or delete"),
+        )),
+    }
+}
+
+/// The scope a call means, from the root the caller named.
+///
+/// **The caller names a ROOT, never a key.** [`todo::workspace_key`] is the
+/// only thing that turns a directory into a scope key, exactly as it is on the
+/// MCP path (#3263 S2) — so two spellings of one project cannot become two
+/// lists, and a caller cannot address a workspace it is not in by inventing its
+/// key. An absent or blank root is the global list.
+///
+/// Returns the scope and, for a workspace call, the `(key, root)` pair
+/// [`apply_to`] records so the pane's scope switch has a label.
+fn scope_for(workspace_root: Option<&str>) -> (Scope, Option<(String, String)>) {
+    match workspace_root.map(str::trim).filter(|r| !r.is_empty()) {
+        None => (Scope::Global, None),
+        Some(root) => {
+            let key = todo::workspace_key(Path::new(root));
+            (Scope::Workspace(key.clone()), Some((key, root.to_string())))
+        }
+    }
+}
+
+/// The To-Do store for one scope — the pane's initial paint, and every refresh
+/// the `todo-changed` event triggers.
+///
+/// `workspace_root` is the active pane's project root, sent RAW; see
+/// [`scope_for`]. Absent means the global list.
+///
+/// Off-thread like every other converted command, and framed with
+/// [`OrchRegistry::read_command`] so a re-entrant acquisition degrades to an
+/// empty snapshot instead of unwinding (#1702). The degraded value says
+/// `read_only: false` and lists nothing: an empty list is the one answer that
+/// cannot be mistaken for real data, and the pane re-reads on the next event.
+#[tauri::command]
+pub async fn todo_snapshot(app: AppHandle, workspace_root: Option<String>) -> TodoSnapshot {
+    let reg = super::reg_of(&app);
+    let (scope, _) = scope_for(workspace_root.as_deref());
+    super::run_blocking(move || {
+        OrchRegistry::read_command(
+            "todo_snapshot",
+            || TodoSnapshot {
+                version: CURRENT_VERSION,
+                read_only: false,
+                quarantined: None,
+                workspaces: std::collections::BTreeMap::new(),
+                items: Vec::new(),
+            },
+            || reg.todo_snapshot(Some(&scope)),
+        )
+    })
+    .await
+}
+
+/// Apply one op to the To-Do store on the human's behalf.
+///
+/// The actor is [`Actor::Human`] and the group is `None`, which is not an
+/// omission: this is the PANE's path, and a pane belongs to no group, so there
+/// is no group audit log for the row to go in. The item's own `updated_by`
+/// still records that a human did it, which is what the pane renders. The MCP
+/// path (#3263 S2) is where an agent's edit gets a group and an audit row.
+///
+/// Errors come back as the message [`TodoError`] renders, because every one of
+/// them is something the pane shows the human: a cap refusal, an `if_rev`
+/// conflict, an unknown id, a store written by a newer build.
+///
+/// Framed with [`OrchRegistry::mutating_command`] (#1702) for the same reason
+/// as its siblings.
+#[tauri::command]
+pub async fn todo_apply(
+    app: AppHandle,
+    op: Value,
+    workspace_root: Option<String>,
+) -> Result<Applied, String> {
+    let reg = super::reg_of(&app);
+    let (scope, workspace) = scope_for(workspace_root.as_deref());
+    // Decoded BEFORE the blocking hop, so a malformed op costs no thread and
+    // the refusal names the field rather than arriving as a generic failure.
+    let parsed = parse_op(&op, scope).map_err(|e| e.to_string())?;
+    super::run_blocking(move || {
+        OrchRegistry::mutating_command(
+            "todo_apply",
+            || Err(super::COMMAND_REFUSED.to_string()),
+            || {
+                let ws = workspace.as_ref().map(|(k, r)| (k.as_str(), r.as_str()));
+                reg.todo_apply(None, &Actor::Human, parsed, ws)
+                    .map_err(|e| e.to_string())
+            },
+        )
+    })
+    .await
+}

@@ -62,4 +62,5 @@ permissions = [
     "allow-orch-lead-bind",
     "allow-orch-confirm-solo-copilot-autopilot",
     "allow-orch-solo-adopt",
+    "allow-todo-apply",
 ]

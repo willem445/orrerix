@@ -61,6 +61,18 @@ of done**). Read them before you act, not instead of.
   **receiver**, `channel_send` is reply-only — it works once the sender has messaged you,
   and goes to the sender only, never another receiver. A peer may be **receive-only**
   (`channel_status` shows `can_send: false` for it) — it will never reply, by design.
+- `todo_list` / `todo_get` / `todo_add` / `todo_update` / `todo_complete` /
+  `todo_delete` — **the human's own To-Do list.** Not the task board (`list_tasks`); the two
+  are unrelated, and a board task is this group's work while a to-do is the human's. `scope`
+  defaults to `workspace` — this project's list, resolved from your group's repo — and you
+  cannot name another project's. Use it for the follow-up you notice while the code is in
+  front of you, written for the human reading it in a month: a title that says what to do,
+  notes carrying the issue/PR number. **Groom it, never sweep it.** Read the list before you
+  add, because `todo_update` on the item already there beats a second row saying the same
+  thing; pass `if_rev` whenever you edit an item you did not create, so a concurrent edit
+  refuses your write instead of silently replacing theirs; complete something only when you
+  KNOW it is done; and delete one item at a time and only when asked — this is the human's
+  list, not your workspace.
 - `note_directive(text, replace?)` — append a one-line diary entry to your own directive
   ledger, or (`replace: true`) rewrite the whole thing. See **Directive ledger** below.{{LOCKS}}
 

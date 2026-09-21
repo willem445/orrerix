@@ -2527,6 +2527,18 @@ population unchanged. And what widens is only the POPULATION:
 working, already gone, not bound to a terminal, or not a driven delegate's role,
 so a busy pane stays exactly where it is and no row claims otherwise.
 
+**The RECONCILE's own cancel is outside all of this, and stays that way.** A
+drive whose PR already reads closed when reconcile runs is cancelled there
+rather than by a tick, and reconcile asks `releasable` nothing — it kills no
+pane, owned or founding, and names them in the `CANCELLED` notice for the
+orchestrator instead. That is unchanged by #3250 and is not an oversight the
+terminal population closes: the release runs under the tick's own hold of
+`rd_state_lock` beside the record drop that keeps a live pane from ever being
+unowned, and reconcile is a different hold at a different moment (startup,
+where the orchestrator pane is most likely to be missing). The window is a PR
+closed while orrerix was not running; the panes are in the notice, and
+`kill_agent` is the orchestrator's.
+
 **The list is not read by `driven_role`, and that is deliberate.** §7's
 interception is a claim on a pane's TRAFFIC, and "a drive must never consume the
 traffic of a worker it did not resume" is as true of a founding pane as it was

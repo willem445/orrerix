@@ -9714,10 +9714,18 @@ fn a_cancelled_exit_releases_the_pane_the_drive_was_started_on() {
     let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
     assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
 
-    // The PR closes under the drive — a human merged or closed it — which is
-    // the one arc that reaches `cancelled` from a tick.
+    // **One tick with the PR still open, and it is load-bearing.** The startup
+    // RECONCILE also cancels a drive whose PR reads closed, and it does so
+    // without taking a tick — `releasable` is never asked there and nothing is
+    // killed, which is its own documented behaviour and not what this test is
+    // about. Spending the reconcile here leaves the arc under test: the tick's
+    // own `decide`, which answers `cancelled` for `pr_open == Some(false)`.
+    // The residual is disclosed in `doc/design/review-driver.md` §3.
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+
+    // The PR closes under the drive — a human merged or closed it.
     gh.set_facts("CLOSED", HEAD_A);
-    let end = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let end = reg.rd_drive_group_with(&group, &gh, 20_000);
     let actions = audit_actions(&reg, &group);
     assert!(
         actions.iter().any(|a| a.contains("cancel")) || status_state(&reg, &group) == "cancelled",

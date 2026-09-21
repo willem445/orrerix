@@ -9317,6 +9317,515 @@ fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
     );
 }
 
+/// Tick until the drive reaches `gate-check`, and answer the clock the last
+/// tick ran at — so a caller can put its own tick strictly after it.
+///
+/// Bounded and asserting, never a silent give-up: how many ticks a one-lane gate
+/// takes is an implementation detail of the states between `review-wait` and the
+/// gate, and a test whose subject is the EXIT should not redden when that count
+/// moves. A drive that never gets there panics here rather than letting the
+/// caller measure a release at a step that is not the one it named.
+fn tick_to_gate_check(reg: &OrchRegistry, group: &GroupId, gh: &FakeGh, from_ms: u64) -> u64 {
+    let mut at = from_ms;
+    for _ in 0..8 {
+        reg.rd_drive_group_with(group, gh, at);
+        if status_state(reg, group) == "gate-check" {
+            return at;
+        }
+        at += 10_000;
+    }
+    panic!("the drive never reached gate-check; it is at {}", status_state(reg, group));
+}
+
+/// **A drive that never handed back still releases the worker pane at the
+/// satisfied exit** (#3250) — the drive shape the release rule could not see.
+///
+/// The fixture is the ordinary one and that is the finding: an orchestrator
+/// starts a drive on a worker that has already pushed and reported, CI is green
+/// at that head, every required lane passes, and no hand-back is ever taken. So
+/// `worker_agent` is empty for the whole drive — it is only ever written by a
+/// hand-back — and `DriveEntry::owned_panes` names nothing on the worker side.
+/// The terminal rule was keyed on that field, so it proposed no candidate at
+/// all and the pane the orchestrator named at `start_review_drive` was still
+/// alive and idle when the drive wrote `rd-satisfied`.
+///
+/// Measured twice on the beta12 build: PR #3243 (`w-2739`) and PR #3248
+/// (`w-2747`), both `rd-started` -> `rd-satisfied` with no `rd-handback` and no
+/// `rd-worker-released` row, both ending with an orchestrator killing the pane
+/// by hand before `git worktree remove` would run.
+///
+/// **What this pins is the pane's FATE, not the candidate's existence** — the
+/// row, the death, the caller's own list, and the session surviving so the
+/// promise the exit notice makes still holds. The negative control is one test
+/// down: a pane the barrier refuses (busy) stays exactly where it is, and the
+/// widening here cannot reach past that barrier because it only widens the
+/// population the barrier is asked about.
+#[test]
+fn a_satisfied_drive_releases_the_worker_pane_it_never_handed_back_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let w = reg
+        .spawn_agent(&group, Role::Worker, "w", "", false, None)
+        .expect("the worker whose session the orchestrator is about to name");
+    let worker = w.id.clone();
+    with_pane(&reg, &worker, 41);
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    // It has finished and said so: idle, alive, on that session — which is the
+    // only reason the release barrier could take it at all.
+    report_as(&reg, &group, &worker, Role::Worker, "done");
+
+    // A stable body digest, as the other gate fixtures take: a verdict binds to
+    // a revision AND a body, and a drive whose body digest moves under it never
+    // reaches the gate at all.
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    let opened = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let lane = opened
+        .lanes_opened
+        .first()
+        .cloned()
+        .map(|(_, _, a)| a)
+        .unwrap_or_else(|| panic!("the second tick opens the gate's lane: {opened:?}"));
+    record_pass_for(&reg, &group, &lane);
+    report_as(&reg, &group, &lane, Role::Reviewer, "done");
+    // Ticked to the gate rather than counted to it: how many ticks a one-lane
+    // gate takes is not the axis under test, and pinning it here would make this
+    // test fail for a reason that has nothing to do with the release.
+    let at = tick_to_gate_check(&reg, &group, &gh, 30_000);
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status != AgentStatus::Dead),
+        "…and nothing before the exit has touched the worker pane"
+    );
+    assert!(
+        drives_json(&reg, &group)["entries"][0]["worker_agent"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
+        "…and the drive never handed back, which is the whole shape under test"
+    );
+
+    let end = reg.rd_drive_group_with(&group, &gh, at + 10_000);
+    // Read off the AUDIT, not the status: a satisfied drive is pruned on the
+    // same tick, so `status_state` answers "" for it rather than "satisfied".
+    assert!(
+        audit_actions(&reg, &group).contains(&"rd-satisfied".to_string()),
+        "the fixture's premise: this tick is the satisfied exit"
+    );
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(released, vec![worker.clone()], "the worker pane goes at the exit");
+    let rows = audit_details(&reg, &group, "rd-worker-released");
+    assert_eq!(rows.len(), 1, "one row per pane that actually went: {rows:?}");
+    assert_eq!(rows[0]["agent"], json!(worker), "…naming the pane: {:?}", rows[0]);
+    assert_eq!(rows[0]["reason"], json!("drive-ended"), "…and why: {:?}", rows[0]);
+    assert_eq!(
+        rows[0]["session"],
+        json!(session),
+        "…and the session it is released ONTO, which is what makes it resumable: {:?}",
+        rows[0]
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status == AgentStatus::Dead),
+        "the pane is really gone — a row without a death is the claim #2501 forbids"
+    );
+    let notice = end
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("a satisfied drive owes a notice: {:?}", end.notices));
+    assert!(!notice.contains(&worker), "a released pane is not named as still running: {notice}");
+    assert!(
+        notice.contains(&format!("worker session {session} resumes with spawn_agent(resume:)")),
+        "…and what replaces it is the handle that still works: {notice}"
+    );
+}
+
+/// **The barrier still decides, and a BUSY pane on the drive's session stays**
+/// (#3250) — the negative control for the widening above, and the one that says
+/// it widened a POPULATION rather than granting the driver a new kill.
+///
+/// Same fixture, one fact changed: the worker never reported, so it is mid-turn
+/// at the exit. `release_driven_pane` refuses a pane that is not idle, and the
+/// drive must then leave it alone and say nothing — a release row for a pane
+/// that is still running is exactly the false claim §5.4 asks a reader to be
+/// able to count on.
+#[test]
+fn a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let w = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).expect("a worker");
+    let worker = w.id.clone();
+    with_pane(&reg, &worker, 41);
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    // Mid-turn through the product's own signal: `report` stamps
+    // `idle_since_ms` for `done`/`blocked` and CLEARS it for `progress`, which
+    // is the one word that says "still working". A fresh pane reads as idle, so
+    // without this the arm would be the positive case wearing the label of the
+    // negative one.
+    report_as(&reg, &group, &worker, Role::Worker, "progress");
+
+    // A stable body digest, as the other gate fixtures take: a verdict binds to
+    // a revision AND a body, and a drive whose body digest moves under it never
+    // reaches the gate at all.
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    let opened = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let lane = opened
+        .lanes_opened
+        .first()
+        .cloned()
+        .map(|(_, _, a)| a)
+        .unwrap_or_else(|| panic!("the second tick opens the gate's lane: {opened:?}"));
+    record_pass_for(&reg, &group, &lane);
+    report_as(&reg, &group, &lane, Role::Reviewer, "done");
+    let at = tick_to_gate_check(&reg, &group, &gh, 30_000);
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.idle_since_ms.is_none()),
+        "the fixture's premise: this pane is mid-turn, so the barrier must refuse it"
+    );
+
+    let end = reg.rd_drive_group_with(&group, &gh, at + 10_000);
+    // Read off the AUDIT, not the status: a satisfied drive is pruned on the
+    // same tick, so `status_state` answers "" for it rather than "satisfied".
+    assert!(
+        audit_actions(&reg, &group).contains(&"rd-satisfied".to_string()),
+        "the fixture's premise: this tick is the satisfied exit"
+    );
+    assert!(
+        end.released.iter().all(|(_, _, a)| *a != worker),
+        "a busy pane is not released: {:?}",
+        end.released
+    );
+    assert!(
+        audit_details(&reg, &group, "rd-worker-released").is_empty(),
+        "…and no row claims it was"
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status != AgentStatus::Dead),
+        "…and it is still there for the orchestrator to speak to"
+    );
+
+    // **And the exit NAMES it** (review round 3, B2). A pane that survives the
+    // exit is one the orchestrator has to dispose of, and this is the last line
+    // the drive ever writes — the entry is terminal and is pruned, so there is
+    // no later tick and no later notice. Before this the founding pane was in
+    // no clause at all: `owned_panes` is empty for a drive that never handed
+    // back, so the notice said nothing about the worker side and the
+    // conversation that just ended was recoverable by nothing the reader could
+    // see.
+    let notice = end
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("a satisfied drive owes a notice: {:?}", end.notices));
+    assert!(
+        notice.contains(&worker),
+        "the pane that survived the exit is named for the orchestrator to dispose of: {notice}"
+    );
+}
+
+/// A drive started on a session that already carries `panes` worker panes, all
+/// idle, walked to `gate-check` — the #3250 shape with the pane count as its
+/// one axis.
+///
+/// Answers `(group, panes oldest-first, session, the clock the last tick ran
+/// at)`. The panes are spawned in order and every one of them reports `done`
+/// before the drive starts, which is what an orchestrator is looking at when it
+/// hands a finished PR to the driver.
+fn drive_started_on_session(
+    reg: &OrchRegistry,
+    repo: &Repo,
+    gh: &FakeGh,
+    panes: usize,
+) -> (GroupId, Vec<String>, String, u64) {
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let first = reg
+        .spawn_agent(&group, Role::Worker, "w", "", false, None)
+        .expect("the worker whose session the orchestrator is about to name");
+    let session = first.session_id.clone().expect("claude mints a session id at spawn");
+    let mut ids = vec![first.id.clone()];
+    for k in 1..panes {
+        // A SECOND pane on one conversation, which is what an orchestrator
+        // produces by resuming a session whose pane is still alive — the shape
+        // #3203 exists to stop the driver producing, and one the driver still
+        // has to be able to clean up after.
+        let more = reg
+            .spawn_agent_ex(
+                &group,
+                Role::Worker,
+                Some("worker".to_string()),
+                &format!("w{k}"),
+                "",
+                false,
+                None,
+                None,
+                Some(session.clone()),
+                None,
+                None,
+            )
+            .expect("a second pane on the same session");
+        ids.push(more.id.clone());
+    }
+    for (k, id) in ids.iter().enumerate() {
+        with_pane(reg, id, 41 + k as u32);
+        report_as(reg, &group, id, Role::Worker, "done");
+    }
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let out = reg.drive_review_with(&group, gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+    // What the drive recorded is deliberately NOT asserted here. It is the
+    // mechanism under test, not a premise of the fixture: pinning it in the
+    // shared setup would make every test below fail on a premise rather than on
+    // the pane's fate when the mechanism is absent, which is the weaker red.
+    // `founding_panes_are_recorded_total_deduped_and_never_alongside_the_current_pane`
+    // pins the recording itself.
+    reg.rd_drive_group_with(&group, gh, 10_000);
+    let opened = reg.rd_drive_group_with(&group, gh, 20_000);
+    let lane = opened
+        .lanes_opened
+        .first()
+        .cloned()
+        .map(|(_, _, a)| a)
+        .unwrap_or_else(|| panic!("the second tick opens the gate's lane: {opened:?}"));
+    record_pass_for(reg, &group, &lane);
+    report_as(reg, &group, &lane, Role::Reviewer, "done");
+    let at = tick_to_gate_check(reg, &group, gh, 30_000);
+    (group, ids, session, at)
+}
+
+/// **Two panes on one session are both released, each once, oldest first**
+/// (#3250, review round 1 finding 2) — the plural path the first round of this
+/// change never exercised.
+///
+/// Three claims in one fixture, because they fail differently: BOTH panes go
+/// (a population that stopped at the first would pass a one-pane test), each
+/// gets exactly ONE row (the dedup against `owned_panes`, which a merged list
+/// can duplicate), and the rows are in the order the panes were opened — the
+/// claim the release loop makes and which only the MERGED list can make true.
+#[test]
+fn two_panes_on_the_drives_session_are_both_released_once_each_oldest_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, panes, session, at) = drive_started_on_session(&reg, &repo, &gh, 2);
+
+    let end = reg.rd_drive_group_with(&group, &gh, at + 10_000);
+    assert!(
+        audit_actions(&reg, &group).contains(&"rd-satisfied".to_string()),
+        "the fixture's premise: this tick is the satisfied exit"
+    );
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(released, panes, "both panes go, oldest first: {released:?}");
+    let rows = audit_details(&reg, &group, "rd-worker-released");
+    let named: Vec<String> =
+        rows.iter().map(|r| r["agent"].as_str().unwrap_or_default().to_string()).collect();
+    assert_eq!(named, panes, "one row per pane, in the same order: {rows:?}");
+    for row in &rows {
+        assert_eq!(row["session"], json!(session), "each row names the session kept: {row}");
+    }
+    for p in &panes {
+        assert!(reg.agent(p).is_some_and(|a| a.status == AgentStatus::Dead), "{p} is really gone");
+    }
+}
+
+/// **A pane opened on the session AFTER the drive started is not released**
+/// (#3250, review round 1 premortem) — in the window the premortem named.
+///
+/// The orchestrator resumes the conversation between the `gate-check` tick and
+/// the exit. A freshly spawned pane reads as idle, so the barrier would take
+/// it; the release is refused here by the POPULATION instead. `founding_panes`
+/// is a list recorded when `drive_review` read the session, and this pane was
+/// not on it — which is the whole reason the population is a recorded list
+/// rather than a live re-read of the session.
+///
+/// The pane the drive WAS started on is asserted to go in the same run, so this
+/// cannot pass by the release having stopped working altogether.
+#[test]
+fn a_pane_opened_on_the_session_after_the_drive_started_survives_the_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, panes, session, at) = drive_started_on_session(&reg, &repo, &gh, 1);
+    let founding = panes[0].clone();
+
+    let late = reg
+        .spawn_agent_ex(
+            &group,
+            Role::Worker,
+            Some("worker".to_string()),
+            "w-late",
+            "",
+            false,
+            None,
+            None,
+            Some(session.clone()),
+            None,
+            None,
+        )
+        .expect("the orchestrator resumes the session inside the window")
+        .id;
+    with_pane(&reg, &late, 61);
+    report_as(&reg, &group, &late, Role::Worker, "done");
+    assert!(
+        reg.agent(&late).is_some_and(|a| a.idle_since_ms.is_some()),
+        "the fixture's premise: this pane reads as idle, so only the population can save it"
+    );
+
+    let end = reg.rd_drive_group_with(&group, &gh, at + 10_000);
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(
+        released,
+        vec![founding.clone()],
+        "the founding pane goes and the late one does not: {released:?}"
+    );
+    assert!(
+        reg.agent(&late).is_some_and(|a| a.status != AgentStatus::Dead),
+        "…and the pane someone has just started speaking to is still there"
+    );
+    assert_eq!(
+        audit_details(&reg, &group, "rd-worker-released").len(),
+        1,
+        "…and no row claims otherwise"
+    );
+}
+
+/// **The CANCELLED exit releases the founding pane too** (#3250, review round 1
+/// finding 1) — the same defect one terminal state over.
+///
+/// The first round of this change bounded the widening to `satisfied`, on the
+/// argument that its notice is what makes the release safe. `cancelled` is a
+/// terminal step too: the drive is over, the terminal rule already ends the
+/// panes it OWNS there, and a PR that closed under a drive that never handed
+/// back left the orchestrator's own worker pane alive exactly as #3243 and
+/// #3248 did. The two exits differing was an accident of the guard, not a
+/// decision.
+#[test]
+fn a_cancelled_exit_releases_the_pane_the_drive_was_started_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let w = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).expect("a worker");
+    let worker = w.id.clone();
+    with_pane(&reg, &worker, 41);
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    report_as(&reg, &group, &worker, Role::Worker, "done");
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+
+    // **One tick with the PR still open, and it is load-bearing.** The startup
+    // RECONCILE also cancels a drive whose PR reads closed, and it does so
+    // without taking a tick — `releasable` is never asked there and nothing is
+    // killed, which is its own documented behaviour and not what this test is
+    // about. Spending the reconcile here leaves the arc under test: the tick's
+    // own `decide`, which answers `cancelled` for `pr_open == Some(false)`.
+    // The residual is disclosed in `doc/design/review-driver.md` §3.
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+
+    // The PR closes under the drive — a human merged or closed it.
+    gh.set_facts("CLOSED", HEAD_A);
+    let end = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let actions = audit_actions(&reg, &group);
+    assert!(
+        actions.iter().any(|a| a.contains("cancel")) || status_state(&reg, &group) == "cancelled",
+        "the fixture's premise: a closed PR cancels the drive: {actions:?}"
+    );
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(released, vec![worker.clone()], "the founding pane goes at this exit too");
+    let rows = audit_details(&reg, &group, "rd-worker-released");
+    assert_eq!(rows.len(), 1, "one row: {rows:?}");
+    assert_eq!(rows[0]["reason"], json!("drive-ended"), "…with the terminal reason: {:?}", rows[0]);
+    assert_eq!(rows[0]["session"], json!(session), "…naming the session kept: {:?}", rows[0]);
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status == AgentStatus::Dead),
+        "the pane is really gone"
+    );
+}
+
+/// **The RECONCILE's cancel names the founding pane too** (#3250, review round
+/// 3, B1) — the one exit that releases nothing at all.
+///
+/// A PR that closed while orrerix was not running is cancelled by reconcile
+/// rather than by a tick, and reconcile asks `releasable` nothing: no pane is
+/// killed, owned or founding. That is argued and left alone in
+/// `doc/design/review-driver.md` §3 — but the argument rests on the orchestrator
+/// being able to see what survived, and `owned_panes` is EMPTY on the worker
+/// side for a drive that never handed back, so the pane the orchestrator handed
+/// the drive appeared in no clause of that notice at all.
+///
+/// The lane pane is asserted in the same run as the control: the clause was
+/// never empty, so a test reading only "the notice names a pane" would have
+/// passed before the fix.
+#[test]
+fn the_reconcile_cancel_names_the_pane_the_drive_was_started_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let w = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).expect("a worker");
+    let worker = w.id.clone();
+    with_pane(&reg, &worker, 41);
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    report_as(&reg, &group, &worker, Role::Worker, "done");
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+
+    // The PR closes while nothing is ticking, so the once-per-process reconcile
+    // is the producer — no tick runs with the PR open first.
+    gh.set_facts("CLOSED", HEAD_A);
+    make_delivery_land(&reg, &group, &orch.id, 7305);
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    assert!(
+        reg.audit_log(&group)
+            .into_iter()
+            .any(|e| e.action == "rd-cancelled" && e.detail["at"] == json!("reconcile")),
+        "this test is about RECONCILE's producer and it did not run"
+    );
+    reg.rd_drive_group_with(&group, &gh, 20_000);
+
+    let landed = drive_notices(&reg, &group, 1758);
+    assert_eq!(landed.len(), 1, "reconcile owes exactly one notice: {landed:?}");
+    assert!(
+        landed[0].contains("the PR is closed or merged"),
+        "the fixture's premise: this is reconcile's own cancel: {}",
+        landed[0]
+    );
+    assert!(
+        landed[0].contains(&worker),
+        "the pane the orchestrator handed the drive is named — nothing killed it, and this \
+         notice is the only thing that says it is still there: {}",
+        landed[0]
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status != AgentStatus::Dead),
+        "…and it really is still there, which is what makes naming it true"
+    );
+}
+
 /// **A terminal release the BARRIER refuses leaves that pane exactly where it
 /// was — named in the notice, alive, and the orchestrator's** (#2811 S1) — the
 /// residual `releasable`'s doc discloses, pinned rather than described.
@@ -13184,11 +13693,17 @@ fn a_takeover_refused_by_a_full_queue_says_so_and_falls_through() {
 /// **Finding 3, pinned.** A superseded pane the release barrier SKIPS is never
 /// re-asked on a later tick.
 ///
-/// `releasable` gates its worker candidate on `!entry.worker_agent.is_empty()`,
-/// and the release that just happened cleared that field — so once the current
-/// pane goes, no later tick names the worker role again. A superseded pane that
-/// was mid-turn at the release tick therefore stays owned and counting against
-/// the cap until its own turn ends and the idle reaper takes it.
+/// `releasable` gates its NON-terminal worker candidate on
+/// `!entry.worker_agent.is_empty()`, and the release that just happened cleared
+/// that field — so no later tick of a LIVE drive names the worker role again. A
+/// superseded pane that was mid-turn at the release tick therefore stays owned
+/// and counting against the cap until its own turn ends and the idle reaper
+/// takes it.
+///
+/// Narrowed by #3250 at one end and no further: the SATISFIED exit now asks
+/// about every live pane on the session, so a pane still alive there is taken.
+/// This drive never reaches one — it is red at `HEAD_B` for every tick below —
+/// which is what keeps the window this pins a real one.
 ///
 /// **This pins the residual the design note now discloses, in the direction that
 /// can go quietly false.** The busy arm of

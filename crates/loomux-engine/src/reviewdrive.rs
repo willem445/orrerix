@@ -1863,6 +1863,31 @@ pub struct DriveEntry {
     /// this drive no longer owns.
     #[serde(default)]
     pub prior_worker_agents: Vec<String>,
+    /// **The panes this drive was STARTED ON** — every live pane sitting on
+    /// `worker_session` at the moment `drive_review` recorded it (#3250).
+    ///
+    /// The other two lists are written by a HAND-BACK, so a drive that never
+    /// takes one owns no worker pane at all: the pane the orchestrator built
+    /// the drive around is invisible to every rule keyed on them. That is the
+    /// defect #3250 measured — on PRs #3243 and #3248 the audit runs
+    /// `rd-started` -> `rd-satisfied` with no `rd-handback` row, and the
+    /// original worker pane was still alive and idle at the exit, holding the
+    /// worktree an orchestrator then had to `kill_agent` by hand.
+    ///
+    /// **Read by the terminal release and by nothing else.** In particular NOT
+    /// by [`driven_role`](DriveEntry::driven_role): §7's interception is a
+    /// claim on a pane's TRAFFIC, and "a drive must never consume the traffic
+    /// of a worker it did not resume" is exactly as true of a founding pane as
+    /// it was before this field existed. Ending a pane the drive was handed,
+    /// once the drive is over, is a different question from speaking for it
+    /// while it runs.
+    ///
+    /// Recorded at drive start and at a resume, cleared with the other two when
+    /// a resume re-points the drive at a DIFFERENT session, and pruned by
+    /// [`forget_dead_panes`](DriveEntry::forget_dead_panes) like them — bounded
+    /// by LIVENESS, never by size, for that function's reason.
+    #[serde(default)]
+    pub founding_panes: Vec<String>,
     /// The orchestrator this drive acts for. Every action taken under it is
     /// audited with this as the `on_behalf_of` detail key — the actor stays
     /// `brand::AUDIT_ACTOR`, so it is this key, not the actor, that
@@ -2223,6 +2248,7 @@ impl DriveEntry {
             worker_session: worker_session.to_string(),
             worker_agent: String::new(),
             prior_worker_agents: Vec::new(),
+            founding_panes: Vec::new(),
             on_behalf_of: on_behalf_of.to_string(),
             lanes: Vec::new(),
             lane_index: 0,
@@ -2819,11 +2845,30 @@ impl DriveEntry {
         self.worker_agent = agent.to_string();
     }
 
+    /// Record the panes this drive was STARTED ON — see
+    /// [`founding_panes`](DriveEntry::founding_panes).
+    ///
+    /// A method rather than a field write at the call site, for
+    /// [`record_worker_pane`](DriveEntry::record_worker_pane)'s reason: the fact
+    /// and its one writer stay together. Normalised through [`retain_panes`] so
+    /// the list carries no empties and no duplicates, and so a pane this drive
+    /// has SINCE resumed into is not filed twice — `worker_agent` is passed as
+    /// the pane to drop, which is what makes re-recording on a resume
+    /// idempotent rather than cumulative.
+    ///
+    /// Total, not additive: a resume re-reads the session and the answer
+    /// replaces the previous one, so a founding pane that has since died does
+    /// not survive by having been recorded once.
+    pub fn record_founding_panes(&mut self, panes: Vec<String>) {
+        self.founding_panes = retain_panes(panes, &self.worker_agent);
+    }
+
     /// Forget every worker pane this drive resumed — the resume-onto-a-different
     /// session case, where those panes belong to a worker it no longer owns.
     pub fn forget_worker_panes(&mut self) {
         self.worker_agent = String::new();
         self.prior_worker_agents.clear();
+        self.founding_panes.clear();
     }
 
     /// Drop superseded panes that are no longer alive, and answer whether
@@ -2862,13 +2907,14 @@ impl DriveEntry {
     /// whether a drive is WAITING on a pane; this decides only what a bounded
     /// list keeps.
     pub fn forget_dead_panes(&mut self, is_live: &dyn Fn(&str) -> bool) -> bool {
-        let before = self.prior_worker_agents.len()
+        let before = self.prior_worker_agents.len() + self.founding_panes.len()
             + self.lanes.iter().map(|l| l.prior_agents.len()).sum::<usize>();
         self.prior_worker_agents.retain(|a| is_live(a));
+        self.founding_panes.retain(|a| is_live(a));
         for l in self.lanes.iter_mut() {
             l.prior_agents.retain(|a| is_live(a));
         }
-        let after = self.prior_worker_agents.len()
+        let after = self.prior_worker_agents.len() + self.founding_panes.len()
             + self.lanes.iter().map(|l| l.prior_agents.len()).sum::<usize>();
         before != after
     }
@@ -4655,6 +4701,134 @@ impl ReleaseReason {
 pub struct ReleaseCandidate {
     pub role: DrivenRole,
     pub reason: ReleaseReason,
+    /// **Whether the caller's population includes the panes this drive was
+    /// STARTED ON, and not only the ones it resumed into** (#3250) — see
+    /// [`DriveEntry::founding_panes`].
+    ///
+    /// [`DriveEntry::owned_panes`] names what the drive itself opened or took
+    /// over, and that set is EMPTY for a drive that never handed back — which
+    /// is the common shape, not a corner: an orchestrator starts a drive on a
+    /// worker that has already pushed and reported, every lane passes, and no
+    /// hand-back is ever taken. Measured on PRs #3243 and #3248, where the
+    /// audit log carries `rd-started` -> `rd-satisfied` with no `rd-handback`
+    /// row at all and the worker pane the orchestrator named at
+    /// `start_review_drive` was still alive and idle at the exit, holding the
+    /// worktree an orchestrator then had to `kill_agent` by hand.
+    ///
+    /// True at a TERMINAL step and false everywhere else, and that bound is the
+    /// argument, not caution. At `satisfied` and at `cancelled` alike the drive
+    /// is over — its own notice tells the orchestrator the conversation resumes
+    /// with `spawn_agent(resume:)` — and the terminal rule already kills the
+    /// panes it OWNS at both, so the two exits differing in population was the
+    /// same defect one state over rather than a deliberate narrowing (review
+    /// round 1, finding 1). Mid-drive the pane may be one the orchestrator is
+    /// still using, so [`ReleaseReason::ReportConsumed`] keeps the #3203
+    /// population (every pane the drive OWNS on that session) and this stays
+    /// false.
+    ///
+    /// **It is not a kill of everything on the session, and the first draft of
+    /// this change was** (review round 1). The population is a RECORDED list —
+    /// the panes that were live on the session when `drive_review` read it —
+    /// so a pane the orchestrator opens or resumes while the drive runs is
+    /// simply not in it, including one opened inside the single tick between
+    /// `gate-check` and the exit, where a fresh pane reads as idle and the
+    /// barrier would otherwise take it from whoever had just started speaking
+    /// to it. [`admit_session_pane`] states the one further exclusion the
+    /// caller applies: a pane another live drive's record names is that
+    /// drive's to release, since `already-driven` is keyed on the PR and one
+    /// worker session may legally back two driven PRs.
+    ///
+    /// And it widens only the POPULATION. Whether any one of those panes may go
+    /// is still the caller's barrier — idle, alive, bound to a terminal, not a
+    /// fixture role — asked per pane, so a busy pane is skipped here exactly as
+    /// a busy owned one is.
+    pub include_founding: bool,
+}
+
+/// **May a pane that is merely ON the drive's worker session join the terminal
+/// release's population?** (#3250, narrowed in review round 1.)
+///
+/// [`DriveEntry::founding_panes`] is the population; this is the whole of what
+/// joining it excludes, spelled as one pure predicate rather than as conditions
+/// in the caller's loop — the caller can then only get it wrong by not calling
+/// this, which is visible, instead of by drifting one condition, which is not.
+///
+/// Three reasons to answer `false`:
+///
+/// - **an empty id**, which names no pane.
+/// - **`already`** — the panes the drive OWNS, already in the population. One
+///   pane, one barrier question, one audit row.
+/// - **`owned_elsewhere`** — the panes any OTHER live drive OWNS, which is that
+///   drive's [`owned_panes`](DriveEntry::owned_panes) and nothing else: the
+///   panes it opened, took over or superseded. `already-driven` is keyed on the
+///   PR and not on the session, so one worker session may legally back two
+///   driven PRs, and a pane the other drive owns is a pane it is going to speak
+///   to again — the exact claim this release rests on, broken by the release
+///   itself (review round 1, finding 1).
+///
+///   **It does NOT cover the other drive's own founding list, and that is a
+///   stated residual rather than an oversight** (review round 2). Two drives
+///   started on one session name the same founding pane, so each considers it
+///   its own and whichever reaches a terminal step first releases it. Excluding
+///   it on both sides would trade that for a pane neither drive ever releases —
+///   the leak this issue is about — so the release is left where it is and the
+///   consequence is written down: the other drive's next hand-back re-opens the
+///   conversation with `spawn_agent(resume:)`, which is the recovery the whole
+///   release rests on and is exactly what it would have done for a pane the
+///   human had killed.
+///
+/// **Deliberately NOT a comparison of timestamps.** The first draft admitted a
+/// session pane if it was older than the drive, which reads well and is
+/// untestable: an agent's `started_ms` is the wall clock while a drive's is the
+/// caller's injected `now`, so under any synthetic clock the two are on
+/// different scales — the same divergence that kept `drive-stalled` from ever
+/// firing in a test before #2811 B2. A recorded list answers the same question
+/// with no clock in it at all.
+pub fn admit_session_pane(
+    agent: &str,
+    already: &[String],
+    owned_elsewhere: &[String],
+) -> bool {
+    !agent.trim().is_empty()
+        && !already.iter().any(|a| a == agent)
+        && !owned_elsewhere.iter().any(|a| a == agent)
+}
+
+/// **The terminal release's worker population: the panes this drive owns plus
+/// the panes it was started on, oldest first** (#3250, review round 2).
+///
+/// The merge and the sort are here rather than in the caller's loop because the
+/// ORDER is a claim two comments make and only the merged list can keep. Every
+/// member of `owned` was minted by a hand-back, so each one post-dates the pane
+/// the drive was started on: appending `founding` to it puts the audit rows
+/// newest-first-then-oldest, the inverse of "the rows read as the history they
+/// are". The caller supplies `started_ms` because a pane's age is the
+/// registry's fact and this crate is Tauri-free — the same injection
+/// [`DriveEntry::forget_dead_panes`] takes for liveness.
+///
+/// A pane the registry cannot date sorts LAST rather than first: it is a pane
+/// that is already gone or was never on the roster, so the barrier will refuse
+/// it, and putting it at the head would place a row that never happens in front
+/// of ones that do. Ties break on the id, so two panes registered inside one
+/// wall-clock millisecond cannot order differently between runs.
+///
+/// Only the founding half is filtered — `owned` is the drive's own record and
+/// is already deduplicated by [`retain_panes`] — and the filtering is
+/// [`admit_session_pane`], asked once per founding pane.
+pub fn release_population(
+    owned: Vec<String>,
+    founding: &[String],
+    owned_elsewhere: &[String],
+    started_ms: &dyn Fn(&str) -> Option<u64>,
+) -> Vec<String> {
+    let mut out = owned;
+    for a in founding {
+        if admit_session_pane(a, &out, owned_elsewhere) {
+            out.push(a.clone());
+        }
+    }
+    out.sort_by_key(|a| (started_ms(a).unwrap_or(u64::MAX), a.clone()));
+    out
 }
 
 /// **The panes this drive no longer needs, at this tick's facts and this tick's
@@ -4830,7 +5004,13 @@ pub fn releasable(
     let mut out: Vec<ReleaseCandidate> = Vec::new();
     // Condition 3, first, so the list reads worker-first exactly as
     // `owned_panes` does.
-    if !entry.worker_agent.is_empty() {
+    // **The guard is "this drive has a worker side", not "this drive resumed a
+    // pane"** (#3250). Keying the whole condition on `worker_agent` made the
+    // terminal rule unreachable for every drive that never handed back — the
+    // exact drives the rule is most needed on, since a drive that DID hand back
+    // has usually released that pane on the report already. The session is what
+    // a drive always has: `drive_review` refuses without one (§5.1).
+    if !entry.worker_agent.is_empty() || !entry.worker_session.trim().is_empty() {
         if terminal {
             // The drive is over. The only thing that keeps its worker pane is a
             // round still outstanding — a `cancelled` that arrived while the
@@ -4840,15 +5020,20 @@ pub fn releasable(
                 out.push(ReleaseCandidate {
                     role: DrivenRole::Worker,
                     reason: ReleaseReason::DriveEnded,
+                    // Both terminal steps: see the field's own doc for why the
+                    // two exits cannot differ here.
+                    include_founding: true,
                 });
             }
-        } else if advancing
+        } else if !entry.worker_agent.is_empty()
+            && advancing
             && entry.handback_outstanding()
             && facts.worker == WorkerSignal::Done
         {
             out.push(ReleaseCandidate {
                 role: DrivenRole::Worker,
                 reason: ReleaseReason::ReportConsumed,
+                include_founding: false,
             });
         }
     }
@@ -4870,6 +5055,7 @@ pub fn releasable(
         out.push(ReleaseCandidate {
             role: DrivenRole::Lane(l.block.clone()),
             reason: ReleaseReason::VerdictRecorded,
+            include_founding: false,
         });
     }
     // **Condition 4: the PR does not merge, so every open lane is reviewing a
@@ -4920,7 +5106,11 @@ pub fn releasable(
             if answered_here {
                 continue;
             }
-            out.push(ReleaseCandidate { role, reason: ReleaseReason::Conflict });
+            out.push(ReleaseCandidate {
+                role,
+                reason: ReleaseReason::Conflict,
+                include_founding: false,
+            });
         }
     }
     out
@@ -8841,9 +9031,24 @@ mod tests {
         let mut f = facts_at("h1");
         f.required_lanes = Some(vec![lane_fact("rev-std", Some(Verdict::Pass), "h0", "d1")]);
         let step = DriveStep::Advance { to: DriveState::Satisfied, held_reason: None, bump: None };
+        let got = releasable(&e, &f, &step);
         assert!(
-            releasable(&e, &f, &step).is_empty(),
-            "a stale verdict is stale at a terminal step too"
+            !got.iter().any(|c| matches!(c.role, DrivenRole::Lane(_))),
+            "a stale verdict is stale at a terminal step too: {got:?}"
+        );
+        // …and what IS proposed here is the worker side, on the session alone
+        // (#3250): this fixture never handed back, so `worker_agent` is empty
+        // and the pre-#3250 rule proposed nothing at all — which is the defect,
+        // measured as an idle worker pane surviving `rd-satisfied` on PRs #3243
+        // and #3248. The caller's barrier still decides per pane.
+        assert_eq!(
+            got,
+            vec![ReleaseCandidate {
+                role: DrivenRole::Worker,
+                reason: ReleaseReason::DriveEnded,
+                include_founding: true,
+            }],
+            "the satisfied exit asks about the worker session it was started on"
         );
 
         // The guard: cancelled while the worker still owes this drive a round.
@@ -8864,6 +9069,142 @@ mod tests {
                 "pushed={pushed}: a worker mid-round is not released by the drive being cancelled"
             );
         }
+    }
+
+    /// **Every reason a founding pane is refused, and the one shape that is
+    /// admitted** (#3250, review round 1).
+    ///
+    /// The rows differ in ONE input each from the admitted row, so a predicate
+    /// that dropped any single condition is red here — the discrimination
+    /// CLAUDE.md's non-discriminating-fixture rule asks for. The two exclusion
+    /// rows are the ones that matter: without the first a pane is asked about
+    /// twice and audited twice, and without the second this drive's exit kills
+    /// a pane ANOTHER live drive is still going to speak to.
+    #[test]
+    fn a_founding_pane_joins_the_release_unless_it_is_owned_here_or_driven_elsewhere() {
+        let owned = vec!["w-owned".to_string()];
+        let elsewhere = vec!["w-other-drive".to_string()];
+        for (label, agent, admit) in [
+            ("the founding pane the orchestrator handed over", "w-founding", true),
+            ("a pane the drive itself owns is already in", "w-owned", false),
+            ("another live drive's pane is that drive's", "w-other-drive", false),
+            ("no pane at all", "  ", false),
+        ] {
+            assert_eq!(admit_session_pane(agent, &owned, &elsewhere), admit, "{label}");
+        }
+    }
+
+    /// **One population holding an owned pane AND a founding one, in the order
+    /// the rows claim** (#3250, review round 2) — the fixture the sort has to
+    /// have, because with only one of the two kinds any order is the right one.
+    ///
+    /// The owned pane is the YOUNGER of the two, which is not a fixture choice
+    /// but the shape of the thing: `owned` is written by a hand-back and a
+    /// hand-back happens after the drive was handed the founding pane. So the
+    /// merge order and the answer DIVERGE — drop the sort and this reddens with
+    /// the two swapped, which is the mutation the claim owes.
+    ///
+    /// The undatable pane is asserted in the same run for the same reason it
+    /// sorts last: a change that made an unknown age sort FIRST would put a row
+    /// that never happens at the head of the list.
+    #[test]
+    fn the_release_population_reads_oldest_first_across_owned_and_founding_panes() {
+        let age = |a: &str| match a {
+            "w-founding" => Some(100u64),
+            "w-handback" => Some(900),
+            "w-second-founding" => Some(300),
+            _ => None,
+        };
+        let got = release_population(
+            vec!["w-handback".to_string()],
+            &["w-founding".to_string(), "w-second-founding".to_string()],
+            &[],
+            &age,
+        );
+        assert_eq!(
+            got,
+            vec![
+                "w-founding".to_string(),
+                "w-second-founding".to_string(),
+                "w-handback".to_string()
+            ],
+            "the hand-back pane is the youngest and comes last, whatever order it was merged in"
+        );
+
+        let with_ghost = release_population(
+            vec!["w-handback".to_string()],
+            &["w-ghost".to_string(), "w-founding".to_string()],
+            &[],
+            &age,
+        );
+        assert_eq!(
+            with_ghost,
+            vec!["w-founding".to_string(), "w-handback".to_string(), "w-ghost".to_string()],
+            "a pane the registry cannot date sorts last, not first"
+        );
+
+        assert_eq!(
+            release_population(
+                vec!["w-handback".to_string()],
+                &["w-founding".to_string(), "w-handback".to_string(), String::new()],
+                &["w-second-founding".to_string()],
+                &age,
+            ),
+            vec!["w-founding".to_string(), "w-handback".to_string()],
+            "and the filtering is unchanged: owned, elsewhere and empty are all refused"
+        );
+    }
+
+    /// **The founding list is recorded TOTAL, deduped, and never files a pane
+    /// the drive has since resumed into** (#3250, review round 1).
+    ///
+    /// Total rather than additive is the half a resume depends on: a second
+    /// `drive_review` re-reads the session, and a founding pane that has since
+    /// died must not survive by having been recorded once. The `worker_agent`
+    /// exclusion is what keeps one pane out of two lists, which the caller's
+    /// dedup would otherwise have to catch every time.
+    #[test]
+    fn founding_panes_are_recorded_total_deduped_and_never_alongside_the_current_pane() {
+        let mut e = entry_at(DriveState::CiWait);
+        e.record_founding_panes(vec!["w-1".into(), "w-2".into(), "w-1".into(), String::new()]);
+        assert_eq!(e.founding_panes, vec!["w-1".to_string(), "w-2".to_string()], "deduped");
+
+        e.record_worker_pane("w-2");
+        e.record_founding_panes(vec!["w-1".into(), "w-2".into()]);
+        assert_eq!(
+            e.founding_panes,
+            vec!["w-1".to_string()],
+            "the pane the drive has resumed into is owned, not founding"
+        );
+
+        e.record_founding_panes(vec!["w-3".into()]);
+        assert_eq!(
+            e.founding_panes,
+            vec!["w-3".to_string()],
+            "a re-read REPLACES: a founding pane that has gone does not survive the resume"
+        );
+
+        e.forget_worker_panes();
+        assert!(e.founding_panes.is_empty(), "a different session forgets these too");
+    }
+
+    /// **A dead founding pane is dropped by the same prune that bounds the
+    /// superseded lists** (#3250) — and a live one is never evicted.
+    ///
+    /// The `changed` answer is asserted in both directions because it is what
+    /// decides whether the tick WRITES: a prune that dropped a pane and
+    /// reported `false` would leave the record claiming a pane that is gone
+    /// until something else happened to write.
+    #[test]
+    fn a_dead_founding_pane_is_pruned_and_says_so() {
+        let mut e = entry_at(DriveState::CiWait);
+        e.record_founding_panes(vec!["w-live".into(), "w-dead".into()]);
+        assert!(
+            e.forget_dead_panes(&|a: &str| a != "w-dead"),
+            "dropping a founding pane is a change the caller must persist"
+        );
+        assert_eq!(e.founding_panes, vec!["w-live".to_string()]);
+        assert!(!e.forget_dead_panes(&|_: &str| true), "…and a prune that drops nothing is no change");
     }
 
     /// **The worker rule: a hand-back outstanding plus `Done`, and nothing

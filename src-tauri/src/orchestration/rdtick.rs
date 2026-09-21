@@ -702,6 +702,44 @@ impl OrchRegistry {
         }
     }
 
+    /// **What a terminal notice owes a reader: the panes this drive still
+    /// holds, founding ones included** (#3250, review round 3).
+    ///
+    /// [`reviewdrive::DriveEntry::owned_panes`] is what the exit notices named
+    /// before, and for a drive that never handed back its worker side is EMPTY
+    /// — so the pane the orchestrator handed the drive appeared in no clause at
+    /// all. That is invisible while the release takes the pane (nothing is left
+    /// to name) and wrong in the two cases where it does not: a founding pane
+    /// that is BUSY on the exit tick, which the barrier refuses and no later
+    /// tick re-asks, and the reconcile's own cancel, which takes no tick and
+    /// releases nothing. Both left the conversation recoverable by nothing the
+    /// notice said.
+    ///
+    /// **Liveness is the filter, and it is what keeps the clause honest.**
+    /// `panes_clause` promises panes that are still RUNNING, for the
+    /// orchestrator to resume or dispose of; a founding pane this very tick
+    /// released is dead, and naming it would be the false claim that clause
+    /// exists to avoid. `release_pane` drops a released OWNED pane from the
+    /// record, which is how the same promise is kept on that side — a founding
+    /// pane is not in the record to drop, so the liveness read does the same
+    /// work here. Asked of the registry, which is why this sits on this side
+    /// rather than in the engine.
+    fn rd_surviving_panes(
+        &self,
+        entry: &reviewdrive::DriveEntry,
+    ) -> Vec<(String, reviewdrive::DrivenRole)> {
+        let mut panes = entry.owned_panes();
+        for a in &entry.founding_panes {
+            if a.trim().is_empty() || panes.iter().any(|(id, _)| id == a) {
+                continue;
+            }
+            if self.agent(a).is_some_and(|x| x.status != AgentStatus::Dead) {
+                panes.push((a.clone(), reviewdrive::DrivenRole::Worker));
+            }
+        }
+        panes
+    }
+
     /// Which live drive, if any, this agent is a delegate of — §7's interception
     /// key, and the whole of it.
     ///
@@ -3235,7 +3273,7 @@ impl OrchRegistry {
                     // #1857 deleted while ALSO owing the notice — the line
                     // twice. The panes are read before `owe_notice`'s mutable
                     // borrow.
-                    let panes = entry.owned_panes();
+                    let panes = self.rd_surviving_panes(entry);
                     // No release clause: reconcile takes no tick, so
                     // `releasable` is never asked and nothing was killed here.
                     let n =
@@ -3598,6 +3636,26 @@ impl OrchRegistry {
                 .map(|l| l.block.clone())
             }),
         };
+        // **Every pane ANOTHER live drive owns**, read here because this is the
+        // last point at which the whole state is borrowable immutably — the
+        // next line takes this entry mutably (review round 1, finding 1).
+        //
+        // `already-driven` is keyed on the PR and not on the session
+        // (`rd_refuse(RESUME_...)` below), so two live drives may legally name
+        // one worker session: the same worker pushed two PRs. Without this, the
+        // terminal release of drive A would take a pane drive B's record still
+        // names and is still going to speak to — the one claim the session
+        // widening rests on ("nobody is going to speak to it again"), broken by
+        // the widening itself. Computed for every tick rather than only for the
+        // terminal ones: it is a walk over a handful of entries, and a
+        // conditional read here would have to be re-derived below where the
+        // borrow is gone.
+        let owned_elsewhere: Vec<String> = state
+            .entries
+            .iter()
+            .filter(|e| e.pr != pr && e.state().is_live())
+            .flat_map(|e| e.owned_panes().into_iter().map(|(a, _)| a))
+            .collect();
         let entry = state.entry_mut(pr)?;
         // What each lane's verdict file said this tick, recorded onto that lane
         // BEFORE the decision — not as an input to it (nothing decides from a
@@ -3825,18 +3883,49 @@ impl OrchRegistry {
             // busy is skipped exactly as the current one would be. What widens
             // is only the population the barrier is asked about.
             //
-            // Ordered oldest-first, which is `owned_panes`'s own order, so the
-            // audit rows read as the history they are.
+            // Ordered oldest-first, so the audit rows read as the history
+            // they are: `owned_panes`'s own order for an owned-only population,
+            // and `reviewdrive::release_population`'s sort wherever the founding
+            // panes widen it.
+            //
+            // **And at a TERMINAL exit it also names the panes the drive was
+            // STARTED ON** (#3250). `owned_panes` is written by a hand-back, so
+            // it is EMPTY for a drive that never took one — which is not a
+            // corner: on PRs #3243 and #3248 the audit log runs `rd-started` ->
+            // `rd-satisfied` with no `rd-handback` row at all, and the worker
+            // pane the orchestrator named at `start_review_drive` sat idle
+            // through the exit holding its worktree.
+            // `ReleaseCandidate::include_founding` carries the decision and the
+            // bound — it is the engine's to make, so this reads the flag rather
+            // than re-deriving the step.
+            //
+            // Still nothing here decides WHETHER a pane may go: the barrier is
+            // applied per pane below, unchanged, so a founding pane that is busy
+            // or not a driven delegate's role is skipped exactly as an owned
+            // one is.
             let (agents, session) = match &cand.role {
-                reviewdrive::DrivenRole::Worker => (
-                    entry
+                reviewdrive::DrivenRole::Worker => {
+                    let mut agents: Vec<String> = entry
                         .owned_panes()
                         .into_iter()
                         .filter(|(_, role)| *role == reviewdrive::DrivenRole::Worker)
                         .map(|(agent, _)| agent)
-                        .collect::<Vec<String>>(),
-                    entry.worker_session.clone(),
-                ),
+                        .collect();
+                    if cand.include_founding {
+                        // **The merge, the narrowing and the ORDER are the
+                        // engine's** (review rounds 1 and 2), so each is stated
+                        // and tested in one place instead of being spelled as
+                        // loop conditions here. All this side supplies is the
+                        // registry's own fact: how old a pane is.
+                        agents = reviewdrive::release_population(
+                            agents,
+                            &entry.founding_panes,
+                            &owned_elsewhere,
+                            &|a: &str| self.agent(a).map(|x| x.started_ms),
+                        );
+                    }
+                    (agents, entry.worker_session.clone())
+                }
                 reviewdrive::DrivenRole::Lane(block) => {
                     let rec = entry.lane(block);
                     let agent = rec.map(|r| r.agent.clone()).unwrap_or_default();
@@ -4440,7 +4529,7 @@ impl OrchRegistry {
                         &entry.body_digest,
                         &brief.lane_notices,
                         &entry.counters,
-                        &entry.owned_panes(),
+                        &self.rd_surviving_panes(entry),
                         &released_worker_session,
                     );
                     out.audits.push((
@@ -4520,7 +4609,7 @@ impl OrchRegistry {
                     // Replace-vs-augment, resolved as reconcile's is: #1871 B3's
                     // panes thread into the construction, and #1857's owe
                     // replaces the direct push rather than sitting beside it.
-                    let panes = entry.owned_panes();
+                    let panes = self.rd_surviving_panes(entry);
                     let n = rddrive::cancelled_notice(
                         pr,
                         rddrive::CancelCause::PrGone,
@@ -4902,6 +4991,14 @@ impl OrchRegistry {
                     entry.forget_worker_panes();
                 }
                 entry.worker_session = session.clone();
+                // **Re-read on every resume** (#3250). The panes a drive was
+                // STARTED ON are the ones its terminal release may end, and a
+                // resume is a fresh start on whatever the session is carrying
+                // now: the pane recorded at the first start may be long dead,
+                // and the orchestrator may have resumed the conversation into a
+                // new one before handing it back. `record_founding_panes` is
+                // total, so this replaces rather than accumulates.
+                entry.record_founding_panes(self.live_panes_on_session(group, &session));
                 entry.on_behalf_of = on_behalf_of.to_string();
             } else {
                 // A `satisfied` or `cancelled` entry that retention has not yet
@@ -4994,6 +5091,9 @@ impl OrchRegistry {
                 // `rounds_already_spent` says: a warm conversation is not a
                 // spent round.
                 fresh.lanes = seeded;
+                // The panes this drive is being handed (#3250) — see the same
+                // call on the resume arm above.
+                fresh.record_founding_panes(self.live_panes_on_session(group, &session));
                 state.entries.push(fresh);
             }
             if reviewdrive::store_state(&dir, &state).is_err() {

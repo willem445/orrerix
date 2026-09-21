@@ -9,6 +9,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+// The repo's ONE calendar-day helper (#3298/#3299). Imported rather than
+// re-derived here, because a test that computed "the next local midnight" with
+// its own `+ 24h` would be the very bug it is asserting against.
+import { addDays } from "../src/todoquickadd.ts";
 import {
   ORDER_GAP,
   SMART_VIEWS,
@@ -234,18 +238,16 @@ test("My Day's midnight counts CALENDAR days, so a DST day is still one day", ()
     // day is computed with calendar arithmetic (`setDate(+1)`), because a
     // `+ 24h` written here would be the very bug the assertion is checking for.
     const noonOfShiftDay = midnightOfShiftDay + 12 * 3600_000;
-    const nextMidnight = new Date(midnightOfShiftDay);
-    nextMidnight.setDate(nextMidnight.getDate() + 1);
-    nextMidnight.setHours(0, 0, 0, 0);
-    const dayLengthMs = nextMidnight.getTime() - midnightOfShiftDay;
+    const nextMidnightMs = addDays(midnightOfShiftDay, 1);
+    const dayLengthMs = nextMidnightMs - midnightOfShiftDay;
     assert.notEqual(dayLengthMs, DAY, "this is supposed to be the DST day, and it is 24h long");
     assert.equal(
-      inView(item({ my_day: noonOfShiftDay }), "myday", nextMidnight.getTime() - 60_000),
+      inView(item({ my_day: noonOfShiftDay }), "myday", nextMidnightMs - 60_000),
       true,
       "an item pulled in at noon expired before the day it was pulled in on had ended"
     );
     assert.equal(
-      inView(item({ my_day: noonOfShiftDay }), "myday", nextMidnight.getTime() + 60_000),
+      inView(item({ my_day: noonOfShiftDay }), "myday", nextMidnightMs + 60_000),
       false,
       "an item pulled in at noon outlived its own day"
     );

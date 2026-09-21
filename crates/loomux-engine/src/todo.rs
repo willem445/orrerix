@@ -102,6 +102,14 @@ pub const STEPS_MAX: usize = 100;
 /// Most LIVE (not tombstoned) items in one scope.
 pub const ITEMS_MAX: usize = 5_000;
 
+/// Most ids one [`TodoOp::Archive`] may name.
+///
+/// [`ITEMS_MAX`], because an archive can legitimately name every live item in a
+/// scope — that IS "archive everything on screen" on a full list. It is a real
+/// bound rather than a formality: the ids arrive as caller JSON, so without it
+/// a single call could hand `apply` an unbounded vector to validate.
+pub const ARCHIVE_IDS_MAX: usize = ITEMS_MAX;
+
 /// Highest accepted `priority`.
 pub const PRIORITY_MAX: u8 = 3;
 
@@ -451,6 +459,27 @@ pub enum TodoOp {
     /// Un-delete a tombstone that has not yet been purged. The inverse a
     /// `Delete` had no way to express (#3285).
     Restore { id: String },
+    /// Put items away, or take them back out (#3263 S5).
+    ///
+    /// # Why this carries IDS and a DIRECTION, and not a scope
+    ///
+    /// The gesture behind it is "archive everything finished on screen", and
+    /// the obvious shape for that is `ArchiveDone { scope }`. It was rejected
+    /// because **it has no inverse.** "Everything that was completed at the
+    /// time" is not a set the store can reconstruct afterwards, so an undo
+    /// would have to guess — and `inverseOp` (`src/todomodel.ts`) refuses to
+    /// guess, which would have left the pane's one BULK gesture as the only
+    /// write a human could not take back.
+    ///
+    /// Carrying the ids also makes what moved exactly what the human was
+    /// shown: a row an agent completed between the render and the click is not
+    /// swept up in a sweep nobody asked for.
+    ///
+    /// An id is **archived** by being given an `archived_ms`; un-archiving
+    /// clears it. Archived items are live data — [`TodoStore::live`] still
+    /// returns them and `todo_snapshot` still carries them — they are simply
+    /// hidden from the pane's views (`inView`) and from `todo_list`.
+    Archive { ids: Vec<String>, archived: bool },
 }
 
 impl TodoOp {
@@ -462,6 +491,7 @@ impl TodoOp {
             TodoOp::Complete { .. } => "todo-complete",
             TodoOp::Delete { .. } => "todo-delete",
             TodoOp::Restore { .. } => "todo-restore",
+            TodoOp::Archive { .. } => "todo-archive",
         }
     }
 }
@@ -606,6 +636,7 @@ pub fn apply(
         TodoOp::Complete { id, done } => apply_complete(store, &id, done, actor, now_ms)?,
         TodoOp::Delete { id } => apply_delete(store, &id, actor, now_ms)?,
         TodoOp::Restore { id } => apply_restore(store, &id, actor, now_ms)?,
+        TodoOp::Archive { ids, archived } => apply_archive(store, &ids, archived, actor, now_ms)?,
     };
 
     // Purge AFTER the write, so the tombstone this op may just have created is
@@ -1036,6 +1067,83 @@ fn apply_restore(
         scope,
         ids: vec![item.id.clone()],
         item: Some(item),
+        purged: 0,
+    })
+}
+
+/// Archive, or un-archive, every id named (#3263 S5).
+///
+/// # All or nothing
+///
+/// Every id is resolved and every rule checked BEFORE anything is written,
+/// which is `apply`'s own contract ("refuses before mutating") and matters
+/// more here than for a single-item op: a partial archive leaves the human
+/// with some rows put away and some not, and an undo that names all of them
+/// would then un-archive rows the forward op never touched.
+///
+/// # Four refusals
+///
+///  * **no ids** — [`TodoError::Invalid`]. An empty archive is
+///    indistinguishable from one that worked, and it has no inverse either
+///    (`inverseOp` says so in the same words).
+///  * **too many ids** — the [`ARCHIVE_IDS_MAX`] cap. The ids are caller JSON.
+///  * **a repeated id** — [`TodoError::Invalid`]. Two spellings of one write
+///    is the kind of argument that reads as working and makes a `purged` or an
+///    `ids` count mean something else than it says.
+///  * **an unknown or tombstoned id** — [`TodoError::Unknown`], through the
+///    same [`live_index`] every other op uses, so a deleted id reads exactly
+///    as one that never existed.
+///
+/// # Idempotent per id, deliberately
+///
+/// Archiving an already-archived id is accepted and rewrites the stamp. That
+/// is the opposite of `Restore`'s "a no-op is indistinguishable from a
+/// success" rule, and the difference is that this is a BULK op: the caller is
+/// naming a set it wants to end up in a state, not asking a question about one
+/// row. Refusing the whole batch because one row was already away would make
+/// the pane's Archive button fail in exactly the situation a human would
+/// retry it in.
+fn apply_archive(
+    store: &mut TodoStore,
+    ids: &[String],
+    archived: bool,
+    actor: &Actor,
+    now_ms: u64,
+) -> Result<Applied, TodoError> {
+    if ids.is_empty() {
+        return Err(TodoError::Invalid("archive", "names no items".to_string()));
+    }
+    if ids.len() > ARCHIVE_IDS_MAX {
+        return Err(TodoError::Cap("archive", ARCHIVE_IDS_MAX));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut indices = Vec::with_capacity(ids.len());
+    for id in ids {
+        if !seen.insert(id.as_str()) {
+            return Err(TodoError::Invalid(
+                "archive",
+                format!("names {id} more than once"),
+            ));
+        }
+        indices.push(live_index(store, id)?);
+    }
+    // Every scope the batch touched. One in practice — the pane archives what
+    // one list showed — but the op is addressed by id and the engine does no
+    // scope check, so the answer is derived rather than assumed.
+    let scope = store.items[indices[0]].scope.clone();
+    for ix in &indices {
+        let item = &mut store.items[*ix];
+        item.archived_ms = if archived { Some(now_ms) } else { None };
+        item.updated_ms = now_ms;
+        item.updated_by = actor.clone();
+        item.rev += 1;
+    }
+    Ok(Applied {
+        scope,
+        ids: ids.to_vec(),
+        // No single item: this op moved a set, and answering with one of them
+        // would invite a caller to read it as "the item that changed".
+        item: None,
         purged: 0,
     })
 }

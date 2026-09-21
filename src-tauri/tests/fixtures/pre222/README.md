@@ -1494,3 +1494,32 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   not, for the budget reason above, and went to the playbook instead. That deviation was put to
   the orchestrator before the code was written and approved, and is recorded here as well as in
   the PR because this is where the next implementer of a role-template edit looks.
+
+- **#3263 S5, `todo_restore` — the seventh to-do tool** — `worker.md`, `reviewer.md`,
+  `planner.md`, `manager.md`, `lead.md` and `orchestrator-playbook.md`, exactly the six S2
+  moved. `orchestrator.md` and `dod.md` are byte-identical to their previous blessed copies,
+  for S2's own measurable reason: the resident core is 45 bytes under
+  `RESIDENT_CORE_BUDGET` and any paragraph there would redden
+  `the_resident_core_is_under_the_byte_budget`.
+
+  Each file's existing to-do paragraph gains `todo_restore` in its tool list and ONE sentence
+  of rule. The rule is the same everywhere and it is a judgement no gate can make for the
+  agent: **restore is for a delete YOU made by mistake; a row the HUMAN deleted is their
+  decision about their own list, so revive one only if they ask.** The engine cannot enforce
+  that — it records who deleted a row, but "they meant it" is not derivable from that — and a
+  Rust check would also refuse the legitimate case where the human asks for it back. So it is
+  instruction, deliberately, which is this repo's line between a guardrail and a judgement.
+
+  `manager.md` and `lead.md` add the half that is true only of a pane the human is sitting in:
+  "no, put that back" is something they will simply SAY there, so those two are the panes that
+  will actually reach for it. The playbook adds one more fact the delegate files do not need —
+  a tombstone in another project's list reads back `unknown todo` exactly as a live row there
+  does, so cross-workspace invisibility survives the new tool rather than being narrowed by it
+  — and updates its audit-action list to `todo-add`/`update`/`complete`/`delete`/`restore`.
+
+  **The paragraphs re-flowed.** The inserted sentences made several lines overrun the wrap the
+  file was written at, so each to-do block was re-wrapped whole at 92 columns — which is why
+  the diff on these six is larger than the words added. No line in any of them is now longer
+  than the longest line that file carried before. Nothing else in any file moved: the
+  `live-minus-keys == golden` check in the README above ("Verifying a re-bless by hand") was
+  run before and after, and the patch on each golden is the patch on its live template.

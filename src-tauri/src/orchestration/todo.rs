@@ -377,7 +377,36 @@ pub fn snapshot_at(path: &Path, scope: Option<&Scope>) -> TodoSnapshot {
     }
 }
 
+/// One item BY ID, tombstones included.
+///
+/// [`snapshot_at`] filters tombstones out, which is right for every reader it
+/// has — and wrong for exactly one caller: the MCP `todo_restore` arm, whose
+/// subject IS a tombstone. Without this it could only ever answer "unknown
+/// todo", and the tool would be unreachable through the one gate that stands
+/// between an agent and another workspace's list.
+///
+/// It is deliberately NOT a widened `snapshot_at`: nothing else should be able
+/// to enumerate tombstones by accident, so the tombstone-visible read is
+/// addressed by a single id the caller already holds and returns one item.
+/// Holding the item is still not permission to touch it — the caller applies
+/// its own visibility rule to the `scope` that comes back, exactly as it does
+/// for a live one.
+///
+/// Takes [`TODO_WRITE_LOCK`] for [`snapshot_at`]'s reason: `load_store`'s
+/// corrupt arm RENAMES, and an unserialised rename could move a store a
+/// concurrent write had just published (#3285 item 2).
+pub fn find_at(path: &Path, id: &str) -> Option<TodoItem> {
+    let lock = lock_todo_write();
+    let loaded = load_store(path, &lock);
+    loaded.store.items.into_iter().find(|i| i.id == id)
+}
+
 impl OrchRegistry {
+    /// One item by id, tombstones included — see [`find_at`].
+    pub fn todo_item_including_deleted(&self, id: &str) -> Option<TodoItem> {
+        find_at(&todo_path(), id)
+    }
+
     /// The To-Do store as the pane and the `todo_list` tool see it.
     ///
     /// Takes no registry lock: the store is a file at the data root, not
@@ -485,6 +514,7 @@ impl OrchRegistry {
 // {"complete": {"id": "td-...", "done": true}}
 // {"delete":   {"id": "td-..."}}
 // {"restore":  {"id": "td-..."}}
+// {"archive":  {"ids": ["td-...", "td-..."], "archived": true}}
 // ```
 //
 // In an `update`, an ABSENT key leaves the field alone and an explicit `null`
@@ -528,11 +558,11 @@ fn tagged<'a>(v: &'a Value, field: &'static str) -> Result<(&'a str, &'a Value),
         (Some((k, payload)), None) => Ok((k.as_str(), payload)),
         (None, _) => Err(invalid(
             field,
-            "must name exactly one of add/update/complete/delete/restore",
+            "must name exactly one of add/update/complete/delete/restore/archive",
         )),
         (Some(_), Some(_)) => Err(invalid(
             field,
-            "names more than one op; send exactly one of add/update/complete/delete/restore",
+            "names more than one op; send exactly one of add/update/complete/delete/restore/archive",
         )),
     }
 }
@@ -788,9 +818,25 @@ pub fn parse_op(v: &Value, scope: Scope) -> Result<TodoOp, TodoError> {
                 id: req_str(o, "id", "restore")?,
             })
         }
+        // #3263 S5. `ids` is REQUIRED and `archived` is not: the overwhelmingly
+        // common call is the pane's Archive button, and a default of `true`
+        // matches `complete`'s own default rather than inventing a second
+        // convention. The engine refuses an empty list, so "archive nothing"
+        // cannot be spelled at all.
+        "archive" => {
+            let o = body(payload, "archive", &["ids", "archived"])?;
+            let ids = opt_strs(o, "ids", "archive")?
+                .ok_or_else(|| invalid("archive", "ids is required"))?;
+            Ok(TodoOp::Archive {
+                ids,
+                archived: opt_bool(o, "archived", "archive")?.unwrap_or(true),
+            })
+        }
         other => Err(invalid(
             "op",
-            format!("unknown op {other:?}; expected add, update, complete, delete or restore"),
+            format!(
+                "unknown op {other:?}; expected add, update, complete, delete, restore or archive"
+            ),
         )),
     }
 }

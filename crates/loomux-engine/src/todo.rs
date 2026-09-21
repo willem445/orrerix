@@ -86,6 +86,17 @@ pub const TITLE_MAX: usize = 500;
 pub const NOTES_MAX: usize = 20_000;
 /// Most `tags` on one item.
 pub const TAGS_MAX: usize = 20;
+/// Longest single `tag`, in bytes.
+///
+/// Beside [`TAGS_MAX`], not instead of it: a count cap alone bounds how MANY
+/// tags an item carries and nothing about how big each one is, so twenty tags
+/// of a megabyte each passed every check this store had (#3285 item 1). Bytes
+/// rather than chars because the bound being defended is the file's size, and
+/// a `String`'s cost is its bytes. A tag is a LABEL — prose belongs in
+/// `notes`, which has its own far larger cap — so this is deliberately tight
+/// enough that the tag list cannot become free-form storage for a runaway
+/// agent loop.
+pub const TAG_BYTES_MAX: usize = 100;
 /// Most `steps` on one item.
 pub const STEPS_MAX: usize = 100;
 /// Most LIVE (not tombstoned) items in one scope.
@@ -437,6 +448,9 @@ pub enum TodoOp {
     Complete { id: String, done: bool },
     /// Soft delete: a tombstone, purged [`PURGE_AFTER_MS`] later.
     Delete { id: String },
+    /// Un-delete a tombstone that has not yet been purged. The inverse a
+    /// `Delete` had no way to express (#3285).
+    Restore { id: String },
 }
 
 impl TodoOp {
@@ -447,6 +461,7 @@ impl TodoOp {
             TodoOp::Update(_) => "todo-update",
             TodoOp::Complete { .. } => "todo-complete",
             TodoOp::Delete { .. } => "todo-delete",
+            TodoOp::Restore { .. } => "todo-restore",
         }
     }
 }
@@ -590,6 +605,7 @@ pub fn apply(
         TodoOp::Update(up) => apply_update(store, up, actor, now_ms)?,
         TodoOp::Complete { id, done } => apply_complete(store, &id, done, actor, now_ms)?,
         TodoOp::Delete { id } => apply_delete(store, &id, actor, now_ms)?,
+        TodoOp::Restore { id } => apply_restore(store, &id, actor, now_ms)?,
     };
 
     // Purge AFTER the write, so the tombstone this op may just have created is
@@ -621,9 +637,16 @@ fn check_notes(notes: &str) -> Result<(), TodoError> {
     Ok(())
 }
 
+/// Two independent bounds on one field: how many tags, and how big each one
+/// is. They were one before #3285 — the list was counted and never measured.
 fn check_tags(tags: &[String]) -> Result<(), TodoError> {
     if tags.len() > TAGS_MAX {
         return Err(TodoError::Cap("tags", TAGS_MAX));
+    }
+    for t in tags {
+        if t.len() > TAG_BYTES_MAX {
+            return Err(TodoError::Cap("tag", TAG_BYTES_MAX));
+        }
     }
     Ok(())
 }
@@ -735,6 +758,15 @@ fn check_if_rev(item: &TodoItem, if_rev: Option<u64>) -> Result<(), TodoError> {
     }
 }
 
+/// An `Update`, in three steps: check everything, write the fields, re-space
+/// the scope if the move closed a gap.
+///
+/// Split out of one 88-line body (#3285 item 4). The three steps answer three
+/// different questions and only the FIRST of them may refuse, which is the
+/// property `apply`'s doc promises ("refuses BEFORE mutating anything"). As one
+/// function that promise was a reading order a later edit could break silently
+/// by putting a `?` below the first assignment; it cannot now, because the
+/// writer takes `&mut TodoItem`, returns nothing, and so has no `?` to add.
 fn apply_update(
     store: &mut TodoStore,
     up: TodoUpdate,
@@ -743,8 +775,33 @@ fn apply_update(
 ) -> Result<Applied, TodoError> {
     let ix = live_index(store, &up.id)?;
     check_if_rev(&store.items[ix], up.if_rev)?;
+    check_update(&up)?;
+    // The one check that needs the STORE rather than the patch: a destination
+    // is resolved against the item's live neighbours.
+    let new_order = match &up.order_after {
+        None => None,
+        Some(after) => Some(order_for(store, &store.items[ix], after)?),
+    };
 
-    // Validate EVERYTHING before mutating anything (see `apply`'s doc).
+    let scope = store.items[ix].scope.clone();
+    write_update(&mut store.items[ix], up, new_order, actor, now_ms);
+    if new_order.is_some() {
+        renumber_if_crowded(store, &scope);
+    }
+    let item = store.items[ix].clone();
+    Ok(Applied {
+        scope,
+        ids: vec![item.id.clone()],
+        item: Some(item),
+        purged: 0,
+    })
+}
+
+/// Every cap and range check an `Update` owes, over the PATCH alone.
+///
+/// Nothing here reads the store, which is what lets it run before anything has
+/// been mutated (`apply`'s doc).
+fn check_update(up: &TodoUpdate) -> Result<(), TodoError> {
     if let Some(t) = &up.title {
         check_title(t)?;
     }
@@ -763,83 +820,80 @@ fn apply_update(
             check_title(&st.title)?;
         }
     }
-    let new_order = match &up.order_after {
-        None => None,
-        Some(after) => Some(order_for(store, &store.items[ix], after)?),
-    };
+    Ok(())
+}
 
-    let scope = store.items[ix].scope.clone();
-    {
-        let item = &mut store.items[ix];
-        if let Some(t) = up.title {
-            item.title = t;
-        }
-        if let Some(n) = up.notes {
-            item.notes = n;
-        }
-        if let Some(d) = up.due_ms {
-            item.due_ms = d;
-        }
-        if let Some(r) = up.remind_ms {
-            item.remind_ms = r;
-        }
-        if let Some(m) = up.my_day {
-            item.my_day = m;
-        }
-        if let Some(p) = up.priority {
-            item.priority = p;
-        }
-        if let Some(i) = up.important {
-            item.important = i;
-        }
-        if let Some(t) = up.tags {
-            item.tags = t;
-        }
-        if let Some(s) = up.steps {
-            // Carry each surviving step's unknown keys across the replace. A
-            // `StepPatch` is what a CALLER can express, so rebuilding the list
-            // from patches alone would drop a newer build's step-level field
-            // (the suite's example: `assignee`) the first time the human edits
-            // the checklist — silently, and only for steps, which is exactly
-            // the asymmetry the module header's round-trip claim must not have.
-            // Item, workspace and envelope keys survive because those are
-            // mutated in place rather than rebuilt.
-            let prior: Vec<Step> = item.steps.clone();
-            item.steps = s
-                .into_iter()
-                .map(|p| {
-                    let id = p.id.unwrap_or_else(new_step_id);
-                    let extra = prior
-                        .iter()
-                        .find(|old| old.id == id)
-                        .map(|old| old.extra.clone())
-                        .unwrap_or_default();
-                    Step {
-                        id,
-                        title: p.title,
-                        done: p.done,
-                        extra,
-                    }
-                })
-                .collect();
-        }
-        if let Some(o) = new_order {
-            item.order = o;
-        }
-        item.updated_ms = now_ms;
-        item.updated_by = actor.clone();
-        item.rev += 1;
+/// Write a checked `Update` onto its item. Infallible BY SIGNATURE: every
+/// refusal has already happened, in [`check_update`] and [`order_for`].
+fn write_update(
+    item: &mut TodoItem,
+    up: TodoUpdate,
+    new_order: Option<i64>,
+    actor: &Actor,
+    now_ms: u64,
+) {
+    if let Some(t) = up.title {
+        item.title = t;
     }
-    if new_order.is_some() {
-        renumber_if_crowded(store, &scope);
+    if let Some(n) = up.notes {
+        item.notes = n;
     }
-    let item = store.items[ix].clone();
-    Ok(Applied {
-        scope,
-        ids: vec![item.id.clone()],
-        item: Some(item),
-        purged: 0,
-    })
+    if let Some(d) = up.due_ms {
+        item.due_ms = d;
+    }
+    if let Some(r) = up.remind_ms {
+        item.remind_ms = r;
+    }
+    if let Some(m) = up.my_day {
+        item.my_day = m;
+    }
+    if let Some(p) = up.priority {
+        item.priority = p;
+    }
+    if let Some(i) = up.important {
+        item.important = i;
+    }
+    if let Some(t) = up.tags {
+        item.tags = t;
+    }
+    if let Some(s) = up.steps {
+        item.steps = merge_steps(&item.steps, s);
+    }
+    if let Some(o) = new_order {
+        item.order = o;
+    }
+    item.updated_ms = now_ms;
+    item.updated_by = actor.clone();
+    item.rev += 1;
+}
+
+/// Rebuild the step list from the caller's patches, carrying each surviving
+/// step's unknown keys across the replace.
+///
+/// A `StepPatch` is what a CALLER can express, so rebuilding the list from
+/// patches alone would drop a newer build's step-level field (the suite's
+/// example: `assignee`) the first time the human edited the checklist —
+/// silently, and only for steps, which is exactly the asymmetry the module
+/// header's round-trip claim must not have. Item, workspace and envelope keys
+/// survive because those are mutated in place rather than rebuilt.
+fn merge_steps(prior: &[Step], patches: Vec<StepPatch>) -> Vec<Step> {
+    patches
+        .into_iter()
+        .map(|p| {
+            let id = p.id.unwrap_or_else(new_step_id);
+            let extra = prior
+                .iter()
+                .find(|old| old.id == id)
+                .map(|old| old.extra.clone())
+                .unwrap_or_default();
+            Step {
+                id,
+                title: p.title,
+                done: p.done,
+                extra,
+            }
+        })
+        .collect()
 }
 
 /// The `order` value that puts `moving` where `after` says — midway between its
@@ -925,6 +979,61 @@ fn apply_delete(
     let item = store.items[ix].clone();
     Ok(Applied {
         scope: item.scope.clone(),
+        ids: vec![item.id.clone()],
+        item: Some(item),
+        purged: 0,
+    })
+}
+
+/// Un-delete a soft-deleted item (#3285): the inverse a `Delete` had no way to
+/// express. `apply` treats a tombstone as unknown, so before this op an undo
+/// of a delete could only refuse — `doc/design/todo-pane.md`, "Undo refuses
+/// rather than guesses", which said so and named the missing op.
+///
+/// Three refusals, each on its own ground:
+///
+///  * **no such id, or a tombstone the purge window has already passed** —
+///    both [`TodoError::Unknown`]. An expired tombstone is a row this build
+///    has already promised to drop (the very next write drops it), so a
+///    restore that revived it would hand back data the store no longer keeps.
+///    It reads as an unknown id because from the caller's side it is one, and
+///    because that is what every other op answers for a tombstone.
+///  * **the item is live** — [`TodoError::Invalid`], never a silent success:
+///    a no-op restore is indistinguishable from one that worked, and the
+///    caller asked precisely because it did not know.
+///  * **the scope is full** — the same [`ITEMS_MAX`] cap an `Add` hits. A
+///    restore puts a LIVE item into a scope exactly as an add does, and a cap
+///    only one of the two doors respects is not a cap.
+fn apply_restore(
+    store: &mut TodoStore,
+    id: &str,
+    actor: &Actor,
+    now_ms: u64,
+) -> Result<Applied, TodoError> {
+    let ix = store
+        .index_of(id)
+        .ok_or_else(|| TodoError::Unknown(id.to_string()))?;
+    let deleted_ms = match store.items[ix].deleted_ms {
+        None => return Err(TodoError::Invalid("restore", format!("{id} is not deleted"))),
+        Some(d) => d,
+    };
+    if now_ms.saturating_sub(deleted_ms) >= PURGE_AFTER_MS {
+        return Err(TodoError::Unknown(id.to_string()));
+    }
+    let scope = store.items[ix].scope.clone();
+    if store.live(&scope).len() >= ITEMS_MAX {
+        return Err(TodoError::Cap("items", ITEMS_MAX));
+    }
+    {
+        let item = &mut store.items[ix];
+        item.deleted_ms = None;
+        item.updated_ms = now_ms;
+        item.updated_by = actor.clone();
+        item.rev += 1;
+    }
+    let item = store.items[ix].clone();
+    Ok(Applied {
+        scope,
         ids: vec![item.id.clone()],
         item: Some(item),
         purged: 0,

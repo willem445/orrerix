@@ -145,6 +145,7 @@ the two ways in.
 | `i` | important |
 | `t` | My Day |
 | `Del` | delete |
+| `u` | undo the last change you made in this pane |
 | `g` | switch Global ⇄ project |
 | `1`–`5` | the five views |
 | `Shift+↑` / `Shift+↓` | move the task up or down |
@@ -173,24 +174,81 @@ lying about how much work there is.
 
 ## What agents can do to your list
 
-Agents you launch get six tools — list, get, add, update, complete, delete —
-and they reach **the global list and their own project's list**, never another
-project's. Every write shows up in your pane immediately, with the agent's dot
+Agents you launch get seven tools — list, get, add, update, complete, delete
+and restore — and they reach **the global list and their own project's list**,
+never another project's. Restore is there so an agent can put back something it
+deleted by mistake; their instructions say that a row **you** deleted stays
+deleted unless you ask for it back. Every write shows up in your pane immediately, with the agent's dot
 on it, and every one is in that group's audit log.
 
 The list lives outside any repository, so nothing here can end up in a commit.
+
+## Reminders
+
+**A task with a reminder time nudges you when it arrives**, as a small toast
+with a **Show** button that takes you straight to the row. A task with only a
+due date nudges you when the date arrives. Set either from the quick-add
+(`fri 4pm`) or from the due field inside an open row.
+
+Three things are worth knowing, because they are choices rather than gaps:
+
+- **A task you have already ticked off never nudges you.** If you finish
+  something at 3pm its 4pm reminder does not arrive.
+- **Reminders live in this window, not in your list.** Nothing is written when
+  one fires, so if you have orrerix open twice you will see it twice, and
+  reloading starts the day's reminders over. The upside is that nothing about
+  reminders can change your list.
+- **You will not get a wall of them.** Anything more than four hours late is
+  dropped rather than shown when you open the pane, and several tasks coming
+  due at the same moment arrive as **one** notice naming the first two and
+  counting the rest — **Show first** opens the soonest.
+- **If the task is gone by the time you click Show, it says so.** An agent can
+  finish or archive something between the reminder and your click; you get a
+  line telling you which, and where to find it, rather than a jump to nothing.
+
+## Undo
+
+**`u` undoes the last change you made in this pane** — completing something,
+deleting it, starring it, moving it to My Day, archiving, editing a note.
+
+**Three of those also offer you a button:** completing, deleting and archiving
+each show a toast with an **Undo** on it, because those are the three that make
+something disappear. The rest are still undoable with `u`; they just do not
+interrupt to say so, which is what keeps the toast worth reading when it does
+appear.
+
+It remembers your last 50 changes, and only yours: changes an agent made are
+not on your undo stack, and switching between Global and your project starts a
+fresh one. If an undo cannot be done — you deleted something more than 30 days
+ago, or the list is full — it tells you why rather than quietly doing nothing.
+
+## Finishing with a list: archive
+
+Open **Completed** and there is an **Archive** button with a count on it. It
+puts those finished tasks away: they leave every view, including Completed, and
+the list is yours again.
+
+They are **not deleted**. **Show archived** beside the button brings them back
+on screen, and unarchiving one is an ordinary undo. Deleted tasks are the other
+thing — those become a 30-day tombstone and then really are gone.
+
+## My Day empties overnight
+
+**A task you put in My Day today leaves it at midnight**, the way Microsoft To
+Do works. The task itself is untouched — it is still in All, still has its due
+date, still has everything you wrote on it — it has simply stopped being
+*today's*. Press `t` to put it back.
+
+Midnight means midnight where you are, on the day you are actually having: a
+25-hour or 23-hour clock-change day still ends at its own midnight.
 
 ## Not here yet
 
 Being honest about the edges, since a button that silently does nothing is
 worse than no button:
 
-- **Reminders, undo and archive** are the next slice. `u` says so rather than
-  pretending.
-- **The due-date control inside a row** is a label today — set dates from the
-  quick-add (`fri 4pm`) for now.
-- **My Day does not empty itself overnight.** Microsoft To Do clears it at
-  midnight; whether this should is still an open question, and until it is
-  answered nothing throws your list away.
 - **Reordering** works until a list runs out of room between two tasks, at
   which point it says so instead of silently not moving the row.
+- **Reminders are a toast in orrerix**, not a desktop notification — if the
+  window is not open you will not see one.
+- **Redo** is not there. Undo walks backwards only.

@@ -14,6 +14,7 @@ import {
   decodeTodoPrefs,
   encodeTodoPrefs,
   moveSelection,
+  planReveal,
   projectPane,
   pruneDrafts,
   renderedRows,
@@ -22,7 +23,7 @@ import {
   seedRowDraft,
   type RowDraft,
 } from "../src/todoview.ts";
-import { SMART_VIEWS, type TodoItem } from "../src/todomodel.ts";
+import { SMART_VIEWS, inView, type TodoItem } from "../src/todomodel.ts";
 
 /** Wednesday 2024-05-15, 10:00 local — `todomodel.test.ts`'s own anchor. */
 const NOW = new Date(2024, 4, 15, 10, 0, 0, 0).getTime();
@@ -228,17 +229,192 @@ test("a fresh draft is seeded from the ITEM and is pristine — including one wi
   assert.equal(rowDraftIsPristine(seedRowDraft(noted)), true);
 });
 
-test("the pristine predicate reads EVERY field of the draft", () => {
+/**
+ * The draft fields that are NOT typable — a record of what the human can edit,
+ * not a reading of the item.
+ *
+ * One entry, argued: `seededNotes` is what the notes box was seeded WITH, so
+ * "has the human typed?" is measured against it rather than into it. Spelled
+ * out here because the loop below must not claim to be testing typing on a
+ * field nobody can type into (#3293 round 6 residual 2) — it passed for the
+ * right answer by the wrong route, since moving the seed alone also separates
+ * it from `notes`.
+ *
+ * DEFAULT-DENY: a field added to `RowDraft` and not named here lands in the
+ * TYPABLE loop, so forgetting to classify it reddens rather than exempts it.
+ */
+const NON_TYPABLE: readonly (keyof RowDraft)[] = ["seededNotes"];
+
+test("planReveal: the row is on screen already, so Show changes no view", () => {
+  // Moving the view is itself a visible jump. Doing it when the row was
+  // already in front of the human is noise, so "reveal, view: null" is a
+  // distinct answer from "reveal, view: all".
+  const row = item({ id: "td-1", my_day: NOW });
+  const vm = projectPane({ items: [row], view: "myday", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(planReveal([row], "td-1", renderedRows(vm), NOW), {
+    kind: "reveal",
+    view: null,
+  });
+});
+
+test("planReveal: a reachable row the current view hides falls back to All", () => {
+  const hidden = item({ id: "td-1" });                 // open, but not in My Day
+  const shown = item({ id: "td-2", my_day: NOW });
+  const vm = projectPane(
+    { items: [hidden, shown], view: "myday", query: "", tagFilter: null },
+    NOW
+  );
+  assert.ok(
+    !renderedRows(vm).some((i) => i.id === "td-1"),
+    "precondition: the row is NOT on screen"
+  );
+  assert.deepEqual(planReveal([hidden, shown], "td-1", renderedRows(vm), NOW), {
+    kind: "reveal",
+    view: "all",
+  });
+});
+
+test("FAILURE CASE: a row COMPLETED between the notice and the click says so", () => {
+  // #3301 review round 2, finding 3. The scan skips done items, so a notice
+  // only exists for an open one — but the human clicks LATER, and an agent's
+  // `todo_complete` in that window moved the row out of every view. The pane
+  // used to clear the filters, fall back to All, select a row nothing rendered
+  // and scroll to a selector matching nothing: the toast dismissed and the
+  // screen did not change.
+  const done = item({ id: "td-1", status: "done", done_ms: NOW });
+  const vm = projectPane({ items: [done], view: "myday", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(planReveal([done], "td-1", renderedRows(vm), NOW), {
+    kind: "left",
+    why: "done",
+  });
+});
+
+test("FAILURE CASE: a row ARCHIVED between the notice and the click says which", () => {
+  // Distinguished from "done" on purpose: the two have different answers for
+  // the human. A finished row is in Completed; an archived one needs the
+  // toggle there as well.
+  const away = item({ id: "td-1", status: "done", done_ms: NOW, archived_ms: NOW });
+  const vm = projectPane({ items: [away], view: "completed", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(planReveal([away], "td-1", renderedRows(vm), NOW), {
+    kind: "left",
+    why: "archived",
+  });
+  // An archived row that was never completed is still "archived", not "done" —
+  // the two checks are ordered, and this is the fixture that tells them apart.
+  const openAway = item({ id: "td-2", archived_ms: NOW });
+  assert.deepEqual(planReveal([openAway], "td-2", []), { kind: "left", why: "archived" });
+});
+
+test("FAILURE CASE: a row DELETED between the notice and the click is 'gone'", () => {
+  // The rarer case, and the only one the pane used to explain. A tombstone is
+  // absent from the snapshot entirely, so it reads as an unknown id.
+  assert.deepEqual(planReveal([], "td-1", []), { kind: "gone" });
+  assert.deepEqual(planReveal([item({ id: "td-other" })], "td-1", [], NOW), { kind: "gone" });
+});
+
+test("planReveal never answers 'reveal' for a row All would not hold", () => {
+  // The promise the fallback makes: it returns `all` only where `inView`
+  // agrees All contains the row. Driven over every item shape this module can
+  // build, so a later change to `inView` that drops a class reddens here
+  // rather than re-introducing the silent no-op one view over.
+  const shapes = [
+    item({ id: "a" }),
+    item({ id: "b", my_day: NOW }),
+    item({ id: "c", due_ms: NOW + 86400000 }),
+    item({ id: "d", important: true }),
+    item({ id: "e", status: "done", done_ms: NOW }),
+    item({ id: "f", archived_ms: NOW }),
+    item({ id: "g", status: "done", done_ms: NOW, archived_ms: NOW }),
+  ];
+  let revealed = 0;
+  for (const s of shapes) {
+    const plan = planReveal(shapes, s.id, []);
+    if (plan.kind !== "reveal") continue;
+    revealed += 1;
+    assert.notEqual(plan.view, null, "a row not on screen must name a view to move to");
+    assert.equal(
+      inView(s, plan.view as "all", NOW),
+      true,
+      `planReveal sent ${s.id} to a view that does not contain it`
+    );
+  }
+  // THE POSITIVE CONTROL. Without it this loop passes against a planReveal
+  // that never answers "reveal" at all.
+  assert.equal(revealed, 4, "the four open shapes must all be revealable");
+});
+
+test("the strip's counts are UNKNOWN until a snapshot has landed (#3293 round 6 residual 1)", () => {
+  // "We have not looked" and "there is nothing" are different facts, and only
+  // one of them is safe to assert. The list's empty state already followed that
+  // rule; the chips and the header total did not, so a pane mid-read drew
+  // "My Day 0" over a list that has rows.
+  const rows = [item({ my_day: NOW }), item({ important: true })];
+
+  const loading = projectPane(
+    { items: [], view: "myday", query: "", tagFilter: null, loaded: false },
+    NOW
+  );
+  assert.equal(loading.countsKnown, false);
+  assert.equal(loading.empty, true, "the projection is still empty — it just cannot say why");
+
+  const loaded = projectPane(
+    { items: rows, view: "myday", query: "", tagFilter: null, loaded: true },
+    NOW
+  );
+  assert.equal(loaded.countsKnown, true);
+  assert.equal(loaded.counts.myday, 1);
+
+  // A genuinely empty, genuinely READ list is `countsKnown` too — the
+  // discriminator, without which `countsKnown` could just be "total > 0".
+  const empty = projectPane(
+    { items: [], view: "myday", query: "", tagFilter: null, loaded: true },
+    NOW
+  );
+  assert.equal(empty.countsKnown, true, "an empty list that HAS been read reads as unknown");
+  assert.equal(empty.counts.myday, 0);
+
+  // Absent means loaded, so every existing caller keeps its meaning.
+  const legacy = projectPane({ items: rows, view: "myday", query: "", tagFilter: null }, NOW);
+  assert.equal(legacy.countsKnown, true);
+});
+
+test("the archived toggle reaches the rows and NEVER the strip's counts", () => {
+  // Archiving must not move what the strip says, because the strip says how
+  // much work exists and archived work is over. If it did, the number would
+  // jump when the toggle flipped and mean nothing either way.
+  const live = item({ id: "td-live", status: "done", done_ms: NOW });
+  const put = item({ id: "td-put", status: "done", done_ms: NOW, archived_ms: NOW });
+  const base = { items: [live, put], view: "completed" as const, query: "", tagFilter: null };
+
+  const hidden = projectPane(base, NOW);
+  const shown = projectPane({ ...base, showArchived: true }, NOW);
+
+  assert.deepEqual(renderedRows(hidden).map((i) => i.id), ["td-live"]);
+  assert.deepEqual(renderedRows(shown).map((i) => i.id).sort(), ["td-live", "td-put"]);
+  assert.equal(hidden.total, 1);
+  assert.equal(shown.total, 2);
+  assert.deepEqual(shown.counts, hidden.counts, "the toggle moved the strip");
+  assert.equal(hidden.counts.completed, 1, "the count is the LIVE finished rows");
+});
+
+test("the pristine predicate reads EVERY TYPABLE field of the draft", () => {
   // #1348 N1/N4: the renderer's seed and "is this untouched" are one question
   // asked twice, so a field present in the draft and absent from the predicate
-  // is a silent hole. Drive it from the object's own keys rather than from a
-  // list this test remembers — a field added to `RowDraft` and forgotten here
-  // then reddens instead of passing.
-  const base = item({ notes: "n" });
-  const seeded = seedRowDraft(base);
+  // is a silent hole. Driven from the object's own keys rather than from a list
+  // this test remembers — a field added to `RowDraft` and forgotten here then
+  // reddens instead of passing.
+  const seeded = seedRowDraft(item({ notes: "n" }));
   const keys = Object.keys(seeded) as (keyof RowDraft)[];
-  assert.ok(keys.length >= 2, "the draft lost its fields — this scan is blind, not clean");
-  for (const k of keys) {
+
+  // The exemption list is checked against the object, so a RENAMED seed field
+  // cannot leave a stale row here silently exempting nothing.
+  for (const k of NON_TYPABLE) {
+    assert.ok(keys.includes(k), `NON_TYPABLE names \`${k}\`, which RowDraft no longer has`);
+  }
+  const typable = keys.filter((k) => !NON_TYPABLE.includes(k));
+  assert.ok(typable.length >= 3, "the draft lost its fields — this scan is blind, not clean");
+
+  for (const k of typable) {
     const touched: RowDraft = { ...seeded, [k]: `${seeded[k]} typed` };
     assert.equal(
       rowDraftIsPristine(touched),
@@ -246,6 +422,20 @@ test("the pristine predicate reads EVERY field of the draft", () => {
       `typing into \`${k}\` left the draft reading as pristine`
     );
   }
+});
+
+test("the seed field is not typed into — it MOVES WITH the value it seeds", () => {
+  // The property the loop above cannot state, and the one `reseedPristineDrafts`
+  // actually depends on: when an agent's write re-seeds a row, BOTH halves move
+  // together and the draft stays pristine. A predicate that compared `notes`
+  // against a literal, or against the live item, would fail exactly here.
+  const seeded = seedRowDraft(item({ notes: "n" }));
+  assert.equal(rowDraftIsPristine(seeded), true);
+  const reseeded: RowDraft = { ...seeded, notes: "agent wrote this", seededNotes: "agent wrote this" };
+  assert.equal(rowDraftIsPristine(reseeded), true, "a re-seeded draft read as edited");
+  // And moving only ONE half is dirty, in both directions.
+  assert.equal(rowDraftIsPristine({ ...seeded, notes: "typed" }), false);
+  assert.equal(rowDraftIsPristine({ ...seeded, seededNotes: "moved" }), false);
 });
 
 test("drafts are pruned to the rows still on screen", () => {

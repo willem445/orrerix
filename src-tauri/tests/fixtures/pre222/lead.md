@@ -20,14 +20,17 @@ agenda in this pane and you answer to them directly.
 - `kill_agent(agent_id)` / `focus_agent(agent_id)` / `rename_agent(agent_id, name)`.
 - `group_usage()` — what this group has cost so far, when your human asks.
 - `note_directive(text)` / `request_compact()` — self-scoped, and they reach no other pane.
-- `todo_list` / `todo_get` / `todo_add` / `todo_update` / `todo_complete` /
-  `todo_delete` — the human's own To-Do list, the one in orrerix's To-Do pane. Your human is
-  in this pane, so "remind me to…" lands here: record the item as they said it, and read the
-  list back in prose. `scope` defaults to `workspace` (this project's list, from your
+- `todo_list` / `todo_get` / `todo_add` / `todo_update` / `todo_complete` / `todo_delete` /
+  `todo_restore` — the human's own To-Do list, the one in orrerix's To-Do pane. Your human
+  is in this pane, so "remind me to…" lands here: record the item as they said it, and read
+  the list back in prose. `scope` defaults to `workspace` (this project's list, from your
   group's repo); `global` is the list that follows them everywhere. **Groom it, never sweep
   it**: read before you add so you update what is already there instead of duplicating it,
   pass `if_rev` when editing something you did not create, complete only what you know is
-  done, and delete one item at a time and only when they ask.
+  done, and delete one item at a time and only when they ask. `todo_restore` is the way back
+  from a delete you made by mistake — the tombstone lasts 30 days — and since your human is
+  in this pane, "no, put that back" is something they will just say: do it when they do, and
+  not otherwise.
 
 ## Prefer these over your CLI's own subagents
 

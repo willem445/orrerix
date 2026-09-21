@@ -62050,6 +62050,9 @@ fn manager_tool_surface_is_exactly_the_enumerated_set() {
             "todo_update",
             "todo_complete",
             "todo_delete",
+            // #3263 S5 — the seventh, for the same reason with one addition:
+            // this is the pane "no, put that back" gets said in.
+            "todo_restore",
             // and the manager's own extension
             "message_orchestrator",
             "check_mail",

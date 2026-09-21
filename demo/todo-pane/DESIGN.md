@@ -189,12 +189,16 @@ paragraph.
 
 **My Day auto-clears at midnight** — the human's call, matching Microsoft To
 Do. The mock does **not** clear (it predates the decision), so what you see
-here is the non-clearing reading; S5 owns the clear. The argument that lost is
+here is the non-clearing reading; the shipped pane CLEARS (S5, the human's
+answer — `doc/design/todo-pane.md` §"My Day empties itself at local midnight",
+and nothing is written when it does). The argument that lost is
 worth keeping, because it is the one this pane has and MS To Do does not: an
 agent writing at 02:00 finds an emptied list and cannot tell "the human cleared
-it" from "nothing is planned". Whatever S5 builds needs an answer for that —
-the clear is a view rule, so the underlying `my_day` flag and its last-set day
-are what an agent should be able to read.
+it" from "nothing is planned". S5's answer is exactly the one this paragraph
+asks for: the clear is a VIEW rule, nothing writes to the store, and the
+`my_day` stamp — which is the day it was last set, not a boolean — survives
+untouched and is what `todo_get` returns. So an agent reading at 02:00 sees the
+stamp and can tell the two apart; only the human's screen has emptied.
 
 ## 7. State lives in the view, never in an element
 

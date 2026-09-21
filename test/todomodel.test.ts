@@ -8,9 +8,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+// The repo's ONE calendar-day helper (#3298/#3299). Imported rather than
+// re-derived here, because a test that computed "the next local midnight" with
+// its own `+ 24h` would be the very bug it is asserting against.
+import { addDays } from "../src/todoquickadd.ts";
 import {
   ORDER_GAP,
   SMART_VIEWS,
+  UNDO_MAX,
+  UndoStack,
   decodeSnapshot,
   groupPlanned,
   inView,
@@ -19,6 +26,7 @@ import {
   moveTarget,
   myDayIsStale,
   needsRenumber,
+  opLabel,
   plannedBucket,
   visibleItems,
   type TodoItem,
@@ -161,17 +169,183 @@ test("My Day holds what was put there and is not yet done", () => {
   assert.equal(inView(out, "myday", NOW), false);
 });
 
-test("My Day does NOT auto-clear; staleness is reported separately", () => {
-  // Whether My Day should empty itself at midnight (Microsoft To Do does) is
-  // the open question in the plan's §8, so the predicate takes the
-  // non-destructive reading and the staleness is a SEPARATE signal the pane
-  // can act on once the human has answered.
+test("My Day empties itself at local midnight, and writes nothing (#3263 S5)", () => {
+  // The plan's §8 open question, answered by the human: an item leaves My Day
+  // at local midnight, as Microsoft To Do does. The predicate that decides it
+  // is `myDayIsStale`, and `inView` is its one reader.
   const yesterday = item({ my_day: NOW - DAY });
-  assert.equal(inView(yesterday, "myday", NOW), true, "still in the view");
-  assert.equal(myDayIsStale(yesterday, NOW), true, "but flagged as carried over");
+  assert.equal(inView(yesterday, "myday", NOW), false, "yesterday's pull has expired");
+  assert.equal(myDayIsStale(yesterday, NOW), true);
+  assert.equal(inView(item({ my_day: NOW }), "myday", NOW), true, "today's pull stands");
   assert.equal(myDayIsStale(item({ my_day: NOW }), NOW), false);
   assert.equal(myDayIsStale(item({}), NOW), false, "an item not in My Day is not stale");
+
+  // NOTHING IS WRITTEN — the half that makes a per-viewer clock safe to decide
+  // this on a store two processes write to. The item leaves the VIEW and keeps
+  // its stamp, so `t` puts it straight back and the record of when it was last
+  // pulled in survives. An implementation that cleared `my_day` to empty the
+  // view would pass every assertion above and fail here.
+  const before = JSON.stringify(yesterday);
+  inView(yesterday, "myday", NOW);
+  assert.equal(JSON.stringify(yesterday), before, "the predicate mutated the item");
+
+  // THE BOUNDARY, both sides, built from LOCAL midnight so the assertion means
+  // the same thing in every timezone the suite runs in. Twenty-two hours after
+  // a 00:01 pull it is still that day; one minute past the NEXT local midnight
+  // it is not.
+  const midnight = new Date(NOW);
+  midnight.setHours(0, 0, 0, 0);
+  const pulled = midnight.getTime() + 60_000;
+  assert.equal(inView(item({ my_day: pulled }), "myday", pulled + 22 * 3600_000), true);
+  assert.equal(inView(item({ my_day: pulled }), "myday", midnight.getTime() + DAY + 60_000), false);
 });
+
+test("My Day's midnight counts CALENDAR days, so a DST day is still one day", () => {
+  // Never `n * MS_PER_DAY`: a DST day is 23 or 25 hours long, so an item pulled
+  // in at 23:30 the evening before a shift must not read as stale at 00:00 —
+  // and must expire at the END of that day whether it ran 23 hours or 25.
+  // `dayDelta` divides two LOCAL midnights, which is what makes both true.
+  //
+  // Driven off the HOST's own transitions rather than a hardcoded date, so it
+  // means something wherever the suite runs, and states its own vacuity where
+  // the zone has none (a UTC CI runner) instead of passing silently.
+  const transitions = dstTransitions(2026);
+  if (transitions.length === 0) {
+    assert.equal(
+      new Date(2026, 0, 1).getTimezoneOffset(),
+      new Date(2026, 6, 1).getTimezoneOffset(),
+      "no transitions found, but the January and July offsets differ — the scan is blind"
+    );
+    return;
+  }
+  for (const midnightOfShiftDay of transitions) {
+    // 23:30 the evening BEFORE the shifted day.
+    const eveningBefore = midnightOfShiftDay - 30 * 60_000;
+    assert.equal(
+      inView(item({ my_day: eveningBefore }), "myday", eveningBefore + 20 * 60_000),
+      true,
+      "an item pulled in at 23:30 left My Day before its own midnight"
+    );
+    // The shifted day is 23 or 25 hours long; either way the item pulled in
+    // the evening before is stale all through it.
+    assert.equal(
+      inView(item({ my_day: eveningBefore }), "myday", midnightOfShiftDay + 60_000),
+      false,
+      "a DST day did not start at its own local midnight"
+    );
+    // And an item pulled in ON the shifted day survives right up to ITS OWN
+    // next midnight — which is 23 or 25 hours away, never 24. The end of the
+    // day is computed with calendar arithmetic (`setDate(+1)`), because a
+    // `+ 24h` written here would be the very bug the assertion is checking for.
+    const noonOfShiftDay = midnightOfShiftDay + 12 * 3600_000;
+    const nextMidnightMs = addDays(midnightOfShiftDay, 1);
+    const dayLengthMs = nextMidnightMs - midnightOfShiftDay;
+    assert.notEqual(dayLengthMs, DAY, "this is supposed to be the DST day, and it is 24h long");
+    assert.equal(
+      inView(item({ my_day: noonOfShiftDay }), "myday", nextMidnightMs - 60_000),
+      true,
+      "an item pulled in at noon expired before the day it was pulled in on had ended"
+    );
+    assert.equal(
+      inView(item({ my_day: noonOfShiftDay }), "myday", nextMidnightMs + 60_000),
+      false,
+      "an item pulled in at noon outlived its own day"
+    );
+    // THE DISCRIMINATOR. A `n * MS_PER_DAY` implementation would answer the
+    // OPPOSITE of one of these two: on a 23-hour day it expires the item an
+    // hour early, on a 25-hour day an hour late. Pinning the divergence means
+    // the two assertions above cannot both hold under that implementation.
+    assert.equal(
+      inView(item({ my_day: noonOfShiftDay }), "myday", noonOfShiftDay + DAY - 12 * 3600_000),
+      dayLengthMs > DAY,
+      "the 24-hour reading and the calendar reading did not diverge, so this fixture is blind"
+    );
+  }
+});
+
+test("My Day's DST behaviour, pinned in a zone that HAS one (not the host's)", () => {
+  // The test above is honest about being vacuous in a UTC zone — which is what
+  // CI is — and a guard that can be vacuous on the machine that gates the merge
+  // is a guard about the developer's laptop. So this one FORCES the zone: a
+  // child `node` with TZ=America/Chicago, where 8 March 2026 is 23 hours long
+  // and 1 November 2026 is 25. It fails rather than skips, everywhere.
+  //
+  // A child process because `TZ` is read when the process starts: setting
+  // `process.env.TZ` mid-run does not move `Date`'s notion of local time on
+  // every platform, and a test that silently kept the host zone would be the
+  // vacuity it is here to remove.
+  const script = [
+    "const { inView } = await import(process.argv[1]);",
+    "const mk = (my_day) => ({ id: 'td-1', scope: 'global', title: 't', notes: '',",
+    "  status: 'open', done_ms: null, due_ms: null, remind_ms: null, my_day, priority: 0,",
+    "  important: false, tags: [], steps: [], order: 0, created_ms: 0,",
+    "  created_by: { kind: 'human' }, updated_ms: 0, updated_by: { kind: 'human' },",
+    "  rev: 0, archived_ms: null, deleted_ms: null });",
+    "const out = [];",
+    // Both shift days: the 23-hour one (spring forward) and the 25-hour one.
+    "for (const [y, m, d] of [[2026, 2, 8], [2026, 10, 1]]) {",
+    "  const mid = new Date(y, m, d, 0, 0, 0, 0).getTime();",
+    "  const next = new Date(y, m, d + 1, 0, 0, 0, 0).getTime();",
+    "  const noon = mid + 12 * 3600000;",
+    "  out.push({ len: next - mid,",
+    "    lastMinute: inView(mk(noon), 'myday', next - 60000),",
+    "    pastMidnight: inView(mk(noon), 'myday', next + 60000),",
+    "    naive24h: inView(mk(noon), 'myday', noon + 12 * 3600000) });",
+    "}",
+    "process.stdout.write(JSON.stringify(out));",
+  ].join("\n");
+  // A file:// URL, built from this test's own URL — never a path. `pathToFileURL`
+  // on a URL's `pathname` yields `C:C:...` on Windows, which resolves nowhere.
+  const modulePath = new URL("../src/todomodel.ts", import.meta.url).href;
+  const res = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", script, modulePath],
+    { env: { ...process.env, TZ: "America/Chicago" }, encoding: "utf8" }
+  );
+  assert.equal(res.status, 0, `child failed: ${res.stderr}`);
+  const [spring, autumn] = JSON.parse(res.stdout) as {
+    len: number;
+    lastMinute: boolean;
+    pastMidnight: boolean;
+    naive24h: boolean;
+  }[];
+
+  // The fixture's own positive control: if the forced zone did not take, these
+  // two are 24h and every assertion below is about nothing.
+  assert.equal(spring.len, 23 * 3600_000, "TZ=America/Chicago did not take in the child");
+  assert.equal(autumn.len, 25 * 3600_000, "TZ=America/Chicago did not take in the child");
+
+  for (const day of [spring, autumn]) {
+    assert.equal(day.lastMinute, true, "an item pulled in at noon left My Day before its midnight");
+    assert.equal(day.pastMidnight, false, "an item pulled in at noon outlived its own day");
+  }
+  // THE DISCRIMINATOR, and it is what makes this a test of calendar arithmetic
+  // rather than of `inView` in general: exactly 24 hours after the noon pull,
+  // the two readings DISAGREE, in opposite directions on the two days.
+  assert.equal(spring.naive24h, false, "a 23-hour day ended before +24h and the view said it had not");
+  assert.equal(autumn.naive24h, true, "a 25-hour day had not ended at +24h and the view said it had");
+});
+
+/** Local midnights in `year` that begin a day whose UTC offset differs from the
+ *  previous day's — i.e. the first midnight of each DST-shift day. Empty in a
+ *  zone with no DST, which the caller states rather than passing over. */
+function dstTransitions(year: number): number[] {
+  const out: number[] = [];
+  let prev = new Date(year, 0, 1, 12, 0, 0, 0).getTimezoneOffset();
+  for (let d = 1; d < 366; d++) {
+    const noon = new Date(year, 0, 1, 12, 0, 0, 0);
+    noon.setDate(noon.getDate() + 1 + (d - 1));
+    if (noon.getFullYear() !== year) break;
+    const off = noon.getTimezoneOffset();
+    if (off !== prev) {
+      const mid = new Date(noon);
+      mid.setHours(0, 0, 0, 0);
+      out.push(mid.getTime());
+      prev = off;
+    }
+  }
+  return out;
+}
 
 test("Important, All and Completed", () => {
   const imp = item({ important: true });
@@ -392,25 +566,171 @@ test("clearing a field inverts to setting it, and setting one that was absent in
   });
 });
 
-test("FAILURE CASE: a delete's inverse is not wired up yet, and says so instead of pretending", () => {
-  // The store's delete is a soft tombstone, and the engine gained a `restore`
-  // op in #3285 — so what is missing is no longer the OP, it is the wiring
-  // here and in the MCP tools (S5). Reporting the gap is still what stops an
-  // undo button that silently does nothing.
-  const inv = inverseOp({ delete: { id: "td-1" } }, item({ id: "td-1" }), null);
-  assert.deepEqual(inv, {
-    unsupported:
-      "undoing a delete is not wired up yet; the store's restore op exists (#3285) and S5 wires it",
+test("a delete inverts to the engine's restore op (#3263 S5)", () => {
+  // The wiring #3285 left outstanding, and what this slice closed. It needs NO
+  // `before` snapshot: the tombstone still carries every field, so the inverse
+  // is the id and nothing else.
+  assert.deepEqual(inverseOp({ delete: { id: "td-1" } }, item({ id: "td-1" }), null), {
+    op: { restore: { id: "td-1" } },
   });
-  // The retracted claim, pinned as retracted. A message asserted only by
-  // `deepEqual` above would come back the moment someone re-wrapped this
-  // string, and a test that quotes a false claim ENFORCES it — correcting it
-  // reads as the regression (CLAUDE.md, "A TEST is one of those surfaces").
-  assert.doesNotMatch(
-    "unsupported" in inv ? inv.unsupported : "",
-    /has no restore op/,
-    "the store HAS a restore op as of #3285; only the undo wiring is outstanding"
+  assert.deepEqual(inverseOp({ delete: { id: "td-1" } }, null, null), {
+    op: { restore: { id: "td-1" } },
+  });
+  // And back the other way, so undoing an undo of a delete is a delete.
+  assert.deepEqual(inverseOp({ restore: { id: "td-1" } }, null, null), {
+    op: { delete: { id: "td-1" } },
+  });
+});
+
+test("THE RETRACTED CLAIMS: nothing still says a delete cannot be undone", () => {
+  // A test that quotes a false claim ENFORCES it — correcting the claim then
+  // reddens a test and reads as the regression (CLAUDE.md, "A TEST is one of
+  // those surfaces"). Both retracted sentences are pinned as retracted: #3285's
+  // "the store has no restore op", and S4's "it exists but is not wired".
+  const inv = inverseOp({ delete: { id: "td-1" } }, item({ id: "td-1" }), null);
+  assert.equal("op" in inv, true, "a delete has an inverse and it is a restore");
+  const text = JSON.stringify(inv);
+  assert.doesNotMatch(text, /has no restore op/);
+  assert.doesNotMatch(text, /not wired up/);
+});
+
+test("an archive inverts to the SAME ids with the flag flipped", () => {
+  // The inverse is derived from the OP, not from any item's snapshot — which is
+  // why the op carries its ids rather than a scope. An "archive everything
+  // completed in this scope" op would have no inverse at all: the set it moved
+  // is not one the store can reconstruct afterwards.
+  assert.deepEqual(inverseOp({ archive: { ids: ["a", "b"], archived: true } }, null, null), {
+    op: { archive: { ids: ["a", "b"], archived: false } },
+  });
+  assert.deepEqual(inverseOp({ archive: { ids: ["a"], archived: false } }, null, null), {
+    op: { archive: { ids: ["a"], archived: true } },
+  });
+  // The ids are COPIED, not aliased: an inverse holding the forward op's own
+  // array would follow a later mutation of it.
+  const ids = ["a"];
+  const inv = inverseOp({ archive: { ids, archived: true } }, null, null);
+  ids.push("b");
+  assert.deepEqual("op" in inv && "archive" in inv.op ? inv.op.archive.ids : null, ["a"]);
+});
+
+test("FAILURE CASE: an archive that named no items has no inverse", () => {
+  assert.deepEqual(inverseOp({ archive: { ids: [], archived: true } }, null, null), {
+    unsupported: "the archive named no items",
+  });
+});
+
+test("the undo stack keeps INVERSES, in order, and hands the newest back first", () => {
+  const stack = new UndoStack();
+  assert.equal(stack.depth, 0);
+  assert.equal(stack.pop(), null, "an empty stack must answer null, not throw");
+
+  const a = item({ id: "td-1", important: false });
+  stack.push({ update: { id: "td-1", important: true } }, a, null);
+  stack.push({ complete: { id: "td-2", done: true } }, item({ id: "td-2" }), null);
+  assert.equal(stack.depth, 2);
+
+  assert.deepEqual(stack.peek(), {
+    op: { complete: { id: "td-2", done: false } },
+    label: "Completed",
+  });
+  assert.equal(stack.depth, 2, "peek removed an entry");
+  assert.deepEqual(stack.pop(), { op: { complete: { id: "td-2", done: false } }, label: "Completed" });
+  assert.deepEqual(stack.pop(), {
+    op: { update: { id: "td-1", important: false } },
+    label: "Updated",
+  });
+  assert.equal(stack.depth, 0);
+});
+
+test("a write with NO honest inverse is not pushed, and says so", () => {
+  // The rule the rest of the module follows: refuse visibly rather than offer a
+  // button that would do nothing. The caller reads the returned `Inverse` to
+  // decide whether to show the undo toast at all.
+  const stack = new UndoStack();
+  const answer = stack.push({ update: { id: "td-1", title: "x" } }, null, null);
+  assert.equal("unsupported" in answer, true);
+  assert.equal(stack.depth, 0, "an uninvertible write went on the stack anyway");
+
+  // And an invertible one IS pushed, and reports the op — the positive control
+  // without which the assertion above passes against a push that never pushes.
+  const ok = stack.push({ delete: { id: "td-1" } }, null, null);
+  assert.deepEqual(ok, { op: { restore: { id: "td-1" } } });
+  assert.equal(stack.depth, 1);
+});
+
+test("the stack is capped at UNDO_MAX, dropping the OLDEST", () => {
+  const stack = new UndoStack();
+  for (let i = 0; i < UNDO_MAX + 10; i++) {
+    stack.push({ delete: { id: `td-${i}` } }, null, null);
+  }
+  assert.equal(stack.depth, UNDO_MAX, `the cap is not holding (depth ${stack.depth})`);
+
+  // The SURVIVORS are the newest, which is the half a depth assertion alone
+  // does not pin: a cap implemented as "ignore pushes once full" would give the
+  // same depth and keep exactly the wrong fifty.
+  const newest = stack.pop();
+  assert.deepEqual(newest?.op, { restore: { id: `td-${UNDO_MAX + 9}` } });
+  let last: string | null = null;
+  while (stack.depth > 0) {
+    const e = stack.pop();
+    last = e !== null && "restore" in e.op ? e.op.restore.id : null;
+  }
+  assert.equal(last, "td-10", "the cap dropped from the wrong end");
+});
+
+test("clear() empties the stack — the scope switch's whole reason", () => {
+  // Every entry names an id in the list the pane is LEAVING, and the engine
+  // resolves an id with no scope check, so an undo popped after a switch would
+  // write to the other store while the header says otherwise.
+  const stack = new UndoStack();
+  stack.push({ delete: { id: "td-1" } }, null, null);
+  stack.clear();
+  assert.equal(stack.depth, 0);
+  assert.equal(stack.pop(), null);
+});
+
+test("opLabel names what the human did, in the past tense the toast reads in", () => {
+  assert.equal(opLabel({ add: { title: "x" } }), "Added");
+  assert.equal(opLabel({ delete: { id: "a" } }), "Deleted");
+  assert.equal(opLabel({ restore: { id: "a" } }), "Restored");
+  assert.equal(opLabel({ complete: { id: "a", done: true } }), "Completed");
+  assert.equal(opLabel({ complete: { id: "a", done: false } }), "Reopened");
+  assert.equal(opLabel({ update: { id: "a", title: "x" } }), "Updated");
+  assert.equal(opLabel({ archive: { ids: ["a", "b"], archived: true } }), "Archived 2");
+  assert.equal(opLabel({ archive: { ids: ["a"], archived: false } }), "Unarchived 1");
+});
+
+test("archived items are in NO view, and only Completed can be told to show them", () => {
+  const openArchived = item({ id: "td-open", archived_ms: NOW });
+  const doneArchived = item({ id: "td-done", status: "done", done_ms: NOW, archived_ms: NOW });
+  const done = item({ id: "td-live", status: "done", done_ms: NOW });
+  const all = [openArchived, doneArchived, done];
+
+  for (const view of SMART_VIEWS) {
+    assert.equal(inView(openArchived, view, NOW), false, `archived showed in ${view}`);
+    assert.equal(inView(doneArchived, view, NOW), false, `archived showed in ${view}`);
+  }
+
+  // Without the toggle: Completed holds only the live finished row.
+  assert.deepEqual(
+    visibleItems(all, { view: "completed" }, NOW).map((i) => i.id),
+    ["td-live"]
   );
+  // With it: the archived FINISHED row joins, and the archived OPEN one does
+  // not — an archived open item is not part of the log of finished work.
+  assert.deepEqual(
+    visibleItems(all, { view: "completed", includeArchived: true }, NOW).map((i) => i.id).sort(),
+    ["td-done", "td-live"]
+  );
+  // And the toggle does nothing anywhere else: honouring it on `all` would put
+  // back the very rows the human archived to get rid of.
+  for (const view of ["all", "myday", "planned", "important"] as const) {
+    assert.deepEqual(
+      visibleItems(all, { view, includeArchived: true }, NOW).map((i) => i.id),
+      visibleItems(all, { view }, NOW).map((i) => i.id),
+      `includeArchived changed the ${view} view`
+    );
+  }
 });
 
 test("FAILURE CASE: an inverse with nothing to read is refused, not guessed", () => {

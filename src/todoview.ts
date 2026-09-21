@@ -28,6 +28,8 @@ import {
   SMART_VIEWS,
   groupPlanned,
   inView,
+  isArchived,
+  isDone,
   visibleItems,
   type PlannedBucket,
   type SmartView,
@@ -71,8 +73,19 @@ export interface RenderGroup {
 export type EmptyReason = "filtered" | SmartView;
 
 export interface PaneProjection {
-  /** Per-view row counts for the strip. */
+  /**
+   * Per-view row counts for the strip.
+   *
+   * **Read them only when [`countsKnown`] is true.** Before a snapshot has
+   * landed for the scope the pane is on, every one of these is 0 because there
+   * is nothing to count — not because there is nothing there — and a chip
+   * reading `My Day 0` in that frame is the same lie as the empty-state
+   * sentence the list already guards (#3293 round 6 residual 1).
+   */
   counts: Record<SmartView, number>;
+  /** Has a snapshot landed for this scope? When false, `counts`, `total` and
+   *  `emptyReason` are all about a list nobody has read yet. */
+  countsKnown: boolean;
   groups: RenderGroup[];
   /** Rows that MATCH, before the budget. The count chip shows this. */
   total: number;
@@ -93,6 +106,19 @@ export interface ProjectInput {
   query: string;
   /** One tag, exact, or null. */
   tagFilter: string | null;
+  /** The Completed view's "show archived" toggle. Ignored by every other view
+   *  — see `VisibleOpts.includeArchived` in `todomodel.ts`. */
+  showArchived?: boolean;
+  /**
+   * Has a snapshot landed for the scope the pane is on?
+   *
+   * Absent is treated as TRUE, so every existing caller and test keeps its
+   * meaning; the pane passes it explicitly. It exists because "we have not
+   * looked" and "there is nothing" are different facts and only one of them is
+   * safe to assert — the rule `todoscope.ts` states and the list's empty-state
+   * already followed.
+   */
+  loaded?: boolean;
 }
 
 /**
@@ -118,7 +144,12 @@ export function projectPane(input: ProjectInput, nowMs: number): PaneProjection 
 
   const rows = visibleItems(
     input.items,
-    { view: input.view, query: input.query, tag: input.tagFilter },
+    {
+      view: input.view,
+      query: input.query,
+      tag: input.tagFilter,
+      includeArchived: input.showArchived === true,
+    },
     nowMs
   );
 
@@ -156,6 +187,7 @@ export function projectPane(input: ProjectInput, nowMs: number): PaneProjection 
   const filtered = input.query.trim() !== "" || input.tagFilter !== null;
   return {
     counts,
+    countsKnown: input.loaded !== false,
     groups: windowed,
     total: rows.length,
     shown,
@@ -283,6 +315,21 @@ export interface RowDraft {
   /** The "next step" field under the step list. */
   step: string;
   /**
+   * The in-row due-date field, as typed (#3263 S5): `fri 4pm`, `tomorrow`,
+   * `next mon`. Parsed by `parseQuickAdd`, so the row and the quick-add bar
+   * understand exactly the same grammar — one date vocabulary in this pane,
+   * not two.
+   *
+   * **Seeded EMPTY, always**, which is why it has no `seededDue` twin the way
+   * `notes` has `seededNotes`. The two fields are different kinds of thing: the
+   * notes box is an EDITOR over a value the store holds, so "has the human
+   * typed?" is a question about its seed; this is an INSTRUCTION field, like
+   * `step`. The item's current due date is drawn beside it as a label, and
+   * rendering a timestamp back into the phrase someone might have typed is
+   * lossy in a way that would make a pristine draft read as dirty.
+   */
+  due: string;
+  /**
    * The item's `notes` AT THE MOMENT this draft was seeded.
    *
    * "Has the human typed?" is a question about the draft against its own SEED,
@@ -296,7 +343,7 @@ export interface RowDraft {
   seededNotes: string;
 }
 
-export const EMPTY_ROW_DRAFT: RowDraft = { notes: "", step: "", seededNotes: "" };
+export const EMPTY_ROW_DRAFT: RowDraft = { notes: "", step: "", due: "", seededNotes: "" };
 
 /**
  * Has the human typed into this draft?
@@ -312,14 +359,14 @@ export const EMPTY_ROW_DRAFT: RowDraft = { notes: "", step: "", seededNotes: "" 
  * drives its check off the object's own keys.
  */
 export function rowDraftIsPristine(draft: RowDraft): boolean {
-  return draft.notes === draft.seededNotes && draft.step === "";
+  return draft.notes === draft.seededNotes && draft.step === "" && draft.due === "";
 }
 
 /** The draft a freshly expanded row starts with: seeded from the ITEM, and
  *  recording what it was seeded from, so `rowDraftIsPristine` is true the
  *  instant it is created and stays true until the human types. */
 export function seedRowDraft(item: TodoItem): RowDraft {
-  return { notes: item.notes, step: "", seededNotes: item.notes };
+  return { notes: item.notes, step: "", due: "", seededNotes: item.notes };
 }
 
 /**
@@ -380,6 +427,78 @@ export function pruneDrafts(drafts: Map<string, RowDraft>, liveIds: ReadonlySet<
   for (const id of [...drafts.keys()]) {
     if (!liveIds.has(id)) drafts.delete(id);
   }
+}
+
+// ---------- revealing a row a toast pointed at ----------
+
+/**
+ * What the reminder toast's "Show" gesture can actually do.
+ *
+ * **Because the answer can be "nothing", and the pane used to do nothing
+ * silently** (#3301 review round 2, finding 3). A notice is created by a scan
+ * that skips done and archived items — but the human clicks it LATER, and an
+ * agent's `todo_complete` or `todo_archive` in that window moves the row out
+ * of every view. The pane then cleared the filters, fell back to All, set a
+ * selection nothing rendered and called `scrollIntoView` on a selector
+ * matching nothing: the toast dismissed and the screen did not change.
+ *
+ * Only an item that was GONE entirely got an explanation, which is the rarer
+ * case — a delete — while the likelier one, a row finished a minute ago, was
+ * the silent one.
+ *
+ * Pure, so the decision is testable without a DOM; `todopane.ts` owns only
+ * the toast and the scroll.
+ */
+export type RevealPlan =
+  /** The row is reachable. `view` is the view to move to, or null to stay. */
+  | { kind: "reveal"; view: SmartView | null }
+  /** No such item in this scope — deleted, or another list's. */
+  | { kind: "gone" }
+  /** The item is still here but has left every view since the notice. */
+  | { kind: "left"; why: "done" | "archived" };
+
+/**
+ * Decide what "Show" should do for `id`.
+ *
+ * `currentRendered` is what the pane is showing RIGHT NOW (the flattened
+ * projection). If the row is already on screen, no view change is needed —
+ * which matters because moving the view is itself a visible jump, and doing it
+ * when the row was already in front of the human is noise.
+ *
+ * The fallback is `all`, the view that holds every open item. It is returned
+ * rather than applied, so the caller decides whether that counts as a
+ * preference (it does not — see `todopane.ts`'s `setView(…, {persist: false})`).
+ *
+ * **No clock**, unlike every other function in this module and its sibling.
+ * The three questions it asks — is the item here, is it archived, is it done —
+ * are all timeless, and the one thing that would have needed a reading was the
+ * dead `inView` branch removed below. A parameter kept "because everything
+ * else takes one" would be a claim that this decision can move at midnight,
+ * which it cannot.
+ */
+export function planReveal(
+  items: readonly TodoItem[],
+  id: string,
+  currentRendered: readonly TodoItem[]
+): RevealPlan {
+  const item = items.find((i) => i.id === id);
+  if (item === undefined) return { kind: "gone" };
+  if (isArchived(item)) return { kind: "left", why: "archived" };
+  if (isDone(item)) return { kind: "left", why: "done" };
+  if (currentRendered.some((i) => i.id === id)) return { kind: "reveal", view: null };
+  // Reachable, but not on screen. All holds every open item, and the two
+  // guards above have already established this one is open — so the fallback
+  // is unconditional rather than re-asking `inView`.
+  //
+  // An earlier revision DID re-ask it (`inView(item, "all", nowMs) ? "all" :
+  // null`). That branch was unreachable, and a mutation run proved it: forcing
+  // the ternary to its true arm reddened NOTHING, which is what dead defensive
+  // code looks like from the outside. The property it was reaching for is
+  // pinned where it belongs instead — `planReveal never answers 'reveal' for a
+  // row All would not hold` asserts `inView` agrees, over every item shape
+  // this module can build, so an `inView` change that dropped a class from All
+  // reddens there rather than being silently absorbed here.
+  return { kind: "reveal", view: "all" };
 }
 
 // ---------- selection ----------

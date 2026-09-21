@@ -22,8 +22,6 @@
 
 import { parseQuickAdd, formatDue, addDays } from "./quickadd.js";
 
-const MS_PER_DAY = 86400000;
-
 /**
  * The most rows the pane will BUILD at once.
  *

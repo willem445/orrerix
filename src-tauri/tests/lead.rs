@@ -175,6 +175,10 @@ fn lead_tool_surface_is_exactly_the_enumerated_set() {
             "todo_update",
             "todo_complete",
             "todo_delete",
+            // #3263 S5 — the seventh. The same argument, and one addition: a
+            // lead pane sits directly with the human, who is the one who says
+            // "no, put that back".
+            "todo_restore",
             // the capability the toggle exists to grant
             "spawn_agent",
             "send_prompt",

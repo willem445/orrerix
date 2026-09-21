@@ -16,8 +16,8 @@
 use loomux_engine::pathseg;
 use loomux_engine::todo::{
     self, Actor, OrderAfter, Scope, StepPatch, TodoAdd, TodoError, TodoOp, TodoStore, TodoUpdate,
-    ITEMS_MAX, NOTES_MAX, ORDER_GAP, PRIORITY_MAX, PURGE_AFTER_MS, STEPS_MAX, TAGS_MAX,
-    TAG_BYTES_MAX,
+    ARCHIVE_IDS_MAX, ITEMS_MAX, NOTES_MAX, ORDER_GAP, PRIORITY_MAX, PURGE_AFTER_MS, STEPS_MAX,
+    TAGS_MAX, TAG_BYTES_MAX,
     TITLE_MAX,
 };
 use loomux_lib::orchestration::todo::{
@@ -1719,7 +1719,14 @@ fn an_op_naming_two_actions_or_none_is_refused() {
             json!({"add": {"title": "a"}, "delete": {"id": "td-1"}}),
             "an op naming two actions",
         ),
-        (json!({"archive": {"id": "td-1"}}), "an unknown action"),
+        // **THE SPECIMEN MOVED, AND THE ASSERTION DID NOT.** This row was
+        // `archive` at S2, chosen because it was not an op; #3263 S5 made it
+        // one, so the witness is relocated rather than the check relaxed
+        // (CLAUDE.md, "A test's specimen must stay a member of the class it
+        // witnesses"). The extra assertion below is what stops the next slice
+        // repeating it silently: the refusal must say the op is UNKNOWN, so a
+        // future `sweep` op reddens this row instead of leaving it vacuous.
+        (json!({"sweep": {"id": "td-1"}}), "an unknown action"),
         (json!("delete"), "an op that is not an object"),
     ] {
         let msg = refusal(v, Scope::Global, what);
@@ -1727,6 +1734,13 @@ fn an_op_naming_two_actions_or_none_is_refused() {
             msg.starts_with("refused: op "),
             "{what} should be refused against the `op` field, got: {msg}"
         );
+        if what == "an unknown action" {
+            assert!(
+                msg.contains("unknown op"),
+                "this row's specimen must still BE unknown — if it has become a real op, \
+                 move the witness rather than relaxing this: {msg}"
+            );
+        }
     }
 }
 
@@ -1785,6 +1799,13 @@ struct DataRoot {
 }
 
 impl DataRoot {
+    /// The redirected data root, so a test can reach the store FILE the tools
+    /// are reading — needed to age a tombstone past the purge window, which no
+    /// injectable clock can do on this path (`todo_apply` reads `now_ms()`).
+    fn path(&self) -> &Path {
+        self._dir.path()
+    }
+
     fn install() -> DataRoot {
         let _guard = MCP_SERIAL.lock_safe();
         let dir = tempfile::tempdir().unwrap();
@@ -1949,13 +1970,25 @@ fn audit_actions(reg: &OrchRegistry, group: &GroupId) -> Vec<String> {
     reg.audit_log(group).into_iter().map(|e| e.action).collect()
 }
 
-/// The six, in one place, so a test cannot cover five of them by accident.
-const TODO_TOOLS: [&str; 6] =
-    ["todo_list", "todo_get", "todo_add", "todo_update", "todo_complete", "todo_delete"];
+/// The seven, in one place, so a test cannot cover six of them by accident.
+///
+/// #3263 S5 added `todo_restore` HERE rather than in each test, which is the
+/// point of the constant: the three default-deny surface tests below — every
+/// delegate role, the manager, the lead — widen with it, so a seventh tool
+/// cannot reach a role whose two gates were not both edited.
+const TODO_TOOLS: [&str; 7] = [
+    "todo_list",
+    "todo_get",
+    "todo_add",
+    "todo_update",
+    "todo_complete",
+    "todo_delete",
+    "todo_restore",
+];
 
 // ---------- the surface: who sees the tools, and who may dispatch them ----------
 
-/// **Every non-Solo role sees all six and may dispatch them.**
+/// **Every non-Solo role sees all seven and may dispatch them.**
 ///
 /// Both halves matter and they are different claims. The listing is cosmetic
 /// (`tool_defs`); the dispatch check is the real gate, and this repo's own
@@ -1969,7 +2002,7 @@ const TODO_TOOLS: [&str; 6] =
 /// two classes "it is on the shared tier" implies nothing at all — and each
 /// needs a differently-shaped group to exist in.
 #[test]
-fn mcp_every_delegate_role_sees_and_may_dispatch_all_six_todo_tools() {
+fn mcp_every_delegate_role_sees_and_may_dispatch_all_seven_todo_tools() {
     let _root = DataRoot::install();
     let dir = tempfile::tempdir().unwrap();
     let reg = relaunch_registry(dir.path());
@@ -1989,7 +2022,7 @@ fn mcp_every_delegate_role_sees_and_may_dispatch_all_six_todo_tools() {
     }
 }
 
-/// **A manager sees and may dispatch all six.**
+/// **A manager sees and may dispatch all seven.**
 ///
 /// Its own test because a manager needs a workflow file to exist at all, and
 /// because `MANAGER_SHARED` plus the manager dispatch gate are two independent
@@ -1997,7 +2030,7 @@ fn mcp_every_delegate_role_sees_and_may_dispatch_all_six_todo_tools() {
 /// if BOTH name it, and the halves are spelled separately on purpose so they
 /// cannot drift together.
 #[test]
-fn mcp_a_manager_sees_and_may_dispatch_all_six_todo_tools() {
+fn mcp_a_manager_sees_and_may_dispatch_all_seven_todo_tools() {
     let _root = DataRoot::install();
     let dir = tempfile::tempdir().unwrap();
     let reg = relaunch_registry(dir.path());
@@ -2043,7 +2076,7 @@ fn mcp_a_manager_sees_and_may_dispatch_all_six_todo_tools() {
     );
 }
 
-/// **A lead sees and may dispatch all six.**
+/// **A lead sees and may dispatch all seven.**
 ///
 /// Its own test for the manager's reason exactly: `LEAD_SHARED` and the lead
 /// dispatch gate are two separate default-deny enumerations, so nothing about
@@ -2052,7 +2085,7 @@ fn mcp_a_manager_sees_and_may_dispatch_all_six_todo_tools() {
 /// scope resolves" is the half of the grant's argument that could stop being
 /// true, and only a workspace-scoped write witnesses it.
 #[test]
-fn mcp_a_lead_sees_and_may_dispatch_all_six_todo_tools() {
+fn mcp_a_lead_sees_and_may_dispatch_all_seven_todo_tools() {
     let _root = DataRoot::install();
     let dir = tempfile::tempdir().unwrap();
     let reg = relaunch_registry(dir.path());
@@ -2079,7 +2112,7 @@ fn mcp_a_lead_sees_and_may_dispatch_all_six_todo_tools() {
     assert_eq!(item["created_by"]["role"], json!("lead"), "{item}");
 }
 
-/// **A solo pane gets none of the six, at both gates.**
+/// **A solo pane gets none of the seven, at both gates.**
 ///
 /// The negative control for the sweep above, and the one class whose exclusion
 /// is structural rather than enumerated: `tool_defs` returns the channel pair
@@ -2109,7 +2142,7 @@ fn mcp_a_solo_pane_gets_no_todo_tools_at_all() {
             !names.contains(&tool.to_string()),
             "a solo pane must not be offered {tool}: {names:?}"
         );
-        // Arguments that would SATISFY every one of the six, so the refusal
+        // Arguments that would SATISFY every one of the seven, so the refusal
         // below cannot be an argument check wearing the gate's clothes.
         let text =
             mcp_refusal(&reg, &cs, tool, json!({ "id": "td-1", "title": "x", "done": true }));
@@ -2122,8 +2155,8 @@ fn mcp_a_solo_pane_gets_no_todo_tools_at_all() {
 
 // ---------- the happy path ----------
 
-/// **Add, list, get, update, complete, delete — one item through all six, with
-/// the audit row each write leaves.**
+/// **Add, list, get, update, complete, delete — one item through six of the
+/// seven (restore has its own tests below), with the audit row each leaves.**
 ///
 /// Asserted on the store's own read-back (`todo_list` / `todo_get`) rather than
 /// on the reply alone: a reply is what the arm computed, and the point of the
@@ -2633,4 +2666,868 @@ fn mcp_the_workspace_a_write_lands_in_is_the_callers_own_repo() {
     assert_eq!(la["items"].as_array().unwrap().len(), 1, "{la}");
     assert_eq!(la["items"].as_array().unwrap()[0]["title"], json!("A"), "{la}");
     assert_eq!(lb["items"].as_array().unwrap()[0]["title"], json!("B"), "{lb}");
+}
+
+// ==================== the archive op (#3263 slice S5) ====================
+//
+// `archived_ms` had a reader and no writer until this slice: `inView` excluded
+// an archived item from every view and `todo_list` filtered one out, and no
+// fixture in the tree could build one. The design note recorded that as a
+// residual ("One residual, stated so it is falsifiable") and said the slice
+// that gave the field a writer owned the test. This is it.
+
+/// The one thing this op is actually for: the pane's Completed view says
+/// "Archive 7" and seven rows go away.
+#[test]
+fn an_archive_puts_the_named_items_away_and_leaves_the_rest_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    let a = apply_to(&path, add("done one"), &human(), T0, None).unwrap().ids[0].clone();
+    let b = apply_to(&path, add("done two"), &human(), T0, None).unwrap().ids[0].clone();
+    let keep = apply_to(&path, add("still open"), &human(), T0, None).unwrap().ids[0].clone();
+
+    // Revs BEFORE the archive. Asserted as a DELTA below rather than against a
+    // remembered absolute: what a fresh `add` leaves `rev` at is `apply_add`'s
+    // business, and a test that hardcodes it measures that instead of this op.
+    let rev_of = |id: &str| {
+        snapshot_at(&path, None).items.iter().find(|i| i.id == id).unwrap().rev
+    };
+    let (rev_a, rev_keep) = (rev_of(&a), rev_of(&keep));
+
+    let applied = apply_to(
+        &path,
+        TodoOp::Archive {
+            ids: vec![a.clone(), b.clone()],
+            archived: true,
+        },
+        &agent(),
+        T0 + 5,
+        None,
+    )
+    .expect("archiving two live items must succeed");
+
+    assert_eq!(
+        applied.ids,
+        vec![a.clone(), b.clone()],
+        "the op answers what it moved"
+    );
+    assert!(
+        applied.item.is_none(),
+        "a bulk op must not answer with ONE item — a caller would read it as the item that changed"
+    );
+    assert_eq!(
+        TodoOp::Archive {
+            ids: vec![a.clone()],
+            archived: true
+        }
+        .action(),
+        "todo-archive",
+        "the audit row needs its own action name"
+    );
+
+    let items = snapshot_at(&path, None).items;
+    let find = |id: &str| items.iter().find(|i| i.id == id).cloned().unwrap();
+    assert_eq!(
+        find(&a).archived_ms,
+        Some(T0 + 5),
+        "the stamp is the write's clock"
+    );
+    assert_eq!(find(&b).archived_ms, Some(T0 + 5));
+    assert_eq!(
+        find(&keep).archived_ms,
+        None,
+        "an id the op did not name must not move"
+    );
+    assert_eq!(find(&keep).rev, rev_keep, "and must not even be touched");
+    assert_eq!(find(&a).rev, rev_a + 1, "an archive is exactly one write");
+    assert_eq!(
+        find(&a).updated_by,
+        agent(),
+        "attributed to whoever performed it"
+    );
+    assert_eq!(find(&a).updated_ms, T0 + 5);
+
+    // ARCHIVED IS NOT DELETED. The snapshot still carries it, which is what
+    // makes the Completed view's "show archived" toggle possible at all and
+    // what makes the op's own inverse reachable.
+    assert!(
+        snapshot_at(&path, None).items.iter().any(|i| i.id == a),
+        "an archived item must still reach a reader — it is live data put away, not a tombstone"
+    );
+    assert_eq!(
+        find(&a).deleted_ms,
+        None,
+        "archiving must not tombstone anything"
+    );
+}
+
+/// The inverse the pane's undo sends, and the reason the op carries a
+/// direction rather than being one-way.
+#[test]
+fn un_archiving_the_same_ids_is_an_exact_inverse() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    let a = apply_to(&path, add("one"), &human(), T0, None).unwrap().ids[0].clone();
+    let b = apply_to(&path, add("two"), &human(), T0, None).unwrap().ids[0].clone();
+
+    // Looked up BY ID rather than by position: the snapshot's order is the
+    // store's, and a test that indexed into it would be pinning that instead.
+    let rev_of = |id: &str| {
+        snapshot_at(&path, None).items.iter().find(|i| i.id == id).unwrap().rev
+    };
+    let rev_before = [(a.clone(), rev_of(&a)), (b.clone(), rev_of(&b))];
+
+    apply_to(
+        &path,
+        TodoOp::Archive {
+            ids: vec![a.clone(), b.clone()],
+            archived: true,
+        },
+        &human(),
+        T0 + 1,
+        None,
+    )
+    .unwrap();
+    apply_to(
+        &path,
+        TodoOp::Archive {
+            ids: vec![a.clone(), b.clone()],
+            archived: false,
+        },
+        &human(),
+        T0 + 2,
+        None,
+    )
+    .expect("un-archiving must be the same op with the flag flipped");
+
+    let items = snapshot_at(&path, None).items;
+    for (id, was) in &rev_before {
+        let item = items.iter().find(|i| &i.id == id).unwrap();
+        assert_eq!(
+            item.archived_ms, None,
+            "un-archive must clear the stamp, not re-stamp it"
+        );
+        assert_eq!(
+            item.rev,
+            was + 2,
+            "two writes, so two revs — a delta, not what a fresh add happens to leave"
+        );
+    }
+}
+
+/// Every refusal, and the half that matters more than the message: the store
+/// is BYTE-IDENTICAL afterwards. A partial archive would leave the human with
+/// some rows away and some not, and an undo naming all of them would then
+/// un-archive rows the forward op never touched.
+#[test]
+fn an_archive_refuses_before_it_mutates_anything() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    let good = apply_to(&path, add("keep me"), &human(), T0, None).unwrap().ids[0].clone();
+    let gone = apply_to(&path, add("tombstoned"), &human(), T0, None).unwrap().ids[0].clone();
+    apply_to(
+        &path,
+        TodoOp::Delete { id: gone.clone() },
+        &human(),
+        T0 + 1,
+        None,
+    )
+    .unwrap();
+    let before = read_raw(&path);
+
+    // An id that never existed, WITH a good id in front of it: the refusal has
+    // to come before the good one is written, not after.
+    let e = unwrap_err_for(
+        apply_to(
+            &path,
+            TodoOp::Archive {
+                ids: vec![good.clone(), "td-nope".to_string()],
+                archived: true,
+            },
+            &human(),
+            T0 + 2,
+            None,
+        ),
+        "an unknown id",
+    );
+    assert_eq!(e.to_string(), "unknown todo: td-nope");
+    assert_eq!(
+        read_raw(&path),
+        before,
+        "the good id in front of it was written anyway"
+    );
+
+    // A TOMBSTONE reads exactly as an id that never existed — the rule every
+    // other op here follows.
+    let e = unwrap_err_for(
+        apply_to(
+            &path,
+            TodoOp::Archive {
+                ids: vec![gone.clone()],
+                archived: true,
+            },
+            &human(),
+            T0 + 2,
+            None,
+        ),
+        "a tombstoned id",
+    );
+    assert_eq!(e.to_string(), format!("unknown todo: {gone}"));
+    assert_eq!(read_raw(&path), before);
+
+    // No ids at all. An empty archive is indistinguishable from one that
+    // worked, and it has no inverse either.
+    let e = unwrap_err_for(
+        apply_to(
+            &path,
+            TodoOp::Archive {
+                ids: vec![],
+                archived: true,
+            },
+            &human(),
+            T0 + 2,
+            None,
+        ),
+        "an empty id list",
+    );
+    assert_eq!(e.to_string(), "refused: archive names no items");
+    assert_eq!(read_raw(&path), before);
+
+    // The SAME id twice. Two spellings of one write make `ids` mean something
+    // other than what it says.
+    let e = unwrap_err_for(
+        apply_to(
+            &path,
+            TodoOp::Archive {
+                ids: vec![good.clone(), good.clone()],
+                archived: true,
+            },
+            &human(),
+            T0 + 2,
+            None,
+        ),
+        "a repeated id",
+    );
+    assert_eq!(
+        e.to_string(),
+        format!("refused: archive names {good} more than once")
+    );
+    assert_eq!(read_raw(&path), before);
+
+    // THE POSITIVE CONTROL. Without it every assertion above passes against an
+    // op that refuses everything, and "the store did not change" would be the
+    // loudest thing in this file saying nothing.
+    apply_to(
+        &path,
+        TodoOp::Archive {
+            ids: vec![good.clone()],
+            archived: true,
+        },
+        &human(),
+        T0 + 3,
+        None,
+    )
+    .expect("the same shape, with a good id, must succeed");
+    assert_ne!(
+        read_raw(&path),
+        before,
+        "the control did not move the store either"
+    );
+}
+
+/// Archiving a row that is already away is ACCEPTED, and deliberately — the
+/// opposite of `restore`'s "a no-op is indistinguishable from a success".
+#[test]
+fn archiving_an_already_archived_row_is_accepted_because_this_op_is_bulk() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    let id = apply_to(&path, add("x"), &human(), T0, None).unwrap().ids[0].clone();
+    apply_to(
+        &path,
+        TodoOp::Archive {
+            ids: vec![id.clone()],
+            archived: true,
+        },
+        &human(),
+        T0 + 1,
+        None,
+    )
+    .unwrap();
+    apply_to(
+        &path,
+        TodoOp::Archive {
+            ids: vec![id.clone()],
+            archived: true,
+        },
+        &human(),
+        T0 + 2,
+        None,
+    )
+    .expect(
+        "a bulk op names a state it wants, so an already-archived row in the batch is not an \
+         error — refusing would make the pane's Archive button fail exactly when a human retries it",
+    );
+    let items = snapshot_at(&path, None).items;
+    let item = items.iter().find(|i| i.id == id).unwrap();
+    assert_eq!(
+        item.archived_ms,
+        Some(T0 + 2),
+        "the second write re-stamps rather than being a no-op"
+    );
+}
+
+/// The cap, because `ids` is caller JSON.
+#[test]
+fn an_archive_naming_more_than_the_cap_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    let id = apply_to(&path, add("x"), &human(), T0, None).unwrap().ids[0].clone();
+    let before = read_raw(&path);
+    // Distinct ids, so the duplicate check cannot be what refuses this — the
+    // refusal has to be the CAP, and the message says which.
+    let ids: Vec<String> = (0..ARCHIVE_IDS_MAX + 1)
+        .map(|n| format!("td-{n:016x}"))
+        .collect();
+    let e = unwrap_err_for(
+        apply_to(
+            &path,
+            TodoOp::Archive { ids, archived: true },
+            &human(),
+            T0 + 1,
+            None,
+        ),
+        "more ids than the cap",
+    );
+    assert_eq!(
+        e.to_string(),
+        format!("refused: archive exceeds {ARCHIVE_IDS_MAX}")
+    );
+    assert_eq!(read_raw(&path), before);
+
+    // And exactly AT the cap passes the count check — what stops it there is
+    // the NEXT rule, the unknown ids. Without this the assertion above would
+    // hold just as well against an off-by-one that refused at the cap itself.
+    let mut ids: Vec<String> = (0..ARCHIVE_IDS_MAX - 1)
+        .map(|n| format!("td-{n:016x}"))
+        .collect();
+    ids.push(id);
+    let e = unwrap_err_for(
+        apply_to(
+            &path,
+            TodoOp::Archive { ids, archived: true },
+            &human(),
+            T0 + 1,
+            None,
+        ),
+        "exactly the cap",
+    );
+    assert!(
+        e.to_string().starts_with("unknown todo:"),
+        "at the cap the refusal must be about the ids, not the count: {e}"
+    );
+}
+
+// ---------- the decoder's archive arm ----------
+
+#[test]
+fn the_archive_op_decodes_from_the_shape_the_pane_sends() {
+    // Default-deny again: without an arm here `{"archive": …}` falls to
+    // `parse_op`'s `other` arm and the pane's one bulk gesture is unreachable.
+    match parse_op(&json!({"archive": {"ids": ["td-1", "td-2"]}}), Scope::Global) {
+        Ok(TodoOp::Archive { ids, archived }) => {
+            assert_eq!(ids, vec!["td-1".to_string(), "td-2".to_string()]);
+            assert!(
+                archived,
+                "an omitted `archived` means archive, as `complete`'s `done` does"
+            );
+        }
+        other => panic!("an archive must decode to TodoOp::Archive, got {other:?}"),
+    }
+    match parse_op(
+        &json!({"archive": {"ids": ["td-1"], "archived": false}}),
+        Scope::Global,
+    ) {
+        Ok(TodoOp::Archive { archived, .. }) => {
+            assert!(!archived, "the inverse must be spellable")
+        }
+        other => panic!("an un-archive must decode, got {other:?}"),
+    }
+
+    // Default-deny on the body, and on the one required field.
+    let msg = refusal(
+        json!({"archive": {"ids": ["td-1"], "when": 1}}),
+        Scope::Global,
+        "an archive carrying an unknown key",
+    );
+    assert!(msg.contains("when"), "the refusal must name the key, got: {msg}");
+    let msg = refusal(
+        json!({"archive": {}}),
+        Scope::Global,
+        "an archive with no ids",
+    );
+    assert!(msg.contains("ids is required"), "got: {msg}");
+    let msg = refusal(
+        json!({"archive": {"ids": [7]}}),
+        Scope::Global,
+        "an archive whose ids are not strings",
+    );
+    assert!(msg.contains("ids"), "got: {msg}");
+}
+
+#[test]
+fn the_unknown_op_message_names_every_op_the_decoder_takes() {
+    // The message is a CONTRACT `src/todo.ts` is written against, and it is the
+    // one place a caller learns what the wire accepts. An op added to the
+    // decoder and not to this sentence is a capability nobody can discover.
+    let msg = refusal(
+        json!({"nope": {}}),
+        Scope::Global,
+        "an op the decoder has no arm for",
+    );
+    for op in ["add", "update", "complete", "delete", "restore", "archive"] {
+        assert!(msg.contains(op), "the unknown-op message must name `{op}`: {msg}");
+    }
+    let msg = refusal(json!({}), Scope::Global, "an op naming nothing");
+    assert!(
+        msg.contains("archive"),
+        "the zero-op message must name every op too: {msg}"
+    );
+}
+
+// ==================== `todo_restore`, the seventh tool (#3263 slice S5) ====================
+//
+// S2 shipped six tools while the engine had no `restore` op; #3285 added the
+// op with no tool; this slice closes the gap. The design note's "No seventh
+// tool" section asked whoever took it to make the capability argument, and the
+// tests below are the half of that argument a reader can check: it reaches the
+// same surfaces the six do (the three default-deny gates above cover that,
+// because `TODO_TOOLS` now has seven entries), and it widens NOTHING — a
+// tombstone in another project's list is exactly as invisible as a live row
+// there, which is the property a tombstone-visible read could have broken.
+
+/// The happy path, end to end through the REAL dispatch: an agent deletes its
+/// own row and puts it back.
+#[test]
+fn mcp_an_agent_can_restore_a_to_do_it_deleted() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let (g, _orch, w) = mcp_group(&reg, repo.path());
+
+    let added = ok_json(
+        &reg,
+        &w,
+        "todo_add",
+        json!({ "title": "keep this", "notes": "with a note", "tags": ["x"] }),
+    );
+    let id = added["id"].as_str().unwrap().to_string();
+    ok_json(&reg, &w, "todo_delete", json!({ "id": id }));
+    let listed = ok_json(&reg, &w, "todo_list", json!({}));
+    assert_eq!(
+        listed["items"].as_array().unwrap().len(),
+        0,
+        "precondition: the tombstone is hidden from the listing: {listed}"
+    );
+
+    let back = ok_json(&reg, &w, "todo_restore", json!({ "id": id }));
+    assert_eq!(back["id"], json!(id));
+    assert_eq!(
+        back["notes"],
+        json!("with a note"),
+        "a restore returns the WHOLE item — the answer to did I get the right one: {back}"
+    );
+    assert_eq!(back["tags"], json!(["x"]), "{back}");
+    let listed = ok_json(&reg, &w, "todo_list", json!({}));
+    assert_eq!(
+        listed["items"].as_array().unwrap().len(),
+        1,
+        "the restored row must be back in the listing: {listed}"
+    );
+
+    // The audit row, under its own action name, on the CALLER's group.
+    let actions = audit_actions(&reg, &g);
+    assert!(
+        actions.iter().any(|a| a == "todo-restore"),
+        "a restore must leave its own audit row: {actions:?}"
+    );
+}
+
+/// **The leak this tool could have opened, and did not.**
+///
+/// `todo_visible` reads `todo_snapshot`, which filters tombstones — so this arm
+/// needed a tombstone-VISIBLE read, and a tombstone-visible read is exactly the
+/// shape that tells a caller "that id exists, you just cannot have it". It does
+/// not: the sibling applies the same scope rule to the same field, so a
+/// tombstone in another project's list answers `unknown todo` — the words an id
+/// that never existed answers.
+///
+/// The POSITIVE CONTROL is the second half and is what makes this a test about
+/// the gate rather than about restore being broken: the very same id, restored
+/// by the group that owns it, succeeds.
+#[test]
+fn mcp_a_tombstone_in_another_workspace_reads_exactly_as_an_id_that_never_existed() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo_a = tempfile::tempdir().unwrap();
+    let repo_b = tempfile::tempdir().unwrap();
+    let (_ga, _oa, wa) = mcp_group(&reg, repo_a.path());
+    let (gb, _ob, wb) = mcp_group(&reg, repo_b.path());
+
+    let id = ok_json(&reg, &wa, "todo_add", json!({ "title": "A's row" }))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ok_json(&reg, &wa, "todo_delete", json!({ "id": id }));
+
+    // The two messages cannot be byte-identical — each quotes the id the
+    // CALLER sent, which is the one thing the caller already knows. What must
+    // be identical is everything else, so the comparison is against a template
+    // with the id substituted rather than against the other string.
+    let never_id = "td-0000000000000000";
+    let theirs = mcp_refusal(&reg, &wb, "todo_restore", json!({ "id": id }));
+    let never = mcp_refusal(&reg, &wb, "todo_restore", json!({ "id": never_id }));
+    assert_eq!(
+        theirs,
+        format!("unknown todo: {id}"),
+        "a tombstone B may not see must read as an unknown id and say nothing else"
+    );
+    assert_eq!(never, format!("unknown todo: {never_id}"));
+    assert_eq!(
+        theirs.replace(&id, "<ID>"),
+        never.replace(never_id, "<ID>"),
+        "with the id blanked the two refusals must be the SAME sentence — anything that \
+         differs is something B learned about A's list"
+    );
+
+    // B's refusal is audited on B's group, as every other refusal this layer
+    // makes is — one `todo-refused` filter answers the question either way.
+    let actions = audit_actions(&reg, &gb);
+    assert!(
+        actions.iter().any(|a| a == "todo-refused"),
+        "a cross-workspace refusal must leave a row: {actions:?}"
+    );
+
+    // THE POSITIVE CONTROL. Same id, its own group, and it comes back — so the
+    // assertion above is about the gate and not about a restore that never
+    // works.
+    let back = ok_json(&reg, &wa, "todo_restore", json!({ "id": id }));
+    assert_eq!(back["id"], json!(id), "{back}");
+}
+
+/// The refusals that reach the caller with the ENGINE's own words, which is
+/// what lets an agent act on one rather than guess.
+///
+/// Renamed at #3301 review round 1: this used to promise "an expired
+/// tombstone" and run an id that had never existed — a different refusal
+/// reaching the same words by a different route, so the name was a claim the
+/// body did not support. The expired-tombstone arm now has its own test
+/// (`mcp_an_expired_tombstone_is_refused_as_unknown_through_the_tool`), which
+/// ages a real tombstone on disk.
+#[test]
+fn mcp_restoring_a_live_row_and_an_absent_id_each_say_which_it_is() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let (_g, _orch, w) = mcp_group(&reg, repo.path());
+
+    let id = ok_json(&reg, &w, "todo_add", json!({ "title": "alive" }))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let msg = mcp_refusal(&reg, &w, "todo_restore", json!({ "id": id }));
+    assert!(
+        msg.contains("is not deleted"),
+        "a live row must say so rather than quietly succeeding: {msg}"
+    );
+    assert!(
+        !msg.contains("unknown todo"),
+        "and must NOT read as a missing id — the caller asked precisely because it did not know: {msg}"
+    );
+
+    // An id that was never here at all — NOT an expired tombstone, which is a
+    // different route to the same words and has its own test below.
+    let msg = mcp_refusal(&reg, &w, "todo_restore", json!({ "id": "td-ffffffffffffffff" }));
+    assert_eq!(msg, "unknown todo: td-ffffffffffffffff", "got: {msg}");
+
+    // A malformed call, so the argument check is not mistaken for the gate.
+    let msg = mcp_refusal(&reg, &w, "todo_restore", json!({}));
+    assert!(msg.contains("id required"), "got: {msg}");
+}
+
+/// **The residual the design note recorded, discharged.**
+///
+/// `todo_list` filters out items carrying `archived_ms`, and that line was
+/// covered by no test and could not be until something wrote the field: S2's
+/// review round 1 finding 6 said so, and named this exact case as S5's. Now
+/// that `TodoOp::Archive` exists, the filter has a witness — and `todo_get`
+/// still returns the row, which is the half that makes it a FILTER rather than
+/// a second kind of deletion.
+#[test]
+fn mcp_todo_list_omits_an_archived_row_while_todo_get_still_returns_it() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let (_g, _orch, w) = mcp_group(&reg, repo.path());
+
+    let away = ok_json(&reg, &w, "todo_add", json!({ "title": "put away" }))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let kept = ok_json(&reg, &w, "todo_add", json!({ "title": "still here" }))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The listing sees both while nothing is archived — the control, without
+    // which the assertion below passes against a listing that shows nothing.
+    let before = ok_json(&reg, &w, "todo_list", json!({}));
+    assert_eq!(before["items"].as_array().unwrap().len(), 2, "{before}");
+
+    // Archive one through the real store path. There is no `todo_archive` tool
+    // and that is deliberate — archive is the HUMAN's housekeeping gesture on
+    // their own Completed view, not a delegate capability — so the write goes
+    // through the registry the way the pane's command layer does.
+    reg.todo_apply(
+        None,
+        &human(),
+        TodoOp::Archive {
+            ids: vec![away.clone()],
+            archived: true,
+        },
+        None,
+    )
+    .expect("archiving through the registry must succeed");
+
+    let after = ok_json(&reg, &w, "todo_list", json!({}));
+    let titles: Vec<String> = after["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["title"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(
+        titles,
+        vec!["still here".to_string()],
+        "an archived row must be absent from the listing: {after}"
+    );
+
+    // …and `todo_get` still answers for it, carrying the stamp that says why
+    // the listing did not.
+    let got = ok_json(&reg, &w, "todo_get", json!({ "id": away }));
+    assert_eq!(got["id"], json!(away), "{got}");
+    assert!(
+        got["archived_ms"].is_number(),
+        "the row must carry the stamp that explains its absence from the listing: {got}"
+    );
+    let got = ok_json(&reg, &w, "todo_get", json!({ "id": kept }));
+    assert!(got["archived_ms"].is_null(), "{got}");
+}
+
+// ============ #3301 review round 1 ============
+
+/// **A batch spanning two lists is refused, not silently attributed to the
+/// first** (rev-final).
+///
+/// `Applied` carries ONE `scope`. An earlier revision took it from `ids[0]`
+/// while its own comment claimed the scope was "derived rather than assumed" —
+/// which was false of exactly the case that matters, a mixed batch, where it
+/// would have named one list for a write that moved rows in two. The code now
+/// matches the claim by refusing.
+#[test]
+fn an_archive_spanning_two_lists_is_refused_rather_than_attributed_to_the_first() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    let ws = Scope::Workspace("c--projects-loomux".to_string());
+
+    let global = apply_to(&path, add("in the global list"), &human(), T0, None)
+        .unwrap()
+        .ids[0]
+        .clone();
+    let scoped = apply_to(
+        &path,
+        TodoOp::Add(TodoAdd {
+            scope: ws.clone(),
+            title: "in a workspace list".to_string(),
+            ..TodoAdd::default()
+        }),
+        &human(),
+        T0,
+        None,
+    )
+    .unwrap()
+    .ids[0]
+        .clone();
+    let before = read_raw(&path);
+
+    let e = unwrap_err_for(
+        apply_to(
+            &path,
+            TodoOp::Archive {
+                ids: vec![global.clone(), scoped.clone()],
+                archived: true,
+            },
+            &human(),
+            T0 + 1,
+            None,
+        ),
+        "a batch spanning two lists",
+    );
+    let msg = e.to_string();
+    assert!(
+        msg.contains("more than one list"),
+        "the refusal must say WHY, so a caller can split the batch: {msg}"
+    );
+    // It names both, so the caller does not have to bisect its own id list to
+    // find out which two lists it mixed.
+    assert!(msg.contains("global"), "{msg}");
+    assert!(msg.contains("c--projects-loomux"), "{msg}");
+    assert_eq!(
+        read_raw(&path),
+        before,
+        "a refused archive must leave the store byte-identical — this one refuses AFTER \
+         resolving every id, so it is the arm most likely to have written first"
+    );
+
+    // THE ORDER DOES NOT MATTER, which is the half that would pass anyway if
+    // the check only ever compared against `ids[0]` and stopped at the first
+    // mismatch. Reversed, it must refuse identically.
+    let e = unwrap_err_for(
+        apply_to(
+            &path,
+            TodoOp::Archive {
+                ids: vec![scoped.clone(), global.clone()],
+                archived: true,
+            },
+            &human(),
+            T0 + 1,
+            None,
+        ),
+        "the same batch, reversed",
+    );
+    assert!(e.to_string().contains("more than one list"), "{e}");
+    assert_eq!(read_raw(&path), before);
+
+    // THE TWO POSITIVE CONTROLS. Without them every assertion above passes
+    // against an archive that refuses every batch of two, and the refusal
+    // would be about the COUNT rather than about the scopes.
+    apply_to(
+        &path,
+        TodoOp::Archive {
+            ids: vec![global.clone()],
+            archived: true,
+        },
+        &human(),
+        T0 + 2,
+        None,
+    )
+    .expect("control: a single-scope batch must still succeed");
+    let second = apply_to(
+        &path,
+        TodoOp::Add(TodoAdd {
+            scope: ws.clone(),
+            title: "another in the same workspace".to_string(),
+            ..TodoAdd::default()
+        }),
+        &human(),
+        T0 + 2,
+        None,
+    )
+    .unwrap()
+    .ids[0]
+        .clone();
+    let applied = apply_to(
+        &path,
+        TodoOp::Archive {
+            ids: vec![scoped, second],
+            archived: true,
+        },
+        &human(),
+        T0 + 3,
+        None,
+    )
+    .expect("control: TWO ids in ONE workspace list must succeed");
+    assert_eq!(
+        applied.scope, ws,
+        "and the scope it answers with is that list's, not the global one"
+    );
+}
+
+/// **An EXPIRED tombstone, through the MCP arm** (rev-std).
+///
+/// `mcp_restoring_a_live_row_and_an_absent_id_each_say_which_it_is` (renamed
+/// in this round) promised this arm in its name and ran an id that had never
+/// existed instead —
+/// a different refusal reaching the same words by a different route. The engine
+/// test for the window exists (`a_restore_after_the_purge_window_is_refused_as_unknown`);
+/// what had no coverage was that the MCP layer's own tombstone-visible read
+/// hands an expired one to the engine rather than short-circuiting it.
+///
+/// The clock cannot be injected through this path — `todo_apply` reads
+/// `now_ms()` — so the tombstone is aged on DISK instead: the row is deleted
+/// through the real tool, then its `deleted_ms` is rewritten to more than
+/// `PURGE_AFTER_MS` ago, which is what an item deleted last month genuinely
+/// looks like.
+#[test]
+fn mcp_an_expired_tombstone_is_refused_as_unknown_through_the_tool() {
+    let root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let (_g, _orch, w) = mcp_group(&reg, repo.path());
+
+    let id = ok_json(&reg, &w, "todo_add", json!({ "title": "deleted last month" }))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ok_json(&reg, &w, "todo_delete", json!({ "id": id }));
+
+    // Inside the window it restores — the control, and it runs FIRST so the
+    // refusal below cannot be "restore never works through this tool".
+    let back = ok_json(&reg, &w, "todo_restore", json!({ "id": id }));
+    assert_eq!(back["id"], json!(id), "control: a fresh tombstone restores: {back}");
+    ok_json(&reg, &w, "todo_delete", json!({ "id": id }));
+
+    // Age it past the window, on disk, through the same file the tool reads.
+    let store_file = todo_path_in(root.path());
+    let raw = std::fs::read_to_string(&store_file).expect("the store must exist by now");
+    let mut store: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let expired = now - PURGE_AFTER_MS - 60_000;
+    let mut aged = 0;
+    for item in store["items"].as_array_mut().unwrap() {
+        if item["id"] == json!(id) {
+            item["deleted_ms"] = json!(expired);
+            aged += 1;
+        }
+    }
+    assert_eq!(aged, 1, "the fixture must have aged exactly one row, not zero");
+    std::fs::write(&store_file, serde_json::to_string(&store).unwrap()).unwrap();
+
+    let msg = mcp_refusal(&reg, &w, "todo_restore", json!({ "id": id }));
+    assert_eq!(
+        msg,
+        format!("unknown todo: {id}"),
+        "an expired tombstone must read exactly as an id that never existed"
+    );
+
+    // AND THE ROW IS STILL THERE, untouched, which is what makes this the
+    // WINDOW's refusal rather than the purge having already dropped it: the
+    // refusal came before any write, so nothing purged.
+    let raw = std::fs::read_to_string(&store_file).unwrap();
+    let store: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(
+        store["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["id"] == json!(id)),
+        "a refused restore must not rewrite the file — not even to purge"
+    );
 }

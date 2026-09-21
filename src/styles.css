@@ -2612,11 +2612,24 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
   padding: 8px 16px; font-size: 12px; cursor: pointer;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* The message itself takes the ellipsis, so a long one shortens instead of pushing
+   the action button off the end of a flex row (#3263 S5). */
+.app-toast-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* A toast reports what just happened, so both variants sit on the state channel: the base
    is --state-danger and the informational one is --state-working (the same pigment the
    identity azure carries — what differs is which question the token answers). */
 .app-toast.info { background: color-mix(in srgb, var(--state-working) 14%, transparent); color: var(--state-working); border-color: color-mix(in srgb, var(--state-working) 35%, transparent); }
-.app-toast.visible { display: block; }
+.app-toast.visible { display: flex; align-items: center; gap: 10px; }
+/* The one action a toast may carry (#3263 S5 — reminders and undo). It borrows the
+   toast's own state colour rather than introducing a pigment: the button is part of
+   the same notice, and a second hue here would say there are two things happening. */
+.app-toast-action {
+  flex: none; font: inherit; color: inherit; cursor: pointer;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+  border-radius: 5px; padding: 2px 8px;
+}
+.app-toast-action:hover { background: color-mix(in srgb, currentColor 26%, transparent); }
 
 /* ---------- git view ---------- */
 /* The git view floats over the top of the terminal rather than shrinking
@@ -6937,6 +6950,31 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tdp-chip-n { font-size: var(--text-xs); color: var(--ink-faint); }
 .tdp-chip[aria-pressed="true"] .tdp-chip-n { color: var(--ink-dim); }
 
+/* The Completed view's own bar (#3263 S5): archive-all on the left, the
+   show-archived toggle on the right. Chrome for a view rather than for a row,
+   so it sits at the strip's inset and carries no pigment of its own. */
+.tdp-donebar {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) 0;
+}
+.tdp-donebtn {
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+  padding: 2px var(--space-2);
+}
+.tdp-donebtn:hover:not(:disabled) { border-color: var(--line-strong); color: var(--ink); }
+.tdp-donebtn[data-on="true"] { color: var(--ink); border-color: var(--ink-faint); }
+.tdp-donebtn:disabled { color: var(--ink-faint); cursor: default; }
+/* An archived row is present-but-put-away: it reads back only through the
+   toggle above, so it is dimmed rather than marked. No new pigment — the
+   identity and state channels both say something else. */
+.tdp-row[data-archived="true"] { opacity: 0.6; }
+
 .tdp-filterbar { padding: var(--space-2) var(--space-3) 0; }
 .tdp-filter-clear {
   border: var(--line-w) solid var(--line-strong);
@@ -7241,7 +7279,22 @@ button.wf-finding:hover { background: var(--surface-2); }
   resize: vertical;
 }
 .tdp-stepadd::placeholder,
-.tdp-notes::placeholder { color: var(--ink-faint); }
+.tdp-notes::placeholder,
+.tdp-duein::placeholder { color: var(--ink-faint); }
+
+/* The in-row due field (#3263 S5) and its Clear button on one line. The field
+   takes the room; the button is only there when there is a date to clear. */
+.tdp-duerow { display: flex; align-items: center; gap: var(--space-2); }
+.tdp-duein {
+  flex: 1; min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-0);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  font: inherit;
+  font-size: var(--text-s);
+  color: var(--ink);
+}
 
 .tdp-controls { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .tdp-rowbtn {

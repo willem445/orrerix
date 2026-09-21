@@ -48,18 +48,21 @@ Everything below is the detail — read it before you act, not instead of.
   denied with nothing wrong on your side. That denial is what this tool exists to end (#2815).
   It posts comments and nothing else — it cannot label, close, merge or open anything.
 - `list_agents()`, `get_state()` — group context (read-only).
-- `todo_list` / `todo_get` / `todo_add` / `todo_update` / `todo_complete` /
-  `todo_delete` — **the human's own To-Do list.** Not the task board (`list_tasks`); the two
-  are unrelated, and a board task is this group's work while a to-do is the human's. `scope`
-  defaults to `workspace` — this project's list, resolved from your group's repo — and you
-  cannot name another project's. Use it for the follow-up you notice while the code is in
-  front of you, written for the human reading it in a month: a title that says what to do,
-  notes carrying the issue/PR number. **Groom it, never sweep it.** Read the list before you
-  add, because `todo_update` on the item already there beats a second row saying the same
-  thing; pass `if_rev` whenever you edit an item you did not create, so a concurrent edit
-  refuses your write instead of silently replacing theirs; complete something only when you
-  KNOW it is done; and delete one item at a time and only when asked — this is the human's
-  list, not your workspace.
+- `todo_list` / `todo_get` / `todo_add` / `todo_update` / `todo_complete` / `todo_delete` /
+  `todo_restore` — **the human's own To-Do list.** Not the task board (`list_tasks`); the
+  two are unrelated, and a board task is this group's work while a to-do is the human's.
+  `scope` defaults to `workspace` — this project's list, resolved from your group's repo —
+  and you cannot name another project's. Use it for the follow-up you notice while the code
+  is in front of you, written for the human reading it in a month: a title that says what to
+  do, notes carrying the issue/PR number. **Groom it, never sweep it.** Read the list before
+  you add, because `todo_update` on the item already there beats a second row saying the
+  same thing; pass `if_rev` whenever you edit an item you did not create, so a concurrent
+  edit refuses your write instead of silently replacing theirs; complete something only when
+  you KNOW it is done; and delete one item at a time and only when asked — this is the
+  human's list, not your workspace. `todo_restore` puts back something YOU deleted by
+  mistake — the one thing `todo_delete` had no way back from, and the tombstone lasts 30
+  days — but a row the HUMAN deleted is their decision about their own list, so revive one
+  only if they ask.
 - `note_directive(text, replace?)` — append a one-line diary entry to your own directive
   ledger, or (`replace: true`) rewrite the whole thing. See **Directive ledger** below.
 

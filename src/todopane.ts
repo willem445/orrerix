@@ -53,12 +53,25 @@ import {
 import {
   SMART_VIEWS,
   SMART_VIEW_LABEL,
+  UndoStack,
+  isArchived,
   isDone,
   moveTarget,
   needsRenumber,
+  opLabel,
   visibleItems,
   type SmartView,
 } from "./todomodel";
+import { pruneFired, reminderSummary, scanReminders } from "./todoreminders";
+import {
+  beginRead,
+  initialScope,
+  isLoaded,
+  readFailed,
+  readLanded,
+  scopeChanged,
+  type ScopeState,
+} from "./todoscope";
 import {
   DEFAULT_TODO_PREFS,
   EMPTY_TEXT,
@@ -66,6 +79,7 @@ import {
   decodeTodoPrefs,
   encodeTodoPrefs,
   moveSelection,
+  planReveal,
   projectPane,
   pruneDrafts,
   renderedRows,
@@ -113,6 +127,22 @@ export interface TodoPaneOptions {
  *  typing `#tag` into search. A rail that wrapped to four lines would take the
  *  list's room to display metadata about the list. */
 const TAG_RAIL_MAX = 8;
+
+/**
+ * How often a VISIBLE todo pane re-scans for reminders and re-renders.
+ *
+ * One minute: the finest granularity a human reads off a due time ("4pm"), and
+ * cheap — a tick is a filter over an in-memory array this view already holds
+ * plus one `render()`, with NO IPC and no store write of any kind
+ * (`todoreminders.ts` carries that rule and why it is structural).
+ *
+ * Declared HERE rather than beside the pure scan because the cadence belongs
+ * to the timer, not to the predicate: `test/perfpolicy.test.ts`'s TIMERS
+ * manifest resolves a cadence from a literal or a same-file constant, so a
+ * cadence imported from elsewhere is one the scan cannot pin (INV-4 —
+ * "declare the cadence").
+ */
+const REMINDER_TICK_MS = 60_000;
 
 const CHECK_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
@@ -209,6 +239,17 @@ interface CaretMark {
   end: number;
 }
 
+/** Which writes volunteer an Undo button. The three that take something OFF
+ *  the screen: completing it, deleting it, archiving it. Everything else is
+ *  still on the stack and still reachable with `u` — it just does not
+ *  interrupt to say so. (An un-complete is excluded for the same reason it is
+ *  labelled "Reopened": it PUTS something back, so there is nothing to miss.) */
+function offersUndoToast(op: TodoOp): boolean {
+  if ("delete" in op) return true;
+  if ("archive" in op) return op.archive.archived;
+  return "complete" in op && op.complete.done;
+}
+
 export class TodoPaneView {
   readonly el: HTMLElement;
 
@@ -217,8 +258,12 @@ export class TodoPaneView {
   private readonly refresher = new CoalescingRefresh(() => this.refreshNow());
 
   // ── what the backend said ───────────────────────────────────────────────
-  private snapshot: TodoSnapshot | null = null;
-  private loadFailed = false;
+  // THE SCOPE AND THE SNAPSHOT TRAVEL TOGETHER, in `todoscope.ts`'s pure state
+  // machine, because both defects this pane has had in that area came from
+  // moving one without the other (#3293 rounds 2 and 3). Nothing below assigns
+  // these fields by hand: it calls `readLanded` / `readFailed` /
+  // `scopeChanged` and keeps what comes back.
+  private scope: ScopeState<TodoSnapshot> = initialScope<TodoSnapshot>(null);
 
   // ── what the human has done and not submitted ───────────────────────────
   // Every field below is the view's, never an element's. See the header.
@@ -232,6 +277,18 @@ export class TodoPaneView {
   private readonly expanded = new Set<string>();
   private readonly drafts = new Map<string, RowDraft>();
 
+  // ── undo, reminders ─────────────────────────────────────────────────────
+  private readonly undos = new UndoStack();
+  /** Reminder keys this PANE has already shown. Per-viewer and dropped with the
+   *  pane: reminders never write to the store (`todoreminders.ts` carries the
+   *  argument and the honest cost). */
+  private readonly fired = new Set<string>();
+  private reminderTimer: ReturnType<typeof setInterval> | null = null;
+  /** The Completed view's "show archived" toggle. A reading position, not a
+   *  preference — so it is NOT persisted, for `TODO_PREFS_KEY`'s stated reason
+   *  about expanded rows. */
+  private showArchived = false;
+
   private unlisten: (() => void) | null = null;
   private visible = false;
   private disposed = false;
@@ -241,6 +298,7 @@ export class TodoPaneView {
     this.opts = opts;
     this.now = opts.now ?? (() => Date.now());
     this.prefs = this.readPrefs();
+    this.scope = initialScope<TodoSnapshot>(this.scopeRoot());
 
     this.el = el("div", { class: "tdp", tabindex: "-1" });
     // ONE delegated listener per event on the root, rather than a handler per
@@ -276,16 +334,132 @@ export class TodoPaneView {
         })
         .catch((err) => console.error("[orrerix] todo-changed subscribe failed", err));
     }
+    // THE REMINDER TICK. One interval per visible pane, and it does two jobs
+    // that both have to happen on a clock rather than on an event: it scans for
+    // items that have come due (`todoreminders.ts`), and it re-renders so the
+    // time-dependent parts of the view — the overdue dye, the relative "12m"
+    // byline and, since S5, My Day emptying itself at local midnight — do not
+    // sit frozen on a pane nobody has touched since yesterday.
+    //
+    // NOTHING HERE WRITES. That is the module's rule, and it is what makes a
+    // per-viewer timer safe on a store two processes write to.
+    if (this.reminderTimer === null) {
+      this.reminderTimer = setInterval(() => this.tick(), REMINDER_TICK_MS);
+    }
     this.refresher.request();
+    this.tick();
   }
 
   hide(): void {
     this.visible = false;
+    // A hidden pane stops ticking: `refreshNow` already drops a wake for one
+    // (the `wakegate.ts` rule), and a reminder toast fired by a pane nobody is
+    // looking at would arrive with an action that opens... this pane. `show()`
+    // re-arms and scans immediately, so nothing due in the meantime is lost —
+    // it arrives on the next look, which is when it is useful.
+    this.stopTicking();
+  }
+
+  private stopTicking(): void {
+    if (this.reminderTimer !== null) {
+      clearInterval(this.reminderTimer);
+      this.reminderTimer = null;
+    }
+  }
+
+  /**
+   * One reminder scan, plus the re-render that keeps the clock-dependent view
+   * honest.
+   *
+   * The scan is `todoreminders.ts`'s pure function; this side owns only the
+   * `fired` set and the toast. The set is pruned FIRST so a rescheduled or
+   * deleted item cannot hold a key forever, and every key the scan consumed is
+   * added — including the ones it suppressed as too old, which is what stops a
+   * long-closed laptop dumping a day of notices on wake.
+   */
+  private tick(): void {
+    if (this.disposed || !this.visible) return;
+    const items = this.items();
+    pruneFired(this.fired, items);
+    const scan = scanReminders(items, this.now(), this.fired);
+    for (const key of scan.fired) this.fired.add(key);
+    // ONE TOAST PER TICK, however many came due. The app has one toast
+    // element, so a loop here would have each call overwrite the last and the
+    // human would see only the final notice — a silent loss of the thing the
+    // feature exists for (#3301 review round 1). `reminderSummary` owns the
+    // wording; the action opens the SOONEST, which is `notices[0]` because the
+    // scan returns them soonest-first.
+    if (scan.notices.length > 0) {
+      const first = scan.notices[0];
+      showToast(reminderSummary(scan.notices), "info", {
+        label: scan.notices.length > 1 ? "Show first" : "Show",
+        run: () => this.revealRow(first.id),
+      });
+    }
+    this.render();
+  }
+
+  /**
+   * Put a row on screen and select it — the toast action's one gesture.
+   *
+   * It may have to MOVE THE VIEW to do it: a reminder fires on an item that is
+   * due, and the pane may well be sitting on Important or on a tag filter that
+   * does not contain it. Showing the toast and then doing nothing visible when
+   * it is clicked is precisely the silently-dead control this pane's design
+   * note argues against, so the filters that could hide the row are cleared and
+   * the view falls back to `all`, which holds every open item.
+   */
+  private revealRow(id: string): void {
+    const nowMs = this.now();
+    // WHAT "SHOW" CAN ACTUALLY DO IS A DECISION, and it lives in `todoview.ts`
+    // so it is testable without a DOM. The answer is sometimes "nothing", and
+    // this used to BE nothing — silently (#3301 review round 2).
+    const plan = planReveal(this.items(), id, renderedRows(this.project(nowMs)));
+    if (plan.kind === "gone") {
+      showToast("That to-do is no longer on this list.", "info");
+      return;
+    }
+    if (plan.kind === "left") {
+      // The likely case, and the one that was silent: an agent finished or
+      // archived the row between the notice and the click. Say which, because
+      // the two have different answers — a finished row is in Completed, an
+      // archived one needs the toggle there.
+      showToast(
+        plan.why === "done"
+          ? "That one was completed since the reminder — it is in Completed."
+          : "That one was archived since the reminder — turn on Show archived in Completed.",
+        "info"
+      );
+      return;
+    }
+    this.query = "";
+    this.tagFilter = null;
+    this.searchOpen = false;
+    if (plan.view !== null) {
+      // NOT PERSISTED (#3301 review round 1, rev-final). The stored view is
+      // "what a fresh pane opens on" — a preference the human expressed by
+      // clicking the strip. Jumping to All because a reminder fired is
+      // navigation the pane did on its own, and writing it to `localStorage`
+      // would let a notification silently redefine a setting: every pane
+      // opened afterwards, in every window, would start on All because
+      // something came due once while this one happened to be on Important.
+      this.setView(plan.view, { persist: false });
+    }
+    this.selected = id;
+    this.expanded.add(id);
+    this.render();
+    this.focus();
+    this.el.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({
+      block: "nearest",
+    });
   }
 
   dispose(): void {
     this.disposed = true;
     this.visible = false;
+    this.stopTicking();
+    this.undos.clear();
+    this.fired.clear();
     this.unlisten?.();
     this.unlisten = null;
     this.el.removeEventListener("click", this.onClick);
@@ -347,12 +521,12 @@ export class TodoPaneView {
     //
     // Dropping the response loses nothing: `setScope` has already asked for a
     // fresh run, and `CoalescingRefresh` guarantees the trailing one.
-    const want = this.scopeRoot();
+    const want = beginRead(this.scope);
     try {
       const snap = await todoSnapshot(want);
-      if (want !== this.scopeRoot()) return;
-      this.snapshot = snap;
-      this.loadFailed = false;
+      const next = readLanded(this.scope, want, snap);
+      if (next === this.scope) return; // stale: the scope moved under the read
+      this.scope = next;
     } catch (err) {
       // A failed READ never publishes an empty list over a real one: the pane
       // keeps the snapshot it had and says the read failed. `todoSnapshot`
@@ -363,8 +537,9 @@ export class TodoPaneView {
       // the scope we have since LEFT says nothing about the one we are on, and
       // flagging the pane "stale" over it would be a warning about a list
       // nobody is looking at.
-      if (want !== this.scopeRoot()) return;
-      this.loadFailed = true;
+      const next = readFailed(this.scope, want);
+      if (next === this.scope) return;
+      this.scope = next;
       console.error("[orrerix] todo snapshot failed", err);
     }
     if (!this.disposed) this.render();
@@ -385,7 +560,7 @@ export class TodoPaneView {
    */
   private async apply(op: TodoOp): Promise<Applied | null> {
     try {
-      return await todoApply(op, this.scopeRoot());
+      return await todoApply(op, this.scope.root);
     } catch (err) {
       showToast(String(err instanceof Error ? err.message : err), "error");
       // The write was refused, so the store is byte-identical and NO event will
@@ -396,10 +571,61 @@ export class TodoPaneView {
     }
   }
 
+  /**
+   * Send one op, record its inverse, and offer the undo.
+   *
+   * **The `before` snapshot is read HERE, before the await**, because it is a
+   * fact only this frame has: `inverseOp` needs the item as the human was
+   * looking at it, and by the time the write returns the store may have moved
+   * under it. Reading it afterwards is the "best-effort guess" `inverseOp`
+   * refuses to make.
+   *
+   * A write with no honest inverse is applied and NOT offered an undo — the
+   * stack says so and this passes the silence on rather than showing a button
+   * that would do nothing. A refused write pushes nothing: `apply` already
+   * returned null and the store is byte-identical.
+   */
+  private async applyUndoable(op: TodoOp, before: TodoItem | null): Promise<Applied | null> {
+    const applied = await this.apply(op);
+    if (applied === null) return null;
+    const inverse = this.undos.push(op, before, applied);
+    // THE TOAST IS NARROWER THAN THE STACK, deliberately. `u` undoes any of
+    // these; only the three that make something DISAPPEAR volunteer a button.
+    // A toast after every quick-add is five toasts for five items, and a
+    // channel that fires on everything is one a human learns to ignore —
+    // which would cost the reminders beside it, not just this.
+    if ("op" in inverse && offersUndoToast(op)) {
+      showToast(`${opLabel(op)} · undo?`, "info", { label: "Undo", run: () => void this.undo() });
+    }
+    return applied;
+  }
+
+  /**
+   * Apply the most recent inverse.
+   *
+   * The entry is popped BEFORE the write and never re-queued if the write is
+   * refused: an undo can genuinely fail — a tombstone past its 30-day purge
+   * window, a scope at `ITEMS_MAX` — and re-offering a gesture that is now
+   * known not to work is worse than saying so once, which `apply`'s toast
+   * already does with the backend's own message.
+   *
+   * The undo of an undo is NOT pushed: `u` is a history walk, not a toggle,
+   * and pushing the inverse of an undo would make the second press put the
+   * first one back forever.
+   */
+  private async undo(): Promise<void> {
+    const entry = this.undos.pop();
+    if (entry === null) {
+      showToast("Nothing to undo in this pane.", "info");
+      return;
+    }
+    await this.apply(entry.op);
+  }
+
   // ── the projection ────────────────────────────────────────────────────────
 
   private items(): readonly TodoItem[] {
-    return this.snapshot?.items ?? [];
+    return this.scope.snapshot?.items ?? [];
   }
 
   private project(nowMs: number): PaneProjection {
@@ -409,6 +635,8 @@ export class TodoPaneView {
         view: this.prefs.view,
         query: this.query,
         tagFilter: this.tagFilter,
+        showArchived: this.showArchived,
+        loaded: isLoaded(this.scope),
       },
       nowMs
     );
@@ -488,6 +716,7 @@ export class TodoPaneView {
     const frag = document.createDocumentFragment();
     frag.append(this.header(vm));
     frag.append(this.strip(vm));
+    if (this.prefs.view === "completed") frag.append(this.completedBar(vm));
     if (this.tagFilter !== null) frag.append(this.filterBar());
     frag.append(this.quickAdd(nowMs));
     frag.append(this.list(vm, nowMs));
@@ -604,7 +833,7 @@ export class TodoPaneView {
     head.append(search);
 
     head.append(el("span", { class: "tdp-grow" }));
-    if (this.snapshot?.read_only) {
+    if (this.scope.snapshot?.read_only) {
       // A store a NEWER build wrote reads but refuses every write. Saying so
       // once, here, beats N identical refusal toasts as the human discovers it
       // control by control.
@@ -616,10 +845,19 @@ export class TodoPaneView {
         })
       );
     }
-    if (this.loadFailed) {
+    if (this.scope.loadFailed) {
       head.append(el("span", { class: "tdp-ro", text: "stale", title: "The last read failed — showing what was already loaded." }));
     }
-    head.append(el("span", { class: "tdp-count tdp-num", text: String(vm.total) }));
+    // The total is a claim about the list, so it waits for a read exactly as
+    // the empty-state sentence and the strip's chips do (#3293 round 6
+    // residual 1). A dash is the one honest thing to draw in that frame.
+    head.append(
+      el("span", {
+        class: "tdp-count tdp-num",
+        text: vm.countsKnown ? String(vm.total) : "—",
+        title: vm.countsKnown ? "Rows matching" : "Reading the list…",
+      })
+    );
     return head;
   }
 
@@ -640,11 +878,71 @@ export class TodoPaneView {
             title: `${SMART_VIEW_LABEL[v]} (${i + 1})`,
           },
           el("span", { text: SMART_VIEW_LABEL[v] }),
-          el("span", { class: "tdp-chip-n tdp-num", text: String(vm.counts[v]) })
+          // NOTHING, not a zero, until a snapshot has landed for this scope.
+          // "My Day 0" in the Loading frame is a sentence about a list nobody
+          // has read, and it is false whenever that list has rows — the same
+          // rule the empty state already followed (#3293 round 6 residual 1).
+          vm.countsKnown && el("span", { class: "tdp-chip-n tdp-num", text: String(vm.counts[v]) })
         )
       );
     });
     return strip;
+  }
+
+  /**
+   * The Completed view's own two controls (#3263 S5).
+   *
+   * **Archive is the point of this view.** Completed is a log, and a log you
+   * cannot clear becomes one you stop opening — so the one bulk gesture in this
+   * pane lives here and nowhere else. It archives exactly the rows ON SCREEN,
+   * which is why the button says how many: the op carries the ids rather than a
+   * scope, so what you saw is what moves, and its inverse is those same ids
+   * with the flag flipped (`inverseOp`).
+   *
+   * **And the way back.** `inView` puts an archived item in no view at all, so
+   * without the toggle beside it an archive would be a one-way door whose only
+   * exit is an undo stack that dies with the pane. The toggle is a reading
+   * position rather than a preference, so it is not persisted — the rule
+   * `TODO_PREFS_KEY` states for expanded rows.
+   */
+  private completedBar(vm: PaneProjection): HTMLElement {
+    const bar = el("div", { class: "tdp-donebar" });
+    const archivable = this.archivableIds(vm);
+    bar.append(
+      el("button", {
+        class: "tdp-donebtn",
+        type: "button",
+        "data-act": "archive-all",
+        disabled: archivable.length === 0,
+        title:
+          archivable.length === 0
+            ? "Nothing here to archive."
+            : "Put these finished tasks away. They stay in the store and undo brings them back.",
+        text: archivable.length === 0 ? "Archive" : `Archive ${archivable.length}`,
+      })
+    );
+    bar.append(el("span", { class: "tdp-grow" }));
+    bar.append(
+      el("button", {
+        class: "tdp-donebtn",
+        type: "button",
+        "data-act": "show-archived",
+        "aria-pressed": this.showArchived ? "true" : "false",
+        "data-on": this.showArchived ? "true" : "false",
+        text: this.showArchived ? "Hide archived" : "Show archived",
+      })
+    );
+    return bar;
+  }
+
+  /** The rows "Archive N" would move: what is on screen, minus anything already
+   *  archived (which is only visible at all when the toggle is on). Sending an
+   *  already-archived id would be a no-op the human cannot tell from a
+   *  success, and it would pad the undo entry with ids it must not unarchive. */
+  private archivableIds(vm: PaneProjection): string[] {
+    return renderedRows(vm)
+      .filter((i) => !isArchived(i))
+      .map((i) => i.id);
   }
 
   private filterBar(): HTMLElement {
@@ -706,7 +1004,7 @@ export class TodoPaneView {
       // same rule the pane already follows on the read path, where a failed
       // read keeps the list it had rather than publishing an emptiness it
       // cannot vouch for.
-      const loading = this.snapshot === null;
+      const loading = !vm.countsKnown;
       list.append(
         el(
           "div",
@@ -763,6 +1061,7 @@ export class TodoPaneView {
       "data-done": done ? "true" : "false",
       "data-selected": this.selected === item.id ? "true" : "false",
       "data-expanded": open ? "true" : "false",
+      "data-archived": isArchived(item) ? "true" : "false",
       "data-priority": String(item.priority),
       role: "listitem",
     });
@@ -925,13 +1224,41 @@ export class TodoPaneView {
       })
     );
 
+    // THE DUE CONTROL (#3263 S5), and it is a text field rather than a date
+    // picker on purpose: the quick-add bar already understands "fri 4pm",
+    // "tomorrow" and "next mon", and `parseQuickAdd` is the one place that
+    // grammar lives. A second date vocabulary in the same pane — a calendar
+    // widget with its own idea of what "next Monday" means — is exactly the
+    // two-answers-to-one-question drift this repo's conventions bounce.
+    //
+    // Seeded from the DRAFT and written on `input`, like every other field
+    // here; the current value is a label beside it, never the field's seed
+    // (see `RowDraft.due`).
+    const dueRow = el("div", { class: "tdp-duerow" });
+    dueRow.append(
+      el("input", {
+        class: "tdp-duein",
+        type: "text",
+        "data-act": "due",
+        placeholder: item.due_ms !== null ? formatDue(item.due_ms, nowMs, true) : "Due — try “fri 4pm”",
+        value: draft.due,
+        "aria-label": "Due date",
+      })
+    );
+    if (item.due_ms !== null) {
+      dueRow.append(
+        el("button", {
+          class: "tdp-rowbtn",
+          type: "button",
+          "data-act": "due-clear",
+          text: "Clear due",
+        })
+      );
+    }
+    body.append(dueRow);
+
     const controls = el("div", { class: "tdp-controls" });
     const pairs: [string, string, boolean][] = [
-      [
-        "due",
-        item.due_ms !== null ? formatDue(item.due_ms, nowMs, true) : "Add due date",
-        item.due_ms !== null,
-      ],
       ["myday", item.my_day !== null ? "In My Day" : "Add to My Day", item.my_day !== null],
       ["delete", "Delete", false],
     ];
@@ -979,7 +1306,10 @@ export class TodoPaneView {
     }
     foot.append(el("span", { class: "tdp-grow" }));
     foot.append(
-      el("span", { class: "tdp-hint", text: "n add · j/k move · space done · e details · g scope" })
+      el("span", {
+        class: "tdp-hint",
+        text: "n add · j/k move · space done · e details · u undo · g scope",
+      })
     );
     return foot;
   }
@@ -1022,35 +1352,47 @@ export class TodoPaneView {
         this.render();
         return;
       case "toggle":
-        if (item !== null) void this.apply({ complete: { id: item.id, done: !isDone(item) } });
+        if (item !== null) {
+          void this.applyUndoable({ complete: { id: item.id, done: !isDone(item) } }, item);
+        }
         return;
       case "important":
-        if (item !== null) void this.apply({ update: { id: item.id, important: !item.important } });
+        if (item !== null) {
+          void this.applyUndoable({ update: { id: item.id, important: !item.important } }, item);
+        }
         return;
       case "expand":
         if (item !== null) this.toggleExpand(item.id);
         return;
       case "myday":
         if (item !== null) {
-          void this.apply({
-            update: { id: item.id, my_day: item.my_day === null ? this.now() : null },
-          });
+          void this.applyUndoable(
+            { update: { id: item.id, my_day: item.my_day === null ? this.now() : null } },
+            item
+          );
         }
         return;
-      case "due":
-        // S5 owns the picker; today this is the one control that has to say so
-        // rather than doing nothing, which is the shape the design note's undo
-        // section argues against.
-        showToast("Due dates are set from the quick-add for now — try “fri 4pm” (#3263 S5).", "info");
+      case "due-clear":
+        if (item !== null) void this.applyUndoable({ update: { id: item.id, due_ms: null } }, item);
+        return;
+      case "archive-all":
+        void this.archiveShown();
+        return;
+      case "show-archived":
+        this.showArchived = !this.showArchived;
+        this.render();
         return;
       case "delete":
-        if (item !== null) void this.apply({ delete: { id: item.id } });
+        if (item !== null) void this.applyUndoable({ delete: { id: item.id } }, item);
         return;
       case "step":
         if (item !== null) this.toggleStep(item, Number(btn.dataset.step ?? "-1"));
         return;
       case "save":
         if (item !== null) void this.commitDraft(item);
+        return;
+      case "undo":
+        void this.undo();
         return;
       default:
         return;
@@ -1075,11 +1417,13 @@ export class TodoPaneView {
         this.render();
         return;
       case "notes":
+      case "due":
       case "step-add": {
         const item = rowId !== null ? this.itemById(rowId) : null;
         if (item === null) return;
         const d = this.draftFor(item);
         if (act === "notes") d.notes = field.value;
+        else if (act === "due") d.due = field.value;
         else d.step = field.value;
         // Re-render so the Save control appears the moment the draft stops
         // being pristine. The caret restore is what makes that free.
@@ -1105,7 +1449,7 @@ export class TodoPaneView {
         void this.submitQuickAdd();
         return;
       }
-      if (ev.key === "Enter" && act === "step-add") {
+      if (ev.key === "Enter" && (act === "step-add" || act === "due")) {
         ev.preventDefault();
         const id = (ev.target as HTMLElement).closest<HTMLElement>("[data-id]")?.dataset.id ?? null;
         const item = id !== null ? this.itemById(id) : null;
@@ -1176,7 +1520,7 @@ export class TodoPaneView {
       case " ":
         if (sel === null) return;
         ev.preventDefault();
-        void this.apply({ complete: { id: sel.id, done: !isDone(sel) } });
+        void this.applyUndoable({ complete: { id: sel.id, done: !isDone(sel) } }, sel);
         return;
       case "e":
       case "d":
@@ -1187,19 +1531,20 @@ export class TodoPaneView {
       case "i":
         if (sel === null) return;
         ev.preventDefault();
-        void this.apply({ update: { id: sel.id, important: !sel.important } });
+        void this.applyUndoable({ update: { id: sel.id, important: !sel.important } }, sel);
         return;
       case "t":
         if (sel === null) return;
         ev.preventDefault();
-        void this.apply({
-          update: { id: sel.id, my_day: sel.my_day === null ? this.now() : null },
-        });
+        void this.applyUndoable(
+          { update: { id: sel.id, my_day: sel.my_day === null ? this.now() : null } },
+          sel
+        );
         return;
       case "Delete":
         if (sel === null) return;
         ev.preventDefault();
-        void this.apply({ delete: { id: sel.id } });
+        void this.applyUndoable({ delete: { id: sel.id } }, sel);
         return;
       case "g":
         ev.preventDefault();
@@ -1208,10 +1553,8 @@ export class TodoPaneView {
         }
         return;
       case "u":
-        // S5 owns the undo stack. Saying so beats a key that silently does
-        // nothing — the same rule `inverseOp` follows when it refuses.
         ev.preventDefault();
-        showToast("Undo arrives with #3263 S5.", "info");
+        void this.undo();
         return;
       case "Escape":
         ev.preventDefault();
@@ -1245,10 +1588,40 @@ export class TodoPaneView {
       // so once the gap runs out the move is a silent no-op: the item does not
       // budge and nothing says why. `needsRenumber` is what lets the pane
       // notice — and saying so beats a drag that does nothing.
-      showToast("This list needs re-spacing before it can be reordered (#3263 S5).", "info");
+      // NOT "(#3263 S5)" any more: S5 is this slice, and it is not building
+      // the renumber. A message that names the slice fixing it is a promise,
+      // and a promise that ships unfulfilled is worse than no promise — the
+      // rule the S4 hooks followed when they said "arrives with S5" and the
+      // reason all three of those are now real controls.
+      showToast("This list has run out of room between two tasks and cannot be reordered.", "info");
       return;
     }
+    // A reorder is applied WITHOUT an undo entry, and `inverseOp` is where the
+    // argument lives: `order_after` is a destination rather than a value, and
+    // the neighbour it names may itself have moved since. Passing `null` for
+    // `before` would make the stack refuse it anyway; going through `apply`
+    // says so at the call site instead of relying on that.
     void this.apply({ update: { id: this.selected, order_after: target } });
+  }
+
+  /**
+   * Archive every finished row on screen.
+   *
+   * Reads the ids from the CURRENT projection rather than from the bar the
+   * human clicked: an agent's write can land between the render and the click,
+   * and archiving the ids a stale button carried would move rows the human was
+   * never shown. Re-deriving costs a projection and closes the whole window.
+   */
+  private async archiveShown(): Promise<void> {
+    const ids = this.archivableIds(this.project(this.now()));
+    if (ids.length === 0) {
+      showToast("Nothing here to archive.", "info");
+      return;
+    }
+    // `before` is null and that is correct rather than a gap: the archive op's
+    // inverse is derived from the OP (the same ids, flag flipped), not from a
+    // snapshot of any one item — see `inverseOp`'s archive arm.
+    await this.applyUndoable({ archive: { ids, archived: true } }, null);
   }
 
   private focusField(sel: string): void {
@@ -1278,15 +1651,32 @@ export class TodoPaneView {
       title: s.title,
       done: i === ix ? !s.done : s.done,
     }));
-    void this.apply({ update: { id: item.id, steps } });
+    void this.applyUndoable({ update: { id: item.id, steps } }, item);
   }
 
   private async commitDraft(item: TodoItem): Promise<void> {
     const draft = this.draftFor(item);
     if (rowDraftIsPristine(draft)) return;
-    const update: { id: string; notes?: string; steps?: { id?: string; title: string; done: boolean }[] } =
-      { id: item.id };
+    const update: {
+      id: string;
+      notes?: string;
+      due_ms?: number | null;
+      steps?: { id?: string; title: string; done: boolean }[];
+    } = { id: item.id };
     if (draft.notes !== item.notes) update.notes = draft.notes;
+    const due = draft.due.trim();
+    if (due !== "") {
+      // The row's date grammar IS the quick-add's — one vocabulary per pane.
+      // A phrase the parser cannot read is REPORTED and the write is abandoned
+      // whole: committing the notes while silently dropping the date the human
+      // just typed is the worst of the three available outcomes.
+      const parsed = parseQuickAdd(due, this.now());
+      if (parsed.dueMs === null) {
+        showToast(`Could not read “${due}” as a date — try “fri 4pm” or “tomorrow”.`, "info");
+        return;
+      }
+      update.due_ms = parsed.dueMs;
+    }
     const step = draft.step.trim();
     if (step !== "") {
       update.steps = [
@@ -1294,7 +1684,7 @@ export class TodoPaneView {
         { title: step, done: false },
       ];
     }
-    const ok = await this.apply({ update });
+    const ok = await this.applyUndoable({ update }, item);
     if (ok === null) return;
     // Cleared on SUCCESS only, and on BOTH routes — the Save button and the
     // Enter key reach this one function. Clearing on the Enter route alone is
@@ -1302,7 +1692,7 @@ export class TodoPaneView {
     // Re-seeded, not merely cleared: the committed notes ARE the new seed, so
     // the draft is pristine again against what the store now holds. Writing a
     // seed of the OLD value here would leave the row looking edited forever.
-    this.drafts.set(item.id, { notes: draft.notes, step: "", seededNotes: draft.notes });
+    this.drafts.set(item.id, { notes: draft.notes, step: "", due: "", seededNotes: draft.notes });
   }
 
   private async submitQuickAdd(): Promise<void> {
@@ -1325,7 +1715,7 @@ export class TodoPaneView {
         ...(parse.myDay ? { my_day: nowMs } : {}),
       },
     };
-    const applied = await this.apply(add);
+    const applied = await this.applyUndoable(add, null);
     if (applied === null) return; // refused — the line stays so it can be fixed
     this.draft = "";
     this.render();
@@ -1342,6 +1732,15 @@ export class TodoPaneView {
     this.tagFilter = null;
     this.expanded.clear();
     this.drafts.clear();
+    // EVERY UNDO ENTRY NAMES AN ID IN THE LIST WE ARE LEAVING, and the engine
+    // resolves an id with no scope check — so an undo popped after the switch
+    // would write to the other store while this header says otherwise. Same
+    // hazard `todoscope.ts` exists for, one gesture over.
+    this.undos.clear();
+    // The reminder keys go too: they are per-list, and keeping them would mean
+    // switching away and back suppressed a reminder the human never saw.
+    this.fired.clear();
+    this.showArchived = false;
     // AND THE SNAPSHOT GOES WITH THEM (#3293 review round 3, premortem 1).
     //
     // The stale-response guard in `refreshNow` closes the race where an
@@ -1358,17 +1757,28 @@ export class TodoPaneView {
     // the list we hold is still the truth for the scope we are on and
     // publishing an empty one would destroy it, here the list we hold is
     // definitively the WRONG scope's. The cost is one frame of the empty state
-    // before the coalesced read lands.
-    this.snapshot = null;
-    this.loadFailed = false;
+    // before the coalesced read lands. `scopeChanged` is that rule, and the
+    // reason it is a function in `todoscope.ts` rather than two assignments
+    // here is that this is the half a DOM test cannot reach.
+    this.scope = scopeChanged(this.scope, this.scopeRoot());
     this.refresher.request();
     this.render();
   }
 
-  private setView(next: SmartView): void {
+  /**
+   * Move to `next`.
+   *
+   * `persist` is true for every gesture the HUMAN made — the strip, the digit
+   * keys — and false for a move the pane made on its own. See `revealRow`.
+   */
+  private setView(next: SmartView, opts: { persist?: boolean } = {}): void {
     if (this.prefs.view === next) return;
     this.prefs = { ...this.prefs, view: next };
-    this.writePrefs();
+    if (opts.persist !== false) this.writePrefs();
+    // The archived toggle belongs to the Completed view and nothing else shows
+    // an archived row, so it is dropped on the way out rather than left armed
+    // for the next visit (the "reading position, not a preference" rule).
+    if (next !== "completed") this.showArchived = false;
     this.render();
   }
 }

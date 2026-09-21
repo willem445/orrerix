@@ -645,6 +645,27 @@ const TIMERS: TimerRow[] = [
     overlapGate: null,
   },
   {
+    key: "src/todopane.ts@REMINDER_TICK_MS",
+    cadenceMs: 60000,
+    policy: "component-scoped",
+    reason:
+      "The To-Do pane's reminder tick (#3263 S5). Armed by show() and cleared by hide() AND " +
+      "dispose(), so it is off for every pane that is not the visible content of its cell — the " +
+      "close half auditview.ts got wrong and #1318 had to fix. NO IPC AND NO WRITE: a tick is " +
+      "scanReminders() (a filter over the items array this view is already holding) plus one " +
+      "render(); reminders are per-viewer by design and todoreminders.ts's header states why " +
+      "that is structural rather than a shortcut. The cadence is not about the scan at all — it " +
+      "is the coarsest tick at which the pane's CLOCK-DEPENDENT rendering stays true: the " +
+      "overdue dye, the relative \"12m\" byline, and My Day emptying itself at local midnight " +
+      "(inView reads nowMs since S5). A pane left open overnight would otherwise show " +
+      "yesterday's My Day until something else re-rendered it.",
+    debt: null,
+    // The body is synchronous and holds no in-flight read: the snapshot refetch
+    // is the CoalescingRefresh on todo-changed, not this. Same null, and the
+    // same reason, as agentsview.ts's re-derive above.
+    overlapGate: null,
+  },
+  {
     key: "src/main.ts@20_000",
     cadenceMs: 20000,
     policy: "argued",

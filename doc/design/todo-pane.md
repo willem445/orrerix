@@ -3,7 +3,8 @@
 The pane is #3263's deliverable; this note is the argument behind it. It is
 written slice by slice — S1 (this text) covers the **data model**, the **store**
 and **workspace identity**. S2 appends the MCP tool surface, S3 the Tauri
-commands and the change event, S4 the pane itself, S5 reminders and undo.
+commands and the change event, S4 the pane itself, and S5 reminders, undo, the
+archive and `todo_restore`.
 
 ## Why the backend owns the schema
 
@@ -184,6 +185,7 @@ op the engine does not have.
 | `complete` | sets or clears `status` and `done_ms`; steps untouched | unknown or tombstoned id |
 | `delete` | writes a `deleted_ms` tombstone | unknown or already-tombstoned id |
 | `restore` | clears the tombstone, putting the row back where it was | unknown id; a tombstone the purge window has passed (as **unknown**, not as its own error); an item that is already live; a scope already at `ITEMS_MAX` |
+| `archive` (S5) | sets or clears `archived_ms` on every id it names | an empty id list; an id named twice; any unknown or tombstoned id; ids from **more than one scope**; more than `ARCHIVE_IDS_MAX` ids. Refuses **before** it writes anything, so a refused archive leaves the store byte-identical |
 
 **`restore` is what makes a soft delete an inverse** rather than a
 one-way door. Without it `apply` treats a tombstone as unknown, so nothing —
@@ -205,16 +207,69 @@ three refusals each answer a different question:
   the two doors respects is not a cap — an agent refused at `add` could
   otherwise delete-and-restore its way past it.
 
-The undo *path* is still S5's: `inverseOp` in `src/todomodel.ts` refuses to
-invert a delete and says so, and wiring it to this op is the work that remains.
-What changed is that the op it needs now exists.
+**S5 wired both halves of that.** `inverseOp` in `src/todomodel.ts` emits
+`{restore: {id}}` for a delete instead of refusing, and `todo_restore` is the
+seventh MCP tool — so the pane's `u` and an agent correcting its own
+`todo_delete` both reach this op. Two things about the undo of a delete are
+worth keeping in view because they are what make it honest rather than merely
+available: it can still FAIL, loudly, with the backend's own message in a toast
+(a tombstone past its window, a scope at `ITEMS_MAX`), and it can never half
+work. See "The seventh tool" below for the capability argument, which is the
+part that needed making rather than writing.
 
-**`restore` is the one op with no MCP tool**, and that is a fact about
-ordering rather than a decision anyone made: S2 shipped its six tools while
-`restore` did not yet exist. An agent therefore cannot undo its own
-`todo_delete`, which is the case the op was added for. Adding a seventh tool
-is a capability decision with its own default-deny gates to argue through —
-see "No seventh tool" below, which now carries it.
+### Archive carries its ids, and that is what gives it an inverse
+
+`archive` is the pane's one BULK gesture: the Completed view's "Archive 7".
+The obvious shape for that is `ArchiveDone { scope }` — sweep everything
+finished — and it was rejected for one reason: **it has no inverse.**
+"Everything that was completed at the time" is not a set the store can
+reconstruct afterwards, so an undo would have to guess, and `inverseOp`
+refuses to guess. That would have left the pane's only bulk write as the one
+write a human could not take back, which is precisely backwards.
+
+Carrying the ids also makes what moved exactly what the human was SHOWN: a row
+an agent completed between the render and the click is not swept into a sweep
+nobody asked for. The pane re-derives the ids from the current projection at
+click time rather than from the button's own label, so the window between them
+is closed too.
+
+**One batch, one list.** `Applied` carries a single `scope`, so a batch
+spanning two has no honest value for that field. An earlier revision took it
+from `ids[0]` and said in its own comment that the scope was "derived rather
+than assumed" — which was true of every batch except the one that mattered:
+a mixed batch would have reported one list for a write that moved rows in two.
+It now refuses, naming both lists so the caller need not bisect its own id list
+to find the mix (#3301 review round 1). This costs the pane nothing:
+`archiveShown` builds its ids from ONE projection of ONE scope.
+
+Two further consequences are deliberate and read as inconsistencies unless stated.
+**Archiving an already-archived row is accepted**, which is the opposite of
+`restore`'s "a no-op is indistinguishable from a success": a bulk op names a
+state it wants a set to end in, not a question about one row, and refusing the
+batch because one row was already away would make the button fail exactly when
+a human retries it. **There is no `todo_archive` MCP tool**: archiving is the
+human's housekeeping gesture on their own finished list, not a delegate
+capability, and a sweep tool is the single easiest way for a runaway agent loop
+to make a list unreadable. An agent that thinks an item is finished has
+`todo_complete`; putting the finished ones away is the human's.
+
+**Archived is not deleted**, and the pane has to keep a way back or the
+distinction is a lie. `inView` puts an archived item in NO view, so the
+Completed view carries a "show archived" toggle beside the Archive button —
+without it an archive would be a one-way door whose only exit is an undo stack
+that dies with the pane. The toggle applies to Completed and nowhere else:
+honouring it on `all` would put back the very rows the human archived to get
+rid of. It also never moves the view STRIP's counts, which say how much work
+exists, and archived work is over.
+
+**The 30-day tombstone purge, surfaced.** Every write answers `Applied.purged`
+— how many expired tombstones that write dropped — and the number has had no
+reader. It still has none in the UI, and that is now a decision rather than an
+omission: a toast saying "3 old deleted items were cleaned up" is a notice
+about housekeeping nobody asked for, arriving at the moment the human was doing
+something else. The count is in the audit log on every `todo-*` row
+(`OrchRegistry::todo_apply` writes it), which is where a human looking for
+"what happened to that thing I deleted last month" actually goes.
 
 ## Workspace identity
 
@@ -380,19 +435,57 @@ every time a read degrades, is worse than one that renders nothing and re-reads.
 
 `inView` is total over `SMART_VIEWS`. Four of the five are the open list sliced
 differently and exclude a finished item; `completed` collects them. An
-**archived** item is in none of them — that is what archiving is for (S5 adds
-the op). Completed is ordered by most recent finish rather than by `order`,
+**archived** item is in none of them — that is what archiving is for — and the
+Completed view's own toggle is the one way to see one (see "Archive carries its
+ids" above). Completed is ordered by most recent finish rather than by `order`,
 because it is a log and that is the row a human opens it to find.
 
 `plannedBucket` decides by whole-day distance, never by a calendar comparison:
 a `getMonth()`-based bucket would put 1 June in a different bucket from 31 May
 for no reason a human would recognise.
 
-**My Day does not auto-clear.** Microsoft To Do empties it at midnight; whether
-this one should is still open (#3263 plan §8, for the human to answer on the S0
-mock). Until it is answered the predicate takes the non-destructive reading — a
-carried-over item stays — and `myDayIsStale` reports the carry-over as a
-separate signal the pane can surface. Nothing clears anything.
+### My Day empties itself at local midnight, and writes nothing
+
+The plan's §8 open question, answered by the human on the S0 mock: an item
+leaves My Day at local midnight, as Microsoft To Do does. `myDayIsStale` is
+the predicate that decides it and `inView(item, "myday", nowMs)` is its one
+reader — which is why that function's clock parameter stopped being `_nowMs`
+in the same commit.
+
+**Nothing is written.** The item leaves the VIEW; its `my_day` stamp stays
+exactly where it was put. That is the whole reason a per-viewer clock is safe
+to decide this on a store two processes write to:
+
+* a machine asleep at midnight, and a pane open across it, agree — neither has
+  to have RUN at midnight, because the answer is recomputed from the stamp on
+  every render;
+* two windows in two timezones each empty at their OWN midnight, which is what
+  a human in either one means by "today";
+* nothing is destroyed, so `t` puts the item back with one keystroke, and the
+  record of when it was last pulled in survives.
+
+A midnight SWEEP would have all three the other way round, and would also be a
+write from a viewer — a third kind of write to a store that has exactly two
+writers, saying nothing about anybody's intent.
+
+**And it is what keeps the list legible to an AGENT**, which is the question
+the S0 mock's §"My Day auto-clears" raised and handed on: after a sweep, an
+agent reading at 02:00 finds an emptied list and cannot tell "the human cleared
+it" from "nothing was planned". Under a view rule it can: `my_day` is a
+TIMESTAMP rather than a boolean, it is never cleared by the midnight rule, and
+`todo_get` returns it. (`todo_list`'s compact row deliberately does not carry
+it — that row is a title-and-status summary — so an agent that needs the
+distinction opens the item, which is the split `todo_list`/`todo_get` exists
+for.)
+
+**Whole local days, never 24-hour spans.** `dayDelta` divides two local
+midnights and rounds, so a DST day — 23 or 25 hours long — still rounds to the
+one day it is. It is a DIFFERENCE rather than an offset, which is why it does
+not use `addDays` (#3298/#3299's helper, the repo's one calendar-day
+arithmetic): `addDays` answers "what is n days after this", and the question
+here is "how many days apart are these two". Pinned in a forced
+`TZ=America/Chicago` child process, so the assertion means something on a CI
+runner with no DST of its own.
 
 ### Reorder, and the gap that runs out
 
@@ -411,18 +504,38 @@ rewrote untouched fields would clobber a concurrent agent edit to something the
 human never touched — and never an `if_rev`, which is stale by construction by
 the time an undo runs.
 
-Three cases have no honest inverse today and each says so instead of shipping a
-button that silently does nothing:
+Two cases have no honest inverse and each says so instead of shipping a button
+that silently does nothing:
 
-* **a delete.** The store's delete is a soft tombstone, and the engine now has
-  the `restore` op that inverts one (see "The ops" above, added by #3285) —
-  but `inverseOp` does not yet emit it, so today it still refuses. The barrier
-  is the frontend `TodoOp` type and a caller, not the backend decoder, which
-  already accepts the op. Wiring it is S5's; what is no longer true
-  is the reason this bullet used to give, that the op did not exist.
 * **no `before` snapshot.** Without it the pane cannot know what to restore,
   and a best-effort guess is how an undo quietly writes the wrong value.
 * **an update that named no field.** There is nothing to put back.
+
+**A delete used to be a third, and S5 is where it stopped being one.** It now
+inverts to `{restore: {id}}` — see "The ops". It needs no `before` snapshot at
+all, because the tombstone still carries every field.
+
+**The stack** is `UndoStack` in `todomodel.ts`: fifty deep, inverses computed
+at PUSH time, dropped from the oldest end. Three things about it are decisions
+rather than defaults.
+
+*Inverses, not forward ops replayed backwards.* The difference is the `before`
+snapshot, which is a fact only the frame that made the write has; deriving it
+later from a store two writers have moved since is exactly the guess
+`inverseOp` refuses to make.
+
+*Fifty is a bound on MEANING, not on memory.* Each entry is a few hundred
+bytes. What is being bounded is an undo forty writes ago, in a list two agents
+have also been writing to, restoring a value to a row whose context the human
+no longer remembers.
+
+*A popped entry is gone whether or not the write lands.* An undo can genuinely
+fail — a tombstone past its window, a scope at `ITEMS_MAX` — and re-queuing a
+gesture now known not to work is worse than saying so once with the backend's
+own message. The undo of an undo is not pushed either: `u` is a history walk,
+not a toggle. And the stack is CLEARED on a scope switch, because every entry
+names an id in the list the pane just left and the engine resolves an id with
+no scope check.
 
 A reorder is a fourth, and it is handled differently rather than refused:
 `order_after` is a destination, not a value, and the item that was above this
@@ -449,8 +562,8 @@ Three gates, and each is enumerated separately on purpose:
 | class | listing | dispatch |
 |---|---|---|
 | orchestrator, worker, reviewer, planner | the shared tier | the shared arms, no role check |
-| manager | `MANAGER_SHARED` names all six | the manager gate names all six |
-| lead | `LEAD_SHARED` names all six | the lead gate names all six |
+| manager | `MANAGER_SHARED` names all seven | the manager gate names all seven |
+| lead | `LEAD_SHARED` names all seven | the lead gate names all seven |
 | solo | the channel pair, before the shared tier is built | refused above the match |
 
 `MANAGER_SHARED`/`LEAD_SHARED` and their dispatch gates are **default-deny**, so
@@ -470,9 +583,9 @@ listing a board tool would advertise a route with nothing at the end of it. The
 to-do store is the opposite case. It is one file at the data root — not
 group-scoped state — so a lead's `todo_list` returns the human's real list, and
 a lead group carries a repo, so `workspace` scope resolves exactly as it does
-anywhere else. Nothing in the six is orchestration authority: a to-do reaches
+anywhere else. Nothing in the seven is orchestration authority: a to-do reaches
 no agent, no board, no branch and no gate.
-(`mcp_a_lead_sees_and_may_dispatch_all_six_todo_tools` drives the *workspace*
+(`mcp_a_lead_sees_and_may_dispatch_all_seven_todo_tools` drives the *workspace*
 scope specifically, because "a lead group has a repo" is the half of this
 argument that could stop being true.)
 
@@ -482,7 +595,7 @@ argument that could stop being true.)
 workspace KEY is computed from the caller's own `GroupInfo.repo` through
 `todo::workspace_key` — the one function that turns a path into a workspace
 identity (see **Workspace identity** above) — and is **not** an argument on any
-of the six. So no group can name another project's list, and an agent cannot
+of the seven. So no group can name another project's list, and an agent cannot
 widen its own reach by spelling a key. A group with no repo is told
 `workspace scope unavailable` rather than silently falling back to the global
 list, which would put a project note on the human's everywhere list with
@@ -524,7 +637,7 @@ one refusal in the feature leaving no trace.
 ### Where the role prose lives, and the one deviation
 
 Each of `worker.md`, `reviewer.md`, `planner.md`, `manager.md` and `lead.md`
-carries one bullet naming the six and the rule (groom, never sweep; `if_rev` on
+carries one bullet naming the seven and the rule (groom, never sweep; `if_rev` on
 anything you did not create; delete one at a time and only when asked).
 `orchestrator.md` does **not**: it measures 44,955 B at blob `816a9c22` against
 `RESIDENT_CORE_BUDGET`'s 45,000, so a paragraph there would redden
@@ -547,32 +660,52 @@ queue" anyway.
 ### One residual, stated so it is falsifiable
 
 `todo_list` filters out items carrying `archived_ms`, and **that line is covered
-by no test and cannot be until #3263 S5 ships.** Nothing in the tree writes
-`archived_ms` yet, so no fixture can build an archived item: deleting the filter
-reddens nothing today, and it would die green if S5 landed with different
-archive semantics. The slice that gives the field a writer is the slice that can
-witness the filter, so S5 owns the test — a `todo_list` case asserting an
-archived item is absent from the listing while `todo_get` still returns it.
-Recorded here rather than left as an unremarked green line (review round 1,
-finding 6).
+by a test as of S5**, which is the slice that gave `archived_ms` a writer.
+Until then no fixture in the tree could build an archived item, so deleting the
+filter reddened nothing — recorded here as a residual rather than left as an
+unremarked green line (review round 1, finding 6), with the test named in
+advance. That test is
+`mcp_todo_list_omits_an_archived_row_while_todo_get_still_returns_it`, and it
+is the case this paragraph asked for: the listing loses the row, `todo_get`
+keeps answering for it, and the item it answers with carries the `archived_ms`
+that explains the absence. The control is the same listing before anything is
+archived.
 
-### No seventh tool
+### The seventh tool, and the ones there still are not
 
 Grooming — re-titling, re-prioritising, due dates, notes, tags, splitting work
 into steps — is `todo_update` plus `todo_add`. A "split" tool would be a second
 way to add an item, and two ways to create one row is two shapes to keep in
-step.
+step. That is still the rule, and it is why there is no `todo_split`, no
+`todo_tag` and no `todo_archive`.
 
-**That argument is about a split tool, and #3285 opened a different question**
-the heading should not be read as having closed. The engine now has a seventh
-op, `restore` (see "The ops"), and no tool reaches it — so an agent cannot
-undo its own `todo_delete`, which is precisely what a soft tombstone was for.
-Unlike a split tool this one would NOT be a second way to do anything: it is
-the only way to reach an op nothing else can. It is left unbuilt because a new
-shared-tier tool has to be named in `MANAGER_SHARED`, `LEAD_SHARED` and both
-dispatch gates — the default-deny pairs above — and that is a capability
-argument a store-hardening slice should not make on its own. Whoever takes it
-should also decide whether an agent may revive a row a human deleted.
+**`todo_restore` is the seventh, and it is the exception the rule allows for.**
+It is not a second way to do anything: it is the only way to reach an op
+nothing else reaches, and without it an agent cannot undo its own
+`todo_delete` — precisely what a soft tombstone was for. #3285 left it
+unbuilt because a new shared-tier tool must be named in `MANAGER_SHARED`,
+`LEAD_SHARED` and both dispatch gates, which is a capability argument a
+store-hardening slice should not make on its own. S5 made it, and it is this:
+
+* **It widens no reach.** The tool takes one id and reaches exactly the scopes
+  its caller could already see. Everything a restored row contains, its own
+  group could already read through `todo_get`.
+* **The one thing it could have leaked, it does not.** `todo_visible` reads
+  `todo_snapshot`, which filters tombstones — so this arm needed a
+  tombstone-VISIBLE read, and that is exactly the shape that can tell a caller
+  "that id exists, you just cannot have it". It is a SIBLING function rather
+  than a flag on the old one (`todo_visible_including_deleted`), it applies the
+  same scope rule to the same field, and it answers `unknown todo: <id>` —
+  the words an id that never existed answers. Pinned, with a positive control,
+  by `mcp_a_tombstone_in_another_workspace_reads_exactly_as_an_id_that_never_existed`.
+* **Whether an agent may revive a row a HUMAN deleted** — the question #3285
+  handed on — is answered in the tool's DESCRIPTION and in every role
+  template, not in Rust. The engine records who deleted a row; "they meant it"
+  is not derivable from that, and a Rust check would also refuse the
+  legitimate case where the human asks for it back. So it is instruction,
+  which is this repo's line between a guardrail and a judgement
+  (`CLAUDE.md`: "caps, pinned models, and isolation are enforced in Rust;
+  agent judgment stays in the instruction templates").
 
 ## The pane (S4)
 
@@ -656,8 +789,8 @@ accept `todo` by accepting *anything* reddens there.
 ### Three modules, and the line between them
 
 `todomodel.ts` (S3) is the **store's** model: what an item is, which smart view
-it is in, which Planned bucket, the op shape, undo's inverse. Its readers are
-this pane and S5.
+it is in, which Planned bucket, the op shape, undo's inverse and (S5) the undo
+stack itself. Its readers are this pane and `todoreminders.ts`.
 
 `todoview.ts` (S4) is the **pane's** projection: the strip's counts, the
 rendered groups, the row budget and its elision, the tag rail, the per-viewer
@@ -839,11 +972,127 @@ Two places, both because the app around it had already answered the question:
 Both are recorded here so the mock's tables and the shipped ones do not quietly
 disagree.
 
-### What S5 owns, and what says so
+### Reminders are per-viewer, and they never write
 
-Reminders, undo and the completed archive are S5. This pane leaves the hooks and
-**says so rather than shipping a control that silently does nothing** — the same
-rule `inverseOp` follows when it refuses an undo it cannot derive. `u` toasts
-that undo arrives with S5; the in-row due control toasts that dates come from
-the quick-add for now; and a reorder that has run out of gap between two items
-says the list needs re-spacing instead of not moving the row.
+`src/todoreminders.ts` is a pure scan — items and a clock in, notices out —
+fired by a one-minute `setInterval` that `show()` arms and `hide()`/`dispose()`
+clear. `remind_ms` beats `due_ms` (an explicit "tell me at" is the human
+saying when they want to hear about it; honouring the due date instead would
+override that with a default), and a COMPLETED item is skipped — a notice about
+finished work is the fastest way to make a channel worthless.
+
+**"Has this fired?" is answered from a `Set` the PANE owns**, and that is the
+decision the module is shaped around. A "reminded" flag on disk was rejected
+three times over: the store has two writer processes and a viewer's flag says
+nothing about anybody's intent; orrerix can be open in more than one window on
+one file, so whichever pane scanned first would be the only one that ever
+noticed; and a machine asleep at 09:00 would either burn the reminder unseen or
+need a "did anyone see this" field the schema does not have.
+
+The cost is real and is stated rather than hidden: a reminder fires again in a
+pane opened after it was dismissed in another, and nothing survives a reload.
+For a nudge that is the right trade.
+
+Two smaller rules follow from "once". The key is `id@atMs`, not the bare id, so
+a RESCHEDULED reminder fires at its new time while a re-render, a re-read and
+an unrelated agent write to the same row all stay quiet. And a notice older
+than `REMINDER_WINDOW_MS` (4 h) is CONSUMED without being shown — a pane opened
+at 17:00 must not stack up everything the day already passed, and marking it
+fired is what stops it arriving whenever the window next slides over it.
+
+**One toast per TICK, however many came due.** The app has a single toast
+element, so a loop calling `showToast` per notice has each call overwrite the
+last: three reminders at 09:00 showed the third and the human never learned the
+other two existed — a silent loss of exactly the thing the feature is for
+(#3301 review round 1). `reminderSummary` coalesces the tick into one
+sentence: two titles named, the rest counted, and the count is always the true
+total so nothing is hidden without being accounted for. Coalescing rather than
+a queue, because five queued toasts hold the human's attention for
+twenty-five seconds over events that happened at the same moment — they are one
+event, and a toast that listed eight titles would be a dialog.
+
+The toast carries one action ("Show", or "Show first" when the tick coalesced),
+which selects the row, expands it, and moves the view if the row is not
+currently rendered. A toast whose button does nothing visible is the
+silently-dead control this note argues against everywhere else.
+
+**And "nothing" is a real answer, so it is said out loud.** The scan only ever
+creates a notice for an OPEN item — but the human clicks LATER, and an agent's
+`todo_complete` or `todo_archive` in that window moves the row out of every
+view. Show then had nothing to reveal and revealed it silently: filters
+cleared, All selected, `scrollIntoView` called on a selector matching nothing
+(#3301 review round 2). `planReveal` in `todoview.ts` is the decision, pure so
+it is testable without a DOM, and it answers one of three things — reveal
+(optionally naming a view to move to), `gone` (a delete; the only case the
+pane used to explain), or `left`, which distinguishes **done** from
+**archived** because the two have different answers for the human: a finished
+row is in Completed, an archived one needs the toggle there as well.
+
+It takes **no clock**, unlike everything else in these two modules. Its three
+questions are timeless, and a parameter kept for symmetry would be a claim that
+the decision can move at midnight.
+
+**That move does NOT become a preference.** The stored view is "what a fresh
+pane opens on", which the human sets by clicking the strip; jumping to All
+because a reminder fired is navigation the pane did on its own. Persisting it
+would let a notification silently redefine a setting — every pane opened
+afterwards, in every window, starting on All because something came due once
+while this one happened to be on Important. `setView` therefore takes a
+`persist` flag, false on exactly the call sites the pane initiates
+(#3301 review round 1).
+
+### What a maximal list costs, measured
+
+`ITEMS_MAX` is 5,000 LIVE items **per scope**, and the pane reads one scope at
+a time, so 5,000 is the largest snapshot a pane can be handed. #3293's review
+recorded that nobody had measured it; this is the measurement, taken once
+rather than pinned as a test, because a timing assertion on shared CI is a
+flake and what the number is FOR is the scroller question `ROW_BUDGET`'s doc
+defers.
+
+Node 24.16.0, one developer machine, 20 reps after two warm-ups, against a
+deliberately unkind fixture — every optional field populated, ~200-character
+notes, three steps and two tags per row, so nothing takes a cheap absent
+branch:
+
+| stage | 500 items | 5,000 items |
+|---|---|---|
+| `JSON.parse` alone | 1.6 ms | 16.6 ms |
+| `decodeSnapshot` (**including** that parse) | 1.9 ms | 19.5 ms |
+| `projectPane`, All, no filter | 0.16 ms | 1.1 ms |
+| `projectPane`, Planned + a two-term query | 0.54 ms | 5.0 ms |
+| `scanReminders`, cold set | 0.03 ms | 0.09 ms |
+
+Three readings, and the third is the one that matters.
+
+**The decode is not the cost; `JSON.parse` is.** At the cap the defensive
+per-field decode adds ~3 ms on top of a 16.6 ms parse — about 15% — so the
+"drop what you cannot understand" discipline is close to free, and a faster
+decoder would be optimising the wrong 15%.
+
+**The reminder scan is free**, which is what makes a one-minute tick on a
+per-viewer timer an easy call: 0.09 ms at the cap, no IPC, no allocation worth
+naming.
+
+**The per-KEYSTROKE projection is the one with a ceiling in sight.** 5 ms for a
+filtered Planned view is inside a 16 ms frame, but not by much, and it is paid
+on every character typed into search. That is the datum the scroller argument
+was waiting for, and it points somewhere slightly different from where
+`ROW_BUDGET` was aimed: the budget bounds how many rows are BUILT, and this
+cost is the filter-and-sort over the whole scope, which a scroller would not
+change. Whoever takes it should debounce the query or memoise the filtered set
+first, and reach for virtual scrolling only if the DOM build turns out to
+dominate. Not this slice's to spend.
+
+### What S5 shipped, and the one thing it did not
+
+S4 left three hooks that **said so rather than shipping a control that silently
+does nothing**, and all three are now built: `u` runs the undo stack, the
+in-row due control is a text field parsed by `parseQuickAdd` (one date grammar
+per pane — a calendar widget with its own idea of what "next Monday" means
+would be a second), and the Completed view has Archive.
+
+The one that remains is the reorder gap: a move that has run out of integers
+between two neighbours still says the list needs re-spacing instead of not
+moving the row. A renumber op is a store-wide rewrite with its own argument to
+make, and "it says so" is the correct behaviour until someone makes it.

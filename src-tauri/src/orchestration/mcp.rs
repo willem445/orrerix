@@ -19,7 +19,7 @@ use super::{Caller, Delivery, GroupId, NameSource, OrchRegistry, Role};
 // acquisition answers with. See `doc/design/lock-liveness.md`.
 use loomux_engine::budget;
 use loomux_engine::lockwatch::{Busy, BUSY_RETRY_AFTER_MS};
-// #3263 S2: the To-Do model, caps and ops the six `todo_*` tools parse into.
+// #3263 S2/S5: the To-Do model, caps and ops the seven `todo_*` tools parse into.
 // The host half (the file, the lock, the audit row) is `super::todo`, reached
 // through `OrchRegistry::todo_apply` / `todo_snapshot` rather than directly.
 use loomux_engine::todo;
@@ -423,7 +423,9 @@ fn verify_with(tool: &str) -> Option<&'static str> {
         // whether a slow write landed may not have the id yet (an `add` that
         // timed out never returned one), and the list answers "is it there"
         // for all four where `todo_get` answers it for only three.
-        "todo_add" | "todo_update" | "todo_complete" | "todo_delete" => "todo_list",
+        "todo_add" | "todo_update" | "todo_complete" | "todo_delete" | "todo_restore" => {
+            "todo_list"
+        }
         _ => return None,
     })
 }
@@ -1311,7 +1313,7 @@ fn tool_defs(
             }),
             &["text"]),
     ];
-    // THE HUMAN'S TO-DO LIST (#3263 S2) — six tools, on the SHARED tier.
+    // THE HUMAN'S TO-DO LIST (#3263 S2, S5) — seven tools, on the SHARED tier.
     //
     // Shared rather than orchestrator-gated because the list is the human's,
     // not the fleet's: a worker that notices a follow-up while it has the code
@@ -1319,7 +1321,7 @@ fn tool_defs(
     // routing every such note through the orchestrator would make the feature
     // cost a turn nobody has. `Role::Solo` never reaches here (the early
     // return above), and both positive enumerations below — the manager's and
-    // the lead's — name all six explicitly, which is what a default-deny
+    // the lead's — name all seven explicitly, which is what a default-deny
     // filter requires.
     //
     // TWO SCOPES, and the caller's own group decides what `workspace` means:
@@ -1385,6 +1387,23 @@ fn tool_defs(
             "Soft-delete one to-do: it disappears from every view and the record survives 30 days, so the human can get it back. ONE AT A TIME AND ONLY WHEN ASKED. This is the human's own list, not your workspace — an item that turned out to be unnecessary is `todo_complete`, and an item that is wrong is `todo_update`. Never sweep the list, never clear a scope, and never delete something you did not add unless the human said to. Deleting an already-deleted id is `unknown todo`, the same as an id that never existed.",
             json!({ "id": { "type": "string", "description": "To-do id to delete." } }),
             &["id"]),
+        // #3263 S5 — THE SEVENTH TOOL, and the capability argument the design
+        // note's "No seventh tool" section asked whoever took it to make.
+        //
+        // It is NOT a second way to do anything, which is the ground that
+        // section rejected a "split" tool on: it is the only way to reach an op
+        // nothing else reaches, and without it an agent cannot undo its own
+        // todo_delete — which is precisely what a soft tombstone was for.
+        // The open question that section raised is answered in the DESCRIPTION
+        // rather than in code, deliberately: whether an agent may revive a row
+        // a HUMAN deleted is a judgement about intent, not a fact the engine
+        // can check (the store records who deleted it, but "the human meant it"
+        // is not derivable from that). Enforcing it in Rust would also refuse
+        // the legitimate case where the human asks for it back.
+        tool("todo_restore",
+            "Un-delete a to-do you (or another agent) soft-deleted — the one op `todo_delete` had no way back from. USE IT WHEN YOU DELETED THE WRONG THING, and essentially never otherwise: a row the HUMAN deleted is a decision they made about their own list, so reviving it needs them to have asked. A tombstone survives 30 days and then the next write drops it; after that the id reads back as `unknown todo: <id>`, exactly as an id that never existed does, and there is nothing to restore. Three other refusals, and each says what to do: `unknown todo: <id>` also means an id outside {the global list, your own workspace's list} — it is not yours to touch, not missing; `refused: restore <id> is not deleted` means the item is live already, so you wanted `todo_update`; and the same `items` cap an add hits means the list is full, because a restore puts a live item back exactly as an add does. A restored item comes back with everything it had — notes, steps, tags, due and reminder times, its place in the order — because a delete here is a tombstone rather than an erase.",
+            json!({ "id": { "type": "string", "description": "To-do id to restore." } }),
+            &["id"]),
     ]);
     // THE MANAGER'S ENTIRE SURFACE — a positive enumeration, on `Role::Solo`'s
     // pattern (#1161 M2).
@@ -1424,20 +1443,23 @@ fn tool_defs(
             "list_verdicts",
             "request_compact",
             "note_directive",
-            // #3263 S2. All six, named explicitly because this filter is
-            // default-deny. The manager is the human's own interface to the
-            // group, so it is the pane where "put that on my list" is most
-            // likely to be TYPED — withholding the list from the one class
-            // whose whole job is talking to the human would be the wrong way
-            // round. Nothing here is orchestration authority: a to-do is the
-            // human's personal data, and the tools reach no agent, no board
-            // and no branch.
+            // #3263 S2, and `todo_restore` at S5. All seven, named explicitly
+            // because this filter is default-deny. The manager is the human's
+            // own interface to the group, so it is the pane where "put that on
+            // my list" is most likely to be TYPED — withholding the list from
+            // the one class whose whole job is talking to the human would be
+            // the wrong way round. Nothing here is orchestration authority: a
+            // to-do is the human's personal data, and the tools reach no agent,
+            // no board and no branch. `todo_restore` least of all: it is the
+            // inverse of one of the six, and the pane it is most useful in is
+            // the one where "no, put that back" gets said out loud.
             "todo_list",
             "todo_get",
             "todo_add",
             "todo_update",
             "todo_complete",
             "todo_delete",
+            "todo_restore",
         ];
         tools.retain(|t| MANAGER_SHARED.contains(&t["name"].as_str().unwrap_or_default()));
         tools.extend([
@@ -1515,8 +1537,9 @@ fn tool_defs(
     // post-compact re-grounding notice, which is the mechanism that need
     // actually has.
     if role == Role::Lead {
-        // #3263 S2 adds the six to-do tools, and the argument is the one the
-        // withheld board/question/verdict surface does NOT have: there is
+        // #3263 S2 adds the to-do tools and S5 the seventh, and the argument
+        // is the one the withheld board/question/verdict surface does NOT
+        // have: there is
         // something behind them. A lead group has a repo, so `workspace`
         // scope resolves exactly as it does anywhere else, and the global
         // list is the same one file every pane on this machine reads — so
@@ -1537,6 +1560,10 @@ fn tool_defs(
             "todo_update",
             "todo_complete",
             "todo_delete",
+            // #3263 S5. The argument above covers it unchanged: it reaches no
+            // agent, no board, no branch and no gate, and a lead pane sits
+            // directly with the human, who is the one who says "put it back".
+            "todo_restore",
         ];
         tools.retain(|t| LEAD_SHARED.contains(&t["name"].as_str().unwrap_or_default()));
         tools.push(lead_spawn_agent_tool());
@@ -2514,7 +2541,7 @@ fn todo_actor(reg: &OrchRegistry, caller: &Caller) -> todo::Actor {
 /// function that turns a path into a workspace identity (CLAUDE.md constraint
 /// 6's neighbour: the key is a JSON map key and is never joined onto a path),
 /// and the path it gets here is THIS group's own `repo` — so no argument on
-/// any of the six tools can name another project's list, and an agent cannot
+/// any of the seven tools can name another project's list, and an agent cannot
 /// widen its own reach by spelling a key. A group with no repo has no
 /// workspace at all and is told so rather than silently falling back to the
 /// global list, which would put a project note on the human's everywhere list
@@ -2589,6 +2616,37 @@ fn todo_visible(
                     todo::Scope::Global => true,
                     todo::Scope::Workspace(k) => mine.as_deref() == Some(k.as_str()),
                 }
+        })
+        .ok_or_else(|| format!("unknown todo: {id}"))
+}
+
+/// `todo_visible`, for the one caller whose subject is a TOMBSTONE (#3263 S5).
+///
+/// `todo_visible` reads `todo_snapshot`, which filters tombstones out — so
+/// `todo_restore` could not use it: every call would answer "unknown todo"
+/// before the engine ever saw the id.
+///
+/// **The visibility rule is the SAME rule, applied to the same field**, and
+/// that is the point of it being a sibling rather than a flag: an id outside
+/// {the global list, the caller's own workspace} answers `unknown todo: <id>`
+/// exactly as a live one does, so nothing here tells an agent whether another
+/// project's list ever held that id. A tombstone this caller may not see and
+/// an id that never existed are one answer.
+///
+/// An EXPIRED tombstone is deliberately NOT filtered here: the engine refuses
+/// it as `unknown todo` for its own stated reason (the row is one this build
+/// has already undertaken to drop), and duplicating that window check in two
+/// places is two clocks to keep in step.
+fn todo_visible_including_deleted(
+    reg: &OrchRegistry,
+    caller: &Caller,
+    id: &str,
+) -> Result<todo::TodoItem, String> {
+    let mine = todo_workspace(reg, caller).ok().map(|(key, _)| key);
+    reg.todo_item_including_deleted(id)
+        .filter(|i| match &i.scope {
+            todo::Scope::Global => true,
+            todo::Scope::Workspace(k) => mine.as_deref() == Some(k.as_str()),
         })
         .ok_or_else(|| format!("unknown todo: {id}"))
 }
@@ -2801,14 +2859,15 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 | "ask_human"
                 | "request_attention"
                 | "group_usage"
-                // #3263 S2 — the six, spelled again here rather than shared
-                // with `MANAGER_SHARED` for this gate's stated reason.
+                // #3263 S2/S5 — the seven, spelled again here rather than
+                // shared with `MANAGER_SHARED` for this gate's stated reason.
                 | "todo_list"
                 | "todo_get"
                 | "todo_add"
                 | "todo_update"
                 | "todo_complete"
                 | "todo_delete"
+                | "todo_restore"
         )
     {
         return Err(format!(
@@ -2846,14 +2905,15 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 | "channel_send"
                 | "channel_status"
                 | "group_usage"
-                // #3263 S2 — the six, spelled again here rather than shared
-                // with `LEAD_SHARED` for this gate's stated reason.
+                // #3263 S2/S5 — the seven, spelled again here rather than
+                // shared with `LEAD_SHARED` for this gate's stated reason.
                 | "todo_list"
                 | "todo_get"
                 | "todo_add"
                 | "todo_update"
                 | "todo_complete"
                 | "todo_delete"
+                | "todo_restore"
         )
     {
         return Err(format!(
@@ -5110,19 +5170,18 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 .iter()
                 .filter(|i| include_done || !i.is_done())
                 // An archived item is live data that the default views hide
-                // (#3263 S5 sets `archived_ms`); the plan's row for this tool
-                // says the listing excludes them, so it does — the human's
-                // Completed view is the pane's surface for those, not this.
+                // (`TodoOp::Archive` sets `archived_ms`, #3263 S5); the plan's
+                // row for this tool says the listing excludes them, so it does
+                // — the human's Completed view is the pane's surface for
+                // those, not this.
                 //
-                // **STATED RESIDUAL (review round 1, finding 6): this line is
-                // covered by no test, and cannot be until S5 ships.** Nothing
-                // in the tree writes `archived_ms` yet, so no fixture can build
-                // an archived item and a mutation deleting this filter reddens
-                // nothing — it would die green if S5 landed with different
-                // semantics. S5 owns the test: the slice that gives the field a
-                // writer is the slice that can witness the filter, and it
-                // should add a `todo_list` case asserting an archived item is
-                // absent here while `todo_get` still returns it.
+                // The residual stated here at S2 (review round 1, finding 6) —
+                // that nothing in the tree could build an archived item, so
+                // deleting this filter reddened nothing — is DISCHARGED by the
+                // slice that gave the field a writer:
+                // `mcp_todo_list_omits_an_archived_row_while_todo_get_still_returns_it`
+                // in `tests/todo.rs` is the case that paragraph asked for, with
+                // the pre-archive listing as its control.
                 .filter(|i| i.archived_ms.is_none())
                 .filter(|i| todo_matches(i, query))
                 .collect();
@@ -5244,6 +5303,27 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 )
                 .map_err(|e| e.to_string())?;
             Ok(json!({ "deleted": applied.ids, "purged": applied.purged }).to_string())
+        }),
+        // #3263 S5. The one arm that resolves its subject through
+        // `todo_visible_including_deleted`, because its subject IS a tombstone
+        // — see that function for why it is a sibling rather than a flag.
+        "todo_restore" => todo_arm(reg, caller, "todo-restore", || {
+            let id = arg_str(args, "id").ok_or("id required")?;
+            let item = todo_visible_including_deleted(reg, caller, id)?;
+            let workspace = todo_workspace_for(reg, caller, &item);
+            let applied = reg
+                .todo_apply(
+                    Some(&caller.group),
+                    &todo_actor(reg, caller),
+                    todo::TodoOp::Restore { id: id.to_string() },
+                    workspace.as_ref().map(|(k, r)| (k.as_str(), r.as_str())),
+                )
+                .map_err(|e| e.to_string())?;
+            // The whole item, as `todo_get` returns one: a caller restoring a
+            // row wants to see what came back, and "it had steps and a due
+            // date" is the answer to "did I get the right one".
+            serde_json::to_string(&applied.item)
+                .map_err(|e| format!("could not serialise the item: {e}"))
         }),
 
         _ => Err(format!("unknown tool: {name}")),

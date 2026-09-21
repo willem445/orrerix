@@ -559,11 +559,12 @@ const NULLABLE: { key: "due_ms" | "remind_ms" | "my_day" }[] = [
  * **It refuses rather than guesses.** Three cases have no honest inverse today
  * and each says so:
  *
- *  * a DELETE. The store's delete is a soft tombstone, but the op set #3263 S1
- *    shipped has no RESTORE — `apply` treats a tombstoned item as unknown, so
- *    an update aimed at it is refused. Undoing a delete needs a new op, and
- *    reporting that is what stops S5 wiring a button that silently does
- *    nothing.
+ *  * a DELETE. The store's delete is a soft tombstone, and the engine HAS a
+ *    `restore` op that inverts one as of #3285 — what is missing is the
+ *    wiring, here and in the MCP tools, which is S5's. Emitting a `restore`
+ *    from this function before `TodoOp` and the pane's caller carry it would
+ *    be an undo that fails at the decoder, so it still reports the gap; only
+ *    the reason has changed, and the reason is what the message says.
  *  * no `before` snapshot. Without it the pane cannot know what to restore,
  *    and a best-effort guess is how an undo quietly writes the wrong value.
  *  * an update that named no field. There is nothing to put back.
@@ -583,7 +584,10 @@ export function inverseOp(op: TodoOp, before: TodoItem | null, applied: Applied 
   }
 
   if ("delete" in op) {
-    return { unsupported: "the store has no restore op; undoing a delete needs one (#3263 S5)" };
+    return {
+      unsupported:
+        "undoing a delete is not wired up yet; the store's restore op exists (#3285) and S5 wires it",
+    };
   }
 
   if (before === null) {

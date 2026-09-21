@@ -392,15 +392,25 @@ test("clearing a field inverts to setting it, and setting one that was absent in
   });
 });
 
-test("FAILURE CASE: a delete has no inverse today, and says so instead of pretending", () => {
-  // The store's delete is a soft tombstone, but the op set S1 shipped has no
-  // RESTORE — `apply` treats a tombstoned item as unknown, so an update
-  // aimed at it is refused. Reporting the gap is what stops #3263 S5 from
-  // wiring an undo button that silently does nothing.
+test("FAILURE CASE: a delete's inverse is not wired up yet, and says so instead of pretending", () => {
+  // The store's delete is a soft tombstone, and the engine gained a `restore`
+  // op in #3285 — so what is missing is no longer the OP, it is the wiring
+  // here and in the MCP tools (S5). Reporting the gap is still what stops an
+  // undo button that silently does nothing.
   const inv = inverseOp({ delete: { id: "td-1" } }, item({ id: "td-1" }), null);
   assert.deepEqual(inv, {
-    unsupported: "the store has no restore op; undoing a delete needs one (#3263 S5)",
+    unsupported:
+      "undoing a delete is not wired up yet; the store's restore op exists (#3285) and S5 wires it",
   });
+  // The retracted claim, pinned as retracted. A message asserted only by
+  // `deepEqual` above would come back the moment someone re-wrapped this
+  // string, and a test that quotes a false claim ENFORCES it — correcting it
+  // reads as the regression (CLAUDE.md, "A TEST is one of those surfaces").
+  assert.doesNotMatch(
+    "unsupported" in inv ? inv.unsupported : "",
+    /has no restore op/,
+    "the store HAS a restore op as of #3285; only the undo wiring is outstanding"
+  );
 });
 
 test("FAILURE CASE: an inverse with nothing to read is refused, not guessed", () => {

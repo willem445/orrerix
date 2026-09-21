@@ -548,6 +548,27 @@ editor the first time an agent wrote to the board. Only **Cancel** and Escape
 discard; shutting the row, a background refresh and an agent's write all leave a
 draft where it is.
 
+### The load path validates nothing, and the row says so
+
+The 500-character cap and the one-line rule are **write-path** rules. A
+`tasks.json` that was hand-edited, or written by a binary older than the rule,
+can hold a multi-line or over-cap description, and it loads and paints
+verbatim — `pre-wrap` renders both lines.
+
+Validating on load was the wrong answer: the value is already on disk, refusing
+to render it would hide the problem rather than show it, and a repair pass that
+rewrote somebody's file to fit a rule they did not know about is worse than
+either. The board instead does what it already does for an unknown `kind`,
+which has exactly the same provenance — only a hand-edited file produces one —
+and marks it: `.task-desc.out-of-contract`, the state-danger dye, the text
+still shown in full, and a tooltip naming which rule it breaks.
+
+`storedDescriptionIsOutOfContract` is defined FROM `descRefusal`, the predicate
+the write path uses, so the display check and the write check cannot drift into
+disagreeing about what is legal (review round 2 premortem). The test pins that
+equivalence over both directions, and pins that an ABSENT description is not a
+broken one — the vacuity such a predicate is most likely to acquire.
+
 **Nothing here resizes a PTY.** Every element added by this slice — the level
 mark, the title area, the full title, the description block and its editor —
 is a child of `.task-main`, inside the row, inside the overlay the board already

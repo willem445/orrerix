@@ -1811,6 +1811,60 @@ export function descOverBy(text: string): number {
   return Math.max(0, Array.from(text.trim()).length - MAX_DESCRIPTION);
 }
 
+/** What the description editor should show and allow, for one keystroke.
+ *
+ *  Pure, and lifted out of the renderer in review round 2: it is the only part
+ *  of that editor with a DECISION in it, and it is the part that had no test —
+ *  "is Save live" was computed inline from two predicates and pinned nowhere,
+ *  which is exactly the shape that silently inverts.
+ *
+ *  `canSave` is false for BOTH reasons a save is pointless or wrong, and the
+ *  two are different: a pristine draft has nothing to write, a refused one must
+ *  not be written. `refusal` says which, or `null` when neither applies.
+ *
+ *  `used` counts CODE POINTS, so the number beside the box is the number the
+ *  backend counted — a count that disagreed with the refusal would be worse
+ *  than no count at all. */
+export interface DescEditorState {
+  /** Characters used, code points, trimmed — what the counter shows. */
+  used: number;
+  /** Why this cannot be saved, or `null`. */
+  refusal: string | null;
+  /** Is the draft exactly what the row already says? */
+  pristine: boolean;
+  /** May the Save button be pressed? */
+  canSave: boolean;
+}
+
+export function descEditorState(draft: string, stored: string | null | undefined): DescEditorState {
+  const refusal = descRefusal(draft);
+  const pristine = descDraftIsPristine(draft, stored);
+  return {
+    used: Array.from(draft.trim()).length,
+    refusal,
+    pristine,
+    canSave: refusal === null && !pristine,
+  };
+}
+
+/** Does a STORED description violate the contract the write path enforces?
+ *
+ *  Always false for anything loomux wrote: every producer goes through
+ *  `upsert_task`, which refuses an over-cap or control-character value before
+ *  anything is stored. A true here therefore means the board FILE is wrong —
+ *  hand-edited, or written by a binary older than the rule — which is the same
+ *  provenance as an unknown `kind`, and gets the same treatment: the row says
+ *  so rather than painting it as if it were fine (#3261 review round 2).
+ *
+ *  Defined from `descRefusal` rather than re-deriving the rule, so the display
+ *  check and the write check cannot drift into disagreeing about what is legal.
+ *  Read-path only: it never blocks anything, because the value is already on
+ *  disk and refusing to render it would hide the problem rather than show it. */
+export function storedDescriptionIsOutOfContract(text: string | null | undefined): boolean {
+  const t = (text ?? "").trim();
+  return t !== "" && descRefusal(t) !== null;
+}
+
 /** Is this a control character by the BACKEND's definition?
  *
  *  Rust's `char::is_control` is Unicode general category `Cc`, which is TWO

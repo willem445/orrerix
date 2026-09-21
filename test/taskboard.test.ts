@@ -98,6 +98,8 @@ import {
   descDraftIsPristine,
   descOverBy,
   descRefusal,
+  descEditorState,
+  storedDescriptionIsOutOfContract,
 } from "../src/taskboard.ts";
 
 test("counts only tasks in the exact `done` status", () => {
@@ -2892,4 +2894,83 @@ test("a trailing newline gets ONE answer, whichever caller sends it", () => {
   // And an INTERIOR one is still refused — trimming must not become a licence
   // to flatten, which is the whole point of the refusal.
   assert.notEqual(descRefusal("Ship it.\nThen ship more."), null);
+});
+
+test("a stored description the write path would refuse reads as a BROKEN board file", () => {
+  // Review round 2, premortem: the LOAD path validates nothing. A hand-edited
+  // tasks.json (or one written by a binary older than the rule) can hold a
+  // multi-line or over-cap description, and it loads and paints verbatim.
+  //
+  // The board already has a precedent for this exact shape and takes the
+  // opposite decision — an unknown `kind` gets a broken chip rather than a
+  // silent pass — so the description gets the same treatment.
+  assert.equal(storedDescriptionIsOutOfContract("One.\nTwo."), true, "a multi-line stored value is out of contract");
+  assert.equal(storedDescriptionIsOutOfContract("x".repeat(MAX_DESCRIPTION + 1)), true, "an over-cap stored value is too");
+  assert.equal(storedDescriptionIsOutOfContract("One.Two."), true, "and a C1 control, like the write path");
+
+  // Anything loomux itself wrote is in contract, because every producer goes
+  // through the write path. These are the negative controls that stop the
+  // predicate from simply reading "true".
+  assert.equal(storedDescriptionIsOutOfContract("Hands the blocks to the spawner."), false);
+  assert.equal(storedDescriptionIsOutOfContract("x".repeat(MAX_DESCRIPTION)), false, "exactly at the cap is legal");
+  assert.equal(storedDescriptionIsOutOfContract("Parses it — the “blocks” list, naïvely."), false);
+
+  // ABSENT is not BROKEN: a row with no description must not be marked as a
+  // corrupt one, which is the vacuity this predicate is most likely to acquire.
+  for (const none of [null, undefined, "", "   "]) {
+    assert.equal(
+      storedDescriptionIsOutOfContract(none),
+      false,
+      `${JSON.stringify(none)} is "no description", not a broken board file`
+    );
+  }
+
+  // It is defined FROM the write-path rule, so the two cannot drift: every
+  // value the writer refuses is a value the reader marks, and vice versa.
+  for (const s of ["One.\nTwo.", "x".repeat(MAX_DESCRIPTION + 1), "ok", "x".repeat(MAX_DESCRIPTION)]) {
+    assert.equal(
+      storedDescriptionIsOutOfContract(s),
+      descRefusal(s) !== null,
+      `the display check and the write check disagree about ${JSON.stringify(s.slice(0, 20))}`
+    );
+  }
+});
+
+test("the description editor's Save is live for exactly one reason, and dead for two", () => {
+  // Review round 2, finding 2. This decision was computed inline in the
+  // renderer and pinned nowhere — the shape that silently inverts. The two
+  // dead reasons are DIFFERENT and the state says which: a pristine draft has
+  // nothing to write, a refused one must not be written.
+  const stored = "Hands the blocks to the spawner.";
+
+  const edited = descEditorState("Hands the blocks to the spawner, twice.", stored);
+  assert.equal(edited.canSave, true, "a real edit is saveable");
+  assert.equal(edited.refusal, null);
+  assert.equal(edited.pristine, false);
+
+  const untouched = descEditorState(stored, stored);
+  assert.equal(untouched.canSave, false, "an untouched box has nothing to save");
+  assert.equal(untouched.pristine, true);
+  assert.equal(untouched.refusal, null, "pristine is not a refusal — the two reasons must stay apart");
+
+  const refused = descEditorState("x".repeat(MAX_DESCRIPTION + 1), stored);
+  assert.equal(refused.canSave, false, "an over-cap draft must not be saveable");
+  assert.notEqual(refused.refusal, null, "and the editor must be able to say why");
+  assert.equal(refused.pristine, false, "it is an edit, just not a legal one");
+
+  // CLEARING is a real edit, not a pristine box — the one case where an empty
+  // draft must stay saveable, because empty is how a description is removed.
+  const cleared = descEditorState("", stored);
+  assert.equal(cleared.canSave, true, "emptying the box is how you delete a description");
+  assert.equal(cleared.refusal, null);
+
+  // ...and on a row that has none, the same empty box is pristine.
+  assert.equal(descEditorState("", null).canSave, false);
+
+  // The counter is code points, so it agrees with the refusal rather than
+  // reporting a different number from the one the cap was applied to.
+  assert.equal(descEditorState("  ab  ", null).used, 2, "the count is of trimmed text");
+  const astral = "🙂".repeat(MAX_DESCRIPTION);
+  assert.equal(descEditorState(astral, null).used, MAX_DESCRIPTION);
+  assert.equal(descEditorState(astral, null).refusal, null, "the count and the refusal must agree");
 });

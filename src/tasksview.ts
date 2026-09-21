@@ -113,7 +113,12 @@ import {
 import { displayTitle, titleOverBudget, titleTooltip, TITLE_BUDGET } from "./tasktitle.ts";
 import { boardShowsKindMarks, kindKey, kindTitle, kindToken } from "./taskkind.ts";
 import { BoardPrefsStore } from "./boardprefs.ts";
-import { MAX_DESCRIPTION, descDraftIsPristine, descRefusal } from "./taskboard.ts";
+import {
+  MAX_DESCRIPTION,
+  descEditorState,
+  descRefusal,
+  storedDescriptionIsOutOfContract,
+} from "./taskboard.ts";
 import { loadBoardPrefs, saveBoardPrefs } from "./pty.ts";
 
 export interface OrchTaskNote {
@@ -3372,8 +3377,20 @@ export class TasksView {
   /** The read path: what the row says, or an invitation to say it. */
   private renderDescriptionView(t: OrchTask): HTMLElement {
     const stored = (t.description ?? "").trim();
-    const view = el("div", `task-desc${stored ? "" : " empty"}`, stored || "No description — click to add one");
-    view.title = "Click to write what this row IS, in a sentence or two";
+    // A stored value the WRITE path would refuse can only come from a
+    // hand-edited tasks.json or a binary older than the rule (#3261 review
+    // round 2). The board says so rather than painting it as though it were
+    // fine — the same call the unknown `kind` gets, for the same reason, and
+    // from the same predicate the write path uses so the two cannot drift.
+    const broken = storedDescriptionIsOutOfContract(stored);
+    const view = el(
+      "div",
+      `task-desc${stored ? "" : " empty"}${broken ? " out-of-contract" : ""}`,
+      stored || "No description — click to add one"
+    );
+    view.title = broken
+      ? `This description is not one loomux would have written — ${descRefusal(stored)}. Only a hand-edited tasks.json can hold it. Click to fix it.`
+      : "Click to write what this row IS, in a sentence or two";
     view.addEventListener("click", () => {
       this.descEditing.add(t.id);
       this.descFocus = t.id;
@@ -3404,18 +3421,19 @@ export class TasksView {
 
     const sync = () => {
       const draft = box.value;
-      // One rule for "nothing to submit", and the renderer's seed above is its
-      // other half (`descDraftIsPristine`): a draft that says exactly what the
-      // row already says is not a draft, so it does not survive the render.
-      if (descDraftIsPristine(draft, t.description)) this.descDrafts.delete(t.id);
+      // The DECISION is `descEditorState`, pure and tested; this closure only
+      // moves it onto the elements. One rule for "nothing to submit", and the
+      // renderer's seed above is its other half — a draft that says exactly
+      // what the row already says is not a draft, so it does not survive the
+      // render.
+      const s = descEditorState(draft, t.description);
+      if (s.pristine) this.descDrafts.delete(t.id);
       else this.descDrafts.set(t.id, draft);
-      const refusal = descRefusal(draft);
-      const used = Array.from(draft.trim()).length;
-      count.textContent = `${used}/${MAX_DESCRIPTION}`;
-      count.classList.toggle("over", refusal !== null);
-      count.title = refusal ?? "";
-      save.disabled = refusal !== null || descDraftIsPristine(draft, t.description);
-      save.title = refusal ?? "Save this description";
+      count.textContent = `${s.used}/${MAX_DESCRIPTION}`;
+      count.classList.toggle("over", s.refusal !== null);
+      count.title = s.refusal ?? "";
+      save.disabled = !s.canSave;
+      save.title = s.refusal ?? (s.pristine ? "Nothing to save yet" : "Save this description");
     };
 
     const commit = () => {

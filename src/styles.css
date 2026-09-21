@@ -3503,6 +3503,15 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
   cursor: text;
 }
 .task-desc.empty { color: var(--ink-faint); font-style: italic; }
+/* A stored description the WRITE path would refuse — only a hand-edited
+   tasks.json can hold one (#3261 review round 2). Same dye and same argument as
+   `.task-chip.kind-broken`: this is the STATE channel saying the board file is
+   wrong, never an identity. The text is still shown in full — hiding it would
+   conceal the problem rather than report it. */
+.task-desc.out-of-contract {
+  border-left-color: var(--state-danger);
+  color: var(--state-danger);
+}
 .task-desc-edit { margin: 3px 0 1px 25px; display: flex; gap: 5px; align-items: flex-start; }
 .task-desc-input { flex: 1; min-width: 0; font-size: 11px; line-height: 1.5; resize: vertical; }
 .task-desc-count { flex: none; font-size: 10px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }

@@ -126,6 +126,30 @@ function atTime(dayStartMs: number, hour: number, minute: number): number {
 }
 
 /**
+ * `n` calendar days after `dayStartMs`, as a local start-of-day.
+ *
+ * CALENDAR ARITHMETIC, NOT `+ n * MS_PER_DAY` (#3298). A local day is not
+ * always 24 hours: on a DST fall-back day it is 25, so adding `MS_PER_DAY` to
+ * that day's midnight lands at 23:00 the SAME day, and the `setHours` that
+ * follows then pulls the date back — every relative date on the changeover
+ * day comes out a day early. `tomorrow` resolved to TODAY (already past, so
+ * the row dyed itself Overdue on the spot), `fri` to Thursday, `in 3 days` to
+ * two. Spring-forward hides it, because the 23-hour day's drift still lands
+ * inside the target.
+ *
+ * `Date#setDate` counts days rather than milliseconds, which is the operation
+ * actually meant, and the `setHours(0,…)` re-normalises in case the target
+ * day's own midnight moved. Found in review on #3271; the lift to this module
+ * lost it and #3298 put it back at every arm that builds a day.
+ */
+export function addDays(dayStartMs: number, n: number): number {
+  const d = new Date(dayStartMs);
+  d.setDate(d.getDate() + n);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/**
  * The next occurrence of `weekday` strictly after today, or today itself when
  * `includeToday`. "fri" on a Friday means NEXT Friday: if you meant today you
  * would have typed `today`, and a to-do that silently lands in the past hour
@@ -135,7 +159,7 @@ function nextWeekday(dayStartMs: number, weekday: number, includeToday: boolean)
   const today = new Date(dayStartMs).getDay();
   let delta = (weekday - today + 7) % 7;
   if (delta === 0 && !includeToday) delta = 7;
-  return dayStartMs + delta * MS_PER_DAY;
+  return addDays(dayStartMs, delta);
 }
 
 /**
@@ -365,7 +389,7 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
       continue;
     }
     if (t === "tomorrow" || t === "tmr") {
-      dueDayMs = dayStart + MS_PER_DAY;
+      dueDayMs = addDays(dayStart, 1);
       takeDue(i, 1, tokens[i].raw);
       continue;
     }
@@ -386,12 +410,12 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
     if (t === "in" && next !== undefined && /^\d{1,3}$/.test(next) && next2 !== undefined) {
       const n = Number(next);
       if (/^days?$/.test(next2)) {
-        dueDayMs = dayStart + n * MS_PER_DAY;
+        dueDayMs = addDays(dayStart, n);
         takeDue(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
         continue;
       }
       if (/^weeks?$/.test(next2)) {
-        dueDayMs = dayStart + n * 7 * MS_PER_DAY;
+        dueDayMs = addDays(dayStart, n * 7);
         takeDue(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
         continue;
       }
@@ -411,7 +435,7 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
   // still ahead, tomorrow if it has passed.
   if (dueDayMs === null && timeOfDay) {
     const todayAt = atTime(dayStart, timeOfDay.hour, timeOfDay.minute);
-    dueDayMs = todayAt > nowMs ? dayStart : dayStart + MS_PER_DAY;
+    dueDayMs = todayAt > nowMs ? dayStart : addDays(dayStart, 1);
   }
 
   let dueMs: number | null = null;

@@ -5113,6 +5113,16 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 // (#3263 S5 sets `archived_ms`); the plan's row for this tool
                 // says the listing excludes them, so it does — the human's
                 // Completed view is the pane's surface for those, not this.
+                //
+                // **STATED RESIDUAL (review round 1, finding 6): this line is
+                // covered by no test, and cannot be until S5 ships.** Nothing
+                // in the tree writes `archived_ms` yet, so no fixture can build
+                // an archived item and a mutation deleting this filter reddens
+                // nothing — it would die green if S5 landed with different
+                // semantics. S5 owns the test: the slice that gives the field a
+                // writer is the slice that can witness the filter, and it
+                // should add a `todo_list` case asserting an archived item is
+                // absent here while `todo_get` still returns it.
                 .filter(|i| i.archived_ms.is_none())
                 .filter(|i| todo_matches(i, query))
                 .collect();

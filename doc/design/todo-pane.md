@@ -462,6 +462,18 @@ like at a glance. The rule lands where an orchestrator already reads about what
 belongs on the board, which is the right place for "the to-do list is not your
 queue" anyway.
 
+### One residual, stated so it is falsifiable
+
+`todo_list` filters out items carrying `archived_ms`, and **that line is covered
+by no test and cannot be until #3263 S5 ships.** Nothing in the tree writes
+`archived_ms` yet, so no fixture can build an archived item: deleting the filter
+reddens nothing today, and it would die green if S5 landed with different
+archive semantics. The slice that gives the field a writer is the slice that can
+witness the filter, so S5 owns the test — a `todo_list` case asserting an
+archived item is absent from the listing while `todo_get` still returns it.
+Recorded here rather than left as an unremarked green line (review round 1,
+finding 6).
+
 ### No seventh tool
 
 Grooming — re-titling, re-prioritising, due dates, notes, tags, splitting work

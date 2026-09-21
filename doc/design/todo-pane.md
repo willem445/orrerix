@@ -101,6 +101,16 @@ token is the compiler's proof, not a scan's: there is no way to obtain one
 without the lock, so the unserialised call cannot be written (CLAUDE.md's
 preference for the type system over a source-scanning guard).
 
+**Within one process, and that qualifier is a residual rather than a caveat.**
+`TODO_WRITE_LOCK` is a process-local `Mutex`, so two app instances — or the
+`loomux-server` daemon (`doc/design/remote-engine-daemon.md`) — against one
+data root interleave exactly as the paragraph above describes, and no test in
+this repo can see it. Pre-existing rather than introduced, and written down
+because a note claiming the race is closed *full stop* would be the next false
+claim on this surface. Closing it needs a lock the filesystem holds, which
+belongs with `fsatomic`'s primitive and not with this one caller — the same
+place the torn-file window above is left.
+
 **A newer store is read-only, not quarantined.** A store written by a future
 build is not damaged, it is *ahead*. It parses (every field is
 `#[serde(default)]`), its items render, and every write is refused with the

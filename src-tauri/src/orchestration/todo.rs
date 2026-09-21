@@ -35,7 +35,9 @@
 //! arm of [`load_store`] RENAMES, so an unserialised snapshot could move a
 //! store a concurrent write had just published (#3285 item 2). That rule is
 //! the compiler's rather than a comment's — [`load_store`] takes a
-//! [`TodoWriteGuard`], and there is no way to make one without the lock.
+//! [`TodoWriteGuard`], and there is no way to make one without the lock —
+//! within THIS process. A second process against the same data root is not
+//! covered; see [`TodoWriteGuard`]'s own doc.
 //!
 //! # The degraded reads, and what each does
 //!
@@ -110,6 +112,16 @@ fn quarantine_path(path: &Path) -> PathBuf {
 /// because there is no other way to obtain one. This is the auto-trait/type
 /// shape CLAUDE.md prefers to a source-scanning guard, which would be blind to
 /// a renamed binding.
+///
+/// **WITHIN ONE PROCESS**, and the qualifier is load-bearing rather than
+/// pedantic. `TODO_WRITE_LOCK` is a process-local `Mutex`, so a second app
+/// instance — or the `loomux-server` daemon (`doc/design/remote-engine-daemon.md`)
+/// — against the same data root can still interleave exactly as described
+/// above, and nothing here or in the suite can see it. That is pre-existing
+/// and not something this guard introduced; it is named because a doc that
+/// said "the race is closed" full stop would be the next false claim
+/// (#3291 review round 1, premortem). Closing it needs a lock the filesystem
+/// holds, which belongs with the primitive, not with this one caller.
 pub struct TodoWriteGuard<'a> {
     _inner: std::sync::MutexGuard<'a, ()>,
 }

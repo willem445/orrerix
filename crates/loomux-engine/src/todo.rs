@@ -14,7 +14,7 @@
 //! rather than a file.
 //!
 //! That is also why `BoardPrefsStore`'s read-before-publish dance
-//! (`doc/design/board-tree-view.md`, "Nothing is published before the file has
+//! (`docs/design/board-tree-view.md`, "Nothing is published before the file has
 //! been read") has no analogue here: no caller ever holds a whole-file handle.
 //! Every write is load → [`apply`] → atomic write, under one lock, on the host
 //! side (`src-tauri/src/orchestration/todo.rs`).
@@ -49,7 +49,7 @@
 //! may enter the shipped Windows binary). Ids are therefore asserted by SHAPE
 //! in tests, never by value.
 //!
-//! See `doc/design/todo-pane.md`.
+//! See `docs/design/todo-pane.md`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -1018,7 +1018,7 @@ fn apply_delete(
 
 /// Un-delete a soft-deleted item (#3285): the inverse a `Delete` had no way to
 /// express. `apply` treats a tombstone as unknown, so before this op an undo
-/// of a delete could only refuse — `doc/design/todo-pane.md`, "Undo refuses
+/// of a delete could only refuse — `docs/design/todo-pane.md`, "Undo refuses
 /// rather than guesses", which said so and named the missing op.
 ///
 /// Three refusals, each on its own ground:

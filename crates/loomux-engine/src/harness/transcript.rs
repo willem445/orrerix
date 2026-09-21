@@ -1,5 +1,5 @@
 //! The VT renderer: [`HarnessEvent`] in, terminal bytes out
-//! (`doc/design/harness-adapters.md` §5).
+//! (`docs/design/harness-adapters.md` §5).
 //!
 //! # Why a structured pane still writes to a terminal
 //!
@@ -1052,7 +1052,7 @@ mod tests {
 
     // ── the two projections, kept honest against one record (#2891 S4) ──────
     //
-    // `doc/design/harness-adapters.md` §5.1 makes the event log the record and
+    // `docs/design/harness-adapters.md` §5.1 makes the event log the record and
     // gives it two projections: this one, into VT bytes for the pane's
     // `OutputBuf` ring, and the DOM renderer the human actually reads
     // (`src/structuredview.ts` -> `src/structuredpane.ts`). It states the risk

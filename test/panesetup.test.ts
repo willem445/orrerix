@@ -618,7 +618,7 @@ test("a remote folder with no remote CLI warns — the value is kept, not droppe
   // sshd built from the account, and the POSIX builder now emits
   // `exec "$SHELL" -l -i -c` around every remote command it builds — without
   // changing this behaviour. See `sshRemoteCwdWarning`'s doc block in
-  // src/panesetup.ts and doc/design/ssh-panes.md.
+  // src/panesetup.ts and docs/design/ssh-panes.md.
   assert.match(sshRemoteCwdWarning(null, "/srv/app"), /only when a remote CLI is set/i);
   assert.match(sshRemoteCwdWarning(null, "/srv/app"), /stays saved/i);
   // Silent in every case where it does apply, or where there is nothing to say.
@@ -1017,7 +1017,7 @@ test("a todo pane with a repo takes the folder's name, like its content siblings
   // normalisation, exactly as every other kind here treats it. That matters
   // more for this kind than for the others: the ROOT is what the BACKEND turns
   // into a workspace key, and normalising it on this side would be a second
-  // answer to that question (doc/design/todo-pane.md §"The caller names a
+  // answer to that question (docs/design/todo-pane.md §"The caller names a
   // ROOT, never a key").
   assert.deepEqual(res.plan, { kind: "todo", root: "C:\\Projects\\loomux\\", name: "loomux" });
 });

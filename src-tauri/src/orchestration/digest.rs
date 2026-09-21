@@ -304,7 +304,7 @@ fn parse_checkpoint_titles(md: &str) -> Vec<(usize, String)> {
 /// **Where OpenCode differs from Claude's wire format**, since the mapping is
 /// only obvious once that is said out loud (schema `SOURCE-VERIFIED` at
 /// `anomalyco/opencode@f67e80c2`, tag `v1.18.11`,
-/// `packages/schema/src/v1/session.ts`; see `doc/design/opencode.md`):
+/// `packages/schema/src/v1/session.ts`; see `docs/design/opencode.md`):
 ///
 /// - **A message carries no text.** Both a user's prompt and an assistant's
 ///   reply live in `part` rows hanging off the message, so the message

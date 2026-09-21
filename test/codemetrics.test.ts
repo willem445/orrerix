@@ -406,9 +406,9 @@ test('the added-lines view of an empty diff is zeros, not a throw', () => {
 // fix that only special-cases one of them still fails.
 
 const DIFF_QUOTING_A_DIFF = [
-  'diff --git a/doc/design/example.md b/doc/design/example.md',
-  '--- a/doc/design/example.md',
-  '+++ b/doc/design/example.md',
+  'diff --git a/docs/design/example.md b/docs/design/example.md',
+  '--- a/docs/design/example.md',
+  '+++ b/docs/design/example.md',
   '@@ -1,0 +1,5 @@',
   '+Worked example of a diff:',
   '+',
@@ -738,7 +738,7 @@ test('the report subcommand writes the documented schema and a summary, and exit
     );
     const report = JSON.parse(fs.readFileSync(out, 'utf8'));
     // The schema B and the future scorecard column read. A renamed key here is a
-    // break in a persisted contract, not a refactor (doc/design/code-metrics.md).
+    // break in a persisted contract, not a refactor (docs/design/code-metrics.md).
     assert.deepEqual(
       Object.keys(report).sort(),
       ['commit', 'diff', 'generatedAt', 'generator', 'modRs', 'ref', 'roots', 'rust', 'schemaVersion', 'ts'].sort()

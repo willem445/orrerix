@@ -97,7 +97,7 @@ export interface TodoPaneOptions {
   /** The pane's ROOT — the workspace whose list the `◆` half of the scope
    *  switch shows. The caller resolves it (git work-tree root, falling back to
    *  the pane's cwd) and this view hands it to the backend RAW: `todo.ts`'s
-   *  header and `doc/design/todo-pane.md` §"The caller names a ROOT, never a
+   *  header and `docs/design/todo-pane.md` §"The caller names a ROOT, never a
    *  key" are the reason — the frontend must never name a workspace KEY, or two
    *  spellings of one project become two lists.
    *
@@ -551,7 +551,7 @@ export class TodoPaneView {
    * Refusals are the human's to see, not the console's: a cap, an unknown id, a
    * store a newer build wrote. `todoApply` rejects with the backend's own
    * message precisely so it can go straight into a toast
-   * (`doc/design/todo-pane.md` §"Caps refuse; they never truncate").
+   * (`docs/design/todo-pane.md` §"Caps refuse; they never truncate").
    *
    * It does NOT re-read on success: the backend emits `todo-changed` for every
    * successful write including this one, and the subscription's
@@ -1749,7 +1749,7 @@ export class TodoPaneView {
     // read has been asked for, so without this it would paint the OLD scope's
     // rows under the NEW scope's header and switch. Those rows are live — and
     // the engine resolves `update`/`complete`/`delete` by id WITHOUT a scope
-    // check (`doc/design/todo-pane.md`), so completing one in that window
+    // check (`docs/design/todo-pane.md`), so completing one in that window
     // writes to whichever store actually holds it while the header says
     // otherwise. One paint deep, and entirely avoidable.
     //

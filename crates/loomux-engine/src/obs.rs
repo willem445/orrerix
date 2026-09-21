@@ -12,7 +12,7 @@
 //!    process outright, with no unwind and no second hook call — still leaves
 //!    the record it exists to leave. A thread-local latch diverts a re-entrant
 //!    run to a single emergency line. See `write_crash_log_in`, `HookGuard`,
-//!    and `doc/design/crash-observability.md`.
+//!    and `docs/design/crash-observability.md`.
 //! 2. A **breadcrumb log** (`breadcrumbs.log`, rotated once at ~2 MB) of
 //!    timestamped one-liners for lifecycle events — pane/PTY open/close/resize,
 //!    agent spawn/death, MCP request failures, delivery outcomes. It must never
@@ -35,7 +35,7 @@
 //! ordering contract, and a line that races a rollover lands in the rotated
 //! generation rather than being lost. A crash that
 //! aborts the process without unwinding (stack overflow, an FFI access
-//! violation, `abort()`) never runs the hook — see `doc/design/crash-observability.md`.
+//! violation, `abort()`) never runs the hook — see `docs/design/crash-observability.md`.
 
 use crate::brand;
 // `GlobalAlloc`/`Layout`/`System` are here for `CrashReportingAlloc` (#1219):
@@ -162,7 +162,7 @@ fn platform_data_dir() -> PathBuf {
 /// pre-#1153 `<data>/loomux`.
 ///
 /// **This enum is the migration policy, and it is deliberately the whole of
-/// it.** See `doc/design/rebrand-filesystem.md`. The shipped policy is
+/// it.** See `docs/design/rebrand-filesystem.md`. The shipped policy is
 /// move-on-first-launch; reverting to read-the-old-one-forever is **one arm of
 /// [`plan_default_root`]** — `(false, true) => RootPlan::UseLegacy` instead of
 /// `Migrate` — plus a doc edit, not a re-architecture.
@@ -441,7 +441,7 @@ fn holds_only_the_signpost(dir: &Path) -> bool {
 /// `<data_local_dir>/<BUNDLE_ID>` as it stands", which after a refused move is
 /// a **fresh** profile.
 ///
-/// That asymmetry is deliberate; `doc/design/rebrand-bundle.md` carries the
+/// That asymmetry is deliberate; `docs/design/rebrand-bundle.md` carries the
 /// argument. Pointing a new build's webview at the old identifier's folder would
 /// put it in the same WebView2 browser process as the still-running old build —
 /// #394's hazard, and precisely the state a refused rename says we are in. A
@@ -503,7 +503,7 @@ pub fn init_webview_profile(identifier: &str) -> Option<PathBuf> {
 /// On macOS WKWebView stores under `~/Library/WebKit/<CFBundleIdentifier>`,
 /// which is not this path and is not a directory this app may move — so the
 /// flip is a documented one-time reset there instead
-/// (`docs/troubleshooting.md`, `doc/design/rebrand-bundle.md`).
+/// (`docs/troubleshooting.md`, `docs/design/rebrand-bundle.md`).
 ///
 /// **This constant is what makes that claim structural.** Without it the macOS
 /// run would still compute `~/Library/Application Support/dev.loomux.app` and
@@ -618,7 +618,7 @@ fn profile_signpost(new: &Path) -> String {
 /// touching the platform data dir at all.
 ///
 /// On the platform default, an install that predates #1153 is migrated once
-/// from `<user data dir>/loomux`; see `doc/design/rebrand-filesystem.md`.
+/// from `<user data dir>/loomux`; see `docs/design/rebrand-filesystem.md`.
 pub fn data_root() -> PathBuf {
     data_root_from(brand::env_os("DATA_DIR").value)
 }
@@ -948,7 +948,7 @@ pub const TICK_PANIC_LIMIT: u32 = 3;
 /// ended that loop permanently — badges frozen, snapshots frozen, no restart
 /// short of relaunching the app, and (for the view publisher) two whole UI
 /// surfaces stuck on their last value. That was a *disclosed* hazard rather
-/// than an unnoticed one (`doc/design/polled-views.md`), and #1702 makes it
+/// than an unnoticed one (`docs/design/polled-views.md`), and #1702 makes it
 /// load-bearing: a re-entrant `lock_safe` now refuses by unwinding, so a defect
 /// that used to wedge a tick thread now panics one, and the degraded result has
 /// to be well defined before that is an improvement.
@@ -1055,7 +1055,7 @@ impl TickSupervisor {
 /// it would have resolved to this crate's permanent `0.0.0` placeholder — see
 /// the manifest — and every crash log would have quietly stopped naming the
 /// loomux release that crashed, which is the field
-/// `doc/design/crash-observability.md` promises a human reading one. Nothing
+/// `docs/design/crash-observability.md` promises a human reading one. Nothing
 /// about that fails to compile, so the identity is injected at the single
 /// startup entry point instead: `src-tauri/src/lib.rs` passes its own
 /// `env!("CARGO_PKG_VERSION")`, where the macro means what it says.
@@ -1366,7 +1366,7 @@ fn write_crash_log(app_version: &str, info: &std::panic::PanicHookInfo<'_>) {
 // print-then-die, and a windowed build with no console is what discarded it
 // (#1218 round 4). Our record is written strictly EARLIER in that sequence,
 // here, and carries the alignment, timestamp and app version as well as the
-// size. See `doc/design/crash-observability.md` for the full frame list and
+// size. See `docs/design/crash-observability.md` for the full frame list and
 // for the stderr-capture follow-up.
 //
 // `std::alloc::set_alloc_error_hook` is the matching seam and is nightly-only.
@@ -1576,7 +1576,7 @@ const CRASH_LOG_GAP_EVENT: &str = "crash-log-gap";
 /// Windows Error Reporting rather than by us: `%LOCALAPPDATA%\CrashDumps` holds
 /// a dump *if local dump collection has been enabled* (it is off by default),
 /// and the Application event log holds the "Application Error" entry with the
-/// exception code either way. See `doc/design/crash-observability.md`.
+/// exception code either way. See `docs/design/crash-observability.md`.
 const CRASH_LOG_GAP_DETAIL: &str = "unclean_prev=true crash_log=none \
      likely=heap_alloc_abort(handle_alloc_error->abort,0xc0000409_param7) \
      or=stack_overflow|FFI_access_violation|external_kill \
@@ -2317,7 +2317,7 @@ mod tests {
         assert_eq!(files.len(), 1, "exactly one crash log written");
         let body = fs::read_to_string(tmp.path().join(&files[0])).unwrap();
         // The `version:` line must be the version the CALLER supplied — the
-        // loomux release, which is the field doc/design/crash-observability.md
+        // loomux release, which is the field docs/design/crash-observability.md
         // promises a human reading a crash log. Pinned against a value no crate
         // in this workspace carries on purpose: an `env!("CARGO_PKG_VERSION")`
         // that crept back in would report this crate's `0.0.0` placeholder (or

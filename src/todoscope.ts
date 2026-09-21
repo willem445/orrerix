@@ -7,7 +7,7 @@
 // wrong, paints one scope's rows under the other scope's header, and those rows
 // are LIVE. Completing one sends the op with the other scope's root, and the
 // engine resolves `update`/`complete`/`delete` by id with no scope check
-// (`doc/design/todo-pane.md`), so the write lands on whichever store actually
+// (`docs/design/todo-pane.md`), so the write lands on whichever store actually
 // holds the id while the header says otherwise. Deferred from #3293 round 6 as
 // S5's, and this is it.
 //

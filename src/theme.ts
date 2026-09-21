@@ -11,11 +11,11 @@
 // So: the values live here, in DOM-free TypeScript that a node:test can read, and the other
 // two surfaces are PINNED TO IT by test/theme.test.ts rather than by good intentions. The
 // pin is a test plus a comment, deliberately — build-time CSS codegen would be a build step
-// and a generated file to review for one shared seam (doc/design/ui-redesign.md, §Pinning).
+// and a generated file to review for one shared seam (docs/design/ui-redesign.md, §Pinning).
 //
 // The design brief this implements — palette rationale, the three colour channels, the
 // elevation model, the signature element, the type roles, and the maintainability rules
-// every later slice is held to — is doc/design/ui-redesign.md. Read it before changing a
+// every later slice is held to — is docs/design/ui-redesign.md. Read it before changing a
 // value here; in particular, a hue is not free to move between channels.
 //
 // DOM-free on purpose: node:test imports this directly (no jsdom, no bundler).
@@ -43,7 +43,7 @@
  * filed against: the ramp was achromatic while `selectionFill` was gold, and a ground nobody
  * had measured carried the tint the human could see. Do not restore the universal form. The
  * whole argument, the still-washed grounds and the open product question live in
- * doc/design/ui-redesign.md, §The ground.
+ * docs/design/ui-redesign.md, §The ground.
  *
  * The eight hues serve THREE channels, not one (design note, §The three colour channels):
  * *state* (what an agent is doing), *interaction* (what the human can act on), and
@@ -488,7 +488,7 @@ export const SEMANTIC = {
  * "this is a literal string the machine gave you" wherever it appears.
  *
  * `mono` is byte-identical to the family chain pane.ts has always passed to xterm — changing
- * it would change cell metrics and force a refit (doc/design/xterm-resize-reflow.md). The
+ * it would change cell metrics and force a refit (docs/design/xterm-resize-reflow.md). The
  * Cascadia faces ship with Windows Terminal / VS but are NOT guaranteed on the Windows 10
  * baseline; Consolas is, and carries the chain.
  */

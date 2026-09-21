@@ -1,6 +1,6 @@
 //! The pi adapter: `--mode rpc` JSONL in and out, [`HarnessEvent`] out
-//! (#2850 slice S1b, `doc/design/harness-adapters.md` §1 and
-//! `doc/design/pi.md`'s "RPC driver (#2850)").
+//! (#2850 slice S1b, `docs/design/harness-adapters.md` §1 and
+//! `docs/design/pi.md`'s "RPC driver (#2850)").
 //!
 //! # Every pi fact here is cited to the INSTALLED package, and none was observed
 //!
@@ -21,7 +21,7 @@
 //! bytes. The fixtures under `crates/loomux-engine/tests/fixtures/harness/pi/`
 //! are **synthesized from `docs/rpc.md`**, not recorded from a session, and say
 //! so in their own README. Replacing them with a human-recorded capture is a
-//! live-validation item (`doc/design/pi.md`, "Live items this section does not
+//! live-validation item (`docs/design/pi.md`, "Live items this section does not
 //! settle", item 4).
 //!
 //! # Three things pi does that Claude Code does not, and what each buys
@@ -235,7 +235,7 @@ pub fn full_argv(prefix_args: &[String], spec: &LaunchSpec) -> Vec<String> {
 /// (`dist/cli/args.js:279`). Surrounding whitespace is still tolerated, because
 /// that is a transport artifact rather than an identity.
 ///
-/// The residual is live item 3 in `doc/design/pi.md`: the exact textual form
+/// The residual is live item 3 in `docs/design/pi.md`: the exact textual form
 /// `get_state` echoes back has not been observed, so the first real session is
 /// what confirms this compare never fires spuriously.
 pub fn session_ids_match(asked: &str, reported: &str) -> bool {
@@ -615,7 +615,7 @@ impl Decoder {
         // verified against the running CLI (constraint 3), and is not claimed
         // either way here. It is a live-validation item for #2850, recorded on
         // #2986 (review round 1, finding 4) — deliberately NOT filed against
-        // `doc/design/pi.md`'s live-items list, which is #2850 S1a's and is not
+        // `docs/design/pi.md`'s live-items list, which is #2850 S1a's and is not
         // on `main` yet; pointing a reader at a section that does not exist is
         // the defect the same review round raised as blocking.
         let success = v.get("success").and_then(Value::as_bool).unwrap_or(false);
@@ -1165,7 +1165,7 @@ pub fn permission_answer_unavailable(req: &RequestId, decision: Decision) -> Str
     format!(
         "cannot settle {req:?} as {decision:?}: pi has no permission-prompt \
          channel to settle one on — its questions arrive as UiRequest and are \
-         answered with answer_ui — see doc/design/harness-adapters.md §3.5"
+         answered with answer_ui — see docs/design/harness-adapters.md §3.5"
     )
 }
 

@@ -89,7 +89,7 @@
 //! `impl AsRef<Path> for PathSegment` can be written in is this one. The
 //! source-scanning tests in `src-tauri/tests/groupid.rs` assert its absence and
 //! walk this crate's source root for exactly that reason; see
-//! `doc/design/groupid-and-path-roots.md`.
+//! `docs/design/groupid-and-path-roots.md`.
 
 use std::borrow::Borrow;
 use std::fmt;

@@ -12,7 +12,7 @@
 // of one boolean, in one place a test can enumerate. A tab SWITCH must answer
 // no: it moves no column, so it costs no PTY resize, which is what makes two
 // tabs in one panel permissible where a third in-flow panel would not be
-// (doc/design/side-dock.md).
+// (docs/design/side-dock.md).
 
 /** The two views the left panel hosts. */
 export type LeftPanelTab = "sessions" | "agents";

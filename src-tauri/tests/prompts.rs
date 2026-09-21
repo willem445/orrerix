@@ -35,7 +35,7 @@ use std::fs;
 /// render empty and the agent reads the templates as every group that never opted in reads them.
 /// So this suite pins what the *default* is told, and `workflow.rs` pins what a *gated* group and
 /// a `mode: replace` persona are told (`mechanics_core`). A rule in only one of them is a rule
-/// one kind of group is not being told — see `doc/design/orchestration.md`.
+/// one kind of group is not being told — see `docs/design/orchestration.md`.
 fn rails() -> Guardrails {
     Guardrails {
         max_agents: 2,

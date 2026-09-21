@@ -6,7 +6,7 @@
 //! Deliberately **not** `workflow.yml`'s sibling in mechanism: there is
 //! no schema, no parser, and no MCP write tool. It is prose, edited like any
 //! other repo file, reaching `main` through the same PR review every other
-//! change does — see `doc/design/lessons.md` for the full argument. This
+//! change does — see `docs/design/lessons.md` for the full argument. This
 //! module's only job is the read side: load the file, cap it, and hand back
 //! text the orchestrator's kickoff can splice in verbatim.
 //!
@@ -29,7 +29,7 @@ pub const LESSONS_PATH: &str = ".orrerix/lessons.md";
 
 /// The pre-#1153 spelling, still discovered when `.orrerix/lessons.md` is
 /// absent — permanently, and never renamed on the repo's behalf. See
-/// [`crate::brand`] and `doc/design/rebrand-filesystem.md`.
+/// [`crate::brand`] and `docs/design/rebrand-filesystem.md`.
 pub const LEGACY_LESSONS_PATH: &str = ".loomux/lessons.md";
 
 /// Which of the two spellings a given repo actually uses — the path a kickoff
@@ -42,7 +42,7 @@ pub fn lessons_path(repo: &str) -> &'static str {
 /// Hard ceiling on the **lesson content read from the file** — roughly 1,000
 /// tokens, a few paragraphs — enough for the "don't touch X" entries this is
 /// for, not enough to make every orchestrator kickoff pay for an ever-growing
-/// changelog. See `doc/design/lessons.md` for why this is a byte cap that
+/// changelog. See `docs/design/lessons.md` for why this is a byte cap that
 /// degrades (dropping whole entries, oldest first — see `cap`) rather than a
 /// reject-at-cap refusal.
 ///
@@ -199,7 +199,7 @@ impl Block<'_> {
 }
 
 /// Split `text` at lines opening with `## ` — the heading convention
-/// `doc/design/lessons.md` documents and this is the first code to read.
+/// `docs/design/lessons.md` documents and this is the first code to read.
 ///
 /// Deliberately not a parser: there is no schema here to fail against (the
 /// module doc's whole point), so a file with no headings, one heading, or

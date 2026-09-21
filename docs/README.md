@@ -1,12 +1,24 @@
 # Orrerix documentation site
 
-The user-facing documentation for orrerix, published to **GitHub Pages** at
-<https://willem445.github.io/orrerix/>. This folder is the whole site: Markdown
-pages plus one `_config.yml`.
+The repository's ONE documentation root (#3315). Two things live here and only
+one of them is published:
+
+- **the user-facing site**, published to **GitHub Pages** at
+  <https://willem445.github.io/orrerix/> — `index.md`, `getting-started.md`,
+  `features/`, and the rest of the top level;
+- **the internal notes** — `design/` (the design notes and ADRs `CLAUDE.md`
+  points at) and `plans/` — which are **excluded from the Jekyll build** by
+  `exclude:` in `_config.yml`, because they are written for contributors and
+  agents rather than for users. `_config.yml` carries the argument, and the
+  alternative it was weighed against.
+
+So "add a page to the docs" and "write a design note" both land in this folder,
+and the `exclude:` list is what separates them. A user-facing behaviour change
+updates a page above; a non-obvious architecture decision gets a note in
+`design/`.
 
 > This `README.md` is a **contributor** note — it is excluded from the published
-> site (`exclude:` in `_config.yml`). The reader-facing entry point is
-> [`index.md`](index.md).
+> site too. The reader-facing entry point is [`index.md`](index.md).
 
 ## How the site is built
 

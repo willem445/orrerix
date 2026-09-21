@@ -15,7 +15,7 @@ and S1b's `crates/loomux-engine/tests/fixtures/harness/pi/*.jsonl` are pi's own
 WIRE shapes, which need `pi.rs`'s decoder to become the events this module
 consumes — a decoder this module must not grow a second copy of. So this file
 is written directly in the consumed vocabulary against
-`doc/design/harness-adapters.md` §1.2 as the S1a branch amends it. When S1b
+`docs/design/harness-adapters.md` §1.2 as the S1a branch amends it. When S1b
 lands, the honest replacement is a capture of what `pi.rs` really emits over
 those wire fixtures, and the swap is a fixture edit with no change to
 `structuredview.ts`.

@@ -394,7 +394,7 @@ test("appImageVersion reads the version Linux has no other record of", () => {
 
 // ---------- the rebrand's accepted set (#1153 phase 5) ----------
 //
-// doc/design/rebrand-protocol.md: emit exactly one spelling, accept every
+// docs/design/rebrand-protocol.md: emit exactly one spelling, accept every
 // spelling on every reading surface. Every one of these reads something this
 // launcher did NOT write and cannot rewrite — a user's /Applications, their
 // registry, their cache, a release published years ago — so a dropped spelling

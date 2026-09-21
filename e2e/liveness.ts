@@ -34,7 +34,7 @@ import { type Locator, type Page } from "@playwright/test";
 
 /** Reads a soak knob, accepting both brand spellings. Emit sites use
  *  `ORRERIX_`; a reader keeps every accepted spelling
- *  (doc/design/rebrand-protocol.md). */
+ *  (docs/design/rebrand-protocol.md). */
 function envInt(suffix: string, fallback: number): number {
   const raw = process.env[`ORRERIX_${suffix}`] ?? process.env[`LOOMUX_${suffix}`];
   if (raw === undefined || raw.trim() === "") return fallback;
@@ -48,7 +48,7 @@ function envInt(suffix: string, fallback: number): number {
 // ---------------------------------------------------------------------------
 // Budget. Every number here is an env knob, because the CI default and a long
 // local soak want different answers and the whole point of a soak lane is that
-// somebody can turn it up. See doc/design/e2e-testing.md for the CI budget.
+// somebody can turn it up. See docs/design/e2e-testing.md for the CI budget.
 // ---------------------------------------------------------------------------
 
 /** How long the app idles under poll load before anything is asserted.
@@ -749,7 +749,7 @@ export function jsonRpcErrorCode(r: McpResult): number | null {
 /** The JSON-RPC code orrerix answers when a registry lock is held past a
  *  budget (#1609). Mirrors `mcp::MCP_BUSY_CODE` in
  *  `src-tauri/src/orchestration/mcp.rs`; the two are one contract, and
- *  `doc/design/lock-liveness.md` §3 is where it is specified.
+ *  `docs/design/lock-liveness.md` §3 is where it is specified.
  *
  *  It is a DIFFERENT fact from -32000, the auth refusal: that one is
  *  permanent for a token and this one is retryable, so a caller that cannot

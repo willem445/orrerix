@@ -8,7 +8,7 @@
  * do not reach them). Change a colour in theme.ts and here in the same commit, or the
  * test says so. The rationale for every value — the eight named hues, the three colour
  * channels, the elevation model, and the signature element they serve — is
- * doc/design/ui-redesign.md.
+ * docs/design/ui-redesign.md.
  *
  * THE RULE THIS LAYER EXISTS TO ENFORCE: no raw colour outside this block. Surfaces
  * consume semantic tokens only, and `test/theme.test.ts` now measures that rather than
@@ -85,7 +85,7 @@
          documented role mapping; "it needed a different blue" is still refused. Reserved
          by slice A; slice B (#957) was the first consumer, mapping the bulk of surfaces, and
          the icon role table directly below is a later one. The full map is
-         doc/design/ui-redesign.md, §What slice B migrated. */
+         docs/design/ui-redesign.md, §What slice B migrated. */
   --id-rose: #e35a5a;
   --id-amber: #e89c3c;
   --id-lime: #b5bf62;
@@ -110,7 +110,7 @@
          Still the identity channel, not a fourth one: the state positions stay reserved and
          no --cli-* token may enter one either. Values, provenance (evocation, never a
          vendor's own hex) and the separation measurements are theme.ts §CLI_HUES and
-         doc/design/ui-redesign.md §The per-CLI hues. */
+         docs/design/ui-redesign.md §The per-CLI hues. */
   --cli-claude: #e08a5f;
   --cli-codex: #3ec2a8;
   --cli-copilot: #7fa8d8;
@@ -193,7 +193,7 @@
  * should copy: a mark never names a hue, it names a ROLE, and the role names the token. `src/icons.ts`
  * stamps `.ic-<role>` onto every `<svg>` it renders, so a consumer that wants an icon gets its
  * meaning's colour automatically and cannot pick a different one — which is what
- * doc/design/ui-redesign.md's rule 3 means by "through a documented role mapping, never ad hoc".
+ * docs/design/ui-redesign.md's rule 3 means by "through a documented role mapping, never ad hoc".
  *
  * EACH IDENTITY HUE IS CLAIMED BY EXACTLY ONE ROLE. That bijection is what keeps eight hues
  * legible instead of decorative: a colour in the UI resolves to one meaning, not to whichever
@@ -1088,7 +1088,7 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
  * pane name folds into ONE ⋯ button whose menu floats over the terminal.
  * src/paneheader.ts decides WHEN (from the header's own width, with a dead band
  * so a divider dragged across the threshold settles instead of strobing);
- * pane.ts moves the elements. doc/design/pane-header.md carries the argument.
+ * pane.ts moves the elements. docs/design/pane-header.md carries the argument.
  *
  * THE MENU IS AN OVERLAY, and that is hard constraint 1, not a style choice: a
  * header that WRAPPED to a second row would grow `.pane-header`'s box, shrink
@@ -1289,7 +1289,7 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
 /* A discrete, user-initiated alternative to a floating overlay: up to THREE
    of the task board / git / issues / audit log / group lifecycle panel —
    one each on the left, right, and bottom edges (never the file editor —
-   see doc/design/embedded-panels.md's "What's embeddable, and what isn't")
+   see docs/design/embedded-panels.md's "What's embeddable, and what isn't")
    — rendered as REAL flex siblings of the terminal, so all of them stay
    fully visible together and the terminal's own box genuinely resizes. See
    the design note for why that's the legitimate side of the
@@ -5517,7 +5517,7 @@ button.wf-finding:hover { background: var(--surface-2); }
  * column back. That is a reversal — the dock shipped as an `position: absolute` overlay
  * that occluded panes precisely so it could never resize one — and it is a deliberate,
  * human-directed reversal (#1150, beta1 feedback: "autosize the OPEN panes the way the
- * Sessions UI does"). doc/design/side-dock.md carries the argument; the short form:
+ * Sessions UI does"). docs/design/side-dock.md carries the argument; the short form:
  *
  *   - CLAUDE.md constraint 1 is about RATIONING ConPTY resizes, not about forbidding
  *     panels. #sessions has always been the sanctioned in-flow panel; the dock is now the
@@ -5532,7 +5532,7 @@ button.wf-finding:hover { background: var(--surface-2); }
  *     ceiling fit would land mid-slide and put a ConPTY resize at an intermediate geometry.
  *     It checks each panel's transition IN ISOLATION, so it cannot see a composite burst:
  *     one panel's slide changing the room, and this one's ease re-targeting on top of it.
- *     That case is open as #1203 (doc/design/side-dock.md) — do not read this pin as
+ *     That case is open as #1203 (docs/design/side-dock.md) — do not read this pin as
  *     covering it.
  *   - So the residual cost is honest and small: one resize per pane per toggle, plus the
  *     per-frame LAYOUT work of the animation (which is why the panel's contents are pulled
@@ -5550,7 +5550,7 @@ button.wf-finding:hover { background: var(--surface-2); }
  *
  * NO SHADOW, deliberately. `--shadow-float` is a 40px soft shadow, and its penumbra would
  * fall on a live WebGL terminal canvas — the documented way to make this app slow
- * (doc/design/performance.md), and what maintainability rule 5 refuses. The dock separates
+ * (docs/design/performance.md), and what maintainability rule 5 refuses. The dock separates
  * the way principle 1 says surfaces should: elevation plus a hairline.
  *
  * z-index 40 no longer separates the dock from anything in the grid — an in-flow panel
@@ -5609,7 +5609,7 @@ button.wf-finding:hover { background: var(--surface-2); }
    the collapse wipes from the grid side — the mirror of `.sessions-inner`.
    The width follows the ROOM, though, which is what stops a squeezed column cropping the
    panel — so a room that moves over time puts these contents back into an animation
-   (#1203, doc/design/side-dock.md). */
+   (#1203, docs/design/side-dock.md). */
 .sidedock-inner {
   position: absolute; top: 0; right: 0; bottom: 0;
   display: flex; flex-direction: column; min-width: 0;
@@ -5653,7 +5653,7 @@ button.wf-finding:hover { background: var(--surface-2); }
 }
 .sidedock-tab:hover { color: var(--ink); background: var(--surface-2); }
 /* The active tab is one of the four positions the ONE interaction accent is allowed
-   (doc/design/ui-redesign.md §The three colour channels). The tab's ICON keeps its own
+   (docs/design/ui-redesign.md §The three colour channels). The tab's ICON keeps its own
    identity dye from the registry — the two channels sit on different properties of the
    same row, which is what keeps them readable as different questions. */
 .sidedock-tab.active { color: var(--ink); border-bottom-color: var(--accent); }

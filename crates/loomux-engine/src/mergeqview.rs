@@ -1,6 +1,6 @@
 //! Read-only merge-queue **view** for the human's chrome (#581 slice F).
 //!
-//! Design note: `doc/design/merge-queue.md` — §11.3 is the `merge_queue.json`
+//! Design note: `docs/design/merge-queue.md` — §11.3 is the `merge_queue.json`
 //! schema this reads, §11.6 is this surface. The note's own words: *one
 //! read-only Tauri command `orch_merge_queue` … feeding a DOM-free
 //! `src/mergequeue.ts` model*. This file is the backend half of that sentence.

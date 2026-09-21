@@ -823,7 +823,7 @@ fn a_deleted_item_is_hidden_immediately_and_purged_after_thirty_days() {
 fn a_deleted_item_can_be_restored_inside_the_purge_window() {
     // The op a soft delete had no inverse without. `apply` treats a tombstone
     // as unknown, so before this every undo of a delete could do was refuse —
-    // `doc/design/todo-pane.md`, "Undo refuses rather than guesses", which said
+    // `docs/design/todo-pane.md`, "Undo refuses rather than guesses", which said
     // so and named the missing op.
     let tmp = tempfile::tempdir().unwrap();
     let path = store_path(tmp.path());

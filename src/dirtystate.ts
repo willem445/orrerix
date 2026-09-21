@@ -122,7 +122,7 @@ export function dirtyBuffers(reports: readonly PaneBufferReport[]): DirtyBuffer[
  *
  *  ONE consolidated ask, deliberately, not a save prompt per buffer: a human quitting
  *  an app with six dirty files does not want six dialogs, they want to know that six
- *  files are dirty and decide once. See doc/design/content-panes.md. */
+ *  files are dirty and decide once. See docs/design/content-panes.md. */
 export function quitDecision(dirty: readonly DirtyBuffer[]): CloseDecision {
   return closeDecision(dirty.length > 0);
 }
@@ -143,7 +143,7 @@ export const QUIT_FLUSH_TIMEOUT_MS = 1500;
  *  settles never throws. So the last write is raced, and on expiry the close proceeds
  *  anyway: a possibly-stale layout snapshot is a small, recoverable loss (the previous
  *  fire-and-forget write is at most one edit behind), while a window whose ✕ does nothing
- *  is not recoverable at all. The trade is stated in doc/design/content-panes.md.
+ *  is not recoverable at all. The trade is stated in docs/design/content-panes.md.
  *
  *  A rejection counts as "done" — not because the write succeeded, but because we are no
  *  longer WAITING on it, and the caller's job here is only to decide when to stop.

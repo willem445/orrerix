@@ -25,7 +25,7 @@
 //!
 //! The teeth are in what is *absent*: there is no third source, and in
 //! particular no wire one. [`admit_root`] is classified **`disabled`** (§5.2 of
-//! `doc/design/remote-engine-protocol.md`) — off the wire roster and advertised
+//! `docs/design/remote-engine-protocol.md`) — off the wire roster and advertised
 //! as absent, exactly like `open_in_editor` and `fm_open` — so when the
 //! listener's default-deny dispatcher lands, a remote peer can **use** declared
 //! roots and can never **mint** one. That is the whole shape of the answer:
@@ -57,7 +57,7 @@
 //! cause a root to become registered from a caller argument must itself take an
 //! already-declared root.**
 //!
-//! See `doc/design/groupid-and-path-roots.md`.
+//! See `docs/design/groupid-and-path-roots.md`.
 
 use std::path::Path;
 use std::sync::Arc;

@@ -168,7 +168,7 @@ test("dueInMs is never below 1ms, so a flush is always actually scheduled", () =
 //
 // This module cannot test the reply path — it is a pure policy core, and the
 // coupling is a browser one. What it CAN pin is the policy: while hidden, do not
-// defer. See doc/design/pane-render-throttle.md for the mechanism and the
+// defer. See docs/design/pane-render-throttle.md for the mechanism and the
 // live-validation residue.
 
 test("SHIPPED: a hidden window never defers — the deferral buys no render pass and costs the reply path", () => {

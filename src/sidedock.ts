@@ -1,14 +1,14 @@
 // The right-side dock (#1020 item 6, #934): git / files / editor in one
 // collapsible panel down the right edge of the workspace, pointed at whichever
 // pane is currently active. The pure decisions are in sidedockmodel.ts; the
-// argument for the whole shape is doc/design/side-dock.md.
+// argument for the whole shape is docs/design/side-dock.md.
 //
 // THE ONE STRUCTURAL RULE, and #1150 reversed it. This panel is a FLEX SIBLING
 // of `#grid-area` — the mirror of `#sessions` on the other edge — so opening it
 // shrinks the grid and the open panes autosize to share the row. It shipped as
 // the opposite: `position: absolute`, out of flow, occluding panes precisely so
 // that nothing here could ever move a terminal. The human asked for the
-// Sessions behaviour instead (#1150, beta1 feedback), and doc/design/side-dock.md
+// Sessions behaviour instead (#1150, beta1 feedback), and docs/design/side-dock.md
 // carries the argument for why that is affordable now and was not before.
 //
 // The short form, because it is the thing to keep true: a displacing panel used
@@ -27,7 +27,7 @@
 // squeezed dock narrow instead of cropped — and a room that is itself animating
 // (a `#sessions` slide) therefore re-targets this panel's own 240 ms ease, so
 // the composite burst can outlast the coalescer's 400 ms ceiling and take one
-// mid-slide fit per pane. Open as #1203, argued in doc/design/side-dock.md,
+// mid-slide fit per pane. Open as #1203, argued in docs/design/side-dock.md,
 // deferred rather than fixed blind: the chain is a browser behaviour nothing in
 // this repo's test rig can execute.
 //

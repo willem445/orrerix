@@ -34,7 +34,7 @@
 //   contend on the same registry mutexes, so the mechanism is exercised, but
 //   the per-tick fan-out is smaller than a real orchestrating session's.
 //   Closing that gap needs a safe stand-in agent process
-//   (doc/design/e2e-testing.md's standing limitation), not a change here.
+//   (docs/design/e2e-testing.md's standing limitation), not a change here.
 // - **Blocking-pool exhaustion: NOT reachable, at either end of the chain,
 //   and no hold duration changes that.** Plan #1600 §1.2 step 4 describes
 //   ticks accumulating parked `spawn_blocking` threads until the 512-thread

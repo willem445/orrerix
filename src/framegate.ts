@@ -1,4 +1,4 @@
-// P5 (doc/design/performance.md §2) as a reusable module: a rAF dirty-flag
+// P5 (docs/design/performance.md §2) as a reusable module: a rAF dirty-flag
 // gate that turns "repaint per batch" into "repaint per frame".
 //
 // The shape is `FileExplorer.onFilesBatch`'s `ft-files` gate — a boolean plus

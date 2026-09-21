@@ -1,6 +1,6 @@
 //! Integration tests for the engine-driven review driver (#1778 S3/S4).
 //!
-//! Design note: `doc/design/review-driver.md`. The pure core's own properties
+//! Design note: `docs/design/review-driver.md`. The pure core's own properties
 //! are pinned inline in `crates/loomux-engine/src/reviewdrive.rs`; what lives
 //! here is everything that needs a **crate boundary** or the registry — the
 //! tick's wiring, the interception arms, the tools, and the brief rendering.
@@ -9738,7 +9738,7 @@ fn a_cancelled_exit_releases_the_pane_the_drive_was_started_on() {
     // killed, which is its own documented behaviour and not what this test is
     // about. Spending the reconcile here leaves the arc under test: the tick's
     // own `decide`, which answers `cancelled` for `pr_open == Some(false)`.
-    // The residual is disclosed in `doc/design/review-driver.md` §3.
+    // The residual is disclosed in `docs/design/review-driver.md` §3.
     reg.rd_drive_group_with(&group, &gh, 10_000);
 
     // The PR closes under the drive — a human merged or closed it.
@@ -9768,7 +9768,7 @@ fn a_cancelled_exit_releases_the_pane_the_drive_was_started_on() {
 /// A PR that closed while orrerix was not running is cancelled by reconcile
 /// rather than by a tick, and reconcile asks `releasable` nothing: no pane is
 /// killed, owned or founding. That is argued and left alone in
-/// `doc/design/review-driver.md` §3 — but the argument rests on the orchestrator
+/// `docs/design/review-driver.md` §3 — but the argument rests on the orchestrator
 /// being able to see what survived, and `owned_panes` is EMPTY on the worker
 /// side for a drive that never handed back, so the pane the orchestrator handed
 /// the drive appeared in no clause of that notice at all.
@@ -12107,7 +12107,7 @@ fn a_provider_limit_outranks_the_lane_stall_timeout() {
 ///
 /// **The resume is explicit, deliberately.** plan-2504 also floats "a pane on
 /// that provider completing a turn resumes all"; that is not shipped, and the
-/// reason is in `doc/design/review-driver.md`: a pane completing a turn does
+/// reason is in `docs/design/review-driver.md`: a pane completing a turn does
 /// not prove the account was topped up. The refusal can simply have scrolled
 /// out of the tail window — which is exactly how S5a's own chip clears — so
 /// self-resuming on it would restart N drives against an account that is still

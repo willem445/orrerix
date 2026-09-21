@@ -28,7 +28,7 @@
 //! traits; A4 moves `OrchRegistry` and the decision layer. Each is its own
 //! reviewable change, and the bar for all of them is behavioural silence — the
 //! existing suite green with no test edits. See
-//! `doc/design/engine-extraction.md`.
+//! `docs/design/engine-extraction.md`.
 //!
 //! # What is here so far
 //!
@@ -258,7 +258,7 @@
 //! the crate a file is compiled in**, and moving the file silently re-points it:
 //! this crate's version is deliberately `0.0.0` (see the manifest), so a
 //! verbatim move would have made every crash log read `version: 0.0.0` while
-//! `doc/design/crash-observability.md` goes on promising the loomux release
+//! `docs/design/crash-observability.md` goes on promising the loomux release
 //! version. Nothing fails to compile; nothing goes red. So
 //! [`obs::install_panic_hook`] takes the app version as an argument and the host
 //! passes `env!("CARGO_PKG_VERSION")` from `src-tauri/src/lib.rs`, where the
@@ -310,7 +310,7 @@
 //! it is the durable REPLACE primitive and a bounded acquisition must not be
 //! able to unwind after one. It is not the only durable-write door (the
 //! append-only audit writers are the others, and do not seal — see
-//! `doc/design/lock-liveness.md` §4.3). Two
+//! `docs/design/lock-liveness.md` §4.3). Two
 //! thread-local reads; still `std`-only, still Tauri-free. Both left every
 //! caller of the day in `src-tauri` —
 //! `OrchRegistry::capture_with_timeout`, `mqdriver`'s `ProcessRunner`, and
@@ -620,13 +620,13 @@
 //! — and the thing they instrument is the orchestration core, which is on its
 //! way into this crate. Landing them in `src-tauri` would put the instrument on
 //! the far side of the boundary from its subject, and would leave the remote
-//! engine daemon (`doc/design/remote-engine-daemon.md`) with no way to say what
+//! engine daemon (`docs/design/remote-engine-daemon.md`) with no way to say what
 //! it was doing when it stopped. `src-tauri` owns only the two wires nothing
 //! Tauri-free can own: the `spawn_blocking` hand-offs the depth counter wraps,
 //! and the `liveness_stamp` command the webview stamps through.
 //!
 //! [`reviewdrive`] (#1778 S1) is the third, and its design note put it here
-//! rather than leaving the choice to the slice: `doc/design/review-driver.md`
+//! rather than leaving the choice to the slice: `docs/design/review-driver.md`
 //! §1 places the review-loop driver in a Tauri-free
 //! `crates/loomux-engine/src/reviewdrive.rs` "beside `mergeq.rs`, which is the
 //! precedent for a loop the backend runs without spending an orchestrator
@@ -657,7 +657,7 @@
 //! [`harness`] (#84 slice R1) is the fourth, and the first that is not a piece
 //! of the existing core at all: it is how loomux drives an agent CLI that can
 //! *report* what it did, instead of one whose output has to be scraped off a
-//! terminal. `doc/design/harness-adapters.md` is its contract, human-reviewed
+//! terminal. `docs/design/harness-adapters.md` is its contract, human-reviewed
 //! before a line of it was written (PR #2193).
 //!
 //! It is here for the same reason [`reviewdrive`] is, one step further along.
@@ -666,7 +666,7 @@
 //! is the kind of code that reads correct and is not: a decoder over a union of
 //! ~35 message types, a usage figure whose two halves have different scopes, and
 //! a renderer that must never rewrite what it drew. The daemon
-//! (`doc/design/remote-engine-daemon.md`) needs exactly this and cannot link
+//! (`docs/design/remote-engine-daemon.md`) needs exactly this and cannot link
 //! Tauri to get it.
 //!
 //! **R1 is a LEAF: nothing calls it yet.** The spawn path, the `driver:`
@@ -699,7 +699,7 @@
 //! the host side, and #2811 S5b's `HeldReason::ProviderLimit` decision is an
 //! engine-side one — putting the table in `src-tauri` would have pointed that
 //! decision's arrow back across the boundary, which is the one thing this crate
-//! exists to prevent. See `doc/design/attention-provider-limit.md`.
+//! exists to prevent. See `docs/design/attention-provider-limit.md`.
 //!
 //! [`todo`] (#3263 S1) is the To-Do store's model and its pure `apply`. It is
 //! here rather than in `src-tauri` for the reason the module header states at
@@ -708,19 +708,19 @@
 //! both meet, and the half that is data plus `match` — no I/O, no clock, no
 //! registry — is engine-shaped exactly like [`model`] and [`providerlimit`].
 //! Persistence, the audit row and the change event stay on the host side in
-//! `src-tauri/src/orchestration/todo.rs`. See `doc/design/todo-pane.md`.
+//! `src-tauri/src/orchestration/todo.rs`. See `docs/design/todo-pane.md`.
 //!
 //! [`triage`] (#3304 S1) is the delivery-triage RULE tier: given an
 //! orchestrator-bound notice, does its leading SHAPE close it without waking
 //! the pane? Data plus `match` again — no I/O, no clock, no registry, and
 //! emphatically no network. It is here rather than in `src-tauri` because it
 //! starts from the classifier `scripts/orch-scorecard.cjs` and
-//! `doc/design/orchestration-evals.md` §4.1 already spell out for the census
+//! `docs/design/orchestration-evals.md` §4.1 already spell out for the census
 //! — inheriting its shapes rather than reproducing its table, with the four
 //! divergences enumerated in the module's own header — now in Rust and on the
 //! delivery path; the host side keeps the
 //! hook (`OrchRegistry::deliver_prompt_as`), `deferred.json` and the
-//! `delivery-triaged` audit row. See `doc/design/delivery-triage.md`.
+//! `delivery-triaged` audit row. See `docs/design/delivery-triage.md`.
 
 pub mod brand;
 pub mod budget;

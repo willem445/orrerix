@@ -42,5 +42,18 @@ footer_content: >-
   <code>main</code>; the source of truth is the code.
 
 # Keep Jekyll from trying to render repo scaffolding as pages.
+#
+# `design/` and `plans/` are INTERNAL notes, folded in here by #3315 so the repo
+# has one documentation root instead of two (`doc/` and `docs/`). They are
+# excluded from the build deliberately: they are written for contributors and
+# agents — arguments, residuals, issue numbers, "what we rejected and why" — and
+# publishing ~85 of them would triple the site and bury the dozen pages a user
+# actually wants behind internal engineering prose. Publishing them under a
+# "Design" nav section is a perfectly reasonable ALTERNATIVE, but it is a
+# product decision about what orrerix's site is for, and it has not been made;
+# excluding is the choice that changes nothing for a reader today. Flipping it
+# later is this block plus front matter on each page.
 exclude:
   - README.md
+  - design/
+  - plans/

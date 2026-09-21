@@ -25,7 +25,7 @@ auto-submitted: you review it and press Enter yourself.
 
 > **Windows only** for now. On other platforms the hotkey reports that voice
 > capture isn't available. The cross-platform path is sketched in
-> [`doc/design/voice.md`](https://github.com/willem445/orrerix/blob/main/doc/design/voice.md).
+> [`docs/design/voice.md`](https://github.com/willem445/orrerix/blob/main/docs/design/voice.md).
 
 ## Where the text lands
 
@@ -177,5 +177,5 @@ conservative budget and logs a warning if `vocab.txt` is over-long. Set
   WAV and logs its path, duration, and level. A near-zero level on a long capture
   is the fingerprint of a silent/starved mic.
 
-See [`doc/design/voice.md`](https://github.com/willem445/orrerix/blob/main/doc/design/voice.md)
+See [`docs/design/voice.md`](https://github.com/willem445/orrerix/blob/main/docs/design/voice.md)
 for the architecture and the cross-platform path.

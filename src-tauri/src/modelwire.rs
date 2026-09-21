@@ -34,7 +34,7 @@
 //! validated the cost themselves and directed that detection become automatic
 //! and interaction-free — so the ask now runs unbidden, once per CLI per app
 //! run, from [`start_startup_sweep`]. The record of that decision, and what
-//! remains unverified about it, is `doc/design/model-catalog.md` §Credit
+//! remains unverified about it, is `docs/design/model-catalog.md` §Credit
 //! safety.
 //!
 //! **The bound that replaced the click, and why it is a boundary rather than a
@@ -42,7 +42,7 @@
 //! automatic detection has none. The tempting shape is to keep
 //! [`list_cli_models`] an ASK and ration it with a memo, so a picker that opens
 //! before the sweep has answered can start its own. That was considered and
-//! rejected (`doc/design/model-catalog.md` §"Why the command cannot spawn"): it
+//! rejected (`docs/design/model-catalog.md` §"Why the command cannot spawn"): it
 //! puts a subprocess spawn back on a render path — precisely the boundary #993
 //! drew — and then needs two separate guards to make it safe again.
 //!
@@ -396,7 +396,7 @@ pub fn start_startup_sweep(app: AppHandle) {
 /// webview learns the real answer on the `models-detected` event moments later.
 ///
 /// **Still delegated off-thread, though its body no longer needs it** (#746 —
-/// `crate::blocking::run_blocking`, P1 of `doc/design/performance.md`). What is
+/// `crate::blocking::run_blocking`, P1 of `docs/design/performance.md`). What is
 /// left here is one uncontended mutex around a `HashMap` lookup, which INV-1
 /// would happily let run on the webview thread as a `Class::Cheap` sync
 /// command. It stays async anyway, for two reasons that outlast this slice:

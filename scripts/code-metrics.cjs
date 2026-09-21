@@ -13,12 +13,12 @@
 // code carries a metric, and every parse error degrades to a missing row. The
 // distributions did not exist when this was written (#2128 part 8) — the gates that
 // will use them (#2128 slice C) are a separate decision, taken once these numbers
-// have been watched for a while. `doc/design/code-metrics.md` is the spec.
+// have been watched for a while. `docs/design/code-metrics.md` is the spec.
 //
 // WHY A SCRIPT AND NOT PRODUCT CODE. CLAUDE.md constraint 8: orrerix is a generic
 // agentic-dev tool, and "how big are the functions in THIS repo" is feedback about
 // developing orrerix, not a product capability. Everything lives in repo config —
-// `scripts/`, `test/`, `.github/`, `doc/design/`.
+// `scripts/`, `test/`, `.github/`, `docs/design/`.
 //
 // NO NEW DEPENDENCY. `typescript` is already a devDependency and its compiler API
 // gives the whole TS side; the Rust side is a parser for `cargo clippy
@@ -992,7 +992,7 @@ function renderSummary(report, topN) {
   L.push('');
   L.push('### Distributions');
   L.push('');
-  L.push('The two function-length rows are DIFFERENT measurements and must not be compared with each other: the TS row is physical lines from the `fn` line to the closing brace, and the Rust row is clippy&#39;s `too_many_lines`, which counts CODE lines only. See `doc/design/code-metrics.md`.');
+  L.push('The two function-length rows are DIFFERENT measurements and must not be compared with each other: the TS row is physical lines from the `fn` line to the closing brace, and the Rust row is clippy&#39;s `too_many_lines`, which counts CODE lines only. See `docs/design/code-metrics.md`.');
   L.push('');
   L.push('| Metric | n | p50 | p90 | p95 | max |');
   L.push('| --- | --- | --- | --- | --- | --- |');
@@ -1115,7 +1115,7 @@ function unavailableComment(reason) {
     '',
     '> Reason: ' + String(reason).slice(0, 300),
     '',
-    '<sub>`scripts/code-metrics.cjs` · schema v' + SCHEMA_VERSION + ' · see `doc/design/code-metrics.md`</sub>',
+    '<sub>`scripts/code-metrics.cjs` · schema v' + SCHEMA_VERSION + ' · see `docs/design/code-metrics.md`</sub>',
   ].join('\n') + '\n';
 }
 
@@ -1254,7 +1254,7 @@ function buildDelta(base, head, meta) {
     L.push('> Base clippy figures unavailable (' + fmt(m.baseNote || 'the base run kept no clippy artifact') + ') — the Rust rows show `n/a` on the base side rather than a guess.');
     L.push('');
   }
-  L.push('<sub>`scripts/code-metrics.cjs` · schema v' + SCHEMA_VERSION + ' · see `doc/design/code-metrics.md`</sub>');
+  L.push('<sub>`scripts/code-metrics.cjs` · schema v' + SCHEMA_VERSION + ' · see `docs/design/code-metrics.md`</sub>');
   return L.join('\n') + '\n';
 }
 

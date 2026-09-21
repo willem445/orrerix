@@ -642,7 +642,7 @@ instance, re-runnable off `git archive 24a428a6 crates src-tauri doc`: the plain
 `src-tauri/src/orchestration/views.rs` (`views.rs:9`, `perf_dispatch.rs:1512`) and misses
 `published.rs:7` and `perf_dispatch.rs:81`, where the phrase reads `no timeout, no` /
 `try-lock` across a comment line break. Pass 2 returns **4** over those three and **5**
-over the whole 187-file tree, the fifth being `doc/design/polled-views.md` — which only
+over the whole 187-file tree, the fifth being `docs/design/polled-views.md` — which only
 a recursive pass reaches. It is one process: **0.15s** over those 187 files, exit **0**;
 the same sweep for a term the tree does not carry exits **1**.
 
@@ -1020,7 +1020,7 @@ the log and never looks at head. MISMATCH must be zero in both before
 
 What it cannot see -- an expired or truncated log, a runner that printed no
 totals, whether a round was cut from the right base -- is in
-`doc/design/mutation-ledger.md`. A parse that finds no totals is an error rather
+`docs/design/mutation-ledger.md`. A parse that finds no totals is an error rather
 than an empty row, so the failure you get is loud rather than a blank cell.
 
 **Checking a body against a run that is still going gets you provisional figures,
@@ -1123,7 +1123,7 @@ round is an unbounded loop wearing evidence's clothes.
 
 ## E2E (Playwright) is CI's job, same line
 
-See `doc/design/e2e-testing.md` for the mechanism, isolation model, and CI
+See `docs/design/e2e-testing.md` for the mechanism, isolation model, and CI
 status. The `e2e-windows` job is a fourth platform in the same sense as the
 ubuntu/windows/macos matrix above — it's CI's job to run the full suite, not
 yours. It also runs `continue-on-error: true`, so it never blocks the merge

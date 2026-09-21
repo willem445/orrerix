@@ -1,5 +1,5 @@
 // Regression class: pane split + drag-reorder geometry (the kind of bug this
-// spike exists to catch — see doc/design/e2e-testing.md). Splits a fresh tab
+// spike exists to catch — see docs/design/e2e-testing.md). Splits a fresh tab
 // into two plain shell panes, drags one onto the other's center (a "swap"
 // drop, src/grid.ts `Grid.swap`), and asserts their left-to-right DOM order
 // actually flips — a pure unit test of grid.ts can't see this because it

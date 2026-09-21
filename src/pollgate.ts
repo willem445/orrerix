@@ -4,7 +4,7 @@
 // anything is here so it is unit-testable under `node --test`, the same split
 // as panethrottle.ts / refreshgate.ts.
 //
-// WHAT THIS IS FOR. `doc/design/performance.md` §3 INV-4: a frontend timer
+// WHAT THIS IS FOR. `docs/design/performance.md` §3 INV-4: a frontend timer
 // that drives IPC or rendering is visibility-aware or argued. The census
 // (#743 plan part 2b §3) found nothing in `src/` that had ever read
 // `document.hidden`, so a minimized window kept paying the tab strip's 4 s

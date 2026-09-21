@@ -312,7 +312,7 @@ test('delegate tokens: attributed agents only, weighted, orchestrator excluded',
   // 1070 + 1070; neither value passes an assert against 535. The sum is a cross-check:
   // it states the re-sum property outright instead of leaving it implied by the two
   // halves. How common this case is on the live store is a dated figure, not a
-  // constant — doc/design/orchestration-evals.md §4.6 carries it (§10 names these
+  // constant — docs/design/orchestration-evals.md §4.6 carries it (§10 names these
   // asserts).
   const rev11 = d.agents.find((a: any) => a.agent === 'rev-11');
   const rev11prev = d.agents.find((a: any) => a.agent === 'rev-11-prev');

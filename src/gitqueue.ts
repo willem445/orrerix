@@ -55,7 +55,7 @@
  *  credential helper — so `fetch`/`push`/`pull` against an unreachable remote
  *  can genuinely never return, and an unbounded queue behind one of those is a
  *  suppression with no answer for "the signal never clears" — INV-6 in
- *  `doc/design/performance.md` ("any suppression driven by a fallible signal
+ *  `docs/design/performance.md` ("any suppression driven by a fallible signal
  *  has a release that does not depend on that signal"), the invariant behind
  *  #496, #513 and #518. The release here does not consult the head job at all:
  *  it is this job's own elapsed wait.

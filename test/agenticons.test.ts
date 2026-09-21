@@ -317,7 +317,7 @@ function classesOf(svg: string): string[] {
 }
 
 test("a mark reaches its colour through exactly one documented dye class", () => {
-  // The identity channel's rule (doc/design/ui-redesign.md): a mark may only reach a colour
+  // The identity channel's rule (docs/design/ui-redesign.md): a mark may only reach a colour
   // through a documented mapping, never ad hoc. There are now two such mappings and a mark
   // takes EXACTLY ONE of them — its CLI's `cli-<program>` (theme.ts §CLI_HUES) if it has one,
   // the `fleet` icon role's `ic-fleet` if it does not.
@@ -494,7 +494,7 @@ test("the mark's own rule adds no colour — the dye class is still the only dye
   // roster, `.ic-fleet` for one without — and if `.pane-cli-icon` grew a `color` of its own
   // it would silently win for the letter tier (whose <text> and <rect> both say
   // `currentColor`), and the mark would stop reaching its hue through a documented mapping —
-  // the one thing doc/design/ui-redesign.md's maintainability rule 3 forbids.
+  // the one thing docs/design/ui-redesign.md's maintainability rule 3 forbids.
   const css = read("../src/styles.css").replace(/\/\*[\s\S]*?\*\//g, "");
   const rule = css.match(/\.pane-cli-icon\s*\{([^}]*)\}/);
   assert.ok(rule, "styles.css has no .pane-cli-icon rule — the header mark is unstyled");

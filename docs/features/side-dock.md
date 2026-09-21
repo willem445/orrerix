@@ -15,6 +15,8 @@ nav_order: 9
 {:toc}
 </details>
 
+*Behind the scenes:* the design note [`docs/design/side-dock.md`](https://github.com/willem445/orrerix/blob/main/docs/design/side-dock.md) argues the *why* — it is a contributor document and is not part of this site.
+
 ---
 
 Click **`⬔ dock`** in the top bar to open a panel down the right edge of the

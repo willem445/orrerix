@@ -583,7 +583,7 @@ fn the_protocol_constants_reach_the_playwright_side_unrenamed() {
              it, and pass."
         );
     }
-    // The ceiling is quoted in the module doc and in doc/design/e2e-testing.md;
+    // The ceiling is quoted in the module doc and in docs/design/e2e-testing.md;
     // pin the number so the three cannot drift apart silently.
     assert_eq!(e2ehold::MAX_HOLD_MS, 300_000);
 }

@@ -15,6 +15,8 @@ nav_order: 6
 {:toc}
 </details>
 
+*Behind the scenes:* the design note [`docs/design/project-tabs.md`](https://github.com/willem445/orrerix/blob/main/docs/design/project-tabs.md) argues the *why* — it is a contributor document and is not part of this site.
+
 ---
 
 The [split grid](../core-concepts.html#the-split-grid) is *one* workspace.
@@ -189,4 +191,4 @@ Everything is saved to durable app storage (not the browser's), so clearing
 webview data doesn't lose it. What is *never* captured is the live terminal
 buffer/scrollback or the process itself — a pane is re-created or resumed from
 its record, so its on-screen history from last session is gone (the process died
-with the app). See the [design note](https://github.com/willem445/orrerix/blob/main/doc/design/session-restore.md).
+with the app). See the [design note](https://github.com/willem445/orrerix/blob/main/docs/design/session-restore.md).

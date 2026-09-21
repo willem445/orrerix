@@ -387,7 +387,7 @@ voiceController.init(() => activeGrid().activePane);
  * Alt+J (#3263 S4): open a To-Do pane in the active grid, or focus the one that
  * is already there.
  *
- * A PANE, NEVER AN OVERLAY. `doc/design/content-panes.md` §"Why a pane and not
+ * A PANE, NEVER AN OVERLAY. `docs/design/content-panes.md` §"Why a pane and not
  * a bigger overlay" is the argument and a to-do list is its clearest case: it
  * is a station you keep open beside your work, not a look you take and dismiss.
  * The overlays this app does have (git, issues, the board) float OVER a
@@ -527,7 +527,7 @@ function eventsFor(ws: Workspace): PaneEvents {
         store: sessionLog,
       }).then(() => pane.focus());
     },
-    // A late-learned session id (#2116, doc/design/session-id-learning.md). Move
+    // A late-learned session id (#2116, docs/design/session-id-learning.md). Move
     // any notes written against the pane onto the id FIRST, then record the
     // identity: `rekey` creates the record if it is not there, and recording
     // first would only mean two writes where one will do.
@@ -2793,7 +2793,7 @@ const sessions = new SessionBrowser(
   // #1563: loomux's own record of every orchestration group. The section it
   // feeds is the ONLY route into an opencode group's orchestrator, whose
   // session lives in <group>/opencode/opencode.db and is deliberately absent
-  // from the session scan above (doc/design/opencode.md).
+  // from the session scan above (docs/design/opencode.md).
   orchListRecorded,
   (groupId: string, sessionId: string) => {
     // Always "orchestrator": the section lists groups, and a group is
@@ -3662,7 +3662,7 @@ void (async () => {
   tabBar = new TabBar(tabBarEl, tabs, () => void openUserTab());
   // The Agents tab's `idle` rung reads the ROSTER (#2122): `idle_since_ms` off
   // the strip poll's own summary. Subscribing to the read the strip already
-  // makes rather than adding a second one is doc/design/polled-views.md's rule
+  // makes rather than adding a second one is docs/design/polled-views.md's rule
   // (one read per strip) — the number is on the wire either way.
   //
   // Every pane is told, including the ones with no orchestration identity:

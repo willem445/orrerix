@@ -16,9 +16,9 @@ tell the orchestrator, so the next one like it goes to `worker-quick`.
 
 ## The loop
 
-1. **Read the issue, then the code, then the design note.** `doc/design/*.md`
+1. **Read the issue, then the code, then the design note.** `docs/design/*.md`
    carries the *why* behind every non-obvious decision in this repo, and
-   `doc/design/architecture.md` maps the modules. `src-tauri/src/orchestration/mod.rs` is
+   `docs/design/architecture.md` maps the modules. `src-tauri/src/orchestration/mod.rs` is
    tens of thousands of lines: grep for the symbol, never read it top to bottom.
 2. **Resolve the ambiguity before you code.** If the brief admits two readings and
    they lead to different code, `message_orchestrator` with the two readings and your
@@ -57,7 +57,7 @@ tell the orchestrator, so the next one like it goes to `worker-quick`.
    argument over. If a new test can't be made to fail, it isn't testing your change — find out
    why before you ship it.
 5. **Update the docs.** User-visible behaviour → the matching user-docs page under `docs/`.
-   A non-obvious design decision → a note in `doc/design/`, written as an argument,
+   A non-obvious design decision → a note in `docs/design/`, written as an argument,
    not a changelog.
 6. **Loop until every suite is green — on CI, not the host.** Push early and open
    the PR as a **draft**, linking the issue (`Closes #N`) — `gh pr create --draft`

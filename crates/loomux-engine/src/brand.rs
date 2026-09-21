@@ -10,7 +10,7 @@
 //! 1. **The app's own data root** (`<platform data dir>/loomux`) — ours, written
 //!    only by us, and the one place a one-time move is defensible. The policy,
 //!    its hazard and its escape hatch are argued in
-//!    `doc/design/rebrand-filesystem.md`; the decision itself is
+//!    `docs/design/rebrand-filesystem.md`; the decision itself is
 //!    [`obs::plan_default_root`](crate::obs::plan_default_root), deliberately a
 //!    pure function so the policy is one `match` arm to change — its
 //!    `(false, true)` arm, `Migrate` → `UseLegacy`, and nothing else. That the
@@ -38,7 +38,7 @@
 //!    their browser profile on `<data_local_dir>/<identifier>`, and macOS keys
 //!    the TCC microphone grant on `CFBundleIdentifier`. It moves once, by the
 //!    same machinery as (1) — with one deliberate asymmetry argued in
-//!    `doc/design/rebrand-bundle.md`: a *refused* rename starts a FRESH
+//!    `docs/design/rebrand-bundle.md`: a *refused* rename starts a FRESH
 //!    profile instead of falling back to the old directory, because the old
 //!    directory is exactly where a still-running old build's WebView2 browser
 //!    process already is (#394). The decision is

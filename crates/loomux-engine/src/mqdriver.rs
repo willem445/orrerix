@@ -1,6 +1,6 @@
 //! The bisecting merge queue — **the driver's write primitives** (#581 slice D1).
 //!
-//! Design note: `doc/design/merge-queue.md`. Section references below (§4, §5,
+//! Design note: `docs/design/merge-queue.md`. Section references below (§4, §5,
 //! §6, §7, §8, §10, §11) point into it; that note is the spec this file
 //! implements and the argument for every choice made here.
 //!

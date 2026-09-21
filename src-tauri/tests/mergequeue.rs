@@ -1,6 +1,6 @@
 //! Integration tests for the merge-queue **driver** (#581 slice D1).
 //!
-//! Design note: `doc/design/merge-queue.md`. These pin the two things that note
+//! Design note: `docs/design/merge-queue.md`. These pin the two things that note
 //! says can only be pinned here:
 //!
 //! - **§7.5's five refusals**, so the constraint-7 proof is executed rather than

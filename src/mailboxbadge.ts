@@ -8,7 +8,7 @@
 // delivered into: `deliver_prompt` refuses a `Role::Manager` target for every
 // delivery outside `permitted_into_manager_pane`'s three-element set — the two
 // kickoffs, plus the post-compact re-grounding notice decision D2 carved out
-// (`doc/design/manager.md`'s table). `MidSession`, which is what every other
+// (`docs/design/manager.md`'s table). `MidSession`, which is what every other
 // producer sends, is refused. News from the orchestrator reaches it by PULL:
 // `message_manager`
 // writes a durable row, the manager runs `check_mail()` at the start of its next

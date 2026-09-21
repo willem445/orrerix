@@ -17,7 +17,7 @@
 // `--claude-projects` to repair a `usage.json` row the collector wrote as zero.
 // Nothing here is a new row, a new field, or a new gate.
 //
-// RETIREMENT. `doc/design/orchestration-evals.md` carries the clause: this file is
+// RETIREMENT. `docs/design/orchestration-evals.md` carries the clause: this file is
 // DELETED in #2011 S3, once an engine module (`crates/loomux-engine`, exposed as the
 // `group_metrics` MCP tool) reproduces this output byte-for-byte on the fixture
 // corpus. Until then it is the only reader, and the design note is its spec.
@@ -682,7 +682,7 @@ function scorePr(ctx, pr) {
 
   // Orchestrator tokens: every deduped transcript turn stamped inside the PR window.
   // `usage.json` cannot answer this — it is CUMULATIVE per session and carries no
-  // time series (doc/design/group-cost-tracking.md).
+  // time series (docs/design/group-cost-tracking.md).
   const orchTokens = emptyTokens();
   for (const t of transcriptTurns) {
     if (inWindow(t.ts_ms, win.pr)) addTokens(orchTokens, t.usage);

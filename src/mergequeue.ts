@@ -1,7 +1,7 @@
 // Merge-queue visibility (#581 slice F) — DOM-free derivations over the
 // `orch_merge_queue` payload (orchestration.ts) for the lifecycle chrome.
 //
-// Design note: doc/design/merge-queue.md. §4 defines the eight entry states,
+// Design note: docs/design/merge-queue.md. §4 defines the eight entry states,
 // §11.3 the `merge_queue.json` schema the payload projects, §11.6 this surface.
 // This module never fetches, never renders, and never decides anything about
 // the queue: the queue is host-run (§3), and the frontend's whole role is to

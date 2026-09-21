@@ -38,7 +38,7 @@
 //
 // The schema is a PUBLIC CONTRACT — a file on the user's disk that older and
 // newer builds both read. Its full write-up (fields, forward-compat, the
-// argument above) lands in doc/design/ssh-panes.md with the rest of the feature
+// argument above) lands in docs/design/ssh-panes.md with the rest of the feature
 // (slice S5).
 
 /** Bump when the persisted shape changes in a way decode must branch on.

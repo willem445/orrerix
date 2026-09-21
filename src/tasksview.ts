@@ -413,7 +413,7 @@ export class TasksView {
    *  preference that never becomes board data (the board is the orchestrator's
    *  queue, not this window's UI state) — but, since #1270, durable: it is
    *  persisted per group in `boardprefs.json`, a sibling blob no agent reads,
-   *  NOT on the task. See doc/design/board-tree-view.md for why the drift
+   *  NOT on the task. See docs/design/board-tree-view.md for why the drift
    *  objection #1152 raised against a sidecar does not carry over.
    *
    *  That is what separates it from `expanded` and `selected` above, which
@@ -620,7 +620,7 @@ export class TasksView {
 
     // Embed side-picker: switch between the floating overlay and any of the
     // pane's (up to three) embed slots (#361) — a discrete, user-initiated
-    // layout change, like a split (see doc/design/embedded-panels.md).
+    // layout change, like a split (see docs/design/embedded-panels.md).
     // setPanelActive() below keeps the icon/tooltip in sync with whether the
     // pane currently has this docked, regardless of which side.
     this.embedBtn = el("button", "pane-btn embed", "⬒") as HTMLButtonElement;
@@ -2204,7 +2204,7 @@ export class TasksView {
 
     const target = document.createElement("input");
     target.className = "dlg-input task-grounding-target-input";
-    target.placeholder = "#123, doc/design/x.md, or a URL";
+    target.placeholder = "#123, docs/design/x.md, or a URL";
     target.spellcheck = false;
     target.value = draftState?.target ?? "";
     target.title =

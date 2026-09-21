@@ -1,6 +1,6 @@
 //! The review-loop driver's registry wiring (#1778 S3).
 //!
-//! Design note: `doc/design/review-driver.md`. Every decision this file makes
+//! Design note: `docs/design/review-driver.md`. Every decision this file makes
 //! is made somewhere else: the state machine is [`reviewdrive::decide`], the
 //! gate is [`mergeq::recheck_gate`], the `gh` reads and the notice text are
 //! [`rddrive`]. What lives here is what only the registry can do — resolve the

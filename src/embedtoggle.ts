@@ -1,7 +1,7 @@
 // Pure decision for the overlay-toggle button/keybinding shared by every
 // embeddable view (#361 user-demo finding): while a view is DOCKED, that
 // toggle is deliberately disabled rather than fixed to correctly close/reopen
-// it. See doc/design/embedded-panels.md's "Overlay toggle vs. dock" section
+// it. See docs/design/embedded-panels.md's "Overlay toggle vs. dock" section
 // for why: the toggle and the dock slot are two independently-driven pieces
 // of visibility state for the same view (the toggle flips the view's own
 // `hidden` flag; the slot flips its host panel's), and proving every one of

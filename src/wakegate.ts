@@ -1,5 +1,5 @@
 // Pure, DOM-free core of the visibility policy for EVENT-DRIVEN views (#1318).
-// The sibling of pollgate.ts, for the other half of `doc/design/performance.md`
+// The sibling of pollgate.ts, for the other half of `docs/design/performance.md`
 // §3: pollgate.ts answers "this view has a TIMER — should it tick?", and this
 // answers "this view has an EVENT STREAM — should a wake run a refresh?".
 //
@@ -27,7 +27,7 @@
 // `show()` already ends in a `refresh()`. So a wake dropped while hidden is
 // re-earned by the act of looking — no staleness can survive being looked at,
 // which is why the gate needs no missed-wake bookkeeping and no trailing run.
-// The cost it accepts in exchange is named in doc/design/embedded-panels.md: a
+// The cost it accepts in exchange is named in docs/design/embedded-panels.md: a
 // reopened panel shows its last render for one backend round-trip before
 // repainting, where before it was already current.
 //

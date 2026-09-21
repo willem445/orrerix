@@ -525,7 +525,7 @@ export interface PaneEvents {
    *  exactly the shape the store's read-before-write rule exists to protect. */
   onOpenNotes: (pane: Pane) => void;
   /** This pane just LEARNED its agent session id (#2116, and
-   *  `doc/design/session-id-learning.md`).
+   *  `docs/design/session-id-learning.md`).
    *
    *  Fires from `adoptSessionId` and from nowhere else, at most once per pane
    *  per adopted id — `adoptSessionId` refuses a second adoption, so this
@@ -544,7 +544,7 @@ export interface PaneEvents {
  *  open beside my agent" that made embedding the overlay unnecessary in the
  *  single-view (#361) round. A later round added it anyway (user-directed
  *  scope increase) once the multi-slot generalization made "one more
- *  dockable view" cheap to reason about — see doc/design/embedded-panels.md's
+ *  dockable view" cheap to reason about — see docs/design/embedded-panels.md's
  *  "What's embeddable, and what isn't". */
 type EmbedKind =
   | "tasks"
@@ -586,7 +586,7 @@ const EMBED_KINDS: readonly EmbedKind[] = [
  *  one kind still excluded: embeddable on every pane kind, same as
  *  `git`/`editor`, but with no equivalent restore hook on a PLAIN
  *  terminal/agent pane (unchanged limitation — see
- *  doc/design/embedded-panels.md's "Why only these kinds survive a restart"
+ *  docs/design/embedded-panels.md's "Why only these kinds survive a restart"
  *  — nothing about `issues` itself is different, there's simply no reason
  *  yet to special-case it further than `git`/`editor` already are: restoring
  *  it on an orch pane specifically would be exactly as easy to add). A
@@ -692,7 +692,7 @@ interface EmbedEntry {
    *  mechanism: whether the waker is a `setInterval` or a Tauri `listen`
    *  changes nothing. If something outside this view can make it do work, this
    *  hook is where it says what happens when nobody is looking — enforced by
-   *  test/embedwake.test.ts; see doc/design/embedded-panels.md and
+   *  test/embedwake.test.ts; see docs/design/embedded-panels.md and
    *  src/wakegate.ts. */
   hide?: () => void;
   /** Reflect whether this view is currently docked to ANY embed slot —
@@ -833,7 +833,7 @@ export class Pane implements VoiceTargetPane {
    *  never pays for its entry. The generic open/close/toggle engine below
    *  (`openView`/`closeView`/`toggleView`/`embedViewAtSide`/`unembedView`)
    *  treats every kind uniformly through this registry instead of hardcoding
-   *  any one view's class — see doc/design/embedded-panels.md. */
+   *  any one view's class — see docs/design/embedded-panels.md. */
   private embedRegistry = new Map<EmbedKind, EmbedEntry>();
   /** Up to THREE simultaneous embed slots — left, right, bottom (#361
    *  generalization from a single bottom-only slot) — each independently
@@ -856,7 +856,7 @@ export class Pane implements VoiceTargetPane {
    *  `termEl`), right's divider + slot]). Bottom spans the row's full width
    *  rather than sitting only beside term — the simpler of the two
    *  corner-layout choices (see
-   *  doc/design/embedded-panels.md's "Layout" section). Nested, not a flat
+   *  docs/design/embedded-panels.md's "Layout" section). Nested, not a flat
    *  5-child row, so every divider's two sides are a real, single DOM
    *  element pair (grid.ts's own nested-split-tree shape) — the left
    *  divider's far side is `embedCenterEl` as ONE element, not "term plus
@@ -1515,7 +1515,7 @@ export class Pane implements VoiceTargetPane {
     // set the human named as always-visible — minimize, maximize and the pane
     // name (the name is not a control, so it is the policy's `titleMinWidth`
     // floor rather than a row here). Everything else folds, close included;
-    // doc/design/pane-header.md carries the argument, and moving a control
+    // docs/design/pane-header.md carries the argument, and moving a control
     // between the two sets is this flag and nothing else.
     this.headerControls = [
       { id: "tasks", el: this.tasksBtn, priority: false },
@@ -1672,7 +1672,7 @@ export class Pane implements VoiceTargetPane {
     // no-op past the global `.pane-term` contextmenu preventDefault in
     // main.ts, which only suppresses the browser's own native menu and
     // predates this PR). Copy still works via Ctrl+C or Ctrl+Shift+C above
-    // (selection → copyToClipboard) — see doc/design/clipboard.md's #370
+    // (selection → copyToClipboard) — see docs/design/clipboard.md's #370
     // section for the supported copy/paste surface.
 
     this.el.addEventListener("mousedown", () => {
@@ -1707,7 +1707,7 @@ export class Pane implements VoiceTargetPane {
   }
 
   // ------------------------------------------------------------------
-  // Header overflow (#2191). See doc/design/pane-header.md and the policy in
+  // Header overflow (#2191). See docs/design/pane-header.md and the policy in
   // src/paneheader.ts; this half owns pixels, elements and dismissal only.
   // ------------------------------------------------------------------
 
@@ -2861,7 +2861,7 @@ export class Pane implements VoiceTargetPane {
       // list when there is no root at all. So the view takes the root as a
       // getter and decides for itself whether the workspace half of its scope
       // switch is available — it never probes, and there is nothing here to
-      // fail soft to. `doc/design/todo-pane.md` §"The pane" is the argument.
+      // fail soft to. `docs/design/todo-pane.md` §"The pane" is the argument.
       //
       // The root goes to the backend RAW. The frontend must never name a
       // workspace KEY (§"The caller names a ROOT, never a key"), so there is
@@ -2934,7 +2934,7 @@ export class Pane implements VoiceTargetPane {
    *  RAW, deliberately. It is the same string `openInEditor` hands out, and the
    *  To-Do backend is the thing that turns a root into a workspace key — the
    *  frontend normalising it here would be a second answer to that question
-   *  (`doc/design/todo-pane.md` §"The caller names a ROOT, never a key"). */
+   *  (`docs/design/todo-pane.md` §"The caller names a ROOT, never a key"). */
   get cwdForRooting(): string | null {
     return this.cwdRaw ?? this.contentRoot;
   }
@@ -4547,7 +4547,7 @@ export class Pane implements VoiceTargetPane {
 
   // ==================== #361: the generic embed engine ====================
   // Shared by every EmbedKind (tasks/git/issues/audit/group) through
-  // `embedRegistry` — see doc/design/embedded-panels.md for the full design,
+  // `embedRegistry` — see docs/design/embedded-panels.md for the full design,
   // including why this is the legitimate side of the no-PTY-resize-for-chrome
   // rule (CLAUDE.md constraint 1) and why the file-editor overlay is
   // deliberately NOT part of this set.
@@ -4576,7 +4576,7 @@ export class Pane implements VoiceTargetPane {
    *  Bottom spans the row's FULL width (a sibling of `embedRowEl`, not
    *  nested inside it) rather than sitting only beside `termEl` — the
    *  simpler of the two corner-layout choices (see
-   *  doc/design/embedded-panels.md's "Layout" section). NESTED, not a flat
+   *  docs/design/embedded-panels.md's "Layout" section). NESTED, not a flat
    *  5-child row, so every divider's two sides are a real, single DOM
    *  element pair — see `dividerPair`/`dividerFloors` for why that's what
    *  keeps each divider's own drag math a plain two-element
@@ -4906,7 +4906,7 @@ export class Pane implements VoiceTargetPane {
    *  moves (leaves that side first). Either way the slot's occupant +
    *  fraction are a PERSISTED preference (tabs.json, via
    *  `onRecordChanged`). A discrete, user-initiated layout change (see
-   *  doc/design/embedded-panels.md) — never fired from a resize or a
+   *  docs/design/embedded-panels.md) — never fired from a resize or a
    *  refresh. */
   private embedViewAtSide(kind: EmbedKind, side: EmbedSide): void {
     const entry = this.embedRegistry.get(kind);
@@ -5228,7 +5228,7 @@ export class Pane implements VoiceTargetPane {
    *  type, plain terminals included. Same no-resize overlay mechanics as the
    *  other views, and (#361 scope increase) the same embed contract:
    *  dockable to any of the three slots, its toggle disabled while docked,
-   *  single-occupant per slot — see doc/design/embedded-panels.md for why
+   *  single-occupant per slot — see docs/design/embedded-panels.md for why
    *  this changed (and what didn't: the #217 content-pane editor is a fully
    *  separate instance/class-option, `host.embedded`, untouched by this). */
   toggleFileEditView(): void {
@@ -5375,7 +5375,7 @@ export class Pane implements VoiceTargetPane {
    *  wrong on every future restart (a silent, groundhog-day loss of whatever
    *  the human did after adopting it). Such panes stay unrecorded/dormant-
    *  eligible by exclusion here, same policy `adoptableSessionId` already
-   *  applies at spawn time — see doc/design/session-id-learning.md. */
+   *  applies at spawn time — see docs/design/session-id-learning.md. */
   get hasForkSession(): boolean {
     return hasForkSession(this.spawnCommand, this.spawnArgv);
   }
@@ -5545,7 +5545,7 @@ export class Pane implements VoiceTargetPane {
       // but nothing short-lived like a plain terminal restore has the
       // natural "captured, then reapplied once the real pane exists" hook
       // orch panes get from staying dormant — see
-      // doc/design/embedded-panels.md's persistence section. The share
+      // docs/design/embedded-panels.md's persistence section. The share
       // mirrors how a split's own `weight` is already persisted as a
       // flex-grow ratio rather than a pixel size — not new geometry-
       // persistence territory, the same one grid.layoutSnapshot() occupies.

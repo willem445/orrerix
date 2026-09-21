@@ -13,7 +13,7 @@
 // REAPER's signal: "this agent holds no assignment / the reaper would consider
 // killing it". It is emphatically NOT "parked at a prompt" (#2089), which is
 // why `deriveAgentState` feeds it to the `idle` rung alone and never to
-// `turn-done`. `doc/design/agents-tab.md` carries that distinction in full.
+// `turn-done`. `docs/design/agents-tab.md` carries that distinction in full.
 //
 // NO IMPORT FROM `orchestration.ts`, deliberately. The shapes below are
 // structural, so `StripViewPayload` satisfies them without this module reaching

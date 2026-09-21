@@ -247,7 +247,7 @@ so far:
   the fail-open direction (a NEW Claude Code editing tool silently working because
   nothing named it in a deny list) moved a planner from `auto` permission mode to
   `dontAsk` (pre-approved tools only — see `claude_effective_permission_mode`'s doc and
-  `doc/design/orchestration.md`'s `#465` section). One side effect: `auto` mode's
+  `docs/design/orchestration.md`'s `#465` section). One side effect: `auto` mode's
   background safety-classifier used to let a planner run an ad hoc shell command (e.g.
   `cargo check`) with no prior approval; `dontAsk` denies anything not in
   `--allowedTools` or Claude's own built-in read-only Bash set outright, with no
@@ -372,7 +372,7 @@ so far:
   planning protocol's step 2. The old text told a planner its allowlist "pre-approves only
   `git`/`gh` shell commands plus built-in read-only ones", which stopped being true when
   #610 added `WebFetch`/`WebSearch` to a read-only pane's `permissions.allow`. That
-  addition is a capability decision, not a bug fix (see `doc/design/orchestration.md`'s
+  addition is a capability decision, not a bug fix (see `docs/design/orchestration.md`'s
   #610 subsection for the argument and the residual), and the reason it is worth the
   re-bless is that a capability nobody is told about is one nobody uses: this repo's own
   `agent-cli-reference` skill *requires* reading a vendor's official reference before
@@ -619,7 +619,7 @@ so far:
   itself one** — the load-bearing half, since a workflow file *is* agent-editable and a
   declaration in one is what makes the process-pro's class exist. The guarantee is not "no repo
   file is involved", which would be false; it is the closed-set rule the liaison note states
-  (`doc/design/liaison.md`): a workflow file only **selects** a class from loomux's closed set and
+  (`docs/design/liaison.md`): a workflow file only **selects** a class from loomux's closed set and
   **cannot author what the selection means**, which loomux's own code fixes — the same reason a
   workflow file can never grant a capability. And a workflow block reaches a running config only
   through a gate the orchestrator does not control: the kickoff, or the human merge gate on the
@@ -681,7 +681,7 @@ so far:
   `list_tasks` response, since every row carries its own `parent`, `deps` and `status`. The
   `claim: true` bullet below it is deliberately untouched: the claim guard still judges a
   row's OWN deps, because it is a gate and hierarchy is metadata (§7 of
-  `doc/design/task-hierarchy.md`) — that asymmetry is taught in `upsert_task`'s tool
+  `docs/design/task-hierarchy.md`) — that asymmetry is taught in `upsert_task`'s tool
   description, where a rule about a write belongs, rather than by growing this section.
 
 - **#1161 M1, `manager.md` seeded** — a NEW file, and **no existing golden was
@@ -1014,7 +1014,7 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
 
   **The reviewer's steps renumber**, because the premortem is the new step 3: *label every
   finding* is now 4, *post the review* 5, and *report* 6. Every reference to a step number
-  OUTSIDE the file names step 1 (`doc/design/orchestration.md`, and this file's own #338/#359
+  OUTSIDE the file names step 1 (`docs/design/orchestration.md`, and this file's own #338/#359
   worktree entry), which does not move — with one exception, and it is an entry above rather
   than a live pointer: **#850's entry says "Step 5 already said the findings stay on the PR"**,
   and that step is now 6. It is left as written, per *Reading the entries above this one*: an
@@ -1327,7 +1327,7 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   accidental edit to bytes a shipped pane already reads fail loudly. Slice A shipped the
   `Role::Lead` capability class and delivered nothing — `orch_lead_prepare` did not exist —
   so there was no shipped reading to regress, and blessing then would have meant blessing
-  again in slice B when the per-CLI content settled. `doc/design/lead-pane.md` recorded that
+  again in slice B when the per-CLI content settled. `docs/design/lead-pane.md` recorded that
   choice as "it joins the pin in the slice that delivers it". Slice B is that slice: it mints
   the group, writes this file into its dir, and types its kickoff.
 
@@ -1403,7 +1403,7 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   post a comment carrying exactly one fenced `orrerix-plan` code block — the drive spawns from
   that block and from nothing else — and the summary of its shape sits in step 3 beside the
   worker split it formalises. Outside a plan drive the block is recommended, not required. The
-  full schema WILL live in `doc/design/plan-driver.md` (#3040 P1, unmerged at this re-bless),
+  full schema WILL live in `docs/design/plan-driver.md` (#3040 P1, unmerged at this re-bless),
   and the tense says so. Step 3's posting instruction moves from `gh issue comment` to
   `post_issue_comment` (#2815, also unmerged at this re-bless — again in WILL tense, with the
   `gh` form named as what to use until it lands).
@@ -1426,11 +1426,11 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
 
   **`planner.md`'s pointer to the schema was WILL-tense and the schema had landed.** Step 3's
   `orrerix-plan` bullet ended "The full schema, field by field, WILL live in
-  `doc/design/plan-driver.md` (#3040 P1); once it lands, read it there before you write one.
+  `docs/design/plan-driver.md` (#3040 P1); once it lands, read it there before you write one.
   Until then this paragraph is the whole schema you have." P1 merged as #3062, so every planner
   spawned since has been told to treat a summary as the contract and not to go looking for the
   real one — the exact failure the WILL-tense convention exists to make temporary. It now points
-  at `doc/design/plan-driver.md` §1 in the present tense and says why to read it (a refusal costs
+  at `docs/design/plan-driver.md` §1 in the present tense and says why to read it (a refusal costs
   a tool call), which is the only change to any golden in this re-bless.
 
   **The orchestrator's own plan-drive teaching moved no golden, and that is the design.** It is a
@@ -1449,7 +1449,7 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   `read_playbook("planning-and-scheduling")` "when planning any work item — and when deciding
   whether to spawn a planner", which is the one moment `drive_plan` is the alternative being
   weighed. So no new section id, no new stub, and no byte of the core. The contract is
-  `doc/design/plan-driver.md` §9.
+  `docs/design/plan-driver.md` §9.
 - **#3263 S2, the human's To-Do list** — `worker.md`, `reviewer.md`, `planner.md`,
   `manager.md`, `lead.md` and `orchestrator-playbook.md`. `orchestrator.md` and `dod.md` are
   byte-identical to their previous blessed copies.
@@ -1559,3 +1559,18 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   each deferral's full text and is permanent, and says what `list_deferred()` is actually for
   — what is held RIGHT NOW. Same check run again: patch on golden == patch on live (6 insertions,
   4 deletions each), `live-minus-keys == golden` OK.
+
+- **#3315, the `doc/` → `docs/` fold** — `planner.md` and `orchestrator-playbook.md`, the only
+  two of the eight that cite a design note by path. `planner.md`'s plan-schema pointer and the
+  playbook's "contradicting the repo's design notes" row each name the folded root; every other
+  file is byte-identical to its previous blessed copy.
+
+  Mechanical and single-character: `doc/design/` → `docs/design/`, one occurrence in each file,
+  produced by the same whole-tree sweep that rewrote the other 265 files in that PR, so the
+  golden and its live template were rewritten by one pass rather than by hand. The patch on each
+  golden was checked to be byte-identical to the patch on its live template before committing
+  (`git diff -U0` on both, compared) — the "Verifying a re-bless by hand" check above, run the
+  cheap way this shape permits.
+
+  **Nothing about the templates' content changed**, so the byte budget moves by exactly one byte
+  per file and `orchestrator.md`, which carries the resident core, is untouched.

@@ -18,7 +18,7 @@ against the real CLI's bytes — a field the docs describe loosely, a key the do
 name but spell differently in practice, or a message the docs do not mention at
 all would pass here and fail live.
 
-`doc/design/harness-adapters.md` §8.1 contracts a human-recorded capture, and
+`docs/design/harness-adapters.md` §8.1 contracts a human-recorded capture, and
 replacing this file with one is a live-validation item in the same family as that
 note's §9. Until then, treat a green decoder suite as "matches the docs", not as
 "matches the CLI".
@@ -29,7 +29,7 @@ note's §9. Until then, treat a green decoder suite as "matches the docs", not a
   test asserts nothing — it is a snapshot of today's behaviour wearing an
   expectation's clothes.
 - A capture that replaces this file records the **CLI version** it came from, in
-  this README, the way `doc/design/opencode.md` labels its source-read evidence.
+  this README, the way `docs/design/opencode.md` labels its source-read evidence.
 - Keep the deliberate awkward cases. `one-turn.jsonl` carries, on purpose:
   a `thinking_delta` (which must NOT become transcript text), a **failing**
   `tool_result` (`is_error: true` — the branch an all-success capture never

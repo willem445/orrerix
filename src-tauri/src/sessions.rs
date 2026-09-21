@@ -813,7 +813,7 @@ fn posture_key(s: &str) -> String {
 /// block or fail a launch.
 ///
 /// Off-thread (#746 — `crate::blocking::run_blocking`, P1 of
-/// `doc/design/performance.md`): it reads the intent file and writes it back
+/// `docs/design/performance.md`): it reads the intent file and writes it back
 /// fsync-ed and renamed, which Tauri used to do on the thread that services
 /// paint, at the exact moment the user is launching something.
 ///

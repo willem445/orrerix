@@ -55,7 +55,7 @@ function splitAtRoot(css: string): { tokens: string; below: string } {
   return { tokens: m[1], below: css.slice(m.index! + m[0].length) };
 }
 
-// WCAG relative luminance / contrast. The design note (doc/design/ui-redesign.md) makes
+// WCAG relative luminance / contrast. The design note (docs/design/ui-redesign.md) makes
 // contrast PROMISES about this palette; a promise nobody measures is prose.
 function luminance(hex: string): number {
   const n = Number.parseInt(hex.slice(1), 16);
@@ -597,7 +597,7 @@ test("the structured pane's three role positions each stay in their own channel"
     wrong,
     [],
     "the structured pane crossed a channel — DESIGN.md §3 is the argument, and widening " +
-      "the gutter's vocabulary is an edit to doc/design/ui-redesign.md first:\n" + wrong.join("\n")
+      "the gutter's vocabulary is an edit to docs/design/ui-redesign.md first:\n" + wrong.join("\n")
   );
 });
 
@@ -1278,7 +1278,7 @@ test("every surface that quotes a per-CLI CVD figure re-derives it, rather than 
   // second parser would be a second thing to get wrong.
   const flatten = (s: string) => s.replace(/[|*]/g, " ").replace(/\s+/g, " ");
   const SURFACES = [
-    { what: "doc/design/ui-redesign.md", text: flatten(read("../doc/design/ui-redesign.md")) },
+    { what: "docs/design/ui-redesign.md", text: flatten(read("../docs/design/ui-redesign.md")) },
     { what: "src/theme.ts", text: flatten(read("../src/theme.ts")) },
   ];
 
@@ -1316,11 +1316,11 @@ test("every surface that quotes a per-CLI CVD figure re-derives it, rather than 
 });
 
 test("the design note's per-CLI table matches theme.ts", () => {
-  // Same pin as the mist row below, for the same reason: doc/design/ui-redesign.md carries
+  // Same pin as the mist row below, for the same reason: docs/design/ui-redesign.md carries
   // its own copy of these seven values as a table, and it is the one mirror nothing reads
   // back. A demo that swaps a hue after the human looks at it would otherwise leave the note
   // describing the palette that was rejected.
-  const doc = read("../doc/design/ui-redesign.md");
+  const doc = read("../docs/design/ui-redesign.md");
   for (const [cli, value] of Object.entries(CLI_HUES)) {
     // name | token | value — the token column is matched loosely so a later column edit
     // does not break the pin, but the VALUE column is exact.
@@ -1485,12 +1485,12 @@ test("no identity-only hue may fill a state role", () => {
 });
 
 test("the design note's mist row matches theme.ts", () => {
-  // doc/design/ui-redesign.md §The palette carries its own copy of the ink ramp as a table
+  // docs/design/ui-redesign.md §The palette carries its own copy of the ink ramp as a table
   // row — the third mirror alongside styles.css and index.html, but the only one nothing
   // reads back. A slice that moves mist000/200/400 in theme.ts (as #1020 item 11 did) can
   // drift the doc silently, which is exactly the kind of gap the other two pins exist to
   // close for their own surfaces.
-  const doc = read("../doc/design/ui-redesign.md");
+  const doc = read("../docs/design/ui-redesign.md");
   const row = doc.match(
     /\|\s*\*\*mist\*\*\s*\|\s*`(#[0-9a-f]{6})`\s*\/\s*`(#[0-9a-f]{6})`\s*\/\s*`(#[0-9a-f]{6})`/i
   );
@@ -1528,13 +1528,13 @@ test("the neutral ramp, the ink and the selection ground carry no hue", () => {
   // dyes the design calls achromatic in prose (`held`/`idle` — and prose is exactly what this
   // pins), and `selection`. It does NOT say no ground in the app carries a hue: the STATE and
   // IDENTITY channels wash grounds by design (an awaiting-human task row, an urgent decision
-  // card, diff add/delete), which doc/design/ui-redesign.md §The ground argues and #1340 leaves
+  // card, diff add/delete), which docs/design/ui-redesign.md §The ground argues and #1340 leaves
   // to the human. A universal here would be the same false claim this test exists to catch.
   //
   // `selection` is on this list because it is a GROUND, and #1340 is what it cost to leave
   // it off. #1320 de-blued the ramp and in the same slice handed the SELECTED-ROW fill a
   // deep GOLD wash (#38321f), so the rule the palette was said to be built on — theme.ts's
-  // ramp doc, and doc/design/ui-redesign.md §The ground — was false for every selected file
+  // ramp doc, and docs/design/ui-redesign.md §The ground — was false for every selected file
   // row, every open editor row, every active workflow row and every terminal text selection
   // at once, while this test stayed green. A list that stopped at the ramp could not see it:
   // the hole was the POPULATION, not the assertion. (Both surfaces are cited by SECTION
@@ -1846,7 +1846,7 @@ test("every surface that quotes an identity/state ΔE figure re-derives it", () 
   const flatten = (s: string) =>
     s.replace(/`/g, "").replace(/[|*]/g, " ").replace(/\s+/g, " ");
   const SURFACES = [
-    { what: "doc/design/ui-redesign.md", text: flatten(read("../doc/design/ui-redesign.md")) },
+    { what: "docs/design/ui-redesign.md", text: flatten(read("../docs/design/ui-redesign.md")) },
     { what: "src/theme.ts", text: flatten(read("../src/theme.ts")) },
     { what: "test/theme.test.ts", text: flatten(read("./theme.test.ts")) },
   ];

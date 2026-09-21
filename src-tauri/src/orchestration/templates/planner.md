@@ -157,7 +157,7 @@ it: act on it, once, normally. The test is always *"have I already acted on this
      orchestrator should brief by hand.
      Nothing is guessed for you — an unknown dep, a duplicate id, a cycle or a missing
      field is a refusal with the line number, never a repair. The full schema, field by
-     field, is `doc/design/plan-driver.md` §1; read it before you write one, because a
+     field, is `docs/design/plan-driver.md` §1; read it before you write one, because a
      refusal costs you a tool call and this paragraph is a summary, not the contract.
 
      Outside a plan drive the block is **recommended**, not required. The prose is what the

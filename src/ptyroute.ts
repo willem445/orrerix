@@ -108,7 +108,7 @@ export const MAX_PREATTACH_ENTRIES = 512;
  *  an id's ENTIRE held buffer, so a pane that later does attach past 64
  *  concurrent unattached ids loses the startup output this buffer exists to
  *  preserve. "Oldest first" is a choice about WHICH id loses it, not a reason
- *  none does. The condition is recorded in `doc/design/performance.md` INV-8(a)
+ *  none does. The condition is recorded in `docs/design/performance.md` INV-8(a)
  *  beside the guarantee itself, because a guarantee whose exception lives only
  *  in the module that takes it is a guarantee nobody reads correctly.
  *

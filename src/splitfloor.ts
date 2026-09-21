@@ -23,7 +23,7 @@
 //     That is `share`, which is what every split did before #885.
 //
 // Two intents, two policies, one mechanism — see
-// `doc/design/pane-splitting-and-floors.md`.
+// `docs/design/pane-splitting-and-floors.md`.
 //
 // ONLY the SAME-DIRECTION case needs a policy at all. A cross-direction split
 // (split-down on a pane inside a row) replaces the target's slot with a nested

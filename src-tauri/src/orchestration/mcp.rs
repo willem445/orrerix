@@ -16,7 +16,7 @@ use super::report;
 use super::workflow;
 use super::{Caller, Delivery, GroupId, NameSource, OrchRegistry, Role};
 // #1609: the thread-local read budget and the typed `Busy` a timed
-// acquisition answers with. See `doc/design/lock-liveness.md`.
+// acquisition answers with. See `docs/design/lock-liveness.md`.
 use loomux_engine::budget;
 use loomux_engine::lockwatch::{Busy, BUSY_RETRY_AFTER_MS};
 // #3263 S2/S5: the To-Do model, caps and ops the seven `todo_*` tools parse into.
@@ -142,7 +142,7 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> String {
     // `tools/list`'s bound answers a `Busy` as an ordinary
     // `Err((code, message))` out of `dispatch`, which rendered a busy error
     // with no `data` at all — a second shape for one code, while
-    // `doc/design/lock-liveness.md` §3 and `e2e/liveness.ts`'s
+    // `docs/design/lock-liveness.md` §3 and `e2e/liveness.ts`'s
     // `jsonRpcErrorData` both specify exactly one. A client that follows the
     // documented contract (branch on `data.retryable`, back off by
     // `data.retry_after_ms`) got `null` and had to string-match the message.
@@ -173,7 +173,7 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> String {
 // request parks before reaching its arm, `ping` included.
 //
 // Both shapes below are PUBLIC CONTRACTS: an agent's model reads them and
-// decides what to do next. `doc/design/lock-liveness.md` §3 is where they are
+// decides what to do next. `docs/design/lock-liveness.md` §3 is where they are
 // specified; changing the wording here changes what an agent is told.
 
 /// JSON-RPC error code for "the registry is busy, this is retryable".
@@ -388,11 +388,11 @@ pub fn tool_kind(name: &str) -> ToolKind {
         // single `write_all` of one whole line to a file with one writer at a
         // time and no rotation, and the schema is cumulative, so an abandoned
         // or duplicated row costs resolution and never spend
-        // (`doc/design/token-charts.md`); the fingerprint walk is read-only.
+        // (`docs/design/token-charts.md`); the fingerprint walk is read-only.
         // What a mutate classification buys — a deadline that refuses rather
         // than corrupts — has nothing here to protect. Putting every usage read
         // on the mutate deadline would still be a heavy answer to a hazard the
-        // floor already closes. `doc/design/lock-liveness.md` §4.
+        // floor already closes. `docs/design/lock-liveness.md` §4.
         "check_mail" | "queue_orphans" | "list_locks" => ToolKind::Mutate,
 
         // Everything else, including anything unrecognised.
@@ -1089,7 +1089,7 @@ fn lead_spawn_agent_tool() -> Value {
 /// writes no board row, cannot withdraw, and — because `answer_question`
 /// delivers through `deliver_to_orchestrator` — is not the pane the answer
 /// notice arrives in. Naming those three in the tool text rather than only in
-/// `doc/design/liaison.md` is deliberate: the description is what the pane
+/// `docs/design/liaison.md` is deliberate: the description is what the pane
 /// actually reads.
 fn ask_human_tool() -> Value {
     tool("ask_human",
@@ -1128,7 +1128,7 @@ fn ask_human_tool() -> Value {
 /// item reading different accounts of what makes a good one is exactly the
 /// authoring-standard split a single funnel exists to prevent.
 ///
-/// **Why the manager gets this at all.** `doc/design/liaison.md` states the
+/// **Why the manager gets this at all.** `docs/design/liaison.md` states the
 /// trip-wire that fired here and names its own answer: the human-facing pane's
 /// raise belongs to `Role::Manager`'s enumerated surface, not to a third row on
 /// the liaison's table. `mcp.rs`'s own `request_attention` arm says the same. So
@@ -1231,7 +1231,7 @@ fn check_mail_tool() -> Value {
 /// of relaying one the orchestrator may or may not choose to open. The rest of
 /// the question WRITE tier does not follow it: `withdraw_question` settles a
 /// row and stays orchestrator-only. Every other tool ignores the hint.
-/// `doc/design/liaison.md` enumerates every exception, narrowing and widening
+/// `docs/design/liaison.md` enumerates every exception, narrowing and widening
 /// alike.
 ///
 /// `manager_declared` says whether this group's roster contains a `kind: manager`
@@ -1431,7 +1431,7 @@ fn tool_defs(
     // this filter reddens rather than vanishing quietly.
     //
     // WHY EACH ONE, and why the withheld ones are withheld, is
-    // `doc/design/manager.md`'s table. In one line each: the reads are how "how
+    // `docs/design/manager.md`'s table. In one line each: the reads are how "how
     // is it going" is answered without spending an orchestrator turn;
     // `list_needs_you` rides with `list_questions` for the shared tier's own
     // stated reason — the human's panel unions the two registries, so a pane
@@ -1476,7 +1476,7 @@ fn tool_defs(
             // liaison's shipped semantics unchanged (the answer notice goes to
             // the ORCHESTRATOR's pane — un-blocking the work is what an answer
             // is for), and `request_attention` is the grant
-            // `doc/design/liaison.md` and this file's own `request_attention`
+            // `docs/design/liaison.md` and this file's own `request_attention`
             // arm both said belongs here. Neither settles anything: no
             // `withdraw_question`, no `withdraw_attention`, and no answer path
             // exists on this surface for any role.
@@ -1505,7 +1505,7 @@ fn tool_defs(
     // future orchestrator-only tool a lead tool by default.
     //
     // WHY EACH ONE, and why the withheld ones are withheld, is
-    // `doc/design/lead-pane.md`'s table. In one line each: the fleet-control
+    // `docs/design/lead-pane.md`'s table. In one line each: the fleet-control
     // five plus `spawn_agent` are the capability the toggle exists to grant;
     // `list_agents` is how the pane knows what it opened; `group_usage` answers
     // "what is this costing" in the pane the human is already asking in
@@ -1750,7 +1750,7 @@ fn tool_defs(
                     "sprint": { "type": "integer", "minimum": 0, "description": "Numbered work batch this row belongs to (NOT a timebox — no dates). Integer >= 1 assigns; 0 CLEARS it back to the backlog; omit = untouched. Negatives and fractions are refused. The current sprint is DERIVED (lowest sprint on any non-done row) and reported by list_tasks as `current_sprint` — there is no stored marker and no advance tool, so a sprint completes when its last open row leaves it, and a blocked row holds it open. Rolling over is one upsert_task per row, each audited. Gates NOTHING: it ranks what you should pick up next, above board order, and never re-sorts the rows or blocks a claim." },
                     // #1273. An object array — `ask_human`'s `options` is the one existing
                     // precedent for that shape on this surface.
-                    "links": { "type": "array", "maxItems": 32, "items": { "type": "object", "required": ["type", "target"], "properties": { "type": { "type": "string", "enum": ["requirement", "spec", "design-note", "test-case", "doc", "link"] }, "target": { "type": "string", "description": "Issue/PR ref (#123), repo path (doc/design/x.md), or URL" }, "label": { "type": "string", "description": "Optional one-line gloss" } } }, "description": "Grounding artifacts that GOVERN this task — the requirement, spec, design note, test case or doc an agent must read before starting. Replaces the whole array; omit = untouched, [] = clear. Max 32 entries, target <= 512 chars, label <= 120. Targets are EXTERNAL (issue/PR refs, repo paths, URLs) and never existence-checked; a target naming a live task on this board is refused — use deps/related for that. Never affects readiness or ordering: context, not structure." },
+                    "links": { "type": "array", "maxItems": 32, "items": { "type": "object", "required": ["type", "target"], "properties": { "type": { "type": "string", "enum": ["requirement", "spec", "design-note", "test-case", "doc", "link"] }, "target": { "type": "string", "description": "Issue/PR ref (#123), repo path (docs/design/x.md), or URL" }, "label": { "type": "string", "description": "Optional one-line gloss" } } }, "description": "Grounding artifacts that GOVERN this task — the requirement, spec, design note, test case or doc an agent must read before starting. Replaces the whole array; omit = untouched, [] = clear. Max 32 entries, target <= 512 chars, label <= 120. Targets are EXTERNAL (issue/PR refs, repo paths, URLs) and never existence-checked; a target naming a live task on this board is refused — use deps/related for that. Never affects readiness or ordering: context, not structure." },
                     // #1349. Optional, so every existing caller keeps working —
                     // see the tool description for when passing it is the
                     // difference between a refusal and a silent loss.
@@ -1779,7 +1779,7 @@ fn tool_defs(
             // gate. BOTH halves are orchestrator-only, and unlike the question
             // tier's split (`ask_human` widened to a liaison, `withdraw_question`
             // not) neither is widened to the liaison hint. That is deliberate and
-            // argued in `doc/design/liaison.md`: raising is a WRITE on the
+            // argued in `docs/design/liaison.md`: raising is a WRITE on the
             // faces-the-human root, which is the trip-wire that note names — and
             // whose answer, `Role::Manager` (#1161 M1), now exists. The
             // human-facing pane's raise therefore belongs to the manager's own
@@ -1934,7 +1934,7 @@ fn tool_defs(
     // diff must not be able to record the durable, attributed PASS that opens a
     // merge gate, so this hint-keyed rule NARROWS the class it sits on. (The
     // same hint also WIDENS, a few lines below — the two rules are independent
-    // and are argued separately in `doc/design/liaison.md`.)
+    // and are argued separately in `docs/design/liaison.md`.)
     // Enforced at all three layers a verdict
     // passes through (this listing, the `call_tool` dispatch arm, and
     // `record_verdict` next to the write) — the same "never one check in a JSON
@@ -1950,7 +1950,7 @@ fn tool_defs(
             &["pr", "verdict", "summary"]));
     }
     // …and the liaison's WIDENINGS, the other half of the same hint. Two tools,
-    // argued separately in `doc/design/liaison.md` because they answer to
+    // argued separately in `docs/design/liaison.md` because they answer to
     // different bars — the second is a WRITE, so the first's "it only reads"
     // argument does not carry it.
     //
@@ -2020,7 +2020,7 @@ fn tool_defs(
 ///
 /// **What it is for, and why a union is the right width.** pi's MCP adapter
 /// MERGES its config sources, and the repo's own `.mcp.json` / `.pi/mcp.json`
-/// are among them (`doc/design/pi.md`, the direct-tool shadowing residual). A
+/// are among them (`docs/design/pi.md`, the direct-tool shadowing residual). A
 /// repo-declared server registering a direct tool named `report` sits in the
 /// same flat tool namespace as loomux's, so loomux warns about the overlap it
 /// can see. That warning is a MEASUREMENT, never a refusal, and it wants the
@@ -2082,7 +2082,7 @@ fn require_orchestrator(caller: &Caller) -> Result<(), String> {
 /// by name; its blast radius is exactly those arms, which
 /// `a_lead_may_spawn_a_worker_and_nothing_else` and the gate/listing agreement
 /// test pin. A seventh is an edit to that arm, to the enumerated surface in
-/// [`tool_defs`], to `call_tool`'s lead gate, and to `doc/design/lead-pane.md`
+/// [`tool_defs`], to `call_tool`'s lead gate, and to `docs/design/lead-pane.md`
 /// — four places, deliberately, so it cannot happen by reflex.
 ///
 /// The refusal names both classes rather than saying "orchestrator-only",
@@ -2140,7 +2140,7 @@ fn caller_is_liaison(caller: &Caller) -> bool {
 /// second time, from the other direction.) **This function widens nothing on
 /// its own**: it is opted into one call site at a time, so its blast radius is
 /// exactly the arms that name it — two today, each argued in
-/// `doc/design/liaison.md` on its own terms. Adding a third is an edit to that
+/// `docs/design/liaison.md` on its own terms. Adding a third is an edit to that
 /// arm and to that note, never to this function; `group_usage`'s own arm opts
 /// `Role::Lead` in beside it (#2519) for exactly that reason rather than
 /// widening this.
@@ -3144,7 +3144,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // plan this slice was built from (#1151), which specified
             // `require_orchestrator_or_liaison` by analogy with `ask_human`.
             //
-            // `doc/design/liaison.md` states its own trip-wire: the two liaison
+            // `docs/design/liaison.md` states its own trip-wire: the two liaison
             // widenings (`group_usage`, then `ask_human`) hang off a second
             // root — "a liaison faces the human" — and "a THIRD tool on the
             // second root is the trigger, and the next one that is a *write* is
@@ -3169,7 +3169,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // widened with it — withdrawing settles ANY open row, not only the
             // one you raised, which is exactly the split `ask_human` and
             // `withdraw_question` already draw. Argued in
-            // `doc/design/manager.md`.
+            // `docs/design/manager.md`.
             if caller.role != Role::Orchestrator && caller.role != Role::Manager {
                 return Err(
                     "permission denied: request_attention is orchestrator-only, plus this \

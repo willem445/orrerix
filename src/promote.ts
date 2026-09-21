@@ -8,7 +8,7 @@
 // The gesture, in one line: the pane's own CLI session is relaunched IN PLACE
 // with the full orchestrator contract, so an hour of prototype conversation
 // becomes the orchestrator's own context instead of being hand-summarized into a
-// fresh one. See doc/design/orchestration.md's #407 section for the backend half.
+// fresh one. See docs/design/orchestration.md's #407 section for the backend half.
 
 import type { OrchSpawnRequest } from "./orchestration";
 import type { PaneOptions } from "./pane";

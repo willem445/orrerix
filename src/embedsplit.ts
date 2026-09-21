@@ -10,7 +10,7 @@
 // dragged below its floor, then redistributed proportionally so the pair's
 // total flex-grow is preserved. Reusing that exact shape is the point — an
 // embedded panel resizes the terminal exactly the way a grid split already
-// does (see doc/design/embedded-panels.md for why that's the legitimate
+// does (see docs/design/embedded-panels.md for why that's the legitimate
 // side of the PTY-resize line), so each of the three dividers should feel
 // identical to a grid split's, not invent a second discipline.
 //

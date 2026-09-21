@@ -18,7 +18,7 @@
 // `<svg>` element (`.ic-<role>` in styles.css, one `var(--id-*)` each). Recolouring the app
 // therefore never touches an SVG, and a consumer cannot pick a hue — it picks a MEANING and
 // the table picks the hue. That is the whole reason the role sits in the registry rather
-// than in an argument at the call site: doc/design/ui-redesign.md's maintainability rule 3
+// than in an argument at the call site: docs/design/ui-redesign.md's maintainability rule 3
 // allows an `--id-*` token only "through a documented role mapping, never ad hoc", and a
 // per-call override would be exactly the ad-hoc route it refuses.
 //
@@ -55,7 +55,7 @@ export const LUCIDE_PIN = {
 /**
  * §The role table — eight roles, eight hues, one claim each.
  *
- * A role answers the identity channel's question (doc/design/ui-redesign.md, §The three
+ * A role answers the identity channel's question (docs/design/ui-redesign.md, §The three
  * colour channels): *which thing is this?* — never *what state is it in*. That is why no
  * role below names a `--state-*` token or the accent: an icon that reports agent state
  * takes its colour from the POSITION it sits in (the warp thread, the status chip, the state

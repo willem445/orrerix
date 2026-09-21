@@ -49,7 +49,7 @@
 // same is true of a name assembled at runtime (`"orrer" + "ix.exe"`). Neither
 // exists today.
 //
-// See doc/design/rebrand-bundle.md.
+// See docs/design/rebrand-bundle.md.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -300,7 +300,7 @@ function scan(expected: string): Scan {
     {
       token: legacyBinaryName(),
       file: "npm/bin/orrerix.js",
-      why: "LEGACY_MAIN_BINARY — the launcher must keep recognising a pre-rename install, so this file spells the old exe name on purpose (doc/design/rebrand-protocol.md: emit one spelling, accept every spelling)",
+      why: "LEGACY_MAIN_BINARY — the launcher must keep recognising a pre-rename install, so this file spells the old exe name on purpose (docs/design/rebrand-protocol.md: emit one spelling, accept every spelling)",
     },
   ];
 
@@ -513,7 +513,7 @@ test("the guard discriminates — it reports findings when the name does not mat
 //     identifier that is not `BUNDLE_ID`, so the move simply never happens and
 //     every existing user's preferences are quietly reset instead;
 //   - `src-tauri/tauri.e2e.conf.json` — the E2E build's DIFFERENT identifier,
-//     which is the whole of the isolation argument in doc/design/e2e-testing.md
+//     which is the whole of the isolation argument in docs/design/e2e-testing.md
 //     (#394: WebView2 keys its shared browser process off the identifier);
 //   - `e2e/fixtures.ts` — `EXPECTED_IDENTIFIER`, which the harness verifies the
 //     spawned build's WebView2 child is really running under before it drives
@@ -735,7 +735,7 @@ test("every surface that spells the bundle identifier agrees with src-tauri/taur
     e2e,
     prod,
     "tauri.e2e.conf.json must override the identifier to something the product does not use — " +
-      "that override IS the E2E isolation (doc/design/e2e-testing.md)"
+      "that override IS the E2E isolation (docs/design/e2e-testing.md)"
   );
 
   // The legacy identifier has to be a third value. If someone "simplified"

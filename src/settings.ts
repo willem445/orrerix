@@ -22,7 +22,7 @@ export interface AppSettings {
    *  paste and never touch vim/readline's use of the raw key. Set to false
    *  to get plain Ctrl+V back for vim's VISUAL BLOCK mode, readline's
    *  quoted-insert, or any other in-pane program that wants it; Ctrl+Shift+V
-   *  still pastes either way. See doc/design/clipboard.md's #370 section for
+   *  still pastes either way. See docs/design/clipboard.md's #370 section for
    *  the full tradeoff — this mirrors the call `Alt+V` made the other way
    *  (#155, shortcuts.ts): don't unconditionally steal a key an in-pane
    *  program may need, offer the interception as a choice instead. */
@@ -36,7 +36,7 @@ export interface AppSettings {
    *  machine-dependent in a way loomux cannot measure for you: the saving is
    *  render passes, so it scales with how many panes are streaming at once and
    *  with how expensive rendering is on your GPU/renderer. Setting it to `0`
-   *  and relaunching is the A/B — see doc/design/pane-render-throttle.md. */
+   *  and relaunching is the A/B — see docs/design/pane-render-throttle.md. */
   unfocusedRenderThrottleMs: number;
 }
 

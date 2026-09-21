@@ -11,7 +11,7 @@
 //! (`loomux_lib::pty::assign_kill_on_close_job`), and only THEN types a command
 //! into the pane that starts a wrapper shell around a long-lived process.
 //! Dropping only the job handle must reap both of them and the shell.
-//! See doc/design/job-object-teardown.md.
+//! See docs/design/job-object-teardown.md.
 //!
 //! ## Why nothing in here starts a PowerShell (#1345)
 //!

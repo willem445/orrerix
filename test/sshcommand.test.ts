@@ -228,7 +228,7 @@ test("#2395 posix: BOTH -l and -i are emitted, and $SHELL is not hardcoded to a 
   // the bug: `-l` misses nvm/`~/.local/bin` exports that live past Ubuntu
   // `.bashrc`'s `case $- in *i*)` early return, `-i` misses `~/.profile`. And
   // `$SHELL` rather than `bash` because a zsh/fish account must not be handed a
-  // bash login. See doc/design/ssh-panes.md.
+  // bash login. See docs/design/ssh-panes.md.
   const cmdString = buildSshArgv(FAKE_SSH, {
     destination: "h",
     remoteShell: "posix",
@@ -796,7 +796,7 @@ test("#2395 real sh: an rc file the pre-fix shape never sourced now reaches the 
 
 test("#2395 real sh: BOTH flags are load-bearing — each one's own startup-file class runs", { skip: !SH_AVAILABLE }, () => {
   // The claim "both flags are load-bearing, and neither alone fixes it"
-  // (src/sshcommand.ts, doc/design/ssh-panes.md) is the reason this emits
+  // (src/sshcommand.ts, docs/design/ssh-panes.md) is the reason this emits
   // `-l -i` rather than one of them, and the argv-string pins above cannot
   // witness it: they would pass just as well if the emitted flags were wrong,
   // as long as they matched the literal. So it is measured here, against the

@@ -42,7 +42,7 @@ fn editor_args(dir: &str) -> Vec<String> {
 /// editor not found, or spawn failure) so the frontend can toast it.
 ///
 /// Off-thread (#746 — `crate::blocking::run_blocking`, P1 of
-/// `doc/design/performance.md`). The spawn is detached, so the wait is short —
+/// `docs/design/performance.md`). The spawn is detached, so the wait is short —
 /// but the PATH/PATHEXT probing in front of it is a sequence of stats over a
 /// list nothing in the app bounds, and the spawn is still a process spawn,
 /// which INV-2 refuses on the webview thread outright.

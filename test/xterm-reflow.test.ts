@@ -144,7 +144,7 @@ test("#430 KNOWN LIMITATION: reflowCursorLine never corrects the cursor COLUMN, 
       r.expectedCol,
       `cols ${cols0}->${cols1}: expected the column to still be wrong (cursorX=${r.cursorX}, ` +
         `a correct reflow would put it at ${r.expectedCol}) -- if this now passes, xterm.js has ` +
-        `shipped a real cursor-column fix; update this test and doc/design/xterm-resize-reflow.md.`
+        `shipped a real cursor-column fix; update this test and docs/design/xterm-resize-reflow.md.`
     );
   }
 });

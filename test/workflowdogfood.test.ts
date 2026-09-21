@@ -105,7 +105,7 @@ test("the roster is the one the repo means to run", () => {
   // The model id is pinned in FULL on purpose, and the loop below covers every
   // pi block (both tiers of it — the default worker AND the every-round
   // reviewer), not just the reviewers. pi's `--model` takes `provider/id`
-  // (doc/design/pi.md, the launch line), so a block that dropped the
+  // (docs/design/pi.md, the launch line), so a block that dropped the
   // `openrouter/` half would spawn against a model that does not exist. This
   // asserts the `/` survives the parser; the pattern allows a second one
   // because this provider's own model ids carry it (`openrouter` +

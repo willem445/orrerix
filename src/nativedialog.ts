@@ -69,7 +69,7 @@
 // single-flight mechanism the repo already has, so this file adds a POLICY and
 // not a second concurrency primitive. Unit-tested in test/nativedialog.test.ts;
 // the end-to-end crash is Windows-native and human-validated (see
-// doc/design/native-dialog-focus.md).
+// docs/design/native-dialog-focus.md).
 
 // Explicit `.ts`: a VALUE import in a module `node --test` loads off disk.
 import { SubmitLatch, withSubmitLatch } from "./panesetup.ts";

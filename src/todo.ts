@@ -24,7 +24,7 @@
 // beside one of those does not confine it to that workspace. Harmless here —
 // this caller is the trusted webview — and named rather than implied because
 // the same sentence one layer down is what an AGENT's path (#3263 S2) must
-// NOT rely on. See `doc/design/todo-pane.md`.
+// NOT rely on. See `docs/design/todo-pane.md`.
 
 import { invoke, listen, type UnlistenFn } from "./transport.ts";
 import { decodeSnapshot, type Applied, type TodoOp, type TodoSnapshot } from "./todomodel.ts";

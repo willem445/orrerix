@@ -558,7 +558,7 @@ test("a block's effort/context are part of what the roster promises will run", (
   // also what makes the design-note argument for letting a repo file pin
   // `effort:` on the ORCHESTRATOR block true rather than aspirational: it rests
   // on the human seeing every block's resolved value here, before the toggle
-  // that reads the file at all (doc/design/workflows.md).
+  // that reads the file at all (docs/design/workflows.md).
   assert.equal(
     describeBlock(block({ id: "w", kind: "worker", effort: "xhigh" })),
     "worker · claude · sonnet · effort: xhigh"

@@ -34,7 +34,7 @@
 //!
 //! The `whisper-cli.exe` binary and the model weights are NOT committed — they
 //! discovered at runtime (bundled resources → env vars → %LOCALAPPDATA%; see
-//! doc/design/voice.md).
+//! docs/design/voice.md).
 //!
 //! The pure helpers ([`resample_linear`], [`encode_wav_pcm16`],
 //! [`parse_whisper_output`]) are cross-platform and unit-tested below.
@@ -68,7 +68,7 @@ const VOICE_UNAVAILABLE: &str = "voice capture is only available on Windows in t
 /// Begin capturing from the default input device.
 ///
 /// Off-thread (#746 — `crate::blocking::run_blocking`, P1 of
-/// `doc/design/performance.md`), and this one was the worst shape in the family:
+/// `docs/design/performance.md`), and this one was the worst shape in the family:
 /// `win::start` waits on `ready_rx.recv()` for the WASAPI device to open WHILE
 /// HOLDING the recording mutex. That is an indeterminate wait, not a bounded
 /// one — a slow, contended or absent audio device froze the GUI for as long as
@@ -535,7 +535,7 @@ mod win {
             .ok_or_else(|| {
                 format!(
                     "whisper CLI not found (looked in bundled resources, \
-                     {}, and {}). See doc/design/voice.md.",
+                     {}, and {}). See docs/design/voice.md.",
                     brand::env_names("WHISPER_CLI"),
                     d.display()
                 )
@@ -565,7 +565,7 @@ mod win {
         pick_model(&models).ok_or_else(|| {
             format!(
                 "no Whisper model found (looked in bundled resources, \
-                 {}, and {}). See doc/design/voice.md.",
+                 {}, and {}). See docs/design/voice.md.",
                 brand::env_names("WHISPER_MODEL"),
                 models.display()
             )
@@ -722,7 +722,7 @@ mod win {
     fn dll_error(cli: &Path) -> String {
         format!(
             "whisper-cli.exe is missing its DLLs — copy the .dll files from the \
-             whisper.cpp release next to {}. See doc/design/voice.md.",
+             whisper.cpp release next to {}. See docs/design/voice.md.",
             cli.display()
         )
     }
@@ -936,7 +936,7 @@ pub const WHISPER_MAX_THREADS: usize = 8;
 /// Character budget for the assembled `--prompt`. whisper's initial-prompt cap is
 /// ~224 tokens (`n_text_ctx/2`). We have no tokenizer, so we approximate
 /// conservatively at ~4 chars/token → ~200 tokens, staying under the hard cap.
-/// This is an ADMITTED approximation (see doc/design/voice.md): keep vocab.txt to
+/// This is an ADMITTED approximation (see docs/design/voice.md): keep vocab.txt to
 /// a short curated list, since only a curated list is reliably honored anyway.
 pub const WHISPER_PROMPT_MAX_CHARS: usize = 800;
 

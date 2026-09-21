@@ -50,7 +50,7 @@
 //!   breadcrumbs `lock-busy-in-mutation`. A half-applied multi-map mutation is
 //!   therefore not *unlikely*, it is unreachable.
 //! - The audit of the writes that happen on READ paths — `usage_memo`,
-//!   `default_branch_memo` and the rest — which is `doc/design/lock-liveness.md`
+//!   `default_branch_memo` and the rest — which is `docs/design/lock-liveness.md`
 //!   §4, and is where a reviewer should hold this.
 
 use crate::lockwatch::Busy;
@@ -97,7 +97,7 @@ pub const MCP_READ_BUDGET: Duration = Duration::from_secs(15);
 /// How long the MCP handler waits for a MUTATING tool before answering that it
 /// is still running.
 ///
-/// A deadline on the WAIT, never on the work: see `doc/design/lock-liveness.md`
+/// A deadline on the WAIT, never on the work: see `docs/design/lock-liveness.md`
 /// §3. The tool keeps executing on its own thread and runs AT MOST once —
 /// nothing can make it run twice, which is what this deadline-on-the-wait
 /// buys. It is not a completion guarantee: a panic on that thread ends it
@@ -251,7 +251,7 @@ pub(crate) fn unwind_to_frame(frame: u64, busy: Busy) -> ! {
 /// that is checkable rather than hopeful: the only unwind this frame CATCHES is
 /// its own [`BudgetTimeout`], every other payload is resumed untouched, and the
 /// state that can be mid-write when a `BudgetTimeout` fires is exactly what
-/// `doc/design/lock-liveness.md` §4 enumerates. A genuine panic is never
+/// `docs/design/lock-liveness.md` §4 enumerates. A genuine panic is never
 /// converted into a recovered value here.
 pub fn read_budget<T>(budget: Duration, f: impl FnOnce() -> T) -> Result<T, Busy> {
     let frame = NEXT_FRAME.fetch_add(1, Ordering::Relaxed);
@@ -470,7 +470,7 @@ pub fn sealed_frames() -> u64 {
 ///
 /// The residual it cannot see, stated because it is the real one: a durable
 /// write through a door that calls neither seal nor record sets no flag at
-/// all. `doc/design/lock-liveness.md` §4.3 lists the doors that do.
+/// all. `docs/design/lock-liveness.md` §4.3 lists the doors that do.
 pub fn torn_writes() -> u64 {
     TORN_WRITES.load(Ordering::Relaxed)
 }

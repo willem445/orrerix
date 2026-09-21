@@ -1,6 +1,6 @@
 //! The bisecting merge queue — **the driver loop** (#581 slice D2).
 //!
-//! Design note: `doc/design/merge-queue.md`. §4, §8, §9, §10 and §11.3 are the
+//! Design note: `docs/design/merge-queue.md`. §4, §8, §9, §10 and §11.3 are the
 //! spec this file implements.
 //!
 //! # The three layers, and why this is the third file
@@ -1226,7 +1226,7 @@ pub mod refusal {
     /// not also be queued.
     ///
     /// **The other half of a refusal this vocabulary only had one side of.**
-    /// §8.1 of `doc/design/review-driver.md` states it in both directions — "a
+    /// §8.1 of `docs/design/review-driver.md` states it in both directions — "a
     /// driven PR may not be queued, and a queued PR may not be driven" — and
     /// until #1778 S4 the queue had no name for its side and made no such
     /// refusal at all. The two loops both move a PR's head and both read its

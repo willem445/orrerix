@@ -6,7 +6,7 @@
 // opencode store. A group's opencode sessions are NOT in that global store —
 // they live in `<group>/opencode/opencode.db`, deliberately excluded because a
 // bare `--session` pane restored from one would be powerless (see
-// `doc/design/opencode.md`). Before #1563 that left a fresh opencode
+// `docs/design/opencode.md`). Before #1563 that left a fresh opencode
 // orchestrator with no clickable route to the backend resume at all. This
 // section reads loomux's own record (`orch_list_recorded`) instead, and it
 // lists every CLI in one shape, so it is the primary restart surface rather

@@ -8,10 +8,10 @@
 //   QUESTIONS — pending `ask_human` rows from `questions.json`, read through
 //   the existing `orch_questions_list` command and answered through the
 //   existing `orch_question_answer` one. The registry is the record; this is
-//   the trusted surface that settles a row (doc/design/human-questions.md).
+//   the trusted surface that settles a row (docs/design/human-questions.md).
 //
 //   NEEDS-YOU ITEMS — first-class rows from `needs-you.json` (#1151 slice A,
-//   doc/design/needs-you-items.md), read with `orch_needs_you_list` and closed
+//   docs/design/needs-you-items.md), read with `orch_needs_you_list` and closed
 //   out with `orch_needs_you_resolve`. An item OWNS who asked, when, what for
 //   and open/resolved; everything about the board row it names — title, status,
 //   demo path, PR, assignee, whether Proceed applies — is JOINED LIVE from

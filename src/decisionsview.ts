@@ -28,7 +28,7 @@
 //
 // CONSTRAINT 1 (no PTY resize for chrome) is satisfied structurally, not by
 // care: this is an `EmbedKind`, and the embed engine only ever moves elements
-// between an overlay host and a flex slot — see doc/design/embedded-panels.md.
+// between an overlay host and a flex slot — see docs/design/embedded-panels.md.
 // CONSTRAINT 5 holds too: every backend touch is a typed wrapper in
 // `orchestration.ts` or an `invoke` from `transport.ts`, never `@tauri-apps`.
 

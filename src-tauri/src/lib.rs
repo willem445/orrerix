@@ -68,7 +68,7 @@ pub fn run() {
     // `check_and_arm` (which writes `running.lock` into the root) and the
     // breadcrumb below (which writes into `<root>/logs`) — either of those
     // going first would pin the old root for the whole process and defer the
-    // move to the next launch. See `doc/design/rebrand-filesystem.md`.
+    // move to the next launch. See `docs/design/rebrand-filesystem.md`.
     obs::init_data_root();
     // #1562: and settle WHICH webview profile it uses, the same way. The
     // identifier keys `<data_local_dir>/<identifier>`, where WebView2 (Windows)
@@ -84,7 +84,7 @@ pub fn run() {
     // therefore the profile directory Tauri resolves from the identifier — are
     // built. Nothing sets `data_directory`: moving the folder first is what
     // makes the moved profile the one the webview opens. See
-    // `doc/design/rebrand-bundle.md`.
+    // `docs/design/rebrand-bundle.md`.
     let context = tauri::generate_context!();
     obs::init_webview_profile(&context.config().identifier);
     let startup = obs::check_and_arm();

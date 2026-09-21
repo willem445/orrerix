@@ -1113,7 +1113,7 @@ pub fn replace(
 // (`tests/fileedit.rs`) can exercise it without a Tauri runtime.
 //
 // #746: and thin *async* wrappers, each handing its whole body to the blocking
-// pool (`crate::blocking::run_blocking`, P1 of `doc/design/performance.md`).
+// pool (`crate::blocking::run_blocking`, P1 of `docs/design/performance.md`).
 // Every one of these is filesystem work Tauri used to run on the thread that
 // services paint — a `read_dir` of a directory nothing bounds, an `fs::read` of
 // up to 2 MiB, an fsync-ed atomic write, and (`ft_replace`) that write over an

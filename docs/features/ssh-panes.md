@@ -193,7 +193,7 @@ launcher retries the read.
 > and an attacker who can write there can already do worse. It is the reason the
 > fields are *not* filtered against a list of "dangerous" options — that would be
 > theatre over a file you control, while breaking legitimate flags.
-> `doc/design/ssh-panes.md` argues it in full.
+> `docs/design/ssh-panes.md` argues it in full.
 
 ## Running an agent on the far end
 

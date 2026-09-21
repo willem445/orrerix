@@ -2,16 +2,20 @@
 
 Tauri 2 desktop terminal multiplexer for AI agent management. Rust backend
 (`src-tauri/`), vanilla-TypeScript frontend (`src/` — no UI framework), xterm.js
-terminals, Vite. `doc/design/architecture.md` maps every module; deeper designs
-live in `doc/design/`.
+terminals, Vite. `docs/` is the repo’s ONE documentation root (#3315): the
+published user site at its top level, plus `docs/design/` (the design notes —
+`docs/design/architecture.md` maps every module) and `docs/plans/`, both
+excluded from the Jekyll build by `docs/_config.yml`. There is no `doc/`, and
+`test/repolayout.test.ts` refuses one coming back, along with any unargued
+top-level entry.
 
 The repo root is a **Cargo workspace**: `src-tauri` (the desktop app, links
 Tauri), `crates/loomux-engine` (the Tauri-free orchestration core, filling up
 one batch at a time as #888 moves modules into it) and `crates/loomux-server`
 (the remote-engine daemon that will host that core — a binary, and a leaf
 nothing else depends on). One `Cargo.lock` and one `target/`, both at the repo
-root. See `doc/design/engine-extraction.md` and
-`doc/design/remote-engine-daemon.md`.
+root. See `docs/design/engine-extraction.md` and
+`docs/design/remote-engine-daemon.md`.
 
 ## Commands
 
@@ -113,7 +117,7 @@ compiles.
    costs zero, and that is the line, not the panel count. Adding a third
    in-flow panel, or animating one of these two for longer than
    `FIT_MAX_WAIT_MS` minus a window, needs the argument in
-   `doc/design/side-dock.md` and `doc/design/xterm-resize-reflow.md` first.
+   `docs/design/side-dock.md` and `docs/design/xterm-resize-reflow.md` first.
 2. **No getrandom-based crates in `src-tauri`** (uuid v4, rand, tempfile with
    default features). They import `bcryptprimitives.dll!ProcessPrng`, which
    this project's Windows 10 baseline doesn't export — the binary then fails
@@ -134,7 +138,7 @@ compiles.
    a per-feature bridge (`git.ts`, `fileapi.ts`, `orchestration.ts`), and those
    wrappers call the seam. `test/transport.test.ts` enforces this — a direct
    `@tauri-apps` import anywhere else in `src/` fails the suite. See
-   doc/design/engine-transport.md.
+   docs/design/engine-transport.md.
 6. **A group id becomes a path in exactly one place.** `GroupId`
    (`crates/loomux-engine/src/groupid.rs`) has one validating constructor;
    `group_dir_at` (`src-tauri`) is the only function that joins one onto a
@@ -247,7 +251,7 @@ compiles.
     takes the app down on this one. Signature: a closed caller-class
     enumeration stated on permanent surfaces, with no measurement for the class
     that runs on the GUI thread (#1713 B1). Chain, armed-build asymmetry and
-    residual: `doc/design/lock-order.md` §2.1; a *genuine* panic there still
+    residual: `docs/design/lock-order.md` §2.1; a *genuine* panic there still
     aborts (#1717).
 
 ## Code conventions
@@ -470,7 +474,7 @@ compiles.
   against the properties CLAIMED, never against a stable pass total. Signature: the
   assertion's two literals never meet (links `"#7"`, deletes `"t-2"`) while a body and a
   design note call the non-interference pinned and a doc comment leans on it (#1300 B1,
-  `doc/design/board-sprints-and-links.md` §3).
+  `docs/design/board-sprints-and-links.md` §3).
 - **A function's doc may only claim what survives its pipeline's LAST writer.** A doc block
   justifying a local choice by a property of the file on disk ("appended, so the order is the
   human's") is false wherever a downstream canonicaliser rewrites it, and its test then measures
@@ -502,7 +506,7 @@ compiles.
   accepted spelling — and a reader whose question is *what did the author DECIDE*
   fails by WIDENING a capability grant when it stops recognising the old one, which is
   the app granting itself capability that #222's closure forbids. Accept-both is not
-  the blanket answer either, so split per question: `doc/design/rebrand-protocol.md`,
+  the blanket answer either, so split per question: `docs/design/rebrand-protocol.md`,
   "The one reader that must NOT accept every spelling". Pin the pre-rename specimen
   BESIDE the current one (#1225).
 - **A documented escape hatch is a counterfactual — only a test that performs the
@@ -537,7 +541,7 @@ compiles.
   pure guard — never at the DOM call sites, which drift — and pin all four
   crossings of {which side says X} × {which side says Y} plus the negative
   control, so "refuse everything" cannot pass either. Worked example:
-  `sshOrchestrationRefusal` and `doc/design/ssh-panes.md` (#859, #906, #921).
+  `sshOrchestrationRefusal` and `docs/design/ssh-panes.md` (#859, #906, #921).
   The two signals can also be ONE state read at two POINTS: a "before" snapshot
   taken below any part of the write — the row insertion included — is the same
   asymmetry, and it leaves the guard inert exactly where before and after
@@ -557,7 +561,7 @@ compiles.
   Signature: `save(encode(this.store))` where `this.store` is seeded by an `await` that a
   gesture can beat, or by a `.catch(() => empty())`; every individual step succeeds, so
   the loss is silent. Worked example: `BoardPrefsStore` (`src/boardprefs.ts`) and
-  `doc/design/board-tree-view.md` (#1299 B1/N5).
+  `docs/design/board-tree-view.md` (#1299 B1/N5).
 - **A cache or snapshot placed in FRONT of per-item reads inherits everything those
   reads answered.** Enumerate what the replaced path could do that the new one cannot —
   which item classes it served (live AND persisted-only), and what it recovered from (a
@@ -595,7 +599,7 @@ narrow their ask back down to the original ticket on your own judgment.
   design-note section and, for a role-template edit, the `pre222` re-bless log — not only in
   a PR body nobody re-reads. Signature: a "take the first that decides it" ladder given a
   rung BELOW one that always decides (board order over an array never ties), so the new rung
-  is unreachable text (`doc/design/board-sprints-and-links.md` §7,
+  is unreachable text (`docs/design/board-sprints-and-links.md` §7,
   `src-tauri/tests/fixtures/pre222/README.md`, #1300).
 - **A routed instruction's factual premise is a claim to verify, not text to transcribe.** A
   disposition relayed reviewer → orchestrator → worker can carry a reason that was true when
@@ -690,9 +694,15 @@ narrow their ask back down to the original ticket on your own judgment.
   `agent-managed` (an orchestrator owns it), `agent-ready` (groomed — go),
   `agent-investigation` (research only — post findings as an issue comment,
   no code), `agent-prototype` (build for demo/feedback).
-- User-visible behavior changes must update the matching user-docs page under
-  `docs/` (the README is a pitch, not a manual — only touch it when the pitch
-  itself changes); substantial designs get a `doc/design/*.md` note.
+- User-visible behavior changes must update the matching user-docs page at the
+  TOP LEVEL of `docs/` (the README is a pitch, not a manual — only touch it when
+  the pitch itself changes); substantial designs get a `docs/design/*.md` note.
+  Both roots are the same folder since #3315, and `docs/_config.yml`’s
+  `exclude:` is what separates them: a page you add above `design/` PUBLISHES,
+  a note inside it does not. A feature with both (`features/side-dock.md` and
+  `design/side-dock.md`, and six other pairs) keeps them two files and
+  cross-links them — the user page links the note by its GitHub blob URL,
+  because a site-relative link to an excluded page is a 404 for every reader.
 - **"The PR body" in every evidence rule below means the body's AGENT LAYER** — the
   collapsed `<details>` block opened by `<!-- agent-layer -->` +
   `<summary>Agent context — evidence, receipts, instruments</summary>`, which is where
@@ -831,7 +841,7 @@ narrow their ask back down to the original ticket on your own judgment.
   operands are both zero-byte files (#1361 review round 1; #1471 N5 for the multi-`-e` form).
 - **Correcting a false claim is a multi-surface edit.** A design rationale here
   lives on several permanent surfaces at once — the code comment, the
-  `doc/design/*.md` note, the PR body (whose human layer becomes the squash message), and
+  `docs/design/*.md` note, the PR body (whose human layer becomes the squash message), and
   the `docs/` page when the claim is user-visible (the bullet above mandates
   it) — so a claim deleted from one survives on the others. Verify the purge by
   grepping the *entity* the claim names, never the phrasing you rewrote.
@@ -891,7 +901,7 @@ narrow their ask back down to the original ticket on your own judgment.
   silently ends a table, and the row you claimed becomes a paragraph of literal
   pipes (#926).
   The trigger is EDITING a table, list or fence — not claiming anything about it. The
-  commonest miss is rendering the PR body and never rendering the `doc/design/*.md` note
+  commonest miss is rendering the PR body and never rendering the `docs/design/*.md` note
   it mirrors, a `docs/` page, or a test-fixtures README nobody filed under "rendered
   surface" (#926 B1 and #1361 B2, both design notes; #1196 N1). Rendering a page once
   does not clear it either: render every construction you touched, since #1140 B4 shipped
@@ -919,7 +929,7 @@ narrow their ask back down to the original ticket on your own judgment.
   a mermaid claim from the SURFACE instead: GitHub's file viewer renders one natively, the
   published site does not while `docs/_config.yml` has no `mermaid:` key; corroborate with
   byte-identity against a fence already rendering there. Signature: a fence moved between
-  files and its rendering "measured" (#1324, `doc/design/group-workflow-diagram.md`).
+  files and its rendering "measured" (#1324, `docs/design/group-workflow-diagram.md`).
   **A hand-wrap inside an inline code span renders as a space**, so a path or
   identifier broken across a line names something that does not exist — a break
   at a space is harmless (`` `delivered_mask_lines(pty,` `` / `` `session)` ``), a
@@ -946,8 +956,9 @@ narrow their ask back down to the original ticket on your own judgment.
   cannot give back a round already spent on stale text (#565). Signature: a re-review
   quoting a body line as verbatim what it was, on a finding your own response section
   says was narrowed (#1225).
-- **Historical context lives in design notes, ADRs, and issue/PR history —
-  never in user docs, this repo's own agent instruction files
+- **Historical context lives in design notes (`docs/design/`), ADRs, and
+  issue/PR history — never in the user-facing pages at the top level of
+  `docs/`, this repo's own agent instruction files
   (`.github/agents/`, `.claude/skills/`, `.orrerix/workflow.yml`), or this
   file.** Incident stories, superseded rules, dates, and "how we got here"
   narratives pollute every future reader's context. Reader-facing text

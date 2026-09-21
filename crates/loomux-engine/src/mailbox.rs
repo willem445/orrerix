@@ -65,7 +65,7 @@
 //! # What this module is not
 //!
 //! It is not the no-injection guarantee. That lives at `deliver_prompt`, which
-//! refuses a `Role::Manager` target outright — see `doc/design/manager.md`.
+//! refuses a `Role::Manager` target outright — see `docs/design/manager.md`.
 //! The mailbox is what makes the refusal *survivable*: without somewhere for
 //! orchestrator-to-manager traffic to go, "never inject" would just mean
 //! "never communicate".

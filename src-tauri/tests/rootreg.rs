@@ -31,7 +31,7 @@
 //! wire caller cannot admit. The enforcement for that is the listener's
 //! default-deny dispatcher (C2), which does not exist yet — `admit_root`'s
 //! `disabled` classification is written down (its own doc comment, and
-//! `doc/design/groupid-and-path-roots.md`) and C2's roster test is what will
+//! `docs/design/groupid-and-path-roots.md`) and C2's roster test is what will
 //! pin it. Claiming a test for it here would be claiming coverage this slice
 //! does not have.
 

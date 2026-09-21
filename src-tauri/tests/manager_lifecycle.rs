@@ -304,7 +304,7 @@ fn a_launch_that_resumes_reopens_the_managers_own_session_with_no_task() {
     // one, which is what makes "a resumed manager pane is a conversation, not a
     // pane waiting to be told what it is" true rather than merely intended.
     // `Delivery::ResumeKickoff` is in the permitted set and this path declines
-    // to use it — see `doc/design/manager.md`.
+    // to use it — see `docs/design/manager.md`.
     //
     // **What this assertion pins, exactly** (#1161 M3 review N5): the INPUT that
     // makes the resume arm deliver nothing, not the absence of a delivery. A
@@ -1008,7 +1008,7 @@ fn role_named(variant: &str) -> Option<Role> {
         // `counted` set below is unchanged, `templates/orchestrator.md`'s
         // parenthetical needs no edit, and the `pre222` fixtures need no
         // re-bless. Its CHILDREN are ordinary workers and are already named
-        // there. See doc/design/lead-pane.md.
+        // there. See docs/design/lead-pane.md.
         "Lead" => Role::Lead,
         _ => return None,
     })
@@ -1143,13 +1143,13 @@ fn the_counting_pin_is_blind_to_a_class_no_workflow_file_can_name_and_that_is_bo
         None,
         "a lead is minted by the launcher toggle alone; `kind_from_str` gaining a `lead` arm \
          would make it declarable AND would let an agent spawn one — see the arm-less comment \
-         there, and doc/design/lead-pane.md"
+         there, and docs/design/lead-pane.md"
     );
     assert!(
         !counts_against_max_agents(Role::Lead),
         "a lead is the seat, not a helper — `Role::is_fixture`. If it ever started counting, \
          the sentence above about it being outside this population for two reasons is down to \
-         one, and the guardrail table in doc/design/lead-pane.md is wrong"
+         one, and the guardrail table in docs/design/lead-pane.md is wrong"
     );
 
     // THE BOUND on that blindness: a class the workflow file cannot name also
@@ -1211,7 +1211,7 @@ fn the_counting_pin_is_blind_to_a_class_no_workflow_file_can_name_and_that_is_bo
 // human "if you close the manager pane, the group behaves as it always has", so
 // closing it is a legitimate act, and no code can tell a deliberate close from
 // a crash. Reopening on a guess would contradict a shipped promise. See
-// `doc/design/manager.md`, "Why nothing reopens a dead manager".
+// `docs/design/manager.md`, "Why nothing reopens a dead manager".
 //
 // `group_summary`'s `manager_declared` is the one fact the panel was missing:
 // `roles.manager` counts LIVE managers, and the human's question is the
@@ -1357,7 +1357,7 @@ fn a_manager_that_dies_leaves_the_group_declaring_one_it_no_longer_has() {
     // And nothing brought it back on its own, which is the decided behaviour
     // rather than a gap: this assertion is what would fail if a later slice
     // added an auto-reopen without revisiting the argument in
-    // `doc/design/manager.md` and the promise in `docs/features/manager.md`.
+    // `docs/design/manager.md` and the promise in `docs/features/manager.md`.
     assert!(
         rows_of(&reg, &gid, "manager").iter().all(|m| m["status"] == json!("dead")),
         "nothing may reopen a manager automatically: {:?}",

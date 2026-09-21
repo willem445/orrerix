@@ -252,7 +252,7 @@ pub fn load_or_quarantine(path: &Path) -> Option<String> {
 // ---------- tauri commands ----------
 //
 // #746: all four are thin async fns over the blocking pool (P1 of
-// `doc/design/performance.md`). The loads read and parse a file — and, when it
+// `docs/design/performance.md`). The loads read and parse a file — and, when it
 // will not parse, RENAME it aside — at launch, which the user feels as a slow
 // start. The saves serialize, fsync and rename, which is deliberate durability
 // work fired on layout gestures and settings changes, i.e. landing in the

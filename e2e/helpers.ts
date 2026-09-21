@@ -1,5 +1,5 @@
 // Shared page-interaction helpers for the E2E PoC specs. There are no
-// `data-testid` hooks in the frontend yet (see doc/design/e2e-testing.md), so
+// `data-testid` hooks in the frontend yet (see docs/design/e2e-testing.md), so
 // selectors are structural: label text inside `.dlg-field` wrappers, and
 // class names read straight out of src/launcher.ts, src/pane.ts, src/grid.ts.
 import { type Locator, type Page } from "@playwright/test";

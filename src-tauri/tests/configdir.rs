@@ -1,5 +1,5 @@
 //! A repo's committed config dir: `.orrerix/` preferred, `.loomux/` still read
-//! (#1153 phase 4 — `doc/design/rebrand-filesystem.md`).
+//! (#1153 phase 4 — `docs/design/rebrand-filesystem.md`).
 //!
 //! The rule under test is one sentence — **the legacy spelling wins only when
 //! it is the only one there, and is never renamed** — but it has to hold at

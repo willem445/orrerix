@@ -221,7 +221,7 @@ test('arm 3 is silent because there is no subject to measure (rev-final round 3,
 
   // Positive control: arm 2 on the same facts DOES speak, so the two silences are arm 3's
   // fall-through rather than a check that never ran.
-  const one = pbc.analyze('`doc/design/a.md` is 4,211 bytes.', SMALL) as Result;
+  const one = pbc.analyze('`docs/design/a.md` is 4,211 bytes.', SMALL) as Result;
   const o = of(one, 'byte-figure');
   assert.equal(o.length, 1);
   assert.equal(o[0].severity, 'MISMATCH');
@@ -337,8 +337,8 @@ const SMALL = {
   head: 'c7a3626a',
   mergeBase: '517073c4',
   diffstat: { files: 2, insertions: 17, deletions: 2 },
-  numstat: { 'doc/design/a.md': { insertions: 9, deletions: 0 }, 'doc/design/b.md': { insertions: 8, deletions: 2 } },
-  files: { 'doc/design/a.md': { blob: 'aabbccdd', blobBytes: 100, blobChars: 98, blobLines: 10, diskBytes: 110, lineAt: {} } },
+  numstat: { 'docs/design/a.md': { insertions: 9, deletions: 0 }, 'docs/design/b.md': { insertions: 8, deletions: 2 } },
+  files: { 'docs/design/a.md': { blob: 'aabbccdd', blobBytes: 100, blobChars: 98, blobLines: 10, diskBytes: 110, lineAt: {} } },
 };
 
 test('a numstat written from recollection is caught even when its figures are in code spans (#2105 r2)', () => {
@@ -356,7 +356,7 @@ test('a numstat written from recollection is caught even when its figures are in
 });
 
 test('two size figures on a line naming one file are a CHECK with the instrument table (#1764 r7)', () => {
-  const r = pbc.analyze('The heading section of `doc/design/a.md` is 7 lines, and the new one is 35 lines.', SMALL) as Result;
+  const r = pbc.analyze('The heading section of `docs/design/a.md` is 7 lines, and the new one is 35 lines.', SMALL) as Result;
   const b = of(r, 'byte-figure', 'CHECK');
   assert.equal(b.length, 2);
   assert.ok(b.every((x) => /the line states several figures/.test(x.message)));
@@ -446,7 +446,7 @@ test('one quantity stated twice with two values is grouped by its unit PHRASE, n
 test('--list-claims reads the ADDED prose of the diff, and only prose', () => {
   const added = pbc.addedProseFromDiff(fs.readFileSync(path.join(fixtures, 'diff.txt'), 'utf8'));
   const files = new Set(added.map((a: any) => a.file));
-  assert.ok(files.has('doc/design/review-driver.md'));
+  assert.ok(files.has('doc/design/review-driver.md'), 'the fixture is a CAPTURED real diff (pre-#3315), so its path spelling is history, not a pointer — it is deliberately not swept');
   assert.ok(files.has('crates/loomux-engine/src/reviewdrive.rs'), 'a comment line in added code is prose');
   // The added `pub fn` and the added assignment are code, not prose, and are not read.
   assert.equal(added.filter((a: any) => /pub fn|cap_starved_since_ms = None/.test(a.text)).length, 0);

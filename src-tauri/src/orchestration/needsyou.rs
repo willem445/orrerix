@@ -230,7 +230,7 @@ impl Kind {
 /// "dismissed:webview"` — the fourth of the four tags, alongside `webview`,
 /// `board:<new-status>` and `withdrawn:<agent>`. The question side, where the
 /// state model genuinely distinguishes settle KINDS, got the new status the
-/// issue asked for. See `doc/design/needs-you-items.md`.
+/// issue asked for. See `docs/design/needs-you-items.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {

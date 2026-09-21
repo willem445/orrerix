@@ -28,8 +28,8 @@
 #  2. ROUTE BY DIFF SHAPE (gates.merge.routing below, #1176). The static gate is
 #     rev-std alone; rev-final is REQUIRED only when the diff touches code, tests,
 #     CI, dependency manifests, the fixture-pinned role templates, or a design
-#     note under doc/design/. A prose-only PR (docs/, CLAUDE.md, .claude/,
-#     .github/agents/, .orrerix/, doc/ OUTSIDE doc/design/) merges on rev-std
+#     note under docs/design/. A prose-only PR (docs/, CLAUDE.md, .claude/,
+#     .github/agents/, .orrerix/, doc/ OUTSIDE docs/design/) merges on rev-std
 #     PASS + the orchestrator's own disposition. Routing is additive by
 #     construction (a rule can add a lane, never remove one), and `*` crosses
 #     `/`, so a rule over-matches rather than under-matches.
@@ -68,7 +68,7 @@
 # routing rules below; until then it stays.
 #
 # 2026-08-30, #1782 (S0 design note of #1778) -- the data point that ADDED the
-# doc/design/** routing rule. rev-std ran two rounds and recorded PASS with 0
+# docs/design/** routing rule. rev-std ran two rounds and recorded PASS with 0
 # open findings; rev-final then found 8 blocking + 12 non-blocking in the same
 # note, and the merge gate read SATISFIED throughout because rev-final was not
 # a required lane for that path. The characterization to keep: rev-std verified
@@ -87,7 +87,7 @@
 #    by the gate.
 #  * OpenRouter auth is the human's, and it is PER CLI: pi reads its own
 #    `auth.json` under pi's config dir (relocatable via `PI_CODING_AGENT_DIR`,
-#    kept separate from `OPENCODE_CONFIG_DIR`; doc/design/pi.md). Configure
+#    kept separate from `OPENCODE_CONFIG_DIR`; docs/design/pi.md). Configure
 #    OpenRouter auth for pi before launching the cheap tier, and confirm with
 #    `pi --list-models` - it prints only models whose auth is configured, so
 #    an unauthed pi silently offers nothing. loomux passes
@@ -217,7 +217,7 @@ gates:
       # Evidenced: #1782 (S0 of #1778) passed rev-std with 0 open findings and
       # rev-final then found 8 blocking + 12 non-blocking in the same note --
       # rev-std verified the cited symbols EXIST, not that they BEHAVE as cited.
-      - paths: ["doc/design/**"]
+      - paths: ["docs/design/**"]
         reviewers: [rev-final]
       # CI and release pipelines
       - paths: [".github/workflows/**"]

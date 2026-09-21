@@ -121,7 +121,7 @@ impl std::fmt::Display for ConfigError {
             ConfigError::RoutableBindRefused { addr } => write!(
                 f,
                 "refusing to bind {addr}: it is reachable from other machines, and this daemon has \
-                 no authentication (see doc/design/remote-engine-protocol.md §1.2/§1.3). Bind a \
+                 no authentication (see docs/design/remote-engine-protocol.md §1.2/§1.3). Bind a \
                  loopback address or a unix socket and reach it over SSH. If you genuinely mean to \
                  expose it, set `allow_routable_bind: true` in the config file"
             ),
@@ -146,7 +146,7 @@ impl std::error::Error for ConfigError {}
 /// the OPPOSITE of the wire rule in `remote-engine-protocol.md` §4.4 ("both
 /// sides ignore what they do not know"), which is right for two independently
 /// updated peers and wrong for one local file — see
-/// `doc/design/remote-engine-daemon.md` for why the two do not conflict.
+/// `docs/design/remote-engine-daemon.md` for why the two do not conflict.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawServerConfig {
@@ -261,7 +261,7 @@ impl ServerConfig {
     /// so a daemon on a pre-rename machine still finds its state. When this
     /// crate grows an actual serve loop, `init_data_root()` belongs at the top
     /// of it, next to where the desktop app calls it — see
-    /// `doc/design/rebrand-filesystem.md`.
+    /// `docs/design/rebrand-filesystem.md`.
     pub fn state_root(&self) -> PathBuf {
         match &self.state_root {
             Some(root) => root.clone(),

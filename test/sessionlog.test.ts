@@ -394,7 +394,7 @@ test("get and all hand out copies, so a caller's edit cannot skip the store", as
 });
 
 // ---------------------------------------------------------------------------
-// Pending notes and the re-key (doc/design/session-id-learning.md)
+// Pending notes and the re-key (docs/design/session-id-learning.md)
 // ---------------------------------------------------------------------------
 
 test("a note on a pane with no session id yet is held in memory, not published", async () => {

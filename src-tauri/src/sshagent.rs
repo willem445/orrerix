@@ -4,7 +4,7 @@
 //!
 //! ## What this module does and does not hold
 //!
-//! orrerix holds no credentials (`doc/design/ssh-panes.md`, "No credentials, and
+//! orrerix holds no credentials (`docs/design/ssh-panes.md`, "No credentials, and
 //! what makes that structural"), and this module does not change that rule — it
 //! extends it to a passphrase. The passphrase arrives as one command argument,
 //! is written to one `ssh-add` process, and is gone: nothing here persists it,
@@ -181,7 +181,7 @@ pub const UNIX_AGENT_HINT: &str =
      relaunch orrerix so it inherits SSH_AUTH_SOCK.";
 
 /// What one `ssh-add` run did. The wire shape of `ssh_add_identity`, and so a
-/// **public contract** — `doc/design/ssh-panes.md` carries it beside the schema
+/// **public contract** — `docs/design/ssh-panes.md` carries it beside the schema
 /// table for the same reason that one is written down.
 ///
 /// Tagged as `{kind, …}` rather than serde's default so the frontend switches on
@@ -1118,7 +1118,7 @@ pub fn last_meaningful_line(transcript: &str) -> &str {
 /// Load one passphrase-protected identity into the user's ssh-agent (#2368).
 ///
 /// Off-thread (#746 — `crate::blocking::run_blocking`, P1 of
-/// `doc/design/performance.md`) and **never sync**: this spawns processes and
+/// `docs/design/performance.md`) and **never sync**: this spawns processes and
 /// waits up to [`SSH_ADD_TIMEOUT`] for one. CLAUDE.md constraint 10 refuses a
 /// synchronous command that can panic on the webview thread; INV-2 refuses a
 /// *process spawn* there outright, and this makes two. The body is a one-line

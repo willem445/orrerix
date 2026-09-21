@@ -1,6 +1,6 @@
 {
   "_": [
-    "THE PARITY RECORD (#2891 S4). doc/design/harness-adapters.md §5.1 makes the",
+    "THE PARITY RECORD (#2891 S4). docs/design/harness-adapters.md §5.1 makes the",
     "event log the record and gives it TWO projections: the engine's VT renderer",
     "(crates/loomux-engine/src/harness/transcript.rs), which feeds the pane's",
     "OutputBuf ring and with it get_output, termgrid replay, thumbnails,",

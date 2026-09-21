@@ -4,7 +4,7 @@
 //! the per-project JSON tree its troubleshooting page still describes — that
 //! layout survives only as migration code (`SOURCE`, `storage/storage.ts`).
 //! loomux points each group's panes at their own file through `OPENCODE_DB`
-//! (see `orchestration::OPENCODE_DB_ENV` and `doc/design/opencode.md`), so the
+//! (see `orchestration::OPENCODE_DB_ENV` and `docs/design/opencode.md`), so the
 //! store this module reads is one loomux created and one only that group's
 //! agents write.
 //!
@@ -352,7 +352,7 @@ pub enum Identified {
 /// in one directory is the exotic case; a group's opencode store is written by
 /// *every pane in that group*, and the orchestrator, the reviewer and any
 /// worker without its own worktree all sit in the repo root — so a contested
-/// match is the ordinary case here, not the corner. `doc/design/session-id-
+/// match is the ordinary case here, not the corner. `docs/design/session-id-
 /// learning.md`'s ambiguity policy already settled which way to fail: a refused
 /// match costs a pane that stays unidentified (degrading exactly as an
 /// opencode pane does today), while a wrong one silently reports one agent's
@@ -564,7 +564,7 @@ pub struct TranscriptRow {
 /// and `part_message_id_id_idx` is `(message_id, id)` (`session/sql.ts`).
 /// Ordering by id *string* alone would be wrong at the session level — session
 /// ids may be minted with a bitwise-inverted timestamp (`id.ts`, recorded in
-/// `doc/design/opencode.md`) — but message and part ids are minted `ascending`
+/// `docs/design/opencode.md`) — but message and part ids are minted `ascending`
 /// (`schema/src/v1/session.ts`, `MessageID.ascending`/`PartID.ascending`), so
 /// they are a sound tiebreak within a session and within a message.
 ///

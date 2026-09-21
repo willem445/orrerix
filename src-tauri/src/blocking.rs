@@ -1,5 +1,5 @@
 //! The one delegation helper the gesture commands share — P1 of
-//! `doc/design/performance.md`, applied to the modules #746 converts
+//! `docs/design/performance.md`, applied to the modules #746 converts
 //! (`pty`, `fileedit`, `filemgr`, `uistate`, `sessions`, `cliprobe`,
 //! `editor`, `voice`, `gitwatch`).
 //!

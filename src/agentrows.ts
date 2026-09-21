@@ -173,7 +173,7 @@ const STATE_ORDER: Record<AgentState, number> = {
  *  `PaneActivity.snapshot(nowMs)` at the moment `facts()` was called, so a
  *  second `nowMs` here would be a parameter that decides nothing while reading
  *  as though it did. (The plan's sketch carried one; see
- *  `doc/design/agents-tab.md`.) */
+ *  `docs/design/agents-tab.md`.) */
 export function deriveAgentState(facts: PaneFacts): AgentState {
   // 1. Dead: had a process, no longer has one, and is not a placeholder that
   //    never had one. A dead pane outranks a stale `waiting` sighting — the

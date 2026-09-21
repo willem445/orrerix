@@ -1,7 +1,7 @@
 //! Structured agent panes: an agent driven over its CLI's own protocol rather
 //! than scraped off a PTY (#2850 S3b).
 //!
-//! `doc/design/harness-adapters.md` is the contract; this module is the
+//! `docs/design/harness-adapters.md` is the contract; this module is the
 //! `src-tauri` half of it — the part that owns a process, a pane id and a
 //! group, none of which the engine leaf may know about.
 //!

@@ -26,7 +26,7 @@
 // `RenderDebouncer` coalesces everything inside one frame into a single
 // `renderRows` call and nothing coalesces ACROSS frames. That is the entire
 // mechanism, and it is why this only pays on panes whose render share is
-// non-trivial. See doc/design/pane-render-throttle.md.
+// non-trivial. See docs/design/pane-render-throttle.md.
 //
 // xterm already stops rendering a pane that is not on screen at all:
 // `RenderService` observes the screen element with an `IntersectionObserver`

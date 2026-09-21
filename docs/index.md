@@ -5,7 +5,7 @@ nav_order: 1
 ---
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/willem445/orrerix/main/orrerix-logo.png" alt="Orrerix" width="400">
+  <img src="{{ site.baseurl }}/img/orrerix-logo.png" alt="Orrerix" width="400">
 </p>
 
 # Orrerix documentation
@@ -38,7 +38,7 @@ straight into a pane, and — the headline feature — a built-in
 **orchestrator/worker** workflow for running a small fleet of AI agents, each
 in its own visible pane, that you gatekeep only at review and merge.
 
-![An orrerix window with several agent panes](https://raw.githubusercontent.com/willem445/orrerix/main/sample.jpg)
+![An orrerix window with several agent panes]({{ site.baseurl }}/img/sample.jpg)
 
 ## What's here
 
@@ -67,11 +67,11 @@ docs stay in the repository:
 
 - [`README.md`](https://github.com/willem445/orrerix/blob/main/README.md) — the
   pitch, the stack, and the build/run commands.
-- [`doc/design/architecture.md`](https://github.com/willem445/orrerix/blob/main/doc/design/architecture.md)
+- [`docs/design/architecture.md`](https://github.com/willem445/orrerix/blob/main/docs/design/architecture.md)
   — the source tree, module by module, and the extension seams.
 - [`CLAUDE.md`](https://github.com/willem445/orrerix/blob/main/CLAUDE.md) — the
   hard constraints and code conventions for working in this codebase.
-- [`doc/design/`](https://github.com/willem445/orrerix/tree/main/doc/design) —
+- [`docs/design/`](https://github.com/willem445/orrerix/tree/main/doc/design) —
   per-feature design notes (why things are built the way they are).
 
 > This documentation describes only what ships on `main` today. Where a feature

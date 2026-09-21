@@ -13,7 +13,7 @@
 //! It has no listener, no protocol, no engine hosting. It starts, reads a
 //! config, decides whether a listener would be allowed to bind the address it
 //! was given, prints that, and stops. The running order is in
-//! `doc/design/remote-engine-protocol.md` §13; the two slices either side of
+//! `docs/design/remote-engine-protocol.md` §13; the two slices either side of
 //! this one are:
 //!
 //! - **C2** — the WebSocket listener: the actual bind, the `Origin` refusal on
@@ -31,7 +31,7 @@
 //! rather than in C2 because it is a statement about which config files are
 //! valid: it needs no socket to decide, and a `ServerConfig` that has not
 //! passed it does not exist. C2 must not re-implement it — see
-//! `doc/design/remote-engine-daemon.md` §3.
+//! `docs/design/remote-engine-daemon.md` §3.
 //!
 //! **Read §1.3 of the protocol note before running this anywhere.** The v1
 //! daemon has no authentication by deliberate decision (H1), and its entire

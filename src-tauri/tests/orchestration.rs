@@ -324,7 +324,7 @@ fn test_registry() -> (OrchRegistry, tempfile::TempDir) {
 /// ids read as words makes a contest assertion legible.
 ///
 /// **No codex is ever run** (constraint 3): the format is read blob-by-blob out
-/// of `openai/codex` at tag `rust-v0.153.4` and quoted in `doc/design/codex.md`.
+/// of `openai/codex` at tag `rust-v0.153.4` and quoted in `docs/design/codex.md`.
 fn write_codex_rollout(root: &Path, date: (&str, &str, &str), thread: &str, cwd: &str) -> PathBuf {
     let dir = root.join(date.0).join(date.1).join(date.2);
     std::fs::create_dir_all(&dir).unwrap();
@@ -523,7 +523,7 @@ fn open_opencode_store(db: &Path) -> rusqlite::Connection {
 /// `directory` is spelled with forward slashes because that is how opencode
 /// writes the column (`LOCAL-OBSERVED`), and `project_id` is the real sha1 for
 /// this repo — every worktree of one repo shares it, which is exactly why
-/// identification cannot key on the project (see `doc/design/opencode.md`).
+/// identification cannot key on the project (see `docs/design/opencode.md`).
 fn insert_opencode_session(conn: &rusqlite::Connection, id: &str, directory: &str) {
     conn.execute(
         "INSERT INTO session (id, project_id, parent_id, slug, directory, title, version,
@@ -8880,7 +8880,7 @@ fn a_model_id_may_carry_a_provider_prefix_but_never_shell_syntax() {
 /// The ceiling is `ReadOnly` because opencode's permission engine denies by
 /// permission KEY (`edit`), and `edit` is the key every file-modifying tool
 /// asks under — the vendor's own read-only `plan` agent is built from exactly
-/// that rule. See `doc/design/opencode.md` for the citations.
+/// that rule. See `docs/design/opencode.md` for the citations.
 #[test]
 fn opencode_is_a_spawnable_cli_with_a_containment_ceiling() {
     assert!(
@@ -9764,7 +9764,7 @@ fn opencode_blocks_default_to_no_model_at_all() {
 /// It is a single key rather than a list because the engine denies by the
 /// permission a tool REQUESTS, and `edit`, `write` and `apply_patch` all
 /// request `edit` — the same one key the CLI's own read-only `plan` agent is
-/// built from. See `doc/design/opencode.md` for the source citations.
+/// built from. See `docs/design/opencode.md` for the source citations.
 #[test]
 fn opencode_denies_the_permission_key_every_editing_tool_asks_under() {
     use loomux_lib::orchestration::{OPENCODE_EDIT_DENY_PERMISSION, OPENCODE_READONLY_DENY_GIT};
@@ -10168,7 +10168,7 @@ fn opencode_orchestration_restores_from_recorded_session() {
 /// blindness is real and not reachable *from these fixtures*, which is why it
 /// is recorded rather than papered over by rigging the fixture around it. The
 /// fix, if a reachable case is ever found, is a `-shm`/`-wal` presence check
-/// before falling back; see `doc/design/opencode.md`, Session identification.
+/// before falling back; see `docs/design/opencode.md`, Session identification.
 #[test]
 fn an_opencode_store_left_by_a_killed_process_still_resolves_the_session() {
     use loomux_lib::opencodedb;
@@ -10255,7 +10255,7 @@ fn an_opencode_store_left_by_a_killed_process_still_resolves_the_session() {
         "and it silently loses everything the dead process committed but never checkpointed. \
          `open_readonly`'s immutable fallback is blind to exactly the rows a crash leaves in \
          the -wal — recorded here (#1563 C2), not fixed, because nothing on these fixtures \
-         reaches it: see doc/design/opencode.md, Session identification"
+         reaches it: see docs/design/opencode.md, Session identification"
     );
     drop(conn);
     let _ = fs::remove_dir_all(&scratch);
@@ -13334,7 +13334,7 @@ fn an_ancestors_status_never_enters_readiness() {
 }
 
 /// A hand-edited container tolerates rather than wedges (§5 of
-/// doc/design/task-hierarchy.md) — the OPPOSITE direction from an unknown dep
+/// docs/design/task-hierarchy.md) — the OPPOSITE direction from an unknown dep
 /// id, which deliberately blocks. The asymmetry is the point: an unknown dep is
 /// an ordering claim that cannot be verified, while an unknown container is a
 /// row with no container at all, and blocking it forever would hide work with
@@ -22683,7 +22683,7 @@ fn compact_nudge_tick_ignores_a_busy_pane_that_merely_mentions_the_banner() {
         oid.clone(),
         (
             "grep results:\n\
-             doc/design/orchestration.md: rendered as `Compacting conversation` — a leading spinner\n\
+             docs/design/orchestration.md: rendered as `Compacting conversation` — a leading spinner\n\
              src-tauri/src/orchestration/mod.rs: \"claude\" => &[\"Compacting conversation\"],\n\
              Done — 2 matches."
                 .to_string(),
@@ -31531,7 +31531,7 @@ fn the_ready_marker_matches_a_count_not_a_label() {
     assert!(m.matches("\u{2299} 2 MCP | 1.18.25"));
 
     // THE RESIDUAL, pinned rather than merely disclosed (see
-    // `doc/design/opencode.md`). The prose rule separates a label from a
+    // `docs/design/opencode.md`). The prose rule separates a label from a
     // sentence; it cannot separate the FOOTER's label from a label-shaped
     // string anywhere else on the rendered screen. This is the blind spot, and
     // it is asserted so the disclosure cannot go stale silently: if a later
@@ -31547,7 +31547,7 @@ fn the_ready_marker_matches_a_count_not_a_label() {
     assert!(m.matches("\u{2022} 2 LSP  \u{2022} 2 MCP"));
     // And the residual the word rule cannot reach: any label-shaped count that
     // is not followed by a word. Asserted so the disclosure in
-    // `doc/design/opencode.md` cannot go stale silently — a later narrowing
+    // `docs/design/opencode.md` cannot go stale silently — a later narrowing
     // that closes this reddens here and the note is corrected in the same
     // commit.
     assert!(
@@ -37953,7 +37953,7 @@ fn a_zero_dollar_statusline_row_never_overwrites_captured_transcript_tokens() {
 fn the_disclosed_residual_holds_a_priced_statusline_row_still_replaces_tokens() {
     // #2167 review, premortem. The fix above narrows "empty" to the FIGURES, and
     // the residual it deliberately leaves is stated in `merge_usage_entry`, in
-    // `doc/design/group-cost-tracking.md` and in the PR body: a statusline read
+    // `docs/design/group-cost-tracking.md` and in the PR body: a statusline read
     // carrying a NON-zero dollar figure still replaces a token-bearing row,
     // trading exact tokens for a price-table estimate.
     //
@@ -44465,7 +44465,7 @@ fn an_unknown_also_condition_refuses_the_merge_rather_than_passing_it() {
     // A gate is a safety claim. A clause loomux cannot check must not be silently
     // dropped — that would turn a stricter-looking workflow file into a weaker one.
     // (`no-live-agents-on-pr` is #197 Scope A's other condition; this build does not
-    // implement it, so it fails closed and says so — see doc/design/workflows.md.)
+    // implement it, so it fails closed and says so — see docs/design/workflows.md.)
     let (reg, d, _repo, gid) = gated_group("    also: [no-live-agents-on-pr]\n");
     let group_dir = d.path().join(gid.as_str());
     let bin = tempfile::tempdir().unwrap();
@@ -48295,7 +48295,7 @@ fn a_bare_resume_of_a_removed_blocks_session_is_refused_by_the_new_roster() {
     assert!(text.contains("w-b"), "and the roster it CAN spawn from: {text}");
 }
 
-// The plan's open unknown, answered in `doc/design/workflows.md`:
+// The plan's open unknown, answered in `docs/design/workflows.md`:
 // `set_advanced_orchestrator` writes no instruction files at all, and the
 // per-spawn render (#1187) never REMOVES one. Only `write_instruction_files`
 // reconciles the group dir against the manifest (#423) — so an apply has to
@@ -48406,7 +48406,7 @@ fn a_switch_that_moves_the_orchestrators_cli_is_refused_but_still_previewed() {
 
 #[test]
 fn apply_refuses_while_workflow_mode_is_off_and_names_the_fix() {
-    // The design call recorded in `doc/design/workflows.md`: the toggle is this
+    // The design call recorded in `docs/design/workflows.md`: the toggle is this
     // group's ONE consent surface for "does this group obey repo-authored
     // workflow files", and an apply answers only WHICH one. Arming the toggle
     // from a picker would be the app granting itself that consent.
@@ -60802,7 +60802,7 @@ fn the_needs_you_write_tools_refuse_a_delegate_and_the_dispatch_check_is_the_gat
 /// is the decision this slice made, so it is pinned rather than left to prose.**
 ///
 /// `#1151`'s plan specified `require_orchestrator_or_liaison` for
-/// `request_attention`, by analogy with `ask_human`. `doc/design/liaison.md`
+/// `request_attention`, by analogy with `ask_human`. `docs/design/liaison.md`
 /// states a trip-wire against exactly that: the liaison's two widenings hang off
 /// the root "a liaison faces the human", and *"a THIRD tool on the second root
 /// is the trigger, and the next one that is a write is the trigger regardless of
@@ -61968,7 +61968,7 @@ fn gh_shim_harness_refuses_a_routing_gate_file_rust_could_not_read_back() {
 
 // ---------------------------------------------------------------------------
 // #1161 slice M2 — the manager mailbox and the structural no-injection
-// guarantee. See `doc/design/manager.md`.
+// guarantee. See `docs/design/manager.md`.
 // ---------------------------------------------------------------------------
 
 /// A group whose workflow declares a manager, plus the ids to reach it.
@@ -62077,7 +62077,7 @@ fn manager_tool_surface_is_exactly_the_enumerated_set() {
         .into_iter()
         .map(String::from)
         .collect::<Vec<_>>(),
-        "the manager's surface is a positive enumeration — see doc/design/manager.md"
+        "the manager's surface is a positive enumeration — see docs/design/manager.md"
     );
 
     let names = listed_tools(&reg, &cm);
@@ -62500,7 +62500,7 @@ fn message_manager_is_unlisted_and_refused_in_a_group_with_no_manager() {
 
 /// **The manager may raise a needs-you item, and may not withdraw one.**
 ///
-/// `doc/design/liaison.md` withheld `request_attention` from the liaison and
+/// `docs/design/liaison.md` withheld `request_attention` from the liaison and
 /// named where the grant belonged instead: *"the human-facing pane's raise
 /// belongs to `Role::Manager` (#1161), whose own definition cites this
 /// trip-wire as the reason the fifth kind exists at all — so the manager's
@@ -62565,7 +62565,7 @@ fn a_manager_may_raise_a_needs_you_item_but_may_not_withdraw_one() {
 
 // ---------------------------------------------------------------------------
 // Sprints (#1272) and typed grounding links (#1273) — one combined additive
-// board-model revision. See doc/design/board-sprints-and-links.md.
+// board-model revision. See docs/design/board-sprints-and-links.md.
 // ---------------------------------------------------------------------------
 
 /// A `sprint`-only patch, the shape most sprint edits take.
@@ -62816,7 +62816,7 @@ fn link_writes_are_validated_normalized_and_replace_wholesale() {
             Some("t-1"),
             links_patch(vec![
                 link("requirement", "#1272", Some("the sprint ask")),
-                link("design-note", "doc/design/board-sprints-and-links.md", None),
+                link("design-note", "docs/design/board-sprints-and-links.md", None),
             ]),
         )
         .unwrap();
@@ -63164,7 +63164,7 @@ fn the_upsert_task_schema_admits_the_sprint_clear_it_documents() {
 
 // ---------------------------------------------------------------------------
 // #1273 PR B: the board binding on `spawn_agent`, and the `Grounding` section
-// it composes into a delegate's kickoff. See doc/design/board-sprints-and-links.md.
+// it composes into a delegate's kickoff. See docs/design/board-sprints-and-links.md.
 // ---------------------------------------------------------------------------
 
 /// `spawn_agent_bound` with the eight arguments this section never varies
@@ -63189,7 +63189,7 @@ fn grounded_row(reg: &OrchRegistry, gid: &GroupId) -> (String, Vec<TaskLink>) {
     let t = reg.upsert_task(gid, "orch", None, patch(Some("Retry logic"), None, None)).unwrap();
     let links = vec![
         link("requirement", "#1104", Some("Retries must be bounded")),
-        link("design-note", "doc/design/retries.md", None),
+        link("design-note", "docs/design/retries.md", None),
     ];
     reg.upsert_task(gid, "orch", Some(&t.id), links_patch(links.clone())).unwrap();
     (t.id, links)
@@ -63220,7 +63220,7 @@ fn a_bound_spawn_injects_the_rows_grounding_links_above_the_task_brief() {
         "a labelled link reads `- [type] label: target`: {k}"
     );
     assert!(
-        k.contains("- [design-note] doc/design/retries.md"),
+        k.contains("- [design-note] docs/design/retries.md"),
         "an unlabelled link is the bare target, with no dangling separator: {k}"
     );
     assert!(
@@ -63521,7 +63521,7 @@ fn the_agent_spawn_audit_records_which_board_row_grounded_it() {
 // new array from the row it PAINTED — so an agent's concurrent write to the same
 // arrays is discarded with no error anywhere. `link_etag` fingerprints exactly
 // those three arrays; `expect_link_etag` refuses a write built on a stale one.
-// See doc/design/board-sprints-and-links.md §16.
+// See docs/design/board-sprints-and-links.md §16.
 // ---------------------------------------------------------------------------
 
 /// The issue's own interleaving, end to end: the board paints a row with two
@@ -63541,7 +63541,7 @@ fn a_stale_link_etag_refuses_the_write_and_the_agents_link_survives() {
         .unwrap();
     let painted = vec![
         link("requirement", "#1349", Some("the ask")),
-        link("design-note", "doc/design/board-sprints-and-links.md", None),
+        link("design-note", "docs/design/board-sprints-and-links.md", None),
     ];
     reg.upsert_task(&g.id, "orch", Some(&t.id), links_patch(painted.clone())).unwrap();
 
@@ -65036,7 +65036,7 @@ fn pi_blocks_default_to_no_model_at_all() {
 /// counter-intuitive half and therefore the half worth pinning: at the pinned
 /// adapter commit, exclusive mode DISCARDS the `--mcp-config` override and
 /// reads one fixed per-user file instead, so setting it would not harden this
-/// pane — it would point it at somebody else's file. See `doc/design/pi.md`.
+/// pane — it would point it at somebody else's file. See `docs/design/pi.md`.
 #[test]
 fn a_pi_spawn_names_its_mcp_config_on_argv_and_sets_no_exclusive_mode() {
     let (reg, _d) = test_registry();
@@ -67475,7 +67475,7 @@ fn the_single_chip_avoids_a_pane_whose_blocked_latch_would_swallow_it() {
 /// goes missing is which provider stopped them — and raising a second chip
 /// instead would reintroduce exactly the per-pane spam the one-chip rule
 /// exists to prevent. Pinned here so the disclosure in `attention_tick`'s
-/// comment and in `doc/design/attention-provider-limit.md` cannot go quietly
+/// comment and in `docs/design/attention-provider-limit.md` cannot go quietly
 /// false under a later edit.
 #[test]
 fn a_provider_limit_is_subsumed_when_every_affected_pane_is_outranked() {
@@ -67586,7 +67586,7 @@ fn a_wrapped_quotation_is_not_a_refusal() {
 }
 
 /// The residual the paragraph-start rule CANNOT close, pinned so the disclosure
-/// in `limit_in_tail`'s doc and in `doc/design/attention-provider-limit.md`
+/// in `limit_in_tail`'s doc and in `docs/design/attention-provider-limit.md`
 /// cannot go quietly false.
 ///
 /// `attention_tail` returns a byte-bounded tail, so line 0 of the scan window

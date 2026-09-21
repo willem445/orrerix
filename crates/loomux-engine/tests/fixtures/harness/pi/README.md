@@ -21,7 +21,7 @@ cannot prove it against the real CLI's bytes — a field the docs describe
 loosely, a key the docs name but spell differently in practice, or an event the
 docs do not mention would pass here and fail live.
 
-`doc/design/pi.md`'s "Live items this section does not settle" carries the
+`docs/design/pi.md`'s "Live items this section does not settle" carries the
 capture that replaces this file as item 4. Until then, treat a green decoder
 suite as "matches the docs", not as "matches the CLI".
 
@@ -31,7 +31,7 @@ suite as "matches the docs", not as "matches the CLI".
   the code under test asserts nothing — it is a snapshot of today's behaviour
   wearing an expectation's clothes.
 - A capture that replaces this file records the **pi version** it came from, in
-  this README, the way `doc/design/pi.md` labels its source-read evidence.
+  this README, the way `docs/design/pi.md` labels its source-read evidence.
 - Keep the deliberate awkward cases. `one-turn.jsonl` carries, on purpose:
   - a literal **`U+2028`** inside a `text_delta` string (line 9). This is the
     byte that separates a compliant reader from Node's `readline`, which

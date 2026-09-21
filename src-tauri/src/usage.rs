@@ -276,7 +276,7 @@ impl TranscriptFold {
 /// PRODUCED, not what was IN context going in. `None` if no real (non-
 /// synthetic) assistant `usage` line is found. Exact (an API-reported figure
 /// from the CLI's own transcript), not a byte-count proxy — see
-/// `doc/design/orchestration.md`'s Compact-nudge section for why this beats
+/// `docs/design/orchestration.md`'s Compact-nudge section for why this beats
 /// inventing one.
 pub fn latest_context_tokens(text: &str) -> Option<u64> {
     let v = latest_real_assistant_turn(text)?;
@@ -347,7 +347,7 @@ pub const DEFAULT_CLAUDE_CONTEXT_WINDOW_TOKENS: u64 = 200_000;
 /// is a best-effort GUESS, not a guarantee — Claude's actual context tier is
 /// ultimately a per-request API setting this transcript field doesn't fully
 /// pin down — so callers needing certainty should prefer an explicit
-/// human-set override over this function's return value; see `doc/design/
+/// human-set override over this function's return value; see `docs/design/
 /// orchestration.md`'s Compact-nudge section.
 pub fn claude_context_window_tokens(model: Option<&str>) -> u64 {
     let Some(model) = model else { return DEFAULT_CLAUDE_CONTEXT_WINDOW_TOKENS };
@@ -692,7 +692,7 @@ pub fn pi_session_usage_in(dir: &Path, session_id: &str) -> Option<SessionUsage>
 /// one to check a fixture against: this mapping's `total()` equals codex's own
 /// `total_tokens`. The plan's D8 named only the two cache mappings and was
 /// silent on the subtraction; the correction is argued in
-/// `doc/design/codex.md` under Usage.
+/// `docs/design/codex.md` under Usage.
 ///
 /// `saturating_sub` rather than a plain one, and it is what bounds the residual:
 /// if a future codex ever made `cache_write_input_tokens` genuinely disjoint
@@ -1320,7 +1320,7 @@ fn fold_appended(cursor: &mut TranscriptCursor, verify_anchor: bool) -> std::io:
 ///
 /// Tracking makes that hold VISIBLE. It does not make it short — bounding IO
 /// under a polled path's guard is Phase 1/2 of
-/// `doc/plans/responsiveness-root-cause.md`, not this change. What #1601 buys
+/// `docs/plans/responsiveness-root-cause.md`, not this change. What #1601 buys
 /// here is that if this IS the hold that wedges a build, the breadcrumb names
 /// it instead of a human having to guess.
 pub struct TranscriptCursors {
@@ -1529,7 +1529,7 @@ impl TranscriptCursors {
 // ---------------------------------------------------------------------------
 
 /// Read an OpenCode session's usage from the SQLite store at `db` — the
-/// group's own database, per `OPENCODE_DB` (see `doc/design/opencode.md`).
+/// group's own database, per `OPENCODE_DB` (see `docs/design/opencode.md`).
 ///
 /// `Ok(None)` is "readable store, no such session yet"; `Err` is a degrade the
 /// caller reports as zero usage (`crate::opencodedb::Unavailable`).

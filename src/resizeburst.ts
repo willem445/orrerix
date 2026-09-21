@@ -22,7 +22,7 @@
 // 240 ms transition: ~15 fits per pane per toggle, each one an xterm buffer
 // reflow over the whole scrollback AND a `ResizePseudoConsole` — the call
 // CLAUDE.md constraint 1 exists to ration, and the one #430's cursor-desync
-// class rides on (doc/design/xterm-resize-reflow.md). With six panes open that
+// class rides on (docs/design/xterm-resize-reflow.md). With six panes open that
 // is ~90 ConPTY resizes for one click, which is what the human felt.
 //
 // #432 fixed the DRAG shape of this storm by BRACKETING it — `beginResizeHold`

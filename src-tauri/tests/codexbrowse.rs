@@ -12,7 +12,7 @@
 //!
 //! **No codex is ever run** (constraint 3). Fixtures are written here from the
 //! format read off `openai/codex` at tag `rust-v0.153.4` and quoted in
-//! `doc/design/codex.md`.
+//! `docs/design/codex.md`.
 
 use loomux_lib::sessions::{
     list_sessions_for_test, set_claude_projects_root_for_test,

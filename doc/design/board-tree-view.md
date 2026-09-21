@@ -307,10 +307,16 @@ rung and then left out of both render orders — is what
 The line is built id → name → issue/PR → status → progress → `⌄`, and
 `flex-wrap: wrap` means the first thing a narrow pane pushes onto a second line
 is precisely what the ladder ranks below the name. `align-items: baseline`
-rather than `center`, because the name now wraps to two or three lines and the
-id has to sit on its **first** one. The title takes `overflow-wrap: anywhere` so
-a long unbroken token (a path, a branch name) breaks rather than forcing the row
-wider than the pane.
+rather than `center`, so the id sits on the name's own baseline however the
+line wraps.
+
+> **#3261 amends this paragraph.** It used to end: the name "now wraps to two or
+> three lines and the id has to sit on its **first** one. The title takes
+> `overflow-wrap: anywhere` so a long unbroken token (a path, a branch name)
+> breaks rather than forcing the row wider than the pane." The name no longer
+> wraps at all — it is one line, cut at a character budget, and the level mark
+> joins the build order between the id and the name. See **Human-readable rows
+> (#3261)** below for why that trade was made.
 
 ### Expanded rows are per-session view state
 

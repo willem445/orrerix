@@ -3238,11 +3238,14 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
   flex: none; font-family: var(--font-mono);
   font-size: 10px; color: var(--ink-dim);
 }
-/* Tier 1 with the id, and the reason this issue exists: never truncated, never
-   `nowrap`. `overflow-wrap: anywhere` rather than `break-word` so a long
-   unbroken token (a path, a branch name) breaks instead of forcing the row
-   wider than the pane. The flex-basis is a WANT, not a floor — it is what makes
-   the chips ranked below it wrap away first when the pane is narrow. */
+/* Tier 1 with the id. #2937 made the name the only flexible item on this line
+   so it could never be squeezed out by chrome, and that still holds — what
+   changed at #3261 is that it no longer WRAPS to take three lines instead. It
+   is cut at `TITLE_BUDGET` by src/tasktitle.ts, with the whole name on the
+   tooltip and in the open row, so "never cut off behind chrome" is delivered by
+   nothing cutting it in the layout at all. The flex-basis below is a WANT, not
+   a floor — it is what makes the chips ranked below it wrap away first when the
+   pane is narrow. */
 /* The title AREA (#3261) — the whole of it opens the row, so it is the click
    target, and `.task-title` inside it is only the text. A pointer cursor and a
    hover tint are what say so; the area is not a <button> because it CONTAINS

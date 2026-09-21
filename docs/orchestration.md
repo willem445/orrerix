@@ -392,16 +392,29 @@ The board is usually read in a normal-width pane with the UI docked to the
 left, so a row spends its width on the four things you actually scan for and
 nothing else:
 
-1. **The task name and its id.** The name **wraps** — to two or three lines if
-   it needs them — and is never cut off behind chrome. Double-click it to edit
-   it in place, as before.
-2. **The issue / PR chips**, still clickable, still opening in your browser.
-3. **Progress** — the status control, and on a parent task the
+1. **The task name and its id.** The name is shown on one line, cut at about 80
+   characters with an ellipsis if it runs longer than that. Nothing is lost:
+   the whole name is on the row's tooltip, and in full — and editable — when you
+   open the row.
+2. **A small coloured square** saying which level the row is: epic, feature,
+   story, task, or none. It only appears on a board that uses levels at all, and
+   hovering it says which one in words.
+3. **The issue / PR chips**, still clickable, still opening in your browser.
+4. **Progress** — the status control, and on a parent task the
    `done/total` rollup of what is directly inside it.
-4. **`⌄`**, at the right-hand end of the row.
+5. **`⌄`**, at the right-hand end of the row.
 
-Everything else is one click away behind that `⌄`: the assignee and session
-chips, the kind and sprint badges, the *ready* / *all inside done* / *cleared*
+**Click anywhere on the name to open or shut the row** — you do not have to hit
+the small `⌄`. Anything inside the row that has its own click (the issue and PR
+chips, the status control, an editor you have open) keeps it.
+
+Opening a row shows, above everything else, the **full name** and the row's
+**description**. Double-click the full name to rename the task; that is where
+renaming lives now, because a single click on the compact name is what opens
+the row.
+
+Everything else is one click away behind that `⌄`: the full name, the
+description, the assignee and session chips, the kind and sprint badges, the *ready* / *all inside done* / *cleared*
 markers, the ACTIVE badge and the *needs a decision* / *needs a look* deep
 link, the ▶ Start / ✓ Approve / ✎ Changes / ▶ Proceed buttons, the 🔗 ⤵ 🏷 🎯
 📎 🗨 buttons, ↩ restore and ✕ delete. It opens **in place**, under the row's
@@ -417,6 +430,23 @@ Two things worth knowing about how it behaves:
   open: amber for work only you can advance, a green glow and pulse for an
   agent working on it right now. Those cost the name no room at all, which is
   why the badges that repeat them sit behind the `⌄`.
+
+### A description: what the row *is*
+
+A task can carry one or two plain sentences saying what it is, for whoever reads
+the board next — you, a week later, or an agent picking the row up. Open a row
+and click the description line to write one; **Enter** saves, **Escape**
+discards, and clearing the box removes the description. Half-typed text survives
+an agent writing to the board underneath you.
+
+It is ordinary text, never formatted, and it is capped at **500 characters** on
+one line. Going over is *refused* rather than quietly trimmed, so the last thing
+you wrote cannot vanish without being mentioned — anything longer than that
+belongs in a 🗨 note or a 📎 grounding link. Your orchestrator can set one too
+(`upsert_task(description: …)`), and read one back with `get_task`. It is
+deliberately **not** on the cheap board listing agents poll: the description is
+written for a human, and putting it on every row of every read is what made the
+old board listing too big to read.
 
 The 🗨 notes and 📎 grounding **sections** are unchanged: they open as
 full-width blocks below the row, so they never compete with the name, and a

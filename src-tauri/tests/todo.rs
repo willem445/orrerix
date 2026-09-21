@@ -1719,7 +1719,14 @@ fn an_op_naming_two_actions_or_none_is_refused() {
             json!({"add": {"title": "a"}, "delete": {"id": "td-1"}}),
             "an op naming two actions",
         ),
-        (json!({"archive": {"id": "td-1"}}), "an unknown action"),
+        // **THE SPECIMEN MOVED, AND THE ASSERTION DID NOT.** This row was
+        // `archive` at S2, chosen because it was not an op; #3263 S5 made it
+        // one, so the witness is relocated rather than the check relaxed
+        // (CLAUDE.md, "A test's specimen must stay a member of the class it
+        // witnesses"). The extra assertion below is what stops the next slice
+        // repeating it silently: the refusal must say the op is UNKNOWN, so a
+        // future `sweep` op reddens this row instead of leaving it vacuous.
+        (json!({"sweep": {"id": "td-1"}}), "an unknown action"),
         (json!("delete"), "an op that is not an object"),
     ] {
         let msg = refusal(v, Scope::Global, what);
@@ -1727,6 +1734,13 @@ fn an_op_naming_two_actions_or_none_is_refused() {
             msg.starts_with("refused: op "),
             "{what} should be refused against the `op` field, got: {msg}"
         );
+        if what == "an unknown action" {
+            assert!(
+                msg.contains("unknown op"),
+                "this row's specimen must still BE unknown — if it has become a real op, \
+                 move the witness rather than relaxing this: {msg}"
+            );
+        }
     }
 }
 
@@ -2665,6 +2679,14 @@ fn an_archive_puts_the_named_items_away_and_leaves_the_rest_alone() {
     let b = apply_to(&path, add("done two"), &human(), T0, None).unwrap().ids[0].clone();
     let keep = apply_to(&path, add("still open"), &human(), T0, None).unwrap().ids[0].clone();
 
+    // Revs BEFORE the archive. Asserted as a DELTA below rather than against a
+    // remembered absolute: what a fresh `add` leaves `rev` at is `apply_add`'s
+    // business, and a test that hardcodes it measures that instead of this op.
+    let rev_of = |id: &str| {
+        snapshot_at(&path, None).items.iter().find(|i| i.id == id).unwrap().rev
+    };
+    let (rev_a, rev_keep) = (rev_of(&a), rev_of(&keep));
+
     let applied = apply_to(
         &path,
         TodoOp::Archive {
@@ -2709,8 +2731,8 @@ fn an_archive_puts_the_named_items_away_and_leaves_the_rest_alone() {
         None,
         "an id the op did not name must not move"
     );
-    assert_eq!(find(&keep).rev, 0, "and must not even be touched");
-    assert_eq!(find(&a).rev, 1, "an archive is one write");
+    assert_eq!(find(&keep).rev, rev_keep, "and must not even be touched");
+    assert_eq!(find(&a).rev, rev_a + 1, "an archive is exactly one write");
     assert_eq!(
         find(&a).updated_by,
         agent(),
@@ -2741,6 +2763,13 @@ fn un_archiving_the_same_ids_is_an_exact_inverse() {
     let a = apply_to(&path, add("one"), &human(), T0, None).unwrap().ids[0].clone();
     let b = apply_to(&path, add("two"), &human(), T0, None).unwrap().ids[0].clone();
 
+    // Looked up BY ID rather than by position: the snapshot's order is the
+    // store's, and a test that indexed into it would be pinning that instead.
+    let rev_of = |id: &str| {
+        snapshot_at(&path, None).items.iter().find(|i| i.id == id).unwrap().rev
+    };
+    let rev_before = [(a.clone(), rev_of(&a)), (b.clone(), rev_of(&b))];
+
     apply_to(
         &path,
         TodoOp::Archive {
@@ -2765,13 +2794,17 @@ fn un_archiving_the_same_ids_is_an_exact_inverse() {
     .expect("un-archiving must be the same op with the flag flipped");
 
     let items = snapshot_at(&path, None).items;
-    for id in [&a, &b] {
+    for (id, was) in &rev_before {
         let item = items.iter().find(|i| &i.id == id).unwrap();
         assert_eq!(
             item.archived_ms, None,
             "un-archive must clear the stamp, not re-stamp it"
         );
-        assert_eq!(item.rev, 2, "two writes, so two revs");
+        assert_eq!(
+            item.rev,
+            was + 2,
+            "two writes, so two revs — a delta, not what a fresh add happens to leave"
+        );
     }
 }
 
@@ -3141,13 +3174,25 @@ fn mcp_a_tombstone_in_another_workspace_reads_exactly_as_an_id_that_never_existe
         .to_string();
     ok_json(&reg, &wa, "todo_delete", json!({ "id": id }));
 
+    // The two messages cannot be byte-identical — each quotes the id the
+    // CALLER sent, which is the one thing the caller already knows. What must
+    // be identical is everything else, so the comparison is against a template
+    // with the id substituted rather than against the other string.
+    let never_id = "td-0000000000000000";
     let theirs = mcp_refusal(&reg, &wb, "todo_restore", json!({ "id": id }));
-    let never = mcp_refusal(&reg, &wb, "todo_restore", json!({ "id": "td-0000000000000000" }));
+    let never = mcp_refusal(&reg, &wb, "todo_restore", json!({ "id": never_id }));
     assert_eq!(
-        theirs, never,
-        "a tombstone B may not see must read EXACTLY as an id that never existed"
+        theirs,
+        format!("unknown todo: {id}"),
+        "a tombstone B may not see must read as an unknown id and say nothing else"
     );
-    assert!(theirs.contains("unknown todo"), "got: {theirs}");
+    assert_eq!(never, format!("unknown todo: {never_id}"));
+    assert_eq!(
+        theirs.replace(&id, "<ID>"),
+        never.replace(never_id, "<ID>"),
+        "with the id blanked the two refusals must be the SAME sentence — anything that \
+         differs is something B learned about A's list"
+    );
 
     // B's refusal is audited on B's group, as every other refusal this layer
     // makes is — one `todo-refused` filter answers the question either way.

@@ -229,8 +229,8 @@ pub struct TodoItem {
     /// [`PURGE_AFTER_MS`] later.
     #[serde(default)]
     pub deleted_ms: Option<u64>,
-    /// Unknown keys written by a newer build (module header, half 2).
-    #[serde(flatten, default)]
+    /// M8: preservation removed.
+    #[serde(skip)]
     pub extra: Map<String, Value>,
 }
 
@@ -508,10 +508,8 @@ fn entropy_u64() -> u64 {
 /// key the same. It fails for a path that does not exist, and the lexical
 /// fallback then applies the same normalisation to the caller's own spelling.
 pub fn workspace_key(path: &Path) -> String {
-    let raw = match std::fs::canonicalize(path) {
-        Ok(p) => p.to_string_lossy().into_owned(),
-        Err(_) => path.to_string_lossy().into_owned(),
-    };
+    let raw = path.to_string_lossy().into_owned(); // M7: canonicalize removed
+
     normalize_key(&raw, cfg!(windows))
 }
 
@@ -538,9 +536,8 @@ pub fn normalize_key(raw: &str, case_insensitive: bool) -> String {
         s = rest.to_string();
     }
     s = s.replace('\\', "/");
-    if case_insensitive {
-        s = s.to_ascii_lowercase();
-    }
+    let _ = case_insensitive; // M6: case folding removed
+
     while s.len() > 1 && s.ends_with('/') && !s.ends_with(":/") {
         s.pop();
     }
@@ -573,9 +570,8 @@ pub fn apply(
     actor: &Actor,
     now_ms: u64,
 ) -> Result<Applied, TodoError> {
-    if store.version > CURRENT_VERSION {
-        return Err(TodoError::NewerVersion(store.version));
-    }
+    // M3: version refusal removed
+
 
     let applied = match op {
         TodoOp::Add(add) => apply_add(store, add, actor, now_ms)?,
@@ -588,9 +584,8 @@ pub fn apply(
     // measured against the same clock as every other one and the reported count
     // is of tombstones that had genuinely expired.
     let before = store.items.len();
-    store
-        .items
-        .retain(|i| !matches!(i.deleted_ms, Some(d) if now_ms.saturating_sub(d) >= PURGE_AFTER_MS));
+    // M4: purge removed
+
     let purged = before - store.items.len();
 
     Ok(Applied { purged, ..applied })
@@ -600,23 +595,20 @@ fn check_title(title: &str) -> Result<(), TodoError> {
     if title.trim().is_empty() {
         return Err(TodoError::Invalid("title", "is empty".to_string()));
     }
-    if title.chars().count() > TITLE_MAX {
-        return Err(TodoError::Cap("title", TITLE_MAX));
-    }
+    // M1: cap removed
+
     Ok(())
 }
 
 fn check_notes(notes: &str) -> Result<(), TodoError> {
-    if notes.len() > NOTES_MAX {
-        return Err(TodoError::Cap("notes", NOTES_MAX));
-    }
+    // M1: cap removed
+
     Ok(())
 }
 
 fn check_tags(tags: &[String]) -> Result<(), TodoError> {
-    if tags.len() > TAGS_MAX {
-        return Err(TodoError::Cap("tags", TAGS_MAX));
-    }
+    // M1: cap removed
+
     Ok(())
 }
 
@@ -631,9 +623,8 @@ fn check_priority(p: u8) -> Result<(), TodoError> {
 }
 
 fn check_steps_len(n: usize) -> Result<(), TodoError> {
-    if n > STEPS_MAX {
-        return Err(TodoError::Cap("steps", STEPS_MAX));
-    }
+    let _ = n; // M1: cap removed
+
     Ok(())
 }
 
@@ -655,9 +646,8 @@ fn apply_add(
     for t in &step_titles {
         check_title(t)?;
     }
-    if store.live(&add.scope).len() >= ITEMS_MAX {
-        return Err(TodoError::Cap("items", ITEMS_MAX));
-    }
+    // M2: item cap removed
+
 
     let id = new_id();
     pathseg::check_segment(&id).map_err(TodoError::BadId)?;
@@ -722,7 +712,7 @@ fn live_index(store: &TodoStore, id: &str) -> Result<usize, TodoError> {
 
 fn check_if_rev(item: &TodoItem, if_rev: Option<u64>) -> Result<(), TodoError> {
     match if_rev {
-        Some(sent) if sent != item.rev => Err(TodoError::Conflict(item.id.clone(), item.rev, sent)),
+        Some(_) => Ok(()), // M5: conflict detection removed
         _ => Ok(()),
     }
 }
@@ -839,7 +829,7 @@ fn order_for(store: &TodoStore, moving: &TodoItem, after: &OrderAfter) -> Result
         (None, None) => ORDER_GAP,
         (None, Some(n)) => n.order - ORDER_GAP,
         (Some(p), None) => p.order + ORDER_GAP,
-        (Some(p), Some(n)) => p.order + (n.order - p.order) / 2,
+        (Some(p), Some(_n)) => p.order, // M13: midpoint removed
     })
 }
 

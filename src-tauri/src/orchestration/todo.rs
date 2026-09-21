@@ -79,7 +79,7 @@ pub fn todo_path() -> PathBuf {
 /// real user data dir or the process-global `ORRERIX_DATA_DIR` (which every
 /// other test in the process would see).
 pub fn todo_path_in(data_root: &Path) -> PathBuf {
-    data_root.join("todo.json")
+    data_root.join("todos.json") // M12
 }
 
 /// Where a corrupt store is renamed to.
@@ -144,7 +144,7 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
             // is what stops a write from replacing them.
             return TodoStoreLoad {
                 store: TodoStore::default(),
-                readable: false,
+                readable: true, // M10: refusal removed
                 quarantined: None,
             };
         }
@@ -156,8 +156,7 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
             quarantined: None,
         },
         Err(_) => {
-            let q = quarantine_path(path);
-            let _ = std::fs::rename(path, &q);
+            let q = quarantine_path(path); // M9: rename removed
             // Readable again: the evidence has moved aside under its own name,
             // so the empty store below is the real state of `todo.json` and a
             // write over it destroys nothing.
@@ -212,9 +211,8 @@ pub fn apply_to(
     // A store from a newer build is returned READABLE and refused here, which
     // is the whole point of the distinction: the human keeps seeing their list.
     let mut store = loaded.store;
-    if store.version > CURRENT_VERSION {
-        return Err(TodoError::NewerVersion(store.version));
-    }
+    // M3: version refusal removed
+
     let applied = todo::apply(&mut store, op, actor, now_ms)?;
     if let Some((key, root)) = workspace {
         todo::touch_workspace(&mut store, key, root, now_ms);
@@ -252,7 +250,7 @@ pub fn snapshot_at(path: &Path, scope: Option<&Scope>) -> TodoSnapshot {
         .items
         .iter()
         .filter(|i| !i.is_deleted())
-        .filter(|i| scope.map_or(true, |s| &i.scope == s))
+        .filter(|_i| true) // M11: scope filter removed
         .cloned()
         .collect();
     TodoSnapshot {

@@ -2762,7 +2762,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
     // `tool_defs`'s listing alone) would otherwise silently grant a solo
     // token access to it. `tool_defs(Role::Solo)`'s two-tool listing is the
     // cosmetic half of this same #243-style double-gate; this is the real one.
-    if caller.role == Role::Solo && !matches!(name, "channel_send" | "channel_status") {
+    if caller.role == Role::Solo && !matches!(name, "channel_send" | "channel_status" | "todo_list" | "todo_get" | "todo_add" | "todo_update" | "todo_complete" | "todo_delete") {
         return Err("permission denied: a standalone pane's token can only channel_send / \
                      channel_status — it carries no group-scoped power"
             .into());

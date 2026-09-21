@@ -25,11 +25,17 @@
 //     Two rules make that literally true rather than nearly true, and both
 //     were review findings on #3286 — the near-miss is the whole failure mode
 //     here, so they are stated rather than left to the code. FIRST WINS, for
-//     every class: one date per line, and one TIME per line. A second `at
-//     <time>` is left in the title exactly as a second bare `5pm` and a
-//     second `tomorrow` are — before, the bare-time branch was guarded and
-//     the `at` branch was not, so `call bob at 4pm at 5pm` ate `at 4pm`
-//     and gave back no chip for it. And READING ORDER is the SOURCE order:
+//     every class: one date per line, and one TIME THE HUMAN NAMED per line. A
+//     second `at <time>` is left in the title exactly as a second bare `5pm`
+//     and a second `tomorrow` are — before, the bare-time branch was guarded
+//     and the `at` branch was not, so `call bob at 4pm at 5pm` ate
+//     `at 4pm` and gave back no chip for it.
+//
+//     "the human named" is load-bearing and not a flourish. `tonight` implies
+//     19:00 without the human naming an hour, so it does NOT start the
+//     first-wins clock: `dinner tonight at 8pm` is 20:00, and so is
+//     `dinner tonight 8pm`. Only `timeGiven` gates the rule. And READING
+//     ORDER is the SOURCE order:
 //     every chip records the index of the first token it consumed and the
 //     list is sorted on it, so the due chip sits where its date phrase sits
 //     rather than always first.
@@ -214,6 +220,27 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
   let dueRaw = "";
   let timeOfDay: { hour: number; minute: number } | null = null;
   let timeRaw = "";
+  /**
+   * Did the HUMAN name a time, as opposed to the parse having produced one?
+   *
+   * These are two different questions and `timeOfDay` answers only the first
+   * of them, which is what made the round-1 guard wrong (#3286 review round 2).
+   * `tonight` sets an implied 19:00 without consuming a token or raising a
+   * chip; a guard reading `timeOfDay === null` cannot tell that default from
+   * an hour the human typed, so it refused the explicit `at 8pm` in
+   * `dinner tonight at 8pm` and stranded the words in the title.
+   *
+   * So the FIRST-WINS rule gates on this flag, which only the two explicit
+   * branches set, while `tonight`'s default keeps gating on `timeOfDay` —
+   * "has the parse got an hour yet" is exactly the right question for a
+   * default. An explicit time therefore overrides the default whichever order
+   * they are written in, and two explicit times still resolve first-wins.
+   *
+   * A future branch that produces an hour WITHOUT the human naming one (an
+   * `eod` keyword, a per-user default due time) must set `timeOfDay` and
+   * leave this alone, or it inherits the same silent refusal.
+   */
+  let timeGiven = false;
 
   const lower = tokens.map((t) => t.raw.toLowerCase().replace(/[.,;:?]+$/, ""));
 
@@ -266,27 +293,32 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
     }
 
     // --- at <time> --------------------------------------------------------
-    // `timeOfDay === null` is the SAME guard the bare-time branch below
-    // carries, and it is here because it was missing: without it a second
-    // `at <time>` overwrote `timeRaw` while the first phrase's tokens stayed
-    // consumed, so `call bob at 4pm at 5pm` ate `at 4pm` and reported no
-    // chip for it (#3286 review round 1). One rule for both inputs — the
-    // one-rule-per-guard rule in CLAUDE.md — and first wins, as it does for
-    // dates.
-    if (timeOfDay === null && t === "at" && next) {
+    // `!timeGiven` is the SAME guard the bare-time branch below carries, and
+    // it is here because it was missing: without it a second `at <time>`
+    // overwrote `timeRaw` while the first phrase's tokens stayed consumed, so
+    // `call bob at 4pm at 5pm` ate `at 4pm` and reported no chip for it
+    // (#3286 review round 1). One rule for both inputs — the one-rule-per-guard
+    // rule in CLAUDE.md — and first wins, as it does for dates.
+    //
+    // It reads `timeGiven` and not `timeOfDay === null` because those are
+    // different questions: see `timeGiven`'s own doc. Round 1 shipped the
+    // latter and so refused an explicit time written after `tonight`.
+    if (!timeGiven && t === "at" && next) {
       const tod = parseTimeOfDay(next);
       if (tod) {
         timeOfDay = tod;
+        timeGiven = true;
         timeRaw = takeDue(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
         continue;
       }
     }
     // A bare `4pm` is unambiguous enough to take without the `at`. A bare
     // `16:00` is too — both carry their own unit. A bare `16` is not.
-    if (timeOfDay === null) {
+    if (!timeGiven) {
       const bare = parseTimeOfDay(t);
       if (bare && /[:apm]/i.test(t)) {
         timeOfDay = bare;
+        timeGiven = true;
         timeRaw = takeDue(i, 1, tokens[i].raw);
         continue;
       }
@@ -297,6 +329,11 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
     // --- today / tomorrow / tonight ---------------------------------------
     if (t === "today" || t === "tonight") {
       dueDayMs = dayStart;
+      // Gates on `timeOfDay`, NOT on `timeGiven`: this is a default, and
+      // "has the parse got an hour yet" is the right question for one. An
+      // explicit time already parsed wins; one written later overrides this,
+      // because the branches above gate on `timeGiven`, which a default never
+      // sets.
       if (t === "tonight" && !timeOfDay) timeOfDay = { hour: 19, minute: 0 };
       dueRaw = takeDue(i, 1, tokens[i].raw);
       continue;

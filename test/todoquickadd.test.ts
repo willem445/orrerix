@@ -251,6 +251,52 @@ test("chips come back in SOURCE order, not with the due chip always first", () =
   assert.equal(c.chips[0].raw, "fri 4pm");
 });
 
+test("FAILURE CASE: an implied hour never refuses a time the human named", () => {
+  // #3286 review round 2, a regression round 1 introduced. `tonight` sets an
+  // implied 19:00 without consuming a token or raising a chip, and round 1's
+  // new guard read `timeOfDay === null` — which cannot tell that default from
+  // an hour the human typed. So an explicit time written AFTER `tonight` was
+  // silently refused and its words stranded in the title.
+  //
+  // The PROPERTY test above is blind to this BY CONSTRUCTION, which is why
+  // this one asserts the ANSWER rather than the partition: the refused `at
+  // 8pm` was never consumed, so it came back in the title and the
+  // every-consumed-token-has-a-chip invariant held while the due date was
+  // wrong. A partition pin cannot see a token that was never taken.
+  const a = parseQuickAdd("dinner tonight at 8pm", NOW);
+  assert.equal(a.dueMs, at(0, 20, 0), "the hour the human named wins over tonight's default");
+  assert.equal(a.title, "dinner", "and its words are consumed, not stranded");
+
+  // The bare spelling takes the same rule. This one was wrong BEFORE round 1
+  // as well — the same defect reached through the other branch — and the
+  // one-rule fix resolves both.
+  const b = parseQuickAdd("dinner tonight 8pm", NOW);
+  assert.equal(b.dueMs, at(0, 20, 0));
+  assert.equal(b.title, "dinner");
+
+  // The CONTROL: the reverse word order, which was correct throughout and must
+  // stay correct. Without it this test would pass against an implementation
+  // that simply let the LAST time win.
+  const c = parseQuickAdd("x at 5pm tonight", NOW);
+  assert.equal(c.dueMs, at(0, 17, 0), "an explicit time already parsed is not overridden by the default");
+
+  // And the default still applies when the human named no hour at all.
+  assert.equal(parseQuickAdd("dinner tonight", NOW).dueMs, at(0, 19, 0));
+});
+
+test("first-wins counts only the times the HUMAN named", () => {
+  // The rule the header states, as a pair that separates the two readings.
+  // Gating on "the parse has an hour" makes the first assertion 19:00; gating
+  // on "the human named an hour" makes it 20:00 and leaves the second at
+  // 16:00. Only the second reading satisfies both.
+  assert.equal(parseQuickAdd("dinner tonight at 8pm", NOW).dueMs, at(0, 20, 0));
+  assert.equal(
+    parseQuickAdd("call bob at 4pm at 5pm", NOW).dueMs,
+    at(0, 16, 0),
+    "two times the human named still resolve first-wins"
+  );
+});
+
 test("formatDue is relative near the present and absolute once that stops helping", () => {
   assert.equal(formatDue(at(0), NOW, false), "Today");
   assert.equal(formatDue(at(1), NOW, false), "Tomorrow");

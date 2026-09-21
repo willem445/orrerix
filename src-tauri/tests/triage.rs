@@ -372,14 +372,28 @@ fn with_no_triage_block_not_one_byte_of_delivery_behaviour_moves() {
 #[test]
 fn a_kind_the_repo_left_off_the_list_is_delivered() {
     let f = fixture_with("triage:\n  enabled: true\n  provider: none\n  kinds: [run-completed]");
+
+    // The NAMED kind is held.
     f.notify(RUN_GREEN);
-    f.notify(PLANNER_EXIT);
     assert_eq!(f.reg.deferred_list(&f.g)["count"], Value::from(1), "only the named kind");
-    assert!(
-        f.prompts().iter().any(|t| t.contains("posted its plan")),
-        "the unnamed kind wakes the pane: {:?}",
-        f.prompts()
-    );
+    assert!(!f.prompts().iter().any(|t| t.contains("17812")), "{:?}", f.prompts());
+
+    // The UNNAMED one is a genuine wake — so it both reaches the pane AND
+    // carries the held notice out in front of it. Asserting the count is
+    // still 1 here is what the first version of this test got wrong: it read
+    // the flush, which is the feature working, as the narrowing failing.
+    f.notify(PLANNER_EXIT);
+    let prompts = f.prompts();
+    let frame = prompts
+        .iter()
+        .position(|t| t.starts_with("[orrerix] 1 notice deferred"))
+        .unwrap_or_else(|| panic!("the flush rides in front: {prompts:?}"));
+    let wake = prompts
+        .iter()
+        .position(|t| t.contains("posted its plan"))
+        .expect("the unnamed kind wakes the pane");
+    assert!(frame < wake, "{prompts:?}");
+    assert_eq!(f.reg.deferred_list(&f.g)["count"], Value::from(0), "the flush cleared it");
 }
 
 // ── the config refusals ─────────────────────────────────────────────────────

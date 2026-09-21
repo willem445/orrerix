@@ -1469,10 +1469,22 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   The resident core is paid on every model call under `RESIDENT_CORE_BUDGET` (45,000 B) and
   measures 44,955 B at blob `816a9c22`, so ANY paragraph there would have reddened
   `the_resident_core_is_under_the_byte_budget`. The orchestrator-facing half is a new
-  `## The to-do list` section in `orchestrator-playbook.md`, which is on-demand and has no such
-  budget. That section states in its own text that it has no resident stub and why, so an
-  orchestrator reading it is not left wondering what it missed; it also names the other surface
-  the orchestrator learns these tools from, which is each tool's own MCP description.
+  paragraph folded into `orchestrator-playbook.md`'s EXISTING `## Planning and
+  scheduling` section, which is on-demand and has no such budget. The orchestrator also reads
+  each tool's own MCP description, which carries the same rules; a role file is not the only
+  surface it learns from.
+
+  **It is folded into an existing section rather than given its own, and that is the half of
+  #2815's precedent its entry above does not make obvious.**
+  `every_playbook_section_has_a_resident_stub_naming_it` is default-deny over the playbook's
+  own headings, with no allowlist: every section must be named by a `read_playbook("<id>")`
+  stub in the RESIDENT core, because the failure mode of an on-demand playbook is not an
+  unreadable section but an orchestrator that never knows to ask. So a new section costs
+  resident bytes too, and there are 45 of them — which is why #2815 put its orchestrator-facing
+  half into the existing planning section rather than opening one. A first draft of this slice
+  added a standalone `## The to-do list` section with a paragraph explaining why it had no
+  stub; that guard caught it, correctly, and this is the record so the next person reading the
+  entry above does not repeat it.
 
   (Dated to the BLOB of the one file that can move the figure, not to a commit: a rebase
   invalidates every SHA while leaving the blob — and so the measurement — checkable, and when

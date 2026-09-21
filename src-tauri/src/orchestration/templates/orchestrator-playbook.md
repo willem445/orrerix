@@ -442,6 +442,22 @@ that waits for the batch, never the build.
 review; batching without the named-reason bound trades a real review for a
 nominal one, which is worse than the split it replaced.
 
+**The human's to-do list is not your queue.** `todo_list` / `todo_get` / `todo_add` /
+`todo_update` / `todo_complete` / `todo_delete` reach the personal list the human keeps in
+orrerix's To-Do pane, and it is a different thing from the board: work this group owns is a
+board task, and a to-do is theirs. Use it for what the board cannot hold — something the human
+must do personally, or a note about a project this group is not driving — and prefer the board
+for everything else. `scope` defaults to `workspace`, derived from your own group's repo and
+not nameable as an argument, so an id outside {the global list, your workspace} reads back
+`unknown todo` — that means it is not yours to touch, not that it is missing. Every non-Solo
+role in every group has these six, so a worker writes down what it noticed itself and you
+neither route that nor hear about it. **Groom, never sweep:** read before you add so you update
+the item already there, pass `if_rev` on anything you did not create, complete only what you
+KNOW is done, and delete one at a time and only when asked. Writes and refusals are both
+audited on the caller's group (`todo-add`/`update`/`complete`/`delete`, and `todo-refused`
+with the reason) — a delegate hitting a cap over and over is a loop to stop, not a limit to
+work around.
+
 ## Engineering standards
 
 INVARIANT 4, made concrete. Acceptance criteria say what a change must *do*, never what it must
@@ -549,44 +565,6 @@ re-bound to a live pane` — call `queue_orphans()` and work the list (see **Dur
 as a `DROPPED` notice. **Never re-send on any of the three without checking `queue_orphans()`
 first**: two of them describe deliveries that are already on their way.
 
-## The to-do list
-
-`todo_list` / `todo_get` / `todo_add` / `todo_update` / `todo_complete` / `todo_delete` reach
-the personal To-Do list the human keeps in orrerix's To-Do pane. It is **not** the task board:
-`list_tasks` is this group's work and belongs to you, a to-do is the human's own and does not.
-The two are unrelated, and nothing you do to one touches the other.
-
-**This section has no resident stub in `orchestrator.md`, and that is deliberate rather than an
-oversight.** The resident core is paid on every model call under a byte budget it is already at,
-so a paragraph could not go there without pushing it over — the same call #2815 made for
-`post_issue_comment`, and recorded in the `pre222` re-bless log. You also read each tool's own
-MCP description, which carries the same rules in full; a role file is not the only surface you
-learn from. So read this section when the human mentions their list, or when a delegate's report
-says it put something on it.
-
-`scope` defaults to `workspace` — this project's list, derived from your group's repo, which you
-cannot override with an argument — and `global` is the one list that follows the human
-everywhere. Every non-Solo role in every group has these six, which is the point: a worker that
-notices a follow-up with the code in front of it writes it down itself, and you neither route
-that nor hear about it.
-
-**What you do with it:**
-
-- **Prefer the board.** Work this group owns is a board task, not a to-do. Use the list for what
-  the board cannot hold — something the human must do personally, or a note about a project this
-  group is not driving.
-- **Groom, never sweep.** Read before you add, so you `todo_update` the item already there rather
-  than leaving a second row saying the same thing. Pass `if_rev` on anything you did not create,
-  so a concurrent edit refuses your write instead of silently replacing the human's. Complete only
-  what you KNOW is done. Delete one item at a time and only when asked — a list swept clean by an
-  agent is the failure this whole feature would be remembered for.
-- **A cap refusal is a signal, not a retry.** The caps (500-character title, 20 KB notes, 20 tags,
-  100 steps, 5,000 live items per list) refuse rather than truncate, and every refusal is audited
-  as `todo-refused` on the group whose agent made it. A delegate hitting one repeatedly is a loop
-  to stop, not a limit to work around.
-- **An id you cannot see reads as `unknown todo`.** Another project's list is not visible to this
-  group, and the refusal is deliberately identical to the one an id that never existed gets — so
-  an unexpected `unknown todo` means the item is not yours to touch, not that it is missing.
 ## Merge gate
 
 INVARIANT 1, and it is not advice you can override: every agent pane runs `gh` through an orrerix

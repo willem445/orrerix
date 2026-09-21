@@ -447,12 +447,20 @@ anything you did not create; delete one at a time and only when asked).
 `orchestrator.md` does **not**: it measures 44,955 B at blob `816a9c22` against
 `RESIDENT_CORE_BUDGET`'s 45,000, so a paragraph there would redden
 `the_resident_core_is_under_the_byte_budget`. The orchestrator-facing half is
-the `## The to-do list` section of `orchestrator-playbook.md`, which is
-on-demand and unbudgeted — the precedent #2815 set for `post_issue_comment`,
-re-derived here rather than inherited, and recorded in the `pre222` re-bless log
-where the next role-template editor will look. That section says in its own
-text that it has no resident stub and why, so an orchestrator reading it is not
-left wondering what it missed.
+a paragraph folded into `orchestrator-playbook.md`'s EXISTING
+`## Planning and scheduling` section, which is on-demand and unbudgeted.
+
+**A NEW playbook section would not have worked, and that is the part worth
+recording.** `every_playbook_section_has_a_resident_stub_naming_it` is default-deny over the
+playbook's own headings with no allowlist: every section must be named by a
+`read_playbook("<id>")` stub in the resident core, because the failure mode of an
+on-demand playbook is not an unreadable section but an orchestrator that never
+knows to ask. A stub costs more than the 45 bytes available, so a standalone
+section is structurally unavailable here — and folding into a section whose stub
+already exists is what #2815 actually did, rather than what its log entry reads
+like at a glance. The rule lands where an orchestrator already reads about what
+belongs on the board, which is the right place for "the to-do list is not your
+queue" anyway.
 
 ### No seventh tool
 

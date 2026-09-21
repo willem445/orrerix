@@ -110,26 +110,55 @@ attempts the enqueue and turns a refusal — a gate the queue's own re-check doe
 not accept, `also:` conditions unmet, a state file it cannot read — back into a
 delivery.
 
-**The vocabulary is `orch-scorecard.cjs`'s**, not a second classifier.
-`doc/design/orchestration-evals.md` §4.1 and that script already decide an
-orchestrator-bound prompt's class from its leading shape, and the census that
-motivated this feature was taken with them. `triage::classify` is the same table
-in Rust — hand-written prefix tests rather than regexes, because the engine has
-no `regex` dependency and CLAUDE.md constraint 2 is not worth spending on one —
-with the same classes and the same first-match-wins order.
+**The vocabulary is inherited from `orch-scorecard.cjs`, and it is not
+identical to it.** `doc/design/orchestration-evals.md` §4.1 and that script
+already decide an orchestrator-bound prompt's class from its leading shape, and
+the census that motivated this feature was taken with them. `triage::classify`
+reuses those shapes, their first-match-wins discipline and their class names
+where they exist — hand-written prefix tests rather than regexes, because the
+engine has no `regex` dependency and CLAUDE.md constraint 2 is not worth
+spending on one.
+
+**The four differences are named rather than left to be discovered** (review
+round 1, B4), because the scorecard answers "what did this cost" over a log
+while this answers "must this wake the pane" on the delivery path, and the
+classes diverge where those questions do:
+
+| # | difference | why |
+| --- | --- | --- |
+| 1 | no `verdict-notice` — it folds into `system-notice` | §4.1 calls that tie-break load-bearing for the scorecard; here no rule fires on either class, so both deliver. A rule for one would have to bring the class back first. |
+| 2 | `message-from` split out of `delegate-blocked`, which the scorecard pools | LOAD-BEARING: the plan-chunk rule exists only because `message-from` can be reasoned about apart from a blocked report, which is never triaged |
+| 3 | `pr-checks`, `planner-exited`, `agent-exited` are in neither scorecard table | the census counted them by hand (#3304 Q1), and a rule needs a class to hang on |
+| 4 | `run-completed` requires `run <digits>: completed` | it now matches the scorecard's own regex; an earlier draft accepted any token after `run `, which was looser than the table it claims to reuse, and would have SUPPRESSED a prose line merely shaped like a green run |
+
+A second, divergent classifier is what this module exists not to be. A
+documented, tested divergence is a different thing from an undisclosed one —
+and (4) was a real defect rather than only a documentation gap.
 
 ## 4. The deferral, and its three bounds
 
 A deferred notice is appended to `<group-dir>/deferred.json` and audited
-`delivery-triaged {to, from, kind, action: "rule:<name>"}`. A delivered one is
-audited with the same row and `action` set to the deliver reason.
+`delivery-triaged {to, from, kind, action: "rule:<name>", text}`. A delivered
+one is audited with the same row, `action` set to the deliver reason, and **no
+`text`** — it already has a `prompt` row carrying its text, and a second copy
+would be a second record to keep in step.
+
+**The `text` on a deferral is load-bearing, not diagnostic** (review round 1,
+B1). Before it, the full text of a held notice existed in exactly one place,
+`deferred.json`, and only until the flush cleared it. The deferrable classes
+audit no notice text of their own (the agent-exit row is `{agent, exit_code}`)
+and `prompt` is deliberately not written for a deferral, so a flushed notice’s
+words existed nowhere afterwards. That made three of this feature’s own claims
+false at once: the flush frame’s pointer, the "in the audit log either way"
+sentence below, and "NOTHING IS EVER DROPPED" for the crash between the clear
+and the paste. One field makes all three true.
 
 It is flushed as ONE framed delivery:
 
 ```
 [orrerix] 3 notices deferred over the last 12 min (flushed because something did
-need you). Each closed by a shape rule, none of them a decision; full text via
-list_deferred():
+need you). Each closed by a shape rule, none of them a decision; full text is on
+this group’s audit log as delivery-triaged:
 - [run-green] run-completed from loomux: [orrerix] run 17812: completed — …
 - …
 ```
@@ -142,9 +171,21 @@ belt-and-braces:
    what it slept through before the thing that woke it;
 2. **`max_defer_minutes`** (default 30, refused outside `1..=240`) — on the
    watchdog's own timer, because bound (1) is a wait on a signal that may never
-   come, and no wait on a fallible signal is unbounded;
+   come, and no wait on a fallible signal is unbounded. It targets **live**
+   orchestrators only (review round 1, B2): flushing at a dead pane would clear
+   the store, have `deliver_prompt` refuse `AgentDead`, and lose every held
+   notice — §1's placement argument reintroduced on the flush side. A group
+   with no live orchestrator keeps holding until one exists;
 3. **`MAX_DEFERRED`** (40) — a CI storm inside one window flushes early rather
    than growing a frame nobody can read.
+
+**Turning triage OFF is a fourth release, and it has to be** (review round 1,
+premortem 1). All three bounds above are gated on the same policy that created
+the entries, so a store held by a policy since switched off — or whose file
+stopped parsing — had nothing that would ever release it: `list_deferred`
+answered `enabled: false, count: N` indefinitely. The flush tick now treats a
+non-empty store under a disabled policy as due immediately. Turning the feature
+off hands back what it is holding.
 
 **Nothing is ever dropped.** The store is written BEFORE the notice leaves the
 delivery path, and a write that fails DELIVERS: a deferral nobody recorded is a
@@ -154,8 +195,8 @@ notice lost at the next restart, and losing one is worse than spending a wake.
 **The flush clears the file before delivering the frame**, and the residual that
 order chooses is stated rather than hidden: a crash between the two costs one
 frame. Clearing afterwards would risk re-delivering the same frame on every
-restart, which is the worse failure — and the notices are in the audit log
-either way.
+restart, which is the worse failure — and every held notice's full text is on
+the audit log either way, which is what the `text` field above is for.
 
 ## 5. Fail-safe is DELIVER, at every layer
 

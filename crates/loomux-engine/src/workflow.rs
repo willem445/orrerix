@@ -4050,7 +4050,8 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 .to_string();
             if provider != crate::triage::PROVIDER_NONE {
                 errs.push(format!(
-                    "triage.provider: must be {:?} - this build ships the RULE tier only, and a                      classifier provider arrives in #3304 S3 (got {provider:?})",
+                    "triage.provider: must be {:?} - this build ships the RULE tier only, \
+                     and a classifier provider arrives in #3304 S3 (got {provider:?})",
                     crate::triage::PROVIDER_NONE,
                 ));
             }
@@ -4083,7 +4084,8 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                         crate::triage::TRIAGE_MAX_DEFER_MINUTES_MAX,
                     ),
                     crate::triage::TRIAGE_MAX_DEFER_MINUTES_DEFAULT,
-                    "a notice held longer than four hours is a notice nobody is coming back to,                      and holding one for less than a minute saves no wake at all",
+                    "a notice held longer than four hours is a notice nobody is coming back \
+                     to, and holding one for less than a minute saves no wake at all",
                     &mut errs,
                 ),
             }

@@ -43,8 +43,8 @@ use std::path::PathBuf;
 use serde_json::json;
 
 use super::{
-    atomic_write, brand, load_active_workflow, now_ms, triage, workflow, Delivery, GroupId,
-    LockExt, OrchRegistry, Role,
+    atomic_write, brand, load_active_workflow, now_ms, triage, workflow, AgentStatus, Delivery,
+    GroupId, LockExt, OrchRegistry, Role,
 };
 
 /// What [`OrchRegistry::triage_delivery`] tells its caller to do.
@@ -231,20 +231,27 @@ impl OrchRegistry {
                 // restart, and losing one is worse than spending a wake.
                 match self.store_deferred(group, &store) {
                     Ok(()) => {
-                        self.audit_triaged(group, to, from, kind, &format!("rule:{}", rule.as_str()));
+                        self.audit_triaged(
+                            group,
+                            to,
+                            from,
+                            kind,
+                            &format!("rule:{}", rule.as_str()),
+                            Some(text),
+                        );
                         Triaged::Deferred
                     }
                     Err(why) => {
                         self.audit(group, brand::AUDIT_ACTOR, "delivery-triage-fault", json!({
                             "at": "store", "why": why, "to": to,
                         }));
-                        self.audit_triaged(group, to, from, kind, "delivered");
+                        self.audit_triaged(group, to, from, kind, "delivered", None);
                         Triaged::Deliver { flush: None }
                     }
                 }
             }
             triage::Decision::Deliver(reason) => {
-                self.audit_triaged(group, to, from, kind, reason.as_str());
+                self.audit_triaged(group, to, from, kind, reason.as_str(), None);
                 Triaged::Deliver {
                     flush: self.take_deferred_locked(group, to, triage::FlushCause::Wake),
                 }
@@ -255,12 +262,42 @@ impl OrchRegistry {
         }
     }
 
-    /// One `delivery-triaged` row. `action` is `deferred`'s spelling
-    /// (`rule:<name>`), or `delivered`'s reason.
-    fn audit_triaged(&self, group: &GroupId, to: &str, from: &str, kind: triage::Kind, action: &str) {
-        self.audit(group, brand::AUDIT_ACTOR, "delivery-triaged", json!({
+    /// One `delivery-triaged` row. `action` is a deferral's spelling
+    /// (`rule:<name>`) or a delivery's reason.
+    ///
+    /// **A DEFERRAL carries the notice's full `text`; a delivery does not**,
+    /// and the asymmetry is the whole point (review round 1, B1). A delivered
+    /// notice already has a `prompt` row carrying its text, so repeating it
+    /// here would duplicate the record. A deferred one has NO other
+    /// text-bearing row anywhere — `prompt` is deliberately not written for it
+    /// (see the hook), and the deferrable classes' own emitters do not audit
+    /// their notice text either (the agent-exit row is `{agent, exit_code}`).
+    ///
+    /// Without this field the full text existed in exactly ONE place,
+    /// `deferred.json`, and only until the flush cleared it — which made three
+    /// of this feature's own claims false at once: the frame's "read the full
+    /// text with `list_deferred()`" (the store is emptied BEFORE the frame is
+    /// delivered, so the tool answers `count: 0`), the design note's "the
+    /// notices are in the audit log either way", and "NOTHING IS EVER DROPPED"
+    /// for the crash between the clear and the paste. One field makes all
+    /// three true. It is the shape `watch-fired` and `prompt` rows already
+    /// use.
+    fn audit_triaged(
+        &self,
+        group: &GroupId,
+        to: &str,
+        from: &str,
+        kind: triage::Kind,
+        action: &str,
+        text: Option<&str>,
+    ) {
+        let mut detail = json!({
             "to": to, "from": from, "kind": kind.as_str(), "action": action,
-        }));
+        });
+        if let Some(t) = text {
+            detail["text"] = json!(t);
+        }
+        self.audit(group, brand::AUDIT_ACTOR, "delivery-triaged", detail);
     }
 
     /// Empty the store and return the framed notice for what was in it, or
@@ -309,11 +346,22 @@ impl OrchRegistry {
     /// Returns the group ids it flushed, for the tests.
     pub fn triage_flush_tick(&self, now_ms: u64) -> Vec<GroupId> {
         // Which groups have an orchestrator at all, and which pane it is.
+        // LIVE orchestrators only (review round 1, B2). Without the status
+        // check this clears the store under the lock, `deliver_prompt` refuses
+        // `AgentDead`, the error is discarded, and the frame plus every held
+        // notice are gone — a relaunched orchestrator inheriting an empty
+        // store. That is precisely what §1's placement argument says must not
+        // happen ("a notice bound for a dead pane must not be deferred into a
+        // store that will later flush it at a pane that no longer exists"),
+        // reintroduced on the flush side. `deliver_to_orchestrator` filters
+        // the same way; a relaunched LIVE pane still gets the flush, and a
+        // group with no live orchestrator simply keeps holding until one
+        // exists.
         let roots: Vec<(GroupId, String)> = self
             .agents
             .lock_safe()
             .values()
-            .filter(|a| a.role == Role::Orchestrator)
+            .filter(|a| a.role == Role::Orchestrator && a.status != AgentStatus::Dead)
             .map(|a| (a.group.clone(), a.id.clone()))
             .collect();
         let mut flushed = Vec::new();
@@ -324,10 +372,15 @@ impl OrchRegistry {
             if self.is_paused(&group) {
                 continue;
             }
+            // A store held by a policy that has since been turned OFF — or
+            // whose file stopped parsing — is flushed rather than stranded
+            // (review round 1, premortem 1). All three bounds are gated on the
+            // same policy that created the entries, so `continue` here left
+            // the stragglers with nothing that would ever release them:
+            // `list_deferred` answered `enabled: false, count: N` forever.
+            // Turning the feature off must hand back what it is holding.
             let policy = self.triage_policy(&group);
-            if !policy.enabled {
-                continue;
-            }
+            let disabled_with_stragglers = !policy.enabled;
             // Load-decide-take under ONE acquisition, so a delivery landing
             // mid-tick cannot have its deferral erased by a flush that read the
             // file before it (`mq_state_lock`'s own lost-update shape).
@@ -336,7 +389,16 @@ impl OrchRegistry {
             let notice = {
                 let _guard = self.triage_defer_lock.lock_safe();
                 let store = self.load_deferred(&group);
-                match store.due(now_ms, policy.max_defer_minutes) {
+                if store.is_empty() {
+                    continue;
+                }
+                // Off: due NOW, whatever the clock says.
+                let due = if disabled_with_stragglers {
+                    Some(triage::FlushCause::Deadline)
+                } else {
+                    store.due(now_ms, policy.max_defer_minutes)
+                };
+                match due {
                     None => continue,
                     Some(cause) => self.take_deferred_locked(&group, &orch, cause),
                 }

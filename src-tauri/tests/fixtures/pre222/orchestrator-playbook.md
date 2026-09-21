@@ -582,10 +582,12 @@ watchdog stall and a re-grounding notice are never triaged at all.
 Nothing is dropped. What was held comes to you as ONE framed `[orrerix] N notices deferred …`
 line in front of the next delivery that DID need you, or on its own if nothing needs you before
 `max_defer_minutes`. Read that frame rather than ignoring it: it is the only place several
-notices are summarised rather than delivered whole. `list_deferred()` reads the full text of
-whatever is held right now, which is what to call when you are about to make a call one of them
-might bear on, or when you are re-grounding after a compact and want to know what happened while
-you were not reading. Every deferral is also in `audit.jsonl` as `delivery-triaged`.
+notices are summarised rather than delivered whole — and each deferral's FULL text is on
+`audit.jsonl` as a `delivery-triaged` row, which is where the frame itself points you, because
+the frame is only ever a summary. `list_deferred()` answers a different question, "what is held
+RIGHT NOW", which is what to call when you are about to make a call one of them might bear on,
+or when you are re-grounding after a compact; by the time you read a flush frame, what it
+describes has already been released and that tool will say `count: 0`.
 
 ## Merge gate
 

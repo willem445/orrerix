@@ -162,6 +162,22 @@ impl Fixture {
     }
 }
 
+/// Every `delivery-triaged` row's `(kind, action, text)`.
+fn triaged_rows(f: &Fixture) -> Vec<(String, String, Option<String>)> {
+    f.reg
+        .audit_log(&f.g)
+        .into_iter()
+        .filter(|e| e.action == "delivery-triaged")
+        .map(|e| {
+            (
+                e.detail["kind"].as_str().unwrap_or_default().to_string(),
+                e.detail["action"].as_str().unwrap_or_default().to_string(),
+                e.detail.get("text").and_then(|t| t.as_str()).map(str::to_string),
+            )
+        })
+        .collect()
+}
+
 /// The other half of `tests/orchestration.rs`'s #464 allowlist row for this
 /// file (`no_registry_construction_bypasses_the_test_agent_dir_overrides`).
 ///
@@ -320,6 +336,121 @@ fn a_held_notice_survives_a_restart_rather_than_being_dropped() {
     let list = reg2.deferred_list(&f.g);
     assert_eq!(list["count"], Value::from(1), "the held notice is still there: {list}");
     assert_eq!(list["items"][0]["text"], Value::from(RUN_GREEN), "in full, not summarised");
+}
+
+/// Review round 1, B1. The deferral's audit row carries the notice's FULL
+/// text, and that is the only permanent copy of it.
+///
+/// `deferred.json` holds the text only until the flush clears it, and the
+/// deferrable classes' own emitters audit no text of their own — so without
+/// this field, a flushed notice's words exist nowhere, which is what makes
+/// "nothing is ever dropped" and the frame's own pointer true or false.
+#[test]
+fn a_deferrals_audit_row_carries_the_full_text_and_outlives_the_flush() {
+    let f = fixture();
+    f.notify(RUN_GREEN);
+
+    let rows = triaged_rows(&f);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, "run-completed");
+    assert_eq!(rows[0].1, "rule:run-green");
+    assert_eq!(rows[0].2.as_deref(), Some(RUN_GREEN), "the full text, not a quote of it");
+
+    // Flush it, which empties the store — the state the frame is read in.
+    f.notify(DONE);
+    assert_eq!(f.reg.deferred_list(&f.g)["count"], Value::from(0));
+
+    // The text survives the clear. This is the assertion the design note's
+    // "the notices are in the audit log either way" rests on.
+    let after = triaged_rows(&f);
+    assert!(
+        after.iter().any(|(_, a, t)| a == "rule:run-green" && t.as_deref() == Some(RUN_GREEN)),
+        "the flushed notice's text must still be recoverable: {after:?}"
+    );
+
+    // A DELIVERED notice carries no `text` here — it already has a `prompt`
+    // row, and duplicating it would be a second record to keep in step.
+    assert!(
+        after.iter().any(|(k, a, t)| k == "delegate-done" && a == "no-rule" && t.is_none()),
+        "{after:?}"
+    );
+}
+
+/// Review round 1, B1a. The frame sends the reader to a record that still
+/// exists when they read it.
+#[test]
+fn the_frame_points_at_the_audit_log_not_at_an_emptied_tool() {
+    let f = fixture();
+    f.notify(RUN_GREEN);
+    f.notify(DONE);
+    let frame = f
+        .prompts()
+        .into_iter()
+        .find(|t| t.starts_with("[orrerix] 1 notice deferred"))
+        .expect("the frame is delivered");
+    assert!(frame.contains("audit log as delivery-triaged"), "got: {frame}");
+    assert!(
+        !frame.contains("list_deferred"),
+        "the store is empty by the time this is read: {frame}"
+    );
+}
+
+/// Review round 1, B2. The deadline flush never targets a dead pane.
+///
+/// Without the status filter this cleared the store under the lock,
+/// `deliver_prompt` refused `AgentDead`, the error was discarded, and every
+/// held notice was gone — a relaunched orchestrator inheriting an empty store.
+#[test]
+fn the_deadline_flush_never_empties_the_store_at_a_dead_pane() {
+    let f = fixture();
+    f.notify(RUN_GREEN);
+    let held_at = f.reg.deferred_list(&f.g)["items"][0]["ts_ms"].as_u64().expect("ts");
+    let deadline = held_at + u64::from(triage::TRIAGE_MAX_DEFER_MINUTES_DEFAULT) * 60_000;
+
+    // The orchestrator's pane exits.
+    f.reg.on_pty_exit(8801, Some(0), "", 0, true);
+
+    assert!(
+        f.reg.triage_flush_tick(deadline).is_empty(),
+        "a dead pane is not a flush target"
+    );
+    assert_eq!(
+        f.reg.deferred_list(&f.g)["count"],
+        Value::from(1),
+        "the held notice waits for a live pane rather than being spent at a dead one"
+    );
+}
+
+/// Review round 1, premortem 1. Turning triage OFF hands back what it is
+/// holding, rather than stranding it.
+///
+/// All three bounds are gated on the same policy that created the entries, so
+/// a store held by a policy since turned off had nothing that would ever
+/// release it: `list_deferred` answered `enabled: false, count: N` forever.
+#[test]
+fn turning_triage_off_releases_what_it_was_holding() {
+    let f = fixture();
+    f.notify(RUN_GREEN);
+    assert_eq!(f.reg.deferred_list(&f.g)["count"], Value::from(1));
+
+    // The repo author edits the file: same group, same store, triage off.
+    fs::write(
+        f._repo.repo.join(".loomux").join("workflow.yml"),
+        workflow_yaml("triage:\n  enabled: false\n  provider: none"),
+    )
+    .unwrap();
+    assert_eq!(f.reg.deferred_list(&f.g)["enabled"], Value::from(false));
+
+    // The very next tick releases it, whatever the clock says — the entry is
+    // nowhere near its deadline.
+    let flushed = f.reg.triage_flush_tick(0);
+    assert_eq!(flushed, vec![f.g.clone()], "the stragglers are handed back");
+    assert_eq!(f.reg.deferred_list(&f.g)["count"], Value::from(0));
+    assert!(
+        f.prompts().iter().any(|t| t.starts_with("[orrerix] 1 notice deferred")),
+        "and they reach the pane: {:?}",
+        f.prompts()
+    );
 }
 
 // ── what is NEVER held ──────────────────────────────────────────────────────

@@ -2738,8 +2738,10 @@ re-grounding notice, and your own words relayed from a manager or lead pane. And
 to deliver, so a notice kind a later release adds wakes the pane until somebody teaches
 triage about it.
 
-**Nothing is dropped.** A held notice is written to the group's directory, recorded in
-`audit.jsonl` as `delivery-triaged`, and readable in full with `list_deferred()`. It
+**Nothing is dropped.** A held notice is written to the group's directory and recorded in
+`audit.jsonl` as a `delivery-triaged` row **carrying its full text** — that row is permanent,
+so a notice's words survive the flush that clears the store. `list_deferred()` reads what is
+held right now, which is a different question and answers `count: 0` once a flush has gone. It
 comes back as ONE framed `[orrerix] N notices deferred …` line in front of the next
 delivery that DID need the pane, or on its own if nothing does within
 `max_defer_minutes` — which is refused outside `1..=240`, because the number says how

@@ -14,13 +14,38 @@
 //! cannot be talked out of its answer by the text it is routing, which matters
 //! because every string it reads is agent-authored.
 //!
-//! THE VOCABULARY IS NOT NEW. `doc/design/orchestration-evals.md` §4.1 and
-//! `scripts/orch-scorecard.cjs` already classify an orchestrator-bound prompt
-//! by its leading shape, and the census that motivated this module was taken
-//! with that classifier. [`classify`] is that same table in Rust — the engine
-//! has no `regex` dependency, so the patterns are hand-written prefix tests,
-//! but the CLASSES and their order are the scorecard's. A second, divergent
-//! classifier is exactly what this module exists not to be.
+//! THE VOCABULARY IS INHERITED, AND IT IS NOT IDENTICAL.
+//! `doc/design/orchestration-evals.md` §4.1 and `scripts/orch-scorecard.cjs`
+//! already classify an orchestrator-bound prompt by its leading shape, and the
+//! census that motivated this module was taken with that classifier.
+//! [`classify`] reuses its shapes, its first-match-wins discipline and its
+//! class names where they exist — the engine has no `regex` dependency, so the
+//! patterns are hand-written prefix tests rather than regexes.
+//!
+//! **It is NOT the same table, and the four differences are named here rather
+//! than left for a reader to find** (review round 1, B4). The scorecard answers
+//! "what did this cost", over a log; this answers "must this wake the pane", on
+//! the delivery path. The classes diverge where those questions do:
+//!
+//! 1. **No `verdict-notice`.** The scorecard's fifth wake class — whose
+//!    tie-break §4.1 calls load-bearing, a verdict echo being a verdict notice
+//!    rather than a system notice — folds into [`Kind::SystemNotice`] here.
+//!    Nothing is lost, because no rule fires on either and both deliver. A rule
+//!    written for one would have to bring the class back first.
+//! 2. **`message-from` is split out of `delegate-blocked`.** The scorecard
+//!    pools them — a "message from" arm sits inside its `delegate-blocked`
+//!    regex — and here they are separate classes. The split is LOAD-BEARING:
+//!    the plan-chunk rule exists only because `message-from` can be reasoned
+//!    about apart from a blocked report, which is never triaged at all.
+//! 3. **Three classes the scorecard has no row for**: [`Kind::PrChecks`],
+//!    [`Kind::PlannerExited`] and [`Kind::AgentExited`]. The census counted
+//!    those by hand (#3304 Q1), and a rule needs a class to hang on.
+//! 4. **`run-completed` is matched the scorecard's way** — `run <digits>:
+//!    completed`. An earlier draft accepted any token after `run `, which was
+//!    looser than the table it claims to reuse.
+//!
+//! A second, divergent classifier is what this module exists not to be. A
+//! documented, tested divergence is a different thing from an undisclosed one.
 //!
 //! FAIL-SAFE IS DELIVER. Every shape this module does not positively recognise
 //! as closing by rule is delivered, so a new notice kind, a reworded one, and
@@ -274,7 +299,9 @@ pub fn classify(text: &str) -> Kind {
     if rest.starts_with("watchdog: ") {
         return Kind::Watchdog;
     }
-    if rest.starts_with("run ") && rest.contains(": completed") {
+    // `run <digits>: completed` — the scorecard's own shape, not a looser
+    // "any token after `run `" (review round 1, B4(4)).
+    if run_completed(rest) {
         return Kind::RunCompleted;
     }
     if rest.starts_with("PR #") && rest.contains(" checks: ") {
@@ -601,6 +628,14 @@ pub fn decide(input: &Input<'_>, policy: &Policy) -> Decision {
     }
 }
 
+/// `run <digits>: completed` — at least one digit, and the digits are the
+/// whole of the run id.
+fn run_completed(rest: &str) -> bool {
+    let Some(tail) = rest.strip_prefix("run ") else { return false };
+    let Some((id, after)) = tail.split_once(':') else { return false };
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) && after.starts_with(" completed")
+}
+
 /// The PR a drive notice names.
 pub fn pr_of(text: &str) -> Option<u64> {
     drive_notice(body(text)?).map(|(pr, _)| pr)
@@ -715,10 +750,17 @@ impl Deferred {
             FlushCause::Deadline => "flushed on the deferral deadline",
             FlushCause::Full => "flushed because the deferred store filled",
         };
+        // The frame points at the audit log, NOT at `list_deferred()` (review
+        // round 1, B1a): the store is emptied BEFORE this frame is delivered,
+        // so by the time the orchestrator could call that tool it answers
+        // `count: 0`. `delivery-triaged` carries each deferral's full text and
+        // is permanent, so it is the record that is actually there to read.
+        // `list_deferred()` answers a DIFFERENT question — what is held right
+        // now — and the tool's own description is where that is said.
         let mut s = format!(
             "{PREFIX}{n} {plural} deferred over the last {mins} min ({tail}). \
-             Each closed by a shape rule, none of them a decision; full text via \
-             list_deferred():"
+             Each closed by a shape rule, none of them a decision; full text is on \
+             this group's audit log as delivery-triaged:"
         );
         for e in &self.entries {
             s.push_str(&format!("\n- [{}] {} from {}: {}", e.rule, e.kind, e.from, quote(&e.text)));
@@ -760,17 +802,23 @@ mod tests {
                         (INVARIANT 3): list_verdicts(\"1758\").";
     const HELD: &str = "[orrerix] review drive PR #1758: HELD (ci-red) — three attempts spent.";
     const CANCELLED: &str = "[orrerix] review drive PR #3: CANCELLED — the human merged it.";
+    // Transcribed from `notify::watch_fired_notice`, INCLUDING the quotes it
+    // writes around a registered note — an earlier draft dropped them, which
+    // made the "transcribed rather than invented" claim above not byte-honest
+    // for this specimen (review round 1, N2).
     const RUN_GREEN: &str =
-        "[orrerix] run 17812: completed — conclusion: success. Note (registered): green → \
-         next merge; red → fix forward. (watch n-1)";
+        "[orrerix] run 17812: completed — conclusion: success. Note (registered): \"green → \
+         next merge; red → fix forward\". (watch n-1)";
     const RUN_RED: &str = "[orrerix] run 17813: completed — conclusion: failure. (watch n-2)";
     const CHECKS_GREEN: &str =
         "[orrerix] PR #241 checks: SUCCESS — all 6 checks passed (watch n-3)";
     const CHECKS_RED: &str = "[orrerix] PR #241 checks: FAILURE — 1 of 6 failed (watch n-3)";
     const PLANNER_EXIT: &str =
         "[orrerix] planner p-1 (plan-2890) posted its plan and exited — its delegate slot is free.";
-    const AGENT_EXIT: &str =
-        "[orrerix] agent w-2902 (worker-adv) exited (code Some(0)) 91000ms after its last output.";
+    // Transcribed from the registry's agent-exit notice, including the clause
+    // an earlier draft invented a different ending for (review round 1, N2).
+    const AGENT_EXIT: &str = "[orrerix] agent w-2902 (worker-adv) exited (code Some(0)) 91000ms \
+                              after spawn — idle. Update your plan and state accordingly.";
     const DONE: &str = "[orrerix] w-2902 reports done: #3304 — PR #3310, CI green.";
     const WATCHDOG: &str = "[orrerix] watchdog: agent w-1 (rev-lead) has been silent 10+ min.";
     const BLOCKED: &str = "[orrerix] w-7 reports blocked: needs a human call on #42.";
@@ -929,6 +977,29 @@ mod tests {
         // NOT a `Defer`: the rule is justified by the enqueue, so the decision
         // stays unresolved until the registry has actually made one.
         assert_eq!(decide(&input(GATE), &on()), Decision::TryEnqueue { pr: 1758 });
+    }
+
+    #[test]
+    fn a_run_notice_needs_a_numeric_id_to_be_one() {
+        // The scorecard requires `run <digits>: completed`, and so does this
+        // (review round 1, B4(4)). A looser `starts_with("run ")` classified
+        // any `run <token>: completed` line as a CI run — and since the rule
+        // DEFERS a green one, a line merely shaped like that would have been
+        // suppressed rather than delivered.
+        let cases: [(&str, Kind); 4] = [
+            (RUN_GREEN, Kind::RunCompleted),
+            ("[orrerix] run 7: completed — conclusion: success.", Kind::RunCompleted),
+            // Not a run id, so not the class, so no rule: DELIVERED.
+            ("[orrerix] run away: completed — conclusion: success.", Kind::SystemNotice),
+            ("[orrerix] run 17a: completed — conclusion: success.", Kind::SystemNotice),
+        ];
+        let got: Vec<(&str, Kind)> = cases.iter().map(|(t, _)| (*t, classify(t))).collect();
+        assert_eq!(got, cases.to_vec());
+        // The consequence that actually matters, not just the class.
+        assert_eq!(
+            decide(&input("[orrerix] run away: completed — conclusion: success."), &on()),
+            Decision::Deliver(DeliverReason::NoRule)
+        );
     }
 
     #[test]
@@ -1107,7 +1178,12 @@ mod tests {
         });
         let n = d.flush_notice(1_120_000, FlushCause::Wake).expect("two entries frame");
         assert!(n.starts_with("[orrerix] 2 notices deferred over the last 2 min"), "got: {n}");
-        assert!(n.contains("list_deferred()"), "the read-back is named: {n}");
+        // The frame names the record that still EXISTS when it is read. It
+        // must not name `list_deferred()`, which answers `count: 0` by then
+        // (review round 1, B1a) — pinned in both directions so the wording
+        // cannot drift back.
+        assert!(n.contains("audit log as delivery-triaged"), "got: {n}");
+        assert!(!n.contains("list_deferred"), "the frame must not send a reader to an empty tool: {n}");
         // The header is ONE paragraph. A `\` line-continuation that collapsed
         // in authoring would ship this literal's own source indentation to the
         // reader — CLAUDE.md, "A user-facing message is ONE paragraph", whose

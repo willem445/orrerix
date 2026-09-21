@@ -1551,3 +1551,11 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   Nothing else in the file moved: the `live-minus-keys == golden` check above ("Verifying a
   re-bless by hand") was run before and after, and the patch on the golden is the patch on its
   live template (18 insertions each).
+
+  **Re-blessed again in the same PR, at review round 1 (B1).** The paragraph told the
+  orchestrator that `list_deferred()` reads the full text of what was just flushed, which is
+  false: the store is emptied BEFORE the frame is delivered, so by the time that frame is read
+  the tool answers `count: 0`. It now points at the `delivery-triaged` audit row, which carries
+  each deferral's full text and is permanent, and says what `list_deferred()` is actually for
+  — what is held RIGHT NOW. Same check run again: patch on golden == patch on live (6 insertions,
+  4 deletions each), `live-minus-keys == golden` OK.

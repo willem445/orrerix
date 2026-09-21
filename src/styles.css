@@ -120,6 +120,20 @@
   --cli-ante: #c3c455;
   --cli-pi: #00d2f0;
 
+  /* The per-LEVEL marks (#3261) — the task board's kind mark and kind chip, and
+     the second sub-table of the identity channel after --cli-* above. "Which
+     level of the epic ⊃ feature ⊃ story ⊃ task ladder is this row" is an
+     identity question, so these obey the identity rule: never in a state
+     position, which is why the board row's LEFT ACCENT (a state position) keeps
+     saying what a row needs from you and the level is its own mark beside the
+     id. An unlabelled row takes the faint-meta ink, not a fifth hue: a row off
+     the ladder carries no level, so it carries no dye. See theme.ts §KIND_HUES. */
+  --kind-epic: #e08a4e;
+  --kind-feature: #72c072;
+  --kind-story: #6aa6de;
+  --kind-task: #c9769b;
+  --kind-unlabelled: #6d6d6d;
+
   /* --- type roles. Sans carries labels and titles; mono is reserved for MACHINE
          IDENTIFIERS — paths, branches, ids, counts, timings — so the mono face always
          means "a literal string the machine gave you".
@@ -3229,9 +3243,25 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
    unbroken token (a path, a branch name) breaks instead of forcing the row
    wider than the pane. The flex-basis is a WANT, not a floor — it is what makes
    the chips ranked below it wrap away first when the pane is narrow. */
+/* The title AREA (#3261) — the whole of it opens the row, so it is the click
+   target, and `.task-title` inside it is only the text. A pointer cursor and a
+   hover tint are what say so; the area is not a <button> because it CONTAINS
+   the row's own controls (the chips, the inline editor), and a button holding a
+   button is invalid and unreachable by keyboard in the order a human expects.
+   The row's own <button class="task-expand"> is the keyboard path. */
+.task-title-area {
+  flex: 1 1 40%; min-width: 0; display: flex; align-items: baseline; gap: 6px;
+  border-radius: 5px; padding: 0 3px; margin: 0 -3px; cursor: pointer;
+}
+.task-title-area:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+/* One line, cut at the budget (#3261). The ellipsis is drawn by src/tasktitle.ts,
+   not by `text-overflow`, so what the row shows is a function of the TITLE and
+   not of the pane's width — which is what lets a test and a tooltip both say
+   exactly what was cut. `nowrap` is still here as the backstop for a name that
+   fits the budget but not the pane. */
 .task-title {
-  flex: 1 1 40%; min-width: 0; white-space: normal; overflow-wrap: anywhere;
-  line-height: 1.4; color: var(--ink); font-weight: 500; cursor: default;
+  flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden;
+  line-height: 1.4; color: var(--ink); font-weight: 500;
 }
 /* The row-level `font-weight: 600` on an active row is set on `.task-row`, so
    the rule above — which targets the element — would out-specify it and an
@@ -3418,22 +3448,79 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
   border-top: 1px solid var(--surface-2);
 }
 /* The Agile level (#1156: enforced, and the authority on what a row is — the
-   id prefix only says where it started). Purple → blue → cyan → dim reads as
-   epic → feature → story → task, reusing the palette the status chips already
-   established rather than introducing a second colour language. */
+   id prefix only says where it started), painted from the level's OWN pigment
+   since #3261. It used to borrow --id-violet / --id-azure / --id-cyan, which
+   gave each of those a second meaning — the failure theme.ts §KIND_HUES exists
+   to close, and the reason --kind-* had to be its own sub-table. */
 .task-chip.kind {
   font-size: 9px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase;
+  background: color-mix(in srgb, var(--kind-hue) 16%, transparent); color: var(--kind-hue);
 }
-.task-chip.kind.k-epic { background: color-mix(in srgb, var(--id-violet) 16%, transparent); color: var(--id-violet); }
-.task-chip.kind.k-feature { background: color-mix(in srgb, var(--id-azure) 16%, transparent); color: var(--id-azure); }
-.task-chip.kind.k-story { background: color-mix(in srgb, var(--id-cyan) 14%, transparent); color: var(--id-cyan); }
-.task-chip.kind.k-task { background: var(--surface-2); color: var(--ink-dim); }
+.task-chip.kind.k-epic { --kind-hue: var(--kind-epic); }
+.task-chip.kind.k-feature { --kind-hue: var(--kind-feature); }
+.task-chip.kind.k-story { --kind-hue: var(--kind-story); }
+.task-chip.kind.k-task { --kind-hue: var(--kind-task); }
+
+/* The compact line's LEVEL MARK (#3261) — the hierarchy, at a glance, for the
+   cost of one 8px square and no horizontal room worth measuring. It is what
+   #2937 could not afford to give the `kind` badge on the compact line: a badge
+   is a word, and a word is width.
+
+   It is a mark and NOT text, so it is exempt from the ink ramp's text floor and
+   held to a UI-component one instead (test/theme.test.ts). Its meaning is also
+   on its tooltip in words, which is what stops the ladder being colour-only. */
+.task-kind-mark {
+  flex: none; width: 8px; height: 8px; border-radius: 2px; align-self: center;
+  border: 1px solid var(--kind-hue);
+  background: color-mix(in srgb, var(--kind-hue) 45%, transparent);
+}
+.task-kind-mark.k-epic { --kind-hue: var(--kind-epic); }
+.task-kind-mark.k-feature { --kind-hue: var(--kind-feature); }
+.task-kind-mark.k-story { --kind-hue: var(--kind-story); }
+.task-kind-mark.k-task { --kind-hue: var(--kind-task); }
+/* Hollow, and on the faint ink — a row off the ladder is not a fifth level, and
+   its mark exists only so the column does not jump on a board that has both. */
+.task-kind-mark.k-unlabelled { --kind-hue: var(--kind-unlabelled); background: transparent; }
+
+/* The row's DESCRIPTION (#3261): one or two sentences the human wrote about
+   what the row IS, shown only when the row is open. Full width under the name,
+   like the notes and grounding sections, so it never competes with it. Plain
+   text — painted as textContent, never markdown — and `pre-wrap` so the width
+   is what wraps it rather than anything in the string. */
+.task-desc {
+  margin: 3px 0 1px 25px; padding: 4px 6px;
+  border-left: 2px solid var(--surface-2); border-radius: 0 5px 5px 0;
+  color: var(--ink-dim); font-size: 11px; line-height: 1.5; white-space: pre-wrap;
+  cursor: text;
+}
+.task-desc.empty { color: var(--ink-faint); font-style: italic; }
+.task-desc-edit { margin: 3px 0 1px 25px; display: flex; gap: 5px; align-items: flex-start; }
+.task-desc-input { flex: 1; min-width: 0; font-size: 11px; line-height: 1.5; resize: vertical; }
+.task-desc-count { flex: none; font-size: 10px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.task-desc-count.over { color: var(--state-danger); }
+/* The expanded row's FULL title (#3261) — where the whole name lives once the
+   budget has cut the compact line, and where double-click-to-edit moved to. A
+   single click in the title area now opens the row, so the compact name could
+   not keep a double-click: the first click re-renders the row out from under
+   the second. */
+.task-title-full {
+  margin: 3px 0 1px 25px; color: var(--ink); font-size: 12px; line-height: 1.4;
+  overflow-wrap: anywhere; cursor: text;
+}
+.task-title-warn { flex: none; font-size: 10px; color: var(--state-attention); }
 /* A level only a hand-edited tasks.json can hold — the backend refuses it on
    write, so it reads as broken rather than as a fifth level. Same red as the
    `missing` dep chip below: both are the "a hand-edited tasks.json produced
-   this" state, not an identity. */
-.task-chip.kind.k-unknown {
-  background: color-mix(in srgb, var(--state-danger) 16%, transparent); color: var(--state-danger); text-transform: none;
+   this" state, not an identity.
+
+   NOT a variant of `.task-chip.kind` (#3261). It used to be `.kind.k-unknown`,
+   and once the level chip started painting its own identity hue on the base
+   rule that made ONE position answer both "which level is this" and "this row
+   is broken" — which is the mix test/theme.test.ts's channel guard forbids, and
+   which it caught. Two questions, two positions. */
+.task-chip.kind-broken {
+  font-size: 9px; font-weight: 600; letter-spacing: 0.3px;
+  background: color-mix(in srgb, var(--state-danger) 16%, transparent); color: var(--state-danger);
 }
 /* The row's sprint badge (#1272). Neutral for the same reason the header lens
    is: "which batch is this in" is an ordering fact, not a state of the work and

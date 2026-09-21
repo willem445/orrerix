@@ -2719,7 +2719,17 @@ export class TasksView {
     // permission, no merge decision, and not the claim guard.
     if (t.kind) {
       const known = (KINDS as readonly string[]).includes(t.kind);
-      const kind = el("span", `task-chip kind k-${known ? t.kind : "unknown"}`, t.kind);
+      // A level the board cannot place is a BROKEN ROW, not a fifth level, so
+      // it takes its own chip class rather than a variant of the level chip
+      // (#3261). One position answers one question: `.task-chip.kind` says
+      // WHICH LEVEL in the identity channel, `.task-chip.kind-broken` says the
+      // board file is wrong, in the state channel — and test/theme.test.ts's
+      // channel guard is what caught them sharing one.
+      const kind = el(
+        "span",
+        known ? `task-chip kind k-${t.kind}` : "task-chip kind-broken",
+        t.kind
+      );
       kind.title = known
         ? `Agile level: ${t.kind} — ${levelRuleText(t.kind)}`
         : `${t.kind} is not one of ${KINDS.join(" | ")} — only a hand-edited tasks.json can hold it`;

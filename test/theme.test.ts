@@ -20,9 +20,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
+import { KINDS } from "../src/taskboard.ts";
 import {
   ANSI_SLOTS,
   CLI_HUES,
+  KIND_HUES,
   CSS_TOKENS,
   IDENTITY,
   IDENTITY_LIT,
@@ -604,12 +606,17 @@ test("no position mixes the state and identity channels across its own variants"
   // is what the identity channel is FOR, and the healthy bar moves while its own siblings
   // stay put. No diff, no failure, a silently desynced ramp.
   const css = stripCssComments(read("../src/styles.css"));
-  // `--cli-*` counts as IDENTITY, not as a fourth channel: "which CLI is this" is the
-  // identity question by definition, and the sub-table exists only because `--id-*` is
-  // bijective with the icon roles (theme.ts §CLI_HUES). Counting it here is what makes that
-  // claim measured — a `--cli-*` token sharing a position with a `--state-*` one fails.
+  // `--cli-*` and `--kind-*` count as IDENTITY, not as further channels: "which CLI is
+  // this" and "which level is this" are both the identity question by definition, and each
+  // sub-table exists only because `--id-*` is bijective with the icon roles (theme.ts
+  // §CLI_HUES, §KIND_HUES). Counting them here is what makes that claim measured — a
+  // `--cli-*` or `--kind-*` token sharing a position with a `--state-*` one fails.
   const channelOf = (t: string) =>
-    t.startsWith("--state-") ? "state" : t.startsWith("--id-") || t.startsWith("--cli-") ? "identity" : null;
+    t.startsWith("--state-")
+      ? "state"
+      : t.startsWith("--id-") || t.startsWith("--cli-") || t.startsWith("--kind-")
+        ? "identity"
+        : null;
 
   // property -> selector -> channel, for every rule that paints a channel token.
   const paints = new Map<string, Map<string, string>>();
@@ -645,6 +652,107 @@ test("no position mixes the state and identity channels across its own variants"
     "these positions answer two different questions depending on the variant, so the token " +
       `layer can move one of them without the others:\n${mixed.join("\n")}`
   );
+});
+
+// ---------------------------------------------------------------------------
+// The per-LEVEL hues (#3261) — theme.ts §KIND_HUES.
+//
+// Four pigments plus one achromatic mark answering ONE question — which level of
+// the epic ⊃ feature ⊃ story ⊃ task ladder is this board row — in two positions:
+// the compact line's level mark and the expanded row's kind chip.
+// ---------------------------------------------------------------------------
+
+test("every level has a pigment, and the unlabelled row deliberately has none", () => {
+  // Both directions, so a level added to the ladder without a pigment and a
+  // pigment for a level that does not exist BOTH fail here. `TASK_KINDS` lives
+  // in Rust; `src/taskboard.ts`'s `KINDS` is pinned against it by its own test,
+  // and this is the third link of that chain.
+  assert.deepEqual(Object.keys(KIND_HUES).sort(), [...KINDS, "unlabelled"].sort());
+  assert.equal(
+    new Set(Object.values(KIND_HUES)).size,
+    Object.keys(KIND_HUES).length,
+    "two levels painted the same pigment would make the ladder unreadable"
+  );
+  // The unlabelled mark is ACHROMATIC — a row off the ladder carries no level,
+  // so it carries no dye. This is the assertion that makes that a rule rather
+  // than a sentence: r === g === b, the same test the neutral ramp takes.
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(KIND_HUES.unlabelled.slice(i, i + 2), 16));
+  assert.ok(
+    r === g && g === b,
+    `the unlabelled mark carries hue (${KIND_HUES.unlabelled}) — it must be the faint ink, not a fifth level`
+  );
+});
+
+test("every LEVEL hue is readable wherever a mark or a chip can sit", () => {
+  // The four levels take the ramp's own AA floor, because the expanded row's
+  // kind chip carries the level as a WORD in this colour. The board never sits
+  // over the terminal ground, but the floor is checked there too: it costs
+  // nothing and the board is a panel that could be re-parented.
+  for (const k of KINDS) {
+    const value = (KIND_HUES as Record<string, string>)[k];
+    for (const ground of [SEMANTIC.surfaceTerm, SEMANTIC.surface0, SEMANTIC.surface1, SEMANTIC.surface2]) {
+      const ratio = contrast(value, ground);
+      assert.ok(ratio >= 4.5, `${k} (${value}) on ${ground} is ${ratio.toFixed(2)}:1, below AA`);
+    }
+  }
+  // The unlabelled mark is held to the UI-COMPONENT floor instead, and that is
+  // the whole reason it is a separate assertion rather than a fifth iteration:
+  // it is `mist400`, which is BELOW AA by design (see PALETTE §mist), and it
+  // never paints text — `.task-kind-mark.k-unlabelled` is a hollow 8px square.
+  // Asserting AA on it would either fail or force it off the faint ink.
+  for (const ground of [SEMANTIC.surface0, SEMANTIC.surface1, SEMANTIC.surface2]) {
+    const ratio = contrast(KIND_HUES.unlabelled, ground);
+    assert.ok(
+      ratio >= 3,
+      `the unlabelled mark on ${ground} is ${ratio.toFixed(2)}:1, below WCAG 1.4.11's 3:1 for a UI component`
+    );
+  }
+});
+
+test("the level marks stay separable under colour-vision deficiency", () => {
+  // This is what four pigments buys that eight cannot, and theme.ts §KIND_HUES
+  // claims it in prose — so it is re-derived here rather than remembered. The
+  // 9 ΔE floor is the STATE channel's, deliberately: unlike the CLI octet (which
+  // collapses to 1.4 ΔE for a tritanope and is excused because shape and label
+  // carry it), the ladder is what a human scans a board by, and a scanning
+  // channel that collapses is not a channel.
+  const marks = { ...KIND_HUES } as Record<string, string>;
+  for (const kind of CVD_KINDS) {
+    const { distance, a, b } = closestPair(marks, (h) => simulate(h, kind));
+    assert.ok(
+      distance >= 9,
+      `${a} and ${b} are ${distance.toFixed(1)} ΔE apart for a ${kind}ope — the ladder collapses`
+    );
+  }
+  // And at normal vision, well clear of the state channel's own floor.
+  const normal = closestPair(marks, (h) => h);
+  assert.ok(normal.distance >= 25, `${normal.a}/${normal.b} are only ${normal.distance.toFixed(1)} ΔE apart`);
+});
+
+test("one level table: every surface that names a level paints it that level's own token", () => {
+  // The CLI table's guard, applied to the second identity sub-table. Its point
+  // is the failure this PR FIXED: the kind chips used to be painted from
+  // `--id-violet` / `--id-azure` / `--id-cyan`, which gave each of those hues a
+  // second meaning — the exact thing `--kind-*` exists to prevent. Without this,
+  // nothing would stop the next surface reaching for an `--id-*` again.
+  const css = stripCssComments(read("../src/styles.css"));
+  const levels = new Set(Object.keys(KIND_HUES));
+  const wrong: string[] = [];
+  let seen = 0;
+  for (const [, sel, body] of css.matchAll(/\.(?:task-chip\.kind|task-kind-mark)\.k-([a-z]+)\s*\{([^}]*)\}/g)) {
+    if (!levels.has(sel)) {
+      wrong.push(`a rule paints level "${sel}", which is not on the ladder`);
+      continue;
+    }
+    seen += 1;
+    const off = [...new Set(tokensIn(body))].filter((t) => t !== `--kind-${sel}`);
+    if (off.length) wrong.push(`level "${sel}" names ${off.join(", ")}, not --kind-${sel}`);
+  }
+  assert.deepEqual(wrong, [], wrong.join("\n"));
+  // The population control (#1209): this guard is default-deny over rules it
+  // MATCHED, so a renamed class would leave it scanning nothing and passing.
+  // Four levels on the chip, five on the mark.
+  assert.equal(seen, 9, `only ${seen} level rules matched — the selectors this scans have moved`);
 });
 
 test("no rule names a token from the retired legacy bridge", () => {

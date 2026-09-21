@@ -116,6 +116,26 @@ test('the vector corpus exercises every rule and every deliver reason', () => {
   }
 });
 
+test('the three number tests are NOT one rule, because Rust’s three are not', () => {
+  // `drive_notice` and `plan_chunk` parse (`u64`/`u32::parse`), which accepts a
+  // leading `+` and refuses `-`; `run_completed` tests
+  // `chars().all(is_ascii_digit)`, which refuses both. The mirror had assumed
+  // one rule for all three, and no vector covered a sign, so neither pin saw it
+  // (review round 1, finding 2). Asserted here AND as four golden vectors, so
+  // the Rust side confirms this reading of Rust rather than taking my word.
+  assert.equal(ev.classify('[orrerix] review drive PR #+42: GATE SATISFIED at a'), 'drive-gate-satisfied');
+  assert.equal(ev.prOf('[orrerix] review drive PR #+42: GATE SATISFIED at a'), 42);
+  assert.equal(ev.classify('[orrerix] review drive PR #-42: GATE SATISFIED at a'), 'system-notice');
+  assert.equal(ev.classify('[orrerix] run +101: completed — conclusion: success.'), 'system-notice');
+  assert.equal(ev.classify('[orrerix] run 101: completed — conclusion: success.'), 'run-completed');
+  assert.deepEqual(ev.planChunk('---BEGIN PLAN +1/4--- x'), [1, 4]);
+  assert.equal(ev.planChunk('---BEGIN PLAN -1/4--- x'), null);
+  // The negative control for the whole bullet: `Number()` would accept all of
+  // these, so a mirror that used it would pass the positives and fail nothing.
+  assert.equal(ev.planChunk('---BEGIN PLAN 0x2/4--- x'), null);
+  assert.equal(ev.classify('[orrerix] review drive PR # 42: GATE SATISFIED at a'), 'system-notice');
+});
+
 // ---------------------------------------------------------------------------
 // 1b. The vocabulary scan — the half the vectors are blind to.
 // ---------------------------------------------------------------------------
@@ -413,14 +433,94 @@ test('the label parser skips comments and the header and reads the rest', () => 
 
 test('the label parser REFUSES a bad row rather than dropping it silently', () => {
   const parsed = ev.parseLabels(
-    ['100,run-completed,maybe', '2e3,run-completed,fyi', '300,x,fyi', '300,x,routing', '400,x'].join('\n'),
+    [
+      '100,run-completed,maybe',
+      '2e3,run-completed,fyi',
+      '300,x,fyi',
+      '300,x,routing',
+      '400',
+      '500,x,y,fyi',
+    ].join('\n'),
   );
   assert.equal(parsed.labels.size, 1, 'only the first 300 row is kept');
-  assert.equal(parsed.problems.length, 4);
+  assert.equal(parsed.problems.length, 5);
   assert.ok(parsed.problems.some((p: string) => p.includes('"maybe"')), 'an unknown label class');
   assert.ok(parsed.problems.some((p: string) => p.includes('"2e3"')), 'a non-integer ts_ms');
   assert.ok(parsed.problems.some((p: string) => p.includes('duplicate')), 'a duplicate ts_ms');
-  assert.ok(parsed.problems.some((p: string) => p.includes('expected ts_ms')), 'a short row');
+  assert.equal(
+    parsed.problems.filter((p: string) => p.includes('expected ts_ms')).length,
+    2,
+    'a one-column row AND a four-column row are both refused',
+  );
+});
+
+test('the two-column ts_ms,label form the slice names is accepted, kind being DERIVED', () => {
+  // #3304's plan slice specifies `ts_ms,label`; the shipped set is
+  // `ts_ms,kind,label`. `kind` is `classify`'s own answer carried for grouping,
+  // never a labelled field, so a two-column file is COMPLETE and refusing one
+  // would refuse the format the slice names (review round 1, finding 1).
+  const two = ev.parseLabels(['ts_ms,label', '100,decision', '200,fyi'].join('\n'));
+  assert.deepEqual(two.problems, []);
+  assert.equal(two.labels.size, 2);
+  assert.deepEqual(two.labels.get(100), { kind: '', label: 'decision' });
+
+  // And the two forms must agree on the LABEL, which is the only field scored —
+  // a test that only checked the two-column form parses would not catch a
+  // reader taking the label from the wrong column.
+  const three = ev.parseLabels(['ts_ms,kind,label', '100,run-completed,decision'].join('\n'));
+  assert.equal(three.labels.get(100).label, two.labels.get(100).label);
+  assert.equal(three.labels.get(100).kind, 'run-completed');
+});
+
+test('--emit-labels prints the RESIDUAL as fillable CSV, and nothing else', () => {
+  const result = ev.replay(population().deliveries, POLICY, {});
+  const csv = ev.emitLabelTemplate(result.rows);
+  const rows = csv
+    .split('\n')
+    .filter((l: string) => l && !l.startsWith('#') && !l.startsWith('ts_ms'));
+
+  // Exactly the `no-rule` residual: not the rule-closed deliveries, and not
+  // the never-triaged ones — a template covering those would ask for labels
+  // nothing reads, and would put a human's own words in front of a labeller.
+  const residual = result.rows.filter((r: any) => r.action === 'deliver' && r.reason === 'no-rule');
+  assert.equal(rows.length, residual.length);
+  assert.equal(rows.length, 7, 'the synthetic corpus has seven residual deliveries');
+  assert.deepEqual(
+    rows.map((l: string) => Number(l.split(',')[0])),
+    residual.map((r: any) => r.ts_ms),
+  );
+
+  // Every row is `ts_ms,kind,` with the label column EMPTY and ready to fill.
+  for (const l of rows) {
+    const cols = l.split(',');
+    assert.equal(cols.length, 3, `not ts_ms,kind,label: ${l}`);
+    assert.equal(cols[2], '', `the label column must be empty: ${l}`);
+    assert.ok(ev.KINDS.includes(cols[1]), `derived kind is not a triage kind: ${l}`);
+  }
+
+  // The rubric rides in the header: a label set whose rubric lives elsewhere is
+  // a label set whose second labeller answered a different question.
+  for (const cls of ev.PROVIDER_CLASSES) assert.match(csv, new RegExp(`\\b${cls}\\b`));
+  assert.match(csv, /NO DELIVERY TEXT IS EMITTED/);
+
+  // The emitted file must round-trip through the parser once filled — the two
+  // halves are a contract, not two independent formats.
+  const filled = csv.replace(/^(\d+,[a-z-]+),$/gm, '$1,fyi');
+  const parsed = ev.parseLabels(filled);
+  assert.deepEqual(parsed.problems, []);
+  assert.equal(parsed.labels.size, residual.length);
+});
+
+test('--emit-labels exits without printing a report', () => {
+  const { code, out } = runCli([
+    '--audit', path.join(fixtures, 'audit-synth.jsonl'),
+    '--agents', path.join(fixtures, 'agents.json'),
+    '--emit-labels',
+  ]);
+  assert.equal(code, 0);
+  assert.match(out, /^# Hand-label template/);
+  assert.ok(!/FALSE DEFERS/.test(out), "a labeller's file must not carry a report");
+  assert.ok(!/Deferred \d+ \//.test(out), "nor a headline");
 });
 
 test('the shipped hand-label set parses, and is the size it claims', () => {
@@ -459,6 +559,11 @@ test('the markdown report states the denominator and names the false-defer floor
   assert.match(md, /\*\*19\*\* of 21 deliveries carry a hand label/);
   assert.match(md, /\*\*FALSE DEFERS: 3\*\*/);
   assert.match(md, /Kickoff proxy dropped \*\*1\*\*/);
+  // The rotation caveat is printed by the REPORT, not left to whoever pastes
+  // it: `audit.jsonl` rotates, so a population figure is a snapshot and a
+  // reader re-running the command later cannot otherwise tell drift from
+  // breakage (review round 1, finding 3).
+  assert.match(md, /Population figures are a snapshot of a rotating artifact/);
   // The optimistic TryEnqueue resolution must be disclosed in the report, not
   // only in the JSON: the markdown is what gets pasted onto an issue.
   assert.match(md, /resolved optimistically/);

@@ -164,9 +164,19 @@ function driveNotice(rest) {
   const at = after.indexOf(':');
   if (at < 0) return null;
   const num = after.slice(0, at);
-  // Rust parses with `u64::parse`, which refuses an empty string, a sign and
-  // any non-digit. `Number()` accepts all three, so the digit test is explicit.
-  if (num.length === 0 || !/^[0-9]+$/.test(num)) return null;
+  // Rust parses this one with `u64::parse`, and the three functions in this
+  // file do NOT agree on what a number is, so each mirrors its own Rust
+  // counterpart rather than a house rule (review round 1, finding 2):
+  //
+  //   drive_notice  `num.parse::<u64>()`             -> a leading `+` is OK
+  //   plan_chunk    `k.parse::<u32>()`               -> a leading `+` is OK
+  //   run_completed `chars().all(is_ascii_digit)`    -> digits only
+  //
+  // `from_str_radix` matches `[b'+', rest @ ..] => (true, rest)` unconditionally
+  // and gates `-` behind `is_signed_ty`, so an unsigned parse accepts `+42` and
+  // refuses `-42`. `Number()` accepts an empty string, both signs, whitespace,
+  // `0x` and exponents, so the test stays explicit in every one of the three.
+  if (!/^\+?[0-9]+$/.test(num)) return null;
   return [Number(num), after.slice(at + 1)];
 }
 
@@ -177,6 +187,10 @@ function runCompleted(rest) {
   const at = tail.indexOf(':');
   if (at < 0) return false;
   const id = tail.slice(0, at);
+  // DIGITS ONLY, and deliberately not the `\+?` the two parse-based mirrors
+  // above carry: Rust tests this one with `chars().all(is_ascii_digit)`, which
+  // refuses `+42` where `u64::parse` accepts it. Making the three agree here
+  // would be the mirror correcting Rust rather than mirroring it.
   return id.length > 0 && /^[0-9]+$/.test(id) && tail.slice(at + 1).startsWith(' completed');
 }
 
@@ -238,7 +252,10 @@ function planChunk(text) {
   if (slash < 0) return null;
   const ks = parts.slice(0, slash).trim();
   const ns = parts.slice(slash + 1).trim();
-  if (!/^[0-9]+$/.test(ks) || !/^[0-9]+$/.test(ns)) return null;
+  // `k.parse::<u32>()` / `n.parse::<u32>()` in Rust — a leading `+` is
+  // accepted, a `-` is not. See `driveNotice`'s note for why the three
+  // number tests in this file are deliberately not identical.
+  if (!/^\+?[0-9]+$/.test(ks) || !/^\+?[0-9]+$/.test(ns)) return null;
   const k = Number(ks);
   const n = Number(ns);
   if (n < 2 || k === 0 || k > n) return null;
@@ -403,10 +420,19 @@ function isNeedsOrchestrator(cls) {
 }
 
 /**
- * `ts_ms,kind,label` CSV. `#` opens a comment line; a header row naming
- * `ts_ms` is skipped. Deliberately carries NO delivery text: the labelled rows
- * are a live group's agent-authored prose, and a label set is reproducible
- * from the ts alone against the audit it was cut from.
+ * A hand-label CSV. `#` opens a comment line; a header row naming `ts_ms` is
+ * skipped. Deliberately carries NO delivery text: the labelled rows are a live
+ * group's agent-authored prose, and a label set is reproducible from the ts
+ * alone against the audit it was cut from.
+ *
+ * TWO COLUMN FORMS, both accepted, and the reason is not convenience. The
+ * shipped set is `ts_ms,kind,label`; #3304's plan slice specifies
+ * `ts_ms,label`. `kind` is DERIVED, never labelled — it is `classify`'s own
+ * answer, carried so a reader can group the rows without re-reading the audit
+ * — so a two-column file is complete, and refusing one would refuse the
+ * format the slice names (review round 1, finding 1). The label is always the
+ * LAST column; a two-column row's `kind` is recomputed by the caller if it
+ * wants one.
  */
 function parseLabels(text) {
   const out = new Map();
@@ -418,8 +444,8 @@ function parseLabels(text) {
     if (!line || line.startsWith('#')) continue;
     const cols = line.split(',').map((c) => c.trim());
     if (cols[0] === 'ts_ms') continue;
-    if (cols.length < 3) {
-      problems.push(`line ${lineNo}: expected ts_ms,kind,label`);
+    if (cols.length < 2 || cols.length > 3) {
+      problems.push(`line ${lineNo}: expected ts_ms,label or ts_ms,kind,label`);
       continue;
     }
     const ts = Number(cols[0]);
@@ -427,17 +453,70 @@ function parseLabels(text) {
       problems.push(`line ${lineNo}: ts_ms "${cols[0]}" is not an integer`);
       continue;
     }
-    if (!PROVIDER_CLASSES.includes(cols[2])) {
-      problems.push(`line ${lineNo}: label "${cols[2]}" is not one of ${PROVIDER_CLASSES.join('|')}`);
+    const label = cols[cols.length - 1];
+    const kind = cols.length === 3 ? cols[1] : '';
+    if (!PROVIDER_CLASSES.includes(label)) {
+      problems.push(`line ${lineNo}: label "${label}" is not one of ${PROVIDER_CLASSES.join('|')}`);
       continue;
     }
     if (out.has(ts)) {
       problems.push(`line ${lineNo}: duplicate ts_ms ${ts}`);
       continue;
     }
-    out.set(ts, { kind: cols[1], label: cols[2] });
+    out.set(ts, { kind, label });
   }
   return { labels: out, problems };
+}
+
+/**
+ * The hand-label TEMPLATE the slice asks for: the residual, as CSV rows ready
+ * to fill in.
+ *
+ * Emitted rather than described, so a second labeller — the thing standing
+ * between this eval and an S3 go/no-go — starts from a file instead of from a
+ * `--format json` dump they have to reshape. The population is the RESIDUAL
+ * only (the rule tier's `no-rule` arm): a never-triaged delivery is excluded by
+ * construction and a rule-closed one needs no judgement, so a template
+ * covering them would be asking for labels nothing reads.
+ *
+ * The rubric rides in the header, because a label set whose rubric lives
+ * somewhere else is a label set whose second labeller answered a different
+ * question.
+ */
+function emitLabelTemplate(rows) {
+  const L = [
+    '# Hand-label template — emitted by `scripts/orch-triage-eval.cjs --emit-labels`.',
+    '#',
+    '# One row per RESIDUAL delivery (the rule tier left it as deliver: no-rule).',
+    '# Fill the empty last column with ONE of: decision | routing | fyi | escalation.',
+    '#',
+    '# THE RUBRIC — one question per delivery:',
+    '#   Does this notice name an action the ORCHESTRATOR must take, which cannot',
+    '#   be derived from the notice’s leading SHAPE alone, before the group can',
+    '#   proceed?',
+    '#',
+    '#   decision    yes — a call, ruling, approval, routing choice or tool call the',
+    '#               text names. A human line typed into the pane is always a',
+    '#               decision: it is an instruction by construction.',
+    '#   routing     no — the next step is the standard one for this kind and is',
+    '#               readable off the shape.',
+    '#   fyi         nothing is asked and nothing waits on a reply.',
+    '#   escalation  a HUMAN, not the orchestrator, must decide.',
+    '#',
+    '# The eval scores the BINARY: needs-orchestrator = decision + escalation;',
+    '# audit-only = routing + fyi. `kind` is DERIVED, not labelled — it is',
+    '# classify()’s answer, carried so rows can be grouped without re-reading the',
+    '# audit. A two-column `ts_ms,label` file is accepted too.',
+    '#',
+    '# NO DELIVERY TEXT IS EMITTED. Read the rows against the audit this was cut',
+    '# from; the timestamps are the join.',
+    'ts_ms,kind,label',
+  ];
+  for (const row of rows) {
+    if (row.action !== 'deliver' || row.reason !== 'no-rule') continue;
+    L.push(`${row.ts_ms},${row.kind},`);
+  }
+  return `${L.join('\n')}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -766,6 +845,23 @@ function renderMarkdown(ctx) {
       `at ${fmtTokens(TOKENS_PER_WAKE)} per wake (#3304's census figure, not re-measured here).`,
   );
   L.push('');
+  // THE REPRODUCIBILITY LINE, printed by the report itself rather than left to
+  // whoever pastes it. `audit.jsonl` ROTATES: a generation that falls off is
+  // unrecoverable, so every POPULATION-dependent figure above is a snapshot of
+  // the log as it stood, and re-running this command later on the same group
+  // legitimately prints different numbers. Only the LABEL-CONDITIONED figures
+  // below (agreement, the confusion matrix, false defers, wasted wakes) are
+  // reproducible from the shipped CSV, and then only while the labelled rows
+  // are still in a surviving generation. Without this line a reader re-running
+  // the command cannot tell drift from breakage (review round 1, finding 3).
+  L.push(
+    '> **Population figures are a snapshot of a rotating artifact.** `audit.jsonl` rotates and a ' +
+      'dropped generation is unrecoverable, so the population, per-rule and projected-saving rows ' +
+      'above are true of the log as read at this moment and need not reproduce later. The ' +
+      'label-conditioned rows below reproduce from the shipped label CSV for as long as the ' +
+      'labelled timestamps survive in some generation — the report states how many of them it found.',
+  );
+  L.push('');
 
   L.push('### Per rule');
   L.push('');
@@ -899,6 +995,9 @@ const USAGE_TEXT = `
   --kinds A,B         restrict triage to these kinds (default: every kind)
   --no-merge-queue    replay as a repo whose merge_queue is OFF (gate-satisfied delivers)
   --triage-disabled   replay with triage.enabled false — the control: everything delivers
+  --emit-labels       print a hand-label CSV template for the RESIDUAL (one row per
+                      delivery the rule tier left as no-rule, label column empty,
+                      rubric in the header) and exit — for a second labeller
   --no-drop-kickoff   keep the first delivery per orchestrator pane (see the header)
   --from TS           drop audit rows before this epoch-ms
   --cut TS            drop audit rows after this epoch-ms
@@ -924,6 +1023,7 @@ function parseArgs(argv) {
     cut: null,
     group: '',
     format: 'md',
+    emitLabels: false,
     help: false,
   };
   let i = 0;
@@ -944,6 +1044,7 @@ function parseArgs(argv) {
       case '--kinds': opts.kinds = next().split(',').map((s) => s.trim()).filter(Boolean); break;
       case '--no-merge-queue': opts.mergeQueue = false; break;
       case '--triage-disabled': opts.enabled = false; break;
+      case '--emit-labels': opts.emitLabels = true; break;
       case '--no-drop-kickoff': opts.dropKickoff = false; break;
       case '--from': opts.from = Number(next()); break;
       case '--cut': opts.cut = Number(next()); break;
@@ -1004,6 +1105,14 @@ function main(argv, out) {
     merge_queue_enabled: opts.mergeQueue,
   };
   const result = replay(pop.deliveries, policy, { provider, floor: opts.floor });
+
+  // The template is the residual as CSV and nothing else, so it is emitted
+  // BEFORE scoring and returns: a labeller's file must not carry a report.
+  if (opts.emitLabels) {
+    out.write(emitLabelTemplate(result.rows));
+    return 0;
+  }
+
   const scored = score(result, labels);
   const sweepRows =
     provider && labels.size > 0 ? sweep(pop.deliveries, policy, provider, labels, opts.floors || DEFAULT_FLOORS) : [];
@@ -1057,6 +1166,7 @@ module.exports = {
   isNeedsOrchestrator,
   // The harness.
   parseLabels,
+  emitLabelTemplate,
   readJsonl,
   indexRoles,
   deliveries,

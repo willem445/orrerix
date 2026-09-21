@@ -24,7 +24,16 @@
     "  expect.decision       decide(), as {action, reason} | {action, rule} | {action, pr}",
     "",
     "Texts are SYNTHETIC, written to the shapes orrerix emits. No line of a real",
-    "group's agent-authored prose is checked in here."
+    "group's agent-authored prose is checked in here.",
+    "",
+    "THE THREE NUMBER TESTS ARE NOT THE SAME TEST, and the four `+`/`-` cases at",
+    "the end of this file are what pins that. `drive_notice` and `plan_chunk`",
+    "parse with `u64`/`u32::parse`, which accepts a leading `+` and refuses a",
+    "`-`; `run_completed` tests `chars().all(is_ascii_digit)`, which refuses",
+    "both. Nothing orrerix emits carries a sign, so these are unreachable in",
+    "production — they are here because the mirror had assumed one rule for all",
+    "three and the divergence was invisible to both pins until a case existed",
+    "(review round 1, finding 2)."
   ],
   "cases": [
     {
@@ -32,11 +41,17 @@
       "text": "[orrerix] review drive PR #3220: GATE SATISFIED at 7dabd366 (body f523..) — rev-std PASS, rev-final PASS; 2 rounds.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "drive-gate-satisfied",
         "never": null,
-        "decision": { "action": "try-enqueue", "pr": 3220 }
+        "decision": {
+          "action": "try-enqueue",
+          "pr": 3220
+        }
       }
     },
     {
@@ -44,11 +59,17 @@
       "text": "[orrerix] review drive PR #3220: GATE SATISFIED at 7dabd366 (body f523..) — rev-std PASS.",
       "human_actor": false,
       "merge_queue_enabled": false,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "drive-gate-satisfied",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -56,11 +77,17 @@
       "text": "[orrerix] review drive PR #3251: HELD — the worker pushed at 13e6eb8e and the driver has heard nothing since.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "drive-held",
         "never": "held",
-        "decision": { "action": "deliver", "reason": "held" }
+        "decision": {
+          "action": "deliver",
+          "reason": "held"
+        }
       }
     },
     {
@@ -68,11 +95,17 @@
       "text": "[orrerix] review drive PR #3251: CANCELLED — cancel_review_drive was called at 13e6eb8e.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "drive-cancelled",
         "never": null,
-        "decision": { "action": "defer", "rule": "drive-cancelled" }
+        "decision": {
+          "action": "defer",
+          "rule": "drive-cancelled"
+        }
       }
     },
     {
@@ -80,11 +113,17 @@
       "text": "[orrerix] review drive PR #3251: PAUSED — a state nothing emits today.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "system-notice",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -92,11 +131,17 @@
       "text": "[orrerix] run 35636565890: completed — conclusion: success. Note (registered): \"post-merge main run\" (watch n-99)",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "run-completed",
         "never": null,
-        "decision": { "action": "defer", "rule": "run-green" }
+        "decision": {
+          "action": "defer",
+          "rule": "run-green"
+        }
       }
     },
     {
@@ -104,11 +149,17 @@
       "text": "[orrerix] run 35636565890: completed — conclusion: failure. Note (registered): \"post-merge main run\" (watch n-99)",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "run-completed",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -116,11 +167,17 @@
       "text": "[orrerix] run away: completed — conclusion: success.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "system-notice",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -128,11 +185,17 @@
       "text": "[orrerix] PR #3253 checks: SUCCESS — 6 of 7 checks passed (1 skipped). Head at this poll: 0704a27.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "pr-checks",
         "never": null,
-        "decision": { "action": "defer", "rule": "checks-green" }
+        "decision": {
+          "action": "defer",
+          "rule": "checks-green"
+        }
       }
     },
     {
@@ -140,11 +203,17 @@
       "text": "[orrerix] PR #3253 checks: CONFLICTING — GitHub creates no check-suite for a conflicted PR.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "pr-checks",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -152,11 +221,17 @@
       "text": "[orrerix] planner Planner (plan-2890) posted its plan and exited — the slot is free.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "planner-exited",
         "never": null,
-        "decision": { "action": "defer", "rule": "planner-exited" }
+        "decision": {
+          "action": "defer",
+          "rule": "planner-exited"
+        }
       }
     },
     {
@@ -164,11 +239,17 @@
       "text": "[orrerix] agent w-2784: bump 1.3.0 (w-2784) exited (code Some(1)) 478358ms after spawn.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "agent-exited",
         "never": null,
-        "decision": { "action": "defer", "rule": "agent-exited" }
+        "decision": {
+          "action": "defer",
+          "rule": "agent-exited"
+        }
       }
     },
     {
@@ -176,11 +257,17 @@
       "text": "[orrerix] message from plan-2890: ---BEGIN PLAN 1/4--- slices: S1 rule tier ...",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "message-from",
         "never": null,
-        "decision": { "action": "defer", "rule": "plan-chunk" }
+        "decision": {
+          "action": "defer",
+          "rule": "plan-chunk"
+        }
       }
     },
     {
@@ -188,11 +275,17 @@
       "text": "[orrerix] message from plan-2890: ---BEGIN PLAN 4/4--- risks: hand labels are single-pass.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "message-from",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -200,11 +293,17 @@
       "text": "[orrerix] message from plan-2890: ---BEGIN PLAN 0/4--- k is zero, which nothing emits.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "message-from",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -212,11 +311,17 @@
       "text": "[orrerix] message from w-2841: #3263 S2 — two brief/tree conflicts found in the read pass.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "message-from",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -224,11 +329,17 @@
       "text": "[orrerix] w-2902 reports done (#3310): CI green on all three platforms, PR ready for review.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "delegate-done",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -236,11 +347,17 @@
       "text": "[orrerix] w-2722 reports done (#3228): PR ready. One thing needs you: five scratch PRs are still open.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "delegate-done",
         "never": "needs-you",
-        "decision": { "action": "deliver", "reason": "needs-you" }
+        "decision": {
+          "action": "deliver",
+          "reason": "needs-you"
+        }
       }
     },
     {
@@ -248,11 +365,17 @@
       "text": "[orrerix] w-2917 reports progress (#3304): harness drafted, labelling the sample now.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "delegate-progress",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -260,11 +383,17 @@
       "text": "[orrerix] rev-2723 reports approved (#3228): rev-std PASS recorded at head 43617e0e.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "reviewer-report",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -272,11 +401,17 @@
       "text": "[orrerix] rev-2910 reports request_changes (#3316): rev-std fail recorded: 6 blocking.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "reviewer-report",
         "never": null,
-        "decision": { "action": "deliver", "reason": "no-rule" }
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
       }
     },
     {
@@ -284,11 +419,17 @@
       "text": "[orrerix] w-2753 reports blocked (#3248): the brief has a scope contradiction I cannot resolve.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "delegate-blocked",
         "never": "blocked",
-        "decision": { "action": "deliver", "reason": "blocked" }
+        "decision": {
+          "action": "deliver",
+          "reason": "blocked"
+        }
       }
     },
     {
@@ -296,11 +437,17 @@
       "text": "[orrerix] watchdog: agent w-2747 has produced no terminal output and sent no report for 10+ min.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "watchdog",
         "never": "watchdog",
-        "decision": { "action": "deliver", "reason": "watchdog" }
+        "decision": {
+          "action": "deliver",
+          "reason": "watchdog"
+        }
       }
     },
     {
@@ -308,11 +455,17 @@
       "text": "[orrerix] Context was compacted. Re-sync live state now: list_tasks, get_state, list_agents.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "system-notice",
         "never": "regrounding",
-        "decision": { "action": "deliver", "reason": "regrounding" }
+        "decision": {
+          "action": "deliver",
+          "reason": "regrounding"
+        }
       }
     },
     {
@@ -320,11 +473,17 @@
       "text": "[orrerix] run 35636565890: completed — conclusion: success. Orchestration restored: your panes are back.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "run-completed",
         "never": "regrounding",
-        "decision": { "action": "deliver", "reason": "regrounding" }
+        "decision": {
+          "action": "deliver",
+          "reason": "regrounding"
+        }
       }
     },
     {
@@ -332,11 +491,17 @@
       "text": "Lets go ahead and do a production release if you are ready",
       "human_actor": true,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "human",
         "never": "human-actor",
-        "decision": { "action": "deliver", "reason": "human-actor" }
+        "decision": {
+          "action": "deliver",
+          "reason": "human-actor"
+        }
       }
     },
     {
@@ -344,11 +509,17 @@
       "text": "[orrerix] the human GRANTED the release of v1.3.0 (valid ~90 min).",
       "human_actor": true,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": [] },
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
       "expect": {
         "kind": "system-notice",
         "never": "human-actor",
-        "decision": { "action": "deliver", "reason": "human-actor" }
+        "decision": {
+          "action": "deliver",
+          "reason": "human-actor"
+        }
       }
     },
     {
@@ -356,11 +527,17 @@
       "text": "[orrerix] run 35636565890: completed — conclusion: success.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": false, "kinds": [] },
+      "policy": {
+        "enabled": false,
+        "kinds": []
+      },
       "expect": {
         "kind": "run-completed",
         "never": null,
-        "decision": { "action": "deliver", "reason": "disabled" }
+        "decision": {
+          "action": "deliver",
+          "reason": "disabled"
+        }
       }
     },
     {
@@ -368,11 +545,19 @@
       "text": "[orrerix] run 35636565890: completed — conclusion: success.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": ["message-from"] },
+      "policy": {
+        "enabled": true,
+        "kinds": [
+          "message-from"
+        ]
+      },
       "expect": {
         "kind": "run-completed",
         "never": null,
-        "decision": { "action": "deliver", "reason": "kind-not-triaged" }
+        "decision": {
+          "action": "deliver",
+          "reason": "kind-not-triaged"
+        }
       }
     },
     {
@@ -380,11 +565,91 @@
       "text": "[orrerix] message from plan-2890: ---BEGIN PLAN 2/4--- slices continue.",
       "human_actor": false,
       "merge_queue_enabled": true,
-      "policy": { "enabled": true, "kinds": ["message-from"] },
+      "policy": {
+        "enabled": true,
+        "kinds": [
+          "message-from"
+        ]
+      },
       "expect": {
         "kind": "message-from",
         "never": null,
-        "decision": { "action": "defer", "rule": "plan-chunk" }
+        "decision": {
+          "action": "defer",
+          "rule": "plan-chunk"
+        }
+      }
+    },
+    {
+      "name": "a leading + IS a number to drive_notice, because Rust parses it with u64::parse",
+      "text": "[orrerix] review drive PR #+42: GATE SATISFIED at abc1234 — rev-std PASS.",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "drive-gate-satisfied",
+        "never": null,
+        "decision": {
+          "action": "try-enqueue",
+          "pr": 42
+        }
+      }
+    },
+    {
+      "name": "a leading - is NOT, because the parse is unsigned",
+      "text": "[orrerix] review drive PR #-42: GATE SATISFIED at abc1234 — rev-std PASS.",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "system-notice",
+        "never": null,
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
+      }
+    },
+    {
+      "name": "run_completed tests DIGITS, not a parse, so a leading + is not a run notice",
+      "text": "[orrerix] run +35636565890: completed — conclusion: success.",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "system-notice",
+        "never": null,
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
+      }
+    },
+    {
+      "name": "plan_chunk parses, so a + chunk index is accepted like drive_notice",
+      "text": "[orrerix] message from plan-2890: ---BEGIN PLAN +1/4--- slices: S1 rule tier ...",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "message-from",
+        "never": null,
+        "decision": {
+          "action": "defer",
+          "rule": "plan-chunk"
+        }
       }
     }
   ]

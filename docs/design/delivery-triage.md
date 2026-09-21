@@ -329,6 +329,17 @@ mirror is pinned twice, because each pin is blind where the other sees:
 Both tests also assert every rule and every deliver reason is EXERCISED by a
 vector, because a rule with no case is a rule the first pin cannot see.
 
+**Neither pin looks at the text orrerix actually emits.** Both compare the
+mirror to `triage.rs`; if the app reworded a notice’s leading shape — the run
+frame’s `completed`, the drive prefix — both would stay green, the mirror would
+still mirror Rust, and the replay would classify the new shape as
+`system-notice` / `no-rule` while the eval measured traffic that no longer
+exists. Its only symptom would be a count that moved between runs, which §8.2
+has just told the reader to expect for an unrelated reason. Closing this needs a
+corpus asserted against the emitting call sites in `src-tauri`, which is a
+product-side change and is not in S2; it is named here so the gap has a reader
+rather than a discoverer.
+
 **The residual, stated rather than left to be found:** a change to the BODY of a
 Rust rule that keeps its name and is covered by no vector is invisible to both
 pins. The exercised-by-a-vector assertion is what bounds it; it does not remove
@@ -354,6 +365,18 @@ either way, so the error is bounded and visible rather than assumed away. A
 `delivery` field on the `prompt` row would remove the proxy; that is a product
 change and is recorded here as a limitation, not made.
 
+**Every population-dependent figure is a snapshot of a rotating artifact.**
+`audit.jsonl` rotates and a generation that falls off is unrecoverable, so the
+population, the per-rule deferrals and the projected saving are true of the log
+as it stood when the command ran and need not reproduce later — re-running the
+same command on the same group legitimately prints different numbers. The
+LABEL-CONDITIONED figures (agreement, the confusion matrix, false defers,
+wasted wakes) do reproduce from the shipped CSV, for as long as the labelled
+timestamps survive in some generation, and the report always states how many of
+them it found. The report prints this caveat itself rather than leaving it to
+whoever pastes the output, because without it a reader re-running the command
+cannot tell drift from breakage.
+
 One more figure the replay cannot observe: `Decision::TryEnqueue` is resolved
 OPTIMISTICALLY (the enqueue is assumed to succeed, so the notice defers). That
 is the direction that makes the harness's own headline worse rather than
@@ -378,6 +401,25 @@ The eval scores the BINARY, because deliver-or-defer is the only question the
 tier asks: **needs-orchestrator** = `decision` + `escalation`, **audit-only** =
 `routing` + `fyi`. Scoring the four-way class would be scoring a question
 nothing in the system answers.
+
+A labeller does not start from a blank file. `--emit-labels` prints the
+RESIDUAL as fillable CSV — one `ts_ms,kind,` row per delivery the rule tier
+left as `no-rule`, the rubric above in the header, the label column empty:
+
+```
+node scripts/orch-triage-eval.cjs --audit <group>/audit.jsonl \
+  --agents <group>/agents.json --emit-labels > labels-round2.csv
+```
+
+The residual is the whole population worth labelling: a never-triaged
+delivery is excluded by construction (which is also what keeps a human’s own
+words out of a labeller’s file) and a rule-closed one needs no judgement.
+
+**Two column forms are accepted**, `ts_ms,label` and `ts_ms,kind,label`, and
+that is not convenience: `kind` is DERIVED — `classify`’s own answer, carried
+so rows can be grouped without re-reading the audit — so a two-column file is
+complete, and #3304’s plan slice names exactly that form. The label is always
+the last column.
 
 The shipped set is `test/fixtures/orchtriage/labels-loomux-68435179.csv`: 150
 consecutive deliveries, one pass, one labeller, `ts_ms,kind,label` and **no

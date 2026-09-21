@@ -295,7 +295,13 @@ fn the_held_notice_is_flushed_in_front_of_the_next_genuine_wake() {
     assert!(frame < wake, "the flush rides in front of the wake: {prompts:?}");
     assert!(prompts[frame].contains("17812"), "the frame names what was held: {prompts:?}");
     assert!(prompts[frame].contains("planner-exited"), "…both of them: {prompts:?}");
-    assert!(prompts[frame].contains("list_deferred()"), "…and how to read them in full");
+    // …and where to read them in full. The AUDIT LOG, not `list_deferred()`:
+    // the store is cleared before this frame is delivered (review round 1,
+    // B1a), which the next assertion is the other half of.
+    assert!(
+        prompts[frame].contains("audit log as delivery-triaged"),
+        "the frame names a record that still exists: {prompts:?}"
+    );
 
     assert_eq!(f.reg.deferred_list(&f.g)["count"], Value::from(0), "the store is cleared");
 }

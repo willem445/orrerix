@@ -294,6 +294,16 @@ compiles.
   empty in every group made since #1778, and the same combined key hid a stale `{{MERGE_QUEUE}}`
   until a review round rendered it (#3161 `the_playbook_names_the_plan_drive_only_where_the_second_switch_is_on`;
   #1844 `the_rendered_merge_queue_note_does_not_revive_the_retracted_rebase_rule`).
+- **A day is not 86,400,000 ms — build a date with calendar arithmetic.**
+  `dayStart + n * MS_PER_DAY` is wrong across every DST boundary, where a local day is
+  23 or 25 hours: a relative due date lands a day early, and a midnight expiry fires an
+  hour off. Go through `Date#setDate` / `setHours(0, 0, 0, 0)` (`addDays` in
+  `src/todoquickadd.ts`), and pin it on a fixture whose two readings DIVERGE — on a
+  24-hour day the broken arithmetic passes, so a test that never lands on a transition
+  is a control, not coverage; force `TZ` in a child `node`, because CI runs UTC and the
+  host-driven form is vacuous there. Signature: `* MS_PER_DAY`, `* 86400000` or `* DAY`
+  producing a TIMESTAMP rather than measuring a span (#3298/#3299; the discriminator is
+  `test/todomodel.test.ts`'s "My Day's midnight counts CALENDAR days").
 - **A source-scanning guard must not decide from a binding's *name*** — a rename
   steps over it, so it enforces nothing. Decide on name-independent axes and
   default-deny: the receiver (anything building a path off a declared root is
@@ -335,6 +345,11 @@ compiles.
   with a name-keyed doc census blob-vs-blob, and read every doc block the diff ADDS
   against the `fn` it now sits on (#1426 B3; recipe in
   `.claude/skills/ci-validate/SKILL.md`).
+  A blank line between a doc block and its `fn` detaches it just as thoroughly, and
+  that is the form the FIX ships: moving a spliced item out from under a neighbour's
+  preamble leaves one behind. Run the census on the fix commit, not only on the
+  defective one. Signature: a pure-move doc commit whose own round introduces the
+  second instance (#3294 round 3 B1, the third outing of #1229).
 - Comments in this codebase explain *why* (design constraints, Windows quirks,
   issue numbers) — keep that density and style.
 - **A user-facing message is ONE paragraph, and the leak has TWO shapes.** `\n` plus
@@ -700,6 +715,16 @@ narrow their ask back down to the original ticket on your own judgment.
   of its own subjects is not a census (#1209). Build the pattern from what a token may
   CONTAIN (a fact), never from what may FOLLOW it (unbounded prose): the second instance
   was a follow-class omitting `#`, blinding a guard to `…/loomux#readme` (#1297).
+  An ABSOLUTE whole-suite total is not a number your reader can check: 15 tests in
+  `test/sshcommand.test.ts` are gated `{ skip: !CMD_AVAILABLE }` / `!SH_AVAILABLE` with
+  placeholder stand-ins on the other platform, so the `tests`, `pass` and `fail` lines
+  differ per machine and a reviewer re-running them measures a different triple rather
+  than your stale one. State the DELTA and the per-file figure,
+  which reproduce, and cite an absolute only off a CI run id. Measure it off the DIFF,
+  never off your own commit history — the diff is what the reader has. Signature: a body
+  `tests 3398 / pass 3387 / fail 2` re-measured as `3397 / 3397 / 0` in three consecutive
+  rounds (#3286), and "three appended test blocks plus twelve mid-file edits" for a diff
+  carrying one append hunk and fourteen (#3301 B7; the same figure's twin, #3293 B3/B4).
 - **A body revised across review rounds is DATED per section, never certified
   by a sentence.** "Everything above is measured at `<sha>` and stands as
   written" is itself a hand-maintained claim over text: it goes stale with the

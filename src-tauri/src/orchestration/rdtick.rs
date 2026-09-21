@@ -702,32 +702,6 @@ impl OrchRegistry {
         }
     }
 
-    /// Which live drive, if any, this agent is a delegate of — §7's interception
-    /// key, and the whole of it.
-    ///
-    /// **Keyed on the agent, never on text.** The id compared here is one
-    /// orrerix minted at spawn and the driver recorded itself
-    /// (`LaneRecord::agent`, `DriveEntry::worker_agent`, and the superseded
-    /// panes beside each), and the caller's id comes from its MCP token rather
-    /// than from `args`. So a delegate cannot choose whether its report reaches
-    /// the orchestrator by naming a PR number, and cannot name someone else's to
-    /// redirect theirs — which is the property §7 spends a paragraph on, because
-    /// a delegate that could do either is a delegate that can route around the
-    /// orchestrator.
-    ///
-    /// **Every pane the drive opened, not only the latest** (#1871 B2), and the
-    /// answer says which: [`reviewdrive::DrivenPane::current`] is what keeps
-    /// "this pane is mine" from being read as "take its word". See that type.
-    ///
-    /// **Only a LIVE drive owns anyone.** A `held` entry is parked: its
-    /// delegates' traffic goes to the orchestrator exactly as it always did,
-    /// which is what makes a hold a hand-back to a human rather than a quieter
-    /// kind of drive. A terminal entry owns nobody for the same reason.
-    ///
-    /// Reads `review_drives.json` on every driven-or-not `report` and
-    /// `review_verdict`. That is one small JSON read on a path that already
-    /// writes a verdict file and delivers a pane prompt, and an absent file —
-    /// the product default — costs a `stat` and answers `None`.
     /// **What a terminal notice owes a reader: the panes this drive still
     /// holds, founding ones included** (#3250, review round 3).
     ///
@@ -766,6 +740,32 @@ impl OrchRegistry {
         panes
     }
 
+    /// Which live drive, if any, this agent is a delegate of — §7's interception
+    /// key, and the whole of it.
+    ///
+    /// **Keyed on the agent, never on text.** The id compared here is one
+    /// orrerix minted at spawn and the driver recorded itself
+    /// (`LaneRecord::agent`, `DriveEntry::worker_agent`, and the superseded
+    /// panes beside each), and the caller's id comes from its MCP token rather
+    /// than from `args`. So a delegate cannot choose whether its report reaches
+    /// the orchestrator by naming a PR number, and cannot name someone else's to
+    /// redirect theirs — which is the property §7 spends a paragraph on, because
+    /// a delegate that could do either is a delegate that can route around the
+    /// orchestrator.
+    ///
+    /// **Every pane the drive opened, not only the latest** (#1871 B2), and the
+    /// answer says which: [`reviewdrive::DrivenPane::current`] is what keeps
+    /// "this pane is mine" from being read as "take its word". See that type.
+    ///
+    /// **Only a LIVE drive owns anyone.** A `held` entry is parked: its
+    /// delegates' traffic goes to the orchestrator exactly as it always did,
+    /// which is what makes a hold a hand-back to a human rather than a quieter
+    /// kind of drive. A terminal entry owns nobody for the same reason.
+    ///
+    /// Reads `review_drives.json` on every driven-or-not `report` and
+    /// `review_verdict`. That is one small JSON read on a path that already
+    /// writes a verdict file and delivers a pane prompt, and an absent file —
+    /// the product default — costs a `stat` and answers `None`.
     pub fn rd_owner(
         &self,
         group: &GroupId,

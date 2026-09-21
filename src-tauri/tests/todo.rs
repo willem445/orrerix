@@ -233,10 +233,18 @@ fn json_of_the_wrong_shape_is_quarantined_too() {
     std::fs::write(&path, r#"["not", "a", "store"]"#).unwrap();
 
     let loaded = load_store(&path);
+    // The assertion is on the FILESYSTEM, not on the returned field. A
+    // `quarantined: Some(path)` is only a CLAIM that a rename happened —
+    // removing the rename and leaving the field is a mutation this test passed
+    // when it read the field alone (#3263 S1 scratch, M9).
+    let quarantine = loaded
+        .quarantined
+        .expect("valid JSON of the wrong shape is still a corrupt store");
     assert!(
-        loaded.quarantined.is_some(),
-        "valid JSON of the wrong shape is still a corrupt store"
+        quarantine.exists(),
+        "the evidence must exist under its own name, not merely be named"
     );
+    assert!(!path.exists(), "the corrupt file is renamed aside, not copied");
     assert!(loaded.store.items.is_empty());
 }
 
@@ -648,6 +656,28 @@ fn order_after_moves_an_item_between_its_new_neighbours() {
         .map(|i| i.id.as_str())
         .collect();
     assert_eq!(order, vec![a.as_str(), c.as_str(), b.as_str()]);
+
+    // The `order` VALUE, not just the resulting sequence. The sequence alone is
+    // masked by the re-spacing safety net: an implementation that lands the
+    // moved item ON its predecessor's order produces a collision, gets
+    // renumbered, and comes out in the right sequence anyway — a mutation that
+    // deleted the midpoint arithmetic entirely reddened nothing until this
+    // assertion existed (#3263 S1 scratch, M13).
+    let at = |id: &str| -> i64 {
+        store.items.iter().find(|i| i.id == id).unwrap().order
+    };
+    assert!(
+        at(&a) < at(&c) && at(&c) < at(&b),
+        "the moved item must land strictly between its neighbours, not on one of them: a={} c={} b={}",
+        at(&a),
+        at(&c),
+        at(&b)
+    );
+    assert_eq!(
+        at(&a),
+        ORDER_GAP,
+        "a move with room to spare must not have re-spaced the scope"
+    );
 }
 
 // ---------- unknown keys ----------

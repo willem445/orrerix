@@ -73,6 +73,18 @@
   --cli-ante: #c3c455;
   --cli-pi: #00d2f0;
 
+  /* CHANNEL 3, per-LEVEL sub-table (#3261) — the task board's epic/feature/
+     story/task ladder. Nothing in THIS pane uses these five: a to-do has no
+     Agile level. They are copied anyway, because the claim above is that this
+     block is the app's token layer rather than the subset this demo happens to
+     need — a subset drifts silently, and "every token, value for value" is a
+     claim a script can check in one pass. */
+  --kind-epic: #e08a4e;
+  --kind-feature: #72c072;
+  --kind-story: #6aa6de;
+  --kind-task: #c9769b;
+  --kind-unlabelled: #6d6d6d;
+
   /* type roles — mono means "a literal string the machine gave you" */
   --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace;
   --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;

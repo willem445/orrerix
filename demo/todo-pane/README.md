@@ -108,6 +108,13 @@ exactly the wrong thing about the overdue dye.
 regenerating `busy.json` produces a byte-identical file and a diff on it means
 someone changed the generator.
 
+One Windows wrinkle if you do regenerate it: node writes LF, the checkout is
+CRLF (`core.autocrlf=true`), so `git status` reports the file as modified even
+though the blob is identical — `git hash-object --path <file> -- <file>` and
+`git rev-parse HEAD:<file>` both give the same hash. Restore it with `rm` then
+`git checkout --`, in that order (a bare `git checkout --` is a no-op here,
+because git considers the file up to date).
+
 ## Nothing in here reaches the app
 
 `demo/` is outside every source root the build and the suites walk, so this

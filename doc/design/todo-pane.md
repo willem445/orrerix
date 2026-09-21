@@ -206,9 +206,15 @@ three refusals each answer a different question:
   otherwise delete-and-restore its way past it.
 
 The undo *path* is still S5's: `inverseOp` in `src/todomodel.ts` refuses to
-invert a delete and says so, and wiring it to this op — plus the MCP tool arm
-(S2) — is the work that remains. What changed is that the op it needs now
-exists.
+invert a delete and says so, and wiring it to this op is the work that remains.
+What changed is that the op it needs now exists.
+
+**`restore` is the one op with no MCP tool**, and that is a fact about
+ordering rather than a decision anyone made: S2 shipped its six tools while
+`restore` did not yet exist. An agent therefore cannot undo its own
+`todo_delete`, which is the case the op was added for. Adding a seventh tool
+is a capability decision with its own default-deny gates to argue through —
+see "No seventh tool" below, which now carries it.
 
 
 ## Workspace identity
@@ -411,8 +417,9 @@ button that silently does nothing:
 
 * **a delete.** The store's delete is a soft tombstone, and the engine now has
   the `restore` op that inverts one (see "The ops" above, added by #3285) —
-  but `inverseOp` does not yet emit it, so today it still refuses. Wiring it
-  is S5's, and so is the MCP arm an agent would need; what is no longer true
+  but `inverseOp` does not yet emit it, so today it still refuses. The barrier
+  is the frontend `TodoOp` type and a caller, not the backend decoder, which
+  already accepts the op. Wiring it is S5's; what is no longer true
   is the reason this bullet used to give, that the op did not exist.
 * **no `before` snapshot.** Without it the pane cannot know what to restore,
   and a best-effort guess is how an undo quietly writes the wrong value.
@@ -555,3 +562,14 @@ Grooming — re-titling, re-prioritising, due dates, notes, tags, splitting work
 into steps — is `todo_update` plus `todo_add`. A "split" tool would be a second
 way to add an item, and two ways to create one row is two shapes to keep in
 step.
+
+**That argument is about a split tool, and #3285 opened a different question**
+the heading should not be read as having closed. The engine now has a seventh
+op, `restore` (see "The ops"), and no tool reaches it — so an agent cannot
+undo its own `todo_delete`, which is precisely what a soft tombstone was for.
+Unlike a split tool this one would NOT be a second way to do anything: it is
+the only way to reach an op nothing else can. It is left unbuilt because a new
+shared-tier tool has to be named in `MANAGER_SHARED`, `LEAD_SHARED` and both
+dispatch gates — the default-deny pairs above — and that is a capability
+argument a store-hardening slice should not make on its own. Whoever takes it
+should also decide whether an agent may revive a row a human deleted.

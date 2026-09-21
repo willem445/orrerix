@@ -561,12 +561,15 @@ const NULLABLE: { key: "due_ms" | "remind_ms" | "my_day" }[] = [
  *
  *  * a DELETE. The store's delete is a soft tombstone, and the engine HAS a
  *    `restore` op that inverts one as of #3285 — what is missing is the
- *    wiring, here and in the MCP tools, which is S5's. Emitting a `restore`
- *    from this function before the frontend `TodoOp` type carries it would
- *    not type-check; the BACKEND decoder already accepts the op, so what is
- *    outstanding is a type and a caller, not a decoder arm. It still reports
- *    the gap; only the reason has changed, and the reason is what the message
- *    says.
+ *    wiring here, which is S5's. Emitting a `restore` from this function
+ *    before the frontend `TodoOp` type carries it would not type-check; the
+ *    BACKEND decoder already accepts the op, so what is outstanding is a type
+ *    and a caller, not a decoder arm. It still reports the gap; only the
+ *    reason has changed, and the reason is what the message says.
+ *
+ *    (The MCP side is a separate gap and not this function's: #3263 S2
+ *    shipped its six tools before `restore` existed, so no agent can undo its
+ *    own `todo_delete` either. `doc/design/todo-pane.md`, "No seventh tool".)
  *  * no `before` snapshot. Without it the pane cannot know what to restore,
  *    and a best-effort guess is how an undo quietly writes the wrong value.
  *  * an update that named no field. There is nothing to put back.

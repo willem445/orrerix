@@ -4827,7 +4827,6 @@ pub fn release_population(
             out.push(a.clone());
         }
     }
-    out.sort_by_key(|a| (started_ms(a).unwrap_or(u64::MAX), a.clone()));
     out
 }
 

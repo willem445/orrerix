@@ -199,7 +199,8 @@ const STREAMS: StreamRow[] = [
       "requestAnimationFrame renders whatever arrived in that frame. That is P5, the same " +
       "gate ft-files established. The frame itself does every write before every read, so a " +
       "burst costs one forced layout rather than one per row — the O(n²) follow-the-live-end " +
-      "defect the S0 mock's storm fixture found (demo/structured-pane/DESIGN.md §7).",
+      "defect the S0 mock's storm fixture found (its DESIGN.md §7, PR #2945 — the mock " +
+      "tree was removed by #3315).",
     debt: null,
   },
   {

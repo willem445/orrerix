@@ -11,9 +11,9 @@
 //     elision line under it, the tag rail, and the per-viewer preferences that
 //     decide which scope and which view a fresh pane opens on.
 //
-// The split is the S0 mock's own (`demo/todo-pane/render.js` §"two halves" — PR
-// #3271, UNMERGED at this slice, so that path is on neither `main` nor this
-// diff), and it is what keeps `todopane.ts` a renderer rather than a place
+// The split is the S0 mock's own (its `render.js` §"two halves" — PR #3271; the
+// mock tree was removed by #3315, so read it in that PR's diff), and it is what
+// keeps `todopane.ts` a renderer rather than a place
 // decisions hide. Everything the pane DECIDES is below; `todopane.ts` owns only
 // elements.
 //

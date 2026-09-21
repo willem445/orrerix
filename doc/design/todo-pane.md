@@ -917,9 +917,12 @@ state.
 
 ### Colour: the mock's channel discipline, held by a test
 
-`demo/todo-pane/DESIGN.md` §2 carries the argument (PR #3271 — **unmerged** at
-this slice, so that path is not on `main` yet) and the stylesheet's own
-header repeats it. Three claims are now pinned in `test/theme.test.ts` rather
+The S0 mock's `DESIGN.md` §2 carried the argument (PR #3271; #3315 removed the
+mock tree, so that section is now readable only in that PR's diff and the rule
+is restated below) and the stylesheet's own header repeats it. The rule: one
+channel per question, each in exactly one position — a to-do has no agent
+state, so `--state-*` marks lateness and nothing else, and identity (which
+agent touched a row) is `--id-*` and may never be read as a status. Three claims are now pinned in `test/theme.test.ts` rather
 than left to discipline:
 
 * **the two coloured positions each stay in their own channel** — the overdue

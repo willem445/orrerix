@@ -20,9 +20,10 @@ lands, the honest replacement is a capture of what `pi.rs` really emits over
 those wire fixtures, and the swap is a fixture edit with no change to
 `structuredview.ts`.
 
-The demo's `demo/structured-pane/fixtures/*.jsonl` (#2891 S0) are the same wire
-shapes for the same reason, and `demo/structured-pane/decode.js` is the mock's
-throwaway stand-in for `pi.rs`. Neither is imported here.
+The S0 mock's `fixtures/*.jsonl` (#2891 S0, PR #2945) were the same wire shapes
+for the same reason, and its `decode.js` was the mock's throwaway stand-in for
+`pi.rs`. Neither was ever imported here, and #3315 removed the mock tree — read
+it in PR #2945's diff if you need it.
 
 **Line endings.** No `.gitattributes` row covers this path, so it is CRLF on
 disk under this project's `core.autocrlf=true` baseline and LF in the blob. The

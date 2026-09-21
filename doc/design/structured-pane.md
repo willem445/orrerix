@@ -24,7 +24,8 @@ the engine — `transcript::Renderer` writing bytes into the `OutputBuf` ring, s
 `get_output`, replay, thumbnails and `last_exit_tail` keep working. Both halves
 are fed from the same `events()` stream by the same drainer.
 
-> `demo/structured-pane/DESIGN.md` §9 assigned the VT projection to a
+> The S0 mock's `DESIGN.md` §9 (PR #2945 — #3315 removed the mock tree, so read
+> it in that PR's diff) assigned the VT projection to a
 > `projectText()` in this module, and §8 of that file left the choice open for
 > whoever owned the contract. S1a closed it, in the engine. That mock predates
 > the resolution and says so itself: "where this file and that note disagree,

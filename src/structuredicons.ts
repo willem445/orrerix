@@ -11,7 +11,8 @@
 // So these are hand-authored in Lucide's own geometry — the 24x24 viewBox
 // `icons.ts` exports, 2px strokes, round caps and joins, `currentColor` — and
 // they are honest about being hand-authored. That is the same call
-// `demo/structured-pane/icons.js` made, in the mock the human approved (#2945),
+// the S0 mock's own `icons.js` made, in the mock the human approved (PR #2945 —
+// the mock tree itself was removed by #3315; read it in that PR's diff),
 // and for the same reason: where a shape resembles a Lucide primitive it does
 // so because the grid and the stroke rules are shared, which is the point of
 // having them.

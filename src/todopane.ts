@@ -1,7 +1,7 @@
-// The To-Do content pane (#3263 S4) — the S0 mock built for real. The mock is
-// `demo/todo-pane` in PR #3271, which is UNMERGED at this slice: every citation
-// of it below names a tree that is not on `main` and not in this diff, and is
-// written so a reader who cannot find it knows why. The sixth `ContentPaneKind`, hosted in a grid cell like the file
+// The To-Do content pane (#3263 S4) — the S0 mock built for real. The mock
+// shipped as `demo/todo-pane` in PR #3271 and was removed from the tree by
+// #3315, so every citation of it below names that PR's diff, not a path you
+// can open. The sixth `ContentPaneKind`, hosted in a grid cell like the file
 // explorer, the editor, the git view, the workflow builder and the structured
 // transcript.
 //
@@ -35,8 +35,8 @@
 // this view; every control is seeded from them and writes back on `input`; and
 // the caret is restored once, centrally, after each render.
 //
-// See `doc/design/todo-pane.md` §"The pane" — which is on `main` — and
-// `demo/todo-pane/DESIGN.md` (PR #3271, unmerged).
+// See `docs/design/todo-pane.md` §"The pane", and the S0 mock's `DESIGN.md`
+// in PR #3271 (removed from the tree by #3315).
 
 import { CoalescingRefresh } from "./refreshgate";
 import { showToast } from "./toast";
@@ -1470,7 +1470,7 @@ export class TodoPaneView {
     const sel = this.selected !== null ? this.itemById(this.selected) : null;
 
     // REORDER IS Shift+↑/↓, NOT THE MOCK'S Alt+↑/↓ — a deliberate departure
-    // from `demo/todo-pane/DESIGN.md` §6 (PR #3271, unmerged), and the one place
+    // from the S0 mock's `DESIGN.md` §6 (PR #3271, removed by #3315), and the one place
     // this pane does not
     // build what the mock drew. `Alt+ArrowUp`/`Alt+ArrowDown` are already the
     // app's `focus-up`/`focus-down` (`shortcuts.ts`), matched on `document` in

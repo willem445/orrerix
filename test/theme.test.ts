@@ -610,8 +610,9 @@ test("the To-Do pane's two coloured positions each stay in their own channel", (
   // channel BY NAME here rather than by internal agreement.
   //
   //  - the due date and the Overdue bucket heading answer "is this late" — the
-  //    one STATE position in the pane, and demo/todo-pane/DESIGN.md §2 (PR #3271,
-  //    unmerged at this slice) says it is
+  //    one STATE position in the pane, and the S0 mock's DESIGN.md §2 (PR #3271;
+  //    the mock tree was removed by #3315, and `docs/design/todo-pane.md` restates
+  //    the rule) says it is
   //    the only one: a to-do has no agent state, so the other dyes never appear;
   //  - the attribution dot answers "WHICH agent touched this row" — identity,
   //    and it may never be read as a status.
@@ -656,8 +657,9 @@ test("the To-Do pane's two coloured positions each stay in their own channel", (
   assert.deepEqual(
     wrong,
     [],
-    "the To-Do pane crossed a channel — demo/todo-pane/DESIGN.md §2 is the argument " +
-      "(PR #3271, unmerged at this slice):\n" +
+    "the To-Do pane crossed a channel — the S0 mock's DESIGN.md §2 is the argument " +
+      "(PR #3271; restated in docs/design/todo-pane.md, the mock tree having been " +
+      "removed by #3315):\n" +
       wrong.join("\n")
   );
 });
@@ -686,8 +688,8 @@ test("the To-Do pane spends only the state dyes it argues for", () => {
       "--state-attention (an overdue date, and the Overdue bucket heading its rows sit " +
       "under) and --state-danger (the Delete control on hover — the app's " +
       "destructive-action dye, spent on the action rather than on the task). A third " +
-      "means demo/todo-pane/DESIGN.md §2 (PR #3271, unmerged at this slice) needs the " +
-      "argument before the stylesheet does."
+      "means the S0 mock's DESIGN.md §2 (PR #3271) and docs/design/todo-pane.md need " +
+      "the argument before the stylesheet does."
   );
 });
 

@@ -761,7 +761,7 @@ fn check_if_rev(item: &TodoItem, if_rev: Option<u64>) -> Result<(), TodoError> {
 /// An `Update`, in three steps: check everything, write the fields, re-space
 /// the scope if the move closed a gap.
 ///
-/// Split out of one 88-line body (#3285 item 4). The three steps answer three
+/// Split out of one body that did all three (#3285 item 4). They answer three
 /// different questions and only the FIRST of them may refuse, which is the
 /// property `apply`'s doc promises ("refuses BEFORE mutating anything"). As one
 /// function that promise was a reading order a later edit could break silently

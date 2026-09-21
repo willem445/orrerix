@@ -11,9 +11,11 @@
 //     elision line under it, the tag rail, and the per-viewer preferences that
 //     decide which scope and which view a fresh pane opens on.
 //
-// The split is the S0 mock's own (`demo/todo-pane/render.js` §"two halves"),
-// and it is what keeps `todopane.ts` a renderer rather than a place decisions
-// hide. Everything the pane DECIDES is below; `todopane.ts` owns only elements.
+// The split is the S0 mock's own (`demo/todo-pane/render.js` §"two halves" — PR
+// #3271, UNMERGED at this slice, so that path is on neither `main` nor this
+// diff), and it is what keeps `todopane.ts` a renderer rather than a place
+// decisions hide. Everything the pane DECIDES is below; `todopane.ts` owns only
+// elements.
 //
 // THE CLOCK IS A PARAMETER. Not one function here reads `Date.now()` — the
 // reason `todomodel.ts` gives, unchanged: a "Today" bucket tested against the
@@ -280,29 +282,87 @@ export interface RowDraft {
   notes: string;
   /** The "next step" field under the step list. */
   step: string;
+  /**
+   * The item's `notes` AT THE MOMENT this draft was seeded.
+   *
+   * "Has the human typed?" is a question about the draft against its own SEED,
+   * not against the item's value right now — and the two differ exactly when a
+   * second writer has been at the item, which is this pane's normal condition
+   * rather than an edge case. Comparing against the live item instead makes an
+   * untouched draft read as DIRTY the moment an agent edits the row, which is
+   * both wrong on its own terms and the reason `reseedPristineDrafts` could
+   * never fire without this field (#3293 review round 2).
+   */
+  seededNotes: string;
 }
 
-export const EMPTY_ROW_DRAFT: RowDraft = { notes: "", step: "" };
+export const EMPTY_ROW_DRAFT: RowDraft = { notes: "", step: "", seededNotes: "" };
 
 /**
- * Is this draft untouched relative to the item it is a draft OF?
+ * Has the human typed into this draft?
  *
- * The seed matters: a notes field is pristine when it still equals the item's
- * stored notes, not when it is empty — an item WITH notes seeds a non-empty
- * box, and calling that dirty would make every expanded row look edited.
+ * Measured against the draft's OWN seed (`seededNotes`), never against the
+ * item's current value — see that field's doc. An item WITH notes seeds a
+ * non-empty box, and calling that dirty would make every expanded row look
+ * edited; an agent's write to the item must not make it look edited either.
  *
- * Reads every field of `RowDraft`. A field added to the interface without a
- * line here is the asymmetry the doc above names, and `tsc` will not catch it,
- * which is why `test/todoview.test.ts` pins the field set.
+ * Reads every field of `RowDraft` that the human can type into. A typable field
+ * added to the interface without a line here is the asymmetry the doc above
+ * names, and `tsc` will not catch it, which is why `test/todoview.test.ts`
+ * drives its check off the object's own keys.
  */
-export function rowDraftIsPristine(draft: RowDraft, item: TodoItem): boolean {
-  return draft.notes === item.notes && draft.step === "";
+export function rowDraftIsPristine(draft: RowDraft): boolean {
+  return draft.notes === draft.seededNotes && draft.step === "";
 }
 
-/** The draft a freshly expanded row starts with: seeded from the ITEM, so
- *  `rowDraftIsPristine` is true the instant it is created. */
+/** The draft a freshly expanded row starts with: seeded from the ITEM, and
+ *  recording what it was seeded from, so `rowDraftIsPristine` is true the
+ *  instant it is created and stays true until the human types. */
 export function seedRowDraft(item: TodoItem): RowDraft {
-  return { notes: item.notes, step: "" };
+  return { notes: item.notes, step: "", seededNotes: item.notes };
+}
+
+/**
+ * Re-seed every PRISTINE draft from the item it is a draft of, and report how
+ * many moved.
+ *
+ * **The silent-revert this closes** (#3293 review round 2, both reviewers'
+ * premortem 1). A draft is seeded from the item when the row is expanded and
+ * then never re-read. If an AGENT edits that item's notes underneath — through
+ * the MCP tools, which is the whole premise of this pane — the row re-renders
+ * from the draft, so the human sees their own stale text, and `commitDraft`'s
+ * `draft.notes !== item.notes` is then TRUE against the agent's new value. Save
+ * ships the pre-agent notes and reverts a write the human never saw. It is
+ * legal under last-writer-wins and invisible until something surfaces versions,
+ * which is exactly what makes it worth closing here.
+ *
+ * **Only pristine drafts move.** A draft the human has typed into is theirs and
+ * is never touched — that is the in-list-editor rule, and re-seeding a dirty
+ * draft would be the very defect this module exists to prevent, one direction
+ * over. The consequence is honest rather than hidden: a human mid-sentence when
+ * an agent writes still overwrites that write on Save. Surfacing a genuine
+ * conflict needs the item's `rev` and a decision about what to show, which is
+ * #3263 S5's (the store already carries `rev` and `if_rev` for it).
+ *
+ * Returns the number re-seeded, so a caller can assert the mechanism RAN rather
+ * than asserting only that nothing was clobbered — an absence-only pin here
+ * would pass just as well against a function that never looked (#1209).
+ */
+export function reseedPristineDrafts(
+  drafts: Map<string, RowDraft>,
+  items: readonly TodoItem[]
+): number {
+  const byId = new Map(items.map((i) => [i.id, i]));
+  let moved = 0;
+  for (const [id, draft] of drafts) {
+    const item = byId.get(id);
+    if (item === undefined) continue; // `pruneDrafts` owns the gone case
+    if (!rowDraftIsPristine(draft)) continue;
+    if (item.notes === draft.seededNotes) continue; // nothing moved underneath
+    drafts.set(id, seedRowDraft(item));
+    moved += 1;
+  }
+  return moved;
 }
 
 /**

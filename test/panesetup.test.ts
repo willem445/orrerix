@@ -22,6 +22,7 @@ import {
   withSubmitLatch,
   sshRemoteCliWarning,
   sshRemoteCwdWarning,
+  type PaneKind,
   type PaneSetupInput,
 } from "../src/panesetup.ts";
 import type { SshProfile } from "../src/sshprofile.ts";
@@ -1059,4 +1060,38 @@ test("the four rooted content kinds still refuse a blank path", () => {
     assert.equal(res.ok, false, `${kind} must still demand a folder`);
     assert.equal(res.ok === false && res.focus, "repo");
   }
+});
+
+test("the rootless branch is decided by the predicate, for every content kind", () => {
+  // #3293 review round 2, finding 1. The earlier guard asked only the
+  // PREDICATE, so the rule it names could drift from the rule `planPaneSetup`
+  // actually applies — a later slice adding a second rootless kind to
+  // `contentKindNeedsRoot` would go green here while the setup path still
+  // answered "the path is mandatory".
+  //
+  // This asks BOTH, and derives its expectation FROM the predicate rather than
+  // from a list of kinds it remembers, so there is no second list to keep in
+  // step: for every content kind, a blank repo must plan iff that kind does not
+  // need a root. Adding a kind to one side and not the other cannot pass.
+  const content: PaneKind[] = ["files", "editor", "git", "workflow", "todo"];
+  let rootless = 0;
+  let rooted = 0;
+  for (const kind of content) {
+    const res = planPaneSetup(input({ kind, repo: "   " }));
+    if (contentKindNeedsRoot(kind)) {
+      rooted += 1;
+      assert.equal(res.ok, false, `${kind} needs a root, so a blank path must be refused`);
+      assert.equal(res.ok === false && res.focus, "repo");
+    } else {
+      rootless += 1;
+      assert.ok(res.ok, `${kind} needs no root, so a blank path must plan`);
+      assert.equal(res.ok && res.plan.kind, kind, "the plan names the kind that was asked for");
+    }
+  }
+  // The population control (#1209): this loop's shape passes vacuously if the
+  // list empties, and it proves nothing about the DIVERGENCE unless both arms
+  // actually ran — one arm alone is a guard that only ever sees one rule.
+  assert.ok(rooted >= 4, `only ${rooted} rooted kinds exercised`);
+  assert.ok(rootless >= 1, `only ${rootless} rootless kinds exercised — this guard saw one rule`);
+  assert.equal(rooted + rootless, content.length);
 });

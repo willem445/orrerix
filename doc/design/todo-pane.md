@@ -615,7 +615,17 @@ So:
 
 * `contentKindNeedsRoot` is a named predicate rather than an extra clause inside
   `planPaneSetup`, so the divergence is findable from either side and the shared
-  branch can keep saying "the path is mandatory" and mean it;
+  branch can keep saying "the path is mandatory" and mean it — **and
+  `planPaneSetup` branches on that predicate**, rather than on a `kind === "todo"`
+  literal. The distinction is the whole value of naming the rule: as first
+  written, the predicate was exported, documented and tested while the setup
+  path tested the kind directly, so the rule was stated on four surfaces and
+  enforced on none. A later slice adding a second rootless kind would have put
+  it in the predicate, watched the guard go green, and still been told "the path
+  is mandatory" by the branch. One condition now, and
+  `the rootless branch is decided by the predicate, for every content kind`
+  derives its expectation FROM the predicate rather than from a list of kinds it
+  remembers (#3293 review round 2, finding 1);
 * neither the launcher nor the restore arm probes the root. A project that has
   been deleted or unmounted costs the human the workspace half of a switch and
   nothing else, and failing soft would discard a working pane to recover from a
@@ -687,8 +697,25 @@ centrally**, after each render, rather than per control as it is built: spread
 over N sites, the one that gets forgotten is the one an agent's write
 interrupts.
 
-`rowDraftIsPristine` reads **every** field of `RowDraft`, because the renderer's
-seed and "is this untouched" are one question asked twice; a field added to one
+**"Untouched" is measured against the draft's own SEED, never against the item's
+current value**, which is why `RowDraft` carries `seededNotes`. The two differ
+exactly when a second writer has been at the row — this pane's normal condition
+rather than an edge case — and measuring against the live item has two
+consequences, one visible and one not. The visible one: an untouched draft flips
+to "edited" the moment an agent writes. The invisible one is the defect both
+reviewers' premortems found (#3293 review round 2): the draft keeps the
+pre-agent notes, `commitDraft` sees them differ from the item's new value, and
+**Save silently reverts a write the human never saw** — legal under
+last-writer-wins and undetectable until something surfaces versions. So a
+PRISTINE draft follows the store (`reseedPristineDrafts`, run beside the prune on
+every render) and a draft the human has typed into is never touched. The
+residual is honest rather than hidden: a human mid-sentence when an agent writes
+still overwrites that write on Save. Surfacing a genuine conflict needs the
+item's `rev` and a decision about what to show, and the store already carries
+`rev` and `if_rev` for whoever builds it.
+
+`rowDraftIsPristine` reads **every** typable field of `RowDraft`, because the
+renderer's seed and "is this untouched" are one question asked twice; a field added to one
 and not the other is #1348 N1/N4's defect, and the test drives the check off the
 object's own keys so a forgotten field reddens rather than passing. The draft is
 seeded from the **item**, not from a literal, so a row that already has notes
@@ -713,9 +740,40 @@ A refused write is the one case that re-renders without an event: the store is
 byte-identical and nothing fires, so the pane re-renders from what it already
 has and a control the human just flipped snaps back instead of lying.
 
+**The gate is only half of it, and the other half is a stale-response guard.**
+`refreshgate.ts`'s own header says both are needed — "the gate alone would still
+let a slow old-mode fetch paint stale data, and the mode check alone would leave
+the new mode with nothing to render" — and this pane shipped with only the gate
+(#3293 review round 2, finding 2). A `TodoSnapshot` carries no scope of its own,
+so a response cannot identify itself; `refreshNow` therefore captures the root
+**before** the await and drops the response if the scope has changed under it.
+Without that, a refresh in flight against the workspace root when the human
+presses `g` paints the **workspace** list into a pane whose header, switch and
+`scopeRoot()` all say Global — and the rows in that window are live, so
+completing one sends the op with `scopeRoot() === null` and it lands on the
+global store against an id that is not there. Dropping the response costs
+nothing: `setScope` has already asked for a fresh run and the coalescer
+guarantees the trailing one.
+
+**What the bound does NOT cover**, written down rather than left for the row in
+`test/perfpolicy.test.ts` to imply:
+
+* it bounds **frequency, not size**. Every refresh reads the whole store over
+  IPC and decodes it, and `ROW_BUDGET` bounds what is *built*, not what is
+  *read*. At the engine's own caps a maximal store is a large parse on the
+  webview thread, once per burst per open pane. Real stores are nowhere near it,
+  nothing here measures the per-refresh cost, and a delta-read is a later
+  slice's argument to make with figures in hand;
+* the event's `scope` is **discarded**, so a write to the global list wakes a
+  workspace-scoped pane and vice versa. Filtering on it is not a one-liner: the
+  payload names a workspace KEY and the frontend may never name one (§"The
+  caller names a ROOT, never a key"), so it would have to resolve through
+  `TodoSnapshot.workspaces`, the key-to-root map that exists for exactly this.
+
 ### Colour: the mock's channel discipline, held by a test
 
-`demo/todo-pane/DESIGN.md` §2 carries the argument and the stylesheet's own
+`demo/todo-pane/DESIGN.md` §2 carries the argument (PR #3271 — **unmerged** at
+this slice, so that path is not on `main` yet) and the stylesheet's own
 header repeats it. Three claims are now pinned in `test/theme.test.ts` rather
 than left to discipline:
 

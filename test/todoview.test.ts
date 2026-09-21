@@ -17,6 +17,7 @@ import {
   projectPane,
   pruneDrafts,
   renderedRows,
+  reseedPristineDrafts,
   rowDraftIsPristine,
   seedRowDraft,
   type RowDraft,
@@ -218,13 +219,13 @@ test("the encoder writes only the two known keys", () => {
 test("a fresh draft is seeded from the ITEM and is pristine — including one with notes", () => {
   const bare = item();
   assert.deepEqual(seedRowDraft(bare), EMPTY_ROW_DRAFT);
-  assert.equal(rowDraftIsPristine(seedRowDraft(bare), bare), true);
+  assert.equal(rowDraftIsPristine(seedRowDraft(bare)), true);
   // The case an "is it empty?" predicate gets wrong: an item that already HAS
   // notes seeds a non-empty box, and calling that dirty makes every expanded
   // row look edited.
   const noted = item({ notes: "already written" });
   assert.equal(seedRowDraft(noted).notes, "already written");
-  assert.equal(rowDraftIsPristine(seedRowDraft(noted), noted), true);
+  assert.equal(rowDraftIsPristine(seedRowDraft(noted)), true);
 });
 
 test("the pristine predicate reads EVERY field of the draft", () => {
@@ -240,7 +241,7 @@ test("the pristine predicate reads EVERY field of the draft", () => {
   for (const k of keys) {
     const touched: RowDraft = { ...seeded, [k]: `${seeded[k]} typed` };
     assert.equal(
-      rowDraftIsPristine(touched, base),
+      rowDraftIsPristine(touched),
       false,
       `typing into \`${k}\` left the draft reading as pristine`
     );
@@ -290,4 +291,64 @@ test("a selection the render dropped re-enters at the edge", () => {
   const rows = renderedRows(projectPane({ items, view: "all", query: "", tagFilter: null }, NOW));
   assert.equal(moveSelection(rows, "td-gone", 1), rows[0].id);
   assert.equal(moveSelection(rows, "td-gone", -1), rows[1].id);
+});
+
+test("an agent's write does NOT make an untouched draft read as edited", () => {
+  // The premise both reviewers' premortems land on, and the reason `RowDraft`
+  // carries `seededNotes` at all. "Has the human typed?" is a question about the
+  // draft against its OWN seed. Measured against the item's live value instead,
+  // an untouched draft flips to dirty the instant a second writer edits the row
+  // — which is this pane's normal condition, not an edge case.
+  const before = item({ notes: "from the human" });
+  const draft = seedRowDraft(before);
+  assert.equal(rowDraftIsPristine(draft), true);
+  // The agent writes. The DRAFT has not changed; only the item has.
+  const after = { ...before, notes: "rewritten by worker-3" };
+  assert.equal(
+    rowDraftIsPristine(draft),
+    true,
+    "an agent's write is not the human typing — the draft is still untouched"
+  );
+  // And the re-seed follows the store, because nothing was typed.
+  const drafts = new Map([[before.id, draft]]);
+  const moved = reseedPristineDrafts(drafts, [after]);
+  assert.equal(moved, 1, "the mechanism ran — an absence-only pin would pass against one that did not");
+  assert.equal(drafts.get(before.id)?.notes, "rewritten by worker-3");
+  assert.equal(rowDraftIsPristine(drafts.get(before.id)!), true);
+});
+
+test("a draft the human has typed into is NEVER re-seeded, even when the item moved", () => {
+  // The other direction, and the one that matters more: re-seeding a dirty
+  // draft would eat a half-typed note, which is the exact defect the in-list
+  // editor rule exists to prevent. The fixture COLLIDES — same row, both
+  // writers — so an implementation that re-seeds unconditionally cannot pass.
+  const before = item({ notes: "original" });
+  const draft = { ...seedRowDraft(before), notes: "the human is mid-sen" };
+  assert.equal(rowDraftIsPristine(draft), false);
+  const after = { ...before, notes: "rewritten by worker-3" };
+  const drafts = new Map([[before.id, draft]]);
+  const moved = reseedPristineDrafts(drafts, [after]);
+  assert.equal(moved, 0);
+  assert.equal(
+    drafts.get(before.id)?.notes,
+    "the human is mid-sen",
+    "a half-typed note must survive an agent's write to the same row"
+  );
+});
+
+test("a pristine draft whose item did not move is left alone", () => {
+  // The no-op case, pinned so `reseedPristineDrafts` cannot be implemented as
+  // "always rewrite": a re-seed on every render would be indistinguishable from
+  // correct here but would churn the map on every one of an agent's bursts.
+  const it = item({ notes: "steady" });
+  const drafts = new Map([[it.id, seedRowDraft(it)]]);
+  assert.equal(reseedPristineDrafts(drafts, [it]), 0);
+});
+
+test("re-seeding skips an id the store no longer has", () => {
+  // `pruneDrafts` owns the gone case; this one must not throw on the way past.
+  const it = item();
+  const drafts = new Map([["td-vanished", seedRowDraft(it)]]);
+  assert.equal(reseedPristineDrafts(drafts, []), 0);
+  assert.equal(drafts.size, 1, "re-seeding does not prune — that is the other function's job");
 });

@@ -6736,7 +6736,8 @@ button.wf-finding:hover { background: var(--surface-2); }
  * same argument the structured pane's block makes one section up.
  *
  * ONE CHANNEL PER QUESTION, AND EACH IN EXACTLY ONE POSITION
- * (`demo/todo-pane/DESIGN.md` §2 carries the argument):
+ * (`demo/todo-pane/DESIGN.md` §2 carries the argument — PR #3271, unmerged at
+ * this slice, so that path is not on `main` yet):
  *
  *   STATE     `--state-attention` marks an OVERDUE due date, and the Overdue
  *             bucket heading its rows sit under. NOTHING ELSE. A to-do has no

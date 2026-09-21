@@ -1,5 +1,7 @@
-// The To-Do content pane (#3263 S4) — `demo/todo-pane`'s approved mock, built
-// for real. The sixth `ContentPaneKind`, hosted in a grid cell like the file
+// The To-Do content pane (#3263 S4) — the S0 mock built for real. The mock is
+// `demo/todo-pane` in PR #3271, which is UNMERGED at this slice: every citation
+// of it below names a tree that is not on `main` and not in this diff, and is
+// written so a reader who cannot find it knows why. The sixth `ContentPaneKind`, hosted in a grid cell like the file
 // explorer, the editor, the git view, the workflow builder and the structured
 // transcript.
 //
@@ -33,7 +35,8 @@
 // this view; every control is seeded from them and writes back on `input`; and
 // the caret is restored once, centrally, after each render.
 //
-// See `doc/design/todo-pane.md` §"The pane" and `demo/todo-pane/DESIGN.md`.
+// See `doc/design/todo-pane.md` §"The pane" — which is on `main` — and
+// `demo/todo-pane/DESIGN.md` (PR #3271, unmerged).
 
 import { CoalescingRefresh } from "./refreshgate";
 import { showToast } from "./toast";
@@ -66,6 +69,7 @@ import {
   projectPane,
   pruneDrafts,
   renderedRows,
+  reseedPristineDrafts,
   rowDraftIsPristine,
   seedRowDraft,
   type PaneProjection,
@@ -325,8 +329,29 @@ export class TodoPaneView {
     // `show()` refreshes unconditionally, which is the half that makes the drop
     // safe rather than merely cheap.
     if (!this.visible) return;
+    // THE STALE-RESPONSE GUARD, and it is the second half `refreshgate.ts`'s own
+    // header says is needed: "the gate alone would still let a slow old-mode
+    // fetch paint stale data, and the mode check alone would leave the new mode
+    // with nothing to render" — `IssuesView` carries both, and this pane was
+    // shipped with only the gate (#3293 review round 2, finding 2).
+    //
+    // The scope is captured BEFORE the await and compared after, because a
+    // `TodoSnapshot` carries no scope of its own and so cannot identify itself.
+    // Without it: a `todo-changed` refresh is in flight against the workspace
+    // root, the human presses `g`, and the WORKSPACE list paints into a pane
+    // whose header, switch and `scopeRoot()` all say Global. The trailing
+    // coalesced run corrects it a round-trip later — but in that window the rows
+    // are live, and completing one sends the op with `scopeRoot() === null`, so
+    // it lands on the global store against an id that is not there and comes
+    // back as a refusal the human cannot interpret.
+    //
+    // Dropping the response loses nothing: `setScope` has already asked for a
+    // fresh run, and `CoalescingRefresh` guarantees the trailing one.
+    const want = this.scopeRoot();
     try {
-      this.snapshot = await todoSnapshot(this.scopeRoot());
+      const snap = await todoSnapshot(want);
+      if (want !== this.scopeRoot()) return;
+      this.snapshot = snap;
       this.loadFailed = false;
     } catch (err) {
       // A failed READ never publishes an empty list over a real one: the pane
@@ -334,6 +359,11 @@ export class TodoPaneView {
       // itself does not throw on a malformed payload (it decodes defensively),
       // so reaching here means the COMMAND failed — a degraded backend, not a
       // degraded row.
+      // The same guard on this arm, for the same reason: a read that failed for
+      // the scope we have since LEFT says nothing about the one we are on, and
+      // flagging the pane "stale" over it would be a warning about a list
+      // nobody is looking at.
+      if (want !== this.scopeRoot()) return;
       this.loadFailed = true;
       console.error("[orrerix] todo snapshot failed", err);
     }
@@ -447,6 +477,11 @@ export class TodoPaneView {
     // stranger's half-typed note.
     const liveIds = new Set(this.items().map((i) => i.id));
     pruneDrafts(this.drafts, liveIds);
+    // Follow the store on any row the human has NOT typed into (#3293 review
+    // round 2). Without this, a draft seeded before an agent edited the row
+    // keeps the pre-agent notes, and Save ships them back — silently reverting
+    // a write nobody saw. A draft the human HAS typed into is never touched.
+    reseedPristineDrafts(this.drafts, this.items());
     for (const id of [...this.expanded]) if (!liveIds.has(id)) this.expanded.delete(id);
     if (this.selected !== null && !liveIds.has(this.selected)) this.selected = null;
 
@@ -894,7 +929,7 @@ export class TodoPaneView {
     // render: the button route and the Enter route both go through
     // `commitDraft`, and the seed/pristine pair in `todoview.ts` is what stops
     // a re-render seeding it back from a literal (#1348 N1/N4).
-    if (!rowDraftIsPristine(draft, item)) {
+    if (!rowDraftIsPristine(draft)) {
       controls.append(
         el("button", { class: "tdp-rowbtn tdp-save", type: "button", "data-act": "save", text: "Save" })
       );
@@ -1070,7 +1105,8 @@ export class TodoPaneView {
     const sel = this.selected !== null ? this.itemById(this.selected) : null;
 
     // REORDER IS Shift+↑/↓, NOT THE MOCK'S Alt+↑/↓ — a deliberate departure
-    // from `demo/todo-pane/DESIGN.md` §6, and the one place this pane does not
+    // from `demo/todo-pane/DESIGN.md` §6 (PR #3271, unmerged), and the one place
+    // this pane does not
     // build what the mock drew. `Alt+ArrowUp`/`Alt+ArrowDown` are already the
     // app's `focus-up`/`focus-down` (`shortcuts.ts`), matched on `document` in
     // the CAPTURE phase and withheld from every pane — so a handler here would
@@ -1226,7 +1262,7 @@ export class TodoPaneView {
 
   private async commitDraft(item: TodoItem): Promise<void> {
     const draft = this.draftFor(item);
-    if (rowDraftIsPristine(draft, item)) return;
+    if (rowDraftIsPristine(draft)) return;
     const update: { id: string; notes?: string; steps?: { id?: string; title: string; done: boolean }[] } =
       { id: item.id };
     if (draft.notes !== item.notes) update.notes = draft.notes;
@@ -1242,7 +1278,10 @@ export class TodoPaneView {
     // Cleared on SUCCESS only, and on BOTH routes — the Save button and the
     // Enter key reach this one function. Clearing on the Enter route alone is
     // the #1348 defect: it leaves the draft on the route most people use.
-    this.drafts.set(item.id, { notes: draft.notes, step: "" });
+    // Re-seeded, not merely cleared: the committed notes ARE the new seed, so
+    // the draft is pristine again against what the store now holds. Writing a
+    // seed of the OLD value here would leave the row looking edited forever.
+    this.drafts.set(item.id, { notes: draft.notes, step: "", seededNotes: draft.notes });
   }
 
   private async submitQuickAdd(): Promise<void> {

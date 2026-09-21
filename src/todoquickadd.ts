@@ -138,9 +138,12 @@ function atTime(dayStartMs: number, hour: number, minute: number): number {
  * inside the target.
  *
  * `Date#setDate` counts days rather than milliseconds, which is the operation
- * actually meant, and the `setHours(0,…)` re-normalises in case the target
- * day's own midnight moved. Found in review on #3271; the lift to this module
- * lost it and #3298 put it back at every arm that builds a day.
+ * actually meant, and the `setHours(0,…)` zeroes the time-of-day, so an input
+ * that is not already a midnight still comes back as a start-of-day — pinned
+ * by the mid-day-input test in `test/todoquickadd.test.ts` — and
+ * re-normalises in case the target day's own midnight moved. Found in review
+ * on #3271; the lift to this module lost it and #3298 put it back at every
+ * arm that builds a day.
  */
 export function addDays(dayStartMs: number, n: number): number {
   const d = new Date(dayStartMs);

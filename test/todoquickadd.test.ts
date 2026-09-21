@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseQuickAdd, formatDue, DEFAULT_DUE_HOUR } from "../src/todoquickadd.ts";
+import { parseQuickAdd, formatDue, DEFAULT_DUE_HOUR, addDays } from "../src/todoquickadd.ts";
 
 // The DST transition-day tests at the bottom (#3298) need a zone that HAS a
 // 25-hour day, and `node --test` runs each file in its own process — so the
@@ -392,6 +392,17 @@ test("CONTROL: the fixture days really are transition days in the pinned zone", 
   // reddens instead of letting that happen.
   assert.equal(new Date(2026, 10, 2).getTime() - new Date(2026, 10, 1).getTime(), 25 * 3600000);
   assert.equal(new Date(2026, 2, 9).getTime() - new Date(2026, 2, 8).getTime(), 23 * 3600000);
+});
+
+test("addDays yields a start-of-day even when the input is not a midnight", () => {
+  // The `setHours(0,…)` inside `addDays` is what this pins. Every parser arm
+  // hands it a dayStart (a midnight), so no parse line can exercise it — the
+  // helper is the module's day-arithmetic seam, and this is its contract:
+  // a mid-day input on the fall-back day still comes back as the target
+  // day's midnight, not at the input's time-of-day. Without `setHours`, the
+  // result here is Mon 2 Nov 12:00.
+  const noon = new Date(2026, 10, 1, 12, 0).getTime();
+  assert.equal(addDays(noon, 1), new Date(2026, 10, 2).getTime());
 });
 
 test("DST fall-back: `tomorrow` is the next calendar day, never today", () => {

@@ -13523,7 +13523,7 @@ pub struct Task {
     /// characters per row is the payload shape #245 was cut for. It is also
     /// the honest one on purpose — the description is written FOR a human, and
     /// an agent that wants it can ask for the row.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub updated_ms: u64,

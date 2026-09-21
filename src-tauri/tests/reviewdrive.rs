@@ -9518,6 +9518,229 @@ fn a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit() {
     );
 }
 
+/// A drive started on a session that already carries `panes` worker panes, all
+/// idle, walked to `gate-check` — the #3250 shape with the pane count as its
+/// one axis.
+///
+/// Answers `(group, panes oldest-first, session, the clock the last tick ran
+/// at)`. The panes are spawned in order and every one of them reports `done`
+/// before the drive starts, which is what an orchestrator is looking at when it
+/// hands a finished PR to the driver.
+fn drive_started_on_session(
+    reg: &OrchRegistry,
+    repo: &Repo,
+    gh: &FakeGh,
+    panes: usize,
+) -> (GroupId, Vec<String>, String, u64) {
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let first = reg
+        .spawn_agent(&group, Role::Worker, "w", "", false, None)
+        .expect("the worker whose session the orchestrator is about to name");
+    let session = first.session_id.clone().expect("claude mints a session id at spawn");
+    let mut ids = vec![first.id.clone()];
+    for k in 1..panes {
+        // A SECOND pane on one conversation, which is what an orchestrator
+        // produces by resuming a session whose pane is still alive — the shape
+        // #3203 exists to stop the driver producing, and one the driver still
+        // has to be able to clean up after.
+        let more = reg
+            .spawn_agent_ex(
+                &group,
+                Role::Worker,
+                Some("worker".to_string()),
+                &format!("w{k}"),
+                "",
+                false,
+                None,
+                None,
+                Some(session.clone()),
+                None,
+                None,
+            )
+            .expect("a second pane on the same session");
+        ids.push(more.id.clone());
+    }
+    for (k, id) in ids.iter().enumerate() {
+        with_pane(reg, id, 41 + k as u32);
+        report_as(reg, &group, id, Role::Worker, "done");
+    }
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let out = reg.drive_review_with(&group, gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+    let recorded: Vec<String> = drives_json(reg, &group)["entries"][0]["founding_panes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    assert_eq!(
+        recorded, ids,
+        "the fixture's premise: the drive recorded the panes it was started on, in order"
+    );
+    reg.rd_drive_group_with(&group, gh, 10_000);
+    let opened = reg.rd_drive_group_with(&group, gh, 20_000);
+    let lane = opened
+        .lanes_opened
+        .first()
+        .cloned()
+        .map(|(_, _, a)| a)
+        .unwrap_or_else(|| panic!("the second tick opens the gate's lane: {opened:?}"));
+    record_pass_for(reg, &group, &lane);
+    report_as(reg, &group, &lane, Role::Reviewer, "done");
+    let at = tick_to_gate_check(reg, &group, gh, 30_000);
+    (group, ids, session, at)
+}
+
+/// **Two panes on one session are both released, each once, oldest first**
+/// (#3250, review round 1 finding 2) — the plural path the first round of this
+/// change never exercised.
+///
+/// Three claims in one fixture, because they fail differently: BOTH panes go
+/// (a population that stopped at the first would pass a one-pane test), each
+/// gets exactly ONE row (the dedup against `owned_panes`, which a merged list
+/// can duplicate), and the rows are in the order the panes were opened — the
+/// claim the release loop makes and which only the MERGED list can make true.
+#[test]
+fn two_panes_on_the_drives_session_are_both_released_once_each_oldest_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, panes, session, at) = drive_started_on_session(&reg, &repo, &gh, 2);
+
+    let end = reg.rd_drive_group_with(&group, &gh, at + 10_000);
+    assert!(
+        audit_actions(&reg, &group).contains(&"rd-satisfied".to_string()),
+        "the fixture's premise: this tick is the satisfied exit"
+    );
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(released, panes, "both panes go, oldest first: {released:?}");
+    let rows = audit_details(&reg, &group, "rd-worker-released");
+    let named: Vec<String> =
+        rows.iter().map(|r| r["agent"].as_str().unwrap_or_default().to_string()).collect();
+    assert_eq!(named, panes, "one row per pane, in the same order: {rows:?}");
+    for row in &rows {
+        assert_eq!(row["session"], json!(session), "each row names the session kept: {row}");
+    }
+    for p in &panes {
+        assert!(reg.agent(p).is_some_and(|a| a.status == AgentStatus::Dead), "{p} is really gone");
+    }
+}
+
+/// **A pane opened on the session AFTER the drive started is not released**
+/// (#3250, review round 1 premortem) — in the window the premortem named.
+///
+/// The orchestrator resumes the conversation between the `gate-check` tick and
+/// the exit. A freshly spawned pane reads as idle, so the barrier would take
+/// it; the release is refused here by the POPULATION instead. `founding_panes`
+/// is a list recorded when `drive_review` read the session, and this pane was
+/// not on it — which is the whole reason the population is a recorded list
+/// rather than a live re-read of the session.
+///
+/// The pane the drive WAS started on is asserted to go in the same run, so this
+/// cannot pass by the release having stopped working altogether.
+#[test]
+fn a_pane_opened_on_the_session_after_the_drive_started_survives_the_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, panes, session, at) = drive_started_on_session(&reg, &repo, &gh, 1);
+    let founding = panes[0].clone();
+
+    let late = reg
+        .spawn_agent_ex(
+            &group,
+            Role::Worker,
+            Some("worker".to_string()),
+            "w-late",
+            "",
+            false,
+            None,
+            None,
+            Some(session.clone()),
+            None,
+            None,
+        )
+        .expect("the orchestrator resumes the session inside the window")
+        .id;
+    with_pane(&reg, &late, 61);
+    report_as(&reg, &group, &late, Role::Worker, "done");
+    assert!(
+        reg.agent(&late).is_some_and(|a| a.idle_since_ms.is_some()),
+        "the fixture's premise: this pane reads as idle, so only the population can save it"
+    );
+
+    let end = reg.rd_drive_group_with(&group, &gh, at + 10_000);
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(
+        released,
+        vec![founding.clone()],
+        "the founding pane goes and the late one does not: {released:?}"
+    );
+    assert!(
+        reg.agent(&late).is_some_and(|a| a.status != AgentStatus::Dead),
+        "…and the pane someone has just started speaking to is still there"
+    );
+    assert_eq!(
+        audit_details(&reg, &group, "rd-worker-released").len(),
+        1,
+        "…and no row claims otherwise"
+    );
+}
+
+/// **The CANCELLED exit releases the founding pane too** (#3250, review round 1
+/// finding 1) — the same defect one terminal state over.
+///
+/// The first round of this change bounded the widening to `satisfied`, on the
+/// argument that its notice is what makes the release safe. `cancelled` is a
+/// terminal step too: the drive is over, the terminal rule already ends the
+/// panes it OWNS there, and a PR that closed under a drive that never handed
+/// back left the orchestrator's own worker pane alive exactly as #3243 and
+/// #3248 did. The two exits differing was an accident of the guard, not a
+/// decision.
+#[test]
+fn a_cancelled_exit_releases_the_pane_the_drive_was_started_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let w = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).expect("a worker");
+    let worker = w.id.clone();
+    with_pane(&reg, &worker, 41);
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    report_as(&reg, &group, &worker, Role::Worker, "done");
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+
+    // The PR closes under the drive — a human merged or closed it — which is
+    // the one arc that reaches `cancelled` from a tick.
+    gh.set_facts("CLOSED", HEAD_A);
+    let end = reg.rd_drive_group_with(&group, &gh, 10_000);
+    let actions = audit_actions(&reg, &group);
+    assert!(
+        actions.iter().any(|a| a.contains("cancel")) || status_state(&reg, &group) == "cancelled",
+        "the fixture's premise: a closed PR cancels the drive: {actions:?}"
+    );
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(released, vec![worker.clone()], "the founding pane goes at this exit too");
+    let rows = audit_details(&reg, &group, "rd-worker-released");
+    assert_eq!(rows.len(), 1, "one row: {rows:?}");
+    assert_eq!(rows[0]["reason"], json!("drive-ended"), "…with the terminal reason: {:?}", rows[0]);
+    assert_eq!(rows[0]["session"], json!(session), "…naming the session kept: {:?}", rows[0]);
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status == AgentStatus::Dead),
+        "the pane is really gone"
+    );
+}
+
 /// **A terminal release the BARRIER refuses leaves that pane exactly where it
 /// was — named in the notice, alive, and the orchestrator's** (#2811 S1) — the
 /// residual `releasable`'s doc discloses, pinned rather than described.

@@ -3464,14 +3464,17 @@ it resumed last — a pane an earlier hand-back superseded was otherwise left si
 delegate slot for the rest of the drive. The same per-pane test decides each one, so a superseded
 pane that is busy stays exactly as a busy current pane does.
 
-At GATE SATISFIED it goes one step wider: every idle pane still sitting on that worker session is
-released, including the pane you spawned yourself and handed the drive when you started it. That
-is the pane the drive most often leaves behind — a drive it never had to hand a round back to owns
-no worker pane of its own, so it used to finish with your original worker still idle on the
-worktree, and you had to kill it by hand before the worktree could be removed. Only at that exit,
-and only where the pane is idle: the drive is over at that point and its own notice tells you the
-conversation resumes with `spawn_agent(resume:)`, while mid-drive a pane it never spoke to may
-still be one you are using. A busy pane is left alone, and no release row claims otherwise.
+When a drive ENDS — gate satisfied, or the PR closed under it — it also releases the pane you
+handed it when you started it, if that pane is idle. That is the one it used to leave behind: a
+drive that never had to hand a round back owns no worker pane of its own, so it finished with your
+original worker still idle on the worktree and you had to kill it by hand before the worktree
+could be removed. It is the pane (or panes) that were live on that session when you called
+`start_review_drive`, recorded then and not looked up again — so a pane you open or resume onto
+the session while the drive is running is never on the list, including one you open in the moment
+between the last check and the exit. A pane another live drive is using is left to that drive, and
+a busy pane is left alone; no release row claims otherwise. Mid-drive nothing changes: a pane the
+drive never spoke to may still be one you are using, so only the panes it opened itself are
+released then.
 
 Each release is on the audit log as `rd-lane-released` or `rd-worker-released`, naming the pane,
 the session kept and why — so it costs you no line in your pane and is still there to count.

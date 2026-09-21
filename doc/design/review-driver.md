@@ -1812,6 +1812,7 @@ group id becomes a path) beside `state.json`, `tasks.json` and
       "worker_session": "<full uuid, as resolved>",
       "worker_agent": "w-7",
       "prior_worker_agents": ["w-5"],
+      "founding_panes": ["w-2"],
       "on_behalf_of": "<orchestrator agent id>",
       "lanes": [ { "block": "rev-std", "session": "<uuid>", "agent": "rev-4",
                    "prior_agents": ["rev-2"],
@@ -2135,6 +2136,15 @@ size cap reproduces B2 and why a dead pane is provably safe to forget. Both are
 cleared with `worker_agent` when a resume re-points the drive at a DIFFERENT
 worker session, for `worker_agent`'s own reason — those panes belong to a worker
 this drive no longer owns.
+
+**`founding_panes` is the third list and the only one a hand-back does not
+write** (#3250): the panes that were live on `worker_session` when
+`drive_review` read it — what the orchestrator handed the drive. Recorded at
+drive start, re-recorded TOTAL on every resume (so a founding pane that has since
+died does not survive by having been recorded once), pruned by liveness and
+cleared with the other two on a session change, exactly as above. §3 argues its
+one reader — the terminal release — and why `driven_role` is deliberately not
+one.
 
 All of these — the five S3 added, the two #1871 B2 added beside them,
 `owed_notice`, which #1857 adds and *Retention* below describes, and
@@ -2477,8 +2487,8 @@ working, already gone, or never bound to a terminal — so this is not a blanket
 kill of a session. One `rd-worker-released` row per pane that actually went, on
 the rule below that a row means a pane went.
 
-**At the SATISFIED exit the population is the whole worker SESSION** (#3250),
-and the widening is the fix for a drive shape the rule above could not see at
+**A TERMINAL exit also releases the panes the drive was STARTED ON** (#3250),
+and that population is the fix for a drive shape the rule above could not see at
 all. `worker_agent` and the superseded list are written by a hand-back and by
 nothing else, so a drive that never took one owns no worker pane: an
 orchestrator starts a drive on a worker that has already pushed and reported,
@@ -2490,20 +2500,45 @@ and #3248 (`w-2747`), both running `rd-started` → `rd-satisfied` with no
 `rd-handback` and no `rd-worker-released` row, and both ending with an
 orchestrator killing the pane by hand before `git worktree remove` would run.
 So the terminal candidate is gated on the drive having a worker SESSION, which
-`drive_review` refuses to start without, and the caller's population for it is
-every live pane on that session.
+`drive_review` refuses to start without, and `DriveEntry::founding_panes`
+records what that session was carrying when the drive read it.
 
-It is true for that one step and no other, and the bound is the argument. At
-`satisfied` the drive is over and its own notice tells the orchestrator the
-conversation resumes with `spawn_agent(resume:)`, so a live pane on that
-session is one nobody is going to speak to again. Mid-drive — a
-`report-consumed` release — a pane the drive never addressed may be one the
-orchestrator is still using, so that arm keeps #3203's population unchanged.
-What widens is again only the POPULATION: `release_driven_pane` is still asked
-per pane and still refuses one that is working, already gone, not bound to a
-terminal, or not a driven delegate's role, so a busy pane on the session stays
-exactly where it is and no row claims otherwise. Pinned in both directions by
-`a_satisfied_drive_releases_the_worker_pane_it_never_handed_back_to` and
+**A recorded list, not a live re-read of the session, and the first draft of
+this was the re-read** (review round 1). A live population takes whatever is on
+the session at the exit — including a pane the orchestrator resumed into it
+during the drive, or inside the single tick between `gate-check` and the exit,
+where a fresh pane reads as idle and the barrier would hand it over to the
+release. Recording at `drive_review` (and re-recording on every resume, total
+rather than cumulative) answers the question the release actually asks: which
+panes was this drive handed. `admit_session_pane` states the one further
+exclusion — a pane any OTHER live drive's record names is that drive's to
+release, because `already-driven` is keyed on the PR and one worker session may
+legally back two driven PRs. The list is bounded by LIVENESS like the
+superseded ones, through the same `forget_dead_panes`.
+
+It reads `founding_panes` at both terminal steps and nowhere else. `satisfied`
+and `cancelled` are both the drive being over, and the terminal rule already
+ends the panes it OWNS at both, so the two exits differing in population was the
+same defect one state over rather than a bound — it is what left a closed-PR
+drive leaking the orchestrator's pane. Mid-drive — a `report-consumed` release —
+the pane may be one the orchestrator is still using, so that arm keeps #3203's
+population unchanged. And what widens is only the POPULATION:
+`release_driven_pane` is still asked per pane and still refuses one that is
+working, already gone, not bound to a terminal, or not a driven delegate's role,
+so a busy pane stays exactly where it is and no row claims otherwise.
+
+**The list is not read by `driven_role`, and that is deliberate.** §7's
+interception is a claim on a pane's TRAFFIC, and "a drive must never consume the
+traffic of a worker it did not resume" is as true of a founding pane as it was
+before the field existed: a `report` from it still reaches the orchestrator.
+Ending a pane the drive was handed, once the drive is over, is a different
+question from speaking for it while it runs.
+
+Pinned by `a_satisfied_drive_releases_the_worker_pane_it_never_handed_back_to`,
+`a_cancelled_exit_releases_the_pane_the_drive_was_started_on`,
+`two_panes_on_the_drives_session_are_both_released_once_each_oldest_first`
+(plural, dedup and the oldest-first order the merged list owes),
+`a_pane_opened_on_the_session_after_the_drive_started_survives_the_exit`, and
 `a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit`.
 
 **A pane the barrier skips is not re-asked later, and that is a residual rather
@@ -2514,11 +2549,13 @@ happened cleared that field — so once the current pane goes, no later tick nam
 the worker role again, and a SUPERSEDED pane that was mid-turn at the release
 tick stays owned and cap-counting. It is not leaked: `forget_dead_panes` drops
 it once it dies, and the idle reaper reclaims it once its own turn ends, which
-is the same path any idle delegate takes. The residual is narrower than it was:
-a drive that reaches `satisfied` now asks about every live pane on the session,
-so a superseded pane still alive at the exit is taken there. What stays open is
-the window in between — the ticks from the skipped release to the exit — and a
-drive that never reaches a terminal step at all. Closing that too would mean
+is the same path any idle delegate takes. #3250 narrows it at ONE end, and only
+that end: the terminal candidate no longer needs a current pane to hang on, so a
+drive that reaches `satisfied` or `cancelled` proposes one even after the
+release cleared `worker_agent`, and `owned_panes` still names the superseded
+pane — which is therefore asked about again at the exit. What stays open is the
+window in between: every tick from the skipped release to the exit, and a drive
+that never reaches a terminal step at all. Closing that too would mean
 re-asking on every tick, which is a busy-pane kill attempt per tick rather than
 a decision, so it is disclosed and bounded here instead, and pinned
 by `a_superseded_pane_the_barrier_skips_is_not_re_asked_on_a_later_tick` so the

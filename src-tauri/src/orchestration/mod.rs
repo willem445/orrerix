@@ -49804,8 +49804,10 @@ impl OrchRegistry {
         ReusablePane { agent: None, declined }
     }
 
-    /// **Every live pane in `group` sitting on `session`, oldest first** — the
-    /// population a satisfied drive's worker release is asked about (#3250).
+    /// **Every live pane in `group` sitting on `session`, oldest first** — what
+    /// a drive records as the panes it was STARTED ON
+    /// ([`DriveEntry::founding_panes`](loomux_engine::reviewdrive::DriveEntry::founding_panes),
+    /// #3250).
     ///
     /// The plural of [`Self::live_pane_on_session`] minus its block filter, and
     /// the filter is dropped for the opposite reason to the one that keeps it
@@ -49820,10 +49822,17 @@ impl OrchRegistry {
     /// has none — the fail-closed direction, and the one a drive record with a
     /// blank session would otherwise take straight through the barrier.
     ///
-    /// Ordered `(started_ms, id)` ascending so the audit rows read as the
-    /// history they are, with the same tiebreak as its singular twin: two panes
-    /// registered inside one wall-clock millisecond would otherwise be ordered
-    /// by `HashMap` iteration order, differently between runs.
+    /// Ordered `(started_ms, id)` ascending, with the same tiebreak as its
+    /// singular twin: two panes registered inside one wall-clock millisecond
+    /// would otherwise be ordered by `HashMap` iteration order, differently
+    /// between runs.
+    ///
+    /// **That order is this list's, and it does not survive being merged**
+    /// (review round 1, finding 2): at the release the recorded founding panes
+    /// are appended to `owned_panes`, whose members were all minted by a
+    /// hand-back and so all post-date them, and the release therefore re-sorts
+    /// the merged list. The claim "the audit rows read as the history they are"
+    /// belongs there, not here.
     fn live_panes_on_session(&self, group: &GroupId, session: &str) -> Vec<String> {
         if session.trim().is_empty() {
             return Vec::new();

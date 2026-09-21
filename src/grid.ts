@@ -1103,12 +1103,22 @@ export class Grid {
       // mark — a docked pane is exactly the one you would forget. A CLASS, not
       // a chip element: the dock is a narrow strip and the frame's own violet
       // bar is what reads there, the same mark the pane wears un-minimized.
-      // The title is left to attention when attention has one, for the reason
-      // the channel badge below gives: the agent's ask is the more urgent of
-      // the two, and only one string fits.
+      //
+      // THE MARK NEVER LOSES; only the TOOLTIP does. The chip has one title
+      // slot and three writers, and this one is LAST in priority, not second:
+      // attention overwrites it below by being written first and guarded, and
+      // the channel badge and queue marker below overwrite it outright under
+      // the same `!attn.needsAttention` guard. That order is right — "this
+      // agent needs you" and "this pane is driving another" are both things
+      // you can act on, and "you marked this" is already said in violet by the
+      // class above, which nothing overwrites.
+      //
+      // Written only when the pane IS watched: `dockChipWatched`'s unwatched
+      // title is the bare pane name, which is what `attn.title` already says,
+      // so writing it otherwise is a no-op dressed as a decision.
       const watch = dockChipWatched(pane.name, pane.watched);
       chip.classList.toggle("watched", watch.watched);
-      if (!attn.needsAttention) chip.title = watch.title;
+      if (watch.watched && !attn.needsAttention) chip.title = watch.title;
 
       // Cross-workspace channel membership (#271): a docked pane's header chip
       // is out of the DOM, so mirror it here too — else minimizing a connected

@@ -1231,9 +1231,13 @@ mod tests {
         // as a SET, so a fifth cause cannot quietly share a fourth's words.
         let mut d = Deferred::default();
         d.push(entry(0));
+        // The parenthesised clause and nothing else: cut at the CLOSING paren
+        // as well as the opening one. Taking the whole tail swept the header
+        // and the entry list in with it.
         let clause = |c: FlushCause| {
             let n = d.flush_notice(0, c).expect("one entry frames");
-            n.split(" (").nth(1).expect("the cause is parenthesised").to_string()
+            let after = n.split_once(" (").expect("the cause is parenthesised").1.to_string();
+            after.split_once(')').expect("the clause closes").0.to_string()
         };
         let got: Vec<(&str, String)> = [
             FlushCause::Wake,
@@ -1247,10 +1251,10 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                ("wake", "flushed because something did need you).".to_string()),
-                ("deadline", "flushed on the deferral deadline).".to_string()),
-                ("full", "flushed because the deferred store filled).".to_string()),
-                ("policy-off", "flushed because triage was turned off).".to_string()),
+                ("wake", "flushed because something did need you".to_string()),
+                ("deadline", "flushed on the deferral deadline".to_string()),
+                ("full", "flushed because the deferred store filled".to_string()),
+                ("policy-off", "flushed because triage was turned off".to_string()),
             ]
         );
         // The wire spellings are distinct too — they land in an audit row.

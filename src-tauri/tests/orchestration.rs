@@ -24155,13 +24155,15 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
     // equality below holds it to the Cargo workspace's own `[workspace]`
     // members. Adding a crate means editing both, and the equality fails
     // if either side moves alone.
-    // WIP MUTATION (red run only): the loomux-server entry is set aside so
-    // the equality reds against a drifted list. Restored in the fix commit.
     const ROOTS: &[(&str, &str)] = &[
         ("src-tauri", concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
         (
             "loomux-engine",
             concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/loomux-engine/src"),
+        ),
+        (
+            "loomux-server",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/loomux-server/src"),
         ),
     ];
     // #3259 item 2: ROOTS must agree with the workspace's own member list —
@@ -26260,12 +26262,17 @@ fn any_posix_sh() -> Option<String> {
 /// `pin_could_not_arm`. Pinned by
 /// `ts_pins_hard_fail_when_posix_sh_cannot_be_resolved`.
 fn ts_pin_sh(test: &str) -> String {
-    // WIP MUTATION (red run only): the panic arm is set aside — returning a
-    // default on a sh-less host is exactly the silent skip #3259 item 3
-    // closes, so the arming pin reds against this and greens against the
-    // real guard. Restored in the fix commit.
-    let _ = test;
-    any_posix_sh().unwrap_or_default()
+    match any_posix_sh() {
+        Some(sh) => sh,
+        None => panic!(
+            "{test}: no POSIX sh on this host — the ts behavioural pins MUST arm \
+             (every CI leg has one; windows-latest ships Git Bash, the shim \
+             feature's declared dependency), so this hard-fails instead of \
+             silently un-arming the ts coverage (#3259 item 3). If a runner \
+             or image change made this legitimate, fix the harness or move \
+             the guard deliberately — do not delete it to get back to green."
+        ),
+    }
 }
 
 /// The POSIX tools the shims' dependency preamble asserts (#509). One list, two

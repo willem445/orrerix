@@ -209,6 +209,48 @@ workflows.md already concedes under "The bypass surface, honestly": an agent
 that wants to evade has the cheaper route of calling the real binary by absolute
 path.
 
+## The audit row's ts_ms (#3202, #3249, #3259)
+
+Every audit row the shims write carries a `ts_ms` the shim produces by
+shelling out to the system `date` — never a Rust crate (the getrandom ban).
+`%3N` is a GNU extension, and BSD `date` answers `+%s%3N` with the epoch plus
+a literal `3N` tail, so the value is guarded by a `case` ladder rather than
+trusted: a non-digit or empty `%s%3N` gets one second chance (`date +%s`,
+whole seconds), and every other wrong answer is refused outright to the
+`ts=0` sentinel.
+
+Three properties the ladder carries, and why each is spelled where it is:
+
+* **Magnitude (#3249).** A `date` that answers with plain seconds is
+  all-digit and passes any all-digit check — so the accept arms are width
+  arms, not mere digit checks: exactly a canonical 13-digit value (epoch ms)
+  is trusted as-is, and exactly a canonical 10-digit value becomes ts+000.
+* **Canonicality (#3259).** The `ts_ms` value is interpolated into the audit
+  line unquoted, so the value must be a JSON number as well as a number:
+  a zero-padded answer (`0170000000`) is all-digit and the right width but
+  produces `"ts_ms":0170000000`, a leading-zero literal no JSON parser
+  accepts. Both accept arms therefore require a non-zero leading digit.
+* **Order-independence (#3259).** Each accept arm spells its whole accept
+  shape — width, alphabet and non-zero lead, in the arm itself — so no arm
+  depends on the junk arm running before it: reordering the case arms
+  changes no verdict, and the behavioural pin runs the reorder adversary
+  (a non-digit answer of the accept width) through the rendered shim.
+
+The census that holds every rendered shim to this ladder scans every
+production source root, and that root list is held to the Cargo workspace's
+own `[workspace] members` (read from the root manifest at test time) rather
+than hand-maintained — a fourth workspace crate hosting a shim renderer
+otherwise escapes exactly the way the third one initially did.
+
+The behavioural pins for all of this arm on every CI leg, and a host where
+no POSIX `sh` can be resolved is a hard failure rather than a skip: the
+pins arm unconditionally on Linux/macOS (`/bin/sh`), and the only leg that
+can silently lose `sh` is Windows — where Git Bash is the shim feature's
+own dependency (it is what `resolve_shim_toolchain` resolves), so its
+absence is an environment defect that must redden, not a legitimate host
+property. The #509 stripped-PATH pins keep their skip: macOS legitimately
+splits the coreutils they need in one directory.
+
 ## What is still not fixed
 
 **O1 is narrowed, not eliminated** (see *Guard completeness* above). Nothing

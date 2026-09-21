@@ -111,7 +111,7 @@ not accept, `also:` conditions unmet, a state file it cannot read — back into 
 delivery.
 
 **The vocabulary is inherited from `orch-scorecard.cjs`, and it is not
-identical to it.** `doc/design/orchestration-evals.md` §4.1 and that script
+identical to it.** `docs/design/orchestration-evals.md` §4.1 and that script
 already decide an orchestrator-bound prompt's class from its leading shape, and
 the census that motivated this feature was taken with them. `triage::classify`
 reuses those shapes, their first-match-wins discipline and their class names

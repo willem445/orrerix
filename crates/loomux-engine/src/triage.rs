@@ -15,7 +15,7 @@
 //! because every string it reads is agent-authored.
 //!
 //! THE VOCABULARY IS INHERITED, AND IT IS NOT IDENTICAL.
-//! `doc/design/orchestration-evals.md` §4.1 and `scripts/orch-scorecard.cjs`
+//! `docs/design/orchestration-evals.md` §4.1 and `scripts/orch-scorecard.cjs`
 //! already classify an orchestrator-bound prompt by its leading shape, and the
 //! census that motivated this module was taken with that classifier.
 //! [`classify`] reuses its shapes, its first-match-wins discipline and its
@@ -60,7 +60,7 @@
 //! #513's lesson is that a suppression waiting on a fallible signal must have
 //! a clock under it: "the next genuine wake" is a signal that may never come.
 //!
-//! See `doc/design/delivery-triage.md`.
+//! See `docs/design/delivery-triage.md`.
 
 use serde::{Deserialize, Serialize};
 

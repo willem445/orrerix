@@ -39221,7 +39221,7 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
         // #3304 S1, delivery triage. Its own binary for the `reviewdrive.rs`
         // row's two reasons (helpers do not cross integration-test targets, and
         // CLAUDE.md constraint 4 makes the target KIND what matters), plus one
-        // of this feature's own: `doc/design/delivery-triage.md` says every
+        // of this feature's own: `docs/design/delivery-triage.md` says every
         // path that can hold a notice back lives in one file, and a test target
         // that reads it as one scope is the other half of that.
         //

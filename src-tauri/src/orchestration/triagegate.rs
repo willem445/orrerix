@@ -156,7 +156,7 @@ impl OrchRegistry {
         //
         // `Role::Orchestrator` rather than `Role::is_root()`, which is a
         // deliberate narrowing of #3304 Q5 and is argued in
-        // `doc/design/delivery-triage.md`: `is_root()` also admits
+        // `docs/design/delivery-triage.md`: `is_root()` also admits
         // `Role::Lead`, the human's OWN pane, and holding a notice back from a
         // pane a human is sitting in front of is a different product decision
         // from cutting an agent's wakes — which is what #3304 measured. The

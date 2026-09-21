@@ -1235,7 +1235,7 @@ impl Default for DriverPolicy {
 // ── triage: orchestrator delivery triage (#3304 S1) ────────────────────────
 
 /// The `triage:` block — policy for the delivery-triage gate
-/// (`doc/design/delivery-triage.md`), a sibling of [`DriverPolicy`] and read
+/// (`docs/design/delivery-triage.md`), a sibling of [`DriverPolicy`] and read
 /// in exactly the same posture: an absent block means the feature is off and
 /// behaviour is byte-for-byte unchanged.
 ///

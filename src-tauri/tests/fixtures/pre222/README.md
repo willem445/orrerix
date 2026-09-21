@@ -1566,11 +1566,21 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   file is byte-identical to its previous blessed copy.
 
   Mechanical and single-character: `doc/design/` → `docs/design/`, one occurrence in each file,
-  produced by the same whole-tree sweep that rewrote the other 265 files in that PR, so the
-  golden and its live template were rewritten by one pass rather than by hand. The patch on each
+  produced by the same whole-tree sweep that rewrote every other citing file in that PR, so a
+  golden and its live template were rewritten by one pass rather than by hand. (No count here:
+  the figure moved when the PR rebased onto #3310 and it would have gone stale silently. What
+  is checkable is the patch equality below.) The patch on each
   golden was checked to be byte-identical to the patch on its live template before committing
   (`git diff -U0` on both, compared) — the "Verifying a re-bless by hand" check above, run the
   cheap way this shape permits.
 
   **Nothing about the templates' content changed**, so the byte budget moves by exactly one byte
   per file and `orchestrator.md`, which carries the resident core, is untouched.
+
+  **Re-verified after rebasing onto #3310** (which merged first, so this PR paid the rebase).
+  That branch added `doc/design/delivery-triage.md`, and the rebased tree carried seven
+  design-note citations under the old root across six files, none of which the original sweep
+  could have seen — a rebase replays patches, not greps. The note moved with the
+  rest and the citations were swept on the rebased tree; both templates re-checked here, patch
+  on each golden still byte-identical to the patch on its live template, `orchestrator.md`
+  still untouched.

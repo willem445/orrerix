@@ -1,6 +1,6 @@
 //! Integration tests for delivery triage (#3304 S1).
 //!
-//! Design note: `doc/design/delivery-triage.md`. The engine's own unit tests
+//! Design note: `docs/design/delivery-triage.md`. The engine's own unit tests
 //! (`loomux_engine::triage`) pin the DECISION — which shape closes by which
 //! rule, and what the never-triaged set always answers. What can only be
 //! pinned here is everything that makes the decision real:

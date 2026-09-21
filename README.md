@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="orrerix-logo.png" alt="Orrerix" width="400">
+  <img src="docs/img/orrerix-logo.png" alt="Orrerix" width="400">
 </p>
 
 # Orrerix
@@ -23,7 +23,7 @@ follow the process, not the other way around.
 [![Docs](https://img.shields.io/badge/docs-github%20pages-blue)](https://willem445.github.io/orrerix/)
 [![Autonomous](https://img.shields.io/badge/autonomous-82%25%20unsupervised-blueviolet)](#hand-it-a-batch-of-work-and-walk-away)
 
-![An orrerix window: an orchestrator pane top-left, a reviewer and a worker in their own panes below and beside it, with the git view and file explorer docked on the right](sample.jpg)
+![An orrerix window: an orchestrator pane top-left, a reviewer and a worker in their own panes below and beside it, with the git view and file explorer docked on the right](docs/img/sample.jpg)
 
 **Orrerix builds itself.** 82% of its own active development time — 22.3 of
 27.2 hours — ran with no human present: agents alone planning, building,
@@ -230,12 +230,12 @@ Backend checks (what CI gates on) run from the repo root: `cargo check --locked
 
 - **[`CLAUDE.md`](CLAUDE.md)** — hard constraints and code conventions. Read it
   before changing code.
-- **[`doc/design/architecture.md`](doc/design/architecture.md)** — the source tree,
+- **[`docs/design/architecture.md`](docs/design/architecture.md)** — the source tree,
   module by module, and the extension seams.
-- **[`doc/design/`](doc/design/)** — per-feature design notes: *why* each subsystem
+- **[`docs/design/`](docs/design/)** — per-feature design notes: *why* each subsystem
   is built the way it is.
 - **E2E** (experimental, `e2e-windows` CI job) — Playwright over CDP against the
-  real WebView2 webview: [`doc/design/e2e-testing.md`](doc/design/e2e-testing.md).
+  real WebView2 webview: [`docs/design/e2e-testing.md`](docs/design/e2e-testing.md).
 - `ORRERIX_DATA_DIR` redirects the **entire** app-data root to an absolute path,
   for a fully isolated second profile (the E2E harness uses it). Without it the
   root is `<platform data dir>/orrerix`. A repo's committed config lives in
@@ -244,9 +244,9 @@ Backend checks (what CI gates on) run from the repo root: `cargo check --locked
   env-var and `.loomux/` config fallbacks, the protocol strings agents match on
   (one spelling emitted, every spelling accepted), and the npm/app/asset
   identities are each specified in their own note:
-  [`rebrand-filesystem.md`](doc/design/rebrand-filesystem.md),
-  [`rebrand-protocol.md`](doc/design/rebrand-protocol.md),
-  [`rebrand-external.md`](doc/design/rebrand-external.md).
+  [`rebrand-filesystem.md`](docs/design/rebrand-filesystem.md),
+  [`rebrand-protocol.md`](docs/design/rebrand-protocol.md),
+  [`rebrand-external.md`](docs/design/rebrand-external.md).
 
 The Windows installer ships one prebuilt, MIT-licensed runtime — a modern ConPTY
 host (`conpty.dll` + `OpenConsole.exe`, committed in

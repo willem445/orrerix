@@ -31,7 +31,7 @@ repo: the pane *is* the git view, permanently. Everything below applies unchange
 pane's own ✕ closes it) and it's sized by the pane rather than by the terminal it
 would otherwise float over. A restored git pane opens on the **primary** worktree,
 read-only — an unlock never survives a restart. See
-[core concepts](../core-concepts#the-file-editor-and-git-panes).
+[core concepts](../core-concepts.html#the-file-editor-and-git-panes).
 
 ## Layout
 

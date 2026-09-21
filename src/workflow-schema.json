@@ -615,6 +615,7 @@
         {
           "name": "kinds",
           "type": "string-list",
+          "default": [],
           "help": "Which delivery kinds triage may act on at all. Empty (the default) means every kind the rule table covers. The engine's set is delegate-progress, delegate-done, reviewer-report, delegate-blocked, drive-gate-satisfied, drive-held, drive-cancelled, run-completed, pr-checks, message-from, planner-exited, agent-exited, watchdog, system-notice, human; a name outside it refuses the whole file, because a repo that misspelled a kind believes it narrowed the gate and did not."
         },
         {

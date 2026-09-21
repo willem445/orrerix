@@ -7,7 +7,20 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseQuickAdd, formatDue, DEFAULT_DUE_HOUR } from "../src/todoquickadd.ts";
+import { parseQuickAdd, formatDue, DEFAULT_DUE_HOUR, addDays } from "../src/todoquickadd.ts";
+
+// The DST transition-day tests at the bottom (#3298) need a zone that HAS a
+// 25-hour day, and `node --test` runs each file in its own process — so the
+// zone is PINNED here and leaks nowhere else. Chicago because it is the zone
+// the issue was measured in, and it has both transitions. Every fixture below
+// is built with local-zone `Date` construction and every expectation with
+// calendar arithmetic, so the pins hold in any zone; the control test just
+// before the transition cases reddens if this pin ever stops taking effect
+// (then both fixture days are 24 hours and the DST arms would go vacuous).
+// ESM hoists the import above this line, but the module under test only
+// builds `Date`s inside its functions, so nothing reads the zone before it
+// is set.
+process.env.TZ = "America/Chicago";
 
 /** Wednesday 2024-05-15, 10:00 local. Every expectation below is relative to it. */
 const NOW = new Date(2024, 4, 15, 10, 0, 0, 0).getTime();
@@ -339,4 +352,109 @@ test("formatDue is relative near the present and absolute once that stops helpin
   assert.equal(formatDue(at(2), NOW, false), "Fri");
   assert.equal(formatDue(at(0, 16, 0), NOW, true), "Today 16:00");
   assert.equal(formatDue(at(30), NOW, false), "Fri 14 Jun");
+});
+
+// ---------- DST transition days (#3298) ----------
+//
+// Before this round every relative arm built its day as
+// `dayStart + n * MS_PER_DAY`. A local day is 25 hours on the fall-back day,
+// so the sum landed at 23:00 the SAME day and the `setHours` that followed
+// pulled the date back a day: `tomorrow` became today, `fri` became Thursday,
+// `in 3 days` became two. The arms below pin the calendar reading on BOTH
+// transition days — the fall-back day is where the bug lives, the
+// spring-forward day (23 h) is the one the old arithmetic happened to survive,
+// and pinning it stops a future rewrite from trading one transition for the
+// other.
+
+/** Local instant on a calendar date — built with CALENDAR arithmetic
+ *  (`new Date(y, m, d, …)`), never epoch math, so the expectation cannot
+ *  share the bug it pins. */
+function atDay(y: number, m: number, d: number, hour = DEFAULT_DUE_HOUR, minute = 0): number {
+  return new Date(y, m, d, hour, minute, 0, 0).getTime();
+}
+
+/** Noon, Sunday 1 Nov 2026 — the DST fall-back day in Chicago (25 h). The
+ *  clock sits after the 02:00→01:00 changeover, but `startOfDay` normalises
+ *  to the same midnight a morning user would produce. */
+const FB_NOON = new Date(2026, 10, 1, 12, 0).getTime();
+/** 18:00 on the fall-back day — 4pm has passed, so a named time rolls forward. */
+const FB_EVENING = new Date(2026, 10, 1, 18, 0).getTime();
+/** Noon, Sunday 8 Mar 2026 — the spring-forward day in Chicago (23 h). */
+const SF_NOON = new Date(2026, 2, 8, 12, 0).getTime();
+/** 18:00 on the spring-forward day. */
+const SF_EVENING = new Date(2026, 2, 8, 18, 0).getTime();
+
+test("CONTROL: the fixture days really are transition days in the pinned zone", () => {
+  // Vacuity control for the tests below. If `TZ` ever stops taking effect
+  // (a zone without the tzdata entry, an environment that ignores the
+  // variable), both fixture days become 24 hours and every DST arm would
+  // pass against the old ms arithmetic — green over the bug, silently. This
+  // reddens instead of letting that happen.
+  assert.equal(new Date(2026, 10, 2).getTime() - new Date(2026, 10, 1).getTime(), 25 * 3600000);
+  assert.equal(new Date(2026, 2, 9).getTime() - new Date(2026, 2, 8).getTime(), 23 * 3600000);
+});
+
+test("addDays yields a start-of-day even when the input is not a midnight", () => {
+  // The `setHours(0,…)` inside `addDays` is what this pins. Every parser arm
+  // hands it a dayStart (a midnight), so no parse line can exercise it — the
+  // helper is the module's day-arithmetic seam, and this is its contract:
+  // a mid-day input on the fall-back day still comes back as the target
+  // day's midnight, not at the input's time-of-day. Without `setHours`, the
+  // result here is Mon 2 Nov 12:00.
+  const noon = new Date(2026, 10, 1, 12, 0).getTime();
+  assert.equal(addDays(noon, 1), new Date(2026, 10, 2).getTime());
+});
+
+test("DST fall-back: `tomorrow` is the next calendar day, never today", () => {
+  const a = parseQuickAdd("water the plants tomorrow", FB_NOON);
+  assert.equal(a.dueMs, atDay(2026, 10, 2), "Mon 2 Nov, not Sunday 1 Nov at 09:00");
+  const b = parseQuickAdd("water the plants tmr", FB_NOON);
+  assert.equal(b.dueMs, atDay(2026, 10, 2), "the abbreviated spelling takes the same arm");
+});
+
+test("DST fall-back: a bare weekday lands on the named weekday", () => {
+  // On main's arithmetic `fri` resolved to THURSDAY 5 Nov: the 25-hour day
+  // pushed the 5-day sum back into the 5th. `next <weekday>` takes the same
+  // path, as does `this <weekday>` — which, with delta 0, builds no day at
+  // all and is the control that the others' deltas are what moved.
+  assert.equal(parseQuickAdd("pay rent fri", FB_NOON).dueMs, atDay(2026, 10, 6));
+  assert.equal(parseQuickAdd("pay rent next fri", FB_NOON).dueMs, atDay(2026, 10, 6));
+  assert.equal(parseQuickAdd("pay rent next sat", FB_NOON).dueMs, atDay(2026, 10, 7));
+  assert.equal(parseQuickAdd("pay rent this sun", FB_NOON).dueMs, atDay(2026, 10, 1), "`this sun` means today");
+});
+
+test("DST fall-back: `next week` is the coming Monday", () => {
+  // On main's arithmetic this resolved to TODAY — Sunday 1 Nov at 09:00, a
+  // due in the past on arrival.
+  assert.equal(parseQuickAdd("retro next week", FB_NOON).dueMs, atDay(2026, 10, 2));
+});
+
+test("DST fall-back: `in N days` and `in N weeks` count calendar days", () => {
+  assert.equal(parseQuickAdd("chase the invoice in 3 days", FB_NOON).dueMs, atDay(2026, 10, 4));
+  assert.equal(parseQuickAdd("chase the invoice in 1 day", FB_NOON).dueMs, atDay(2026, 10, 2));
+  assert.equal(parseQuickAdd("chase the invoice in 2 weeks", FB_NOON).dueMs, atDay(2026, 10, 15));
+});
+
+test("DST fall-back: a time whose slot has passed rolls to TOMORROW's slot", () => {
+  // The no-date arm: `at 4pm` at 18:00 means the next occurrence of 4pm.
+  // On main's arithmetic `dayStart + MS_PER_DAY` was 23:00 the SAME day, so
+  // the `setHours(16,…)` pulled it back to today's 4pm — already past.
+  const a = parseQuickAdd("standup at 4pm", FB_EVENING);
+  assert.equal(a.dueMs, atDay(2026, 10, 2, 16, 0));
+  assert.equal(a.hasTime, true);
+});
+
+test("DST spring-forward: the 23-hour day keeps every arm on calendar days", () => {
+  // Spring-forward HIDES the bug — the 23-hour day's +24h sum lands at 01:00
+  // the next day, still inside the target — so every assertion here was green
+  // on the code this fixes. They are pinned anyway: the fix must not trade
+  // the 25-hour day for the 23-hour one, and `addDays`' `setHours(0,…)`
+  // re-normalisation is exactly what keeps the two symmetric.
+  assert.equal(parseQuickAdd("water the plants tomorrow", SF_NOON).dueMs, atDay(2026, 2, 9));
+  assert.equal(parseQuickAdd("pay rent fri", SF_NOON).dueMs, atDay(2026, 2, 13));
+  assert.equal(parseQuickAdd("pay rent next sat", SF_NOON).dueMs, atDay(2026, 2, 14));
+  assert.equal(parseQuickAdd("retro next week", SF_NOON).dueMs, atDay(2026, 2, 9));
+  assert.equal(parseQuickAdd("chase the invoice in 3 days", SF_NOON).dueMs, atDay(2026, 2, 11));
+  assert.equal(parseQuickAdd("chase the invoice in 2 weeks", SF_NOON).dueMs, atDay(2026, 2, 22));
+  assert.equal(parseQuickAdd("standup at 4pm", SF_EVENING).dueMs, atDay(2026, 2, 9, 16, 0));
 });

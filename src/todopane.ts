@@ -1556,7 +1556,12 @@ export class TodoPaneView {
       // so once the gap runs out the move is a silent no-op: the item does not
       // budge and nothing says why. `needsRenumber` is what lets the pane
       // notice — and saying so beats a drag that does nothing.
-      showToast("This list needs re-spacing before it can be reordered (#3263 S5).", "info");
+      // NOT "(#3263 S5)" any more: S5 is this slice, and it is not building
+      // the renumber. A message that names the slice fixing it is a promise,
+      // and a promise that ships unfulfilled is worse than no promise — the
+      // rule the S4 hooks followed when they said "arrives with S5" and the
+      // reason all three of those are now real controls.
+      showToast("This list has run out of room between two tasks and cannot be reordered.", "info");
       return;
     }
     // A reorder is applied WITHOUT an undo entry, and `inverseOp` is where the

@@ -10827,6 +10827,7 @@ fn task_summary_drops_notes_but_counts_them() {
         sprint: None,
         links: vec![],
         demo_path: None,
+        description: None,
         cleared_ms: None,
         updated_ms: 42,
     };
@@ -11422,6 +11423,7 @@ fn linked(id: &str, status: &str, deps: &[&str], related: &[&str]) -> Task {
         sprint: None,
         links: vec![],
         demo_path: None,
+        description: None,
         cleared_ms: None,
         updated_ms: 0,
     }

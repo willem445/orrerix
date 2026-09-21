@@ -1566,6 +1566,7 @@ fn tool_defs(
                     "pr": { "type": "string", "description": "PR ref or URL" },
                     "pr_base": { "type": "string", "description": "Branch the PR targets, as gh reports it (`gh pr view --json baseRefName`): `main`, `integration/581`, … Record it whenever you record `pr` — it is what lets the human's board say \"sub-PR into integration/581\" instead of warning about the default-branch merge gate on a PR that isn't one. DISPLAY METADATA ONLY: nothing gates on it, orrerix re-resolves the real base ref live for every merge decision, so a wrong value here misleads a human rather than opening a merge." },
                     "demo_path": { "type": "string", "description": "Worktree path where a demo of this item lives, e.g. \"C:/Projects/loomux-worktrees/<branch>\" — record it whenever you park a task at `prototype` or `human-testing` so the human can go run it directly instead of you pinging a pane. Prefer the worktree you actually built the demo in (often an integration-branch worktree, not any single worker's cwd) — explicit beats inferred. Omit = untouched, EMPTY STRING = clear, same rule as `pr`. DISPLAY METADATA ONLY: nothing gates on it." },
+                    "description": { "type": "string", "description": "One or two PLAIN-TEXT sentences saying what this row IS, for the HUMAN reading a board they did not build — the field to use when a title alone does not say what the work is or why it exists. Write it for someone with no context: what the change is, and what it is for. Never markdown, never a status update, never a plan; the board paints it verbatim as one line, and a newline or a tab is REFUSED rather than flattened. At most 500 characters, and an over-long value is REFUSED rather than cut, so the last sentence cannot be silently lost — put anything longer in a `note` or a grounding `link`. Omit = untouched, EMPTY STRING = clear, same rule as `pr`. IT IS NOT ON THE COMPACT ROW: `list_tasks` does not carry it, deliberately, because it is written for a human and would otherwise ride every row of every board read; `get_task(id)` is where you read one back. DISPLAY METADATA ONLY: nothing gates on it." },
                     "assignee": { "type": "string", "description": "Agent id working on it" },
                     "session": { "type": "string", "description": "Worker session id for this task (enables follow-up resume)" },
                     "note": { "type": "string", "description": "Note to append" },
@@ -2743,6 +2744,13 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                     pr: arg_str(args, "pr").map(str::to_string),
                     pr_base: arg_str(args, "pr_base").map(str::to_string),
                     demo_path: arg_str(args, "demo_path").map(str::to_string),
+                    // STRICT (#3261), for the `parent`/`kind` reason spelled
+                    // out below: this argument is new here and has no live
+                    // callers, so refusing a non-string costs nothing — and a
+                    // description silently dropped is the failure the field
+                    // exists to prevent, an agent told the write landed while
+                    // the human's board still says nothing about the row.
+                    description: arg_str_strict(args, "description")?.map(str::to_string),
                     assignee: arg_str(args, "assignee").map(str::to_string),
                     session: arg_str(args, "session").map(str::to_string),
                     note: arg_str(args, "note").map(str::to_string),

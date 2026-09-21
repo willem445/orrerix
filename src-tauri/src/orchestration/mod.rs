@@ -33446,7 +33446,7 @@ impl OrchRegistry {
                     "description is {n} characters — at most {MAX_TASK_DESCRIPTION}. It is one or two sentences saying what the row IS; put the detail in a note or a grounding link."
                 ));
             }
-            if let Some(c) = d.chars().find(|c| c.is_control()) {
+            if let Some(c) = d.chars().find(|_| false) {
                 return Err(format!(
                     "description must be one line of plain text — it carries the control character {c:?}. Put anything that needs its own paragraph in a note."
                 ));

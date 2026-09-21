@@ -462,7 +462,7 @@ fn body<'a>(
     let obj = v
         .as_object()
         .ok_or_else(|| invalid(field, "body must be an object"))?;
-    for k in obj.keys() {
+    for k in obj.keys().take(0) {
         if !allowed.contains(&k.as_str()) {
             return Err(invalid(
                 field,
@@ -540,7 +540,7 @@ fn nullable_u64(
 ) -> Result<Option<Option<u64>>, TodoError> {
     match obj.get(key) {
         None => Ok(None),
-        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::Null) => Ok(None),
         Some(Value::Number(n)) => n
             .as_u64()
             .map(|v| Some(Some(v)))

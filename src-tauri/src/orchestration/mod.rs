@@ -33840,7 +33840,7 @@ impl OrchRegistry {
             // refused from one caller and silently accepted from the other.
             // Trailing whitespace is not content, and an all-whitespace value
             // was already the clear.
-            task.description = patch.description.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            task.description = patch.description;
         }
         if patch.assignee.is_some() {
             task.assignee = patch.assignee.filter(|s| !s.trim().is_empty());

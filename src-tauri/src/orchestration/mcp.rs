@@ -19,6 +19,10 @@ use super::{Caller, Delivery, GroupId, NameSource, OrchRegistry, Role};
 // acquisition answers with. See `doc/design/lock-liveness.md`.
 use loomux_engine::budget;
 use loomux_engine::lockwatch::{Busy, BUSY_RETRY_AFTER_MS};
+// #3263 S2: the To-Do model, caps and ops the six `todo_*` tools parse into.
+// The host half (the file, the lock, the audit row) is `super::todo`, reached
+// through `OrchRegistry::todo_apply` / `todo_snapshot` rather than directly.
+use loomux_engine::todo;
 use serde_json::{json, Value};
 use std::io::Read as _;
 use std::path::Path;
@@ -328,6 +332,15 @@ pub const READ_TOOLS: &[&str] = &[
     // #1683: a pure group-dir read — validates the section id, slices the
     // rendered playbook, writes one audit line. Nothing mutates.
     "read_playbook",
+    // #3263 S2. Classified from what the ARMS do, per this table's own rule:
+    // both reach `todo_snapshot`, which is `load_store` + a filter and takes
+    // no lock at all. The quarantine rename inside `load_store` is the one
+    // thing either can move on disk, and it is a RECOVERY from bytes that
+    // could not be parsed — it preserves evidence rather than publishing
+    // state, and it happens identically on the pane's own read. The four
+    // writers below are deliberately absent and fall through to `Mutate`.
+    "todo_list",
+    "todo_get",
 ];
 
 pub fn tool_kind(name: &str) -> ToolKind {
@@ -406,6 +419,11 @@ fn verify_with(tool: &str) -> Option<&'static str> {
         "queue_merge" | "cancel_queued_merge" => "merge_queue_status",
         "acquire_lock" | "release_lock" => "list_locks",
         "notify_when" | "cancel_notification" => "list_notifications",
+        // #3263 S2. `todo_list` rather than `todo_get`: a caller checking
+        // whether a slow write landed may not have the id yet (an `add` that
+        // timed out never returned one), and the list answers "is it there"
+        // for all four where `todo_get` answers it for only three.
+        "todo_add" | "todo_update" | "todo_complete" | "todo_delete" => "todo_list",
         _ => return None,
     })
 }
@@ -1293,6 +1311,81 @@ fn tool_defs(
             }),
             &["text"]),
     ];
+    // THE HUMAN'S TO-DO LIST (#3263 S2) — six tools, on the SHARED tier.
+    //
+    // Shared rather than orchestrator-gated because the list is the human's,
+    // not the fleet's: a worker that notices a follow-up while it has the code
+    // in front of it is exactly who should be able to write it down, and
+    // routing every such note through the orchestrator would make the feature
+    // cost a turn nobody has. `Role::Solo` never reaches here (the early
+    // return above), and both positive enumerations below — the manager's and
+    // the lead's — name all six explicitly, which is what a default-deny
+    // filter requires.
+    //
+    // TWO SCOPES, and the caller's own group decides what `workspace` means:
+    // the workspace key is derived from THIS group's repo
+    // (`todo::workspace_key`), never passed as an argument, so one group can
+    // neither read nor write another project's list. An id that is in neither
+    // `global` nor the caller's own workspace reads back `unknown todo` — the
+    // same wording an id that never existed gets, so a caller cannot probe for
+    // what it may not see (`require_in_group`'s posture, applied to items).
+    tools.extend([
+        tool("todo_list",
+            "Read the human's To-Do list — the personal list they keep in orrerix's To-Do pane, NOT the group's task board (that is `list_tasks`, and the two are unrelated: a board task is this group's work, a to-do is the human's own). Rows come back compact: id, title, status, due_ms, priority, important, tags, steps_done/steps_total, updated_by. Tombstoned items are never returned. USE THIS BEFORE WRITING ANYTHING — an item you were about to add is often already there, and `todo_update` on the existing one beats a second row saying the same thing. `scope` picks WHICH list: `workspace` (the default) is this project's list, keyed on your group's own repo; `global` is the one list that follows the human everywhere. You cannot name another project's list. Completed items are omitted unless you pass `include_done: true`. `query` filters on the title and notes: whitespace-separated terms, ALL of which must match (substring, case-insensitive).",
+            json!({
+                "scope": { "type": "string", "enum": ["global", "workspace"], "description": "Which list to read. `workspace` (default) = this project's list, resolved from YOUR group's repo. `global` = the human's everywhere list." },
+                "include_done": { "type": "boolean", "description": "true = include completed items (default false)." },
+                "query": { "type": "string", "description": "Whitespace-separated terms; every term must appear (case-insensitive substring) in the title or notes." },
+            }),
+            &[]),
+        tool("todo_get",
+            "Read ONE to-do in full — notes, steps, tags, due/remind times, and who last touched it — after `todo_list`'s compact row showed you something worth opening. It also carries `rev`, which is the value to pass back as `todo_update`'s `if_rev` so a concurrent edit refuses your write instead of being silently overwritten by it. An id outside {the global list, your own workspace's list} is `unknown todo: <id>`, exactly as an id that never existed is.",
+            json!({ "id": { "type": "string", "description": "To-do id, e.g. td-9f3a1c2e7b4d5a60." } }),
+            &["id"]),
+        tool("todo_add",
+            "Add one item to the human's To-Do list. WRITE IT AS THE HUMAN WILL READ IT LATER, with no context from this conversation: a title that says what to do, and notes carrying the issue/PR number, the file, or whatever makes it actionable in a month. `scope` defaults to `workspace` — this project's list, resolved from your group's repo — which is almost always right for something you noticed in the code; use `global` only for something genuinely not about this project. The item records YOU as its author, so the human can see which agent added it. Caps refuse rather than truncate (title 500 chars, notes 20 KB, 20 tags, 100 steps, 5,000 live items per list) and every refusal is audited: a truncated title is a silent loss, a refusal is something you can act on now. `steps` is a plain list of step TITLES, in order.",
+            json!({
+                "scope": { "type": "string", "enum": ["global", "workspace"], "description": "Which list to add to. `workspace` (default) = this project's list; `global` = the human's everywhere list." },
+                "title": { "type": "string", "description": "What to do, in the human's words. Required, non-blank, at most 500 characters." },
+                "notes": { "type": "string", "description": "The detail that makes it actionable later — issue/PR numbers, file paths, what you saw. At most 20 KB." },
+                "due_ms": { "type": "integer", "description": "Due date, unix milliseconds." },
+                "remind_ms": { "type": "integer", "description": "In-app reminder time, unix milliseconds. Defaults to nothing; the pane derives one from `due_ms` when you omit it." },
+                "priority": { "type": "integer", "minimum": 0, "maximum": 3, "description": "0 (none) to 3 (highest). Outside that range is refused, not clamped." },
+                "important": { "type": "boolean", "description": "true = starred into the human's Important view." },
+                "tags": { "type": "array", "items": { "type": "string" }, "description": "Free-text tags, at most 20." },
+                "steps": { "type": "array", "items": { "type": "string" }, "description": "Sub-step titles, in order — at most 100. Each becomes an unchecked step." },
+                "my_day": { "type": "integer", "description": "Unix ms at the local midnight of the day to put this in My Day for. Omit unless the human asked for today." },
+            }),
+            &["title"]),
+        tool("todo_update",
+            "Edit one to-do — this is how you GROOM the list: re-title something vague, add the notes that make it actionable, set a due date or a priority, split the work into steps. Every field is optional and an omitted one is LEFT ALONE, so a call that sends only `notes` changes only the notes. PASS `if_rev` WHENEVER YOU ARE EDITING AN ITEM YOU DID NOT JUST CREATE: it is the `rev` you read in `todo_get`/`todo_list`, and if the human (or another agent) has touched the item since, your write is refused with `conflict: <id> is at rev N (you sent M)` instead of quietly replacing their edit — re-read the item and re-apply your intent to what is there NOW, never resend what you had. `tags` and `steps` REPLACE the whole array, so read the item first and send the full list you want. A step with an `id` is the existing step (kept, with anything a newer build wrote on it); a step with no `id` is a new one. `order_after` moves the item within its list: an id to put it after, or null for first.",
+            json!({
+                "id": { "type": "string", "description": "To-do id to edit." },
+                "if_rev": { "type": "integer", "description": "The `rev` you read this item at. A mismatch REFUSES the write and names both revs. Pass it whenever the read and the write are separated by anything." },
+                "title": { "type": "string", "description": "New title. Non-blank, at most 500 characters." },
+                "notes": { "type": "string", "description": "New notes, replacing what is there. At most 20 KB." },
+                "due_ms": { "type": ["integer", "null"], "description": "New due date in unix ms, or null to clear it." },
+                "remind_ms": { "type": ["integer", "null"], "description": "New reminder time in unix ms, or null to clear it." },
+                "my_day": { "type": ["integer", "null"], "description": "Unix ms at local midnight to put this in My Day for, or null to take it out." },
+                "priority": { "type": "integer", "minimum": 0, "maximum": 3, "description": "0 to 3." },
+                "important": { "type": "boolean", "description": "Star or un-star it." },
+                "tags": { "type": "array", "items": { "type": "string" }, "description": "REPLACES the whole tag list. At most 20." },
+                "steps": { "type": "array", "items": { "type": "object" }, "description": "REPLACES the whole step list, in order: `[{\"id\": \"st-…\", \"title\": \"…\", \"done\": false}]`. Keep an existing step's `id` to keep the step; omit `id` for a new one. At most 100." },
+                "order_after": { "type": ["string", "null"], "description": "Move this item directly after the to-do with this id, or null to move it to the top of its list." },
+            }),
+            &["id"]),
+        tool("todo_complete",
+            "Tick a to-do off, or un-tick one. Steps are left exactly as they are — this is the item's own status, not a cascade. COMPLETE SOMETHING ONLY WHEN YOU KNOW IT IS ACTUALLY DONE (the PR you added it for merged, the thing it asked for is in the tree): this is the human's list, and an item ticked off on an assumption is one they will never look at again.",
+            json!({
+                "id": { "type": "string", "description": "To-do id." },
+                "done": { "type": "boolean", "description": "true = completed, false = back to open." },
+            }),
+            &["id", "done"]),
+        tool("todo_delete",
+            "Soft-delete one to-do: it disappears from every view and the record survives 30 days, so the human can get it back. ONE AT A TIME AND ONLY WHEN ASKED. This is the human's own list, not your workspace — an item that turned out to be unnecessary is `todo_complete`, and an item that is wrong is `todo_update`. Never sweep the list, never clear a scope, and never delete something you did not add unless the human said to. Deleting an already-deleted id is `unknown todo`, the same as an id that never existed.",
+            json!({ "id": { "type": "string", "description": "To-do id to delete." } }),
+            &["id"]),
+    ]);
     // THE MANAGER'S ENTIRE SURFACE — a positive enumeration, on `Role::Solo`'s
     // pattern (#1161 M2).
     //
@@ -1331,6 +1424,20 @@ fn tool_defs(
             "list_verdicts",
             "request_compact",
             "note_directive",
+            // #3263 S2. All six, named explicitly because this filter is
+            // default-deny. The manager is the human's own interface to the
+            // group, so it is the pane where "put that on my list" is most
+            // likely to be TYPED — withholding the list from the one class
+            // whose whole job is talking to the human would be the wrong way
+            // round. Nothing here is orchestration authority: a to-do is the
+            // human's personal data, and the tools reach no agent, no board
+            // and no branch.
+            "todo_list",
+            "todo_get",
+            "todo_add",
+            "todo_update",
+            "todo_complete",
+            "todo_delete",
         ];
         tools.retain(|t| MANAGER_SHARED.contains(&t["name"].as_str().unwrap_or_default()));
         tools.extend([
@@ -1408,7 +1515,29 @@ fn tool_defs(
     // post-compact re-grounding notice, which is the mechanism that need
     // actually has.
     if role == Role::Lead {
-        const LEAD_SHARED: &[&str] = &["list_agents", "request_compact", "note_directive"];
+        // #3263 S2 adds the six to-do tools, and the argument is the one the
+        // withheld board/question/verdict surface does NOT have: there is
+        // something behind them. A lead group has a repo, so `workspace`
+        // scope resolves exactly as it does anywhere else, and the global
+        // list is the same one file every pane on this machine reads — so
+        // unlike `get_state`, which would answer `"{}"` forever in a group
+        // with no orchestrator to write it, a lead's `todo_list` returns the
+        // human's real list. The feature's own premise is that ANY agent can
+        // add, groom and complete items; a lead pane — the one sitting
+        // directly with the human — is the last class that should be the
+        // exception. And none of it is orchestration authority: a to-do
+        // reaches no agent, no board, no branch and no gate.
+        const LEAD_SHARED: &[&str] = &[
+            "list_agents",
+            "request_compact",
+            "note_directive",
+            "todo_list",
+            "todo_get",
+            "todo_add",
+            "todo_update",
+            "todo_complete",
+            "todo_delete",
+        ];
         tools.retain(|t| LEAD_SHARED.contains(&t["name"].as_str().unwrap_or_default()));
         tools.push(lead_spawn_agent_tool());
         tools.extend(fleet_control_tool_defs());
@@ -2234,6 +2363,321 @@ fn arg_task_links(args: &Value, key: &str) -> Result<Option<Vec<super::TaskLink>
 }
 
 
+// ---------- the To-Do tools' argument and identity helpers (#3263 S2) ----------
+
+/// A whole-number argument (`due_ms`, `remind_ms`, `my_day`, `if_rev`).
+///
+/// Absent or null is `None`. `Value::as_u64` is what makes the refusals fall
+/// out, on `arg_sprint`'s precedent: a negative, a fraction and a JSON string
+/// all fail it, so `-1`, `1.5` and `"3"` are refused rather than coerced or
+/// silently dropped. Strict because a dropped `if_rev` is the whole
+/// concurrency guard going quiet — the caller would be told its guarded write
+/// landed while nothing guarded it.
+fn arg_u64(args: &Value, key: &str) -> Result<Option<u64>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("{key} must be a whole number >= 0, got: {v}")),
+    }
+}
+
+/// [`arg_u64`] for a field a caller may explicitly CLEAR.
+///
+/// Three states, and the nesting is what keeps them apart: `None` = the caller
+/// said nothing, leave it alone; `Some(None)` = an explicit `null`, clear it;
+/// `Some(Some(n))` = set it. Collapsing the first two — which a plain
+/// `arg_u64` does — would make "remove this due date" unexpressible, and the
+/// engine's `TodoUpdate` already carries the nested shape for exactly this.
+fn arg_nullable_u64(args: &Value, key: &str) -> Result<Option<Option<u64>>, String> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(v) => v
+            .as_u64()
+            .map(|n| Some(Some(n)))
+            .ok_or_else(|| format!("{key} must be a whole number >= 0, or null to clear it")),
+    }
+}
+
+/// `priority`, 0..=[`todo::PRIORITY_MAX`].
+///
+/// The RANGE is checked by the engine (`check_priority`), not here, and is
+/// deliberately not repeated: two copies of one bound is two chances to
+/// drift, and the engine's is the one that also guards the pane's writes.
+/// What this does is the JSON shape plus the `u8` narrowing, so `300` and
+/// `"2"` are refused where they are written rather than truncated into a
+/// legal-looking value on the way in.
+fn arg_priority(args: &Value, key: &str) -> Result<Option<u8>, String> {
+    match arg_u64(args, key)? {
+        None => Ok(None),
+        Some(n) if n <= u8::MAX as u64 => Ok(Some(n as u8)),
+        Some(n) => Err(format!(
+            "{key} must be 0..={}, got: {n}",
+            todo::PRIORITY_MAX
+        )),
+    }
+}
+
+/// A string-array argument, refusing in the CALLER's vocabulary.
+///
+/// [`arg_str_array`] exists and does the same parse, but its refusal says
+/// "an array of task-id strings" — true for `deps`/`related`, and a wrong and
+/// confusing thing to tell someone who mistyped `tags`. Same shape, own
+/// wording; the empty-array-clears convention (#582) is unchanged.
+fn arg_str_array_named(args: &Value, key: &str) -> Result<Option<Vec<String>>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("{key} must be an array of strings"))
+            })
+            .collect::<Result<Vec<String>, String>>()
+            .map(Some),
+        Some(_) => Err(format!("{key} must be an array of strings")),
+    }
+}
+
+/// `todo_update`'s `steps` — `[{id?, title, done?}]`.
+///
+/// Hand-parsed for `arg_task_links`' reason: serde's untagged deserializer
+/// answers "data did not match any variant", which tells a caller neither
+/// which step was wrong nor what the shape is. An `id` that is present names
+/// an EXISTING step (the engine re-attaches whatever a newer build wrote on
+/// it); an absent `id` mints a new one. `done` defaults to `false`, so a
+/// caller can send `[{"title": "…"}]` for a fresh checklist.
+///
+/// An empty array is `Some(vec![])` — the explicit "clear every step" — which
+/// is the #582 convention this file uses everywhere else.
+fn arg_step_patches(args: &Value, key: &str) -> Result<Option<Vec<todo::StepPatch>>, String> {
+    const SHAPE: &str = "must be an array of objects {\"id\": \"st-…\" (omit for a new step), \
+                         \"title\": \"…\", \"done\": false}";
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| match item {
+                Value::Object(map) => {
+                    let id = match map.get("id") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::String(s)) => Some(s.clone()),
+                        Some(_) => return Err(format!("a {key} \"id\" must be a string")),
+                    };
+                    let title = map
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| format!("each {key} entry needs a string \"title\""))?
+                        .to_string();
+                    let done = match map.get("done") {
+                        None | Some(Value::Null) => false,
+                        Some(Value::Bool(b)) => *b,
+                        Some(_) => return Err(format!("a {key} \"done\" must be true or false")),
+                    };
+                    Ok(todo::StepPatch { id, title, done })
+                }
+                _ => Err(format!("{key} {SHAPE}")),
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .map(Some),
+        Some(_) => Err(format!("{key} {SHAPE}")),
+    }
+}
+
+/// Who the item records as its author.
+///
+/// Every field is registry-derived, never caller-supplied: `agent_id`, `group`
+/// and `role` come off the resolved token, and the display name off the
+/// roster. That is what makes the pane's attribution mark a fact about who
+/// wrote the row rather than a string an agent chose for itself. A name the
+/// roster cannot answer falls back to the id, which is always present — the
+/// attribution degrades to something true rather than to an empty label.
+fn todo_actor(reg: &OrchRegistry, caller: &Caller) -> todo::Actor {
+    let name = reg
+        .agent(&caller.agent_id)
+        .map(|a| a.name)
+        .unwrap_or_else(|| caller.agent_id.clone());
+    todo::Actor::Agent {
+        id: caller.agent_id.clone(),
+        name,
+        group: caller.group.as_str().to_string(),
+        role: caller.role.as_str().to_string(),
+    }
+}
+
+/// `(workspace key, the repo root as the group spelled it)` for this caller.
+///
+/// **The key is derived, never passed.** `todo::workspace_key` is the one
+/// function that turns a path into a workspace identity (CLAUDE.md constraint
+/// 6's neighbour: the key is a JSON map key and is never joined onto a path),
+/// and the path it gets here is THIS group's own `repo` — so no argument on
+/// any of the six tools can name another project's list, and an agent cannot
+/// widen its own reach by spelling a key. A group with no repo has no
+/// workspace at all and is told so rather than silently falling back to the
+/// global list, which would put a project note on the human's everywhere list
+/// with nothing to say it happened.
+fn todo_workspace(reg: &OrchRegistry, caller: &Caller) -> Result<(String, String), String> {
+    let repo = reg
+        .group(caller.group.as_str())
+        .map(|g| g.repo)
+        .filter(|r| !r.trim().is_empty())
+        .ok_or_else(|| {
+            "workspace scope unavailable: your group has no repo — pass scope: \"global\" to \
+             use the human's everywhere list"
+                .to_string()
+        })?;
+    Ok((todo::workspace_key(Path::new(&repo)), repo))
+}
+
+/// The `scope` argument: `"global"` or `"workspace"`, defaulting to
+/// `"workspace"`.
+///
+/// `workspace` is the default because it is right for almost everything an
+/// agent notices — a follow-up in this repo's code belongs on this repo's
+/// list — and because the alternative default would quietly pile every
+/// group's project notes onto the one list the human carries everywhere.
+///
+/// Returns the scope together with the `(key, root)` pair a write passes to
+/// `todo_apply` so the store records the project's label for the pane's scope
+/// switch. A global scope passes `None`, which is what leaves the workspace
+/// table untouched.
+fn todo_scope(
+    reg: &OrchRegistry,
+    caller: &Caller,
+    args: &Value,
+) -> Result<(todo::Scope, Option<(String, String)>), String> {
+    match arg_str_strict(args, "scope")? {
+        None | Some("workspace") => {
+            let (key, root) = todo_workspace(reg, caller)?;
+            Ok((todo::Scope::Workspace(key.clone()), Some((key, root))))
+        }
+        Some("global") => Ok((todo::Scope::Global, None)),
+        Some(other) => Err(format!(
+            "scope must be \"global\" or \"workspace\", got: {other}"
+        )),
+    }
+}
+
+/// Resolve an id the caller is ALLOWED to see, or refuse with `unknown todo`.
+///
+/// The visible set is {the global list} ∪ {this caller's own workspace list},
+/// and an id outside it is refused with the SAME wording an id that never
+/// existed gets. That sameness is the point: a distinct "not yours" would let
+/// a caller probe another project's list for which ids exist, which is
+/// `require_in_group`'s "unknown agent" posture applied to items. A group with
+/// no repo simply sees the global list and nothing else — the missing
+/// workspace narrows what is visible, it never widens it.
+///
+/// Called BEFORE every mutating arm, because `todo_apply` itself has no notion
+/// of who is asking: the engine refuses an id that is absent or tombstoned,
+/// and this is what refuses an id that is present but not the caller's.
+fn todo_visible(
+    reg: &OrchRegistry,
+    caller: &Caller,
+    id: &str,
+) -> Result<todo::TodoItem, String> {
+    let mine = todo_workspace(reg, caller).ok().map(|(key, _)| key);
+    reg.todo_snapshot(None)
+        .items
+        .into_iter()
+        .find(|i| {
+            i.id == id
+                && match &i.scope {
+                    todo::Scope::Global => true,
+                    todo::Scope::Workspace(k) => mine.as_deref() == Some(k.as_str()),
+                }
+        })
+        .ok_or_else(|| format!("unknown todo: {id}"))
+}
+
+/// The `(key, root)` a write against an EXISTING item passes, so a workspace
+/// item's project label is refreshed by the edit the way an add records it.
+/// `None` for a global item, and `None` when the group has no repo — neither
+/// has a workspace record to touch.
+fn todo_workspace_for(
+    reg: &OrchRegistry,
+    caller: &Caller,
+    item: &todo::TodoItem,
+) -> Option<(String, String)> {
+    match &item.scope {
+        todo::Scope::Global => None,
+        todo::Scope::Workspace(_) => todo_workspace(reg, caller).ok(),
+    }
+}
+
+/// Audit a refusal this layer made, in the shape
+/// `OrchRegistry::todo_apply` uses for the ones the engine made.
+///
+/// A cross-workspace id and a malformed argument never reach `todo_apply`, so
+/// without this they would be the only two refusals in the feature that leave
+/// no trace — and a caller repeatedly probing ids it may not see is precisely
+/// the event the human needs to be able to find afterwards. Same action, same
+/// two detail keys, so one `todo-refused` filter over the audit log answers
+/// the question regardless of which layer said no.
+fn audit_todo_refusal(reg: &OrchRegistry, caller: &Caller, action: &str, reason: &str) {
+    reg.audit(
+        &caller.group,
+        &caller.agent_id,
+        "todo-refused",
+        json!({ "action": action, "reason": reason }),
+    );
+}
+
+/// Run a to-do arm, auditing whatever it refuses before handing the refusal
+/// back — so the arms below can use `?` and still leave a row.
+fn todo_arm(
+    reg: &OrchRegistry,
+    caller: &Caller,
+    action: &str,
+    body: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    body().map_err(|e| {
+        audit_todo_refusal(reg, caller, action, &e);
+        e
+    })
+}
+
+/// The compact row `todo_list` returns — deliberately NOT the whole item.
+///
+/// `TodoItem` carries notes (up to 20 KB each), every step's text and two full
+/// `Actor` records; a list of fifty of them is a payload an agent pays for on
+/// a call whose question is "what is on the list". The full record is one
+/// `todo_get` away, and that is the same split `list_tasks`/`get_task` already
+/// make for the board.
+fn todo_row(item: &todo::TodoItem) -> Value {
+    json!({
+        "id": item.id,
+        "title": item.title,
+        "status": item.status,
+        "due_ms": item.due_ms,
+        "priority": item.priority,
+        "important": item.important,
+        "tags": item.tags,
+        "steps_done": item.steps.iter().filter(|s| s.done).count(),
+        "steps_total": item.steps.len(),
+        "updated_by": item.updated_by.label(),
+        "rev": item.rev,
+    })
+}
+
+/// `todo_list`'s `query`: whitespace-separated terms, ALL of which must appear
+/// (case-insensitive substring) in the title or the notes.
+///
+/// The `filematch.ts` semantics the plan names, spelled in Rust rather than
+/// reached for across the seam — the frontend module is TypeScript and this is
+/// three lines. An empty or whitespace-only query matches everything, which is
+/// what makes `query: ""` behave as "no filter" rather than as a filter
+/// nothing can satisfy.
+fn todo_matches(item: &todo::TodoItem, query: &str) -> bool {
+    let hay = format!("{} {}", item.title, item.notes).to_lowercase();
+    query
+        .split_whitespace()
+        .all(|term| hay.contains(&term.to_lowercase()))
+}
+
 /// Default number of top-by-tokens agents shown in `group_usage`'s summary
 /// mode (#866). A plain constant, not a per-group setting — the point is a
 /// number small enough to read in-context, not a figure tuned to any one
@@ -2357,6 +2801,14 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 | "ask_human"
                 | "request_attention"
                 | "group_usage"
+                // #3263 S2 — the six, spelled again here rather than shared
+                // with `MANAGER_SHARED` for this gate's stated reason.
+                | "todo_list"
+                | "todo_get"
+                | "todo_add"
+                | "todo_update"
+                | "todo_complete"
+                | "todo_delete"
         )
     {
         return Err(format!(
@@ -2394,6 +2846,14 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 | "channel_send"
                 | "channel_status"
                 | "group_usage"
+                // #3263 S2 — the six, spelled again here rather than shared
+                // with `LEAD_SHARED` for this gate's stated reason.
+                | "todo_list"
+                | "todo_get"
+                | "todo_add"
+                | "todo_update"
+                | "todo_complete"
+                | "todo_delete"
         )
     {
         return Err(format!(
@@ -4624,6 +5084,157 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             })
             .to_string())
         }
+
+        // ---------- the human's To-Do list (#3263 S2) ----------
+        //
+        // THIN, by the add-orch-tool checklist's rule: every arm below parses
+        // JSON, resolves the caller's scope/identity from the REGISTRY, and
+        // hands a `TodoOp` to `reg.todo_apply`, which owns the load → apply →
+        // atomic write, the audit row and the change event. No state change
+        // happens here. The only judgement these arms make that the registry
+        // cannot is WHOSE list an id belongs to (`todo_visible`), because the
+        // engine has no notion of a caller.
+        //
+        // There is no role check in any of them, deliberately and in line with
+        // the arms above that also have none: the tools are on the shared
+        // tier, and the three classes with a positive surface — solo, manager,
+        // lead — are gated once at the top of this function, where a tool
+        // added later cannot forget to be.
+        "todo_list" => todo_arm(reg, caller, "todo-list", || {
+            let (scope, _) = todo_scope(reg, caller, args)?;
+            let include_done = arg_bool(args, "include_done")?;
+            let query = arg_str_strict(args, "query")?.unwrap_or_default();
+            let snap = reg.todo_snapshot(Some(&scope));
+            let mut items: Vec<&todo::TodoItem> = snap
+                .items
+                .iter()
+                .filter(|i| include_done || !i.is_done())
+                // An archived item is live data that the default views hide
+                // (#3263 S5 sets `archived_ms`); the plan's row for this tool
+                // says the listing excludes them, so it does — the human's
+                // Completed view is the pane's surface for those, not this.
+                .filter(|i| i.archived_ms.is_none())
+                .filter(|i| todo_matches(i, query))
+                .collect();
+            items.sort_by_key(|i| (i.order, i.created_ms));
+            Ok(json!({
+                "scope": scope,
+                "items": items.iter().map(|i| todo_row(i)).collect::<Vec<_>>(),
+                // The pane shows this as a banner rather than discovering it
+                // one refused write at a time, and an agent deserves the same:
+                // a `true` here means every write below WILL be refused, and
+                // the reason is a build downgrade, not anything it did.
+                "read_only": snap.read_only,
+            })
+            .to_string())
+        }),
+        "todo_get" => todo_arm(reg, caller, "todo-get", || {
+            let id = arg_str(args, "id").ok_or("id required")?;
+            let item = todo_visible(reg, caller, id)?;
+            serde_json::to_string(&item).map_err(|e| format!("could not serialise the item: {e}"))
+        }),
+        "todo_add" => todo_arm(reg, caller, "todo-add", || {
+            let (scope, workspace) = todo_scope(reg, caller, args)?;
+            let title = arg_str(args, "title").ok_or("title required")?.to_string();
+            let op = todo::TodoOp::Add(todo::TodoAdd {
+                scope,
+                title,
+                notes: arg_str_strict(args, "notes")?.map(str::to_string),
+                due_ms: arg_u64(args, "due_ms")?,
+                remind_ms: arg_u64(args, "remind_ms")?,
+                priority: arg_priority(args, "priority")?,
+                important: arg_bool_opt(args, "important")?,
+                tags: arg_str_array_named(args, "tags")?,
+                steps: arg_str_array_named(args, "steps")?,
+                my_day: arg_u64(args, "my_day")?,
+            });
+            let applied = reg
+                .todo_apply(
+                    Some(&caller.group),
+                    &todo_actor(reg, caller),
+                    op,
+                    workspace.as_ref().map(|(k, r)| (k.as_str(), r.as_str())),
+                )
+                .map_err(|e| e.to_string())?;
+            serde_json::to_string(&applied.item)
+                .map_err(|e| format!("could not serialise the item: {e}"))
+        }),
+        "todo_update" => todo_arm(reg, caller, "todo-update", || {
+            let id = arg_str(args, "id").ok_or("id required")?;
+            // Visibility FIRST, so another workspace's id is `unknown todo`
+            // rather than an edit that lands.
+            let item = todo_visible(reg, caller, id)?;
+            let workspace = todo_workspace_for(reg, caller, &item);
+            // `order_after` is three states, not two: absent = leave the
+            // position alone, null = move to the top, an id = move after that
+            // item. Collapsing null into absent would silently ignore the one
+            // spelling that means "first".
+            let order_after = match args.get("order_after") {
+                None => None,
+                Some(Value::Null) => Some(todo::OrderAfter::Start),
+                Some(Value::String(s)) => Some(todo::OrderAfter::Item(s.clone())),
+                Some(_) => {
+                    return Err(
+                        "order_after must be a to-do id string, or null to move it to the top"
+                            .into(),
+                    )
+                }
+            };
+            let op = todo::TodoOp::Update(todo::TodoUpdate {
+                id: id.to_string(),
+                if_rev: arg_u64(args, "if_rev")?,
+                title: arg_str_strict(args, "title")?.map(str::to_string),
+                notes: arg_str_strict(args, "notes")?.map(str::to_string),
+                due_ms: arg_nullable_u64(args, "due_ms")?,
+                remind_ms: arg_nullable_u64(args, "remind_ms")?,
+                my_day: arg_nullable_u64(args, "my_day")?,
+                priority: arg_priority(args, "priority")?,
+                important: arg_bool_opt(args, "important")?,
+                tags: arg_str_array_named(args, "tags")?,
+                steps: arg_step_patches(args, "steps")?,
+                order_after,
+            });
+            let applied = reg
+                .todo_apply(
+                    Some(&caller.group),
+                    &todo_actor(reg, caller),
+                    op,
+                    workspace.as_ref().map(|(k, r)| (k.as_str(), r.as_str())),
+                )
+                .map_err(|e| e.to_string())?;
+            serde_json::to_string(&applied.item)
+                .map_err(|e| format!("could not serialise the item: {e}"))
+        }),
+        "todo_complete" => todo_arm(reg, caller, "todo-complete", || {
+            let id = arg_str(args, "id").ok_or("id required")?;
+            let done = arg_bool_opt(args, "done")?.ok_or("done required (true or false)")?;
+            let item = todo_visible(reg, caller, id)?;
+            let workspace = todo_workspace_for(reg, caller, &item);
+            let applied = reg
+                .todo_apply(
+                    Some(&caller.group),
+                    &todo_actor(reg, caller),
+                    todo::TodoOp::Complete { id: id.to_string(), done },
+                    workspace.as_ref().map(|(k, r)| (k.as_str(), r.as_str())),
+                )
+                .map_err(|e| e.to_string())?;
+            serde_json::to_string(&applied.item)
+                .map_err(|e| format!("could not serialise the item: {e}"))
+        }),
+        "todo_delete" => todo_arm(reg, caller, "todo-delete", || {
+            let id = arg_str(args, "id").ok_or("id required")?;
+            let item = todo_visible(reg, caller, id)?;
+            let workspace = todo_workspace_for(reg, caller, &item);
+            let applied = reg
+                .todo_apply(
+                    Some(&caller.group),
+                    &todo_actor(reg, caller),
+                    todo::TodoOp::Delete { id: id.to_string() },
+                    workspace.as_ref().map(|(k, r)| (k.as_str(), r.as_str())),
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "deleted": applied.ids, "purged": applied.purged }).to_string())
+        }),
 
         _ => Err(format!("unknown tool: {name}")),
     }

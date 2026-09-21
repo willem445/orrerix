@@ -14066,7 +14066,7 @@ pub fn board_task(task: Task, with_notes: bool) -> BoardTask {
         sprint,
         demo_path,
         cleared_ms,
-        description,
+        description: with_notes.then_some(description).flatten(),
         updated_ms,
         link_etag,
     }

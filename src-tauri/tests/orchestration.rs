@@ -23967,6 +23967,22 @@ fn git_shim_script_bakes_real_git_and_gates_tag_push() {
 /// a non-digit or empty answer; the behavioural twin
 /// (`gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date`, below) runs
 /// that adversary through the rendered shim.
+///
+/// #3259 items 1+4: the accept arms are also CANONICAL and SELF-CONTAINED.
+/// A zero-padded answer (`0170000000`) is all-digit and the right WIDTH, so
+/// only a non-zero leading digit spelled in the arm itself can refuse it —
+/// a bare interpolation (`"ts_ms":0170000000`) stops the audit line being
+/// JSON at all. And each arm spelling its whole accept shape (width AND
+/// alphabet AND non-zero lead) is what removes the ordering from between
+/// the ACCEPT arms and the junk arm: a reordered case still gives every
+/// input the same verdict among those arms — the catch-all `*)` is the
+/// exception and must stay last (see the happy-path pin). The behavioural
+/// twins:
+/// `gh_shim_audit_ts_refuses_a_leading_zero_timestamp` (both arms' zero-pad
+/// adversary), `gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung`
+/// (the reorder adversary: a 13-character NON-digit answer must reach the
+/// whole-seconds rung, not the 13-digit accept arm), and
+/// `gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n`.
 #[test]
 fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
     // The array is BUILT from PINNED_SHIMS, not hand-enumerated beside it
@@ -23994,22 +24010,34 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
         // millisecond precision. What must be gone is a `%s%3N` value trusted
         // with only an emptiness check.
         const BROKEN: &str = "[ -z \"$ts\" ] && ts=0";
-        // The reused fallback's inner arm: whole seconds → `…000` when the
-        // seconds value is EXACTLY 10 digits; anything non-digit, empty or
-        // wrong-magnitude → 0 (#3249 residual 1).
-        const FALLBACK: &str =
-            "case \"$ts\" in *[!0-9]*|\"\") ts=0 ;; ??????????) ts=\"${ts}000\" ;; *) ts=0 ;; esac ;;";
-        // #3249 item 2: exactly 13 digits (epoch ms) is the only all-digit
-        // value trusted as-is; every other all-digit magnitude is refused.
-        const MS_ARM: &str = "?????????????) ;;";
-        // #3249 residual 1: the whole-seconds rung takes EXACTLY a 10-digit
-        // epoch-second answer — a 9- or 11-digit `%s` must not be appended
-        // `000` into a wrong-magnitude ts_ms. The const is LEFT-ANCHORED on
-        // the rung's own preceding `;; ` AND carries exactly ten `?`: a bare
-        // `?`-run is a substring of any wider run, so a merely-widened const
-        // would still match an 11-digit arm. Width 9 and width 11 arms count
-        // 0 against it (measured, see the PR body's width table).
-        const SECONDS_ARM: &str = ";; ??????????) ts=\"${ts}000\" ;;";
+        // #3259 item 1: the accept arms are CANONICAL. A zero-padded answer
+        // is all-digit and can carry the right magnitude, so neither the
+        // junk arm nor a width check alone refuses it: `0170000000` used to
+        // pass the ten-`?` arm and interpolate `"ts_ms":0170000000000`, a
+        // line no JSON parser accepts. Every accept arm therefore requires
+        // a non-zero leading digit — the first class is `[1-9]`, every later
+        // position `[0-9]`, and the run ends in the arm's own `)`: an arm
+        // one class wider reads `…[0-9])` where the const needs `)`, so the
+        // same width-safety the ten-`?` consts carried holds (width 9 and
+        // width 11 match 0 — measured, see the PR body's width table).
+        const SECONDS_ARM: &str =
+            "[1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ts=\"${ts}000\" ;;";
+        // #3249 item 2 + #3259 item 1: exactly a CANONICAL 13-digit value
+        // (epoch-ms width AND a non-zero lead) is trusted as-is; every other
+        // all-digit magnitude, and every zero-padded form, is refused.
+        const MS_ARM: &str =
+            "[1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;";
+        // #3259 item 4: each accept arm states its WHOLE accept shape —
+        // width, alphabet and non-zero lead in the arm itself — so no
+        // ACCEPT arm depends on the junk arm running before it; the
+        // catch-all `*)` must stay LAST (only the happy-path pin sees a
+        // demoted catch-all — every refusal pin expects 0). The reorder
+        // adversary is run through the rendered shim by
+        // gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung.
+        // The rung is only a SECOND CHANCE: every `%s%3N` site re-consults
+        // `date` with plain `%s` exactly once — a `%s%3N` answer that
+        // already produced digits is never re-consulted (#3249).
+        const SECONDS_CONSULT: &str = "ts=$(date +%s 2>/dev/null)";
         // The bare reject arm appears TWICE per ts site once the whole-seconds
         // rung carries its own magnitude guard: the rung's reject and the
         // outer all-other-magnitude reject.
@@ -24018,21 +24046,21 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
         assert!(sites > 0, "the {name} shim must timestamp its audit rows (non-vacuity)");
         assert_eq!(
             sites,
-            sh.matches(FALLBACK).count(),
-            "the {name} shim has {sites} `%s%3N` site(s) but {} fallback(s) — every ts site must reuse the self-launch shim's portable form (#3202)",
-            sh.matches(FALLBACK).count()
-        );
-        assert_eq!(
-            sites,
             sh.matches(MS_ARM).count(),
-            "the {name} shim has {sites} ts site(s) but {} 13-digit accept arm(s) — an all-digit guard is magnitude-blind: a date answering `%s%3N` with plain seconds is trusted as milliseconds and stamps ts_ms a thousandfold too small (#3248 premortem, #3249)",
+            "the {name} shim has {sites} ts site(s) but {} canonical 13-digit accept arm(s) (thirteen classes, first `[1-9]`) — an all-digit guard is magnitude-blind AND a leading-zero digit string interpolated bare stops the audit line being JSON (#3248 premortem, #3249, #3259 item 1)",
             sh.matches(MS_ARM).count()
         );
         assert_eq!(
             sites,
             sh.matches(SECONDS_ARM).count(),
-            "the {name} shim has {sites} ts site(s) but {} exactly-10-digit whole-seconds arm(s) (the const is left-anchored on the rung's preceding `;; ` and carries ten `?`, so an arm of width 9 or 11 matches 0) — the whole-seconds rung must refuse a wrong-magnitude `%s` answer (9 or 11 digits) instead of appending `000` (#3249 residual 1)",
+            "the {name} shim has {sites} ts site(s) but {} canonical whole-seconds arm(s) (ten classes, first `[1-9]`) — the whole-seconds rung must refuse a wrong-magnitude `%s` answer (9 or 11 digits) and a zero-padded one, not append `000` into a ts_ms no JSON parser accepts (#3249 residual 1, #3259 item 1)",
             sh.matches(SECONDS_ARM).count()
+        );
+        assert_eq!(
+            sites,
+            sh.matches(SECONDS_CONSULT).count(),
+            "the {name} shim has {sites} `%s%3N` site(s) but {} whole-seconds re-consult(s) — every ts site must reuse the self-launch shim's portable form, one `date +%s` second chance per site and never for a `%s%3N` answer that already produced digits (#3202, #3249)",
+            sh.matches(SECONDS_CONSULT).count()
         );
         assert_eq!(
             2 * sites,
@@ -24093,6 +24121,12 @@ const PINNED_SHIMS: [&str; 3] = ["gh", "git", "loomux"];
 /// control works from the third root: a fake renderer under
 /// `crates/loomux-server/src` reds this pin's template-count check the
 /// same way (#3249 residual 2).
+///
+/// #3259 item 2 closes the next abstraction up: the ROOTS list is no longer
+/// the census's own word. The equality against the root manifest's
+/// `[workspace] members` reddens when a crate joins the workspace without a
+/// ROOTS entry — and when a ROOTS entry outlives its crate — so the
+/// hand-maintained list can only drift with a red to say so.
 #[test]
 fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
     /// Sanctioned shebang-bearing lines, exact text after whitespace
@@ -24120,6 +24154,10 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
             }
         }
     }
+    // #3259 item 2: this list is no longer hand-maintained alone — the
+    // equality below holds it to the Cargo workspace's own `[workspace]`
+    // members. Adding a crate means editing both, and the equality fails
+    // if either side moves alone.
     const ROOTS: &[(&str, &str)] = &[
         ("src-tauri", concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
         (
@@ -24131,6 +24169,58 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
             concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/loomux-server/src"),
         ),
     ];
+    // #3259 item 2: ROOTS must agree with the workspace's own member list —
+    // the third root was missed for exactly this reason once (`crates/
+    // loomux-server/src` had no shim code, so nothing forced the list to
+    // name it), and a FOURTH crate hosting a shim renderer would escape the
+    // same way, one abstraction up. The members are read from the root
+    // manifest — the workspace's own declaration — and both sides are
+    // canonicalized, so the comparison is between directories, not between
+    // two spellings of one (`src-tauri` is a member whose ROOTS entry is
+    // spelled `CARGO_MANIFEST_DIR/src`, not `…/../src-tauri/src`). If the
+    // parser silently under-read, the equality would fail loudly (members
+    // ≠ ROOTS), so it fails toward red, never toward green.
+    let manifest =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("Cargo.toml");
+    let manifest_src = std::fs::read_to_string(&manifest).unwrap_or_else(|e| {
+        panic!(
+            "cannot read the workspace root manifest ({}): {e}",
+            manifest.display()
+        )
+    });
+    let members = workspace_members(&manifest_src);
+    let ws_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let canon = |p: &std::path::Path, what: &str| {
+        std::fs::canonicalize(p)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{what} ({}) does not resolve as a directory ({e}) — the census \
+                     scans real source roots, and a member with no `src` cannot \
+                     host a renderer", p.display()
+                )
+            })
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
+    let mut member_roots: Vec<String> = members
+        .iter()
+        .map(|m| canon(&ws_root.join(m).join("src"), &format!("workspace member `{m}`'s src")))
+        .collect();
+    let mut census_roots: Vec<String> = ROOTS
+        .iter()
+        .map(|(_, p)| canon(std::path::Path::new(*p), &format!("census root `{p}`")))
+        .collect();
+    member_roots.sort();
+    census_roots.sort();
+    assert_eq!(
+        member_roots, census_roots,
+        "the census ROOTS list and the Cargo workspace members have drifted — a \
+         member with no ROOTS entry hosts shim renderers the census cannot see \
+         (the exact miss #3249 residual 2 recorded), and a ROOTS entry with no \
+         member scans a crate that no longer exists. Add the missing side (or \
+         argue beside the per-root tripwire below why a member is deliberately \
+         unscanned). members: {member_roots:?}; ROOTS: {census_roots:?}"
+    );
     let mut files: Vec<(&str, std::path::PathBuf)> = Vec::new();
     for (label, root) in ROOTS {
         let mut found = Vec::new();
@@ -24243,6 +24333,60 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
     }
 }
 
+/// #3259 item 2 — the `[workspace] members` array from the ROOT manifest,
+/// hand-parsed: reading one array out of one file is not worth a TOML
+/// dependency, and a new dependency is an audit argument the
+/// src-tauri/Cargo.toml notes would have to carry. The parser is
+/// deliberately narrow and fails LOUD on anything it was not written for —
+/// a multi-line array, a glob member, a missing section — because a silent
+/// under-read would feed the equality above an empty list that then fails
+/// loudly rather than green (it fails toward red, never toward green).
+fn workspace_members(manifest: &str) -> Vec<String> {
+    let mut in_workspace = false;
+    for line in manifest.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_workspace = t == "[workspace]";
+            continue;
+        }
+        if !in_workspace {
+            continue;
+        }
+        let Some(rest) = t.strip_prefix("members") else { continue };
+        let Some(rest) = rest.trim_start().strip_prefix('=') else { continue };
+        let arr = rest.trim();
+        let (Some(open), Some(close)) = (arr.find('['), arr.rfind(']')) else {
+            panic!(
+                "`members` in the root [workspace] is not a single-line array — \
+                 extend workspace_members to read the new shape: {t:?}"
+            );
+        };
+        let inner = &arr[open + 1..close];
+        if inner.contains('*') || inner.contains('?') {
+            panic!(
+                "`members` carries a glob — a glob cannot be tied to census ROOTS \
+                 without resolving it; spell the members out: {t:?}"
+            );
+        }
+        let parsed: Vec<String> = inner
+            .split(',')
+            .map(|m| m.trim().trim_matches('"').trim_matches('\''))
+            .filter(|m| !m.is_empty())
+            .map(|m| m.to_string())
+            .collect();
+        assert!(
+            !parsed.is_empty(),
+            "`members` parsed to an empty list — the census cannot tie ROOTS to \
+             a workspace that declares none: {t:?}"
+        );
+        return parsed;
+    }
+    panic!(
+        "no `[workspace] members` in the root manifest — the census cannot tie \
+         ROOTS to a workspace that declares none"
+    );
+}
+
 /// #3249 item 2 — the behavioural twin of the text pin above, for the one
 /// adversary the text pin cannot run: a `date` that answers `%s%3N` with a
 /// plain seconds value (all-digit, 10 digits — the #3248 premortem's
@@ -24256,17 +24400,16 @@ fn a_rendered_shim_renderer_cannot_hide_from_the_ts_pin() {
 /// assertion reddens rather than passing (rev-final round 2 finding 3).
 /// The 3N polarity (item 3) is pinned by
 /// `gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n`,
-/// below, and the whole-seconds rung's own magnitude by
-/// `gh_shim_audit_ts_refuses_a_wrong_magnitude_whole_seconds_answer`.
+/// below; the whole-seconds rung's own magnitude by
+/// `gh_shim_audit_ts_refuses_a_wrong_magnitude_whole_seconds_answer`; the
+/// accept arms' canonicality and order-independence by
+/// `gh_shim_audit_ts_refuses_a_leading_zero_timestamp` and
+/// `gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung`. All four
+/// arm through `ts_pin_sh` — a sh-less host is a hard failure, not a skip
+/// (#3259 item 3).
 #[test]
 fn gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date() {
-    let Some(sh) = any_posix_sh() else {
-        pin_could_not_arm(
-            "gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date",
-            "no POSIX sh on this host",
-        );
-        return;
-    };
+    let sh = ts_pin_sh("gh_shim_audit_ts_rejects_a_seconds_magnitude_from_date");
     let td = tempfile::tempdir().unwrap();
     // The premortem adversary: a `date` that prints plain seconds for every
     // format, so `%s%3N` is all-digit — and 10 digits, not 13.
@@ -24388,13 +24531,7 @@ fn run_gh_shim_audit_with_fake_date(
 /// The rung's ACCEPT side (exactly 10 digits) is pinned by this same run.
 #[test]
 fn gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n() {
-    let Some(sh) = any_posix_sh() else {
-        pin_could_not_arm(
-            "gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n",
-            "no POSIX sh on this host",
-        );
-        return;
-    };
+    let sh = ts_pin_sh("gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n");
     let td = tempfile::tempdir().unwrap();
     // BSD polarity: `%s%3N` is the epoch with a literal `3N` glued on;
     // `%s` is a known 10-digit epoch second.
@@ -24442,13 +24579,7 @@ fn gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n() {
 /// `gh_shim_audit_ts_falls_back_to_whole_seconds_when_date_lacks_percent_n`.
 #[test]
 fn gh_shim_audit_ts_refuses_a_wrong_magnitude_whole_seconds_answer() {
-    let Some(sh) = any_posix_sh() else {
-        pin_could_not_arm(
-            "gh_shim_audit_ts_refuses_a_wrong_magnitude_whole_seconds_answer",
-            "no POSIX sh on this host",
-        );
-        return;
-    };
+    let sh = ts_pin_sh("gh_shim_audit_ts_refuses_a_wrong_magnitude_whole_seconds_answer");
     for (label, seconds) in [("9-digit", "170000000"), ("11-digit", "17000000000")] {
         let td = tempfile::tempdir().unwrap();
         // The `3N` junk answer is what sends the guard down the
@@ -24484,6 +24615,215 @@ fn gh_shim_audit_ts_refuses_a_wrong_magnitude_whole_seconds_answer() {
             );
         }
     }
+}
+
+/// #3259 item 1 — canonicality, on both accept arms. A zero-padded answer
+/// is all-digit and the right WIDTH, so neither the junk arm nor the width
+/// alone refuses it: a PATH-rogue `date` answering `0170000000` to `+%s`
+/// used to pass the ten-`?` arm and interpolate `"ts_ms":0170000000000` —
+/// a bare leading-zero literal, which no JSON parser accepts — and the
+/// same defect on the outer arm (`0170000000000` from `+%s%3N`) never even
+/// reached the rung. Both adversaries are run through the rendered shim:
+/// the row must land on the ts=0 sentinel AND parse (the pre-fix shim
+/// emits a line serde_json refuses, which is the red this pin is cut for).
+/// The reorder twin (a NON-digit answer of the accept width) is pinned by
+/// `gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung`.
+#[test]
+fn gh_shim_audit_ts_refuses_a_leading_zero_timestamp() {
+    let sh = ts_pin_sh("gh_shim_audit_ts_refuses_a_leading_zero_timestamp");
+    for (label, answers, want_marker) in [
+        // The outer arm's adversary: `%s%3N` itself answers zero-padded —
+        // refused outright, so the fake is never consulted a second time.
+        (
+            "13-digit",
+            &[("+%s%3N", "0170000000000")] as &[(&str, &str)],
+            &["+%s%3N"] as &[&str],
+        ),
+        // The rung's adversary: the `3N` junk answer is what routes the
+        // guard to the whole-seconds rung, whose own answer is zero-padded.
+        (
+            "10-digit",
+            &[("+%s%3N", "3N"), ("+%s", "0170000000")] as &[(&str, &str)],
+            &["+%s%3N", "+%s"] as &[&str],
+        ),
+    ] {
+        let td = tempfile::tempdir().unwrap();
+        let (audit, marker) = run_gh_shim_audit_with_fake_date(&sh, td.path(), answers, "3N");
+        // Positive control (#3249 residual 3): the fake must actually have
+        // run — a host that reaches NO `date` also lands on ts=0.
+        assert_eq!(
+            marker.lines().collect::<Vec<_>>(),
+            want_marker,
+            "the {label} scenario's fake date must have been invoked for exactly \
+             the rungs it reaches (positive control): {marker:?}"
+        );
+        assert_eq!(
+            audit.lines().filter(|l| l.contains("merge-gate-blocked")).count(),
+            1,
+            "the {label} refusal must be audited exactly once (non-vacuity): {audit}"
+        );
+        for line in audit.lines().filter(|l| !l.trim().is_empty()) {
+            let v: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|e| {
+                panic!(
+                    "ts_ms must stay JSON-parseable — a zero-padded answer \
+                     interpolated bare is a leading-zero literal, invalid JSON \
+                     (#3259 item 1): {e} in {line}"
+                )
+            });
+            assert_eq!(
+                v["ts_ms"].as_u64(),
+                Some(0),
+                "a zero-padded {label} answer must be refused outright (ts=0), not \
+                 interpolated into the audit line: got {v} in {line}"
+            );
+        }
+    }
+}
+
+/// #3259 item 4 — the accept shape is in the arm, so no ACCEPT arm depends
+/// on the junk arm running before it. The adversary the OLD ladder could
+/// not survive reordered: a 13-character NON-digit answer would have
+/// matched the bare ten-`?`-run accept arm (`?????????????` matches any 13
+/// characters) the moment the junk arm stopped running first, and landed
+/// in ts_ms unquoted. With the accept shape spelled in the arm (`[1-9]`
+/// then digit classes), the same input fails the arm on its ALPHABET and
+/// reaches the whole-seconds rung whatever order the arms are in — this
+/// pin runs it through the rendered shim in the shipping order and
+/// demands the rung's verdict. SCOPE, stated because the claim was
+/// over-broad once: this pins accept-arm-vs-junk-arm only. The catch-all
+/// `*) ts=0 ;;` is NOT order-independent — moved above the 13-digit
+/// accept arm it silently zero-stamps every audit row while every
+/// refusal pin stays green — which is why the catch-all must stay last,
+/// and why `gh_shim_audit_ts_trusts_a_good_millisecond_answer` (the
+/// happy path, below) exists.
+#[test]
+fn gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung() {
+    let sh = ts_pin_sh("gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung");
+    let td = tempfile::tempdir().unwrap();
+    // 13 characters, none a digit — the outer accept arm's width exactly.
+    // `%s` is a known 10-digit epoch second, so the rung's accept side is
+    // what must answer.
+    let (audit, marker) = run_gh_shim_audit_with_fake_date(
+        &sh,
+        td.path(),
+        &[("+%s%3N", "abcdefghijklm"), ("+%s", "1700000000")],
+        "3N",
+    );
+    assert_eq!(
+        marker.lines().collect::<Vec<_>>(),
+        ["+%s%3N", "+%s"],
+        "the junk-width answer must be routed to the rung (positive control): {marker:?}"
+    );
+    assert_eq!(
+        audit.lines().filter(|l| l.contains("merge-gate-blocked")).count(),
+        1,
+        "the refusal must be audited exactly once (non-vacuity): {audit}"
+    );
+    for line in audit.lines().filter(|l| !l.trim().is_empty()) {
+        let v: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("audit line must be JSON ({e}): {line}"));
+        assert_eq!(
+            v["ts_ms"].as_u64(),
+            Some(1700000000000),
+            "a 13-character non-digit answer must reach the whole-seconds rung \
+             (the accept arm matches on shape, not on luck of the ordering): \
+             got {v} in {line}"
+        );
+    }
+}
+
+/// The HAPPY PATH — the pin the refusal pins cannot be: a good, canonical
+/// 13-digit `%s%3N` answer (what GNU `date` answers on Linux and Git Bash)
+/// must be trusted AS-IS — `ts_ms` is the value itself, not the ts=0
+/// sentinel. Every other ts pin feeds an adversary, so every one of them
+/// expects 0; that polarity is why demoting the catch-all `*) ts=0 ;;`
+/// above the 13-digit accept arm greens the whole suite while silently
+/// zero-stamping every audit row (rev round 1, finding 1's premortem —
+/// the reviewer ran the permutation). This run's exact-value assertion is
+/// what makes that demotion red: the permuted ladder answers 0.
+#[test]
+fn gh_shim_audit_ts_trusts_a_good_millisecond_answer() {
+    let sh = ts_pin_sh("gh_shim_audit_ts_trusts_a_good_millisecond_answer");
+    let td = tempfile::tempdir().unwrap();
+    let (audit, marker) = run_gh_shim_audit_with_fake_date(
+        &sh,
+        td.path(),
+        &[("+%s%3N", "1700000000000")],
+        "3N",
+    );
+    // Positive control (#3249 residual 3): the fake must actually have run
+    // — a host that reaches NO `date` also lands on ts=0, and this pin's
+    // whole point is to separate the trusted answer from the sentinel.
+    assert_eq!(
+        marker.lines().collect::<Vec<_>>(),
+        ["+%s%3N"],
+        "the fake date must have been invoked exactly once, for the `%s%3N` \
+         attempt (positive control): {marker:?}"
+    );
+    assert_eq!(
+        audit.lines().filter(|l| l.contains("merge-gate-blocked")).count(),
+        1,
+        "the refusal must be audited exactly once (non-vacuity): {audit}"
+    );
+    for line in audit.lines().filter(|l| !l.trim().is_empty()) {
+        let v: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("audit line must be JSON ({e}): {line}"));
+        assert_eq!(
+            v["ts_ms"].as_u64(),
+            Some(1700000000000),
+            "a good canonical 13-digit answer must be trusted as-is — a demoted \
+             catch-all or a broken accept arm zero-stamps every audit row \
+             silently: got {v} in {line}"
+        );
+    }
+}
+
+/// #3259 item 3 — the hard-fail itself. A host that CANNOT resolve a `sh`
+/// must panic, naming the decision, never skip: `pin_could_not_arm`'s skip
+/// path is exactly the silent un-arming this closes. The None case is fed
+/// BY HAND (`ts_pin_sh_resolved`) because no CI leg can produce it without
+/// going red — that is the point. (Round 2 finding: the first cut of this
+/// pin called `ts_pin_sh` for the None case too, which on CI consults a
+/// host that HAS a sh and so never reached the guard — the fixed run reds
+/// on all three legs with exactly this panic, and the parameter split is
+/// what makes the guard's red reachable at all.)
+#[test]
+fn ts_pins_hard_fail_when_posix_sh_cannot_be_resolved() {
+    // Positive controls: an ARMED host answers with a sh, never the panic,
+    // through BOTH layers — the live one really consults the resolution,
+    // and the parameterized one passes Some through unchanged.
+    let sh = ts_pin_sh("positive control");
+    assert!(!sh.is_empty(), "an armed host's sh path is non-empty: {sh:?}");
+    assert_eq!(
+        ts_pin_sh_resolved("positive control", Some("/bin/sh".to_string())),
+        "/bin/sh",
+        "a Some resolution is passed through, not second-guessed"
+    );
+    // The guard: None → panic (caught here; a panic that ESCAPED would be
+    // a legitimate red on a genuinely sh-less host).
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ts_pin_sh_resolved("sh-less host", None)
+    }));
+    let Err(payload) = outcome else {
+        panic!(
+            "ts_pin_sh skipped instead of hard-failing on a sh-less host — the \
+             silent degradation #3259 item 3 closes is still open"
+        );
+    };
+    let msg = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_else(|| {
+            payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .unwrap_or_default()
+        });
+    assert!(
+        msg.contains("#3259"),
+        "the panic must name the decision it encodes, so a reader of a red log \
+         can tell a broken host from a broken pin: {msg:?}"
+    );
 }
 
 /// #815: the launcher block is a refusal, not a gate — the properties worth
@@ -25967,6 +26307,45 @@ fn any_posix_sh() -> Option<String> {
     #[cfg(not(target_os = "windows"))]
     {
         Some("/bin/sh".to_string())
+    }
+}
+
+/// The `sh` the ts behavioural pins run under — `any_posix_sh`, but a host
+/// that cannot resolve one is a HARD failure, not a skip (#3259 item 3).
+///
+/// The #3249 ts pins arm on EVERY CI leg today: Linux and macOS get
+/// `/bin/sh` unconditionally (`any_posix_sh`'s non-Windows arm never
+/// answers None), and windows-latest ships Git for Windows — the shim
+/// feature's own dependency, since the product's `resolve_shim_toolchain`
+/// is exactly what `any_posix_sh` consults here. The only leg that can
+/// silently lose `sh` is Windows, and there the absence is a runner
+/// defect, not a legitimate host property: #509's lesson was that a
+/// green-while-unarmed pin is indistinguishable from coverage, so the
+/// degradation path must not exist. Counting armed-vs-skipped across legs
+/// was the alternative and is declined: the count lands in per-job step
+/// summaries nobody is forced to read, while a panic is red CI nobody can
+/// miss. The #509 stripped-PATH pins are deliberately NOT switched — they
+/// CAN legitimately skip (macOS splits the coreutils), so they keep
+/// `pin_could_not_arm`. Pinned by
+/// `ts_pins_hard_fail_when_posix_sh_cannot_be_resolved`.
+fn ts_pin_sh(test: &str) -> String {
+    ts_pin_sh_resolved(test, any_posix_sh())
+}
+
+/// `ts_pin_sh` with the resolution as a PARAMETER, so the None case is
+/// drivable: no CI leg can produce it without going red — that is the
+/// point — so the pin feeds the None by hand.
+fn ts_pin_sh_resolved(test: &str, sh: Option<String>) -> String {
+    match sh {
+        Some(sh) => sh,
+        None => panic!(
+            "{test}: no POSIX sh on this host — the ts behavioural pins MUST arm \
+             (every CI leg has one; windows-latest ships Git Bash, the shim \
+             feature's declared dependency), so this hard-fails instead of \
+             silently un-arming the ts coverage (#3259 item 3). If a runner \
+             or image change made this legitimate, fix the harness or move \
+             the guard deliberately — do not delete it to get back to green."
+        ),
     }
 }
 

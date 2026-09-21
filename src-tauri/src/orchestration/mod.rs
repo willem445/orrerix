@@ -1847,13 +1847,25 @@ loomux_audit() { # $1=action $2=detail-json
   # %s%3N, then to 0 — and the whole-seconds answer must itself carry the
   # right magnitude: exactly a 10-digit epoch-second value becomes ts+000;
   # every other all-digit magnitude is the same lie one rung lower and is
-  # refused outright (ts=0) (#3249).
+  # refused outright (ts=0) (#3249). Neither accept arm takes a leading
+  # zero: a zero-padded answer interpolated bare (`"ts_ms":0170000000`) is
+  # a leading-zero literal and no JSON parser accepts it (#3259) — so
+  # every accept arm requires a non-zero leading digit. And each arm
+  # spells its WHOLE accept shape (`[1-9]` then digit classes, every
+  # position), so no ACCEPT arm depends on the junk arm running before
+  # it (#3259); the catch-all `*)` must stay LAST — above the 13-digit
+  # accept arm it would refuse every good answer to ts=0, and only the
+  # happy-path pin would notice.
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")
       ts=$(date +%s 2>/dev/null)
-      case "$ts" in *[!0-9]*|"") ts=0 ;; ??????????) ts="${ts}000" ;; *) ts=0 ;; esac ;;
-    ?????????????) ;;
+      case "$ts" in
+        *[!0-9]*|"") ts=0 ;;
+        [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ts="${ts}000" ;;
+        *) ts=0 ;;
+      esac ;;
+    [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
     *) ts=0 ;;
   esac
   if [ -n "$ORX_GD" ]; then
@@ -3229,13 +3241,25 @@ loomux_audit() { # $1=action $2=detail-json
   # %s%3N, then to 0 — and the whole-seconds answer must itself carry the
   # right magnitude: exactly a 10-digit epoch-second value becomes ts+000;
   # every other all-digit magnitude is the same lie one rung lower and is
-  # refused outright (ts=0) (#3249).
+  # refused outright (ts=0) (#3249). Neither accept arm takes a leading
+  # zero: a zero-padded answer interpolated bare (`"ts_ms":0170000000`) is
+  # a leading-zero literal and no JSON parser accepts it (#3259) — so
+  # every accept arm requires a non-zero leading digit. And each arm
+  # spells its WHOLE accept shape (`[1-9]` then digit classes, every
+  # position), so no ACCEPT arm depends on the junk arm running before
+  # it (#3259); the catch-all `*)` must stay LAST — above the 13-digit
+  # accept arm it would refuse every good answer to ts=0, and only the
+  # happy-path pin would notice.
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")
       ts=$(date +%s 2>/dev/null)
-      case "$ts" in *[!0-9]*|"") ts=0 ;; ??????????) ts="${ts}000" ;; *) ts=0 ;; esac ;;
-    ?????????????) ;;
+      case "$ts" in
+        *[!0-9]*|"") ts=0 ;;
+        [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ts="${ts}000" ;;
+        *) ts=0 ;;
+      esac ;;
+    [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
     *) ts=0 ;;
   esac
   if [ -n "$ORX_GD" ]; then
@@ -3391,13 +3415,25 @@ if [ -n "$ORX_GD" ]; then
   # %s%3N, then to 0 — and the whole-seconds answer must itself carry the
   # right magnitude: exactly a 10-digit epoch-second value becomes ts+000;
   # every other all-digit magnitude is the same lie one rung lower and is
-  # refused outright (ts=0) (#3249).
+  # refused outright (ts=0) (#3249). Neither accept arm takes a leading
+  # zero: a zero-padded answer interpolated bare (`"ts_ms":0170000000`) is
+  # a leading-zero literal and no JSON parser accepts it (#3259) — so
+  # every accept arm requires a non-zero leading digit. And each arm
+  # spells its WHOLE accept shape (`[1-9]` then digit classes, every
+  # position), so no ACCEPT arm depends on the junk arm running before
+  # it (#3259); the catch-all `*)` must stay LAST — above the 13-digit
+  # accept arm it would refuse every good answer to ts=0, and only the
+  # happy-path pin would notice.
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")
       ts=$(date +%s 2>/dev/null)
-      case "$ts" in *[!0-9]*|"") ts=0 ;; ??????????) ts="${ts}000" ;; *) ts=0 ;; esac ;;
-    ?????????????) ;;
+      case "$ts" in
+        *[!0-9]*|"") ts=0 ;;
+        [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ts="${ts}000" ;;
+        *) ts=0 ;;
+      esac ;;
+    [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
     *) ts=0 ;;
   esac
   # ONE printf of the whole line — see the gh shim's note (#240): cross-process

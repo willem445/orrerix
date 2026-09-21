@@ -162,6 +162,59 @@ impl Fixture {
     }
 }
 
+/// The other half of `tests/orchestration.rs`'s #464 allowlist row for this
+/// file (`no_registry_construction_bypasses_the_test_agent_dir_overrides`).
+///
+/// That row permits exactly one raw `OrchRegistry::new` here, on the stated
+/// grounds that it is [`relaunch_registry`] and that [`relaunch_registry`]
+/// redirects every generated-agent-file destination away from the real
+/// `~/.claude` / `~/.copilot`. A helper that quietly stopped applying one of
+/// those overrides would leave the row true about the COUNT and false about the
+/// property, and nothing over there could tell.
+#[test]
+fn its_registry_helper_applies_every_override_this_allowlist_row_assumes() {
+    let src =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/triage.rs"))
+            .expect("this file reads itself");
+
+    // The helper's body: from its signature to the first line that closes it at
+    // column 0 — narrow enough that an override applied by some OTHER function
+    // in this file cannot satisfy the assertions below.
+    let start = src
+        .find("fn relaunch_registry(dir: &Path) -> OrchRegistry {")
+        .expect("the sanctioned helper must exist, under the name the row names");
+    let body = &src[start..];
+    let end = body.find("\n}").expect("the helper must terminate") + 2;
+    let body = &body[..end];
+
+    for needed in [
+        "set_claude_agents_dir_override",
+        "set_copilot_agents_dir_override",
+        "set_compact_hook_dir_override",
+        "set_copilot_hooks_dir_override",
+    ] {
+        assert!(
+            body.contains(needed),
+            "the #464 allowlist row for tests/triage.rs assumes this helper applies every \
+             override; it no longer applies {needed}, so a registry built through it can reach \
+             the real agent dirs and the row's premise is gone"
+        );
+    }
+
+    // The population control: the extraction really did isolate the helper, so
+    // the four assertions above are about ITS body and not about the whole file.
+    assert!(
+        body.len() < 1_200,
+        "the helper's body extraction ran away ({} chars); the assertions above would then be \
+         satisfied by any other function in this file",
+        body.len()
+    );
+    assert!(
+        !body.contains("#[test]"),
+        "the extraction swallowed a test, so it is no longer reading only the helper"
+    );
+}
+
 // The real shapes, transcribed from their emitters rather than invented.
 const RUN_GREEN: &str = "[orrerix] run 17812: completed — conclusion: success. \
                          Note (registered): green → next merge. (watch n-1)";

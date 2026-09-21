@@ -2517,6 +2517,12 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
     // HAND-LISTED — see this function's docblock. Mirrors `parse_workflow`'s gate
     // match arms (`Some("all-pass") | Some("all")` and `Some("threshold")`).
     fact("gate.require", "values", json!(["all-pass", "all", "threshold"]));
+    // #3304 S1. `provider:` is a closed set of ONE in this build, and it is
+    // published here rather than hand-listed in the JSON alone for
+    // `block.cli`'s reason: when S3 adds the second value, this line is what
+    // makes the manifest — and any control generated from it — redden instead
+    // of quietly offering a choice the engine refuses.
+    fact("triage.provider", "values", json!([crate::triage::PROVIDER_NONE]));
 
     // Effective defaults: what the engine BEHAVES as when the key is omitted,
     // which is what a form shows as its placeholder. Distinct from the wire
@@ -2546,6 +2552,10 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
     fact("driver.plan_enabled", "default", json!(dv.plan_enabled));
     fact("driver.plan_review_minutes", "default", json!(dv.plan_review_minutes));
     fact("driver.planner_timeout_minutes", "default", json!(dv.planner_timeout_minutes));
+    let tr = TriagePolicy::default();
+    fact("triage.enabled", "default", json!(tr.enabled));
+    fact("triage.provider", "default", json!(tr.provider));
+    fact("triage.max_defer_minutes", "default", json!(tr.max_defer_minutes));
     let res = ResourcePolicy::default();
     fact("resource.slots", "default", json!(res.slots));
     fact("resource.max_hold_minutes", "default", json!(res.max_hold_minutes));
@@ -2594,6 +2604,11 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
         "max",
         json!(crate::plandrive::PLANNER_TIMEOUT_MINUTES_MAX),
     );
+    // #3304 S1. REFUSED outside, not clamped — `merge_queue.max_batch`'s
+    // posture, for the reason `TriagePolicy::max_defer_minutes` states: the
+    // number says how long this repo is willing to lose sight of its own fleet.
+    fact("triage.max_defer_minutes", "min", json!(crate::triage::TRIAGE_MAX_DEFER_MINUTES_MIN));
+    fact("triage.max_defer_minutes", "max", json!(crate::triage::TRIAGE_MAX_DEFER_MINUTES_MAX));
     // #1457. A LENGTH bound on a string, so it is `maxLength` rather than `max`:
     // this manifest documents `max` as "highest accepted number", and a generated
     // text control needs a maxlength, not a numeric ceiling. Stated here because

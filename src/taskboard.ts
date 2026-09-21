@@ -1823,7 +1823,7 @@ export function descRefusal(text: string): string | null {
   const t = text.trim();
   const over = descOverBy(t);
   if (over > 0) return `${over} character${over === 1 ? "" : "s"} over the ${MAX_DESCRIPTION} limit`;
-  if (Array.from(t).some((c) => c < " " || c === "")) {
+  if (Array.from(t).some((c) => c < " " || c === "\u007f")) {
     return "one line of plain text only — put anything needing its own paragraph in a note";
   }
   return null;

@@ -683,6 +683,35 @@ test("every level has a pigment, and the unlabelled row deliberately has none", 
   );
 });
 
+test("no level borrows a pigment another channel has already claimed", () => {
+  // The CENTRAL claim of theme.ts §KIND_HUES, and a red-before-green run found
+  // it pinned by nothing: swapping `story` to PALETTE.azure left every other
+  // guard green, because the CSS tokens and the table stayed consistent with
+  // each other while azure quietly acquired a second meaning — the exact
+  // failure a separate --kind-* sub-table exists to prevent.
+  //
+  // Identity hues are bijective with the icon roles and CLI hues with the CLI
+  // roster; a level taking either would not gain a colour, it would cost that
+  // hue its own answer.
+  const claimed = new Map<string, string>();
+  for (const [name, v] of Object.entries(IDENTITY)) claimed.set(v, `--id-${name}`);
+  for (const [name, v] of Object.entries(IDENTITY_LIT)) claimed.set(v, `--id-${name}-lit`);
+  for (const [name, v] of Object.entries(CLI_HUES)) claimed.set(v, `--cli-${name}`);
+  for (const k of KINDS) {
+    const v = (KIND_HUES as Record<string, string>)[k];
+    const owner = claimed.get(v);
+    assert.equal(owner, undefined, `level "${k}" is painted ${v}, which is already ${owner}`);
+  }
+  // The unlabelled mark is the one deliberate reuse, and it is NOT a hue: it is
+  // the faint-meta ink. Pinned as an equality so a future edit that gave it a
+  // pigment of its own has to come back and argue here.
+  assert.equal(KIND_HUES.unlabelled, SEMANTIC.inkFaint, "the unlabelled mark is the faint ink, by design");
+
+  // Positive control on the sweep above: a map that had gone empty would let
+  // every level pass in silence.
+  assert.ok(claimed.size >= 20, `only ${claimed.size} pigments were scanned as claimed`);
+});
+
 test("every LEVEL hue is readable wherever a mark or a chip can sit", () => {
   // The four levels take the ramp's own AA floor, because the expanded row's
   // kind chip carries the level as a WORD in this colour. The board never sits

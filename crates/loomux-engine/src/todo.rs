@@ -839,7 +839,7 @@ fn order_for(store: &TodoStore, moving: &TodoItem, after: &OrderAfter) -> Result
         (None, None) => ORDER_GAP,
         (None, Some(n)) => n.order - ORDER_GAP,
         (Some(p), None) => p.order + ORDER_GAP,
-        (Some(p), Some(n)) => p.order + (n.order - p.order) / 2,
+        (Some(p), Some(_n)) => p.order, // M13: midpoint removed
     })
 }
 

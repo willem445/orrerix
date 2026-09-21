@@ -704,8 +704,17 @@ pub fn parse_op(v: &Value, scope: Scope) -> Result<TodoOp, TodoError> {
 /// **The caller names a ROOT, never a key.** [`todo::workspace_key`] is the
 /// only thing that turns a directory into a scope key, exactly as it is on the
 /// MCP path (#3263 S2) — so two spellings of one project cannot become two
-/// lists, and a caller cannot address a workspace it is not in by inventing its
-/// key. An absent or blank root is the global list.
+/// lists, and a caller cannot NAME a scope it is not in by inventing its key.
+/// An absent or blank root is the global list.
+///
+/// **Scope only — this is not a containment property** (#3286 review round 1,
+/// which caught the earlier phrasing claiming it was). Only an ADD takes its
+/// scope from here; `update`, `complete` and `delete` are addressed by id
+/// alone, and [`loomux_engine::todo::apply`] resolves an id without consulting
+/// any scope, so the root passed beside one of those does not confine it. On
+/// THIS path that is fine — the caller is the trusted webview — and it is
+/// stated because the MCP path's caller is an agent, where confining a caller
+/// to the ids it may name is S2's own job and not something it inherits here.
 ///
 /// Returns the scope and, for a workspace call, the `(key, root)` pair
 /// [`apply_to`] records so the pane's scope switch has a label.
@@ -733,8 +742,13 @@ fn scope_for(workspace_root: Option<&str>) -> (Scope, Option<(String, String)>) 
 #[tauri::command]
 pub async fn todo_snapshot(app: AppHandle, workspace_root: Option<String>) -> TodoSnapshot {
     let reg = super::reg_of(&app);
-    let (scope, _) = scope_for(workspace_root.as_deref());
     super::run_blocking(move || {
+        // INSIDE the hop, not before it (#3286 review round 1). `scope_for`
+        // reaches `workspace_key` -> `std::fs::canonicalize`, a blocking
+        // filesystem syscall: on a disconnected network drive it parks the
+        // caller for the OS timeout, and before this it parked an async-runtime
+        // worker rather than a blocking-pool thread.
+        let (scope, _) = scope_for(workspace_root.as_deref());
         OrchRegistry::read_command(
             "todo_snapshot",
             || TodoSnapshot {
@@ -771,11 +785,19 @@ pub async fn todo_apply(
     workspace_root: Option<String>,
 ) -> Result<Applied, String> {
     let reg = super::reg_of(&app);
-    let (scope, workspace) = scope_for(workspace_root.as_deref());
-    // Decoded BEFORE the blocking hop, so a malformed op costs no thread and
-    // the refusal names the field rather than arriving as a generic failure.
-    let parsed = parse_op(&op, scope).map_err(|e| e.to_string())?;
     super::run_blocking(move || {
+        // Both the scope resolution and the decode happen HERE rather than
+        // before the hop (#3286 review round 1). An earlier revision decoded
+        // early and argued it "costs no thread" — true of the decode, which is
+        // pure, but it needs the scope, and `scope_for` reaches
+        // `std::fs::canonicalize`, a blocking syscall that on a disconnected
+        // network drive parks the caller for the OS timeout. Parking a
+        // blocking-pool thread is what that pool is for; parking an
+        // async-runtime worker is not. The decode still runs before anything
+        // touches the store, which is the ordering that actually mattered:
+        // a malformed op is refused by field name, having written nothing.
+        let (scope, workspace) = scope_for(workspace_root.as_deref());
+        let parsed = parse_op(&op, scope).map_err(|e| e.to_string())?;
         OrchRegistry::mutating_command(
             "todo_apply",
             || Err(super::COMMAND_REFUSED.to_string()),

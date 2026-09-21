@@ -217,8 +217,19 @@ consequences, both deliberate:
 
 * two spellings of one project cannot become two lists, because the
   canonicalisation happens once, on the backend, for both writers;
-* the frontend cannot address a workspace it is not in, because it never sends
-  a key at all. An absent or blank root is the global list.
+* the frontend cannot NAME a scope it is not in, because it never sends a key
+  at all. An absent or blank root is the global list.
+
+**That is a claim about SCOPE, and only about scope** (#3286 review round 1).
+`add` takes its scope from the root and `parse_op` refuses an op that carries
+one — but `update`, `complete` and `delete` are addressed by **id alone**,
+and `apply_update` → `live_index` does no scope comparison, so a call made
+with workspace A's root can still mutate an item in workspace B or in the
+global list. That is S1's op shape rather than anything this slice chose, and
+it is harmless on THIS path because the caller is the trusted webview
+(constraint 5's whole premise). It stops being harmless where the caller is an
+AGENT: confining an agent to the ids it may name is #3263 S2's problem, not a
+property this command layer provides.
 
 ### Why the op decoder is hand-written
 

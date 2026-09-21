@@ -17,7 +17,14 @@
 // root as the caller spells it, and the BACKEND turns it into a workspace key
 // through `todo::workspace_key`. That is the same door the MCP path uses, so
 // two spellings of one project cannot become two lists — and the frontend
-// cannot address a workspace by inventing its key, because it never sends one.
+// cannot NAME a scope by inventing its key, because it never sends one.
+//
+// Scope, and only scope. An `update` / `complete` / `delete` is addressed by
+// ID, and the engine's `live_index` does no scope check, so the root sent
+// beside one of those does not confine it to that workspace. Harmless here —
+// this caller is the trusted webview — and named rather than implied because
+// the same sentence one layer down is what an AGENT's path (#3263 S2) must
+// NOT rely on. See `doc/design/todo-pane.md`.
 
 import { invoke, listen, type UnlistenFn } from "./transport.ts";
 import { decodeSnapshot, type Applied, type TodoOp, type TodoSnapshot } from "./todomodel.ts";

@@ -157,6 +157,100 @@ test("only the first date on a line is taken", () => {
   assert.equal(a.title, "move the meeting to fri");
 });
 
+// ---- the header's two promises, pinned as properties (#3286 review round 1) ----
+
+/** Whitespace tokens, the way the parser itself splits. */
+function toks(line: string): string[] {
+  return line.split(/\s+/).filter(Boolean);
+}
+
+test("PROPERTY: every consumed token comes back in exactly one chip", () => {
+  // The module header promises this outright, and before this round it was
+  // false: a second `at <time>` phrase overwrote the first phrase's chip
+  // while leaving its tokens consumed, so `at 4pm` vanished from the title
+  // and was named by nothing. A per-line assertion would have missed it — the
+  // promise is a PROPERTY over the whole partition, so that is what is pinned.
+  const lines = [
+    "pay rent fri 4pm #home !!",
+    "call bob at 4pm at 5pm",
+    "standup 4pm 5pm",
+    "fix the roof #home #urgent !!! * @myday",
+    "move the tomorrow meeting to fri",
+    "chase the invoice in 3 days",
+    "retro next week at 9:30",
+    "buy #home friday",
+    "ship the q3 roadmap",
+    "#home !! @myday",
+  ];
+  let checked = 0;
+  for (const line of lines) {
+    const a = parseQuickAdd(line, NOW);
+    const accounted = [...toks(a.title), ...a.chips.flatMap((c) => toks(c.raw))].sort();
+    assert.deepEqual(
+      accounted,
+      toks(line).sort(),
+      `"${line}": title + chips must partition the input exactly — no token eaten ` +
+        `without a chip, and none named twice`
+    );
+    checked += 1;
+  }
+  // Positive control: an assertion over a loop is vacuous if the loop is
+  // empty, and a line with nothing to consume cannot fail it either.
+  assert.equal(checked, lines.length);
+  assert.ok(
+    lines.some((l) => parseQuickAdd(l, NOW).chips.length >= 3),
+    "at least one specimen must consume several tokens, or the partition is trivially satisfied"
+  );
+});
+
+test("FAILURE CASE: a second TIME phrase stays in the title, as a second date does", () => {
+  // First wins, for every class. Before this round the bare-time branch was
+  // guarded by `timeOfDay === null` and the `at <time>` branch was not, which
+  // is the one-rule-per-guard asymmetry CLAUDE.md names.
+  const a = parseQuickAdd("call bob at 4pm at 5pm", NOW);
+  assert.equal(a.title, "call bob at 5pm", "the second phrase is left in the title, not eaten");
+  assert.equal(a.dueMs, at(0, 16, 0), "the FIRST time is the one that counts");
+  assert.deepEqual(
+    a.chips.map((c) => c.raw),
+    ["at 4pm"],
+    "and exactly the tokens it took are named by a chip"
+  );
+
+  // The CONTROL that makes the above a real finding rather than a preference:
+  // the bare-time form already behaved this way, so the two spellings now
+  // agree instead of disagreeing.
+  const b = parseQuickAdd("standup 4pm 5pm", NOW);
+  assert.equal(b.title, "standup 5pm");
+  assert.equal(b.dueMs, at(0, 16, 0));
+});
+
+test("chips come back in SOURCE order, not with the due chip always first", () => {
+  // The due chip used to be unshifted to position 0 regardless of where its
+  // date phrase sat, which made "in reading order" false for any line whose
+  // tag or priority preceded the date.
+  const a = parseQuickAdd("buy #home friday", NOW);
+  assert.deepEqual(
+    a.chips.map((c) => c.kind),
+    ["tag", "due"],
+    "#home is read before friday, so its chip comes first"
+  );
+  // …and the reverse line still reads the other way, so the assertion is
+  // about ORDER rather than about a fixed answer.
+  const b = parseQuickAdd("buy friday #home", NOW);
+  assert.deepEqual(
+    b.chips.map((c) => c.kind),
+    ["due", "tag"]
+  );
+  // A due phrase split across the line takes its EARLIEST token's position.
+  const c = parseQuickAdd("pay rent fri #home 4pm", NOW);
+  assert.deepEqual(
+    c.chips.map((c2) => c2.kind),
+    ["due", "tag"],
+    "the due chip sits at `fri`, the first token its phrase consumed"
+  );
+  assert.equal(c.chips[0].raw, "fri 4pm");
+});
+
 test("formatDue is relative near the present and absolute once that stops helping", () => {
   assert.equal(formatDue(at(0), NOW, false), "Today");
   assert.equal(formatDue(at(1), NOW, false), "Tomorrow");

@@ -159,11 +159,20 @@ function decodeSteps(v: unknown): Step[] {
  * are what make a row renderable and addressable, and everything else has a
  * defined absent value. A row missing either is dropped — it could not be
  * clicked, completed or deleted, so showing it would be a lie.
+ *
+ * **Missing means absent OR empty, for both, and by the SAME rule** (#3286
+ * review round 1). An earlier revision checked `id` for emptiness and
+ * `title` only for its type, so a present-but-empty title survived and the
+ * pane would have drawn a blank, unlabelled, clickable row. The engine's
+ * `check_title` refuses an empty title on WRITE, so nothing this build
+ * produces is lost here — but a store a newer build wrote, or one edited by
+ * hand, is exactly the population a defensive decode exists for, and it is
+ * where reading the two fields by different rules would have shown.
  */
 function decodeItem(v: unknown): TodoItem | null {
   if (!isObject(v)) return null;
   if (typeof v.id !== "string" || v.id === "") return null;
-  if (typeof v.title !== "string") return null;
+  if (typeof v.title !== "string" || v.title === "") return null;
   return {
     id: v.id,
     scope: decodeScope(v.scope),

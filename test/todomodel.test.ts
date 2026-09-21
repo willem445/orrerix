@@ -97,6 +97,38 @@ test("decode drops a malformed item and keeps the rest", () => {
   assert.equal(snap.version, 1);
 });
 
+test("decode reads id and title by the SAME rule: absent OR empty is dropped", () => {
+  // #3286 review round 1. An earlier revision checked `id` for emptiness and
+  // `title` only for its type, so a present-but-empty title survived and S4
+  // would have drawn a blank, unlabelled, clickable row. The engine refuses an
+  // empty title on WRITE, so this is reachable only from a store a newer build
+  // wrote or one edited by hand — which is the population a defensive decode
+  // exists for.
+  //
+  // The fixture COLLIDES on the field under test: the empty-title row and the
+  // empty-id row sit either side of a good one, so a decoder that dropped by
+  // POSITION, or that threw the batch away, fails differently from one reading
+  // both fields by one rule.
+  const snap = decodeSnapshot({
+    items: [
+      { id: "td-1", title: "" },
+      { id: "td-2", title: "kept" },
+      { id: "", title: "no id" },
+      { id: "td-4", title: "also kept" },
+    ],
+  });
+  assert.deepEqual(
+    snap.items.map((i) => i.id),
+    ["td-2", "td-4"]
+  );
+
+  // Both directions of the one rule, so the assertion is about the RULE and
+  // not about this fixture's answer.
+  assert.equal(decodeSnapshot({ items: [{ id: "td-9", title: "x" }] }).items.length, 1);
+  assert.equal(decodeSnapshot({ items: [{ id: "td-9", title: "" }] }).items.length, 0);
+  assert.equal(decodeSnapshot({ items: [{ id: "", title: "x" }] }).items.length, 0);
+});
+
 test("decode fills every absent field rather than yielding undefined", () => {
   const snap = decodeSnapshot({ items: [{ id: "td-1", title: "bare" }] });
   const i = snap.items[0];

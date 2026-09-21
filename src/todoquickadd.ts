@@ -22,6 +22,18 @@
 //     chip the human did not expect is the signal to fix the sentence; a word
 //     that silently became a due date is not.
 //
+//     Two rules make that literally true rather than nearly true, and both
+//     were review findings on #3286 — the near-miss is the whole failure mode
+//     here, so they are stated rather than left to the code. FIRST WINS, for
+//     every class: one date per line, and one TIME per line. A second `at
+//     <time>` is left in the title exactly as a second bare `5pm` and a
+//     second `tomorrow` are — before, the bare-time branch was guarded and
+//     the `at` branch was not, so `call bob at 4pm at 5pm` ate `at 4pm`
+//     and gave back no chip for it. And READING ORDER is the SOURCE order:
+//     every chip records the index of the first token it consumed and the
+//     list is sorted on it, so the due chip sits where its date phrase sits
+//     rather than always first.
+//
 // THE WEEKDAY RULE, stated as the code actually implements it. A bare weekday
 // is a date when it stands as its OWN token and is not the FIRST word of the
 // line. So `friday's report` keeps the word (the token is `friday's`, which is
@@ -185,7 +197,13 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
 
   const dayStart = startOfDay(nowMs);
 
-  const chips: Chip[] = [];
+  /** Chips with the index of the first token each consumed, so the list can
+   *  be returned in SOURCE order rather than in the order the branches
+   *  happened to fire. */
+  const chipsAt: { chip: Chip; at: number }[] = [];
+  /** The earliest token index the due phrase consumed — its date part or its
+   *  time part, whichever came first in the line. */
+  let dueChipAt = Number.POSITIVE_INFINITY;
   const tags: string[] = [];
   let priority = 0;
   let important = false;
@@ -204,6 +222,14 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
     return raw;
   };
 
+  /** [`take`] for a token belonging to the DUE phrase (its date part or its
+   *  time part). Both parts feed one chip, so the chip's position is the
+   *  earliest index either of them consumed. */
+  const takeDue = (from: number, count: number, raw: string): string => {
+    dueChipAt = Math.min(dueChipAt, from);
+    return take(from, count, raw);
+  };
+
   for (let i = 0; i < tokens.length; i++) {
     if (consumed[i]) continue;
     const t = lower[i];
@@ -214,37 +240,44 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
     if (/^#[\w-]+$/.test(tokens[i].raw)) {
       const tag = tokens[i].raw.slice(1).toLowerCase();
       if (!tags.includes(tag)) tags.push(tag);
-      chips.push({ kind: "tag", label: "#" + tag, raw: take(i, 1, tokens[i].raw) });
+      chipsAt.push({ chip: { kind: "tag", label: "#" + tag, raw: take(i, 1, tokens[i].raw) }, at: i });
       continue;
     }
 
     // --- !, !!, !!! priority ----------------------------------------------
     if (/^!{1,3}$/.test(t)) {
       priority = Math.max(priority, t.length);
-      chips.push({ kind: "priority", label: t, raw: take(i, 1, tokens[i].raw) });
+      chipsAt.push({ chip: { kind: "priority", label: t, raw: take(i, 1, tokens[i].raw) }, at: i });
       continue;
     }
 
     // --- * important ------------------------------------------------------
     if (t === "*") {
       important = true;
-      chips.push({ kind: "important", label: "Important", raw: take(i, 1, tokens[i].raw) });
+      chipsAt.push({ chip: { kind: "important", label: "Important", raw: take(i, 1, tokens[i].raw) }, at: i });
       continue;
     }
 
     // --- @myday -----------------------------------------------------------
     if (t === "@myday" || t === "@today") {
       myDay = true;
-      chips.push({ kind: "myday", label: "My Day", raw: take(i, 1, tokens[i].raw) });
+      chipsAt.push({ chip: { kind: "myday", label: "My Day", raw: take(i, 1, tokens[i].raw) }, at: i });
       continue;
     }
 
     // --- at <time> --------------------------------------------------------
-    if (t === "at" && next) {
+    // `timeOfDay === null` is the SAME guard the bare-time branch below
+    // carries, and it is here because it was missing: without it a second
+    // `at <time>` overwrote `timeRaw` while the first phrase's tokens stayed
+    // consumed, so `call bob at 4pm at 5pm` ate `at 4pm` and reported no
+    // chip for it (#3286 review round 1). One rule for both inputs — the
+    // one-rule-per-guard rule in CLAUDE.md — and first wins, as it does for
+    // dates.
+    if (timeOfDay === null && t === "at" && next) {
       const tod = parseTimeOfDay(next);
       if (tod) {
         timeOfDay = tod;
-        timeRaw = take(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
+        timeRaw = takeDue(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
         continue;
       }
     }
@@ -254,7 +287,7 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
       const bare = parseTimeOfDay(t);
       if (bare && /[:apm]/i.test(t)) {
         timeOfDay = bare;
-        timeRaw = take(i, 1, tokens[i].raw);
+        timeRaw = takeDue(i, 1, tokens[i].raw);
         continue;
       }
     }
@@ -265,24 +298,24 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
     if (t === "today" || t === "tonight") {
       dueDayMs = dayStart;
       if (t === "tonight" && !timeOfDay) timeOfDay = { hour: 19, minute: 0 };
-      dueRaw = take(i, 1, tokens[i].raw);
+      dueRaw = takeDue(i, 1, tokens[i].raw);
       continue;
     }
     if (t === "tomorrow" || t === "tmr") {
       dueDayMs = dayStart + MS_PER_DAY;
-      dueRaw = take(i, 1, tokens[i].raw);
+      dueRaw = takeDue(i, 1, tokens[i].raw);
       continue;
     }
 
     // --- next week / next <weekday> / this <weekday> ----------------------
     if (t === "next" && next === "week") {
       dueDayMs = nextWeekday(dayStart, 1, false); // Monday of the coming week
-      dueRaw = take(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
+      dueRaw = takeDue(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
       continue;
     }
     if ((t === "next" || t === "this") && next !== undefined && next in WEEKDAYS) {
       dueDayMs = nextWeekday(dayStart, WEEKDAYS[next], t === "this");
-      dueRaw = take(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
+      dueRaw = takeDue(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
       continue;
     }
 
@@ -291,12 +324,12 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
       const n = Number(next);
       if (/^days?$/.test(next2)) {
         dueDayMs = dayStart + n * MS_PER_DAY;
-        dueRaw = take(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
+        dueRaw = takeDue(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
         continue;
       }
       if (/^weeks?$/.test(next2)) {
         dueDayMs = dayStart + n * 7 * MS_PER_DAY;
-        dueRaw = take(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
+        dueRaw = takeDue(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
         continue;
       }
     }
@@ -306,7 +339,7 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
     // word of the line.
     if (i > 0 && t in WEEKDAYS) {
       dueDayMs = nextWeekday(dayStart, WEEKDAYS[t], false);
-      dueRaw = take(i, 1, tokens[i].raw);
+      dueRaw = takeDue(i, 1, tokens[i].raw);
       continue;
     }
   }
@@ -328,8 +361,20 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
 
   if (dueMs !== null) {
     const raw = [dueRaw, timeRaw].filter(Boolean).join(" ");
-    chips.unshift({ kind: "due", label: formatDue(dueMs, nowMs, hasTime), raw });
+    // `dueChipAt` is finite whenever a date or time token was consumed. A due
+    // derived with NO token of its own cannot arise today — `dueMs` is set
+    // only from `dueDayMs` or `timeOfDay`, and both come from `takeDue` —
+    // but the fallback keeps the sort total rather than seeding it with
+    // Infinity if a later branch ever forgets.
+    chipsAt.push({
+      chip: { kind: "due", label: formatDue(dueMs, nowMs, hasTime), raw },
+      at: Number.isFinite(dueChipAt) ? dueChipAt : -1,
+    });
   }
+
+  // Source order. A stable sort (ES2019+) keeps two chips that somehow share
+  // an index in the order they were pushed.
+  const chips = chipsAt.sort((a, b) => a.at - b.at).map((c) => c.chip);
 
   const title = tokens
     .filter((_, i) => !consumed[i])

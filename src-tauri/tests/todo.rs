@@ -1263,6 +1263,496 @@ fn an_op_naming_two_actions_or_none_is_refused() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The MCP tool surface (#3263 slice S2) — `todo_list` / `todo_get` /
+// `todo_add` / `todo_update` / `todo_complete` / `todo_delete`.
+//
+// Appended here rather than to `tests/orchestration.rs` for the reason this
+// file's header already gives: that file is the end-of-file-append conflict
+// class, and the To-Do slices land concurrently. Every test below drives the
+// REAL `dispatch()` with a `Caller` resolved from a real spawned agent's
+// token, so the role gates, the listing filter and the dispatch gate are all
+// exercised as the product runs them.
+//
+// **Why these tests redirect the process-global data root, and how they stay
+// honest about it.** Everything above drives `apply_to`/`snapshot_at` against
+// an explicit path, deliberately. The tool arms cannot: they go through
+// `OrchRegistry::todo_apply`, which reads `todo_path()` -> `obs::data_root()`,
+// one value for the whole test binary. So each test below takes
+// [`MCP_SERIAL`] and installs a fresh `$ORRERIX_DATA_DIR` through
+// [`DataRoot`], whose `Drop` puts the previous value back (CLAUDE.md: restore
+// any global the harness overrode from a `Drop` guard). The lock is taken with
+// a poison-tolerant `lock_safe`, for the same file's other rule — one panicking
+// test must not turn every later one into a `PoisonError` and make a mutation
+// round's reds unattributable.
+// ---------------------------------------------------------------------------
+
+use loomux_engine::obs::LockExt;
+use loomux_lib::orchestration::mcp::dispatch;
+use loomux_lib::orchestration::workflow;
+use loomux_lib::orchestration::{AgentEntry, Caller, GroupId, Guardrails, OrchRegistry, Role};
+// `json` is already in scope from the S3 command-decoder block above (this
+// is one module), so importing it again here would be E0252 — the name
+// defined twice. Only `Value` is new to this block.
+use serde_json::Value;
+use std::sync::Mutex;
+
+/// Serialises every test that redirects the process-global data root.
+///
+/// `lock_safe`, never `.lock().unwrap()`: one failing test panicking under the
+/// guard would poison it and report N failures for one real one, which is
+/// exactly what makes a mutation round's reds unattributable.
+static MCP_SERIAL: Mutex<()> = Mutex::new(());
+
+/// Point `obs::data_root()` at a fresh temp directory for the life of one
+/// test, and put the previous value back afterwards.
+///
+/// The restore is in `Drop` so it happens on a panicking test too — a test
+/// that failed while holding the override would otherwise leave every later
+/// test in this binary pointed at a deleted directory, turning one red into a
+/// cascade with no relationship to the change under test.
+struct DataRoot {
+    _dir: tempfile::TempDir,
+    prior: Option<std::ffi::OsString>,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl DataRoot {
+    fn install() -> DataRoot {
+        let _guard = MCP_SERIAL.lock_safe();
+        let dir = tempfile::tempdir().unwrap();
+        let prior = std::env::var_os("ORRERIX_DATA_DIR");
+        std::env::set_var("ORRERIX_DATA_DIR", dir.path());
+        DataRoot { _dir: dir, prior, _guard }
+    }
+}
+
+impl Drop for DataRoot {
+    fn drop(&mut self) {
+        match self.prior.take() {
+            Some(v) => std::env::set_var("ORRERIX_DATA_DIR", v),
+            None => std::env::remove_var("ORRERIX_DATA_DIR"),
+        }
+    }
+}
+
+/// Build a registry with every test-only directory override applied.
+///
+/// The ONE raw `OrchRegistry::new` this file is sanctioned for in
+/// `orchestration.rs`'s
+/// `no_registry_construction_bypasses_the_test_agent_dir_overrides` allowlist.
+/// It is a real requirement rather than ceremony: a registry built without
+/// these writes a generated agent file into the developer's REAL `~/.claude` /
+/// `~/.copilot` agents dir on its first spawn (#464). Helpers do not cross
+/// integration-test binaries, which is why this cannot call
+/// `orchestration.rs`'s.
+fn relaunch_registry(dir: &Path) -> OrchRegistry {
+    let reg = OrchRegistry::new(dir.to_path_buf());
+    reg.set_port(45993);
+    reg.set_claude_agents_dir_override(dir.join("claude-agents"));
+    reg.set_copilot_agents_dir_override(dir.join("copilot-agents"));
+    reg.set_compact_hook_dir_override(dir.join("compacthook"));
+    reg.set_copilot_hooks_dir_override(dir.join("copilot-hooks"));
+    reg
+}
+
+/// The four agent/hook dir overrides this file's allowlist row ASSUMES
+/// [`relaunch_registry`] applies (#1778's row convention, in the shape
+/// `plandrive.rs` and `piusage.rs` already use it).
+///
+/// Without it the row in `orchestration.rs` is a claim about this file that
+/// nothing in this file checks — and the property it stands in for (#464: no
+/// generated agent file reaches a developer's real `~/.claude`) is exactly the
+/// kind that fails silently. The four setters are private to the registry's
+/// own crate-internal accessors, so the check is a scan of the HELPER'S BODY,
+/// bounded by the population control below so it cannot be satisfied by some
+/// other function in this file.
+#[test]
+fn its_registry_helper_applies_every_override_this_allowlist_row_assumes() {
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/todo.rs"),
+    )
+    .expect("this file reads itself");
+
+    // The helper's body: from its signature to the first line that closes it at
+    // column 0.
+    let start = src
+        .find("fn relaunch_registry(dir: &Path) -> OrchRegistry {")
+        .expect("the sanctioned helper must exist, under the name the row names");
+    let body = &src[start..];
+    let end = body.find("\n}").expect("the helper must terminate") + 2;
+    let body = &body[..end];
+
+    for needed in [
+        "set_claude_agents_dir_override",
+        "set_copilot_agents_dir_override",
+        "set_compact_hook_dir_override",
+        "set_copilot_hooks_dir_override",
+    ] {
+        assert!(
+            body.contains(needed),
+            "the #464 allowlist row for tests/todo.rs assumes this helper applies every \
+             override; it no longer applies {needed}, so a registry built through it can reach \
+             the real agent dirs and the row's premise is gone"
+        );
+    }
+
+    // The population control: the extraction really did isolate the helper, so
+    // the four assertions above are about ITS body and not about the whole file
+    // — which contains those same names in prose.
+    assert!(
+        body.len() < 1_200,
+        "the helper's body extraction ran away ({} chars); the assertions above would then be \
+         satisfied by any other function in this file",
+        body.len()
+    );
+    assert!(
+        !body.contains("#[test]"),
+        "the extraction swallowed a test, so it is no longer reading only the helper"
+    );
+}
+
+/// Guardrails with room for one pane of every class these tests drive.
+///
+/// `max_agents: 8` rather than the 2 `orchestration.rs`'s fixture uses: the
+/// per-role sweep below spawns one of each, and a cap refusal mid-fixture would
+/// make a "this role can add a to-do" assertion fail for a reason that has
+/// nothing to do with the to-do list.
+fn mcp_rails() -> Guardrails {
+    Guardrails {
+        max_agents: 8,
+        agent_cli: "claude".into(),
+        blocks: workflow::default_roster(&[
+            (Role::Orchestrator, "claude", "opus"),
+            (Role::Worker, "claude", "sonnet"),
+            (Role::Reviewer, "claude", "sonnet"),
+            (Role::Planner, "claude", "opus"),
+        ]),
+        auto_ops: false,
+        idle_kill_minutes: 0,
+        max_spawns_per_hour: 0,
+        watchdog_stall_minutes: 0,
+        ..Guardrails::default()
+    }
+}
+
+fn caller_for(reg: &OrchRegistry, a: &AgentEntry) -> Caller {
+    reg.resolve_token(&a.token).expect("a spawned agent's token must resolve")
+}
+
+/// A group on `repo`, with one orchestrator and one worker pane.
+fn mcp_group(reg: &OrchRegistry, repo: &Path) -> (GroupId, Caller, Caller) {
+    let g = reg.create_group(&repo.to_string_lossy(), mcp_rails()).unwrap();
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let worker = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    (g.id.clone(), caller_for(reg, &orch), caller_for(reg, &worker))
+}
+
+/// Call one tool through the REAL dispatch. Returns `(is_error, text)`.
+fn call(reg: &OrchRegistry, c: &Caller, name: &str, args: Value) -> (bool, String) {
+    let out = dispatch(reg, c, "tools/call", &json!({ "name": name, "arguments": args })).unwrap();
+    let text = out["content"][0]["text"].as_str().unwrap_or("").to_string();
+    (out["isError"] == json!(true), text)
+}
+
+/// Call a tool that must SUCCEED, and parse its JSON reply.
+fn ok_json(reg: &OrchRegistry, c: &Caller, name: &str, args: Value) -> Value {
+    let (err, text) = call(reg, c, name, args);
+    assert!(!err, "{name} must succeed: {text}");
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name} must return JSON ({e}): {text}"))
+}
+
+/// Call a tool that must be REFUSED, and return the refusal text.
+fn mcp_refusal(reg: &OrchRegistry, c: &Caller, name: &str, args: Value) -> String {
+    let (err, text) = call(reg, c, name, args);
+    assert!(err, "{name} should have been refused, got: {text}");
+    text
+}
+
+fn listed_tools(reg: &OrchRegistry, c: &Caller) -> Vec<String> {
+    dispatch(reg, c, "tools/list", &json!({})).unwrap()["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap_or("").to_string())
+        .collect()
+}
+
+fn audit_actions(reg: &OrchRegistry, group: &GroupId) -> Vec<String> {
+    reg.audit_log(group).into_iter().map(|e| e.action).collect()
+}
+
+/// The six, in one place, so a test cannot cover five of them by accident.
+const TODO_TOOLS: [&str; 6] =
+    ["todo_list", "todo_get", "todo_add", "todo_update", "todo_complete", "todo_delete"];
+
+// ---------- the surface: who sees the tools, and who may dispatch them ----------
+
+/// **Every non-Solo role sees all six and may dispatch them.**
+///
+/// Both halves matter and they are different claims. The listing is cosmetic
+/// (`tool_defs`); the dispatch check is the real gate, and this repo's own
+/// `add-orch-tool` checklist says so. A tool that listed but did not dispatch
+/// would be invisible in a way nothing else here would catch, and one that
+/// dispatched without listing is the "works but is invisible to agents" failure
+/// the same checklist names.
+///
+/// Manager and lead get their own tests below rather than joining this loop:
+/// each has a POSITIVE, default-deny enumeration at BOTH gates, so for those
+/// two classes "it is on the shared tier" implies nothing at all — and each
+/// needs a differently-shaped group to exist in.
+#[test]
+fn mcp_every_delegate_role_sees_and_may_dispatch_all_six_todo_tools() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let g = reg.create_group(&repo.path().to_string_lossy(), mcp_rails()).unwrap();
+
+    for role in [Role::Orchestrator, Role::Worker, Role::Reviewer, Role::Planner] {
+        let a = reg.spawn_agent(&g.id, role, "pane", "task", false, None).unwrap();
+        let c = caller_for(&reg, &a);
+        let names = listed_tools(&reg, &c);
+        for tool in TODO_TOOLS {
+            assert!(names.contains(&tool.to_string()), "{role:?} must be OFFERED {tool}: {names:?}");
+        }
+        // The real gate: the arm dispatches rather than being refused by role.
+        let out = ok_json(&reg, &c, "todo_list", json!({ "scope": "global" }));
+        assert!(out["items"].is_array(), "{role:?}'s todo_list returns rows: {out}");
+    }
+}
+
+/// **A manager sees and may dispatch all six.**
+///
+/// Its own test because a manager needs a workflow file to exist at all, and
+/// because `MANAGER_SHARED` plus the manager dispatch gate are two independent
+/// default-deny lists: a tool added to the shared tier reaches a manager only
+/// if BOTH name it, and the halves are spelled separately on purpose so they
+/// cannot drift together.
+#[test]
+fn mcp_a_manager_sees_and_may_dispatch_all_six_todo_tools() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let wf = repo.path().join(".loomux");
+    std::fs::create_dir_all(&wf).unwrap();
+    std::fs::write(
+        wf.join("workflow.yml"),
+        "version: 1\nname: with-a-manager\n\
+         blocks:\n\
+         \x20 - id: manager\n    kind: manager\n\
+         \x20 - id: worker\n    kind: worker\n\
+         \x20 - id: reviewer\n    kind: reviewer\n",
+    )
+    .unwrap();
+    let g = reg
+        .create_group(
+            &repo.path().to_string_lossy(),
+            Guardrails { advanced_orchestrator: true, ..mcp_rails() },
+        )
+        .unwrap();
+    // The fixture asserts its own validity: a workflow that never parsed would
+    // leave the built-in roster in place and this would be testing a worker.
+    assert!(
+        reg.manager_block(&g.id).is_some(),
+        "fixture must really declare a manager block, or nothing below tests what it says"
+    );
+    let mgr = reg.spawn_agent(&g.id, Role::Manager, "manager", "", false, None).unwrap();
+    assert_eq!(mgr.role, Role::Manager, "precondition: the pane really is a manager");
+    let cm = caller_for(&reg, &mgr);
+
+    let names = listed_tools(&reg, &cm);
+    for tool in TODO_TOOLS {
+        assert!(names.contains(&tool.to_string()), "a manager must be OFFERED {tool}: {names:?}");
+    }
+    // Happy path through the real dispatch gate, not just the listing.
+    let item = ok_json(&reg, &cm, "todo_add", json!({ "title": "ask about the roadmap" }));
+    assert_eq!(item["title"], json!("ask about the roadmap"));
+    assert_eq!(
+        item["created_by"]["role"],
+        json!("manager"),
+        "the item records the manager's own class: {item}"
+    );
+}
+
+/// **A lead sees and may dispatch all six.**
+///
+/// Its own test for the manager's reason exactly: `LEAD_SHARED` and the lead
+/// dispatch gate are two separate default-deny enumerations, so nothing about
+/// the shared tier reaches a lead by itself. The `workspace` scope is driven
+/// deliberately rather than `global`: "a lead group has a repo, so workspace
+/// scope resolves" is the half of the grant's argument that could stop being
+/// true, and only a workspace-scoped write witnesses it.
+#[test]
+fn mcp_a_lead_sees_and_may_dispatch_all_six_todo_tools() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let rails = Guardrails {
+        blocks: workflow::default_roster(&[(Role::Lead, "claude", ""), (Role::Worker, "claude", "")]),
+        ..mcp_rails()
+    };
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails).unwrap();
+    assert!(
+        reg.group(g.id.as_str()).unwrap().guardrails.block_for(Role::Lead).is_some(),
+        "fixture must really carry a lead block, or nothing below tests what it says"
+    );
+    let lead = reg.spawn_agent(&g.id, Role::Lead, "lead", "", false, None).unwrap();
+    assert_eq!(lead.role, Role::Lead, "precondition: the pane really is a lead");
+    let cl = caller_for(&reg, &lead);
+
+    let names = listed_tools(&reg, &cl);
+    for tool in TODO_TOOLS {
+        assert!(names.contains(&tool.to_string()), "a lead must be OFFERED {tool}: {names:?}");
+    }
+    let item = ok_json(&reg, &cl, "todo_add", json!({ "title": "chase the flaky test" }));
+    assert!(item["scope"]["workspace"].is_string(), "workspace scope resolves for a lead: {item}");
+    assert_eq!(item["created_by"]["role"], json!("lead"), "{item}");
+}
+
+/// **A solo pane gets none of the six, at both gates.**
+///
+/// The negative control for the sweep above, and the one class whose exclusion
+/// is structural rather than enumerated: `tool_defs` returns the channel pair
+/// before the shared tier is built at all, and `call_tool` refuses anything but
+/// those two before the match. A to-do is the human's personal data, but it is
+/// still reached through a group-scoped registry, and "a solo token confers
+/// zero group-scoped power" is a flat rule this feature does not get to bend.
+///
+/// The refusal TEXT is asserted, not just the refusal: a solo caller reaching a
+/// `title required` would mean it had passed the solo gate and been stopped by
+/// an argument check, which is a different and much weaker guarantee.
+#[test]
+fn mcp_a_solo_pane_gets_no_todo_tools_at_all() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let prepared = reg.solo_prepare("claude", "C:/tmp/solo", "solo pane").unwrap();
+    let agent_id = prepared["agent_id"].as_str().unwrap().to_string();
+    reg.solo_bind(&agent_id, 503).unwrap();
+    let token = reg.agent(&agent_id).unwrap().token;
+    let cs = reg.resolve_token(&token).expect("a solo pane's token must resolve");
+    assert_eq!(cs.role, Role::Solo, "precondition: the pane really is solo");
+
+    let names = listed_tools(&reg, &cs);
+    for tool in TODO_TOOLS {
+        assert!(
+            !names.contains(&tool.to_string()),
+            "a solo pane must not be offered {tool}: {names:?}"
+        );
+        // Arguments that would SATISFY every one of the six, so the refusal
+        // below cannot be an argument check wearing the gate's clothes.
+        let text =
+            mcp_refusal(&reg, &cs, tool, json!({ "id": "td-1", "title": "x", "done": true }));
+        assert!(
+            text.contains("no group-scoped power"),
+            "{tool} must be refused by the SOLO gate, not by an argument check: {text}"
+        );
+    }
+}
+
+// ---------- the happy path ----------
+
+/// **Add, list, get, update, complete, delete — one item through all six, with
+/// the audit row each write leaves.**
+///
+/// Asserted on the store's own read-back (`todo_list` / `todo_get`) rather than
+/// on the reply alone: a reply is what the arm computed, and the point of the
+/// feature is what it WROTE.
+#[test]
+fn mcp_a_worker_can_add_groom_complete_and_delete_a_workspace_todo() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let (gid, _co, cw) = mcp_group(&reg, repo.path());
+
+    // ADD
+    let added = ok_json(
+        &reg,
+        &cw,
+        "todo_add",
+        json!({
+            "title": "fix the flaky resize test",
+            "notes": "see #3263",
+            "priority": 2,
+            "tags": ["infra"],
+            "steps": ["reproduce", "fix"],
+        }),
+    );
+    let id = added["id"].as_str().expect("add returns the item").to_string();
+    assert_eq!(added["created_by"]["kind"], json!("agent"), "{added}");
+    assert_eq!(
+        added["created_by"]["id"],
+        json!(cw.agent_id),
+        "the item records the CALLER, from the registry: {added}"
+    );
+    assert!(added["scope"]["workspace"].is_string(), "the default scope is workspace: {added}");
+
+    // LIST — the compact row, and the item really is in the store.
+    let listed = ok_json(&reg, &cw, "todo_list", json!({}));
+    let rows = listed["items"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "exactly the item just added: {listed}");
+    assert_eq!(rows[0]["id"], json!(id));
+    assert_eq!(rows[0]["steps_total"], json!(2), "the row carries the step counts: {listed}");
+    assert_eq!(rows[0]["steps_done"], json!(0));
+    assert!(rows[0].get("notes").is_none(), "the compact row is NOT the whole item: {listed}");
+
+    // GET — the full record, including what the row left out.
+    let got = ok_json(&reg, &cw, "todo_get", json!({ "id": id }));
+    assert_eq!(got["notes"], json!("see #3263"), "{got}");
+    assert_eq!(got["priority"], json!(2));
+
+    // UPDATE — grooming, with the rev guard the tool's own description tells a
+    // caller to pass.
+    let rev = got["rev"].as_u64().expect("the item carries a rev");
+    let updated = ok_json(
+        &reg,
+        &cw,
+        "todo_update",
+        json!({ "id": id, "if_rev": rev, "title": "fix the resize flake", "priority": 3 }),
+    );
+    assert_eq!(updated["title"], json!("fix the resize flake"));
+    assert_eq!(updated["priority"], json!(3));
+    assert_eq!(updated["notes"], json!("see #3263"), "an omitted field is LEFT ALONE: {updated}");
+
+    // COMPLETE — and the default listing stops showing it, which is the
+    // behaviour a caller actually observes.
+    ok_json(&reg, &cw, "todo_complete", json!({ "id": id, "done": true }));
+    let after = ok_json(&reg, &cw, "todo_list", json!({}));
+    assert_eq!(
+        after["items"].as_array().unwrap().len(),
+        0,
+        "a done item is hidden by default: {after}"
+    );
+    let with_done = ok_json(&reg, &cw, "todo_list", json!({ "include_done": true }));
+    assert_eq!(
+        with_done["items"].as_array().unwrap()[0]["status"],
+        json!("done"),
+        "{with_done}"
+    );
+
+    // DELETE — a tombstone, so the id reads as unknown afterwards.
+    ok_json(&reg, &cw, "todo_delete", json!({ "id": id }));
+    let text = mcp_refusal(&reg, &cw, "todo_get", json!({ "id": id }));
+    assert_eq!(
+        text,
+        format!("unknown todo: {id}"),
+        "a deleted id must read exactly as one that never existed"
+    );
+
+    // Every write left its audit row on the CALLER's group.
+    let actions = audit_actions(&reg, &gid);
+    for expected in ["todo-add", "todo-update", "todo-complete", "todo-delete"] {
+        assert!(
+            actions.contains(&expected.to_string()),
+            "the write must be auditable as {expected}: {actions:?}"
+        );
+    }
+}
+
 #[test]
 fn a_timestamp_that_is_not_a_whole_non_negative_number_is_refused() {
     // Truncating a float or wrapping a negative would put the item at a
@@ -1351,4 +1841,291 @@ fn complete_defaults_to_done_and_delete_needs_its_id() {
         "a delete with no id",
     );
     assert!(msg.contains("id is required"), "got: {msg}");
+}
+
+/// **The GLOBAL list is one list, and every group reaches it.**
+///
+/// The positive control for the cross-workspace refusal below. Without it, that
+/// test passes just as well against an implementation where a group cannot see
+/// anything it did not write — which would be a different, wrong feature, and
+/// "the one list that follows the human everywhere" would be false.
+#[test]
+fn mcp_the_global_list_is_the_same_list_from_every_group() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo_a = tempfile::tempdir().unwrap();
+    let repo_b = tempfile::tempdir().unwrap();
+    let (_ga, _oa, wa) = mcp_group(&reg, repo_a.path());
+    let (_gb, _ob, wb) = mcp_group(&reg, repo_b.path());
+
+    let added =
+        ok_json(&reg, &wa, "todo_add", json!({ "scope": "global", "title": "renew the domain" }));
+    let id = added["id"].as_str().unwrap().to_string();
+
+    // Group B reads it, gets it, and may groom it — it is the HUMAN's list.
+    let listed = ok_json(&reg, &wb, "todo_list", json!({ "scope": "global" }));
+    assert_eq!(listed["items"].as_array().unwrap()[0]["id"], json!(id), "{listed}");
+    let got = ok_json(&reg, &wb, "todo_get", json!({ "id": id }));
+    assert_eq!(got["title"], json!("renew the domain"), "{got}");
+    let done = ok_json(&reg, &wb, "todo_complete", json!({ "id": id, "done": true }));
+    assert_eq!(done["status"], json!("done"), "{done}");
+}
+
+// ---------- refusals ----------
+
+/// **Another workspace's id is `unknown todo`, at every tool that takes one —
+/// and the refusal is audited.**
+///
+/// The wording is the whole point: a distinct "not yours" would let a caller
+/// probe another project's list for which ids exist, which is the leak the
+/// plan's refusal table rules out. So this asserts the EXACT text rather than
+/// a substring — the same posture `require_in_group`'s "unknown agent" takes.
+///
+/// Its positive control is the test above: group B reaching the same store
+/// through the GLOBAL scope succeeds, so the refusal here is about the
+/// workspace and not about a group being unable to see anything at all.
+#[test]
+fn mcp_an_id_in_another_groups_workspace_reads_as_unknown_and_is_audited() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo_a = tempfile::tempdir().unwrap();
+    let repo_b = tempfile::tempdir().unwrap();
+    let (_ga, _oa, wa) = mcp_group(&reg, repo_a.path());
+    let (gb, _ob, wb) = mcp_group(&reg, repo_b.path());
+
+    let added = ok_json(&reg, &wa, "todo_add", json!({ "title": "A's own note" }));
+    let id = added["id"].as_str().unwrap().to_string();
+
+    // Precondition: group A really can see it, so the refusals below are about
+    // WHO is asking and not about the item having failed to land.
+    assert_eq!(
+        ok_json(&reg, &wa, "todo_get", json!({ "id": id }))["title"],
+        json!("A's own note")
+    );
+
+    // Vacuity control: B's audit carries no refusal yet, so the rows counted
+    // afterwards were written by THESE calls.
+    assert!(
+        !audit_actions(&reg, &gb).contains(&"todo-refused".to_string()),
+        "precondition: group B has refused nothing yet"
+    );
+
+    for (tool, args) in [
+        ("todo_get", json!({ "id": id })),
+        ("todo_update", json!({ "id": id, "title": "taken over" })),
+        ("todo_complete", json!({ "id": id, "done": true })),
+        ("todo_delete", json!({ "id": id })),
+    ] {
+        let text = mcp_refusal(&reg, &wb, tool, args);
+        assert_eq!(
+            text,
+            format!("unknown todo: {id}"),
+            "{tool} must refuse with EXACTLY the wording an id that never existed gets — \
+             anything more tells B that A's id is real"
+        );
+    }
+
+    // …and A's item is untouched: the refusals refused, they did not half-apply.
+    let still = ok_json(&reg, &wa, "todo_get", json!({ "id": id }));
+    assert_eq!(still["title"], json!("A's own note"), "{still}");
+    assert_eq!(still["status"], json!("open"), "{still}");
+    assert_eq!(still["rev"], json!(1), "no write landed, so the rev did not move: {still}");
+
+    // Every one of the four left a `todo-refused` row on B's OWN group.
+    let refused = audit_actions(&reg, &gb).into_iter().filter(|a| a == "todo-refused").count();
+    assert_eq!(refused, 4, "each refused call is auditable: {:?}", audit_actions(&reg, &gb));
+}
+
+/// **A stale `if_rev` is refused, names both revs, and changes nothing.**
+#[test]
+fn mcp_a_stale_if_rev_is_refused_and_names_both_revs() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let (gid, co, cw) = mcp_group(&reg, repo.path());
+
+    let added = ok_json(&reg, &cw, "todo_add", json!({ "title": "one" }));
+    let id = added["id"].as_str().unwrap().to_string();
+    let stale = added["rev"].as_u64().unwrap();
+
+    // Someone else writes first — the orchestrator, so the two callers really
+    // are different panes and the conflict is the one the tool describes.
+    ok_json(
+        &reg,
+        &co,
+        "todo_update",
+        json!({ "id": id, "notes": "the orchestrator got here first" }),
+    );
+
+    let text =
+        mcp_refusal(&reg, &cw, "todo_update", json!({ "id": id, "if_rev": stale, "title": "two" }));
+    assert_eq!(
+        text,
+        format!("conflict: {id} is at rev {} (you sent {stale})", stale + 1),
+        "the refusal must name BOTH revs so the caller can re-read and re-apply"
+    );
+
+    // Nothing was written: the title is untouched and the other pane's note
+    // survives — a conflict must not half-apply.
+    let after = ok_json(&reg, &cw, "todo_get", json!({ "id": id }));
+    assert_eq!(after["title"], json!("one"), "{after}");
+    assert_eq!(after["notes"], json!("the orchestrator got here first"), "{after}");
+
+    // Re-reading and re-applying to what is there NOW is what the tool tells
+    // the caller to do, and it works.
+    let fresh = after["rev"].as_u64().unwrap();
+    let ok =
+        ok_json(&reg, &cw, "todo_update", json!({ "id": id, "if_rev": fresh, "title": "two" }));
+    assert_eq!(ok["title"], json!("two"), "{ok}");
+
+    assert!(
+        audit_actions(&reg, &gid).contains(&"todo-refused".to_string()),
+        "the conflict is auditable: {:?}",
+        audit_actions(&reg, &gid)
+    );
+}
+
+/// **A cap refuses rather than truncating, and the refusal is audited.**
+///
+/// The title cap, driven through the TOOL rather than through the engine: the
+/// engine's own caps are pinned above, and what this adds is that the MCP arm
+/// surfaces the refusal as a tool error carrying the engine's wording instead
+/// of swallowing it or writing a shortened title. A runaway agent loop is the
+/// shape being bounded, so the audit row is the half the human needs.
+#[test]
+fn mcp_a_cap_refusal_comes_back_as_a_tool_error_and_is_audited() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let (gid, _co, cw) = mcp_group(&reg, repo.path());
+
+    assert!(
+        !audit_actions(&reg, &gid).contains(&"todo-refused".to_string()),
+        "precondition: nothing refused yet, so the row below is THIS call's"
+    );
+
+    let over = "x".repeat(TITLE_MAX + 1);
+    let text = mcp_refusal(&reg, &cw, "todo_add", json!({ "title": over }));
+    assert_eq!(
+        text,
+        format!("refused: title exceeds {TITLE_MAX}"),
+        "the arm surfaces the engine's own cap wording"
+    );
+
+    // NOTHING was written — a cap refuses, it does not truncate.
+    let listed = ok_json(&reg, &cw, "todo_list", json!({}));
+    assert_eq!(
+        listed["items"].as_array().unwrap().len(),
+        0,
+        "no shortened item landed: {listed}"
+    );
+
+    assert!(
+        audit_actions(&reg, &gid).contains(&"todo-refused".to_string()),
+        "a cap that bounces a runaway loop is exactly the event the human must be able to find \
+         afterwards: {:?}",
+        audit_actions(&reg, &gid)
+    );
+}
+
+/// **A malformed argument is refused by name, and nothing reaches the store.**
+#[test]
+fn mcp_a_malformed_argument_is_refused_before_anything_is_written() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let (_gid, _co, cw) = mcp_group(&reg, repo.path());
+
+    let text = mcp_refusal(&reg, &cw, "todo_add", json!({ "title": "x", "scope": "everywhere" }));
+    assert!(text.contains("scope must be"), "the refusal names the shape it wanted: {text}");
+    let empty = ok_json(&reg, &cw, "todo_list", json!({}));
+    assert_eq!(empty["items"].as_array().unwrap().len(), 0, "nothing landed: {empty}");
+
+    // A string where a number belongs is refused rather than silently dropped —
+    // a dropped `if_rev` is the concurrency guard going quiet while telling the
+    // caller its guarded write landed.
+    let added = ok_json(&reg, &cw, "todo_add", json!({ "title": "real" }));
+    let id = added["id"].as_str().unwrap().to_string();
+    let text = mcp_refusal(&reg, &cw, "todo_update", json!({ "id": id, "if_rev": "1", "title": "y" }));
+    assert!(text.contains("if_rev must be a whole number"), "{text}");
+    let after = ok_json(&reg, &cw, "todo_get", json!({ "id": id }));
+    assert_eq!(after["title"], json!("real"), "the refused call wrote nothing: {after}");
+}
+
+/// **`query` requires EVERY term to match, case-insensitively, over the title
+/// and the notes.**
+#[test]
+fn mcp_the_list_query_requires_every_term_to_match() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = tempfile::tempdir().unwrap();
+    let (_gid, _co, cw) = mcp_group(&reg, repo.path());
+
+    ok_json(
+        &reg,
+        &cw,
+        "todo_add",
+        json!({ "title": "Fix the RESIZE flake", "notes": "windows only" }),
+    );
+    ok_json(&reg, &cw, "todo_add", json!({ "title": "Write the design note" }));
+
+    let hit = ok_json(&reg, &cw, "todo_list", json!({ "query": "resize flake" }));
+    assert_eq!(hit["items"].as_array().unwrap().len(), 1, "case-insensitive, both terms: {hit}");
+
+    // A term matching only the NOTES still counts — the field is part of what a
+    // human searches, and a title-only filter would quietly miss it.
+    let notes = ok_json(&reg, &cw, "todo_list", json!({ "query": "windows" }));
+    assert_eq!(notes["items"].as_array().unwrap().len(), 1, "{notes}");
+
+    // ALL terms must match: one that does not appear excludes the row.
+    let miss = ok_json(&reg, &cw, "todo_list", json!({ "query": "resize macos" }));
+    assert_eq!(miss["items"].as_array().unwrap().len(), 0, "every term must match: {miss}");
+
+    // An empty query is "no filter", not "a filter nothing satisfies".
+    let all = ok_json(&reg, &cw, "todo_list", json!({ "query": "   " }));
+    assert_eq!(all["items"].as_array().unwrap().len(), 2, "{all}");
+}
+
+/// **The workspace a write lands in is the CALLER's own repo, derived and never
+/// passed.**
+///
+/// Two groups on two repos write with the default scope and land in two
+/// different lists — the containment claim behind the whole feature, stated as
+/// a fact about the store rather than as a fact about the argument list. A
+/// `scope` argument that could name a key would pass every other test here and
+/// fail this one.
+#[test]
+fn mcp_the_workspace_a_write_lands_in_is_the_callers_own_repo() {
+    let _root = DataRoot::install();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo_a = tempfile::tempdir().unwrap();
+    let repo_b = tempfile::tempdir().unwrap();
+    let (_ga, _oa, wa) = mcp_group(&reg, repo_a.path());
+    let (_gb, _ob, wb) = mcp_group(&reg, repo_b.path());
+
+    let a = ok_json(&reg, &wa, "todo_add", json!({ "title": "A" }));
+    let b = ok_json(&reg, &wb, "todo_add", json!({ "title": "B" }));
+    assert_ne!(
+        a["scope"]["workspace"], b["scope"]["workspace"],
+        "two repos are two workspaces: {a} / {b}"
+    );
+    assert_eq!(
+        a["scope"]["workspace"],
+        json!(todo::workspace_key(repo_a.path())),
+        "and the key is the one `workspace_key` derives from the group's own repo"
+    );
+
+    // Each group's default listing shows only its own.
+    let la = ok_json(&reg, &wa, "todo_list", json!({}));
+    let lb = ok_json(&reg, &wb, "todo_list", json!({}));
+    assert_eq!(la["items"].as_array().unwrap().len(), 1, "{la}");
+    assert_eq!(la["items"].as_array().unwrap()[0]["title"], json!("A"), "{la}");
+    assert_eq!(lb["items"].as_array().unwrap()[0]["title"], json!("B"), "{lb}");
 }

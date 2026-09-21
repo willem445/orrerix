@@ -1865,8 +1865,8 @@ loomux_audit() { # $1=action $2=detail-json
         [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ts="${ts}000" ;;
         *) ts=0 ;;
       esac ;;
-    *) ts=0 ;;
     [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) ts=0 ;;
   esac
   if [ -n "$ORX_GD" ]; then
     # ONE printf of the whole line (record + \n) — O_APPEND is atomic per write,
@@ -3259,8 +3259,8 @@ loomux_audit() { # $1=action $2=detail-json
         [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ts="${ts}000" ;;
         *) ts=0 ;;
       esac ;;
-    *) ts=0 ;;
     [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) ts=0 ;;
   esac
   if [ -n "$ORX_GD" ]; then
     # ONE printf of the whole line — see the gh shim's note (#240): cross-process
@@ -3433,8 +3433,8 @@ if [ -n "$ORX_GD" ]; then
         [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ts="${ts}000" ;;
         *) ts=0 ;;
       esac ;;
-    *) ts=0 ;;
     [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) ts=0 ;;
   esac
   # ONE printf of the whole line — see the gh shim's note (#240): cross-process
   # append atomicity is per write syscall, and no backend mutex reaches here.

@@ -59,9 +59,13 @@ break the PR dry-run before the one-time setup below. It runs:
   refreshes with each release;
 - **on `workflow_dispatch`** — a manual button for docs-only fixes between
   releases;
-- **on pull requests that touch `docs/`** — a **build-only dry-run** (the deploy
-  job is skipped) so a broken config is caught before it ships. The app's regular
-  CI (`ci.yml`) does **not** build the docs, so PR CI on code changes stays fast.
+- **on pull requests that touch a PUBLISHED page under `docs/`** — a
+  **build-only dry-run** (the deploy job is skipped) so a broken config is
+  caught before it ships. `design/` and `plans/` are negated in that workflow's
+  `paths:` filter, because `_config.yml` excludes them from the build and an
+  edit to one cannot change a published byte — so a design-note-only PR runs no
+  dry-run, deliberately. The app's regular CI (`ci.yml`) does **not** build the
+  docs either, so PR CI on code changes stays fast.
 
 ### One-time human setup (required once, can't be automated here)
 

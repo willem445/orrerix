@@ -270,3 +270,108 @@ test("every self-referencing GitHub URL resolves to something in the tree", () =
       "(#3315 B1). Update the href, or make the link relative if the page is not published.",
   );
 });
+
+// ---------------------------------------------------------------------------
+// Citations of a retired root (#3315 review round 1, rev-std finding 2)
+// ---------------------------------------------------------------------------
+//
+// The move itself is guarded above: no tracked path may LIVE under `doc/` or
+// `demo/`. This guards the other half — no tracked file may CITE one — and it
+// exists because the round-1 receipt for that half was a number in a PR body.
+//
+// A number in a body is not a guard. #3315's own sweep reported zero, and by
+// the time it was read it was two, because the PR's later commits added
+// self-referential mentions (a re-bless log entry, a comment explaining an
+// unswept fixture). Both reviewers reached the same premortem independently:
+// the receipt IS the procedure, so the next agent re-runs it, gets a non-zero,
+// and the cheapest way to make it zero again is to rewrite this PR's own
+// record. Making the sweep a test replaces that with an argued allowlist: a
+// legitimate mention is a row with a reason, and a dangling one is red.
+//
+// DEFAULT-DENY, and the pattern is CONTAIN-class, not follow-class. It matches
+// `doc/` or `demo/` at a token boundary — built from what a path token may
+// contain, never from what may follow it. The round-1 sweep required a
+// trailing `/design/`, and a URL ending `…/doc/design)` slipped a 404 onto the
+// published site's front page with every check green (#1297's blind spot, the
+// PR's own B1).
+//
+// WHAT THIS CANNOT SAY. The allowlist unit is the FILE, not the line: a new
+// dangling citation added to an already-allowlisted file is invisible here.
+// That is a deliberate trade — the eleven rows are nearly all prose that
+// discusses the retirement, where a line-level pin would redden on every
+// rewording — and it is bounded by the rows being few and individually argued.
+// It also does not resolve URLs; the self-link guard above does that, and the
+// lookbehind deliberately excludes a `/` so `tree/main/doc/design` belongs to
+// that guard rather than to this one.
+
+/** `doc/` or `demo/` used as a path prefix, at a token boundary. */
+const RETIRED_CITATION = /(?<![A-Za-z0-9_.\-\/])(doc|demo)\//g;
+
+/**
+ * Files permitted to name a retired root, with the reason each may.
+ *
+ * Required to match, like `ROOT_ALLOWLIST`: a row whose file no longer cites
+ * anything fails, so this stays a census rather than accumulating permissions.
+ */
+const CITATION_ALLOWLIST: ReadonlyArray<{ file: string; reason: string }> = [
+  { file: "CLAUDE.md", reason: "states the rule — \"There is no `doc/`\" — and names `demo/feedback` as a label. Naming a retired root while saying it is retired is the point." },
+  { file: "docs/_config.yml", reason: "the `exclude:` comment explains the fold it implements: \"one documentation root instead of two (`doc/` and `docs/`)\"." },
+  { file: "test/repolayout.test.ts", reason: "this file: BANNED_PREFIXES names both roots, and these rows quote them. A guard cannot forbid the string it is written in." },
+  { file: "src-tauri/tests/fixtures/pre222/README.md", reason: "the re-bless log — dated history of what each blessing changed. Rewriting an entry to today's spelling would falsify the record it exists to keep." },
+  { file: "docs/design/rebrand-external.md", reason: "a by-root census explicitly labelled \"at analysis time\"; the figures are a measurement of a past tree, not a pointer into this one." },
+  { file: "test/prbodycheck.test.ts", reason: "the assertion over `test/fixtures/prbodycheck/diff.txt`, a CAPTURED real diff. It must keep the captured spelling, and the assertion says so inline." },
+  { file: "test/filematch.test.ts", reason: "synthetic path literals in a ranking fixture (`doc/restore.md`). They are test data standing for any path, not references to this repo's tree." },
+  { file: "test/fixtures/tokenscorecard/audit.jsonl", reason: "cut verbatim from the real group log (see that directory's README). A capture's value is being faithful; rewriting a path inside one falsifies it." },
+  { file: "src-tauri/tests/orchestration.rs", reason: "a synthetic Windows path literal (`C:\\Projects\\demo/`) in a path-fixture test — a test path, not a reference. #3315 exempts it explicitly." },
+  { file: "src/todopane.ts", reason: "names `demo/todo-pane` as the tree PR #3271 carried and #3315 removed — a citation of history, phrased as history." },
+  { file: ".claude/skills/agent-cli-reference/SKILL.md", reason: "the English phrase \"a demo/live check\", not a path. Matched because the guard reads shape, not meaning." },
+];
+
+test("no tracked file cites a retired root outside the argued allowlist", () => {
+  const files = trackedFiles();
+  const allowed = new Set(CITATION_ALLOWLIST.map((r) => r.file));
+  const citing = new Map<string, number>();
+
+  let scanned = 0;
+  for (const f of files) {
+    if (f.startsWith(".claude/skills/impeccable/")) continue; // vendored — re-vendor, never edit
+    let buf: Buffer;
+    try {
+      buf = readFileSync(path.join(REPO_ROOT, f));
+    } catch {
+      continue;
+    }
+    if (buf.includes(0)) continue; // binary
+    scanned++;
+    RETIRED_CITATION.lastIndex = 0;
+    const n = (buf.toString("utf8").match(RETIRED_CITATION) || []).length;
+    if (n > 0) citing.set(f, n);
+  }
+
+  // Positive control. Every assertion below succeeds on an empty scan, which is
+  // what a broken reader or a pattern that matches nothing produces.
+  assert.ok(scanned > 500, `positive control: only ${scanned} text files scanned`);
+  assert.ok(citing.size > 0, "positive control: the pattern matched nothing at all — it cannot even see this file, which quotes both roots");
+
+  const unargued = [...citing.keys()].filter((f) => !allowed.has(f)).sort();
+  assert.deepEqual(
+    unargued,
+    [],
+    `${unargued.length} file(s) cite a retired root with no row in CITATION_ALLOWLIST:\n  ${unargued.join("\n  ")}\n\n` +
+      "`doc/` and `demo/` were retired by #3315. Point the citation at where the thing lives now " +
+      "(`docs/design/`, `docs/plans/`, or PR #2945 / #3271 for the mocks), or add a row here saying why " +
+      "this file legitimately names a root that does not exist.",
+  );
+
+  const stale = CITATION_ALLOWLIST.map((r) => r.file).filter((f) => !citing.has(f)).sort();
+  assert.deepEqual(
+    stale,
+    [],
+    `CITATION_ALLOWLIST row(s) matching nothing: ${stale.join(", ")}. Delete the row — a permission that ` +
+      "guards nothing reads as coverage to the next person.",
+  );
+
+  for (const { file, reason } of CITATION_ALLOWLIST) {
+    assert.ok(reason.trim().length >= 40, `\`${file}\` needs a real reason, not "${reason}"`);
+  }
+});

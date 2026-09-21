@@ -1011,7 +1011,7 @@ Your agents can read and groom **your own To-Do list** — the personal one in o
 pane, not the task board above. The two are unrelated: a board task is a group's work, a
 to-do is yours, and nothing an agent does to one touches the other.
 
-Every agent except a standalone pane has these six tools:
+Every agent except a standalone pane has these seven tools:
 
 | tool | what it does |
 | --- | --- |
@@ -1021,6 +1021,7 @@ Every agent except a standalone pane has these six tools:
 | `todo_update` | Edit one. Every field is optional and an omitted one is left alone. |
 | `todo_complete` | Tick it off, or un-tick it. Steps are untouched. |
 | `todo_delete` | Soft-delete: it disappears from every view and the record survives 30 days. |
+| `todo_restore` | Put back something it deleted. Their instructions say a row **you** deleted stays deleted unless you ask for it. |
 
 **Which list.** `scope` is `global` — the one list that follows you everywhere — or
 `workspace`, this project's list, and `workspace` is the default. **An agent cannot name a

@@ -996,6 +996,49 @@ moves the view if the row is not currently rendered. A toast whose button does
 nothing visible is the silently-dead control this note argues against
 everywhere else.
 
+### What a maximal list costs, measured
+
+`ITEMS_MAX` is 5,000 LIVE items **per scope**, and the pane reads one scope at
+a time, so 5,000 is the largest snapshot a pane can be handed. #3293's review
+recorded that nobody had measured it; this is the measurement, taken once
+rather than pinned as a test, because a timing assertion on shared CI is a
+flake and what the number is FOR is the scroller question `ROW_BUDGET`'s doc
+defers.
+
+Node 24.16.0, one developer machine, 20 reps after two warm-ups, against a
+deliberately unkind fixture — every optional field populated, ~200-character
+notes, three steps and two tags per row, so nothing takes a cheap absent
+branch:
+
+| stage | 500 items | 5,000 items |
+|---|---|---|
+| `JSON.parse` alone | 1.6 ms | 16.6 ms |
+| `decodeSnapshot` (**including** that parse) | 1.9 ms | 19.5 ms |
+| `projectPane`, All, no filter | 0.16 ms | 1.1 ms |
+| `projectPane`, Planned + a two-term query | 0.54 ms | 5.0 ms |
+| `scanReminders`, cold set | 0.03 ms | 0.09 ms |
+
+Three readings, and the third is the one that matters.
+
+**The decode is not the cost; `JSON.parse` is.** At the cap the defensive
+per-field decode adds ~3 ms on top of a 16.6 ms parse — about 15% — so the
+"drop what you cannot understand" discipline is close to free, and a faster
+decoder would be optimising the wrong 15%.
+
+**The reminder scan is free**, which is what makes a one-minute tick on a
+per-viewer timer an easy call: 0.09 ms at the cap, no IPC, no allocation worth
+naming.
+
+**The per-KEYSTROKE projection is the one with a ceiling in sight.** 5 ms for a
+filtered Planned view is inside a 16 ms frame, but not by much, and it is paid
+on every character typed into search. That is the datum the scroller argument
+was waiting for, and it points somewhere slightly different from where
+`ROW_BUDGET` was aimed: the budget bounds how many rows are BUILT, and this
+cost is the filter-and-sort over the whole scope, which a scroller would not
+change. Whoever takes it should debounce the query or memoise the filtered set
+first, and reach for virtual scrolling only if the DOM build turns out to
+dominate. Not this slice's to spend.
+
 ### What S5 shipped, and the one thing it did not
 
 S4 left three hooks that **said so rather than shipping a control that silently

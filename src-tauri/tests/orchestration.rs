@@ -23973,9 +23973,11 @@ fn git_shim_script_bakes_real_git_and_gates_tag_push() {
 /// only a non-zero leading digit spelled in the arm itself can refuse it —
 /// a bare interpolation (`"ts_ms":0170000000`) stops the audit line being
 /// JSON at all. And each arm spelling its whole accept shape (width AND
-/// alphabet AND non-zero lead) is what makes the ladder's ordering not
-/// load-bearing: a reordered case still gives every input the same verdict.
-/// The behavioural twins:
+/// alphabet AND non-zero lead) is what removes the ordering from between
+/// the ACCEPT arms and the junk arm: a reordered case still gives every
+/// input the same verdict among those arms — the catch-all `*)` is the
+/// exception and must stay last (see the happy-path pin). The behavioural
+/// twins:
 /// `gh_shim_audit_ts_refuses_a_leading_zero_timestamp` (both arms' zero-pad
 /// adversary), `gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung`
 /// (the reorder adversary: a 13-character NON-digit answer must reach the
@@ -24026,10 +24028,11 @@ fn every_rendered_shim_timestamps_with_the_portable_ms_fallback() {
         const MS_ARM: &str =
             "[1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;";
         // #3259 item 4: each accept arm states its WHOLE accept shape —
-        // width, alphabet and non-zero lead in the arm itself — so no arm
-        // depends on the junk arm running before it and the ladder's
-        // ordering is not load-bearing. The reorder adversary is run through
-        // the rendered shim by
+        // width, alphabet and non-zero lead in the arm itself — so no
+        // ACCEPT arm depends on the junk arm running before it; the
+        // catch-all `*)` must stay LAST (only the happy-path pin sees a
+        // demoted catch-all — every refusal pin expects 0). The reorder
+        // adversary is run through the rendered shim by
         // gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung.
         // The rung is only a SECOND CHANCE: every `%s%3N` site re-consults
         // `date` with plain `%s` exactly once — a `%s%3N` answer that
@@ -24677,15 +24680,22 @@ fn gh_shim_audit_ts_refuses_a_leading_zero_timestamp() {
     }
 }
 
-/// #3259 item 4 — the accept shape is in the arm, so the ordering is not
-/// load-bearing. The adversary the OLD ladder could not survive reordered:
-/// a 13-character NON-digit answer would have matched the bare ten-`?`-run
-/// accept arm (`?????????????` matches any 13 characters) the moment the
-/// junk arm stopped running first, and landed in ts_ms unquoted. With the
-/// accept shape spelled in the arm (`[1-9]` then digit classes), the same
-/// input fails the arm on its ALPHABET and reaches the whole-seconds rung
-/// whatever order the arms are in — this pin runs it through the rendered
-/// shim in the shipping order and demands the rung's verdict.
+/// #3259 item 4 — the accept shape is in the arm, so no ACCEPT arm depends
+/// on the junk arm running before it. The adversary the OLD ladder could
+/// not survive reordered: a 13-character NON-digit answer would have
+/// matched the bare ten-`?`-run accept arm (`?????????????` matches any 13
+/// characters) the moment the junk arm stopped running first, and landed
+/// in ts_ms unquoted. With the accept shape spelled in the arm (`[1-9]`
+/// then digit classes), the same input fails the arm on its ALPHABET and
+/// reaches the whole-seconds rung whatever order the arms are in — this
+/// pin runs it through the rendered shim in the shipping order and
+/// demands the rung's verdict. SCOPE, stated because the claim was
+/// over-broad once: this pins accept-arm-vs-junk-arm only. The catch-all
+/// `*) ts=0 ;;` is NOT order-independent — moved above the 13-digit
+/// accept arm it silently zero-stamps every audit row while every
+/// refusal pin stays green — which is why the catch-all must stay last,
+/// and why `gh_shim_audit_ts_trusts_a_good_millisecond_answer` (the
+/// happy path, below) exists.
 #[test]
 fn gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung() {
     let sh = ts_pin_sh("gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung");
@@ -24718,6 +24728,52 @@ fn gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung() {
             "a 13-character non-digit answer must reach the whole-seconds rung \
              (the accept arm matches on shape, not on luck of the ordering): \
              got {v} in {line}"
+        );
+    }
+}
+
+/// The HAPPY PATH — the pin the refusal pins cannot be: a good, canonical
+/// 13-digit `%s%3N` answer (what GNU `date` answers on Linux and Git Bash)
+/// must be trusted AS-IS — `ts_ms` is the value itself, not the ts=0
+/// sentinel. Every other ts pin feeds an adversary, so every one of them
+/// expects 0; that polarity is why demoting the catch-all `*) ts=0 ;;`
+/// above the 13-digit accept arm greens the whole suite while silently
+/// zero-stamping every audit row (rev round 1, finding 1's premortem —
+/// the reviewer ran the permutation). This run's exact-value assertion is
+/// what makes that demotion red: the permuted ladder answers 0.
+#[test]
+fn gh_shim_audit_ts_trusts_a_good_millisecond_answer() {
+    let sh = ts_pin_sh("gh_shim_audit_ts_trusts_a_good_millisecond_answer");
+    let td = tempfile::tempdir().unwrap();
+    let (audit, marker) = run_gh_shim_audit_with_fake_date(
+        &sh,
+        td.path(),
+        &[("+%s%3N", "1700000000000")],
+        "3N",
+    );
+    // Positive control (#3249 residual 3): the fake must actually have run
+    // — a host that reaches NO `date` also lands on ts=0, and this pin's
+    // whole point is to separate the trusted answer from the sentinel.
+    assert_eq!(
+        marker.lines().collect::<Vec<_>>(),
+        ["+%s%3N"],
+        "the fake date must have been invoked exactly once, for the `%s%3N` \
+         attempt (positive control): {marker:?}"
+    );
+    assert_eq!(
+        audit.lines().filter(|l| l.contains("merge-gate-blocked")).count(),
+        1,
+        "the refusal must be audited exactly once (non-vacuity): {audit}"
+    );
+    for line in audit.lines().filter(|l| !l.trim().is_empty()) {
+        let v: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("audit line must be JSON ({e}): {line}"));
+        assert_eq!(
+            v["ts_ms"].as_u64(),
+            Some(1700000000000),
+            "a good canonical 13-digit answer must be trusted as-is — a demoted \
+             catch-all or a broken accept arm zero-stamps every audit row \
+             silently: got {v} in {line}"
         );
     }
 }

@@ -1852,8 +1852,10 @@ loomux_audit() { # $1=action $2=detail-json
   # a leading-zero literal and no JSON parser accepts it (#3259) — so
   # every accept arm requires a non-zero leading digit. And each arm
   # spells its WHOLE accept shape (`[1-9]` then digit classes, every
-  # position), so no arm depends on the junk arm running before it: the
-  # ladder's ordering is not load-bearing (#3259).
+  # position), so no ACCEPT arm depends on the junk arm running before
+  # it (#3259); the catch-all `*)` must stay LAST — above the 13-digit
+  # accept arm it would refuse every good answer to ts=0, and only the
+  # happy-path pin would notice.
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")
@@ -3244,8 +3246,10 @@ loomux_audit() { # $1=action $2=detail-json
   # a leading-zero literal and no JSON parser accepts it (#3259) — so
   # every accept arm requires a non-zero leading digit. And each arm
   # spells its WHOLE accept shape (`[1-9]` then digit classes, every
-  # position), so no arm depends on the junk arm running before it: the
-  # ladder's ordering is not load-bearing (#3259).
+  # position), so no ACCEPT arm depends on the junk arm running before
+  # it (#3259); the catch-all `*)` must stay LAST — above the 13-digit
+  # accept arm it would refuse every good answer to ts=0, and only the
+  # happy-path pin would notice.
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")
@@ -3416,8 +3420,10 @@ if [ -n "$ORX_GD" ]; then
   # a leading-zero literal and no JSON parser accepts it (#3259) — so
   # every accept arm requires a non-zero leading digit. And each arm
   # spells its WHOLE accept shape (`[1-9]` then digit classes, every
-  # position), so no arm depends on the junk arm running before it: the
-  # ladder's ordering is not load-bearing (#3259).
+  # position), so no ACCEPT arm depends on the junk arm running before
+  # it (#3259); the catch-all `*)` must stay LAST — above the 13-digit
+  # accept arm it would refuse every good answer to ts=0, and only the
+  # happy-path pin would notice.
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
     *[!0-9]*|"")

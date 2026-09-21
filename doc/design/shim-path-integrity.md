@@ -216,11 +216,20 @@ shelling out to the system `date` — never a Rust crate (the getrandom ban) —
 while the `.cmd` delegators' degraded rows (no `sh` on the machine at all)
 hardcode `"ts_ms":0`, because a `.cmd` cannot shell out either.
 `%3N` is a GNU extension, and BSD `date` answers `+%s%3N` with the epoch plus
-`%3N` is a GNU extension, and BSD `date` answers `+%s%3N` with the epoch plus
 a literal `3N` tail, so the value is guarded by a `case` ladder rather than
 trusted: a non-digit or empty `%s%3N` gets one second chance (`date +%s`,
 whole seconds), and every other wrong answer is refused outright to the
 `ts=0` sentinel.
+
+One ordering constraint the ladder DOES carry, and why it is not the
+load-bearing one the #3259 work removed: no ACCEPT arm depends on the junk
+arm running before it — each accept arm matches on its whole shape, so the
+arms among themselves can move — but the catch-all `*) ts=0 ;;` must stay
+LAST. Move it above the 13-digit accept arm and every good `%s%3N` answer
+is refused to `ts=0` — every audit row silently loses its timestamp — while
+every refusal pin keeps its expected verdict, because they all expect 0.
+The happy-path pin (`gh_shim_audit_ts_trusts_a_good_millisecond_answer`)
+exists to make that demotion red.
 
 Three properties the ladder carries, and why each is spelled where it is:
 
@@ -234,10 +243,12 @@ Three properties the ladder carries, and why each is spelled where it is:
   produces `"ts_ms":0170000000`, a leading-zero literal no JSON parser
   accepts. Both accept arms therefore require a non-zero leading digit.
 * **Order-independence (#3259).** Each accept arm spells its whole accept
-  shape — width, alphabet and non-zero lead, in the arm itself — so no arm
-  depends on the junk arm running before it: reordering the case arms
-  changes no verdict, and the behavioural pin runs the reorder adversary
-  (a non-digit answer of the accept width) through the rendered shim.
+  shape — width, alphabet and non-zero lead, in the arm itself — so no
+  ACCEPT arm depends on the junk arm running before it: reordering the
+  arms among themselves changes no verdict. The catch-all `*) ts=0 ;;` is
+  the exception and must stay last; the behavioural pins run the reorder
+  adversary (a non-digit answer of the accept width) and the happy path (a
+  good canonical 13-digit answer) through the rendered shim.
 
 The census that holds every rendered shim to this ladder scans every
 production source root, and that root list is held to the Cargo workspace's

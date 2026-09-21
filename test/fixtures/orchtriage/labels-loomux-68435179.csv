@@ -1,0 +1,202 @@
+# HAND LABELS — group loomux-68435179, #3304 S2.
+#
+# 150 consecutive orchestrator-bound deliveries, 2026-09-08T02:14:52Z ..
+# 2026-09-21T22:29:42Z, cut as the LAST 150 of the population defined in
+# `scripts/orch-triage-eval.cjs`'s header (a `prompt` row whose `detail.to` is an
+# orchestrator pane, kickoff proxy applied). One pass, one labeller (w-2917).
+#
+# NO DELIVERY TEXT IS CHECKED IN. The rows are a live group's agent-authored
+# prose; a label set is reproducible from the `ts_ms` against the audit it was
+# cut from, and nothing here needs the words. `kind` is derived, not labelled —
+# it is the rule tier's own `classify` answer, carried so a reader can group the
+# labels without re-reading the audit.
+#
+# THE RUBRIC. One question per delivery:
+#
+#   Does this notice name an action the ORCHESTRATOR must take, which cannot be
+#   derived from the notice's leading SHAPE alone, before the group can proceed?
+#
+#   decision    yes — a call, a ruling, an approval, a routing choice, or a tool
+#               call the text names ("Disposition is yours", "needs an owner",
+#               "if green: tag v1.3.0"). A human line typed into the pane is
+#               always a decision: it is an instruction by construction.
+#   routing     no — the next step is the standard one for this kind and is
+#               readable off the shape: a green `done` on an open PR starts a
+#               review drive, a reviewer's `request_changes` hands back, a
+#               planner's `done` means read the plan.
+#   fyi         nothing is asked and nothing waits on a reply.
+#   escalation  a HUMAN, not the orchestrator, must decide ("wants a human
+#               call", "two questions for the HUMAN gate S4", "do NOT merge").
+#
+#   Binary, which is what the eval scores: needs-orchestrator = decision +
+#   escalation; audit-only = routing + fyi.
+#
+# TWO CLASSES WHERE THIS RUBRIC DIVERGES FROM #3304's PLANNING CENSUS, stated
+# because the divergence is most of the difference between that census's 26 %
+# decision rate and this set's 60 %:
+#
+#   1. `drive-gate-satisfied`. The census calls it a rule. Every instance in
+#      this window ends "... N lanes carry non-blocking findings. Disposition is
+#      yours (INVARIANT 3): list_verdicts(\"NNNN\")." — an orchestrator action,
+#      named in the text, that no shape rule can discharge. Labelled `decision`.
+#      Hold that disposition is batchable and all 32 move to `routing`.
+#   2. `run-completed`, green. The census calls it a rule. The registered note
+#      is the orchestrator's own instruction to itself, and it splits: a note
+#      whose only action is on RED ("Red -> INVARIANT 6", "red-main rule") is
+#      `fyi`, while one naming a GREEN-path action ("if green: tag v1.3.0 and
+#      push", "Green -> spawn process-pro") is `decision`. 6 of 25 are the
+#      latter.
+#
+# A second labeller is still required before any agreement figure from this set
+# is quoted as a pass criterion (#3304's own risk row).
+ts_ms,kind,label
+1788833692542,human,decision
+1788835411251,delegate-done,routing
+1788836174191,human,decision
+1788837093436,delegate-done,routing
+1788837102976,delegate-done,routing
+1788837206311,agent-exited,decision
+1788837320943,human,decision
+1788839960224,drive-held,decision
+1788840866503,drive-gate-satisfied,decision
+1788840935204,drive-gate-satisfied,decision
+1788841030486,delegate-done,routing
+1788841865682,run-completed,fyi
+1788843885676,reviewer-report,routing
+1788844053387,drive-gate-satisfied,decision
+1788845014416,run-completed,fyi
+1788846213728,drive-gate-satisfied,decision
+1788847223016,run-completed,fyi
+1788879162725,delegate-done,decision
+1788880629501,reviewer-report,routing
+1788880692402,human,decision
+1788884013659,reviewer-report,routing
+1788884045835,drive-gate-satisfied,decision
+1788885129950,run-completed,fyi
+1788885358839,delegate-done,escalation
+1788890100665,system-notice,decision
+1788891069335,run-completed,decision
+1788892203248,run-completed,decision
+1788905807532,human,decision
+1788907276022,delegate-done,routing
+1788908170023,drive-gate-satisfied,decision
+1788908538681,delegate-done,routing
+1788909431034,drive-gate-satisfied,decision
+1788909485030,delegate-done,routing
+1788910307747,reviewer-report,routing
+1788910340536,drive-gate-satisfied,decision
+1788910464781,run-completed,fyi
+1788911322237,run-completed,fyi
+1788913855888,watchdog,decision
+1788915410539,delegate-done,routing
+1788916485750,drive-gate-satisfied,decision
+1788918018736,delegate-done,routing
+1788919004078,drive-gate-satisfied,decision
+1788920043806,run-completed,fyi
+1788920065515,human,decision
+1788922116292,message-from,decision
+1789178703153,delegate-done,decision
+1789180353113,human,decision
+1789180862229,agent-exited,fyi
+1789180862258,agent-exited,fyi
+1789181536646,pr-checks,decision
+1789182552917,system-notice,decision
+1789183539866,system-notice,decision
+1789183667221,run-completed,decision
+1789184055679,drive-held,decision
+1789184704131,run-completed,decision
+1789185217055,drive-gate-satisfied,decision
+1789186288070,run-completed,fyi
+1789186410931,human,decision
+1789186530981,system-notice,decision
+1789188987304,delegate-done,routing
+1789190250263,drive-gate-satisfied,decision
+1789191742467,delegate-done,routing
+1789192514599,drive-gate-satisfied,decision
+1789193738554,run-completed,fyi
+1789194109657,delegate-done,decision
+1789956478557,human,decision
+1789958331234,human,decision
+1789958365728,human,decision
+1789958857993,human,decision
+1789958872075,delegate-done,routing
+1789961622166,delegate-done,routing
+1789961869342,delegate-done,escalation
+1789963983195,delegate-done,routing
+1789967143400,drive-gate-satisfied,decision
+1789967471852,drive-gate-satisfied,decision
+1789968452455,run-completed,decision
+1789968718559,message-from,fyi
+1789969505013,run-completed,fyi
+1789969825653,message-from,decision
+1789970756468,delegate-done,decision
+1789972285363,drive-gate-satisfied,decision
+1789973663704,delegate-done,routing
+1789973951574,delegate-done,decision
+1789976916169,drive-gate-satisfied,decision
+1789977870465,run-completed,fyi
+1789978111917,message-from,decision
+1789979129369,message-from,fyi
+1789979874450,delegate-done,routing
+1789980756502,drive-gate-satisfied,decision
+1789981343840,delegate-done,routing
+1789981747589,run-completed,fyi
+1789985772813,drive-gate-satisfied,decision
+1789986965648,run-completed,fyi
+1789990665419,human,decision
+1789993099718,delegate-done,decision
+1789994156791,message-from,decision
+1789994197425,drive-held,decision
+1789994990763,drive-held,decision
+1789995657460,drive-gate-satisfied,decision
+1789995658279,delegate-done,routing
+1789995724540,delegate-done,routing
+1789995851835,delegate-done,routing
+1789996050227,drive-gate-satisfied,decision
+1789996318012,drive-gate-satisfied,decision
+1789996495736,drive-gate-satisfied,decision
+1789997092395,run-completed,fyi
+1789997198658,run-completed,fyi
+1789997412125,message-from,fyi
+1789997446022,delegate-done,routing
+1789998410724,drive-gate-satisfied,decision
+1789998522519,human,decision
+1789999572328,run-completed,fyi
+1789999719362,drive-gate-satisfied,decision
+1789999762587,delegate-done,routing
+1790000501757,drive-gate-satisfied,decision
+1790000881524,run-completed,fyi
+1790001633205,human,decision
+1790001864097,delegate-done,routing
+1790002156154,human,decision
+1790002445844,delegate-done,routing
+1790002724169,delegate-done,routing
+1790003536759,delegate-done,routing
+1790004367171,drive-held,decision
+1790004871950,drive-gate-satisfied,decision
+1790005680146,delegate-done,routing
+1790006035630,drive-gate-satisfied,decision
+1790006816089,delegate-done,routing
+1790007235047,run-completed,fyi
+1790010507367,drive-gate-satisfied,decision
+1790011580851,run-completed,decision
+1790011714507,human,decision
+1790011874917,system-notice,decision
+1790012319275,delegate-done,routing
+1790013323098,message-from,routing
+1790014124235,drive-gate-satisfied,decision
+1790015163368,run-completed,fyi
+1790021933397,delegate-done,escalation
+1790025670572,human,decision
+1790026480251,drive-gate-satisfied,decision
+1790028148197,delegate-done,decision
+1790028212580,drive-held,decision
+1790028253992,human,decision
+1790028478986,delegate-done,escalation
+1790028581969,human,decision
+1790028654613,system-notice,decision
+1790028658708,reviewer-report,decision
+1790028751794,delegate-done,routing
+1790028988671,system-notice,decision
+1790028989859,reviewer-report,routing
+1790029782339,drive-gate-satisfied,decision

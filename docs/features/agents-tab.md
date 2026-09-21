@@ -192,6 +192,12 @@ The chips under the heading filter the list to one state, with a live count on
 each. A chip is only offered for a state something is currently in — except the
 one you have selected, which stays so you can always get back out of it.
 
+One chip is not a state. **watched** narrows the list to the panes you have
+marked yourself — see [Watched panes](watched-panes.html) — and it sits second,
+right after **all**, because "which ones did I say to look at" is the question
+you ask before "what is anything doing". It appears once you are watching
+something, and the rows under it still show what each agent is up to.
+
 The number on the **agents** button and on the tab is how many panes are in
 **needs you** or **question**: the two states where a person has to do
 something. It is visible with the panel closed, which is the point of counting

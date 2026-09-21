@@ -50,3 +50,6 @@ shell.
 - **[To-do pane](todo-pane.html)** — your task list in a pane beside your work,
   with natural-language quick-add, five views, and the agents you launch writing
   to the same list under their own colour (`Alt+J`).
+- **[Watched panes](watched-panes.html)** — mark the panes you came back for
+  (`Alt+H`), see the mark everywhere they are listed, and jump between them with
+  `Ctrl+Shift+H`. Set by you, cleared by you, and it survives a restart.

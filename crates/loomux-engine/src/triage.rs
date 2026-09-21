@@ -867,13 +867,45 @@ mod tests {
 
     // ---------- the rule table: one specimen per rule, and its negative
 
+    // ONE TEST PER RULE, rather than one test asserting all six.
+    //
+    // The six were a single test until the red-before-green run said why that
+    // is worth six `#[test]` lines: a mutation removing the whole rule table
+    // reddened it on its FIRST assertion and stopped, so the red evidenced the
+    // `run-green` rule and told us nothing whatever about the other five
+    // (CLAUDE.md: "a red evidences only the assertion it REACHED and MOVED").
+    // Split, every rule's red is its own and the mutation table has six rows
+    // instead of one.
+
     #[test]
-    fn each_rule_matches_its_own_specimen() {
+    fn the_run_green_rule_matches_its_own_specimen() {
         assert_eq!(decide(&input(RUN_GREEN), &on()), Decision::Defer(Rule::RunGreen));
+    }
+
+    #[test]
+    fn the_checks_green_rule_matches_its_own_specimen() {
         assert_eq!(decide(&input(CHECKS_GREEN), &on()), Decision::Defer(Rule::ChecksGreen));
+    }
+
+    #[test]
+    fn the_planner_exited_rule_matches_its_own_specimen() {
         assert_eq!(decide(&input(PLANNER_EXIT), &on()), Decision::Defer(Rule::PlannerExited));
+    }
+
+    #[test]
+    fn the_agent_exited_rule_matches_its_own_specimen() {
         assert_eq!(decide(&input(AGENT_EXIT), &on()), Decision::Defer(Rule::AgentExited));
+    }
+
+    #[test]
+    fn the_drive_cancelled_rule_matches_its_own_specimen() {
         assert_eq!(decide(&input(CANCELLED), &on()), Decision::Defer(Rule::DriveCancelled));
+    }
+
+    #[test]
+    fn a_satisfied_gate_asks_the_caller_to_enqueue_rather_than_deferring_on_its_own() {
+        // NOT a `Defer`: the rule is justified by the enqueue, so the decision
+        // stays unresolved until the registry has actually made one.
         assert_eq!(decide(&input(GATE), &on()), Decision::TryEnqueue { pr: 1758 });
     }
 

@@ -412,20 +412,32 @@ const STREAMS: StreamRow[] = [
   {
     event: "todo-changed",
     rate: "producer",
-    bound: "argued-none",
-    cite: "src/todo.ts",
+    bound: "throttled",
+    cite: "src/refreshgate.ts",
     reason:
       "Emitted on every successful write to todo.json, from EITHER writer — the pane's own " +
       "todo_apply and an agent's through the #3263 S2 MCP tools — so its rate is set by a human " +
-      "typing and by agents, not by a clock. Today it is a gap by construction rather than by " +
-      "oversight: #3263 S3 ships the subscription helper (onTodoChanged) and NOTHING CALLS IT, " +
-      "because the To-Do pane that would is S4. So no listener runs at runtime and the stream " +
-      "costs nothing yet. The bound arrives with the consumer: S4's TodoPaneView puts a " +
-      "CoalescingRefresh (src/tasksview.ts) behind this exactly as the board does with " +
-      "orch-tasks-changed — single-flight with a trailing-edge merge, so an agent's burst costs " +
-      "the refetch already in flight plus one more. This row is the reminder, and it is why the " +
-      "bound is recorded as argued-none rather than as a mechanism that does not exist yet.",
-    debt: "#3263 S4",
+      "typing and by agents, not by a clock. #3263 S4 shipped the consumer this row was waiting " +
+      "for: TodoPaneView is the only listener and it refreshes through a CoalescingRefresh " +
+      "(#743 S5) exactly as the board does with orch-tasks-changed — single-flight with a " +
+      "trailing-edge merge, so an agent's burst costs the refetch already in flight plus " +
+      "exactly one more, and the trailing run reads the final store. It is ALSO visibility-" +
+      "gated the way #1318 gates the board: a HIDDEN pane drops the wake outright rather than " +
+      "coalescing it, and show() re-reads unconditionally so nothing is lost by dropping it. " +
+      "A pane left open behind a background tab still pays, which is #1465's open case here too. " +
+      "TWO BOUNDS THIS ROW DOES NOT CLAIM, stated so it is not read as more than it is " +
+      "(#3293 review round 2, finding 3 and premortem 2). (a) The bound is on FREQUENCY, not " +
+      "on SIZE: every refresh reads the WHOLE store over IPC and decodes it, and ROW_BUDGET " +
+      "(src/todoview.ts) bounds what is BUILT, not what is read — at the engine's own caps " +
+      "(ITEMS_MAX 5000 x NOTES_MAX 20000 chars, crates/loomux-engine/src/todo.rs) a maximal " +
+      "store is a large parse on the webview thread per burst per open pane. Real stores are " +
+      "nowhere near it and nothing here measures the per-refresh cost; a delta-read is a later " +
+      "slice's argument to make with figures. (b) The event's scope field is DISCARDED: a " +
+      "write to the global list wakes a workspace-scoped pane and vice versa. Filtering on it " +
+      "is not a one-liner — the payload names a workspace KEY and the frontend may never name " +
+      "one (doc/design/todo-pane.md), so it would have to go through TodoSnapshot.workspaces, " +
+      "which is the key-to-root map that exists for it.",
+    debt: null,
   },
   {
     event: "orch-needs-you-changed",

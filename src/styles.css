@@ -6724,3 +6724,609 @@ button.wf-finding:hover { background: var(--surface-2); }
   .spane-fold { transition: none; }
   .spane-chev { transition: none; }
 }
+
+/* ==========================================================================
+ * The To-Do pane (#3263 S4) — `src/todopane.ts`.
+ *
+ * WHY THIS IS IN styles.css AND NOT A FILE OF ITS OWN. `test/theme.test.ts`
+ * reads `../src/styles.css` BY NAME in the raw-colour ban, the channel rules
+ * and the one-role-table check. A second stylesheet would be invisible to every
+ * one of them, so a surface with real colour decisions would be one nothing
+ * watches. Everything below names a `var(--…)` and introduces no pigment — the
+ * same argument the structured pane's block makes one section up.
+ *
+ * ONE CHANNEL PER QUESTION, AND EACH IN EXACTLY ONE POSITION
+ * (`demo/todo-pane/DESIGN.md` §2 carries the argument — PR #3271, unmerged at
+ * this slice, so that path is not on `main` yet):
+ *
+ *   STATE     `--state-attention` marks an OVERDUE due date, and the Overdue
+ *             bucket heading its rows sit under. NOTHING ELSE. A to-do has no
+ *             agent state — it is not working, held, idle or ok, it is due or
+ *             it is not — so the other five dyes never appear here, and giving
+ *             `--state-working` to an in-progress task would put a second
+ *             meaning on a pigment the fleet already reads as "an agent is
+ *             running". The supervisor scanning a grid of panes pays for that.
+ *   ACCENT    the interaction channel: the checkbox ring and tick, the star
+ *             when set, the active view chip's underline, the submittable
+ *             quick-add's left edge, the `!!!` left edge. A MARK, NEVER A
+ *             GROUND — there is no gold fill below. Thirty unchecked rows are
+ *             a column of hairline circles; thirty gold-filled ones are a gold
+ *             pane. The selected row's ground is `--selection`, which the token
+ *             block made achromatic for exactly this reason.
+ *   IDENTITY  `--id-*`, in ONE position: the 6px attribution dot that says
+ *             WHICH agent last touched a row. Never a status. And the hue is
+ *             not chosen here — it comes from the app's ONE role table, which
+ *             is why these rules are `.tdp-dot.role-<role>` and why
+ *             test/theme.test.ts scans them as a fifth role surface.
+ *
+ * THE 2px WARP THREAD IS NOT REUSED. `ui-redesign.md` gives every pane a 2px
+ * left thread whose colour is its live agent state. This pane deliberately does
+ * not run one: there is no agent state here to carry, and a thread in the same
+ * position carrying something ELSE would break the one thing the warp is for —
+ * that its colour always answers the same question. Where this pane does use a
+ * 2px left edge (`!!!` priority, the submittable quick-add) it is in the
+ * ACCENT, which is visibly not a state dye, and it is an emphasis mark rather
+ * than a status.
+ * ==========================================================================*/
+
+.tdp {
+  --tdp-box: 17px;
+  --tdp-run: calc(var(--tdp-box) + var(--space-3));
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-0);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-m);
+  overflow: hidden;
+  /* The pane has to read at a GRID CELL's width, not only at a tile's, so the
+     narrow rules at the bottom key off the pane's own size rather than the
+     window's — a 320px cell in a wide window is still a 320px cell. */
+  container-type: inline-size;
+}
+
+.tdp:focus { outline: none; }
+.tdp .tdp-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.tdp .tdp-mono { font-family: var(--font-mono); }
+.tdp .tdp-grow { flex: 1 1 auto; }
+
+/* ------------------------------- header ---------------------------------- */
+
+.tdp-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--line-w) solid var(--line);
+  background: var(--surface-1);
+  min-height: var(--pane-header-h);
+  flex-wrap: wrap;
+}
+
+.tdp-scope {
+  display: inline-flex;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--surface-0);
+}
+
+.tdp-scope-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-3);
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  cursor: pointer;
+  max-width: 11ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.tdp-scope-btn:hover:not(:disabled) { color: var(--ink-dim); }
+.tdp-scope-btn:disabled { cursor: default; opacity: 0.5; }
+/* The selected half is a GROUND (--selection, achromatic by design) with the
+   accent held back to a hairline underline: gold as a fill would tint the
+   header, which is the one thing the token block's --selection note forbids. */
+.tdp-scope-btn[aria-pressed="true"] {
+  background: var(--selection);
+  color: var(--ink);
+  box-shadow: inset 0 -1px 0 0 var(--accent);
+}
+.tdp-scope-mark { font-size: var(--text-s); line-height: 1; }
+
+.tdp-rootbtn {
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: var(--text-s);
+  line-height: 1;
+  padding: 0 var(--space-1);
+}
+.tdp-rootbtn:hover { color: var(--ink-dim); }
+
+.tdp-rootpath {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
+.tdp-search { flex: 0 1 auto; min-width: 0; }
+.tdp-search-in {
+  width: 9ch;
+  padding: 2px var(--space-2);
+  border: 0;
+  border-bottom: var(--line-w) solid transparent;
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+  transition: width var(--dur-base) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.tdp-search-in::placeholder { color: var(--ink-faint); }
+.tdp-search[data-open="true"] .tdp-search-in,
+.tdp-search-in:focus {
+  width: 18ch;
+  border-bottom-color: var(--line-strong);
+  color: var(--ink);
+  outline: none;
+}
+
+.tdp-count {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  padding: 1px var(--space-2);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-pill);
+}
+
+/* "read-only" (a store a newer build wrote) and "stale" (the last read failed)
+   are FACTS ABOUT THE PANE, not alarms about the work — so they are ink, not
+   the attention dye. The dye is spoken for by "this is overdue", and spending
+   it here would make a downgrade look like a deadline. */
+.tdp-ro {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  padding: 1px var(--space-2);
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-pill);
+}
+
+/* ----------------------------- view strip -------------------------------- */
+
+.tdp-strip {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tdp-strip::-webkit-scrollbar { display: none; }
+
+.tdp-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  border: 0;
+  border-bottom: var(--thread) solid transparent;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  font-size: var(--text-s);
+  color: var(--ink-faint);
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.tdp-chip:hover { color: var(--ink-dim); }
+.tdp-chip[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tdp-chip-n { font-size: var(--text-xs); color: var(--ink-faint); }
+.tdp-chip[aria-pressed="true"] .tdp-chip-n { color: var(--ink-dim); }
+
+.tdp-filterbar { padding: var(--space-2) var(--space-3) 0; }
+.tdp-filter-clear {
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+  padding: 1px var(--space-2);
+}
+
+/* ----------------------------- quick-add --------------------------------- */
+
+.tdp-qa {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) var(--space-3) 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-1);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  transition: border-color var(--dur-fast) var(--ease);
+  flex-wrap: wrap;
+}
+.tdp-qa:focus-within { border-color: var(--line-strong); }
+/* A submittable line gets the accent as a LEFT EDGE — a mark on the field,
+   never a fill of it. This is the only "the Enter key will work" signal. */
+.tdp-qa[data-valid="true"]:focus-within { box-shadow: inset var(--thread) 0 0 0 var(--accent); }
+
+.tdp-qa-in {
+  flex: 1 1 14ch;
+  min-width: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--text-m);
+  color: var(--ink);
+}
+.tdp-qa-in:focus { outline: none; }
+.tdp-qa-in::placeholder { color: var(--ink-faint); }
+
+/* The chips take their natural width and the field yields to them: a parse the
+   human cannot see is worth less than the two characters of field it costs. */
+.tdp-qa-chips { display: flex; gap: var(--space-1); flex-wrap: wrap; flex: 0 0 auto; }
+
+/* Each chip kind takes the channel its MEANING belongs to: a due chip is a date
+   (ink), a tag is identity-free metadata (ink), priority and importance are
+   emphasis (an accent outline), My Day is the sun, drawn as a dashed edge. */
+.tdp-qa-chip {
+  font-size: var(--text-xs);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  border: var(--line-w) solid var(--line-strong);
+  color: var(--ink-dim);
+  white-space: nowrap;
+  animation: tdp-chip-in var(--dur-base) var(--ease);
+}
+.tdp-qa-chip[data-kind="due"] { color: var(--ink); border-color: var(--ink-faint); }
+.tdp-qa-chip[data-kind="priority"],
+.tdp-qa-chip[data-kind="important"] { color: var(--accent); border-color: var(--accent); }
+.tdp-qa-chip[data-kind="myday"] { color: var(--ink); border-style: dashed; }
+
+@keyframes tdp-chip-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* -------------------------------- list ----------------------------------- */
+
+.tdp-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3) var(--space-4);
+  scrollbar-width: thin;
+}
+
+/* The stated elision. Ink, not a state dye: "there is more" is a fact about the
+   list, not an alarm about it. */
+.tdp-elision {
+  margin: var(--space-4) 0 0;
+  padding-top: var(--space-2);
+  border-top: var(--line-w) solid var(--line);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+.tdp-bucket {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 var(--space-1);
+  font-size: var(--text-eyebrow);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.tdp-bucket::after {
+  content: "";
+  flex: 1 1 auto;
+  height: var(--line-w);
+  background: var(--line);
+}
+.tdp-bucket-n { font-size: var(--text-eyebrow); }
+/* Overdue is the one bucket heading that takes the state dye — the same dye its
+   rows' dates take, so the group and its members say one thing. */
+.tdp-bucket[data-bucket="overdue"] { color: var(--state-attention); }
+
+.tdp-row {
+  border-radius: var(--radius-s);
+  transition: background var(--dur-fast) var(--ease);
+}
+.tdp-row:hover { background: var(--surface-1); }
+.tdp-row[data-selected="true"] { background: var(--selection); }
+.tdp-row[data-expanded="true"] { background: var(--surface-1); }
+
+.tdp-rowhead {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2);
+}
+
+/* The checkbox: an ACCENT RING with accent INK inside it when checked, never a
+   gold fill. Unchecked it is a hairline circle in --line-strong, so a full list
+   reads as a column of empty rings rather than a column of gold. */
+.tdp-check {
+  flex: 0 0 auto;
+  width: var(--tdp-box);
+  height: var(--tdp-box);
+  margin-top: 1px;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: transparent;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.tdp-check:hover { border-color: var(--ink-faint); color: var(--ink-faint); }
+.tdp-check svg { width: 10px; height: 10px; display: block; }
+.tdp-row[data-done="true"] .tdp-check { border-color: var(--accent); color: var(--accent); }
+
+.tdp-rowmain { flex: 1 1 auto; min-width: 0; }
+.tdp-titleline { display: flex; align-items: baseline; gap: var(--space-2); }
+
+.tdp-title {
+  font-size: var(--text-m);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.tdp-row[data-done="true"] .tdp-title { color: var(--ink-faint); text-decoration: line-through; }
+
+/* Priority is WEIGHT, not a third colour. `!!!` is the only level that also gets
+   a mark, and that mark is the left hairline — an edge, in the accent.
+   Inventing a priority hue would mean a fourth channel in a pane with three. */
+.tdp-row[data-priority="2"] .tdp-title,
+.tdp-row[data-priority="3"] .tdp-title { font-weight: 600; }
+.tdp-row[data-priority="3"] { box-shadow: inset var(--thread) 0 0 0 var(--accent); }
+
+/* IDENTITY CHANNEL, ONE POSITION (#3263 S4). 6px, the agent's ROLE hue, name on
+   hover. A human-authored row has no dot at all: absence is the human, which
+   keeps the fleet's marks meaning one thing rather than seven.
+   The hues are NOT chosen here — this is a fifth surface naming the app's one
+   role table (the session badge, the group roster and the workflow canvas are
+   the others), and test/theme.test.ts holds all five to the same answer. A role
+   with no rule here draws an uncoloured dot, which is the planner bug that test
+   was written for, so the scan over this surface is `complete: true`. */
+.tdp-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  align-self: center;
+  /* The base is the "an agent this build cannot classify" case — a role a NEWER
+     orrerix wrote. Visibly a third state: a dot means an agent, no dot means
+     the human, a colourless dot means an agent whose role we do not know. */
+  background: var(--ink-faint);
+}
+.tdp-dot.role-orchestrator { background: var(--id-azure); }
+.tdp-dot.role-worker { background: var(--id-jade); }
+.tdp-dot.role-reviewer { background: var(--id-violet); }
+.tdp-dot.role-planner { background: var(--id-amber); }
+.tdp-dot.role-manager { background: var(--id-orchid); }
+.tdp-dot.role-lead { background: var(--id-cyan); }
+
+.tdp-byline {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  margin-top: 1px;
+}
+
+.tdp-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+}
+.tdp-metasep { color: var(--ink-faint); }
+/* THE ONE STATE POSITION IN THIS PANE. A due date that is merely soon is ink:
+   if everything upcoming is amber, nothing is. */
+.tdp-due[data-overdue="false"] { color: var(--ink-dim); }
+.tdp-due[data-overdue="true"] { color: var(--state-attention); }
+.tdp-steps { color: var(--ink-faint); }
+.tdp-metatag {
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+  padding: 0;
+}
+.tdp-metatag:hover { color: var(--ink-dim); }
+.tdp-notemark { color: var(--ink-faint); font-style: italic; }
+.tdp-sun { color: var(--ink-faint); display: inline-flex; }
+.tdp-sun svg { width: 11px; height: 11px; display: block; }
+
+.tdp-star,
+.tdp-chev {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--ink-faint);
+  opacity: 0;
+  padding: 2px;
+  transition: opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.tdp-star svg,
+.tdp-chev svg { width: 14px; height: 14px; display: block; }
+.tdp-row:hover .tdp-star,
+.tdp-row:hover .tdp-chev,
+.tdp-row[data-selected="true"] .tdp-star,
+.tdp-row[data-selected="true"] .tdp-chev,
+.tdp-star:focus-visible,
+.tdp-chev:focus-visible { opacity: 1; }
+.tdp-star[aria-pressed="true"] { opacity: 1; color: var(--accent); }
+.tdp-chev[aria-expanded="true"] { opacity: 1; }
+.tdp-chev[aria-expanded="true"] svg { transform: rotate(90deg); }
+
+/* --------------------------- inline expansion ---------------------------- */
+
+/* INLINE, never a side panel: the pane can be a 320px grid cell, and a detail
+   panel at that width is a modal with extra steps. */
+.tdp-rowbody {
+  padding: 0 var(--space-2) var(--space-3) calc(var(--space-2) + var(--tdp-run));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tdp-steplist { display: flex; flex-direction: column; gap: 2px; }
+.tdp-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  font-size: var(--text-s);
+  color: var(--ink-dim);
+  text-align: left;
+  padding: 1px 0;
+}
+.tdp-step svg { width: 9px; height: 9px; display: block; }
+.tdp-step .tdp-step-mark {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: transparent;
+}
+.tdp-step[data-done="true"] .tdp-step-mark { border-color: var(--accent); color: var(--accent); }
+.tdp-step[data-done="true"] span:last-child {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+.tdp-stepadd,
+.tdp-notes {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-0);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  font: inherit;
+  font-size: var(--text-s);
+  color: var(--ink);
+  resize: vertical;
+}
+.tdp-stepadd::placeholder,
+.tdp-notes::placeholder { color: var(--ink-faint); }
+
+.tdp-controls { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.tdp-rowbtn {
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+  padding: 2px var(--space-2);
+}
+.tdp-rowbtn:hover { border-color: var(--line-strong); color: var(--ink); }
+.tdp-rowbtn[data-on="true"] { color: var(--ink); border-color: var(--ink-faint); }
+/* Delete is the one destructive control, and it takes the danger dye only on
+   HOVER — a red button sitting in every expanded row would read as an alarm
+   about the task rather than as what the button does. */
+.tdp-rowbtn[data-act="delete"]:hover {
+  color: var(--state-danger);
+  border-color: var(--state-danger);
+}
+/* Save appears only while the draft is dirty, so it is the one row control that
+   may carry the accent at rest: it is the "this will commit" mark, which is the
+   same job the quick-add's left edge does. */
+.tdp-save { color: var(--accent); border-color: var(--accent); }
+
+/* ------------------------------ empty state ------------------------------ */
+
+.tdp-empty { padding: var(--space-6) var(--space-4); text-align: center; }
+.tdp-empty-text { margin: 0; color: var(--ink-dim); font-size: var(--text-s); }
+.tdp-empty-hint {
+  margin: var(--space-2) 0 0;
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+}
+
+/* -------------------------------- footer --------------------------------- */
+
+.tdp-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: var(--line-w) solid var(--line);
+  background: var(--surface-1);
+  font-size: var(--text-xs);
+  flex-wrap: wrap;
+}
+.tdp-tagrail { display: flex; gap: var(--space-1); flex-wrap: wrap; }
+.tdp-tagbtn {
+  border: var(--line-w) solid transparent;
+  border-radius: var(--radius-pill);
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  padding: 1px var(--space-2);
+}
+.tdp-tagbtn:hover { color: var(--ink-dim); border-color: var(--line); }
+.tdp-tagbtn[data-on="true"] { color: var(--ink); border-color: var(--line-strong); }
+.tdp-hint {
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --------------------------- narrow pane --------------------------------- */
+
+/* Below 360px the footer hint and the workspace path go first: they are the two
+   pieces of chrome that DESCRIBE the pane rather than carry it. */
+@container (max-width: 360px) {
+  .tdp-hint,
+  .tdp-rootpath { display: none; }
+  .tdp-scope-btn { max-width: 10ch; }
+}
+
+/* ------------------------------- motion ---------------------------------- */
+
+/* Everything above is a state change with a duration, so removing the durations
+   removes the motion and changes nothing else. The chip-in is the one animation
+   this slice ships; the completion strike and the reminder pulse arrive with
+   #3263 S5, which owns both. */
+@media (prefers-reduced-motion: reduce) {
+  .tdp-qa-chip { animation: none; }
+  .tdp * { transition-duration: 1ms !important; }
+}

@@ -12,6 +12,7 @@ import {
   shellKindOptions,
   resolveShellKind,
   isContentKind,
+  contentKindNeedsRoot,
   sshDiscardedFieldError,
   sshLaunchArgv,
   sshLaunchParams,
@@ -21,6 +22,7 @@ import {
   withSubmitLatch,
   sshRemoteCliWarning,
   sshRemoteCwdWarning,
+  type PaneKind,
   type PaneSetupInput,
 } from "../src/panesetup.ts";
 import type { SshProfile } from "../src/sshprofile.ts";
@@ -995,4 +997,101 @@ test("a reconnect that THROWS still releases the latch (a failure must stay retr
       );
     }
   );
+});
+
+test("a todo pane plans with NO repo — the one content kind whose root is optional", () => {
+  // #3263 S4. The shared content rule is "the path is mandatory", and it is
+  // right for the four kinds that open ON a directory. This one opens on a LIST:
+  // a blank root is not a missing input, it is the GLOBAL list. The fixture
+  // COLLIDES with the shared rule on purpose — same blank repo, and a plan that
+  // routed through `CONTENT_SETUP` would answer `ok: false` here.
+  const res = planPaneSetup(input({ kind: "todo", repo: "" }));
+  assert.ok(res.ok, `a rootless to-do pane must plan, got: ${res.ok ? "" : res.error}`);
+  assert.deepEqual(res.plan, { kind: "todo", root: "", name: "to-do" });
+});
+
+test("a todo pane with a repo takes the folder's name, like its content siblings", () => {
+  const res = planPaneSetup(input({ kind: "todo", repo: "  C:\\Projects\\loomux\\  " }));
+  assert.ok(res.ok);
+  // Whitespace trimmed, the path otherwise passed through — no slash
+  // normalisation, exactly as every other kind here treats it. That matters
+  // more for this kind than for the others: the ROOT is what the BACKEND turns
+  // into a workspace key, and normalising it on this side would be a second
+  // answer to that question (doc/design/todo-pane.md §"The caller names a
+  // ROOT, never a key").
+  assert.deepEqual(res.plan, { kind: "todo", root: "C:\\Projects\\loomux\\", name: "loomux" });
+});
+
+test("a named todo pane keeps the name the human typed", () => {
+  const res = planPaneSetup(input({ kind: "todo", repo: "C:\\Projects\\loomux", name: "  errands  " }));
+  assert.ok(res.ok);
+  assert.equal(res.plan.kind === "todo" && res.plan.name, "errands");
+});
+
+test("todo is a content kind, and is the only one that does not need a root", () => {
+  // Two predicates, two questions, and the pane machinery keys on the first
+  // while the setup rule keys on the second. Asserted against the same list so
+  // a sixth content kind added to one and not the other reddens.
+  const content = ["files", "editor", "git", "workflow", "todo"] as const;
+  for (const k of content) {
+    assert.equal(isContentKind(k), true, `${k} should be a content kind`);
+  }
+  for (const k of ["agent", "orchestrator", "terminal", "ssh"] as const) {
+    assert.equal(isContentKind(k), false, `${k} is not a content kind`);
+  }
+  assert.deepEqual(
+    content.filter((k) => !contentKindNeedsRoot(k)),
+    ["todo"],
+    "exactly one content kind may open without a root — see its own doc comment"
+  );
+  // And a NON-content kind is never "a content kind that needs no root": the
+  // predicate is an AND, and dropping the `isContentKind` half would make it
+  // true for every agent and terminal.
+  assert.equal(contentKindNeedsRoot("terminal"), false);
+  assert.equal(contentKindNeedsRoot("agent"), false);
+});
+
+test("the four rooted content kinds still refuse a blank path", () => {
+  // The control for the test above: lifting `todo` out of the shared branch must
+  // not have loosened it for the kinds it still covers. Without this, deleting
+  // the `if (!repo)` guard would pass every assertion in this file.
+  for (const kind of ["files", "editor", "git", "workflow"] as const) {
+    const res = planPaneSetup(input({ kind, repo: "   " }));
+    assert.equal(res.ok, false, `${kind} must still demand a folder`);
+    assert.equal(res.ok === false && res.focus, "repo");
+  }
+});
+
+test("the rootless branch is decided by the predicate, for every content kind", () => {
+  // #3293 review round 2, finding 1. The earlier guard asked only the
+  // PREDICATE, so the rule it names could drift from the rule `planPaneSetup`
+  // actually applies — a later slice adding a second rootless kind to
+  // `contentKindNeedsRoot` would go green here while the setup path still
+  // answered "the path is mandatory".
+  //
+  // This asks BOTH, and derives its expectation FROM the predicate rather than
+  // from a list of kinds it remembers, so there is no second list to keep in
+  // step: for every content kind, a blank repo must plan iff that kind does not
+  // need a root. Adding a kind to one side and not the other cannot pass.
+  const content: PaneKind[] = ["files", "editor", "git", "workflow", "todo"];
+  let rootless = 0;
+  let rooted = 0;
+  for (const kind of content) {
+    const res = planPaneSetup(input({ kind, repo: "   " }));
+    if (contentKindNeedsRoot(kind)) {
+      rooted += 1;
+      assert.equal(res.ok, false, `${kind} needs a root, so a blank path must be refused`);
+      assert.equal(res.ok === false && res.focus, "repo");
+    } else {
+      rootless += 1;
+      assert.ok(res.ok, `${kind} needs no root, so a blank path must plan`);
+      assert.equal(res.ok && res.plan.kind, kind, "the plan names the kind that was asked for");
+    }
+  }
+  // The population control (#1209): this loop's shape passes vacuously if the
+  // list empties, and it proves nothing about the DIVERGENCE unless both arms
+  // actually ran — one arm alone is a guard that only ever sees one rule.
+  assert.ok(rooted >= 4, `only ${rooted} rooted kinds exercised`);
+  assert.ok(rootless >= 1, `only ${rootless} rootless kinds exercised — this guard saw one rule`);
+  assert.equal(rooted + rootless, content.length);
 });

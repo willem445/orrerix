@@ -449,6 +449,15 @@ test("one role table: every surface that names an agent role paints it the same 
     // and `styles.css`'s claim that this test "reads all four surfaces and fails
     // on a role that ... is missing" is true of this one for the first time.
     { what: "workflow node", re: /\.wf-node-([a-z]+)\s*\{([^}]*)\}/g, complete: true },
+    // #3263 S4: the To-Do pane's attribution dot, a FIFTH surface that names a
+    // role. `complete: true` for the reason the roster and the workflow node are:
+    // `todopane.ts` classes the dot `role-<role>` for EVERY agent actor the store
+    // carries, so a role with no rule here falls through to the base rule's
+    // neutral ink and reads as "an agent this build cannot classify" — which is a
+    // real and different state the pane reserves for a role a NEWER orrerix wrote,
+    // and handing a role this build DOES know to that state is exactly the
+    // uncoloured-planner bug this test exists for.
+    { what: "todo attribution dot", re: /\.tdp-dot\.role-([a-z]+)\s*\{([^}]*)\}/g, complete: true },
     // The chips stay `complete: false`, and that is not an oversight: they are
     // the SCAFFOLD PREVIEW (`workflowview.ts`'s three hardcoded rows), not a
     // per-block render, so they only ever exist for the roles that preview
@@ -590,6 +599,147 @@ test("the structured pane's three role positions each stay in their own channel"
     "the structured pane crossed a channel — DESIGN.md §3 is the argument, and widening " +
       "the gutter's vocabulary is an edit to doc/design/ui-redesign.md first:\n" + wrong.join("\n")
   );
+});
+
+test("the To-Do pane's two coloured positions each stay in their own channel", () => {
+  // #3263 S4, and the same argument the structured pane's test one up makes: the
+  // general channel guard below compares a position's variants against EACH
+  // OTHER, so a position whose every variant reached for the same wrong channel
+  // passes it clean (#1344 — a guard's green is evidence about its POPULATION).
+  // This pane introduces exactly two coloured positions and they are pinned to a
+  // channel BY NAME here rather than by internal agreement.
+  //
+  //  - the due date and the Overdue bucket heading answer "is this late" — the
+  //    one STATE position in the pane, and demo/todo-pane/DESIGN.md §2 (PR #3271,
+  //    unmerged at this slice) says it is
+  //    the only one: a to-do has no agent state, so the other dyes never appear;
+  //  - the attribution dot answers "WHICH agent touched this row" — identity,
+  //    and it may never be read as a status.
+  const css = stripCssComments(read("../src/styles.css"));
+  const POSITIONS: Array<{ what: string; re: RegExp; want: "state" | "id"; min: number }> = [
+    {
+      what: "the overdue due date",
+      re: /\.tdp-due\[data-overdue="true"\]\s*\{([^}]*)\}/g,
+      want: "state",
+      min: 1,
+    },
+    {
+      what: "the Overdue bucket heading",
+      re: /\.tdp-bucket\[data-bucket="overdue"\]\s*\{([^}]*)\}/g,
+      want: "state",
+      min: 1,
+    },
+    {
+      what: "the attribution dot",
+      re: /\.tdp-dot\.role-[a-z]+\s*\{([^}]*)\}/g,
+      want: "id",
+      min: 6,
+    },
+  ];
+  const wrong: string[] = [];
+  for (const p of POSITIONS) {
+    const bodies = [...css.matchAll(p.re)].map((m) => m[1]!);
+    // The population control: a renamed class or a reshaped rule would make this
+    // scan match nothing and report a clean surface (#1209).
+    assert.ok(
+      bodies.length >= p.min,
+      `${p.what}: found ${bodies.length} rules, expected at least ${p.min} — ` +
+        "the scan is blind, not the stylesheet clean"
+    );
+    for (const body of bodies) {
+      for (const t of tokensIn(body)) {
+        const ok = p.want === "state" ? t.startsWith("--state-") : t.startsWith("--id-");
+        if (!ok) wrong.push(`${p.what} names ${t}, which is not the ${p.want} channel`);
+      }
+    }
+  }
+  assert.deepEqual(
+    wrong,
+    [],
+    "the To-Do pane crossed a channel — demo/todo-pane/DESIGN.md §2 is the argument " +
+      "(PR #3271, unmerged at this slice):\n" +
+      wrong.join("\n")
+  );
+});
+
+test("the To-Do pane spends only the state dyes it argues for", () => {
+  // DESIGN.md §2's sharpest claim, and the one a later slice is most likely to
+  // break: "a to-do has no agent state, so five of the six state dyes never
+  // appear". Giving --state-working to an in-progress task would put a second
+  // meaning on a pigment the fleet already reads as "an agent is running", and
+  // the supervisor looking at a grid of panes is the person who pays for it.
+  //
+  // Scoped by the class PREFIX every rule in the pane's block carries, not by
+  // the section comment: a rule written outside that block but named .tdp-* is
+  // still this pane's, and a scan anchored on a comment would miss it.
+  const css = stripCssComments(read("../src/styles.css"));
+  const rules = [...css.matchAll(/(\.tdp[^{}]*)\{([^}]*)\}/g)];
+  assert.ok(rules.length >= 40, `only ${rules.length} .tdp rules matched — the scan is blind`);
+  const dyes = new Set<string>();
+  for (const [, , body] of rules) {
+    for (const t of tokensIn(body)) if (t.startsWith("--state-")) dyes.add(t);
+  }
+  assert.deepEqual(
+    [...dyes].sort(),
+    ["--state-attention", "--state-danger"],
+    "the To-Do pane's state vocabulary changed. Two dyes are argued for: " +
+      "--state-attention (an overdue date, and the Overdue bucket heading its rows sit " +
+      "under) and --state-danger (the Delete control on hover — the app's " +
+      "destructive-action dye, spent on the action rather than on the task). A third " +
+      "means demo/todo-pane/DESIGN.md §2 (PR #3271, unmerged at this slice) needs the " +
+      "argument before the stylesheet does."
+  );
+});
+
+test("the To-Do pane never grounds in the accent, and never runs the warp thread", () => {
+  // Two claims the pane's own stylesheet header makes, each the kind a later
+  // edit breaks without noticing:
+  //
+  //  - "gold MARKS, it never GROUNDS": thirty unchecked rows must be a column of
+  //    hairline circles, not a gold pane. So --accent may appear in a border, a
+  //    colour, a box-shadow or an outline — never in a background.
+  //  - the 2px warp thread is NOT reused: ui-redesign.md gives every pane a left
+  //    thread whose colour is its live agent STATE, and a thread in the same
+  //    position carrying something else breaks the one thing the warp is for.
+  //    This pane's two 2px left edges are both the accent, which is visibly not
+  //    a state dye.
+  const css = stripCssComments(read("../src/styles.css"));
+  const rules = [...css.matchAll(/(\.tdp[^{}]*)\{([^}]*)\}/g)];
+  assert.ok(rules.length >= 40, `only ${rules.length} .tdp rules matched — the scan is blind`);
+  const grounded: string[] = [];
+  const threaded: string[] = [];
+  let backgrounds = 0;
+  let insetEdges = 0;
+  for (const [, sel, body] of rules) {
+    for (const decl of body.split(";")) {
+      const cut = decl.indexOf(":");
+      if (cut < 0) continue;
+      const prop = decl.slice(0, cut).trim();
+      const value = decl.slice(cut + 1);
+      if (prop === "background" || prop === "background-color") {
+        backgrounds += 1;
+        if (value.includes("--accent") || value.includes("--focus")) {
+          grounded.push(`${sel.trim()} grounds in ${value.trim()}`);
+        }
+      }
+      // A 2px LEFT inset shadow is the warp's position. It may carry the accent
+      // (an emphasis mark) but never a state dye, which is what the warp means.
+      if (prop === "box-shadow" && /inset\s+var\(--thread\)/.test(value)) {
+        insetEdges += 1;
+        for (const t of tokensIn(value)) {
+          if (t.startsWith("--state-")) {
+            threaded.push(`${sel.trim()} runs ${t} down the warp position`);
+          }
+        }
+      }
+    }
+  }
+  // Population controls, both: a stylesheet this scan could not read would
+  // report zero of each and pass clean.
+  assert.ok(backgrounds >= 8, `only ${backgrounds} background declarations scanned`);
+  assert.ok(insetEdges >= 2, `only ${insetEdges} 2px inset left edges scanned`);
+  assert.deepEqual(grounded, [], `gold as a ground:\n${grounded.join("\n")}`);
+  assert.deepEqual(threaded, [], `the warp position carries a state dye:\n${threaded.join("\n")}`);
 });
 
 test("no position mixes the state and identity channels across its own variants", () => {

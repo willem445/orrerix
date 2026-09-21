@@ -1,0 +1,354 @@
+// The To-Do PANE's pure half (#3263 S4): the projection the renderer draws, the
+// per-viewer prefs, the un-submitted draft discipline, and the selection walk.
+//
+// Every clock is injected, for `todomodel.test.ts`'s reason: a bucket tested
+// against the host clock is a different test every day.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  DEFAULT_TODO_PREFS,
+  EMPTY_ROW_DRAFT,
+  EMPTY_TEXT,
+  ROW_BUDGET,
+  decodeTodoPrefs,
+  encodeTodoPrefs,
+  moveSelection,
+  projectPane,
+  pruneDrafts,
+  renderedRows,
+  reseedPristineDrafts,
+  rowDraftIsPristine,
+  seedRowDraft,
+  type RowDraft,
+} from "../src/todoview.ts";
+import { SMART_VIEWS, type TodoItem } from "../src/todomodel.ts";
+
+/** Wednesday 2024-05-15, 10:00 local — `todomodel.test.ts`'s own anchor. */
+const NOW = new Date(2024, 4, 15, 10, 0, 0, 0).getTime();
+const DAY = 86400000;
+
+let seq = 0;
+function item(over: Partial<TodoItem> = {}): TodoItem {
+  seq += 1;
+  return {
+    id: `td-${String(seq).padStart(4, "0")}`,
+    scope: "global",
+    title: `task ${seq}`,
+    notes: "",
+    status: "open",
+    done_ms: null,
+    due_ms: null,
+    remind_ms: null,
+    my_day: null,
+    priority: 0,
+    important: false,
+    tags: [],
+    steps: [],
+    order: seq * 1024,
+    created_ms: seq,
+    created_by: { kind: "human" },
+    updated_ms: seq,
+    updated_by: { kind: "human" },
+    rev: 1,
+    archived_ms: null,
+    deleted_ms: null,
+    ...over,
+  };
+}
+
+// ── the projection ────────────────────────────────────────────────────────────
+
+test("the strip's counts are the views' sizes, not the filtered list's", () => {
+  // The decision this pins is an ORDER: counts before the filters. A chip whose
+  // number moves as you type would be telling the human about their query, and
+  // the strip exists to say how much work exists. The fixture COLLIDES on
+  // purpose — the query matches exactly one of the three All rows — so a
+  // counts-after-filter implementation reports 1 where this asserts 3, and
+  // cannot pass by accident.
+  const items = [
+    item({ title: "alpha", my_day: NOW }),
+    item({ title: "beta" }),
+    item({ title: "gamma", important: true }),
+  ];
+  const p = projectPane({ items, view: "all", query: "alpha", tagFilter: null }, NOW);
+  assert.equal(p.counts.all, 3, "All counts every open item, whatever is typed");
+  assert.equal(p.counts.myday, 1);
+  assert.equal(p.counts.important, 1);
+  assert.equal(p.total, 1, "the LIST is filtered even though the counts are not");
+  assert.equal(p.groups[0].items.length, 1);
+});
+
+test("Planned renders one group per non-empty bucket, in calendar order", () => {
+  const items = [
+    item({ title: "late", due_ms: NOW - 2 * DAY }),
+    item({ title: "soon", due_ms: NOW + 3 * DAY }),
+    item({ title: "today", due_ms: NOW + 3600000 }),
+  ];
+  const p = projectPane({ items, view: "planned", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(
+    p.groups.map((g) => g.key),
+    ["overdue", "today", "week"],
+    "tomorrow and later are omitted rather than drawn as empty headings"
+  );
+  assert.deepEqual(
+    p.groups.map((g) => g.label),
+    ["Overdue", "Today", "This week"]
+  );
+});
+
+test("a non-Planned view is ONE unlabelled group, and an empty one is no group at all", () => {
+  const p = projectPane({ items: [item(), item()], view: "all", query: "", tagFilter: null }, NOW);
+  assert.equal(p.groups.length, 1);
+  assert.equal(p.groups[0].label, null, "a heading over the whole list would say nothing");
+  const none = projectPane({ items: [], view: "all", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(none.groups, []);
+  assert.equal(none.empty, true);
+});
+
+test("the budget elides the TAIL, and the elision count is what is missing", () => {
+  const items = Array.from({ length: ROW_BUDGET + 52 }, () => item());
+  const p = projectPane({ items, view: "all", query: "", tagFilter: null }, NOW);
+  assert.equal(p.total, ROW_BUDGET + 52, "the count chip carries the real total");
+  assert.equal(p.shown, ROW_BUDGET);
+  assert.equal(p.elided, 52, "the stated elision — a silent stop at 200 is the lie");
+  assert.equal(renderedRows(p).length, ROW_BUDGET);
+  // The rows kept are the FIRST ones in display order, so the elision is a tail
+  // and never a slice out of the middle.
+  assert.equal(renderedRows(p)[0].id, items[0].id);
+});
+
+test("a bucket the budget cannot fit is truncated, never dropped whole", () => {
+  // Overdue alone overruns the budget. The heading has to survive: it is the
+  // answer to "is there anything overdue", and dropping the group to save rows
+  // deletes that answer.
+  const items = Array.from({ length: ROW_BUDGET + 10 }, (_, i) =>
+    item({ due_ms: NOW - (i + 1) * DAY })
+  );
+  items.push(item({ due_ms: NOW + 30 * DAY }));
+  const p = projectPane({ items, view: "planned", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(p.groups.map((g) => g.key), ["overdue"], "later did not fit and is gone");
+  assert.equal(p.groups[0].items.length, ROW_BUDGET, "overdue is truncated, not dropped");
+  assert.equal(p.elided, 11);
+});
+
+test("the tag rail is the SCOPE's open tags, not the filtered rows' — else it cannot widen a filter", () => {
+  // The failure case this exists for: with `#infra` selected, a rail built from
+  // the filtered rows would show only `#infra`, and the human could never
+  // switch to `#release` from it.
+  const items = [item({ tags: ["infra"] }), item({ tags: ["release"] }), item({ tags: ["infra"] })];
+  const p = projectPane({ items, view: "all", query: "", tagFilter: "infra" }, NOW);
+  assert.deepEqual(p.tags, ["infra", "release"]);
+  assert.equal(p.total, 2, "the LIST is still filtered");
+});
+
+test("a DONE item's tag leaves the rail when the item does", () => {
+  // The rail is built from the OPEN list, so completing the only `#release`
+  // item takes the tag with it. Pinned because the obvious implementation
+  // (every tag on every item) passes every other test in this file.
+  const open = item({ tags: ["release"] });
+  const p1 = projectPane({ items: [open], view: "all", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(p1.tags, ["release"]);
+  const done = { ...open, status: "done", done_ms: NOW };
+  const p2 = projectPane({ items: [done], view: "all", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(p2.tags, [], "a finished item's tag is not a filter you can still use");
+});
+
+test("an empty list says WHY, and a filtered one never claims the view is empty", () => {
+  const items = [item({ title: "alpha", due_ms: NOW + DAY })];
+  const unfiltered = projectPane({ items: [], view: "planned", query: "", tagFilter: null }, NOW);
+  assert.equal(unfiltered.emptyReason, "planned");
+  assert.equal(EMPTY_TEXT[unfiltered.emptyReason], "Nothing scheduled.");
+  // Same view, same emptiness, DIFFERENT fact: the human has a term typed.
+  const byQuery = projectPane({ items, view: "planned", query: "zzz", tagFilter: null }, NOW);
+  assert.equal(byQuery.empty, true);
+  assert.equal(byQuery.emptyReason, "filtered");
+  // A tag filter is the same fact as a query, and is the half an implementation
+  // that only checks `query` gets wrong.
+  const byTag = projectPane({ items, view: "planned", query: "", tagFilter: "nope" }, NOW);
+  assert.equal(byTag.emptyReason, "filtered");
+  // Whitespace is not a filter — " " must not turn "Nothing scheduled" into
+  // "Nothing matches".
+  const blank = projectPane({ items: [], view: "planned", query: "   ", tagFilter: null }, NOW);
+  assert.equal(blank.emptyReason, "planned");
+});
+
+test("EMPTY_TEXT has a sentence for every view, and for the filtered case", () => {
+  for (const v of SMART_VIEWS) {
+    assert.equal(typeof EMPTY_TEXT[v], "string", `${v} has no empty sentence`);
+    assert.ok(EMPTY_TEXT[v].length > 0);
+  }
+  assert.ok(EMPTY_TEXT.filtered.length > 0);
+});
+
+// ── per-viewer prefs ──────────────────────────────────────────────────────────
+
+test("prefs round-trip, and a malformed field costs only that field", () => {
+  const p = { scope: "global", view: "completed" } as const;
+  assert.deepEqual(decodeTodoPrefs(encodeTodoPrefs(p)), p);
+  // Field-wise, not record-wise: the good half survives the bad half.
+  assert.deepEqual(decodeTodoPrefs('{"scope":"global","view":"nonsense"}'), {
+    scope: "global",
+    view: DEFAULT_TODO_PREFS.view,
+  });
+  assert.deepEqual(decodeTodoPrefs('{"scope":7,"view":"planned"}'), {
+    scope: DEFAULT_TODO_PREFS.scope,
+    view: "planned",
+  });
+});
+
+test("decoding prefs never throws, whatever is in the slot", () => {
+  // The failure case: `localStorage` is a string a human or another build can
+  // have written. Each of these would throw or yield a partial record under a
+  // naive `JSON.parse(raw)`.
+  for (const raw of [null, "", "not json", "[]", "null", "7", '"a string"', "{}"]) {
+    const got = decodeTodoPrefs(raw);
+    assert.deepEqual(got, DEFAULT_TODO_PREFS, `bad prefs ${JSON.stringify(raw)} lost the defaults`);
+  }
+});
+
+test("the encoder writes only the two known keys", () => {
+  // A pref record that round-trips a stray key would grow the blob without
+  // anything reading it back.
+  const raw = encodeTodoPrefs({ ...DEFAULT_TODO_PREFS, extra: 1 } as never);
+  assert.deepEqual(Object.keys(JSON.parse(raw)).sort(), ["scope", "view"]);
+});
+
+// ── the un-submitted draft ────────────────────────────────────────────────────
+
+test("a fresh draft is seeded from the ITEM and is pristine — including one with notes", () => {
+  const bare = item();
+  assert.deepEqual(seedRowDraft(bare), EMPTY_ROW_DRAFT);
+  assert.equal(rowDraftIsPristine(seedRowDraft(bare)), true);
+  // The case an "is it empty?" predicate gets wrong: an item that already HAS
+  // notes seeds a non-empty box, and calling that dirty makes every expanded
+  // row look edited.
+  const noted = item({ notes: "already written" });
+  assert.equal(seedRowDraft(noted).notes, "already written");
+  assert.equal(rowDraftIsPristine(seedRowDraft(noted)), true);
+});
+
+test("the pristine predicate reads EVERY field of the draft", () => {
+  // #1348 N1/N4: the renderer's seed and "is this untouched" are one question
+  // asked twice, so a field present in the draft and absent from the predicate
+  // is a silent hole. Drive it from the object's own keys rather than from a
+  // list this test remembers — a field added to `RowDraft` and forgotten here
+  // then reddens instead of passing.
+  const base = item({ notes: "n" });
+  const seeded = seedRowDraft(base);
+  const keys = Object.keys(seeded) as (keyof RowDraft)[];
+  assert.ok(keys.length >= 2, "the draft lost its fields — this scan is blind, not clean");
+  for (const k of keys) {
+    const touched: RowDraft = { ...seeded, [k]: `${seeded[k]} typed` };
+    assert.equal(
+      rowDraftIsPristine(touched),
+      false,
+      `typing into \`${k}\` left the draft reading as pristine`
+    );
+  }
+});
+
+test("drafts are pruned to the rows still on screen", () => {
+  const drafts = new Map<string, RowDraft>([
+    ["td-1", { notes: "a", step: "" }],
+    ["td-2", { notes: "b", step: "" }],
+  ]);
+  pruneDrafts(drafts, new Set(["td-2"]));
+  assert.deepEqual([...drafts.keys()], ["td-2"], "a deleted row's half-typed note must not linger");
+  // A prune against an empty screen clears it rather than throwing.
+  pruneDrafts(drafts, new Set());
+  assert.equal(drafts.size, 0);
+});
+
+// ── selection ─────────────────────────────────────────────────────────────────
+
+test("j/k walk the flattened rows and clamp at both ends", () => {
+  const items = [item(), item(), item()];
+  const p = projectPane({ items, view: "all", query: "", tagFilter: null }, NOW);
+  const rows = renderedRows(p);
+  assert.equal(moveSelection(rows, null, 1), rows[0].id, "j on a fresh pane enters at the top");
+  assert.equal(moveSelection(rows, null, -1), rows[2].id, "k enters at the bottom");
+  assert.equal(moveSelection(rows, rows[0].id, 1), rows[1].id);
+  assert.equal(moveSelection(rows, rows[0].id, -1), rows[0].id, "clamps — a list is not a carousel");
+  assert.equal(moveSelection(rows, rows[2].id, 1), rows[2].id);
+  assert.equal(moveSelection([], "td-1", 1), null);
+});
+
+test("the selection crosses a bucket heading exactly as the eye does", () => {
+  // The flattening is the point: `j` off the last Overdue row lands on the
+  // first Today row, not nowhere.
+  const late = item({ due_ms: NOW - DAY });
+  const soon = item({ due_ms: NOW + 3600000 });
+  const p = projectPane({ items: [late, soon], view: "planned", query: "", tagFilter: null }, NOW);
+  assert.equal(p.groups.length, 2, "the fixture must actually straddle two buckets");
+  assert.equal(moveSelection(renderedRows(p), late.id, 1), soon.id);
+});
+
+test("a selection the render dropped re-enters at the edge", () => {
+  // The failure case: an agent completes the selected row out from under the
+  // human. Returning null (or the old id) would leave `j` doing nothing.
+  const items = [item(), item()];
+  const rows = renderedRows(projectPane({ items, view: "all", query: "", tagFilter: null }, NOW));
+  assert.equal(moveSelection(rows, "td-gone", 1), rows[0].id);
+  assert.equal(moveSelection(rows, "td-gone", -1), rows[1].id);
+});
+
+test("an agent's write does NOT make an untouched draft read as edited", () => {
+  // The premise both reviewers' premortems land on, and the reason `RowDraft`
+  // carries `seededNotes` at all. "Has the human typed?" is a question about the
+  // draft against its OWN seed. Measured against the item's live value instead,
+  // an untouched draft flips to dirty the instant a second writer edits the row
+  // — which is this pane's normal condition, not an edge case.
+  const before = item({ notes: "from the human" });
+  const draft = seedRowDraft(before);
+  assert.equal(rowDraftIsPristine(draft), true);
+  // The agent writes. The DRAFT has not changed; only the item has.
+  const after = { ...before, notes: "rewritten by worker-3" };
+  assert.equal(
+    rowDraftIsPristine(draft),
+    true,
+    "an agent's write is not the human typing — the draft is still untouched"
+  );
+  // And the re-seed follows the store, because nothing was typed.
+  const drafts = new Map([[before.id, draft]]);
+  const moved = reseedPristineDrafts(drafts, [after]);
+  assert.equal(moved, 1, "the mechanism ran — an absence-only pin would pass against one that did not");
+  assert.equal(drafts.get(before.id)?.notes, "rewritten by worker-3");
+  assert.equal(rowDraftIsPristine(drafts.get(before.id)!), true);
+});
+
+test("a draft the human has typed into is NEVER re-seeded, even when the item moved", () => {
+  // The other direction, and the one that matters more: re-seeding a dirty
+  // draft would eat a half-typed note, which is the exact defect the in-list
+  // editor rule exists to prevent. The fixture COLLIDES — same row, both
+  // writers — so an implementation that re-seeds unconditionally cannot pass.
+  const before = item({ notes: "original" });
+  const draft = { ...seedRowDraft(before), notes: "the human is mid-sen" };
+  assert.equal(rowDraftIsPristine(draft), false);
+  const after = { ...before, notes: "rewritten by worker-3" };
+  const drafts = new Map([[before.id, draft]]);
+  const moved = reseedPristineDrafts(drafts, [after]);
+  assert.equal(moved, 0);
+  assert.equal(
+    drafts.get(before.id)?.notes,
+    "the human is mid-sen",
+    "a half-typed note must survive an agent's write to the same row"
+  );
+});
+
+test("a pristine draft whose item did not move is left alone", () => {
+  // The no-op case, pinned so `reseedPristineDrafts` cannot be implemented as
+  // "always rewrite": a re-seed on every render would be indistinguishable from
+  // correct here but would churn the map on every one of an agent's bursts.
+  const it = item({ notes: "steady" });
+  const drafts = new Map([[it.id, seedRowDraft(it)]]);
+  assert.equal(reseedPristineDrafts(drafts, [it]), 0);
+});
+
+test("re-seeding skips an id the store no longer has", () => {
+  // `pruneDrafts` owns the gone case; this one must not throw on the way past.
+  const it = item();
+  const drafts = new Map([["td-vanished", seedRowDraft(it)]]);
+  assert.equal(reseedPristineDrafts(drafts, []), 0);
+  assert.equal(drafts.size, 1, "re-seeding does not prune — that is the other function's job");
+});

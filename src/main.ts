@@ -383,6 +383,60 @@ voiceController.init(() => activeGrid().activePane);
 
 /** Pane events bound to a specific workspace, so a pane always acts on its own
  *  tab's grid — never whichever tab happens to be active when the event fires. */
+/**
+ * Alt+J (#3263 S4): open a To-Do pane in the active grid, or focus the one that
+ * is already there.
+ *
+ * A PANE, NEVER AN OVERLAY. `doc/design/content-panes.md` §"Why a pane and not
+ * a bigger overlay" is the argument and a to-do list is its clearest case: it
+ * is a station you keep open beside your work, not a look you take and dismiss.
+ * The overlays this app does have (git, issues, the board) float OVER a
+ * terminal and are sized from it, which is also why none of them could host
+ * this — there is no terminal here to float over.
+ *
+ * OPEN-OR-FOCUS, not toggle. The second press of a toggle would CLOSE the pane,
+ * and a pane is where the human has a half-typed quick-add line and an expanded
+ * row; closing that on a stray keypress is a different and much worse gesture
+ * than dismissing an overlay. So a press with a todo pane already in the tab
+ * focuses it, and only a press with none opens one.
+ *
+ * The new pane is rooted at the ACTIVE pane's project: the git work tree it
+ * sits in, falling back to its cwd. That root goes to the backend RAW — the
+ * frontend never names a workspace key. A pane with no cwd at all opens the
+ * to-do pane rootless, which is the GLOBAL list and a perfectly good pane.
+ */
+async function openOrFocusTodoPane(): Promise<void> {
+  const ws = tabs.activeWorkspace;
+  // `allPanes()` so a DOCKED todo pane counts as already open — the same reason
+  // every other cross-pane lookup in this file uses it rather than the grid's
+  // visible leaves.
+  const existing = ws.grid.allPanes().find((p) => p.todoView !== null);
+  if (existing) {
+    existing.focus();
+    existing.todoView?.focus();
+    return;
+  }
+  const from = ws.grid.activePane?.cwdForRooting ?? null;
+  let root = from ?? "";
+  if (from) {
+    // `gitRepoRoot` THROWING is a tooling failure (no git on PATH, an unreadable
+    // path), not an answer about the folder — so it falls back to the cwd
+    // rather than losing the root, exactly as the git-pane restore arm argues.
+    try {
+      root = (await gitRepoRoot(from)) ?? from;
+    } catch {
+      root = from;
+    }
+  }
+  const pane = ws.grid.openContentPane(
+    eventsFor(ws),
+    { kind: "todo", name: "to-do", root },
+    "row",
+    ws.grid.activePane ?? undefined
+  );
+  pane.todoView?.focus();
+}
+
 function eventsFor(ws: Workspace): PaneEvents {
   return {
     onFocus: (pane) => ws.grid.setActive(pane),
@@ -1369,6 +1423,26 @@ async function openActionPane(
       pane = ws.grid.openDormantPane(events, record, content, dir, anchor);
       return pane;
     }
+    case "open-todo": {
+      // #3263 S4. The one content restore with NO probe, and that is the
+      // difference between opening on a directory and opening on a list: a
+      // to-do pane whose recorded project has been deleted or unmounted still
+      // shows the global list and every other scope, so failing soft to the
+      // welcome form would discard a working pane to recover from a folder it
+      // does not need. A null root restores the same way, on Global.
+      //
+      // The root is still declared when there is one (#1042), for the reason
+      // the arm below declares its own: the trusted webview re-declaring its
+      // OWN persisted state, so the pane's chip and the backend's workspace
+      // lookup can resolve it.
+      if (a.root) await admitRoot(a.root);
+      return ws.grid.openContentPane(
+        events,
+        { kind: "todo", name: a.name, root: a.root ?? "", background: true },
+        dir,
+        anchor
+      );
+    }
     case "open-files":
     case "open-editor":
     case "open-workflow": {
@@ -2256,7 +2330,8 @@ async function handleWelcomeSubmit(
     result.kind === "files" ||
     result.kind === "editor" ||
     result.kind === "git" ||
-    result.kind === "workflow"
+    result.kind === "workflow" ||
+    result.kind === "todo"
   ) {
     // Convert the setup pane into a CONTENT pane in place (#214 files, #217 editor /
     // git, #222 workflow). Synchronous — there is no process to start, so no await, no
@@ -3325,6 +3400,9 @@ document.addEventListener(
         break;
       case "open-editor":
         void activeGrid().activePane?.openInEditor();
+        break;
+      case "open-todo":
+        void openOrFocusTodoPane();
         break;
       case "toggle-tasks":
         activeGrid().activePane?.toggleTasksView();

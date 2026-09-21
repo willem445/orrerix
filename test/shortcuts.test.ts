@@ -120,3 +120,66 @@ test("plain W, Ctrl+W and Alt+Shift+W are not the timeline (Ctrl+W is the shell'
   assert.equal(matchShortcut(evt({ ctrlKey: true, code: "KeyW" })), null);
   assert.equal(matchShortcut(evt({ altKey: true, shiftKey: true, code: "KeyW" })), null);
 });
+
+test("Alt+J opens or focuses the To-Do pane (#3263 S4)", () => {
+  assert.equal(matchShortcut(evt({ altKey: true, code: "KeyJ" })), "open-todo");
+});
+
+test("Alt+J is an ALT chord and nothing else claims J", () => {
+  // The modifier boundary, asserted the way the tab-reorder tests assert theirs:
+  // the app takes exactly one of the four J chords, so a shell's Ctrl+J
+  // (opencode's `input_newline`, Claude Code's `chat:newline`) and a bare `j`
+  // (this pane's own move-down key, and vim's everywhere) both stay with the
+  // pane that has focus.
+  assert.equal(matchShortcut(evt({ code: "KeyJ" })), null, "bare j is not an app chord");
+  assert.equal(matchShortcut(evt({ ctrlKey: true, code: "KeyJ" })), null, "Ctrl+J stays with the CLI");
+  assert.equal(
+    matchShortcut(evt({ altKey: true, shiftKey: true, code: "KeyJ" })),
+    null,
+    "Alt+Shift is UNVERIFIED across the CLIs, so the block's !shiftKey guard withholds it"
+  );
+  assert.equal(matchShortcut(evt({ ctrlKey: true, altKey: true, code: "KeyJ" })), null);
+});
+
+test("no two app shortcuts answer to the same chord", () => {
+  // The guard that makes adding a chord safe, rather than a grep. Every chord in
+  // `matchShortcut`'s four modifier blocks is enumerated here and each must map
+  // to a DISTINCT action — a new binding that silently shadows an existing one
+  // (the switch's first matching case wins, so the older one just stops firing)
+  // reddens here instead of being discovered by a human whose Alt+T stopped
+  // working.
+  const CODES = [
+    "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI", "KeyJ",
+    "KeyK", "KeyL", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT",
+    "KeyU", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ",
+    "BracketLeft", "BracketRight", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "F2",
+  ];
+  const MODS = [
+    { ctrlKey: true, shiftKey: true },
+    { ctrlKey: true, shiftKey: true, altKey: true },
+    { altKey: true },
+    {},
+  ];
+  const seen = new Map<string, string>();
+  const dupes: string[] = [];
+  let bound = 0;
+  for (const mods of MODS) {
+    for (const code of CODES) {
+      const action = matchShortcut(evt({ ...mods, code }));
+      if (action === null) continue;
+      bound += 1;
+      const chord =
+        (mods.ctrlKey ? "Ctrl+" : "") +
+        (mods.shiftKey ? "Shift+" : "") +
+        (mods.altKey ? "Alt+" : "") +
+        code;
+      const prior = seen.get(action);
+      if (prior !== undefined) dupes.push(`${action} answers to both ${prior} and ${chord}`);
+      else seen.set(action, chord);
+    }
+  }
+  // The population control (#1209): this sweep's success shape is an empty
+  // list, which is what a sweep that matched nothing also produces.
+  assert.ok(bound >= 25, `only ${bound} chords matched — the sweep is blind, not the map clean`);
+  assert.deepEqual(dupes, [], `two chords fire one action:\n${dupes.join("\n")}`);
+});

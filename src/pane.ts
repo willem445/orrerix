@@ -115,6 +115,7 @@ import { FileExplorerView } from "./fileexplorer";
 import { icon } from "./icons.ts";
 import { agentMark, type AgentMarkInput } from "./agenticons.ts";
 import { WorkflowView } from "./workflowview";
+import { TodoPaneView } from "./todopane";
 import { StructuredPaneView } from "./structuredpane";
 import type { AnswerFn } from "./structuredpane";
 import { WORKFLOW_FILE, workflowNameOf } from "./workflowmodel";
@@ -401,7 +402,13 @@ export interface PaneOptions {
  *  a file manager (#214), the file editor, the git view (#217), or the workflow
  *  builder (#222) — rather than a process. They share every pane mechanic (split,
  *  dock, drag, maximize, restore) and differ only in which view fills the content box. */
-export type ContentPaneKind = "files" | "editor" | "git" | "workflow" | "structured";
+export type ContentPaneKind =
+  | "files"
+  | "editor"
+  | "git"
+  | "workflow"
+  | "structured"
+  | "todo";
 
 /** What to CALL each content kind when a message has to name it ("the git view isn't
  *  available in a workflow pane"). A table rather than a ternary chain, so a fifth kind
@@ -412,6 +419,7 @@ const CONTENT_KIND_LABEL: Record<ContentPaneKind, string> = {
   git: "git",
   workflow: "workflow",
   structured: "structured agent",
+  todo: "to-do list",
 };
 
 /** What a content pane needs: which surface, the root it is pointed at, and a name.
@@ -1096,6 +1104,7 @@ export class Pane implements VoiceTargetPane {
   private gitPaneView: GitView | null = null;
   private workflowPaneView: WorkflowView | null = null;
   private structuredPaneView: StructuredPaneView | null = null;
+  private todoPaneView: TodoPaneView | null = null;
   /** True once the pane's process has exited but the pane was kept open to show
    *  its output (notifyExited). The counter must not count a dead agent as live
    *  (#194 P4 LOW-7). */
@@ -2845,6 +2854,26 @@ export class Pane implements VoiceTargetPane {
       return view;
     }
 
+    if (opts.kind === "todo") {
+      // #3263 S4. The one content kind whose `root` is NOT a thing it opens:
+      // every other kind fails without a readable directory, where this one
+      // reads a list the backend keys off the root and falls back to the GLOBAL
+      // list when there is no root at all. So the view takes the root as a
+      // getter and decides for itself whether the workspace half of its scope
+      // switch is available — it never probes, and there is nothing here to
+      // fail soft to. `doc/design/todo-pane.md` §"The pane" is the argument.
+      //
+      // The root goes to the backend RAW. The frontend must never name a
+      // workspace KEY (§"The caller names a ROOT, never a key"), so there is
+      // deliberately no normalisation on this path.
+      this.todoPaneView = new TodoPaneView({
+        getRoot: () => this.contentRoot,
+        onClose: () => {}, // never called — see the editor's note above
+        embedded: true,
+      });
+      return this.todoPaneView;
+    }
+
     if (opts.kind === "workflow") {
       // The workflow file rides in `file`, exactly as the editor's open file does, so the
       // capture/restore path needed no new field (tabstore.ts). Absent = the repo's
@@ -2895,6 +2924,27 @@ export class Pane implements VoiceTargetPane {
       embedded: true,
     });
     return this.gitPaneView;
+  }
+
+  /** The working directory this pane was launched in, as the human spelled it —
+   *  null for a pane that has none (a content pane, an ssh pane, a terminal in
+   *  home). ONE reader: the `Alt+J` open-or-focus shortcut (#3263 S4), which
+   *  roots a new To-Do pane at the active pane's project.
+   *
+   *  RAW, deliberately. It is the same string `openInEditor` hands out, and the
+   *  To-Do backend is the thing that turns a root into a workspace key — the
+   *  frontend normalising it here would be a second answer to that question
+   *  (`doc/design/todo-pane.md` §"The caller names a ROOT, never a key"). */
+  get cwdForRooting(): string | null {
+    return this.cwdRaw ?? this.contentRoot;
+  }
+
+  /** This pane's To-Do view (#3263 S4), or null on every other kind. Exposed for
+   *  ONE reader — the `open-or-focus` shortcut in `main.ts`, which focuses an
+   *  already-open todo pane rather than opening a second one. The kind itself
+   *  stays private, as `isContent`'s note says it must. */
+  get todoView(): TodoPaneView | null {
+    return this.todoPaneView;
   }
 
   /** This pane's structured transcript view (#2891), or null on every other kind.
@@ -6418,6 +6468,7 @@ export class Pane implements VoiceTargetPane {
     this.gitPaneView?.dispose();
     this.workflowPaneView?.dispose();
     this.structuredPaneView?.dispose();
+    this.todoPaneView?.dispose();
     // Drop anything the #720 throttle was holding. Cheap on its own, and it
     // matters exactly when something else has gone wrong: a pane that is still
     // reachable from somewhere should at least not be dragging its output

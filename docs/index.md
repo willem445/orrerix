@@ -54,8 +54,9 @@ in its own visible pane, that you gatekeep only at review and merge.
   [GitHub issues view](features/github-issues.html),
   [voice prompts](features/voice-prompts.html),
   [steering & attachments](features/steering.html), the
-  [session browser & editor launch](features/session-browser.html), and the
-  [side dock](features/side-dock.html).
+  [session browser & editor launch](features/session-browser.html), the
+  [side dock](features/side-dock.html), and the
+  [to-do pane](features/todo-pane.html).
 - **[Troubleshooting](troubleshooting.html)** — the classics: whisper DLLs, `gh`
   auth, mic permission, disk.
 

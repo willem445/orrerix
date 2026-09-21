@@ -67,6 +67,7 @@ export type PaneKind =
   | "editor"
   | "git"
   | "workflow"
+  | "todo"
   | "ssh";
 export type ShellKind = "powershell" | "gitbash" | "cmd";
 
@@ -79,7 +80,37 @@ const AGENT_MAX = 8;
  *  can hide every other field off this one predicate instead of listing the kinds at
  *  each site (and forgetting one when a fifth arrives). */
 export function isContentKind(kind: PaneKind): boolean {
-  return kind === "files" || kind === "editor" || kind === "git" || kind === "workflow";
+  return (
+    kind === "files" ||
+    kind === "editor" ||
+    kind === "git" ||
+    kind === "workflow" ||
+    kind === "todo"
+  );
+}
+
+/** The one content kind whose root is OPTIONAL (#3263 S4).
+ *
+ *  Every other content kind fails without a readable directory: a file tree, a
+ *  code editor, a git view and a workflow editor all open ON something, and a
+ *  rootless one has no content at all. A to-do pane does not — it opens on a
+ *  LIST, the backend keys that list off the root, and no root means the GLOBAL
+ *  list, which is a first-class scope rather than a degraded one.
+ *
+ *  Its own predicate rather than an extra clause inside `planPaneSetup`, so the
+ *  divergence is a named rule a reader can find from either side — and so the
+ *  shared content branch below can keep saying "the path is mandatory" and mean
+ *  it.
+ *
+ *  **`planPaneSetup` BRANCHES ON THIS**, rather than on a kind literal, and the
+ *  distinction is load-bearing: a rule named on four surfaces and enforced by
+ *  none is free to drift. Add a second rootless kind here and the setup path
+ *  follows it in the same edit — `the rootless branch is decided by the
+ *  predicate, for every content kind` in `test/panesetup.test.ts` is what holds
+ *  the two together, by deriving its expectation FROM the predicate rather than
+ *  from a list of kinds it remembers (#3293 review round 2, finding 1). */
+export function contentKindNeedsRoot(kind: PaneKind): boolean {
+  return isContentKind(kind) && kind !== "todo";
 }
 
 export interface PaneSetupInput {
@@ -175,6 +206,16 @@ export interface WorkflowPlan {
   root: string;
   name: string;
 }
+/** A TO-DO pane (#3263 S4): the human's task list, which agents also write
+ *  through MCP. `root` is the project whose per-workspace list the scope
+ *  switch's `◆` half shows — and it is the ONE content root that may be blank,
+ *  because a rootless to-do pane is not broken, it is the global list. The
+ *  backend turns the root into a workspace key; nothing here normalises it. */
+export interface TodoPlan {
+  kind: "todo";
+  root: string;
+  name: string;
+}
 /** An SSH pane (#887 S3): a local `ssh.exe` connected to the profile's host, with
  *  the profile's `defaultCli` (if any) launched on the far end. The plan carries
  *  the whole PROFILE rather than a copy of its fields — every consumer downstream
@@ -202,6 +243,7 @@ export type PaneSetupPlan =
   | EditorPlan
   | GitPlan
   | WorkflowPlan
+  | TodoPlan
   | SshPlan;
 
 /** The per-kind halves of the content-pane rule: what to call the missing path in
@@ -796,6 +838,25 @@ export function planPaneSetup(input: PaneSetupInput): PaneSetupResult {
   // content pane has no content at all, and "home" is not a repo. What differs per kind
   // is only the wording (CONTENT_SETUP), and whether the path is REAL — a directory? a
   // work tree? — which is I/O the form probes, not a rule this module can decide.
+  // The ROOTLESS content kinds — today only the To-Do pane (#3263 S4). A blank
+  // root is not a missing input here, it is the GLOBAL list.
+  //
+  // The condition is `contentKindNeedsRoot`, NOT a literal `kind === "todo"`,
+  // and that is the whole point rather than a style preference (#3293 review
+  // round 2, finding 1). The predicate, its doc, this comment and the design
+  // note all state the same rule; if the branch tested the kind directly, the
+  // rule would be *named* in four places and *enforced* in none — a later slice
+  // adding a second rootless kind would put it in the predicate, watch
+  // `test/panesetup.test.ts` go green, and still get "the path is mandatory"
+  // out of the branch below. One condition, so the four surfaces cannot drift
+  // apart silently.
+  if (isContentKind(input.kind) && !contentKindNeedsRoot(input.kind)) {
+    const name = input.name.trim() || (repo ? pathTail(repo) : "") || "to-do";
+    // `todo` is the only member today; the cast is what a second one would have
+    // to widen, beside the `TodoPlan` union it returns.
+    return { ok: true, plan: { kind: input.kind as "todo", root: repo, name } };
+  }
+
   if (isContentKind(input.kind)) {
     const kind = input.kind as "files" | "editor" | "git" | "workflow";
     const setup = CONTENT_SETUP[kind];

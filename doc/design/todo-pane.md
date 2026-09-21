@@ -216,7 +216,6 @@ ordering rather than a decision anyone made: S2 shipped its six tools while
 is a capability decision with its own default-deny gates to argue through —
 see "No seventh tool" below, which now carries it.
 
-
 ## Workspace identity
 
 **The workspace is the normalised repo root**, computed in exactly one function,
@@ -429,6 +428,7 @@ A reorder is a fourth, and it is handled differently rather than refused:
 `order_after` is a destination, not a value, and the item that was above this
 one may itself have moved since — so the honest inverse of a reorder is a fresh
 one the pane computes from the CURRENT list, and `inverseOp` omits it.
+
 ## The tools (#3263 S2)
 
 Six MCP tools, on the **shared** tier of `tool_defs`: `todo_list`, `todo_get`,
@@ -573,3 +573,277 @@ shared-tier tool has to be named in `MANAGER_SHARED`, `LEAD_SHARED` and both
 dispatch gates — the default-deny pairs above — and that is a capability
 argument a store-hardening slice should not make on its own. Whoever takes it
 should also decide whether an agent may revive a row a human deleted.
+
+## The pane (S4)
+
+The sixth `ContentPaneKind`. A grid cell whose content is the list, hosted on
+the same machinery the file explorer, the editor, the git view, the workflow
+builder and the structured transcript use.
+
+**Why a pane and not an overlay.** `doc/design/content-panes.md`'s "Why a pane
+and not a bigger overlay" is the general argument, and a to-do list is its
+clearest case: it is a *station* you keep open beside the work, not a *look* you
+take and dismiss. The overlays this app has — git, issues, the board — float
+OVER a terminal and are sized from it, which is also why none of them could
+have hosted this: there is no terminal here to float over. Constraint 1 then
+holds by construction rather than by discipline: there is no ConPTY behind this
+pane, so nothing in it can resize one.
+
+**`Alt+J`, and it is open-or-focus rather than a toggle.** The chord was chosen
+by the `agent-cli-reference` discipline with the references fetched, not
+recalled; `src/shortcuts.ts` carries the per-CLI check beside the binding, and
+the residual is stated there too — Codex's reference documents no Alt binding at
+all, so that one is UNVERIFIED rather than confirmed free. Alt+H came out
+equally free and J took it because `h` is the conventional help letter and the
+likelier of the two to be claimed later.
+
+The gesture is deliberately not a toggle. A second press of a toggle CLOSES the
+thing, and this pane holds a half-typed quick-add line and an expanded row —
+state a stray keypress must not be able to throw away. Dismissing an overlay
+costs nothing; closing a pane costs what is in it.
+
+### The root is optional, and that is the one rule this kind breaks
+
+Every other content kind opens ON a directory, so `planPaneSetup` refuses a
+blank path for all four and both the launcher and the restore path probe it,
+failing soft to the welcome form when the folder has gone.
+
+A to-do pane opens on a **list**. The root only says which *workspace* list the
+`◆` half of the scope switch offers, and a pane with no root is not broken — it
+is the **global** list, which is a first-class scope rather than a degraded one.
+So:
+
+* `contentKindNeedsRoot` is a named predicate rather than an extra clause inside
+  `planPaneSetup`, so the divergence is findable from either side and the shared
+  branch can keep saying "the path is mandatory" and mean it — **and
+  `planPaneSetup` branches on that predicate**, rather than on a `kind === "todo"`
+  literal. The distinction is the whole value of naming the rule: as first
+  written, the predicate was exported, documented and tested while the setup
+  path tested the kind directly, so the rule was stated on four surfaces and
+  enforced on none. A later slice adding a second rootless kind would have put
+  it in the predicate, watched the guard go green, and still been told "the path
+  is mandatory" by the branch. One condition now, and
+  `the rootless branch is decided by the predicate, for every content kind`
+  derives its expectation FROM the predicate rather than from a list of kinds it
+  remembers (#3293 review round 2, finding 1);
+* neither the launcher nor the restore arm probes the root. A project that has
+  been deleted or unmounted costs the human the workspace half of a switch and
+  nothing else, and failing soft would discard a working pane to recover from a
+  folder it does not need;
+* a `todo` leaf with a null `cwd` restores as a todo pane, on Global.
+
+`test/panesetup.test.ts` and `test/tabstore.test.ts` pin both halves — the
+rootless todo plan, and the four rooted kinds still refusing a blank path, which
+is the control that keeps lifting `todo` out of the shared branch from having
+loosened it for the kinds it still covers.
+
+### Persistence, and the downgrade
+
+`"todo"` joins `PersistedPaneKind` and `CONTENT_KINDS`. Additive and
+shape-driven like the four before it — the workspace root rides in the existing
+`cwd` — so `SCHEMA_VERSION` stays at 2 and a file written before this slice
+simply never carries a `todo` leaf.
+
+The **downgrade** direction costs exactly what the `ssh` kind's note already
+describes and no more: an older build's `decodePane` does not recognise the
+kind, answers null, and `decodeLayout`'s whole-tree fail-safe collapses that
+tab's layout to one welcome pane. That behaviour is **unchanged** by this slice,
+and it is asserted rather than assumed — one test decodes a file holding both a
+`todo` leaf and a leaf from an imagined newer build, and requires the first to
+be understood and the second to still collapse its tab. A decode loosened to
+accept `todo` by accepting *anything* reddens there.
+
+### Three modules, and the line between them
+
+`todomodel.ts` (S3) is the **store's** model: what an item is, which smart view
+it is in, which Planned bucket, the op shape, undo's inverse. Its readers are
+this pane and S5.
+
+`todoview.ts` (S4) is the **pane's** projection: the strip's counts, the
+rendered groups, the row budget and its elision, the tag rail, the per-viewer
+preferences, the un-submitted row draft and the selection walk. DOM-free and
+clock-injected, so `test/todoview.test.ts` pins a month-boundary bucket and a
+full 200-row elision without a browser.
+
+`todopane.ts` owns **elements** and nothing else. The split is the S0 mock's own
+(`render.js` §"two halves"), and its point is that a renderer which also decides
+what My Day contains can only be tested by mounting it.
+
+Two decisions in the projection are worth stating because the obvious
+implementation gets each backwards:
+
+* **the strip's counts are computed BEFORE the search and tag filters.** A chip
+  whose number moves as you type is telling you about your query; the strip is
+  there to say how much work exists. `test/todoview.test.ts`'s fixture collides
+  on purpose — the query matches exactly one of three rows — so a
+  counts-after-filter implementation cannot pass it;
+* **the tag rail is built from the scope's open items, not from the filtered
+  rows.** A rail that shrank to the tags of what you can already see could not
+  be used to widen the filter, which is the only thing it is for.
+
+### Nothing un-submitted lives in an element
+
+`todo-changed` fires on **every** successful write from **either** writer, so an
+agent editing an unrelated row through MCP re-renders this pane — and a
+re-render rebuilds every control from its seed. That is the board's own lesson
+(`CLAUDE.md`'s in-list-editor rule) arriving in a pane where the interfering
+writer is a different *process*.
+
+So the quick-add draft, each expanded row's notes and next-step field, the
+search term, the tag filter, the selection and the expanded set are **fields on
+the view**. Every control is seeded from them and writes back on `input`, never
+read at submit. The one cost of a wholesale render — the caret — is paid **once,
+centrally**, after each render, rather than per control as it is built: spread
+over N sites, the one that gets forgotten is the one an agent's write
+interrupts.
+
+**"Untouched" is measured against the draft's own SEED, never against the item's
+current value**, which is why `RowDraft` carries `seededNotes`. The two differ
+exactly when a second writer has been at the row — this pane's normal condition
+rather than an edge case — and measuring against the live item has two
+consequences, one visible and one not. The visible one: an untouched draft flips
+to "edited" the moment an agent writes. The invisible one is the defect both
+reviewers' premortems found (#3293 review round 2): the draft keeps the
+pre-agent notes, `commitDraft` sees them differ from the item's new value, and
+**Save silently reverts a write the human never saw** — legal under
+last-writer-wins and undetectable until something surfaces versions. So a
+PRISTINE draft follows the store (`reseedPristineDrafts`, run beside the prune on
+every render) and a draft the human has typed into is never touched. The
+residual is honest rather than hidden: a human mid-sentence when an agent writes
+still overwrites that write on Save. Surfacing a genuine conflict needs the
+item's `rev` and a decision about what to show, and the store already carries
+`rev` and `if_rev` for whoever builds it.
+
+`rowDraftIsPristine` reads **every** typable field of `RowDraft`, because the
+renderer's seed and "is this untouched" are one question asked twice; a field added to one
+and not the other is #1348 N1/N4's defect, and the test drives the check off the
+object's own keys so a forgotten field reddens rather than passing. The draft is
+seeded from the **item**, not from a literal, so a row that already has notes
+does not read as edited the moment it is opened. It is cleared on **success
+only**, and on **both** routes — the Save button and the Enter key reach one
+function — because clearing on the Enter route alone leaves the draft on the
+route most people use.
+
+### The bound on the event
+
+`TodoPaneView` is the only listener on `todo-changed` and it refreshes through a
+`CoalescingRefresh`, exactly as the board does with `orch-tasks-changed`:
+single-flight with a trailing-edge merge, so an agent's burst costs the refetch
+already in flight plus exactly one more, and the trailing run reads the final
+store. It is also visibility-gated the way #1318 gates the board — a **hidden**
+pane drops the wake outright rather than coalescing it, and `show()` re-reads
+unconditionally, which is the half that makes the drop safe rather than merely
+cheap. `test/perfpolicy.test.ts`'s row moved from `argued-none` to `throttled`
+in the same commit; it had been a declared gap naming this slice.
+
+A refused write is the one case that re-renders without an event: the store is
+byte-identical and nothing fires, so the pane re-renders from what it already
+has and a control the human just flipped snaps back instead of lying.
+
+**The gate is only half of it, and the other half is a stale-response guard.**
+`refreshgate.ts`'s own header says both are needed — "the gate alone would still
+let a slow old-mode fetch paint stale data, and the mode check alone would leave
+the new mode with nothing to render" — and this pane shipped with only the gate
+(#3293 review round 2, finding 2). A `TodoSnapshot` carries no scope of its own,
+so a response cannot identify itself; `refreshNow` therefore captures the root
+**before** the await and drops the response if the scope has changed under it.
+Without that, a refresh in flight against the workspace root when the human
+presses `g` paints the **workspace** list into a pane whose header, switch and
+`scopeRoot()` all say Global — and the rows in that window are live, so
+completing one sends the op with `scopeRoot() === null` and it lands on the
+global store against an id that is not there. Dropping the response costs
+nothing: `setScope` has already asked for a fresh run and the coalescer
+guarantees the trailing one.
+
+**And the snapshot is dropped ON the scope change**, which is the half that
+needs no race at all (#3293 review round 3). `setScope` renders synchronously,
+before the new read has even been requested, so without this it paints the OLD
+scope's rows under the NEW header and switch — rows that are live, against an
+engine that resolves `update`/`complete`/`delete` by id with no scope check, so
+acting on one in that window writes to whichever store holds it while the header
+says otherwise. Dropping it is right rather than merely safe, and the asymmetry
+with a FAILED read is the point: there the list we hold is still the truth for
+the scope we are on, so publishing an empty one would destroy it; here the list
+we hold is definitively the wrong scope's. The cost is one frame of the empty
+state.
+
+**What the bound does NOT cover**, written down rather than left for the row in
+`test/perfpolicy.test.ts` to imply:
+
+* it bounds **frequency, not size**. Every refresh reads the whole store over
+  IPC and decodes it, and `ROW_BUDGET` bounds what is *built*, not what is
+  *read*. At the engine's own caps a maximal store is a large parse on the
+  webview thread, once per burst per open pane. Real stores are nowhere near it,
+  nothing here measures the per-refresh cost, and a delta-read is a later
+  slice's argument to make with figures in hand;
+* the event's `scope` is **discarded**, so a write to the global list wakes a
+  workspace-scoped pane and vice versa. Filtering on it is not a one-liner: the
+  payload names a workspace KEY and the frontend may never name one (§"The
+  caller names a ROOT, never a key"), so it would have to resolve through
+  `TodoSnapshot.workspaces`, the key-to-root map that exists for exactly this.
+
+### Colour: the mock's channel discipline, held by a test
+
+`demo/todo-pane/DESIGN.md` §2 carries the argument (PR #3271 — **unmerged** at
+this slice, so that path is not on `main` yet) and the stylesheet's own
+header repeats it. Three claims are now pinned in `test/theme.test.ts` rather
+than left to discipline:
+
+* **the two coloured positions each stay in their own channel** — the overdue
+  due date and the Overdue bucket heading in `--state-*`, the attribution dot in
+  `--id-*` — pinned by NAME rather than by internal agreement, because the
+  general channel guard compares a position's variants against each other and
+  would pass a position whose every variant reached for the same wrong channel
+  (#1344);
+* **the pane spends only the state dyes it argues for.** A to-do has no agent
+  state — it is not working, held, idle or ok, it is due or it is not — so
+  giving `--state-working` to an in-progress task would put a second meaning on
+  a pigment the fleet already reads as "an agent is running". Two dyes are
+  argued for and the test asserts the SET: `--state-attention` (overdue) and
+  `--state-danger` (the Delete control on hover, spent on the action rather than
+  on the task);
+* **gold marks, it never grounds, and the warp thread is not reused.** A list of
+  thirty unchecked rows is a column of hairline rings, not a gold pane; and
+  `ui-redesign.md`'s 2px left thread carries a pane's live agent state, so this
+  pane's two 2px left edges are the **accent** — visibly not a state dye — and
+  the test refuses a state dye in that position.
+
+**The attribution dot takes its hue from the app's ONE role table.** DESIGN.md
+§3 asks for a hue "assigned once, in one place", and this repo already has that:
+`theme.ts`'s identity channel mapped per role, with `test/theme.test.ts`'s "one
+role table" guard holding every surface to it. A hue hashed from the agent id
+here would have been a second answer to a settled question, which is the drift
+that guard exists to catch — so the dot is classed `role-<role>` and the pane
+became that guard's **fifth surface**, scanned `complete: true` for the reason
+the roster and the workflow node are.
+
+That leaves a third state, and it is deliberate: a **dot** means an agent, **no
+dot** means the human (absence is the human — colouring the majority case would
+make the marks mean "someone" rather than "which agent"), and a **colourless
+dot** means an agent whose role this build does not know, which is what a newer
+orrerix writing a new role looks like from here. It is not the uncoloured-badge
+bug the `complete: true` scan exists for, which is a role this build *does* know
+and forgot to paint.
+
+### Where this pane departs from the mock
+
+Two places, both because the app around it had already answered the question:
+
+* **reorder is `Shift+↑`/`↓`, not the mock's `Alt+↑`/`↓`.** Those are already
+  `focus-up`/`focus-down` in `shortcuts.ts`, matched on `document` in the
+  capture phase and withheld from every pane — so a handler in this view would
+  never see them and "reorder" would silently be "move focus to the pane above";
+* **the attribution hue is the role table's**, per the section above, rather
+  than a local hash of the agent id.
+
+Both are recorded here so the mock's tables and the shipped ones do not quietly
+disagree.
+
+### What S5 owns, and what says so
+
+Reminders, undo and the completed archive are S5. This pane leaves the hooks and
+**says so rather than shipping a control that silently does nothing** — the same
+rule `inverseOp` follows when it refuses an undo it cannot derive. `u` toasts
+that undo arrives with S5; the in-row due control toasts that dates come from
+the quick-add for now; and a reorder that has run out of gap between two items
+says the list needs re-spacing instead of not moving the row.

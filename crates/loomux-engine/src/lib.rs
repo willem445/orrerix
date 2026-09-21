@@ -709,6 +709,16 @@
 //! registry — is engine-shaped exactly like [`model`] and [`providerlimit`].
 //! Persistence, the audit row and the change event stay on the host side in
 //! `src-tauri/src/orchestration/todo.rs`. See `doc/design/todo-pane.md`.
+//!
+//! [`triage`] (#3304 S1) is the delivery-triage RULE tier: given an
+//! orchestrator-bound notice, does its leading SHAPE close it without waking
+//! the pane? Data plus `match` again — no I/O, no clock, no registry, and
+//! emphatically no network. It is here rather than in `src-tauri` because it
+//! is the classifier `scripts/orch-scorecard.cjs` and
+//! `doc/design/orchestration-evals.md` §4.1 already spell out for the
+//! census, now in Rust and on the delivery path; the host side keeps the
+//! hook (`OrchRegistry::deliver_prompt_as`), `deferred.json` and the
+//! `delivery-triaged` audit row. See `doc/design/delivery-triage.md`.
 
 pub mod brand;
 pub mod budget;
@@ -745,6 +755,7 @@ pub mod subproc;
 pub mod termgrid;
 pub mod text;
 pub mod todo;
+pub mod triage;
 pub mod usageseries;
 pub mod winpath;
 pub mod workflow;

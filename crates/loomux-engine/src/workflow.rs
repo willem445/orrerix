@@ -124,6 +124,12 @@
 //!     review: 3
 //!   enforce: false         # false (the default) = warn + notify; true =
 //!                          # AGENT writes crossing a cap are refused
+//!
+//! triage:                  # OPT-IN, default off (#3304). Absent block = every
+//!   enabled: true          # delivery reaches the orchestrator, as before.
+//!   provider: none         # `none` is the ONLY accepted value in this build.
+//!   kinds: []              # empty = every kind the rule table covers
+//!   max_defer_minutes: 30  # the clock under a deferral. See [`TriagePolicy`].
 //! ```
 //!
 //! `id` is immutable and human-meaningful and `name` is display-only on
@@ -1226,6 +1232,75 @@ impl Default for DriverPolicy {
     }
 }
 
+// ── triage: orchestrator delivery triage (#3304 S1) ────────────────────────
+
+/// The `triage:` block — policy for the delivery-triage gate
+/// (`doc/design/delivery-triage.md`), a sibling of [`DriverPolicy`] and read
+/// in exactly the same posture: an absent block means the feature is off and
+/// behaviour is byte-for-byte unchanged.
+///
+/// **Policy, not mechanism** (CLAUDE.md constraint 8). Nothing here names a
+/// pane, an agent, a PR or a branch. The two fields that are not a bool or a
+/// number are a CLOSED vocabulary each — `provider` is one accepted value in
+/// this slice, `kinds` is drawn from [`crate::triage::Kind::ALL`] — so the
+/// field-by-field capability closure holds: this block can turn a
+/// SUPPRESSION on and bound it, and there is no spelling in it that grants
+/// anything.
+///
+/// **Restrict-only in the direction that matters.** Every field can make
+/// orrerix deliver MORE (`enabled: false`, a shorter `max_defer_minutes`, a
+/// narrower `kinds`); the only field that can make it deliver less is
+/// `enabled`, and the rule table it switches on is compiled in rather than
+/// configurable. A hostile `.orrerix/workflow.yml` cannot write a rule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TriagePolicy {
+    /// Default **false**. The product default is off, and with it off not one
+    /// byte of delivery behaviour moves.
+    pub enabled: bool,
+    /// Which classifier tier may see the residual. `none` — the only value
+    /// this slice accepts — means the rule tier and nothing else: no network,
+    /// no key, no text leaving the machine. #3304 S3 adds the second value,
+    /// and a file naming one today is REFUSED rather than run with no
+    /// provider, because an author who wrote `provider: typesafe` believes
+    /// text is being classified and it is not.
+    pub provider: String,
+    /// The kinds triage may act on at all. **Empty means every kind the rule
+    /// table covers** — the ordinary case, and what an absent key resolves
+    /// to. A name that is not one of [`crate::triage::Kind::ALL`]'s wire
+    /// spellings is a hard error rather than an ignored line: a repo that
+    /// misspelled a kind believes it narrowed the gate and did not.
+    pub kinds: Vec<crate::triage::Kind>,
+    /// The clock under a deferral. Refused outside
+    /// [`crate::triage::TRIAGE_MAX_DEFER_MINUTES_MIN`]
+    /// ..=[`crate::triage::TRIAGE_MAX_DEFER_MINUTES_MAX`], the posture
+    /// `merge_queue.max_batch` takes — its own doc carries why this one is
+    /// refused rather than clamped.
+    pub max_defer_minutes: u32,
+}
+
+impl Default for TriagePolicy {
+    fn default() -> Self {
+        TriagePolicy {
+            enabled: false,
+            provider: crate::triage::PROVIDER_NONE.to_string(),
+            kinds: Vec::new(),
+            max_defer_minutes: crate::triage::TRIAGE_MAX_DEFER_MINUTES_DEFAULT,
+        }
+    }
+}
+
+impl TriagePolicy {
+    /// The shape the pure decision reads — [`crate::triage::decide`] takes no
+    /// dependency on the whole workflow.
+    pub fn as_triage_policy(&self) -> crate::triage::Policy {
+        crate::triage::Policy {
+            enabled: self.enabled,
+            kinds: self.kinds.clone(),
+            max_defer_minutes: self.max_defer_minutes,
+        }
+    }
+}
+
 // ── board: per-status WIP limits (#1175 / #1170 A2) ────────────────────────
 
 /// The smallest cap that means anything. `0` would say "nothing may ever enter
@@ -1517,6 +1592,9 @@ pub struct Workflow {
     /// default carries **no limits at all**, which is what an absent `board:`
     /// block means.
     pub board: BoardPolicy,
+    /// Delivery-triage policy (#3304 S1). Always resolved; the default is
+    /// **disabled**, which is what an absent `triage:` block means.
+    pub triage: TriagePolicy,
 }
 
 impl Workflow {
@@ -1911,6 +1989,17 @@ struct RawWorkflow {
     /// ignored line.
     #[serde(default)]
     driver: Option<RawDriver>,
+    /// Delivery-triage policy (#3304 S1). `None` when the file declares no
+    /// `triage:` block - which resolves to [`TriagePolicy::default`], i.e.
+    /// **off**, and behavior is byte-for-byte unchanged.
+    ///
+    /// Like `driver:`, this block can never grant a capability: `enabled` is
+    /// a bool, `max_defer_minutes` is a number from a closed range, and the
+    /// two string-shaped keys are each a CLOSED vocabulary the parse refuses
+    /// outside. The rule table it switches on is compiled in - there is no
+    /// spelling here that writes a rule, names a pane, or reaches a network.
+    #[serde(default)]
+    triage: Option<RawTriage>,
     /// Named lock resources (#858). Absent (or empty) means no group in this
     /// repo gets the lock tools at all.
     ///
@@ -2045,6 +2134,22 @@ struct RawDriver {
     plan_review_minutes: Option<u32>,
     #[serde(default)]
     planner_timeout_minutes: Option<u32>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RawTriage {
+    #[serde(default)]
+    enabled: bool,
+    /// `Option` for [`RawMergeQueue::max_batch`]'s reason: "omitted" and
+    /// "written as `none`" must stay distinguishable, so a future slice can
+    /// tell an author who accepted the default from one who pinned it.
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    kinds: Vec<String>,
+    #[serde(default)]
+    max_defer_minutes: Option<u32>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2253,6 +2358,12 @@ pub fn workflow_schema_keys() -> BTreeMap<String, Vec<String>> {
         planner_timeout_minutes: Some(60),
     };
     let resource = RawResource { slots: Some(1), max_hold_minutes: Some(30) };
+    let triage = RawTriage {
+        enabled: true,
+        provider: Some(crate::triage::PROVIDER_NONE.into()),
+        kinds: vec![crate::triage::Kind::RunCompleted.as_str().into()],
+        max_defer_minutes: Some(crate::triage::TRIAGE_MAX_DEFER_MINUTES_DEFAULT),
+    };
     // Every field populated, per this function's docblock: a `None` here would
     // drop the key from the serialization and shrink the manifest silently.
     let wip = RawWip {
@@ -2288,6 +2399,7 @@ pub fn workflow_schema_keys() -> BTreeMap<String, Vec<String>> {
     out.insert("intake.labels".to_string(), keys_of("intake.labels", &labels));
     out.insert("merge_queue".to_string(), keys_of("merge_queue", &merge_queue));
     out.insert("driver".to_string(), keys_of("driver", &driver));
+    out.insert("triage".to_string(), keys_of("triage", &triage));
     out.insert("resource".to_string(), keys_of("resource", &resource));
     out.insert("board".to_string(), keys_of("board", &board));
     let workflow = RawWorkflow {
@@ -2302,6 +2414,7 @@ pub fn workflow_schema_keys() -> BTreeMap<String, Vec<String>> {
         driver: Some(driver),
         resources: BTreeMap::from([("build".to_string(), resource)]),
         board: Some(board),
+        triage: Some(triage),
     };
     out.insert("workflow".to_string(), keys_of("workflow", &workflow));
     out
@@ -2369,6 +2482,7 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
         ("intake.labels", wire_defaults::<RawIntakeLabels>("{}", &[])),
         ("merge_queue", wire_defaults::<RawMergeQueue>("{}", &[])),
         ("driver", wire_defaults::<RawDriver>("{}", &[])),
+        ("triage", wire_defaults::<RawTriage>("{}", &[])),
         ("resource", wire_defaults::<RawResource>("{}", &[])),
         ("board", wire_defaults::<RawBoard>("{}", &[])),
         // Deliberately contributes nothing: every field of `RawWip` is an
@@ -3891,6 +4005,76 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
         }
     };
 
+    // Delivery-triage policy (#3304 S1). `None` (no `triage:` block at all)
+    // resolves to the default, which is **disabled** - an absent block means
+    // the feature is off and behavior is byte-for-byte unchanged.
+    //
+    // Every bad value here is a hard ERROR, never a silent substitution, and
+    // the three refusals differ in what they are protecting:
+    //
+    // - `provider` outside the accepted set names the slice that would add it.
+    //   An author who wrote `provider: typesafe` believes agent text is being
+    //   classified by a model; running the rule tier anyway would leave that
+    //   belief in place while the behaviour was something else entirely - and
+    //   the belief in question is about text LEAVING THE MACHINE, so it is the
+    //   one value where a silent substitution is a privacy claim.
+    // - a `kinds` entry that is not one of `triage::Kind::ALL`'s wire
+    //   spellings is a repo that believes it narrowed the gate and did not.
+    // - `max_defer_minutes` outside its closed range is refused rather than
+    //   clamped, on `merge_queue.max_batch`'s argument: the number says how
+    //   long the author is willing to lose sight of their own fleet.
+    let triage = match &raw.triage {
+        None => TriagePolicy::default(),
+        Some(rt) => {
+            let provider = rt
+                .provider
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .unwrap_or(crate::triage::PROVIDER_NONE)
+                .to_string();
+            if provider != crate::triage::PROVIDER_NONE {
+                errs.push(format!(
+                    "triage.provider: must be {:?} - this build ships the RULE tier only, and a                      classifier provider arrives in #3304 S3 (got {provider:?})",
+                    crate::triage::PROVIDER_NONE,
+                ));
+            }
+            let mut kinds: Vec<crate::triage::Kind> = Vec::new();
+            for raw_kind in &rt.kinds {
+                match crate::triage::Kind::parse(raw_kind.trim()) {
+                    Some(k) if !kinds.contains(&k) => kinds.push(k),
+                    // A repeat is the author saying the same thing twice, not
+                    // an error about anything; the set is what is read.
+                    Some(_) => {}
+                    None => errs.push(format!(
+                        "triage.kinds: {raw_kind:?} is not a delivery kind - the set is {}",
+                        crate::triage::Kind::ALL
+                            .iter()
+                            .map(|k| k.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    )),
+                }
+            }
+            TriagePolicy {
+                enabled: rt.enabled,
+                provider,
+                kinds,
+                max_defer_minutes: driver_counter(
+                    "triage.max_defer_minutes",
+                    rt.max_defer_minutes,
+                    (
+                        crate::triage::TRIAGE_MAX_DEFER_MINUTES_MIN,
+                        crate::triage::TRIAGE_MAX_DEFER_MINUTES_MAX,
+                    ),
+                    crate::triage::TRIAGE_MAX_DEFER_MINUTES_DEFAULT,
+                    "a notice held longer than four hours is a notice nobody is coming back to,                      and holding one for less than a minute saves no wake at all",
+                    &mut errs,
+                ),
+            }
+        }
+    };
+
     if !errs.is_empty() {
         return Err(errs);
     }
@@ -3906,6 +4090,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
         driver,
         resources,
         board,
+        triage,
     })
 }
 
@@ -6714,6 +6899,18 @@ driver:
                 // names one PR. What it CAN do is tighten the loop the
                 // orchestrator template promises, or bound the driver's waits.
                 driver: _,
+                // #3304 S1. Confirmed against the rule above before being
+                // named here: `triage:` is one bool, one closed-range number
+                // and two CLOSED vocabularies (`RawTriage`,
+                // `deny_unknown_fields`) - `provider`, whose only accepted
+                // value is `none`, and `kinds`, drawn from
+                // `triage::Kind::ALL`. It names no PR, no branch, no program
+                // and no agent, and the rule table it switches on is compiled
+                // in rather than written here. What it CAN do is hold a notice
+                // back from ONE pane for a bounded time, with every deferral
+                // audited and re-readable; every other direction it can be
+                // moved in delivers MORE.
+                triage: _,
             } = v;
         }
         // #1175: the same inventory rule one level down. A field added to
@@ -6774,6 +6971,19 @@ driver:
                 planner_timeout_minutes: _,
             } = v;
         }
+        // #3304 S1: `triage:` is policy for a gate that SUPPRESSES a delivery
+        // to the orchestrator pane, under the same inventory rule and with its
+        // own sharper reason - a key added here can widen what never reaches a
+        // human-supervised pane, which is the direction this schema must never
+        // move quietly.
+        fn raw_triage_fields(v: RawTriage) {
+            let RawTriage {
+                enabled: _,
+                provider: _,
+                kinds: _,
+                max_defer_minutes: _,
+            } = v;
+        }
         // Referenced, never called — the compiler still type-checks (and
         // therefore exhaustiveness-checks) every function body above whether
         // or not it runs. This line only exists to avoid a dead-code warning.
@@ -6783,6 +6993,7 @@ driver:
             raw_intake_labels_fields as fn(RawIntakeLabels),
             raw_merge_queue_fields as fn(RawMergeQueue),
             raw_driver_fields as fn(RawDriver),
+            raw_triage_fields as fn(RawTriage),
             raw_board_fields as fn(RawBoard),
             raw_wip_fields as fn(RawWip),
         );

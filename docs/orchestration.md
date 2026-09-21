@@ -1005,6 +1005,49 @@ The error names the statuses you *could* have written. That is deliberate: a rep
 `review: 0` believes something about how its board paces, and quietly substituting a default
 would leave that belief in place while the behaviour went the other way.
 
+## The to-do list
+
+Your agents can read and groom **your own To-Do list** — the personal one in orrerix's To-Do
+pane, not the task board above. The two are unrelated: a board task is a group's work, a
+to-do is yours, and nothing an agent does to one touches the other.
+
+Every agent except a standalone pane has these six tools:
+
+| tool | what it does |
+| --- | --- |
+| `todo_list` | Read a list: compact rows (title, status, due date, priority, tags, `2/5` steps, who last touched it). Completed items are left out unless asked for; `query` filters on the title and notes. |
+| `todo_get` | One item in full — notes, steps, dates, and the `rev` an edit should quote. |
+| `todo_add` | Add an item: title, notes, due date, reminder, priority, important, tags, steps. |
+| `todo_update` | Edit one. Every field is optional and an omitted one is left alone. |
+| `todo_complete` | Tick it off, or un-tick it. Steps are untouched. |
+| `todo_delete` | Soft-delete: it disappears from every view and the record survives 30 days. |
+
+**Which list.** `scope` is `global` — the one list that follows you everywhere — or
+`workspace`, this project's list, and `workspace` is the default. **An agent cannot name a
+project**: the workspace is worked out from its own group's repo, so a group running on one
+repo can neither read nor write another project's list. An id it cannot see comes back as
+`unknown todo`, worded exactly as an id that never existed, so it cannot go fishing for
+what is on your other lists.
+
+**What agents are told to do with it.** Their instructions say: read before adding, so you
+get an updated item rather than a second row saying the same thing; quote the item's `rev`
+when editing something they did not create, so a write of theirs is refused rather than
+silently replacing an edit of yours; complete something only when they *know* it is done;
+and delete one item at a time and only when asked. Grooming your list is welcome —
+sweeping it is not.
+
+**Every item says who touched it.** The pane shows the agent that added or last changed a
+row, so an agent-authored to-do is never mistaken for one of yours.
+
+**Caps refuse rather than truncate** — 500-character title, 20 KB notes, 20 tags, 100 steps,
+5,000 live items per list. A refusal is something the agent can act on; a silently shortened
+title is a loss you would find weeks later.
+
+**Everything is in the audit log.** Writes land as `todo-add` / `todo-update` /
+`todo-complete` / `todo-delete` on the group whose agent made them — so an agent's edit to
+your *global* list is still findable in that group's audit — and anything refused lands as
+`todo-refused` with the reason. A runaway agent hitting a cap over and over is visible
+there.
 ## Steering, attention, and audit
 
 These deserve their own detail — see:

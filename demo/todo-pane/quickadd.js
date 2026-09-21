@@ -11,15 +11,25 @@
 //     "tomorrow" without the test being a different test every day, and
 //     `test/todoquickadd.test.ts` is going to pin exactly that.
 //   * UNPARSEABLE TEXT STAYS IN THE TITLE. The parser never swallows a token
-//     it did not understand and never guesses. "ship the friday build" keeps
-//     every word: `friday` is only a date when it stands as its own token in a
-//     date position, and even then the words around it are preserved. The
-//     failure mode this avoids is the one that makes a quick-add bar
-//     untrustworthy — you type a title, and a word vanishes out of it.
+//     it did not understand and never guesses. The failure mode this avoids is
+//     the one that makes a quick-add bar untrustworthy: you type a title, and
+//     a word vanishes out of it.
 //   * THE CHIPS ARE THE PROOF. Every token the parser consumed comes back in
 //     `chips`, in reading order, so the UI can show the parse BEFORE Enter.
 //     A chip the human did not expect is the signal to fix the sentence; a
 //     word that silently became a due date is not.
+//
+// THE WEEKDAY RULE, stated as the code below actually implements it. A bare
+// weekday is a date when it stands as its OWN token and is not the FIRST word
+// of the line. So `friday's report` keeps the word (the token is `friday's`,
+// which is not a weekday) and `Friday retro notes` keeps it (a line that opens
+// with a weekday is far more often a title than a date) — but `write the
+// report friday` DOES take it, and so does `ship the friday build`.
+//
+// An earlier version of this header claimed `ship the friday build` kept every
+// word. It does not, and it never did: the code has always been `i > 0 && t in
+// WEEKDAYS`. The claim was caught in the lift to `src/todoquickadd.ts` (#3263
+// S3), whose header states this same rule and whose tests pin the three cases.
 //
 // Local time throughout. The store keeps epoch millis (plan §1); the parser is
 // the only place that thinks in calendar days, and it derives every one of
@@ -275,10 +285,8 @@ export function parseQuickAdd(text, nowMs) {
     }
 
     // --- a bare weekday ----------------------------------------------------
-    // ONLY when it is the whole token and not the first word of the line: a
-    // line that OPENS with a weekday is far more often a title ("Friday
-    // retro notes") than a date, and taking it there is the swallowed-word
-    // failure this parser is written to avoid.
+    // See THE WEEKDAY RULE in the header: its own token, and never the first
+    // word of the line.
     if (i > 0 && t in WEEKDAYS) {
       dueDayMs = nextWeekday(dayStart, WEEKDAYS[t], false);
       dueRaw = take(i, 1, tokens[i].raw);

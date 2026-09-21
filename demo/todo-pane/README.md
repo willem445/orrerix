@@ -70,6 +70,9 @@ ship the release notes tomorrow at 4pm #release !! *
        exactly the words you meant
 Friday retro notes
     -> no chips. A line that OPENS with a weekday is a title, not a date.
+ship the friday build
+    -> Fri. Mid-line, a bare weekday IS a date — and the chip is what
+       tells you so before you press Enter.
 ```
 
 The chips are the parse, shown **before** Enter. A word that silently became a

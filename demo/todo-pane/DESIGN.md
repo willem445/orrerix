@@ -114,10 +114,13 @@ you typed. So the parser has two rules that the chips make checkable:
 
 - **It never consumes a token it did not understand.** Unparseable text stays
   in the title, whole.
-- **A line that OPENS with a weekday is a title.** `Friday retro notes` keeps
-  every word; `call the vendor fri` does not. A bare weekday is a date only
-  when something precedes it, which is where a date actually appears in a
-  sentence someone types.
+- **A bare weekday is a date when it stands as its OWN token and is not the
+  FIRST word of the line.** `friday's report` keeps the word (the token is
+  `friday's`, which is not a weekday) and `Friday retro notes` keeps it (a line
+  that opens with a weekday is far more often a title than a date) — but
+  `write the report friday` and `ship the friday build` both take it. That is
+  the rule `quickadd.js`'s header states and `src/todoquickadd.ts` shipped;
+  a weekday mid-line **is** consumed, and the chip is what tells you so.
 
 Two more parser decisions worth inheriting: `fri` on a Friday means **next**
 Friday (if you meant today you would have typed `today`, and a task that lands
@@ -176,10 +179,22 @@ Single letters, unmodified, because the pane has no text field focused when
 they fire — typing into the quick-add or a note swallows them, which is the
 behaviour you want and is why `n` and `/` are the two ways in.
 
-**The chord that opens the pane is NOT decided here.** The plan leaves it open
-between `Alt+H` and `Alt+J`, both to be checked against the
-`agent-cli-reference` discipline before one is committed to (`Alt+D` and
-`Alt+L`/`N`/`U` are readline-bound; `Alt+T` is taken). The PR asks the human.
+**The chord that opens the pane is NOT decided here, and this note is not
+where to read it.** The mock suggested `Alt+H` or `Alt+J` (`Alt+D` and
+`Alt+L`/`N`/`U` are readline-bound; `Alt+T` is taken), but a suggestion is all
+it was: S4 (#3293) verified its own chord against the vendor references under
+the `agent-cli-reference` discipline, and **what S4 shipped is the answer**.
+Anyone wiring a chord reads `src/shortcuts.ts` and S4's own comment, not this
+paragraph.
+
+**My Day auto-clears at midnight** — the human's call, matching Microsoft To
+Do. The mock does **not** clear (it predates the decision), so what you see
+here is the non-clearing reading; S5 owns the clear. The argument that lost is
+worth keeping, because it is the one this pane has and MS To Do does not: an
+agent writing at 02:00 finds an emptied list and cannot tell "the human cleared
+it" from "nothing is planned". Whatever S5 builds needs an answer for that —
+the clear is a view rule, so the underlying `my_day` flag and its last-set day
+are what an agent should be able to read.
 
 ## 7. State lives in the view, never in an element
 

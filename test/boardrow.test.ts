@@ -41,8 +41,14 @@ const NEVER_COMPACT: readonly RowField[] = [
 ];
 
 test("the name and the id lead the compact row, ahead of everything else", () => {
+  // #3261 puts one thing between them: the 8px LEVEL MARK. It is tier 1 on
+  // #2937's own reasoning — this ladder ranks how much of the LINE a field
+  // costs against how often it is read — and it is pinned here as part of the
+  // prefix rather than tolerated by a looser assertion, so a fifth compact
+  // field cannot arrive unargued.
   const { compact } = rowLayout(false);
-  assert.deepEqual(compact.slice(0, 2), ["id", "title"]);
+  assert.deepEqual(compact.slice(0, 3), ["id", "kindMark", "title"]);
+  assert.equal(rowFieldTier("kindMark"), 1, "the level mark is tier 1 or it does not belong on the prefix");
 });
 
 test("nothing ranked below the name is allowed to precede it on the line", () => {
@@ -55,17 +61,26 @@ test("nothing ranked below the name is allowed to precede it on the line", () =>
 });
 
 test("the compact row carries the name, the id, issue/PR and progress — and nothing else", () => {
-  // The acceptance criterion, literally: "a row shows the full name and id
+  // #2937's acceptance criterion, literally: "a row shows the full name and id
   // (wrapping) plus the issue/PR line and a status chip; nothing else", plus
   // children_done/children, which #2937 ranks as progress alongside status.
-  assert.deepEqual([...rowLayout(false).compact], ["id", "title", "issue", "pr", "status", "children"]);
+  //
+  // #3261 amends it in exactly two ways, and both are stated here rather than
+  // left to be inferred from the array: the name is no longer shown WHOLE on
+  // this line (it is cut at `TITLE_BUDGET`, with the rest on the tooltip and in
+  // the expanded row — src/tasktitle.ts), and the level MARK joins the line.
+  // Nothing else did.
+  assert.deepEqual(
+    [...rowLayout(false).compact],
+    ["id", "kindMark", "title", "issue", "pr", "status", "children"]
+  );
 });
 
 test("collapsing a row hides the chrome and keeps the four things that matter", () => {
   // Named fields, not `rowFieldTier(f) < 4` — asking the ladder to agree with
   // itself passes under any ladder at all, the flat one this issue replaces
   // included. These are the human's own words in #2937 turned into two lists.
-  for (const f of ["id", "title", "issue", "pr", "status", "children"] as const) {
+  for (const f of ["id", "kindMark", "title", "issue", "pr", "status", "children"] as const) {
     assert.equal(rowShows(f, false), true, `${f} is hidden on a collapsed row`);
   }
   for (const f of NEVER_COMPACT) {
@@ -275,7 +290,7 @@ test("a control is honoured wherever on the path it sits, not only at the target
 });
 
 test("a contenteditable in the title area is an editor, not a toggle target", () => {
-  const editable: ClickPathNode = { tagName: "DIV", classList: [], contentEditable: true };
+  const editable: ClickPathNode = { tagName: "DIV", classList: [], isContentEditable: true };
   assert.equal(titleClickToggles([editable, TITLE_AREA]), false);
 });
 

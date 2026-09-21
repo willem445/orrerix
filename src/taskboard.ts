@@ -1773,6 +1773,62 @@ export function linkDraftIsPristine(draft: LinkDraft): boolean {
   return !draft.target && !draft.label && draft.type === DEFAULT_LINK_TYPE;
 }
 
+// --- the row's DESCRIPTION (#3261) ----------------------------------------
+
+/** How many characters a description may carry.
+ *
+ *  A MIRROR of `MAX_TASK_DESCRIPTION` in `src-tauri/src/orchestration/mod.rs`,
+ *  which is the authority: the backend REFUSES an over-long description rather
+ *  than cutting it, and this copy exists only so the editor can say so before
+ *  the round trip instead of after it. `test/taskboard.test.ts` reads the
+ *  constant out of the Rust source, the way the ladder rules are pinned, so the
+ *  two cannot drift into an editor that permits what the board then rejects. */
+export const MAX_DESCRIPTION = 500;
+
+/** Is this draft still exactly what the row already says?
+ *
+ *  The one rule for "nothing to submit" — `linkDraftIsPristine`'s job for the
+ *  description editor, and written the same way for the same reason: the
+ *  renderer SEEDS the box from this same stored value, so the seed and the
+ *  pristine test are one question asked once rather than a literal in each
+ *  place. Compared after trimming, because the write trims: a draft that
+ *  differs from the stored text only in trailing space would otherwise show a
+ *  live Save button that saves nothing.
+ *
+ *  `null`, `undefined` and `""` are one value here — the backend's empty-string
+ *  clear means "no description", so a row with none seeds an empty box, and an
+ *  empty box on such a row is pristine. */
+export function descDraftIsPristine(draft: string, stored: string | null | undefined): boolean {
+  return draft.trim() === (stored ?? "").trim();
+}
+
+/** How many characters a description is OVER the cap, or 0 when it is not.
+ *
+ *  Code points, not UTF-16 units, so the number the editor shows is the number
+ *  the backend counted (`.chars().count()` on the Rust side). A count that
+ *  disagreed with the refusal would be worse than no count at all. */
+export function descOverBy(text: string): number {
+  return Math.max(0, Array.from(text.trim()).length - MAX_DESCRIPTION);
+}
+
+/** Why this description cannot be saved, or `null` when it can.
+ *
+ *  Mirrors the backend's two refusals so the editor can decline BEFORE the
+ *  round trip rather than surfacing a tool error: over the cap, and carrying a
+ *  control character (the field is one line of plain text — anything wanting a
+ *  paragraph of its own is a note). Deliberately NOT a silent fix-up in either
+ *  case: the caller who pasted three lines should be told the field is one, not
+ *  have two of them welded together. */
+export function descRefusal(text: string): string | null {
+  const t = text.trim();
+  const over = descOverBy(t);
+  if (over > 0) return `${over} character${over === 1 ? "" : "s"} over the ${MAX_DESCRIPTION} limit`;
+  if (Array.from(t).some((c) => c < " " || c === "")) {
+    return "one line of plain text only — put anything needing its own paragraph in a note";
+  }
+  return null;
+}
+
 /** One grounding link as it arrives over `orch_tasks`.
  *
  *  Named `TaskArtifactLink`, not `TaskLink`, because `HasLinks` in this module

@@ -181,6 +181,9 @@ use loomux_lib::orchestration::{
     // and the prefix its refusal opens with (which the board matches on).
     board_task, link_etag, STALE_LINK_ETAG_PREFIX,
     MAX_TASK_LINKS, MAX_TASK_LINK_TARGET, MAX_TASK_LINK_LABEL,
+    // #3261: the description cap, which is REFUSED past rather than cut — so
+    // the guard has to name the same number the refusal does.
+    MAX_TASK_DESCRIPTION,
     TASK_STATUSES,
     // #1156: the strict Agile ladder, pinned against Rust literals here
     // (`the_ladder_table_is_pinned_on_the_rust_side`) and against the board's
@@ -11628,6 +11631,193 @@ fn demo_path_round_trips_through_the_board_and_clears_on_empty() {
     let clear = TaskPatch { demo_path: Some("   ".into()), ..Default::default() };
     let cleared = reg.upsert_task(&g.id, "orch-1", Some(&t.id), clear).unwrap();
     assert_eq!(cleared.demo_path, None, "a blank demo_path clears the field rather than storing whitespace");
+}
+
+// ---------- #3261: the row's plain-text description ----------
+
+/// The compat half, `demo_path`'s guard applied to `description`: a board
+/// written before the field existed must load with it simply absent, and a
+/// board that never sets it must not GAIN the key on a later rewrite — the
+/// additive promise kept on disk, not only at load.
+#[test]
+fn pre_3261_boards_load_with_description_absent() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let path = reg.state_root().join(g.id.as_str()).join("tasks.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        r##"[
+  {"id":"t-1","title":"Ship the parser","status":"queued","issue":null,"pr":null,"assignee":null,"session":null,"notes":[],"updated_ms":11}
+]"##,
+    )
+    .unwrap();
+
+    let tasks = reg.tasks(&g.id);
+    assert_eq!(tasks.len(), 1, "a pre-#3261 board must still load — a parse failure reads as an EMPTY board");
+    assert_eq!(tasks[0].description, None, "an absent description deserializes to None, never an error");
+
+    reg.upsert_task(&g.id, "orch", Some("t-1"), patch(None, Some("in-progress"), None)).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("in-progress"), "the edit itself landed");
+    assert!(
+        !text.contains("\"description\""),
+        "a board that never set a description must not gain the key:\n{text}"
+    );
+}
+
+/// The description survives the write→read path both callers funnel through,
+/// and clears on the empty string like every other optional text field.
+#[test]
+fn description_round_trips_through_the_board_and_clears_on_empty() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let t = reg.upsert_task(&g.id, "orch-1", None, patch(Some("Ship the parser"), None, None)).unwrap();
+
+    let p = TaskPatch {
+        description: Some("Reads .orrerix/workflow.yml and hands the blocks to the spawner.".into()),
+        ..Default::default()
+    };
+    let saved = reg.upsert_task(&g.id, "orch-1", Some(&t.id), p).unwrap();
+    assert_eq!(
+        saved.description.as_deref(),
+        Some("Reads .orrerix/workflow.yml and hands the blocks to the spawner.")
+    );
+
+    let path = reg.state_root().join(g.id.as_str()).join("tasks.json");
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("hands the blocks to the spawner"), "description must reach the file:\n{text}");
+    let reread = reg.tasks(&g.id);
+    assert_eq!(
+        reread[0].description.as_deref(),
+        Some("Reads .orrerix/workflow.yml and hands the blocks to the spawner.")
+    );
+
+    // Omitted = untouched.
+    let untouched = reg.upsert_task(&g.id, "orch-1", Some(&t.id), patch(None, Some("review"), None)).unwrap();
+    assert!(untouched.description.is_some(), "omitting the field must leave it alone");
+
+    // Blank clears, rather than storing whitespace — the `pr` rule.
+    let clear = TaskPatch { description: Some("   ".into()), ..Default::default() };
+    let cleared = reg.upsert_task(&g.id, "orch-1", Some(&t.id), clear).unwrap();
+    assert_eq!(cleared.description, None, "a blank description clears the field");
+}
+
+/// An over-long description is REFUSED, not cut — and the refusal writes
+/// nothing at all, which is the property that makes it safe to retry.
+#[test]
+fn an_over_long_description_is_refused_and_nothing_is_written() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let t = reg.upsert_task(&g.id, "orch-1", None, patch(Some("Ship the parser"), None, None)).unwrap();
+
+    // Exactly at the cap: accepted.
+    let at_cap = TaskPatch { description: Some("x".repeat(MAX_TASK_DESCRIPTION)), ..Default::default() };
+    let ok = reg.upsert_task(&g.id, "orch-1", Some(&t.id), at_cap).unwrap();
+    assert_eq!(ok.description.as_ref().map(|d| d.chars().count()), Some(MAX_TASK_DESCRIPTION));
+
+    // One over: refused, and the error names the cap and the length so the fix
+    // is one edit rather than a guess.
+    let over = TaskPatch {
+        description: Some("x".repeat(MAX_TASK_DESCRIPTION + 1)),
+        status: Some("review".into()),
+        ..Default::default()
+    };
+    let err = reg.upsert_task(&g.id, "orch-1", Some(&t.id), over).unwrap_err();
+    assert!(err.contains(&(MAX_TASK_DESCRIPTION + 1).to_string()), "the error names the length: {err}");
+    assert!(err.contains(&MAX_TASK_DESCRIPTION.to_string()), "the error names the cap: {err}");
+
+    // NOTHING was written — not the description it refused, and not the status
+    // that rode along in the same patch.
+    let after = reg.tasks(&g.id);
+    assert_eq!(
+        after[0].description.as_ref().map(|d| d.chars().count()),
+        Some(MAX_TASK_DESCRIPTION),
+        "a refused write must leave the old description exactly as it was"
+    );
+    assert_eq!(after[0].status, "queued", "a refused write must not land the other fields of its patch");
+
+    // The cap is in CHARACTERS, not bytes: 500 em dashes are 1500 bytes and
+    // are accepted, which is this repo's own prose style not being refused.
+    let wide = TaskPatch { description: Some("—".repeat(MAX_TASK_DESCRIPTION)), ..Default::default() };
+    assert!(reg.upsert_task(&g.id, "orch-1", Some(&t.id), wide).is_ok(), "the cap counts characters, not bytes");
+}
+
+/// A description is ONE line of plain text, and a multi-line one is refused
+/// rather than flattened — welding two sentences together loses the point the
+/// second one made.
+#[test]
+fn a_multi_line_description_is_refused_rather_than_flattened() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let t = reg.upsert_task(&g.id, "orch-1", None, patch(Some("Ship the parser"), None, None)).unwrap();
+
+    for bad in ["One line.\nAnd another.", "One line.\r\nAnd another.", "One line.\tIndented."] {
+        let p = TaskPatch { description: Some(bad.into()), ..Default::default() };
+        let err = reg.upsert_task(&g.id, "orch-1", Some(&t.id), p).unwrap_err();
+        assert!(err.contains("one line"), "the refusal must say what the field is: {err}");
+        assert_eq!(reg.tasks(&g.id)[0].description, None, "nothing was written for {bad:?}");
+    }
+
+    // The negative control: prose this repo really writes is not a control
+    // character, and must be accepted — an em dash, curly quotes, an accent.
+    let good = TaskPatch {
+        description: Some("Parses the workflow file — the “blocks” list, naïvely.".into()),
+        ..Default::default()
+    };
+    assert!(reg.upsert_task(&g.id, "orch-1", Some(&t.id), good).is_ok());
+}
+
+/// The SPLIT: the description rides the full-record reads and never the
+/// compact one. It is written for a human, and `list_tasks` rides every row of
+/// every board read an orchestrator makes.
+#[test]
+fn the_description_rides_get_task_and_never_the_compact_list_row() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let t = reg.upsert_task(&g.id, "orch-1", None, patch(Some("Ship the parser"), None, None)).unwrap();
+    let p = TaskPatch { description: Some("Hands the blocks to the spawner.".into()), ..Default::default() };
+    reg.upsert_task(&g.id, "orch-1", Some(&t.id), p).unwrap();
+    let stored = reg.tasks(&g.id).remove(0);
+
+    // list_tasks' row: absent, and the whole row must not carry the text under
+    // any other key either — which is what a raw scan of the serialized row
+    // says and a per-key assertion would not.
+    let summary = serde_json::to_value(task_summary(&stored, true, 0, 0)).unwrap();
+    assert!(
+        !summary.to_string().contains("Hands the blocks"),
+        "the compact row must not carry the description:\n{summary}"
+    );
+
+    // get_task's record: present.
+    let view = serde_json::to_value(agent_task_view(&stored)).unwrap();
+    assert_eq!(
+        view.get("description").and_then(|v| v.as_str()),
+        Some("Hands the blocks to the spawner."),
+        "the full-record read is where an agent reads one back:\n{view}"
+    );
+
+    // And the human board's row carries it on every row, expanded or not —
+    // the board is what decides to SHOW it only when the row is open.
+    for with_notes in [false, true] {
+        let board = serde_json::to_value(board_task(stored.clone(), with_notes)).unwrap();
+        assert_eq!(
+            board.get("description").and_then(|v| v.as_str()),
+            Some("Hands the blocks to the spawner."),
+            "with_notes={with_notes}: the board row carries it:\n{board}"
+        );
+    }
+
+    // A row with none omits the key entirely on all three, so a board that
+    // never uses the feature pays nothing for it.
+    let bare = reg.upsert_task(&g.id, "orch-1", None, patch(Some("No description here"), None, None)).unwrap();
+    for (what, v) in [
+        ("summary", serde_json::to_value(task_summary(&bare, true, 0, 0)).unwrap()),
+        ("agent view", serde_json::to_value(agent_task_view(&bare)).unwrap()),
+        ("board row", serde_json::to_value(board_task(bare.clone(), false)).unwrap()),
+    ] {
+        assert!(v.get("description").is_none(), "{what} gained a dead description key:\n{v}");
+    }
 }
 
 // ---------------------------------------------------------------------------

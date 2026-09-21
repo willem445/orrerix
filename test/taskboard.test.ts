@@ -94,6 +94,10 @@ import {
   STALE_LINK_ETAG_PREFIX,
   type LinkArrayEdit,
   type TaskArtifactLink,
+  MAX_DESCRIPTION,
+  descDraftIsPristine,
+  descOverBy,
+  descRefusal,
 } from "../src/taskboard.ts";
 
 test("counts only tasks in the exact `done` status", () => {
@@ -2781,4 +2785,75 @@ test("every argument key the board composes is a declared orch_upsert_task param
   // Scope, stated rather than implied: this covers the arguments THIS view
   // composes. The ~20 other parameters on the same command are reached from
   // other call sites and are not swept here.
+});
+
+// --- the row's description (#3261) ---------------------------------------
+
+test("the description cap is the backend's, read out of the Rust source", () => {
+  // The backend REFUSES an over-long description rather than cutting it, so an
+  // editor holding a different number would either permit what the board then
+  // rejects or refuse what it would have accepted. The ladder guard above reads
+  // its rule out of mod.rs for this reason; so does this.
+  const src = readFileSync(RUST_LADDER, "utf8");
+  const m = src.match(/pub const MAX_TASK_DESCRIPTION: usize = (\d+);/);
+  assert.notEqual(
+    m,
+    null,
+    "MAX_TASK_DESCRIPTION is gone or renamed in mod.rs — this guard reads it by name, so a " +
+      "rename must update the guard rather than leave it scanning nothing"
+  );
+  assert.equal(MAX_DESCRIPTION, Number(m![1]), "the editor's cap and the backend's must be one number");
+});
+
+test("a draft that says what the row already says is not a draft", () => {
+  // The pristine rule and the renderer's SEED are one question: the box is
+  // seeded from the row's stored text, so a box nobody has touched must read as
+  // pristine or every render would leave a live Save button behind.
+  assert.equal(descDraftIsPristine("Parses the workflow file.", "Parses the workflow file."), true);
+  // A row with no description seeds an EMPTY box, and all three spellings of
+  // "no description" are one value.
+  for (const none of [null, undefined, ""]) {
+    assert.equal(descDraftIsPristine("", none), true, `an empty box on a ${JSON.stringify(none)} row is pristine`);
+  }
+  // Trailing space only — the write trims, so this would save nothing.
+  assert.equal(descDraftIsPristine("Parses it.  ", "Parses it."), true);
+  // Real edits are not pristine, in both directions.
+  assert.equal(descDraftIsPristine("Parses it, twice.", "Parses it."), false);
+  assert.equal(descDraftIsPristine("", "Parses it."), false, "clearing the box is an edit, not a no-op");
+  assert.equal(descDraftIsPristine("Parses it.", null), false);
+});
+
+test("the over-cap count is in code points, so it matches what the backend counted", () => {
+  assert.equal(descOverBy("x".repeat(MAX_DESCRIPTION)), 0);
+  assert.equal(descOverBy("x".repeat(MAX_DESCRIPTION + 7)), 7);
+  // The failure this pins: an em dash is 1 code point and 1 UTF-16 unit, but an
+  // astral character is 2 units — so a `.length` count would report a string
+  // the backend accepts as over by up to its own length.
+  const astral = "🙂".repeat(MAX_DESCRIPTION);
+  assert.equal(astral.length, MAX_DESCRIPTION * 2, "the fixture must really be surrogate pairs");
+  assert.equal(descOverBy(astral), 0, "a 500-code-point description is not over a 500 cap");
+  assert.equal(descOverBy(`${astral}🙂`), 1);
+});
+
+test("the editor declines exactly what the backend refuses, and nothing else", () => {
+  assert.equal(descRefusal("What this row is."), null);
+  assert.equal(descRefusal(""), null, "clearing the description is a legal write, not a refusal");
+  assert.equal(descRefusal("   "), null, "whitespace is the clear too — the backend trims before it stores");
+  // Over the cap: refused, with the overage named, so the fix is one edit.
+  const over = descRefusal("x".repeat(MAX_DESCRIPTION + 3));
+  assert.match(over ?? "", /3 characters over/);
+  assert.match(descRefusal("x".repeat(MAX_DESCRIPTION + 1)) ?? "", /1 character over/, "singular, not '1 characters'");
+  // One line of plain text: a pasted paragraph is REFUSED, never flattened —
+  // welding two sentences together loses the point the second one made.
+  for (const [what, text] of [
+    ["a newline", "One line.\nAnd another."],
+    ["a carriage return", "One line.\rAnd another."],
+    ["a tab", "One line.\tIndented."],
+    ["a DEL", "One line.\u007fetc."],
+  ] as const) {
+    assert.notEqual(descRefusal(text), null, `${what} must be refused, not flattened`);
+  }
+  // The negative control on that sweep: prose this repo really writes — an em
+  // dash, curly quotes, an accent — is not a control character and must pass.
+  assert.equal(descRefusal("Parses the workflow file — the “blocks” list, naïvely."), null);
 });

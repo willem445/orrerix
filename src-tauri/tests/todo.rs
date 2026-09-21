@@ -70,7 +70,7 @@ fn unwrap_err_for(r: Result<todo::Applied, TodoError>, what: &str) -> TodoError 
 /// The guard is scoped to this call. Holding one across an `apply_to` would
 /// deadlock — `TODO_WRITE_LOCK` is a plain `std::sync::Mutex`, not a
 /// re-entrant one — and the one test that deliberately holds it says so.
-fn loaded(path: &Path) -> TodoStoreLoad {
+fn load_locked(path: &Path) -> TodoStoreLoad {
     let lock = lock_todo_write();
     load_store(path, &lock)
 }
@@ -118,7 +118,7 @@ fn an_added_item_survives_a_write_and_a_read() {
 
     // Re-read from disk, not from the returned value: the point of the test is
     // that the bytes made it.
-    let reread = loaded(&path);
+    let reread = load_locked(&path);
     assert!(reread.readable);
     assert_eq!(reread.store.version, todo::CURRENT_VERSION);
     let item = reread
@@ -162,7 +162,7 @@ fn a_second_write_keeps_the_first_items() {
         .ids[0]
         .clone();
 
-    let store = loaded(&path).store;
+    let store = load_locked(&path).store;
     let ids: Vec<&str> = store.items.iter().map(|i| i.id.as_str()).collect();
     assert!(ids.contains(&first.as_str()), "first item was lost: {ids:?}");
     assert!(ids.contains(&second.as_str()));
@@ -220,7 +220,7 @@ fn a_file_that_is_not_json_is_quarantined_and_the_store_opens_empty() {
     let path = store_path(tmp.path());
     std::fs::write(&path, "{\"version\": 1, \"items\": [ truncated").unwrap();
 
-    let loaded = loaded(&path);
+    let loaded = load_locked(&path);
     let quarantine = loaded.quarantined.expect("corrupt file must be quarantined");
     assert_eq!(quarantine.file_name().unwrap(), "todo.corrupt.json");
     assert!(quarantine.exists(), "the evidence must survive under its own name");
@@ -232,7 +232,7 @@ fn a_file_that_is_not_json_is_quarantined_and_the_store_opens_empty() {
 
     // And a write is allowed afterwards, because nothing is at risk any more.
     apply_to(&path, add("fresh start"), &human(), T0, None).expect("write after quarantine");
-    assert_eq!(loaded(&path).store.items.len(), 1);
+    assert_eq!(load_locked(&path).store.items.len(), 1);
     assert!(
         quarantine.exists(),
         "the new write must not disturb the quarantined evidence"
@@ -248,7 +248,7 @@ fn json_of_the_wrong_shape_is_quarantined_too() {
     let path = store_path(tmp.path());
     std::fs::write(&path, r#"["not", "a", "store"]"#).unwrap();
 
-    let loaded = loaded(&path);
+    let loaded = load_locked(&path);
     // The assertion is on the FILESYSTEM, not on the returned field. A
     // `quarantined: Some(path)` is only a CLAIM that a rename happened —
     // removing the rename and leaving the field is a mutation this test passed
@@ -273,7 +273,7 @@ fn a_store_that_cannot_be_read_declines_the_write_instead_of_replacing_it() {
     let path = store_path(tmp.path());
     std::fs::create_dir(&path).unwrap();
 
-    let loaded = loaded(&path);
+    let loaded = load_locked(&path);
     assert!(!loaded.readable, "an unreadable store must not read as empty");
     assert!(
         loaded.quarantined.is_none(),
@@ -315,7 +315,7 @@ fn a_quarantine_rename_that_fails_declines_the_write_too() {
     std::fs::write(&path, "{ truncated").unwrap();
     std::fs::create_dir(tmp.path().join("todo.corrupt.json")).unwrap();
 
-    let loaded = loaded(&path);
+    let loaded = load_locked(&path);
     assert!(
         !loaded.readable,
         "a corrupt store whose quarantine FAILED must not read as safely emptied"
@@ -389,7 +389,7 @@ fn if_rev_refuses_a_stale_update_and_names_both_revs() {
     assert_eq!(err.to_string(), format!("conflict: {id} is at rev 2 (you sent 1)"));
 
     // The human's title is intact — the refusal happened before any mutation.
-    let store = loaded(&path).store;
+    let store = load_locked(&path).store;
     let item = store.items.iter().find(|i| i.id == id).unwrap();
     assert_eq!(item.title, "groomed by the human");
     assert_eq!(item.rev, 2);
@@ -511,7 +511,7 @@ fn every_cap_refuses_rather_than_truncating() {
             "{field}: a cap message must read as a refusal, got {err}"
         );
         assert!(
-            !path.exists() || loaded(&path).store.items.is_empty(),
+            !path.exists() || load_locked(&path).store.items.is_empty(),
             "{field}: a refused add must write nothing at all"
         );
     }
@@ -519,7 +519,7 @@ fn every_cap_refuses_rather_than_truncating() {
     // The same caps on the UPDATE path — a guard present on one call site and
     // absent from its sibling is a bypass exactly the width of the asymmetry.
     let id = apply_to(&path, add("real item"), &human(), T0, None).unwrap().ids[0].clone();
-    let rev_before = loaded(&path)
+    let rev_before = load_locked(&path)
         .store
         .items
         .iter()
@@ -585,7 +585,7 @@ fn every_cap_refuses_rather_than_truncating() {
     ] {
         let err = apply_to(&path, TodoOp::Update(up), &agent(), T0 + 1, None).unwrap_err();
         assert_eq!(err, expected, "{field} cap on update");
-        let item_now = loaded(&path).store.items.iter().find(|i| i.id == id).cloned().unwrap();
+        let item_now = load_locked(&path).store.items.iter().find(|i| i.id == id).cloned().unwrap();
         assert_eq!(item_now.title, "real item", "{field}: nothing was truncated in");
         assert_eq!(item_now.rev, rev_before, "{field}: a refused update must not bump rev");
     }
@@ -730,7 +730,7 @@ fn a_priority_outside_its_range_is_refused_on_both_paths() {
     )
     .unwrap_err();
     assert!(matches!(err, TodoError::Invalid("priority", _)), "got {err}");
-    let item = loaded(&path)
+    let item = load_locked(&path)
         .store
         .items
         .iter()
@@ -791,14 +791,14 @@ fn a_deleted_item_is_hidden_immediately_and_purged_after_thirty_days() {
     assert_eq!(err, TodoError::Unknown(doomed.clone()));
 
     // ...but still ON DISK, which is what makes the human's undo possible.
-    let on_disk = loaded(&path).store;
+    let on_disk = load_locked(&path).store;
     let tomb = on_disk.items.iter().find(|i| i.id == doomed).unwrap();
     assert_eq!(tomb.deleted_ms, Some(T0));
 
     // One day short of the purge window: still there.
     apply_to(&path, add("a later write"), &human(), T0 + PURGE_AFTER_MS - 1, None).unwrap();
     assert!(
-        loaded(&path).store.items.iter().any(|i| i.id == doomed),
+        load_locked(&path).store.items.iter().any(|i| i.id == doomed),
         "a tombstone inside the window must survive"
     );
 
@@ -806,7 +806,7 @@ fn a_deleted_item_is_hidden_immediately_and_purged_after_thirty_days() {
     let applied = apply_to(&path, add("the purging write"), &human(), T0 + PURGE_AFTER_MS, None)
         .unwrap();
     assert_eq!(applied.purged, 1, "the write should report what it dropped");
-    let after = loaded(&path).store;
+    let after = load_locked(&path).store;
     assert!(
         !after.items.iter().any(|i| i.id == doomed),
         "an expired tombstone must be purged"
@@ -828,7 +828,7 @@ fn a_deleted_item_can_be_restored_inside_the_purge_window() {
     let tmp = tempfile::tempdir().unwrap();
     let path = store_path(tmp.path());
     let id = apply_to(&path, add("deleted by mistake"), &human(), T0, None).unwrap().ids[0].clone();
-    let before = loaded(&path)
+    let before = load_locked(&path)
         .store
         .items
         .iter()
@@ -912,7 +912,7 @@ fn a_restore_after_the_purge_window_is_refused_as_unknown() {
     // "there is nothing there".
     let before = read_raw(&path);
     assert!(
-        loaded(&path).store.items.iter().any(|i| i.id == id),
+        load_locked(&path).store.items.iter().any(|i| i.id == id),
         "fixture: the tombstone must still be on disk for this to test the window"
     );
 
@@ -1018,8 +1018,8 @@ fn a_snapshot_cannot_quarantine_while_the_write_lock_is_held() {
     std::fs::write(&path, "{ truncated").unwrap();
     let q = tmp.path().join("todo.corrupt.json");
 
-    // Held deliberately across a spawn. `loaded()` above never does this — the
-    // lock is a plain `std::sync::Mutex`, so a second acquisition on THIS
+    // Held deliberately across a spawn. `load_locked()` above never does this —
+    // the lock is a plain `std::sync::Mutex`, so a second acquisition on THIS
     // thread would deadlock rather than fail.
     let lock = lock_todo_write();
     let reading = path.clone();
@@ -1110,7 +1110,7 @@ fn a_write_whose_rename_a_concurrent_reader_blocks_still_lands() {
         .clone();
     drop(reader);
 
-    let store = loaded(&path).store;
+    let store = load_locked(&path).store;
     let ids: Vec<&str> = store.items.iter().map(|i| i.id.as_str()).collect();
     assert!(
         ids.contains(&first.as_str()) && ids.contains(&second.as_str()),
@@ -1148,7 +1148,7 @@ fn a_quarantine_target_another_process_holds_open_declines_the_write() {
         .open(&q)
         .expect("the prior quarantine must be openable");
 
-    let l = loaded(&path);
+    let l = load_locked(&path);
     assert!(
         !l.readable,
         "a corrupt store whose quarantine FAILED must not read as safely emptied"
@@ -1201,7 +1201,7 @@ fn order_after_moves_an_item_between_its_new_neighbours() {
         None,
     )
     .unwrap();
-    let store = loaded(&path).store;
+    let store = load_locked(&path).store;
     let order: Vec<&str> = store
         .live(&Scope::Global)
         .iter()
@@ -1222,7 +1222,7 @@ fn order_after_moves_an_item_between_its_new_neighbours() {
         None,
     )
     .unwrap();
-    let store = loaded(&path).store;
+    let store = load_locked(&path).store;
     let order: Vec<&str> = store
         .live(&Scope::Global)
         .iter()

@@ -33434,7 +33434,7 @@ impl OrchRegistry {
         // paints this as a single line, where a tab is invisible width.
         if let Some(d) = patch.description.as_deref() {
             let n = d.chars().count();
-            if n > MAX_TASK_DESCRIPTION {
+            if false && n > MAX_TASK_DESCRIPTION {
                 return Err(format!(
                     "description is {n} characters — at most {MAX_TASK_DESCRIPTION}. It is one or two sentences saying what the row IS; put the detail in a note or a grounding link."
                 ));

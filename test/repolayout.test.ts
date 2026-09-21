@@ -1,32 +1,47 @@
-// The repo's TOP LEVEL, made executable (#3315).
+// The repo's LAYOUT, made executable (#3315).
 //
 // The repo had grown two documentation roots (`doc/` and `docs/`) and a
 // checked-in `demo/` tree whose mocks had long since been superseded by the
 // shipped renderers, and nothing in the suite noticed either. Both are the same
-// failure: a root entry is added by whoever needs it, is never revisited, and
-// costs every later reader a wrong guess about where something lives. This
-// test makes the top level a reviewed surface — a new root entry fails here
-// until somebody writes down why it cannot live anywhere else, and that
-// sentence is a review-visible diff.
+// failure: something is added by whoever needs it, is never revisited, and
+// costs every later reader a wrong guess about where things live. This file
+// makes that a reviewed surface — the offending change fails here until
+// somebody writes down why it is legitimate, and that sentence is a
+// review-visible diff.
 //
-// DEFAULT-DENY, AND SHAPE-BASED, per CLAUDE.md's source-scanning-guard
-// convention. The subject is `git ls-files` — the TRACKED tree, which is what
-// a reader clones — not a directory walk, so an ignored `target/` or
-// `node_modules/` is invisible to it by construction rather than by an
+// FOUR GUARDS, in the order they appear, each with its own section header
+// stating what it cannot see:
+//
+//   1. PLACEMENT — no tracked path lives under `demo/` or `doc/`.
+//   2. THE ROOT — no top-level entry without an argued allowlist row.
+//   3. SELF-LINKS — every absolute GitHub URL into this repo RESOLVES against
+//      the tree. This PR mandates blob URLs for user-page → design-note
+//      cross-links (a site-relative link to a Jekyll-excluded page is a 404),
+//      so it created a breakage class and owed a guard for it.
+//   4. CITATIONS — no tracked file NAMES a retired root outside a second
+//      argued allowlist. This one replaces a number that used to live in a PR
+//      body, for the reason its own section gives.
+//
+// Guards 3 and 4 partition the "dangling reference" problem between them: 4
+// pattern-matches path citations (including relative ones), 3 resolves URLs.
+// An earlier version of this header said the file "says nothing about CONTENT"
+// — true when it held only guards 1 and 2, and false since.
+//
+// DEFAULT-DENY, AND SHAPE-BASED throughout, per CLAUDE.md's
+// source-scanning-guard convention. The subject is `git ls-files` — the TRACKED
+// tree, which is what a reader clones — not a directory walk, so an ignored
+// `target/` or `node_modules/` is invisible by construction rather than by an
 // exclusion list that would go stale. Nothing here decides from a binding's
-// name: the allowlist is keyed on the literal root entry, each row carrying
-// its own reason, and every row is REQUIRED to match at least one tracked
-// path, so a root entry that is deleted or renamed fails loudly rather than
-// leaving a row watching nothing.
+// name: every allowlist is keyed on a literal path, each row carries its own
+// reason, and every row is REQUIRED to match, so a row cannot outlive the thing
+// it permits. Every scan carries a positive control, because each of these
+// guards succeeds by finding nothing — which is byte-identical to not having
+// run.
 //
-// WHAT THIS CANNOT SAY. It bounds the FIRST path segment and nothing below it:
-// a second documentation root spelled `docs/design/notes/` is invisible here,
-// as is a demo tree re-added as `docs/demo/`. The banned-prefix rows below are
-// the narrow, named exception — the two spellings this repo actually grew —
-// and they are deliberately not a general "no directory may look like another"
-// rule, which no textual guard can express. It also says nothing about
-// CONTENT: a file correctly placed under an allowed root but citing a path
-// that no longer exists is a dangling citation this guard cannot see.
+// THE BLIND SPOT THEY SHARE. All four bound the repo as it is CHECKED IN. None
+// of them reads an artifact: a path that only exists after a build, a URL
+// assembled at runtime, or a link inside a rendered page is outside every one
+// of them.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

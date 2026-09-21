@@ -201,12 +201,31 @@ S3.
 
 Stated here so S3 inherits it rather than re-deciding it. With
 `provider: none` — the only value this build has — **no text leaves the
-machine**: there is no HTTP client anywhere in this workspace, and
-`src-tauri/tests/triage.rs` pins that as a property of the dependency graph
-rather than as a promise. With any future `provider != none`, the TEXT of
-`report` and `message_orchestrator` lines would leave the machine, and
-`kinds:` is what bounds which. Whatever S3 ships, that sentence belongs in the
-user docs in the same PR.
+machine.**
+
+**What backs that sentence, precisely, because an earlier draft of it
+overreached.** It said "there is no HTTP client anywhere in this workspace",
+which is false: `tauri` brings `reqwest`, `hyper` and `hyper-util` into
+`Cargo.lock` transitively, as the webview host has done since long before this
+feature. The claim reached three surfaces before the guard that was supposed to
+check it was ever RUN — which is CLAUDE.md's "a guard that REFUSES ships only
+after it has run clean over known-good subjects", landing on its author.
+
+The true and checkable statement is narrower, and
+`neither_the_engine_nor_triage_can_reach_a_network` pins both halves of it:
+`loomux-engine` — the crate triage lives in — declares no HTTP client among
+its short, individually-audited dependencies; and neither triage source names a
+network primitive, default-denied over TOKENS (`https://`, `TcpStream`,
+`Client::new`) rather than over a binding's name. The shipped binary does link
+an HTTP stack; what S1 guarantees is that no delivery can reach it, because
+there is no call, no client and no address anywhere between
+`deliver_prompt_as` and a decision. S3 adding a provider has to add a direct
+edge or a socket, and either reddens that test.
+
+With any future `provider != none`, the TEXT of `report` and
+`message_orchestrator` lines would leave the machine, and `kinds:` is what
+bounds which. Whatever S3 ships, that sentence belongs in the user docs in the
+same PR.
 
 ## 7. What this slice does not do
 

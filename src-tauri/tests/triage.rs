@@ -11,8 +11,8 @@
 //! - it is flushed at the DEADLINE with no wake at all;
 //! - it is never DROPPED — `deferred.json` survives a fresh registry over the
 //!   same state root;
-//! - `provider: none` is the only value that loads, and nothing in this
-//!   workspace can reach a network at all.
+//! - `provider: none` is the only value that loads, and nothing on the
+//!   delivery path can reach a network.
 //!
 //! # Why a new file rather than `tests/orchestration.rs`
 //!
@@ -429,48 +429,71 @@ fn an_out_of_range_deadline_and_an_unknown_kind_both_refuse_the_file() {
 
 // ── the privacy claim, as a property of the build ───────────────────────────
 
-/// `provider: none` cannot reach a network, and the reason is stronger than
-/// "no code calls one": **there is no HTTP client in this workspace at all.**
+/// What `provider: none` actually guarantees, stated as something CHECKABLE.
 ///
-/// Asserted over `Cargo.lock`, which is the whole dependency graph rather than
-/// the manifests' direct edges — a transitive client would be just as reachable
-/// and would not appear in any `Cargo.toml` here. The ban list is the common
-/// Rust HTTP stacks; it is a SAMPLE and says so, which is why the claim in
-/// `doc/design/delivery-triage.md` §6.1 is scoped to these names.
+/// **The first draft of this test claimed the workspace has no HTTP client at
+/// all, and that claim is false.** `tauri` brings `reqwest`, `hyper` and
+/// `hyper-util` into `Cargo.lock` transitively — it is the webview host and
+/// has done so since long before this feature. The claim survived being
+/// written into three permanent surfaces and was caught only by RUNNING the
+/// guard, which is CLAUDE.md's "a guard that REFUSES ships only after it has
+/// run clean over known-good subjects" landing on its author.
 ///
-/// `tauri` ships its own networking, and that is not a hole in this test: it
-/// is the webview host, it predates this feature by two years, and nothing in
-/// `triage` or `triagegate` can reach it. What this pins is that #3304 S1 did
-/// not ADD one, and that S3 cannot add one without reddening here first.
+/// So the guarantee is narrowed to what is true, and each half is pinned by
+/// the assertion that can actually see it:
+///
+/// 1. **The crate triage lives in declares no HTTP client.**
+///    `loomux-engine`'s dependency list is closed, short and individually
+///    audited in its own manifest; a client added there would be a new direct
+///    edge in a crate whose defining property is what it must never depend on.
+/// 2. **Neither triage source names a network primitive**, default-deny over a
+///    token list rather than over a binding's name.
+///
+/// What is NOT claimed: that the shipped binary links no HTTP stack. It does,
+/// through `tauri`. What S1 guarantees is that no delivery can reach it —
+/// there is no call, no client and no address anywhere on the path from
+/// `deliver_prompt_as` to a decision. S3 adding a provider has to add a direct
+/// edge or a socket, and either reddens this.
 #[test]
-fn no_http_client_is_in_this_workspaces_dependency_graph() {
-    let lock = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("Cargo.lock"),
-    )
-    .expect("the workspace lockfile");
-    // The positive control FIRST: this test is a scan whose success shape is
-    // "no match", which is byte-identical to a scan that read the wrong file.
+fn neither_the_engine_nor_triage_can_reach_a_network() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+
+    // (1) the engine crate's own declared dependencies.
+    let manifest = fs::read_to_string(root.join("crates/loomux-engine/Cargo.toml"))
+        .expect("the engine manifest");
+    // The positive control FIRST: a scan whose success shape is "no match" is
+    // byte-identical to a scan that read the wrong file.
     assert!(
-        lock.contains("name = \"serde_json\""),
-        "the lockfile was not read as expected — every assertion below would pass vacuously"
+        manifest.contains("serde_norway"),
+        "the engine manifest was not read as expected — the assertions below would be vacuous"
     );
-    for banned in [
-        "name = \"reqwest\"",
-        "name = \"hyper\"",
-        "name = \"ureq\"",
-        "name = \"isahc\"",
-        "name = \"curl\"",
-        "name = \"curl-sys\"",
-        "name = \"attohttpc\"",
-        "name = \"surf\"",
-        "name = \"typesafe-sdk\"",
-    ] {
+    for banned in
+        ["reqwest", "hyper", "ureq", "isahc", "curl", "attohttpc", "surf", "typesafe-sdk"]
+    {
         assert!(
-            !lock.contains(banned),
-            "{banned} is in the workspace graph — #3304 S1 ships no provider, and a \
-             classifier that sends agent-authored text off the machine is S3's decision \
-             to argue, with the human's say-so, not a dependency that arrives quietly"
+            !manifest.contains(banned),
+            "{banned} is a declared dependency of loomux-engine — the crate triage lives in. \
+             #3304 S1 ships no provider, and a classifier that sends agent-authored text off \
+             the machine is S3's decision to argue with the human's say-so, not a dependency \
+             that arrives quietly"
         );
+    }
+
+    // (2) the two triage sources name no network primitive. Default-deny over
+    // TOKENS, never over a binding's name (CLAUDE.md's source-scanning-guard
+    // convention): a rename cannot step over `https://` or `TcpStream`.
+    for rel in ["crates/loomux-engine/src/triage.rs", "src-tauri/src/orchestration/triagegate.rs"]
+    {
+        let src = fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        assert!(src.contains("fn "), "{rel} was not read as expected");
+        for token in
+            ["https://", "http://", "TcpStream", "reqwest", "hyper::", "Client::new", "::connect("]
+        {
+            assert!(
+                !src.contains(token),
+                "{rel} names {token} — nothing on the delivery path may reach a network in S1"
+            );
+        }
     }
 }
 

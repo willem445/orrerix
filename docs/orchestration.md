@@ -2747,10 +2747,12 @@ long you are willing to lose sight of your own fleet. A burst also flushes early
 than growing a summary nobody can read.
 
 **`provider: none` is the only value this build accepts**, and it is the whole of the
-privacy posture: with it, no text leaves the machine — orrerix has no HTTP client at
-all. A classifier tier for the notices the rules cannot close is #3304 S3, and a file
-naming a provider today refuses to load rather than running the rule tier while you
-believe something else is happening.
+privacy posture: with it, no text leaves the machine. Nothing on the delivery path makes
+a network call — the engine crate triage lives in declares no HTTP client, and neither
+triage source names one. (orrerix's own binary does link an HTTP stack, by way of the
+webview framework; the point is that triage cannot reach it.) A classifier tier for the
+notices the rules cannot close is #3304 S3, and a file naming a provider today refuses
+to load rather than running the rule tier while you believe something else is happening.
 
 `kinds:` narrows which delivery kinds triage may act on; empty (the default) means all
 of them. The names are the ones `list_deferred()` reports —

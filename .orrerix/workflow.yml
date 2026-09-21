@@ -131,8 +131,8 @@ driver:
 # never triaged at all.
 #
 # provider: none is the ONLY value this build accepts, and it is the whole of the
-# privacy posture: no text leaves this machine - there is no HTTP client in the
-# workspace. A provider adapter is #3304 S3 and is held on a measured agreement
+# privacy posture: no text leaves this machine - nothing on the delivery path
+# makes a network call. A provider adapter is #3304 S3 and is held on a measured agreement
 # run. kinds and max_defer_minutes are left at their defaults (every kind the rule
 # table covers; 30 minutes). Set enabled: false to turn it off; absent and false
 # are equivalent.

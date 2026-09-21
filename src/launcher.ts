@@ -207,6 +207,13 @@ export type WelcomeResult =
        *  and what the pane offers to create when there is no file at all. */
       file?: string;
     }
+  /** A TO-DO pane (#3263 S4): the human's task list, which agents also write.
+   *  `root` is the project whose per-workspace list the scope switch offers, and
+   *  it is the one content root that may be BLANK — a rootless to-do pane is not
+   *  broken, it is the global list. So this kind is the one the form does not
+   *  probe: there is no directory it opens, and a vanished one costs the
+   *  workspace half of a switch rather than the pane. */
+  | { kind: "todo"; name: string; root: string }
   /** An SSH pane (#887 S3): `argv` is the fully-composed local ssh command line —
    *  the resolved `ssh.exe` path, the profile's option flags, the destination, and
    *  (for a remote CLI) one quoted remote-command string. Composed HERE rather than
@@ -615,6 +622,7 @@ export class WelcomeForm {
       ["editor", "File editor — tree + code editor, rooted at a folder"],
       ["git", "Git — graph, status, diffs and worktrees for a repo"],
       ["workflow", "Workflow — agent blocks, edges and merge gates for a repo"],
+      ["todo", "To-do — your task list, shared with the agents you launch"],
       ["ssh", "SSH — a remote shell or agent CLI over your own ssh client"],
     ]);
     this.kindSel.addEventListener("change", () => this.applyKind());
@@ -1191,7 +1199,8 @@ export class WelcomeForm {
     }
     // Same control, honest caption per kind: a folder to browse or edit, a repository
     // to view — not "a repository to work in".
-    this.repoLabel.textContent = k === "files" || k === "editor" ? "Folder" : "Repository";
+    this.repoLabel.textContent =
+      k === "files" || k === "editor" ? "Folder" : k === "todo" ? "Project" : "Repository";
     this.repoPicker.input.placeholder =
       k === "files"
         ? "Folder to browse — required"
@@ -1201,7 +1210,9 @@ export class WelcomeForm {
             ? "Repository — required"
             : k === "workflow"
               ? "Repository whose workflow to edit — required"
-              : "Repository or folder — empty for home";
+              : k === "todo"
+                ? "Project for a per-project list — empty for the global list"
+                : "Repository or folder — empty for home";
     this.applyOrchCli();
     this.applyAutopilot();
     this.applyChannelTools();
@@ -2357,6 +2368,25 @@ export class WelcomeForm {
       if (plan.cwd) addRecentRepo(plan.cwd);
       this.setBusy(true, "Starting…");
       this.fire({ kind: "terminal", name: plan.name, cwd: plan.cwd ?? undefined, shellKind });
+      return;
+    }
+
+    if (plan.kind === "todo") {
+      // #3263 S4. NOT probed, unlike its four content siblings: this pane opens
+      // on a LIST the backend holds, not on a directory, so a root that is
+      // blank or has since vanished costs the WORKSPACE half of the scope
+      // switch and nothing else — the global list is still there. Refusing to
+      // open over a missing folder would throw away a working pane.
+      //
+      // The root is still DECLARED when there is one (#1042): the human picked
+      // it, and the pane's folder chip and the backend's own workspace lookup
+      // both want it resolvable.
+      if (plan.root) {
+        await admitRoot(plan.root);
+        addRecentRepo(plan.root);
+      }
+      this.setBusy(true, "Opening…");
+      this.fire({ kind: "todo", name: plan.name, root: plan.root });
       return;
     }
 

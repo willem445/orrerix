@@ -1102,3 +1102,142 @@ test("the persisted-kind ladder answers each rung, with the rung below it varied
   assert.equal(persistedKindFor({ ...LIVE, launchedCommand: true }), "agent");
   assert.equal(persistedKindFor(LIVE), "terminal", "a bare shell");
 });
+
+test("a todo leaf round-trips, and its workspace root rides in cwd (#3263 S4)", () => {
+  // The sixth persisted kind, and the fifth PTY-less content one. Additive and
+  // shape-driven like the four before it — the workspace ROOT rides in `cwd`
+  // exactly as a file tree's root does — so SCHEMA_VERSION does not move.
+  const todo: PersistedPane = {
+    paneKind: "todo",
+    name: "to-do",
+    cwd: "C:\\Projects\\loomux",
+    command: null,
+    argv: null,
+    shellKind: null,
+    sessionId: null,
+    role: null,
+    groupId: null,
+    file: null,
+    sshProfileId: null,
+    lead: false,
+    embeds: [],
+  };
+  const state: PersistedTabs = {
+    tabs: [
+      { name: "t", color: null, groupId: null, layout: { kind: "leaf", weight: 1, pane: todo } },
+    ],
+    activeIndex: 0,
+  };
+  const back = decodeTabs(encodeTabs(state));
+  const leaf = back?.tabs[0].layout;
+  assert.ok(leaf?.kind === "leaf", "the todo leaf survives — an unknown kind would collapse the tab");
+  assert.deepEqual(leaf.pane, todo);
+  assert.equal(back?.schemaVersion, SCHEMA_VERSION);
+});
+
+test("a ROOTLESS todo leaf survives, where a rootless content leaf is the unrestorable case", () => {
+  // The divergence this slice introduces, pinned rather than described. Every
+  // other content kind opens ON a directory, so a null root is unrestorable and
+  // fails soft to the welcome form. A to-do pane opens on a LIST: a null root is
+  // the GLOBAL list, a first-class scope. So the decode must keep the leaf —
+  // dropping it, or refusing it, would delete a working pane.
+  const todo: PersistedPane = {
+    paneKind: "todo",
+    name: "to-do",
+    cwd: null,
+    command: null,
+    argv: null,
+    shellKind: null,
+    sessionId: null,
+    role: null,
+    groupId: null,
+    file: null,
+    sshProfileId: null,
+    lead: false,
+    embeds: [],
+  };
+  const state: PersistedTabs = {
+    tabs: [
+      { name: "t", color: null, groupId: null, layout: { kind: "leaf", weight: 1, pane: todo } },
+    ],
+    activeIndex: 0,
+  };
+  const leaf = decodeTabs(encodeTabs(state))?.tabs[0].layout;
+  assert.ok(leaf?.kind === "leaf");
+  assert.equal(leaf.pane.cwd, null);
+  assert.equal(leaf.pane.paneKind, "todo");
+});
+
+test("a kind from a NEWER build still degrades exactly as it always did (#3263 S4)", () => {
+  // The other half of adding a kind, and the half nothing would otherwise
+  // notice: "todo" decoding is only correct if an UNRECOGNISED kind still hits
+  // the same fail-safe it hit before. The two are asserted together, against one
+  // file, so a decode loosened to accept "todo" by accepting anything reddens
+  // here rather than shipping a pane that spawns nothing under a stranger's name.
+  const raw = {
+    schemaVersion: SCHEMA_VERSION,
+    activeIndex: 0,
+    tabs: [
+      {
+        name: "known",
+        color: null,
+        groupId: null,
+        layout: {
+          kind: "leaf",
+          weight: 1,
+          pane: { paneKind: "todo", name: "to-do", cwd: null },
+        },
+      },
+      {
+        name: "newer",
+        color: null,
+        groupId: null,
+        layout: {
+          kind: "leaf",
+          weight: 1,
+          pane: { paneKind: "hologram", name: "from the future", cwd: null },
+        },
+      },
+    ],
+  };
+  const back = decodeTabs(JSON.stringify(raw));
+  assert.ok(back, "the file as a whole still decodes");
+  assert.equal(back.tabs[0].layout?.kind, "leaf", "the todo leaf is understood");
+  assert.equal(
+    back.tabs[1].layout,
+    null,
+    "an unknown kind still collapses ITS tab's layout — unchanged by this slice, and " +
+      "the reason the downgrade note on CONTENT_KINDS says what it says"
+  );
+});
+
+test("persistedKindFor puts todo on the content rung, not on the ladder below it", () => {
+  // The ladder's first rung is "content", and a to-do pane has to reach it: a
+  // fallthrough would persist it as a plain terminal and it would come back next
+  // boot as a shell wearing the pane's name — the exact failure the `ssh` rung
+  // was added for.
+  assert.equal(
+    persistedKindFor({
+      contentKind: "todo",
+      structured: false,
+      ssh: false,
+      orchRole: null,
+      orchGroup: null,
+      launchedCommand: false,
+    }),
+    "todo"
+  );
+  // And it stays content even when the pane carries things the lower rungs key
+  // on — the rung is a precedence ladder, not a set of independent tests.
+  assert.equal(
+    persistedKindFor({
+      contentKind: "todo",
+      structured: false,
+      ssh: true,
+      orchRole: "worker",
+      orchGroup: "g-1",
+      launchedCommand: true,
+    }),
+    "todo"
+  );
+});

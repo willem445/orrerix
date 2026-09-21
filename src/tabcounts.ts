@@ -15,19 +15,32 @@
  *  (kind + whether it has a running PTY); welcome/dormant panes report
  *  `live: false` so they add nothing to the agent count. */
 export interface TabPaneInfo {
-  /** "files" (#214), "editor" and "git" (#217) and "workflow" (#222) are the PTY-less
-   *  CONTENT panes. None is an agent, and none ever will be, so — like a terminal — they
+  /** "files" (#214), "editor" and "git" (#217), "workflow" (#222) and "todo"
+   *  (#3263) are the PTY-less CONTENT panes. None is an agent, and none ever will be, so — like a terminal — they
    *  contribute nothing to the count below, no matter what `live` says. The count
    *  keys off the KIND, not off `live`: a viewer that is fully functional (and so
    *  honestly reports live) must not thereby claim to be a running agent. The workflow
    *  pane is the sharpest case of that: it is ABOUT agents without being one.
+   *  The TO-DO pane is the same shape once removed: agents write to its list
+   *  through MCP, so a row on screen can be an agent's work — but the pane is a
+   *  view of a file, and counting it would put an agent in the strip for a tab
+   *  running none.
    *
    *  "ssh" (#887) contributes nothing either, and for a reason worth stating rather
    *  than filing under "not an agent": the CLI on the far end may well BE an agent,
    *  but it is not one this loomux spawned, supervises, or can account for — the
    *  counter reports what this app is running. It can never be an orchestration
    *  member either (the #887/#888 boundary), so neither branch below is its. */
-  kind: "terminal" | "agent" | "orch" | "files" | "editor" | "git" | "workflow" | "ssh";
+  kind:
+    | "terminal"
+    | "agent"
+    | "orch"
+    | "files"
+    | "editor"
+    | "git"
+    | "workflow"
+    | "todo"
+    | "ssh";
   /** True when the pane has a running PTY — a live terminal/agent. False for a
    *  setup (welcome) pane or a dormant restore placeholder (no process yet). A
    *  content pane has no process at all; it reports `live: true` because it is

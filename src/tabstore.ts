@@ -74,11 +74,28 @@ export type PersistedPaneKind =
   | "editor"
   | "git"
   | "workflow"
+  | "todo"
   | "ssh";
 
 /** The PTY-less content kinds, in one place — what `cwd` means for them is a ROOT,
  *  not a shell's directory. */
-const CONTENT_KINDS: readonly PersistedPaneKind[] = ["files", "editor", "git", "workflow"];
+const CONTENT_KINDS: readonly PersistedPaneKind[] = [
+  "files",
+  "editor",
+  "git",
+  "workflow",
+  // #3263 S4. Additive like its four siblings, and `cwd` carries the workspace
+  // ROOT exactly as it carries their root — so SCHEMA_VERSION stays at 2 and a
+  // file written before this simply never holds a "todo" leaf.
+  //
+  // The DOWNGRADE direction costs what the "ssh" note below describes and no
+  // more: an older build's `decodePane` does not know this kind, returns null,
+  // and `decodeLayout`'s whole-tree fail-safe collapses that tab to one welcome
+  // pane. That behaviour is UNCHANGED by this slice — `test/tabstore.test.ts`
+  // pins both halves, that a "todo" leaf decodes here and that an unknown kind
+  // from a newer build still degrades exactly as it always did.
+  "todo",
+];
 
 /** One pane at a layout leaf, reduced to what restore needs. Never the live
  *  PTY/buffer — those are deliberately not captured (cost/#78 process-storm and

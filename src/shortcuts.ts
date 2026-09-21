@@ -18,6 +18,7 @@ export type ShortcutAction =
   | "toggle-issues"
   | "toggle-files"
   | "open-editor"
+  | "open-todo"
   | "toggle-tasks"
   | "toggle-decisions"
   | "toggle-audit"
@@ -99,6 +100,36 @@ export function matchShortcut(e: KeyboardEvent): ShortcutAction | null {
       // that's why the in-file find uses a button, not Ctrl+F). (#174)
       case "KeyF": return "toggle-files";
       case "KeyE": return "open-editor";
+      // Alt+J (#3263 S4) — the To-Do pane. A pane, never an overlay: a to-do
+      // list is a station you keep open, not a look you take (content-panes.md
+      // "Why a pane and not a bigger overlay"), so this OPENS one in the active
+      // grid or FOCUSES the one already there.
+      //
+      // CHECKED against every CLI this repo spawns, per the
+      // agent-cli-reference discipline, with the references fetched rather
+      // than recalled:
+      //   - Claude Code's interactive-mode reference documents Alt+B/D/F/M/O/
+      //     P/T/V/Y and the arrows, and its keybindings reference spells
+      //     `chat:newline` as Ctrl+J; neither lists Alt+J.
+      //   - Copilot CLI's command reference documents Alt+V, Alt+Enter and
+      //     Alt+arrows; no Alt+J.
+      //   - opencode's keybinds reference binds `input_newline` to
+      //     `shift+return,ctrl+return,alt+return,ctrl+j` — Ctrl+J, not Alt+J —
+      //     and its Alt rows are a/e/f/b/d/return/arrows.
+      //   - pi's keybindings reference has no Alt+J default (a/b/d/f/y/v/
+      //     enter/arrows/backspace/delete).
+      //   - Codex's reference documents no Alt binding at all, so that one is
+      //     UNVERIFIED rather than confirmed free — a reference that lists no
+      //     Alt row is not evidence of no conflict.
+      //   - Readline leaves `\ej` unbound in this repo's bash, the same shape
+      //     Alt+W and Alt+Q rely on, and Alt+J is not a WebView2 accelerator.
+      // Alt+H was the other candidate and comes out equally free; J takes it
+      // because `h` is the conventional HELP letter and is the likelier of the
+      // two to be claimed by a CLI adding a help overlay. Both are bound by
+      // pi's *vim example config*, which a user opts into by hand — a
+      // user-config collision rather than a shipped default, and the same for
+      // either letter, so it does not separate them.
+      case "KeyJ": return "open-todo";
       case "KeyT": return "toggle-tasks";
       // Alt+Q (#1091) — the NEEDS-YOU panel, the board's decision sibling.
       // NOT Alt+D, which is readline's kill-word in every bash pane.
@@ -144,13 +175,15 @@ export function matchShortcut(e: KeyboardEvent): ShortcutAction | null {
       //   - Readline in this repo's bash leaves `\ek` unbound (`\eK` is only
       //     do-lowercase-version), the same shape Alt+W relies on, and Alt+K
       //     is not a WebView2 accelerator.
-      //   - **pi DOES bind it**: `"tui.editor.cursorUp": ["up", "alt+k"]`.
-      // That last one is a real collision and is taken deliberately. It costs
-      // a REDUNDANT alias — pi binds the same action to plain `up`, which
-      // loomux does not intercept — and pi's Alt space is vim-shaped
-      // (h/j/k/l/w/q/f/d/…), so subtracting it, readline and loomux's twelve
-      // existing Alt keys leaves NO free letter at all. There is no better
-      // choice to migrate to, which is why this is a decision and not a miss.
+      //   - pi does NOT bind it by default. Its `tui.editor.cursorUp` default
+      //     is `up` alone; the `["up", "alt+k"]` spelling is in that page's
+      //     *Vim Example* custom-config block, which a user opts into by hand
+      //     (re-read at the reference, #3263 S4 — the earlier note here read
+      //     that example as a shipped default and called Alt+K a real
+      //     collision, which it is not).
+      // So Alt+K is free of documented defaults everywhere, and a pi user who
+      // copies the vim example costs themselves a REDUNDANT alias: pi binds the
+      // same action to plain `up`, which loomux does not intercept.
       case "KeyK": return "toggle-tokens";
       case "KeyO": return "toggle-group";
       case "KeyP": return "focus-compose";

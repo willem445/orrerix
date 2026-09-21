@@ -200,6 +200,22 @@ export type RestoreAction =
       name: string;
       root: string | null;
       file: string | null;
+    }
+  | {
+      // A TO-DO pane (#3263 S4), back over the workspace it was pointed at.
+      //
+      // IT IS NOT PROBED, and that is the difference from every content action
+      // above rather than an omission. Those four open ON a directory, so a
+      // vanished one leaves a pane that renders an empty tree and a mystery.
+      // This one opens on a LIST the backend holds: a root that has been
+      // deleted or unmounted costs the human the WORKSPACE half of the scope
+      // switch and nothing else, and the global list — every item not tied to
+      // that project — is still right there. Failing soft to the welcome form
+      // would throw away a working pane to "recover" from a folder it does not
+      // need. A null root restores the same way, on Global.
+      type: "open-todo";
+      name: string;
+      root: string | null;
     };
 
 /** True when a recorded agent session id still has a resumable conversation on
@@ -267,6 +283,12 @@ export function planPaneRestore(pane: PersistedPane, resumable?: SessionResumabl
       // open tab are view state, not layout: a restored workflow pane opens on its roster
       // exactly like a freshly opened one.
       return { type: "open-workflow", name: pane.name, root: pane.cwd, file: pane.file };
+    case "todo":
+      // #3263 S4. The scope the human was on and which rows were expanded are
+      // VIEW state, not layout — the scope is a per-viewer preference
+      // (`todoview.ts`'s `TodoPrefs`, localStorage) and expansion is a reading
+      // position, so a restored todo pane opens exactly like a fresh one.
+      return { type: "open-todo", name: pane.name, root: pane.cwd };
     case "agent":
       // Auto-resume when we have a session id AND the hybrid is enabled; else a
       // dormant Start placeholder (no id to resume into, or the flip is off).

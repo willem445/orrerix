@@ -412,20 +412,20 @@ const STREAMS: StreamRow[] = [
   {
     event: "todo-changed",
     rate: "producer",
-    bound: "argued-none",
-    cite: "src/todo.ts",
+    bound: "throttled",
+    cite: "src/refreshgate.ts",
     reason:
       "Emitted on every successful write to todo.json, from EITHER writer — the pane's own " +
       "todo_apply and an agent's through the #3263 S2 MCP tools — so its rate is set by a human " +
-      "typing and by agents, not by a clock. Today it is a gap by construction rather than by " +
-      "oversight: #3263 S3 ships the subscription helper (onTodoChanged) and NOTHING CALLS IT, " +
-      "because the To-Do pane that would is S4. So no listener runs at runtime and the stream " +
-      "costs nothing yet. The bound arrives with the consumer: S4's TodoPaneView puts a " +
-      "CoalescingRefresh (src/tasksview.ts) behind this exactly as the board does with " +
-      "orch-tasks-changed — single-flight with a trailing-edge merge, so an agent's burst costs " +
-      "the refetch already in flight plus one more. This row is the reminder, and it is why the " +
-      "bound is recorded as argued-none rather than as a mechanism that does not exist yet.",
-    debt: "#3263 S4",
+      "typing and by agents, not by a clock. #3263 S4 shipped the consumer this row was waiting " +
+      "for: TodoPaneView is the only listener and it refreshes through a CoalescingRefresh " +
+      "(#743 S5) exactly as the board does with orch-tasks-changed — single-flight with a " +
+      "trailing-edge merge, so an agent's burst costs the refetch already in flight plus " +
+      "exactly one more, and the trailing run reads the final store. It is ALSO visibility-" +
+      "gated the way #1318 gates the board: a HIDDEN pane drops the wake outright rather than " +
+      "coalescing it, and show() re-reads unconditionally so nothing is lost by dropping it. " +
+      "A pane left open behind a background tab still pays, which is #1465's open case here too.",
+    debt: null,
   },
   {
     event: "orch-needs-you-changed",

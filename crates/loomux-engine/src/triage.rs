@@ -367,6 +367,10 @@ fn contains_ci(hay_lower: &str, needles: &[&str]) -> bool {
 /// Is this delivery exempt from triage entirely? `None` means the rule table
 /// decides.
 pub fn never_triaged(text: &str, human_actor: bool) -> Option<NeverReason> {
+    // SCRATCH MUTATION: the never-triaged set is bypassed entirely, so every
+    // exempt delivery falls through to the rule table.
+    #[allow(unreachable_code)]
+    return None;
     if human_actor || body(text).is_none() {
         return Some(NeverReason::HumanActor);
     }

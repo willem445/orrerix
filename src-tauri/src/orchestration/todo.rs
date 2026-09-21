@@ -156,8 +156,7 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
             quarantined: None,
         },
         Err(_) => {
-            let q = quarantine_path(path);
-            let _ = std::fs::rename(path, &q);
+            let q = quarantine_path(path); // M9: rename removed
             // Readable again: the evidence has moved aside under its own name,
             // so the empty store below is the real state of `todo.json` and a
             // write over it destroys nothing.

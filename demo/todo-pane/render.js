@@ -20,7 +20,7 @@
 // every change. That is CLAUDE.md's in-list-editor rule, obeyed here so S4
 // inherits the shape rather than discovering it.
 
-import { parseQuickAdd, formatDue } from "./quickadd.js";
+import { parseQuickAdd, formatDue, addDays } from "./quickadd.js";
 
 const MS_PER_DAY = 86400000;
 
@@ -65,7 +65,7 @@ function startOfDay(ms) {
 /** `{ day: -1, hm: "16:00" }` → epoch ms, anchored on `nowMs`'s local day. */
 function resolveDue(due, nowMs) {
   if (!due) return { dueMs: null, hasTime: false };
-  const day = startOfDay(nowMs) + (due.day || 0) * MS_PER_DAY;
+  const day = addDays(startOfDay(nowMs), due.day || 0);
   const [h, m] = (due.hm || "09:00").split(":").map(Number);
   const d = new Date(day);
   d.setHours(h, m, 0, 0);
@@ -113,8 +113,8 @@ export function plannedBucket(item, nowMs) {
   const day = startOfDay(item.dueMs);
   if (day < today) return "overdue";
   if (day === today) return "today";
-  if (day === today + MS_PER_DAY) return "tomorrow";
-  if (day < today + 7 * MS_PER_DAY) return "week";
+  if (day === addDays(today, 1)) return "tomorrow";
+  if (day < addDays(today, 7)) return "week";
   return "later";
 }
 

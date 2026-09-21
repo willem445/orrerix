@@ -85,6 +85,28 @@ function atTime(dayStartMs, hour, minute) {
 }
 
 /**
+ * `n` calendar days after `dayStartMs`, as a local start-of-day.
+ *
+ * CALENDAR ARITHMETIC, NOT `+ n * MS_PER_DAY`. A local day is not always 24
+ * hours: on a DST fall-back day it is 25, so adding `MS_PER_DAY` to that day's
+ * midnight lands at 23:00 the SAME day, and the `setHours` that follows then
+ * pulls the date back — every relative date on the changeover day comes out a
+ * day early. `tomorrow` resolved to TODAY (already past, so the row dyed itself
+ * Overdue on the spot), `fri` to Thursday, `in 3 days` to two. Spring-forward
+ * hides it, because the 23-hour day's drift still lands inside the target.
+ *
+ * `Date#setDate` counts days rather than milliseconds, which is the operation
+ * actually meant, and the `setHours(0,…)` re-normalises in case the target
+ * day's own midnight moved. Found in review on #3271.
+ */
+export function addDays(dayStartMs, n) {
+  const d = new Date(dayStartMs);
+  d.setDate(d.getDate() + n);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/**
  * The next occurrence of `weekday` strictly after today, or today itself when
  * `includeToday`. "fri" on a Friday means NEXT Friday: if you meant today you
  * would have typed `today`, and a to-do that silently lands in the past hour
@@ -94,11 +116,11 @@ function nextWeekday(dayStartMs, weekday, includeToday) {
   const today = new Date(dayStartMs).getDay();
   let delta = (weekday - today + 7) % 7;
   if (delta === 0 && !includeToday) delta = 7;
-  return dayStartMs + delta * MS_PER_DAY;
+  return addDays(dayStartMs, delta);
 }
 
 /**
- * `4pm`, `16:00`, `4:30pm`, `16h`. Returns `{hour, minute}` or null.
+ * `4pm`, `16:00`, `4:30pm`. Returns `{hour, minute}` or null.
  * Deliberately narrow: a bare number is NOT a time ("buy 4 lemons").
  */
 function parseTimeOfDay(token) {
@@ -126,6 +148,10 @@ function parseTimeOfDay(token) {
 export function formatDue(dueMs, nowMs, hasTime) {
   const dayStart = startOfDay(nowMs);
   const dueDay = startOfDay(dueMs);
+  // A DAY COUNT, and the division is safe where the arithmetic above was
+  // not: a DST transition skews the span by at most an hour, which
+  // `Math.round` absorbs. It counts days between two start-of-days; it is
+  // never a way to BUILD one — that is `addDays`.
   const days = Math.round((dueDay - dayStart) / MS_PER_DAY);
   const d = new Date(dueMs);
   const time = hasTime
@@ -252,7 +278,7 @@ export function parseQuickAdd(text, nowMs) {
       continue;
     }
     if (t === "tomorrow" || t === "tmr") {
-      dueDayMs = dayStart + MS_PER_DAY;
+      dueDayMs = addDays(dayStart, 1);
       dueRaw = take(i, 1, tokens[i].raw);
       continue;
     }
@@ -273,12 +299,12 @@ export function parseQuickAdd(text, nowMs) {
     if (t === "in" && next !== undefined && /^\d{1,3}$/.test(next) && next2 !== undefined) {
       const n = Number(next);
       if (/^days?$/.test(next2)) {
-        dueDayMs = dayStart + n * MS_PER_DAY;
+        dueDayMs = addDays(dayStart, n);
         dueRaw = take(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
         continue;
       }
       if (/^weeks?$/.test(next2)) {
-        dueDayMs = dayStart + n * 7 * MS_PER_DAY;
+        dueDayMs = addDays(dayStart, n * 7);
         dueRaw = take(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
         continue;
       }
@@ -298,7 +324,7 @@ export function parseQuickAdd(text, nowMs) {
   // still ahead, tomorrow if it has passed.
   if (dueDayMs === null && timeOfDay) {
     const todayAt = atTime(dayStart, timeOfDay.hour, timeOfDay.minute);
-    dueDayMs = todayAt > nowMs ? dayStart : dayStart + MS_PER_DAY;
+    dueDayMs = todayAt > nowMs ? dayStart : addDays(dayStart, 1);
   }
 
   let dueMs = null;

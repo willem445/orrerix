@@ -209,10 +209,23 @@ after each render; a note is written to the model **on input**, not read at
 submit.
 
 Undo is an **inverse-op stack**, 50 deep, not a pile of snapshots. Every
-mutation pushes the op that undoes it, and soft delete is what makes deletion
-invertible at all. The inverse carries the **attribution** too — undoing an
-agent's completed row must put the agent's dot back, not leave the row looking
-human-authored.
+*discrete gesture* pushes the op that undoes it — complete, important, My Day,
+due, delete, add, reorder, a sub-step toggle or addition, archive-all — and
+soft delete is what makes deletion (and archiving) invertible at all. The
+inverse carries the **attribution** too: undoing an agent's completed row must
+put the agent's dot back, not leave the row looking human-authored.
+
+One entry is a **list** of per-item inverses rather than a single patch,
+because a gesture is not always one row: a reorder swaps two, an archive-all
+moves several. A stack that can only hold one item's patch silently does not
+cover those, which is how this note came to claim more than the code did — the
+review that caught it found five uncovered paths.
+
+**Typing in a note is deliberately outside the stack.** It is continuous rather
+than discrete, so a per-keystroke entry would bury every real gesture, and the
+browser's own text undo already covers it inside the field. That exception is
+written down rather than left implicit, because an unstated exception to "every
+mutation" is just a false claim with better manners.
 
 ## 8. Load: state the elision, never hide it
 

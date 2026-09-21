@@ -8,8 +8,14 @@
 //     here, never a property of an element. The DOM is rebuilt from it on
 //     every change (CLAUDE.md's in-list-editor rule), so a re-render caused
 //     by an agent's write can never eat a half-typed row.
-//   * UNDO IS AN INVERSE-OP STACK, not a snapshot pile. Every mutation pushes
-//     the op that undoes it. Soft delete is what makes deletion invertible.
+//   * UNDO IS AN INVERSE-OP STACK, not a snapshot pile. Every DISCRETE gesture
+//     pushes the op that undoes it — complete, important, My Day, due, delete,
+//     add, reorder, a sub-step toggle or addition, archive-all — and soft
+//     delete is what makes deletion invertible. One mutation is deliberately
+//     outside it: typing in a note, which is continuous rather than discrete,
+//     and which the browser's own text undo already covers inside the field.
+//     That exception is stated because an earlier version of this comment
+//     claimed "every mutation" while five paths pushed nothing (#3271 review).
 //   * THE CLOCK IS EXPLICIT. `state.nowMs` is set once from the demo's clock
 //     control and threaded everywhere; nothing in `render.js` or
 //     `quickadd.js` reads the wall clock, so the 09:00 / 14:00 / 23:00 buttons
@@ -92,30 +98,59 @@ function byId(id) {
   return state.items.find((it) => it.id === id) || null;
 }
 
-/** Apply a field patch and push its inverse. `silent` skips the undo push (used BY undo). */
-function patch(id, fields, label, silent) {
+/** DESIGN.md §7's "50 deep", named once so the claim and the code cannot drift. */
+const UNDO_DEPTH = 50;
+
+/** Deep enough for the one array a patch can carry: `steps`. */
+function cloneValue(v) {
+  return Array.isArray(v) ? v.map((x) => (x && typeof x === "object" ? { ...x } : x)) : v;
+}
+
+/**
+ * Apply ONE item's field patch and RETURN its inverse. Touches no stack.
+ *
+ * Split out from `patch` because an undo entry has to be able to span more than
+ * one item — a reorder swaps two rows, an archive moves several — and a stack
+ * that can only hold a single-item patch silently does not cover those. That
+ * was a review finding on #3271: the header claimed every mutation pushed its
+ * inverse while five paths pushed nothing.
+ */
+function applyPatch(id, fields) {
   const item = byId(id);
-  if (!item) return;
+  if (!item) return null;
   // The inverse carries the attribution too: undoing an agent's completed row
   // must put the agent's dot back, not leave the row looking human-authored.
   const inverse = { actor: item.actor, updatedAgoMin: item.updatedAgoMin };
-  for (const k of Object.keys(fields)) inverse[k] = item[k];
+  for (const k of Object.keys(fields)) inverse[k] = cloneValue(item[k]);
   Object.assign(item, fields);
   if (!("actor" in fields)) {
     item.updatedAgoMin = 0;
     item.actor = null; // the human just touched it; attribution follows the last writer
   }
-  if (!silent) {
-    state.undo.push({ id, fields: inverse });
-    if (state.undo.length > 50) state.undo.shift();
-    if (label) toast(label);
+  return { id, fields: inverse };
+}
+
+/** Push one undo entry — a LIST of per-item inverses, applied together. */
+function pushUndo(inverses, label) {
+  const real = inverses.filter(Boolean);
+  if (real.length) {
+    state.undo.push(real);
+    if (state.undo.length > UNDO_DEPTH) state.undo.shift();
   }
+  if (label) toast(label);
+}
+
+/** The common case: one item, one patch, one entry. */
+function patch(id, fields, label) {
+  pushUndo([applyPatch(id, fields)], label);
 }
 
 function undo() {
   const op = state.undo.pop();
   if (!op) { toast("Nothing to undo."); return; }
-  patch(op.id, op.fields, null, true);
+  // Applied through applyPatch, not patch: an undo pushes nothing, so undo is
+  // not itself undoable. A redo stack is S5's if the human wants one.
+  for (const inv of op) applyPatch(inv.id, inv.fields);
   state.toast = null;
   render();
 }
@@ -147,7 +182,10 @@ function addFromDraft() {
   });
   // Undoing an add is a soft delete of it — the same op every other undo uses,
   // rather than a second "remove" path that only the add route can produce.
-  state.undo.push({ id, fields: { deleted: true } });
+  // Pushed through pushUndo so it is an entry of the same SHAPE as every other
+  // (a list of inverses); a hand-built entry here was the one site that still
+  // spoke the old single-patch shape after the stack was generalised.
+  pushUndo([{ id, fields: { deleted: true } }], null);
   state.draft = "";
   render();
 }
@@ -177,9 +215,16 @@ function reorder(delta) {
   const swapWith = byId(ids[at + delta]);
   const me = byId(state.selected);
   if (!swapWith || !me) return;
-  const tmp = me.order;
-  me.order = swapWith.order;
-  swapWith.order = tmp;
+  // Both values read BEFORE either is written. `applyPatch` mutates in place,
+  // so reading `me.order` on the second line would read the value the first
+  // line just assigned — a swap with no temp, leaving both rows on the same
+  // order and the list visibly unmoved.
+  const mine = me.order;
+  const theirs = swapWith.order;
+  pushUndo([
+    applyPatch(me.id, { order: theirs }),
+    applyPatch(swapWith.id, { order: mine }),
+  ], null);
   render();
 }
 
@@ -238,14 +283,27 @@ function onClick(ev) {
       break;
     }
     case "delete": patch(id, { deleted: true }, "Deleted."); state.expanded = null; break;
-    case "step": { const it = byId(id); const i = Number(btn.dataset.step); it.steps[i].done = !it.steps[i].done; break; }
+    case "step": {
+      // Patched as a whole cloned array rather than mutated in place, so the
+      // inverse the stack keeps is the array as it was.
+      const it = byId(id);
+      const i = Number(btn.dataset.step);
+      const steps = it.steps.map((s) => ({ ...s }));
+      steps[i].done = !steps[i].done;
+      patch(id, { steps }, null);
+      break;
+    }
     case "tag": state.tagFilter = state.tagFilter === btn.dataset.tag ? null : btn.dataset.tag; break;
     case "cleartag": state.tagFilter = null; break;
-    case "archiveall":
-      for (const it of state.items) if (it.done && it.scope === state.scope) it.archived = true;
-      state.items = state.items.filter((it) => !it.archived);
-      toast("Archived.");
+    case "archiveall": {
+      // Soft-deletes each archived row rather than splicing them out of the
+      // list: a removed row cannot be put back by a field patch, and "archive"
+      // is exactly the gesture a human reaches for undo after.
+      const rows = state.items.filter((it) => it.done && !it.deleted && it.scope === state.scope);
+      pushUndo(rows.map((it) => applyPatch(it.id, { deleted: true })),
+        rows.length ? `Archived ${rows.length}.` : "Nothing to archive.");
       break;
+    }
     case "undo": undo(); return;
     default: return;
   }
@@ -281,7 +339,9 @@ function onKeydown(ev) {
   if (typing && t.dataset.act === "step-add") {
     if (ev.key === "Enter" && t.value.trim()) {
       const id = t.closest(".row").dataset.id;
-      byId(id).steps.push({ title: t.value.trim(), done: false });
+      const it = byId(id);
+      patch(id, { steps: [...it.steps, { title: t.value.trim(), done: false }] }, null);
+      t.value = "";
       render();
     }
     return;
@@ -344,16 +404,29 @@ async function load(name) {
   render();
 }
 
+/** A tag with a class and text — text set as TEXT, never parsed as markup. */
+function el2(tag, cls, text) {
+  const n = document.createElement(tag);
+  n.className = cls;
+  n.textContent = text;
+  return n;
+}
+
 function fail(err) {
   for (const id of PANES) {
     const root = document.getElementById(id);
     if (!root) continue;
     const box = document.createElement("div");
     box.className = "empty";
-    box.innerHTML = `<p class="empty-text">[demo] ${String(err.message || err)}</p>`
-      + `<p class="empty-hint">A plain file:// open cannot fetch the fixtures. `
-      + `Serve the directory: <span class="mono">npx vite demo/todo-pane --host 127.0.0.1</span>. `
-      + `README.md has the detail.</p>`;
+    // textContent, not innerHTML: `err.message` carries the fixture name, which
+    // comes from the ?fixture= URL parameter, so a crafted URL was injecting
+    // markup into this box (review finding on #3271). Demo-only and
+    // self-inflicted, but the habit is the point — S4 inherits these shapes.
+    const line = el2("p", "empty-text", `[demo] ${String(err.message || err)}`);
+    const hint = el2("p", "empty-hint", "A plain file:// open cannot fetch the fixtures. Serve the directory: ");
+    const cmd = el2("span", "mono", "npx vite demo/todo-pane --host 127.0.0.1");
+    hint.append(cmd, document.createTextNode(". README.md has the detail."));
+    box.append(line, hint);
     root.replaceChildren(box);
   }
 }

@@ -31,6 +31,12 @@
 //! nothing there", and a write on top of an unreadable file would erase a list
 //! the next launch could have recovered.
 //!
+//! **A READ takes the same lock**, which is not belt-and-braces: the corrupt
+//! arm of [`load_store`] RENAMES, so an unserialised snapshot could move a
+//! store a concurrent write had just published (#3285 item 2). That rule is
+//! the compiler's rather than a comment's — [`load_store`] takes a
+//! [`TodoWriteGuard`], and there is no way to make one without the lock.
+//!
 //! # The degraded reads, and what each does
 //!
 //! | on disk | read | write |
@@ -38,7 +44,7 @@
 //! | absent (first run) | empty store | allowed — this is how the file is created |
 //! | present, unreadable | empty store, `readable: false` | **refused** |
 //! | not JSON at all, or JSON of the wrong shape | quarantined to `todo.corrupt.json`, empty store | allowed — the evidence is already safe under its own name |
-//! | …and the quarantine rename FAILED | empty store, `readable: false` | **refused** — nothing was preserved, so nothing may be overwritten |
+//! | …and the quarantine rename FAILED | empty store, `readable: false`, `quarantine_failed: true` | **refused** — "could not be quarantined"; nothing was preserved, so nothing may be overwritten |
 //! | `version` greater than [`CURRENT_VERSION`] | the items, as written | **refused** ([`TodoError::NewerVersion`]) |
 //!
 //! The third row is the one that is deliberately not the other two: a store
@@ -89,6 +95,36 @@ fn quarantine_path(path: &Path) -> PathBuf {
     path.with_extension("corrupt.json")
 }
 
+/// Proof that [`TODO_WRITE_LOCK`] is held, and the only way to get one.
+///
+/// A token rather than a comment because the thing being serialised is not
+/// only the write: [`load_store`] can RENAME `todo.json` aside, and that rename
+/// raced every write before #3285 item 2. The losing interleaving is specific
+/// and silent — a reader finds corrupt bytes and decides to quarantine; a
+/// writer, under the lock, quarantines first and writes a fresh store; the
+/// reader's rename then lands on THAT file and moves the human's new list to
+/// `todo.corrupt.json`. Every syscall succeeds and nothing reports anything.
+///
+/// Taking the token by reference is what makes the rule the compiler's rather
+/// than a reviewer's: a `load_store` call outside the lock cannot be written,
+/// because there is no other way to obtain one. This is the auto-trait/type
+/// shape CLAUDE.md prefers to a source-scanning guard, which would be blind to
+/// a renamed binding.
+pub struct TodoWriteGuard<'a> {
+    _inner: std::sync::MutexGuard<'a, ()>,
+}
+
+/// Acquire [`TODO_WRITE_LOCK`]. **Never call this while already holding it** —
+/// a `std::sync::Mutex` is not re-entrant, so the two doors below each take it
+/// exactly once, at the top, and call nothing that re-enters.
+///
+/// Public because `src-tauri/tests/todo.rs` drives [`load_store`] directly.
+pub fn lock_todo_write() -> TodoWriteGuard<'static> {
+    TodoWriteGuard {
+        _inner: crate::obs::LockExt::lock_safe(&TODO_WRITE_LOCK),
+    }
+}
+
 /// What a read of the store found.
 #[derive(Clone, Debug)]
 pub struct TodoStoreLoad {
@@ -101,6 +137,14 @@ pub struct TodoStoreLoad {
     pub readable: bool,
     /// Set when this read renamed a corrupt file aside.
     pub quarantined: Option<PathBuf>,
+    /// Set when the bytes were corrupt AND the quarantine rename itself failed.
+    ///
+    /// `readable` is `false` either way, but the two are not the same event and
+    /// the decline the human reads must not name the wrong one (#3285 item 3):
+    /// "could not be read" describes the arm above this one, and a file that
+    /// read perfectly well and could not be MOVED is a different thing to go
+    /// and look at.
+    pub quarantine_failed: bool,
 }
 
 /// Read the store, quarantining a file that cannot be understood.
@@ -129,7 +173,13 @@ pub struct TodoStoreLoad {
 /// A store from a NEWER build is none of these: it parses (every field is
 /// `#[serde(default)]` and unknown keys are preserved), it is returned as read,
 /// and [`apply_to`] is what refuses to write it.
-pub fn load_store(path: &Path) -> TodoStoreLoad {
+///
+/// Takes a [`TodoWriteGuard`] because the corrupt arm RENAMES, and a rename
+/// racing a write is how the human's fresh list ends up under
+/// `todo.corrupt.json` (#3285 item 2; the interleaving is spelled out on
+/// `TodoWriteGuard`). The token is never read — it is the compiler's proof that
+/// the caller is holding the lock.
+pub fn load_store(path: &Path, _lock: &TodoWriteGuard<'_>) -> TodoStoreLoad {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -138,6 +188,7 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
                 store: TodoStore::default(),
                 readable: true,
                 quarantined: None,
+                quarantine_failed: false,
             };
         }
         Err(_) => {
@@ -148,6 +199,7 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
                 store: TodoStore::default(),
                 readable: false,
                 quarantined: None,
+                quarantine_failed: false,
             };
         }
     };
@@ -156,6 +208,7 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
             store,
             readable: true,
             quarantined: None,
+            quarantine_failed: false,
         },
         Err(_) => {
             let q = quarantine_path(path);
@@ -167,6 +220,7 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
                     store: TodoStore::default(),
                     readable: true,
                     quarantined: Some(q),
+                    quarantine_failed: false,
                 },
                 // The rename FAILED, so the corrupt bytes are still at `path`
                 // and nothing has been preserved anywhere. Returning
@@ -176,11 +230,17 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
                 // the same ground as the unreadable arm above: the bytes may be
                 // movable next time. A `todo.corrupt.json` that exists as a
                 // directory, or a file another process holds open, is how this
-                // happens on Windows.
+                // happens on Windows — and both are what
+                // `tests/todo.rs` exercises.
+                //
+                // `quarantine_failed` separates this from the arm above so the
+                // decline names the right cause (#3285 item 3): the bytes here
+                // READ fine, they could not be MOVED.
                 Err(_) => TodoStoreLoad {
                     store: TodoStore::default(),
                     readable: false,
                     quarantined: None,
+                    quarantine_failed: true,
                 },
             }
         }
@@ -225,15 +285,24 @@ pub fn apply_to(
     now_ms: u64,
     workspace: Option<(&str, &str)>,
 ) -> Result<Applied, TodoError> {
-    let _guard = crate::obs::LockExt::lock_safe(&TODO_WRITE_LOCK);
-    let loaded = load_store(path);
+    let lock = lock_todo_write();
+    let loaded = load_store(path, &lock);
     if !loaded.readable {
-        // The file is there and would not read. Declining is the whole point:
-        // publishing an empty store over it would destroy a list the next
-        // launch could have recovered.
+        // The file is there and the read could not leave it in a state a write
+        // may replace. Declining is the whole point: publishing an empty store
+        // over it would destroy a list the next launch could have recovered.
+        //
+        // Two arms, two causes, two messages (#3285 item 3). Before this the
+        // quarantine-rename failure was reported as "could not be read", which
+        // names the wrong thing to go and look at: those bytes READ perfectly
+        // well, and what failed was moving them aside.
         return Err(TodoError::Invalid(
             "store",
-            "exists but could not be read; refusing to overwrite it".to_string(),
+            if loaded.quarantine_failed {
+                "is corrupt and could not be quarantined; refusing to overwrite it".to_string()
+            } else {
+                "exists but could not be read; refusing to overwrite it".to_string()
+            },
         ));
     }
     // A store from a newer build is returned READABLE and refused here, which
@@ -272,8 +341,13 @@ pub struct TodoSnapshot {
 }
 
 /// Read the store from `path`, filtered to `scope` when one is given.
+///
+/// Holds [`TODO_WRITE_LOCK`] although it writes nothing: [`load_store`]'s
+/// corrupt arm RENAMES, and an unserialised rename here could move a store a
+/// concurrent write had just published (#3285 item 2).
 pub fn snapshot_at(path: &Path, scope: Option<&Scope>) -> TodoSnapshot {
-    let loaded = load_store(path);
+    let lock = lock_todo_write();
+    let loaded = load_store(path, &lock);
     let store = loaded.store;
     let items: Vec<TodoItem> = store
         .items
@@ -398,6 +472,7 @@ impl OrchRegistry {
 // {"update":   {"id": "td-...", "if_rev": 3, "due_ms": null}}
 // {"complete": {"id": "td-...", "done": true}}
 // {"delete":   {"id": "td-..."}}
+// {"restore":  {"id": "td-..."}}
 // ```
 //
 // In an `update`, an ABSENT key leaves the field alone and an explicit `null`
@@ -441,11 +516,11 @@ fn tagged<'a>(v: &'a Value, field: &'static str) -> Result<(&'a str, &'a Value),
         (Some((k, payload)), None) => Ok((k.as_str(), payload)),
         (None, _) => Err(invalid(
             field,
-            "must name exactly one of add/update/complete/delete",
+            "must name exactly one of add/update/complete/delete/restore",
         )),
         (Some(_), Some(_)) => Err(invalid(
             field,
-            "names more than one op; send exactly one of add/update/complete/delete",
+            "names more than one op; send exactly one of add/update/complete/delete/restore",
         )),
     }
 }
@@ -692,9 +767,18 @@ pub fn parse_op(v: &Value, scope: Scope) -> Result<TodoOp, TodoError> {
                 id: req_str(o, "id", "delete")?,
             })
         }
+        // Default-deny means a new op needs an arm HERE as well as in the
+        // engine: without one `{"restore": …}` falls to the `other` arm below
+        // and is refused by name, which is the failure the arm list is for.
+        "restore" => {
+            let o = body(payload, "restore", &["id"])?;
+            Ok(TodoOp::Restore {
+                id: req_str(o, "id", "restore")?,
+            })
+        }
         other => Err(invalid(
             "op",
-            format!("unknown op {other:?}; expected add, update, complete or delete"),
+            format!("unknown op {other:?}; expected add, update, complete, delete or restore"),
         )),
     }
 }

@@ -251,6 +251,41 @@ test("chips come back in SOURCE order, not with the due chip always first", () =
   assert.equal(c.chips[0].raw, "fri 4pm");
 });
 
+
+test("the due chip's raw text is in SOURCE order when the time precedes the date", () => {
+  // #3285 item 6. A due chip's raw is joined from two spans — the date phrase
+  // and the time phrase — and the join used a FIXED order, `[dueRaw, timeRaw]`,
+  // whichever way the human wrote them. `standup at 5pm tonight` therefore came
+  // back as `tonight at 5pm`, reordering words that are on screen. THE CHIPS ARE
+  // THE PROOF: a proof the human has to reconcile against their own line is not
+  // one.
+  //
+  // The test above already pins a split due phrase's raw (`pay rent fri #home
+  // 4pm` → `fri 4pm`), and cannot catch this: that line writes the date first,
+  // so source order and join order agree and every implementation passes it.
+  const timeFirst = parseQuickAdd("standup at 5pm tonight", NOW);
+  const timeFirstRaw = timeFirst.chips.find((c) => c.kind === "due")?.raw;
+  assert.equal(timeFirstRaw, "at 5pm tonight");
+
+  // The mirror line, so this is an assertion about ORDER rather than a second
+  // fixed answer: no single join order satisfies both of these.
+  const dateFirst = parseQuickAdd("standup tonight at 5pm", NOW);
+  const dateFirstRaw = dateFirst.chips.find((c) => c.kind === "due")?.raw;
+  assert.equal(dateFirstRaw, "tonight at 5pm");
+  assert.notEqual(
+    timeFirstRaw,
+    dateFirstRaw,
+    "the two lines must NOT produce one raw string, or neither of them pins order"
+  );
+
+  // Only the chip's TEXT moved: both lines still mean 17:00 today, and both
+  // still leave the same title behind.
+  assert.equal(timeFirst.dueMs, at(0, 17, 0));
+  assert.equal(dateFirst.dueMs, at(0, 17, 0));
+  assert.equal(timeFirst.title, "standup");
+  assert.equal(dateFirst.title, "standup");
+});
+
 test("FAILURE CASE: an implied hour never refuses a time the human named", () => {
   // #3286 review round 2, a regression round 1 introduced. `tonight` sets an
   // implied 19:00 without consuming a token or raising a chip, and round 1's

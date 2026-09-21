@@ -40,6 +40,12 @@
 //     list is sorted on it, so the due chip sits where its date phrase sits
 //     rather than always first.
 //
+//     The due chip's RAW text is source-ordered for the same reason (#3285
+//     item 6). It is joined from two spans that can appear either way round,
+//     and joining them in a fixed order rendered `x at 5pm tonight` as
+//     `tonight at 5pm` — a chip the human has to re-read their own line to
+//     check is not a proof.
+//
 // THE WEEKDAY RULE, stated as the code actually implements it. A bare weekday
 // is a date when it stands as its OWN token and is not the FIRST word of the
 // line. So `friday's report` keeps the word (the token is `friday's`, which is
@@ -79,7 +85,13 @@ export interface Chip {
   kind: ChipKind;
   /** What the chip shows the human. */
   label: string;
-  /** The exact source text this chip ate, so the UI can point at it. */
+  /**
+   * The exact source text this chip ate, so the UI can point at it.
+   *
+   * A `due` chip can eat two spans (`fri` and `at 4pm`), and they are joined
+   * in the order they appear IN THE LINE, never in the order the parser's
+   * branches fired.
+   */
   raw: string;
 }
 
@@ -217,9 +229,20 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
 
   /** Day resolved by a date phrase, and the explicit time if one was given. */
   let dueDayMs: number | null = null;
-  let dueRaw = "";
   let timeOfDay: { hour: number; minute: number } | null = null;
-  let timeRaw = "";
+  /**
+   * The source text of every token the DUE phrase ate, each with the index
+   * it was eaten at.
+   *
+   * A LIST rather than a `dueRaw` and a `timeRaw` because the chip's raw
+   * text is joined from it, and two accumulators can only be joined in a
+   * fixed order: `[dueRaw, timeRaw]` rendered `x at 5pm tonight` as
+   * `tonight at 5pm`, re-ordering words the human can see on screen (#3285
+   * item 6). The chip is the PROOF of what the parser ate — the header's
+   * THE CHIPS ARE THE PROOF rule — and a proof that reorders the evidence
+   * is one the human has to re-read their own line to check.
+   */
+  const duePartsAt: { raw: string; at: number }[] = [];
   /**
    * Did the HUMAN name a time, as opposed to the parse having produced one?
    *
@@ -251,10 +274,13 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
 
   /** [`take`] for a token belonging to the DUE phrase (its date part or its
    *  time part). Both parts feed one chip, so the chip's position is the
-   *  earliest index either of them consumed. */
-  const takeDue = (from: number, count: number, raw: string): string => {
+   *  earliest index either of them consumed — and the part itself is
+   *  recorded WITH that index, so the chip's raw text can be rebuilt in
+   *  source order however the branches fired. */
+  const takeDue = (from: number, count: number, raw: string): void => {
     dueChipAt = Math.min(dueChipAt, from);
-    return take(from, count, raw);
+    duePartsAt.push({ raw, at: from });
+    take(from, count, raw);
   };
 
   for (let i = 0; i < tokens.length; i++) {
@@ -308,7 +334,7 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
       if (tod) {
         timeOfDay = tod;
         timeGiven = true;
-        timeRaw = takeDue(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
+        takeDue(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
         continue;
       }
     }
@@ -319,7 +345,7 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
       if (bare && /[:apm]/i.test(t)) {
         timeOfDay = bare;
         timeGiven = true;
-        timeRaw = takeDue(i, 1, tokens[i].raw);
+        takeDue(i, 1, tokens[i].raw);
         continue;
       }
     }
@@ -335,24 +361,24 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
       // because the branches above gate on `timeGiven`, which a default never
       // sets.
       if (t === "tonight" && !timeOfDay) timeOfDay = { hour: 19, minute: 0 };
-      dueRaw = takeDue(i, 1, tokens[i].raw);
+      takeDue(i, 1, tokens[i].raw);
       continue;
     }
     if (t === "tomorrow" || t === "tmr") {
       dueDayMs = dayStart + MS_PER_DAY;
-      dueRaw = takeDue(i, 1, tokens[i].raw);
+      takeDue(i, 1, tokens[i].raw);
       continue;
     }
 
     // --- next week / next <weekday> / this <weekday> ----------------------
     if (t === "next" && next === "week") {
       dueDayMs = nextWeekday(dayStart, 1, false); // Monday of the coming week
-      dueRaw = takeDue(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
+      takeDue(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
       continue;
     }
     if ((t === "next" || t === "this") && next !== undefined && next in WEEKDAYS) {
       dueDayMs = nextWeekday(dayStart, WEEKDAYS[next], t === "this");
-      dueRaw = takeDue(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
+      takeDue(i, 2, tokens[i].raw + " " + tokens[i + 1].raw);
       continue;
     }
 
@@ -361,12 +387,12 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
       const n = Number(next);
       if (/^days?$/.test(next2)) {
         dueDayMs = dayStart + n * MS_PER_DAY;
-        dueRaw = takeDue(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
+        takeDue(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
         continue;
       }
       if (/^weeks?$/.test(next2)) {
         dueDayMs = dayStart + n * 7 * MS_PER_DAY;
-        dueRaw = takeDue(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
+        takeDue(i, 3, tokens[i].raw + " " + tokens[i + 1].raw + " " + tokens[i + 2].raw);
         continue;
       }
     }
@@ -376,7 +402,7 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
     // word of the line.
     if (i > 0 && t in WEEKDAYS) {
       dueDayMs = nextWeekday(dayStart, WEEKDAYS[t], false);
-      dueRaw = takeDue(i, 1, tokens[i].raw);
+      takeDue(i, 1, tokens[i].raw);
       continue;
     }
   }
@@ -397,7 +423,13 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
   }
 
   if (dueMs !== null) {
-    const raw = [dueRaw, timeRaw].filter(Boolean).join(" ");
+    // SOURCE order, not branch order. A stable sort keeps two parts that
+    // somehow share an index in the order they were eaten.
+    const raw = duePartsAt
+      .slice()
+      .sort((a, b) => a.at - b.at)
+      .map((part) => part.raw)
+      .join(" ");
     // `dueChipAt` is finite whenever a date or time token was consumed. A due
     // derived with NO token of its own cannot arise today — `dueMs` is set
     // only from `dueDayMs` or `timeOfDay`, and both come from `takeDue` —

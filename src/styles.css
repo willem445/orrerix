@@ -75,6 +75,15 @@
   --focus: #f8c93e;
   --selection: #323232;
 
+  /* --- THE HUMAN'S OWN MARK (#3319): the pane they said to come back to. Neither a state
+         (no agent produces it) nor an identity (it does not say which thing this is), so it
+         takes its own `--mark-` prefix and sits outside both channel tables. Violet, chosen
+         on a measurement rather than a taste — 20.5 ΔE from the nearest state dye and from
+         the accent, over normal vision and all three CVD simulations, against the state
+         channel's own floor of 9. theme.ts §SEMANTIC.watched carries the candidate table and
+         why the accent could not do this job; test/theme.test.ts re-derives the figure. */
+  --mark-watched: #9a8fc4;
+
   /* --- CHANNEL 3: identity. Hue that says WHICH thing this is — a surface, an action
          family, a CLI, a git lane — never what state it is in. Consumers: coloured icons
          and their role table, git-graph lanes, diff add/delete, task-board
@@ -863,6 +872,53 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
 @media (prefers-reduced-motion: reduce) {
   .pane-attn, .pane-held { animation: none; }
 }
+
+/* ---------- watched panes (#3319) ---------- */
+/* The human's own mark: "these are the panes I need to actively look at when I
+   come back". Deliberately loud, and deliberately a DIFFERENT loud from
+   .pane-attn above — that chip is amber, pulses, and says what the AGENT needs;
+   this one is violet, still, and says what the HUMAN decided. The two sit side
+   by side in the same header on purpose and neither clears the other.
+   It does NOT pulse: a watch can stay set for hours by design, and a mark that
+   flashed for hours would be noise rather than a signal. Steady and saturated
+   is what survives being looked at all afternoon. */
+.pane-watch {
+  flex: none; cursor: pointer;
+  font-size: 10px; line-height: 1;
+  border: 1px solid color-mix(in srgb, var(--mark-watched) 45%, transparent); border-radius: 4px;
+  padding: 2px 5px;
+  color: var(--mark-watched); background: color-mix(in srgb, var(--mark-watched) 18%, transparent);
+}
+.pane-watch:hover { background: color-mix(in srgb, var(--mark-watched) 32%, transparent); }
+/* The frame, which is what carries across the room. A 3px bar down the pane's
+   own LEFT edge, full height — not the header edge, which is already spoken for
+   twice over (the group colour on its left inset, the attention dye on its
+   bottom), and not a ring, which is the focus affordance. `inset` so it costs
+   no layout: constraint 1 forbids anything here that could reach a PTY resize,
+   and a border would change the content box. */
+.pane.watched {
+  box-shadow: var(--shadow-card), inset 3px 0 0 var(--mark-watched);
+}
+.pane.watched.active {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), inset 3px 0 0 var(--mark-watched);
+}
+/* The dock chip for a minimized watched pane — the same left bar, so one glance
+   over the dock answers "did I minimize one of the ones I care about". */
+.dock-chip.watched {
+  box-shadow: inset 3px 0 0 var(--mark-watched);
+  border-color: color-mix(in srgb, var(--mark-watched) 45%, transparent);
+}
+/* The tab strip's count: "there are N watched panes in that tab", which is the
+   only per-pane fact a tab can carry (a tab is not a pane). */
+.tab-watched {
+  flex: none;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.4px;
+  border-radius: 4px; padding: 1px 4px;
+  color: var(--mark-watched); background: color-mix(in srgb, var(--mark-watched) 18%, transparent);
+}
+/* The Agents list — the one surface that really lists PANES. */
+.agents-item.watched { box-shadow: inset 3px 0 0 var(--mark-watched); }
+.agents-watch-mark { flex: none; color: var(--mark-watched); font-size: 10px; }
 
 /* ---------- delivery-held badge (#246) ---------- */
 /* Orrerix is currently withholding an outbound prompt because it believes the

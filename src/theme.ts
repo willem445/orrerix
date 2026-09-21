@@ -480,6 +480,44 @@ export const SEMANTIC = {
   accent: PALETTE.gold,
   focus: PALETTE.gold,
   selection: PALETTE.selectionFill,
+
+  // The HUMAN'S OWN MARK (#3319) — the pane they said to come back to. It is
+  // `--mark-watched`, not `--state-watched`, and the name is the argument: a
+  // state dye answers "what is this agent doing", and watched is the one fact
+  // on a pane that no agent produces. Keeping it out of `SEMANTIC.state*` also
+  // keeps it out of `STATE_DYES`, so the state scale's closed six stay six.
+  //
+  // WHY VIOLET, and why not the two nearer candidates. It must be unmistakable
+  // BESIDE the attention chip rather than in competition with it (#3319 AC2),
+  // which is a measurement, not a taste: the mark's worst-case distance from
+  // every state dye AND from the accent, over normal vision and all three CVD
+  // simulations, using this repo's own ΔE. Measured at `ed4375a5`:
+  //
+  //     violet  #9a8fc4   20.5 ΔE   (worst: held, tritan)      <- shipped
+  //     lime    #b5bf62   11.0 ΔE   (worst: attention, protan)
+  //     cyan    #5aa8b5    6.3 ΔE   (worst: ok, tritan)
+  //     azure   #6f93c4    4.7 ΔE   (worst: ok, tritan)
+  //     orchid  #c47f9e    4.3 ΔE   (worst: danger, tritan)
+  //
+  // Violet is the only candidate with room to spare over the state channel's
+  // own 9 ΔE floor, and `test/theme.test.ts` re-derives that figure rather than
+  // trusting this table. The ACCENT was the other structural option — watched
+  // is arguably an interaction answer — and it is refused on the same
+  // measurement: gold sits 12.8 ΔE from amber, which clears the floor but puts
+  // the human's bookmark and the agent's attention on adjacent hues, and gold
+  // already means "focus" on every focused pane. One pigment cannot say both
+  // "you are here" and "come back here".
+  //
+  // The cost, stated rather than hidden: this is violet's SECOND meaning — it
+  // is also `--id-violet` (the fleet icon, the reviewer and PR badges, the
+  // review status, the group timeline lane). That reuse is deliberate and it
+  // is not the thing the channel rule forbids, which is an identity hue in a
+  // STATE position: watched is not a state. None of `--id-violet`'s positions
+  // is a pane frame, a dock chip, a tab or an agents row, so no surface shows
+  // both meanings of the pigment at once. Minting a ninth PALETTE hue was the
+  // alternative and is worse: §PALETTE already records that eight hues on this
+  // ground cannot all survive CVD.
+  watched: PALETTE.violet,
 } as const;
 
 /**
@@ -597,6 +635,9 @@ export const CSS_TOKENS = {
   "--accent": SEMANTIC.accent,
   "--focus": SEMANTIC.focus,
   "--selection": SEMANTIC.selection,
+  // The human's own mark (#3319) — its own prefix, because it is neither a
+  // state nor an identity: see SEMANTIC.watched.
+  "--mark-watched": SEMANTIC.watched,
   // The per-level marks (#3261) — see KIND_HUES. Identity channel, own prefix.
   "--kind-epic": KIND_HUES.epic,
   "--kind-feature": KIND_HUES.feature,

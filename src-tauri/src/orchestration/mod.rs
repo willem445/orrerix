@@ -33439,7 +33439,7 @@ impl OrchRegistry {
         // a three-line paragraph should be told the field is one, not have two
         // of the lines silently welded together. `	` is included — the board
         // paints this as a single line, where a tab is invisible width.
-        if let Some(d) = patch.description.as_deref().map(str::trim) {
+        if let Some(d) = patch.description.as_deref() {
             let n = d.chars().count();
             if n > MAX_TASK_DESCRIPTION {
                 return Err(format!(

@@ -1,0 +1,8 @@
+{
+  "_README": "FakeTriage verdicts for `audit-synth.jsonl`. Only the RESIDUAL (the rule tier's `no-rule` arm) is ever consulted, so a ts outside it is never read. 21000 and 22000 are deliberately absent, exercising the no-verdict fail-safe; 19000 is the harmful case the eval exists to surface — labelled `decision`, classified `fyi` at high confidence.",
+  "4000": { "class": "decision", "confidence": 0.88 },
+  "10000": { "class": "decision", "confidence": 0.95 },
+  "17000": { "class": "routing", "confidence": 0.93 },
+  "19000": { "class": "fyi", "confidence": 0.91 },
+  "20000": { "class": "routing", "confidence": 0.62 }
+}

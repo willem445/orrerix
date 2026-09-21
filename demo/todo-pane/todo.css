@@ -1,0 +1,718 @@
+/* ============================================================================
+ * demo/todo-pane — the To-Do pane, S0 mock (#3263).
+ *
+ * TOKENS ARE COPIED, NOT IMPORTED. Every custom property in the :root block
+ * below is a verbatim copy of src/styles.css's token layer, kept here so the
+ * demo is a standalone page with no build step and no import into the app
+ * bundle. It is a COPY and it can drift: src/styles.css is the source of truth
+ * and test/theme.test.ts pins that file, not this one. Nothing below :root may
+ * introduce a raw colour — the same rule the app's token layer enforces, held
+ * here by hand because no test watches this directory.
+ *
+ * ONE THEME. orrerix is dark-only (`color-scheme: dark`, a single :root in
+ * src/styles.css). There is deliberately no light block here: inventing a light
+ * ramp would mean inventing palette values #3263 never sanctioned.
+ *
+ * CHANNEL DISCIPLINE, IN ONE LINE EACH (DESIGN.md §2 has the argument):
+ *   STATE   `--state-attention` marks an OVERDUE due date and nothing else in
+ *           this pane. A to-do has no agent state, so the other five dyes and
+ *           the 2px warp thread do not appear here at all.
+ *   ACCENT  `--accent` is the interaction channel: focus ring, the checkbox
+ *           ring, the star when set, the active view chip's underline. A MARK,
+ *           never a ground — no gold fill anywhere below.
+ *   IDENTITY `--id-*` appears in exactly one position: the 6px attribution dot
+ *           that says WHICH agent touched a row. Never a status.
+ * ==========================================================================*/
+
+:root {
+  color-scheme: dark;
+
+  /* elevation ladder */
+  --surface-term: #0b0b0b;
+  --surface-0: #111111;
+  --surface-1: #171717;
+  --surface-2: #1f1f1f;
+  --line: #2a2a2a;
+  --line-strong: #393939;
+
+  /* ink */
+  --ink: #d2d2d2;
+  --ink-dim: #a3a3a3;
+  --ink-faint: #6d6d6d;
+
+  /* CHANNEL 1 — agent state. Only --state-attention is used in this pane. */
+  --state-working: #74d98d;
+  --state-attention: #e89c3c;
+  --state-ok: #35a86b;
+  --state-danger: #e35a5a;
+  --state-held: #6d6d6d;
+  --state-idle: #393939;
+
+  /* CHANNEL 2 — interaction. Marks, edges, rings, carets. Never a ground. */
+  --accent: #f8c93e;
+  --focus: #f8c93e;
+  --selection: #323232;
+
+  /* CHANNEL 3 — identity. Which thing this is, never what state it is in. */
+  --id-rose: #e35a5a;
+  --id-amber: #e89c3c;
+  --id-lime: #b5bf62;
+  --id-jade: #35a86b;
+  --id-cyan: #5aa8b5;
+  --id-azure: #6f93c4;
+  --id-violet: #9a8fc4;
+  --id-orchid: #c47f9e;
+
+  /* CHANNEL 3, per-CLI sub-table — which agent program runs in this pane. */
+  --cli-claude: #e08a5f;
+  --cli-codex: #3ec2a8;
+  --cli-copilot: #7fa8d8;
+  --cli-opencode: #5fc873;
+  --cli-gemini: #9677c5;
+  --cli-hermes: #b67c94;
+  --cli-ante: #c3c455;
+  --cli-pi: #00d2f0;
+
+  /* type roles — mono means "a literal string the machine gave you" */
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace;
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --text-eyebrow: 10px;
+  --text-xs: 10.5px;
+  --text-s: 11.5px;
+  --text-m: 13px;
+  --text-l: 15px;
+  --text-xl: 22px;
+  --tracking-eyebrow: 0.09em;
+
+  /* rhythm and shape */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --radius-s: 6px;
+  --radius-m: 10px;
+  --radius-l: 14px;
+  --radius-pill: 999px;
+  --line-w: 1px;
+  --thread: 2px;
+  --header-h: 40px;
+  --pane-header-h: 27px;
+  --rail-w: 200px;
+
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, 0.55);
+
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --ease: cubic-bezier(0.25, 0.8, 0.35, 1);
+
+  /* --- demo-local geometry. Not colours: the checkbox diameter and the column
+     every row's text hangs off, named once so the meta line, the byline and
+     the inline body cannot drift out of alignment with the title. */
+  --box: 17px;
+  --run: calc(var(--box) + var(--space-3));
+}
+
+/* ============================ reset and page ============================= */
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  background: var(--surface-0);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-m);
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, textarea, select {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  margin: 0;
+}
+
+button { cursor: pointer; }
+
+:focus-visible {
+  outline: var(--line-w) solid var(--focus);
+  outline-offset: 2px;
+}
+
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--font-mono); }
+.grow { flex: 1 1 auto; }
+
+/* ====================== demo scaffolding (not the pane) ================== */
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.stagebar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  height: auto;
+  min-height: var(--header-h);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface-1);
+  border-bottom: var(--line-w) solid var(--line);
+  font-size: var(--text-s);
+  color: var(--ink-dim);
+}
+
+.stagebar-title {
+  font-size: var(--text-eyebrow);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.ctl-group { display: flex; align-items: center; gap: var(--space-2); }
+.ctl-label { font-size: var(--text-xs); color: var(--ink-faint); }
+
+.ctl {
+  padding: 3px var(--space-3);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--ink-dim);
+  font-size: var(--text-xs);
+}
+.ctl:hover { border-color: var(--line-strong); color: var(--ink); }
+.ctl[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); }
+select.ctl { padding-right: var(--space-2); }
+
+.grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
+  gap: var(--space-5);
+  padding: var(--space-5);
+  background: var(--surface-term);
+}
+
+/* Each demo cell is the size a terminal pane would be. The narrow one exists
+   to prove the layout at 320px — the pane has to read at a grid cell's width,
+   not only at a tile's. */
+.cell { min-height: 0; display: flex; }
+.cell-label {
+  position: absolute;
+  margin-top: calc(-1 * var(--space-5));
+  font-size: var(--text-eyebrow);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* ================================ the pane =============================== */
+
+.pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-0);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+}
+
+/* ------------------------------- header ---------------------------------- */
+
+.thead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--line-w) solid var(--line);
+  background: var(--surface-1);
+  min-height: var(--pane-header-h);
+  flex-wrap: wrap;
+}
+
+.scope {
+  display: inline-flex;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--surface-0);
+}
+
+.scope-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  max-width: 11ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-btn:hover { color: var(--ink-dim); }
+/* The selected half is a GROUND (--selection, achromatic by design) with the
+   accent held back to a hairline underline: gold as a fill would tint the
+   header, which is the one thing src/styles.css's --selection note forbids. */
+.scope-btn[aria-pressed="true"] {
+  background: var(--selection);
+  color: var(--ink);
+  box-shadow: inset 0 -1px 0 0 var(--accent);
+}
+.scope-mark { font-size: var(--text-s); line-height: 1; }
+
+.rootbtn {
+  color: var(--ink-faint);
+  font-size: var(--text-s);
+  line-height: 1;
+  padding: 0 var(--space-1);
+}
+.rootbtn:hover { color: var(--ink-dim); }
+
+.rootpath {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
+.search { flex: 0 1 auto; min-width: 0; }
+.search-in {
+  width: 9ch;
+  padding: 2px var(--space-2);
+  border-bottom: var(--line-w) solid transparent;
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+  transition: width var(--dur-base) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.search-in::placeholder { color: var(--ink-faint); }
+.search[data-open="true"] .search-in,
+.search-in:focus {
+  width: 18ch;
+  border-bottom-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.countchip {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  padding: 1px var(--space-2);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-pill);
+}
+
+/* ----------------------------- view strip -------------------------------- */
+
+.strip {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.strip::-webkit-scrollbar { display: none; }
+
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  border-bottom: 2px solid transparent;
+  font-size: var(--text-s);
+  color: var(--ink-faint);
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.chip:hover { color: var(--ink-dim); }
+.chip[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.chip-n { font-size: var(--text-xs); color: var(--ink-faint); }
+.chip[aria-pressed="true"] .chip-n { color: var(--ink-dim); }
+
+.filterbar { padding: var(--space-2) var(--space-3) 0; }
+.filter-clear {
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--space-2);
+}
+
+/* ----------------------------- quick-add --------------------------------- */
+
+.quickadd {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) var(--space-3) 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-1);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  transition: border-color var(--dur-fast) var(--ease);
+  flex-wrap: wrap;
+}
+.quickadd:focus-within { border-color: var(--line-strong); }
+/* A submittable line gets the accent as a LEFT EDGE — a mark on the field,
+   never a fill of it. This is the only "the Enter key will work" signal. */
+.quickadd[data-valid="true"]:focus-within { box-shadow: inset 2px 0 0 0 var(--accent); }
+
+.qa-in {
+  flex: 1 1 14ch;
+  min-width: 0;
+  font-size: var(--text-m);
+  color: var(--ink);
+}
+.qa-in::placeholder { color: var(--ink-faint); }
+
+/* The chips take their natural width and the field yields to them: a parse the
+   human cannot see is worth less than the two characters of field it costs. */
+.qa-chips { display: flex; gap: var(--space-1); flex-wrap: wrap; flex: 0 0 auto; }
+
+/* The chips are the parse, shown before Enter. Each kind takes the channel its
+   MEANING belongs to: a due chip is a date (ink), a tag is identity-free
+   metadata (ink), priority is emphasis (accent outline), My Day is the sun. */
+.qa-chip {
+  font-size: var(--text-xs);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  border: var(--line-w) solid var(--line-strong);
+  color: var(--ink-dim);
+  white-space: nowrap;
+  animation: chip-in var(--dur-base) var(--ease);
+}
+.qa-chip[data-kind="due"] { color: var(--ink); border-color: var(--ink-faint); }
+.qa-chip[data-kind="priority"],
+.qa-chip[data-kind="important"] { color: var(--accent); border-color: var(--accent); }
+.qa-chip[data-kind="myday"] { color: var(--ink); border-style: dashed; }
+
+@keyframes chip-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* -------------------------------- list ----------------------------------- */
+
+.list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3) var(--space-4);
+  scrollbar-width: thin;
+}
+
+/* The stated elision. Ink, not a state dye: "there is more" is a fact about
+   the list, not an alarm about it. */
+.elision {
+  margin: var(--space-4) 0 0;
+  padding-top: var(--space-2);
+  border-top: var(--line-w) solid var(--line);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+.bucket {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 var(--space-1);
+  font-size: var(--text-eyebrow);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.bucket::after {
+  content: "";
+  flex: 1 1 auto;
+  height: var(--line-w);
+  background: var(--line);
+}
+.bucket-n { font-size: var(--text-eyebrow); }
+/* Overdue is the one bucket heading that takes the state dye — the same dye
+   its rows' dates take, so the group and its members say one thing. */
+.bucket[data-bucket="overdue"] { color: var(--state-attention); }
+
+.row {
+  border-radius: var(--radius-s);
+  transition: background var(--dur-fast) var(--ease);
+}
+.row:hover { background: var(--surface-1); }
+.row[data-selected="true"] { background: var(--selection); }
+.row[data-expanded="true"] { background: var(--surface-1); }
+
+.row-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2);
+}
+
+/* The checkbox: an ACCENT RING with gold INK inside it when checked, never a
+   gold fill (src/theme.ts's rule — the interaction channel marks, it does not
+   ground). Unchecked it is a hairline circle in --line-strong, so a full list
+   reads as a column of empty rings rather than a column of gold. */
+.check {
+  flex: 0 0 auto;
+  width: var(--box);
+  height: var(--box);
+  margin-top: 1px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: transparent;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.check:hover { border-color: var(--ink-faint); color: var(--ink-faint); }
+.check svg { width: 10px; height: 10px; display: block; }
+.row[data-done="true"] .check { border-color: var(--accent); color: var(--accent); }
+
+.row-main { flex: 1 1 auto; min-width: 0; }
+
+.title-line { display: flex; align-items: baseline; gap: var(--space-2); }
+
+.title {
+  font-size: var(--text-m);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.row[data-done="true"] .title { color: var(--ink-faint); text-decoration: line-through; }
+
+/* Priority is WEIGHT, not a third colour. !!! is the only level that also gets
+   a mark, and that mark is the left hairline — an edge, in the accent. */
+.row[data-priority="2"] .title { font-weight: 600; }
+.row[data-priority="3"] .title { font-weight: 600; }
+.row[data-priority="3"] { box-shadow: inset 2px 0 0 0 var(--accent); }
+
+/* IDENTITY CHANNEL, ONE POSITION. 6px, the agent's hue, name on hover. A
+   human-authored row has no dot: absence is the human. */
+.attr-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--attr);
+  align-self: center;
+}
+
+.byline {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  margin-top: 1px;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+}
+.meta-sep { color: var(--ink-faint); }
+.meta-due { font-family: var(--font-mono); }
+/* THE ONE STATE POSITION IN THIS PANE. */
+.meta-due[data-overdue="true"] { color: var(--state-attention); }
+.meta-steps { color: var(--ink-faint); }
+.meta-tag { color: var(--ink-faint); font-size: var(--text-xs); padding: 0; }
+.meta-tag:hover { color: var(--ink-dim); }
+.meta-note { color: var(--ink-faint); font-style: italic; }
+.meta-sun { color: var(--ink-faint); display: inline-flex; }
+.meta-sun svg { width: 11px; height: 11px; display: block; }
+
+.star, .chev {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  opacity: 0;
+  padding: 2px;
+  transition: opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.star svg, .chev svg { width: 14px; height: 14px; display: block; }
+.row:hover .star, .row:hover .chev,
+.row[data-selected="true"] .star, .row[data-selected="true"] .chev,
+.star:focus-visible, .chev:focus-visible { opacity: 1; }
+.star[aria-pressed="true"] { opacity: 1; color: var(--accent); }
+.chev[aria-expanded="true"] { opacity: 1; }
+.chev[aria-expanded="true"] svg { transform: rotate(90deg); }
+
+/* --------------------------- inline expansion ---------------------------- */
+
+.row-body {
+  padding: 0 var(--space-2) var(--space-3) calc(var(--space-2) + var(--run));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.steps { display: flex; flex-direction: column; gap: 2px; }
+.step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-s);
+  color: var(--ink-dim);
+  text-align: left;
+  padding: 1px 0;
+}
+.step svg { width: 9px; height: 9px; display: block; }
+.step .step-mark {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: transparent;
+}
+.step[data-done="true"] .step-mark { border-color: var(--accent); color: var(--accent); }
+.step[data-done="true"] span:last-child { color: var(--ink-faint); text-decoration: line-through; }
+
+.step-add, .notes {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-0);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  font-size: var(--text-s);
+  color: var(--ink);
+  resize: vertical;
+}
+.step-add::placeholder, .notes::placeholder { color: var(--ink-faint); }
+
+.row-controls { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.rowbtn {
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+  padding: 2px var(--space-2);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+}
+.rowbtn:hover { border-color: var(--line-strong); color: var(--ink); }
+.rowbtn[data-on="true"] { color: var(--ink); border-color: var(--ink-faint); }
+.rowbtn[data-act="delete"]:hover { color: var(--state-danger); border-color: var(--state-danger); }
+
+/* ------------------------------ empty state ------------------------------ */
+
+.empty {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+}
+.empty-text { margin: 0; color: var(--ink-dim); font-size: var(--text-s); }
+.empty-hint { margin: var(--space-2) 0 0; color: var(--ink-faint); font-size: var(--text-xs); }
+
+/* -------------------------------- footer --------------------------------- */
+
+.tfoot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: var(--line-w) solid var(--line);
+  background: var(--surface-1);
+  font-size: var(--text-xs);
+  flex-wrap: wrap;
+}
+.tagrow { display: flex; gap: var(--space-1); flex-wrap: wrap; }
+.tagbtn {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  padding: 1px var(--space-2);
+  border: var(--line-w) solid transparent;
+  border-radius: var(--radius-pill);
+}
+.tagbtn:hover { color: var(--ink-dim); border-color: var(--line); }
+.tagbtn[data-on="true"] { color: var(--ink); border-color: var(--line-strong); }
+.hint { color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* -------------------------------- toast ---------------------------------- */
+
+.toast {
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: var(--space-6);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  border: var(--line-w) solid var(--line-strong);
+  border-radius: var(--radius-s);
+  box-shadow: var(--shadow-float);
+  font-size: var(--text-s);
+  color: var(--ink-dim);
+  animation: toast-in var(--dur-base) var(--ease);
+}
+.toast-undo { color: var(--accent); font-size: var(--text-s); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ------------------------------- motion ---------------------------------- */
+
+/* The completion animation: the row strikes, dims and slides out. It is 600ms
+   because it has a job — it is the window in which the undo toast is still
+   the obvious thing to reach for. */
+.row[data-leaving="true"] {
+  animation: row-out 600ms var(--ease) forwards;
+  overflow: hidden;
+}
+
+@keyframes row-out {
+  0% { opacity: 1; }
+  40% { opacity: 0.55; }
+  100% { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; }
+}
+
+/* A row that just gained a reminder pulses its edge once. Attention dye,
+   attention position — and it is the ONE continuous cue in the pane. */
+.row[data-remind="true"] { animation: remind-pulse 1.6s var(--ease) 2; }
+
+@keyframes remind-pulse {
+  0%, 100% { box-shadow: inset 2px 0 0 0 transparent; }
+  50% { box-shadow: inset 2px 0 0 0 var(--state-attention); }
+}
+
+/* The demo's Motion toggle and the OS setting both land here. Everything above
+   is a state change with a duration, so removing the durations removes the
+   motion and changes nothing else. */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+}
+.stage[data-motion="off"] * {
+  animation-duration: 1ms !important;
+  transition-duration: 1ms !important;
+}
+
+/* --------------------------- narrow pane ---------------------------------- */
+
+/* The pane has to read at a grid cell's width. Below 360px the footer hint and
+   the workspace path are the first things to go: they are the two pieces of
+   chrome that describe the pane rather than carry it. */
+@container (max-width: 360px) {
+  .hint, .rootpath { display: none; }
+  .scope-btn { max-width: 10ch; }
+}
+.pane { container-type: inline-size; }

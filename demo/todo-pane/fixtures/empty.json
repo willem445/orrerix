@@ -1,0 +1,10 @@
+{
+  "_comment": [
+    "The empty state. It is a fixture rather than a screenshot because the",
+    "empty state IS the quick-add bar: there is nothing else on the screen to",
+    "reach for, and the only way to see whether that reads as an invitation or",
+    "as a broken pane is to sit in front of it and type."
+  ],
+  "workspace": { "label": "loomux", "root": "C:\\Projects\\loomux" },
+  "items": []
+}

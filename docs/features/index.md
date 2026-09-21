@@ -47,3 +47,6 @@ shell.
 - **[Agents tab](agents-tab.html)** — every pane in the window and what its agent
   is doing right now — working, idle, done with its turn, or waiting on you —
   on the second tab of the left panel, with a click to go there.
+- **[To-do pane](todo-pane.html)** — your task list in a pane beside your work,
+  with natural-language quick-add, five views, and the agents you launch writing
+  to the same list under their own colour (`Alt+J`).

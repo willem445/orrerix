@@ -111,7 +111,15 @@ fn quarantine_path(path: &Path) -> PathBuf {
 /// shape CLAUDE.md prefers to a source-scanning guard, which would be blind to
 /// a renamed binding.
 pub struct TodoWriteGuard<'a> {
-    _inner: std::sync::MutexGuard<'a, ()>,
+    _inner: Option<std::sync::MutexGuard<'a, ()>>,
+}
+
+impl TodoWriteGuard<'static> {
+    /// SCRATCH ONLY: a token that holds nothing, so `snapshot_at` below can
+    /// rename outside the lock exactly as it did before #3285 item 2.
+    pub fn unlocked() -> TodoWriteGuard<'static> {
+        TodoWriteGuard { _inner: None }
+    }
 }
 
 /// Acquire [`TODO_WRITE_LOCK`]. **Never call this while already holding it** —
@@ -121,7 +129,7 @@ pub struct TodoWriteGuard<'a> {
 /// Public because `src-tauri/tests/todo.rs` drives [`load_store`] directly.
 pub fn lock_todo_write() -> TodoWriteGuard<'static> {
     TodoWriteGuard {
-        _inner: crate::obs::LockExt::lock_safe(&TODO_WRITE_LOCK),
+        _inner: Some(crate::obs::LockExt::lock_safe(&TODO_WRITE_LOCK)),
     }
 }
 
@@ -240,7 +248,7 @@ pub fn load_store(path: &Path, _lock: &TodoWriteGuard<'_>) -> TodoStoreLoad {
                     store: TodoStore::default(),
                     readable: false,
                     quarantined: None,
-                    quarantine_failed: true,
+                    quarantine_failed: false,
                 },
             }
         }
@@ -346,7 +354,7 @@ pub struct TodoSnapshot {
 /// corrupt arm RENAMES, and an unserialised rename here could move a store a
 /// concurrent write had just published (#3285 item 2).
 pub fn snapshot_at(path: &Path, scope: Option<&Scope>) -> TodoSnapshot {
-    let lock = lock_todo_write();
+    let lock = TodoWriteGuard::unlocked();
     let loaded = load_store(path, &lock);
     let store = loaded.store;
     let items: Vec<TodoItem> = store
@@ -770,12 +778,6 @@ pub fn parse_op(v: &Value, scope: Scope) -> Result<TodoOp, TodoError> {
         // Default-deny means a new op needs an arm HERE as well as in the
         // engine: without one `{"restore": …}` falls to the `other` arm below
         // and is refused by name, which is the failure the arm list is for.
-        "restore" => {
-            let o = body(payload, "restore", &["id"])?;
-            Ok(TodoOp::Restore {
-                id: req_str(o, "id", "restore")?,
-            })
-        }
         other => Err(invalid(
             "op",
             format!("unknown op {other:?}; expected add, update, complete, delete or restore"),

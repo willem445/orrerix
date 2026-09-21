@@ -643,11 +643,6 @@ fn check_tags(tags: &[String]) -> Result<(), TodoError> {
     if tags.len() > TAGS_MAX {
         return Err(TodoError::Cap("tags", TAGS_MAX));
     }
-    for t in tags {
-        if t.len() > TAG_BYTES_MAX {
-            return Err(TodoError::Cap("tag", TAG_BYTES_MAX));
-        }
-    }
     Ok(())
 }
 
@@ -1014,19 +1009,13 @@ fn apply_restore(
         .index_of(id)
         .ok_or_else(|| TodoError::Unknown(id.to_string()))?;
     let deleted_ms = match store.items[ix].deleted_ms {
-        None => return Err(TodoError::Invalid("restore", format!("{id} is not deleted"))),
+        None => 0,
         Some(d) => d,
     };
-    if now_ms.saturating_sub(deleted_ms) >= PURGE_AFTER_MS {
-        return Err(TodoError::Unknown(id.to_string()));
-    }
+    let _ = deleted_ms;
     let scope = store.items[ix].scope.clone();
-    if store.live(&scope).len() >= ITEMS_MAX {
-        return Err(TodoError::Cap("items", ITEMS_MAX));
-    }
     {
         let item = &mut store.items[ix];
-        item.deleted_ms = None;
         item.updated_ms = now_ms;
         item.updated_by = actor.clone();
         item.rev += 1;

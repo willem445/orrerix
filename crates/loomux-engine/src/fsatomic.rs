@@ -95,15 +95,6 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     match fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
-        Err(_) => {
-            // Rename can fail if the destination is momentarily locked. Fall
-            // back to a direct write so the update isn't lost; keep the temp on
-            // failure so the new contents remain recoverable.
-            let r = fs::write(path, bytes);
-            if r.is_ok() {
-                let _ = fs::remove_file(&tmp);
-            }
-            r
-        }
+        Err(e) => Err(e),
     }
 }

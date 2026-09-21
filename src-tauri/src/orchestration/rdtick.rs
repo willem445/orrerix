@@ -728,6 +728,44 @@ impl OrchRegistry {
     /// `review_verdict`. That is one small JSON read on a path that already
     /// writes a verdict file and delivers a pane prompt, and an absent file —
     /// the product default — costs a `stat` and answers `None`.
+    /// **What a terminal notice owes a reader: the panes this drive still
+    /// holds, founding ones included** (#3250, review round 3).
+    ///
+    /// [`reviewdrive::DriveEntry::owned_panes`] is what the exit notices named
+    /// before, and for a drive that never handed back its worker side is EMPTY
+    /// — so the pane the orchestrator handed the drive appeared in no clause at
+    /// all. That is invisible while the release takes the pane (nothing is left
+    /// to name) and wrong in the two cases where it does not: a founding pane
+    /// that is BUSY on the exit tick, which the barrier refuses and no later
+    /// tick re-asks, and the reconcile's own cancel, which takes no tick and
+    /// releases nothing. Both left the conversation recoverable by nothing the
+    /// notice said.
+    ///
+    /// **Liveness is the filter, and it is what keeps the clause honest.**
+    /// `panes_clause` promises panes that are still RUNNING, for the
+    /// orchestrator to resume or dispose of; a founding pane this very tick
+    /// released is dead, and naming it would be the false claim that clause
+    /// exists to avoid. `release_pane` drops a released OWNED pane from the
+    /// record, which is how the same promise is kept on that side — a founding
+    /// pane is not in the record to drop, so the liveness read does the same
+    /// work here. Asked of the registry, which is why this sits on this side
+    /// rather than in the engine.
+    fn rd_surviving_panes(
+        &self,
+        entry: &reviewdrive::DriveEntry,
+    ) -> Vec<(String, reviewdrive::DrivenRole)> {
+        let mut panes = entry.owned_panes();
+        for a in &entry.founding_panes {
+            if a.trim().is_empty() || panes.iter().any(|(id, _)| id == a) {
+                continue;
+            }
+            if self.agent(a).is_some_and(|x| x.status != AgentStatus::Dead) {
+                panes.push((a.clone(), reviewdrive::DrivenRole::Worker));
+            }
+        }
+        panes
+    }
+
     pub fn rd_owner(
         &self,
         group: &GroupId,
@@ -3235,7 +3273,7 @@ impl OrchRegistry {
                     // #1857 deleted while ALSO owing the notice — the line
                     // twice. The panes are read before `owe_notice`'s mutable
                     // borrow.
-                    let panes = entry.owned_panes();
+                    let panes = self.rd_surviving_panes(entry);
                     // No release clause: reconcile takes no tick, so
                     // `releasable` is never asked and nothing was killed here.
                     let n =
@@ -4491,7 +4529,7 @@ impl OrchRegistry {
                         &entry.body_digest,
                         &brief.lane_notices,
                         &entry.counters,
-                        &entry.owned_panes(),
+                        &self.rd_surviving_panes(entry),
                         &released_worker_session,
                     );
                     out.audits.push((
@@ -4571,7 +4609,7 @@ impl OrchRegistry {
                     // Replace-vs-augment, resolved as reconcile's is: #1871 B3's
                     // panes thread into the construction, and #1857's owe
                     // replaces the direct push rather than sitting beside it.
-                    let panes = entry.owned_panes();
+                    let panes = self.rd_surviving_panes(entry);
                     let n = rddrive::cancelled_notice(
                         pr,
                         rddrive::CancelCause::PrGone,

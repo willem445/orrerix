@@ -9516,6 +9516,24 @@ fn a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit() {
         reg.agent(&worker).is_some_and(|a| a.status != AgentStatus::Dead),
         "…and it is still there for the orchestrator to speak to"
     );
+
+    // **And the exit NAMES it** (review round 3, B2). A pane that survives the
+    // exit is one the orchestrator has to dispose of, and this is the last line
+    // the drive ever writes — the entry is terminal and is pruned, so there is
+    // no later tick and no later notice. Before this the founding pane was in
+    // no clause at all: `owned_panes` is empty for a drive that never handed
+    // back, so the notice said nothing about the worker side and the
+    // conversation that just ended was recoverable by nothing the reader could
+    // see.
+    let notice = end
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("a satisfied drive owes a notice: {:?}", end.notices));
+    assert!(
+        notice.contains(&worker),
+        "the pane that survived the exit is named for the orchestrator to dispose of: {notice}"
+    );
 }
 
 /// A drive started on a session that already carries `panes` worker panes, all
@@ -9741,6 +9759,70 @@ fn a_cancelled_exit_releases_the_pane_the_drive_was_started_on() {
     assert!(
         reg.agent(&worker).is_some_and(|a| a.status == AgentStatus::Dead),
         "the pane is really gone"
+    );
+}
+
+/// **The RECONCILE's cancel names the founding pane too** (#3250, review round
+/// 3, B1) — the one exit that releases nothing at all.
+///
+/// A PR that closed while orrerix was not running is cancelled by reconcile
+/// rather than by a tick, and reconcile asks `releasable` nothing: no pane is
+/// killed, owned or founding. That is argued and left alone in
+/// `doc/design/review-driver.md` §3 — but the argument rests on the orchestrator
+/// being able to see what survived, and `owned_panes` is EMPTY on the worker
+/// side for a drive that never handed back, so the pane the orchestrator handed
+/// the drive appeared in no clause of that notice at all.
+///
+/// The lane pane is asserted in the same run as the control: the clause was
+/// never empty, so a test reading only "the notice names a pane" would have
+/// passed before the fix.
+#[test]
+fn the_reconcile_cancel_names_the_pane_the_drive_was_started_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let w = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).expect("a worker");
+    let worker = w.id.clone();
+    with_pane(&reg, &worker, 41);
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    report_as(&reg, &group, &worker, Role::Worker, "done");
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+
+    // The PR closes while nothing is ticking, so the once-per-process reconcile
+    // is the producer — no tick runs with the PR open first.
+    gh.set_facts("CLOSED", HEAD_A);
+    make_delivery_land(&reg, &group, &orch.id, 7305);
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    assert!(
+        reg.audit_log(&group)
+            .into_iter()
+            .any(|e| e.action == "rd-cancelled" && e.detail["at"] == json!("reconcile")),
+        "this test is about RECONCILE's producer and it did not run"
+    );
+    reg.rd_drive_group_with(&group, &gh, 20_000);
+
+    let landed = drive_notices(&reg, &group, 1758);
+    assert_eq!(landed.len(), 1, "reconcile owes exactly one notice: {landed:?}");
+    assert!(
+        landed[0].contains("the PR is closed or merged"),
+        "the fixture's premise: this is reconcile's own cancel: {}",
+        landed[0]
+    );
+    assert!(
+        landed[0].contains(&worker),
+        "the pane the orchestrator handed the drive is named — nothing killed it, and this \
+         notice is the only thing that says it is still there: {}",
+        landed[0]
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status != AgentStatus::Dead),
+        "…and it really is still there, which is what makes naming it true"
     );
 }
 

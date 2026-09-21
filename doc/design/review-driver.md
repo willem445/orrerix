@@ -2536,14 +2536,24 @@ so a busy pane stays exactly where it is and no row claims otherwise.
 **The RECONCILE's own cancel is outside all of this, and stays that way.** A
 drive whose PR already reads closed when reconcile runs is cancelled there
 rather than by a tick, and reconcile asks `releasable` nothing — it kills no
-pane, owned or founding, and names them in the `CANCELLED` notice for the
-orchestrator instead. That is unchanged by #3250 and is not an oversight the
+pane, owned or founding. That is unchanged by #3250 and is not an oversight the
 terminal population closes: the release runs under the tick's own hold of
 `rd_state_lock` beside the record drop that keeps a live pane from ever being
 unowned, and reconcile is a different hold at a different moment (startup,
 where the orchestrator pane is most likely to be missing). The window is a PR
-closed while orrerix was not running; the panes are in the notice, and
-`kill_agent` is the orchestrator's.
+closed while orrerix was not running, and `kill_agent` is the orchestrator's.
+
+What DID have to change there is what that notice says. Its pane clause was
+built from `owned_panes` alone, which is empty on the worker side for exactly
+the drive shape this issue is about, so the founding pane was named in no clause
+at all and the argument above — the orchestrator disposes of it — rested on a
+pane it could not see. Every terminal notice now names the drive's surviving
+panes: what it owns, plus any founding pane still alive, which is
+`rd_surviving_panes`. The liveness read is what keeps the clause's own promise
+(panes that are still RUNNING) true for a founding pane the same tick released —
+`release_pane` drops an owned one from the record, and a founding pane is not in
+the record to drop. Pinned by
+`the_reconcile_cancel_names_the_pane_the_drive_was_started_on`.
 
 **The list is not read by `driven_role`, and that is deliberate.** §7's
 interception is a claim on a pane's TRAFFIC, and "a drive must never consume the
@@ -2579,10 +2589,12 @@ that never reaches a terminal step at all.
 that is busy on the exit tick itself.** The barrier refuses it exactly as it
 refuses a busy superseded one, and there is no later tick to re-ask on — the
 entry is terminal and is pruned. So the pane the orchestrator handed the drive
-survives a drive that ended while it was mid-turn, holding its worktree, and
-the recovery is the one that was there before this change: the exit notice names
-the session, the idle reaper takes the pane once its own turn ends, and
-`kill_agent` is the orchestrator's. It is the same trade as the superseded case
+survives a drive that ended while it was mid-turn, holding its worktree. The
+exit notice NAMES it, through `rd_surviving_panes` — and that clause is the
+recovery rather than the released-worker one, which cannot be: that clause says
+a pane WAS released, and on this path none was. The idle reaper takes the pane
+once its own turn ends, and `kill_agent` is the orchestrator's. It is the same
+trade as the superseded case
 and for the same reason — the alternative is killing a pane mid-turn, which §3
 forbids the driver — and
 `a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit` pins

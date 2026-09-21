@@ -3472,9 +3472,12 @@ could be removed. It is the pane (or panes) that were live on that session when 
 `start_review_drive`, recorded then and not looked up again — so a pane you open or resume onto
 the session while the drive is running is never on the list, including one you open in the moment
 between the last check and the exit. A pane another live drive opened for itself is left to it, and
-a busy pane is left alone; no release row claims otherwise. Mid-drive nothing changes: a pane the
-drive never spoke to may still be one you are using, so only the panes it opened itself are
-released then.
+a busy pane is left alone; no release row claims otherwise. A pane that is left alone is NAMED in
+the ending notice, beside the ones the drive still owns, so what survived the drive is something
+you can see rather than something you have to go looking for — that includes the cancel a restart
+performs for a PR that closed while orrerix was down, which releases nothing at all. Mid-drive
+nothing changes: a pane the drive never spoke to may still be one you are using, so only the panes
+it opened itself are released then.
 
 Each release is on the audit log as `rd-lane-released` or `rd-worker-released`, naming the pane,
 the session kept and why — so it costs you no line in your pane and is still there to count.

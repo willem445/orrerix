@@ -16,7 +16,8 @@
 use loomux_engine::pathseg;
 use loomux_engine::todo::{
     self, Actor, OrderAfter, Scope, StepPatch, TodoAdd, TodoError, TodoOp, TodoStore, TodoUpdate,
-    ITEMS_MAX, NOTES_MAX, ORDER_GAP, PURGE_AFTER_MS, STEPS_MAX, TAGS_MAX, TITLE_MAX,
+    ITEMS_MAX, NOTES_MAX, ORDER_GAP, PRIORITY_MAX, PURGE_AFTER_MS, STEPS_MAX, TAGS_MAX,
+    TITLE_MAX,
 };
 use loomux_lib::orchestration::todo::{apply_to, load_store, snapshot_at, todo_path_in};
 use std::path::{Path, PathBuf};
@@ -270,6 +271,43 @@ fn a_store_that_cannot_be_read_declines_the_write_instead_of_replacing_it() {
         "the refusal must say why: {err}"
     );
     assert!(path.is_dir(), "the refused write must have touched nothing");
+}
+
+#[test]
+fn a_quarantine_rename_that_fails_declines_the_write_too() {
+    // The half the quarantine tests above do NOT cover: `fs::rename` can fail,
+    // and then nothing has been preserved anywhere. Reporting the read as
+    // successful would license the next write to publish an empty store over
+    // corrupt bytes that were never moved aside — the exact loss the quarantine
+    // exists to prevent (rev-std round 1, finding 2).
+    //
+    // A DIRECTORY at the quarantine target is the portable way to make the
+    // rename fail: POSIX and Windows both refuse to rename a file onto one.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    std::fs::write(&path, "{ truncated").unwrap();
+    std::fs::create_dir(tmp.path().join("todo.corrupt.json")).unwrap();
+
+    let loaded = load_store(&path);
+    assert!(
+        !loaded.readable,
+        "a corrupt store whose quarantine FAILED must not read as safely emptied"
+    );
+    assert!(
+        loaded.quarantined.is_none(),
+        "nothing may be reported as quarantined when the rename did not happen"
+    );
+
+    let err = apply_to(&path, add("would erase the evidence"), &human(), T0, None).unwrap_err();
+    assert!(
+        err.to_string().contains("refusing to overwrite"),
+        "the write must be declined: {err}"
+    );
+    assert_eq!(
+        read_raw(&path),
+        "{ truncated",
+        "the corrupt bytes must still be exactly where they were"
+    );
 }
 
 // ---------- conflict ----------
@@ -530,6 +568,74 @@ fn the_per_scope_item_cap_refuses_the_next_add() {
 }
 
 #[test]
+fn a_priority_outside_its_range_is_refused_on_both_paths() {
+    // The range check had no witness at all: mutating PRIORITY_MAX reddened
+    // nothing (rev-std round 1, completeness table). Both paths, because a
+    // guard on one call site and absent from its sibling is a bypass exactly
+    // the width of the asymmetry.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+
+    let err = apply_to(
+        &path,
+        TodoOp::Add(TodoAdd {
+            title: "too urgent".to_string(),
+            priority: Some(PRIORITY_MAX + 1),
+            ..TodoAdd::default()
+        }),
+        &agent(),
+        T0,
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(err, TodoError::Invalid("priority", _)), "got {err}");
+    assert!(
+        err.to_string().contains(&format!("0..={PRIORITY_MAX}")),
+        "the refusal must name the range: {err}"
+    );
+
+    // The boundary itself is accepted — without this, a guard that refused
+    // every priority would pass the assertion above.
+    let id = apply_to(
+        &path,
+        TodoOp::Add(TodoAdd {
+            title: "urgent".to_string(),
+            priority: Some(PRIORITY_MAX),
+            ..TodoAdd::default()
+        }),
+        &agent(),
+        T0,
+        None,
+    )
+    .expect("the cap value itself is in range")
+    .ids[0]
+        .clone();
+
+    let err = apply_to(
+        &path,
+        TodoOp::Update(TodoUpdate {
+            id: id.clone(),
+            priority: Some(PRIORITY_MAX + 1),
+            ..TodoUpdate::default()
+        }),
+        &agent(),
+        T0 + 1,
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(err, TodoError::Invalid("priority", _)), "got {err}");
+    let item = load_store(&path)
+        .store
+        .items
+        .iter()
+        .find(|i| i.id == id)
+        .cloned()
+        .unwrap();
+    assert_eq!(item.priority, PRIORITY_MAX, "nothing was clamped in");
+    assert_eq!(item.rev, 1, "a refused update must not bump rev");
+}
+
+#[test]
 fn an_empty_title_is_refused() {
     let tmp = tempfile::tempdir().unwrap();
     let path = store_path(tmp.path());
@@ -748,6 +854,79 @@ fn keys_this_build_does_not_know_survive_a_round_trip() {
         value["items"].as_array().unwrap().len(),
         2,
         "the new item should have been written too"
+    );
+}
+
+#[test]
+fn a_steps_replace_keeps_each_surviving_steps_unknown_keys() {
+    // The one level at which the round-trip promise needed CODE rather than
+    // `#[serde(flatten)]`: item, workspace and envelope keys survive because
+    // they are mutated in place, but an update REPLACES the step list from
+    // `StepPatch`es, which carry only what a caller can express. Without the
+    // re-attach, a newer build's step field is dropped the first time the human
+    // edits the checklist (rev-std round 1, finding 3).
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    std::fs::write(
+        &path,
+        r#"{
+          "version": 1,
+          "items": [{
+            "id": "td-000000000000cafe",
+            "title": "has steps with unknown keys",
+            "rev": 1,
+            "steps": [
+              {"id":"st-keep","title":"kept","done":false,"assignee":"a-7"},
+              {"id":"st-drop","title":"removed by the edit","done":false,"assignee":"a-9"}
+            ]
+          }]
+        }"#,
+    )
+    .unwrap();
+
+    // The human edits the checklist: renames the surviving step, ticks it, and
+    // drops the other — the ordinary gesture, not a contrived one.
+    apply_to(
+        &path,
+        TodoOp::Update(TodoUpdate {
+            id: "td-000000000000cafe".to_string(),
+            steps: Some(vec![
+                StepPatch {
+                    id: Some("st-keep".to_string()),
+                    title: "kept, and renamed".to_string(),
+                    done: true,
+                },
+                StepPatch {
+                    id: None,
+                    title: "brand new".to_string(),
+                    done: false,
+                },
+            ]),
+            ..TodoUpdate::default()
+        }),
+        &human(),
+        T0,
+        None,
+    )
+    .unwrap();
+
+    let value: serde_json::Value = serde_json::from_str(&read_raw(&path)).unwrap();
+    let steps = value["items"][0]["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["id"], serde_json::json!("st-keep"));
+    assert_eq!(steps[0]["title"], serde_json::json!("kept, and renamed"));
+    assert_eq!(steps[0]["done"], serde_json::json!(true));
+    assert_eq!(
+        steps[0]["assignee"],
+        serde_json::json!("a-7"),
+        "a surviving step's unknown key must cross the replace"
+    );
+    // The negative control: a step the caller MINTED has no prior keys to
+    // inherit, so a blanket copy would show up here.
+    assert!(
+        steps[1].get("assignee").is_none(),
+        "a new step must not inherit another step's unknown keys: {}",
+        steps[1]
     );
 }
 

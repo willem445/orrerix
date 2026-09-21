@@ -46,7 +46,17 @@ path, and the reason is #133: a bare `fs::write` truncates in place, so a
 crash or a full disk mid-write destroys the list instead of leaving the previous
 one intact.
 
-## The envelope, and the three degraded reads
+**What that does not promise.** `atomic_write` writes a temp file and renames,
+and when the *rename* fails — a momentarily locked destination, which a
+concurrent reader on Windows produces — it falls back to exactly that bare
+`fs::write`, keeping the temp so the new contents stay recoverable. The
+torn-file window is therefore narrowed, not closed, and this store carries the
+same exposure `tasks.json` has carried since #133. It is written down rather
+than papered over because the recovery for a torn file is the quarantine above,
+which is why that path is tested rather than assumed. A per-file lock that
+would close it belongs with the primitive, not with this one caller.
+
+## The envelope, and the degraded reads
 
 ```json
 { "version": 1, "workspaces": { "<key>": { … } }, "items": [ … ] }
@@ -57,6 +67,7 @@ one intact.
 | absent (first run) | empty store | allowed — this is how the file is created |
 | present, unreadable (permissions, a directory in its place) | empty store, `readable: false` | **refused** |
 | not JSON, or JSON of the wrong shape | quarantined to `todo.corrupt.json`, empty store | allowed — the evidence is already safe under its own name |
+| …and the quarantine rename itself failed | empty store, `readable: false` | **refused** — nothing was preserved, so nothing may be overwritten |
 | `version` greater than `CURRENT_VERSION` | the items, as written | **refused** |
 
 The first and third rows are what `uistate` already does. Two things about the
@@ -87,6 +98,13 @@ carry a `#[serde(flatten)] extra` map, so a field a newer build wrote
 round-trips through an older one instead of being dropped by the next save.
 This is the second, independent half of forward compatibility: the version
 guards the *shape*, `extra` guards the *fields*.
+
+Three of those four hold for free, because an update mutates them **in place**.
+Steps are the exception and needed code: an update REPLACES the step list, and
+a `StepPatch` carries only what a caller can express, so `apply_update`
+re-attaches each surviving step's `extra` by id. Without that, a newer build's
+step-level field would be dropped the first time the human edited a checklist —
+silently, and at the one level where nothing else would have noticed.
 
 ## The item
 

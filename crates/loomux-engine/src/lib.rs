@@ -705,8 +705,8 @@
 //! here rather than in `src-tauri` for the reason the module header states at
 //! length: the store is the one durable blob with TWO writer processes (agents
 //! through MCP, the human through the pane), so the schema has to live where
-//! both meet, and the half that is data plus `match`  no I/O, no clock, no
-//! registry  is engine-shaped exactly like [`model`] and [`providerlimit`].
+//! both meet, and the half that is data plus `match` — no I/O, no clock, no
+//! registry — is engine-shaped exactly like [`model`] and [`providerlimit`].
 //! Persistence, the audit row and the change event stay on the host side in
 //! `src-tauri/src/orchestration/todo.rs`. See `doc/design/todo-pane.md`.
 

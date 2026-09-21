@@ -31,12 +31,14 @@
 //! nothing there", and a write on top of an unreadable file would erase a list
 //! the next launch could have recovered.
 //!
-//! # The three degraded reads, and what each does
+//! # The degraded reads, and what each does
 //!
 //! | on disk | read | write |
 //! |---|---|---|
 //! | absent (first run) | empty store | allowed — this is how the file is created |
+//! | present, unreadable | empty store, `readable: false` | **refused** |
 //! | not JSON at all, or JSON of the wrong shape | quarantined to `todo.corrupt.json`, empty store | allowed — the evidence is already safe under its own name |
+//! | …and the quarantine rename FAILED | empty store, `readable: false` | **refused** — nothing was preserved, so nothing may be overwritten |
 //! | `version` greater than [`CURRENT_VERSION`] | the items, as written | **refused** ([`TodoError::NewerVersion`]) |
 //!
 //! The third row is the one that is deliberately not the other two: a store
@@ -157,14 +159,29 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
         },
         Err(_) => {
             let q = quarantine_path(path);
-            let _ = std::fs::rename(path, &q);
-            // Readable again: the evidence has moved aside under its own name,
-            // so the empty store below is the real state of `todo.json` and a
-            // write over it destroys nothing.
-            TodoStoreLoad {
-                store: TodoStore::default(),
-                readable: true,
-                quarantined: Some(q),
+            match std::fs::rename(path, &q) {
+                // The evidence has moved aside under its own name, so the empty
+                // store below is the real state of `todo.json` and a write over
+                // it destroys nothing.
+                Ok(()) => TodoStoreLoad {
+                    store: TodoStore::default(),
+                    readable: true,
+                    quarantined: Some(q),
+                },
+                // The rename FAILED, so the corrupt bytes are still at `path`
+                // and nothing has been preserved anywhere. Returning
+                // `readable: true` here would license the next write to publish
+                // an empty store over evidence that was never moved — the exact
+                // loss this branch exists to prevent. It declines instead, on
+                // the same ground as the unreadable arm above: the bytes may be
+                // movable next time. A `todo.corrupt.json` that exists as a
+                // directory, or a file another process holds open, is how this
+                // happens on Windows.
+                Err(_) => TodoStoreLoad {
+                    store: TodoStore::default(),
+                    readable: false,
+                    quarantined: None,
+                },
             }
         }
     }
@@ -172,9 +189,19 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
 
 /// Serialise and atomically replace the store.
 ///
-/// `atomic_write` (the `tasks.json` path, #133) and never `fs::write`: a
-/// bare write truncates in place, so a crash or a full disk mid-write destroys
-/// the list rather than leaving the previous one intact.
+/// `atomic_write` (the `tasks.json` path, #133) rather than a bare `fs::write`:
+/// a bare write truncates in place, so a crash or a full disk mid-write
+/// destroys the list rather than leaving the previous one intact.
+///
+/// **What that does NOT promise**, because the primitive does not: when the
+/// temp-file rename fails — a momentarily locked destination, which on Windows
+/// a concurrent reader produces — `atomic_write` falls back to exactly that
+/// bare `fs::write` (`fsatomic.rs`, the `Err(_)` arm of its rename), keeping
+/// the temp file so the new contents stay recoverable. So the torn-file window
+/// is narrowed to the rename-failure case, not closed. This store has the same
+/// exposure `tasks.json` has had since #133, and it is named here rather than
+/// papered over: the recovery for a torn file is the quarantine in
+/// [`load_store`], which is why that path is tested rather than assumed.
 fn save_store(path: &Path, store: &TodoStore) -> Result<(), TodoError> {
     let body = serde_json::to_string_pretty(store)
         .map_err(|e| TodoError::Invalid("store", format!("could not be serialised: {e}")))?;

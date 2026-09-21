@@ -33,6 +33,14 @@
 //!    next save. Combined with `#[serde(default)]` on every field, an older
 //!    file also loads without its newer siblings.
 //!
+//!    Three of those four survive because they are mutated **in place**. Steps
+//!    are the exception and needed code to hold the claim up: a
+//!    [`TodoUpdate`] REPLACES the whole step list, and a [`StepPatch`] carries
+//!    only what a caller can express, so `apply_update` re-attaches each
+//!    surviving step's `extra` by id. Without that, a newer build's step field
+//!    would be dropped the first time the human edited the checklist — the one
+//!    level at which this promise would otherwise be false.
+//!
 //! # Purity
 //!
 //! [`apply`] takes the clock as an argument and performs no I/O. Its one
@@ -788,13 +796,30 @@ fn apply_update(
             item.tags = t;
         }
         if let Some(s) = up.steps {
+            // Carry each surviving step's unknown keys across the replace. A
+            // `StepPatch` is what a CALLER can express, so rebuilding the list
+            // from patches alone would drop a newer build's step-level field
+            // (the suite's example: `assignee`) the first time the human edits
+            // the checklist — silently, and only for steps, which is exactly
+            // the asymmetry the module header's round-trip claim must not have.
+            // Item, workspace and envelope keys survive because those are
+            // mutated in place rather than rebuilt.
+            let prior: Vec<Step> = item.steps.clone();
             item.steps = s
                 .into_iter()
-                .map(|p| Step {
-                    id: p.id.unwrap_or_else(new_step_id),
-                    title: p.title,
-                    done: p.done,
-                    extra: Map::new(),
+                .map(|p| {
+                    let id = p.id.unwrap_or_else(new_step_id);
+                    let extra = prior
+                        .iter()
+                        .find(|old| old.id == id)
+                        .map(|old| old.extra.clone())
+                        .unwrap_or_default();
+                    Step {
+                        id,
+                        title: p.title,
+                        done: p.done,
+                        extra,
+                    }
                 })
                 .collect();
         }

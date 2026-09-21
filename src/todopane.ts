@@ -1321,6 +1321,25 @@ export class TodoPaneView {
     this.tagFilter = null;
     this.expanded.clear();
     this.drafts.clear();
+    // AND THE SNAPSHOT GOES WITH THEM (#3293 review round 3, premortem 1).
+    //
+    // The stale-response guard in `refreshNow` closes the race where an
+    // IN-FLIGHT read paints the old list. This is the other half, and it needs
+    // no race at all: the `render()` below runs synchronously, before the new
+    // read has been asked for, so without this it would paint the OLD scope's
+    // rows under the NEW scope's header and switch. Those rows are live — and
+    // the engine resolves `update`/`complete`/`delete` by id WITHOUT a scope
+    // check (`doc/design/todo-pane.md`), so completing one in that window
+    // writes to whichever store actually holds it while the header says
+    // otherwise. One paint deep, and entirely avoidable.
+    //
+    // Dropping it is right rather than merely safe: unlike a FAILED read, where
+    // the list we hold is still the truth for the scope we are on and
+    // publishing an empty one would destroy it, here the list we hold is
+    // definitively the WRONG scope's. The cost is one frame of the empty state
+    // before the coalesced read lands.
+    this.snapshot = null;
+    this.loadFailed = false;
     this.refresher.request();
     this.render();
   }

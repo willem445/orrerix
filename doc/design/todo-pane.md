@@ -755,6 +755,18 @@ global store against an id that is not there. Dropping the response costs
 nothing: `setScope` has already asked for a fresh run and the coalescer
 guarantees the trailing one.
 
+**And the snapshot is dropped ON the scope change**, which is the half that
+needs no race at all (#3293 review round 3). `setScope` renders synchronously,
+before the new read has even been requested, so without this it paints the OLD
+scope's rows under the NEW header and switch — rows that are live, against an
+engine that resolves `update`/`complete`/`delete` by id with no scope check, so
+acting on one in that window writes to whichever store holds it while the header
+says otherwise. Dropping it is right rather than merely safe, and the asymmetry
+with a FAILED read is the point: there the list we hold is still the truth for
+the scope we are on, so publishing an empty one would destroy it; here the list
+we hold is definitively the wrong scope's. The cost is one frame of the empty
+state.
+
 **What the bound does NOT cover**, written down rather than left for the row in
 `test/perfpolicy.test.ts` to imply:
 

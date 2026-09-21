@@ -22,6 +22,10 @@ pub mod humanq;
 pub mod mcp;
 pub mod needsyou;
 pub mod structured;
+/// The To-Do store (#3263 slice S1): where `todo.json` lives, the
+/// load-or-quarantine read, the atomic write, the audit row and the change
+/// event. The model and the pure `apply` are `loomux_engine::todo`.
+pub mod todo;
 /// The repo tuning fingerprint behind the time-plot's marks (#2011 slice B).
 /// Walks and hashes the agent-facing config, at most once per series bucket.
 /// Never the GUI thread, and serialized per group by the usage memo cell — see

@@ -11146,6 +11146,7 @@ fn done_row(id: &str, status: &str, updated_ms: u64) -> TaskSummary {
         kind: None,
         sprint: None,
         links: vec![],
+        description: None,
         // #1349: derived per read, so the literal that stands in for one carries
         // the token an empty row produces. `filter_done_rows` never reads it.
         link_etag: link_etag(&linked(id, status, &[], &[])),

@@ -326,6 +326,10 @@ pub const READ_TOOLS: &[&str] = &[
     "group_usage",
     "session_digest",
     "merge_queue_status",
+    // #3304 S1: `deferred_list` is a policy read plus one file read under the
+    // deferral lock. Nothing mutates — the flush is the delivery path's, never
+    // a reader's.
+    "list_deferred",
     "review_drive_status",
     "plan_drive_status",
     "channel_status",
@@ -1830,6 +1834,17 @@ fn tool_defs(
                     "target": { "type": "string", "description": "OPTIONAL, and an ASSERTION rather than a choice: if you pass it, it must equal the branch the PR's base actually resolves to, and a mismatch is refused with `base-not-target`. It can narrow what happens, never widen it — you cannot retarget a PR by passing a different branch. Omit it unless you want that assertion checked." },
                 }),
                 &["pr"]),
+            // Delivery triage's read-back (#3304 S1). ORCHESTRATOR-ONLY, and
+            // narrower than `list_needs_you`, whose tier this otherwise sits
+            // at: a needs-you item is a thing the human's own panel shows, so
+            // a manager that could not read it would be reasoning about a
+            // queue the human can see. A deferred notice is the opposite —
+            // it is what was held back from ONE pane, and the pane it was held
+            // back from is the only one that has a question to ask about it.
+            // Widening this later is one word; narrowing a shipped grant is a
+            // contract break.
+            tool("list_deferred", "Read what delivery triage has HELD BACK from your pane: `{enabled, provider, max_defer_minutes, count, items:[{ts_ms, from, kind, rule, text}]}`. When this repo declares `triage: enabled: true`, orrerix answers a notice whose LEADING SHAPE closes it without any judgement — a review drive reporting GATE SATISFIED on a repo whose merge queue accepted the PR, a notify_when run that came back green, a planner that posted its plan and exited, a mid-plan `---BEGIN PLAN k/n---` chunk — by recording it instead of waking you. Everything else is DELIVERED, which is the default for any shape the rules do not positively recognise, and a delivery that names you (`blocking on you`, `needs you`, `your call`), a HELD drive, a `blocked` report, a watchdog stall and a re-grounding notice are never triaged at all. NOTHING IS EVER DROPPED. Every held notice is in this list, in the audit log as `delivery-triaged`, and on disk in this group's directory, and it is flushed to you as ONE framed `[orrerix] N notices deferred…` line at the next delivery that DID need you, at `max_defer_minutes` if nothing does, or when the store fills. So you do not need to poll this: the flush comes to you. WHAT IT IS ACTUALLY FOR is the question the flush cannot answer — `what is being held RIGHT NOW`, in full text rather than quoted — when you are about to make a call that one of them might bear on, or when you are re-grounding after a compact and want to know what happened while you were not reading. `enabled: false` means this repo declares no triage at all and `count: 0` means nothing is held; read the flag before concluding the second. Read-only: calling this never delivers, flushes, or clears anything.",
+                json!({}), &[]),
             tool("merge_queue_status",
                 "Where this group's merge queue stands: {enabled, target, entries:[{pr, state, since_ms, blocked_reason?}], batch?}. `target` is the branch the queue is landing on — established by the first successful queue_merge from that PR's live base, and RELEASED when the queue drains, so it is a property of the work in the queue rather than a setting. Entry states are queued | batching | ci-wait | landing | bisecting; terminal entries (landed, kicked-back, cancelled) are not listed. `blocked_reason` on a `queued` entry means it is not batchable RIGHT NOW — almost always because the PR was rebased, which kills its verdicts until a re-review covers the new head; it clears by itself, so re-review rather than re-queue. `since_ms` is an AGE, not a timestamp. `batch` appears only while one is in flight and names the draft PR whose checks are being watched — that PR is orrerix's, so do not merge or close it by hand. Read-only: calling this never changes anything.",
                 json!({}), &[]),
@@ -3429,6 +3444,17 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             let target = arg_str_strict(args, "target")?;
             let out = reg.queue_merge(&caller.group, pr, target);
             Ok(serde_json::to_string(&out).unwrap_or_default())
+        }
+        // #3304 S1. `require_orchestrator` is the real gate — the
+        // role-filtered listing above is cosmetic — and there is deliberately
+        // no write tool at any tier: nothing on this surface can defer a
+        // notice, flush one, or clear the store. Deferring is a RULE's answer
+        // about a shape, and an agent that could ask for one could ask for its
+        // own report to be held back from the pane that routes it.
+        "list_deferred" => {
+            require_orchestrator(caller)?;
+            let out = reg.deferred_list(&caller.group);
+            Ok(out.to_string())
         }
         "merge_queue_status" => {
             require_orchestrator(caller)?;

@@ -144,6 +144,18 @@ pub use loomux_engine::mailbox;
 
 pub use loomux_engine::{locks, profiles, workflow};
 
+// Delivery triage's pure core (#3304 S1) — the leading-shape classifier, the
+// never-triaged set, the rule table and the deferred store's wire form.
+// Re-exported for `workflow`'s reason: every decision is made there, and what
+// stays on this side is the wiring.
+pub use loomux_engine::triage;
+
+// Delivery triage's registry wiring (#3304 S1), in a file of its own, for the
+// reason `rdtick` is: a gate that can SUPPRESS a delivery to the one pane a
+// human supervises has to be findable as ONE scope, and a FILE is a scope a
+// rename cannot step over. `src-tauri/tests/triage.rs` reads it as one.
+mod triagegate;
+
 /// #2811 S5a: the per-provider spend/usage-limit table the attention scan reads
 /// a pane tail against. Re-exported here beside `workflow` because the two
 /// consumers straddle the seam — `attention_tick` below raises the
@@ -16153,6 +16165,21 @@ pub mod lockorder {
     /// "Takes no other registry lock while held" except `AUDIT_LOCK`.
     pub const USAGE: LockRank = LockRank::new(840);
 
+    /// `triage_defer_lock` — delivery triage's read-modify-write of one
+    /// group's `deferred.json` (#3304 S1).
+    ///
+    /// Inner of every registry map, because the load-decide-store it spans is
+    /// pure file I/O and takes none of them: `triage_delivery` resolves the
+    /// policy (`groups`) and attempts the merge-queue enqueue
+    /// (`mq_state_lock`) ABOVE it, deliberately, so neither is ever held
+    /// under this one. Outer of `AUDIT` alone, which every write under it
+    /// reaches.
+    ///
+    /// **Never held across a delivery**, the #467/#468 rule every state lock
+    /// here follows: `take_deferred` returns the framed notice and releases,
+    /// and the caller delivers it afterwards.
+    pub const TRIAGE_DEFER: LockRank = LockRank::new(850);
+
     /// `AUDIT_LOCK` — the audit append. The innermost leaf.
     ///
     /// Four of the file leaves above name it explicitly as the one lock they
@@ -16186,6 +16213,7 @@ pub mod lockorder {
         ("questions_lock", QUESTIONS),
         ("mailbox_lock", MAILBOX),
         ("usage_lock", USAGE),
+        ("triage_defer_lock", TRIAGE_DEFER),
         ("audit", AUDIT),
     ];
 }
@@ -16784,6 +16812,20 @@ pub struct OrchRegistry {
     /// nesting the `tasks_lock` version already had. Callers hold no registry
     /// lock when they take it.
     usage_lock: TrackedMutex<()>,
+    /// Serialises every read-modify-write of a group's `deferred.json`
+    /// (#3304 S1), and with it the decision to hold a notice back at all.
+    ///
+    /// One registry-wide lock rather than one per group, `mq_state_lock`'s
+    /// argument: the only long hold is the flush tick, which services one
+    /// group at a time, so a per-group map buys no concurrency at the cost of
+    /// an ordering question every future caller would have to get right.
+    ///
+    /// Ranked (`lockorder::TRIAGE_DEFER`) rather than left unranked like its
+    /// three state-lock siblings, because it is taken on the DELIVERY path —
+    /// the one path in this file that every producer funnels through — so a
+    /// future caller reaching it while holding a map is the inversion most
+    /// worth catching at the moment it is written.
+    triage_defer_lock: Arc<TrackedMutex<()>>,
     /// Per-group memo for the polled usage read (#743 S4b) — the value
     /// [`OrchRegistry::group_usage_within`] serves when the stored one is
     /// younger than the caller's `max_age`.
@@ -30828,6 +30870,7 @@ impl OrchRegistry {
             needs_you_lock: TrackedMutex::new_ranked("needs_you_lock", lockorder::NEEDS_YOU, ()),
             mailbox_lock: TrackedMutex::new_ranked("mailbox_lock", lockorder::MAILBOX, ()),
             usage_lock: TrackedMutex::new_ranked("usage_lock", lockorder::USAGE, ()),
+            triage_defer_lock: Arc::new(TrackedMutex::new_ranked("triage_defer_lock", lockorder::TRIAGE_DEFER, ())),
             usage_memo: TrackedMutex::new("usage_memo", HashMap::new()),
             series_state: TrackedMutex::new("series_state", HashMap::new()),
             series_bucket_override: TrackedMutex::new("series_bucket_override", None),
@@ -37443,6 +37486,18 @@ impl OrchRegistry {
         for w in self.watches.lock_safe().values() {
             has_watch.entry(w.agent.clone()).or_default().push(w.id.clone());
         }
+        // #3304 S1, bound (2): delivery triage's deferral deadline. It rides
+        // the watchdog's timer rather than opening a second one because it is
+        // the same quantity the watchdog exists for — "has something been
+        // silent too long" — asked of a store instead of a pane, and a
+        // feature that suppresses notices must not also be the feature that
+        // adds a thread. A no-op in microseconds for every group with no
+        // `triage:` block: `triage_flush_tick` reads the roster, finds no
+        // enabled policy, and returns.
+        //
+        // Deliberately NOT inside `watchdog_tick`, which is the pure decision
+        // half over injected counters; this is a flush that delivers.
+        self.triage_flush_tick(now);
         self.watchdog_tick(now, &outputs, &has_watch)
     }
 
@@ -53804,6 +53859,43 @@ impl OrchRegistry {
         // in the same position relative to admission — because a pause-held
         // delivery is an ordinary delivery now. What distinguishes it lives
         // where it belongs: the `delivery-queued` line's `reason`.
+        // DELIVERY TRIAGE (#3304 S1). The rule tier sits HERE — above the
+        // `prompt` audit line and above every admission — because a deferred
+        // notice must not look like one that was offered to a pane:
+        // `front_door_refusals`'s doc makes `prompt` mean exactly that, and a
+        // row written for a delivery nobody typed would corrupt every
+        // derivation over it, this feature's own wake count first.
+        //
+        // It is below the manager and dead/no-terminal refusals on purpose.
+        // Those are REFUSALS, and a refusal is a fact about the target that
+        // triage has no opinion on; putting triage above them would mean a
+        // notice bound for a dead pane could be "deferred" into a store that
+        // will flush it at a pane that no longer exists.
+        //
+        // With no `triage:` block — every repo that has not opted in — this
+        // resolves to the default before any I/O happens, returns
+        // `Deliver { flush: None }`, and the rest of this function is byte for
+        // byte what it was.
+        //
+        // A flush rides IN FRONT: it is admitted first, and the queue is FIFO,
+        // so the orchestrator reads what it slept through before the thing
+        // that woke it. It goes through `deliver_prompt` rather than being
+        // spliced in here, so it is an ordinary delivery with an ordinary
+        // `prompt` row — a framed summary of N notices IS a wake, and the
+        // audit must be able to say so.
+        match self.triage_delivery(&a.group, agent_id, from, text, a.role, delivery) {
+            triagegate::Triaged::Deferred => return Ok(()),
+            triagegate::Triaged::Deliver { flush } => {
+                if let Some(notice) = flush {
+                    let _ = self.deliver_prompt(
+                        agent_id,
+                        &notice,
+                        brand::AUDIT_ACTOR,
+                        Delivery::MidSession,
+                    );
+                }
+            }
+        }
         self.audit(&a.group, from, "prompt", json!({ "to": agent_id, "text": text }));
         if self.is_paused(&a.group) {
             // #620: the entry carries what KIND of delivery this is, because

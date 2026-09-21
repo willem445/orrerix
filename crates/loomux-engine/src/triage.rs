@@ -956,9 +956,20 @@ mod tests {
 
     #[test]
     fn an_ordinary_message_from_is_delivered() {
+        // A marker moves the row into the never-triaged set, which is a
+        // DIFFERENT reason for the same answer — and the reason is what the
+        // audit row carries, so the two are pinned apart rather than together.
+        assert_eq!(
+            decide(&input("[orrerix] message from w-2: the rebase call is YOUR CALL."), &on()),
+            Decision::Deliver(DeliverReason::Never(NeverReason::NeedsYou))
+        );
+        // A decision the markers do NOT catch still delivers, because
+        // `message-from` is not a rule in this slice at all. The markers are
+        // an escape hatch toward delivery, never the thing that decides it —
+        // which is why missing one costs nothing.
         assert_eq!(
             decide(&input("[orrerix] message from w-2: design call before I code?"), &on()),
-            Decision::Deliver(DeliverReason::Never(NeverReason::NeedsYou))
+            Decision::Deliver(DeliverReason::NoRule)
         );
         assert_eq!(
             decide(&input("[orrerix] message from w-2: heads-up, rebasing onto main."), &on()),

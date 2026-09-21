@@ -1850,10 +1850,10 @@ loomux_audit() { # $1=action $2=detail-json
   # refused outright (ts=0) (#3249).
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
+    ?????????????) ;;
     *[!0-9]*|"")
       ts=$(date +%s 2>/dev/null)
-      case "$ts" in *[!0-9]*|"") ts=0 ;; ??????????) ts="${ts}000" ;; *) ts=0 ;; esac ;;
-    ?????????????) ;;
+      case "$ts" in ??????????) ts="${ts}000" ;; *[!0-9]*|"") ts=0 ;; *) ts=0 ;; esac ;;
     *) ts=0 ;;
   esac
   if [ -n "$ORX_GD" ]; then
@@ -3232,10 +3232,10 @@ loomux_audit() { # $1=action $2=detail-json
   # refused outright (ts=0) (#3249).
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
+    ?????????????) ;;
     *[!0-9]*|"")
       ts=$(date +%s 2>/dev/null)
-      case "$ts" in *[!0-9]*|"") ts=0 ;; ??????????) ts="${ts}000" ;; *) ts=0 ;; esac ;;
-    ?????????????) ;;
+      case "$ts" in ??????????) ts="${ts}000" ;; *[!0-9]*|"") ts=0 ;; *) ts=0 ;; esac ;;
     *) ts=0 ;;
   esac
   if [ -n "$ORX_GD" ]; then
@@ -3394,10 +3394,10 @@ if [ -n "$ORX_GD" ]; then
   # refused outright (ts=0) (#3249).
   ts=$(date +%s%3N 2>/dev/null)
   case "$ts" in
+    ?????????????) ;;
     *[!0-9]*|"")
       ts=$(date +%s 2>/dev/null)
-      case "$ts" in *[!0-9]*|"") ts=0 ;; ??????????) ts="${ts}000" ;; *) ts=0 ;; esac ;;
-    ?????????????) ;;
+      case "$ts" in ??????????) ts="${ts}000" ;; *[!0-9]*|"") ts=0 ;; *) ts=0 ;; esac ;;
     *) ts=0 ;;
   esac
   # ONE printf of the whole line — see the gh shim's note (#240): cross-process

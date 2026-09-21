@@ -238,6 +238,17 @@ interface CaretMark {
   end: number;
 }
 
+/** Which writes volunteer an Undo button. The three that take something OFF
+ *  the screen: completing it, deleting it, archiving it. Everything else is
+ *  still on the stack and still reachable with `u` — it just does not
+ *  interrupt to say so. (An un-complete is excluded for the same reason it is
+ *  labelled "Reopened": it PUTS something back, so there is nothing to miss.) */
+function offersUndoToast(op: TodoOp): boolean {
+  if ("delete" in op) return true;
+  if ("archive" in op) return op.archive.archived;
+  return "complete" in op && op.complete.done;
+}
+
 export class TodoPaneView {
   readonly el: HTMLElement;
 
@@ -546,7 +557,12 @@ export class TodoPaneView {
     const applied = await this.apply(op);
     if (applied === null) return null;
     const inverse = this.undos.push(op, before, applied);
-    if ("op" in inverse) {
+    // THE TOAST IS NARROWER THAN THE STACK, deliberately. `u` undoes any of
+    // these; only the three that make something DISAPPEAR volunteer a button.
+    // A toast after every quick-add is five toasts for five items, and a
+    // channel that fires on everything is one a human learns to ignore —
+    // which would cost the reminders beside it, not just this.
+    if ("op" in inverse && offersUndoToast(op)) {
       showToast(`${opLabel(op)} · undo?`, "info", { label: "Undo", run: () => void this.undo() });
     }
     return applied;

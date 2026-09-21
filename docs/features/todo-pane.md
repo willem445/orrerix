@@ -204,8 +204,13 @@ Three things are worth knowing, because they are choices rather than gaps:
 ## Undo
 
 **`u` undoes the last change you made in this pane** — completing something,
-deleting it, starring it, moving it to My Day, archiving. Each of those also
-shows a toast with an **Undo** button, so you do not have to remember the key.
+deleting it, starring it, moving it to My Day, archiving, editing a note.
+
+**Three of those also offer you a button:** completing, deleting and archiving
+each show a toast with an **Undo** on it, because those are the three that make
+something disappear. The rest are still undoable with `u`; they just do not
+interrupt to say so, which is what keeps the toast worth reading when it does
+appear.
 
 It remembers your last 50 changes, and only yours: changes an agent made are
 not on your undo stack, and switching between Global and your project starts a

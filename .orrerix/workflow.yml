@@ -28,8 +28,8 @@
 #  2. ROUTE BY DIFF SHAPE (gates.merge.routing below, #1176). The static gate is
 #     rev-std alone; rev-final is REQUIRED only when the diff touches code, tests,
 #     CI, dependency manifests, the fixture-pinned role templates, or a design
-#     note under docs/design/. A prose-only PR (docs/, CLAUDE.md, .claude/,
-#     .github/agents/, .orrerix/, doc/ OUTSIDE docs/design/) merges on rev-std
+#     note under docs/design/. A prose-only PR (CLAUDE.md, .claude/,
+#     .github/agents/, .orrerix/, and docs/ OUTSIDE docs/design/) merges on rev-std
 #     PASS + the orchestrator's own disposition. Routing is additive by
 #     construction (a rule can add a lane, never remove one), and `*` crosses
 #     `/`, so a rule over-matches rather than under-matches.

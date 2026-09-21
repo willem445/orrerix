@@ -71,7 +71,7 @@ docs stay in the repository:
   — the source tree, module by module, and the extension seams.
 - [`CLAUDE.md`](https://github.com/willem445/orrerix/blob/main/CLAUDE.md) — the
   hard constraints and code conventions for working in this codebase.
-- [`docs/design/`](https://github.com/willem445/orrerix/tree/main/doc/design) —
+- [`docs/design/`](https://github.com/willem445/orrerix/tree/main/docs/design) —
   per-feature design notes (why things are built the way they are).
 
 > This documentation describes only what ships on `main` today. Where a feature

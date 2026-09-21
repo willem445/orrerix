@@ -161,7 +161,7 @@ test("every declared reviewer lane is named by the gate or by a routing rule, be
   // "In the gate" is a UNION of two lists, and that is the roster's design rather
   // than a loosening: `rev-std` is static (every PR), `rev-final` is REQUIRED BY
   // ROUTING (#1176) on the paths a prose review cannot judge — code, tests, CI,
-  // manifests, doc/design. A docs-only PR that runs rev-std alone is the rule
+  // manifests, docs/design. A docs-only PR that runs rev-std alone is the rule
   // working (#1952), not a hole.
   const declaredReviewers = workflow.blocks.filter((b) => b.kind === "reviewer").map((b) => b.id);
   const namedBy = (g: typeof gate): Set<string> =>

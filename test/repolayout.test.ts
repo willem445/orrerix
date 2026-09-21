@@ -31,6 +31,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 
@@ -175,4 +176,97 @@ test("every allowlist and banned-prefix row carries a reason", () => {
   }
   const entries = ROOT_ALLOWLIST.map((r) => r.entry);
   assert.equal(new Set(entries).size, entries.length, "duplicate row in ROOT_ALLOWLIST");
+});
+
+// ---------------------------------------------------------------------------
+// Self-referencing GitHub URLs (#3315 review round 1, B1)
+// ---------------------------------------------------------------------------
+//
+// This repo deliberately links some of its own files by ABSOLUTE GitHub URL
+// rather than relatively, and #3315 made that a rule rather than an accident:
+// a user page under `docs/` is served by Jekyll, which excludes `docs/design/`
+// from the build, so a site-relative link from a published page to a design
+// note is a 404 for every reader on the site. A blob URL resolves from both
+// surfaces, so that is what those cross-links use.
+//
+// The cost of that rule is a class of breakage nothing else here can see. A
+// relative link is checked by anyone who opens the file; an absolute one is a
+// string, and no compiler, test or Jekyll build resolves it. #3315's own sweep
+// proved the point: it rewrote the LABEL of `docs/index.md`'s design-notes link
+// and left the HREF pointing at `tree/main/doc/design`, a tree that PR deleted.
+// The site's front page would have shipped a 404, with every check green — the
+// pattern was built from what could FOLLOW the token (a trailing `/`) instead
+// of from what a path token may CONTAIN, which is the #1297 blind spot.
+//
+// So: every self-referencing URL is resolved against `git ls-files`. A `blob`
+// or `raw` URL must name a tracked FILE; a `tree` URL must name a directory
+// some tracked path lives under.
+//
+// WHAT THIS CANNOT SAY. It resolves against the tree in hand, not against
+// `main` — a URL correct here is still dangling until this branch merges, which
+// is the intended semantics for a link to a file this very PR adds. It reads
+// only URLs on the `main` ref: a URL pinned to a tag or a SHA names history
+// deliberately and is skipped, which also means a typo in one is invisible
+// here. And it says nothing about a link to another repo, or about an anchor
+// within a page — only that the file or directory exists.
+
+/** `main`-ref URLs into this repo, as {url, path, kind} — anchors stripped. */
+function selfLinks(files: string[]): Array<{ file: string; url: string; target: string; kind: "file" | "dir" }> {
+  const out: Array<{ file: string; url: string; target: string; kind: "file" | "dir" }> = [];
+  const patterns: Array<{ re: RegExp; kind: "file" | "dir" }> = [
+    { re: /https:\/\/github\.com\/willem445\/orrerix\/blob\/main\/([^)\s"'`>\]]+)/g, kind: "file" },
+    { re: /https:\/\/raw\.githubusercontent\.com\/willem445\/orrerix\/main\/([^)\s"'`>\]]+)/g, kind: "file" },
+    { re: /https:\/\/github\.com\/willem445\/orrerix\/tree\/main\/([^)\s"'`>\]]+)/g, kind: "dir" },
+  ];
+  for (const f of files) {
+    if (!/\.(md|ts|js|cjs|mjs|rs|yml|yaml|html|css|json|sh|ps1)$/.test(f)) continue;
+    if (f.startsWith(".claude/skills/impeccable/")) continue; // vendored — re-vendor, never edit
+    let text: string;
+    try {
+      text = readFileSync(path.join(REPO_ROOT, f), "utf8");
+    } catch {
+      continue;
+    }
+    for (const { re, kind } of patterns) {
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text)) !== null) {
+        // Strip an anchor and any trailing sentence punctuation the URL swept up.
+        const target = m[1].split("#")[0].replace(/[.,;:]+$/, "").replace(/\/$/, "");
+        if (target) out.push({ file: f, url: m[0], target, kind });
+      }
+    }
+  }
+  return out;
+}
+
+test("every self-referencing GitHub URL resolves to something in the tree", () => {
+  const files = trackedFiles();
+  const links = selfLinks(files);
+
+  // Positive control. The success shape here is an empty list of dangling
+  // links, which is byte-identical to the matcher never having matched
+  // anything — a regex that stops one character early reads as a clean repo.
+  assert.ok(
+    links.length >= 10,
+    `positive control: only ${links.length} self-referencing URLs found. This repo carries a couple of ` +
+      "dozen; a number this low means the matcher is broken, not that the links are gone.",
+  );
+
+  const tracked = new Set(files);
+  const dangling = links
+    .filter(({ target, kind }) =>
+      kind === "file" ? !tracked.has(target) : !files.some((f) => f.startsWith(target + "/")),
+    )
+    .map(({ file, url, target }) => `${file}: ${url}  ->  ${target} is not in the tree`)
+    .sort();
+
+  assert.deepEqual(
+    dangling,
+    [],
+    "a URL this repo publishes points at a path that does not exist:\n  " +
+      dangling.join("\n  ") +
+      "\n\nNothing but this test resolves an absolute link, so a rename or a move breaks one silently " +
+      "(#3315 B1). Update the href, or make the link relative if the page is not published.",
+  );
 });

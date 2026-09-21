@@ -830,28 +830,12 @@ mod tests {
     /// unevidenced (CLAUDE.md: "a red evidences only the assertion it REACHED
     /// and MOVED"). Comparing the collected vectors reddens ONCE, with every
     /// row that moved printed side by side.
-    fn decide_all<'a>(
-        cases: &'a [(&'a str, Decision)],
-        policy: &Policy,
-        tweak: impl Fn(&mut Input<'_>),
-    ) -> (Vec<(&'a str, Decision)>, Vec<(&'a str, Decision)>) {
-        let got = cases
-            .iter()
-            .map(|(text, _)| {
-                let mut i = input(text);
-                tweak(&mut i);
-                (*text, decide(&i, policy))
-            })
-            .collect();
-        (got, cases.to_vec())
-    }
-
-    /// [`decide_all`] with no per-case tweak — the ordinary form.
     fn decide_table<'a>(
         cases: &'a [(&'a str, Decision)],
         policy: &Policy,
     ) -> (Vec<(&'a str, Decision)>, Vec<(&'a str, Decision)>) {
-        decide_all(cases, policy, |_| {})
+        let got = cases.iter().map(|(text, _)| (*text, decide(&input(text), policy))).collect();
+        (got, cases.to_vec())
     }
 
     // ---------- the never-triaged set: these ALWAYS deliver
@@ -953,13 +937,11 @@ mod tests {
         // proves a deletion mutation is not enough: both already expect
         // `Deliver`, so only inverting `run_is_green` / `checks_are_green`
         // can move them (#1487 N2/N4).
-        let (got, want) = decide_table(
-            &[
-                (RUN_RED, Decision::Deliver(DeliverReason::NoRule)),
-                (CHECKS_RED, Decision::Deliver(DeliverReason::NoRule)),
-            ],
-            &on(),
-        );
+        let cases: [(&str, Decision); 2] = [
+            (RUN_RED, Decision::Deliver(DeliverReason::NoRule)),
+            (CHECKS_RED, Decision::Deliver(DeliverReason::NoRule)),
+        ];
+        let (got, want) = decide_table(&cases, &on());
         assert_eq!(got, want);
     }
 
@@ -974,13 +956,11 @@ mod tests {
     fn a_delegate_done_is_never_a_rule_in_this_slice() {
         // #3304 Q2: the `done` class is where the residual JUDGEMENT lives,
         // and S1 ships no provider — so all 90 of them deliver.
-        let (got, want) = decide_table(
-            &[
-                (DONE, Decision::Deliver(DeliverReason::NoRule)),
-                (APPROVED, Decision::Deliver(DeliverReason::NoRule)),
-            ],
-            &on(),
-        );
+        let cases: [(&str, Decision); 2] = [
+            (DONE, Decision::Deliver(DeliverReason::NoRule)),
+            (APPROVED, Decision::Deliver(DeliverReason::NoRule)),
+        ];
+        let (got, want) = decide_table(&cases, &on());
         assert_eq!(got, want);
     }
 
@@ -1000,13 +980,11 @@ mod tests {
     #[test]
     fn a_kind_left_off_the_kinds_list_is_delivered() {
         let narrow = Policy { enabled: true, kinds: vec![Kind::RunCompleted], ..Policy::default() };
-        let (got, want) = decide_table(
-            &[
-                (RUN_GREEN, Decision::Defer(Rule::RunGreen)),
-                (PLANNER_EXIT, Decision::Deliver(DeliverReason::KindNotTriaged)),
-            ],
-            &narrow,
-        );
+        let cases: [(&str, Decision); 2] = [
+            (RUN_GREEN, Decision::Defer(Rule::RunGreen)),
+            (PLANNER_EXIT, Decision::Deliver(DeliverReason::KindNotTriaged)),
+        ];
+        let (got, want) = decide_table(&cases, &narrow);
         assert_eq!(got, want);
     }
 
@@ -1018,15 +996,16 @@ mod tests {
             format!("[orrerix] message from p-1: ---BEGIN PLAN {k}/{n}--- slices: …")
         };
         let (first, middle, last) = (c(1, 4), c(3, 4), c(4, 4));
-        let (got, want) = decide_table(
-            &[
-                (first.as_str(), Decision::Defer(Rule::PlanChunk)),
-                (middle.as_str(), Decision::Defer(Rule::PlanChunk)),
-                // The last chunk is the wake that carries the others out.
-                (last.as_str(), Decision::Deliver(DeliverReason::NoRule)),
-            ],
-            &on(),
-        );
+        // The table is a `let` binding rather than a temporary: `decide_table`
+        // borrows it and `got`/`want` outlive the call, so an inline `&[…]`
+        // is dropped at the end of the statement (E0716).
+        let cases: [(&str, Decision); 3] = [
+            (first.as_str(), Decision::Defer(Rule::PlanChunk)),
+            (middle.as_str(), Decision::Defer(Rule::PlanChunk)),
+            // The last chunk is the wake that carries the others out.
+            (last.as_str(), Decision::Deliver(DeliverReason::NoRule)),
+        ];
+        let (got, want) = decide_table(&cases, &on());
         assert_eq!(got, want);
     }
 

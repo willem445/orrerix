@@ -798,9 +798,11 @@ mod tests {
             ("[orrerix] q-4 was answered: yes, option A.", Kind::SystemNotice),
             ("merge it when you get a chance", Kind::Human),
         ];
-        for (text, want) in cases {
-            assert_eq!(classify(text), *want, "classifying: {text}");
-        }
+        // Collected and compared once, for `decide_all`'s reason: a rename or
+        // a reordering of the shape table breaks several rows at once, and a
+        // loop would report the first and hide the rest.
+        let got: Vec<(&str, Kind)> = cases.iter().map(|(t, _)| (*t, classify(t))).collect();
+        assert_eq!(got, cases.to_vec());
     }
 
     #[test]
@@ -818,6 +820,40 @@ mod tests {
         assert_eq!(Kind::parse("no-such-kind"), None);
     }
 
+    /// Decide a whole TABLE and compare the answers in one assertion.
+    ///
+    /// Every table-driven test below goes through this rather than asserting
+    /// inside a loop, and the reason is a measured one rather than a style
+    /// preference. A loop of `assert_eq!` stops at its first mismatch, so a
+    /// mutation that breaks N rows reddens with evidence about ONE of them —
+    /// which is how #3304 S1's own red-before-green run left five of six rules
+    /// unevidenced (CLAUDE.md: "a red evidences only the assertion it REACHED
+    /// and MOVED"). Comparing the collected vectors reddens ONCE, with every
+    /// row that moved printed side by side.
+    fn decide_all<'a>(
+        cases: &'a [(&'a str, Decision)],
+        policy: &Policy,
+        tweak: impl Fn(&mut Input<'_>),
+    ) -> (Vec<(&'a str, Decision)>, Vec<(&'a str, Decision)>) {
+        let got = cases
+            .iter()
+            .map(|(text, _)| {
+                let mut i = input(text);
+                tweak(&mut i);
+                (*text, decide(&i, policy))
+            })
+            .collect();
+        (got, cases.to_vec())
+    }
+
+    /// [`decide_all`] with no per-case tweak — the ordinary form.
+    fn decide_table<'a>(
+        cases: &'a [(&'a str, Decision)],
+        policy: &Policy,
+    ) -> (Vec<(&'a str, Decision)>, Vec<(&'a str, Decision)>) {
+        decide_all(cases, policy, |_| {})
+    }
+
     // ---------- the never-triaged set: these ALWAYS deliver
 
     fn on() -> Policy {
@@ -830,27 +866,29 @@ mod tests {
 
     #[test]
     fn the_never_triaged_set_always_delivers() {
-        let cases: &[(&str, NeverReason)] = &[
-            (HELD, NeverReason::DriveHeld),
-            (BLOCKED, NeverReason::DelegateBlocked),
-            (WATCHDOG, NeverReason::Watchdog),
-            ("merge it when you get a chance", NeverReason::HumanActor),
+        // One assertion over the whole set, so a mutation that breaks several
+        // members reddens with all of them rather than with the first — this
+        // is the safety-critical half of the decision, and "which members
+        // moved" is the question a red here has to answer.
+        let cases: &[(&str, Decision)] = &[
+            (HELD, Decision::Deliver(DeliverReason::Never(NeverReason::DriveHeld))),
+            (BLOCKED, Decision::Deliver(DeliverReason::Never(NeverReason::DelegateBlocked))),
+            (WATCHDOG, Decision::Deliver(DeliverReason::Never(NeverReason::Watchdog))),
+            (
+                "merge it when you get a chance",
+                Decision::Deliver(DeliverReason::Never(NeverReason::HumanActor)),
+            ),
             (
                 "[orrerix] Context was compacted — re-read your instructions.",
-                NeverReason::Regrounding,
+                Decision::Deliver(DeliverReason::Never(NeverReason::Regrounding)),
             ),
             (
                 "[orrerix] w-4 reports done: PR #9 is up but BLOCKING ON YOU: A or B?",
-                NeverReason::NeedsYou,
+                Decision::Deliver(DeliverReason::Never(NeverReason::NeedsYou)),
             ),
         ];
-        for (text, why) in cases {
-            assert_eq!(
-                decide(&input(text), &on()),
-                Decision::Deliver(DeliverReason::Never(*why)),
-                "must never be triaged: {text}"
-            );
-        }
+        let (got, want) = decide_table(cases, &on());
+        assert_eq!(got, want, "none of these may ever be triaged");
     }
 
     #[test]
@@ -911,8 +949,18 @@ mod tests {
 
     #[test]
     fn a_red_run_and_red_checks_are_delivered() {
-        assert_eq!(decide(&input(RUN_RED), &on()), Decision::Deliver(DeliverReason::NoRule));
-        assert_eq!(decide(&input(CHECKS_RED), &on()), Decision::Deliver(DeliverReason::NoRule));
+        // The NEGATIVE controls for the two green rules, and the pair that
+        // proves a deletion mutation is not enough: both already expect
+        // `Deliver`, so only inverting `run_is_green` / `checks_are_green`
+        // can move them (#1487 N2/N4).
+        let (got, want) = decide_table(
+            &[
+                (RUN_RED, Decision::Deliver(DeliverReason::NoRule)),
+                (CHECKS_RED, Decision::Deliver(DeliverReason::NoRule)),
+            ],
+            &on(),
+        );
+        assert_eq!(got, want);
     }
 
     #[test]
@@ -926,31 +974,40 @@ mod tests {
     fn a_delegate_done_is_never_a_rule_in_this_slice() {
         // #3304 Q2: the `done` class is where the residual JUDGEMENT lives,
         // and S1 ships no provider — so all 90 of them deliver.
-        assert_eq!(decide(&input(DONE), &on()), Decision::Deliver(DeliverReason::NoRule));
-        assert_eq!(decide(&input(APPROVED), &on()), Decision::Deliver(DeliverReason::NoRule));
+        let (got, want) = decide_table(
+            &[
+                (DONE, Decision::Deliver(DeliverReason::NoRule)),
+                (APPROVED, Decision::Deliver(DeliverReason::NoRule)),
+            ],
+            &on(),
+        );
+        assert_eq!(got, want);
     }
 
     #[test]
     fn triage_off_delivers_everything_the_rules_would_have_held() {
         let off = Policy::default();
         assert!(!off.enabled, "the product default is off");
-        for text in [RUN_GREEN, CHECKS_GREEN, PLANNER_EXIT, AGENT_EXIT, CANCELLED, GATE] {
-            assert_eq!(
-                decide(&input(text), &off),
-                Decision::Deliver(DeliverReason::Disabled),
-                "off must change nothing: {text}"
-            );
-        }
+        let cases: Vec<(&str, Decision)> =
+            [RUN_GREEN, CHECKS_GREEN, PLANNER_EXIT, AGENT_EXIT, CANCELLED, GATE]
+                .into_iter()
+                .map(|t| (t, Decision::Deliver(DeliverReason::Disabled)))
+                .collect();
+        let (got, want) = decide_table(&cases, &off);
+        assert_eq!(got, want, "off must change nothing");
     }
 
     #[test]
     fn a_kind_left_off_the_kinds_list_is_delivered() {
         let narrow = Policy { enabled: true, kinds: vec![Kind::RunCompleted], ..Policy::default() };
-        assert_eq!(decide(&input(RUN_GREEN), &narrow), Decision::Defer(Rule::RunGreen));
-        assert_eq!(
-            decide(&input(PLANNER_EXIT), &narrow),
-            Decision::Deliver(DeliverReason::KindNotTriaged)
+        let (got, want) = decide_table(
+            &[
+                (RUN_GREEN, Decision::Defer(Rule::RunGreen)),
+                (PLANNER_EXIT, Decision::Deliver(DeliverReason::KindNotTriaged)),
+            ],
+            &narrow,
         );
+        assert_eq!(got, want);
     }
 
     // ---------- plan chunks
@@ -960,30 +1017,33 @@ mod tests {
         let c = |k: u32, n: u32| {
             format!("[orrerix] message from p-1: ---BEGIN PLAN {k}/{n}--- slices: …")
         };
-        assert_eq!(decide(&input(&c(1, 4)), &on()), Decision::Defer(Rule::PlanChunk));
-        assert_eq!(decide(&input(&c(3, 4)), &on()), Decision::Defer(Rule::PlanChunk));
-        assert_eq!(
-            decide(&input(&c(4, 4)), &on()),
-            Decision::Deliver(DeliverReason::NoRule),
-            "the last chunk is the wake that carries the others out"
+        let (first, middle, last) = (c(1, 4), c(3, 4), c(4, 4));
+        let (got, want) = decide_table(
+            &[
+                (first.as_str(), Decision::Defer(Rule::PlanChunk)),
+                (middle.as_str(), Decision::Defer(Rule::PlanChunk)),
+                // The last chunk is the wake that carries the others out.
+                (last.as_str(), Decision::Deliver(DeliverReason::NoRule)),
+            ],
+            &on(),
         );
+        assert_eq!(got, want);
     }
 
     #[test]
     fn a_malformed_plan_marker_falls_through_to_deliver() {
-        for bad in [
+        let cases: Vec<(&str, Decision)> = [
             "[orrerix] message from p-1: ---BEGIN PLAN 1/1--- one chunk is not a split",
             "[orrerix] message from p-1: ---BEGIN PLAN 5/4--- past the end",
             "[orrerix] message from p-1: ---BEGIN PLAN 0/4--- zero",
             "[orrerix] message from p-1: ---BEGIN PLAN one/four--- words",
             "[orrerix] message from p-1: ---BEGIN PLAN 1/4 no closing marker",
-        ] {
-            assert_eq!(
-                decide(&input(bad), &on()),
-                Decision::Deliver(DeliverReason::NoRule),
-                "must fail safe: {bad}"
-            );
-        }
+        ]
+        .into_iter()
+        .map(|t| (t, Decision::Deliver(DeliverReason::NoRule)))
+        .collect();
+        let (got, want) = decide_table(&cases, &on());
+        assert_eq!(got, want, "every malformed marker must fail safe");
     }
 
     #[test]

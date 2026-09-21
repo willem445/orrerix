@@ -61660,6 +61660,17 @@ fn manager_tool_surface_is_exactly_the_enumerated_set() {
             "list_verdicts",
             "request_compact",
             "note_directive",
+            // #3263 S2 — the human's own To-Do list. The manager is the pane
+            // the human talks to, so it is where "put that on my list" gets
+            // typed; withholding the list from the one class whose whole job is
+            // talking to them would be the wrong way round. Not orchestration
+            // authority: a to-do reaches no agent, no board and no branch.
+            "todo_list",
+            "todo_get",
+            "todo_add",
+            "todo_update",
+            "todo_complete",
+            "todo_delete",
             // and the manager's own extension
             "message_orchestrator",
             "check_mail",

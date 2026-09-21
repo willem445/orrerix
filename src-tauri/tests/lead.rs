@@ -162,6 +162,19 @@ fn lead_tool_surface_is_exactly_the_enumerated_set() {
             "list_agents",
             "request_compact",
             "note_directive",
+            // #3263 S2 — the human's own To-Do list. Granted rather than
+            // withheld because, unlike the board/question/verdict surface, a
+            // lead group HAS something behind it: the store is one file at the
+            // data root, and a lead group carries a repo, so `workspace` scope
+            // resolves exactly as it does anywhere else. Nothing here is
+            // orchestration authority — a to-do reaches no agent, no board, no
+            // branch and no gate.
+            "todo_list",
+            "todo_get",
+            "todo_add",
+            "todo_update",
+            "todo_complete",
+            "todo_delete",
             // the capability the toggle exists to grant
             "spawn_agent",
             "send_prompt",

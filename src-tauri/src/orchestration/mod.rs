@@ -557,6 +557,16 @@ pub const PLAYBOOK_SECTION_IDS: &[&str] = &[
     // #2565 already made for a step it moved here.
     "definition-of-done",
     "delivery-notices",
+    // #3263 S2, and it is here for the row above's reason exactly, re-derived
+    // rather than inherited: `orchestrator.md` measures 44,955 B against
+    // `RESIDENT_CORE_BUDGET`'s 45,000 (blob 816a9c22), so the to-do tools'
+    // paragraph could not go in the resident core either. Unlike every other
+    // section here it has NO resident stub naming its trigger — the budget is
+    // what makes that impossible — so the section says so in its own text and
+    // names the other surface an orchestrator learns these tools from, which
+    // is each tool's own MCP description. `pre222/README.md`'s re-bless log
+    // carries the same record for whoever edits a role template next.
+    "the-to-do-list",
     "merge-gate",
     "squash-closes-issues",
     "red-main",

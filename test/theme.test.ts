@@ -1553,11 +1553,17 @@ test("one watched mark: every surface that marks a watched pane paints it --mark
   // One row per SURFACE, each required, so a renamed class fails loudly here
   // rather than quietly dropping a surface out of the sweep above — the
   // "one row per family" shape `tests/groupid.rs` uses for the same reason.
+  // EXACT match, not a prefix. The prefix form was the first draft and a
+  // mutation round found it hollow: repainting `.pane.watched` in
+  // `--state-attention` reddened NOTHING, because `.pane.watched.active` — a
+  // different rule, for the focused case — still started with the required
+  // string and satisfied the row on its behalf. A row that another rule can
+  // answer for is not a row.
   for (const required of [".pane.watched", ".dock-chip.watched", ".tab-watched", ".agents-item.watched"]) {
     assert.ok(
-      selectors.some((s) => s === required || s.startsWith(`${required}.`) || s.startsWith(`${required}:`)),
-      `no rule paints "${required}" with --mark-watched — a surface #3319 marks has lost its mark ` +
-        `or been renamed. Rules that do name it: ${selectors.join(", ")}`,
+      selectors.includes(required),
+      `no rule paints exactly "${required}" with --mark-watched — a surface #3319 marks has lost ` +
+        `its mark or been renamed. Rules that do name it: ${selectors.join(", ")}`,
     );
   }
 });

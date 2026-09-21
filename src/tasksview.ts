@@ -3237,8 +3237,6 @@ export class TasksView {
     top.appendChild(expand);
     main.appendChild(top);
 
-    if (rowExpanded) main.appendChild(detail);
-
     // The FULL title, under an open row (#3261) — where the rest of a cut name
     // lives, and where double-click-to-edit moved to when a single click on the
     // compact line became the expand. Rendered whether or not the name was cut:
@@ -3269,16 +3267,31 @@ export class TasksView {
           e.stopPropagation();
           if (e.key === "Enter") commit(true);
           if (e.key === "Escape") commit(false);
-          // A SOFT warning, never a refusal (#3261 AC1): the backend accepts
-          // any title, and an editor that refused what agents can still write
-          // would be a worse board than one with long names in it.
-          input.classList.toggle("over-budget", titleOverBudget(input.value));
         });
+        // A SOFT warning, never a refusal (#3261 AC1): the backend accepts any
+        // title, and an editor that refused what agents can still write would
+        // be a worse board than one with long names in it.
+        //
+        // On `input`, not `keydown` (review round 1): `keydown` fires BEFORE the
+        // value changes, so the warning was always one keystroke stale — and it
+        // never fired at all for the way a 200-character title actually arrives,
+        // which is a paste. `input` covers paste, drag-drop, IME commit and undo.
+        const warn = () => input.classList.toggle("over-budget", titleOverBudget(input.value));
+        input.addEventListener("input", warn);
+        warn();
         input.title = `Names over ${TITLE_BUDGET} characters are cut on the row's own line — the whole name stays on the tooltip and here`;
         input.addEventListener("blur", () => commit(true));
       });
+      // ORDER IS LOAD-BEARING, and it was the wrong way round until review
+      // round 1: these two go in BEFORE `detail`, so an open row reads
+      // name -> description -> everything else. A human opens a row to find out
+      // what it IS, and making them pass the badges, pickers, links and notes to
+      // reach the one block that answers that is the opposite of what #3261 is
+      // for. `docs/orchestration.md` promised this order while the code did the
+      // other one; the promise was right.
       main.appendChild(full);
       main.appendChild(this.renderDescription(t));
+      main.appendChild(detail);
     }
 
     // The deps / see-also chips and the four pickers live on their own line
@@ -3349,18 +3362,30 @@ export class TasksView {
    *  Every piece of un-submitted state here lives in `this.descDrafts` /
    *  `this.descEditing`, never in the elements — see `descDrafts`. */
   private renderDescription(t: OrchTask): HTMLElement {
-    const stored = (t.description ?? "").trim();
-    if (!this.descEditing.has(t.id)) {
-      const view = el("div", `task-desc${stored ? "" : " empty"}`, stored || "No description — click to add one");
-      view.title = "Click to write what this row IS, in a sentence or two";
-      view.addEventListener("click", () => {
-        this.descEditing.add(t.id);
-        this.descFocus = t.id;
-        this.render();
-      });
-      return view;
-    }
+    // Two paths, and they share nothing but the row — which is why this is the
+    // seam the split follows (review round 1, code-metrics: 97 lines against a
+    // base p95 of 42). The dispatch stays here so "which one am I looking at"
+    // is one line rather than a condition buried in a long method.
+    return this.descEditing.has(t.id) ? this.renderDescriptionEditor(t) : this.renderDescriptionView(t);
+  }
 
+  /** The read path: what the row says, or an invitation to say it. */
+  private renderDescriptionView(t: OrchTask): HTMLElement {
+    const stored = (t.description ?? "").trim();
+    const view = el("div", `task-desc${stored ? "" : " empty"}`, stored || "No description — click to add one");
+    view.title = "Click to write what this row IS, in a sentence or two";
+    view.addEventListener("click", () => {
+      this.descEditing.add(t.id);
+      this.descFocus = t.id;
+      this.render();
+    });
+    return view;
+  }
+
+  /** The edit path. Every piece of un-submitted state is in `descDrafts` /
+   *  `descEditing`, never in these elements — see `descDrafts`. */
+  private renderDescriptionEditor(t: OrchTask): HTMLElement {
+    const stored = (t.description ?? "").trim();
     const wrap = el("div", "task-desc-edit");
     const box = document.createElement("textarea");
     box.className = "dlg-input task-desc-input";

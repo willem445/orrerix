@@ -1811,6 +1811,21 @@ export function descOverBy(text: string): number {
   return Math.max(0, Array.from(text.trim()).length - MAX_DESCRIPTION);
 }
 
+/** Is this a control character by the BACKEND's definition?
+ *
+ *  Rust's `char::is_control` is Unicode general category `Cc`, which is TWO
+ *  ranges: C0 (U+0000–U+001F) and C1 (U+007F–U+009F). This mirror stopped at
+ *  U+007F until review round 1, so a C1 character passed the editor's
+ *  pre-check, left Save enabled, and was refused by the backend instead —
+ *  precisely the round trip `descRefusal` exists to avoid.
+ *
+ *  It is not a theoretical range: U+0085 (NEL) is a real line break in text
+ *  pasted out of a mainframe export or a Windows-1252 round trip, and U+0096
+ *  arrives from a Word en-dash through the same path. */
+function isBackendControl(c: string): boolean {
+  return c <= "\u001f" || (c >= "\u007f" && c <= "\u009f");
+}
+
 /** Why this description cannot be saved, or `null` when it can.
  *
  *  Mirrors the backend's two refusals so the editor can decline BEFORE the
@@ -1818,12 +1833,18 @@ export function descOverBy(text: string): number {
  *  control character (the field is one line of plain text — anything wanting a
  *  paragraph of its own is a note). Deliberately NOT a silent fix-up in either
  *  case: the caller who pasted three lines should be told the field is one, not
- *  have two of them welded together. */
+ *  have two of them welded together.
+ *
+ *  Both checks run on the TRIMMED text, because the backend validates and
+ *  stores the trimmed value too (#3261 review round 1, premortem 1) — a
+ *  trailing newline is the one control character a paste routinely carries, and
+ *  refusing it on one caller while the other silently strips it would be the
+ *  same text getting two answers. */
 export function descRefusal(text: string): string | null {
   const t = text.trim();
   const over = descOverBy(t);
   if (over > 0) return `${over} character${over === 1 ? "" : "s"} over the ${MAX_DESCRIPTION} limit`;
-  if (Array.from(t).some((c) => c < " " || c === "\u007f")) {
+  if (Array.from(t).some(isBackendControl)) {
     return "one line of plain text only — put anything needing its own paragraph in a note";
   }
   return null;

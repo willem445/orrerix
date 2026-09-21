@@ -11820,6 +11820,114 @@ fn the_description_rides_get_task_and_never_the_compact_list_row() {
     }
 }
 
+/// One text, ONE answer, whichever caller sends it (#3261 review round 1,
+/// premortem 1).
+///
+/// The board's editor trims before it sends and MCP does not. While the check
+/// read the RAW value, `upsert_task(description: "Ship it.\n")` was REFUSED
+/// from an agent and the identical paste into the human's own box was SAVED —
+/// one field, two callers, two outcomes, and nothing pinned either half.
+#[test]
+fn a_description_is_validated_and_stored_trimmed() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let t = reg.upsert_task(&g.id, "orch-1", None, patch(Some("Ship the parser"), None, None)).unwrap();
+
+    // The agent's raw value, with the trailing newline a paste carries.
+    let p = TaskPatch { description: Some("Ship it.\n".into()), ..Default::default() };
+    let agent_wrote = reg.upsert_task(&g.id, "orch-1", Some(&t.id), p).unwrap();
+    assert_eq!(
+        agent_wrote.description.as_deref(),
+        Some("Ship it."),
+        "a trailing newline is trimmed, not refused — and not stored"
+    );
+
+    // The human board's own path, which trimmed before sending: same result.
+    let h = TaskPatch { description: Some("Ship it.".into()), ..Default::default() };
+    let human_wrote = reg.upsert_task_by_human(&g.id, "human", Some(&t.id), h).unwrap();
+    assert_eq!(
+        human_wrote.description, agent_wrote.description,
+        "the two callers must not be able to disagree about one text"
+    );
+
+    // Surrounding whitespace never reaches the file either — tasks.json is a
+    // file humans read and diff.
+    let pad = TaskPatch { description: Some("   Padded.   ".into()), ..Default::default() };
+    let saved = reg.upsert_task(&g.id, "orch-1", Some(&t.id), pad).unwrap();
+    assert_eq!(saved.description.as_deref(), Some("Padded."));
+    let text = fs::read_to_string(reg.state_root().join(g.id.as_str()).join("tasks.json")).unwrap();
+    assert!(!text.contains("   Padded"), "untrimmed text must not reach the board file:\n{text}");
+
+    // Trimming is NOT a licence to flatten: an interior control character is
+    // still refused, which is the whole point of the refusal.
+    let inner = TaskPatch { description: Some("Ship it.\nThen ship more.".into()), ..Default::default() };
+    assert!(reg.upsert_task(&g.id, "orch-1", Some(&t.id), inner).is_err());
+}
+
+/// The POLL-PAYLOAD RESIDUAL, measured (#3261 review round 1, premortem 2).
+///
+/// `BoardTask` carries the description on EVERY row rather than only the ones
+/// the caller named, which is the opposite call from `notes`. The argument is
+/// that its weight is bounded by ROW COUNT alone — a description is written
+/// once and capped, where note bodies accumulate for the life of the board —
+/// and every payload test so far ran on rows that had no description at all,
+/// so the argument went untested exactly where it matters.
+///
+/// This fills a board the way a bulk writer would and states the bound as a
+/// number. If the description ever costs more than the cap accounts for, the
+/// argument for carrying it whole is gone and this test says so.
+#[test]
+fn a_board_full_of_descriptions_stays_bounded_by_row_count() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+
+    const ROWS: usize = 64;
+    let filled = "d".repeat(MAX_TASK_DESCRIPTION);
+    for i in 0..ROWS {
+        let t = reg
+            .upsert_task(&g.id, "orch-1", None, patch(Some(&format!("row {i}")), None, None))
+            .unwrap();
+        let p = TaskPatch { description: Some(filled.clone()), ..Default::default() };
+        reg.upsert_task(&g.id, "orch-1", Some(&t.id), p).unwrap();
+    }
+
+    let board: Vec<_> = reg.tasks(&g.id).into_iter().map(|t| board_task(t, false)).collect();
+    assert_eq!(board.len(), ROWS, "the fixture must really be a full board");
+    let bytes = serde_json::to_string(&board).unwrap().len();
+
+    // The bound: per row, the description contributes at most the cap plus its
+    // key. Nothing here is a function of how long the group has RUN.
+    let ceiling = ROWS * (MAX_TASK_DESCRIPTION + 256);
+    assert!(
+        bytes < ceiling,
+        "a {ROWS}-row board of maximal descriptions serialized to {bytes} bytes, over the \
+         {ceiling}-byte row-count bound — the 'bounded by row count alone' argument is false"
+    );
+
+    // The control that makes the number mean something: the SAME board with no
+    // descriptions. A bound that held because the field was absent would pass
+    // the assertion above while saying nothing at all.
+    let bare: Vec<_> = reg
+        .tasks(&g.id)
+        .into_iter()
+        .map(|mut t| {
+            t.description = None;
+            board_task(t, false)
+        })
+        .collect();
+    let bare_bytes = serde_json::to_string(&bare).unwrap().len();
+    let grew = bytes - bare_bytes;
+    assert!(
+        grew >= ROWS * MAX_TASK_DESCRIPTION,
+        "descriptions added only {grew} bytes over {ROWS} maximal rows — the fixture is not \
+         measuring what it claims to"
+    );
+    assert!(
+        grew <= ROWS * (MAX_TASK_DESCRIPTION + 64),
+        "descriptions added {grew} bytes, more than the cap accounts for"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // #1152: "clear completed items" — the human's ARCHIVE action on their own
 // board. The whole feature rests on it never being a delete, and on it never

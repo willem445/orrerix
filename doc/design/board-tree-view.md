@@ -428,9 +428,12 @@ Two consequences worth stating:
   double-click threshold was the alternative, and it would have put a ~250 ms
   delay on every expand to preserve a gesture that has a better home anyway —
   the editable copy of the name belongs beside the full text of it.
-- **The title area is not a `<button>`.** It contains the row's own controls,
-  and a button inside a button is invalid and lands in the wrong place in the
-  tab order. The row's keyboard path is the `⌄` button #2937 already built.
+- **The title area is not a `<button>`.** The reason is what it MAY hold, not
+  what it holds today — today that is the title span and the cut marker. The
+  click rule is default-deny over the path precisely so a control can be put in
+  there later without folding the row, and a button nested in a button is
+  invalid and lands in the wrong place in the tab order. The row's keyboard path
+  is the `⌄` button #2937 already built.
 
 ### Colour by level
 
@@ -489,6 +492,22 @@ refusal is safe to fix and resend. The cap is counted in CHARACTERS: a byte cap
 would refuse a 260-character description written in this repo's own em-dash
 prose while accepting 500 ASCII ones.
 
+**Validated and stored TRIMMED, which is one rule for two callers.** The board's
+editor trims before it sends and MCP does not, so while the check read the raw
+value `upsert_task(description: "Ship it.\n")` was refused from an agent and the
+identical paste into the human's own box was saved — one field, two callers, two
+answers (review round 1). Surrounding whitespace is not content and an
+all-whitespace value was already the clear, so both the check and the store read
+the trimmed text. Trimming is not a licence to flatten: a control character
+*between* two sentences is still refused, which is what the refusal is for.
+
+The frontend mirror (`descRefusal`) carries the same two ranges the backend
+does. Rust's `char::is_control` is category `Cc` — C0 **and** C1
+(U+007F–U+009F) — and the mirror stopped at U+007F, so a C1 character such as
+U+0085 (a real line break out of a Windows-1252 round trip) passed the editor
+and was refused by the backend instead: the exact round trip the pre-check
+exists to avoid.
+
 **It is kept off the compact `list_tasks` row**, and that is the only
 interesting call in the field. `list_tasks` rides every row of every board read
 an orchestrator makes, which is the payload shape #245 was cut for; the
@@ -500,9 +519,15 @@ description is written once and capped. Gating it on the wire would also have
 needed a `has_description` companion for the reason `notes` needs `note_count`
 — absent is not empty — to buy nothing the board wanted.
 
-The board shows it only under an open row. That is a RENDERING decision, made in
-`tasksview.ts`; it is prose, and prose competes with the name #2937 was spent
-protecting.
+The board shows it only under an open row, and **directly under the name, above
+the detail block**. That is a RENDERING decision, made in `tasksview.ts`; it is
+prose, and prose competes with the name #2937 was spent protecting.
+
+The ORDER is load-bearing and was wrong until review round 1: the two blocks
+were appended after `detail`, so a human who opened a row to find out what it
+IS had to pass the badges, pickers, links and notes to reach the one block that
+answers that. `docs/orchestration.md` promised the right order while the code
+did the other one; the promise was right and the code moved.
 
 ### The editor's un-submitted state
 

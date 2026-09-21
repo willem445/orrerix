@@ -3248,10 +3248,14 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
    pane is narrow. */
 /* The title AREA (#3261) — the whole of it opens the row, so it is the click
    target, and `.task-title` inside it is only the text. A pointer cursor and a
-   hover tint are what say so; the area is not a <button> because it CONTAINS
-   the row's own controls (the chips, the inline editor), and a button holding a
-   button is invalid and unreachable by keyboard in the order a human expects.
-   The row's own <button class="task-expand"> is the keyboard path. */
+   hover tint are what say so.
+
+   It is not a <button>, and the reason is what it MAY hold rather than what it
+   holds today: `titleClickToggles` is a default-deny rule over the click path
+   precisely so a control can be placed in here later without folding the row,
+   and a button nested in a button is invalid and lands in the wrong place in
+   the tab order. Today the area holds the title span and the cut marker only.
+   The row's own <button class="task-expand"> is the keyboard path either way. */
 .task-title-area {
   flex: 1 1 40%; min-width: 0; display: flex; align-items: baseline; gap: 6px;
   border-radius: 5px; padding: 0 3px; margin: 0 -3px; cursor: pointer;
@@ -3486,10 +3490,12 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
 .task-kind-mark.k-unlabelled { --kind-hue: var(--kind-unlabelled); background: transparent; }
 
 /* The row's DESCRIPTION (#3261): one or two sentences the human wrote about
-   what the row IS, shown only when the row is open. Full width under the name,
-   like the notes and grounding sections, so it never competes with it. Plain
-   text — painted as textContent, never markdown — and `pre-wrap` so the width
-   is what wraps it rather than anything in the string. */
+   what the row IS, shown only when the row is open. Full width directly below
+   the name and ABOVE the detail block, so the answer to "what is this row" is
+   the first thing an open row gives you — the renderer's append order is what
+   holds that, and it is commented there as load-bearing. Plain text — painted
+   as textContent, never markdown — and `pre-wrap` so the width is what wraps it
+   rather than anything in the string. */
 .task-desc {
   margin: 3px 0 1px 25px; padding: 4px 6px;
   border-left: 2px solid var(--surface-2); border-radius: 0 5px 5px 0;
@@ -3502,15 +3508,27 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
 .task-desc-count { flex: none; font-size: 10px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .task-desc-count.over { color: var(--state-danger); }
 /* The expanded row's FULL title (#3261) — where the whole name lives once the
-   budget has cut the compact line, and where double-click-to-edit moved to. A
-   single click in the title area now opens the row, so the compact name could
-   not keep a double-click: the first click re-renders the row out from under
-   the second. */
+   budget has cut the compact line, and where double-click-to-edit moved to. It
+   is the FIRST thing an open row adds, directly under the compact line and
+   above the description and the detail block. A single click in the title area
+   now opens the row, so the compact name could not keep a double-click: the
+   first click re-renders the row out from under the second. */
 .task-title-full {
   margin: 3px 0 1px 25px; color: var(--ink); font-size: 12px; line-height: 1.4;
   overflow-wrap: anywhere; cursor: text;
 }
 .task-title-warn { flex: none; font-size: 10px; color: var(--state-attention); }
+/* The inline title editor, over the display budget (#3261). A SOFT warning: the
+   backend takes any title and this never refuses one — it says the row's own
+   line will not show all of this. `--state-attention` is the right channel
+   because that is exactly what it is, something the human may want to act on,
+   and the editor is not an identity position. Added in review round 1: the
+   class was toggled from the first commit and styled by nothing, so the
+   "warning" was the tooltip alone. */
+.task-title-input.over-budget {
+  border-color: var(--state-attention);
+  color: var(--state-attention);
+}
 /* A level only a hand-edited tasks.json can hold — the backend refuses it on
    write, so it reads as broken rather than as a fifth level. Same red as the
    `missing` dep chip below: both are the "a hand-edited tasks.json produced

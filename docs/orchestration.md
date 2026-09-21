@@ -440,9 +440,11 @@ discards, and clearing the box removes the description. Half-typed text survives
 an agent writing to the board underneath you.
 
 It is ordinary text, never formatted, and it is capped at **500 characters** on
-one line. Going over is *refused* rather than quietly trimmed, so the last thing
-you wrote cannot vanish without being mentioned — anything longer than that
-belongs in a 🗨 note or a 📎 grounding link. Your orchestrator can set one too
+one line. Going over is *refused* rather than quietly cut, so the last thing you
+wrote cannot vanish without being mentioned — anything longer than that belongs
+in a 🗨 note or a 📎 grounding link. Space at the start or end is tidied away,
+but a line break in the *middle* is refused rather than closed up, so two
+sentences are never silently welded into one. Your orchestrator can set one too
 (`upsert_task(description: …)`), and read one back with `get_task`. It is
 deliberately **not** on the cheap board listing agents poll: the description is
 written for a human, and putting it on every row of every read is what made the

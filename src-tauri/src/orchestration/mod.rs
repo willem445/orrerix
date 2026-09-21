@@ -13515,6 +13515,13 @@ pub struct Task {
     /// read and diff. Capped at `MAX_TASK_DESCRIPTION`, and a write over the
     /// cap is refused rather than cut.
     ///
+    /// **Stored TRIMMED, and validated on the same trimmed value** — one rule
+    /// for both callers. The board's editor trims before it sends and MCP does
+    /// not, so checking the raw value refused `"Ship it.\n"` from an agent while
+    /// silently accepting the identical paste from the human's own box
+    /// (#3261 review round 1). Trailing whitespace is not content; an
+    /// all-whitespace value was already the clear.
+    ///
     /// **Withheld from both COMPACT reads, deliberately** — `TaskSummary`
     /// (`list_tasks`) and an unexpanded `BoardTask` row do not carry it, and
     /// the full-record reads (`get_task`, and an expanded board row) do. It is
@@ -33432,7 +33439,7 @@ impl OrchRegistry {
         // a three-line paragraph should be told the field is one, not have two
         // of the lines silently welded together. `	` is included — the board
         // paints this as a single line, where a tab is invisible width.
-        if let Some(d) = patch.description.as_deref() {
+        if let Some(d) = patch.description.as_deref().map(str::trim) {
             let n = d.chars().count();
             if n > MAX_TASK_DESCRIPTION {
                 return Err(format!(
@@ -33827,7 +33834,13 @@ impl OrchRegistry {
             task.demo_path = patch.demo_path.filter(|s| !s.trim().is_empty());
         }
         if patch.description.is_some() {
-            task.description = patch.description.filter(|s| !s.trim().is_empty());
+            // TRIMMED, like the check above (#3261 review round 1). Both halves
+            // read the same value or the field has two policies: the editor
+            // trims before it sends, MCP does not, and a trailing "\n" was
+            // refused from one caller and silently accepted from the other.
+            // Trailing whitespace is not content, and an all-whitespace value
+            // was already the clear.
+            task.description = patch.description.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         }
         if patch.assignee.is_some() {
             task.assignee = patch.assignee.filter(|s| !s.trim().is_empty());

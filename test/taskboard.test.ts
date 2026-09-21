@@ -2857,3 +2857,39 @@ test("the editor declines exactly what the backend refuses, and nothing else", (
   // dash, curly quotes, an accent — is not a control character and must pass.
   assert.equal(descRefusal("Parses the workflow file — the “blocks” list, naïvely."), null);
 });
+
+test("the editor's control-character rule covers BOTH of Cc's ranges, as the backend's does", () => {
+  // Review round 1, finding 2. Rust `char::is_control` is Unicode category Cc,
+  // which is C0 (U+0000-U+001F) *and* C1 (U+007F-U+009F). The mirror stopped at
+  // U+007F, so a C1 character passed the editor, left Save enabled, and was
+  // refused by the backend instead — the exact round trip `descRefusal` exists
+  // to avoid, and which its own doc says cannot happen.
+  //
+  // These are not theoretical code points: U+0085 (NEL) is a real line break in
+  // text pasted from a mainframe export or a Windows-1252 round trip.
+  for (const cp of [0x00, 0x0a, 0x1f, 0x7f, 0x80, 0x85, 0x96, 0x9f]) {
+    const c = String.fromCharCode(cp);
+    assert.notEqual(
+      descRefusal(`Ship${c}it.`),
+      null,
+      `U+${cp.toString(16).padStart(4, "0").toUpperCase()} is category Cc and must be refused`
+    );
+  }
+  // The boundary on the far side: U+00A0 is NBSP, category Zs, NOT a control —
+  // a rule that refused it would refuse text pasted out of any word processor.
+  assert.equal(descRefusal("Ship\u00a0it."), null, "U+00A0 is a space, not a control character");
+  assert.equal(descRefusal("Ship it."), null);
+});
+
+test("a trailing newline gets ONE answer, whichever caller sends it", () => {
+  // Review round 1, premortem 1. The editor trims before it sends and MCP does
+  // not, so a raw-value check refused `"Ship it.\n"` from an agent while
+  // silently accepting the identical paste from the human's own box. Both sides
+  // now read the TRIMMED value; the Rust half of this pin is
+  // `a_description_is_validated_and_stored_trimmed`.
+  assert.equal(descRefusal("Ship it.\n"), null, "a trailing newline is trimmed, not refused");
+  assert.equal(descRefusal("  Ship it.  "), null);
+  // And an INTERIOR one is still refused — trimming must not become a licence
+  // to flatten, which is the whole point of the refusal.
+  assert.notEqual(descRefusal("Ship it.\nThen ship more."), null);
+});

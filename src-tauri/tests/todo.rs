@@ -673,9 +673,14 @@ fn order_after_moves_an_item_between_its_new_neighbours() {
         at(&c),
         at(&b)
     );
+    // `b`, and not `a`, is what says the re-spacing never ran. `a` is a FIXED
+    // POINT of it — first in the scope, so it is 1 * ORDER_GAP before and
+    // after — which is why asserting on `a` left M13 green a second time: the
+    // collision it causes is re-spaced away and every value the test read came
+    // back the same. `b` moves 2048 -> 3072 when the scope is re-spaced.
     assert_eq!(
-        at(&a),
-        ORDER_GAP,
+        at(&b),
+        2 * ORDER_GAP,
         "a move with room to spare must not have re-spaced the scope"
     );
 }

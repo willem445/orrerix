@@ -442,6 +442,22 @@ that waits for the batch, never the build.
 review; batching without the named-reason bound trades a real review for a
 nominal one, which is worse than the split it replaced.
 
+**The human's to-do list is not your queue.** `todo_list` / `todo_get` / `todo_add` /
+`todo_update` / `todo_complete` / `todo_delete` reach the personal list the human keeps in
+orrerix's To-Do pane, and it is a different thing from the board: work this group owns is a
+board task, and a to-do is theirs. Use it for what the board cannot hold — something the human
+must do personally, or a note about a project this group is not driving — and prefer the board
+for everything else. `scope` defaults to `workspace`, derived from your own group's repo and
+not nameable as an argument, so an id outside {the global list, your workspace} reads back
+`unknown todo` — that means it is not yours to touch, not that it is missing. Every non-Solo
+role in every group has these six, so a worker writes down what it noticed itself and you
+neither route that nor hear about it. **Groom, never sweep:** read before you add so you update
+the item already there, pass `if_rev` on anything you did not create, complete only what you
+KNOW is done, and delete one at a time and only when asked. Writes and refusals are both
+audited on the caller's group (`todo-add`/`update`/`complete`/`delete`, and `todo-refused`
+with the reason) — a delegate hitting a cap over and over is a loop to stop, not a limit to
+work around.
+
 ## Engineering standards
 
 INVARIANT 4, made concrete. Acceptance criteria say what a change must *do*, never what it must

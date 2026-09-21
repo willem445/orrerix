@@ -347,3 +347,136 @@ A reorder is a fourth, and it is handled differently rather than refused:
 `order_after` is a destination, not a value, and the item that was above this
 one may itself have moved since — so the honest inverse of a reorder is a fresh
 one the pane computes from the CURRENT list, and `inverseOp` omits it.
+## The tools (#3263 S2)
+
+Six MCP tools, on the **shared** tier of `tool_defs`: `todo_list`, `todo_get`,
+`todo_add`, `todo_update`, `todo_complete`, `todo_delete`.
+
+Shared rather than orchestrator-gated because the list is the human's, not the
+fleet's. A worker that spots a follow-up with the code in front of it is
+exactly who should be able to write it down, and routing every such note
+through the orchestrator would make the feature cost a turn nobody has. The
+same argument reaches the two classes with a *positive* surface — a manager and
+a lead are the panes the human actually talks to, so "put that on my list" is
+typed into them more often than into anything else — and it does **not** reach
+`Role::Solo`, whose contract is that a standalone token confers zero
+group-scoped power. That rule is flat and this feature does not bend it.
+
+Three gates, and each is enumerated separately on purpose:
+
+| class | listing | dispatch |
+|---|---|---|
+| orchestrator, worker, reviewer, planner | the shared tier | the shared arms, no role check |
+| manager | `MANAGER_SHARED` names all six | the manager gate names all six |
+| lead | `LEAD_SHARED` names all six | the lead gate names all six |
+| solo | the channel pair, before the shared tier is built | refused above the match |
+
+`MANAGER_SHARED`/`LEAD_SHARED` and their dispatch gates are **default-deny**, so
+a tool added to the shared tier by a later slice reaches neither class until
+someone names it and argues for it — the direction a capability list should
+fail in. The two halves of each pair are spelled twice rather than shared, and
+`manager_tool_surface_is_exactly_the_enumerated_set` /
+`lead_tool_surface_is_exactly_the_enumerated_set` assert the produced list by
+name: a single shared constant would make one edit move both halves, which is
+precisely what a double gate exists to catch.
+
+### Why a lead gets them, when it gets no board, gate or queue
+
+The withheld surface is withheld because there is nothing behind it: a lead
+group has no orchestrator, so `get_state` would answer `"{}"` forever, and
+listing a board tool would advertise a route with nothing at the end of it. The
+to-do store is the opposite case. It is one file at the data root — not
+group-scoped state — so a lead's `todo_list` returns the human's real list, and
+a lead group carries a repo, so `workspace` scope resolves exactly as it does
+anywhere else. Nothing in the six is orchestration authority: a to-do reaches
+no agent, no board, no branch and no gate.
+(`mcp_a_lead_sees_and_may_dispatch_all_six_todo_tools` drives the *workspace*
+scope specifically, because "a lead group has a repo" is the half of this
+argument that could stop being true.)
+
+### The workspace is derived, never passed
+
+`scope` is `"global"` or `"workspace"`, defaulting to `workspace`. The
+workspace KEY is computed from the caller's own `GroupInfo.repo` through
+`todo::workspace_key` — the one function that turns a path into a workspace
+identity (see **Workspace identity** above) — and is **not** an argument on any
+of the six. So no group can name another project's list, and an agent cannot
+widen its own reach by spelling a key. A group with no repo is told
+`workspace scope unavailable` rather than silently falling back to the global
+list, which would put a project note on the human's everywhere list with
+nothing to say it happened.
+
+`workspace` is the default because it is right for almost everything an agent
+notices, and because the other default would quietly pile every group's project
+notes onto the one list the human carries everywhere.
+
+### `unknown todo`, and why it is the same words
+
+The set an id may name is {the global list} ∪ {the caller's own workspace
+list}. Anything else is refused with `unknown todo: <id>` — **byte for byte
+what an id that never existed gets**. A distinct "not yours" would let a caller
+probe another project's list for which ids are real, so the two are
+deliberately indistinguishable; this is `require_in_group`'s "unknown agent"
+posture applied to items, and the engine already gives a tombstoned id the same
+treatment for the same reason.
+
+That check (`todo_visible`) runs in the MCP layer and BEFORE every mutating
+arm, because the engine has no notion of who is asking: `apply` refuses an id
+that is absent or deleted, and this is what refuses an id that is present but
+not the caller's. Its positive control is
+`mcp_the_global_list_is_the_same_list_from_every_group` — without it, the
+refusal test would pass equally against a build where a group could see nothing
+it had not written, which would be a different and wrong feature.
+
+### Audit, including the refusals this layer makes
+
+`reg.todo_apply` writes the `todo-add`/`update`/`complete`/`delete` row and the
+`todo-refused` row for anything the ENGINE refused (see **Audit** above). A
+cross-workspace id and a malformed argument never reach it, so the MCP layer
+audits those itself, with the same action and the same two detail keys — one
+`todo-refused` filter over a group's audit log therefore answers "what did this
+group try and get told no for" regardless of which layer said no. A caller
+repeatedly probing ids it may not see is exactly the event that must not be the
+one refusal in the feature leaving no trace.
+
+### Where the role prose lives, and the one deviation
+
+Each of `worker.md`, `reviewer.md`, `planner.md`, `manager.md` and `lead.md`
+carries one bullet naming the six and the rule (groom, never sweep; `if_rev` on
+anything you did not create; delete one at a time and only when asked).
+`orchestrator.md` does **not**: it measures 44,955 B at blob `816a9c22` against
+`RESIDENT_CORE_BUDGET`'s 45,000, so a paragraph there would redden
+`the_resident_core_is_under_the_byte_budget`. The orchestrator-facing half is
+a paragraph folded into `orchestrator-playbook.md`'s EXISTING
+`## Planning and scheduling` section, which is on-demand and unbudgeted.
+
+**A NEW playbook section would not have worked, and that is the part worth
+recording.** `every_playbook_section_has_a_resident_stub_naming_it` is default-deny over the
+playbook's own headings with no allowlist: every section must be named by a
+`read_playbook("<id>")` stub in the resident core, because the failure mode of an
+on-demand playbook is not an unreadable section but an orchestrator that never
+knows to ask. A stub costs more than the 45 bytes available, so a standalone
+section is structurally unavailable here — and folding into a section whose stub
+already exists is what #2815 actually did, rather than what its log entry reads
+like at a glance. The rule lands where an orchestrator already reads about what
+belongs on the board, which is the right place for "the to-do list is not your
+queue" anyway.
+
+### One residual, stated so it is falsifiable
+
+`todo_list` filters out items carrying `archived_ms`, and **that line is covered
+by no test and cannot be until #3263 S5 ships.** Nothing in the tree writes
+`archived_ms` yet, so no fixture can build an archived item: deleting the filter
+reddens nothing today, and it would die green if S5 landed with different
+archive semantics. The slice that gives the field a writer is the slice that can
+witness the filter, so S5 owns the test — a `todo_list` case asserting an
+archived item is absent from the listing while `todo_get` still returns it.
+Recorded here rather than left as an unremarked green line (review round 1,
+finding 6).
+
+### No seventh tool
+
+Grooming — re-titling, re-prioritising, due dates, notes, tags, splitting work
+into steps — is `todo_update` plus `todo_add`. A "split" tool would be a second
+way to add an item, and two ways to create one row is two shapes to keep in
+step.

@@ -1450,3 +1450,47 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   whether to spawn a planner", which is the one moment `drive_plan` is the alternative being
   weighed. So no new section id, no new stub, and no byte of the core. The contract is
   `doc/design/plan-driver.md` §9.
+- **#3263 S2, the human's To-Do list** — `worker.md`, `reviewer.md`, `planner.md`,
+  `manager.md`, `lead.md` and `orchestrator-playbook.md`. `orchestrator.md` and `dod.md` are
+  byte-identical to their previous blessed copies.
+
+  Each role file gains ONE bullet naming the six tools (`todo_list` / `todo_get` / `todo_add` /
+  `todo_update` / `todo_complete` / `todo_delete`) and the rule that governs them: the list is
+  the HUMAN's and is not the task board; `scope` defaults to `workspace`, derived from the
+  caller's own group repo and not nameable as an argument; **groom it, never sweep it** — read
+  before you add so you update the item already there, pass `if_rev` on anything you did not
+  create, complete only what you know is done, and delete one item at a time and only when
+  asked. `manager.md` and `lead.md` carry the same rule phrased for a pane the human is talking
+  to directly ("put that on my list" is typed into those two), including reading the list back
+  in prose rather than as rows.
+
+  **`orchestrator.md` was deliberately NOT touched, and the reason is measurable rather than
+  editorial** — the same call #2815's entry in this log records, re-derived here rather than inherited.
+  The resident core is paid on every model call under `RESIDENT_CORE_BUDGET` (45,000 B) and
+  measures 44,955 B at blob `816a9c22`, so ANY paragraph there would have reddened
+  `the_resident_core_is_under_the_byte_budget`. The orchestrator-facing half is a new
+  paragraph folded into `orchestrator-playbook.md`'s EXISTING `## Planning and
+  scheduling` section, which is on-demand and has no such budget. The orchestrator also reads
+  each tool's own MCP description, which carries the same rules; a role file is not the only
+  surface it learns from.
+
+  **It is folded into an existing section rather than given its own, and that is the half of
+  #2815's precedent its entry above does not make obvious.**
+  `every_playbook_section_has_a_resident_stub_naming_it` is default-deny over the playbook's
+  own headings, with no allowlist: every section must be named by a `read_playbook("<id>")`
+  stub in the RESIDENT core, because the failure mode of an on-demand playbook is not an
+  unreadable section but an orchestrator that never knows to ask. So a new section costs
+  resident bytes too, and there are 45 of them — which is why #2815 put its orchestrator-facing
+  half into the existing planning section rather than opening one. A first draft of this slice
+  added a standalone `## The to-do list` section with a paragraph explaining why it had no
+  stub; that guard caught it, correctly, and this is the record so the next person reading the
+  entry above does not repeat it.
+
+  (Dated to the BLOB of the one file that can move the figure, not to a commit: a rebase
+  invalidates every SHA while leaving the blob — and so the measurement — checkable, and when
+  the blob DOES move it names what to re-measure on.)
+
+  **The brief asked for a paragraph in all six role templates.** Five got one; the sixth could
+  not, for the budget reason above, and went to the playbook instead. That deviation was put to
+  the orchestrator before the code was written and approved, and is recorded here as well as in
+  the PR because this is where the next implementer of a role-template edit looks.

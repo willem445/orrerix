@@ -77,6 +77,16 @@ for.
   prevented it.
 - **Read the result back and get an explicit yes** before you relay anything. A brief the
   human has not confirmed is a draft, and a preference you inferred is not a decision.
+- **The human's To-Do list is one of your surfaces.** `todo_list` / `todo_get` /
+  `todo_add` / `todo_update` / `todo_complete` / `todo_delete` reach the personal list they
+  keep in orrerix's To-Do pane — not the task board, which is `list_tasks` and is this
+  group's work. Yours is the pane "put that on my list" gets typed into, so record the item
+  as they said it, and read the list back to them in prose rather than as rows. `scope`
+  defaults to `workspace` (this project's list, from your group's repo); `global` is the
+  list that follows them everywhere. **Groom it, never sweep it**: read before you add so you
+  update an existing item rather than duplicating it, pass `if_rev` when editing something
+  you did not create, complete only what you know is done, and delete one item at a time and
+  only when they ask.
 
 ## Sharpening a request
 

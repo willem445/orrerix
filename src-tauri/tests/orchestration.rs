@@ -38858,6 +38858,22 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
         // asserts the helper really applies all four agent/hook dir overrides,
         // so this row's premise fails loudly in that binary if it ever stops.
         ("codexusage.rs", 1),     // test_registry (#2515 C3) — proof test in that file
+        // #3263 S2. `tests/todo.rs` was S1's own binary (a new file rather than
+        // an append to this one, for the end-of-file-append conflict class
+        // CLAUDE.md's git section names), and S1 needed no registry at all: it
+        // drove `apply_to`/`snapshot_at` against explicit paths. The MCP tools
+        // cannot — they go through `OrchRegistry::todo_apply` — so that binary
+        // gains a registry, and therefore its own helper, since helpers do not
+        // cross integration-test targets.
+        //
+        // **The proof this row names**, so it can go stale rather than merely
+        // be trusted: that file's own
+        // `its_registry_helper_applies_every_override_this_allowlist_row_assumes`
+        // spawns through the helper's registry and asserts all four agent/hook
+        // dir overrides really took — which is the property #464 is about. If
+        // the helper ever stops applying one, that test fails in its own binary
+        // and this row's premise is gone with it.
+        ("todo.rs", 1),           // relaunch_registry (#3263 S2) — proof test in that file
     ];
     let mut files = Vec::new();
     collect_rs_files(tests_dir, &mut files);
@@ -61644,6 +61660,17 @@ fn manager_tool_surface_is_exactly_the_enumerated_set() {
             "list_verdicts",
             "request_compact",
             "note_directive",
+            // #3263 S2 — the human's own To-Do list. The manager is the pane
+            // the human talks to, so it is where "put that on my list" gets
+            // typed; withholding the list from the one class whose whole job is
+            // talking to them would be the wrong way round. Not orchestration
+            // authority: a to-do reaches no agent, no board and no branch.
+            "todo_list",
+            "todo_get",
+            "todo_add",
+            "todo_update",
+            "todo_complete",
+            "todo_delete",
             // and the manager's own extension
             "message_orchestrator",
             "check_mail",

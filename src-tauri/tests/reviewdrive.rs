@@ -9381,6 +9381,7 @@ fn a_satisfied_drive_releases_the_worker_pane_it_never_handed_back_to() {
     // a revision AND a body, and a drive whose body digest moves under it never
     // reaches the gate at all.
     reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
     let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
     assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
     reg.rd_drive_group_with(&group, &gh, 10_000);
@@ -9471,6 +9472,7 @@ fn a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit() {
     // a revision AND a body, and a drive whose body digest moves under it never
     // reaches the gate at all.
     reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
     let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
     assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
     reg.rd_drive_group_with(&group, &gh, 10_000);

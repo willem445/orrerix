@@ -168,6 +168,10 @@ impl OrchRegistry {
         if !policy.enabled {
             return Triaged::Deliver { flush: None };
         }
+        // SCRATCH MUTATION: the hook is severed. Nothing is ever deferred,
+        // written or flushed, so these reds belong to the wiring.
+        #[allow(unreachable_code)]
+        return Triaged::Deliver { flush: None };
         // "The sender is the human." A human never reaches this function by
         // TYPING — they type into the PTY, which is not a delivery at all — so
         // the question the never-triaged set is really asking is whether these

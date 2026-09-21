@@ -9568,17 +9568,12 @@ fn drive_started_on_session(
     reg.set_pr_head_override(Some(HEAD_A.to_string()));
     let out = reg.drive_review_with(&group, gh, 1758, &session, false, 0, "orch-1", 0);
     assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
-    let recorded: Vec<String> = drives_json(reg, &group)["entries"][0]["founding_panes"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|v| v.as_str().map(str::to_string))
-        .collect();
-    assert_eq!(
-        recorded, ids,
-        "the fixture's premise: the drive recorded the panes it was started on, in order"
-    );
+    // What the drive recorded is deliberately NOT asserted here. It is the
+    // mechanism under test, not a premise of the fixture: pinning it in the
+    // shared setup would make every test below fail on a premise rather than on
+    // the pane's fate when the mechanism is absent, which is the weaker red.
+    // `founding_panes_are_recorded_total_deduped_and_never_alongside_the_current_pane`
+    // pins the recording itself.
     reg.rd_drive_group_with(&group, gh, 10_000);
     let opened = reg.rd_drive_group_with(&group, gh, 20_000);
     let lane = opened

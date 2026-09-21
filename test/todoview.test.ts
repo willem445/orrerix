@@ -228,17 +228,94 @@ test("a fresh draft is seeded from the ITEM and is pristine — including one wi
   assert.equal(rowDraftIsPristine(seedRowDraft(noted)), true);
 });
 
-test("the pristine predicate reads EVERY field of the draft", () => {
+/**
+ * The draft fields that are NOT typable — a record of what the human can edit,
+ * not a reading of the item.
+ *
+ * One entry, argued: `seededNotes` is what the notes box was seeded WITH, so
+ * "has the human typed?" is measured against it rather than into it. Spelled
+ * out here because the loop below must not claim to be testing typing on a
+ * field nobody can type into (#3293 round 6 residual 2) — it passed for the
+ * right answer by the wrong route, since moving the seed alone also separates
+ * it from `notes`.
+ *
+ * DEFAULT-DENY: a field added to `RowDraft` and not named here lands in the
+ * TYPABLE loop, so forgetting to classify it reddens rather than exempts it.
+ */
+const NON_TYPABLE: readonly (keyof RowDraft)[] = ["seededNotes"];
+
+test("the strip's counts are UNKNOWN until a snapshot has landed (#3293 round 6 residual 1)", () => {
+  // "We have not looked" and "there is nothing" are different facts, and only
+  // one of them is safe to assert. The list's empty state already followed that
+  // rule; the chips and the header total did not, so a pane mid-read drew
+  // "My Day 0" over a list that has rows.
+  const rows = [item({ my_day: NOW }), item({ important: true })];
+
+  const loading = projectPane(
+    { items: [], view: "myday", query: "", tagFilter: null, loaded: false },
+    NOW
+  );
+  assert.equal(loading.countsKnown, false);
+  assert.equal(loading.empty, true, "the projection is still empty — it just cannot say why");
+
+  const loaded = projectPane(
+    { items: rows, view: "myday", query: "", tagFilter: null, loaded: true },
+    NOW
+  );
+  assert.equal(loaded.countsKnown, true);
+  assert.equal(loaded.counts.myday, 1);
+
+  // A genuinely empty, genuinely READ list is `countsKnown` too — the
+  // discriminator, without which `countsKnown` could just be "total > 0".
+  const empty = projectPane(
+    { items: [], view: "myday", query: "", tagFilter: null, loaded: true },
+    NOW
+  );
+  assert.equal(empty.countsKnown, true, "an empty list that HAS been read reads as unknown");
+  assert.equal(empty.counts.myday, 0);
+
+  // Absent means loaded, so every existing caller keeps its meaning.
+  const legacy = projectPane({ items: rows, view: "myday", query: "", tagFilter: null }, NOW);
+  assert.equal(legacy.countsKnown, true);
+});
+
+test("the archived toggle reaches the rows and NEVER the strip's counts", () => {
+  // Archiving must not move what the strip says, because the strip says how
+  // much work exists and archived work is over. If it did, the number would
+  // jump when the toggle flipped and mean nothing either way.
+  const live = item({ id: "td-live", status: "done", done_ms: NOW });
+  const put = item({ id: "td-put", status: "done", done_ms: NOW, archived_ms: NOW });
+  const base = { items: [live, put], view: "completed" as const, query: "", tagFilter: null };
+
+  const hidden = projectPane(base, NOW);
+  const shown = projectPane({ ...base, showArchived: true }, NOW);
+
+  assert.deepEqual(renderedRows(hidden).map((i) => i.id), ["td-live"]);
+  assert.deepEqual(renderedRows(shown).map((i) => i.id).sort(), ["td-live", "td-put"]);
+  assert.equal(hidden.total, 1);
+  assert.equal(shown.total, 2);
+  assert.deepEqual(shown.counts, hidden.counts, "the toggle moved the strip");
+  assert.equal(hidden.counts.completed, 1, "the count is the LIVE finished rows");
+});
+
+test("the pristine predicate reads EVERY TYPABLE field of the draft", () => {
   // #1348 N1/N4: the renderer's seed and "is this untouched" are one question
   // asked twice, so a field present in the draft and absent from the predicate
-  // is a silent hole. Drive it from the object's own keys rather than from a
-  // list this test remembers — a field added to `RowDraft` and forgotten here
-  // then reddens instead of passing.
-  const base = item({ notes: "n" });
-  const seeded = seedRowDraft(base);
+  // is a silent hole. Driven from the object's own keys rather than from a list
+  // this test remembers — a field added to `RowDraft` and forgotten here then
+  // reddens instead of passing.
+  const seeded = seedRowDraft(item({ notes: "n" }));
   const keys = Object.keys(seeded) as (keyof RowDraft)[];
-  assert.ok(keys.length >= 2, "the draft lost its fields — this scan is blind, not clean");
-  for (const k of keys) {
+
+  // The exemption list is checked against the object, so a RENAMED seed field
+  // cannot leave a stale row here silently exempting nothing.
+  for (const k of NON_TYPABLE) {
+    assert.ok(keys.includes(k), `NON_TYPABLE names \`${k}\`, which RowDraft no longer has`);
+  }
+  const typable = keys.filter((k) => !NON_TYPABLE.includes(k));
+  assert.ok(typable.length >= 3, "the draft lost its fields — this scan is blind, not clean");
+
+  for (const k of typable) {
     const touched: RowDraft = { ...seeded, [k]: `${seeded[k]} typed` };
     assert.equal(
       rowDraftIsPristine(touched),
@@ -246,6 +323,20 @@ test("the pristine predicate reads EVERY field of the draft", () => {
       `typing into \`${k}\` left the draft reading as pristine`
     );
   }
+});
+
+test("the seed field is not typed into — it MOVES WITH the value it seeds", () => {
+  // The property the loop above cannot state, and the one `reseedPristineDrafts`
+  // actually depends on: when an agent's write re-seeds a row, BOTH halves move
+  // together and the draft stays pristine. A predicate that compared `notes`
+  // against a literal, or against the live item, would fail exactly here.
+  const seeded = seedRowDraft(item({ notes: "n" }));
+  assert.equal(rowDraftIsPristine(seeded), true);
+  const reseeded: RowDraft = { ...seeded, notes: "agent wrote this", seededNotes: "agent wrote this" };
+  assert.equal(rowDraftIsPristine(reseeded), true, "a re-seeded draft read as edited");
+  // And moving only ONE half is dirty, in both directions.
+  assert.equal(rowDraftIsPristine({ ...seeded, notes: "typed" }), false);
+  assert.equal(rowDraftIsPristine({ ...seeded, seededNotes: "moved" }), false);
 });
 
 test("drafts are pruned to the rows still on screen", () => {

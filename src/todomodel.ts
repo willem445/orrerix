@@ -265,13 +265,32 @@ function dayDelta(ms: number, nowMs: number): number {
   return Math.round((startOfDay(ms) - startOfDay(nowMs)) / MS_PER_DAY);
 }
 
-/** True when an item is in My Day but was put there on an earlier day.
+/**
+ * True when an item is in My Day but was put there on an earlier day.
  *
- *  SEPARATE from `inView(item, "myday", …)` on purpose. Microsoft To Do empties
- *  My Day at midnight; whether this one should is the open question in #3263's
- *  plan §8, so the predicate takes the non-destructive reading (a carried-over
- *  item stays) and this reports the staleness for the pane to surface once the
- *  human has answered. Nothing here clears anything. */
+ * **MY DAY EMPTIES ITSELF AT LOCAL MIDNIGHT** (#3263 S5, the human's answer to
+ * the plan's §8 open question). This is the predicate that decides it, and
+ * `inView(item, "myday", …)` is its one reader — which is why that function's
+ * `nowMs` stopped being `_nowMs` in the same commit.
+ *
+ * **NOTHING IS WRITTEN.** The item leaves the VIEW; its `my_day` stamp stays
+ * exactly where the human (or an agent) put it. That is the difference between
+ * this and a midnight sweep, and it is the whole reason it is safe for a
+ * per-viewer clock to decide it:
+ *
+ *  * a machine asleep at midnight, or a pane open across it, agree — neither
+ *    has to have RUN at midnight for the answer to be right, because the
+ *    answer is recomputed from the stamp on every render;
+ *  * two windows on two timezones each empty at their OWN midnight, which is
+ *    what a human in either one means by "today";
+ *  * nothing is destroyed, so `t` puts the item back with one keystroke and
+ *    the record of when it was last pulled in survives.
+ *
+ * **Whole local days, never 24-hour spans.** `dayDelta` divides two local
+ * midnights, so a DST day — 23 or 25 hours long — still rounds to the one day
+ * it is, and an item pulled into My Day at 23:30 the evening the clocks go
+ * back does not read as stale at 00:30.
+ */
 export function myDayIsStale(item: TodoItem, nowMs: number): boolean {
   return item.my_day !== null && dayDelta(item.my_day, nowMs) < 0;
 }
@@ -294,22 +313,25 @@ export const SMART_VIEW_LABEL: Record<SmartView, string> = {
  *
  * Four of the five are the OPEN list sliced differently, so each excludes a
  * finished item; `completed` is the one that collects them. An ARCHIVED item
- * is in none of them — that is what archiving is for (#3263 S5 adds the op).
+ * is in none of them — that is what archiving is for (#3263 S5 added the op).
+ * The one way to see one is the Completed view's own "show archived" toggle,
+ * which goes through `visibleItems`' `includeArchived` rather than through
+ * here: archiving must not move what the STRIP counts, because the strip says
+ * how much work exists and archived work is over.
  *
- * **No view reads the clock TODAY**, hence `_nowMs`. The parameter is kept
- * because the one open product question would make My Day read it the moment
- * it is answered (#3263 plan §8 — whether My Day empties itself at midnight,
- * as Microsoft To Do does), and because every caller already threads a clock
- * through `visibleItems`. Dropping it would mean changing every call site to
- * put it back.
+ * **My Day reads the clock, and it is the only view that does** (#3263 S5).
+ * An item pulled into My Day on an earlier day leaves it at local midnight —
+ * `myDayIsStale` carries the argument, the "nothing is written" half and the
+ * DST note. The parameter that used to be `_nowMs` against the plan's §8 open
+ * question is that question, answered.
  */
-export function inView(item: TodoItem, view: SmartView, _nowMs: number): boolean {
+export function inView(item: TodoItem, view: SmartView, nowMs: number): boolean {
   if (isArchived(item)) return false;
   switch (view) {
     case "completed":
       return isDone(item);
     case "myday":
-      return !isDone(item) && item.my_day !== null;
+      return !isDone(item) && item.my_day !== null && !myDayIsStale(item, nowMs);
     case "planned":
       return !isDone(item) && item.due_ms !== null;
     case "important":
@@ -411,6 +433,33 @@ export interface VisibleOpts {
   query?: string;
   /** One tag, exact. Absent means no filter. */
   tag?: string | null;
+  /**
+   * Show archived items too — the Completed view's own toggle (#3263 S5).
+   *
+   * **It applies to `completed` and to nothing else**, and that is deliberate
+   * rather than an unfinished generalisation. Archiving is how a human clears
+   * a finished list; an archived item is *done work put away*, so the only
+   * place it makes sense to look at one is the log of finished work. Honouring
+   * this flag on `all` or `myday` would put items back in the open list that
+   * the human archived precisely to get rid of.
+   *
+   * It is also the ONE way back: `inView` excludes an archived item from every
+   * view, so without this toggle an archive would be a one-way door with undo
+   * as its only exit — and undo lives for the life of a pane.
+   */
+  includeArchived?: boolean;
+}
+
+/** `inView`, plus the Completed view's archive toggle. Private because the
+ *  counts must NOT use it — see `includeArchived`'s doc and `projectPane`. */
+function inViewWithArchive(
+  item: TodoItem,
+  view: SmartView,
+  nowMs: number,
+  includeArchived: boolean
+): boolean {
+  if (isArchived(item)) return includeArchived && view === "completed" && isDone(item);
+  return inView(item, view, nowMs);
 }
 
 /**
@@ -428,7 +477,7 @@ export function visibleItems(
   const tag = opts.tag ?? null;
   const out = items.filter(
     (i) =>
-      inView(i, opts.view, nowMs) &&
+      inViewWithArchive(i, opts.view, nowMs, opts.includeArchived === true) &&
       matchesQuery(i, opts.query ?? "") &&
       (tag === null || i.tags.includes(tag))
   );
@@ -523,12 +572,20 @@ export interface UpdateFields {
   order_after?: OrderAfter;
 }
 
-/** One mutation, in the single-key shape `parse_op` accepts. */
+/** One mutation, in the single-key shape `parse_op` accepts.
+ *
+ *  `restore` and `archive` join the four at #3263 S5. Both were already the
+ *  backend's: `restore` landed with #3285 and `parse_op` has accepted it since,
+ *  and `archive` is S5's own engine op. What was missing here was the type and
+ *  a caller, which is exactly what `inverseOp` said when it refused to invert a
+ *  delete. */
 export type TodoOp =
   | { add: AddFields }
   | { update: UpdateFields }
   | { complete: { id: string; done: boolean } }
-  | { delete: { id: string } };
+  | { delete: { id: string } }
+  | { restore: { id: string } }
+  | { archive: { ids: string[]; archived: boolean } };
 
 /** What `todo_apply` answers. */
 export interface Applied {
@@ -556,23 +613,23 @@ const NULLABLE: { key: "due_ms" | "remind_ms" | "my_day" }[] = [
  * The op that undoes `op`, given the item as it stood BEFORE (from the
  * snapshot the pane was rendering) and the `Applied` the backend answered.
  *
- * **It refuses rather than guesses.** Three cases have no honest inverse today
- * and each says so:
+ * **It refuses rather than guesses.** Two cases have no honest inverse and
+ * each says so:
  *
- *  * a DELETE. The store's delete is a soft tombstone, and the engine HAS a
- *    `restore` op that inverts one as of #3285 — what is missing is the
- *    wiring here, which is S5's. Emitting a `restore` from this function
- *    before the frontend `TodoOp` type carries it would not type-check; the
- *    BACKEND decoder already accepts the op, so what is outstanding is a type
- *    and a caller, not a decoder arm. It still reports the gap; only the
- *    reason has changed, and the reason is what the message says.
- *
- *    (The MCP side is a separate gap and not this function's: #3263 S2
- *    shipped its six tools before `restore` existed, so no agent can undo its
- *    own `todo_delete` either. `doc/design/todo-pane.md`, "No seventh tool".)
  *  * no `before` snapshot. Without it the pane cannot know what to restore,
  *    and a best-effort guess is how an undo quietly writes the wrong value.
  *  * an update that named no field. There is nothing to put back.
+ *
+ * **A DELETE used to be a third, and #3263 S5 is where it stopped being one.**
+ * The store's delete is a soft tombstone and the engine's `restore` op inverts
+ * one (#3285); what was missing was this type and a caller, which is what the
+ * refusal message said. Both now exist, so a delete inverts to
+ * `{restore: {id}}`. Two things about that inverse are worth stating because
+ * they are what make it honest rather than merely available: the engine
+ * refuses a restore whose 30-day tombstone window has passed (it reads back as
+ * an unknown id), and it refuses one into a scope that has hit `ITEMS_MAX` —
+ * so an undo of a delete can still fail, loudly, with the backend's own
+ * message in a toast. It can never silently half-work.
  *
  * The inverse carries EXACTLY the fields the forward op named, and never an
  * `if_rev`: an undo that rewrote untouched fields would clobber a concurrent
@@ -589,10 +646,23 @@ export function inverseOp(op: TodoOp, before: TodoItem | null, applied: Applied 
   }
 
   if ("delete" in op) {
-    return {
-      unsupported:
-        "undoing a delete is not wired up yet; the store's restore op exists (#3285) and S5 wires it",
-    };
+    return { op: { restore: { id: op.delete.id } } };
+  }
+
+  if ("restore" in op) {
+    return { op: { delete: { id: op.restore.id } } };
+  }
+
+  if ("archive" in op) {
+    // Symmetric by construction: the op carries BOTH the ids and the direction,
+    // so its inverse is the same ids with the flag flipped. That shape was
+    // chosen for this — an `archive-all` that took a scope instead would have
+    // no inverse at all, because "everything that was completed at the time"
+    // is not a set the store can reconstruct afterwards.
+    if (op.archive.ids.length === 0) {
+      return { unsupported: "the archive named no items" };
+    }
+    return { op: { archive: { ids: [...op.archive.ids], archived: !op.archive.archived } } };
   }
 
   if (before === null) {
@@ -644,4 +714,112 @@ export function inverseOp(op: TodoOp, before: TodoItem | null, applied: Applied 
     return { unsupported: "the update named no invertible field" };
   }
   return { op: { update: back } };
+}
+
+// ---------- the undo stack ----------
+
+/**
+ * How many undos a pane remembers.
+ *
+ * FIFTY, and it is a bound rather than a number anyone measured: the stack
+ * holds one inverse op per write and each is a few hundred bytes, so the
+ * memory is irrelevant and what is being bounded is *meaning*. An undo forty
+ * writes ago, in a list two agents have also been writing to, restores a value
+ * to a row whose context the human no longer remembers — and a stack with no
+ * floor invites exactly that. The ops are dropped from the OLDEST end, so the
+ * fifty most recent are always the ones available.
+ */
+export const UNDO_MAX = 50;
+
+/** One undoable write, as the pane remembers it. */
+export interface UndoEntry {
+  /** The op that puts it back. */
+  op: TodoOp;
+  /** What the human did, for the toast: "Completed", "Deleted", "Archived 7". */
+  label: string;
+}
+
+/** The phrase an undo toast uses for a FORWARD op. Past tense, because it is
+ *  read after the write has landed. */
+export function opLabel(op: TodoOp): string {
+  if ("add" in op) return "Added";
+  if ("delete" in op) return "Deleted";
+  if ("restore" in op) return "Restored";
+  if ("complete" in op) return op.complete.done ? "Completed" : "Reopened";
+  if ("archive" in op) {
+    const n = op.archive.ids.length;
+    return op.archive.archived ? `Archived ${n}` : `Unarchived ${n}`;
+  }
+  return "Updated";
+}
+
+/**
+ * The pane's undo history — DOM-free and clock-free, so `test/todomodel.test.ts`
+ * can drive it directly.
+ *
+ * **It stores INVERSES, computed at push time, never forward ops replayed
+ * backwards.** The difference is the `before` snapshot: `inverseOp` needs the
+ * item as it stood before the write, and that is a fact only the frame that
+ * made the write has. Deriving it later, from a store two writers have moved
+ * since, is exactly the "best-effort guess" `inverseOp` refuses to make.
+ *
+ * **A write with no honest inverse is not pushed at all**, and `push` hands
+ * back the [`Inverse`] so the caller can say so instead of offering an undo
+ * that would do nothing. That is the same rule the rest of this module
+ * follows: refuse visibly rather than fail quietly.
+ *
+ * **Nothing here is a transaction.** Popping an entry hands the caller an op
+ * to send; whether it lands is the backend's answer, and the entry is gone
+ * either way. That is deliberate — a failed undo (a tombstone past its purge
+ * window, a scope at `ITEMS_MAX`) is reported to the human with the backend's
+ * own message, and re-queuing it would offer a gesture that is now known not
+ * to work.
+ */
+export class UndoStack {
+  private entries: UndoEntry[] = [];
+
+  /** How many undos are available. */
+  get depth(): number {
+    return this.entries.length;
+  }
+
+  /**
+   * Record a write, and report whether it could be inverted.
+   *
+   * `before` is the item as the pane was rendering it; `applied` is what the
+   * backend answered (needed for an `add`, whose inverse needs the id the
+   * store minted).
+   */
+  push(forward: TodoOp, before: TodoItem | null, applied: Applied | TodoItem | null): Inverse {
+    const inverse = inverseOp(forward, before, applied);
+    if ("op" in inverse) {
+      this.entries.push({ op: inverse.op, label: opLabel(forward) });
+      // Drop from the OLDEST end, so the cap costs the least useful entry.
+      if (this.entries.length > UNDO_MAX) this.entries.splice(0, this.entries.length - UNDO_MAX);
+    }
+    return inverse;
+  }
+
+  /** The most recent inverse, removed from the stack. */
+  pop(): UndoEntry | null {
+    return this.entries.pop() ?? null;
+  }
+
+  /** What `pop` would return, without removing it. */
+  peek(): UndoEntry | null {
+    return this.entries.length === 0 ? null : this.entries[this.entries.length - 1];
+  }
+
+  /**
+   * Forget everything.
+   *
+   * Called when the pane changes SCOPE: every entry names an id in the list
+   * the pane has just left, and the engine resolves an id without a scope
+   * check — so an undo popped after the switch would write to the other
+   * store while the header says otherwise. The same paint-the-wrong-scope
+   * hazard `todoscope.ts` exists for, one gesture over.
+   */
+  clear(): void {
+    this.entries = [];
+  }
 }

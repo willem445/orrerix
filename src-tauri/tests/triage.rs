@@ -454,28 +454,69 @@ fn an_out_of_range_deadline_and_an_unknown_kind_both_refuse_the_file() {
 /// there is no call, no client and no address anywhere on the path from
 /// `deliver_prompt_as` to a decision. S3 adding a provider has to add a direct
 /// edge or a socket, and either reddens this.
+/// Every dependency NAME a Cargo manifest declares — the keys of every
+/// `[dependencies]`-family table, and nothing from `[package]` or from the
+/// comments.
+///
+/// Deliberately small and deliberately not a TOML parser: the one property it
+/// needs is that a name matches as a NAME rather than as a substring of the
+/// surrounding prose, which is the false block this exists to have fixed.
+fn declared_deps(manifest: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_deps = false;
+    for line in manifest.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            // `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`
+            // and every `[target.'cfg(...)'.dependencies]` variant.
+            in_deps = t.contains("dependencies]");
+            continue;
+        }
+        if !in_deps || t.starts_with('#') || t.is_empty() {
+            continue;
+        }
+        if let Some((key, _)) = t.split_once('=') {
+            let key = key.trim().trim_matches('"');
+            if !key.is_empty() && !key.contains(char::is_whitespace) {
+                out.push(key.to_string());
+            }
+        }
+    }
+    out
+}
+
 #[test]
 fn neither_the_engine_nor_triage_can_reach_a_network() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
 
-    // (1) the engine crate's own declared dependencies.
+    // (1) the engine crate's own declared dependencies, compared by NAME.
+    //
+    // **Not `manifest.contains(name)`**, which is how the first version of
+    // this assertion falsely blocked a known-good manifest: `surf` is a
+    // substring of `surface`, and that word appears twice in the engine's own
+    // dependency-audit prose. A substring scan over a file that is mostly
+    // COMMENTARY reports the commentary. Parse the declaration instead — a
+    // dependency is a `key = …` line inside a `[dependencies]` table — and
+    // compare the keys by equality.
     let manifest = fs::read_to_string(root.join("crates/loomux-engine/Cargo.toml"))
         .expect("the engine manifest");
+    let declared = declared_deps(&manifest);
     // The positive control FIRST: a scan whose success shape is "no match" is
-    // byte-identical to a scan that read the wrong file.
+    // byte-identical to a scan that read the wrong file, or that parsed it into
+    // nothing.
     assert!(
-        manifest.contains("serde_norway"),
-        "the engine manifest was not read as expected — the assertions below would be vacuous"
+        declared.iter().any(|d| d == "serde_norway"),
+        "the engine manifest parsed to {declared:?} — the assertions below would be vacuous"
     );
     for banned in
         ["reqwest", "hyper", "ureq", "isahc", "curl", "attohttpc", "surf", "typesafe-sdk"]
     {
         assert!(
-            !manifest.contains(banned),
+            !declared.iter().any(|d| d == banned),
             "{banned} is a declared dependency of loomux-engine — the crate triage lives in. \
              #3304 S1 ships no provider, and a classifier that sends agent-authored text off \
              the machine is S3's decision to argue with the human's say-so, not a dependency \
-             that arrives quietly"
+             that arrives quietly. Declared: {declared:?}"
         );
     }
 

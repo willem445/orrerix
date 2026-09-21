@@ -211,8 +211,11 @@ path.
 
 ## The audit row's ts_ms (#3202, #3249, #3259)
 
-Every audit row the shims write carries a `ts_ms` the shim produces by
-shelling out to the system `date` — never a Rust crate (the getrandom ban).
+Every audit row the POSIX shims write carries a `ts_ms` produced by
+shelling out to the system `date` — never a Rust crate (the getrandom ban) —
+while the `.cmd` delegators' degraded rows (no `sh` on the machine at all)
+hardcode `"ts_ms":0`, because a `.cmd` cannot shell out either.
+`%3N` is a GNU extension, and BSD `date` answers `+%s%3N` with the epoch plus
 `%3N` is a GNU extension, and BSD `date` answers `+%s%3N` with the epoch plus
 a literal `3N` tail, so the value is guarded by a `case` ladder rather than
 trusted: a non-digit or empty `%s%3N` gets one second chance (`date +%s`,

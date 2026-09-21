@@ -190,3 +190,149 @@ made it. Actions are `todo-add` / `todo-update` / `todo-complete` /
 cap that bounces a runaway loop is exactly the event the human needs to find
 afterwards. A pane with no group writes no row: there is no group audit log to
 write to, and the item's own `updated_by` still records who did it.
+
+## The two commands, and the `todo-changed` event
+
+The pane reaches the store through exactly two `#[tauri::command]`s, both
+`async` and both off-thread through `run_blocking`:
+
+| command | takes | answers | frame |
+|---|---|---|---|
+| `todo_snapshot` | `workspace_root: Option<String>` | `TodoSnapshot` | `read_command`, degrading to an empty snapshot |
+| `todo_apply` | `op: Value`, `workspace_root: Option<String>` | `Result<Applied, String>` | `mutating_command`, degrading to `COMMAND_REFUSED` |
+
+Both frames are #1702's containment barrier. They are not strictly *required*
+here — `tests/synccommands.rs` scans the **synchronous** commands in `mod.rs`,
+and an `async` body runs on the async runtime rather than inside the WebView2
+COM callback — but they are what every converted sibling does, and the
+degraded values are the honest ones: an empty list the pane re-reads on the
+next event, and a refusal the human sees.
+
+### The caller names a ROOT, never a key
+
+`workspace_root` is the active pane's project root as the caller spells it.
+`scope_for` is the only thing that turns it into a `Scope`, and it does so
+through `todo::workspace_key` — the same door the MCP path uses. Two
+consequences, both deliberate:
+
+* two spellings of one project cannot become two lists, because the
+  canonicalisation happens once, on the backend, for both writers;
+* the frontend cannot address a workspace it is not in, because it never sends
+  a key at all. An absent or blank root is the global list.
+
+### Why the op decoder is hand-written
+
+The engine's op types are `Serialize`-only on purpose (their own doc says so),
+and this is the half of that decision that lives in `src-tauri`. A
+`#[derive(Deserialize)]` on `TodoUpdate` would be a third, laxer way into the
+store:
+
+* `TodoUpdate`'s nullable fields are `Option<Option<u64>>`, where the outer
+  `None` means *leave alone* and `Some(None)` means *clear it*. Serde's derived
+  decoder reads a JSON `null` into an `Option` as `None`, so the derive cannot
+  express "clear this due date" at all without a `deserialize_with` helper per
+  field — more code than the explicit reader, and it hides the rule instead of
+  stating it.
+* A derive accepts what it knows and silently ignores the rest, so `due` for
+  `due_ms` would be a write that succeeds and does nothing. `parse_op` is
+  **default-deny**: an unknown key is a refusal naming itself.
+* `scope` is not a field a caller may send at all, per the rule above.
+
+The wire shape is one single-key object per op, so the tag can never be
+omitted:
+
+```json
+{"add":      {"title": "pay rent", "due_ms": 1750000000000, "tags": ["home"]}}
+{"update":   {"id": "td-...", "if_rev": 3, "due_ms": null}}
+{"complete": {"id": "td-...", "done": true}}
+{"delete":   {"id": "td-..."}}
+```
+
+`order_after` takes `"start"` or `{"item": "<id>"}` rather than a nullable id,
+because `null` already means *leave alone* on this wire and "first in the list"
+is a destination, not the absence of one.
+
+### The event
+
+Every successful write emits `todo-changed` with `{scope, ids, actor}` — from
+**either** writer, the pane's own `todo_apply` and an agent's through the MCP
+tools. It is a NOTIFICATION, not a delta: the pane re-reads the snapshot rather
+than patching its list from the payload, so a missed event costs one stale
+render and never a divergent one. It is declared in `test/perfpolicy.test.ts`'s
+stream manifest, today as a `debt` row against S4 — S3 ships the subscription
+helper and nothing calls it, so the `CoalescingRefresh` that bounds it arrives
+with the pane that needs it.
+
+## The frontend split
+
+`src/todo.ts` is the only module that talks to the backend, and it does so
+through `./transport.ts` (constraint 5). It names the two commands, decodes
+through `decodeSnapshot`, and subscribes to the event — nothing else.
+
+Every DECISION lives in `src/todomodel.ts`, which is DOM-free and takes its
+clock as a parameter. That is what makes a month-boundary Planned bucket
+testable without a DOM or a fixed system date, and it is the repo's convention
+for frontend logic worth testing (`layout.ts`, `steer.ts`, `spawnexpiry.ts`).
+
+### Decode drops, it does not throw
+
+The backend owns this schema and may be a newer build than the loaded bundle,
+so `decodeSnapshot` reads defensively: an item without a string `id` and a
+string `title` is dropped and the rest are kept. Those two are the bar because
+they are what make a row renderable and addressable — a row you cannot click,
+complete or delete would be a lie to draw. Every other field has a defined
+absent value. A hostile or absent payload decodes to an empty snapshot rather
+than throwing, because a pane that renders an error where the list should be,
+every time a read degrades, is worse than one that renders nothing and re-reads.
+
+### The smart views, and the one open question
+
+`inView` is total over `SMART_VIEWS`. Four of the five are the open list sliced
+differently and exclude a finished item; `completed` collects them. An
+**archived** item is in none of them — that is what archiving is for (S5 adds
+the op). Completed is ordered by most recent finish rather than by `order`,
+because it is a log and that is the row a human opens it to find.
+
+`plannedBucket` decides by whole-day distance, never by a calendar comparison:
+a `getMonth()`-based bucket would put 1 June in a different bucket from 31 May
+for no reason a human would recognise.
+
+**My Day does not auto-clear.** Microsoft To Do empties it at midnight; whether
+this one should is still open (#3263 plan §8, for the human to answer on the S0
+mock). Until it is answered the predicate takes the non-destructive reading — a
+carried-over item stays — and `myDayIsStale` reports the carry-over as a
+separate signal the pane can surface. Nothing clears anything.
+
+### Reorder, and the gap that runs out
+
+The backend places a moved item at the **midpoint** of its new neighbours
+(`order_for`). After enough halvings there is no integer strictly between them
+and the move becomes a silent no-op: the item does not budge and nothing says
+why. `needsRenumber` is what lets the pane notice. `moveTarget` computes the
+`order_after` for a one-step move relative to what the human can SEE — the list
+`visibleItems` returned, not the whole store.
+
+### Undo refuses rather than guesses
+
+`inverseOp` derives the op that undoes a write from the item as it stood
+before. It carries **exactly** the fields the forward op named — an undo that
+rewrote untouched fields would clobber a concurrent agent edit to something the
+human never touched — and never an `if_rev`, which is stale by construction by
+the time an undo runs.
+
+Three cases have no honest inverse today and each says so instead of shipping a
+button that silently does nothing:
+
+* **a delete.** The store's delete is a soft tombstone, but the op set S1
+  shipped has no RESTORE: `apply` treats a tombstoned item as unknown, so an
+  update aimed at it is refused. The plan's "soft delete makes every op
+  invertible" is therefore not yet true — undoing a delete needs a new engine
+  op, and that is S5's to add.
+* **no `before` snapshot.** Without it the pane cannot know what to restore,
+  and a best-effort guess is how an undo quietly writes the wrong value.
+* **an update that named no field.** There is nothing to put back.
+
+A reorder is a fourth, and it is handled differently rather than refused:
+`order_after` is a destination, not a value, and the item that was above this
+one may itself have moved since — so the honest inverse of a reorder is a fresh
+one the pane computes from the CURRENT list, and `inverseOp` omits it.

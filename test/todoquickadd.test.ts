@@ -1,0 +1,167 @@
+// The quick-add parser (#3263 S3), against the plan §3 token list.
+//
+// The clock is INJECTED in every case below. That is not a style preference:
+// a parser that read `Date.now()` could not be tested for "tomorrow" without
+// the test being a different test every day, and every assertion here is an
+// absolute instant derived from one fixed `NOW`.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { parseQuickAdd, formatDue, DEFAULT_DUE_HOUR } from "../src/todoquickadd.ts";
+
+/** Wednesday 2024-05-15, 10:00 local. Every expectation below is relative to it. */
+const NOW = new Date(2024, 4, 15, 10, 0, 0, 0).getTime();
+
+/** Local midnight, `days` from NOW's day, at `hour`:`minute`. */
+function at(days: number, hour = DEFAULT_DUE_HOUR, minute = 0): number {
+  const d = new Date(NOW);
+  d.setDate(d.getDate() + days);
+  d.setHours(hour, minute, 0, 0);
+  return d.getTime();
+}
+
+test("the clock is injected, so `tomorrow` is a fixed instant", () => {
+  const a = parseQuickAdd("water the plants tomorrow", NOW);
+  assert.equal(a.title, "water the plants");
+  assert.equal(a.dueMs, at(1));
+  assert.equal(a.hasTime, false, "a bare date gets the default hour, not a time the human chose");
+
+  // The same line parsed against a clock a week later moves by exactly a week —
+  // which is only observable because the clock is a parameter.
+  const b = parseQuickAdd("water the plants tomorrow", NOW + 7 * 86400000);
+  assert.equal(b.dueMs, at(8));
+});
+
+test("`today` and `tonight` differ only in the hour", () => {
+  assert.equal(parseQuickAdd("call mum today", NOW).dueMs, at(0));
+  const tonight = parseQuickAdd("call mum tonight", NOW);
+  assert.equal(tonight.dueMs, at(0, 19, 0));
+  assert.equal(tonight.hasTime, true);
+});
+
+test("a bare weekday means the NEXT one, never today", () => {
+  // NOW is a Wednesday. `fri` is two days out; `wed` is a full week out,
+  // because a to-do that silently lands in the past hour is worse than one a
+  // week away — if you meant today you would have typed `today`.
+  assert.equal(parseQuickAdd("pay rent fri", NOW).dueMs, at(2));
+  assert.equal(parseQuickAdd("pay rent wed", NOW).dueMs, at(7));
+  assert.equal(parseQuickAdd("pay rent this wed", NOW).dueMs, at(0), "`this wed` DOES mean today");
+});
+
+test("`next week` is the coming Monday and `next <weekday>` its own day", () => {
+  assert.equal(parseQuickAdd("retro next week", NOW).dueMs, at(5), "Mon 20 May from Wed 15 May");
+  assert.equal(parseQuickAdd("retro next fri", NOW).dueMs, at(2));
+});
+
+test("`in N days` and `in N weeks`", () => {
+  assert.equal(parseQuickAdd("chase the invoice in 3 days", NOW).dueMs, at(3));
+  assert.equal(parseQuickAdd("chase the invoice in 1 day", NOW).dueMs, at(1));
+  assert.equal(parseQuickAdd("chase the invoice in 2 weeks", NOW).dueMs, at(14));
+  assert.equal(parseQuickAdd("chase the invoice in 3 days", NOW).title, "chase the invoice");
+});
+
+test("`at 4pm`, a bare `4pm`, and `16:00` all name the same hour", () => {
+  for (const line of ["standup at 4pm", "standup 4pm", "standup 16:00"]) {
+    const a = parseQuickAdd(line, NOW);
+    assert.equal(a.dueMs, at(0, 16, 0), line);
+    assert.equal(a.hasTime, true, line);
+    assert.equal(a.title, "standup", line);
+  }
+  assert.equal(parseQuickAdd("standup at 4:30pm", NOW).dueMs, at(0, 16, 30));
+  assert.equal(parseQuickAdd("standup at 9am", NOW).dueMs, at(1, 9, 0), "9am has passed at 10:00, so it is tomorrow's");
+});
+
+test("a bare number is not a time", () => {
+  // The failure this guards is the one that makes a quick-add bar
+  // untrustworthy: a word silently leaving the title.
+  const a = parseQuickAdd("buy 4 lemons", NOW);
+  assert.equal(a.title, "buy 4 lemons");
+  assert.equal(a.dueMs, null);
+});
+
+test("#tag, !/!!/!!!, * and @myday", () => {
+  const a = parseQuickAdd("fix the roof #home #urgent !!! * @myday", NOW);
+  assert.equal(a.title, "fix the roof");
+  assert.deepEqual(a.tags, ["home", "urgent"]);
+  assert.equal(a.priority, 3);
+  assert.equal(a.important, true);
+  assert.equal(a.myDay, true);
+  assert.equal(parseQuickAdd("x !", NOW).priority, 1);
+  assert.equal(parseQuickAdd("x !!", NOW).priority, 2);
+});
+
+test("the plan's combined line", () => {
+  const a = parseQuickAdd("pay rent fri 4pm #home !!", NOW);
+  assert.equal(a.title, "pay rent");
+  assert.equal(a.dueMs, at(2, 16, 0));
+  assert.deepEqual(a.tags, ["home"]);
+  assert.equal(a.priority, 2);
+  // The chips are the proof: every consumed token comes back, so the UI can
+  // show the parse BEFORE Enter.
+  assert.deepEqual(
+    a.chips.map((c) => c.kind),
+    ["due", "tag", "priority"]
+  );
+  assert.equal(a.chips[0].raw, "fri 4pm");
+});
+
+// ---------- failure cases ----------
+
+test("FAILURE CASE: an unparseable date stays in the title", () => {
+  // Nothing here is a date the parser knows, and the rule is that it never
+  // guesses and never swallows: every word survives.
+  for (const line of ["ship the q3 roadmap", "review PR 1234", "sometime next month", "call on 15/05"]) {
+    const a = parseQuickAdd(line, NOW);
+    assert.equal(a.title, line, line);
+    assert.equal(a.dueMs, null, line);
+    assert.deepEqual(a.chips, [], line);
+  }
+});
+
+test("FAILURE CASE: `fri` inside `friday's report` keeps the word", () => {
+  // A weekday is a date only when it stands as its OWN token. `friday's` is
+  // not `friday`, so neither the day nor the apostrophe is taken.
+  const a = parseQuickAdd("write friday's report", NOW);
+  assert.equal(a.title, "write friday's report");
+  assert.equal(a.dueMs, null);
+
+  // And the same for a weekday that opens the line: a title far more often
+  // than a date.
+  const b = parseQuickAdd("Friday retro notes", NOW);
+  assert.equal(b.title, "Friday retro notes");
+  assert.equal(b.dueMs, null);
+
+  // The contrast that makes the two above fail-able rather than vacuous: the
+  // SAME word, as its own token and not first, IS taken.
+  const c = parseQuickAdd("write the report friday", NOW);
+  assert.equal(c.title, "write the report");
+  assert.equal(c.dueMs, at(2));
+});
+
+test("FAILURE CASE: an empty title is refused", () => {
+  // Reported rather than thrown: the bar renders chips for a line that is not
+  // yet submittable, which is the whole point of the live parse.
+  const a = parseQuickAdd("#home !! @myday", NOW);
+  assert.equal(a.title, "");
+  assert.equal(a.valid, false);
+  assert.equal(a.tags.length, 1, "the tokens it DID understand are still reported");
+
+  assert.equal(parseQuickAdd("", NOW).valid, false);
+  assert.equal(parseQuickAdd("   ", NOW).valid, false);
+  assert.equal(parseQuickAdd("anything", NOW).valid, true);
+});
+
+test("only the first date on a line is taken", () => {
+  const a = parseQuickAdd("move the tomorrow meeting to fri", NOW);
+  assert.equal(a.dueMs, at(1), "`tomorrow` wins; `fri` stays in the title");
+  assert.equal(a.title, "move the meeting to fri");
+});
+
+test("formatDue is relative near the present and absolute once that stops helping", () => {
+  assert.equal(formatDue(at(0), NOW, false), "Today");
+  assert.equal(formatDue(at(1), NOW, false), "Tomorrow");
+  assert.equal(formatDue(at(-1), NOW, false), "Yesterday");
+  assert.equal(formatDue(at(2), NOW, false), "Fri");
+  assert.equal(formatDue(at(0, 16, 0), NOW, true), "Today 16:00");
+  assert.equal(formatDue(at(30), NOW, false), "Fri 14 Jun");
+});

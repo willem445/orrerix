@@ -34,6 +34,7 @@ test("a tab of nothing but file explorers reports no agents and no orch markers"
     liveOrch: false,
     dormantOrch: false,
     connectedChannels: 0,
+    watched: 0,
   });
 });
 
@@ -52,12 +53,13 @@ test("editor and git panes are NOT agents either — same rule, same reason (#21
     liveOrch: false,
     dormantOrch: false,
     connectedChannels: 0,
+    watched: 0,
   });
 });
 
 test("an empty tab (only a welcome pane) counts zero and shows no markers", () => {
   const c = tabCounts([p("terminal", false)], false);
-  assert.deepEqual(c, { agents: 0, liveOrch: false, dormantOrch: false, connectedChannels: 0 });
+  assert.deepEqual(c, { agents: 0, liveOrch: false, dormantOrch: false, connectedChannels: 0, watched: 0 });
 });
 
 test("live orchestration panes count as agents AND flag the live-orch icon", () => {

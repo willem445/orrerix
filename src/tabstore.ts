@@ -193,6 +193,31 @@ export interface PersistedPane {
    *  (`Pane.liveKind`). Absent (every pre-#2519 snapshot, and every pane that
    *  is not a lead) or malformed reads `false`. */
   lead: boolean;
+  /** The human's WATCH on this pane (#3319) — "one of the panes I need to
+   *  actively look at when I come back".
+   *
+   *  It is here, on the pane's own restore record, because that is the object
+   *  whose lifetime the flag has to match: a watch must survive the pane's own
+   *  respawn (the record is what a dormant placeholder re-emits) and an app
+   *  restart (this record rides `tabs.json`), and it must die with the pane,
+   *  because a mark on a pane that no longer exists is not a mark on anything.
+   *  A separate keyed store — the `boardprefs.ts` shape — was the alternative
+   *  and would have needed a key that outlives a pane, a new Rust command pair,
+   *  and its own answer for "the pane this names is gone". None of that buys
+   *  anything the human asked for.
+   *
+   *  Recorded on EVERY kind, unlike the per-kind launch fields around it: those
+   *  describe how to bring a pane back and are meaningless on another kind,
+   *  while this describes what the human decided about it, and they can decide
+   *  it about any pane they can see.
+   *
+   *  Absent (every pre-#3319 snapshot) or malformed reads `false` — the same
+   *  default-OFF polarity `lead` takes, and for a gentler version of the same
+   *  reason: an unwatched pane is the state a human can always reach from, and
+   *  a snapshot that invented a watch would put a violet bar on a pane nobody
+   *  marked. No schema bump: the decoder's stated forward-compat rule is that
+   *  an absent field reads as its pre-feature default. */
+  watched: boolean;
   /** Every view CURRENTLY docked to this "orch" pane (#361) — up to three
    *  entries, one per occupied edge (left/right/bottom), each naming which
    *  view and its share of that edge's split. Empty = nothing docked, every
@@ -510,6 +535,11 @@ function decodePane(v: unknown): PersistedPane | null {
     // reason: a corrupted or hand-edited snapshot must not silently mint a real
     // group with a cap's worth of live agents on the next boot.
     lead: r.lead === true,
+    // #3319: only an exact `true` is a watch, same polarity and same reason as
+    // `lead` above in its milder form — a hand-edited or truncated snapshot
+    // must not mint marks the human never set, because a mark they did not put
+    // there is one they have to find and clear by hand.
+    watched: r.watched === true,
     embeds: decodeEmbeds(r.embeds, r.embed, r.taskEmbed),
   };
 }

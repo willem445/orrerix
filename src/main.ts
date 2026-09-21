@@ -4,6 +4,7 @@ import { showToast } from "./toast";
 import type { Grid } from "./grid";
 import type { SplitPolicy } from "./splitfloor";
 import { Workspace } from "./workspace";
+import { nextWatchedKey } from "./watchedpanes";
 import { TabManager } from "./tabs";
 import { TabBar } from "./tabbar";
 import type { Pane, PaneEvents, PaneOptions } from "./pane";
@@ -383,6 +384,53 @@ voiceController.init(() => activeGrid().activePane);
 
 /** Pane events bound to a specific workspace, so a pane always acts on its own
  *  tab's grid — never whichever tab happens to be active when the event fires. */
+/** Alt+H (#3319): watch, or stop watching, the pane that has focus.
+ *
+ *  The chord acts on the ACTIVE pane and says so out loud, because unlike the
+ *  right-click gesture there is no pane under a cursor to make the target
+ *  obvious — and a mark the human is not sure landed is a mark they check by
+ *  hand, which is the tax this feature exists to remove. With no active pane it
+ *  says that rather than silently doing nothing.
+ */
+function toggleWatchOnActivePane(): void {
+  const pane = activeGrid().activePane;
+  if (!pane) {
+    showToast("No pane is focused, so there is nothing to watch.", "info");
+    return;
+  }
+  const now = pane.toggleWatched();
+  showToast(now ? `Watching "${pane.name}".` : `No longer watching "${pane.name}".`, "info");
+}
+
+/** Ctrl+Shift+H (#3319): go to the next watched pane, across every tab.
+ *
+ *  THE WALK IS FLEET-WIDE, and that is the feature rather than a generosity:
+ *  the human set these marks before stepping away and has no idea which tab
+ *  each one is in when they come back. Tabs are walked in strip order and panes
+ *  within a tab in grid order, so the cycle is the same one the eye would make.
+ *
+ *  Focus is moved with `revealPane(..., true)` — the same one function the
+ *  Agents list's click uses (#2365), so "go to this pane" means one thing — and
+ *  `true` because this is a discrete human gesture, so it may leave the current
+ *  tab, exit a fullscreen, or bring the pane back from the dock. A watched pane
+ *  the human minimized is exactly one they need brought back.
+ */
+function goToNextWatchedPane(): void {
+  const walk: { ws: Workspace; pane: Pane }[] = [];
+  for (const ws of tabs.tabs) for (const pane of ws.grid.allPanes()) walk.push({ ws, pane });
+  const from = activeGrid().activePane;
+  const key = nextWatchedKey(
+    walk.map(({ pane }) => ({ key: pane.key, watched: pane.watched })),
+    from ? from.key : null,
+  );
+  if (key === null) {
+    showToast("No panes are being watched — press Alt+H on one to start.", "info");
+    return;
+  }
+  const hit = walk.find(({ pane }) => pane.key === key);
+  if (hit) revealPane(hit.ws, hit.pane, true);
+}
+
 /**
  * Alt+J (#3263 S4): open a To-Do pane in the active grid, or focus the one that
  * is already there.
@@ -894,6 +942,10 @@ async function rebuildLayout(
   for (const step of steps) {
     const anchor = step.relativeTo === null ? undefined : panes[step.relativeTo];
     const pane = await openActionPane(ws, step.action, step.dir, anchor);
+    // The human's watch comes back with the pane (#3319 AC3). Applied here,
+    // after the pane exists, rather than as a launch option: it is not an input
+    // to how the pane is brought back, and `setWatched` is the one writer.
+    if (step.watched) pane.setWatched(true);
     // Symmetry with the welcome/session-restore spawn paths: an exit that raced in
     // before `ptyId` was assigned sits in earlyExits — drain it here (also lets the
     // resume fresh-fallback fire on a sub-tick resume failure) instead of leaking it.
@@ -917,6 +969,11 @@ async function restoreDocked(
 ): Promise<void> {
   for (const record of docked) {
     const pane = await openActionPane(ws, planPaneRestore(record, resumable));
+    // #3319 AC3, and the docked path needs its own line for the same reason it
+    // needs its own `reapIfExited`: it does not go through `planLayoutRestore`,
+    // so there is no step to carry the flag. A minimized watched pane is the
+    // one most worth restoring the mark on — it is the pane you cannot see.
+    if (record.watched) pane.setWatched(true);
     reapIfExited(ws, pane); // same early-exit drain as the layout path
     ws.grid.minimize(pane);
   }
@@ -1209,6 +1266,9 @@ async function openActionPane(
         sessionId: null,
         role: null,
         groupId: null, // an agent pane belongs to no orchestration group (#485)
+        // #3319: a placeholder the human just asked for is not one they
+        // have marked — a watch is only ever set by the gesture that sets it.
+        watched: false,
         file: null,
         sshProfileId: null, // …nor to an SSH connection (#887 S4)
         // #2519: carried through so a dormant LEAD placeholder that is never
@@ -1360,6 +1420,9 @@ async function openActionPane(
         // #2519, and the same boundary the fields below restate: an SSH pane can
         // never be an orchestration member, so it can never have been a lead.
         lead: false,
+        // #3319: a placeholder the human just asked for is not one they
+        // have marked — a watch is only ever set by the gesture that sets it.
+        watched: false,
         sessionId: a.sessionId,
         // The #887/#888 boundary, restated where the placeholder is built: an
         // SSH pane is never an orchestration member, so this record carries no
@@ -1557,6 +1620,9 @@ async function openActionPane(
         // is the one thing a lead pane is not — a lead persists as `agent`
         // (`Pane.liveKind`), so this arm can never be reached for one.
         lead: false,
+        // #3319: a placeholder the human just asked for is not one they
+        // have marked — a watch is only ever set by the gesture that sets it.
+        watched: false,
         // Carry the captured member identity so a group resume restores exactly
         // the panes that were live at close (#194.5) and re-capture is exact.
         sessionId: a.sessionId,
@@ -3403,6 +3469,12 @@ document.addEventListener(
         break;
       case "open-todo":
         void openOrFocusTodoPane();
+        break;
+      case "toggle-watch":
+        toggleWatchOnActivePane();
+        break;
+      case "next-watched":
+        goToNextWatchedPane();
         break;
       case "toggle-tasks":
         activeGrid().activePane?.toggleTasksView();

@@ -71,9 +71,22 @@ export interface FilterChip {
 export function filterChips(rows: readonly AgentRow[], selected: AgentFilter): FilterChip[] {
   const counts = new Map<AgentState, number>();
   for (const r of rows) counts.set(r.state, (counts.get(r.state) ?? 0) + 1);
+  const watched = rows.reduce((n, r) => (r.watched ? n + 1 : n), 0);
   const chips: FilterChip[] = [
     { filter: "all", label: "all", count: rows.length, selected: selected === "all" },
   ];
+  // The watched chip sits SECOND, directly after `all` and ahead of the state
+  // ladder (#3319). Not inside `CHIP_ORDER`, which is derived from the state
+  // labels and must stay so — this is not a state. And ahead of the ladder
+  // rather than at the end because it answers the question a human asks on the
+  // way back to their desk, before "what is anything doing": which panes did I
+  // say to look at. Offered on the same terms as a state chip — it has rows, or
+  // it is the one selected — so it does not clutter the strip for someone who
+  // has never set a watch, and cannot vanish out from under the human standing
+  // on it.
+  if (watched > 0 || selected === "watched") {
+    chips.push({ filter: "watched", label: "watched", count: watched, selected: selected === "watched" });
+  }
   for (const state of CHIP_ORDER) {
     const count = counts.get(state) ?? 0;
     if (count === 0 && selected !== state) continue;
@@ -133,7 +146,15 @@ export function visibleGroups(
  *  state something is in, so "No panes are X" is reachable mid-refresh and
  *  says nothing about how many panes exist. */
 export function emptyMessage(filter: AgentFilter): string {
-  return filter === "all" ? "No agent panes in this window." : `No panes are ${AGENT_STATE_LABEL[filter]}.`;
+  if (filter === "all") return "No agent panes in this window.";
+  // "watched" is the one filter that is not a state, so it does not read out of
+  // the state-label table and does not fit the "No panes are X" sentence —
+  // watching is something the human DOES to a pane, not something the pane is.
+  // The compiler found this: widening `AgentFilter` made the index into
+  // `Record<AgentState, string>` a type error rather than a sentence that would
+  // have rendered "No panes are undefined."
+  if (filter === "watched") return "You are not watching any panes.";
+  return `No panes are ${AGENT_STATE_LABEL[filter]}.`;
 }
 
 /** One element the Agents list renders, in the order it renders them. `key` is

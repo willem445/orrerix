@@ -41,6 +41,7 @@ import {
   visibleGroups,
 } from "./agentsviewmodel";
 import { PollGate } from "./pollgate";
+import { WATCHED_MARK } from "./watchedpanes";
 import { spinnerSvg } from "./spinner";
 
 /** How often an open Agents tab re-derives its rows.
@@ -79,6 +80,8 @@ interface RowEls {
   name: HTMLElement;
   identity: HTMLElement;
   state: HTMLElement;
+  /** The human's watch mark (#3319) — shown or hidden, never rebuilt. */
+  watch: HTMLElement;
   row: AgentRow;
 }
 
@@ -399,7 +402,17 @@ export class AgentsView {
     name.className = "agents-name";
     const state = document.createElement("span");
     state.className = "agents-state";
-    top.append(mark, name, state);
+    // The human's watch mark (#3319), FIRST in the row — ahead of the agent's
+    // own mark, because the question it answers ("is this one of mine") is the
+    // one a human scanning the list back at their desk asks first. Hidden when
+    // the pane is not watched rather than absent, so `updateRow` only ever
+    // toggles a flag on a stable element (the keyed-not-rebuilt rule this view
+    // already follows for its chips and rows).
+    const watch = document.createElement("span");
+    watch.className = "agents-watch-mark";
+    watch.textContent = WATCHED_MARK;
+    watch.hidden = true;
+    top.append(watch, mark, name, state);
     const identity = document.createElement("div");
     identity.className = "agents-identity";
     el.append(top, identity);
@@ -408,7 +421,7 @@ export class AgentsView {
     // paints. `""` is not a candidate — `markKey` always emits a JSON array —
     // and the `was === row` arm covers it too; belt and braces on the one path
     // where an unpainted element must not be mistaken for a current one.
-    return { el, mark, markKey: "", name, identity, state, row };
+    return { el, mark, markKey: "", name, identity, state, watch, row };
   }
 
   /** Paint the agent-type mark (#2371).
@@ -468,6 +481,12 @@ export class AgentsView {
     // painted at all. `classList.toggle` with an explicit second argument is
     // idempotent, so running it every tick costs nothing and cannot drift.
     els.el.classList.toggle("child", row.parent !== null);
+    // AFTER the state block for the same reason `child` is (#3319): that block
+    // rewrites `className` wholesale and is guarded on the state CHANGING, so a
+    // watch toggled on a tick where the state did not move would be painted and
+    // then wiped. `toggle` with an explicit second argument is idempotent.
+    els.el.classList.toggle("watched", row.watched);
+    if (els.watch.hidden === row.watched) els.watch.hidden = !row.watched;
     const title = this.rowTitle(row);
     if (els.el.title !== title) els.el.title = title;
   }

@@ -141,6 +141,48 @@ test("Alt+J is an ALT chord and nothing else claims J", () => {
   assert.equal(matchShortcut(evt({ ctrlKey: true, altKey: true, code: "KeyJ" })), null);
 });
 
+test("Alt+H watches the focused pane, Ctrl+Shift+H goes to the next watched one (#3319)", () => {
+  assert.equal(matchShortcut(evt({ altKey: true, code: "KeyH" })), "toggle-watch");
+  assert.equal(matchShortcut(evt({ ctrlKey: true, shiftKey: true, code: "KeyH" })), "next-watched");
+});
+
+test("plain Ctrl+H stays with the CLI — it is the backspace byte (#3319)", () => {
+  // THE ONE THAT WOULD BE A REAL REGRESSION. Claude Code's keybindings
+  // reference lists Ctrl+H under "Reserved shortcuts" — "Sends the ASCII
+  // backspace byte" — and cannot rebind it; Copilot CLI's command reference
+  // binds it to "Delete the previous character". Taking Ctrl+H at the app
+  // level would eat backspace inside every agent and shell pane, silently.
+  //
+  // What holds it is the `e.shiftKey` requirement on the Ctrl+Shift block, and
+  // that guard is invisible at the one line that adds the chord — so it is
+  // asserted here rather than trusted, the way the Ctrl+A guard above is.
+  assert.equal(matchShortcut(evt({ ctrlKey: true, code: "KeyH" })), null);
+  assert.equal(matchShortcut(evt({ code: "KeyH" })), null, "bare h is not an app chord");
+  assert.equal(
+    matchShortcut(evt({ altKey: true, shiftKey: true, code: "KeyH" })),
+    null,
+    "Alt+Shift is UNVERIFIED across the CLIs, so the block's !shiftKey guard withholds it",
+  );
+  assert.equal(
+    matchShortcut(evt({ ctrlKey: true, shiftKey: true, altKey: true, code: "KeyH" })),
+    null,
+    "the tab-reorder block takes only the bracket keys",
+  );
+});
+
+test("the watch pair is two chords on one letter, and they are different actions", () => {
+  // H is now bound under two modifier sets, the same collision the audit/
+  // timeline and Ctrl+Shift+A/Alt+A pairs above guard against — and here it is
+  // deliberate, because the pair IS one idea. What must hold is that the two
+  // chords stay distinct actions: a switch whose first matching case wins would
+  // otherwise let one silently shadow the other.
+  const toggle = matchShortcut(evt({ altKey: true, code: "KeyH" }));
+  const next = matchShortcut(evt({ ctrlKey: true, shiftKey: true, code: "KeyH" }));
+  assert.notEqual(toggle, next);
+  assert.notEqual(toggle, null);
+  assert.notEqual(next, null);
+});
+
 test("no two app shortcuts answer to the same chord", () => {
   // The guard that makes adding a chord safe, rather than a grep. Every chord in
   // `matchShortcut`'s four modifier blocks is enumerated here and each must map

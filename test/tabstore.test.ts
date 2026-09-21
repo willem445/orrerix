@@ -96,6 +96,7 @@ test("docked panes round-trip (captured outside the layout tree, #194 P4)", () =
             file: null,
             sshProfileId: null,
             lead: false,
+            watched: false,
             embeds: [],
           },
         ],
@@ -217,6 +218,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
         file: null,
         sshProfileId: null,
         lead: false,
+        watched: false,
         embeds: [],
       },
     },
@@ -241,6 +243,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             file: null,
             sshProfileId: null,
             lead: false,
+            watched: false,
             embeds: [],
           },
         },
@@ -260,6 +263,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             file: null,
             sshProfileId: null,
             lead: false,
+            watched: false,
             embeds: [],
           },
         },
@@ -281,6 +285,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             file: null,
             sshProfileId: null,
             lead: false,
+            watched: false,
             embeds: [],
           },
         },
@@ -315,6 +320,7 @@ test("a files leaf round-trips its root — and needed NO new field or schema bu
     file: null,
     sshProfileId: null,
     lead: false,
+    watched: false,
     embeds: [],
   };
   const state: PersistedTabs = {
@@ -387,6 +393,7 @@ test("editor and git leaves round-trip their root — and the editor's open FILE
     file,
     sshProfileId: null,
     lead: false,
+    watched: false,
     embeds: [],
   });
   const state: PersistedTabs = {
@@ -525,6 +532,7 @@ test("malformed pane fields inside a valid leaf coerce to null, not a drop", () 
       file: null,
       sshProfileId: null,
       lead: false,
+      watched: false,
       embeds: [],
     },
   });
@@ -546,6 +554,7 @@ test("embed preferences ({view, side, share}), one per docked edge, round-trip t
     file: null,
     sshProfileId: null,
     lead: false,
+    watched: false,
     embeds: [
       { view: "group", side: "bottom", share: 0.42 },
       { view: "tasks", side: "left", share: 0.3 },
@@ -580,6 +589,7 @@ test("git and editor are valid embed views too (#361 scope increase), round-trip
     file: null,
     sshProfileId: null,
     lead: false,
+    watched: false,
     embeds: [
       { view: "git", side: "left", share: 0.35 },
       { view: "editor", side: "right", share: 0.4 },
@@ -614,6 +624,7 @@ test("the progress timeline (#608) is a valid embed view and round-trips like an
     file: null,
     sshProfileId: null,
     lead: false,
+    watched: false,
     embeds: [{ view: "timeline", side: "bottom", share: 0.45 }],
   };
   const state: PersistedTabs = {
@@ -893,6 +904,7 @@ test("an ssh leaf round-trips its connection + recorded session, and carries NO 
     file: null,
     sshProfileId: "prof-7",
     lead: false,
+    watched: false,
     embeds: [],
   };
   const state: PersistedTabs = {
@@ -1120,6 +1132,7 @@ test("a todo leaf round-trips, and its workspace root rides in cwd (#3263 S4)", 
     file: null,
     sshProfileId: null,
     lead: false,
+    watched: false,
     embeds: [],
   };
   const state: PersistedTabs = {
@@ -1154,6 +1167,7 @@ test("a ROOTLESS todo leaf survives, where a rootless content leaf is the unrest
     file: null,
     sshProfileId: null,
     lead: false,
+    watched: false,
     embeds: [],
   };
   const state: PersistedTabs = {
@@ -1241,3 +1255,121 @@ test("persistedKindFor puts todo on the content rung, not on the ladder below it
     "todo"
   );
 });
+
+// ---------- #3319: the human's watch ----------
+
+test("#3319: a watch rides the restore record — set, saved, and read back set", () => {
+  // AC3's "survives an app restart" half, at the layer that provides it: the
+  // flag is on the pane's own record, so encode -> decode returns it. The
+  // fixture watches ONE of two panes on purpose — a round-trip that set every
+  // pane's flag the same way would pass against an encoder that dropped the
+  // field and a decoder that defaulted it to that same value.
+  const watched: PersistedPane = { ...FILES_LEAF, name: "the one I care about", watched: true };
+  const unwatched: PersistedPane = { ...FILES_LEAF, name: "the other one", watched: false };
+  const state: PersistedTabs = {
+    tabs: [
+      {
+        name: "t",
+        color: null,
+        groupId: null,
+        layout: {
+          kind: "split",
+          dir: "row",
+          weight: 1,
+          children: [
+            { kind: "leaf", weight: 1, pane: watched },
+            { kind: "leaf", weight: 1, pane: unwatched },
+          ],
+        },
+      },
+    ],
+    activeIndex: 0,
+  };
+  const back = decodeTabs(encodeTabs(state));
+  const layout = back?.tabs[0].layout;
+  assert.ok(layout?.kind === "split");
+  const [a, b] = layout.children;
+  assert.ok(a.kind === "leaf" && b.kind === "leaf");
+  assert.equal(a.pane.watched, true, "the watched pane came back unwatched");
+  assert.equal(b.pane.watched, false, "an unwatched pane came back watched");
+});
+
+test("#3319: a pre-#3319 snapshot reads as unwatched, not as undefined", () => {
+  // Forward compatibility, and the direction that matters: every snapshot
+  // written before this feature has no `watched` key at all. It must decode to
+  // a real `false` — not `undefined` — because `Pane.capture()` writes the
+  // decoded value straight back out, and a record that round-tripped
+  // `undefined` would grow a key with no value in `tabs.json`.
+  const legacy = { ...FILES_LEAF } as Record<string, unknown>;
+  delete legacy.watched;
+  const state = {
+    tabs: [{ name: "t", color: null, groupId: null, layout: { kind: "leaf", weight: 1, pane: legacy } }],
+    activeIndex: 0,
+  };
+  const back = decodeTabs(JSON.stringify(state));
+  const leaf = back?.tabs[0].layout;
+  assert.ok(leaf?.kind === "leaf");
+  assert.equal(leaf.pane.watched, false);
+  assert.ok("watched" in leaf.pane, "the decoded record must CARRY the field, not merely lack it");
+});
+
+test("#3319: a malformed watch decodes off rather than on", () => {
+  // Default-OFF polarity, the same `lead` takes. A snapshot that invented a
+  // watch would put a violet bar on a pane nobody marked, and the human would
+  // have to hunt it down to clear it — there is no auto-clear by design.
+  for (const bad of ["true", 1, {}, null, "yes"]) {
+    const state = {
+      tabs: [
+        {
+          name: "t",
+          color: null,
+          groupId: null,
+          layout: { kind: "leaf", weight: 1, pane: { ...FILES_LEAF, watched: bad } },
+        },
+      ],
+      activeIndex: 0,
+    };
+    const back = decodeTabs(JSON.stringify(state));
+    const leaf = back?.tabs[0].layout;
+    assert.ok(leaf?.kind === "leaf");
+    assert.equal(leaf.pane.watched, false, `${JSON.stringify(bad)} decoded as a watch`);
+  }
+  // The positive control: the same fixture with a REAL `true` does come back
+  // watched, so the loop above is measuring the coercion and not a decoder
+  // that answers `false` to everything.
+  const good = {
+    tabs: [
+      {
+        name: "t",
+        color: null,
+        groupId: null,
+        layout: { kind: "leaf", weight: 1, pane: { ...FILES_LEAF, watched: true } },
+      },
+    ],
+    activeIndex: 0,
+  };
+  const leaf = decodeTabs(JSON.stringify(good))?.tabs[0].layout;
+  assert.ok(leaf?.kind === "leaf");
+  assert.equal(leaf.pane.watched, true);
+});
+
+/** A minimal, kind-agnostic leaf for the watch tests above. `files` because it
+ *  is the simplest kind with no launch state — and because the watch is NOT
+ *  gated on kind (`Pane.capture`), which a fixture built on an agent pane
+ *  would not have shown. */
+const FILES_LEAF: PersistedPane = {
+  paneKind: "files",
+  name: "loomux",
+  cwd: "C:/Projects/loomux",
+  command: null,
+  argv: null,
+  shellKind: null,
+  sessionId: null,
+  role: null,
+  groupId: null,
+  file: null,
+  sshProfileId: null,
+  lead: false,
+  watched: false,
+  embeds: [],
+};

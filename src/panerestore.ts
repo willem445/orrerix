@@ -1462,6 +1462,16 @@ export interface RestoreOpenStep {
   relativeTo: number | null;
   dir: "row" | "column";
   weights: number[];
+  /** The human's watch on this leaf (#3319), carried BESIDE the action rather
+   *  than inside it.
+   *
+   *  `RestoreAction` is a union of nine arms, every one of which describes how
+   *  to bring a pane BACK — what to spawn, what to resume, what to leave
+   *  dormant. A watch describes none of that: it is true or false of any arm,
+   *  it is applied to the pane after it exists, and threading it through all
+   *  nine would be nine chances to forget it for one fact that does not vary by
+   *  arm. It rides the step, which is already the per-leaf envelope. */
+  watched: boolean;
 }
 
 /** The pane at a subtree's entry (its leftmost leaf) — the one leaf a split's
@@ -1496,6 +1506,7 @@ export function planLayoutRestore(
       relativeTo: null,
       dir: "row",
       weights: entryWeightChain(layout),
+      watched: entryLeafPane(layout).watched,
     },
   ];
   const expand = (node: PersistedLayoutNode, anchorIndex: number): void => {
@@ -1514,6 +1525,7 @@ export function planLayoutRestore(
         relativeTo: prevAnchor,
         dir: node.dir,
         weights: entryWeightChain(node.children[i]),
+        watched: entryLeafPane(node.children[i]).watched,
       });
     }
     // Recurse to subdivide every child (a child that is itself a split gets its

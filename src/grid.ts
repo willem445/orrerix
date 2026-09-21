@@ -54,6 +54,7 @@ import { Pane, type PaneEvents, type PaneOptions, type ContentPaneOptions } from
 import type { PersistedPane } from "./tabstore";
 import { dropZoneFor, indicatorFor, zoneToPlacement, type DropZone } from "./layout";
 import { dockChipAttention } from "./attention";
+import { dockChipWatched } from "./watchedpanes";
 import { dockChipQueue, queuePresentation } from "./queuebadge";
 import { dockChipMail, mailboxPresentation } from "./mailboxbadge";
 import { planGroupMinimize } from "./group";
@@ -1097,6 +1098,17 @@ export class Grid {
       chip.classList.toggle("needs-attention", attn.needsAttention);
       chip.classList.toggle("urgent", attn.urgent);
       chip.title = attn.title;
+
+      // The human's watch (#3319). Minimizing a watched pane must not hide the
+      // mark — a docked pane is exactly the one you would forget. A CLASS, not
+      // a chip element: the dock is a narrow strip and the frame's own violet
+      // bar is what reads there, the same mark the pane wears un-minimized.
+      // The title is left to attention when attention has one, for the reason
+      // the channel badge below gives: the agent's ask is the more urgent of
+      // the two, and only one string fits.
+      const watch = dockChipWatched(pane.name, pane.watched);
+      chip.classList.toggle("watched", watch.watched);
+      if (!attn.needsAttention) chip.title = watch.title;
 
       // Cross-workspace channel membership (#271): a docked pane's header chip
       // is out of the DOM, so mirror it here too — else minimizing a connected

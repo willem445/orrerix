@@ -45,6 +45,7 @@ const pane = (over: Partial<PersistedPane>): PersistedPane => ({
   file: null,
   sshProfileId: null,
   lead: false,
+  watched: false,
   embeds: [],
   ...over,
 });
@@ -1625,6 +1626,7 @@ test("GUARDRAIL: a persisted ssh leaf can NEVER restore into an orchestration id
       name: "remote box",
       sshProfileId: "prof-1",
       lead: false,
+      watched: false,
       sessionId: "s-1",
       role: "worker",
       groupId: "loomux-deadbeef",
@@ -1655,6 +1657,7 @@ test("a recorded ssh command line is NOT carried into the restore action", () =>
       name: "box",
       sshProfileId: "p1",
       lead: false,
+      watched: false,
       command: "ssh host",
       argv: ["ssh", "-t", "host", "--", "claude --session-id s-1"],
     })

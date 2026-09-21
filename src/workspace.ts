@@ -160,7 +160,13 @@ export class Workspace implements ManagedWorkspace {
   /** Classify every pane in the tab (visible AND docked) for the per-tab agent
    *  counter / orchestration markers (#194 P4, tabcounts.ts). */
   paneInfos(): TabPaneInfo[] {
-    return this.grid.allPanes().map((p) => p.tabPaneInfo());
+    // The watch (#3319) is composed on HERE rather than inside
+    // `tabPaneInfo()`, which has three per-state return arms and answers a
+    // different question — what the pane IS and whether it is live. A watch is
+    // true of any of those states at once, so threading it through all three
+    // would be three chances to forget it for one fact that does not vary by
+    // arm.
+    return this.grid.allPanes().map((p) => ({ ...p.tabPaneInfo(), watched: p.watched }));
   }
 
   /** Any unsaved editor edits in this tab — visible panes AND docked ones (#217).

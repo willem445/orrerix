@@ -9317,6 +9317,26 @@ fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
     );
 }
 
+/// Tick until the drive reaches `gate-check`, and answer the clock the last
+/// tick ran at — so a caller can put its own tick strictly after it.
+///
+/// Bounded and asserting, never a silent give-up: how many ticks a one-lane gate
+/// takes is an implementation detail of the states between `review-wait` and the
+/// gate, and a test whose subject is the EXIT should not redden when that count
+/// moves. A drive that never gets there panics here rather than letting the
+/// caller measure a release at a step that is not the one it named.
+fn tick_to_gate_check(reg: &OrchRegistry, group: &GroupId, gh: &FakeGh, from_ms: u64) -> u64 {
+    let mut at = from_ms;
+    for _ in 0..8 {
+        reg.rd_drive_group_with(group, gh, at);
+        if status_state(reg, group) == "gate-check" {
+            return at;
+        }
+        at += 10_000;
+    }
+    panic!("the drive never reached gate-check; it is at {}", status_state(reg, group));
+}
+
 /// **A drive that never handed back still releases the worker pane at the
 /// satisfied exit** (#3250) — the drive shape the release rule could not see.
 ///
@@ -9357,6 +9377,10 @@ fn a_satisfied_drive_releases_the_worker_pane_it_never_handed_back_to() {
     // only reason the release barrier could take it at all.
     report_as(&reg, &group, &worker, Role::Worker, "done");
 
+    // A stable body digest, as the other gate fixtures take: a verdict binds to
+    // a revision AND a body, and a drive whose body digest moves under it never
+    // reaches the gate at all.
+    reg.set_pr_body_override(Some("b".to_string()));
     let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
     assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
     reg.rd_drive_group_with(&group, &gh, 10_000);
@@ -9369,12 +9393,10 @@ fn a_satisfied_drive_releases_the_worker_pane_it_never_handed_back_to() {
         .unwrap_or_else(|| panic!("the second tick opens the gate's lane: {opened:?}"));
     record_pass_for(&reg, &group, &lane);
     report_as(&reg, &group, &lane, Role::Reviewer, "done");
-    reg.rd_drive_group_with(&group, &gh, 30_000);
-    assert_eq!(
-        status_state(&reg, &group),
-        "gate-check",
-        "the fixture's premise: the drive is one tick short of satisfied"
-    );
+    // Ticked to the gate rather than counted to it: how many ticks a one-lane
+    // gate takes is not the axis under test, and pinning it here would make this
+    // test fail for a reason that has nothing to do with the release.
+    let at = tick_to_gate_check(&reg, &group, &gh, 30_000);
     assert!(
         reg.agent(&worker).is_some_and(|a| a.status != AgentStatus::Dead),
         "…and nothing before the exit has touched the worker pane"
@@ -9387,7 +9409,7 @@ fn a_satisfied_drive_releases_the_worker_pane_it_never_handed_back_to() {
         "…and the drive never handed back, which is the whole shape under test"
     );
 
-    let end = reg.rd_drive_group_with(&group, &gh, 40_000);
+    let end = reg.rd_drive_group_with(&group, &gh, at + 10_000);
     assert_eq!(status_state(&reg, &group), "satisfied");
 
     let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
@@ -9438,7 +9460,17 @@ fn a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit() {
     let worker = w.id.clone();
     with_pane(&reg, &worker, 41);
     let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    // Mid-turn through the product's own signal: `report` stamps
+    // `idle_since_ms` for `done`/`blocked` and CLEARS it for `progress`, which
+    // is the one word that says "still working". A fresh pane reads as idle, so
+    // without this the arm would be the positive case wearing the label of the
+    // negative one.
+    report_as(&reg, &group, &worker, Role::Worker, "progress");
 
+    // A stable body digest, as the other gate fixtures take: a verdict binds to
+    // a revision AND a body, and a drive whose body digest moves under it never
+    // reaches the gate at all.
+    reg.set_pr_body_override(Some("b".to_string()));
     let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
     assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
     reg.rd_drive_group_with(&group, &gh, 10_000);
@@ -9451,13 +9483,13 @@ fn a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit() {
         .unwrap_or_else(|| panic!("the second tick opens the gate's lane: {opened:?}"));
     record_pass_for(&reg, &group, &lane);
     report_as(&reg, &group, &lane, Role::Reviewer, "done");
-    reg.rd_drive_group_with(&group, &gh, 30_000);
+    let at = tick_to_gate_check(&reg, &group, &gh, 30_000);
     assert!(
         reg.agent(&worker).is_some_and(|a| a.idle_since_ms.is_none()),
-        "the fixture's premise: this pane has never reported, so it is mid-turn"
+        "the fixture's premise: this pane is mid-turn, so the barrier must refuse it"
     );
 
-    let end = reg.rd_drive_group_with(&group, &gh, 40_000);
+    let end = reg.rd_drive_group_with(&group, &gh, at + 10_000);
     assert_eq!(status_state(&reg, &group), "satisfied");
     assert!(
         end.released.iter().all(|(_, _, a)| *a != worker),

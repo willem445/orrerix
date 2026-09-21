@@ -577,6 +577,11 @@ pub fn decide(input: &Input<'_>, policy: &Policy) -> Decision {
     if !policy.covers(kind) {
         return Decision::Deliver(DeliverReason::KindNotTriaged);
     }
+    // SCRATCH MUTATION: the rule table below is bypassed, so the decision
+    // is the pre-feature behaviour -- deliver everything.
+    #[allow(unreachable_code)]
+    return Decision::Deliver(DeliverReason::NoRule);
+    #[allow(unreachable_code)]
     match kind {
         Kind::DriveGateSatisfied => match (input.merge_queue_enabled, pr_of(input.text)) {
             // The queue is the rule's justification, so no queue means no

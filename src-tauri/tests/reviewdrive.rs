@@ -9411,7 +9411,12 @@ fn a_satisfied_drive_releases_the_worker_pane_it_never_handed_back_to() {
     );
 
     let end = reg.rd_drive_group_with(&group, &gh, at + 10_000);
-    assert_eq!(status_state(&reg, &group), "satisfied");
+    // Read off the AUDIT, not the status: a satisfied drive is pruned on the
+    // same tick, so `status_state` answers "" for it rather than "satisfied".
+    assert!(
+        audit_actions(&reg, &group).contains(&"rd-satisfied".to_string()),
+        "the fixture's premise: this tick is the satisfied exit"
+    );
 
     let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
     assert_eq!(released, vec![worker.clone()], "the worker pane goes at the exit");
@@ -9492,7 +9497,12 @@ fn a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit() {
     );
 
     let end = reg.rd_drive_group_with(&group, &gh, at + 10_000);
-    assert_eq!(status_state(&reg, &group), "satisfied");
+    // Read off the AUDIT, not the status: a satisfied drive is pruned on the
+    // same tick, so `status_state` answers "" for it rather than "satisfied".
+    assert!(
+        audit_actions(&reg, &group).contains(&"rd-satisfied".to_string()),
+        "the fixture's premise: this tick is the satisfied exit"
+    );
     assert!(
         end.released.iter().all(|(_, _, a)| *a != worker),
         "a busy pane is not released: {:?}",

@@ -116,10 +116,12 @@ const PREFIX: &str = "[orrerix] ";
 /// A delivery's class, decided by the LEADING SHAPE of its text — first match
 /// wins, in the order [`classify`] tests them.
 ///
-/// The variants are `orch-scorecard.cjs`'s two tables unioned (`WAKE_SHAPES`
+/// The variants START from `orch-scorecard.cjs`'s two tables (`WAKE_SHAPES`
 /// plus `ORCH_PROMPT_SHAPES`), because the census this module implements used
 /// both: the scorecard splits "what woke it" from "what the drive cost it",
-/// and triage needs one table that names every row of #3304's Q1.
+/// and triage needs one table that names every row of #3304's Q1. It is **not
+/// their union** — the module header enumerates the four places this table and
+/// the scorecard's differ, and that list is the contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// `X reports progress …`
@@ -675,6 +677,16 @@ pub enum FlushCause {
     Deadline,
     /// [`MAX_DEFERRED`] entries accumulated.
     Full,
+    /// Triage was turned OFF (or its file stopped parsing) while this store
+    /// still held notices, so the feature hands back what it was holding.
+    ///
+    /// **Its own variant rather than a reuse of [`FlushCause::Deadline`]**
+    /// (review round 2): the cause is rendered into the frame a human-supervised
+    /// pane reads, and "flushed on the deferral deadline" is simply untrue of a
+    /// release that happened because the policy went away — often, as the test
+    /// pins, nowhere near the deadline. A wrong value on a user-facing surface
+    /// is a defect rather than a tidiness point.
+    PolicyOff,
 }
 
 impl FlushCause {
@@ -683,6 +695,7 @@ impl FlushCause {
             FlushCause::Wake => "wake",
             FlushCause::Deadline => "deadline",
             FlushCause::Full => "full",
+            FlushCause::PolicyOff => "policy-off",
         }
     }
 }
@@ -749,6 +762,7 @@ impl Deferred {
             FlushCause::Wake => "flushed because something did need you",
             FlushCause::Deadline => "flushed on the deferral deadline",
             FlushCause::Full => "flushed because the deferred store filled",
+            FlushCause::PolicyOff => "flushed because triage was turned off",
         };
         // The frame points at the audit log, NOT at `list_deferred()` (review
         // round 1, B1a): the store is emptied BEFORE this frame is delivered,
@@ -1207,6 +1221,44 @@ mod tests {
             !n.contains(&"é".repeat(200)),
             "the frame summarises rather than replaying the payload: {n}"
         );
+    }
+
+    #[test]
+    fn every_flush_cause_renders_its_own_clause() {
+        // Review round 2: `PolicyOff` reused `Deadline`'s variant, so a release
+        // caused by triage being switched off told the reader it had hit the
+        // deferral deadline — a wrong value on a surface a human reads. Pinned
+        // as a SET, so a fifth cause cannot quietly share a fourth's words.
+        let mut d = Deferred::default();
+        d.push(entry(0));
+        let clause = |c: FlushCause| {
+            let n = d.flush_notice(0, c).expect("one entry frames");
+            n.split(" (").nth(1).expect("the cause is parenthesised").to_string()
+        };
+        let got: Vec<(&str, String)> = [
+            FlushCause::Wake,
+            FlushCause::Deadline,
+            FlushCause::Full,
+            FlushCause::PolicyOff,
+        ]
+        .into_iter()
+        .map(|c| (c.as_str(), clause(c)))
+        .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("wake", "flushed because something did need you).".to_string()),
+                ("deadline", "flushed on the deferral deadline).".to_string()),
+                ("full", "flushed because the deferred store filled).".to_string()),
+                ("policy-off", "flushed because triage was turned off).".to_string()),
+            ]
+        );
+        // The wire spellings are distinct too — they land in an audit row.
+        let mut names: Vec<&str> = got.iter().map(|(n, _)| *n).collect();
+        names.sort_unstable();
+        let n = names.len();
+        names.dedup();
+        assert_eq!(names.len(), n, "two causes share a wire spelling");
     }
 
     #[test]

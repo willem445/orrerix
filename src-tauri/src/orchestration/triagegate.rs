@@ -392,9 +392,13 @@ impl OrchRegistry {
                 if store.is_empty() {
                     continue;
                 }
-                // Off: due NOW, whatever the clock says.
+                // Off: due NOW, whatever the clock says — and under its OWN
+                // cause (review round 2). The cause is rendered into the frame
+                // a human-supervised pane reads, and "flushed on the deferral
+                // deadline" is untrue of a release triggered by the policy
+                // going away, usually nowhere near that deadline.
                 let due = if disabled_with_stragglers {
-                    Some(triage::FlushCause::Deadline)
+                    Some(triage::FlushCause::PolicyOff)
                 } else {
                     store.due(now_ms, policy.max_defer_minutes)
                 };

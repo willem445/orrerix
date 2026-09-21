@@ -452,11 +452,17 @@ fn turning_triage_off_releases_what_it_was_holding() {
     let flushed = f.reg.triage_flush_tick(0);
     assert_eq!(flushed, vec![f.g.clone()], "the stragglers are handed back");
     assert_eq!(f.reg.deferred_list(&f.g)["count"], Value::from(0));
-    assert!(
-        f.prompts().iter().any(|t| t.starts_with("[orrerix] 1 notice deferred")),
-        "and they reach the pane: {:?}",
-        f.prompts()
-    );
+    // …and they reach the pane saying WHY, which is the half review round 2
+    // caught: the release reused the deadline's cause, so the frame told the
+    // reader it had hit `max_defer_minutes` when it was nowhere near it (the
+    // entry is seconds old and the default is 30 minutes).
+    let frame = f
+        .prompts()
+        .into_iter()
+        .find(|t| t.starts_with("[orrerix] 1 notice deferred"))
+        .expect("the frame reaches the pane");
+    assert!(frame.contains("flushed because triage was turned off"), "got: {frame}");
+    assert!(!frame.contains("deadline"), "the cause was the policy, not the clock: {frame}");
 }
 
 // ── what is NEVER held ──────────────────────────────────────────────────────

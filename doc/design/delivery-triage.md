@@ -187,6 +187,12 @@ answered `enabled: false, count: N` indefinitely. The flush tick now treats a
 non-empty store under a disabled policy as due immediately. Turning the feature
 off hands back what it is holding.
 
+It carries **its own `FlushCause`** (`policy-off`), not the deadline's (review
+round 2). The cause is rendered into the frame a human-supervised pane reads,
+and "flushed on the deferral deadline" is untrue of a release triggered by the
+policy going away — usually, as the test pins, nowhere near that deadline. A
+wrong value on a user-facing surface is a defect, not a tidiness point.
+
 **Nothing is ever dropped.** The store is written BEFORE the notice leaves the
 delivery path, and a write that fails DELIVERS: a deferral nobody recorded is a
 notice lost at the next restart, and losing one is worse than spending a wake.

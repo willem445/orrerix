@@ -1086,3 +1086,269 @@ fn the_store_is_a_sibling_of_the_other_data_root_singletons() {
     assert_eq!(todo_path_in(root), root.join("todo.json"));
 }
 
+
+// ==================== the command decoder (#3263 slice S3) ====================
+//
+// `parse_op` is the strict reader that stands between the webview and
+// `TodoOp`. Every message it produces is a contract `src/todo.ts` is written
+// against, so each refusal below is pinned by the text a human would see —
+// not merely by "it was an error".
+//
+// The two commands themselves (`todo_snapshot` / `todo_apply`) are `async
+// #[tauri::command]`s, so exercising them end to end needs an `AppHandle` and
+// a live registry. What is testable without one — and what actually carries
+// the risk — is the decoder plus the host path it hands its op to, which is
+// exactly what these drive. Their REGISTRATION is covered structurally
+// elsewhere: `tests/acl_manifest.rs` fails if either name is missing from
+// `generate_handler!`, from `command_manifest::APP_COMMANDS`, or from the
+// grants `capabilities/default.json` resolves through `permissions/sets/`.
+
+use loomux_lib::orchestration::todo::parse_op;
+use serde_json::json;
+
+/// The refusal message, or a panic naming what was expected to be refused.
+fn refusal(v: serde_json::Value, scope: Scope, what: &str) -> String {
+    match parse_op(&v, scope) {
+        Ok(_) => panic!("{what}: the decoder should have refused this op"),
+        Err(e) => e.to_string(),
+    }
+}
+
+#[test]
+fn a_quick_add_shaped_op_decodes_and_lands_in_the_store() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    let ws = Scope::Workspace("c:/projects/loomux".to_string());
+
+    // The exact JSON `src/todo.ts`'s `addTodo` sends for the quick-add line
+    // `pay rent fri 4pm #home !!`.
+    let op = parse_op(
+        &json!({"add": {
+            "title": "pay rent",
+            "due_ms": T0 + 86_400_000u64,
+            "tags": ["home"],
+            "priority": 2,
+            "important": true,
+            "my_day": T0,
+            "steps": ["find the landlord's email"],
+        }}),
+        ws.clone(),
+    )
+    .expect("a well-formed add should decode");
+
+    let applied = apply_to(&path, op, &human(), T0, Some(("c:/projects/loomux", "C:/Projects/loomux")))
+        .expect("the decoded op should apply");
+    let item = applied.item.expect("an add returns the item it made");
+
+    assert_eq!(item.title, "pay rent");
+    assert_eq!(item.due_ms, Some(T0 + 86_400_000));
+    assert_eq!(item.tags, vec!["home".to_string()]);
+    assert_eq!(item.priority, 2);
+    assert!(item.important);
+    assert_eq!(item.my_day, Some(T0));
+    assert_eq!(item.steps.len(), 1);
+    assert_eq!(
+        item.scope, ws,
+        "the scope comes from the command's workspace root, not from the op"
+    );
+
+    // And it is really on disk under that scope, which is what the pane reads.
+    let snap = snapshot_at(&path, Some(&ws));
+    assert_eq!(snap.items.len(), 1);
+    assert_eq!(snap.items[0].id, item.id);
+}
+
+#[test]
+fn a_misspelt_field_is_refused_rather_than_silently_dropped() {
+    // The whole reason this decoder is hand-written instead of derived: a
+    // derive accepts what it knows and ignores the rest, so `due` for `due_ms`
+    // would be a write that succeeds and does nothing.
+    let msg = refusal(
+        json!({"add": {"title": "pay rent", "due": 17}}),
+        Scope::Global,
+        "an add with a misspelt due field",
+    );
+    assert!(
+        msg.contains("\"due\"") && msg.contains("due_ms"),
+        "the refusal must name the offending key AND the accepted ones, got: {msg}"
+    );
+}
+
+#[test]
+fn a_caller_may_not_name_a_scope_at_all() {
+    // The workspace key is derived from the root the caller names; accepting a
+    // key from the caller would let a pane address a list it is not in.
+    let msg = refusal(
+        json!({"add": {"title": "x", "scope": {"workspace": "c:/somewhere/else"}}}),
+        Scope::Global,
+        "an add carrying its own scope",
+    );
+    assert!(
+        msg.contains("\"scope\""),
+        "the refusal must name `scope`, got: {msg}"
+    );
+}
+
+#[test]
+fn an_explicit_null_clears_a_due_date_and_an_absent_key_leaves_it() {
+    // The `Option<Option<u64>>` distinction, both arms, on ONE item — a
+    // non-interference pin whose two operands collide (CLAUDE.md): the update
+    // that must LEAVE the due date alone is the same field on the same item
+    // the other update CLEARS, so a decoder that folded the two onto "leave
+    // alone" fails the first assertion and one that folded them onto "clear"
+    // fails the second.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+
+    let op = parse_op(
+        &json!({"add": {"title": "renew the domain", "due_ms": T0 + 86_400_000u64}}),
+        Scope::Global,
+    )
+    .unwrap();
+    let id = apply_to(&path, op, &human(), T0, None)
+        .unwrap()
+        .item
+        .unwrap()
+        .id;
+
+    // Absent `due_ms`: leave it alone.
+    let op = parse_op(
+        &json!({"update": {"id": id, "title": "renew the domain (annual)"}}),
+        Scope::Global,
+    )
+    .unwrap();
+    let item = apply_to(&path, op, &human(), T0 + 1, None)
+        .unwrap()
+        .item
+        .unwrap();
+    assert_eq!(item.title, "renew the domain (annual)");
+    assert_eq!(
+        item.due_ms,
+        Some(T0 + 86_400_000),
+        "an absent key must leave the field alone"
+    );
+
+    // Explicit `null`: clear it.
+    let op = parse_op(&json!({"update": {"id": id, "due_ms": null}}), Scope::Global).unwrap();
+    let item = apply_to(&path, op, &human(), T0 + 2, None)
+        .unwrap()
+        .item
+        .unwrap();
+    assert_eq!(
+        item.due_ms, None,
+        "an explicit null must clear the field — the whole reason a derive would not do"
+    );
+    assert_eq!(
+        item.title, "renew the domain (annual)",
+        "and must leave every field it did not name alone"
+    );
+}
+
+#[test]
+fn an_op_naming_two_actions_or_none_is_refused() {
+    for (v, what) in [
+        (json!({}), "an empty op"),
+        (
+            json!({"add": {"title": "a"}, "delete": {"id": "td-1"}}),
+            "an op naming two actions",
+        ),
+        (json!({"archive": {"id": "td-1"}}), "an unknown action"),
+        (json!("delete"), "an op that is not an object"),
+    ] {
+        let msg = refusal(v, Scope::Global, what);
+        assert!(
+            msg.starts_with("refused: op "),
+            "{what} should be refused against the `op` field, got: {msg}"
+        );
+    }
+}
+
+#[test]
+fn a_timestamp_that_is_not_a_whole_non_negative_number_is_refused() {
+    // Truncating a float or wrapping a negative would put the item at a
+    // different instant than the caller meant, silently.
+    for (v, what) in [
+        (json!({"add": {"title": "a", "due_ms": 1.5}}), "a fractional due_ms"),
+        (json!({"add": {"title": "a", "due_ms": -1}}), "a negative due_ms"),
+        (
+            json!({"update": {"id": "td-1", "remind_ms": 2.5}}),
+            "a fractional remind_ms",
+        ),
+    ] {
+        let msg = refusal(v, Scope::Global, what);
+        assert!(
+            msg.contains("non-negative whole number"),
+            "{what} should say why, got: {msg}"
+        );
+    }
+}
+
+#[test]
+fn the_decoders_own_priority_range_matches_the_stores() {
+    // The decoder range-checks so the message names the field the CALLER sent.
+    // If this drifts above `PRIORITY_MAX` the store refuses anyway; if it
+    // drifts below, a legal priority becomes unreachable from the pane.
+    assert!(parse_op(
+        &json!({"add": {"title": "a", "priority": PRIORITY_MAX}}),
+        Scope::Global
+    )
+    .is_ok());
+    let msg = refusal(
+        json!({"add": {"title": "a", "priority": u64::from(PRIORITY_MAX) + 1}}),
+        Scope::Global,
+        "a priority one above the maximum",
+    );
+    assert!(
+        msg.contains(&format!("maximum of {PRIORITY_MAX}")),
+        "the refusal must name the maximum, got: {msg}"
+    );
+}
+
+#[test]
+fn order_after_takes_start_or_an_item_but_not_a_bare_id() {
+    // `null` already means "leave alone" on this wire, so "first in the list"
+    // needs a spelling of its own rather than being the absence of one.
+    match parse_op(
+        &json!({"update": {"id": "td-1", "order_after": "start"}}),
+        Scope::Global,
+    ) {
+        Ok(TodoOp::Update(u)) => assert!(matches!(u.order_after, Some(OrderAfter::Start))),
+        other => panic!("`\"start\"` should decode to OrderAfter::Start, got {other:?}"),
+    }
+    match parse_op(
+        &json!({"update": {"id": "td-1", "order_after": {"item": "td-2"}}}),
+        Scope::Global,
+    ) {
+        Ok(TodoOp::Update(u)) => {
+            assert!(matches!(u.order_after, Some(OrderAfter::Item(ref i)) if i == "td-2"))
+        }
+        other => panic!("an item object should decode to OrderAfter::Item, got {other:?}"),
+    }
+    let msg = refusal(
+        json!({"update": {"id": "td-1", "order_after": "td-2"}}),
+        Scope::Global,
+        "a bare id as order_after",
+    );
+    assert!(msg.contains("order_after"), "got: {msg}");
+}
+
+#[test]
+fn complete_defaults_to_done_and_delete_needs_its_id() {
+    match parse_op(&json!({"complete": {"id": "td-1"}}), Scope::Global) {
+        Ok(TodoOp::Complete { id, done }) => {
+            assert_eq!(id, "td-1");
+            assert!(done, "a bare complete means DONE — the space-bar path");
+        }
+        other => panic!("got {other:?}"),
+    }
+    match parse_op(&json!({"complete": {"id": "td-1", "done": false}}), Scope::Global) {
+        Ok(TodoOp::Complete { done, .. }) => assert!(!done, "un-completing must be expressible"),
+        other => panic!("got {other:?}"),
+    }
+    let msg = refusal(
+        json!({"delete": {}}),
+        Scope::Global,
+        "a delete with no id",
+    );
+    assert!(msg.contains("id is required"), "got: {msg}");
+}

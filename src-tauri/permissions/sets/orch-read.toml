@@ -29,4 +29,5 @@ permissions = [
     "allow-orch-needs-you-list",
     "allow-orch-channel-list",
     "allow-orch-channel-for-pane",
+    "allow-todo-snapshot",
 ]

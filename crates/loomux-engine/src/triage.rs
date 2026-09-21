@@ -545,6 +545,9 @@ pub fn plan_chunk(text: &str) -> Option<(u32, u32)> {
 /// single red run — the one delivery of the 65 that mattered — is caught by
 /// the conclusion, not by the branch.
 fn run_is_green(text: &str) -> bool {
+    // SCRATCH MUTATION (polarity).
+    #[allow(unreachable_code)]
+    return true;
     let lower = text.to_ascii_lowercase();
     match lower.find("conclusion: ") {
         Some(at) => lower[at + "conclusion: ".len()..].trim_start().starts_with("success"),
@@ -554,6 +557,9 @@ fn run_is_green(text: &str) -> bool {
 
 /// Does a `PR #N checks:` notice report a green result?
 fn checks_are_green(text: &str) -> bool {
+    // SCRATCH MUTATION (polarity).
+    #[allow(unreachable_code)]
+    return true;
     match text.find(" checks: ") {
         Some(at) => text[at + " checks: ".len()..].trim_start().starts_with("SUCCESS"),
         None => false,
@@ -578,7 +584,8 @@ pub fn decide(input: &Input<'_>, policy: &Policy) -> Decision {
         return Decision::Deliver(DeliverReason::KindNotTriaged);
     }
     match kind {
-        Kind::DriveGateSatisfied => match (input.merge_queue_enabled, pr_of(input.text)) {
+        // SCRATCH MUTATION (polarity): the queue-enabled condition dropped.
+        Kind::DriveGateSatisfied => match (true, pr_of(input.text)) {
             // The queue is the rule's justification, so no queue means no
             // rule — a satisfied gate on a repo that merges by hand is a
             // thing the orchestrator has to act on.

@@ -4655,6 +4655,33 @@ impl ReleaseReason {
 pub struct ReleaseCandidate {
     pub role: DrivenRole,
     pub reason: ReleaseReason,
+    /// **Whether the caller's population is the drive's SESSION rather than the
+    /// panes this drive resumed into** (#3250).
+    ///
+    /// [`DriveEntry::owned_panes`] names what the drive itself opened or took
+    /// over, and that set is EMPTY for a drive that never handed back — which
+    /// is the common shape, not a corner: an orchestrator starts a drive on a
+    /// worker that has already pushed and reported, every lane passes, and no
+    /// hand-back is ever taken. Measured on PRs #3243 and #3248, where the
+    /// audit log carries `rd-started` -> `rd-satisfied` with no `rd-handback`
+    /// row at all and the worker pane the orchestrator named at
+    /// `start_review_drive` was still alive and idle at the exit, holding the
+    /// worktree an orchestrator then had to `kill_agent` by hand.
+    ///
+    /// True for exactly one step — the SATISFIED exit — and that bound is the
+    /// argument, not caution. There the drive is over and its own notice tells
+    /// the orchestrator the conversation resumes with `spawn_agent(resume:)`,
+    /// so a live pane on that session is one nobody is going to speak to
+    /// again. Mid-drive it is a pane the drive never addressed and the
+    /// orchestrator may still be using, so [`ReleaseReason::ReportConsumed`]
+    /// keeps the #3208 population (every pane the drive OWNS on that session)
+    /// and this stays false.
+    ///
+    /// It widens only the POPULATION. Whether any one of those panes may go is
+    /// still the caller's barrier — idle, alive, bound to a terminal, not a
+    /// fixture role — asked per pane, so a busy pane is skipped here exactly as
+    /// a busy owned one is.
+    pub session_wide: bool,
 }
 
 /// **The panes this drive no longer needs, at this tick's facts and this tick's
@@ -4820,17 +4847,27 @@ pub fn releasable(
     // free the pane one tick before the drive stopped needing it, on a claim
     // (`report-consumed`) that was not yet true.
     let mut advancing = false;
+    // **The one step whose worker population is the SESSION** — see
+    // [`ReleaseCandidate::session_wide`], which carries the argument.
+    let mut satisfied = false;
     if let DriveStep::Advance { to, .. } = step {
         if to.is_parked() {
             return Vec::new();
         }
         terminal = to.is_terminal();
+        satisfied = *to == DriveState::Satisfied;
         advancing = true;
     }
     let mut out: Vec<ReleaseCandidate> = Vec::new();
     // Condition 3, first, so the list reads worker-first exactly as
     // `owned_panes` does.
-    if !entry.worker_agent.is_empty() {
+    // **The guard is "this drive has a worker side", not "this drive resumed a
+    // pane"** (#3250). Keying the whole condition on `worker_agent` made the
+    // terminal rule unreachable for every drive that never handed back — the
+    // exact drives the rule is most needed on, since a drive that DID hand back
+    // has usually released that pane on the report already. The session is what
+    // a drive always has: `drive_review` refuses without one (§5.1).
+    if !entry.worker_agent.is_empty() || !entry.worker_session.trim().is_empty() {
         if terminal {
             // The drive is over. The only thing that keeps its worker pane is a
             // round still outstanding — a `cancelled` that arrived while the
@@ -4840,15 +4877,18 @@ pub fn releasable(
                 out.push(ReleaseCandidate {
                     role: DrivenRole::Worker,
                     reason: ReleaseReason::DriveEnded,
+                    session_wide: satisfied,
                 });
             }
-        } else if advancing
+        } else if !entry.worker_agent.is_empty()
+            && advancing
             && entry.handback_outstanding()
             && facts.worker == WorkerSignal::Done
         {
             out.push(ReleaseCandidate {
                 role: DrivenRole::Worker,
                 reason: ReleaseReason::ReportConsumed,
+                session_wide: false,
             });
         }
     }
@@ -4870,6 +4910,7 @@ pub fn releasable(
         out.push(ReleaseCandidate {
             role: DrivenRole::Lane(l.block.clone()),
             reason: ReleaseReason::VerdictRecorded,
+            session_wide: false,
         });
     }
     // **Condition 4: the PR does not merge, so every open lane is reviewing a
@@ -4920,7 +4961,11 @@ pub fn releasable(
             if answered_here {
                 continue;
             }
-            out.push(ReleaseCandidate { role, reason: ReleaseReason::Conflict });
+            out.push(ReleaseCandidate {
+                role,
+                reason: ReleaseReason::Conflict,
+                session_wide: false,
+            });
         }
     }
     out
@@ -8841,9 +8886,24 @@ mod tests {
         let mut f = facts_at("h1");
         f.required_lanes = Some(vec![lane_fact("rev-std", Some(Verdict::Pass), "h0", "d1")]);
         let step = DriveStep::Advance { to: DriveState::Satisfied, held_reason: None, bump: None };
+        let got = releasable(&e, &f, &step);
         assert!(
-            releasable(&e, &f, &step).is_empty(),
-            "a stale verdict is stale at a terminal step too"
+            !got.iter().any(|c| matches!(c.role, DrivenRole::Lane(_))),
+            "a stale verdict is stale at a terminal step too: {got:?}"
+        );
+        // …and what IS proposed here is the worker side, on the session alone
+        // (#3250): this fixture never handed back, so `worker_agent` is empty
+        // and the pre-#3250 rule proposed nothing at all — which is the defect,
+        // measured as an idle worker pane surviving `rd-satisfied` on PRs #3243
+        // and #3248. The caller's barrier still decides per pane.
+        assert_eq!(
+            got,
+            vec![ReleaseCandidate {
+                role: DrivenRole::Worker,
+                reason: ReleaseReason::DriveEnded,
+                session_wide: true,
+            }],
+            "the satisfied exit asks about the worker session it was started on"
         );
 
         // The guard: cancelled while the worker still owes this drive a round.

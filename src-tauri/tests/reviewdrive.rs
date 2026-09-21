@@ -9317,6 +9317,163 @@ fn a_satisfied_tick_releases_its_panes_before_it_writes_the_satisfied_row() {
     );
 }
 
+/// **A drive that never handed back still releases the worker pane at the
+/// satisfied exit** (#3250) — the drive shape the release rule could not see.
+///
+/// The fixture is the ordinary one and that is the finding: an orchestrator
+/// starts a drive on a worker that has already pushed and reported, CI is green
+/// at that head, every required lane passes, and no hand-back is ever taken. So
+/// `worker_agent` is empty for the whole drive — it is only ever written by a
+/// hand-back — and `DriveEntry::owned_panes` names nothing on the worker side.
+/// The terminal rule was keyed on that field, so it proposed no candidate at
+/// all and the pane the orchestrator named at `start_review_drive` was still
+/// alive and idle when the drive wrote `rd-satisfied`.
+///
+/// Measured twice on the beta12 build: PR #3243 (`w-2739`) and PR #3248
+/// (`w-2747`), both `rd-started` -> `rd-satisfied` with no `rd-handback` and no
+/// `rd-worker-released` row, both ending with an orchestrator killing the pane
+/// by hand before `git worktree remove` would run.
+///
+/// **What this pins is the pane's FATE, not the candidate's existence** — the
+/// row, the death, the caller's own list, and the session surviving so the
+/// promise the exit notice makes still holds. The negative control is one test
+/// down: a pane the barrier refuses (busy) stays exactly where it is, and the
+/// widening here cannot reach past that barrier because it only widens the
+/// population the barrier is asked about.
+#[test]
+fn a_satisfied_drive_releases_the_worker_pane_it_never_handed_back_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let w = reg
+        .spawn_agent(&group, Role::Worker, "w", "", false, None)
+        .expect("the worker whose session the orchestrator is about to name");
+    let worker = w.id.clone();
+    with_pane(&reg, &worker, 41);
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+    // It has finished and said so: idle, alive, on that session — which is the
+    // only reason the release barrier could take it at all.
+    report_as(&reg, &group, &worker, Role::Worker, "done");
+
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    let opened = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let lane = opened
+        .lanes_opened
+        .first()
+        .cloned()
+        .map(|(_, _, a)| a)
+        .unwrap_or_else(|| panic!("the second tick opens the gate's lane: {opened:?}"));
+    record_pass_for(&reg, &group, &lane);
+    report_as(&reg, &group, &lane, Role::Reviewer, "done");
+    reg.rd_drive_group_with(&group, &gh, 30_000);
+    assert_eq!(
+        status_state(&reg, &group),
+        "gate-check",
+        "the fixture's premise: the drive is one tick short of satisfied"
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status != AgentStatus::Dead),
+        "…and nothing before the exit has touched the worker pane"
+    );
+    assert!(
+        drives_json(&reg, &group)["entries"][0]["worker_agent"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
+        "…and the drive never handed back, which is the whole shape under test"
+    );
+
+    let end = reg.rd_drive_group_with(&group, &gh, 40_000);
+    assert_eq!(status_state(&reg, &group), "satisfied");
+
+    let released: Vec<String> = end.released.iter().map(|(_, _, a)| a.clone()).collect();
+    assert_eq!(released, vec![worker.clone()], "the worker pane goes at the exit");
+    let rows = audit_details(&reg, &group, "rd-worker-released");
+    assert_eq!(rows.len(), 1, "one row per pane that actually went: {rows:?}");
+    assert_eq!(rows[0]["agent"], json!(worker), "…naming the pane: {:?}", rows[0]);
+    assert_eq!(rows[0]["reason"], json!("drive-ended"), "…and why: {:?}", rows[0]);
+    assert_eq!(
+        rows[0]["session"],
+        json!(session),
+        "…and the session it is released ONTO, which is what makes it resumable: {:?}",
+        rows[0]
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status == AgentStatus::Dead),
+        "the pane is really gone — a row without a death is the claim #2501 forbids"
+    );
+    let notice = end
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("a satisfied drive owes a notice: {:?}", end.notices));
+    assert!(!notice.contains(&worker), "a released pane is not named as still running: {notice}");
+    assert!(
+        notice.contains(&format!("worker session {session} resumes with spawn_agent(resume:)")),
+        "…and what replaces it is the handle that still works: {notice}"
+    );
+}
+
+/// **The barrier still decides, and a BUSY pane on the drive's session stays**
+/// (#3250) — the negative control for the widening above, and the one that says
+/// it widened a POPULATION rather than granting the driver a new kill.
+///
+/// Same fixture, one fact changed: the worker never reported, so it is mid-turn
+/// at the exit. `release_driven_pane` refuses a pane that is not idle, and the
+/// drive must then leave it alone and say nothing — a release row for a pane
+/// that is still running is exactly the false claim §5.4 asks a reader to be
+/// able to count on.
+#[test]
+fn a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let w = reg.spawn_agent(&group, Role::Worker, "w", "", false, None).expect("a worker");
+    let worker = w.id.clone();
+    with_pane(&reg, &worker, 41);
+    let session = w.session_id.clone().expect("claude mints a session id at spawn");
+
+    let out = reg.drive_review_with(&group, &gh, 1758, &session, false, 0, "orch-1", 0);
+    assert_eq!(out["driving"], json!(true), "drive_review refused: {out}");
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    let opened = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let lane = opened
+        .lanes_opened
+        .first()
+        .cloned()
+        .map(|(_, _, a)| a)
+        .unwrap_or_else(|| panic!("the second tick opens the gate's lane: {opened:?}"));
+    record_pass_for(&reg, &group, &lane);
+    report_as(&reg, &group, &lane, Role::Reviewer, "done");
+    reg.rd_drive_group_with(&group, &gh, 30_000);
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.idle_since_ms.is_none()),
+        "the fixture's premise: this pane has never reported, so it is mid-turn"
+    );
+
+    let end = reg.rd_drive_group_with(&group, &gh, 40_000);
+    assert_eq!(status_state(&reg, &group), "satisfied");
+    assert!(
+        end.released.iter().all(|(_, _, a)| *a != worker),
+        "a busy pane is not released: {:?}",
+        end.released
+    );
+    assert!(
+        audit_details(&reg, &group, "rd-worker-released").is_empty(),
+        "…and no row claims it was"
+    );
+    assert!(
+        reg.agent(&worker).is_some_and(|a| a.status != AgentStatus::Dead),
+        "…and it is still there for the orchestrator to speak to"
+    );
+}
+
 /// **A terminal release the BARRIER refuses leaves that pane exactly where it
 /// was — named in the notice, alive, and the orchestrator's** (#2811 S1) — the
 /// residual `releasable`'s doc discloses, pinned rather than described.
@@ -13184,11 +13341,17 @@ fn a_takeover_refused_by_a_full_queue_says_so_and_falls_through() {
 /// **Finding 3, pinned.** A superseded pane the release barrier SKIPS is never
 /// re-asked on a later tick.
 ///
-/// `releasable` gates its worker candidate on `!entry.worker_agent.is_empty()`,
-/// and the release that just happened cleared that field — so once the current
-/// pane goes, no later tick names the worker role again. A superseded pane that
-/// was mid-turn at the release tick therefore stays owned and counting against
-/// the cap until its own turn ends and the idle reaper takes it.
+/// `releasable` gates its NON-terminal worker candidate on
+/// `!entry.worker_agent.is_empty()`, and the release that just happened cleared
+/// that field — so no later tick of a LIVE drive names the worker role again. A
+/// superseded pane that was mid-turn at the release tick therefore stays owned
+/// and counting against the cap until its own turn ends and the idle reaper
+/// takes it.
+///
+/// Narrowed by #3250 at one end and no further: the SATISFIED exit now asks
+/// about every live pane on the session, so a pane still alive there is taken.
+/// This drive never reaches one — it is red at `HEAD_B` for every tick below —
+/// which is what keeps the window this pins a real one.
 ///
 /// **This pins the residual the design note now discloses, in the direction that
 /// can go quietly false.** The busy arm of

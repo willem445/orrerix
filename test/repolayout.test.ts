@@ -302,10 +302,26 @@ test("every self-referencing GitHub URL resolves to something in the tree", () =
 // rewording — and it is bounded by the rows being few and individually argued.
 // It also does not resolve URLs; the self-link guard above does that, and the
 // lookbehind deliberately excludes a `/` so `tree/main/doc/design` belongs to
-// that guard rather than to this one.
+// that guard rather than to this one. Relative prefixes (`./`, `../`) ARE this
+// guard's job and are matched; that gap was found in review, measured 6/6
+// green, and closed rather than left disclosed.
 
-/** `doc/` or `demo/` used as a path prefix, at a token boundary. */
-const RETIRED_CITATION = /(?<![A-Za-z0-9_.\-\/])(doc|demo)\//g;
+/**
+ * `doc/` or `demo/` used as a path prefix, at a token boundary, including
+ * through any number of leading `./` or `../` segments.
+ *
+ * Those relative prefixes are not decoration. Without them the pattern misses
+ * `](../doc/design/x.md)` — a dangling RELATIVE citation, which is the natural
+ * way one page under `docs/` links a sibling, and which was measured passing
+ * against BOTH guards before this was widened (#3316 review round 2: a whole
+ * suite green with a 404 link sitting in a published page).
+ *
+ * The lookbehind still excludes a bare `/`, so an absolute
+ * `…/tree/main/doc/design` is left to the self-link guard above, which
+ * RESOLVES it instead of pattern-matching it. The two guards partition the
+ * problem rather than overlapping on it.
+ */
+const RETIRED_CITATION = /(?<![A-Za-z0-9_.\-\/])(\.\.?\/)*(doc|demo)\//g;
 
 /**
  * Files permitted to name a retired root, with the reason each may.

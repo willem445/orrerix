@@ -202,6 +202,9 @@ Three things are worth knowing, because they are choices rather than gaps:
   dropped rather than shown when you open the pane, and several tasks coming
   due at the same moment arrive as **one** notice naming the first two and
   counting the rest — **Show first** opens the soonest.
+- **If the task is gone by the time you click Show, it says so.** An agent can
+  finish or archive something between the reminder and your click; you get a
+  line telling you which, and where to find it, rather than a jump to nothing.
 
 ## Undo
 

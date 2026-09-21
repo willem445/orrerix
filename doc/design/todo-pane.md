@@ -1016,6 +1016,22 @@ which selects the row, expands it, and moves the view if the row is not
 currently rendered. A toast whose button does nothing visible is the
 silently-dead control this note argues against everywhere else.
 
+**And "nothing" is a real answer, so it is said out loud.** The scan only ever
+creates a notice for an OPEN item — but the human clicks LATER, and an agent's
+`todo_complete` or `todo_archive` in that window moves the row out of every
+view. Show then had nothing to reveal and revealed it silently: filters
+cleared, All selected, `scrollIntoView` called on a selector matching nothing
+(#3301 review round 2). `planReveal` in `todoview.ts` is the decision, pure so
+it is testable without a DOM, and it answers one of three things — reveal
+(optionally naming a view to move to), `gone` (a delete; the only case the
+pane used to explain), or `left`, which distinguishes **done** from
+**archived** because the two have different answers for the human: a finished
+row is in Completed, an archived one needs the toggle there as well.
+
+It takes **no clock**, unlike everything else in these two modules. Its three
+questions are timeless, and a parameter kept for symmetry would be a claim that
+the decision can move at midnight.
+
 **That move does NOT become a preference.** The stored view is "what a fresh
 pane opens on", which the human sets by clicking the strip; jumping to All
 because a reminder fired is navigation the pane did on its own. Persisting it

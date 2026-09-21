@@ -14,6 +14,7 @@ import {
   decodeTodoPrefs,
   encodeTodoPrefs,
   moveSelection,
+  planReveal,
   projectPane,
   pruneDrafts,
   renderedRows,
@@ -22,7 +23,7 @@ import {
   seedRowDraft,
   type RowDraft,
 } from "../src/todoview.ts";
-import { SMART_VIEWS, type TodoItem } from "../src/todomodel.ts";
+import { SMART_VIEWS, inView, type TodoItem } from "../src/todomodel.ts";
 
 /** Wednesday 2024-05-15, 10:00 local — `todomodel.test.ts`'s own anchor. */
 const NOW = new Date(2024, 4, 15, 10, 0, 0, 0).getTime();
@@ -243,6 +244,104 @@ test("a fresh draft is seeded from the ITEM and is pristine — including one wi
  * TYPABLE loop, so forgetting to classify it reddens rather than exempts it.
  */
 const NON_TYPABLE: readonly (keyof RowDraft)[] = ["seededNotes"];
+
+test("planReveal: the row is on screen already, so Show changes no view", () => {
+  // Moving the view is itself a visible jump. Doing it when the row was
+  // already in front of the human is noise, so "reveal, view: null" is a
+  // distinct answer from "reveal, view: all".
+  const row = item({ id: "td-1", my_day: NOW });
+  const vm = projectPane({ items: [row], view: "myday", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(planReveal([row], "td-1", renderedRows(vm), NOW), {
+    kind: "reveal",
+    view: null,
+  });
+});
+
+test("planReveal: a reachable row the current view hides falls back to All", () => {
+  const hidden = item({ id: "td-1" });                 // open, but not in My Day
+  const shown = item({ id: "td-2", my_day: NOW });
+  const vm = projectPane(
+    { items: [hidden, shown], view: "myday", query: "", tagFilter: null },
+    NOW
+  );
+  assert.ok(
+    !renderedRows(vm).some((i) => i.id === "td-1"),
+    "precondition: the row is NOT on screen"
+  );
+  assert.deepEqual(planReveal([hidden, shown], "td-1", renderedRows(vm), NOW), {
+    kind: "reveal",
+    view: "all",
+  });
+});
+
+test("FAILURE CASE: a row COMPLETED between the notice and the click says so", () => {
+  // #3301 review round 2, finding 3. The scan skips done items, so a notice
+  // only exists for an open one — but the human clicks LATER, and an agent's
+  // `todo_complete` in that window moved the row out of every view. The pane
+  // used to clear the filters, fall back to All, select a row nothing rendered
+  // and scroll to a selector matching nothing: the toast dismissed and the
+  // screen did not change.
+  const done = item({ id: "td-1", status: "done", done_ms: NOW });
+  const vm = projectPane({ items: [done], view: "myday", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(planReveal([done], "td-1", renderedRows(vm), NOW), {
+    kind: "left",
+    why: "done",
+  });
+});
+
+test("FAILURE CASE: a row ARCHIVED between the notice and the click says which", () => {
+  // Distinguished from "done" on purpose: the two have different answers for
+  // the human. A finished row is in Completed; an archived one needs the
+  // toggle there as well.
+  const away = item({ id: "td-1", status: "done", done_ms: NOW, archived_ms: NOW });
+  const vm = projectPane({ items: [away], view: "completed", query: "", tagFilter: null }, NOW);
+  assert.deepEqual(planReveal([away], "td-1", renderedRows(vm), NOW), {
+    kind: "left",
+    why: "archived",
+  });
+  // An archived row that was never completed is still "archived", not "done" —
+  // the two checks are ordered, and this is the fixture that tells them apart.
+  const openAway = item({ id: "td-2", archived_ms: NOW });
+  assert.deepEqual(planReveal([openAway], "td-2", []), { kind: "left", why: "archived" });
+});
+
+test("FAILURE CASE: a row DELETED between the notice and the click is 'gone'", () => {
+  // The rarer case, and the only one the pane used to explain. A tombstone is
+  // absent from the snapshot entirely, so it reads as an unknown id.
+  assert.deepEqual(planReveal([], "td-1", []), { kind: "gone" });
+  assert.deepEqual(planReveal([item({ id: "td-other" })], "td-1", [], NOW), { kind: "gone" });
+});
+
+test("planReveal never answers 'reveal' for a row All would not hold", () => {
+  // The promise the fallback makes: it returns `all` only where `inView`
+  // agrees All contains the row. Driven over every item shape this module can
+  // build, so a later change to `inView` that drops a class reddens here
+  // rather than re-introducing the silent no-op one view over.
+  const shapes = [
+    item({ id: "a" }),
+    item({ id: "b", my_day: NOW }),
+    item({ id: "c", due_ms: NOW + 86400000 }),
+    item({ id: "d", important: true }),
+    item({ id: "e", status: "done", done_ms: NOW }),
+    item({ id: "f", archived_ms: NOW }),
+    item({ id: "g", status: "done", done_ms: NOW, archived_ms: NOW }),
+  ];
+  let revealed = 0;
+  for (const s of shapes) {
+    const plan = planReveal(shapes, s.id, []);
+    if (plan.kind !== "reveal") continue;
+    revealed += 1;
+    assert.notEqual(plan.view, null, "a row not on screen must name a view to move to");
+    assert.equal(
+      inView(s, plan.view as "all", NOW),
+      true,
+      `planReveal sent ${s.id} to a view that does not contain it`
+    );
+  }
+  // THE POSITIVE CONTROL. Without it this loop passes against a planReveal
+  // that never answers "reveal" at all.
+  assert.equal(revealed, 4, "the four open shapes must all be revealable");
+});
 
 test("the strip's counts are UNKNOWN until a snapshot has landed (#3293 round 6 residual 1)", () => {
   // "We have not looked" and "there is nothing" are different facts, and only

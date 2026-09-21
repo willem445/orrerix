@@ -28,6 +28,8 @@ import {
   SMART_VIEWS,
   groupPlanned,
   inView,
+  isArchived,
+  isDone,
   visibleItems,
   type PlannedBucket,
   type SmartView,
@@ -425,6 +427,78 @@ export function pruneDrafts(drafts: Map<string, RowDraft>, liveIds: ReadonlySet<
   for (const id of [...drafts.keys()]) {
     if (!liveIds.has(id)) drafts.delete(id);
   }
+}
+
+// ---------- revealing a row a toast pointed at ----------
+
+/**
+ * What the reminder toast's "Show" gesture can actually do.
+ *
+ * **Because the answer can be "nothing", and the pane used to do nothing
+ * silently** (#3301 review round 2, finding 3). A notice is created by a scan
+ * that skips done and archived items — but the human clicks it LATER, and an
+ * agent's `todo_complete` or `todo_archive` in that window moves the row out
+ * of every view. The pane then cleared the filters, fell back to All, set a
+ * selection nothing rendered and called `scrollIntoView` on a selector
+ * matching nothing: the toast dismissed and the screen did not change.
+ *
+ * Only an item that was GONE entirely got an explanation, which is the rarer
+ * case — a delete — while the likelier one, a row finished a minute ago, was
+ * the silent one.
+ *
+ * Pure, so the decision is testable without a DOM; `todopane.ts` owns only
+ * the toast and the scroll.
+ */
+export type RevealPlan =
+  /** The row is reachable. `view` is the view to move to, or null to stay. */
+  | { kind: "reveal"; view: SmartView | null }
+  /** No such item in this scope — deleted, or another list's. */
+  | { kind: "gone" }
+  /** The item is still here but has left every view since the notice. */
+  | { kind: "left"; why: "done" | "archived" };
+
+/**
+ * Decide what "Show" should do for `id`.
+ *
+ * `currentRendered` is what the pane is showing RIGHT NOW (the flattened
+ * projection). If the row is already on screen, no view change is needed —
+ * which matters because moving the view is itself a visible jump, and doing it
+ * when the row was already in front of the human is noise.
+ *
+ * The fallback is `all`, the view that holds every open item. It is returned
+ * rather than applied, so the caller decides whether that counts as a
+ * preference (it does not — see `todopane.ts`'s `setView(…, {persist: false})`).
+ *
+ * **No clock**, unlike every other function in this module and its sibling.
+ * The three questions it asks — is the item here, is it archived, is it done —
+ * are all timeless, and the one thing that would have needed a reading was the
+ * dead `inView` branch removed below. A parameter kept "because everything
+ * else takes one" would be a claim that this decision can move at midnight,
+ * which it cannot.
+ */
+export function planReveal(
+  items: readonly TodoItem[],
+  id: string,
+  currentRendered: readonly TodoItem[]
+): RevealPlan {
+  const item = items.find((i) => i.id === id);
+  if (item === undefined) return { kind: "gone" };
+  if (isArchived(item)) return { kind: "left", why: "archived" };
+  if (isDone(item)) return { kind: "left", why: "done" };
+  if (currentRendered.some((i) => i.id === id)) return { kind: "reveal", view: null };
+  // Reachable, but not on screen. All holds every open item, and the two
+  // guards above have already established this one is open — so the fallback
+  // is unconditional rather than re-asking `inView`.
+  //
+  // An earlier revision DID re-ask it (`inView(item, "all", nowMs) ? "all" :
+  // null`). That branch was unreachable, and a mutation run proved it: forcing
+  // the ternary to its true arm reddened NOTHING, which is what dead defensive
+  // code looks like from the outside. The property it was reaching for is
+  // pinned where it belongs instead — `planReveal never answers 'reveal' for a
+  // row All would not hold` asserts `inView` agrees, over every item shape
+  // this module can build, so an `inView` change that dropped a class from All
+  // reddens there rather than being silently absorbed here.
+  return { kind: "reveal", view: "all" };
 }
 
 // ---------- selection ----------

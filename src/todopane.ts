@@ -79,6 +79,7 @@ import {
   decodeTodoPrefs,
   encodeTodoPrefs,
   moveSelection,
+  planReveal,
   projectPane,
   pruneDrafts,
   renderedRows,
@@ -409,15 +410,32 @@ export class TodoPaneView {
    * the view falls back to `all`, which holds every open item.
    */
   private revealRow(id: string): void {
-    const item = this.itemById(id);
-    if (item === null) {
+    const nowMs = this.now();
+    // WHAT "SHOW" CAN ACTUALLY DO IS A DECISION, and it lives in `todoview.ts`
+    // so it is testable without a DOM. The answer is sometimes "nothing", and
+    // this used to BE nothing — silently (#3301 review round 2).
+    const plan = planReveal(this.items(), id, renderedRows(this.project(nowMs)));
+    if (plan.kind === "gone") {
       showToast("That to-do is no longer on this list.", "info");
+      return;
+    }
+    if (plan.kind === "left") {
+      // The likely case, and the one that was silent: an agent finished or
+      // archived the row between the notice and the click. Say which, because
+      // the two have different answers — a finished row is in Completed, an
+      // archived one needs the toggle there.
+      showToast(
+        plan.why === "done"
+          ? "That one was completed since the reminder — it is in Completed."
+          : "That one was archived since the reminder — turn on Show archived in Completed.",
+        "info"
+      );
       return;
     }
     this.query = "";
     this.tagFilter = null;
     this.searchOpen = false;
-    if (!renderedRows(this.project(this.now())).some((i) => i.id === id)) {
+    if (plan.view !== null) {
       // NOT PERSISTED (#3301 review round 1, rev-final). The stored view is
       // "what a fresh pane opens on" — a preference the human expressed by
       // clicking the strip. Jumping to All because a reminder fired is
@@ -425,7 +443,7 @@ export class TodoPaneView {
       // would let a notification silently redefine a setting: every pane
       // opened afterwards, in every window, would start on All because
       // something came due once while this one happened to be on Important.
-      this.setView("all", { persist: false });
+      this.setView(plan.view, { persist: false });
     }
     this.selected = id;
     this.expanded.add(id);

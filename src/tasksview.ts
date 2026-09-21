@@ -1483,8 +1483,8 @@ export class TasksView {
   /** Does this board paint LEVEL MARKS at all (#3261)?
    *
    *  Computed once per render rather than per row: it is a property of the
-   *  BOARD, and asking it inside `taskRow` would walk every row for every row.
-   *  Set by `render`, read by `taskRow`. */
+   *  BOARD, and asking it inside `renderTask` would walk every row for every
+   *  row. Set by `render` before any row is built, read by `renderTask`. */
   private boardMarksLevels = false;
 
   private render(): void {

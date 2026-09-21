@@ -24724,19 +24724,30 @@ fn gh_shim_audit_ts_junk_of_the_accept_width_reaches_the_rung() {
 
 /// #3259 item 3 — the hard-fail itself. A host that CANNOT resolve a `sh`
 /// must panic, naming the decision, never skip: `pin_could_not_arm`'s skip
-/// path is exactly the silent un-arming this closes, and no CI leg can
-/// produce the None case without going red — that is the point — so the
-/// panic arm is driven DIRECTLY, by feeding the None by hand.
+/// path is exactly the silent un-arming this closes. The None case is fed
+/// BY HAND (`ts_pin_sh_resolved`) because no CI leg can produce it without
+/// going red — that is the point. (Round 2 finding: the first cut of this
+/// pin called `ts_pin_sh` for the None case too, which on CI consults a
+/// host that HAS a sh and so never reached the guard — the fixed run reds
+/// on all three legs with exactly this panic, and the parameter split is
+/// what makes the guard's red reachable at all.)
 #[test]
 fn ts_pins_hard_fail_when_posix_sh_cannot_be_resolved() {
-    // Positive control: an ARMED host answers with a sh, never the panic —
-    // the guard really consults the resolution rather than always failing.
+    // Positive controls: an ARMED host answers with a sh, never the panic,
+    // through BOTH layers — the live one really consults the resolution,
+    // and the parameterized one passes Some through unchanged.
     let sh = ts_pin_sh("positive control");
     assert!(!sh.is_empty(), "an armed host's sh path is non-empty: {sh:?}");
+    assert_eq!(
+        ts_pin_sh_resolved("positive control", Some("/bin/sh".to_string())),
+        "/bin/sh",
+        "a Some resolution is passed through, not second-guessed"
+    );
     // The guard: None → panic (caught here; a panic that ESCAPED would be
     // a legitimate red on a genuinely sh-less host).
-    let outcome =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ts_pin_sh("sh-less host")));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ts_pin_sh_resolved("sh-less host", None)
+    }));
     let Err(payload) = outcome else {
         panic!(
             "ts_pin_sh skipped instead of hard-failing on a sh-less host — the \
@@ -26262,7 +26273,14 @@ fn any_posix_sh() -> Option<String> {
 /// `pin_could_not_arm`. Pinned by
 /// `ts_pins_hard_fail_when_posix_sh_cannot_be_resolved`.
 fn ts_pin_sh(test: &str) -> String {
-    match any_posix_sh() {
+    ts_pin_sh_resolved(test, any_posix_sh())
+}
+
+/// `ts_pin_sh` with the resolution as a PARAMETER, so the None case is
+/// drivable: no CI leg can produce it without going red — that is the
+/// point — so the pin feeds the None by hand.
+fn ts_pin_sh_resolved(test: &str, sh: Option<String>) -> String {
+    match sh {
         Some(sh) => sh,
         None => panic!(
             "{test}: no POSIX sh on this host — the ts behavioural pins MUST arm \

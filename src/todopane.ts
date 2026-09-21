@@ -690,17 +690,38 @@ export class TodoPaneView {
   private list(vm: PaneProjection, nowMs: number): HTMLElement {
     const list = el("div", { class: "tdp-list", role: "list" });
     if (vm.empty) {
-      // In an empty view the quick-add IS the empty state (DESIGN.md §4), so
-      // this points at it rather than drawing a picture.
+      // "NOTHING HERE" AND "NOTHING YET" ARE DIFFERENT FACTS, and only one of
+      // them is safe to assert (#3293 review round 4, premortem 1).
+      //
+      // `this.snapshot === null` means no read has landed for the scope we are
+      // on — the state `setScope` deliberately creates so the previous scope's
+      // rows cannot paint under the new header. In that frame the view-model is
+      // empty because we have not LOOKED, not because the list is. Saying
+      // "Nothing for today — add one, or pull from Planned" there is a sentence
+      // about a list nobody has read, and it is false whenever that list has
+      // rows. It is normally one frame; on a slow backend it is however long
+      // the read takes, and the slower it gets the longer the pane lies.
+      //
+      // So the empty STATE is only claimed once a snapshot exists. This is the
+      // same rule the pane already follows on the read path, where a failed
+      // read keeps the list it had rather than publishing an emptiness it
+      // cannot vouch for.
+      const loading = this.snapshot === null;
       list.append(
         el(
           "div",
           { class: "tdp-empty" },
-          el("p", { class: "tdp-empty-text", text: EMPTY_TEXT[vm.emptyReason] }),
           el("p", {
-            class: "tdp-empty-hint",
-            text: "Press n to add · / to search · 1-5 to switch view",
-          })
+            class: "tdp-empty-text",
+            text: loading ? "Loading…" : EMPTY_TEXT[vm.emptyReason],
+          }),
+          // The hint is about the keyboard, not about the list, so it is true
+          // either way — but it is noise under a one-frame "Loading…".
+          !loading &&
+            el("p", {
+              class: "tdp-empty-hint",
+              text: "Press n to add · / to search · 1-5 to switch view",
+            })
         )
       );
       return list;

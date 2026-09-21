@@ -67,7 +67,7 @@ would close it belongs with the primitive, not with this one caller.
 | absent (first run) | empty store | allowed — this is how the file is created |
 | present, unreadable (permissions, a directory in its place) | empty store, `readable: false` | **refused** |
 | not JSON, or JSON of the wrong shape | quarantined to `todo.corrupt.json`, empty store | allowed — the evidence is already safe under its own name |
-| …and the quarantine rename itself failed | empty store, `readable: false` | **refused** — nothing was preserved, so nothing may be overwritten |
+| …and the quarantine rename itself failed | empty store, `readable: false`, `quarantine_failed: true` | **refused** — nothing was preserved, so nothing may be overwritten |
 | `version` greater than `CURRENT_VERSION` | the items, as written | **refused** |
 
 The first and third rows are what `uistate` already does. Two things about the
@@ -84,6 +84,32 @@ to `uistate::load_or_quarantine`:
   "is it JSON at all", because the webview owns those schemas and validates
   them itself. This is the one blob whose schema the backend owns, so a valid
   document that is not a `TodoStore` earns the same rename a torn file does.
+
+The last two rows both answer `readable: false` and they are **not the same
+event**, so they do not share a message. "exists but could not be read" is the
+third row; the fourth says "is corrupt and could not be quarantined", because
+those bytes read perfectly well and what failed was moving them aside — and the
+human reading the decline is deciding which file to go and look at.
+
+**The quarantine RENAME is under the write lock**, which is why `load_store`
+takes a `TodoWriteGuard` rather than trusting a comment. A snapshot that
+renamed without it could move a store a concurrent write had just published:
+a reader finds corrupt bytes and decides to quarantine; a writer, under the
+lock, quarantines first and writes a fresh list; the reader's rename then
+lands on THAT file. Every syscall succeeds and nothing reports a thing. The
+token is the compiler's proof, not a scan's: there is no way to obtain one
+without the lock, so the unserialised call cannot be written (CLAUDE.md's
+preference for the type system over a source-scanning guard).
+
+**Within one process, and that qualifier is a residual rather than a caveat.**
+`TODO_WRITE_LOCK` is a process-local `Mutex`, so two app instances — or the
+`loomux-server` daemon (`doc/design/remote-engine-daemon.md`) — against one
+data root interleave exactly as the paragraph above describes, and no test in
+this repo can see it. Pre-existing rather than introduced, and written down
+because a note claiming the race is closed *full stop* would be the next false
+claim on this surface. Closing it needs a lock the filesystem holds, which
+belongs with `fsatomic`'s primitive and not with this one caller — the same
+place the torn-file window above is left.
 
 **A newer store is read-only, not quarantined.** A store written by a future
 build is not damaged, it is *ahead*. It parses (every field is
@@ -121,12 +147,18 @@ existed does, so a caller cannot probe for what it may not see. The next write
 30 days later drops it. That is what makes the human's undo possible and an
 agent's `todo_delete` recoverable.
 
-**Caps refuse; they never truncate.** Title 500 chars, notes 20 KB, 20 tags,
-100 steps, 5 000 live items per scope. A runaway agent loop is the shape being
-bounded, and a truncated title is a silent data loss the human finds weeks
-later, where a refusal is a message the agent can act on now and an audit row
-the human can find. Every check runs *before* anything is mutated, so a refused
-write leaves the store byte-identical — including `rev`.
+**Caps refuse; they never truncate.** Title 500 chars, notes 20 KB, 20 tags of
+100 bytes each, 100 steps, 5 000 live items per scope. A runaway agent loop is
+the shape being bounded, and a truncated title is a silent data loss the human
+finds weeks later, where a refusal is a message the agent can act on now and an
+audit row the human can find. Every check runs *before* anything is mutated, so
+a refused write leaves the store byte-identical — including `rev`.
+
+The tag list carries **two** bounds because one of them is not a bound on
+anything a count can see: `TAGS_MAX` says how many tags, `TAG_BYTES_MAX` how
+big each one may be. With only the first, twenty tags of a megabyte apiece
+passed every check the store had. Bytes rather than chars, because what is
+being defended is the file.
 
 **Ordering** is an integer `order` with gaps of 1024 per scope, re-spaced when
 two live items collide. A drag or an `Alt+↑` is then one field write rather
@@ -137,6 +169,53 @@ than a rewrite of the list.
 getrandom-based crate from the shipped binary. Each minted id is put through
 `pathseg::check_segment` — it never becomes a path today, and validating it
 costs one line and keeps per-item attachments possible later.
+
+## The ops
+
+Every mutation the store accepts, and what each one refuses. The table is the
+contract both writers share — the pane's `todo_apply` decoder (below) and the
+MCP tools (S2) each parse their own JSON onto these, and neither may invent an
+op the engine does not have.
+
+| op | does | refuses |
+|---|---|---|
+| `add` | mints an item in the **command's** scope | empty or over-cap title; over-cap notes, tag count, tag, or step count; priority out of range; the scope already holding `ITEMS_MAX` live items |
+| `update` | writes the fields it names, and only those | unknown or tombstoned id; an `if_rev` that does not match; any cap or range above |
+| `complete` | sets or clears `status` and `done_ms`; steps untouched | unknown or tombstoned id |
+| `delete` | writes a `deleted_ms` tombstone | unknown or already-tombstoned id |
+| `restore` | clears the tombstone, putting the row back where it was | unknown id; a tombstone the purge window has passed (as **unknown**, not as its own error); an item that is already live; a scope already at `ITEMS_MAX` |
+
+**`restore` is what makes a soft delete an inverse** rather than a
+one-way door. Without it `apply` treats a tombstone as unknown, so nothing —
+not the pane's undo, not an agent correcting its own `todo_delete` — could put
+a row back; the file kept the data for 30 days and no op could reach it. The
+three refusals each answer a different question:
+
+* **past the purge window** answers `unknown todo: <id>`, the same as an id
+  that never existed. That is deliberate and not laziness: the row is one this
+  build has already undertaken to drop — the very next write drops it — so
+  reviving it would hand back data the store no longer guarantees is intact.
+  It also keeps the "a deleted id reads exactly as one that never existed"
+  rule true for every id a caller can still address.
+* **an item that is live** answers `refused: restore <id> is not deleted`. A
+  restore that quietly did nothing is indistinguishable from one that worked,
+  and the caller asked precisely because it did not know.
+* **a full scope** answers the same `ITEMS_MAX` cap an `add` hits. A restore
+  puts a LIVE item into a scope exactly as an add does, and a cap only one of
+  the two doors respects is not a cap — an agent refused at `add` could
+  otherwise delete-and-restore its way past it.
+
+The undo *path* is still S5's: `inverseOp` in `src/todomodel.ts` refuses to
+invert a delete and says so, and wiring it to this op is the work that remains.
+What changed is that the op it needs now exists.
+
+**`restore` is the one op with no MCP tool**, and that is a fact about
+ordering rather than a decision anyone made: S2 shipped its six tools while
+`restore` did not yet exist. An agent therefore cannot undo its own
+`todo_delete`, which is the case the op was added for. Adding a seventh tool
+is a capability decision with its own default-deny gates to argue through —
+see "No seventh tool" below, which now carries it.
+
 
 ## Workspace identity
 
@@ -186,10 +265,11 @@ in-memory table with an order to respect — acquired through
 `todo_apply` writes the audit row on the **caller's** group, so an agent's edit
 to the *global* list is still findable in the audit of the group whose agent
 made it. Actions are `todo-add` / `todo-update` / `todo-complete` /
-`todo-delete`, and a refusal is audited as `todo-refused` with the reason — a
-cap that bounces a runaway loop is exactly the event the human needs to find
-afterwards. A pane with no group writes no row: there is no group audit log to
-write to, and the item's own `updated_by` still records who did it.
+`todo-delete` / `todo-restore`, and a refusal is audited as `todo-refused` with
+the reason — a cap that bounces a runaway loop is exactly the event the human
+needs to find afterwards. A pane with no group writes no row: there is no group
+audit log to write to, and the item's own `updated_by` still records who did
+it.
 
 ## The two commands, and the `todo-changed` event
 
@@ -257,6 +337,7 @@ omitted:
 {"update":   {"id": "td-...", "if_rev": 3, "due_ms": null}}
 {"complete": {"id": "td-...", "done": true}}
 {"delete":   {"id": "td-..."}}
+{"restore":  {"id": "td-..."}}
 ```
 
 `order_after` takes `"start"` or `{"item": "<id>"}` rather than a nullable id,
@@ -334,11 +415,12 @@ the time an undo runs.
 Three cases have no honest inverse today and each says so instead of shipping a
 button that silently does nothing:
 
-* **a delete.** The store's delete is a soft tombstone, but the op set S1
-  shipped has no RESTORE: `apply` treats a tombstoned item as unknown, so an
-  update aimed at it is refused. The plan's "soft delete makes every op
-  invertible" is therefore not yet true — undoing a delete needs a new engine
-  op, and that is S5's to add.
+* **a delete.** The store's delete is a soft tombstone, and the engine now has
+  the `restore` op that inverts one (see "The ops" above, added by #3285) —
+  but `inverseOp` does not yet emit it, so today it still refuses. The barrier
+  is the frontend `TodoOp` type and a caller, not the backend decoder, which
+  already accepts the op. Wiring it is S5's; what is no longer true
+  is the reason this bullet used to give, that the op did not exist.
 * **no `before` snapshot.** Without it the pane cannot know what to restore,
   and a best-effort guess is how an undo quietly writes the wrong value.
 * **an update that named no field.** There is nothing to put back.
@@ -480,3 +562,14 @@ Grooming — re-titling, re-prioritising, due dates, notes, tags, splitting work
 into steps — is `todo_update` plus `todo_add`. A "split" tool would be a second
 way to add an item, and two ways to create one row is two shapes to keep in
 step.
+
+**That argument is about a split tool, and #3285 opened a different question**
+the heading should not be read as having closed. The engine now has a seventh
+op, `restore` (see "The ops"), and no tool reaches it — so an agent cannot
+undo its own `todo_delete`, which is precisely what a soft tombstone was for.
+Unlike a split tool this one would NOT be a second way to do anything: it is
+the only way to reach an op nothing else can. It is left unbuilt because a new
+shared-tier tool has to be named in `MANAGER_SHARED`, `LEAD_SHARED` and both
+dispatch gates — the default-deny pairs above — and that is a capability
+argument a store-hardening slice should not make on its own. Whoever takes it
+should also decide whether an agent may revive a row a human deleted.

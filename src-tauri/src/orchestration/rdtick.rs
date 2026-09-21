@@ -3827,41 +3827,16 @@ impl OrchRegistry {
             //
             // Ordered oldest-first, which is `owned_panes`'s own order, so the
             // audit rows read as the history they are.
-            //
-            // **And at the SATISFIED exit the population is the SESSION**
-            // (#3250) — every live pane on it, not only the panes this drive
-            // opened or took over. `owned_panes` is EMPTY for a drive that
-            // never handed back, which is not a corner: on PRs #3243 and #3248
-            // the audit log runs `rd-started` -> `rd-satisfied` with no
-            // `rd-handback` row at all, and the worker pane the orchestrator
-            // named at `start_review_drive` sat idle through the exit holding
-            // its worktree. `ReleaseCandidate::session_wide` carries the
-            // decision and the bound — it is the engine's to make, so this
-            // reads the flag rather than re-deriving the step.
-            //
-            // Still nothing here decides WHETHER a pane may go: the barrier is
-            // applied per pane below, unchanged, so a session pane that is busy
-            // or not a driven delegate's role is skipped exactly as an owned
-            // one is. What widens is only the population the barrier is asked
-            // about — and duplicates are filtered, so a pane that is both owned
-            // and on the session is asked about once and audited once.
             let (agents, session) = match &cand.role {
-                reviewdrive::DrivenRole::Worker => {
-                    let mut agents: Vec<String> = entry
+                reviewdrive::DrivenRole::Worker => (
+                    entry
                         .owned_panes()
                         .into_iter()
                         .filter(|(_, role)| *role == reviewdrive::DrivenRole::Worker)
                         .map(|(agent, _)| agent)
-                        .collect();
-                    if cand.session_wide {
-                        for a in self.live_panes_on_session(group, &entry.worker_session) {
-                            if !agents.contains(&a) {
-                                agents.push(a);
-                            }
-                        }
-                    }
-                    (agents, entry.worker_session.clone())
-                }
+                        .collect::<Vec<String>>(),
+                    entry.worker_session.clone(),
+                ),
                 reviewdrive::DrivenRole::Lane(block) => {
                     let rec = entry.lane(block);
                     let agent = rec.map(|r| r.agent.clone()).unwrap_or_default();

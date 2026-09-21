@@ -49804,46 +49804,6 @@ impl OrchRegistry {
         ReusablePane { agent: None, declined }
     }
 
-    /// **Every live pane in `group` sitting on `session`, oldest first** — the
-    /// population a satisfied drive's worker release is asked about (#3250).
-    ///
-    /// The plural of [`Self::live_pane_on_session`] minus its block filter, and
-    /// the filter is dropped for the opposite reason to the one that keeps it
-    /// there. That function picks a pane to TYPE INTO, where the wrong block is
-    /// the wrong persona on the wrong model (#1961); this one only proposes
-    /// panes to a barrier that then refuses everything that is not idle, alive,
-    /// terminal-bound and a driven delegate's role. A pane on this drive's
-    /// worker session under some other block is still a pane on the
-    /// conversation the drive has just finished with.
-    ///
-    /// An empty `session` answers nothing rather than matching every agent that
-    /// has none — the fail-closed direction, and the one a drive record with a
-    /// blank session would otherwise take straight through the barrier.
-    ///
-    /// Ordered `(started_ms, id)` ascending so the audit rows read as the
-    /// history they are, with the same tiebreak as its singular twin: two panes
-    /// registered inside one wall-clock millisecond would otherwise be ordered
-    /// by `HashMap` iteration order, differently between runs.
-    fn live_panes_on_session(&self, group: &GroupId, session: &str) -> Vec<String> {
-        if session.trim().is_empty() {
-            return Vec::new();
-        }
-        let mut panes: Vec<(u64, String)> = self
-            .agents
-            .lock_safe()
-            .values()
-            .filter(|a| {
-                a.group == *group
-                    && a.status != AgentStatus::Dead
-                    && a.session_id.as_deref() == Some(session)
-                    && a.pty_id.is_some()
-            })
-            .map(|a| (a.started_ms, a.id.clone()))
-            .collect();
-        panes.sort_by(|x, y| (x.0, &x.1).cmp(&(y.0, &y.1)));
-        panes.into_iter().map(|(_started, id)| id).collect()
-    }
-
     /// The newest **live** pane in `group` running `session` under `block` —
     /// what a hand-back TAKES OVER when `idle_pane_on_session` found nothing
     /// eligible to reuse (#3203).

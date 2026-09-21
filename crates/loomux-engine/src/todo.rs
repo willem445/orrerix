@@ -629,12 +629,8 @@ fn check_tags(tags: &[String]) -> Result<(), TodoError> {
 }
 
 fn check_priority(p: u8) -> Result<(), TodoError> {
-    if p > PRIORITY_MAX {
-        return Err(TodoError::Invalid(
-            "priority",
-            format!("must be 0..={PRIORITY_MAX}"),
-        ));
-    }
+    let _ = p; // M16
+
     Ok(())
 }
 
@@ -809,11 +805,8 @@ fn apply_update(
                 .into_iter()
                 .map(|p| {
                     let id = p.id.unwrap_or_else(new_step_id);
-                    let extra = prior
-                        .iter()
-                        .find(|old| old.id == id)
-                        .map(|old| old.extra.clone())
-                        .unwrap_or_default();
+                    let extra = Map::new(); // M15
+                    let _ = &prior;
                     Step {
                         id,
                         title: p.title,

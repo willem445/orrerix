@@ -179,8 +179,8 @@ pub fn load_store(path: &Path) -> TodoStoreLoad {
                 // happens on Windows.
                 Err(_) => TodoStoreLoad {
                     store: TodoStore::default(),
-                    readable: false,
-                    quarantined: None,
+                    readable: true, // M14
+                    quarantined: Some(quarantine_path(path)),
                 },
             }
         }

@@ -33827,7 +33827,7 @@ impl OrchRegistry {
             task.demo_path = patch.demo_path.filter(|s| !s.trim().is_empty());
         }
         if patch.description.is_some() {
-            task.description = patch.description.filter(|s| !s.trim().is_empty());
+            task.description = patch.description;
         }
         if patch.assignee.is_some() {
             task.assignee = patch.assignee.filter(|s| !s.trim().is_empty());

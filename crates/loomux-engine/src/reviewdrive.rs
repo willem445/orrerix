@@ -4722,7 +4722,7 @@ pub struct ReleaseCandidate {
     /// panes it OWNS at both, so the two exits differing in population was the
     /// same defect one state over rather than a deliberate narrowing (review
     /// round 1, finding 1). Mid-drive the pane may be one the orchestrator is
-    /// still using, so [`ReleaseReason::ReportConsumed`] keeps the #3208
+    /// still using, so [`ReleaseReason::ReportConsumed`] keeps the #3203
     /// population (every pane the drive OWNS on that session) and this stays
     /// false.
     ///
@@ -4758,11 +4758,24 @@ pub struct ReleaseCandidate {
 /// - **an empty id**, which names no pane.
 /// - **`already`** — the panes the drive OWNS, already in the population. One
 ///   pane, one barrier question, one audit row.
-/// - **`owned_elsewhere`** — every pane any OTHER live drive's record names.
-///   `already-driven` is keyed on the PR and not on the session, so one worker
-///   session may legally back two driven PRs, and a pane the other drive owns
-///   is a pane it is going to speak to again — the exact claim this release
-///   rests on, broken by the release itself (review round 1, finding 1).
+/// - **`owned_elsewhere`** — the panes any OTHER live drive OWNS, which is that
+///   drive's [`owned_panes`](DriveEntry::owned_panes) and nothing else: the
+///   panes it opened, took over or superseded. `already-driven` is keyed on the
+///   PR and not on the session, so one worker session may legally back two
+///   driven PRs, and a pane the other drive owns is a pane it is going to speak
+///   to again — the exact claim this release rests on, broken by the release
+///   itself (review round 1, finding 1).
+///
+///   **It does NOT cover the other drive's own founding list, and that is a
+///   stated residual rather than an oversight** (review round 2). Two drives
+///   started on one session name the same founding pane, so each considers it
+///   its own and whichever reaches a terminal step first releases it. Excluding
+///   it on both sides would trade that for a pane neither drive ever releases —
+///   the leak this issue is about — so the release is left where it is and the
+///   consequence is written down: the other drive's next hand-back re-opens the
+///   conversation with `spawn_agent(resume:)`, which is the recovery the whole
+///   release rests on and is exactly what it would have done for a pane the
+///   human had killed.
 ///
 /// **Deliberately NOT a comparison of timestamps.** The first draft admitted a
 /// session pane if it was older than the drive, which reads well and is
@@ -4779,6 +4792,43 @@ pub fn admit_session_pane(
     !agent.trim().is_empty()
         && !already.iter().any(|a| a == agent)
         && !owned_elsewhere.iter().any(|a| a == agent)
+}
+
+/// **The terminal release's worker population: the panes this drive owns plus
+/// the panes it was started on, oldest first** (#3250, review round 2).
+///
+/// The merge and the sort are here rather than in the caller's loop because the
+/// ORDER is a claim two comments make and only the merged list can keep. Every
+/// member of `owned` was minted by a hand-back, so each one post-dates the pane
+/// the drive was started on: appending `founding` to it puts the audit rows
+/// newest-first-then-oldest, the inverse of "the rows read as the history they
+/// are". The caller supplies `started_ms` because a pane's age is the
+/// registry's fact and this crate is Tauri-free — the same injection
+/// [`DriveEntry::forget_dead_panes`] takes for liveness.
+///
+/// A pane the registry cannot date sorts LAST rather than first: it is a pane
+/// that is already gone or was never on the roster, so the barrier will refuse
+/// it, and putting it at the head would place a row that never happens in front
+/// of ones that do. Ties break on the id, so two panes registered inside one
+/// wall-clock millisecond cannot order differently between runs.
+///
+/// Only the founding half is filtered — `owned` is the drive's own record and
+/// is already deduplicated by [`retain_panes`] — and the filtering is
+/// [`admit_session_pane`], asked once per founding pane.
+pub fn release_population(
+    owned: Vec<String>,
+    founding: &[String],
+    owned_elsewhere: &[String],
+    started_ms: &dyn Fn(&str) -> Option<u64>,
+) -> Vec<String> {
+    let mut out = owned;
+    for a in founding {
+        if admit_session_pane(a, &out, owned_elsewhere) {
+            out.push(a.clone());
+        }
+    }
+    out.sort_by_key(|a| (started_ms(a).unwrap_or(u64::MAX), a.clone()));
+    out
 }
 
 /// **The panes this drive no longer needs, at this tick's facts and this tick's
@@ -9042,6 +9092,67 @@ mod tests {
         ] {
             assert_eq!(admit_session_pane(agent, &owned, &elsewhere), admit, "{label}");
         }
+    }
+
+    /// **One population holding an owned pane AND a founding one, in the order
+    /// the rows claim** (#3250, review round 2) — the fixture the sort has to
+    /// have, because with only one of the two kinds any order is the right one.
+    ///
+    /// The owned pane is the YOUNGER of the two, which is not a fixture choice
+    /// but the shape of the thing: `owned` is written by a hand-back and a
+    /// hand-back happens after the drive was handed the founding pane. So the
+    /// merge order and the answer DIVERGE — drop the sort and this reddens with
+    /// the two swapped, which is the mutation the claim owes.
+    ///
+    /// The undatable pane is asserted in the same run for the same reason it
+    /// sorts last: a change that made an unknown age sort FIRST would put a row
+    /// that never happens at the head of the list.
+    #[test]
+    fn the_release_population_reads_oldest_first_across_owned_and_founding_panes() {
+        let age = |a: &str| match a {
+            "w-founding" => Some(100u64),
+            "w-handback" => Some(900),
+            "w-second-founding" => Some(300),
+            _ => None,
+        };
+        let got = release_population(
+            vec!["w-handback".to_string()],
+            &["w-founding".to_string(), "w-second-founding".to_string()],
+            &[],
+            &age,
+        );
+        assert_eq!(
+            got,
+            vec![
+                "w-founding".to_string(),
+                "w-second-founding".to_string(),
+                "w-handback".to_string()
+            ],
+            "the hand-back pane is the youngest and comes last, whatever order it was merged in"
+        );
+
+        let with_ghost = release_population(
+            vec!["w-handback".to_string()],
+            &["w-ghost".to_string(), "w-founding".to_string()],
+            &[],
+            &age,
+        );
+        assert_eq!(
+            with_ghost,
+            vec!["w-founding".to_string(), "w-handback".to_string(), "w-ghost".to_string()],
+            "a pane the registry cannot date sorts last, not first"
+        );
+
+        assert_eq!(
+            release_population(
+                vec!["w-handback".to_string()],
+                &["w-founding".to_string(), "w-handback".to_string(), String::new()],
+                &["w-second-founding".to_string()],
+                &age,
+            ),
+            vec!["w-founding".to_string(), "w-handback".to_string()],
+            "and the filtering is unchanged: owned, elsewhere and empty are all refused"
+        );
     }
 
     /// **The founding list is recorded TOTAL, deduped, and never files a pane

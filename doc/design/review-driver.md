@@ -2511,9 +2511,15 @@ where a fresh pane reads as idle and the barrier would hand it over to the
 release. Recording at `drive_review` (and re-recording on every resume, total
 rather than cumulative) answers the question the release actually asks: which
 panes was this drive handed. `admit_session_pane` states the one further
-exclusion — a pane any OTHER live drive's record names is that drive's to
-release, because `already-driven` is keyed on the PR and one worker session may
-legally back two driven PRs. The list is bounded by LIVENESS like the
+exclusion — a pane any OTHER live drive OWNS is that drive's to release, because
+`already-driven` is keyed on the PR and one worker session may legally back two
+driven PRs. That exclusion reads the other drive's `owned_panes` and **not its
+founding list**, which is a residual rather than an oversight: two drives
+started on one session name the same founding pane, so whichever ends first
+releases it, and excluding it on both sides would trade that for a pane neither
+drive ever releases — the leak this issue is about. The other drive's next
+hand-back resumes the conversation, which is the recovery every release here
+rests on. The list is bounded by LIVENESS like the
 superseded ones, through the same `forget_dead_panes`.
 
 It reads `founding_panes` at both terminal steps and nowhere else. `satisfied`
@@ -2567,7 +2573,21 @@ drive that reaches `satisfied` or `cancelled` proposes one even after the
 release cleared `worker_agent`, and `owned_panes` still names the superseded
 pane — which is therefore asked about again at the exit. What stays open is the
 window in between: every tick from the skipped release to the exit, and a drive
-that never reaches a terminal step at all. Closing that too would mean
+that never reaches a terminal step at all.
+
+**#3250 adds one pane to that residual, at the far end of it: a FOUNDING pane
+that is busy on the exit tick itself.** The barrier refuses it exactly as it
+refuses a busy superseded one, and there is no later tick to re-ask on — the
+entry is terminal and is pruned. So the pane the orchestrator handed the drive
+survives a drive that ended while it was mid-turn, holding its worktree, and
+the recovery is the one that was there before this change: the exit notice names
+the session, the idle reaper takes the pane once its own turn ends, and
+`kill_agent` is the orchestrator's. It is the same trade as the superseded case
+and for the same reason — the alternative is killing a pane mid-turn, which §3
+forbids the driver — and
+`a_busy_pane_on_the_drives_session_is_not_released_at_the_satisfied_exit` pins
+that it really does survive, so the disclosure cannot go quietly false. Closing
+that too would mean
 re-asking on every tick, which is a busy-pane kill attempt per tick rather than
 a decision, so it is disclosed and bounded here instead, and pinned
 by `a_superseded_pane_the_barrier_skips_is_not_re_asked_on_a_later_tick` so the

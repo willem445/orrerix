@@ -3471,7 +3471,7 @@ original worker still idle on the worktree and you had to kill it by hand before
 could be removed. It is the pane (or panes) that were live on that session when you called
 `start_review_drive`, recorded then and not looked up again — so a pane you open or resume onto
 the session while the drive is running is never on the list, including one you open in the moment
-between the last check and the exit. A pane another live drive is using is left to that drive, and
+between the last check and the exit. A pane another live drive opened for itself is left to it, and
 a busy pane is left alone; no release row claims otherwise. Mid-drive nothing changes: a pane the
 drive never spoke to may still be one you are using, so only the panes it opened itself are
 released then.

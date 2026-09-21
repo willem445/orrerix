@@ -3847,7 +3847,8 @@ impl OrchRegistry {
             //
             // Ordered oldest-first, so the audit rows read as the history
             // they are: `owned_panes`'s own order for an owned-only population,
-            // and an explicit sort below wherever the session panes widen it.
+            // and `reviewdrive::release_population`'s sort wherever the founding
+            // panes widen it.
             //
             // **And at a TERMINAL exit it also names the panes the drive was
             // STARTED ON** (#3250). `owned_panes` is written by a hand-back, so
@@ -3873,27 +3874,17 @@ impl OrchRegistry {
                         .map(|(agent, _)| agent)
                         .collect();
                     if cand.include_founding {
-                        // **The narrowing is the engine's own predicate**
-                        // (review round 1), so the reasons a founding pane is
-                        // refused are stated and tested in one place rather
-                        // than spelled as conditions here.
-                        for a in entry.founding_panes.clone() {
-                            if reviewdrive::admit_session_pane(&a, &agents, &owned_elsewhere) {
-                                agents.push(a);
-                            }
-                        }
-                        // **Oldest first over the MERGED list, which is the only
-                        // place that claim can be made true** (review round 1,
-                        // finding 2). `owned_panes` is hand-back panes, every
-                        // one of them minted after the pane the drive was
-                        // started on, so appending the founding panes to it
-                        // would put the rows newest-first-then-oldest — the
-                        // inverse of what the audit rows claim to read as. A
-                        // pane the registry no longer knows sorts last and is
-                        // skipped by the barrier anyway.
-                        agents.sort_by_key(|a| {
-                            (self.agent(a).map(|x| x.started_ms).unwrap_or(u64::MAX), a.clone())
-                        });
+                        // **The merge, the narrowing and the ORDER are the
+                        // engine's** (review rounds 1 and 2), so each is stated
+                        // and tested in one place instead of being spelled as
+                        // loop conditions here. All this side supplies is the
+                        // registry's own fact: how old a pane is.
+                        agents = reviewdrive::release_population(
+                            agents,
+                            &entry.founding_panes,
+                            &owned_elsewhere,
+                            &|a: &str| self.agent(a).map(|x| x.started_ms),
+                        );
                     }
                     (agents, entry.worker_session.clone())
                 }

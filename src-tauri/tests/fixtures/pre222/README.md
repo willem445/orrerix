@@ -1523,3 +1523,39 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   than the longest line that file carried before. Nothing else in any file moved: the
   `live-minus-keys == golden` check in the README above ("Verifying a re-bless by hand") was
   run before and after, and the patch on each golden is the patch on its live template.
+
+- **#3304 S1, delivery triage** — `orchestrator-playbook.md` only. The other six goldens are
+  byte-identical to their previous blessed copies.
+
+  `orchestrator.md` was deliberately NOT touched, and the reason is #2815's, re-derived here
+  rather than inherited: the resident core is paid on every model call under
+  `RESIDENT_CORE_BUDGET` (45,000 B), so any paragraph there would have reddened
+  `the_resident_core_is_under_the_byte_budget`. The orchestrator-facing half is two paragraphs
+  folded into the playbook's EXISTING `## Delivery notices` section — folded rather than given
+  a section of its own, because `every_playbook_section_has_a_resident_stub_naming_it` is
+  default-deny and a new section would cost resident bytes too (#3263 S2's entry above is the
+  worked example of getting that wrong).
+
+  What the orchestrator is now told: where a repo declares `triage: enabled: true`, a notice
+  whose LEADING SHAPE closes it without judgement is RECORDED rather than typed into the pane —
+  a drive's `GATE SATISFIED` the merge queue then accepted, a green `notify_when` run, a
+  planner that posted and exited, an exited pane, a cancelled drive, and the middle chunks of a
+  split plan. Nothing is dropped: what was held arrives as ONE framed
+  `[orrerix] N notices deferred …` line in front of the next delivery that did need the pane,
+  or on its own at `max_defer_minutes`, and `list_deferred()` reads the full text of whatever
+  is held right now. The paragraph also names what is NEVER triaged — a notice that addresses
+  the orchestrator, a `HELD` drive, a `blocked` report, a watchdog stall, a re-grounding
+  notice — because the failure mode of a suppression an agent does not know about is an
+  orchestrator reading silence as a stalled delegate.
+
+  Nothing else in the file moved: the `live-minus-keys == golden` check above ("Verifying a
+  re-bless by hand") was run before and after, and the patch on the golden is the patch on its
+  live template (18 insertions each).
+
+  **Re-blessed again in the same PR, at review round 1 (B1).** The paragraph told the
+  orchestrator that `list_deferred()` reads the full text of what was just flushed, which is
+  false: the store is emptied BEFORE the frame is delivered, so by the time that frame is read
+  the tool answers `count: 0`. It now points at the `delivery-triaged` audit row, which carries
+  each deferral's full text and is permanent, and says what `list_deferred()` is actually for
+  — what is held RIGHT NOW. Same check run again: patch on golden == patch on live (6 insertions,
+  4 deletions each), `live-minus-keys == golden` OK.

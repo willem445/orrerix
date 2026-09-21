@@ -145,6 +145,12 @@
           "type": "section",
           "section": "board",
           "help": "Task-board policy — how much work may sit in each status at once. Absent = no limits, and behavior is byte-for-byte unchanged."
+        },
+        {
+          "name": "triage",
+          "type": "section",
+          "section": "triage",
+          "help": "Delivery-triage policy — which orchestrator-bound notices close by a shape rule instead of waking the pane (#3304). Absent = off, and behavior is byte-for-byte unchanged. The rule table is compiled in; nothing here writes a rule."
         }
       ]
     },
@@ -585,6 +591,41 @@
           "min": 1,
           "on_out_of_range": "refuse",
           "help": "Cap on blocked work. Prefer leaving this one uncapped under `enforce: true` — refusing a move to `blocked` refuses an agent's report of reality. Omit for no cap."
+        }
+      ]
+    },
+    "triage": {
+      "title": "Delivery triage",
+      "help": "Policy for the delivery-triage gate (#3304 S1). An orchestrator pane wakes once per delivery and a wake is expensive; two thirds of them close by the LEADING SHAPE of the notice, with no judgement in them at all. With this on, those are held in `<group-dir>/deferred.json`, audited as `delivery-triaged`, and flushed as ONE framed delivery at the next genuine wake or at `max_defer_minutes`. Fail-safe is DELIVER — anything the rule table does not positively recognise wakes the pane — and nothing is ever dropped.",
+      "fields": [
+        {
+          "name": "enabled",
+          "type": "bool",
+          "default": false,
+          "help": "Off by default. Off means not one byte of delivery behaviour moves."
+        },
+        {
+          "name": "provider",
+          "type": "enum",
+          "values": ["none"],
+          "default": "none",
+          "on_out_of_range": "refuse",
+          "help": "Which classifier tier may see the residual the rules do not close. `none` — the only value this build accepts — means the rule tier and nothing else: no network, no key, no text leaving the machine. A provider adapter arrives in #3304 S3; naming one today refuses the whole file rather than silently running with no provider."
+        },
+        {
+          "name": "kinds",
+          "type": "string-list",
+          "default": [],
+          "help": "Which delivery kinds triage may act on at all. Empty (the default) means every kind the rule table covers. The engine's set is delegate-progress, delegate-done, reviewer-report, delegate-blocked, drive-gate-satisfied, drive-held, drive-cancelled, run-completed, pr-checks, message-from, planner-exited, agent-exited, watchdog, system-notice, human; a name outside it refuses the whole file, because a repo that misspelled a kind believes it narrowed the gate and did not."
+        },
+        {
+          "name": "max_defer_minutes",
+          "type": "number",
+          "default": 30,
+          "min": 1,
+          "max": 240,
+          "on_out_of_range": "refuse",
+          "help": "The clock under a deferral: the longest a held notice may sit with no genuine wake to flush it. Refused rather than clamped — the number says how long this repo is willing to lose sight of its own fleet."
         }
       ]
     }

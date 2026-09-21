@@ -602,6 +602,11 @@ export const WIP_STATUSES = [
 /** `parse_workflow` refuses `0` — a cap of nothing is a stop, not a limit. */
 export const WIP_LIMIT_MIN = 1;
 
+/** `triage.max_defer_minutes` (#3304 S1) — the engine's own closed range, REFUSED
+ *  outside rather than clamped, so a form must stop the submit rather than coerce. */
+export const TRIAGE_MAX_DEFER_MINUTES_MIN = 1;
+export const TRIAGE_MAX_DEFER_MINUTES_MAX = 240;
+
 /** One numeric field's range. `max` is OPTIONAL and its absence is a statement: the
  *  engine imposes no ceiling on that field, so neither may a form. */
 export interface FieldBounds {
@@ -674,6 +679,10 @@ export const POLICY_BOUNDS: Readonly<Record<string, FieldBounds>> = {
   ...Object.fromEntries(
     WIP_STATUSES.map((s) => [`board.wip.${s}`, { min: WIP_LIMIT_MIN }] as const)
   ),
+  "triage.max_defer_minutes": {
+    min: TRIAGE_MAX_DEFER_MINUTES_MIN,
+    max: TRIAGE_MAX_DEFER_MINUTES_MAX,
+  },
 };
 
 /** A legal block id: lowercase-ish, human-meaningful, safe as a filename fragment and as
@@ -1063,6 +1072,20 @@ export type WorkflowWip = Record<string, number>;
 /** The `board:` section (#1175). Same declared-or-absent rule as `intake:` and
  *  `merge_queue:`: an omitted key is the engine's own default, never a value this
  *  module writes back in. */
+/** The `triage:` section (#3304 S1). Same declared-or-absent rule as `board:` and
+ *  `merge_queue:`: an omitted key is the engine's own default, never a value this
+ *  module writes back in. `kinds` is the one list, and it is round-tripped as
+ *  written rather than validated against the engine's closed set here — the pane
+ *  reports an unknown key, and the ENGINE refuses an unknown kind, which is the
+ *  same division `intake.source` already draws. */
+export interface WorkflowTriage {
+  enabled?: boolean;
+  provider?: string;
+  kinds?: string[];
+  max_defer_minutes?: number;
+  extra?: Record<string, YamlValue>;
+}
+
 export interface WorkflowBoard {
   wip?: WorkflowWip;
   /** Absent, `true` or `false` — three states, and absent is NOT `false` on the wire
@@ -1095,6 +1118,8 @@ export interface Workflow {
   resources?: Record<string, WorkflowResource>;
   /** Task-board policy — per-status WIP limits (#1175). */
   board?: WorkflowBoard;
+  /** Delivery-triage policy (#3304 S1). */
+  triage?: WorkflowTriage;
   extra?: Record<string, YamlValue>;
 }
 
@@ -1840,6 +1865,28 @@ function emitResourcesLines(resources: Record<string, WorkflowResource>, indent 
  *  Caps are emitted in `WIP_STATUSES` order — the board's own order, and the order the
  *  engine's struct declares them in — rather than sorted, so a file reads top-to-bottom
  *  the way the board flows. */
+/** The `triage:` section (#3304 S1). Same declared-only rule as `board:`: a key the
+ *  file did not write is not written back, because absent and the engine's default
+ *  are the same state and converting one into the other behind the human's back is
+ *  the data loss `enforce:` taught. `kinds` emits as a flow list, like
+ *  `reviewers:`/`also:`, through `emitScalar` so a value is never re-read as two. */
+function emitTriageLines(triage: WorkflowTriage, indent = ""): string[] {
+  const field = `${indent}  `;
+  const body: string[] = [];
+  if (triage.enabled !== undefined) body.push(`${field}enabled: ${triage.enabled}`);
+  if (triage.provider !== undefined) {
+    body.push(`${field}provider: ${emitScalar(triage.provider)}`);
+  }
+  if (triage.kinds !== undefined) {
+    body.push(`${field}kinds: [${triage.kinds.map(emitScalar).join(", ")}]`);
+  }
+  if (triage.max_defer_minutes !== undefined) {
+    body.push(`${field}max_defer_minutes: ${triage.max_defer_minutes}`);
+  }
+  body.push(...extraLines(triage.extra, field));
+  return emitMappingSection("triage", indent, body);
+}
+
 function emitBoardLines(board: WorkflowBoard, indent = ""): string[] {
   const field = `${indent}  `;
   const body: string[] = [];
@@ -1969,6 +2016,7 @@ export function serializeWorkflow(w: Workflow): string {
     w.driver ? emitDriverLines(w.driver) : [],
     w.resources ? emitResourcesLines(w.resources) : [],
     w.board ? emitBoardLines(w.board) : [],
+    w.triage ? emitTriageLines(w.triage) : [],
   ]) {
     if (lines.length) out.push("", ...lines);
   }
@@ -2415,6 +2463,7 @@ const SECTION_ORDER = [
   "driver",
   "resources",
   "board",
+  "triage",
 ] as const;
 
 type SectionKey = (typeof SECTION_ORDER)[number];
@@ -2673,6 +2722,13 @@ export function serializeWorkflowPreserving(w: Workflow, originalText: string): 
         !!w.board,
         w.board ? emitBoardLines(w.board) : []
       ),
+    triage: (entry) =>
+      pushSection(
+        entry,
+        deepEqualValue(w.triage, orig.triage),
+        !!w.triage,
+        w.triage ? emitTriageLines(w.triage) : []
+      ),
   };
 
   // The document's OWN order is the output's order (#880): walk the entries as the file
@@ -2733,6 +2789,7 @@ const KNOWN_TOP = new Set([
   "driver",
   "resources",
   "board",
+  "triage",
 ]);
 /** The block keys this build knows — the pane's half of the #880 schema
  *  lockstep, EXPORTED so a test can read it as a set.
@@ -2783,6 +2840,8 @@ const KNOWN_DRIVER = new Set([
 ]);
 const KNOWN_RESOURCE = new Set(["slots", "max_hold_minutes"]);
 const KNOWN_BOARD = new Set(["wip", "enforce"]);
+
+const KNOWN_TRIAGE = new Set(["enabled", "provider", "kinds", "max_defer_minutes"]);
 const KNOWN_WIP = new Set<string>(WIP_STATUSES);
 
 function collectExtra(
@@ -2964,6 +3023,38 @@ function readBoard(r: Record<string, YamlValue>, findings: Finding[]): WorkflowB
   return board;
 }
 
+/** `triage:` (#3304 S1) — one switch, one closed-vocabulary string, one list and one
+ *  bounded number.
+ *
+ *  `provider` is read as a STRING rather than against the accepted set: the engine's
+ *  refusal is the authority on which providers this build has, and a pane that
+ *  second-guessed it would report a file broken that a newer engine loads. The
+ *  unknown-KEY report is a different question and is still made, as everywhere else. */
+function readTriage(r: Record<string, YamlValue>, findings: Finding[]): WorkflowTriage {
+  const triage: WorkflowTriage = {};
+  if (r.enabled !== undefined) {
+    if (typeof r.enabled === "boolean") triage.enabled = r.enabled;
+    else findings.push(badValue("triage.enabled", "true or false", r.enabled));
+  }
+  if (r.provider !== undefined) {
+    const p = asString(r.provider);
+    if (p !== null && p !== undefined) triage.provider = p;
+    else findings.push(badValue("triage.provider", "a provider name", r.provider));
+  }
+  if (r.kinds !== undefined) {
+    if (Array.isArray(r.kinds)) {
+      triage.kinds = r.kinds.map((x) => asString(x) ?? "").filter(Boolean);
+    } else {
+      findings.push(badValue("triage.kinds", "a list of delivery kinds", r.kinds));
+    }
+  }
+  const defer = readNumberField(r, "max_defer_minutes", "triage", findings);
+  if (defer !== undefined) triage.max_defer_minutes = defer;
+  const extra = collectExtra(r, KNOWN_TRIAGE);
+  if (extra) triage.extra = extra;
+  return triage;
+}
+
 /** Read a workflow file. NEVER throws and NEVER refuses: a file it cannot fully
  *  understand still yields a workflow (with stub blocks) plus the findings that say why,
  *  because the pane's job is to let the human FIX the file — which it cannot do if the
@@ -3071,6 +3162,8 @@ export function parseWorkflow(text: string): ParseResult {
   if (resources) w.resources = readResources(resources, findings);
   const board = readSection(root.board, "board", findings);
   if (board) w.board = readBoard(board, findings);
+  const triage = readSection(root.triage, "triage", findings);
+  if (triage) w.triage = readTriage(triage, findings);
 
   return { workflow: w, findings };
 }
@@ -4000,6 +4093,7 @@ function unknownKeyFindings(w: Workflow): Finding[] {
   // the one finding the driver surface cannot show. (`board:`'s missing line
   // below is a pre-existing gap, not this section's.)
   if (w.driver) report("driver:", w.driver.extra, undefined, "driver");
+  if (w.triage) report("triage:", w.triage.extra);
   for (const [name, r] of Object.entries(w.resources ?? {})) report(`resources.${name}:`, r.extra);
   return out;
 }

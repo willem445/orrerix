@@ -569,6 +569,26 @@ re-bound to a live pane` — call `queue_orphans()` and work the list (see **Dur
 as a `DROPPED` notice. **Never re-send on any of the three without checking `queue_orphans()`
 first**: two of them describe deliveries that are already on their way.
 
+**Delivery triage — some notices no longer wake you, and none of them is lost (#3304).** Where
+this repo declares `triage: enabled: true`, orrerix answers a notice whose LEADING SHAPE closes
+it without judgement by RECORDING it instead of typing it into your pane: a review drive's `GATE
+SATISFIED` on a PR the merge queue then accepted, a `notify_when` run that came back green, a
+planner that posted its plan and exited, a pane that exited, a cancelled drive, and the middle
+chunks of a plan split `---BEGIN PLAN k/n---`. Everything else is delivered, and the default for
+any shape the rules do not positively recognise is to deliver — so a new notice kind wakes you
+exactly as it did before. A delivery that NAMES you, a `HELD` drive, a `blocked` report, a
+watchdog stall and a re-grounding notice are never triaged at all.
+
+Nothing is dropped. What was held comes to you as ONE framed `[orrerix] N notices deferred …`
+line in front of the next delivery that DID need you, or on its own if nothing needs you before
+`max_defer_minutes`. Read that frame rather than ignoring it: it is the only place several
+notices are summarised rather than delivered whole — and each deferral's FULL text is on
+`audit.jsonl` as a `delivery-triaged` row, which is where the frame itself points you, because
+the frame is only ever a summary. `list_deferred()` answers a different question, "what is held
+RIGHT NOW", which is what to call when you are about to make a call one of them might bear on,
+or when you are re-grounding after a compact; by the time you read a flush frame, what it
+describes has already been released and that tool will say `count: 0`.
+
 ## Merge gate
 
 INVARIANT 1, and it is not advice you can override: every agent pane runs `gh` through an orrerix

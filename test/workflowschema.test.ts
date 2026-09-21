@@ -240,6 +240,8 @@ function docFor(section: string, field: string, yaml: string): string {
       );
     case "board":
       return ["version: 1", ...roster, "board:", `  ${field}: ${yaml}`].join("\n") + "\n";
+    case "triage":
+      return ["version: 1", ...roster, "triage:", `  ${field}: ${yaml}`].join("\n") + "\n";
     case "board.wip":
       return (
         ["version: 1", ...roster, "board:", "  wip:", `    ${field}: ${yaml}`].join("\n") + "\n"
@@ -280,6 +282,8 @@ function readBack(w: Workflow, section: string, field: string): { value: unknown
       return at(w.resources?.ci as unknown as Record<string, unknown>);
     case "board":
       return at(w.board as unknown as Record<string, unknown>);
+    case "triage":
+      return at(w.triage as unknown as Record<string, unknown>);
     // `board.wip` is the one section whose unknown-key bag does not sit on the section
     // itself: the caps are a plain `Record<string, number>`, so an `extra` key inside it
     // would be indistinguishable from a cap. It lives on the parent as `wipExtra`.
@@ -440,6 +444,15 @@ const FIELDS_WITHOUT_AN_EDITOR = new Set<string>([
   "board.wip.prototype",
   "board.wip.human-testing",
   "board.wip.blocked",
+  // #3304 S1. PENDING rather than editable, and the reason is the one this list
+  // exists to record: `triage:` is authored by hand today (this repo's own
+  // `.orrerix/workflow.yml` turns it on in two lines), and a form control for a
+  // gate that SUPPRESSES deliveries wants a read-back surface beside it — the
+  // deferred count and `list_deferred`'s rows — rather than a bare checkbox.
+  "triage.enabled",
+  "triage.provider",
+  "triage.kinds",
+  "triage.max_defer_minutes",
 ]);
 
 test("the pane's block-key set IS the manifest's, in both directions (#1457 review N1)", () => {

@@ -2702,6 +2702,70 @@ exists until an orchestrator makes its own role-gated `drive_review` call naming
 (The workflow pane edits this block too: an enable-toggle whose state is the `enabled:`
 line, plus number fields bounded to the ranges shown above - #1869.)
 
+### Delivery triage: the `triage:` block
+
+An orchestrator pane wakes once per notice, and a wake is the single most expensive
+thing a group does. Most of them do not earn it: on one fifteen-day log, **64 % of 368
+orchestrator wakes closed by the LEADING SHAPE of the notice** — a review drive
+reporting `GATE SATISFIED`, a CI watch that came back green, a planner that posted its
+plan and exited — with no judgement in them at all (#3304).
+
+A `triage:` block turns on the gate that stops those reaching the pane:
+
+```yaml
+triage:
+  enabled: true
+  provider: none
+  kinds: []
+  max_defer_minutes: 30
+```
+
+Every value there but `enabled` is its field's own default, so a block naming only
+`enabled: true` and `provider: none` behaves exactly like the one above. An absent
+`triage:` block means the feature is off and delivery behaves byte-for-byte as it did
+before it existed.
+
+**What gets held.** A drive's `GATE SATISFIED` on a PR the merge queue then accepted;
+a `notify_when` run or PR-checks watch that came back green; a planner that posted its
+plan and exited; a pane that exited; a cancelled drive; and the middle chunks of a plan
+a planner split across several messages. That is the whole list, and it is compiled in
+— nothing in this block writes a rule.
+
+**What is never held.** Anything whose text names the orchestrator (`blocking on you`,
+`needs you`, `your call`), a `HELD` drive, a `blocked` report, a watchdog stall, a
+re-grounding notice, and your own words relayed from a manager or lead pane. And
+**everything else**: the default for any shape the rules do not positively recognise is
+to deliver, so a notice kind a later release adds wakes the pane until somebody teaches
+triage about it.
+
+**Nothing is dropped.** A held notice is written to the group's directory and recorded in
+`audit.jsonl` as a `delivery-triaged` row **carrying its full text** — that row is permanent,
+so a notice's words survive the flush that clears the store. `list_deferred()` reads what is
+held right now, which is a different question and answers `count: 0` once a flush has gone. It
+comes back as ONE framed `[orrerix] N notices deferred …` line in front of the next
+delivery that DID need the pane, or on its own if nothing does within
+`max_defer_minutes` — which is refused outside `1..=240`, because the number says how
+long you are willing to lose sight of your own fleet. A burst also flushes early rather
+than growing a summary nobody can read.
+
+**`provider: none` is the only value this build accepts**, and it is the whole of the
+privacy posture: with it, no text leaves the machine. Nothing on the delivery path makes
+a network call — the engine crate triage lives in declares no HTTP client, and neither
+triage source names one. (orrerix's own binary does link an HTTP stack, by way of the
+webview framework; the point is that triage cannot reach it.) A classifier tier for the
+notices the rules cannot close is #3304 S3, and a file naming a provider today refuses
+to load rather than running the rule tier while you believe something else is happening.
+
+`kinds:` narrows which delivery kinds triage may act on; empty (the default) means all
+of them. The names are the ones `list_deferred()` reports —
+`drive-gate-satisfied`, `run-completed`, `pr-checks`, `planner-exited`,
+`agent-exited`, `drive-cancelled`, `message-from`, `delegate-done`,
+`reviewer-report`, `delegate-progress`, `delegate-blocked`, `drive-held`,
+`watchdog`, `system-notice`, `human` — and a name outside that set refuses the whole
+file, because a misspelled kind is a gate you believe you narrowed and did not.
+
+This block has no form in the workflow pane yet; author it by hand.
+
 ### The plan driver
 
 The second switch in that block, `plan_enabled`, turns on a different driver

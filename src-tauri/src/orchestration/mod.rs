@@ -12862,7 +12862,7 @@ pub const MAX_TASK_LINK_LABEL: usize = 120;
 /// `list_tasks` row (see `TaskSummary`) and never rides an unexpanded board
 /// row (see `BoardTask::description`), so its weight is bounded by the rows a
 /// human has opened plus the one row a `get_task` names — never by board size.
-pub const MAX_TASK_DESCRIPTION: usize = 500;
+pub const MAX_TASK_DESCRIPTION: usize = 5000;
 
 /// Where a row of a given kind is allowed to sit (#1156) — the whole ladder,
 /// as data. `ladder_rule` is the ONLY place this table exists on this

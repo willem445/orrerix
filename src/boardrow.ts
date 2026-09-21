@@ -21,6 +21,7 @@
 export type RowField =
   // Tier 1 — what the row IS.
   | "id"
+  | "kindMark"
   | "title"
   // Tier 2 — where the work lives.
   | "issue"
@@ -75,6 +76,12 @@ export type RowTier = 1 | 2 | 3 | 4;
  *    what a human scanning for "what is left" is reading. */
 const FIELD_TIER: Record<RowField, RowTier> = {
   id: 1,
+  // The level mark (#3261) — tier 1 beside the id, which is the one place
+  // #2937's own reasoning puts it: this ladder ranks by how much of the LINE a
+  // field costs against how often it is read, and the mark is an 8px square
+  // read on every downward scan. The kind BADGE below is still tier 4 and still
+  // a word, which is what it was ranked there for.
+  kindMark: 1,
   title: 1,
   issue: 2,
   pr: 2,
@@ -106,7 +113,7 @@ const FIELD_TIER: Record<RowField, RowTier> = {
 
 /** The compact line, in ladder order — the order the renderer appends in, so
  *  the name is never pushed right by something ranked below it. */
-const COMPACT_ORDER: readonly RowField[] = ["id", "title", "issue", "pr", "status", "children"];
+const COMPACT_ORDER: readonly RowField[] = ["id", "kindMark", "title", "issue", "pr", "status", "children"];
 
 /** The detail block, in the order the renderer appends it. Grouped as the eye
  *  reads it: what the row IS (badges), then what it is WAITING on, then what
@@ -245,4 +252,85 @@ export function pruneExpandFocus(pending: string | null, liveIds: ReadonlySet<st
  *  `" "`, and matching both costs one comparison. */
 export function isExpandToggleKey(key: string): boolean {
   return key === "Enter" || key === " " || key === "Spacebar";
+}
+
+// ---------------------------------------------------------------------------
+// Clicking the TITLE AREA (#3261)
+//
+// The `⌄` is a small target, and the thing a human actually aims at when they
+// want to see more of a row is its name. So the whole title area toggles — and
+// the rule for what that must NOT swallow is here, pure, rather than as a
+// `closest("button, a, input")` call buried in a 3000-line renderer.
+// ---------------------------------------------------------------------------
+
+/** Element tags that own their own click, wherever they sit.
+ *
+ *  An exhaustive set of the INTERACTIVE tags this board actually builds — every
+ *  one of them is somewhere under a row today. It is a set of tag names rather
+ *  than a check for "has a click handler", because there is no such check: a
+ *  listener is not observable from the element, so the only honest rule is one
+ *  a reader can enumerate and a test can pin.
+ *
+ *  `OPTION` and `LABEL` are here although the renderer never puts a bare one in
+ *  the title area, and that is deliberate: this is a DEFAULT-DENY list read
+ *  from the tag, so a future control that reaches the title area is inert
+ *  rather than silently folding the row. */
+const CONTROL_TAGS: ReadonlySet<string> = new Set([
+  "BUTTON",
+  "A",
+  "INPUT",
+  "SELECT",
+  "TEXTAREA",
+  "OPTION",
+  "LABEL",
+]);
+
+/** One step of the DOM path, as much of it as the rule reads.
+ *
+ *  A structural type rather than `HTMLElement` so the rule stays testable
+ *  without a DOM — the caller passes the real elements, which satisfy it. */
+export interface ClickPathNode {
+  /** `Element.tagName`, upper-case as the DOM gives it. */
+  tagName: string;
+  /** `Element.classList`, or anything iterable of the same strings. */
+  classList: Iterable<string>;
+  /** `HTMLElement.isContentEditable` — an in-place editor that is not an
+   *  `<input>`. None exist on this board today; the rule covers it because a
+   *  contenteditable that folded the row on every click would be unusable.
+   *
+   *  Spelled exactly as the DOM spells the BOOLEAN one, so a caller can pass
+   *  real elements straight in. `contentEditable` (no `is`) is a STRING there
+   *  ("true"/"false"/"inherit"), and a field named for it would have made every
+   *  element truthy — a rule that refused every click. `tsc` caught that on the
+   *  first wiring; the name is what stops it coming back. */
+  isContentEditable?: boolean;
+}
+
+/** Classes that own their own click even on a non-interactive tag.
+ *
+ *  One entry, and it is the reason this is not a tag-only rule: the title's own
+ *  inline editor swaps the `<span>` for an `<input>`, but the swap is not
+ *  instantaneous from the click's point of view — and the editor's wrapper is a
+ *  plain element. Keyed on the class the renderer stamps for exactly this
+ *  purpose, never on a class that happens to be there for styling. */
+const CONTROL_CLASSES: ReadonlySet<string> = new Set(["task-title-input", "task-desc-edit"]);
+
+/** Does a click that travelled this path toggle the row?
+ *
+ *  `path` runs from the click's target OUTWARD, ending at (and including) the
+ *  title area itself — i.e. what `composedPath()` gives you, cut at the element
+ *  the listener is on. True means "nothing on the way owns this click".
+ *
+ *  Default-deny in the direction that matters: an EMPTY path is not a toggle.
+ *  An empty path means the caller could not say where the click came from, and
+ *  folding a row on a click nobody can account for is the failure this rule
+ *  exists to prevent. */
+export function titleClickToggles(path: readonly ClickPathNode[]): boolean {
+  if (path.length === 0) return false;
+  for (const node of path) {
+    if (CONTROL_TAGS.has(node.tagName.toUpperCase())) return false;
+    if (node.isContentEditable) return false;
+    for (const c of node.classList) if (CONTROL_CLASSES.has(c)) return false;
+  }
+  return true;
 }

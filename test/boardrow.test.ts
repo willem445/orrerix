@@ -19,6 +19,8 @@ import {
   pruneExpandFocus,
   rowShows,
   toggleExpandedRow,
+  titleClickToggles,
+  type ClickPathNode,
   type RowField,
 } from "../src/boardrow.ts";
 
@@ -39,8 +41,14 @@ const NEVER_COMPACT: readonly RowField[] = [
 ];
 
 test("the name and the id lead the compact row, ahead of everything else", () => {
+  // #3261 puts one thing between them: the 8px LEVEL MARK. It is tier 1 on
+  // #2937's own reasoning — this ladder ranks how much of the LINE a field
+  // costs against how often it is read — and it is pinned here as part of the
+  // prefix rather than tolerated by a looser assertion, so a fifth compact
+  // field cannot arrive unargued.
   const { compact } = rowLayout(false);
-  assert.deepEqual(compact.slice(0, 2), ["id", "title"]);
+  assert.deepEqual(compact.slice(0, 3), ["id", "kindMark", "title"]);
+  assert.equal(rowFieldTier("kindMark"), 1, "the level mark is tier 1 or it does not belong on the prefix");
 });
 
 test("nothing ranked below the name is allowed to precede it on the line", () => {
@@ -53,17 +61,26 @@ test("nothing ranked below the name is allowed to precede it on the line", () =>
 });
 
 test("the compact row carries the name, the id, issue/PR and progress — and nothing else", () => {
-  // The acceptance criterion, literally: "a row shows the full name and id
+  // #2937's acceptance criterion, literally: "a row shows the full name and id
   // (wrapping) plus the issue/PR line and a status chip; nothing else", plus
   // children_done/children, which #2937 ranks as progress alongside status.
-  assert.deepEqual([...rowLayout(false).compact], ["id", "title", "issue", "pr", "status", "children"]);
+  //
+  // #3261 amends it in exactly two ways, and both are stated here rather than
+  // left to be inferred from the array: the name is no longer shown WHOLE on
+  // this line (it is cut at `TITLE_BUDGET`, with the rest on the tooltip and in
+  // the expanded row — src/tasktitle.ts), and the level MARK joins the line.
+  // Nothing else did.
+  assert.deepEqual(
+    [...rowLayout(false).compact],
+    ["id", "kindMark", "title", "issue", "pr", "status", "children"]
+  );
 });
 
 test("collapsing a row hides the chrome and keeps the four things that matter", () => {
   // Named fields, not `rowFieldTier(f) < 4` — asking the ladder to agree with
   // itself passes under any ladder at all, the flat one this issue replaces
   // included. These are the human's own words in #2937 turned into two lists.
-  for (const f of ["id", "title", "issue", "pr", "status", "children"] as const) {
+  for (const f of ["id", "kindMark", "title", "issue", "pr", "status", "children"] as const) {
     assert.equal(rowShows(f, false), true, `${f} is hidden on a collapsed row`);
   }
   for (const f of NEVER_COMPACT) {
@@ -214,4 +231,87 @@ test("the expand tooltip counts what is actually hidden, and reads as English at
   assert.match(expandTitle(false, 7), /7 more fields\b/);
   assert.match(expandTitle(true, 7), /^Hide\b/);
   assert.doesNotMatch(expandTitle(false, 1), /1 more fields/);
+});
+
+// ---------------------------------------------------------------------------
+// Clicking the title area (#3261)
+//
+// The property under test is the one the acceptance criterion states: the title
+// AREA opens the row, and every control that sits inside a row keeps its own
+// click. So each case below is a control this board really builds, reached
+// through a path this board really produces — not a synthetic tag list.
+// ---------------------------------------------------------------------------
+
+/** A path step, spelled the way the DOM hands one over. */
+function node(tagName: string, ...classes: string[]): ClickPathNode {
+  return { tagName, classList: classes };
+}
+
+/** The title area itself — the element the listener sits on, so it is the last
+ *  step of every path. */
+const TITLE_AREA = node("DIV", "task-title-area");
+
+test("a click on the title text itself opens the row", () => {
+  assert.equal(titleClickToggles([node("SPAN", "task-title"), TITLE_AREA]), true);
+  // And a click on the area's own padding, with nothing in between.
+  assert.equal(titleClickToggles([TITLE_AREA]), true);
+});
+
+test("every control this board puts in a row keeps its own click", () => {
+  // Each entry is a real control off the row: the id chip's button, the issue
+  // and PR link chips, the status <select>, the inline title editor, the
+  // description editor, the expand button itself.
+  const controls: [string, ClickPathNode[]][] = [
+    ["the expand button", [node("BUTTON", "task-expand")]],
+    ["an issue chip", [node("BUTTON", "task-chip", "issue", "link")]],
+    ["the status select", [node("SELECT", "task-status", "st-queued")]],
+    ["an option inside it", [node("OPTION"), node("SELECT", "task-status")]],
+    ["the inline title editor", [node("INPUT", "dlg-input", "task-title-input")]],
+    ["the description editor", [node("TEXTAREA", "task-desc-input")]],
+    ["a link out of the row", [node("A")]],
+  ];
+  for (const [what, path] of controls) {
+    assert.equal(
+      titleClickToggles([...path, TITLE_AREA]),
+      false,
+      `${what} must keep its own click, not fold the row`
+    );
+  }
+});
+
+test("a control is honoured wherever on the path it sits, not only at the target", () => {
+  // A click lands on a <span> INSIDE a button — the glyph inside the chip. The
+  // target is inert; the button on the way out is what owns the click.
+  assert.equal(
+    titleClickToggles([node("SPAN", "chip-glyph"), node("BUTTON", "task-chip"), TITLE_AREA]),
+    false,
+    "a click inside a button is the button's, however deep the target is"
+  );
+});
+
+test("a contenteditable in the title area is an editor, not a toggle target", () => {
+  const editable: ClickPathNode = { tagName: "DIV", classList: [], isContentEditable: true };
+  assert.equal(titleClickToggles([editable, TITLE_AREA]), false);
+});
+
+test("an editor's own wrapper is honoured by CLASS, since its tag is inert", () => {
+  // The title editor's wrapper is a plain <div>; without the class rule the tag
+  // check alone would let a click on it fold the row out from under the input.
+  assert.equal(titleClickToggles([node("DIV", "task-title-input"), TITLE_AREA]), false);
+  assert.equal(titleClickToggles([node("DIV", "task-desc-edit"), TITLE_AREA]), false);
+  // A class that is merely styling is NOT a control — the rule is keyed on the
+  // two the renderer stamps for this purpose, so it cannot creep.
+  assert.equal(titleClickToggles([node("DIV", "task-title"), TITLE_AREA]), true);
+});
+
+test("a click nobody can account for does not fold the row", () => {
+  // Default-deny: an empty path means the caller could not say where the click
+  // came from, and a row folding on that is the failure the rule prevents.
+  assert.equal(titleClickToggles([]), false);
+});
+
+test("the tag rule is case-insensitive, as the DOM's own tagName is not always", () => {
+  // `tagName` is upper-case for HTML elements and lower-case inside SVG, and an
+  // SVG glyph inside a chip is exactly what this board draws.
+  assert.equal(titleClickToggles([node("button", "task-expand"), TITLE_AREA]), false);
 });

@@ -307,10 +307,16 @@ rung and then left out of both render orders — is what
 The line is built id → name → issue/PR → status → progress → `⌄`, and
 `flex-wrap: wrap` means the first thing a narrow pane pushes onto a second line
 is precisely what the ladder ranks below the name. `align-items: baseline`
-rather than `center`, because the name now wraps to two or three lines and the
-id has to sit on its **first** one. The title takes `overflow-wrap: anywhere` so
-a long unbroken token (a path, a branch name) breaks rather than forcing the row
-wider than the pane.
+rather than `center`, so the id sits on the name's own baseline however the
+line wraps.
+
+> **#3261 amends this paragraph.** It used to end: the name "now wraps to two or
+> three lines and the id has to sit on its **first** one. The title takes
+> `overflow-wrap: anywhere` so a long unbroken token (a path, a branch name)
+> breaks rather than forcing the row wider than the pane." The name no longer
+> wraps at all — it is one line, cut at a character budget, and the level mark
+> joins the build order between the id and the name. See **Human-readable rows
+> (#3261)** below for why that trade was made.
 
 ### Expanded rows are per-session view state
 
@@ -367,6 +373,206 @@ cancelling the keydown cancels the activation this is here to protect.
 inside the row, inside the overlay the board already occupied; an expanded row
 grows downward and scrolls with the list. No sibling is added to `#grid-area`
 and nothing in the layout moves. Hard constraint 1.
+
+## Human-readable rows (#3261)
+
+#2937 gave the name the line. This decides what the name may do with it, adds
+the two fields a human needs to read a board somebody else built, and makes the
+row's biggest target do the obvious thing.
+
+### The title budget, and why the ellipsis is not CSS
+
+A row's name is cut for display at `TITLE_BUDGET` (80 code points,
+`src/tasktitle.ts`) and marked with a single ellipsis. Nothing is lost:
+`upsert_task` still accepts any title, `tasks.json` still stores it whole, the
+full string is on the row's tooltip, and the expanded row carries it in full and
+editable.
+
+This **supersedes** one clause of #2937, and it is stated here rather than left
+for a reader to notice: that slice's criterion said the name "wraps — to two or
+three lines if it needs them — and is never cut off behind chrome". The first
+half was the wrong trade. A 200-character agent-written title rendered over
+three lines is not a queue you can read down; the board's job is to be scannable
+and a name that takes a paragraph has stopped being a name. The second half is
+what survives, and it is what the budget delivers differently: nothing is cut
+off *behind chrome*, because nothing is cut by the LAYOUT at all.
+
+That is why the ellipsis is drawn by the module and never by `text-overflow`. A
+CSS cut is a function of the pane's WIDTH — it changes when the dock moves, and
+nothing can say what it removed. A cut made from the TITLE is a function of the
+string alone, so a test can assert it and a tooltip can carry exactly the part
+that is missing. The budget counts CODE POINTS for the same reason the
+description cap does: `"🙂".length` is 2, and a `.length` budget would cut an
+emoji title at half its visible characters, or mid-surrogate.
+
+The inline editor's over-budget warning is **soft**, deliberately. The backend
+accepts any title, so an editor that refused one would be a board that cannot
+edit rows its own agents can still create.
+
+### Clicking the title opens the row, and what that cost
+
+The whole `.task-title-area` toggles the row, not just the `⌄`. The rule for
+what that must *not* swallow is `titleClickToggles` in `src/boardrow.ts`: it
+walks the path from the click's target out to the title area and refuses on any
+interactive tag, any `isContentEditable`, and the two classes the renderer
+stamps on its own editors. It is **default-deny in both directions** — an
+unknown control on the path stops the toggle, and an EMPTY path (a caller that
+could not say where the click came from) does too.
+
+Two consequences worth stating:
+
+- **Double-click-to-edit had to move.** It is now on the full title under the
+  open row. This is mechanical, not a preference: the first click of a
+  double-click toggles the row, which calls `render()`, which replaces the
+  element the second click would have landed on. Deferring the toggle past the
+  double-click threshold was the alternative, and it would have put a ~250 ms
+  delay on every expand to preserve a gesture that has a better home anyway —
+  the editable copy of the name belongs beside the full text of it.
+- **The title area is not a `<button>`.** The reason is what it MAY hold, not
+  what it holds today — today that is the title span and the cut marker. The
+  click rule is default-deny over the path precisely so a control can be put in
+  there later without folding the row, and a button nested in a button is
+  invalid and lands in the wrong place in the tab order. The row's keyboard path
+  is the `⌄` button #2937 already built.
+
+### Colour by level
+
+Four pigments, one per Agile level, in `theme.ts` §KIND_HUES — the identity
+channel's **second sub-table**, after `--cli-*`, and it exists for that one's
+reason: the eight `--id-*` hues are in bijection with the eight icon roles, so
+handing `--id-azure` to `story` would give azure a second meaning rather than
+give story a colour. The kind chips *did* exactly that until this slice; they
+now paint from `--kind-*`.
+
+**The level is not the row's left accent**, and #3261's criterion offering "a
+left accent stripe and/or a tinted kind chip" is what makes that a choice worth
+recording. The left accent is a STATE position — `--state-attention` on a row
+waiting for the human, the working dye on an active one — and an identity hue
+may never enter one. The level gets its own 8px mark beside the id instead.
+`test/theme.test.ts`'s channel guard is not decorative here: it caught
+`.task-chip.kind.k-unknown` answering "this row's file is broken" in the same
+position the level chip had just started answering "which level", and that chip
+is now `.task-chip.kind-broken`, its own position.
+
+**An unlabelled row is achromatic**, taking `mist400` rather than a fifth hue. A
+row with no `kind` is not a fifth level — it is a row on the flat board, exempt
+from the ladder — so giving it a pigment would claim it had a place on a ladder
+it is deliberately off. That is `stateHeld`/`stateIdle`'s argument applied here:
+a thing that carries no level carries no dye. A kind the board cannot place at
+all gets no mark, because its own broken chip is the thing that should be
+speaking.
+
+The marks are gated on the board using levels at all — the pay-for-what-you-use
+rule the kind and sprint filter chips already follow. On a flat board, a column
+of "unlabelled" marks would say nothing 400 times.
+
+Measured, and re-derived by `test/theme.test.ts` rather than remembered here:
+every level clears AA as text on every ground, and the closest pair across all
+five marks is 12.8 ΔE for a protanope, 15.9 for a deuteranope and 10.0 for a
+tritanope. Unlike the CLI octet — which collapses to 1.4 ΔE and is excused
+because a mark's shape and label carry it — the ladder is what a human *scans*
+by, and a scanning channel that collapses is not a channel. Four hues can hold
+that floor; eight cannot. The mark still carries the word on its tooltip and its
+`aria-label`, so colour is never the only channel.
+
+### The `description` field
+
+One optional plain-text field on a task: what the row IS, in a sentence or two,
+for whoever reads the board next. Additive and skipped-when-absent on the wire —
+`demo_path`'s contract verbatim, so a board that never uses it is unchanged on
+disk and at load.
+
+**It is refused, not cut**, past `MAX_TASK_DESCRIPTION` (500 characters), and
+refused rather than flattened when it carries a control character. That is
+`raise_attention`'s rule rather than `title`'s, and the argument is the same one:
+a caller who wrote 900 characters meant all of them, and welding two pasted
+lines together loses the point the second one made. Both refusals write nothing
+at all — not the description, and not the other fields of the same patch — so a
+refusal is safe to fix and resend. The cap is counted in CHARACTERS: a byte cap
+would refuse a 260-character description written in this repo's own em-dash
+prose while accepting 500 ASCII ones.
+
+**Validated and stored TRIMMED, which is one rule for two callers.** The board's
+editor trims before it sends and MCP does not, so while the check read the raw
+value `upsert_task(description: "Ship it.\n")` was refused from an agent and the
+identical paste into the human's own box was saved — one field, two callers, two
+answers (review round 1). Surrounding whitespace is not content and an
+all-whitespace value was already the clear, so both the check and the store read
+the trimmed text. Trimming is not a licence to flatten: a control character
+*between* two sentences is still refused, which is what the refusal is for.
+
+The frontend mirror (`descRefusal`) carries the same two ranges the backend
+does. Rust's `char::is_control` is category `Cc` — C0 **and** C1
+(U+007F–U+009F) — and the mirror stopped at U+007F, so a C1 character such as
+U+0085 (a real line break out of a Windows-1252 round trip) passed the editor
+and was refused by the backend instead: the exact round trip the pre-check
+exists to avoid.
+
+**It is kept off the compact `list_tasks` row**, and that is the only
+interesting call in the field. `list_tasks` rides every row of every board read
+an orchestrator makes, which is the payload shape #245 was cut for; the
+description is written *for a human*, so an agent that wants one asks for the row
+with `get_task`. The human board's own `orch_tasks` rows *do* carry it on every
+row, which is the opposite call and rests on what each field's weight is a
+function OF: note bodies grow with how long the group has run, while a
+description is written once and capped. Gating it on the wire would also have
+needed a `has_description` companion for the reason `notes` needs `note_count`
+— absent is not empty — to buy nothing the board wanted.
+
+The board shows it only under an open row, and **directly under the name, above
+the detail block**. That is a RENDERING decision, made in `tasksview.ts`; it is
+prose, and prose competes with the name #2937 was spent protecting.
+
+The ORDER is load-bearing and was wrong until review round 1: the two blocks
+were appended after `detail`, so a human who opened a row to find out what it
+IS had to pass the badges, pickers, links and notes to reach the one block that
+answers that. `docs/orchestration.md` promised the right order while the code
+did the other one; the promise was right and the code moved.
+
+### The editor's un-submitted state
+
+`TasksView.descDrafts` is a `Map<rowId, string>` and the `<textarea>` is a view
+of it — the board's own convention, and the `linkDrafts` precedent. The board
+re-renders on every `orch-tasks-changed`, which fires on every `write_tasks`,
+and `refreshNow` defers only while `isEditing()` reads an `INPUT`/`TEXTAREA` as
+`document.activeElement` — which holds while somebody is typing and **not** for
+the click on this editor's own Save button. Clearing the draft on success alone
+would therefore lose the text on exactly the route most people use.
+
+`descDraftIsPristine` is the one rule for "nothing to submit", and the
+renderer's seed is its other half: the box is seeded from the row's stored text,
+so a box nobody has touched must read as pristine. Open-for-editing is its own
+set rather than a draft entry, because "the box is open and untouched" and
+"there is no box" are different states, and collapsing them would shut the
+editor the first time an agent wrote to the board. Only **Cancel** and Escape
+discard; shutting the row, a background refresh and an agent's write all leave a
+draft where it is.
+
+### The load path validates nothing, and the row says so
+
+The 500-character cap and the one-line rule are **write-path** rules. A
+`tasks.json` that was hand-edited, or written by a binary older than the rule,
+can hold a multi-line or over-cap description, and it loads and paints
+verbatim — `pre-wrap` renders both lines.
+
+Validating on load was the wrong answer: the value is already on disk, refusing
+to render it would hide the problem rather than show it, and a repair pass that
+rewrote somebody's file to fit a rule they did not know about is worse than
+either. The board instead does what it already does for an unknown `kind`,
+which has exactly the same provenance — only a hand-edited file produces one —
+and marks it: `.task-desc.out-of-contract`, the state-danger dye, the text
+still shown in full, and a tooltip naming which rule it breaks.
+
+`storedDescriptionIsOutOfContract` is defined FROM `descRefusal`, the predicate
+the write path uses, so the display check and the write check cannot drift into
+disagreeing about what is legal (review round 2 premortem). The test pins that
+equivalence over both directions, and pins that an ABSENT description is not a
+broken one — the vacuity such a predicate is most likely to acquire.
+
+**Nothing here resizes a PTY.** Every element added by this slice — the level
+mark, the title area, the full title, the description block and its editor —
+is a child of `.task-main`, inside the row, inside the overlay the board already
+occupied. Hard constraint 1.
 
 ## What is not here
 

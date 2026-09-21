@@ -12849,6 +12849,21 @@ pub const MAX_TASK_LINK_TARGET: usize = 512;
 /// Max `label` length — a one-line gloss, not a description.
 pub const MAX_TASK_LINK_LABEL: usize = 120;
 
+/// Max `description` length (#3261) — one or two sentences of plain prose
+/// saying what a row IS, for a human scanning a board they did not build.
+///
+/// REFUSED when it is over, never truncated, which is `raise_attention`'s rule
+/// rather than `title`'s: a cut description loses its last sentence silently,
+/// and a caller that wrote 900 characters meant all of them. The error names
+/// the cap and the length, so the fix is one edit rather than a guess.
+///
+/// 500 is chosen against the payload argument the link caps above are chosen
+/// against, and it is a weaker obligation: this field never rides a
+/// `list_tasks` row (see `TaskSummary`) and never rides an unexpanded board
+/// row (see `BoardTask::description`), so its weight is bounded by the rows a
+/// human has opened plus the one row a `get_task` names — never by board size.
+pub const MAX_TASK_DESCRIPTION: usize = 500;
+
 /// Where a row of a given kind is allowed to sit (#1156) — the whole ladder,
 /// as data. `ladder_rule` is the ONLY place this table exists on this
 /// side, so the write path and every error string it produces cannot drift
@@ -13487,6 +13502,36 @@ pub struct Task {
     /// into view without a repair pass having to wipe the stamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleared_ms: Option<u64>,
+    /// One or two sentences saying what this row IS (#3261) — the field a
+    /// human adds when a title alone does not tell the next reader what the
+    /// work is. Plain text, never markdown-rendered anywhere: the board paints
+    /// it as `textContent`, so a row cannot become a rendering surface for
+    /// text an agent wrote.
+    ///
+    /// Same additive, skipped-when-absent, empty-string-clears contract as
+    /// `demo_path`, and for `demo_path`'s exact reason: most rows will never
+    /// carry one, so without the skip the first rewrite of any board would add
+    /// a permanently-dead `"description":null` to every row of a file humans
+    /// read and diff. Capped at `MAX_TASK_DESCRIPTION`, and a write over the
+    /// cap is refused rather than cut.
+    ///
+    /// **Stored TRIMMED, and validated on the same trimmed value** — one rule
+    /// for both callers. The board's editor trims before it sends and MCP does
+    /// not, so checking the raw value refused `"Ship it.\n"` from an agent while
+    /// silently accepting the identical paste from the human's own box
+    /// (#3261 review round 1). Trailing whitespace is not content; an
+    /// all-whitespace value was already the clear.
+    ///
+    /// **Withheld from both COMPACT reads, deliberately** — `TaskSummary`
+    /// (`list_tasks`) and an unexpanded `BoardTask` row do not carry it, and
+    /// the full-record reads (`get_task`, and an expanded board row) do. It is
+    /// the `notes` split (#1317) applied to a second field for the same
+    /// measured reason: a board is polled whole, 400-odd rows, and 500
+    /// characters per row is the payload shape #245 was cut for. It is also
+    /// the honest one on purpose — the description is written FOR a human, and
+    /// an agent that wants it can ask for the row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default)]
     pub updated_ms: u64,
 }
@@ -13664,6 +13709,12 @@ pub struct AgentTaskView<'a> {
     pub links: &'a [TaskLink],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demo_path: Option<&'a str>,
+    /// AGENT-VISIBLE (#3261), on THIS read only. `get_task` is the full-record
+    /// read, and an agent picking up a row it did not create is exactly the
+    /// reader the field was added for. The compact `list_tasks` row does NOT
+    /// carry it — see `Task::description` for why the split is where it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<&'a str>,
     pub updated_ms: u64,
     /// AGENT-VISIBLE (#1349), and DERIVED rather than projected off a `Task`
     /// field — which is why it is an owned `String` among borrows. It is what an
@@ -13708,6 +13759,8 @@ pub fn agent_task_view(task: &Task) -> AgentTaskView<'_> {
         // promises the human that no agent can see they cleared a row, and this
         // binding is where that promise is kept.
         cleared_ms: _,
+        // AGENT-VISIBLE (#3261) on this read: see the field's doc above.
+        description,
         updated_ms,
     } = task;
     AgentTaskView {
@@ -13725,6 +13778,7 @@ pub fn agent_task_view(task: &Task) -> AgentTaskView<'_> {
         parent: parent.as_deref(),
         kind: kind.as_deref(),
         demo_path: demo_path.as_deref(),
+        description: description.as_deref(),
         sprint: *sprint,
         links,
         updated_ms: *updated_ms,
@@ -13821,6 +13875,7 @@ pub fn link_etag(task: &Task) -> String {
         sprint: _,
         demo_path: _,
         cleared_ms: _,
+        description: _,
         updated_ms: _,
     } = task;
     let mut h = LINK_ETAG_OFFSET;
@@ -13915,6 +13970,25 @@ pub struct BoardTask {
     pub demo_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cleared_ms: Option<u64>,
+    /// The row's description (#3261), on EVERY row rather than only the ones
+    /// the caller named — which is the opposite call from `notes` two fields
+    /// up, and the difference is what each field's weight is a function OF.
+    ///
+    /// Note bodies grow with how long the group has run: `MAX_TASK_NOTES`
+    /// entries of unbounded prose per row, accumulating for the life of the
+    /// board, which is the shape that blew #245's payload and took #1317's cut
+    /// here. A description is written once and capped at
+    /// `MAX_TASK_DESCRIPTION`, so the whole board's worth is bounded by row
+    /// count alone — strictly tighter than `title`, which is uncapped and has
+    /// ridden every row since the board existed.
+    ///
+    /// The board hides it behind the row's expand, but that is a RENDERING
+    /// decision made in `tasksview.ts`, not a wire one: gating it here would
+    /// mean the human's own board could not show them their own text without a
+    /// second round trip, and would need a `has_description` companion for the
+    /// same reason `notes` needs `note_count` (absent ≠ empty).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub updated_ms: u64,
     pub link_etag: String,
 }
@@ -13970,6 +14044,7 @@ pub fn board_task(task: Task, with_notes: bool) -> BoardTask {
         sprint,
         demo_path,
         cleared_ms,
+        description,
         updated_ms,
     } = task;
     BoardTask {
@@ -13991,6 +14066,7 @@ pub fn board_task(task: Task, with_notes: bool) -> BoardTask {
         sprint,
         demo_path,
         cleared_ms,
+        description,
         updated_ms,
         link_etag,
     }
@@ -14775,6 +14851,11 @@ pub struct TaskPatch {
     /// Worktree path for a demo of this item (#1091 slice B) — same
     /// untouched/empty-clears rule as `pr`/`pr_base`. See `Task::demo_path`.
     pub demo_path: Option<String>,
+    /// What this row IS, in a sentence or two (#3261) — same
+    /// untouched/empty-clears rule as `demo_path`, with ONE difference: a
+    /// value over `MAX_TASK_DESCRIPTION` is REFUSED, before anything is
+    /// written, rather than stored cut. See `Task::description`.
+    pub description: Option<String>,
     /// The human's archive stamp (#1152): `None` leaves it untouched,
     /// `Some(true)` stamps it with now, `Some(false)` clears it. A bool rather
     /// than a timestamp because the caller has no business choosing WHEN it was
@@ -33343,6 +33424,34 @@ impl OrchRegistry {
                 return Err(format!("invalid kind {k:?} — use one of {}", TASK_KINDS.join(" | ")));
             }
         }
+        // The description is validated HERE, beside the status and kind checks
+        // and before the lock, for the reason the whole method obeys: nothing
+        // is written until `write_tasks` at the bottom, and a refusal that has
+        // not touched the board is the cheapest kind (#3261).
+        //
+        // It is checked in CHARACTERS rather than bytes, because the cap is a
+        // promise to a human counting sentences: a byte cap would refuse a
+        // 260-character description written in an em-dash-and-accents style
+        // this repo writes in constantly, while accepting 500 ASCII ones.
+        //
+        // Control characters are refused rather than stripped, for the reason
+        // the over-length case is refused rather than cut: a caller who pasted
+        // a three-line paragraph should be told the field is one, not have two
+        // of the lines silently welded together. `	` is included — the board
+        // paints this as a single line, where a tab is invisible width.
+        if let Some(d) = patch.description.as_deref().map(str::trim) {
+            let n = d.chars().count();
+            if n > MAX_TASK_DESCRIPTION {
+                return Err(format!(
+                    "description is {n} characters — at most {MAX_TASK_DESCRIPTION}. It is one or two sentences saying what the row IS; put the detail in a note or a grounding link."
+                ));
+            }
+            if let Some(c) = d.chars().find(|c| c.is_control()) {
+                return Err(format!(
+                    "description must be one line of plain text — it carries the control character {c:?}. Put anything that needs its own paragraph in a note."
+                ));
+            }
+        }
         // NO sprint check sits here, beside the status and kind ones, and that
         // is deliberate rather than an omission (#1272). Nothing is left to
         // check by the time a patch reaches this method:
@@ -33469,6 +33578,10 @@ impl OrchRegistry {
                     links: vec![],
                     demo_path: None,
                     cleared_ms: None,
+                    // Born with no description (#3261); applied below by the
+                    // generic patch application, so a create-with-description
+                    // is one code path with an update.
+                    description: None,
                     updated_ms: 0,
                 });
                 tasks.len() - 1
@@ -33719,6 +33832,15 @@ impl OrchRegistry {
         }
         if patch.demo_path.is_some() {
             task.demo_path = patch.demo_path.filter(|s| !s.trim().is_empty());
+        }
+        if patch.description.is_some() {
+            // TRIMMED, like the check above (#3261 review round 1). Both halves
+            // read the same value or the field has two policies: the editor
+            // trims before it sends, MCP does not, and a trailing "\n" was
+            // refused from one caller and silently accepted from the other.
+            // Trailing whitespace is not content, and an all-whitespace value
+            // was already the clear.
+            task.description = patch.description.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         }
         if patch.assignee.is_some() {
             task.assignee = patch.assignee.filter(|s| !s.trim().is_empty());
@@ -63783,6 +63905,11 @@ pub async fn orch_upsert_task(
     // demo_path edits (the orchestrator sets it through the MCP `upsert_task`
     // tool's own arm — see `mcp.rs`).
     demo_path: Option<String>,
+    // #3261: same additive contract, for the human's own in-place description
+    // editor on the board row. The cap and the one-line rule are checked in
+    // the registry, identically to the MCP path — the rules do not depend on
+    // who wrote them.
+    description: Option<String>,
     // #1272/#1273: same additive contract again, so the human board can set a
     // row's sprint (including the sprint-advance affordance, which is N of
     // these writes and never a bulk operation) and edit its grounding links.
@@ -63815,6 +63942,7 @@ pub async fn orch_upsert_task(
                 parent,
                 kind,
                 demo_path,
+                description,
                 cleared,
                 sprint,
                 links,

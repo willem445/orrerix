@@ -94,6 +94,12 @@ import {
   STALE_LINK_ETAG_PREFIX,
   type LinkArrayEdit,
   type TaskArtifactLink,
+  MAX_DESCRIPTION,
+  descDraftIsPristine,
+  descOverBy,
+  descRefusal,
+  descEditorState,
+  storedDescriptionIsOutOfContract,
 } from "../src/taskboard.ts";
 
 test("counts only tasks in the exact `done` status", () => {
@@ -2781,4 +2787,190 @@ test("every argument key the board composes is a declared orch_upsert_task param
   // Scope, stated rather than implied: this covers the arguments THIS view
   // composes. The ~20 other parameters on the same command are reached from
   // other call sites and are not swept here.
+});
+
+// --- the row's description (#3261) ---------------------------------------
+
+test("the description cap is the backend's, read out of the Rust source", () => {
+  // The backend REFUSES an over-long description rather than cutting it, so an
+  // editor holding a different number would either permit what the board then
+  // rejects or refuse what it would have accepted. The ladder guard above reads
+  // its rule out of mod.rs for this reason; so does this.
+  const src = readFileSync(RUST_LADDER, "utf8");
+  const m = src.match(/pub const MAX_TASK_DESCRIPTION: usize = (\d+);/);
+  assert.notEqual(
+    m,
+    null,
+    "MAX_TASK_DESCRIPTION is gone or renamed in mod.rs — this guard reads it by name, so a " +
+      "rename must update the guard rather than leave it scanning nothing"
+  );
+  assert.equal(MAX_DESCRIPTION, Number(m![1]), "the editor's cap and the backend's must be one number");
+});
+
+test("a draft that says what the row already says is not a draft", () => {
+  // The pristine rule and the renderer's SEED are one question: the box is
+  // seeded from the row's stored text, so a box nobody has touched must read as
+  // pristine or every render would leave a live Save button behind.
+  assert.equal(descDraftIsPristine("Parses the workflow file.", "Parses the workflow file."), true);
+  // A row with no description seeds an EMPTY box, and all three spellings of
+  // "no description" are one value.
+  for (const none of [null, undefined, ""]) {
+    assert.equal(descDraftIsPristine("", none), true, `an empty box on a ${JSON.stringify(none)} row is pristine`);
+  }
+  // Trailing space only — the write trims, so this would save nothing.
+  assert.equal(descDraftIsPristine("Parses it.  ", "Parses it."), true);
+  // Real edits are not pristine, in both directions.
+  assert.equal(descDraftIsPristine("Parses it, twice.", "Parses it."), false);
+  assert.equal(descDraftIsPristine("", "Parses it."), false, "clearing the box is an edit, not a no-op");
+  assert.equal(descDraftIsPristine("Parses it.", null), false);
+});
+
+test("the over-cap count is in code points, so it matches what the backend counted", () => {
+  assert.equal(descOverBy("x".repeat(MAX_DESCRIPTION)), 0);
+  assert.equal(descOverBy("x".repeat(MAX_DESCRIPTION + 7)), 7);
+  // The failure this pins: an em dash is 1 code point and 1 UTF-16 unit, but an
+  // astral character is 2 units — so a `.length` count would report a string
+  // the backend accepts as over by up to its own length.
+  const astral = "🙂".repeat(MAX_DESCRIPTION);
+  assert.equal(astral.length, MAX_DESCRIPTION * 2, "the fixture must really be surrogate pairs");
+  assert.equal(descOverBy(astral), 0, "a 500-code-point description is not over a 500 cap");
+  assert.equal(descOverBy(`${astral}🙂`), 1);
+});
+
+test("the editor declines exactly what the backend refuses, and nothing else", () => {
+  assert.equal(descRefusal("What this row is."), null);
+  assert.equal(descRefusal(""), null, "clearing the description is a legal write, not a refusal");
+  assert.equal(descRefusal("   "), null, "whitespace is the clear too — the backend trims before it stores");
+  // Over the cap: refused, with the overage named, so the fix is one edit.
+  const over = descRefusal("x".repeat(MAX_DESCRIPTION + 3));
+  assert.match(over ?? "", /3 characters over/);
+  assert.match(descRefusal("x".repeat(MAX_DESCRIPTION + 1)) ?? "", /1 character over/, "singular, not '1 characters'");
+  // One line of plain text: a pasted paragraph is REFUSED, never flattened —
+  // welding two sentences together loses the point the second one made.
+  for (const [what, text] of [
+    ["a newline", "One line.\nAnd another."],
+    ["a carriage return", "One line.\rAnd another."],
+    ["a tab", "One line.\tIndented."],
+    ["a DEL", "One line.\u007fetc."],
+  ] as const) {
+    assert.notEqual(descRefusal(text), null, `${what} must be refused, not flattened`);
+  }
+  // The negative control on that sweep: prose this repo really writes — an em
+  // dash, curly quotes, an accent — is not a control character and must pass.
+  assert.equal(descRefusal("Parses the workflow file — the “blocks” list, naïvely."), null);
+});
+
+test("the editor's control-character rule covers BOTH of Cc's ranges, as the backend's does", () => {
+  // Review round 1, finding 2. Rust `char::is_control` is Unicode category Cc,
+  // which is C0 (U+0000-U+001F) *and* C1 (U+007F-U+009F). The mirror stopped at
+  // U+007F, so a C1 character passed the editor, left Save enabled, and was
+  // refused by the backend instead — the exact round trip `descRefusal` exists
+  // to avoid, and which its own doc says cannot happen.
+  //
+  // These are not theoretical code points: U+0085 (NEL) is a real line break in
+  // text pasted from a mainframe export or a Windows-1252 round trip.
+  for (const cp of [0x00, 0x0a, 0x1f, 0x7f, 0x80, 0x85, 0x96, 0x9f]) {
+    const c = String.fromCharCode(cp);
+    assert.notEqual(
+      descRefusal(`Ship${c}it.`),
+      null,
+      `U+${cp.toString(16).padStart(4, "0").toUpperCase()} is category Cc and must be refused`
+    );
+  }
+  // The boundary on the far side: U+00A0 is NBSP, category Zs, NOT a control —
+  // a rule that refused it would refuse text pasted out of any word processor.
+  assert.equal(descRefusal("Ship\u00a0it."), null, "U+00A0 is a space, not a control character");
+  assert.equal(descRefusal("Ship it."), null);
+});
+
+test("a trailing newline gets ONE answer, whichever caller sends it", () => {
+  // Review round 1, premortem 1. The editor trims before it sends and MCP does
+  // not, so a raw-value check refused `"Ship it.\n"` from an agent while
+  // silently accepting the identical paste from the human's own box. Both sides
+  // now read the TRIMMED value; the Rust half of this pin is
+  // `a_description_is_validated_and_stored_trimmed`.
+  assert.equal(descRefusal("Ship it.\n"), null, "a trailing newline is trimmed, not refused");
+  assert.equal(descRefusal("  Ship it.  "), null);
+  // And an INTERIOR one is still refused — trimming must not become a licence
+  // to flatten, which is the whole point of the refusal.
+  assert.notEqual(descRefusal("Ship it.\nThen ship more."), null);
+});
+
+test("a stored description the write path would refuse reads as a BROKEN board file", () => {
+  // Review round 2, premortem: the LOAD path validates nothing. A hand-edited
+  // tasks.json (or one written by a binary older than the rule) can hold a
+  // multi-line or over-cap description, and it loads and paints verbatim.
+  //
+  // The board already has a precedent for this exact shape and takes the
+  // opposite decision — an unknown `kind` gets a broken chip rather than a
+  // silent pass — so the description gets the same treatment.
+  assert.equal(storedDescriptionIsOutOfContract("One.\nTwo."), true, "a multi-line stored value is out of contract");
+  assert.equal(storedDescriptionIsOutOfContract("x".repeat(MAX_DESCRIPTION + 1)), true, "an over-cap stored value is too");
+  assert.equal(storedDescriptionIsOutOfContract("One.Two."), true, "and a C1 control, like the write path");
+
+  // Anything loomux itself wrote is in contract, because every producer goes
+  // through the write path. These are the negative controls that stop the
+  // predicate from simply reading "true".
+  assert.equal(storedDescriptionIsOutOfContract("Hands the blocks to the spawner."), false);
+  assert.equal(storedDescriptionIsOutOfContract("x".repeat(MAX_DESCRIPTION)), false, "exactly at the cap is legal");
+  assert.equal(storedDescriptionIsOutOfContract("Parses it — the “blocks” list, naïvely."), false);
+
+  // ABSENT is not BROKEN: a row with no description must not be marked as a
+  // corrupt one, which is the vacuity this predicate is most likely to acquire.
+  for (const none of [null, undefined, "", "   "]) {
+    assert.equal(
+      storedDescriptionIsOutOfContract(none),
+      false,
+      `${JSON.stringify(none)} is "no description", not a broken board file`
+    );
+  }
+
+  // It is defined FROM the write-path rule, so the two cannot drift: every
+  // value the writer refuses is a value the reader marks, and vice versa.
+  for (const s of ["One.\nTwo.", "x".repeat(MAX_DESCRIPTION + 1), "ok", "x".repeat(MAX_DESCRIPTION)]) {
+    assert.equal(
+      storedDescriptionIsOutOfContract(s),
+      descRefusal(s) !== null,
+      `the display check and the write check disagree about ${JSON.stringify(s.slice(0, 20))}`
+    );
+  }
+});
+
+test("the description editor's Save is live for exactly one reason, and dead for two", () => {
+  // Review round 2, finding 2. This decision was computed inline in the
+  // renderer and pinned nowhere — the shape that silently inverts. The two
+  // dead reasons are DIFFERENT and the state says which: a pristine draft has
+  // nothing to write, a refused one must not be written.
+  const stored = "Hands the blocks to the spawner.";
+
+  const edited = descEditorState("Hands the blocks to the spawner, twice.", stored);
+  assert.equal(edited.canSave, true, "a real edit is saveable");
+  assert.equal(edited.refusal, null);
+  assert.equal(edited.pristine, false);
+
+  const untouched = descEditorState(stored, stored);
+  assert.equal(untouched.canSave, false, "an untouched box has nothing to save");
+  assert.equal(untouched.pristine, true);
+  assert.equal(untouched.refusal, null, "pristine is not a refusal — the two reasons must stay apart");
+
+  const refused = descEditorState("x".repeat(MAX_DESCRIPTION + 1), stored);
+  assert.equal(refused.canSave, false, "an over-cap draft must not be saveable");
+  assert.notEqual(refused.refusal, null, "and the editor must be able to say why");
+  assert.equal(refused.pristine, false, "it is an edit, just not a legal one");
+
+  // CLEARING is a real edit, not a pristine box — the one case where an empty
+  // draft must stay saveable, because empty is how a description is removed.
+  const cleared = descEditorState("", stored);
+  assert.equal(cleared.canSave, true, "emptying the box is how you delete a description");
+  assert.equal(cleared.refusal, null);
+
+  // ...and on a row that has none, the same empty box is pristine.
+  assert.equal(descEditorState("", null).canSave, false);
+
+  // The counter is code points, so it agrees with the refusal rather than
+  // reporting a different number from the one the cap was applied to.
+  assert.equal(descEditorState("  ab  ", null).used, 2, "the count is of trimmed text");
+  const astral = "🙂".repeat(MAX_DESCRIPTION);
+  assert.equal(descEditorState(astral, null).used, MAX_DESCRIPTION);
+  assert.equal(descEditorState(astral, null).refusal, null, "the count and the refusal must agree");
 });

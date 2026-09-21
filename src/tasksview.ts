@@ -105,10 +105,20 @@ import {
   isExpandToggleKey,
   pruneExpandFocus,
   rowLayout,
+  titleClickToggles,
   toggleExpandedRow,
+  type ClickPathNode,
   type RowField,
 } from "./boardrow.ts";
+import { displayTitle, titleOverBudget, titleTooltip, TITLE_BUDGET } from "./tasktitle.ts";
+import { boardShowsKindMarks, kindKey, kindTitle, kindToken } from "./taskkind.ts";
 import { BoardPrefsStore } from "./boardprefs.ts";
+import {
+  MAX_DESCRIPTION,
+  descEditorState,
+  descRefusal,
+  storedDescriptionIsOutOfContract,
+} from "./taskboard.ts";
 import { loadBoardPrefs, saveBoardPrefs } from "./pty.ts";
 
 export interface OrchTaskNote {
@@ -197,6 +207,15 @@ export interface OrchTask {
    *  its notes and its links stay on the board, and `isCleared` only honours
    *  the stamp while the row is still `done`. */
   cleared_ms?: number | null;
+  /** One or two sentences the human wrote about what this row IS (#3261).
+   *  Optional on the wire like `parent`/`kind`/`demo_path`: the backend omits
+   *  the key when absent, so a pre-#3261 board arrives without it and absent
+   *  means "nobody has written one". Plain text — painted as `textContent`,
+   *  never markdown, so a row can never become a rendering surface for text an
+   *  agent wrote. Carried on EVERY row rather than only the expanded ones (see
+   *  `BoardTask::description` for why the call differs from `notes`); the
+   *  board is what decides to show it only when the row is open. */
+  description?: string | null;
   updated_ms: number;
   /** Fingerprint of this row's `deps`/`related`/`links` as of the read that
    *  produced it (#1349) — DERIVED per read by the backend, never stored on the
@@ -361,6 +380,28 @@ export class TasksView {
    *  already been wiped out of the box. Pruned to live rows on every refresh,
    *  like `selected`/`collapsed`. */
   private linkDrafts = new Map<string, LinkDraft>();
+  /** Un-submitted DESCRIPTION text, per row (#3261) — the same convention as
+   *  `linkDrafts` above and for the same reason: the board re-renders on every
+   *  `orch-tasks-changed`, which fires on every `write_tasks`, so a half-typed
+   *  sentence living in the `<textarea>` would be destroyed the first time any
+   *  agent touched any row. `refreshNow` defers while `isEditing()`, but that
+   *  reads `document.activeElement` — it holds for typing and NOT for the click
+   *  on this editor's own Save button, which is the route most people use.
+   *
+   *  The map IS the authority and the element is a view of it, never the other
+   *  way round. Pruned to live rows on every refresh beside `linkDrafts`, and
+   *  dropped when `descDraftIsPristine` says the box says exactly what the row
+   *  already does — one rule, which the renderer's own seed is the other half
+   *  of. */
+  private descDrafts = new Map<string, string>();
+  /** Rows whose description is OPEN for editing (#3261) — its own set, not a
+   *  `descDrafts` entry, because "the box is open and untouched" and "there is
+   *  no box" are different states and collapsing them would shut the editor
+   *  the first time an agent wrote to the board. */
+  private descEditing = new Set<string>();
+  /** The row whose description box should take focus after the next render —
+   *  the one-shot hook `linkFocus` and `expandFocus` already follow. */
+  private descFocus: string | null = null;
   /** The row whose target field should take focus after the next render — the
    *  same one-shot hook as `pickingFocus`, so adding several links to a row in
    *  a row does not need a click between each. */
@@ -1008,6 +1049,12 @@ export class TasksView {
     // (#1273): a draft nobody can ever see again is a leak that grows with the
     // session.
     this.linkDrafts = retainExistingKeys(this.linkDrafts, this.tasks);
+    // #3261: the description editor's two sets, on exactly the rule above —
+    // a draft or an open editor for a row that has gone is inert at best and,
+    // like a stale `expandFocus`, would fire on whatever row next carried the
+    // id.
+    this.descDrafts = retainExistingKeys(this.descDrafts, this.tasks);
+    this.descEditing = retainExisting(this.descEditing, this.tasks);
     // The two expanded-row sets, pruned on the same rule (#1317).
     //
     // This is the sixth of #1316's six module-level collections, and the one
@@ -1033,7 +1080,11 @@ export class TasksView {
     // the toggle and the render would leave it armed for a row that will never
     // be built again, so it would sit there until the next expand consumed it —
     // on the wrong row.
-    this.expandFocus = pruneExpandFocus(this.expandFocus, new Set(this.tasks.map((t) => t.id)));
+    const live = new Set(this.tasks.map((t) => t.id));
+    this.expandFocus = pruneExpandFocus(this.expandFocus, live);
+    // #3261: same one-shot hook, same prune — a row deleted between the click
+    // and the render would otherwise leave it armed forever.
+    this.descFocus = pruneExpandFocus(this.descFocus, live);
     this.render();
   }
 
@@ -1434,7 +1485,16 @@ export class TasksView {
     ta.focus();
   }
 
+  /** Does this board paint LEVEL MARKS at all (#3261)?
+   *
+   *  Computed once per render rather than per row: it is a property of the
+   *  BOARD, and asking it inside `renderTask` would walk every row for every
+   *  row. Set by `render` before any row is built, read by `renderTask`. */
+  private boardMarksLevels = false;
+
   private render(): void {
+    // #3261: one pass over the board, before any row is built.
+    this.boardMarksLevels = boardShowsKindMarks(this.tasks);
     this.updateCleared();
     this.updateDeleteDone();
     this.updateDeleteSelected();
@@ -2719,7 +2779,17 @@ export class TasksView {
     // permission, no merge decision, and not the claim guard.
     if (t.kind) {
       const known = (KINDS as readonly string[]).includes(t.kind);
-      const kind = el("span", `task-chip kind k-${known ? t.kind : "unknown"}`, t.kind);
+      // A level the board cannot place is a BROKEN ROW, not a fifth level, so
+      // it takes its own chip class rather than a variant of the level chip
+      // (#3261). One position answers one question: `.task-chip.kind` says
+      // WHICH LEVEL in the identity channel, `.task-chip.kind-broken` says the
+      // board file is wrong, in the state channel — and test/theme.test.ts's
+      // channel guard is what caught them sharing one.
+      const kind = el(
+        "span",
+        known ? `task-chip kind k-${t.kind}` : "task-chip kind-broken",
+        t.kind
+      );
       kind.title = known
         ? `Agile level: ${t.kind} — ${levelRuleText(t.kind)}`
         : `${t.kind} is not one of ${KINDS.join(" | ")} — only a hand-edited tasks.json can hold it`;
@@ -2759,35 +2829,69 @@ export class TasksView {
     );
     place("status", status);
 
-    // Title: double-click to edit in place.
-    const title = el("span", "task-title", t.title);
-    title.title = "Double-click to edit";
-    title.addEventListener("dblclick", () => {
-      const input = document.createElement("input");
-      input.className = "dlg-input task-title-input";
-      input.value = t.title;
-      title.replaceWith(input);
-      input.focus();
-      input.select();
-      const commit = (save: boolean) => {
-        // Enter/Escape/click all commit, and detaching the focused input fires
-        // blur → a second commit; swapIfConnected keeps that redundant call (or
-        // a background re-render having already removed the row) from throwing
-        // NotFoundError out into the app-wide error banner.
-        if (!swapIfConnected(input, title)) return;
-        const v = input.value.trim();
-        if (save && v && v !== t.title) {
-          void this.mutate(invoke("orch_upsert_task", { groupId: this.groupId, id: t.id, title: v }));
-        }
-      };
-      input.addEventListener("keydown", (e) => {
-        e.stopPropagation();
-        if (e.key === "Enter") commit(true);
-        if (e.key === "Escape") commit(false);
-      });
-      input.addEventListener("blur", () => commit(true));
+    // The LEVEL MARK (#3261): the hierarchy at a glance, for one 8px square
+    // beside the id. Only on a board that uses levels at all — a flat board
+    // would otherwise gain a column of "unlabelled" marks saying nothing, which
+    // is the pay-for-what-you-use rule the kind and sprint FILTER chips already
+    // follow. An unknown kind gets no mark (`kindToken` returns null): its own
+    // broken chip is the thing that should be speaking.
+    if (this.boardMarksLevels) {
+      const key = kindKey(t.kind);
+      if (kindToken(t.kind) !== null) {
+        const mark = el("span", `task-kind-mark k-${key}`);
+        mark.title = kindTitle(t.kind);
+        // The mark is a colour; the colour is a quiz on its own. The tooltip
+        // above carries the word, and this is what an assistive technology
+        // announces — see theme.ts §KIND_HUES on colour never being the only
+        // channel.
+        mark.setAttribute("role", "img");
+        mark.setAttribute("aria-label", kindTitle(t.kind));
+        place("kindMark", mark);
+      }
+    }
+
+    // The TITLE AREA (#3261). Two changes from #2937's wrapping name:
+    //
+    //  - it is CUT at `TITLE_BUDGET` (src/tasktitle.ts). Nothing is lost — the
+    //    whole name is on the tooltip and in the expanded row, and the backend
+    //    still accepts any title;
+    //  - clicking anywhere on it opens the row, which is the acceptance
+    //    criterion and also why double-click-to-edit had to MOVE. The first
+    //    click re-renders the row, so the element the second click would land
+    //    on no longer exists; the editable copy is the full title under the
+    //    open row instead.
+    const shownTitle = displayTitle(t.title);
+    const titleArea = el("div", "task-title-area");
+    const title = el("span", "task-title", shownTitle.shown);
+    titleArea.appendChild(title);
+    if (shownTitle.truncated) {
+      // A quiet marker that the line is not the whole name, for a human who is
+      // reading rather than hovering. The ellipsis says it too; this says it in
+      // a place a tooltip does not have to be found first.
+      const more = el("span", "task-title-warn", "⋯");
+      more.setAttribute("aria-hidden", "true");
+      titleArea.appendChild(more);
+    }
+    titleArea.title = titleTooltip(
+      shownTitle,
+      rowExpanded ? "Click to close this row" : "Click to open this row"
+    );
+    titleArea.addEventListener("click", (e) => {
+      // The rule is `boardrow.ts`'s, over the path from the click's target out
+      // to this element — so every control that sits INSIDE the title area
+      // (there are none today, and there is no promise there never will be)
+      // keeps its own click.
+      const path: ClickPathNode[] = [];
+      for (let n = e.target as HTMLElement | null; n; n = n.parentElement) {
+        path.push(n);
+        if (n === titleArea) break;
+      }
+      if (!titleClickToggles(path)) return;
+      this.expandedRows = toggleExpandedRow(this.expandedRows, t.id);
+      this.expandFocus = t.id;
+      this.render();
     });
-    place("title", title);
+    place("title", titleArea);
 
     // Meta chips: issue / PR / assignee / resumable session. Issue and PR
     // refs are clickable — they open in the browser (see openRef).
@@ -3138,7 +3242,62 @@ export class TasksView {
     top.appendChild(expand);
     main.appendChild(top);
 
-    if (rowExpanded) main.appendChild(detail);
+    // The FULL title, under an open row (#3261) — where the rest of a cut name
+    // lives, and where double-click-to-edit moved to when a single click on the
+    // compact line became the expand. Rendered whether or not the name was cut:
+    // "the editable copy of the name is here" must not be a rule that depends
+    // on how long the name happens to be.
+    if (rowExpanded) {
+      const full = el("div", "task-title-full", t.title);
+      full.title = "Double-click to edit the name";
+      full.addEventListener("dblclick", () => {
+        const input = document.createElement("input");
+        input.className = "dlg-input task-title-input";
+        input.value = t.title;
+        full.replaceWith(input);
+        input.focus();
+        input.select();
+        const commit = (write: boolean) => {
+          // Enter/Escape/click all commit, and detaching the focused input
+          // fires blur → a second commit; swapIfConnected keeps that redundant
+          // call (or a background re-render having already removed the row)
+          // from throwing NotFoundError into the app-wide error banner.
+          if (!swapIfConnected(input, full)) return;
+          const v = input.value.trim();
+          if (write && v && v !== t.title) {
+            void this.mutate(invoke("orch_upsert_task", { groupId: this.groupId, id: t.id, title: v }));
+          }
+        };
+        input.addEventListener("keydown", (e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") commit(true);
+          if (e.key === "Escape") commit(false);
+        });
+        // A SOFT warning, never a refusal (#3261 AC1): the backend accepts any
+        // title, and an editor that refused what agents can still write would
+        // be a worse board than one with long names in it.
+        //
+        // On `input`, not `keydown` (review round 1): `keydown` fires BEFORE the
+        // value changes, so the warning was always one keystroke stale — and it
+        // never fired at all for the way a 200-character title actually arrives,
+        // which is a paste. `input` covers paste, drag-drop, IME commit and undo.
+        const warn = () => input.classList.toggle("over-budget", titleOverBudget(input.value));
+        input.addEventListener("input", warn);
+        warn();
+        input.title = `Names over ${TITLE_BUDGET} characters are cut on the row's own line — the whole name stays on the tooltip and here`;
+        input.addEventListener("blur", () => commit(true));
+      });
+      // ORDER IS LOAD-BEARING, and it was the wrong way round until review
+      // round 1: these two go in BEFORE `detail`, so an open row reads
+      // name -> description -> everything else. A human opens a row to find out
+      // what it IS, and making them pass the badges, pickers, links and notes to
+      // reach the one block that answers that is the opposite of what #3261 is
+      // for. `docs/orchestration.md` promised this order while the code did the
+      // other one; the promise was right.
+      main.appendChild(full);
+      main.appendChild(this.renderDescription(t));
+      main.appendChild(detail);
+    }
 
     // The deps / see-also chips and the four pickers live on their own line
     // below, and they are detail (#2937) — but a picker the human has just
@@ -3196,5 +3355,137 @@ export class TasksView {
 
     row.append(check, order, main);
     return row;
+  }
+
+  /** The row's DESCRIPTION block (#3261) — read mode, or the in-place editor.
+   *
+   *  Shown only under an open row, which is the acceptance criterion and also
+   *  the reason it is a full-width block rather than anything on the compact
+   *  line: it is prose, and prose competes with a name the whole of #2937 was
+   *  spent protecting.
+   *
+   *  Every piece of un-submitted state here lives in `this.descDrafts` /
+   *  `this.descEditing`, never in the elements — see `descDrafts`. */
+  private renderDescription(t: OrchTask): HTMLElement {
+    // Two paths, and they share nothing but the row — which is why this is the
+    // seam the split follows (review round 1, code-metrics: 97 lines against a
+    // base p95 of 42). The dispatch stays here so "which one am I looking at"
+    // is one line rather than a condition buried in a long method.
+    return this.descEditing.has(t.id) ? this.renderDescriptionEditor(t) : this.renderDescriptionView(t);
+  }
+
+  /** The read path: what the row says, or an invitation to say it. */
+  private renderDescriptionView(t: OrchTask): HTMLElement {
+    const stored = (t.description ?? "").trim();
+    // A stored value the WRITE path would refuse can only come from a
+    // hand-edited tasks.json or a binary older than the rule (#3261 review
+    // round 2). The board says so rather than painting it as though it were
+    // fine — the same call the unknown `kind` gets, for the same reason, and
+    // from the same predicate the write path uses so the two cannot drift.
+    const broken = storedDescriptionIsOutOfContract(stored);
+    const view = el(
+      "div",
+      `task-desc${stored ? "" : " empty"}${broken ? " out-of-contract" : ""}`,
+      stored || "No description — click to add one"
+    );
+    view.title = broken
+      ? `This description is not one loomux would have written — ${descRefusal(stored)}. Only a hand-edited tasks.json can hold it. Click to fix it.`
+      : "Click to write what this row IS, in a sentence or two";
+    view.addEventListener("click", () => {
+      this.descEditing.add(t.id);
+      this.descFocus = t.id;
+      this.render();
+    });
+    return view;
+  }
+
+  /** The edit path. Every piece of un-submitted state is in `descDrafts` /
+   *  `descEditing`, never in these elements — see `descDrafts`. */
+  private renderDescriptionEditor(t: OrchTask): HTMLElement {
+    const stored = (t.description ?? "").trim();
+    const wrap = el("div", "task-desc-edit");
+    const box = document.createElement("textarea");
+    box.className = "dlg-input task-desc-input";
+    box.rows = 2;
+    box.spellcheck = true;
+    box.placeholder = "What is this row? One or two sentences, for whoever reads the board next.";
+    // SEEDED FROM THE DRAFT, falling back to the row — the draft map is the
+    // authority and this element is a view of it. Seeding from `stored` alone
+    // would discard whatever was typed on every background re-render, which is
+    // the whole failure the map exists to prevent.
+    box.value = this.descDrafts.get(t.id) ?? stored;
+
+    const count = el("span", "task-desc-count");
+    const save = el("button", "dlg-btn", "Save") as HTMLButtonElement;
+    const cancel = el("button", "dlg-btn", "Cancel") as HTMLButtonElement;
+
+    const sync = () => {
+      const draft = box.value;
+      // The DECISION is `descEditorState`, pure and tested; this closure only
+      // moves it onto the elements. One rule for "nothing to submit", and the
+      // renderer's seed above is its other half — a draft that says exactly
+      // what the row already says is not a draft, so it does not survive the
+      // render.
+      const s = descEditorState(draft, t.description);
+      if (s.pristine) this.descDrafts.delete(t.id);
+      else this.descDrafts.set(t.id, draft);
+      count.textContent = `${s.used}/${MAX_DESCRIPTION}`;
+      count.classList.toggle("over", s.refusal !== null);
+      count.title = s.refusal ?? "";
+      save.disabled = !s.canSave;
+      save.title = s.refusal ?? (s.pristine ? "Nothing to save yet" : "Save this description");
+    };
+
+    const commit = () => {
+      const draft = box.value.trim();
+      if (descRefusal(draft) !== null) return;
+      this.descDrafts.delete(t.id);
+      this.descEditing.delete(t.id);
+      // The EMPTY STRING is the backend's clear, so wiping the box and saving
+      // removes the description rather than storing whitespace — the `pr` rule,
+      // which `description` shares.
+      void this.mutate(
+        invoke("orch_upsert_task", { groupId: this.groupId, id: t.id, description: draft })
+      );
+    };
+
+    box.addEventListener("input", sync);
+    box.addEventListener("keydown", (e) => {
+      // The board's app-level shortcuts must not eat a keystroke aimed at a
+      // text box, exactly as the note and link editors do.
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        this.descDrafts.delete(t.id);
+        this.descEditing.delete(t.id);
+        this.render();
+        return;
+      }
+      // Enter submits, Shift+Enter does not — and neither inserts a newline,
+      // because the field is one line of plain text and the backend refuses a
+      // control character rather than flattening it.
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (!e.shiftKey) commit();
+      }
+    });
+    save.addEventListener("click", commit);
+    cancel.addEventListener("click", () => {
+      // CANCEL DISCARDS, and it is the only thing that does: shutting the row,
+      // a background re-render, and an agent writing to the board all leave the
+      // draft where it is.
+      this.descDrafts.delete(t.id);
+      this.descEditing.delete(t.id);
+      this.render();
+    });
+
+    wrap.append(box, count, save, cancel);
+    sync();
+    // The one-shot focus hook (`expandFocus`'s rule): only on the render that
+    // follows this row's own click into the editor, never on a background
+    // refresh, which would yank the caret out of whatever the human moved to.
+    const hook = consumeExpandFocus(this.descFocus, t.id);
+    this.descFocus = hook.pending;
+    if (hook.focus) window.setTimeout(() => box.focus(), 0);
+    return wrap;
   }
 }

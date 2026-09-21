@@ -197,6 +197,33 @@ export const PALETTE = {
   //     this value is in the PR for #2126; what matters here is that a tempered #4ccfe8 measures
   //     28.5 ΔE from copilot and is therefore not available.
 
+  // --- the four AGILE-LEVEL pigments (#3261). Like the CLI hues above they exist for ONE
+  //     position — the task board's kind mark and its kind chip — and answer one closed
+  //     question: *which level of the ladder is this row*. `KIND_HUES` says why they could
+  //     not be borrowed `--id-*` tokens, and why the unlabelled row deliberately has no
+  //     pigment here at all.
+  //
+  //     Measured, on the same instruments `test/theme.test.ts` uses and re-derives (CIE76
+  //     over the Viénot simulation; WCAG for contrast): every one of the four clears AA as
+  //     text on every slate ground, worst case `mulberry` at 5.14:1 on slate300. Across all
+  //     five marks including the unlabelled one, the closest pair is 40.0 ΔE normal, and
+  //     under simulation protan 12.8 (ember/moss), deutan 15.9 (mulberry/unlabelled),
+  //     tritan 10.0 (ember/mulberry) — so this set does NOT collapse under CVD, unlike the
+  //     CLI octet, which is what four pigments buys that eight cannot.
+  //
+  //     The nearest EXISTING pigment to any of them is `steel` (copilot's mark), 6.2 ΔE
+  //     from `cobalt`; `ember` sits 8.7 from `clay` (claude's). Stated rather than tuned
+  //     away, and on the CLI table's own argument: distance matters between pigments that
+  //     appear in the same position, and a CLI mark never appears on a board row's kind
+  //     mark. Tuning `cobalt` off `steel` costs the CVD floor above, which is the number
+  //     that decides whether a human can read the ladder at all.
+  //
+  //     No `Lit` step, for `CLI_HUES`' reason: nothing paints an emphasis tier of a level.
+  ember: "#e08a4e", //     epic    — the container everything else sits in
+  moss: "#72c072", //      feature
+  cobalt: "#6aa6de", //    story
+  mulberry: "#c9769b", //  task    — the leaf
+
   // --- terminal-only. ANSI wants a true green in a slot where the app's greens are a teal
   //     (jade) and a yellow-green (lime); neither reads as "green" to a CLI, so ANSI green
   //     keeps its own pull. It is NOT an app hue — no UI surface may use it. `cyan` and
@@ -337,6 +364,61 @@ export const CLI_HUES = {
   hermes: PALETTE.fuchsia,
   ante: PALETTE.citron,
   pi: PALETTE.cerulean,
+} as const;
+
+/**
+ * §The per-LEVEL hues (#3261) — Agile level → the pigment that says *where on the ladder
+ * this board row sits*.
+ *
+ * WHY IT EXISTS. An epic, a feature, a story and a task rendered in the same grey read as
+ * one flat list, and the board's whole hierarchy has to be reconstructed by reading the
+ * indent. A hue per level is the cheapest carrier there is: it costs a 8px mark and no
+ * horizontal room at all, which matters on a board whose row budget #2937 spent arguing
+ * over.
+ *
+ * WHY IT COULD NOT REUSE `--id-*`, which is `CLI_HUES`' question asked again and answered
+ * the same way. The eight identity hues are in BIJECTION with the eight icon roles
+ * (test/icons.test.ts, both directions). Handing `--id-azure` to `story` would not add a
+ * meaning, it would give azure a second one. So a per-level hue needs a pigment no icon
+ * role and no CLI has claimed, which means a new set and a new prefix — and `--kind-*` in
+ * a diff says "this surface is answering *which level*", the way `--cli-*` and `--state-*`
+ * already declare theirs.
+ *
+ * STILL THE IDENTITY CHANNEL. "Which level is this row" is an identity question by
+ * definition, so `--kind-*` is a SUB-TABLE of that channel for one closed roster, exactly
+ * as `--cli-*` is — not a fourth channel with new rules. An identity hue may never enter a
+ * state position, and neither may one of these. That is not an abstract promise here: the
+ * board row's LEFT ACCENT is a state position (`--state-attention` for a row waiting on the
+ * human, the working dye for an active one), which is why the level is painted as its own
+ * mark beside the id and never as that accent. #3261's acceptance criterion offers "a left
+ * accent stripe and/or a tinted kind chip"; only the chip is available, and this is why.
+ *
+ * WHY AN UNLABELLED ROW IS ACHROMATIC. It takes `mist400`, the faint-meta ink — not a fifth
+ * hue. A row with no `kind` is not a fifth level, it is a row on the flat board, exempt from
+ * the ladder entirely (see the MCP `upsert_task` description), and giving it a pigment would
+ * say it had a place on a ladder it is deliberately off. It is the `stateHeld`/`stateIdle`
+ * argument applied here: a thing that carries no level carries no dye. It is also the one
+ * entry that never paints TEXT — mist400 is below AA by design — so it renders as a hollow
+ * mark only, and test/theme.test.ts holds the four levels and this one to different floors
+ * for that reason.
+ *
+ * COLOUR-VISION DEFICIENCY, MEASURED. Unlike the CLI octet, this set does not collapse:
+ * worst pair over all five marks is protan 12.8 ΔE, deutan 15.9, tritan 10.0 (figures and
+ * method in the PALETTE comment above, re-derived rather than remembered by
+ * test/theme.test.ts). Four hues can hold a floor eight cannot, and the ladder is also
+ * carried by the row's indent and by the chip's own word when the row is open — colour is
+ * the scanning channel here, never the only one.
+ *
+ * Keys are `TASK_KINDS` as the backend spells them, plus `UNLABELLED_KIND` as
+ * `src/taskboard.ts` spells it; test/taskkind.test.ts pins the two lists against each other
+ * in both directions, the way test/agenticons.test.ts does for the CLI table.
+ */
+export const KIND_HUES = {
+  epic: PALETTE.ember,
+  feature: PALETTE.moss,
+  story: PALETTE.cobalt,
+  task: PALETTE.mulberry,
+  unlabelled: PALETTE.mist400,
 } as const;
 
 /**
@@ -515,6 +597,12 @@ export const CSS_TOKENS = {
   "--accent": SEMANTIC.accent,
   "--focus": SEMANTIC.focus,
   "--selection": SEMANTIC.selection,
+  // The per-level marks (#3261) — see KIND_HUES. Identity channel, own prefix.
+  "--kind-epic": KIND_HUES.epic,
+  "--kind-feature": KIND_HUES.feature,
+  "--kind-story": KIND_HUES.story,
+  "--kind-task": KIND_HUES.task,
+  "--kind-unlabelled": KIND_HUES.unlabelled,
   // The identity channel. Three of these carry the same pigment as a `--state-*` token
   // above, and that duplication is the point: which token a surface names declares which
   // QUESTION it is answering, so a reviewer can see a channel violation in the diff without

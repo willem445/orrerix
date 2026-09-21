@@ -1773,6 +1773,137 @@ export function linkDraftIsPristine(draft: LinkDraft): boolean {
   return !draft.target && !draft.label && draft.type === DEFAULT_LINK_TYPE;
 }
 
+// --- the row's DESCRIPTION (#3261) ----------------------------------------
+
+/** How many characters a description may carry.
+ *
+ *  A MIRROR of `MAX_TASK_DESCRIPTION` in `src-tauri/src/orchestration/mod.rs`,
+ *  which is the authority: the backend REFUSES an over-long description rather
+ *  than cutting it, and this copy exists only so the editor can say so before
+ *  the round trip instead of after it. `test/taskboard.test.ts` reads the
+ *  constant out of the Rust source, the way the ladder rules are pinned, so the
+ *  two cannot drift into an editor that permits what the board then rejects. */
+export const MAX_DESCRIPTION = 500;
+
+/** Is this draft still exactly what the row already says?
+ *
+ *  The one rule for "nothing to submit" — `linkDraftIsPristine`'s job for the
+ *  description editor, and written the same way for the same reason: the
+ *  renderer SEEDS the box from this same stored value, so the seed and the
+ *  pristine test are one question asked once rather than a literal in each
+ *  place. Compared after trimming, because the write trims: a draft that
+ *  differs from the stored text only in trailing space would otherwise show a
+ *  live Save button that saves nothing.
+ *
+ *  `null`, `undefined` and `""` are one value here — the backend's empty-string
+ *  clear means "no description", so a row with none seeds an empty box, and an
+ *  empty box on such a row is pristine. */
+export function descDraftIsPristine(draft: string, stored: string | null | undefined): boolean {
+  return draft.trim() === (stored ?? "").trim();
+}
+
+/** How many characters a description is OVER the cap, or 0 when it is not.
+ *
+ *  Code points, not UTF-16 units, so the number the editor shows is the number
+ *  the backend counted (`.chars().count()` on the Rust side). A count that
+ *  disagreed with the refusal would be worse than no count at all. */
+export function descOverBy(text: string): number {
+  return Math.max(0, Array.from(text.trim()).length - MAX_DESCRIPTION);
+}
+
+/** What the description editor should show and allow, for one keystroke.
+ *
+ *  Pure, and lifted out of the renderer in review round 2: it is the only part
+ *  of that editor with a DECISION in it, and it is the part that had no test —
+ *  "is Save live" was computed inline from two predicates and pinned nowhere,
+ *  which is exactly the shape that silently inverts.
+ *
+ *  `canSave` is false for BOTH reasons a save is pointless or wrong, and the
+ *  two are different: a pristine draft has nothing to write, a refused one must
+ *  not be written. `refusal` says which, or `null` when neither applies.
+ *
+ *  `used` counts CODE POINTS, so the number beside the box is the number the
+ *  backend counted — a count that disagreed with the refusal would be worse
+ *  than no count at all. */
+export interface DescEditorState {
+  /** Characters used, code points, trimmed — what the counter shows. */
+  used: number;
+  /** Why this cannot be saved, or `null`. */
+  refusal: string | null;
+  /** Is the draft exactly what the row already says? */
+  pristine: boolean;
+  /** May the Save button be pressed? */
+  canSave: boolean;
+}
+
+export function descEditorState(draft: string, stored: string | null | undefined): DescEditorState {
+  const refusal = descRefusal(draft);
+  const pristine = descDraftIsPristine(draft, stored);
+  return {
+    used: Array.from(draft.trim()).length,
+    refusal,
+    pristine,
+    canSave: refusal === null && !pristine,
+  };
+}
+
+/** Does a STORED description violate the contract the write path enforces?
+ *
+ *  Always false for anything loomux wrote: every producer goes through
+ *  `upsert_task`, which refuses an over-cap or control-character value before
+ *  anything is stored. A true here therefore means the board FILE is wrong —
+ *  hand-edited, or written by a binary older than the rule — which is the same
+ *  provenance as an unknown `kind`, and gets the same treatment: the row says
+ *  so rather than painting it as if it were fine (#3261 review round 2).
+ *
+ *  Defined from `descRefusal` rather than re-deriving the rule, so the display
+ *  check and the write check cannot drift into disagreeing about what is legal.
+ *  Read-path only: it never blocks anything, because the value is already on
+ *  disk and refusing to render it would hide the problem rather than show it. */
+export function storedDescriptionIsOutOfContract(text: string | null | undefined): boolean {
+  const t = (text ?? "").trim();
+  return t !== "" && descRefusal(t) !== null;
+}
+
+/** Is this a control character by the BACKEND's definition?
+ *
+ *  Rust's `char::is_control` is Unicode general category `Cc`, which is TWO
+ *  ranges: C0 (U+0000–U+001F) and C1 (U+007F–U+009F). This mirror stopped at
+ *  U+007F until review round 1, so a C1 character passed the editor's
+ *  pre-check, left Save enabled, and was refused by the backend instead —
+ *  precisely the round trip `descRefusal` exists to avoid.
+ *
+ *  It is not a theoretical range: U+0085 (NEL) is a real line break in text
+ *  pasted out of a mainframe export or a Windows-1252 round trip, and U+0096
+ *  arrives from a Word en-dash through the same path. */
+function isBackendControl(c: string): boolean {
+  return c <= "\u001f" || (c >= "\u007f" && c <= "\u009f");
+}
+
+/** Why this description cannot be saved, or `null` when it can.
+ *
+ *  Mirrors the backend's two refusals so the editor can decline BEFORE the
+ *  round trip rather than surfacing a tool error: over the cap, and carrying a
+ *  control character (the field is one line of plain text — anything wanting a
+ *  paragraph of its own is a note). Deliberately NOT a silent fix-up in either
+ *  case: the caller who pasted three lines should be told the field is one, not
+ *  have two of them welded together.
+ *
+ *  Both checks run on the TRIMMED text, because the backend validates and
+ *  stores the trimmed value too (#3261 review round 1, premortem 1) — a
+ *  trailing newline is the one control character a paste routinely carries, and
+ *  refusing it on one caller while the other silently strips it would be the
+ *  same text getting two answers. */
+export function descRefusal(text: string): string | null {
+  const t = text.trim();
+  const over = descOverBy(t);
+  if (over > 0) return `${over} character${over === 1 ? "" : "s"} over the ${MAX_DESCRIPTION} limit`;
+  if (Array.from(t).some(isBackendControl)) {
+    return "one line of plain text only — put anything needing its own paragraph in a note";
+  }
+  return null;
+}
+
 /** One grounding link as it arrives over `orch_tasks`.
  *
  *  Named `TaskArtifactLink`, not `TaskLink`, because `HasLinks` in this module

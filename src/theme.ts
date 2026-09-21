@@ -512,11 +512,30 @@ export const SEMANTIC = {
   // is also `--id-violet` (the fleet icon, the reviewer and PR badges, the
   // review status, the group timeline lane). That reuse is deliberate and it
   // is not the thing the channel rule forbids, which is an identity hue in a
-  // STATE position: watched is not a state. None of `--id-violet`'s positions
-  // is a pane frame, a dock chip, a tab or an agents row, so no surface shows
-  // both meanings of the pigment at once. Minting a ninth PALETTE hue was the
-  // alternative and is worse: §PALETTE already records that eight hues on this
-  // ground cannot all survive CVD.
+  // STATE position: watched is not a state.
+  //
+  // THE TWO MEANINGS DO CO-OCCUR, on one surface, and an earlier version of
+  // this comment claimed they never did (#3320 review round 1, B1 — the claim
+  // was simply false). `.ic-fleet` is `--id-violet`, and `cliDyeClass` sends
+  // every program outside `CLI_DYE_PROGRAMS` to it, `null` included — so a
+  // watched pane running a CLI with no dye of its own wears a violet glyph in
+  // its header (`.pane-cli-icon`) and on its Agents row (`.agents-mark`),
+  // beside the violet watch pill, over the violet frame bar.
+  //
+  // What keeps that legible is FORM and POSITION, the separation this design
+  // already leans on wherever a hue is shared ("state is an edge, interaction
+  // is a fill or a ring"): the fleet mark is a bare SVG GLYPH at the head of
+  // the row, the watch is a bordered, tinted PILL further along it, and the
+  // frame bar is outside the header entirely, down the pane's own left edge,
+  // where nothing else paints. They are never the same shape in the same
+  // place. The doubled identity claim is also the weakest one the app makes:
+  // `ic-fleet` is the "no hue of its own" fallback, which says "some agent",
+  // not which one.
+  //
+  // The residual, accepted rather than designed away: one header can carry two
+  // violet things at once. Every other existing hue fails the ΔE floor above,
+  // and minting a ninth PALETTE hue is what §PALETTE already records as
+  // unaffordable — eight on this ground cannot all survive CVD.
   watched: PALETTE.violet,
 } as const;
 

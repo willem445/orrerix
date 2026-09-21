@@ -20,6 +20,7 @@ import {
   type AgentState,
 } from "./agentrows.ts";
 import { agentMark, type AgentMarkInput, type AgentMarkView } from "./agenticons.ts";
+import { watchedCount } from "./watchedpanes.ts";
 
 /** What each state is called in the UI. `Record<AgentState, string>` is TOTAL,
  *  so a rung added to the ladder without a word for it fails to compile rather
@@ -71,7 +72,7 @@ export interface FilterChip {
 export function filterChips(rows: readonly AgentRow[], selected: AgentFilter): FilterChip[] {
   const counts = new Map<AgentState, number>();
   for (const r of rows) counts.set(r.state, (counts.get(r.state) ?? 0) + 1);
-  const watched = rows.reduce((n, r) => (r.watched ? n + 1 : n), 0);
+  const watched = watchedCount(rows);
   const chips: FilterChip[] = [
     { filter: "all", label: "all", count: rows.length, selected: selected === "all" },
   ];
@@ -145,6 +146,29 @@ export function visibleGroups(
  *  The filtered branch was and stays correct: a chip is offered only for a
  *  state something is in, so "No panes are X" is reachable mid-refresh and
  *  says nothing about how many panes exist. */
+/** The line the Agents list adds when the human is watching panes it cannot
+ *  show (#3320 review round 1, B2).
+ *
+ *  THE LIMIT IS REAL AND IT IS NOT A BUG: this list is `isAgentPane`-filtered
+ *  by a rule argued in `agentrows.ts` (#2514), and a watch may be set on ANY
+ *  pane — a shell, an editor, a file explorer. So a watched shell has no row
+ *  here and never will. What was wrong was that the list said nothing about it
+ *  while the docs described it as the complete overview.
+ *
+ *  `total` is counted over the UNFILTERED facts and `listed` over the rows, so
+ *  the difference is exactly the panes this surface cannot reach. Returns null
+ *  when there is no gap — the common case, and the one that must add no chrome.
+ *
+ *  It names the chord because the chord is the overview that IS complete: it
+ *  walks `allPanes()` across every tab. */
+export function watchedNotInList(total: number, listed: number): string | null {
+  const missing = total - listed;
+  if (missing <= 0) return null;
+  const s = missing === 1 ? "" : "s";
+  const it = missing === 1 ? "it" : "them";
+  return `${missing} watched pane${s} ${missing === 1 ? "is" : "are"} not an agent pane and ${missing === 1 ? "is" : "are"} not listed here — press Ctrl+Shift+H to reach ${it}.`;
+}
+
 export function emptyMessage(filter: AgentFilter): string {
   if (filter === "all") return "No agent panes in this window.";
   // "watched" is the one filter that is not a state, so it does not read out of

@@ -90,16 +90,40 @@ adjacent hues — and gold already means *focus*, on every focused pane. One
 pigment cannot say both "you are here" and "come back here" while staying
 useful for either.
 
-**The cost, which is real.** This is violet's second meaning: it is also
-`--id-violet` (the fleet icon, the reviewer and PR badges, the review status,
-the group timeline lane). The rule the three-channel design enforces is that no
-identity-only hue may fill a **state** role, and watched is not a state — which
-is why the token takes a `--mark-` prefix rather than `--state-`, keeping it out
-of `STATE_DYES` by construction rather than by naming discipline. None of
-`--id-violet`'s positions is a pane frame, a dock chip, a tab or an agents row,
-so no surface shows both meanings at once. Minting a ninth palette hue was the
-alternative and is worse: `theme.ts` §PALETTE already records that eight hues on
-this ground cannot all survive CVD.
+**The cost, which is real — and larger than this note first claimed.** This is
+violet's second meaning: it is also `--id-violet` (the fleet icon, the reviewer
+and PR badges, the review status, the group timeline lane). The rule the
+three-channel design enforces is that no identity-only hue may fill a **state**
+role, and watched is not a state — which is why the token takes a `--mark-`
+prefix rather than `--state-`, keeping it out of `STATE_DYES` by construction
+rather than by naming discipline.
+
+The first version of this section went further and said the two meanings never
+appear on one surface. **That was false** (#3320 review round 1, B1).
+`.ic-fleet` is `--id-violet`, and `cliDyeClass` routes every program outside
+`CLI_DYE_PROGRAMS` to it — `null` included, which `sessionCliFromCommand`
+answers for half the catalog. So a watched pane running such a CLI carries a
+violet glyph in its header (`.pane-cli-icon`) and on its Agents row
+(`.agents-mark`), beside the violet watch pill, over the violet frame bar.
+
+What keeps that legible is **form and position**, the separation this design
+already leans on wherever a hue is shared — *state is an edge, interaction is a
+fill or a ring*:
+
+| mark | form | position |
+| --- | --- | --- |
+| fleet identity | a bare SVG glyph | head of the header row |
+| watch | a bordered, tinted pill | further along the header row |
+| watch, on the frame | a 3px bar | the pane's left edge, outside the header |
+
+They are never the same shape in the same place. The doubled identity claim is
+also the weakest one the app makes: `ic-fleet` is the *no hue of its own*
+fallback, which says "some agent", not which one.
+
+**The residual, accepted rather than designed away:** one header can carry two
+violet things at once. Every other existing hue fails the ΔE floor above, and
+minting a ninth palette hue is what `theme.ts` §PALETTE already records as
+unaffordable — eight hues on this ground cannot all survive CVD.
 
 **Form, not just hue.** Attention is amber and *pulses*; watched is violet and
 is *still*. A watch can stay set for an afternoon by design, and a mark that
@@ -165,6 +189,18 @@ Consequences worth naming:
   returns `{ ...dormantRecord }` verbatim for a dormant pane; the watch is
   spliced over it, because a Reconnect card is exactly the kind of pane someone
   marks and the verbatim path would drop a fresh toggle silently.
+- **A whole-group RESUME drops the watch, and that is the one place the
+  "survives" promise stops** (#3320 review round 1, N2). `resumeDormantGroup`
+  (`src/main.ts`) closes this group's placeholders and `resumeOrchSession`
+  builds fresh panes from the plan's session id, role and group — it reads no
+  watch, so a mark set on a Reconnect card does not travel to the pane that
+  replaces it. It is consistent with the "dies with the pane" rule above, since
+  those really are different panes, but it is the one case where a human's
+  gesture is undone by a *different* human gesture rather than by closing the
+  thing they marked, and the docs invite marking a reconnect card. Carrying it
+  across would mean threading a watch through the group-resume plan, which is a
+  change to that feature's contract; it is recorded here rather than done
+  quietly, and it is a small follow-up if the human wants it.
 
 ## The overview gesture, and why it is two things
 
@@ -238,8 +274,27 @@ turn out not to be pane lists:
   not live panes. A watch is on a pane, and a session row may correspond to no
   open pane, or to one that has not been opened yet.
 
-The surface that really lists panes is the left panel's **Agents tab**
+The surface that lists **agent panes** is the left panel's **Agents tab**
 (`agentsview.ts` over `agentrows.ts`), and that is where the row mark and the
 filter chip went. The tab strip gets a per-tab **count** rather than a mark,
 because a tab is not a pane and "one of these" and "four of these" are different
 amounts of reason to switch.
+
+**That tab is not a complete overview, and the first version of this note said it
+was** (#3320 review round 1, B2). `agentsview.ts` renders `agentRows()`, which is
+`isAgentPane`-filtered (#2514) — so a watched shell, editor or file explorer has
+no row there and is not in the chip's count, while the docs invite marking
+exactly those panes. Three things now hold instead of that false sentence:
+
+- **`Ctrl+Shift+H` is the complete overview.** It walks `allPanes()` across every
+  tab and reaches every watched pane whatever its kind.
+- **The tab-strip count is complete too.** `tabcounts.ts` counts `p.watched`
+  before its kind switch, so a watched shell still puts `◉1` on its tab.
+- **The Agents tab states its own limit.** When the `watched` chip is selected
+  and the unfiltered count exceeds the rows it can show, `watchedNotInList`
+  renders a footnote naming how many are missing and pointing at the chord.
+
+Widening `isAgentPane` was the alternative and is worse: that rule is argued and
+tested in its own right, and a shell pane has no rung on the state ladder every
+row in that list carries. The honest fix is for the surface to say what it
+covers, not for it to pretend to cover more.

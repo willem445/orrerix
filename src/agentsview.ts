@@ -31,6 +31,7 @@ import {
   AGENT_ORDER_LABEL,
   AGENT_STATE_LABEL,
   emptyMessage,
+  watchedNotInList,
   ORDER_CHOICES,
   agentIdentityLine,
   agentRowMark,
@@ -41,7 +42,7 @@ import {
   visibleGroups,
 } from "./agentsviewmodel";
 import { PollGate } from "./pollgate";
-import { WATCHED_MARK } from "./watchedpanes";
+import { WATCHED_MARK, watchedCount } from "./watchedpanes";
 import { spinnerSvg } from "./spinner";
 
 /** How often an open Agents tab re-derives its rows.
@@ -108,6 +109,12 @@ export class AgentsView {
   private chipsEl: HTMLElement;
   private listEl: HTMLElement;
   private emptyEl: HTMLElement;
+  /** The "watched panes this list cannot show" footnote (#3320 review round 1,
+   *  B2). */
+  private watchedNoteEl: HTMLElement;
+  /** Watched panes in the window, counted BEFORE `isAgentPane` filters — the
+   *  one figure on this surface taken from the unfiltered facts. */
+  private watchedTotal = 0;
   private rows = new Map<string, RowEls>();
   /** One header per tab that currently has rows, keyed so it outlives a refresh
    *  — the same reason the chips and rows are keyed: rebuilding a subtree the
@@ -184,6 +191,11 @@ export class AgentsView {
     this.emptyEl = document.createElement("div");
     this.emptyEl.className = "sessions-empty";
     this.emptyEl.hidden = true;
+    // #3320 review round 1, B2 — see `renderEmpty`. Built once and hidden,
+    // never created per refresh, like every other element in this view.
+    this.watchedNoteEl = document.createElement("div");
+    this.watchedNoteEl.className = "agents-watch-note";
+    this.watchedNoteEl.hidden = true;
 
     this.listEl.append(this.emptyEl);
     this.el.append(head, this.chipsEl, this.listEl);
@@ -231,11 +243,17 @@ export class AgentsView {
     // (#2514) rides on the projection, so the BADGE below and the rendered
     // list below that cannot come to disagree about which panes are agents.
     // A plain shell the human has typed into is not one of them.
-    const rows = agentRows(this.deps.facts());
+    const facts = this.deps.facts();
+    const rows = agentRows(facts);
     this.deps.onCountChanged(needsYouCount(rows));
     if (!this.open) return;
     this.renderChips(rows);
     this.renderOrder();
+    // Counted over the UNFILTERED facts, which is the whole point (#3320 review
+    // round 1, B2): the gap between this and the rows is exactly the watched
+    // panes `isAgentPane` removes, and it is the only number on this surface
+    // that has to be taken from before the filter.
+    this.watchedTotal = watchedCount(facts);
     this.renderGroups(visibleGroups(rows, this.filter, this.order));
   }
 
@@ -375,6 +393,18 @@ export class AgentsView {
     this.emptyEl.hidden = rowCount > 0;
     this.emptyEl.textContent = emptyMessage(this.filter);
     if (!this.emptyEl.hidden) this.listEl.appendChild(this.emptyEl);
+    // The watched-but-unlistable note (#3320 review round 1, B2). Shown only on
+    // the `watched` chip: on any other chip it would be answering a question
+    // nobody asked, and on `all` it would fire for every human who has ever
+    // watched a shell. Appended LAST, after the empty line, so it reads as a
+    // footnote to the list whether or not the list has rows — the gap it
+    // describes exists in both cases.
+    const note = this.filter === "watched" ? watchedNotInList(this.watchedTotal, rowCount) : null;
+    this.watchedNoteEl.hidden = note === null;
+    if (note !== null) {
+      this.watchedNoteEl.textContent = note;
+      this.listEl.appendChild(this.watchedNoteEl);
+    }
   }
 
   private createGroup(): GroupEls {

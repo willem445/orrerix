@@ -1559,12 +1559,46 @@ test("one watched mark: every surface that marks a watched pane paints it --mark
   // different rule, for the focused case — still started with the required
   // string and satisfied the row on its behalf. A row that another rule can
   // answer for is not a row.
-  for (const required of [".pane.watched", ".dock-chip.watched", ".tab-watched", ".agents-item.watched"]) {
+  for (const required of [".pane.watched", ".dock-chip-watch", ".tab-watched", ".agents-item.watched"]) {
     assert.ok(
       selectors.includes(required),
       `no rule paints exactly "${required}" with --mark-watched — a surface #3319 marks has lost ` +
         `its mark or been renamed. Rules that do name it: ${selectors.join(", ")}`,
     );
+  }
+});
+
+test("the watched mark and the fleet identity are ONE pigment, deliberately", () => {
+  // #3320 review round 1, B1. `--mark-watched` and `--id-violet` are the same
+  // bytes, and they CO-OCCUR: `.ic-fleet` is `--id-violet`, `cliDyeClass` sends
+  // every program outside the dyed roster to it (`null` included), and that
+  // glyph is painted on the pane header and the Agents row — the same two
+  // surfaces the watch marks. The design accepts that and separates the two by
+  // form and position instead (doc/design/watched-panes.md, §The colour).
+  //
+  // This is the pin that makes the acceptance survive: the identity channel
+  // exists to be RETUNED (that is what `--id-*` is for — git-lane and icon-role
+  // separability), and a retune of violet would silently move the human's watch
+  // mark with it. Equality asserted, not inequality, so that edit has to come
+  // back here and decide on purpose.
+  assert.equal(
+    SEMANTIC.watched,
+    IDENTITY.violet,
+    "the watched mark has drifted off `--id-violet`. That may be right — but it is a " +
+      "DECISION, because the two share a pigment on purpose and the ΔE table in " +
+      "theme.ts §SEMANTIC.watched was measured on this value. Re-derive it and update " +
+      "the design note's colour section before changing this.",
+  );
+  // And the half that must NOT be true: sharing a pigment with an identity hue
+  // is permitted, sharing one with a STATE dye is the thing #3319 forbids.
+  // Asserted here beside its opposite so the two rules read together.
+  for (const [role, hex] of Object.entries({
+    working: SEMANTIC.stateWorking,
+    attention: SEMANTIC.stateAttention,
+    ok: SEMANTIC.stateOk,
+    danger: SEMANTIC.stateDanger,
+  })) {
+    assert.notEqual(SEMANTIC.watched, hex, `the watched mark is now the "${role}" dye`);
   }
 });
 

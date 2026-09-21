@@ -54,9 +54,22 @@ export const WATCHED_MARK = "◉";
  *  reassuring if the human can see how to clear it. */
 export const WATCHED_TITLE = "You are watching this pane — click, or press Alt+H, to stop";
 
-/** How many of these panes are watched. The tab strip's marker and the Agents
- *  filter chip both want this and neither should count it itself. */
-export function watchedCount(panes: readonly WatchedPane[]): number {
+/** How many of these are watched.
+ *
+ *  Takes the FLAG alone, not a `WatchedPane` — counting needs no identity, and
+ *  the narrower parameter is what lets the two counters that exist share it:
+ *  the Agents filter chip counts `AgentRow`s and the tab strip counts
+ *  `TabPaneInfo`s, and neither is the other's type.
+ *
+ *  ONE of them routes through here today: `agentsviewmodel.ts`'s chip.
+ *  `tabcounts.ts` deliberately does not — it increments inside a loop it is
+ *  already making over the same array for the agent and channel counts, and a
+ *  second pass to save one line would be a pass. Its call site says so.
+ *
+ *  (This doc used to claim both callers used it while NEITHER did — #3320
+ *  review round 1, N1. A comment that describes callers is a claim about code
+ *  elsewhere, and nothing checks it but a reader.) */
+export function watchedCount(panes: readonly { readonly watched: boolean }[]): number {
   let n = 0;
   for (const p of panes) if (p.watched) n += 1;
   return n;

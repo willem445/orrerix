@@ -902,11 +902,21 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
 .pane.watched.active {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent), inset 3px 0 0 var(--mark-watched);
 }
-/* The dock chip for a minimized watched pane — the same left bar, so one glance
-   over the dock answers "did I minimize one of the ones I care about". */
-.dock-chip.watched {
-  box-shadow: inset 3px 0 0 var(--mark-watched);
-  border-color: color-mix(in srgb, var(--mark-watched) 45%, transparent);
+/* The dock chip for a minimized watched pane — a MARKER SPAN, the idiom the dock
+   already uses for the queue and mail readings, and deliberately not an edge.
+   Both of this chip's edges are spoken for by identity: `border-left` is
+   `--dock-accent` (the pane's group or CLI colour) and `.dock-chip.connected`
+   takes `border-right` for the channel. The first draft set `border-color`,
+   whose shorthand recoloured BOTH of those to a violet mix — the design note's
+   own "the header edge is already spoken for twice" argument, applied to the
+   pane frame and then broken on the chip (#3320 review round 1, N3). An inset
+   box-shadow was no better: it renders inside the border box, so the violet sat
+   directly beside the 3px accent border as a 6px double stripe. */
+.dock-chip-watch {
+  flex: none;
+  font-size: 9px; line-height: 1;
+  border-radius: 3px; padding: 1px 3px;
+  color: var(--mark-watched); background: color-mix(in srgb, var(--mark-watched) 20%, transparent);
 }
 /* The tab strip's count: "there are N watched panes in that tab", which is the
    only per-pane fact a tab can carry (a tab is not a pane). */
@@ -916,9 +926,18 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
   border-radius: 4px; padding: 1px 4px;
   color: var(--mark-watched); background: color-mix(in srgb, var(--mark-watched) 18%, transparent);
 }
-/* The Agents list — the one surface that really lists PANES. */
+/* The Agents list — the surface that lists AGENT panes (#3320 review round 1,
+   B2: it is `isAgentPane`-filtered, so a watched shell has no row here). */
 .agents-item.watched { box-shadow: inset 3px 0 0 var(--mark-watched); }
 .agents-watch-mark { flex: none; color: var(--mark-watched); font-size: 10px; }
+/* The footnote naming the watched panes this list cannot show. Faint meta, not
+   a warning: the gap is a stated property of the surface, not a fault. */
+.agents-watch-note {
+  padding: 6px 10px;
+  font-size: 11px; line-height: 1.4;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--line);
+}
 
 /* ---------- delivery-held badge (#246) ---------- */
 /* Orrerix is currently withholding an outbound prompt because it believes the

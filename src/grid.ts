@@ -54,7 +54,7 @@ import { Pane, type PaneEvents, type PaneOptions, type ContentPaneOptions } from
 import type { PersistedPane } from "./tabstore";
 import { dropZoneFor, indicatorFor, zoneToPlacement, type DropZone } from "./layout";
 import { dockChipAttention } from "./attention";
-import { dockChipWatched } from "./watchedpanes";
+import { WATCHED_MARK, dockChipWatched } from "./watchedpanes";
 import { dockChipQueue, queuePresentation } from "./queuebadge";
 import { dockChipMail, mailboxPresentation } from "./mailboxbadge";
 import { planGroupMinimize } from "./group";
@@ -1117,7 +1117,12 @@ export class Grid {
       // title is the bare pane name, which is what `attn.title` already says,
       // so writing it otherwise is a no-op dressed as a decision.
       const watch = dockChipWatched(pane.name, pane.watched);
-      chip.classList.toggle("watched", watch.watched);
+      if (watch.watched) {
+        const marker = document.createElement("span");
+        marker.className = "dock-chip-watch";
+        marker.textContent = WATCHED_MARK;
+        chip.appendChild(marker);
+      }
       if (watch.watched && !attn.needsAttention) chip.title = watch.title;
 
       // Cross-workspace channel membership (#271): a docked pane's header chip

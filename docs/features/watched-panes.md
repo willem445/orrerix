@@ -68,8 +68,16 @@ Agents tab and click **watched**; the list narrows to those panes, each still
 showing what its agent is doing. The chip is only there once you are watching
 something.
 
+That list covers **agent panes**. The Agents tab is a list of agents, so a
+watched shell or editor has no row there — if you have any, the list says so
+underneath and points you at `Ctrl+Shift+H`. The chord and the tab-strip count
+cover every pane; the Agents tab is the one place that does not.
+
 ## Which panes can be watched
 
 All of them. A shell, an editor, a file explorer, an agent, a reconnect card —
 if you can see it, you can mark it. The mark says something about *you*, not
 about what the pane is running.
+
+The chord reaches all of them and the tab strip counts all of them. Only the
+Agents tab is narrower, for the reason above.

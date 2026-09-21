@@ -100,7 +100,9 @@ export function tabCounts(panes: readonly TabPaneInfo[], groupBound: boolean): T
   const channelIds = new Set<string>();
   for (const p of panes) {
     // Before the kind switch, not inside it: a watch is not about what the pane
-    // IS (#3319).
+    // IS (#3319). Counted inline rather than through `watchedpanes.ts`'s
+    // `watchedCount`, which would be a second pass over an array this loop is
+    // already walking for the agent and channel counts.
     if (p.watched) watched++;
     if (p.kind === "agent") {
       if (p.live) agents++;

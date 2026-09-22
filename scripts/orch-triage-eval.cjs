@@ -287,7 +287,15 @@ function runIsGreen(text) {
   return lower.slice(at + 'conclusion: '.length).replace(/^\s+/, '').startsWith('success');
 }
 
-/** `triage.rs`'s `registered_note` — the note slice, or null. */
+/**
+ * `triage.rs`'s `registered_note` — the note slice, or null.
+ *
+ * The slice is EXACT: `lastIndexOf` (Rust `rfind`) searches only the text after the
+ * opening delimiter, where the one thing following the note is the backend-built
+ * ` (watch <id>)`, which carries no quote — so a quote embedded in the note never
+ * moves the boundary. `indexOf` here would be a real divergence from Rust, not a
+ * style choice: it cuts the note at its first embedded quote (#3324 r4).
+ */
 function registeredNote(text) {
   const open = 'Note (registered): "';
   const at = text.indexOf(open);

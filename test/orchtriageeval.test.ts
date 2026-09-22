@@ -253,10 +253,27 @@ test('the green-path scan reads the NOTE, not the verdict around it', () => {
     action: 'defer',
     rule: 'run-green',
   });
-  // And a note is read to its LAST quote, so a note containing one truncates
-  // the slice rather than escaping it — in the DELIVER direction only.
-  const quoted = '[orrerix] run 1: completed — conclusion: success. Note (registered): "he said "if green" to me" (watch n-1)';
+  // And the slice is EXACT: a note is read to its LAST quote, and the only
+  // thing after the note is the backend-built ` (watch <id>)`, which carries
+  // no quote — so the last quote in that region is always the note's own
+  // closer and an embedded quote does not move the boundary at all. (An
+  // earlier comment here claimed otherwise, and claimed a lost marker would
+  // fail safe; both were false — a lost marker would DEFER. Retracted in
+  // #3324 review rounds 3-4.) Rust pins the
+  // four quote placements in `a_quote_inside_the_note_does_not_move_the_slice`;
+  // the mirror pins the same property here, on the placement that separates
+  // `rfind` from `find`.
+  const note = 'he said "go" then if green: tag and push';
+  const quoted = `[orrerix] run 1: completed — conclusion: success. Note (registered): "${note}" (watch n-1)`;
+  assert.equal(ev.registeredNote(quoted), note, "the slice must be the WHOLE note, quotes and all");
   assert.equal(ev.noteNamesGreenPath(quoted), true);
+  // The consequence, not just the slice: it DELIVERS. And the negative
+  // control for the direction — a marker-free note defers, so losing a
+  // marker fails toward DEFER.
+  assert.deepEqual(ev.decide({ text: quoted, from: 'orrerix', human_actor: false }, POLICY), {
+    action: 'deliver',
+    reason: 'no-rule',
+  });
 });
 
 test('asciiLower is Rust’s to_ascii_lowercase, not JS toLowerCase', () => {

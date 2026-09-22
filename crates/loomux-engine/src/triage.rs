@@ -1228,6 +1228,7 @@ mod tests {
         assert!(!note_names_green_path(&plain));
         assert_eq!(decide(&input(&plain), &on()), Decision::Defer(Rule::RunGreen));
     }
+
     #[test]
     fn the_green_path_scan_reads_the_note_and_not_the_verdict_around_it() {
         // The SCOPE is load-bearing: `conclusion: success` and `checks: SUCCESS`

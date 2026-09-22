@@ -49,10 +49,28 @@ export function watchMenuLabel(watched: boolean): string {
  *  four different marks for one flag. */
 export const WATCHED_MARK = "◉";
 
+/** The two chords, spelled ONCE (#3320 review round 3, premortem 1).
+ *
+ *  Several user-facing strings name a chord — the watch chip's tooltip below,
+ *  the Agents list's footnote (`agentsviewmodel.ts`), the docs. Each used to
+ *  carry its own literal, pinned only by a test asserting that literal against
+ *  itself, which is a tautology: rebind `toggle-watch` in `shortcuts.ts` and
+ *  every one of those sentences goes on naming a dead key with the whole suite
+ *  green.
+ *
+ *  Spelling them here does not by itself tie them to the binding — nothing in
+ *  TypeScript can, because `matchShortcut` is a `switch` over `KeyboardEvent`
+ *  and not a table. What it buys is ONE place for a test to tie:
+ *  `test/watchedpanes.test.ts` feeds these strings back through `matchShortcut`
+ *  as synthetic events and asserts each one really fires the action it claims.
+ *  A rebind then reddens there instead of lying to the human. */
+export const WATCH_CHORD = "Alt+H";
+export const NEXT_WATCHED_CHORD = "Ctrl+Shift+H";
+
 /** The chip's tooltip. Says what UNDOES it, because the mark itself already
  *  says what it is and "never cleared automatically" (#3319 AC5) is only
  *  reassuring if the human can see how to clear it. */
-export const WATCHED_TITLE = "You are watching this pane — click, or press Alt+H, to stop";
+export const WATCHED_TITLE = `You are watching this pane — click, or press ${WATCH_CHORD}, to stop`;
 
 /** How many of these are watched.
  *

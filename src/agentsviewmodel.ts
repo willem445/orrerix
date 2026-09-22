@@ -20,7 +20,7 @@ import {
   type AgentState,
 } from "./agentrows.ts";
 import { agentMark, type AgentMarkInput, type AgentMarkView } from "./agenticons.ts";
-import { watchedCount } from "./watchedpanes.ts";
+import { NEXT_WATCHED_CHORD, watchedCount } from "./watchedpanes.ts";
 
 /** What each state is called in the UI. `Record<AgentState, string>` is TOTAL,
  *  so a rung added to the ladder without a word for it fails to compile rather
@@ -150,7 +150,9 @@ export function watchedNotInList(total: number, listed: number): string | null {
   const missing = total - listed;
   if (missing <= 0) return null;
   const one = missing === 1;
-  const reach = `press Ctrl+Shift+H to reach ${one ? "it" : "them"}.`;
+  // NEXT_WATCHED_CHORD, not a literal (#3320 review round 3, premortem 1): a
+  // rebind must not leave this sentence naming a dead key.
+  const reach = `press ${NEXT_WATCHED_CHORD} to reach ${one ? "it" : "them"}.`;
   // The two readings are different sentences, not one with a plural (#3320
   // review round 2, N4). With rows on screen the note is a footnote about the
   // REST; with none it has to carry the whole answer, because the generic

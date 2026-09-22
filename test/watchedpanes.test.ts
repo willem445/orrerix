@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { matchShortcut } from "../src/shortcuts.ts";
+import { watchedNotInList } from "../src/agentsviewmodel.ts";
 import {
+  NEXT_WATCHED_CHORD,
+  WATCH_CHORD,
   WATCHED_MARK,
   WATCHED_TITLE,
   dockChipWatched,
@@ -104,4 +108,58 @@ test("the dock chip's title says watched only when it is", () => {
     watched: false,
     title: "w: #3319",
   });
+});
+
+// ---------- #3320 review round 3, premortem 1: prose vs binding ----------
+
+/** Turn a chord SPELLING ("Alt+H", "Ctrl+Shift+H") into the synthetic event
+ *  `matchShortcut` reads. Deliberately total over the modifier words this app
+ *  uses, and it THROWS on one it does not know rather than silently producing
+ *  an event with no modifiers — which would make every assertion below pass
+ *  against a chord nobody bound. */
+function eventFor(chord: string): KeyboardEvent {
+  const parts = chord.split("+");
+  const key = parts.pop()!;
+  const e: Record<string, unknown> = { code: `Key${key.toUpperCase()}` };
+  for (const mod of parts) {
+    if (mod === "Alt") e.altKey = true;
+    else if (mod === "Ctrl") e.ctrlKey = true;
+    else if (mod === "Shift") e.shiftKey = true;
+    else throw new Error(`eventFor cannot spell the modifier "${mod}" in "${chord}"`);
+  }
+  return e as unknown as KeyboardEvent;
+}
+
+test("#3320 premortem 1: every chord this feature NAMES to the human really fires", () => {
+  // THE TAUTOLOGY THIS REPLACES. `WATCHED_TITLE` names "Alt+H" and the
+  // footnote names "Ctrl+Shift+H", and both used to be pinned by a test
+  // asserting the literal against itself — which stays green forever after a
+  // rebind, while the app tells the human to press a dead key.
+  //
+  // This feeds the SPELLING back through `matchShortcut`, so the prose and the
+  // binding are tied by the thing that actually dispatches. Rebind
+  // `toggle-watch` to Alt+Y and this reddens.
+  assert.equal(matchShortcut(eventFor(WATCH_CHORD)), "toggle-watch");
+  assert.equal(matchShortcut(eventFor(NEXT_WATCHED_CHORD)), "next-watched");
+});
+
+test("#3320 premortem 1: the user-facing strings are BUILT from those spellings", () => {
+  // The other half: the tie above is worth nothing if a sentence carries its
+  // own copy of the chord. Both strings must contain the constant, so a
+  // rebind that updates the constant updates them.
+  assert.ok(WATCHED_TITLE.includes(WATCH_CHORD), "the tooltip does not name WATCH_CHORD");
+  assert.ok(
+    (watchedNotInList(2, 0) ?? "").includes(NEXT_WATCHED_CHORD),
+    "the footnote does not name NEXT_WATCHED_CHORD",
+  );
+});
+
+test("#3320 premortem 1: the chord speller refuses a modifier it cannot spell", () => {
+  // The positive control on `eventFor` (#1209): a helper that quietly dropped
+  // an unknown modifier would build a bare-key event, and the two assertions
+  // above would then be measuring the wrong chord entirely.
+  assert.throws(() => eventFor("Meta+H"), /cannot spell the modifier "Meta"/);
+  // And it really does set the modifiers it knows — a speller that set none
+  // would make `Alt+H` and a bare `h` the same event.
+  assert.equal(matchShortcut(eventFor("H")), null, "a bare letter is not an app chord");
 });

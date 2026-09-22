@@ -3,8 +3,11 @@
 //! WHAT THIS IS FOR. An orchestrator pane wakes once per delivery, and a wake
 //! costs ~1.3 M cache-read tokens (#3304's census, measured over 368 wakes in
 //! fifteen days). 64 % of those wakes close by a SHAPE rule with no judgement
-//! in them at all: a review drive reporting `GATE SATISFIED`, a `notify_when`
-//! run that came back green, a planner that posted and exited. This module is
+//! in them at all: a `notify_when` run that came back green, a planner that
+//! posted and exited, a pane that exited. (The census's single largest class
+//! was a review drive reporting `GATE SATISFIED`; #3324 established that one
+//! is never closeable by shape — see [`Rule`] — and retired its rule.) This
+//! module is
 //! the pure half of the gate that stops those reaching the pane — it reads a
 //! delivery's LEADING SHAPE and answers deliver / defer.
 //!
@@ -427,6 +430,15 @@ const GREEN_PATH_MARKERS: [&str; 5] =
 /// not reachable by anything a delegate writes.
 const SILENT_EXIT_MARKERS: [&str; 1] = ["produced no output before exiting"];
 
+/// The needs-you markers, for the surfaces that must LIST them.
+///
+/// A tool description or a role template that tells an agent which phrases
+/// reach the orchestrator is making a claim about this array, and #3324 shipped
+/// three rounds of that claim going stale. Exposed so a test can derive the list
+/// instead of restating it — a restated list is the thing that drifts.
+pub fn needs_you_markers() -> &'static [&'static str] {
+    &NEEDS_YOU_MARKERS
+}
 fn contains_ci(hay_lower: &str, needles: &[&str]) -> bool {
     needles.iter().any(|n| hay_lower.contains(n))
 }
@@ -459,7 +471,6 @@ pub fn never_triaged(text: &str, human_actor: bool) -> Option<NeverReason> {
 
 /// A rule that closed a delivery without waking the pane. The wire spelling
 /// is what the audit row's `action` carries as `rule:<name>`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 ///
 /// **There is no `GateSatisfied` (#3324).** The rule shipped on the reading
 /// that the merge queue's own gate re-check was the decision; it is not. A
@@ -469,6 +480,7 @@ pub fn never_triaged(text: &str, human_actor: bool) -> Option<NeverReason> {
 /// retired rather than reworded: the marker in [`NEEDS_YOU_MARKERS`] already
 /// delivers every one of these, and a rule that can only ever be shadowed is
 /// a rule with no behaviour to test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rule {
     /// A `notify_when` `workflow_run` that came back `conclusion: success`
     /// AND whose registered note names no green-path action (#3324).
@@ -625,8 +637,13 @@ fn run_is_green(text: &str) -> bool {
 /// verdict, not the registrant's intent. The note's own delimiters are
 /// backend-built by `notify::watch_fired_notice` and the note is sanitized of
 /// control characters before it is interpolated, so an agent cannot forge the
-/// closing delimiter's position; the worst it can do is include a quote, which
-/// truncates the slice this reads — in the DELIVER direction only.
+/// closing delimiter's position. A quote INSIDE the note does move the slice
+/// boundary — `rfind` takes the LAST one — but only ever to a SHORTER slice,
+/// since the note's own closing quote is the last one this function can see.
+/// A shorter slice can only drop a marker, never add one, so the effect is
+/// bounded to the DELIVER direction. ("Truncates" was the earlier wording and
+/// overstated it: a quote sitting BEFORE the marker shortens the slice from
+/// the left of it, which is not a truncation.)
 fn registered_note(text: &str) -> Option<&str> {
     const OPEN: &str = "Note (registered): \"";
     let at = text.find(OPEN)?;

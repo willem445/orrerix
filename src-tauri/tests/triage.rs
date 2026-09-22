@@ -737,6 +737,71 @@ fn list_deferred_is_the_orchestrators_read_and_nobody_elses() {
     assert!(msg.contains("orchestrator"), "got: {msg}");
 }
 
+/// The `list_deferred` TOOL DESCRIPTION is a rule-table claim, and it goes
+/// stale like any other (#3324 review round 3).
+///
+/// It is the surface an orchestrator reads at RUNTIME to decide whether a
+/// notice it has not seen was held or never arrived, and three rounds of this
+/// PR corrected the rule table on three other surfaces — the design note, the
+/// user docs, the playbook template — while leaving this one naming a retired
+/// rule. Nothing was red, because nothing reads prose.
+///
+/// So: a DEFAULT-DENY scan of the description for the vocabulary of rules that
+/// no longer hold, plus the markers that must be listed because an agent
+/// reaching for one needs to know it works. Decided on the retired ENTITY, not
+/// on a phrasing, so a reworded description that still promises the old
+/// behaviour is still caught.
+#[test]
+fn the_list_deferred_description_does_not_promise_a_retired_rule() {
+    let f = fixture();
+    let orch = caller(&f, &f.orch, Role::Orchestrator);
+    let listed = dispatch(&f.reg, &orch, "tools/list", &json!({})).expect("tools/list");
+    let tools = listed["tools"].as_array().expect("tools[]");
+
+    // POSITIVE CONTROL. Every assertion below is about the CONTENT of one
+    // description; a lookup that found no tool, or a tool with no description,
+    // would pass all of them vacuously.
+    assert!(tools.len() >= 5, "tools/list returned {} tools", tools.len());
+    let desc = tools
+        .iter()
+        .find(|t| t["name"] == "list_deferred")
+        .and_then(|t| t["description"].as_str())
+        .expect("list_deferred is not on tools/list, or carries no description");
+    assert!(desc.len() > 400, "description is {} bytes — did it lose its body?", desc.len());
+
+    // 1. The RETIRED rule. `GATE SATISFIED` may still be NAMED — the fixed
+    //    description names it to say it is never held, which is the useful
+    //    thing to say — so the scan is on the CLAIM, not the string: the
+    //    description must not put it on the held side.
+    let held_side = desc.split("Everything else is DELIVERED").next().unwrap_or(desc);
+    assert!(
+        !held_side.contains("GATE SATISFIED"),
+        "the held-classes sentence still names GATE SATISFIED, whose rule is retired (#3324): {held_side}"
+    );
+
+    // 2. Every marker in `NEEDS_YOU_MARKERS` that an agent could reach for
+    //    deliberately must be listed. Derived from the engine array rather
+    //    than from a literal list here, so adding a marker without mentioning
+    //    it reddens — which is how `is yours` went unlisted in the first place.
+    for marker in triage::needs_you_markers() {
+        assert!(
+            desc.contains(marker),
+            "`{marker}` is a needs-you marker and the tool description does not name it"
+        );
+    }
+
+    // 3. The two rules that GAINED a proviso must not be stated flat. Both
+    //    used to read as unconditional and both now depend on the registered
+    //    note / on what the pane printed.
+    assert!(
+        desc.contains("registered note"),
+        "the green rules are conditional on the registered note and the description does not say so"
+    );
+    assert!(
+        desc.contains("printed something"),
+        "`agent-exited` is conditional on the pane having printed and the description does not say so"
+    );
+}
 /// There is deliberately no write tool at any tier: nothing on the MCP surface
 /// can defer a notice, flush one, or clear the store. Default-deny, so a
 /// future slice cannot add one quietly.

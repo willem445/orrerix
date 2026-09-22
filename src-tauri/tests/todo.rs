@@ -3531,3 +3531,168 @@ fn mcp_an_expired_tombstone_is_refused_as_unknown_through_the_tool() {
         "a refused restore must not rewrite the file — not even to purge"
     );
 }
+
+// ---------- #3335: the exhausted gap, and the per-item colour ----------
+
+/// Live ids of `scope`, in the order the pane draws them.
+fn live_ids(store: &TodoStore, scope: &Scope) -> Vec<String> {
+    store.live(scope).iter().map(|i| i.id.clone()).collect()
+}
+
+fn order_of(store: &TodoStore, id: &str) -> i64 {
+    store.items.iter().find(|i| i.id == id).unwrap().order
+}
+
+/// An item with a hand-chosen `order` and `created_ms`, for the one test that
+/// has to START from an exhausted gap rather than walk into it.
+fn placed(id: &str, order: i64, created_ms: u64) -> todo::TodoItem {
+    todo::TodoItem {
+        id: id.to_string(),
+        title: id.to_string(),
+        status: "open".to_string(),
+        order,
+        created_ms,
+        rev: 1,
+        ..todo::TodoItem::default()
+    }
+}
+
+fn move_after(id: &str, after: &str) -> TodoOp {
+    TodoOp::Update(TodoUpdate {
+        id: id.to_string(),
+        order_after: Some(OrderAfter::Item(after.to_string())),
+        ..TodoUpdate::default()
+    })
+}
+
+/// **The latent defect #3335 fixed, pinned on its own** (#3307 item 4).
+///
+/// `a` and `b` are ONE apart, so no integer sits between them. Before #3335 the
+/// engine computed the midpoint anyway — `1024 + 1 / 2` is `1024`, which is
+/// `a`'s own order — and a sweep then re-spaced the scope in `live`'s order,
+/// whose tiebreak is `created_ms`. `m` is OLDER than `a`, so it won the tie and
+/// landed ABOVE `a`: the human dropped it after `a` and it appeared before it,
+/// with no refusal and nothing to say why.
+#[test]
+fn an_exhausted_gap_misplaced_an_older_mover() {
+    let mut store = TodoStore::default();
+    store.items = vec![
+        placed("m", 5 * ORDER_GAP, T0), // the oldest, and last in the list
+        placed("a", ORDER_GAP, T0 + 10),
+        placed("b", ORDER_GAP + 1, T0 + 20),
+    ];
+    assert_eq!(live_ids(&store, &Scope::Global), ["a", "b", "m"], "fixture order");
+
+    todo::apply(&mut store, move_after("m", "a"), &human(), T0 + 100).unwrap();
+
+    assert_eq!(
+        live_ids(&store, &Scope::Global),
+        ["a", "m", "b"],
+        "a move after `a` must land directly after `a`, whatever the mover's age"
+    );
+}
+
+/// **The renumber op, reached through the public op alone** (#3307 item 4).
+///
+/// Nothing hand-set: twelve fillers are moved one at a time to directly after
+/// `a`, and each move halves the gap below `a` until there is no integer left
+/// in it — the state a long reorder session really reaches. The move that finds
+/// the gap exhausted must still land where it was sent, and it must leave the
+/// scope re-spaced rather than collided.
+#[test]
+fn a_move_into_an_exhausted_gap_renumbers_the_scope_and_lands() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = store_path(tmp.path());
+    let mut clock = T0;
+    let mut add_one = |title: &str| -> String {
+        clock += 1;
+        apply_to(&path, add(title), &human(), clock, None).unwrap().ids[0].clone()
+    };
+    // `m` first, so it is the OLDEST item — the mover that the pre-#3335
+    // collision sweep misplaced (see the test above).
+    let m = add_one("m");
+    let a = add_one("a");
+    let fillers: Vec<String> = (0..12).map(|n| add_one(&format!("f{n}"))).collect();
+
+    let gap_below = |store: &TodoStore, id: &str| -> i64 {
+        let ids = live_ids(store, &Scope::Global);
+        let ix = ids.iter().position(|i| i == id).unwrap();
+        order_of(store, &ids[ix + 1]) - order_of(store, id)
+    };
+
+    let mut t = T0 + 1_000;
+    let mut moves = 0;
+    for f in fillers.iter().rev() {
+        if gap_below(&load_locked(&path).store, &a) < 2 {
+            break;
+        }
+        t += 1;
+        apply_to(&path, move_after(f, &a), &human(), t, None).unwrap();
+        moves += 1;
+        let ids = live_ids(&load_locked(&path).store, &Scope::Global);
+        let ix = ids.iter().position(|i| *i == a).unwrap();
+        assert_eq!(&ids[ix + 1], f, "filler move {moves} must land directly after `a`");
+    }
+    let before = load_locked(&path).store;
+    // THE POSITIVE CONTROL: the loop really exhausted the gap. Without it a
+    // change to ORDER_GAP or to the midpoint could stop the walk short, and the
+    // assertions below would pass against a move that never met the case.
+    assert!(
+        gap_below(&before, &a) < 2,
+        "the walk must exhaust the gap below `a`; it is {} after {moves} moves",
+        gap_below(&before, &a)
+    );
+    assert!(moves >= 10, "1024 halves to 1 in ten moves; the walk made {moves}");
+
+    // What the scope must read after the move: the same order, with `m` taken
+    // out and put back directly after `a`.
+    let mut want = live_ids(&before, &Scope::Global);
+    want.retain(|i| *i != m);
+    let at = want.iter().position(|i| *i == a).unwrap() + 1;
+    want.insert(at, m.clone());
+
+    t += 1;
+    apply_to(&path, move_after(&m, &a), &human(), t, None).unwrap();
+    let after = load_locked(&path).store;
+    assert_eq!(live_ids(&after, &Scope::Global), want, "the exhausted move must land after `a`");
+
+    // Re-spaced, not collided: every live order is distinct and a multiple of
+    // ORDER_GAP, so the NEXT reorder has room again.
+    let orders: Vec<i64> = after.live(&Scope::Global).iter().map(|i| i.order).collect();
+    assert!(orders.windows(2).all(|w| w[0] < w[1]), "orders must be strictly increasing: {orders:?}");
+    assert!(orders.iter().all(|o| o % ORDER_GAP == 0), "a re-spaced scope sits on the gap: {orders:?}");
+
+    // Only `m` was EDITED. The items re-spaced around it kept their rev, so an
+    // agent holding one has lost nothing it could have read.
+    for item in after.live(&Scope::Global) {
+        if item.id == m {
+            continue;
+        }
+        let prior = before.items.iter().find(|i| i.id == item.id).unwrap();
+        assert_eq!(item.rev, prior.rev, "{} was re-spaced, not edited", item.id);
+    }
+}
+
+/// A move to the TOP of a list whose first item already sits at the bottom of
+/// the `i64` range re-spaces instead of wrapping or panicking — a panic here
+/// aborts a synchronous command (CLAUDE.md constraint 10).
+#[test]
+fn a_move_that_would_overflow_the_order_re_spaces_instead() {
+    let mut store = TodoStore::default();
+    store.items = vec![placed("a", i64::MIN + 5, T0), placed("b", 0, T0 + 1)];
+    todo::apply(
+        &mut store,
+        TodoOp::Update(TodoUpdate {
+            id: "b".to_string(),
+            order_after: Some(OrderAfter::Start),
+            ..TodoUpdate::default()
+        }),
+        &human(),
+        T0 + 10,
+    )
+    .unwrap();
+    assert_eq!(live_ids(&store, &Scope::Global), ["b", "a"]);
+    assert_eq!(order_of(&store, "b"), ORDER_GAP);
+    assert_eq!(order_of(&store, "a"), 2 * ORDER_GAP);
+}
+

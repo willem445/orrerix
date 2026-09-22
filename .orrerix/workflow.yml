@@ -136,9 +136,12 @@ driver:
 # run. kinds and max_defer_minutes are left at their defaults (every kind the rule
 # table covers; 30 minutes). Set enabled: false to turn it off; absent and false
 # are equivalent.
-triage:
-  enabled: true
-  provider: none
+# DISABLED UNTIL the installed build carries the key (>= 1.3.1-beta1, #3310):
+# RawWorkflow refuses unknown keys, so an older build refuses the WHOLE file — the
+# roster and the review driver with it (#3330). Uncomment after installing that build.
+# triage:
+#   enabled: true
+#   provider: none
 
 blocks:
   - id: orchestrator

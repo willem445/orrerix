@@ -285,3 +285,205 @@ same PR.
   flush one, or clear the store: deferring is a rule's answer about a shape, and
   an agent that could ask for one could ask for its own report to be held back
   from the pane that routes it.
+
+## 8. The eval harness (#3304 S2)
+
+`scripts/orch-triage-eval.cjs` replays a group's own `audit.jsonl` through the
+rule tier above and reports what it would have done. It exists because neither
+number that decides whether this feature is worth having is knowable from
+reading §3: how many wakes the rules actually close, and how many of the
+notices they close were ones the orchestrator needed. Both are properties of
+the TRAFFIC, so both have to be measured against it.
+
+```
+node scripts/orch-triage-eval.cjs \
+  --audit <group>/audit.1.jsonl --audit <group>/audit.jsonl \
+  --agents <group>/agents.json \
+  --labels test/fixtures/orchtriage/labels-loomux-68435179.csv
+```
+
+### 8.1 How the harness reuses the rules, and why it is a mirror
+
+The rule table is hand-written prefix tests over `&str`. There is nothing a
+`--dump-rules` export could hand a Node script: a dump of the class and rule
+NAMES would export the vocabulary and leave the decisions behind, which is the
+half that can diverge silently, and shipping a Rust helper binary would put a
+`cargo` build on the eval's path — which this repo's agent workers are barred
+from running at all. So the script carries a JS mirror of `triage.rs`, and the
+mirror is pinned twice, because each pin is blind where the other sees:
+
+1. **Cross-language golden vectors.** `test/fixtures/orchtriage/vectors.json`
+   holds delivery cases with their expected `classify` / `never_triaged` /
+   `decide` answers. `crates/loomux-engine/tests/triage_vectors.rs` asserts the
+   ENGINE agrees with that file; `test/orchtriageeval.test.ts` asserts the
+   MIRROR agrees with the same file. One fixture, two readers, one CI run — a
+   behavioural divergence reddens on whichever side moved. Vectors are blind to
+   a Rust rule that exists and has no vector.
+2. **A vocabulary scan.** `test/orchtriageeval.test.ts` reads `triage.rs` and
+   asserts the mirror's `KINDS`, `RULES`, `NEVER_REASONS`, `DELIVER_REASONS` and
+   both marker arrays are set-equal to Rust's own wire spellings, with a
+   per-scan positive control so a regex that stopped matching reddens instead of
+   agreeing with an emptied table. A rule added or renamed in Rust reddens here
+   with no vector involved.
+
+Both tests also assert every rule and every deliver reason is EXERCISED by a
+vector, because a rule with no case is a rule the first pin cannot see.
+
+**Neither pin looks at the text orrerix actually emits.** Both compare the
+mirror to `triage.rs`; if the app reworded a notice’s leading shape — the run
+frame’s `completed`, the drive prefix — both would stay green, the mirror would
+still mirror Rust, and the replay would classify the new shape as
+`system-notice` / `no-rule` while the eval measured traffic that no longer
+exists. Its only symptom would be a count that moved between runs, which §8.2
+has just told the reader to expect for an unrelated reason. Closing this needs a
+corpus asserted against the emitting call sites in `src-tauri`, which is a
+product-side change and is not in S2; it is named here so the gap has a reader
+rather than a discoverer.
+
+**The residual, stated rather than left to be found:** a change to the BODY of a
+Rust rule that keeps its name and is covered by no vector is invisible to both
+pins. The exercised-by-a-vector assertion is what bounds it; it does not remove
+it. `Rule::GateSatisfied` is the one rule no vector can name at all, because
+`decide` answers `TryEnqueue` for it and only a successful merge-queue enqueue
+turns that into a defer — an impure step a fixture cannot contain. Its witness
+is a `try-enqueue` vector, asserted by name on both sides.
+
+### 8.2 The population, and the one proxy
+
+The population is `orchestration-evals.md` §4.1's definition of a wake,
+unchanged: a `prompt` row whose `detail.to` is a pane whose `agents.json` role
+is `orchestrator`.
+
+S1's gate keys on `Delivery::MidSession`, so a KICKOFF is out of scope — but a
+`prompt` audit row carries only `{text, to}` and no delivery kind, so the replay
+cannot read which it was. It drops the FIRST prompt row per orchestrator pane id
+instead, which is right exactly when a pane's first delivery is its kickoff (it
+is, for every pane in the census: a pane is spawned with one) and wrong for a
+pane whose kickoff predates the `--from` window, where it costs one real
+delivery. `--no-drop-kickoff` turns it off and the report prints the count
+either way, so the error is bounded and visible rather than assumed away. A
+`delivery` field on the `prompt` row would remove the proxy; that is a product
+change and is recorded here as a limitation, not made.
+
+**Every population-dependent figure is a snapshot of a rotating artifact.**
+`audit.jsonl` rotates and a generation that falls off is unrecoverable, so the
+population, the per-rule deferrals and the projected saving are true of the log
+as it stood when the command ran and need not reproduce later — re-running the
+same command on the same group legitimately prints different numbers. The
+LABEL-CONDITIONED figures (agreement, the confusion matrix, false defers,
+wasted wakes) do reproduce from the shipped CSV, for as long as the labelled
+timestamps survive in some generation, and the report always states how many of
+them it found. The report prints this caveat itself rather than leaving it to
+whoever pastes the output, because without it a reader re-running the command
+cannot tell drift from breakage.
+
+One more figure the replay cannot observe: `Decision::TryEnqueue` is resolved
+OPTIMISTICALLY (the enqueue is assumed to succeed, so the notice defers). That
+is the direction that makes the harness's own headline worse rather than
+better — every false defer the resolution can manufacture is counted against
+the tier — and the count is printed separately so a reader can subtract it.
+
+### 8.3 The labelling rubric
+
+A label answers one question per delivery:
+
+> Does this notice name an action the ORCHESTRATOR must take, which cannot be
+> derived from the notice's leading SHAPE alone, before the group can proceed?
+
+| class | meaning |
+| --- | --- |
+| `decision` | yes — a call, ruling, approval, routing choice or tool call the text names. A human line typed into the pane is always a decision: it is an instruction by construction. |
+| `routing` | no — the next step is the standard one for this kind and is readable off the shape (a green `done` starts a review drive; a `request_changes` hands back). |
+| `fyi` | nothing is asked and nothing waits on a reply. |
+| `escalation` | a HUMAN, not the orchestrator, must decide. |
+
+The eval scores the BINARY, because deliver-or-defer is the only question the
+tier asks: **needs-orchestrator** = `decision` + `escalation`, **audit-only** =
+`routing` + `fyi`. Scoring the four-way class would be scoring a question
+nothing in the system answers.
+
+A labeller does not start from a blank file. `--emit-labels` prints the
+RESIDUAL as fillable CSV — one `ts_ms,kind,` row per delivery the rule tier
+left as `no-rule`, the rubric above in the header, the label column empty:
+
+```
+node scripts/orch-triage-eval.cjs --audit <group>/audit.jsonl \
+  --agents <group>/agents.json --emit-labels > labels-round2.csv
+```
+
+The residual is the whole population worth labelling: a never-triaged
+delivery is excluded by construction (which is also what keeps a human’s own
+words out of a labeller’s file) and a rule-closed one needs no judgement.
+
+**Two column forms are accepted**, `ts_ms,label` and `ts_ms,kind,label`, and
+that is not convenience: `kind` is DERIVED — `classify`’s own answer, carried
+so rows can be grouped without re-reading the audit — so a two-column file is
+complete, and #3304’s plan slice names exactly that form. The label is always
+the last column.
+
+The shipped set is `test/fixtures/orchtriage/labels-loomux-68435179.csv`: 150
+consecutive deliveries, one pass, one labeller, `ts_ms,kind,label` and **no
+delivery text** — the rows are a live group's agent-authored prose, and the set
+is reproducible from the timestamps against the audit it was cut from. Its
+header records the two classes where this rubric diverges from #3304's planning
+census, which is most of the gap between that census's 26 % decision rate and
+this set's 60 %. A second labeller is still required before any agreement figure
+from it is quoted as a pass criterion.
+
+### 8.4 The metrics, and which one decides
+
+- **deferred / delivered**, per rule and per kind, plus the projected saving at
+  #3304's census figure of ~1.3 M cache-read tokens per wake (carried, not
+  re-measured here).
+- **agreement** on the binary, always printed with its denominator: an agreement
+  figure over an unstated population is not a number a reader can check.
+- **a per-class confusion matrix**, and **ECE** over reliability bins in 0.1
+  steps for a provider's confidence. An empty bin prints `-`, never 0 — an
+  unsampled bin is not a perfectly calibrated one, and an ECE over zero samples
+  is `null` rather than a clean zero.
+- **FALSE DEFERS** — a delivery labelled needs-orchestrator that the tier held
+  back. This is the only harmful error and it decides: a spared wake costs a
+  wake, a swallowed decision costs a stalled group. #3304 Q4's pass criterion
+  for any provider is ZERO of these at the chosen floor.
+- **wasted wakes** — an audit-only delivery that still woke the pane. The cheap
+  error, reported beside the expensive one so the trade is visible.
+
+The **negative control** for every saving figure is `--triage-disabled`: the same
+corpus with the tier off must report 0 deferred and 0 false defers. Without it,
+"the tier deferred N" is a number with nothing to fail against.
+
+### 8.5 The provider seam, for S3
+
+A `TriageProvider` is an object with `classify({ts_ms, from, kind, text}) ->
+{class, confidence} | null`. The residual it is shown is exactly the rule tier's
+`no-rule` arm — never-triaged deliveries are excluded by construction, which is
+what makes "a human's words are never sent to a classifier" a property of the
+code rather than of the rule table happening not to match them.
+
+`FakeTriage` replays verdicts from a JSON file keyed by `ts_ms`, so S3's
+decision rule can be swept against this label set with no network and no
+account. The fail-safe ladder lives in `providerAction` so the sweep measures
+the rule S3 will ship rather than an approximation of it: no verdict delivers, a
+sub-floor confidence delivers, and `decision` / `escalation` deliver at any
+confidence. A missing or out-of-range confidence is a NO-VERDICT, never a zero
+one — a zero would be right by accident under every floor and wrong the moment a
+caller reads `class` without one.
+
+### 8.6 What the first run found, and what it does NOT change
+
+The run on this group's own log (812 deliveries, both audit generations, against
+the 150-row label set) is on #3304. Its headline is a result about §3's table,
+not about the harness: at 150 labels the rule tier holds back **40** deliveries
+this rubric calls needs-orchestrator, and **32 of those are `gate-satisfied`** —
+every `GATE SATISFIED` line in the window ends "Disposition is yours
+(INVARIANT 3): `list_verdicts(...)`", which `NEEDS_YOU_MARKERS` does not match.
+
+Nothing in S2 changes the rule tier: measuring it and editing it are different
+slices, and an eval that quietly fixed what it found would have no independent
+reading left to report. The candidate remedies belong to a follow-up and are
+recorded here so the next reader starts from them rather than re-deriving them:
+adding an `is yours` marker (which the census says closes all 32 at once),
+splitting the green `run-completed` rule on whether its registered note names a
+GREEN-path action rather than only a red one (6 of the remaining 8), and
+delivering an `agent-exited` whose text says the pane produced no output at all
+(1 — a lost kickoff is not a roster update).

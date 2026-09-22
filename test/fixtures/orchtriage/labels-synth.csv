@@ -1,0 +1,27 @@
+# Hand labels for `audit-synth.jsonl` (#3304 S2). Synthetic corpus, so these are
+# the labels the fixture was DESIGNED to carry rather than a labelling pass over
+# real traffic — the real set is `labels-loomux-68435179.csv`.
+#
+# Two rows are deliberately UNLABELLED (9000, 22000) so the report's
+# "labelled N of population M" is fail-able: a harness that scored the whole
+# population would read 21 of 21 here.
+ts_ms,kind,label
+2000,run-completed,fyi
+3000,run-completed,fyi
+4000,run-completed,decision
+5000,pr-checks,fyi
+6000,planner-exited,fyi
+7000,agent-exited,decision
+8000,drive-cancelled,fyi
+10000,message-from,decision
+11000,drive-gate-satisfied,decision
+12000,drive-held,decision
+13000,delegate-blocked,decision
+14000,watchdog,decision
+15000,system-notice,decision
+16000,human,decision
+17000,delegate-done,routing
+18000,delegate-done,decision
+19000,message-from,decision
+20000,reviewer-report,routing
+21000,delegate-progress,fyi

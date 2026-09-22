@@ -1,0 +1,7 @@
+[
+  { "id": "orch-1", "role": "orchestrator", "session": "s-orch", "name": "Orchestrator" },
+  { "id": "w-1", "role": "worker", "session": "s-w1", "name": "worker one" },
+  { "id": "w-2", "role": "worker", "session": "s-w2", "name": "worker two" },
+  { "id": "rev-1", "role": "reviewer", "session": "s-rev1", "name": "reviewer one" },
+  { "id": "plan-1", "role": "planner", "session": "s-plan1", "name": "planner one" }
+]

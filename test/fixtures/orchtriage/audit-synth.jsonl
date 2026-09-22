@@ -1,0 +1,23 @@
+{"ts_ms":1000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"You are the orchestrator for group synth-1. Read your role instructions."}}
+{"ts_ms":2000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] run 101: completed — conclusion: success. Note (registered): \"post-merge main. Red -> fix forward.\" (watch n-1)"}}
+{"ts_ms":3000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] run 102: completed — conclusion: success. Note (registered): \"post-merge main. Red -> fix forward.\" (watch n-2)"}}
+{"ts_ms":4000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] run 103: completed — conclusion: failure. Note (registered): \"post-merge main. Red -> fix forward.\" (watch n-3)"}}
+{"ts_ms":5000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] PR #900 checks: SUCCESS — 6 of 7 checks passed (1 skipped). Head at this poll: abc1234."}}
+{"ts_ms":6000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] planner Planner (plan-1) posted its plan and exited — the slot is free."}}
+{"ts_ms":7000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] agent w-2 (w-2) exited (code Some(1)) 4100ms after spawn — produced no output before exiting."}}
+{"ts_ms":8000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] review drive PR #901: CANCELLED — cancel_review_drive was called at abc1234."}}
+{"ts_ms":9000,"action":"prompt","actor":"plan-1","detail":{"to":"orch-1","text":"[orrerix] message from plan-1: ---BEGIN PLAN 1/3--- slices: S1 the first part of the plan."}}
+{"ts_ms":10000,"action":"prompt","actor":"plan-1","detail":{"to":"orch-1","text":"[orrerix] message from plan-1: ---BEGIN PLAN 3/3--- risks: the labels are single-pass."}}
+{"ts_ms":11000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] review drive PR #900: GATE SATISFIED at abc1234 (body 7f31..) — rev-1 PASS; 1 rounds. Disposition is yours."}}
+{"ts_ms":12000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] review drive PR #902: HELD — the worker pushed at def5678 and the driver has heard nothing since."}}
+{"ts_ms":13000,"action":"prompt","actor":"w-1","detail":{"to":"orch-1","text":"[orrerix] w-1 reports blocked (#900): the brief contradicts the tree and I cannot pick a reading."}}
+{"ts_ms":14000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] watchdog: agent w-1 has produced no terminal output and sent no report for 10+ min."}}
+{"ts_ms":15000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] Context was compacted. Re-sync live state now: list_tasks, get_state, list_agents."}}
+{"ts_ms":16000,"action":"prompt","actor":"human","detail":{"to":"orch-1","text":"Lets do a production release if you think we are ready."}}
+{"ts_ms":17000,"action":"prompt","actor":"w-1","detail":{"to":"orch-1","text":"[orrerix] w-1 reports done (#900): CI green on all three platforms at abc1234, PR ready for review."}}
+{"ts_ms":18000,"action":"prompt","actor":"w-2","detail":{"to":"orch-1","text":"[orrerix] w-2 reports done (#901): PR ready. One thing needs you: the scratch PRs are still open."}}
+{"ts_ms":19000,"action":"prompt","actor":"w-1","detail":{"to":"orch-1","text":"[orrerix] message from w-1: a live product defect found in review needs an owner outside my slice."}}
+{"ts_ms":20000,"action":"prompt","actor":"rev-1","detail":{"to":"orch-1","text":"[orrerix] rev-1 reports approved (#900): rev-std PASS recorded at head abc1234, 0 blocking."}}
+{"ts_ms":21000,"action":"prompt","actor":"w-2","detail":{"to":"orch-1","text":"[orrerix] w-2 reports progress (#901): still working the second item; nothing blocking."}}
+{"ts_ms":22000,"action":"prompt","actor":"w-2","detail":{"to":"orch-1","text":"[orrerix] message from w-2: heads-up, I am proceeding on the brief unless you say otherwise."}}
+{"ts_ms":23000,"action":"prompt","actor":"orrerix","detail":{"to":"w-1","text":"[orrerix] run 104: completed — conclusion: success. A delivery to a WORKER pane: never in the population."}}

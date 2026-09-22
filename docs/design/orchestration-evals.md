@@ -847,6 +847,39 @@ What no test can reach is whether an **even** split is the right one: it is an
 assumption about how a shared pane's spend divided, and only the structural field named
 in H8 would settle it.
 
-The one instrument here is `npm test`. `tsconfig.json`'s `include` is `["src"]`, so
+The one instrument here is `npm test`. `tsconfig.json`'s `include` is `["src", "dev"]`, so
 `tsc --noEmit` typechecks neither `scripts/` nor `test/` and has no opinion on any of
 this — a mutation table for this file must not claim the compiler as a second reader.
+
+---
+
+## 11. The delivery-triage replay (`scripts/orch-triage-eval.cjs`)
+
+A second script over the same inputs, answering a different question. The
+scorecard above asks *what did this PR cost the orchestrator*; the replay asks
+*which of those wakes needed to happen at all*. It reads §4.1's wake population
+unchanged — a `prompt` row whose `detail.to` is an `orchestrator` pane — and
+pushes each one through #3304 S1's rule tier, reporting deferred/delivered per
+rule and per kind, the projected saving, and, against a hand-label set,
+agreement, a confusion matrix, ECE and the false-defer floor.
+
+Three things are worth knowing here rather than only in
+`docs/design/delivery-triage.md` §8, because they are facts about reading this
+audit rather than about triage:
+
+- **The classifier is not this document's.** §4.1's table and the triage rule
+  table are deliberately different — `triage.rs`'s module header enumerates the
+  four divergences, and the replay mirrors THAT table, not this one. A reader
+  reconciling a kind count between the two scripts should start there.
+- **A `prompt` row carries no delivery kind**, so the replay cannot tell a
+  kickoff from a mid-session delivery and drops the first row per orchestrator
+  pane as a proxy. The count is printed; `--no-drop-kickoff` turns it off.
+- **The saving is quoted in cache-read tokens at ~1.3 M per wake**, which is
+  #3304's transcript-derived census figure and is *carried*, not re-measured —
+  §4.5's caveat about transcript-derived token numbers applies to it in full.
+  The audit still has no per-turn token rows.
+
+Testing: `test/orchtriageeval.test.ts` over `test/fixtures/orchtriage/`, a
+21-delivery synthetic corpus built on the same no-two-counters-share-a-value
+rule as §10's, plus a cross-language golden-vector fixture the Rust engine test
+`crates/loomux-engine/tests/triage_vectors.rs` reads from the other side.

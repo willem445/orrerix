@@ -109,14 +109,14 @@ against that would be reading the verdict rather than the registrant's intent.
 
 **The consequence is that the `gate-satisfied` rule is unreachable on the text
 orrerix emits today**, and that is stated here rather than discovered later: on
-the 415-delivery replay it went from 83 defers to 0, every one of them now a
+the 416-delivery replay it went from 83 defers to 0, every one of them now a
 needs-you delivery. Its `TryEnqueue` arm survives in code and in the tests only
 against a COUNTERFACTUAL specimen (`GATE_NO_MARKER`) — a gate notice with the
 closing sentence removed. Two honest ways out exist and neither is this slice's
 to take: reword the gate notice so it does not name an action the orchestrator
 must take, or retire the rule. Until one is chosen, the rule is dead weight that
 costs nothing and hides nothing, and the projected saving on this group's log
-falls from 227.5 M to 59.8 M cache-read tokens — the price of the pass criterion
+falls from 228.8 M to 61.1 M cache-read tokens — the price of the pass criterion
 (#3304 Q4: zero false defers), paid knowingly. Recovering that residual is what
 S3's provider tier is for.
 

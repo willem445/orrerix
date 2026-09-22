@@ -439,6 +439,7 @@ const SILENT_EXIT_MARKERS: [&str; 1] = ["produced no output before exiting"];
 pub fn needs_you_markers() -> &'static [&'static str] {
     &NEEDS_YOU_MARKERS
 }
+
 fn contains_ci(hay_lower: &str, needles: &[&str]) -> bool {
     needles.iter().any(|n| hay_lower.contains(n))
 }
@@ -637,13 +638,22 @@ fn run_is_green(text: &str) -> bool {
 /// verdict, not the registrant's intent. The note's own delimiters are
 /// backend-built by `notify::watch_fired_notice` and the note is sanitized of
 /// control characters before it is interpolated, so an agent cannot forge the
-/// closing delimiter's position. A quote INSIDE the note does move the slice
-/// boundary — `rfind` takes the LAST one — but only ever to a SHORTER slice,
-/// since the note's own closing quote is the last one this function can see.
-/// A shorter slice can only drop a marker, never add one, so the effect is
-/// bounded to the DELIVER direction. ("Truncates" was the earlier wording and
-/// overstated it: a quote sitting BEFORE the marker shortens the slice from
-/// the left of it, which is not a truncation.)
+/// closing delimiter's position.
+///
+/// **The slice is the whole note, however many quotes the note contains**,
+/// because `rfind` searches the text AFTER the opening delimiter and the only
+/// thing following the note there is the backend-built ` (watch <id>)`, which
+/// carries no quote of its own — so the last quote in that region is always
+/// the note's real closing one. Pinned over all four placements of an
+/// embedded quote by `a_quote_inside_the_note_does_not_move_the_slice`.
+///
+/// Two earlier wordings of this paragraph were wrong and are named so the
+/// claim is not re-derived from them: an embedded quote does NOT move the
+/// boundary (it is not the last one), and a slice that somehow lost a
+/// green-path marker would NOT fail toward delivery — `decide` reads
+/// `!note_names_green_path`, so a dropped marker yields `Defer(RunGreen)`.
+/// There is no safe-direction argument to lean on here; the guarantee is
+/// that the slice is exact.
 fn registered_note(text: &str) -> Option<&str> {
     const OPEN: &str = "Note (registered): \"";
     let at = text.find(OPEN)?;
@@ -1169,6 +1179,55 @@ mod tests {
         assert!(note_names_green_path(CHECKS_GREEN_ACT) && !note_names_green_path(CHECKS_GREEN));
     }
 
+    #[test]
+    fn a_quote_inside_the_note_does_not_move_the_slice() {
+        // Review round 4, B1. Two successive wordings of `registered_note`'s doc
+        // claimed an embedded quote moves the slice boundary, and the second also
+        // got the failure DIRECTION backwards. Both were reasoning, not
+        // measurement, so the property is now a test over all four placements of
+        // a quote relative to the marker.
+        //
+        // Why it holds: `rfind` searches the text AFTER the opening delimiter,
+        // and the only thing following the note there is ` (watch <id>)`, which
+        // `notify::watch_fired_notice` builds and which carries no quote — so the
+        // last quote in that region is always the note's real closing one.
+        let notice = |note: &str| {
+            format!(
+                "[orrerix] run 17812: completed — conclusion: success. \
+                 Note (registered): \"{note}\" (watch n-1)"
+            )
+        };
+        let cases: [&str; 4] = [
+            // a. no embedded quote — the control.
+            "post-merge main; if green: tag and push",
+            // b. a quote BEFORE the marker.
+            "he said \"go\" then if green: tag and push",
+            // c. a quote AFTER the marker.
+            "if green: tag and push, he said \"go\"",
+            // d. quotes on BOTH sides of it.
+            "he said \"go\", if green: tag, then \"done\"",
+        ];
+        for note in cases {
+            let text = notice(note);
+            assert_eq!(
+                registered_note(&text),
+                Some(note),
+                "the slice must be the WHOLE note, quotes and all: {note}"
+            );
+            // The consequence that actually matters: the marker survives, so a
+            // green run carrying this note is DELIVERED.
+            assert!(note_names_green_path(&text), "green-path marker lost: {note}");
+            assert_eq!(decide(&input(&text), &on()), Decision::Deliver(DeliverReason::NoRule));
+        }
+
+        // THE DIRECTION, pinned rather than argued. A note that does NOT carry a
+        // marker defers — so losing one would fail toward DEFER, not toward
+        // deliver, and there is no safe-direction argument available here. The
+        // doc says so; this is what makes that sentence checkable.
+        let plain = notice("post-merge main; red → INVARIANT 6");
+        assert!(!note_names_green_path(&plain));
+        assert_eq!(decide(&input(&plain), &on()), Decision::Defer(Rule::RunGreen));
+    }
     #[test]
     fn the_green_path_scan_reads_the_note_and_not_the_verdict_around_it() {
         // The SCOPE is load-bearing: `conclusion: success` and `checks: SUCCESS`

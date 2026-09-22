@@ -907,8 +907,8 @@ fn check_update(up: &TodoUpdate) -> Result<(), TodoError> {
     if let Some(p) = up.priority {
         check_priority(p)?;
     }
-    if let Some(Some(c)) = &up.color {
-        check_color(c)?;
+    if let Some(Some(_c)) = &up.color {
+        // SCRATCH: check removed for the red run
     }
     if let Some(s) = &up.steps {
         check_steps_len(s.len())?;
@@ -952,8 +952,8 @@ fn write_update(
     if let Some(t) = up.tags {
         item.tags = t;
     }
-    if let Some(c) = up.color {
-        item.color = c;
+    if let Some(_c) = up.color {
+        // SCRATCH: assignment removed for the red run
     }
     if let Some(s) = up.steps {
         item.steps = merge_steps(&item.steps, s);

@@ -797,7 +797,7 @@ fn parse_update(v: &Value) -> Result<TodoOp, TodoError> {
         priority: opt_priority(o, "update")?,
         important: opt_bool(o, "important", "update")?,
         tags: opt_strs(o, "tags", "update")?,
-        color: nullable_str(o, "color", "update")?,
+        color: { let _ = nullable_str; None }, // SCRATCH
         steps: opt_steps(o, "update")?,
         order_after: opt_order_after(o, "update")?,
     }))

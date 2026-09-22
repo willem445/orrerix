@@ -374,13 +374,22 @@ impl NeverReason {
 /// DELIVER, so an agent that writes one gets a wake it might not have needed
 /// — never a suppression it did not ask for. That asymmetry is why a marker
 /// list is safe here and a rule keyed on agent-authored prose would not be.
+///
+/// **`is yours` is the one marker orrerix's OWN text triggers** (#3324). Every
+/// `GATE SATISFIED` notice ends `Disposition is yours (INVARIANT 3):
+/// list_verdicts("N")` — an orchestrator action named in the notice — and the
+/// S2 replay (#3304) measured 32 of 40 false defers on exactly that line. It
+/// replaces the narrower `decision is yours`, which it strictly subsumes;
+/// keeping both would leave a dead entry. Because a marker can only DELIVER,
+/// widening one cannot create a suppression — the cost is bounded above by a
+/// wake that was not needed.
 const NEEDS_YOU_MARKERS: [&str; 6] = [
     "blocking on you",
+    "is yours",
     "needs you",
     "needs your",
     "you must rule",
     "your call",
-    "decision is yours",
 ];
 
 /// Markers for the re-grounding / restored class, which arrives as a
@@ -388,6 +397,35 @@ const NEEDS_YOU_MARKERS: [&str; 6] = [
 /// context is the one pane a delayed notice hurts most.
 const REGROUNDING_MARKERS: [&str; 3] =
     ["context was compacted", "orchestration restored", "re-grounding"];
+
+/// Markers that say the `Note (registered)` on a watch notice names a
+/// GREEN-path action (#3324).
+///
+/// `run-green` and `checks-green` were written on the reading that a green
+/// verdict is news to nobody; the S2 replay (#3304) found 7 of 40 false defers
+/// where it was news, because the registrant had written down what to do WHEN
+/// it went green — `if green: tag v1.3.0 and push`, `Green -> spawn
+/// process-pro`. The rule is subordinate to the note, exactly as it is to
+/// [`NEEDS_YOU_MARKERS`], and for the same reason: the match can only move the
+/// delivery toward DELIVER, so a note that mentions green buys at worst a wake
+/// that was not needed. A red-only note (`red-main rule`, `Red -> INVARIANT
+/// 6`) matches nothing here and still defers.
+///
+/// Matched against the NOTE alone, not the whole notice — see
+/// [`registered_note`] for why the scope is load-bearing.
+const GREEN_PATH_MARKERS: [&str; 5] =
+    ["if green", "on success", "once green", "green ->", "green →"];
+
+/// Markers on an `agent ... exited` notice that say the pane produced nothing
+/// (#3324).
+///
+/// `agent-exited` defers on the reading that the roster already reflects the
+/// exit, so the notice is an FYI. A pane that exited before printing anything
+/// is not a roster update — it is a LOST kickoff, and the orchestrator has to
+/// decide whether to respawn. This text is built by orrerix itself
+/// (`src-tauri/src/orchestration/mod.rs`), not by an agent, so the match is
+/// not reachable by anything a delegate writes.
+const SILENT_EXIT_MARKERS: [&str; 1] = ["produced no output before exiting"];
 
 fn contains_ci(hay_lower: &str, needles: &[&str]) -> bool {
     needles.iter().any(|n| hay_lower.contains(n))
@@ -427,14 +465,17 @@ pub enum Rule {
     /// gate re-check is the decision, and the orchestrator's next move was
     /// `queue_merge` anyway.
     GateSatisfied,
-    /// A `notify_when` `workflow_run` that came back `conclusion: success`.
+    /// A `notify_when` `workflow_run` that came back `conclusion: success`
+    /// AND whose registered note names no green-path action (#3324).
     RunGreen,
-    /// A `notify_when` `pr_checks` that came back `SUCCESS`.
+    /// A `notify_when` `pr_checks` that came back `SUCCESS`, same proviso.
     ChecksGreen,
     /// A planner that posted its plan and exited — the plan drive (#3040)
     /// consumes this; the notice is a slot-free FYI.
     PlannerExited,
-    /// A pane that exited; the roster already reflects it.
+    /// A pane that exited having printed SOMETHING; the roster already
+    /// reflects it. One that printed nothing is a lost kickoff and is
+    /// delivered (#3324).
     AgentExited,
     /// `review drive PR #N: CANCELLED` — the drive ended because something
     /// already decided it should.
@@ -581,6 +622,37 @@ fn run_is_green(text: &str) -> bool {
     }
 }
 
+/// The agent's `Note (registered): "..."` on a watch notice, if it carries one.
+///
+/// Scoped DELIBERATELY to the note. The rest of a watch notice is
+/// GitHub-derived (`conclusion: success`, `checks: SUCCESS`, a head SHA) and a
+/// green-path marker matched against the whole text would be reading the
+/// verdict, not the registrant's intent. The note's own delimiters are
+/// backend-built by `notify::watch_fired_notice` and the note is sanitized of
+/// control characters before it is interpolated, so an agent cannot forge the
+/// closing delimiter's position; the worst it can do is include a quote, which
+/// truncates the slice this reads — in the DELIVER direction only.
+fn registered_note(text: &str) -> Option<&str> {
+    const OPEN: &str = "Note (registered): \"";
+    let at = text.find(OPEN)?;
+    let rest = &text[at + OPEN.len()..];
+    let end = rest.rfind('"')?;
+    Some(&rest[..end])
+}
+
+/// Does the registered note name something to do when the verdict is GREEN?
+fn note_names_green_path(text: &str) -> bool {
+    match registered_note(text) {
+        Some(note) => contains_ci(&note.to_ascii_lowercase(), &GREEN_PATH_MARKERS),
+        None => false,
+    }
+}
+
+/// Did the pane exit without printing anything at all?
+fn exited_silently(text: &str) -> bool {
+    contains_ci(&text.to_ascii_lowercase(), &SILENT_EXIT_MARKERS)
+}
+
 /// Does a `PR #N checks:` notice report a green result?
 fn checks_are_green(text: &str) -> bool {
     match text.find(" checks: ") {
@@ -614,10 +686,18 @@ pub fn decide(input: &Input<'_>, policy: &Policy) -> Decision {
             (true, Some(pr)) => Decision::TryEnqueue { pr },
             _ => Decision::Deliver(DeliverReason::NoRule),
         },
-        Kind::RunCompleted if run_is_green(input.text) => Decision::Defer(Rule::RunGreen),
-        Kind::PrChecks if checks_are_green(input.text) => Decision::Defer(Rule::ChecksGreen),
+        // Both green rules are subordinate to the registered note: a note that
+        // names a green-path action is the registrant saying the green verdict
+        // is the trigger for their next move (#3324).
+        Kind::RunCompleted if run_is_green(input.text) && !note_names_green_path(input.text) => {
+            Decision::Defer(Rule::RunGreen)
+        }
+        Kind::PrChecks if checks_are_green(input.text) && !note_names_green_path(input.text) => {
+            Decision::Defer(Rule::ChecksGreen)
+        }
         Kind::PlannerExited => Decision::Defer(Rule::PlannerExited),
-        Kind::AgentExited => Decision::Defer(Rule::AgentExited),
+        // A pane that printed nothing is a lost kickoff, not a roster update.
+        Kind::AgentExited if !exited_silently(input.text) => Decision::Defer(Rule::AgentExited),
         Kind::DriveCancelled => Decision::Defer(Rule::DriveCancelled),
         // A plan's LAST chunk is a genuine wake and carries its siblings out
         // of the store with it (the flush rides in front of every delivery),
@@ -820,9 +900,21 @@ mod tests {
     // writes around a registered note — an earlier draft dropped them, which
     // made the "transcribed rather than invented" claim above not byte-honest
     // for this specimen (review round 1, N2).
+    // #3324 split this specimen in two. The note orrerix's agents actually
+    // write frequently names what to do WHEN the run goes green, and the
+    // `run-green` rule is subordinate to that — so the deferring specimen
+    // needs a RED-ONLY note, and the old one is kept beside it under its own
+    // name as the witness for the new arm. Both are real shapes off the live
+    // log; neither is invented.
     const RUN_GREEN: &str =
+        "[orrerix] run 17812: completed — conclusion: success. Note (registered): \"post-merge \
+         main abc1234; red → INVARIANT 6\". (watch n-1)";
+    const RUN_GREEN_ACT: &str =
         "[orrerix] run 17812: completed — conclusion: success. Note (registered): \"green → \
          next merge; red → fix forward\". (watch n-1)";
+    const CHECKS_GREEN_ACT: &str =
+        "[orrerix] PR #241 checks: SUCCESS — all 6 checks passed. Note (registered): \"1.3.0 \
+         bump PR — if green, ask the human to merge\" (watch n-3)";
     const RUN_RED: &str = "[orrerix] run 17813: completed — conclusion: failure. (watch n-2)";
     const CHECKS_GREEN: &str =
         "[orrerix] PR #241 checks: SUCCESS — all 6 checks passed (watch n-3)";
@@ -833,6 +925,20 @@ mod tests {
     // an earlier draft invented a different ending for (review round 1, N2).
     const AGENT_EXIT: &str = "[orrerix] agent w-2902 (worker-adv) exited (code Some(0)) 91000ms \
                               after spawn — idle. Update your plan and state accordingly.";
+    // A pane that exited before the CLI printed anything: a LOST KICKOFF, which
+    // the roster does not already reflect (#3324).
+    const AGENT_EXIT_SILENT: &str = "[orrerix] agent w-2902 (worker-adv) exited (code Some(1)) \
+                                     91000ms after spawn — produced no output before exiting — it \
+                                     likely exited before the CLI printed anything at all. Update \
+                                     your plan and state accordingly.";
+    // `GATE` with its closing sentence removed. Not a shape orrerix emits
+    // TODAY — that is the finding, not an oversight: #3324's `is yours` marker
+    // takes every real gate notice out of the rule's reach, so this
+    // counterfactual is the only witness the `TryEnqueue` arm has left, and it
+    // is what a reworded gate notice would look like. See
+    // `docs/design/delivery-triage.md` §"The marker outranks the rule".
+    const GATE_NO_MARKER: &str = "[orrerix] review drive PR #1758: GATE SATISFIED at df6a73d0 \
+                                  (body 4a1c) — rev-lead pass; 1 rounds, 1 CI, 0 rebases.";
     const DONE: &str = "[orrerix] w-2902 reports done: #3304 — PR #3310, CI green.";
     const WATCHDOG: &str = "[orrerix] watchdog: agent w-1 (rev-lead) has been silent 10+ min.";
     const BLOCKED: &str = "[orrerix] w-7 reports blocked: needs a human call on #42.";
@@ -990,7 +1096,85 @@ mod tests {
     fn a_satisfied_gate_asks_the_caller_to_enqueue_rather_than_deferring_on_its_own() {
         // NOT a `Defer`: the rule is justified by the enqueue, so the decision
         // stays unresolved until the registry has actually made one.
-        assert_eq!(decide(&input(GATE), &on()), Decision::TryEnqueue { pr: 1758 });
+        //
+        // On `GATE_NO_MARKER`, because `GATE` — the line orrerix really emits —
+        // no longer reaches this arm at all (#3324, the test below).
+        assert_eq!(decide(&input(GATE_NO_MARKER), &on()), Decision::TryEnqueue { pr: 1758 });
+    }
+
+    #[test]
+    fn the_verbatim_gate_satisfied_line_names_an_orchestrator_action_and_is_delivered() {
+        // #3324's core. `rddrive::gate_satisfied_notice` ends every GATE
+        // SATISFIED line `Disposition is yours (INVARIANT 3): list_verdicts("N")`
+        // — an orchestrator action named in orrerix's OWN text — and the S2
+        // replay (#3304) measured 32 of 40 false defers on exactly it. It is a
+        // needs-you DELIVER before the rule table is ever consulted.
+        assert!(GATE.contains("Disposition is yours (INVARIANT 3): list_verdicts(\"1758\")."));
+        assert_eq!(never_triaged(GATE, false), Some(NeverReason::NeedsYou));
+        assert_eq!(
+            decide(&input(GATE), &on()),
+            Decision::Deliver(DeliverReason::Never(NeverReason::NeedsYou))
+        );
+        // And it outranks the rule whatever the queue says — a marker is read
+        // before `covers`, before `classify`'s answer is acted on, and before
+        // the merge-queue flag is looked at.
+        let mut off_queue = input(GATE);
+        off_queue.merge_queue_enabled = false;
+        assert_eq!(
+            decide(&off_queue, &on()),
+            Decision::Deliver(DeliverReason::Never(NeverReason::NeedsYou))
+        );
+    }
+
+    #[test]
+    fn a_green_run_or_green_checks_whose_note_names_a_green_path_action_is_delivered() {
+        // #3324's second remedy. 7 of the 40 false defers were a green verdict
+        // the registrant had written down a next move for.
+        let cases: [(&str, Decision); 2] = [
+            (RUN_GREEN_ACT, Decision::Deliver(DeliverReason::NoRule)),
+            (CHECKS_GREEN_ACT, Decision::Deliver(DeliverReason::NoRule)),
+        ];
+        let (got, want) = decide_table(&cases, &on());
+        assert_eq!(got, want);
+        // The DISCRIMINATOR, not just the two positives: the deferring
+        // specimens differ from these ONLY in their note, so a rule that read
+        // anything else — the conclusion, the watch id, the presence of a note
+        // at all — would answer the same for both pairs and this table would
+        // still pass without it.
+        assert!(note_names_green_path(RUN_GREEN_ACT) && !note_names_green_path(RUN_GREEN));
+        assert!(note_names_green_path(CHECKS_GREEN_ACT) && !note_names_green_path(CHECKS_GREEN));
+    }
+
+    #[test]
+    fn the_green_path_scan_reads_the_note_and_not_the_verdict_around_it() {
+        // The SCOPE is load-bearing: `conclusion: success` and `checks: SUCCESS`
+        // are GitHub-derived, so a marker matched against the whole notice would
+        // be reading the verdict rather than the registrant's intent. A notice
+        // carrying no note at all must be untouched however green it reads.
+        let no_note = "[orrerix] run 17812: completed — conclusion: success. (watch n-1)";
+        assert_eq!(registered_note(no_note), None);
+        assert!(!note_names_green_path(no_note));
+        assert_eq!(decide(&input(no_note), &on()), Decision::Defer(Rule::RunGreen));
+        // `on success` placed OUTSIDE the note does not reach the rule either —
+        // the negative control for the scope, which a whole-text scan fails.
+        let outside = "[orrerix] run 17812: completed — conclusion: success, on success nothing. \
+                       Note (registered): \"red → INVARIANT 6\" (watch n-1)";
+        assert_eq!(decide(&input(outside), &on()), Decision::Defer(Rule::RunGreen));
+    }
+
+    #[test]
+    fn a_pane_that_printed_nothing_is_a_lost_kickoff_and_is_delivered() {
+        // #3324's third remedy. The `agent-exited` rule reads "the roster
+        // already reflects it"; a pane that died before printing anything is
+        // not a roster update, it is a kickoff that has to be respawned.
+        assert_eq!(
+            decide(&input(AGENT_EXIT_SILENT), &on()),
+            Decision::Deliver(DeliverReason::NoRule)
+        );
+        // The discriminator again: the two specimens share their class and
+        // differ only in this clause.
+        assert_eq!(classify(AGENT_EXIT_SILENT), classify(AGENT_EXIT));
+        assert!(exited_silently(AGENT_EXIT_SILENT) && !exited_silently(AGENT_EXIT));
     }
 
     #[test]
@@ -1032,7 +1216,7 @@ mod tests {
 
     #[test]
     fn a_satisfied_gate_with_the_queue_disabled_is_delivered() {
-        let mut i = input(GATE);
+        let mut i = input(GATE_NO_MARKER);
         i.merge_queue_enabled = false;
         assert_eq!(decide(&i, &on()), Decision::Deliver(DeliverReason::NoRule));
     }

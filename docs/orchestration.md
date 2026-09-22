@@ -2725,15 +2725,19 @@ Every value there but `enabled` is its field's own default, so a block naming on
 `triage:` block means the feature is off and delivery behaves byte-for-byte as it did
 before it existed.
 
-**What gets held.** A drive's `GATE SATISFIED` on a PR the merge queue then accepted;
-a `notify_when` run or PR-checks watch that came back green; a planner that posted its
-plan and exited; a pane that exited; a cancelled drive; and the middle chunks of a plan
-a planner split across several messages. That is the whole list, and it is compiled in
-— nothing in this block writes a rule.
+**What gets held.** A `notify_when` run or PR-checks watch that came back green *and*
+whose registered note named nothing to do when it did; a planner that posted its plan and
+exited; a pane that exited having printed something; a cancelled drive; and the middle
+chunks of a plan a planner split across several messages. That is the whole list, and it is
+compiled in — nothing in this block writes a rule.
+
+A drive's `GATE SATISFIED` on a PR the merge queue accepted is in the rule table too, and
+in practice it never fires: the notice orrerix emits for one ends `Disposition is yours
+(INVARIANT 3)`, which is a text naming the orchestrator, and those are never held (#3324).
 
 **What is never held.** Anything whose text names the orchestrator (`blocking on you`,
-`needs you`, `your call`), a `HELD` drive, a `blocked` report, a watchdog stall, a
-re-grounding notice, and your own words relayed from a manager or lead pane. And
+`needs you`, `your call`, `is yours`), a `HELD` drive, a `blocked` report, a watchdog
+stall, a re-grounding notice, and your own words relayed from a manager or lead pane. And
 **everything else**: the default for any shape the rules do not positively recognise is
 to deliver, so a notice kind a later release adds wakes the pane until somebody teaches
 triage about it.

@@ -21,3 +21,5 @@
 {"ts_ms":21000,"action":"prompt","actor":"w-2","detail":{"to":"orch-1","text":"[orrerix] w-2 reports progress (#901): still working the second item; nothing blocking."}}
 {"ts_ms":22000,"action":"prompt","actor":"w-2","detail":{"to":"orch-1","text":"[orrerix] message from w-2: heads-up, I am proceeding on the brief unless you say otherwise."}}
 {"ts_ms":23000,"action":"prompt","actor":"orrerix","detail":{"to":"w-1","text":"[orrerix] run 104: completed — conclusion: success. A delivery to a WORKER pane: never in the population."}}
+{"ts_ms":24000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] agent w-3 (w-3) exited (code Some(0)) 5200ms after spawn — last output before it exited: \"all four items are done.\". Update your plan and state accordingly."}}
+{"ts_ms":25000,"action":"prompt","actor":"orrerix","detail":{"to":"orch-1","text":"[orrerix] review drive PR #901: GATE SATISFIED at def56789 (body 8c42..) — rev-1 PASS; 2 rounds, 1 CI, 0 rebases."}}

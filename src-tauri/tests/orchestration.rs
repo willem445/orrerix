@@ -209,6 +209,9 @@ use loomux_lib::orchestration::{
     // #267 stage 2: gemini as a reviewer-capable CLI, and the capability table
     // that decides which classes any CLI may host.
     cli_can_host, cli_caps, cli_extra_env, codex_profile_toml, gemini_policy_toml,
+    // #3318 F1: the per-CLI fork seam, the refusal a fork gesture asks, and
+    // the L1 constant both line builders select their arm from.
+    fork_refusal, ForkSeam, CLAUDE_FORK_PREMINTS_CHILD_ID,
     gemini_settings_json, CodexMcpAuth,
     CLI_CAPS, GEMINI_EDIT_DENY_TOOLS, GEMINI_READONLY_DENY_GIT, KNOWN_GEMINI_TOOLS,
     // #687: the per-block model knobs — the capability rows that decide which
@@ -8319,10 +8322,12 @@ fn build_agent_argv_matches_command_line() {
                                     let line = reg.build_agent_command_ex(
                                         cli, "m", knobs, auto_ops, cfg, hook_settings, gdir, wd, session, resume, containment, persona,
                                         role, role_hint,
+                                    None,
                                     );
                                     let argv = reg.build_agent_argv_ex(
                                         cli, "m", knobs, auto_ops, cfg, hook_settings, gdir, wd, session, resume, containment, persona,
                                         role, role_hint,
+                                    None,
                                     );
                                     assert_eq!(
                                         shell_tokenize(&line),
@@ -54099,12 +54104,14 @@ fn claude_emits_the_knobs_only_when_set_and_no_other_cli_ever_does() {
         reg.build_agent_command_ex(
             cli, model, k, false, cfg, None, gdir, wd, None, false, Containment::None,
             &PersonaInject::default(), Role::Worker, None,
+            None,
         )
     };
     let argv = |cli, model, k| {
         reg.build_agent_argv_ex(
             cli, model, k, false, cfg, None, gdir, wd, None, false, Containment::None,
             &PersonaInject::default(), Role::Worker, None,
+            None,
         )
     };
 
@@ -54193,10 +54200,12 @@ fn the_effort_flag_does_not_sever_the_allowedtools_value_list() {
             let line = reg.build_agent_command_ex(
                 "claude", "opus", knobs, true, cfg, Some(hooks), gdir, wd, None, false,
                 containment, &p, Role::Worker, None,
+            None,
             );
             let argv_form = reg.build_agent_argv_ex(
                 "claude", "opus", knobs, true, cfg, Some(hooks), gdir, wd, None, false,
                 containment, &p, Role::Worker, None,
+            None,
             );
             for (form, tokens) in [("command", shell_tokenize(&line)), ("argv", argv_form)] {
                 let allowed = claude_allowed_tools_values(&tokens);
@@ -64362,6 +64371,7 @@ fn pi_launch_flags_per_posture() {
         &PersonaInject::default(),
         Role::Worker,
         None,
+        None,
     );
     assert!(effortful.contains("--thinking high"), "{effortful}");
     assert!(
@@ -64564,6 +64574,7 @@ fn codex_launch_flags_per_posture() {
         &PersonaInject::default(),
         Role::Worker,
         None,
+        None,
     );
     assert_eq!(
         effortful, attended,
@@ -64591,10 +64602,12 @@ fn the_codex_argv_builder_agrees_with_the_command_builder() {
         let argv = reg.build_agent_argv_ex(
             "codex", model, knobs, true, cfg, None, gdir, wd, session, resume,
             Containment::None, &PersonaInject::default(), Role::Worker, None,
+            None,
         );
         let cmd = reg.build_agent_command_ex(
             "codex", model, knobs, true, cfg, None, gdir, wd, session, resume,
             Containment::None, &PersonaInject::default(), Role::Worker, None,
+            None,
         );
         // The argv form carries no quotes (there is no shell), so the
         // comparison is on the TOKENS the string form quotes.
@@ -68518,4 +68531,229 @@ fn the_refusal_names_the_agent_that_owns_the_branch() {
     let m = stderr("release/v9");
     assert!(m.contains("no agent on this group's roster owns that branch"), "{m}");
     assert_eq!(m, gh_close_refusal("2942", "release/v9", "fix/mine", "", false), "parity with Rust");
+}
+
+// ---------------------------------------------------------------------------
+// #3318 F1 — forking a session: the claude fork line, and the refusal for
+// every CLI loomux has not wired one for yet.
+// ---------------------------------------------------------------------------
+
+/// The fork line is the RESUME line plus exactly the documented token, and it
+/// names the parent with `--resume` while pre-minting the child with
+/// `--session-id` (`CLAUDE_FORK_PREMINTS_CHILD_ID`, live check L1 on #3318).
+///
+/// Asserted as a DIFFERENCE against the resume line rather than against a
+/// literal: a fork must never be able to change the model, the permission mode,
+/// the allow list or anything else a resume already got right, and a literal
+/// would pass just as well if it had.
+#[test]
+fn a_claude_fork_line_is_the_resume_line_plus_exactly_the_fork_token() {
+    let (reg, _d) = test_registry();
+    let cfg = Path::new("C:/x/cfg.json");
+    let gdir = Path::new("C:/data/group");
+    let wd = Path::new("C:/repo");
+    let parent = "11111111-2222-3333-4444-555555555555";
+    let child = "99999999-8888-7777-6666-555555555555";
+    let build = |session, resume, fork_of| {
+        reg.build_agent_command_ex(
+            "claude", "sonnet", workflow::ModelKnobs::default(), false, cfg, None, gdir, wd,
+            session, resume, Containment::None, &PersonaInject::default(), Role::Worker, None,
+            fork_of,
+        )
+    };
+    let resume = build(Some(parent), true, None);
+    let fork = build(Some(child), false, Some(parent));
+
+    // The parent is still the session being opened, and the child's id is
+    // pre-minted ahead of it.
+    assert!(
+        fork.starts_with(&format!("claude --session-id {child} --resume {parent} ")),
+        "fork line: {fork}"
+    );
+    // ...and the ONLY other difference from the resume line is the fork token.
+    let normalised = fork
+        .replace(&format!("--session-id {child} --resume {parent}"), &format!("--resume {parent}"))
+        .replace(" --fork-session", "");
+    assert_eq!(normalised, resume, "a fork must differ from a resume in the fork token alone");
+    // The token is emitted once, and it is the documented spelling.
+    assert_eq!(fork.matches("--fork-session").count(), 1, "fork line: {fork}");
+}
+
+/// **The constant is what decides, and this is the test that makes the
+/// documented flip real.** `CLAUDE_FORK_PREMINTS_CHILD_ID` is compile-time, so
+/// the counterfactual cannot be executed at runtime — but the assertion can
+/// read the SAME constant the builder reads and require the line to agree with
+/// it. Flip the constant and the line follows, and this still passes; flip the
+/// constant while the builder ignores it (which is what it did before review
+/// round 1 — the arm was selected by whether the caller passed a child id) and
+/// this goes red.
+///
+/// That is the closest a compile-time switch gets to CLAUDE.md's rule that a
+/// documented escape hatch is a counterfactual only a test performing the edit
+/// can pin.
+#[test]
+fn the_claude_fork_arm_is_selected_by_the_constant_not_by_the_caller() {
+    let (reg, _d) = test_registry();
+    let cfg = Path::new("C:/x/cfg.json");
+    let gdir = Path::new("C:/data/group");
+    let wd = Path::new("C:/repo");
+    let parent = "11111111-2222-3333-4444-555555555555";
+    let child = "99999999-8888-7777-6666-555555555555";
+
+    // The caller offers a child id in BOTH runs. What changes the answer is the
+    // constant, so offering one and not getting it is the learned arm working.
+    let line = reg.build_agent_command_ex(
+        "claude", "sonnet", workflow::ModelKnobs::default(), false, cfg, None, gdir, wd,
+        Some(child), false, Containment::None, &PersonaInject::default(), Role::Worker, None,
+        Some(parent),
+    );
+    let argv = reg.build_agent_argv_ex(
+        "claude", "sonnet", workflow::ModelKnobs::default(), false, cfg, None, gdir, wd,
+        Some(child), false, Containment::None, &PersonaInject::default(), Role::Worker, None,
+        Some(parent),
+    );
+
+    if CLAUDE_FORK_PREMINTS_CHILD_ID {
+        assert!(
+            line.starts_with(&format!("claude --session-id {child} --resume {parent} ")),
+            "pre-mint arm: {line}"
+        );
+        assert_eq!(
+            argv.iter().take(5).cloned().collect::<Vec<_>>(),
+            vec!["claude", "--session-id", child, "--resume", parent]
+        );
+    } else {
+        assert!(line.starts_with(&format!("claude --resume {parent} ")), "learned arm: {line}");
+        assert!(
+            !line.contains("--session-id"),
+            "the learned arm pre-mints nothing, even when the caller offers an id: {line}"
+        );
+        assert!(!argv.iter().any(|t| t == "--session-id"), "{argv:?}");
+    }
+
+    // Either way the parent is named and the fork token is emitted once — the
+    // half of the shape the constant does NOT get to change.
+    assert!(line.contains(&format!("--resume {parent}")), "{line}");
+    assert_eq!(line.matches("--fork-session").count(), 1, "{line}");
+}
+
+/// The two spawn forms agree on the fork exactly as they agree on everything
+/// else — the string line tokenizes to the argv vector.
+#[test]
+fn the_fork_argv_form_matches_the_fork_command_line() {
+    let (reg, _d) = test_registry();
+    let cfg = Path::new("C:/x/cfg.json");
+    let gdir = Path::new("C:/data/group");
+    let wd = Path::new("C:/repo");
+    let parent = "11111111-2222-3333-4444-555555555555";
+    let child = "99999999-8888-7777-6666-555555555555";
+    let line = reg.build_agent_command_ex(
+        "claude", "sonnet", workflow::ModelKnobs::default(), false, cfg, None, gdir, wd,
+        Some(child), false, Containment::None, &PersonaInject::default(), Role::Worker, None,
+        Some(parent),
+    );
+    let argv = reg.build_agent_argv_ex(
+        "claude", "sonnet", workflow::ModelKnobs::default(), false, cfg, None, gdir, wd,
+        Some(child), false, Containment::None, &PersonaInject::default(), Role::Worker, None,
+        Some(parent),
+    );
+    // The id shape, in order, on both forms.
+    assert_eq!(
+        argv.iter().take(5).cloned().collect::<Vec<_>>(),
+        vec!["claude", "--session-id", child, "--resume", parent]
+    );
+    assert_eq!(argv.iter().filter(|t| *t == "--fork-session").count(), 1, "{argv:?}");
+    assert!(line.contains("--fork-session"));
+    // Position, not just presence: the token must sit AFTER the last
+    // `--allowedTools` value, never between that flag and its values (#610).
+    let allow = argv.iter().position(|t| t == "--allowedTools").expect("allow flag");
+    let forked = argv.iter().position(|t| t == "--fork-session").expect("fork flag");
+    assert!(forked > allow, "fork token must not sever the allow list: {argv:?}");
+}
+
+/// A CLI whose `ForkSeam` is `None` gets NO fork token, whatever the caller
+/// passes — a line builder cannot refuse, and a line silently gaining a flag
+/// its CLI does not know is the worse of the two failures. The REFUSAL is
+/// `fork_refusal`, asserted below.
+#[test]
+fn a_cli_with_no_fork_seam_gets_a_byte_identical_line_with_or_without_fork_of() {
+    let (reg, _d) = test_registry();
+    let cfg = Path::new("C:/x/cfg.json");
+    let gdir = Path::new("C:/data/group");
+    let wd = Path::new("C:/repo");
+    let parent = "11111111-2222-3333-4444-555555555555";
+    // "hermes" is an UNRECOGNIZED cli, and it is in this list on purpose: it
+    // falls through to the same arm claude does, so before rev-std round 1 it
+    // took the fork's id shape (`--session-id <child> --resume <parent>`)
+    // while the table lookup withheld the flag itself — a line that neither
+    // forks nor resumes the session the caller named, which is wrong under
+    // every reading. The seam gate closes it, and this row is what reddens if
+    // that gate is removed.
+    for cli in ["copilot", "gemini", "opencode", "pi", "codex", "hermes"] {
+        let build = |fork_of| {
+            reg.build_agent_command_ex(
+                cli, "sonnet", workflow::ModelKnobs::default(), false, cfg, None, gdir, wd,
+                Some(parent), true, Containment::None, &PersonaInject::default(), Role::Worker,
+                None, fork_of,
+            )
+        };
+        assert_eq!(build(None), build(Some(parent)), "{cli} line moved on a fork it has no seam for");
+        assert!(!build(Some(parent)).contains("--fork-session"), "{cli}");
+    }
+    // Positive control: the same assertion is FALSE for claude, so the loop
+    // above is measuring the seam and not an inert `fork_of`.
+    let claude = |fork_of| {
+        reg.build_agent_command_ex(
+            "claude", "sonnet", workflow::ModelKnobs::default(), false, cfg, None, gdir, wd,
+            Some(parent), true, Containment::None, &PersonaInject::default(), Role::Worker, None,
+            fork_of,
+        )
+    };
+    assert_ne!(claude(None), claude(Some(parent)));
+}
+
+/// `fork_refusal` is the predicate a fork GESTURE asks, and it quotes the row's
+/// own note so a rejected fork says what is missing rather than "unsupported".
+#[test]
+fn a_cli_with_no_fork_seam_is_refused_with_its_own_note() {
+    // claude is the positive control and it comes FIRST: a refusal test whose
+    // subject refuses everything passes just as well broken.
+    assert_eq!(fork_refusal("claude"), None, "claude is the one CLI F1 wires");
+
+    for cli in ["copilot", "gemini", "opencode", "pi", "codex"] {
+        let refusal = fork_refusal(cli).unwrap_or_else(|| panic!("{cli} must be refused in F1"));
+        assert!(refusal.contains(cli), "the refusal names the CLI: {refusal}");
+        let ForkSeam::None(note) = cli_caps(cli).expect("row").fork else {
+            panic!("{cli} has a fork seam but F1 only wires claude");
+        };
+        assert!(refusal.contains(note), "the refusal quotes the row's note: {refusal}");
+    }
+    // An unknown CLI is refused too, rather than falling through to claude's arm.
+    let unknown = fork_refusal("hermes").expect("an unknown CLI is refused");
+    assert!(unknown.contains("hermes"), "{unknown}");
+}
+
+/// Every row states its fork position, and every `None` row explains it — the
+/// same "empty is a claim, not an omission" rule `effort_note` already carries.
+#[test]
+fn every_cli_row_states_its_fork_position() {
+    for caps in CLI_CAPS {
+        match caps.fork {
+            ForkSeam::Flag(flag) => assert!(
+                flag.starts_with("--") && flag.len() > 2,
+                "{}: a fork flag must be a real token",
+                caps.cli
+            ),
+            ForkSeam::None(note) => assert!(
+                note.len() > 20,
+                "{}: a None fork row must explain itself",
+                caps.cli
+            ),
+        }
+    }
+    // #3318 F1 wires exactly one CLI, and says so here rather than leaving a
+    // widened table to be noticed in review: F2 changes this number WITH the
+    // rows it adds.
+    let wired: Vec<&str> = CLI_CAPS.iter().filter(|c| c.fork.flag().is_some()).map(|c| c.cli).collect();
+    assert_eq!(wired, vec!["claude"], "F1 wires claude alone; F2 adds the rest");
 }

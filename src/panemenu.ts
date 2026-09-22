@@ -98,6 +98,29 @@ export type PaneMenuAction =
        *  never got a standalone channel identity (adopt-on-connect failed, or
        *  the pane predates channel tools). Optional backend-side. */
       soloAgentId: string | null;
+    }
+  /** Fork this pane's session (#3318 F1): open a NEW pane running the
+   *  vendor's own fork of this one's conversation, leaving this pane
+   *  untouched. Same identity-vs-reference discipline as `promote` above, and
+   *  it carries the recorded LINE as well as the session id: the fork is built
+   *  by rewriting that line, and a pane can be restarted or re-bound between
+   *  the menu opening and the click. */
+  | {
+      kind: "fork";
+      /** The session being forked — the PARENT. Full id, never a prefix. */
+      sessionId: string;
+      cli: string;
+      /** The fork opens in the source's own directory: it is the human's own
+       *  environment and a side quest on the same work is the gesture's whole
+       *  point. A worktree of its own is #3318 F2's, for a DELEGATE fork. */
+      workdir: string;
+      /** The source pane's recorded launch line, both representations — what
+       *  the fork line is rewritten FROM, so the child keeps the model, the
+       *  permission posture and every other flag the human launched with. */
+      command: string | null;
+      argv: string[] | null;
+      /** The source pane's name, so the child can be named after it. */
+      sourceName: string;
     };
 
 export type PaneMenuItem = MenuItem<PaneMenuAction>;
@@ -147,6 +170,14 @@ export interface PaneConnectState {
    *  field here that gates nothing and enables nothing. Every pane can be
    *  watched, so this decides the item's VERB and never its presence. */
   watched: boolean;
+  // ── #3318 F1: what the FORK gesture needs beyond the three above ──
+  /** The pane's recorded launch line, both representations, exactly as
+   *  `Pane.launchLine` reports them. A fork is that line rewritten, so the
+   *  child keeps the model and posture the human launched with — carried on
+   *  the state (and then on the action) rather than re-read at click time, the
+   *  same reason `PaneIdentity` carries a whole identity. */
+  command: string | null;
+  argv: string[] | null;
 }
 
 const NOT_CAPABLE_REASON =
@@ -220,6 +251,58 @@ function promoteItem(p: PaneConnectState): PaneMenuItem | null {
   };
 }
 
+// ---------- fork this session (#3318 F1) ----------
+
+const FORK_LABEL = "Fork session…";
+const FORK_CLI_REASON =
+  "Forking is Claude-only for now — it runs the CLI's own fork of this session, and claude is the one loomux has wired and tested (#3318).";
+const FORK_NO_SESSION_REASON =
+  "orrerix doesn't know this pane's conversation yet — a fork copies the session it already has, so send this agent a prompt first.";
+const FORK_NO_WORKDIR_REASON =
+  "This pane has no working directory, and a fork opens in the directory its source is working in.";
+const FORK_NO_COMMAND_REASON =
+  "orrerix has no launch line recorded for this pane, and a fork is that line rewritten — there is nothing to rewrite.";
+
+/** The fork item for this pane, or `null` when the gesture doesn't apply here
+ *  at all.
+ *
+ *  Decided outside `buildPaneMenu`'s connect short-circuits for exactly
+ *  `promoteItem`'s reason, and it takes the same null-vs-disabled rule: no item
+ *  for a pane the gesture is not about (a shell, a build watcher, a pane
+ *  already in an orchestration group), a disabled row WITH a reason for an
+ *  agent pane that could plausibly be forked but is not eligible right now.
+ *
+ *  **An orchestration-group pane gets no item, and that is a scope line rather
+ *  than an oversight.** Forking a delegate is #3318 F2: it needs a roster row
+ *  naming the parent, an audit row, a worktree policy and a refusal for a pane
+ *  a review drive owns — none of which this gesture has. A lead's own pane is
+ *  excluded by the same rung (its role is `lead`, not `solo`), and F2 is where
+ *  it becomes a Solo fork. */
+function forkItem(p: PaneConnectState): PaneMenuItem | null {
+  // Same gate, and the same argument, as `promoteItem`'s: a recognized agent
+  // CLI is what makes a pane one this gesture is about.
+  if (p.agentCli === null) return null;
+  if (p.group !== null && p.role !== "solo") return null;
+
+  const refuse = (reason: string): PaneMenuItem => ({ label: FORK_LABEL, disabled: true, reason });
+  if (p.agentCli !== "claude") return refuse(FORK_CLI_REASON);
+  if (!p.sessionId) return refuse(FORK_NO_SESSION_REASON);
+  if (!p.workdir) return refuse(FORK_NO_WORKDIR_REASON);
+  if (!p.command?.trim() && !p.argv?.length) return refuse(FORK_NO_COMMAND_REASON);
+  return {
+    label: FORK_LABEL,
+    action: {
+      kind: "fork",
+      sessionId: p.sessionId,
+      cli: p.agentCli,
+      workdir: p.workdir,
+      command: p.command,
+      argv: p.argv,
+      sourceName: p.name,
+    },
+  };
+}
+
 function identity(p: PaneConnectState): PaneIdentity | null {
   return p.group !== null && p.agentId !== null
     ? {
@@ -240,16 +323,20 @@ function identity(p: PaneConnectState): PaneIdentity | null {
  *  threaded in by the caller), or null if no gesture is in progress. Every action this
  *  returns carries the full identity it needs — see the module header.
  *
- *  The menu is TWO independent gestures: the connect model below, and #407's
- *  promote item appended here. Composed at this level (rather than inside the
- *  connect branches) so the promote item cannot be lost to a connect
- *  short-circuit — see `promoteItem`. */
+ *  The menu is FOUR independent gestures, and saying the number is the point:
+ *  the connect model below, #407's promote item, #3318 F1's fork item, and
+ *  #3319's watch toggle. Every one of the three non-connect items is composed
+ *  at THIS level rather than inside the connect branches, so none of them can
+ *  be lost to a connect short-circuit — see `promoteItem` for the argument,
+ *  which has applied unchanged to each gesture added since. */
 export function buildPaneMenu(pane: PaneConnectState, pending: PendingConnect | null): PaneMenuItem[] {
   const items = connectItems(pane, pending);
   const promote = promoteItem(pane);
-  if (promote) {
+  const fork = forkItem(pane);
+  if (promote || fork) {
     if (items.length) items.push({ label: "", separator: true });
-    items.push(promote);
+    if (promote) items.push(promote);
+    if (fork) items.push(fork);
   }
   // The watch (#3319), composed HERE and outside `connectItems` for the reason
   // the promote item is: those branches short-circuit on a pane with no channel

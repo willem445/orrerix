@@ -182,6 +182,36 @@ which is why their individual rows are not a route you need.
 The button counts what your current search left hidden, so it changes as you
 type. It disappears entirely when nothing is hidden.
 
+## Fork a session
+
+Right-click an agent pane's header and choose **Fork session…** to open a new
+pane that starts as a copy of that conversation. The original pane keeps
+running, untouched — the fork is where you take the side quest.
+
+The new pane opens beside the one you forked, in the same folder, running the
+same CLI with the same model and the same permissions you launched with. It
+gets its own name (`claude (fork)`, then `claude (fork 2)`, …), its own
+session, and its own identity for [connecting panes](../orchestration.html)
+— so anything you do in it is invisible to the pane you forked.
+
+The fork is the CLI's own: orrerix asks Claude Code to fork the session rather
+than copying any files around. That means the fork carries the conversation up
+to this moment. Expect to re-approve tools you had allowed "for this session" —
+the fork is a new process, so those approvals are not expected to carry.
+
+**Claude Code only, for now.** On a standalone agent pane the item is always
+there: greyed out with the reason on any other CLI, and greyed out until the
+agent has been prompted at least once (there is no conversation to fork before
+that). Panes belonging to an orchestration group — a worker, a reviewer, a
+lead — have no Fork item at all yet; forking those comes later.
+
+**There is no rejoin.** Nothing merges two conversations back together — no
+agent CLI offers it — so when a side quest is worth keeping, you copy what you
+want back into the original pane yourself.
+
+Forked panes are restored like any other: when you reopen orrerix, a forked
+pane comes back on **its own** session, not by forking again.
+
 ## Open in editor
 
 Orrerix is a terminal, not an editor — so when you need to open files in a real

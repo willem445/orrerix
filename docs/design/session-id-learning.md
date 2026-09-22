@@ -298,6 +298,42 @@ non-empty) excludes such panes from `reconcileCandidates` in `main.ts`, and
 the D2 enrichment checks the same predicate on the dormant record's
 command/argv before ever offering the button.
 
+### B3's carve-out: a fork line orrerix BUILT (#3318 F1)
+
+B3 above is argued for a **human-owned** line, and that is the whole of its
+reach. #3318 F1 gives orrerix a gesture that builds a `--fork-session` line of
+its own — right-click a pane, **Fork session…** — and such a line is different
+in exactly the way B3's reasoning turns on.
+
+The objection B3 settled was overriding the human's explicit intent: they typed
+`--fork-session`, so orrerix must not silently drop it, and the honest
+degradation is to leave the pane unrecorded. An orrerix-built fork line carries
+no such intent to override — orrerix put the flag there, for one spawn — and
+replaying it is not a degradation but a defect: the pane re-forks on every
+restart, minting a fresh session each boot and losing whatever the human did in
+it. That is the same harm B3 refused to paper over with a learned id, reached
+from the other direction.
+
+So the flag is **one-shot**: consumed at the fork spawn, never persisted. Once
+the child's id is known, the record is the child's own plain `--resume <id>`
+line; with no id, the fork flag *and* the parent's `--resume` are both dropped,
+leaving a fresh-session line (keeping the parent's would be two panes resumed
+into one session id — the interleaved transcript claude's docs describe).
+
+**The gate is `PersistedPane.forkOf`, not the flag's presence**, and that is
+what keeps B3 intact rather than reopened. Only orrerix's own gesture sets that
+field, and `forkRecordCommand` (`src/panerestore.ts`) rewrites a record only for
+a pane it marks — so a human's typed `--fork-session` line still comes back
+byte-identical, still acquires no learned id, and is still governed by the
+exclusion above, unchanged. Both poles are pinned:
+`a_fork_line_never_persists_its_fork_flag` and the B3 control beside it in
+`test/panerestore.test.ts`.
+
+`Pane.hasForkSession`'s exclusion from `reconcileCandidates` is untouched and
+still correct for a forked pane on the pre-mint arm: that pane is handed its id
+at open, so it is not a reconciliation candidate in the first place. Full design:
+[session-fork.md](session-fork.md).
+
 ## D2: the dormant card, when reconciliation comes up empty (or hasn't run yet)
 
 A pane can still end up dormant with no recorded id — reconciliation hasn't

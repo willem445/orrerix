@@ -15,6 +15,11 @@ import {
   sessionIdFromCommand,
   adoptableSessionId,
   hasForkSession,
+  agentForkCommand,
+  forkPaneName,
+  forkIdFlags,
+  forkRecordCommand,
+  FORK_PREMINTS_CHILD_ID,
   shouldRespawnFresh,
   findResumedPaneIndex,
   programFromRestore,
@@ -45,6 +50,7 @@ const pane = (over: Partial<PersistedPane>): PersistedPane => ({
   file: null,
   sshProfileId: null,
   lead: false,
+  forkOf: null,
   watched: false,
   embeds: [],
   ...over,
@@ -76,6 +82,7 @@ test("an agent WITH a session id auto-resumes (never replays a prompt)", () => {
     // #2519: an ordinary agent pane is not a lead, and the action says so
     // rather than omitting the field — the caller branches on it.
     lead: false,
+    forkOf: null,
   });
 });
 
@@ -90,6 +97,7 @@ test("an agent WITHOUT a session id falls back to a dormant Start placeholder", 
     command: "copilot",
     argv: null,
     lead: false,
+    forkOf: null,
   });
 });
 
@@ -438,6 +446,7 @@ test("an agent whose session has NO conversation restores FRESH, keeping its ide
     argv: null,
     sessionId: "s2",
     lead: false,
+    forkOf: null,
   });
 });
 
@@ -1626,6 +1635,7 @@ test("GUARDRAIL: a persisted ssh leaf can NEVER restore into an orchestration id
       name: "remote box",
       sshProfileId: "prof-1",
       lead: false,
+      forkOf: null,
       watched: false,
       sessionId: "s-1",
       role: "worker",
@@ -1657,6 +1667,7 @@ test("a recorded ssh command line is NOT carried into the restore action", () =>
       name: "box",
       sshProfileId: "p1",
       lead: false,
+      forkOf: null,
       watched: false,
       command: "ssh host",
       argv: ["ssh", "-t", "host", "--", "claude --session-id s-1"],
@@ -2232,4 +2243,182 @@ test("#3319 AC3: a tree nobody watched carries no watch anywhere", () => {
   const steps = planLayoutRestore(tree);
   assert.equal(steps.length, 2);
   assert.deepEqual(steps.map((s) => s.watched), [false, false]);
+});
+// ---------------------------------------------------------------------------
+// #3318 F1 — forking a session from a pane.
+//
+// Two halves, and the second is the one B3 is about: `agentForkCommand` BUILDS
+// the fork line, and `forkRecordCommand` DISCHARGES it out of the record so a
+// restart never re-forks.
+// ---------------------------------------------------------------------------
+
+const PARENT = "11111111-2222-3333-4444-555555555555";
+const CHILD = "99999999-8888-7777-6666-555555555555";
+
+test("#3318 F1: a claude fork line is the recorded line plus the fork token, with the child pre-minted", () => {
+  const recorded = `claude --session-id ${PARENT} --model opus --permission-mode acceptEdits`;
+  const forked = agentForkCommand(recorded, null, PARENT, CHILD);
+  assert.ok(forked?.command);
+  // The parent is named with --resume (a fork branches OFF it), the child is
+  // pre-minted, and the fork token is present exactly once.
+  assert.match(forked.command, new RegExp(`--session-id ${CHILD} --resume ${PARENT} --fork-session$`));
+  assert.equal(forked.command.match(/--fork-session/g)?.length, 1);
+  // Every OTHER flag the human launched with survives — a fork must not be able
+  // to change the model or the permission posture. Asserted as survival of the
+  // recorded flags, not against a whole literal, so a future flag added to a
+  // launch line does not have to be re-typed here to keep this honest.
+  assert.match(forked.command, /--model opus/);
+  assert.match(forked.command, /--permission-mode acceptEdits/);
+  // ...and the recorded session flag is gone rather than doubled: the line must
+  // never carry two --session-ids.
+  assert.equal(forked.command.match(/--session-id/g)?.length, 1);
+});
+
+test("#3318 F1: the argv form forks the same way, and a bare line falls back to claude", () => {
+  const forked = agentForkCommand(null, ["claude", "--session-id", PARENT, "--model", "opus"], PARENT, CHILD);
+  assert.deepEqual(forked?.argv, [
+    "claude",
+    "--model",
+    "opus",
+    "--session-id",
+    CHILD,
+    "--resume",
+    PARENT,
+    "--fork-session",
+  ]);
+  // No recorded line at all — the same claude fallback `agentResumeCommand`'s
+  // final arm takes, and for the same reason (every session loomux mints an id
+  // for today is claude's).
+  const bare = agentForkCommand(null, null, PARENT, CHILD);
+  assert.equal(bare?.command, `claude --session-id ${CHILD} --resume ${PARENT} --fork-session`);
+});
+
+test("#3318 F1: forking a pane that is ITSELF a fork emits one fork token, not two", () => {
+  const alreadyForked = `claude --session-id ${CHILD} --resume ${PARENT} --fork-session`;
+  const again = agentForkCommand(alreadyForked, null, CHILD, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+  assert.ok(again?.command);
+  assert.equal(again.command.match(/--fork-session/g)?.length, 1, again.command);
+  // ...and it forks the pane it was asked to, not that pane's own parent.
+  assert.match(again.command, new RegExp(`--resume ${CHILD} `));
+  assert.doesNotMatch(again.command, new RegExp(PARENT));
+});
+
+test("#3318 F1: a CLI loomux has not wired a fork for is refused, and claude is the control", () => {
+  // F1 wires claude alone; codex/pi/opencode each have a documented argv fork
+  // that F2 adds, and copilot/gemini have none at all.
+  for (const line of [
+    `copilot --resume=${PARENT}`,
+    `opencode --session ${PARENT}`,
+    `codex resume ${PARENT}`,
+    `pi --session-id ${PARENT}`,
+    "gemini",
+  ]) {
+    assert.equal(agentForkCommand(line, null, PARENT, CHILD), null, line);
+  }
+  // The control: the same call on a claude line is NOT null, so the loop above
+  // is measuring the CLI gate rather than a function that refuses everything.
+  assert.ok(agentForkCommand(`claude --resume ${PARENT}`, null, PARENT, CHILD));
+});
+
+test("#3318 F1: a_fork_line_never_persists_its_fork_flag — the record is a plain --resume into the CHILD", () => {
+  // The ONE-SHOT rule, and the argued carve-out of session-id-learning.md B3.
+  // The pane is running the fork line; what gets WRITTEN is the child's own
+  // resume line, so the next restart resumes the child rather than re-forking
+  // the parent into a third session.
+  const live = `claude --session-id ${CHILD} --resume ${PARENT} --model opus --fork-session`;
+  const rec = forkRecordCommand(live, null, CHILD, PARENT);
+  assert.ok(rec.command);
+  assert.equal(hasForkSession(rec.command, rec.argv), false, rec.command);
+  assert.match(rec.command, new RegExp(`--resume ${CHILD}$`));
+  assert.doesNotMatch(rec.command, new RegExp(PARENT), "the parent is not resumed from the child's pane");
+  assert.match(rec.command, /--model opus/, "the rest of the line survives");
+  // Idempotent: capturing the already-discharged record again changes nothing,
+  // which is what makes this safe to run on EVERY capture.
+  assert.deepEqual(forkRecordCommand(rec.command, rec.argv, CHILD, PARENT), rec);
+});
+
+test("#3318 F1: B3 still governs a HUMAN's own --fork-session line — it comes back byte-identical", () => {
+  // The carve-out is narrowed to a line loomux BUILT, and `forkOf` is the whole
+  // gate. A human who typed `--fork-session` themselves still owns their line:
+  // B3 chose exclusion over rewriting precisely so loomux never overrides that
+  // intent, and this is the assertion that keeps the new rule from reopening it.
+  const human = `claude --resume ${PARENT} --fork-session`;
+  const rec = forkRecordCommand(human, ["claude", "--resume", PARENT, "--fork-session"], null, null);
+  assert.equal(rec.command, human);
+  assert.deepEqual(rec.argv, ["claude", "--resume", PARENT, "--fork-session"]);
+  assert.equal(hasForkSession(rec.command, rec.argv), true, "the human's flag is untouched");
+});
+
+test("#3318 F1: a fork with no learned child id records neither the fork flag nor the parent's resume", () => {
+  // The LEARNED arm (FORK_PREMINTS_CHILD_ID === false), where nothing has
+  // learned the child's id yet. Keeping `--resume <parent>` would be worse than
+  // dropping it: two panes resumed into one session is the interleaved
+  // transcript claude's own docs describe, not a degraded restore.
+  const live = `claude --resume ${PARENT} --model opus --fork-session`;
+  const rec = forkRecordCommand(live, null, null, PARENT);
+  assert.equal(hasForkSession(rec.command, rec.argv), false, String(rec.command));
+  assert.doesNotMatch(String(rec.command), new RegExp(PARENT));
+  assert.match(String(rec.command), /--model opus/);
+});
+
+test("#3318 F1: a pane that is not a fork is captured byte-identically, both representations", () => {
+  // The back-compat half, and the reason this runs on every capture safely: a
+  // `forkOf` of null returns its inputs unchanged — including a line that
+  // happens to carry the flag, which is the previous test's case.
+  const cmd = `claude --session-id ${PARENT} --model opus`;
+  const argv = ["claude", "--session-id", PARENT];
+  assert.deepEqual(forkRecordCommand(cmd, argv, PARENT, null), { command: cmd, argv });
+  // ...and a fork-marked pane whose line carries no fork flag is also untouched
+  // (a fork already discharged on an earlier capture, restored and re-captured).
+  assert.deepEqual(forkRecordCommand(cmd, argv, PARENT, "some-parent"), { command: cmd, argv });
+});
+
+test("#3318 F1: the pre-mint answer is the SAME bit on both sides of the transport seam", () => {
+  // Live check L1 is one fact about claude, and it is written down twice: the
+  // engine's `CLAUDE_FORK_PREMINTS_CHILD_ID` (the authority, with the argument)
+  // and this module's mirror, because the F1 gesture builds its line in the
+  // frontend and never goes through `build_agent_command_ex`. When the human
+  // runs L1 and flips one, this reddens rather than letting the two disagree.
+  const rust = readFileSync(new URL("../crates/loomux-engine/src/model.rs", import.meta.url), "utf8");
+  const m = /pub const CLAUDE_FORK_PREMINTS_CHILD_ID: bool = (true|false);/.exec(rust);
+  assert.ok(m, "the engine constant must exist under exactly this name");
+  assert.equal(FORK_PREMINTS_CHILD_ID, m[1] === "true");
+});
+
+test("#3318 F1: a fork pane is named after its source, and a chain does not nest the suffix", () => {
+  assert.equal(forkPaneName("claude"), "claude (fork)");
+  assert.equal(forkPaneName("  claude  "), "claude (fork)");
+  assert.equal(forkPaneName("claude (fork)"), "claude (fork 2)");
+  assert.equal(forkPaneName("claude (fork 2)"), "claude (fork 3)");
+  // A name that merely CONTAINS the word is not a suffix.
+  assert.equal(forkPaneName("fork tooling"), "fork tooling (fork)");
+});
+
+test("#3318 F1: BOTH id arms are executable, so the flip L1 may force is not untested code", () => {
+  // `FORK_PREMINTS_CHILD_ID` is a module constant and cannot be flipped at
+  // runtime, so the arm it does not select had no coverage at all (review
+  // round 1, rev-final N2) — which is exactly the line the human would be
+  // running for the first time if L1 came back false. `forkIdFlags` takes the
+  // bit as a parameter so both arms are reachable here.
+  const premint = forkIdFlags(PARENT, CHILD, true);
+  assert.equal(premint.command, `--session-id ${CHILD} --resume ${PARENT}`);
+  assert.deepEqual(premint.argv, ["--session-id", CHILD, "--resume", PARENT]);
+
+  const learned = forkIdFlags(PARENT, CHILD, false);
+  assert.equal(learned.command, `--resume ${PARENT}`);
+  assert.deepEqual(learned.argv, ["--resume", PARENT]);
+  // The learned arm names the parent and pre-mints NOTHING — the child's id
+  // is claude's to choose.
+  assert.doesNotMatch(learned.command, /--session-id/);
+  assert.ok(!learned.argv.includes(CHILD));
+
+  // Both arms agree on the half the constant does not get to change: the
+  // PARENT is what --resume names.
+  for (const arm of [premint, learned]) {
+    assert.match(arm.command, new RegExp(`--resume ${PARENT}`));
+  }
+
+  // ...and the default really is the shipped constant, so production takes
+  // whichever arm the constant names rather than a hardcoded one.
+  assert.deepEqual(forkIdFlags(PARENT, CHILD), forkIdFlags(PARENT, CHILD, FORK_PREMINTS_CHILD_ID));
 });

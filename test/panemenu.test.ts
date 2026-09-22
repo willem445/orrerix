@@ -30,6 +30,10 @@ const free = (overrides: Partial<PaneConnectState> = {}): PaneConnectState => ({
   // Spelled out rather than left to fall through as `undefined`: this file is
   // not in tsconfig's `include`, so nothing would have told us it was missing.
   watched: false,
+  // #3318 F1: the recorded launch line the FORK item rewrites. A real line,
+  // not a stub: the fork fixtures below assert the child keeps the flags on it.
+  command: "claude --session-id 11111111-2222-3333-4444-555555555555 --model opus",
+  argv: null,
   ...overrides,
 });
 
@@ -101,10 +105,12 @@ test("a planner pane offers a single disabled item naming why, even though it ha
 test("a standalone solo pane with a channel identity is capable — it offers Connect like any other agent pane", () => {
   const solo = free({ group: "__solo__", agentId: "solo-3", role: "solo", canSend: true });
   const items = buildPaneMenu(solo, null);
-  // Connect first, then #407's promote item — a claude standalone pane is
-  // exactly the shape both gestures apply to, so this is the one place the two
-  // halves of the menu appear together.
-  assert.deepEqual(kinds(items), ["connect-arm", "promote"]);
+  // Connect first, then #407's promote item, then #3318 F1's fork — a solo
+  // claude pane with a known session is exactly the shape all three gestures
+  // apply to, so this is the one place they appear together. (#3319's watch is
+  // on every pane, so `kinds` filters it out rather than repeating it in every
+  // assertion in this file.)
+  assert.deepEqual(kinds(items), ["connect-arm", "promote", "fork"]);
 });
 
 test("right-clicking the ARMED pane again offers Cancel, not a second arm (self-click cancels)", () => {
@@ -242,6 +248,13 @@ const soloPane = (overrides: Partial<PaneConnectState> = {}): PaneConnectState =
 const promoteOf = (items: PaneMenuItem[]): PaneMenuItem | undefined =>
   items.find((i) => /^Promote/.test(i.label));
 
+/** #3318 F1's item, found the same way — by LABEL, so a DISABLED row (which
+ *  carries no action to match on) is found too. That is the whole reason both
+ *  helpers key on the label: the disabled rows are half of what these fixtures
+ *  are about. */
+const forkOf = (items: PaneMenuItem[]): PaneMenuItem | undefined =>
+  items.find((i) => /^Fork session/.test(i.label));
+
 test("#407: a standalone claude pane with a session and a workdir offers Promote, carrying everything the backend call needs", () => {
   const items = buildPaneMenu(soloPane(), null);
   const promote = promoteOf(items);
@@ -276,7 +289,11 @@ test("#407: an agent pane with NO channel identity yet still offers promote — 
     soloAgentId: null, // nothing to retire — there is no solo identity
   });
   // …and the connect half is unchanged: still exactly one disabled Connect item.
-  const connect = connectItemsOf(items).filter((i) => i !== promote);
+  // Every gesture that is not connect is excluded — `connectItemsOf` drops the
+  // separators and #3319's watch, and these two drop #407's promote and #3318
+  // F1's fork. Naming what this filter KEEPS is what stops the next gesture
+  // silently reddening a connect assertion again.
+  const connect = connectItemsOf(items).filter((i) => i !== promote && i !== forkOf(items));
   assert.equal(connect.length, 1);
   assert.equal(connect[0].disabled, true);
 });
@@ -405,4 +422,73 @@ test("#3319: a watch toggle names no pane — it is always the menu's own", () =
   // disagree with) is the shape a reader would expect from its siblings.
   const watch = buildPaneMenu(free(), null).find((i) => i.action?.kind === "toggle-watch");
   assert.deepEqual(watch?.action, { kind: "toggle-watch" });
+});
+
+// ---------------------------------------------------------------------------
+// #3318 F1 — the Fork item: a THIRD independent gesture on this menu, with
+// the same null-vs-disabled rule as promote and its own eligibility matrix.
+// ---------------------------------------------------------------------------
+
+const forkLine = "claude --session-id 11111111-2222-3333-4444-555555555555 --model opus";
+
+test("#3318 F1: a solo claude pane with a session, a workdir and a line offers Fork, carrying all of them", () => {
+  const fork = forkOf(buildPaneMenu(soloPane(), null));
+  assert.ok(fork, "a solo claude pane is exactly what the gesture is for");
+  assert.equal(fork.disabled, undefined);
+  assert.deepEqual(fork.action, {
+    kind: "fork",
+    sessionId: "11111111-2222-3333-4444-555555555555",
+    cli: "claude",
+    workdir: "/repo/poc",
+    command: forkLine,
+    argv: null,
+    sourceName: soloPane().name,
+  });
+});
+
+test("#3318 F1: each ineligibility is a DISABLED row naming its own reason, never a silent omission", () => {
+  // The human is looking for the item on an agent pane, so silence would read
+  // as a missing feature. Each reason is distinct, and asserted as distinct:
+  // a single shared string would pass a per-case test while telling the human
+  // the wrong thing three times out of four.
+  const cases: Array<[string, Partial<PaneConnectState>, RegExp]> = [
+    ["a CLI F1 has not wired", { agentCli: "copilot" }, /Claude-only/i],
+    ["no session yet", { sessionId: null }, /prompt/i],
+    ["no working directory", { workdir: null }, /working directory/i],
+    ["no recorded launch line", { command: null, argv: null }, /launch line/i],
+  ];
+  const reasons = new Set<string>();
+  for (const [what, over, re] of cases) {
+    const fork = forkOf(buildPaneMenu(soloPane(over), null));
+    assert.ok(fork, `${what}: the row is still offered`);
+    assert.equal(fork.disabled, true, what);
+    assert.equal(fork.action, undefined, `${what}: a disabled row fires nothing`);
+    assert.match(fork.reason ?? "", re, what);
+    reasons.add(fork.reason ?? "");
+  }
+  assert.equal(reasons.size, cases.length, "each refusal says its own thing");
+});
+
+test("#3318 F1: a pane the gesture is not about gets NO row — a shell, and an orchestration delegate", () => {
+  // A shell/build-watcher pane: no agent CLI at all, so no permanently-dead row.
+  assert.equal(forkOf(buildPaneMenu(free({ group: null, agentId: null, role: null, agentCli: null }), null)), undefined);
+  // An orchestration delegate. Not a refusal with a reason but no row at all,
+  // and that is a SCOPE line: forking a delegate is #3318 F2, which owes it a
+  // roster row, an audit row, a worktree policy and a drive-owned refusal.
+  assert.equal(forkOf(buildPaneMenu(free(), null)), undefined, "a group worker is F2's");
+  // ...and a lead's own pane is excluded by the same rung.
+  assert.equal(forkOf(buildPaneMenu(free({ role: "lead" }), null)), undefined, "a lead pane is F2's");
+});
+
+test("#3318 F1: the fork item survives every connect short-circuit the menu has", () => {
+  // `promoteItem`'s lesson, re-run for the second gesture: ordering the fork
+  // decision after a connect branch is exactly how the row goes missing on the
+  // panes it exists for. A solo pane whose adopt-on-connect FAILED has no
+  // group and no agent id, so its connect half is the NOT_CAPABLE row — and it
+  // is still a perfectly forkable session.
+  const unadopted = soloPane({ group: null, agentId: null, role: null });
+  assert.ok(forkOf(buildPaneMenu(unadopted, null)), "un-adopted, still forkable");
+  // ...and mid-connect-gesture, where the menu is showing completion items.
+  const pending = pendingFrom();
+  assert.ok(forkOf(buildPaneMenu(soloPane(), pending)), "armed elsewhere, still forkable");
 });

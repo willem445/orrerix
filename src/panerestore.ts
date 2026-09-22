@@ -71,6 +71,12 @@ export type RestoreAction =
        *  rather than resumed, and docs/design/lead-pane.md for what does NOT
        *  come back with it (its children are not restored). */
       lead: boolean;
+      /** This pane was FORKED from that session (#3318 F1) — carried through
+       *  the restore so the pane it reopens is still marked as loomux's own
+       *  fork, which is what keeps the one-shot discharge idempotent on every
+       *  later capture. Null for every pane that was not. See
+       *  `PersistedPane.forkOf`. */
+      forkOf: string | null;
     }
   | {
       // An agent whose recorded session id has NO resumable conversation on disk
@@ -86,6 +92,12 @@ export type RestoreAction =
       sessionId: string;
       /** As `resume-agent`'s (#2519). */
       lead: boolean;
+      /** This pane was FORKED from that session (#3318 F1) — carried through
+       *  the restore so the pane it reopens is still marked as loomux's own
+       *  fork, which is what keeps the one-shot discharge idempotent on every
+       *  later capture. Null for every pane that was not. See
+       *  `PersistedPane.forkOf`. */
+      forkOf: string | null;
     }
   | {
       type: "dormant-agent";
@@ -97,6 +109,12 @@ export type RestoreAction =
        *  sits there — a dormant pane has no process to hold a group — so this
        *  is what the Start click reads when it finally spawns one. */
       lead: boolean;
+      /** This pane was FORKED from that session (#3318 F1) — carried through
+       *  the restore so the pane it reopens is still marked as loomux's own
+       *  fork, which is what keeps the one-shot discharge idempotent on every
+       *  later capture. Null for every pane that was not. See
+       *  `PersistedPane.forkOf`. */
+      forkOf: string | null;
     }
   | {
       // The orchestration pane's whole group stays dormant; the human resumes it
@@ -306,6 +324,7 @@ export function planPaneRestore(pane: PersistedPane, resumable?: SessionResumabl
             argv: pane.argv,
             sessionId: pane.sessionId,
             lead: pane.lead,
+            forkOf: pane.forkOf ?? null,
           };
         }
         return {
@@ -316,6 +335,7 @@ export function planPaneRestore(pane: PersistedPane, resumable?: SessionResumabl
           argv: pane.argv,
           sessionId: pane.sessionId,
           lead: pane.lead,
+          forkOf: pane.forkOf ?? null,
         };
       }
       return {
@@ -325,6 +345,7 @@ export function planPaneRestore(pane: PersistedPane, resumable?: SessionResumabl
         command: pane.command,
         argv: pane.argv,
         lead: pane.lead,
+        forkOf: pane.forkOf ?? null,
       };
   }
 }
@@ -1320,6 +1341,228 @@ export function hasForkSession(command: string | null, argv: string[] | null): b
   if (command && command.trim() && has(command.trim().split(/\s+/))) return true;
   if (argv && argv.length && has(argv)) return true;
   return false;
+}
+
+// ---------- forking a session (#3318 F1) ----------
+
+/** claude's fork token — `--fork-session`, "When resuming, create a new session
+ *  ID instead of reusing the original" (CLI reference, checked 2026-09-21 per
+ *  the `agent-cli-reference` skill).
+ *
+ *  The one spelling this module knows, and it is the same token
+ *  `hasForkSession` above already matches: the flag loomux now EMITS for a fork
+ *  gesture is the flag #440 B3 taught this module to recognise on a human's own
+ *  line. Kept as a named constant so the two cannot drift into two spellings of
+ *  one fact. */
+const CLAUDE_FORK_FLAG = "--fork-session";
+
+/** Whether `--session-id <new> --resume <old> --fork-session` mints the child
+ *  as `<new>` — live check **L1** on #3318, and this module's mirror of
+ *  `model::CLAUDE_FORK_PREMINTS_CHILD_ID` (`crates/loomux-engine/src/model.rs`),
+ *  which carries the full argument and is the authority.
+ *
+ *  It is mirrored rather than imported because the F1 gesture builds its line
+ *  HERE (a Solo pane's fork never goes through the backend's
+ *  `build_agent_command_ex`), and `test/panerestore.test.ts` reads the Rust
+ *  constant off disk and asserts the two agree — so the answer cannot be
+ *  flipped on one side alone when the human runs L1.
+ *
+ *  `true` (the shipped default) is the PRE-MINT arm: loomux names the child's
+ *  id up front, so a forked pane has an exact recorded identity from its first
+ *  turn, exactly like every other claude pane. `false` is the LEARNED arm,
+ *  which is correct under either answer to L1 and leaves the child's id
+ *  unrecorded — claude takes no session baseline today, so nothing can learn
+ *  it until #3318 F2. */
+export const FORK_PREMINTS_CHILD_ID = true;
+
+/** Can loomux fork this pane's CLI? — the frontend's copy of the engine's
+ *  `ForkSeam` table (`CliCaps.fork`), narrowed to the one question a menu item
+ *  asks.
+ *
+ *  **claude alone, and that is #3318 F1's whole scope**: the human demos a fork
+ *  on one CLI before the rest are added. codex, pi and opencode each have a
+ *  documented argv fork and are F2's; copilot and gemini have none at all (see
+ *  their `CliCaps` rows for the citation on each). Same mirroring contract as
+ *  `SOLO_MCP_CLIS` above — the backend table is authoritative, this is the
+ *  frontend's copy of the row it needs, and widening it here without widening
+ *  the row there would emit a flag the backend never blessed. */
+export function canForkCli(program: string | null | undefined): boolean {
+  return normalizeAgentProgram(program ?? "") === "claude";
+}
+
+/** Excise every `--fork-session` occurrence from a command STRING — the same
+ *  whitespace-preserving, one-leading-space-absorbing contract as
+ *  `stripSessionFlagsFromCommand`, and simpler for one reason: the flag takes
+ *  no value, so nothing following it is ever consumed. */
+function stripForkSessionFromCommand(command: string): string {
+  const tokens = tokenizeWithPositions(command);
+  const dropRanges: Array<[number, number]> = [];
+  for (const t of tokens) {
+    if (command.slice(t.start, t.end) !== CLAUDE_FORK_FLAG) continue;
+    let dropStart = t.start;
+    if (dropStart > 0 && /\s/.test(command[dropStart - 1])) dropStart -= 1;
+    dropRanges.push([dropStart, t.end]);
+  }
+  if (!dropRanges.length) return command;
+  let result = "";
+  let cursor = 0;
+  for (const [s, e] of dropRanges) {
+    result += command.slice(cursor, s);
+    cursor = e;
+  }
+  return result + command.slice(cursor);
+}
+
+/** The argv twin — every occurrence dropped, nothing following it consumed. */
+function stripForkSessionFromArgv(tokens: string[]): string[] {
+  return tokens.filter((t) => t !== CLAUDE_FORK_FLAG);
+}
+
+/** The id flags a fork line carries — the L1 two-arm choice, as a pure
+ *  function of one boolean, so BOTH arms are executable by a test.
+ *
+ *  `premint` defaults to `FORK_PREMINTS_CHILD_ID`, which is what production
+ *  passes; a test overrides it to exercise the arm the shipped constant does
+ *  not select. Without this the learned arm was unreachable from any test — a
+ *  module constant cannot be flipped at runtime — so the flip the human is
+ *  invited to make after live check L1 would have shipped an untested line
+ *  builder (review round 1, rev-final N2).
+ *
+ *  Pre-mint: `--session-id <child> --resume <parent>`, so the child's id is
+ *  known before it boots. Learned: `--resume <parent>` alone, and the child's
+ *  id is whatever claude mints. Either way the PARENT is what `--resume`
+ *  names — that half is documented and neither arm changes it. */
+export function forkIdFlags(
+  parentSessionId: string,
+  childSessionId: string,
+  premint: boolean = FORK_PREMINTS_CHILD_ID
+): { command: string; argv: string[] } {
+  return premint
+    ? {
+        command: `--session-id ${childSessionId} --resume ${parentSessionId}`,
+        argv: ["--session-id", childSessionId, "--resume", parentSessionId],
+      }
+    : {
+        command: `--resume ${parentSessionId}`,
+        argv: ["--resume", parentSessionId],
+      };
+}
+/** Build the command that opens a FORK of `parentSessionId` — a new session
+ *  starting as a copy of that one's conversation, with the original untouched
+ *  (#3318 F1).
+ *
+ *  `null` for a CLI loomux cannot fork (`canForkCli`), so a caller that reaches
+ *  here with the wrong pane gets nothing rather than a line whose flag that CLI
+ *  does not know. The menu refuses such a pane before this is ever called; this
+ *  is the second half of the same rule, at the site that would have to build
+ *  the broken line.
+ *
+ *  `childSessionId` is the id loomux minted for the child, used only on the
+ *  PRE-MINT arm (`FORK_PREMINTS_CHILD_ID`); the learned arm ignores it and
+ *  names only the parent. Both arms are built and both are pinned, because
+ *  which is correct is live check L1 and the human is the one who can run it.
+ *
+ *  Every recorded session flag is excised first, exactly as `agentResumeCommand`
+ *  does and for the same reason — a pane forked twice would otherwise carry two
+ *  `--resume`s — and so is any `--fork-session` already on the line, so forking
+ *  a pane that is itself a fork emits one flag rather than two. */
+export function agentForkCommand(
+  command: string | null,
+  argv: string[] | null,
+  parentSessionId: string,
+  childSessionId: string
+): { command?: string; argv?: string[] } | null {
+  const program = programFromRestore(command, argv);
+  // A line with no recorded program at all falls back to claude, the same
+  // assumption `agentResumeCommand`'s final fallback makes and for the same
+  // reason: every session this project mints an id for today is claude's.
+  if (program !== null && !canForkCli(program)) return null;
+  const { command: idFlags, argv: idArgv } = forkIdFlags(parentSessionId, childSessionId);
+  if (command && command.trim()) {
+    const stripped = stripForkSessionFromCommand(
+      stripSessionFlagsFromCommand(command, SESSION_FLAG_NAMES)
+    );
+    return { command: `${stripped} ${idFlags} ${CLAUDE_FORK_FLAG}` };
+  }
+  if (argv && argv.length) {
+    const stripped = stripForkSessionFromArgv(
+      stripSessionFlagsFromArgv(argv, SESSION_FLAG_NAMES)
+    );
+    return { argv: [...stripped, ...idArgv, CLAUDE_FORK_FLAG] };
+  }
+  return { command: `claude ${idFlags} ${CLAUDE_FORK_FLAG}` };
+}
+
+/** Name the pane a fork opens (#3318 F1) — the source's name with a `(fork)`
+ *  suffix, and a counter from the second fork of the same source onward.
+ *
+ *  Forking a fork does NOT nest the suffix (`x (fork) (fork)`): the second
+ *  suffix is replaced, so a chain of side quests off one session reads
+ *  `x (fork)`, `x (fork 2)`, `x (fork 3)` rather than growing a word per
+ *  generation. The number is the SOURCE's, not a global counter — this
+ *  function is pure and sees one name — so two forks of the same pane can
+ *  collide on a name. That is deliberate: pane names are a human label, not an
+ *  identity (the session id is), and every pane in this app is renameable. */
+export function forkPaneName(sourceName: string): string {
+  const m = /^(.*?)\s*\(fork(?: (\d+))?\)$/.exec(sourceName.trim());
+  if (!m) return `${sourceName.trim()} (fork)`;
+  const base = m[1];
+  const n = m[2] ? Number(m[2]) : 1;
+  return `${base} (fork ${n + 1})`;
+}
+
+/** Discharge the ONE-SHOT fork flag for the PERSISTED record (#3318 F1) — the
+ *  argued carve-out of `docs/design/session-id-learning.md` B3.
+ *
+ *  A fork flag is consumed at the fork spawn and must never be replayed: a
+ *  recorded `--fork-session` line re-forks on every restart, minting a fresh
+ *  session each boot and losing whatever the human did in the pane — which is
+ *  exactly what B3 forbade a LEARNED id from papering over. B3's chosen fix was
+ *  EXCLUSION rather than rewriting the line, because rewriting would override a
+ *  human's own explicit `--fork-session` intent. **That argument does not reach
+ *  a line loomux built**, and this function is narrowed to exactly that case:
+ *
+ *   - `forkOf` non-null is the whole gate. It is set only by loomux's own fork
+ *     gesture, so a human-typed `--fork-session` pane (`forkOf === null`)
+ *     comes back byte-identical and B3's exclusion continues to govern it,
+ *     unchanged.
+ *   - With a known `sessionId`, the record becomes the plain `--resume <id>`
+ *     line for the child — no fork flag, nothing to re-fork.
+ *   - With NO id (the learned arm, where nothing has learned one yet), the fork
+ *     flag AND the parent's `--resume` are both dropped, leaving a line that
+ *     starts a genuinely fresh session. Keeping the `--resume <parent>` would
+ *     be worse than dropping it: two panes resumed into one session id is the
+ *     interleaved-transcript corruption claude's own docs describe, not a
+ *     degraded restore.
+ *
+ *  Pure, and byte-identical out for every input it does not govern — the same
+ *  `#442` property the rest of this module holds. */
+export function forkRecordCommand(
+  command: string | null,
+  argv: string[] | null,
+  sessionId: string | null,
+  forkOf: string | null
+): { command: string | null; argv: string[] | null } {
+  if (!forkOf) return { command, argv };
+  if (!hasForkSession(command, argv)) return { command, argv };
+  // Both representations are rewritten INDEPENDENTLY, not routed through
+  // `agentResumeCommand` — that function answers with whichever ONE of the two
+  // it preferred, which is right for building a launch and wrong for a capture:
+  // a pane records both, and returning one would silently delete the other half
+  // of its own restore record.
+  const bare = (c: string | null): string | null =>
+    c && c.trim()
+      ? stripForkSessionFromCommand(stripSessionFlagsFromCommand(c, SESSION_FLAG_NAMES))
+      : c;
+  const bareArgv = (a: string[] | null): string[] | null =>
+    a && a.length ? stripForkSessionFromArgv(stripSessionFlagsFromArgv(a, SESSION_FLAG_NAMES)) : a;
+  const strippedCommand = bare(command);
+  const strippedArgv = bareArgv(argv);
+  if (!sessionId) return { command: strippedCommand, argv: strippedArgv };
+  return {
+    command: strippedCommand?.trim() ? `${strippedCommand} --resume ${sessionId}` : strippedCommand,
+    argv: strippedArgv?.length ? [...strippedArgv, "--resume", sessionId] : strippedArgv,
+  };
 }
 
 /** Extract the session id a CUSTOM command line names, for ADOPTING it as the

@@ -864,7 +864,7 @@ rule and per kind, the projected saving, and, against a hand-label set,
 agreement, a confusion matrix, ECE and the false-defer floor.
 
 Three things are worth knowing here rather than only in
-`doc/design/delivery-triage.md` §8, because they are facts about reading this
+`docs/design/delivery-triage.md` §8, because they are facts about reading this
 audit rather than about triage:
 
 - **The classifier is not this document's.** §4.1's table and the triage rule

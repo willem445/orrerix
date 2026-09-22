@@ -54,7 +54,7 @@
 // cannot cover at all is a change to the BODY of a Rust rule that keeps its
 // name and is not covered by a vector; that is what pin 1 plus the
 // exercised-by-a-vector assertion bound, and the residual is disclosed in
-// `doc/design/delivery-triage.md` §"The eval harness".
+// `docs/design/delivery-triage.md` §"The eval harness".
 //
 // ---------------------------------------------------------------------------
 // AUDIT-READING CONVENTIONS — inherited from `scripts/orch-scorecard.cjs`.
@@ -409,7 +409,7 @@ function providerAction(verdict, floor) {
 
 /**
  * The four-way label class collapses to the binary the eval scores on.
- * `doc/design/delivery-triage.md` §"The eval harness" carries the rubric this
+ * `docs/design/delivery-triage.md` §"The eval harness" carries the rubric this
  * mapping implements; it is one place rather than two so a report cannot state
  * a binary its own class column contradicts.
  */

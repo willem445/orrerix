@@ -774,6 +774,51 @@ const orchWiring: OrchWiring = {
     }
     return { grid: ws.grid, paneEvents: eventsFor(ws) };
   },
+  async openForkedPane(source, opts): Promise<void> {
+    // The fork opens BESIDE its source, in the same tab: a side quest on the
+    // same work belongs next to the work, and the human right-clicked here.
+    // A pane with no tab (disposed between the menu opening and the click) is
+    // the one case with nowhere to open, and it is a no-op rather than a new
+    // tab nobody asked for.
+    const ws = workspaceOfPane(source);
+    if (!ws) {
+      showToast("Can't fork: that pane is no longer open.", "error");
+      return;
+    }
+    // #439's re-mint, reached for the same reason a RESTORE reaches it: the
+    // line this fork was built from is the source pane's, and it carries the
+    // source's own `--mcp-config` naming a solo identity that is already bound
+    // to the source's pty. Replaying it would give two panes one channel
+    // identity. `stripSoloMcpFlags` removes it and `orch_solo_prepare` mints
+    // the child its own, best-effort exactly as every other path treats it:
+    // a failed mint opens a delivery-only pane, adoptable later via Connect,
+    // rather than failing a fork the human asked for.
+    //
+    // `lead: false` unconditionally, and that is not a shortcut: the fork
+    // gesture is not offered on a lead pane at all (`forkItem` takes only a
+    // pane whose role is `solo` or none), so there is never a lead group to
+    // re-mint here. A lead fork is #3318 F2's.
+    const remint = await remintSoloIdentity(opts.name, opts.cwd, opts.command, opts.argv, false);
+    const pane = await ws.grid.openPane(
+      {
+        name: opts.name,
+        cwd: opts.cwd,
+        command: remint.command,
+        argv: remint.argv,
+        sessionId: opts.sessionId,
+        channelAgent: remint.channelAgent,
+        forkOf: opts.forkOf,
+      },
+      eventsFor(ws),
+      "row",
+      source
+    );
+    if (pane.ptyId !== null) remint.bind(pane.ptyId);
+    reapIfExited(ws, pane);
+    onGridChanged();
+    persistTabs();
+    showToast(`Forked “${source.name}” — the original is untouched.`, "info");
+  },
   findByPty(ptyId): Pane | undefined {
     return findPaneAcrossTabs(ptyId)?.pane;
   },
@@ -1175,6 +1220,10 @@ async function openActionPane(
           argv: remint.argv,
           sessionId: a.sessionId,
           channelAgent: remint.channelAgent,
+          // #3318 F1: the pane comes back still marked as loomux's own fork, so
+          // its next capture discharges the flag idempotently rather than
+          // reading as an ordinary pane whose line happens to say --fork-session.
+          forkOf: a.forkOf ?? undefined,
           ...leadPaneOptions(remint),
           background: true,
         },
@@ -1236,6 +1285,10 @@ async function openActionPane(
           argv: remint.argv,
           sessionId: a.sessionId,
           channelAgent: remint.channelAgent,
+          // #3318 F1: the pane comes back still marked as loomux's own fork, so
+          // its next capture discharges the flag idempotently rather than
+          // reading as an ordinary pane whose line happens to say --fork-session.
+          forkOf: a.forkOf ?? undefined,
           ...leadPaneOptions(remint),
           background: true,
         },
@@ -1276,6 +1329,10 @@ async function openActionPane(
         // returns this record verbatim for a pane that stayed dormant, so a
         // `false` here would silently demote the pane one boot later.
         lead: a.lead,
+        // #3318 F1: same carry-through as `lead` above, and for the same
+        // reason — `Pane.capture` returns a dormant record verbatim, so a
+        // `null` here would silently un-mark a forked pane one boot later.
+        forkOf: a.forkOf,
         embeds: [],
       };
       let pane: Pane;
@@ -1322,6 +1379,8 @@ async function openActionPane(
               command: remint.command,
               argv: remint.argv,
               channelAgent: remint.channelAgent,
+              // #3318 F1 — as the resume/fresh arms above.
+              forkOf: a.forkOf ?? undefined,
               ...leadPaneOptions(remint),
             });
             if (pane.ptyId !== null) remint.bind(pane.ptyId);
@@ -1423,6 +1482,9 @@ async function openActionPane(
         // #3319: a placeholder the human just asked for is not one they
         // have marked — a watch is only ever set by the gesture that sets it.
         watched: false,
+        // #3318 F1: nor a fork — a fork is an agent pane in this window, and
+        // the gesture is not offered on an SSH pane at all.
+        forkOf: null,
         sessionId: a.sessionId,
         // The #887/#888 boundary, restated where the placeholder is built: an
         // SSH pane is never an orchestration member, so this record carries no
@@ -1623,6 +1685,9 @@ async function openActionPane(
         // #3319: a placeholder the human just asked for is not one they
         // have marked — a watch is only ever set by the gesture that sets it.
         watched: false,
+        // #3318 F1: and for the same reason it can never be a fork — a forked
+        // pane persists as `agent`, never as an `orch` placeholder.
+        forkOf: null,
         // Carry the captured member identity so a group resume restores exactly
         // the panes that were live at close (#194.5) and re-capture is exact.
         sessionId: a.sessionId,

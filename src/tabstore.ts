@@ -218,6 +218,30 @@ export interface PersistedPane {
    *  marked. No schema bump: the decoder's stated forward-compat rule is that
    *  an absent field reads as its pre-feature default. */
   watched: boolean;
+  /** The PARENT session id this agent pane was FORKED from (#3318 F1), or null
+   *  for every pane that was not — which is nearly all of them, and every
+   *  snapshot written before F1.
+   *
+   *  Two jobs, and the second is the load-bearing one.
+   *
+   *  It is PROVENANCE: this pane's conversation began as a copy of that session
+   *  at the moment of the fork, which is the one thing about it a later reader
+   *  (or F2's roster row) cannot recover from the command line, because the
+   *  command line is deliberately scrubbed of the fork.
+   *
+   *  And it is the GATE on that scrubbing. `--fork-session` is ONE-SHOT: it is
+   *  consumed at the fork spawn and must never be replayed, or the pane re-forks
+   *  on every restart and loses its own work each boot. `forkRecordCommand`
+   *  (`panerestore.ts`) discharges it into the plain `--resume <child id>` line
+   *  at capture time — but ONLY for a pane this field marks as loomux's own
+   *  fork, so a HUMAN's typed `--fork-session` line is still never rewritten and
+   *  `docs/design/session-id-learning.md` B3's exclusion continues to govern it
+   *  unchanged. See that note's fork carve-out section and
+   *  `docs/design/session-fork.md`.
+   *
+   *  Recorded on the AGENT kind, like `lead` above and for the same reason: a
+   *  fork is an agent pane whose command line is its own. */
+  forkOf: string | null;
   /** Every view CURRENTLY docked to this "orch" pane (#361) — up to three
    *  entries, one per occupied edge (left/right/bottom), each naming which
    *  view and its share of that edge's split. Empty = nothing docked, every
@@ -540,6 +564,12 @@ function decodePane(v: unknown): PersistedPane | null {
     // must not mint marks the human never set, because a mark they did not put
     // there is one they have to find and clear by hand.
     watched: r.watched === true,
+    // #3318 F1: absent (every pre-F1 snapshot, and every pane that is not a
+    // fork) or blank -> null. Blank is treated as absent for `sshProfileId`'s
+    // reason: a session id names something in a store, and "" names nothing
+    // while reading as a value -- and here it would also arm the one-shot
+    // rewrite on a pane nothing forked.
+    forkOf: typeof r.forkOf === "string" && r.forkOf.trim() ? r.forkOf : null,
     embeds: decodeEmbeds(r.embeds, r.embed, r.taskEmbed),
   };
 }

@@ -12,7 +12,12 @@ import type { Pane, PaneEvents } from "./pane";
 import { panesInGroup } from "./group";
 import { badgeFor, forgetGroupMeta, type OrchRole } from "./orchbadge";
 import { isSpawnRequestExpired, spawnsForGroup } from "./spawnexpiry";
-import { sessionIdFromCommand } from "./panerestore";
+import {
+  agentForkCommand,
+  forkPaneName,
+  sessionIdFromCommand,
+  FORK_PREMINTS_CHILD_ID,
+} from "./panerestore";
 import type { AutonomyState } from "./autonomy";
 import type { NeedsYouView, OrchQuestion } from "./decisions";
 import type { WorkflowEntry, WorkflowListing, WorkflowPreview } from "./roster";
@@ -652,6 +657,26 @@ export interface OrchWiring {
    *  after every `orch-channel` event so the tab-strip dot doesn't wait for the
    *  next 4s status poll. */
   refreshTabBar(): void;
+  /** Open a NEW agent pane beside `source`, running `command` (#3318 F1's
+   *  fork gesture).
+   *
+   *  A hook rather than an inline open for the same reason `persistLayout` is
+   *  one: the whole of what a solo agent pane needs at open — the grid, its
+   *  pane events, and the `stripSoloMcpFlags` + `orch_solo_prepare` re-mint that
+   *  gives it a channel identity of its own — lives in main.ts, and a second
+   *  copy of it here would be a second answer to one question.
+   *
+   *  `forkOf` is the parent session id, recorded on the new pane: it is that
+   *  pane's provenance AND the gate that discharges the one-shot fork flag out
+   *  of every later capture (`PersistedPane.forkOf`). */
+  openForkedPane(source: Pane, opts: {
+    name: string;
+    cwd: string;
+    command?: string;
+    argv?: string[];
+    sessionId?: string;
+    forkOf: string;
+  }): Promise<void>;
 }
 
 /** The tab layer, kept for the paths that aren't backend events (#407's promote
@@ -1048,6 +1073,10 @@ function paneConnectState(pane: Pane): PaneConnectState {
     agentCli: pane.agentCli,
     sessionId: pane.sessionId,
     workdir: pane.workdir,
+    // #3318 F1: and the LINE the fork is built by rewriting — bound here,
+    // at menu-build time, for `PaneMenuAction`'s stated reason.
+    command: pane.launchLine.command,
+    argv: pane.launchLine.argv,
   };
 }
 
@@ -1165,6 +1194,14 @@ async function handlePaneMenuAction(action: PaneMenuAction, pane: Pane): Promise
     await promotePaneToOrchestrator(pane, action);
     return;
   }
+  // #3318 F1: like `promote` above, a fork is not a connect action — it
+  // neither arms nor completes anything, and `reduceConnect` leaves `pending`
+  // exactly as it was, so an in-progress connect gesture elsewhere survives a
+  // fork here.
+  if (action.kind === "fork") {
+    await forkPaneSession(pane, action);
+    return;
+  }
   // Only "connect-arm" legitimately introduces a NEW pending source pane — every
   // other action either leaves `pending` exactly as it was (a disconnect of some
   // UNRELATED pane while a different one is armed elsewhere: `pane` here is the
@@ -1203,6 +1240,61 @@ async function handlePaneMenuAction(action: PaneMenuAction, pane: Pane): Promise
         showToast(`Making this pane the sender failed: ${String(err)}`, "error");
       }
       return;
+  }
+}
+
+// ---------- fork a pane's session (#3318 F1) ----------
+
+/** Panes with a fork in flight. Same re-entry guard, and the same reasoning, as
+ *  `promotionsInFlight`: the window here is the `openForkedPane` round trip, and
+ *  a double-click inside it would open TWO children of one parent, each having
+ *  minted its own id. Bounded rather than corrupting — the parent is untouched
+ *  either way — but two panes nobody asked for is not a good outcome to leave
+ *  reachable. */
+const forksInFlight = new Set<Pane>();
+
+/** Fork this pane's session into a new pane (#3318 F1).
+ *
+ *  Everything that can refuse does so BEFORE anything is opened, and nothing
+ *  here touches the SOURCE pane at all: that is the gesture's whole contract
+ *  ("the parent continues"), and it is what makes a failed fork a no-op rather
+ *  than a half-move. There is no kill, no relaunch and no confirm dialog — a
+ *  fork adds a pane and takes nothing away, so unlike a promotion it has
+ *  nothing to warn about.
+ *
+ *  The child's session id is minted HERE, before the pane opens, and handed to
+ *  claude on the line (`FORK_PREMINTS_CHILD_ID`). `crypto.randomUUID` is the
+ *  webview's Web Crypto, not a getrandom crate — CLAUDE.md constraint 2
+ *  governs `src-tauri` Rust only — and it is the same mint the launcher
+ *  already uses for a fresh claude pane's `--session-id`. */
+async function forkPaneSession(
+  pane: Pane,
+  action: Extract<PaneMenuAction, { kind: "fork" }>
+): Promise<void> {
+  if (forksInFlight.has(pane)) return;
+  forksInFlight.add(pane);
+  try {
+    const childId = crypto.randomUUID();
+    const line = agentForkCommand(action.command, action.argv, action.sessionId, childId);
+    if (!line) {
+      // The menu already refuses a CLI with no fork seam, so reaching here means
+      // the pane's CLI changed under an open menu. Say so rather than opening a
+      // pane whose line carries a flag its CLI does not know.
+      showToast(`Can't fork this pane: loomux has no fork for ${action.cli}.`, "error");
+      return;
+    }
+    await orchWiring?.openForkedPane(pane, {
+      name: forkPaneName(action.sourceName),
+      cwd: action.workdir,
+      command: line.command,
+      argv: line.argv,
+      sessionId: FORK_PREMINTS_CHILD_ID ? childId : undefined,
+      forkOf: action.sessionId,
+    });
+  } catch (err) {
+    showToast(`Fork failed: ${String(err)}`, "error");
+  } finally {
+    forksInFlight.delete(pane);
   }
 }
 

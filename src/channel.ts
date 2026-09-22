@@ -83,6 +83,15 @@ export function reduceConnect(
         pending: pending && action.soloAgentId !== null && pending.agentId === action.soloAgentId ? null : pending,
         effect: { kind: "none" },
       };
+    case "fork":
+      // #3318 F1: a fork is not a channel action AND, unlike `promote` above,
+      // it retires nothing — the source pane keeps its process, its session
+      // and its `__solo__` identity, which is the gesture's whole contract. So
+      // an arm pointing at this pane is still valid afterwards and is left
+      // exactly as it was; clearing it here would cost a right-click for no
+      // reason. (The CHILD gets its own freshly-minted identity at open and is
+      // a free pane, armable in its own right.)
+      return { pending, effect: { kind: "none" } };
   }
 }
 

@@ -108,8 +108,9 @@ pub(crate) use loomux_engine::text::tail_snippet;
 // flat form — a method's visibility is the defining crate's to set, and no
 // re-export narrows it.
 pub use loomux_engine::model::{
-    self, cli_can_host, cli_caps, premints_session_id, CliCaps, Containment, ReadyMarker, Role,
-    CLI_CAPS, CONTEXT_VARIANTS, EFFORT_LEVELS, SUPPORTED_CLIS,
+    self, cli_can_host, cli_caps, fork_refusal, premints_session_id, CliCaps, Containment,
+    ForkSeam, ReadyMarker, Role, CLAUDE_FORK_PREMINTS_CHILD_ID, CLI_CAPS, CONTEXT_VARIANTS,
+    EFFORT_LEVELS, SUPPORTED_CLIS,
 };
 pub(crate) use loomux_engine::model::{default_model, sanitize_model_opt};
 
@@ -51514,6 +51515,7 @@ impl OrchRegistry {
             persona,
             Role::Worker,
             None,
+            None,
         )
     }
 
@@ -51531,6 +51533,24 @@ impl OrchRegistry {
     /// orthogonal to `containment`, never a substitute for it. See that
     /// function's doc for the predicate and [`CLAUDE_QUESTION_DENY_TOOLS`]
     /// for what gets denied.
+    ///
+    /// `fork_of` (#3318 F1) asks the CLI to **fork** the session it names —
+    /// open a new session that starts as a copy of that one's conversation,
+    /// leaving the original untouched. `Some(parent)` is honoured only for a
+    /// CLI whose [`model::CliCaps::fork`] row carries a spelling, which today
+    /// is claude alone; every other arm ignores it, and
+    /// [`model::fork_refusal`] is the predicate a *gesture* asks before ever
+    /// getting here (F1's gesture is the pane menu, F2's is the MCP tool).
+    /// The ignore is deliberate and pinned rather than left implicit: a line
+    /// builder has no way to refuse, and a non-claude line silently GAINING a
+    /// flag its CLI does not know is the worse failure of the two.
+    ///
+    /// **On the claude arm `fork_of` overrides `resume`**, because the two ask
+    /// incompatible things of one flag: `--resume <id>` alone continues that
+    /// session, and `--resume <parent> --fork-session` branches off it. The
+    /// `session` argument then names the CHILD rather than the session being
+    /// opened — see the claude arm for the two id shapes and which of them
+    /// #3318's live check L1 decides.
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)] // pub for integration tests
     pub fn build_agent_command_ex(
@@ -51555,6 +51575,7 @@ impl OrchRegistry {
         persona: &PersonaInject,
         role: Role,
         role_hint: Option<&str>,
+        fork_of: Option<&str>,
     ) -> String {
         // A planner never mutates and has no human in its pane, so there is
         // nothing for `auto_ops` to gate: it must explore, post its plan
@@ -51972,10 +51993,60 @@ impl OrchRegistry {
                 // Assigning the session id up front is what makes per-task
                 // sessions resumable later: loomux never has to fish the id
                 // out of the CLI.
-                let session_flag = match (session, resume) {
-                    (Some(s), true) => format!("--resume {s} "),
-                    (Some(s), false) => format!("--session-id {s} "),
-                    (None, _) => String::new(),
+                //
+                // #3318 F1 adds a third shape. A FORK names the parent with
+                // `--resume` and asks for a new id with `--fork-session`
+                // (appended below, with the other trailing flags). Which id
+                // the child ends up with is the one thing the vendor's docs do
+                // not settle, so BOTH arms are built here and the choice is
+                // made by `model::CLAUDE_FORK_PREMINTS_CHILD_ID` — READ below,
+                // not inferred from what the caller passed:
+                //
+                //  - constant true — the PRE-MINT arm, and the default loomux
+                //    ships: `--session-id <child> --resume <parent>
+                //    --fork-session`, where `<child>` is the `session`
+                //    argument. If claude honours the given id for the child, a
+                //    fork keeps the exact-id property every claude pane
+                //    already has and nothing has to be learned.
+                //  - constant false — the LEARNED arm: `--resume <parent>
+                //    --fork-session`, and the child's id is whatever claude
+                //    mints. loomux cannot read it today (claude takes no
+                //    session baseline — `premints_session_id` is true for it),
+                //    so such a pane is honestly unrecorded until F2 adds one.
+                //
+                // Live check L1 on #3318 is what decides between them, and it
+                // is the human's to run: constraint 3 forbids loomux spawning
+                // a real claude to find out.
+                // This arm serves claude AND every unrecognized CLI, so the fork
+                // shape is gated on the SEAM rather than on `fork_of` alone
+                // (rev-std r1). Without that gate an unknown CLI took
+                // `--session-id <child> --resume <parent>` — the fork's id shape
+                // — while the flag itself was withheld by the table lookup
+                // below, which is the one combination that is wrong under every
+                // reading: it neither forks nor resumes the session the caller
+                // named. Now an unknown CLI's line is byte-identical with and
+                // without `fork_of`, exactly as the five named ones are.
+                let fork_of = fork_of.filter(|_| cli_caps(cli).is_some_and(|c| c.fork.flag().is_some()));
+                let session_flag = match fork_of {
+                    // A FORK. Which of the two arms is built is decided HERE, by
+                    // the constant — not by whether the caller happened to pass a
+                    // child id. That distinction is the whole point: the constant
+                    // is what the human flips after running live check L1, and a
+                    // caller convention would leave that flip inert on this side
+                    // while the frontend's mirror really moved.
+                    Some(parent) => {
+                        let child = if CLAUDE_FORK_PREMINTS_CHILD_ID { session } else { None };
+                        match child {
+                            Some(child) => format!("--session-id {child} --resume {parent} "),
+                            None => format!("--resume {parent} "),
+                        }
+                    }
+                    // Not a fork: exactly the pre-#3318 line, byte for byte.
+                    None => match (session, resume) {
+                        (Some(s), true) => format!("--resume {s} "),
+                        (Some(s), false) => format!("--session-id {s} "),
+                        (None, _) => String::new(),
+                    },
                 };
                 // "Auto" preset = Claude Code's native auto permission mode
                 // (what the human uses interactively); otherwise acceptEdits.
@@ -52054,6 +52125,19 @@ impl OrchRegistry {
                 // so it needs no quoting — the same argument `model` rests on.
                 if !knobs.effort.is_empty() {
                     cmd.push_str(&format!(" --effort {}", knobs.effort));
+                }
+                // #3318 F1: the fork token, read from the capability table
+                // rather than spelled here — `ForkSeam::Flag("--fork-session")`
+                // on claude's row, and `None` (so nothing is emitted) on every
+                // other. Positioned with `--settings` and `--effort` above, for
+                // the same #610 reason they are: any flag added to this branch
+                // goes AFTER the last `--allowedTools` value, never between the
+                // flag and its values.
+                if fork_of.is_some() {
+                    if let Some(flag) = cli_caps(cli).and_then(|c| c.fork.flag()) {
+                        cmd.push(' ');
+                        cmd.push_str(flag);
+                    }
                 }
                 if containment.denies_edits() {
                     // Deny the file-editing tools — and, for a ReadOnly class,
@@ -52192,6 +52276,7 @@ impl OrchRegistry {
             persona,
             Role::Worker,
             None,
+            None,
         )
     }
 
@@ -52219,6 +52304,7 @@ impl OrchRegistry {
         persona: &PersonaInject,
         role: Role,
         role_hint: Option<&str>,
+        fork_of: Option<&str>,
     ) -> Vec<String> {
         let unattended = auto_ops || containment.forces_unattended();
         let mut a: Vec<String> = Vec::new();
@@ -52397,16 +52483,38 @@ impl OrchRegistry {
             // "claude" and the explicit fallback for anything unrecognized.
             _ => {
                 push(&mut a, "claude");
-                match (session, resume) {
-                    (Some(s), true) => {
+                // #3318 F1 — the same three shapes as the string form, in the
+                // same order; see that arm's comment for the pre-mint/learned
+                // split and live check L1.
+                // Same seam gate as the string form (rev-std r1) — an
+                // unrecognized CLI takes neither the fork's id shape nor its
+                // flag. See that arm's comment.
+                let fork_of = fork_of.filter(|_| cli_caps(cli).is_some_and(|c| c.fork.flag().is_some()));
+                match fork_of {
+                    // Same constant, same decision, same reason as the string
+                    // form — see its comment. Read here too rather than passed
+                    // in, so the two forms cannot disagree about which arm a
+                    // flip of the constant selects.
+                    Some(parent) => {
+                        let child = if CLAUDE_FORK_PREMINTS_CHILD_ID { session } else { None };
+                        if let Some(child) = child {
+                            push(&mut a, "--session-id");
+                            push(&mut a, child);
+                        }
                         push(&mut a, "--resume");
-                        push(&mut a, s);
+                        push(&mut a, parent);
                     }
-                    (Some(s), false) => {
-                        push(&mut a, "--session-id");
-                        push(&mut a, s);
-                    }
-                    (None, _) => {}
+                    None => match (session, resume) {
+                        (Some(s), true) => {
+                            push(&mut a, "--resume");
+                            push(&mut a, s);
+                        }
+                        (Some(s), false) => {
+                            push(&mut a, "--session-id");
+                            push(&mut a, s);
+                        }
+                        (None, _) => {}
+                    },
                 }
                 push(&mut a, "--mcp-config");
                 a.push(cfg.display().to_string());
@@ -52445,6 +52553,14 @@ impl OrchRegistry {
                 if !knobs.effort.is_empty() {
                     push(&mut a, "--effort");
                     push(&mut a, knobs.effort);
+                }
+                // #3318 F1 — same position and same table read as the string
+                // form; `build_agent_argv_matches_command_line` is what keeps
+                // the two from drifting.
+                if fork_of.is_some() {
+                    if let Some(flag) = cli_caps(cli).and_then(|c| c.fork.flag()) {
+                        push(&mut a, flag);
+                    }
                 }
                 if containment.denies_edits() {
                     push(&mut a, "--disallowedTools");
@@ -52937,6 +53053,7 @@ impl OrchRegistry {
             // #946 Q4 / #1091 slice H (H7): the liaison-hinted block feeds
             // `claude_denies_interactive_question` the same way `role` does.
             block.role_hint.as_deref(),
+            None,
         );
         let argv = self.build_agent_argv_ex(
             &cli,
@@ -52953,6 +53070,7 @@ impl OrchRegistry {
             &inject,
             role,
             block.role_hint.as_deref(),
+            None,
         );
         // Round #417 correction 6: fail loudly, pre-spawn, rather than
         // handing CreateProcessW a command line it will refuse with an
@@ -62549,6 +62667,7 @@ fn register_orchestrator_pane(
         // rather than threaded from `block` the way `spawn_agent_ex` does.
         Role::Orchestrator,
         None,
+    None,
     );
     let argv = reg.build_agent_argv_ex(
         &cli,
@@ -62565,6 +62684,7 @@ fn register_orchestrator_pane(
         &inject,
         Role::Orchestrator,
         None,
+    None,
     );
     // Round #417 correction 6: see `command_line_length_guard`'s doc — the
     // orchestrator's own pane must fail loudly pre-spawn too, not just

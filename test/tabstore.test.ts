@@ -96,6 +96,7 @@ test("docked panes round-trip (captured outside the layout tree, #194 P4)", () =
             file: null,
             sshProfileId: null,
             lead: false,
+            forkOf: null,
             watched: false,
             embeds: [],
           },
@@ -218,6 +219,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
         file: null,
         sshProfileId: null,
         lead: false,
+        forkOf: null,
         watched: false,
         embeds: [],
       },
@@ -243,6 +245,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             file: null,
             sshProfileId: null,
             lead: false,
+            forkOf: null,
             watched: false,
             embeds: [],
           },
@@ -263,6 +266,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             file: null,
             sshProfileId: null,
             lead: false,
+            forkOf: null,
             watched: false,
             embeds: [],
           },
@@ -285,6 +289,7 @@ const NESTED_LAYOUT: PersistedLayoutNode = {
             file: null,
             sshProfileId: null,
             lead: false,
+            forkOf: null,
             watched: false,
             embeds: [],
           },
@@ -320,6 +325,7 @@ test("a files leaf round-trips its root — and needed NO new field or schema bu
     file: null,
     sshProfileId: null,
     lead: false,
+    forkOf: null,
     watched: false,
     embeds: [],
   };
@@ -393,6 +399,7 @@ test("editor and git leaves round-trip their root — and the editor's open FILE
     file,
     sshProfileId: null,
     lead: false,
+    forkOf: null,
     watched: false,
     embeds: [],
   });
@@ -532,6 +539,7 @@ test("malformed pane fields inside a valid leaf coerce to null, not a drop", () 
       file: null,
       sshProfileId: null,
       lead: false,
+      forkOf: null,
       watched: false,
       embeds: [],
     },
@@ -554,6 +562,7 @@ test("embed preferences ({view, side, share}), one per docked edge, round-trip t
     file: null,
     sshProfileId: null,
     lead: false,
+    forkOf: null,
     watched: false,
     embeds: [
       { view: "group", side: "bottom", share: 0.42 },
@@ -589,6 +598,7 @@ test("git and editor are valid embed views too (#361 scope increase), round-trip
     file: null,
     sshProfileId: null,
     lead: false,
+    forkOf: null,
     watched: false,
     embeds: [
       { view: "git", side: "left", share: 0.35 },
@@ -624,6 +634,7 @@ test("the progress timeline (#608) is a valid embed view and round-trips like an
     file: null,
     sshProfileId: null,
     lead: false,
+    forkOf: null,
     watched: false,
     embeds: [{ view: "timeline", side: "bottom", share: 0.45 }],
   };
@@ -904,6 +915,7 @@ test("an ssh leaf round-trips its connection + recorded session, and carries NO 
     file: null,
     sshProfileId: "prof-7",
     lead: false,
+    forkOf: null,
     watched: false,
     embeds: [],
   };
@@ -1132,6 +1144,7 @@ test("a todo leaf round-trips, and its workspace root rides in cwd (#3263 S4)", 
     file: null,
     sshProfileId: null,
     lead: false,
+    forkOf: null,
     watched: false,
     embeds: [],
   };
@@ -1167,6 +1180,7 @@ test("a ROOTLESS todo leaf survives, where a rootless content leaf is the unrest
     file: null,
     sshProfileId: null,
     lead: false,
+    forkOf: null,
     watched: false,
     embeds: [],
   };
@@ -1370,6 +1384,79 @@ const FILES_LEAF: PersistedPane = {
   file: null,
   sshProfileId: null,
   lead: false,
+  forkOf: null,
   watched: false,
   embeds: [],
 };
+// ---------- #3318 F1: a forked agent leaf ----------
+
+test("#3318 F1: a forked agent leaf round-trips its parent session, and a legacy record reads as not-a-fork", () => {
+  // `forkOf` is the record's provenance AND the gate that discharges the
+  // one-shot `--fork-session` flag on every later capture (see
+  // `PersistedPane.forkOf`), so losing it across a restart would silently turn a
+  // fork back into an ordinary pane whose line happens to carry that flag.
+  const parent = "11111111-2222-3333-4444-555555555555";
+  const child = "99999999-8888-7777-6666-555555555555";
+  const forked: PersistedPane = {
+    paneKind: "agent",
+    name: "claude (fork)",
+    cwd: "C:/repo",
+    // The DISCHARGED line: a fork is recorded as the child's own plain resume,
+    // never as the fork line it booted with.
+    command: `claude --resume ${child}`,
+    argv: null,
+    shellKind: null,
+    sessionId: child,
+    role: null,
+    groupId: null,
+    file: null,
+    sshProfileId: null,
+    lead: false,
+    watched: false,
+    forkOf: parent,
+    embeds: [],
+  };
+  const state: PersistedTabs = {
+    tabs: [{ name: "t", color: null, groupId: null, layout: { kind: "leaf", weight: 1, pane: forked } }],
+    activeIndex: 0,
+  };
+  const back = decodeTabs(encodeTabs(state));
+  const leaf = back?.tabs[0].layout;
+  assert.ok(leaf?.kind === "leaf");
+  assert.deepEqual(leaf.pane, forked);
+});
+
+test("#3318 F1: a pre-F1 record, and a blank or malformed forkOf, all decode as not-a-fork", () => {
+  // Blank is treated as absent for `sshProfileId`'s reason — a session id names
+  // something in a store, and "" names nothing while reading as a value — and
+  // here it would also arm the one-shot rewrite on a pane nothing forked.
+  for (const raw of [undefined, "", "   ", 7, null, {}]) {
+    const pane: Record<string, unknown> = { paneKind: "agent", name: "a", cwd: null, command: "claude" };
+    if (raw !== undefined) pane.forkOf = raw;
+    const decoded = decodeTabs(
+      JSON.stringify({
+        tabs: [{ name: "t", color: null, layout: { kind: "leaf", weight: 1, pane } }],
+        activeIndex: 0,
+      })
+    );
+    const leaf = decoded?.tabs[0].layout;
+    assert.ok(leaf?.kind === "leaf", `forkOf: ${JSON.stringify(raw)}`);
+    assert.equal(leaf.pane.forkOf, null, `forkOf: ${JSON.stringify(raw)} must not survive`);
+  }
+  // The control: a REAL id does survive the same decode, so the loop above is
+  // measuring the coercion rather than a field that is always nulled.
+  const ok = decodeTabs(
+    JSON.stringify({
+      tabs: [
+        {
+          name: "t",
+          color: null,
+          layout: { kind: "leaf", weight: 1, pane: { paneKind: "agent", name: "a", cwd: null, command: "claude", forkOf: "p-1" } },
+        },
+      ],
+      activeIndex: 0,
+    })
+  );
+  const okLeaf = ok?.tabs[0].layout;
+  assert.equal(okLeaf?.kind === "leaf" ? okLeaf.pane.forkOf : null, "p-1");
+});

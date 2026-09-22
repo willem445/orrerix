@@ -782,6 +782,114 @@ pub struct CliCaps {
     /// refused at parse time is honest, where an accepted one that spawned a
     /// PTY anyway would lie.
     pub structured_driver: Option<crate::harness::Harness>,
+    /// How loomux forks a session on this CLI (#3318) — see [`ForkSeam`].
+    ///
+    /// [`ForkSeam::None`] is a CLAIM, the same way an empty
+    /// [`Self::effort_levels`] is: it says loomux will refuse a fork on this
+    /// CLI and why, rather than leaving a gesture that quietly does nothing.
+    pub fork: ForkSeam,
+}
+
+/// How (or whether) loomux can ask this CLI to **fork** an existing session —
+/// open a second session that starts as a copy of the first's conversation,
+/// leaving the original untouched (#3318).
+///
+/// Data, not a branch, for CLAUDE.md constraint 8's reason: "does this vendor
+/// have a fork, and what is it spelled" is a fact about the vendor, so it is
+/// written down once here and consulted, never re-derived as an
+/// `if cli == "..."` at a spawn site.
+///
+/// **One variant carries a spelling today and that is deliberate, not an
+/// oversight.** #3318's F1 slice ships the claude arm alone, because the human
+/// tests and demos a fork on claude before any other CLI is added; the survey
+/// on #3318 found argv-reachable forks for codex, pi and opencode too, and
+/// F2 is where each of those rows is filled in with its own citation and its
+/// own test. A row that said `--fork` today on the strength of a doc page
+/// nobody had exercised would be a claim loomux could not keep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForkSeam {
+    /// The resume line plus one flag: loomux builds the CLI's ordinary
+    /// `--resume <id>` invocation and appends this token.
+    ///
+    /// claude's `--fork-session` — "When resuming, create a new session ID
+    /// instead of reusing the original"
+    /// ([CLI reference](https://code.claude.com/docs/en/cli-reference), per the
+    /// `agent-cli-reference` skill).
+    Flag(&'static str),
+    /// loomux cannot fork this CLI from argv. The note says *why*, and is
+    /// quoted into the refusal so a rejected gesture names what is missing
+    /// rather than saying "unsupported".
+    None(&'static str),
+}
+
+impl ForkSeam {
+    /// The flag to append to the resume line, or `None` for a CLI loomux
+    /// cannot fork.
+    pub fn flag(&self) -> Option<&'static str> {
+        match self {
+            ForkSeam::Flag(f) => Some(f),
+            ForkSeam::None(_) => None,
+        }
+    }
+}
+
+/// **Does `--session-id <new> --resume <old> --fork-session` mint the claude
+/// child as `<new>`?** — live check L1 on #3318, and the one fact about a
+/// claude fork the vendor's reference does not settle.
+///
+/// `--session-id` is documented as pre-assigning an id and `--fork-session` as
+/// creating "a new session ID instead of reusing the original"
+/// ([CLI reference](https://code.claude.com/docs/en/cli-reference), checked
+/// 2026-09-21); whether the two COMPOSE — whether the "new" id is the one
+/// loomux named — is documented nowhere, and CLAUDE.md constraint 3 forbids
+/// loomux spawning a real claude to find out. So this is a stated assumption,
+/// not a measurement, and **the human confirms or flips it**.
+///
+/// **Both readers select their arm from this constant**, rather than from what
+/// a caller happened to pass — which is what makes the flip below a real
+/// one-line edit instead of a documented intention. `build_agent_command_ex`
+/// and `build_agent_argv_ex` (`src-tauri`) each read it inside their claude
+/// fork arm, and `src/panerestore.ts`'s `agentForkCommand` reads its mirror.
+///
+/// `true` (shipped default) selects the PRE-MINT line, which keeps the exact-id
+/// property every claude pane already has: the child's id is known before it
+/// boots, so nothing has to be learned and the one-shot record is exact.
+/// `false` selects the LEARNED line (`--resume <parent> --fork-session`, no
+/// `--session-id`), which is correct under either answer and costs the child's
+/// identity until #3318 F2 adds claude a session baseline to learn it from.
+///
+/// If L1 turns out FALSE and this is still `true`, the failure is bounded and
+/// visible rather than silent-and-wrong: the pane really is a fork of the right
+/// parent (that half is documented), and only its RECORDED id is another
+/// session's — so a later restart resumes the parent's fork-point rather than
+/// the child, and the pane's own work since is not reachable from loomux.
+/// Flipping this to `false` degrades those panes to unrecorded instead.
+///
+/// The frontend mirrors this one bit as `FORK_PREMINTS_CHILD_ID`
+/// (`src/panerestore.ts`), because the F1 gesture builds its line there; the
+/// two are pinned equal by a source-reading test (`test/panerestore.test.ts`)
+/// so the answer cannot be flipped on one side alone.
+pub const CLAUDE_FORK_PREMINTS_CHILD_ID: bool = true;
+
+/// Why this CLI's session cannot be forked, or `None` when it can (#3318).
+///
+/// The one predicate a fork gesture asks. An **unknown** CLI is refused too
+/// (with its own wording) rather than falling through to claude's arm: the
+/// conservative side here is "do nothing", because a fork that silently did
+/// not fork would hand the human a second pane sharing ONE session id with the
+/// first — which claude's own docs describe as interleaving two conversations
+/// into one transcript, i.e. corruption, not a no-op.
+pub fn fork_refusal(cli: &str) -> Option<String> {
+    match cli_caps(cli) {
+        Some(caps) => match caps.fork {
+            ForkSeam::Flag(_) => None,
+            ForkSeam::None(note) => Some(format!("loomux cannot fork a {cli} session: {note}")),
+        },
+        None => Some(format!(
+            "loomux cannot fork a {cli} session: loomux has no capability record for {cli} at all, \
+             so it has no fork spelling to use"
+        )),
+    }
 }
 
 /// The closed vocabulary of a block's `effort:` (#687) — the thinking level.
@@ -919,6 +1027,13 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // a pane through it yet — the spawn-path wiring is #84's R2. Flipping
         // this row is R2's change to make, with its own tests.
         structured_driver: None,
+        // Claude Code's native fork, and the ONE row #3318 F1 fills in:
+        // `--fork-session` — "When resuming, create a new session ID
+        // instead of reusing the original" (CLI reference, checked
+        // 2026-09-21 per the `agent-cli-reference` skill). It rides the
+        // resume line loomux already builds, so a fork is that line plus
+        // one token — see `build_agent_command_ex`'s claude arm.
+        fork: ForkSeam::Flag("--fork-session"),
     },
     CliCaps {
         cli: "copilot",
@@ -938,6 +1053,16 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // No structured surface loomux can drive; R4's ACP adapter is where
         // one would come from.
         structured_driver: None,
+        // No argv fork exists to call. copilot's `/fork` is an INTERACTIVE
+        // slash command and is absent from both published CLI references
+        // (command reference and configuration guide, checked 2026-09-21);
+        // per the survey on #3318 it also moves the CURRENT terminal into
+        // the fork rather than opening a second one, which would invert the
+        // roster. Held behind a live check (#3318 F4), never guessed at.
+        fork: ForkSeam::None(
+            "copilot's /fork is an interactive slash command with no documented argv equivalent, \
+             and per the issue lead it moves the current pane into the fork rather than opening a new one",
+        ),
     },
     CliCaps {
         cli: "gemini",
@@ -958,6 +1083,13 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // surface to drive, and stays PTY-only (the Harness enum's own doc
         // names it).
         structured_driver: None,
+        // Documented NOT to exist, which is a stronger statement than
+        // silence: gemini's command reference lists `/chat save|resume|list|
+        // delete|share` and `/resume`, and no fork of any kind (checked
+        // 2026-09-21).
+        fork: ForkSeam::None(
+            "gemini has no fork: its command reference documents /chat checkpoints and /resume only",
+        ),
     },
     CliCaps {
         cli: "opencode",
@@ -1004,6 +1136,16 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // No structured surface loomux can drive; R3 is where one would come
         // from.
         structured_driver: None,
+        // opencode DOES document `--fork` ("Fork the session when
+        // continuing (use with --continue or --session)"), and the survey on
+        // #3318 expects it to compose with the `--session <id>` line loomux
+        // already builds. It is `None` here because #3318 F1 ships claude
+        // ALONE — the human demos one CLI before the rest are added — and a
+        // row claiming a spelling no test has exercised is a claim loomux
+        // cannot keep. F2 fills this in with its own citation and test.
+        fork: ForkSeam::None(
+            "opencode documents --fork, but loomux has not wired or tested it yet — #3318 F2",
+        ),
     },
     CliCaps {
         cli: "pi",
@@ -1062,6 +1204,16 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // extension-UI dialogs the PTY scrape cannot see. This row is what a
         // block's `driver: structured` is checked against.
         structured_driver: Some(crate::harness::Harness::Pi),
+        // pi documents `--fork <path|id>` ("Fork a session file or partial
+        // session ID into a new session"). `None` for #3318 F1's
+        // claude-only reason (see opencode's row), and pi has a second open
+        // question besides: whether `--fork` composes with the
+        // `--session-id` pre-mint above, or refuses it the way pi already
+        // refuses `--session` beside `--session-id`. That is live check L2
+        // on #3318, and F2 answers it before this row moves.
+        fork: ForkSeam::None(
+            "pi documents --fork, but loomux has not wired or tested it yet — #3318 F2",
+        ),
     },
     CliCaps {
         cli: "codex",
@@ -1121,6 +1273,15 @@ pub const CLI_CAPS: &[CliCaps] = &[
         ready_marker: None,
         // No structured surface loomux can drive.
         structured_driver: None,
+        // codex documents `codex fork [SESSION_ID]` ("Fork a previous
+        // interactive session into a new chat, preserving the original
+        // transcript") — a SUBCOMMAND in the same positional slot as
+        // `resume <id>`, not a flag, so its row will need a variant this
+        // enum does not have yet. `None` for #3318 F1's claude-only reason;
+        // F2 adds both the variant and the row.
+        fork: ForkSeam::None(
+            "codex documents a codex-fork subcommand, but loomux has not wired or tested it yet — #3318 F2",
+        ),
     },
 ];
 

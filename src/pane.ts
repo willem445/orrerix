@@ -122,7 +122,12 @@ import type { AnswerFn } from "./structuredpane";
 import { WORKFLOW_FILE, workflowNameOf } from "./workflowmodel";
 import { persistedKindFor, type PersistedPane, type PersistedPaneKind } from "./tabstore";
 import type { TabPaneInfo } from "./tabcounts";
-import { adoptableSessionId, hasForkSession, sessionCliFromCommand } from "./panerestore";
+import {
+  adoptableSessionId,
+  forkRecordCommand,
+  hasForkSession,
+  sessionCliFromCommand,
+} from "./panerestore";
 // The reconciler's own CLI set, imported rather than re-spelled: `agentCli`
 // below exists to be matched against `listSessions()` rows, so the two must
 // name the same CLIs by construction (#722).
@@ -397,6 +402,15 @@ export interface PaneOptions {
    *  session-capable CLIs; absent for terminals/orchestration and best-effort
    *  CLIs. Retained for the layout snapshot — never used to drive the PTY. */
   sessionId?: string;
+  /** The PARENT session id this pane was FORKED from (#3318 F1), set by the
+   *  pane menu's Fork gesture and by a restore of a pane it opened.
+   *
+   *  Retained for the capture, where it does two things — it is the record's
+   *  provenance, and it is the GATE that discharges the one-shot
+   *  `--fork-session` flag out of the persisted command line. See
+   *  `PersistedPane.forkOf` for the whole contract and why the gate is this
+   *  field rather than the flag's presence. */
+  forkOf?: string;
 }
 
 /** The PTY-less CONTENT pane kinds. A pane of one of these kinds IS a surface —
@@ -1003,6 +1017,10 @@ export class Pane implements VoiceTargetPane {
   private spawnArgv: string[] | null = null;
   private spawnShellKind: ShellKind | null = null;
   private agentSessionId: string | null = null;
+  /** #3318 F1 — the parent session this pane was forked from, or null. Set
+   *  from `PaneOptions.forkOf` on every path that starts a pane, and read only
+   *  by `capture()`. */
+  private forkOf: string | null = null;
   /** Wall-clock time the HUMAN's first input (keystroke/paste) reached this
    *  pane's current process — not when the process was spawned (#440; review
    *  round 2, B2). The session-reconciler needs a boundary before which a
@@ -2159,6 +2177,7 @@ export class Pane implements VoiceTargetPane {
     // one with no session flag, yields null here — the reconciler (main.ts)
     // is the OTHER half of D1, catching that case post-start.
     this.agentSessionId = opts.sessionId ?? adoptableSessionId(opts.command ?? null, opts.argv ?? null);
+    this.forkOf = opts.forkOf ?? null;
     this.firstInputMs = null; // this process hasn't been typed into yet (#440 B2)
     if (opts.badge) this.setBadge(opts.badge);
     if (opts.orchAgent) this.orchAgent = opts.orchAgent;
@@ -2629,6 +2648,7 @@ export class Pane implements VoiceTargetPane {
     // (BUG-1 backstop, or a dormant Start with a recorded command) can equally
     // carry a self-naming --resume/--session-id.
     this.agentSessionId = opts.sessionId ?? adoptableSessionId(opts.command ?? null, opts.argv ?? null);
+    this.forkOf = opts.forkOf ?? null;
     this.firstInputMs = null; // fresh process, nothing typed into it yet (#440 B2)
     if (opts.cwd) {
       this.cwdRaw = opts.cwd;
@@ -3648,6 +3668,20 @@ export class Pane implements VoiceTargetPane {
       knownCli: this.sshDefaultCli,
       remote: this.isSshPane,
     };
+  }
+
+  /** This pane's recorded launch line, both representations (#3318 F1).
+   *
+   *  The one read the FORK gesture needs and the one thing it could not
+   *  otherwise get: a fork is this line rewritten, so the child keeps the
+   *  model, the permission posture and every other flag the human launched
+   *  with. Deliberately NOT `agentMarkInput` above, which answers a narrower
+   *  question (what glyph to draw) and carries two fields — `knownCli`,
+   *  `remote` — that would be noise here; and deliberately not `capture()`,
+   *  whose `command` is the PERSISTED line, already discharged of a one-shot
+   *  fork flag, which is the wrong thing to fork from. */
+  get launchLine(): { command: string | null; argv: string[] | null } {
+    return { command: this.spawnCommand, argv: this.spawnArgv };
   }
 
   private refreshAgentMark(): void {
@@ -5559,6 +5593,7 @@ export class Pane implements VoiceTargetPane {
     // nobody touched re-emits the identical value.
     if (this.dormantRecord) return { ...this.dormantRecord, watched: this.isWatched };
     const kind = this.liveKind();
+    const forked = forkRecordCommand(this.spawnCommand, this.spawnArgv, this.agentSessionId, this.forkOf);
     return {
       paneKind: kind,
       name: this.name,
@@ -5568,8 +5603,14 @@ export class Pane implements VoiceTargetPane {
       // field of this record. A captured local cwd could only ever be a folder
       // the human never picked, restored into a pane that hides it.
       cwd: kind === "ssh" ? null : this.cwdRaw,
-      command: kind === "agent" ? this.spawnCommand : null,
-      argv: kind === "agent" ? this.spawnArgv : null,
+      // #3318 F1: an agent pane's line goes through the one-shot fork
+      // discharge on its way into the record. For every pane that is not
+      // loomux's own fork — which is every pane but one gesture's output —
+      // `forkRecordCommand` returns both halves byte-identical, so this is the
+      // same capture it always was. For a fork, it is what stops the record
+      // re-forking on the next restart (see `PersistedPane.forkOf`).
+      command: kind === "agent" ? forked.command : null,
+      argv: kind === "agent" ? forked.argv : null,
       shellKind: kind === "terminal" ? this.spawnShellKind : null,
       // Capture the session id for orch panes too (#194.5) so a group resume
       // restores exactly the captured members from their own recorded sessions.
@@ -5617,6 +5658,11 @@ export class Pane implements VoiceTargetPane {
       // holding the file they were mid-way through means it, and a gate would
       // silently drop that watch on restart rather than refuse it visibly.
       watched: this.isWatched,
+      // #3318 F1. Gated on the agent kind exactly as `lead` above is, and
+      // recorded even after the fork flag it gates has been discharged out of
+      // the command line above: it is this pane's provenance, and the gate
+      // that keeps the discharge idempotent across every later capture.
+      forkOf: kind === "agent" ? this.forkOf : null,
       // Every view CURRENTLY docked (#361), and at what side + share of the
       // split — up to three entries, one per occupied slot. Empty = nothing
       // embedded — every view opens as its floating overlay (the default).

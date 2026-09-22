@@ -3930,6 +3930,7 @@ fn compile(reg: &OrchRegistry, g: &loomux_lib::orchestration::GroupInfo, block_i
         &inject,
         Role::Worker,
         None,
+    None,
     );
     let argv = reg.build_agent_argv_ex(
         cli,
@@ -3946,6 +3947,7 @@ fn compile(reg: &OrchRegistry, g: &loomux_lib::orchestration::GroupInfo, block_i
         &inject,
         Role::Worker,
         None,
+    None,
     );
     (cmd, argv, inject.kickoff)
 }

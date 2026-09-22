@@ -113,7 +113,6 @@ const KINDS = [
 
 /** `Rule::as_str`. */
 const RULES = [
-  'gate-satisfied',
   'run-green',
   'checks-green',
   'planner-exited',
@@ -131,15 +130,33 @@ const DELIVER_REASONS = ['disabled', 'kind-not-triaged', 'no-rule'];
 /** `triage.rs`'s `NEEDS_YOU_MARKERS`. */
 const NEEDS_YOU_MARKERS = [
   'blocking on you',
+  'is yours',
   'needs you',
   'needs your',
   'you must rule',
   'your call',
-  'decision is yours',
 ];
 
 /** `triage.rs`'s `REGROUNDING_MARKERS`. */
 const REGROUNDING_MARKERS = ['context was compacted', 'orchestration restored', 're-grounding'];
+
+/** `triage.rs`'s `GREEN_PATH_MARKERS`. */
+const GREEN_PATH_MARKERS = ['if green', 'on success', 'once green', 'green ->', 'green →'];
+
+/** `triage.rs`'s `SILENT_EXIT_MARKERS`. */
+const SILENT_EXIT_MARKERS = ['produced no output before exiting'];
+
+/**
+ * Rust's `str::to_ascii_lowercase`, which JS's `toLowerCase` is NOT: the
+ * latter lowercases the whole Unicode range, so a text carrying (say) `İ`
+ * lowercases to a different string on the two sides and a marker scan could
+ * diverge. Unreachable on the audit rows measured so far, but the mirror's job
+ * is to be a transliteration rather than to be right by population (#3322
+ * residual (b), closed in #3324 with the marker code it lives in).
+ */
+function asciiLower(s) {
+  return s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+}
 
 /** `triage.rs`'s `body`. */
 function body(text) {
@@ -229,7 +246,7 @@ function classify(text) {
 /** `triage.rs`'s `never_triaged` — a NeverReason spelling, or null. */
 function neverTriaged(text, humanActor) {
   if (humanActor || body(text) === null) return 'human-actor';
-  const lower = text.toLowerCase();
+  const lower = asciiLower(text);
   if (REGROUNDING_MARKERS.some((m) => lower.includes(m))) return 'regrounding';
   const kind = classify(text);
   if (kind === 'drive-held') return 'held';
@@ -264,10 +281,43 @@ function planChunk(text) {
 
 /** `triage.rs`'s `run_is_green` — conclusion only, deliberately NOT the branch. */
 function runIsGreen(text) {
-  const lower = text.toLowerCase();
+  const lower = asciiLower(text);
   const at = lower.indexOf('conclusion: ');
   if (at < 0) return false;
   return lower.slice(at + 'conclusion: '.length).replace(/^\s+/, '').startsWith('success');
+}
+
+/**
+ * `triage.rs`'s `registered_note` — the note slice, or null.
+ *
+ * The slice is EXACT: `lastIndexOf` (Rust `rfind`) searches only the text after the
+ * opening delimiter, where the one thing following the note is the backend-built
+ * ` (watch <id>)`, which carries no quote — so a quote embedded in the note never
+ * moves the boundary. `indexOf` here would be a real divergence from Rust, not a
+ * style choice: it cuts the note at its first embedded quote (#3324 r4).
+ */
+function registeredNote(text) {
+  const open = 'Note (registered): "';
+  const at = text.indexOf(open);
+  if (at < 0) return null;
+  const rest = text.slice(at + open.length);
+  const end = rest.lastIndexOf('"');
+  if (end < 0) return null;
+  return rest.slice(0, end);
+}
+
+/** `triage.rs`'s `note_names_green_path`. */
+function noteNamesGreenPath(text) {
+  const note = registeredNote(text);
+  if (note === null) return false;
+  const lower = asciiLower(note);
+  return GREEN_PATH_MARKERS.some((m) => lower.includes(m));
+}
+
+/** `triage.rs`'s `exited_silently`. */
+function exitedSilently(text) {
+  const lower = asciiLower(text);
+  return SILENT_EXIT_MARKERS.some((m) => lower.includes(m));
 }
 
 /** `triage.rs`'s `checks_are_green`. */
@@ -289,7 +339,6 @@ function prOf(text) {
  * `triage.rs`'s `decide`. Returns the Rust `Decision` as a tagged object:
  *   {action: 'deliver', reason}        — Decision::Deliver(reason)
  *   {action: 'defer', rule}            — Decision::Defer(rule)
- *   {action: 'try-enqueue', pr}        — Decision::TryEnqueue { pr }
  */
 function decide(input, policy) {
   if (!policy.enabled) return { action: 'deliver', reason: 'disabled' };
@@ -298,19 +347,18 @@ function decide(input, policy) {
   const kind = classify(input.text);
   const covers = !policy.kinds || policy.kinds.length === 0 || policy.kinds.includes(kind);
   if (!covers) return { action: 'deliver', reason: 'kind-not-triaged' };
-  if (kind === 'drive-gate-satisfied') {
-    const pr = prOf(input.text);
-    if (input.merge_queue_enabled === true && pr !== null) return { action: 'try-enqueue', pr };
-    return { action: 'deliver', reason: 'no-rule' };
-  }
-  if (kind === 'run-completed' && runIsGreen(input.text)) {
+  // `drive-gate-satisfied` has no branch: the gate rule is retired (#3324) and
+  // the class falls through to the fail-safe below, exactly as in Rust.
+  if (kind === 'run-completed' && runIsGreen(input.text) && !noteNamesGreenPath(input.text)) {
     return { action: 'defer', rule: 'run-green' };
   }
-  if (kind === 'pr-checks' && checksAreGreen(input.text)) {
+  if (kind === 'pr-checks' && checksAreGreen(input.text) && !noteNamesGreenPath(input.text)) {
     return { action: 'defer', rule: 'checks-green' };
   }
   if (kind === 'planner-exited') return { action: 'defer', rule: 'planner-exited' };
-  if (kind === 'agent-exited') return { action: 'defer', rule: 'agent-exited' };
+  if (kind === 'agent-exited' && !exitedSilently(input.text)) {
+    return { action: 'defer', rule: 'agent-exited' };
+  }
   if (kind === 'drive-cancelled') return { action: 'defer', rule: 'drive-cancelled' };
   if (kind === 'message-from') {
     const chunk = planChunk(input.text);
@@ -321,21 +369,17 @@ function decide(input, policy) {
 }
 
 /**
- * What the REPLAY does with `TryEnqueue`, which the live path resolves by
- * attempting a real merge-queue enqueue.
+ * Formerly: what the REPLAY did with `TryEnqueue`, the one decision the live
+ * path resolved impurely by attempting a real merge-queue enqueue, which the
+ * replay could not observe and so resolved optimistically.
  *
- * The replay has no queue, so it cannot observe the attempt — and inventing a
- * success would report a saving the live tier may never deliver. It resolves
- * the variant OPTIMISTICALLY (enqueue succeeds -> `Defer(gate-satisfied)`),
- * which is the direction that makes the harness's own headline WORSE rather
- * than better: every false-defer this resolution can manufacture is counted
- * against the tier, and every one it hides would have been a delivery. The
- * report prints the count separately so a reader can subtract it.
+ * #3324 retired the gate rule, so `decide` is now pure and total on both sides
+ * and there is nothing left to resolve. The function stays as the identity so
+ * `replay` reads the same and the mirror keeps a named seam for any future
+ * decision that needs caller resolution; `assumed_enqueue` is never set and
+ * the report's optimistic-resolution caveat is gone with it.
  */
 function resolveDecision(decision) {
-  if (decision.action === 'try-enqueue') {
-    return { action: 'defer', rule: 'gate-satisfied', assumed_enqueue: true };
-  }
   return decision;
 }
 
@@ -645,7 +689,6 @@ function replay(deliveryList, policy, opts) {
   const byDeliverReason = {};
   const rows = [];
   let ruleDeferred = 0;
-  let assumedEnqueues = 0;
   let providerDeferred = 0;
   let providerCalls = 0;
   let providerNoVerdict = 0;
@@ -657,12 +700,10 @@ function replay(deliveryList, policy, opts) {
         text: d.text,
         from: d.from,
         human_actor: d.human_actor,
-        merge_queue_enabled: policy.merge_queue_enabled,
       },
       policy,
     );
     const resolved = resolveDecision(raw);
-    if (resolved.assumed_enqueue) assumedEnqueues += 1;
 
     const row = {
       ts_ms: d.ts_ms,
@@ -715,7 +756,6 @@ function replay(deliveryList, policy, opts) {
     total,
     rule_deferred: ruleDeferred,
     provider_deferred: providerDeferred,
-    assumed_enqueues: assumedEnqueues,
     delivered: total - deferred,
     deferred,
     by_kind: byKind,
@@ -774,6 +814,12 @@ function score(result, labels) {
 
   return {
     labelled,
+    // The label FILE's size, not the overlap. `audit.jsonl` rotates, so a
+    // re-run after a rotation scores whatever slice of the hand set survives
+    // in the population — and a scorecard that printed only `labelled` would
+    // read identically for a full set and for a tenth of one (#3322 residual
+    // (c)). The renderer prints the coverage line whenever these differ.
+    labels_total: labels.size,
     population: result.rows.length,
     agreement: labelled === 0 ? null : agree / labelled,
     confusion,
@@ -872,15 +918,6 @@ function renderMarkdown(ctx) {
     L.push(`| \`${rule}\` | ${c ? c.deferred : 0} | ${pct(c ? c.deferred : 0, result.total)} |`);
   }
   L.push('');
-  if (result.assumed_enqueues > 0) {
-    L.push(
-      `\`gate-satisfied\` includes **${result.assumed_enqueues}** \`TryEnqueue\` decisions the replay ` +
-        'resolved optimistically — the live tier defers one only if the merge-queue enqueue SUCCEEDS, ' +
-        'which no replay can observe. Subtract them for the pessimistic reading.',
-    );
-    L.push('');
-  }
-
   L.push('### Per kind');
   L.push('');
   L.push('| kind | deferred | delivered |');
@@ -908,6 +945,22 @@ function renderMarkdown(ctx) {
         `Agreement on the binary (needs-orchestrator vs audit-only): **${(scored.agreement * 100).toFixed(1)} %**.`,
     );
     L.push('');
+    // PARTIAL OVERLAP. `audit.jsonl` rotates, so a re-run scores whatever
+    // slice of the hand set survives in the population. Only the ZERO-overlap
+    // case was guarded before (#3322 residual (c)): a partial one printed a
+    // full scorecard with nothing saying it was a sample.
+    if (typeof scored.labels_total === 'number' && scored.labelled < scored.labels_total) {
+      const pct = ((scored.labelled / scored.labels_total) * 100).toFixed(1);
+      L.push(
+        `> **PARTIAL LABEL COVERAGE — ${scored.labelled} of the label file's ` +
+          `${scored.labels_total} rows (${pct} %) landed in this population.** The rest name ` +
+          `deliveries this run cannot see, almost always because \`audit.jsonl\` rotated away the ` +
+          `generation they were labelled on. Every figure below is scored on the surviving slice ` +
+          `only: it is a SAMPLE of the hand set, not the hand set, and a false-defer count of zero ` +
+          `over it does not discharge #3304 Q4 for the rows that are missing.`,
+      );
+      L.push('');
+    }
     L.push('| hand label | deferred | delivered |');
     L.push('| --- | ---: | ---: |');
     for (const c of PROVIDER_CLASSES) {
@@ -993,7 +1046,6 @@ const USAGE_TEXT = `
   --floors A,B,C      sweep these floors instead of the default 0.50..0.95 by 0.05
   --no-provider       ignore --verdicts; rule tier only
   --kinds A,B         restrict triage to these kinds (default: every kind)
-  --no-merge-queue    replay as a repo whose merge_queue is OFF (gate-satisfied delivers)
   --triage-disabled   replay with triage.enabled false — the control: everything delivers
   --emit-labels       print a hand-label CSV template for the RESIDUAL (one row per
                       delivery the rule tier left as no-rule, label column empty,
@@ -1016,7 +1068,6 @@ function parseArgs(argv) {
     floors: null,
     noProvider: false,
     kinds: [],
-    mergeQueue: true,
     enabled: true,
     dropKickoff: true,
     from: null,
@@ -1042,7 +1093,6 @@ function parseArgs(argv) {
       case '--floors': opts.floors = next().split(',').map((s) => Number(s.trim())); break;
       case '--no-provider': opts.noProvider = true; break;
       case '--kinds': opts.kinds = next().split(',').map((s) => s.trim()).filter(Boolean); break;
-      case '--no-merge-queue': opts.mergeQueue = false; break;
       case '--triage-disabled': opts.enabled = false; break;
       case '--emit-labels': opts.emitLabels = true; break;
       case '--no-drop-kickoff': opts.dropKickoff = false; break;
@@ -1102,7 +1152,6 @@ function main(argv, out) {
   const policy = {
     enabled: opts.enabled,
     kinds: opts.kinds,
-    merge_queue_enabled: opts.mergeQueue,
   };
   const result = replay(pop.deliveries, policy, { provider, floor: opts.floor });
 
@@ -1153,8 +1202,14 @@ module.exports = {
   DELIVER_REASONS,
   NEEDS_YOU_MARKERS,
   REGROUNDING_MARKERS,
+  GREEN_PATH_MARKERS,
+  SILENT_EXIT_MARKERS,
+  asciiLower,
   classify,
   neverTriaged,
+  registeredNote,
+  noteNamesGreenPath,
+  exitedSilently,
   planChunk,
   prOf,
   decide,

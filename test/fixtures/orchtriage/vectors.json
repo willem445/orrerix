@@ -17,11 +17,11 @@
     "A case is:",
     "  text                  the delivery text, verbatim",
     "  human_actor           the audit row's actor is the human",
-    "  merge_queue_enabled   the repo's merge_queue: block is on",
+    "  merge_queue_enabled   INERT since #3324 retired the gate rule — no reader passes it",
     "  policy                {enabled, kinds}; kinds [] means every kind",
     "  expect.kind           classify()",
     "  expect.never          never_triaged(), or null",
-    "  expect.decision       decide(), as {action, reason} | {action, rule} | {action, pr}",
+    "  expect.decision       decide(), as {action, reason} | {action, rule}",
     "",
     "Texts are SYNTHETIC, written to the shapes orrerix emits. No line of a real",
     "group's agent-authored prose is checked in here.",
@@ -37,7 +37,7 @@
   ],
   "cases": [
     {
-      "name": "gate-satisfied with the queue on is a TryEnqueue, not a Defer",
+      "name": "a satisfied gate is DELIVERED — the rule is retired, the notice names an orchestrator action (#3324)",
       "text": "[orrerix] review drive PR #3220: GATE SATISFIED at 7dabd366 (body f523..) — rev-std PASS, rev-final PASS; 2 rounds.",
       "human_actor": false,
       "merge_queue_enabled": true,
@@ -49,13 +49,13 @@
         "kind": "drive-gate-satisfied",
         "never": null,
         "decision": {
-          "action": "try-enqueue",
-          "pr": 3220
+          "action": "deliver",
+          "reason": "no-rule"
         }
       }
     },
     {
-      "name": "gate-satisfied with the queue OFF has no rule — the enqueue IS the justification",
+      "name": "a satisfied gate delivers whatever the merge queue is doing — triage no longer reads it (#3324)",
       "text": "[orrerix] review drive PR #3220: GATE SATISFIED at 7dabd366 (body f523..) — rev-std PASS.",
       "human_actor": false,
       "merge_queue_enabled": false,
@@ -593,8 +593,8 @@
         "kind": "drive-gate-satisfied",
         "never": null,
         "decision": {
-          "action": "try-enqueue",
-          "pr": 42
+          "action": "deliver",
+          "reason": "no-rule"
         }
       }
     },
@@ -649,6 +649,150 @@
         "decision": {
           "action": "defer",
           "rule": "plan-chunk"
+        }
+      }
+    },
+    {
+      "name": "the verbatim GATE SATISFIED line names an orchestrator action, so it DELIVERS (#3324)",
+      "text": "[orrerix] review drive PR #1758: GATE SATISFIED at df6a73d0 (body 4a1c) — rev-lead pass; 1 rounds, 1 CI, 0 rebases. Disposition is yours (INVARIANT 3): list_verdicts(\"1758\").",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "drive-gate-satisfied",
+        "never": "needs-you",
+        "decision": {
+          "action": "deliver",
+          "reason": "needs-you"
+        }
+      }
+    },
+    {
+      "name": "a gate notice WITHOUT the marker delivers off the fail-safe — the gate rule is retired (#3324)",
+      "text": "[orrerix] review drive PR #1758: GATE SATISFIED at df6a73d0 (body 4a1c) — rev-lead pass; 1 rounds, 1 CI, 0 rebases.",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "drive-gate-satisfied",
+        "never": null,
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
+      }
+    },
+    {
+      "name": "a green run whose registered note names a GREEN-path action DELIVERS (#3324)",
+      "text": "[orrerix] run 17812: completed — conclusion: success. Note (registered): \"post-merge main abc1234 — if green: tag the release and push\" (watch n-1)",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "run-completed",
+        "never": null,
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
+      }
+    },
+    {
+      "name": "a green run whose note is RED-only still defers — the negative control for the note rule",
+      "text": "[orrerix] run 17812: completed — conclusion: success. Note (registered): \"post-merge main abc1234 — red-main rule if it fails\" (watch n-1)",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "run-completed",
+        "never": null,
+        "decision": {
+          "action": "defer",
+          "rule": "run-green"
+        }
+      }
+    },
+    {
+      "name": "green checks whose note names a green-path action DELIVER (#3324)",
+      "text": "[orrerix] PR #241 checks: SUCCESS — all 6 checks passed. Note (registered): \"bump PR — if green, ask the human to merge\" (watch n-3)",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "pr-checks",
+        "never": null,
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
+      }
+    },
+    {
+      "name": "a pane that printed NOTHING is a lost kickoff, not a roster update (#3324)",
+      "text": "[orrerix] agent w-2902 (worker-adv) exited (code Some(1)) 91000ms after spawn — produced no output before exiting — it likely exited before the CLI printed anything at all. Update your plan and state accordingly.",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "agent-exited",
+        "never": null,
+        "decision": {
+          "action": "deliver",
+          "reason": "no-rule"
+        }
+      }
+    },
+    {
+      "name": "a pane that printed something still defers — the negative control for the silent-exit rule",
+      "text": "[orrerix] agent w-2902 (worker-adv) exited (code Some(0)) 91000ms after spawn — last output before it exited: \"all done.\". Update your plan and state accordingly.",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "agent-exited",
+        "never": null,
+        "decision": {
+          "action": "defer",
+          "rule": "agent-exited"
+        }
+      }
+    },
+    {
+      "name": "a green-path phrase OUTSIDE the note does not reach the rule — the scope control (#3324)",
+      "text": "[orrerix] run 17812: completed — conclusion: success, on success nothing follows. Note (registered): \"post-merge main; red → INVARIANT 6\" (watch n-1)",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "run-completed",
+        "never": null,
+        "decision": {
+          "action": "defer",
+          "rule": "run-green"
         }
       }
     }

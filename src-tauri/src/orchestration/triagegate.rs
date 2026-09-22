@@ -179,41 +179,20 @@ impl OrchRegistry {
         let human = self
             .agent(from)
             .is_some_and(|a| matches!(a.role, Role::Manager | Role::Lead));
-        let input = triage::Input {
-            text,
-            from,
-            human_actor: human,
-            merge_queue_enabled: self.merge_queue_enabled(group),
-        };
+        let input = triage::Input { text, from, human_actor: human };
         let decision = triage::decide(&input, &policy.as_triage_policy());
         let kind = triage::classify(text);
 
-        // A satisfied gate earns its rule by the ENQUEUE, not by its shape:
-        // the orchestrator's own next step for one is `queue_merge`, so a
-        // notice suppressed without one having happened is a PR nobody is
-        // driving. The attempt is made here, and any refusal — a gate the
-        // queue re-check does not accept, a state file it cannot read, a
-        // repo it cannot resolve — falls back to delivering.
-        let decision = match decision {
-            triage::Decision::TryEnqueue { pr } => {
-                let reply = self.queue_merge(group, pr, None);
-                let refused = reply.get("refused").and_then(|v| v.as_str());
-                self.audit(group, brand::AUDIT_ACTOR, "delivery-triage-enqueue", json!({
-                    "pr": pr, "refused": refused, "to": to,
-                }));
-                match refused {
-                    None => triage::Decision::Defer(triage::Rule::GateSatisfied),
-                    Some(_) => triage::Decision::Deliver(triage::DeliverReason::NoRule),
-                }
-            }
-            other => other,
-        };
+        // No post-processing of the decision. Until #3324 a `GATE SATISFIED`
+        // came back as `TryEnqueue` and was resolved HERE by attempting a real
+        // merge-queue enqueue; that rule is retired, `decide` is pure and
+        // final, and this function no longer reads the merge queue or writes a
+        // `delivery-triage-enqueue` row.
 
-        // The deferral lock is taken HERE and not one line earlier: the
-        // policy read above takes `groups` and the enqueue takes
-        // `mq_state_lock`, and `lockorder::TRIAGE_DEFER` is inner of both.
-        // Holding it across either would be the inversion this rank exists to
-        // catch.
+        // The deferral lock is taken HERE and not one line earlier: the policy
+        // read above takes `groups`, and `lockorder::TRIAGE_DEFER` is inner of
+        // it. Holding it across that read would be the inversion this rank
+        // exists to catch.
         let _guard = self.triage_defer_lock.lock_safe();
         match decision {
             triage::Decision::Defer(rule) => {
@@ -256,9 +235,6 @@ impl OrchRegistry {
                     flush: self.take_deferred_locked(group, to, triage::FlushCause::Wake),
                 }
             }
-            // Unreachable: the arm above rewrote it. Delivering is the
-            // fail-safe answer if that ever stops being true.
-            triage::Decision::TryEnqueue { .. } => Triaged::Deliver { flush: None },
         }
     }
 

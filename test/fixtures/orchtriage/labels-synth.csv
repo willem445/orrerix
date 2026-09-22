@@ -4,7 +4,7 @@
 #
 # Two rows are deliberately UNLABELLED (9000, 22000) so the report's
 # "labelled N of population M" is fail-able: a harness that scored the whole
-# population would read 21 of 21 here.
+# population would read 23 of 23 here.
 ts_ms,kind,label
 2000,run-completed,fyi
 3000,run-completed,fyi
@@ -25,3 +25,5 @@ ts_ms,kind,label
 19000,message-from,decision
 20000,reviewer-report,routing
 21000,delegate-progress,fyi
+24000,agent-exited,decision
+25000,drive-gate-satisfied,decision

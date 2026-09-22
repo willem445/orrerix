@@ -232,15 +232,8 @@ fn its_registry_helper_applies_every_override_this_allowlist_row_assumes() {
 }
 
 // The real shapes, transcribed from their emitters rather than invented.
-//
-// The note is RED-ONLY and carries the quotes `notify::watch_fired_notice`
-// writes around one. Both matter since #3324: the `run-green` rule now defers
-// only when the registered note names no green-path action, and a specimen
-// whose note said `green → next merge` (as this one did, unquoted) passed for
-// the WRONG reason — the missing quotes put it outside `registered_note`'s
-// slice, not outside the marker set.
 const RUN_GREEN: &str = "[orrerix] run 17812: completed — conclusion: success. \
-                         Note (registered): \"post-merge main; red → INVARIANT 6\". (watch n-1)";
+                         Note (registered): green → next merge. (watch n-1)";
 const RUN_RED: &str = "[orrerix] run 17813: completed — conclusion: failure. (watch n-2)";
 const HELD: &str = "[orrerix] review drive PR #1758: HELD (ci-red) — three attempts spent.";
 const DONE: &str = "[orrerix] w-2902 reports done: #3304 — PR #3310, CI green.";

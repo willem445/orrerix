@@ -64,7 +64,7 @@ the conclusion.
    a relayed human line (the sender is a `Manager` or a `Lead`), a re-grounding
    or restored notice, a `HELD` drive, a `blocked` report, a watchdog stall, and
    anything whose text NAMES the orchestrator (`blocking on you`, `needs you`,
-   `your call`, `is yours`, …) — see §2.1.
+   `your call`, …).
 3. **`triage.kinds:`** — if the repo narrowed the set and this kind is not on it,
    deliver.
 4. **The rule table** (§3).
@@ -86,49 +86,15 @@ census's own note applies: this text is agent-authored, and a rule that could be
 *talked out of* its answer by the thing it is routing is a rule with an injection
 surface.
 
-### 2.1 The marker outranks the rule (#3324)
-
-Step 2 runs before step 4, and that ordering is not an implementation detail: it
-is the claim that a delivery whose text NAMES an orchestrator action is a
-decision no matter what class it falls in. The S2 replay (#3304) is what made
-the claim expensive to get wrong. Every `GATE SATISFIED` notice
-`rddrive::gate_satisfied_notice` emits ends `Disposition is yours (INVARIANT 3):
-list_verdicts("N")` — orrerix naming an orchestrator action in its own words —
-and `NEEDS_YOU_MARKERS` carried `decision is yours` and `your call` but not
-`is yours`, so 32 of the 40 measured false defers were that one line. The same
-shape appears twice more: a green `run-completed` or `pr-checks` whose
-registered note says what to do *when it goes green* (`if green: tag v1.3.0 and
-push`), and an `agent-exited` whose text says the pane printed nothing at all,
-which is a lost kickoff rather than the roster update the rule assumes. All
-three are now read before or instead of the rule, and all three are safe for the
-one reason §2 already gives: a marker can only move a delivery toward DELIVER,
-so widening one buys at worst a wake that was not needed. The green-path scan is
-deliberately narrowed to the note's own slice — the verdict around it
-(`conclusion: success`, a head SHA) is GitHub-derived, and a marker matched
-against that would be reading the verdict rather than the registrant's intent.
-
-**The consequence is that the `gate-satisfied` rule is unreachable on the text
-orrerix emits today**, and that is stated here rather than discovered later: on
-the 415-delivery replay it went from 83 defers to 0, every one of them now a
-needs-you delivery. Its `TryEnqueue` arm survives in code and in the tests only
-against a COUNTERFACTUAL specimen (`GATE_NO_MARKER`) — a gate notice with the
-closing sentence removed. Two honest ways out exist and neither is this slice's
-to take: reword the gate notice so it does not name an action the orchestrator
-must take, or retire the rule. Until one is chosen, the rule is dead weight that
-costs nothing and hides nothing, and the projected saving on this group's log
-falls from 227.5 M to 59.8 M cache-read tokens — the price of the pass criterion
-(#3304 Q4: zero false defers), paid knowingly. Recovering that residual is what
-S3's provider tier is for.
-
 ## 3. The rule table
 
 | kind | rule | census |
 | --- | --- | --- |
-| `drive-gate-satisfied` | the merge queue is enabled AND `queue_merge` accepted the PR → defer. Any refusal → deliver. **Unreachable on the notice orrerix emits today — §2.1.** | 74 |
-| `run-completed` | `conclusion: success` AND the registered note names no green-path action (§2.1) → defer; anything else → deliver | 65 (64 green, 1 red) |
-| `pr-checks` | `SUCCESS`, same proviso → defer; anything else → deliver | 1 |
+| `drive-gate-satisfied` | the merge queue is enabled AND `queue_merge` accepted the PR → defer. Any refusal → deliver. | 74 |
+| `run-completed` | `conclusion: success` → defer; anything else → deliver | 65 (64 green, 1 red) |
+| `pr-checks` | `SUCCESS` → defer; anything else → deliver | 1 |
 | `planner-exited` | defer — the plan drive (#3040) consumes this; the notice is a slot-free FYI | 4 |
-| `agent-exited` | defer — the roster already reflects it — UNLESS the text says the pane printed nothing, which is a lost kickoff (§2.1) | 4 |
+| `agent-exited` | defer — the roster already reflects it | 4 |
 | `drive-cancelled` | defer — something already decided the drive should end | 1 |
 | `message-from` carrying `---BEGIN PLAN k/n---`, `k < n` | defer; the LAST chunk is a genuine wake and carries its siblings out with it | 17 → 4 |
 
@@ -512,13 +478,12 @@ this rubric calls needs-orchestrator, and **32 of those are `gate-satisfied`** �
 every `GATE SATISFIED` line in the window ends "Disposition is yours
 (INVARIANT 3): `list_verdicts(...)`", which `NEEDS_YOU_MARKERS` does not match.
 
-Nothing in S2 changed the rule tier: measuring it and editing it are different
+Nothing in S2 changes the rule tier: measuring it and editing it are different
 slices, and an eval that quietly fixed what it found would have no independent
-reading left to report. **S2b (#3324) applied all three remedies** — the
-`is yours` marker, the green-path proviso on both green rules, and the
-silent-exit proviso on `agent-exited` — and re-measured the same label set to
-**0 false defers at 73.3 % agreement**, above the 60.0 % deliver-everything
-control. None of the three was a rubric change, so the hand-label set is
-untouched and the before/after readings are comparable row for row. What it
-cost, and the choice it leaves open about the now-unreachable `gate-satisfied`
-rule, is §2.1.
+reading left to report. The candidate remedies belong to a follow-up and are
+recorded here so the next reader starts from them rather than re-deriving them:
+adding an `is yours` marker (which the census says closes all 32 at once),
+splitting the green `run-completed` rule on whether its registered note names a
+GREEN-path action rather than only a red one (6 of the remaining 8), and
+delivering an `agent-exited` whose text says the pane produced no output at all
+(1 — a lost kickoff is not a roster update).

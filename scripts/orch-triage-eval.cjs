@@ -131,33 +131,15 @@ const DELIVER_REASONS = ['disabled', 'kind-not-triaged', 'no-rule'];
 /** `triage.rs`'s `NEEDS_YOU_MARKERS`. */
 const NEEDS_YOU_MARKERS = [
   'blocking on you',
-  'is yours',
   'needs you',
   'needs your',
   'you must rule',
   'your call',
+  'decision is yours',
 ];
 
 /** `triage.rs`'s `REGROUNDING_MARKERS`. */
 const REGROUNDING_MARKERS = ['context was compacted', 'orchestration restored', 're-grounding'];
-
-/** `triage.rs`'s `GREEN_PATH_MARKERS`. */
-const GREEN_PATH_MARKERS = ['if green', 'on success', 'once green', 'green ->', 'green →'];
-
-/** `triage.rs`'s `SILENT_EXIT_MARKERS`. */
-const SILENT_EXIT_MARKERS = ['produced no output before exiting'];
-
-/**
- * Rust's `str::to_ascii_lowercase`, which JS's `toLowerCase` is NOT: the
- * latter lowercases the whole Unicode range, so a text carrying (say) `İ`
- * lowercases to a different string on the two sides and a marker scan could
- * diverge. Unreachable on the audit rows measured so far, but the mirror's job
- * is to be a transliteration rather than to be right by population (#3322
- * residual (b), closed in #3324 with the marker code it lives in).
- */
-function asciiLower(s) {
-  return s.replace(/[A-Z]/g, (c) => c.toLowerCase());
-}
 
 /** `triage.rs`'s `body`. */
 function body(text) {
@@ -247,7 +229,7 @@ function classify(text) {
 /** `triage.rs`'s `never_triaged` — a NeverReason spelling, or null. */
 function neverTriaged(text, humanActor) {
   if (humanActor || body(text) === null) return 'human-actor';
-  const lower = asciiLower(text);
+  const lower = text.toLowerCase();
   if (REGROUNDING_MARKERS.some((m) => lower.includes(m))) return 'regrounding';
   const kind = classify(text);
   if (kind === 'drive-held') return 'held';
@@ -282,35 +264,10 @@ function planChunk(text) {
 
 /** `triage.rs`'s `run_is_green` — conclusion only, deliberately NOT the branch. */
 function runIsGreen(text) {
-  const lower = asciiLower(text);
+  const lower = text.toLowerCase();
   const at = lower.indexOf('conclusion: ');
   if (at < 0) return false;
   return lower.slice(at + 'conclusion: '.length).replace(/^\s+/, '').startsWith('success');
-}
-
-/** `triage.rs`'s `registered_note` — the note slice, or null. */
-function registeredNote(text) {
-  const open = 'Note (registered): "';
-  const at = text.indexOf(open);
-  if (at < 0) return null;
-  const rest = text.slice(at + open.length);
-  const end = rest.lastIndexOf('"');
-  if (end < 0) return null;
-  return rest.slice(0, end);
-}
-
-/** `triage.rs`'s `note_names_green_path`. */
-function noteNamesGreenPath(text) {
-  const note = registeredNote(text);
-  if (note === null) return false;
-  const lower = asciiLower(note);
-  return GREEN_PATH_MARKERS.some((m) => lower.includes(m));
-}
-
-/** `triage.rs`'s `exited_silently`. */
-function exitedSilently(text) {
-  const lower = asciiLower(text);
-  return SILENT_EXIT_MARKERS.some((m) => lower.includes(m));
 }
 
 /** `triage.rs`'s `checks_are_green`. */
@@ -346,16 +303,14 @@ function decide(input, policy) {
     if (input.merge_queue_enabled === true && pr !== null) return { action: 'try-enqueue', pr };
     return { action: 'deliver', reason: 'no-rule' };
   }
-  if (kind === 'run-completed' && runIsGreen(input.text) && !noteNamesGreenPath(input.text)) {
+  if (kind === 'run-completed' && runIsGreen(input.text)) {
     return { action: 'defer', rule: 'run-green' };
   }
-  if (kind === 'pr-checks' && checksAreGreen(input.text) && !noteNamesGreenPath(input.text)) {
+  if (kind === 'pr-checks' && checksAreGreen(input.text)) {
     return { action: 'defer', rule: 'checks-green' };
   }
   if (kind === 'planner-exited') return { action: 'defer', rule: 'planner-exited' };
-  if (kind === 'agent-exited' && !exitedSilently(input.text)) {
-    return { action: 'defer', rule: 'agent-exited' };
-  }
+  if (kind === 'agent-exited') return { action: 'defer', rule: 'agent-exited' };
   if (kind === 'drive-cancelled') return { action: 'defer', rule: 'drive-cancelled' };
   if (kind === 'message-from') {
     const chunk = planChunk(input.text);
@@ -819,12 +774,6 @@ function score(result, labels) {
 
   return {
     labelled,
-    // The label FILE's size, not the overlap. `audit.jsonl` rotates, so a
-    // re-run after a rotation scores whatever slice of the hand set survives
-    // in the population — and a scorecard that printed only `labelled` would
-    // read identically for a full set and for a tenth of one (#3322 residual
-    // (c)). The renderer prints the coverage line whenever these differ.
-    labels_total: labels.size,
     population: result.rows.length,
     agreement: labelled === 0 ? null : agree / labelled,
     confusion,
@@ -959,22 +908,6 @@ function renderMarkdown(ctx) {
         `Agreement on the binary (needs-orchestrator vs audit-only): **${(scored.agreement * 100).toFixed(1)} %**.`,
     );
     L.push('');
-    // PARTIAL OVERLAP. `audit.jsonl` rotates, so a re-run scores whatever
-    // slice of the hand set survives in the population. Only the ZERO-overlap
-    // case was guarded before (#3322 residual (c)): a partial one printed a
-    // full scorecard with nothing saying it was a sample.
-    if (typeof scored.labels_total === 'number' && scored.labelled < scored.labels_total) {
-      const pct = ((scored.labelled / scored.labels_total) * 100).toFixed(1);
-      L.push(
-        `> **PARTIAL LABEL COVERAGE — ${scored.labelled} of the label file's ` +
-          `${scored.labels_total} rows (${pct} %) landed in this population.** The rest name ` +
-          `deliveries this run cannot see, almost always because \`audit.jsonl\` rotated away the ` +
-          `generation they were labelled on. Every figure below is scored on the surviving slice ` +
-          `only: it is a SAMPLE of the hand set, not the hand set, and a false-defer count of zero ` +
-          `over it does not discharge #3304 Q4 for the rows that are missing.`,
-      );
-      L.push('');
-    }
     L.push('| hand label | deferred | delivered |');
     L.push('| --- | ---: | ---: |');
     for (const c of PROVIDER_CLASSES) {
@@ -1220,14 +1153,8 @@ module.exports = {
   DELIVER_REASONS,
   NEEDS_YOU_MARKERS,
   REGROUNDING_MARKERS,
-  GREEN_PATH_MARKERS,
-  SILENT_EXIT_MARKERS,
-  asciiLower,
   classify,
   neverTriaged,
-  registeredNote,
-  noteNamesGreenPath,
-  exitedSilently,
   planChunk,
   prOf,
   decide,

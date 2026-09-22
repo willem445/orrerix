@@ -107,24 +107,30 @@ deliberately narrowed to the note's own slice — the verdict around it
 (`conclusion: success`, a head SHA) is GitHub-derived, and a marker matched
 against that would be reading the verdict rather than the registrant's intent.
 
-**The consequence is that the `gate-satisfied` rule is unreachable on the text
-orrerix emits today**, and that is stated here rather than discovered later: on
-the 416-delivery replay it went from 83 defers to 0, every one of them now a
-needs-you delivery. Its `TryEnqueue` arm survives in code and in the tests only
-against a COUNTERFACTUAL specimen (`GATE_NO_MARKER`) — a gate notice with the
-closing sentence removed. Two honest ways out exist and neither is this slice's
-to take: reword the gate notice so it does not name an action the orchestrator
-must take, or retire the rule. Until one is chosen, the rule is dead weight that
-costs nothing and hides nothing, and the projected saving on this group's log
-falls from 228.8 M to 61.1 M cache-read tokens — the price of the pass criterion
-(#3304 Q4: zero false defers), paid knowingly. Recovering that residual is what
-S3's provider tier is for.
+**So the `gate-satisfied` rule is RETIRED (#3324).** It shipped on the reading
+that the merge queue's own gate re-check was the decision and the orchestrator's
+next move was `queue_merge` anyway; under INVARIANT 3 the disposition of a
+satisfied gate *is* an orchestrator decision, so the notice could never be an
+FYI and the rule was wrong on its own terms — which is why the very notice it
+fired on ends `Disposition is yours`. Retired rather than reworded, on the
+human's call: the marker already delivers every one of these, so the rule could
+only ever be shadowed, and a rule with no reachable behaviour is a rule with
+nothing to test. Gone with it: `Decision::TryEnqueue`, the merge-queue enqueue
+the registry attempted on triage's behalf, the `delivery-triage-enqueue` audit
+row, `Input::merge_queue_enabled`, and the harness's `--no-merge-queue` flag and
+optimistic-resolution caveat. `decide` is now pure and final on every path.
+
+The measured cost of the whole slice, stated because it is larger than S2's
+projection implied: the projected saving on this group's log falls from 228.8 M
+to 61.1 M cache-read tokens — 83 of those deferrals were gate notices — which is
+the price of the pass criterion (#3304 Q4: zero false defers), paid knowingly.
+Recovering that residual is what S3's provider tier is for.
 
 ## 3. The rule table
 
 | kind | rule | census |
 | --- | --- | --- |
-| `drive-gate-satisfied` | the merge queue is enabled AND `queue_merge` accepted the PR → defer. Any refusal → deliver. **Unreachable on the notice orrerix emits today — §2.1.** | 74 |
+| `drive-gate-satisfied` | **no rule** — retired in #3324 (§2.1). The class still exists and is still audited; nothing holds it back. | 74 |
 | `run-completed` | `conclusion: success` AND the registered note names no green-path action (§2.1) → defer; anything else → deliver | 65 (64 green, 1 red) |
 | `pr-checks` | `SUCCESS`, same proviso → defer; anything else → deliver | 1 |
 | `planner-exited` | defer — the plan drive (#3040) consumes this; the notice is a slot-free FYI | 4 |
@@ -135,14 +141,6 @@ S3's provider tier is for.
 Everything else — 90 `done` reports, 17 reviewer reports, the rest of
 `message from` — delivers. #3304 Q2 is explicit that the `done` class is where
 the residual judgement lives, and S1 ships no judgement.
-
-**`GATE SATISFIED` earns its rule by the ENQUEUE, not by its shape**, which is
-why it is a third `Decision` variant rather than a plain defer. The
-orchestrator's own next step for a satisfied gate is `queue_merge`; a notice
-suppressed *without* one having happened is a PR nobody is driving. The registry
-attempts the enqueue and turns a refusal — a gate the queue's own re-check does
-not accept, `also:` conditions unmet, a state file it cannot read — back into a
-delivery.
 
 **The vocabulary is inherited from `orch-scorecard.cjs`, and it is not
 identical to it.** `docs/design/orchestration-evals.md` §4.1 and that script
@@ -377,10 +375,12 @@ rather than a discoverer.
 **The residual, stated rather than left to be found:** a change to the BODY of a
 Rust rule that keeps its name and is covered by no vector is invisible to both
 pins. The exercised-by-a-vector assertion is what bounds it; it does not remove
-it. `Rule::GateSatisfied` is the one rule no vector can name at all, because
-`decide` answers `TryEnqueue` for it and only a successful merge-queue enqueue
-turns that into a defer — an impure step a fixture cannot contain. Its witness
-is a `try-enqueue` vector, asserted by name on both sides.
+it. There is no longer any rule a vector cannot name: `Rule::GateSatisfied` was
+that one — `decide` answered `TryEnqueue` for it and only a successful
+merge-queue enqueue turned that into a defer, an impure step no fixture can
+contain — and #3324 retired it. Both pins now assert the RETIREMENT from the
+fixture's side too: no case may expect the `try-enqueue` action or the
+`gate-satisfied` rule, so neither can be reinstated on one side alone.
 
 ### 8.2 The population, and the one proxy
 
@@ -411,11 +411,10 @@ them it found. The report prints this caveat itself rather than leaving it to
 whoever pastes the output, because without it a reader re-running the command
 cannot tell drift from breakage.
 
-One more figure the replay cannot observe: `Decision::TryEnqueue` is resolved
-OPTIMISTICALLY (the enqueue is assumed to succeed, so the notice defers). That
-is the direction that makes the harness's own headline worse rather than
-better — every false defer the resolution can manufacture is counted against
-the tier — and the count is printed separately so a reader can subtract it.
+The replay used to carry one figure it could not observe — `Decision::TryEnqueue`
+resolved optimistically, with the count printed separately so a reader could
+subtract it. #3324 retired the rule that produced it, so every figure the harness
+prints is now exact and the caveat is gone rather than left standing over nothing.
 
 ### 8.3 The labelling rubric
 
@@ -519,6 +518,6 @@ reading left to report. **S2b (#3324) applied all three remedies** — the
 silent-exit proviso on `agent-exited` — and re-measured the same label set to
 **0 false defers at 73.3 % agreement**, above the 60.0 % deliver-everything
 control. None of the three was a rubric change, so the hand-label set is
-untouched and the before/after readings are comparable row for row. What it
-cost, and the choice it leaves open about the now-unreachable `gate-satisfied`
-rule, is §2.1.
+untouched and the before/after readings are comparable row for row. The
+`gate-satisfied` rule the marker made unreachable was then RETIRED in the same
+slice, on the human's call; what that costs is §2.1.

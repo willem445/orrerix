@@ -1590,17 +1590,19 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
 
   The `## Delivery notices` paragraph told the orchestrator that a review drive's `GATE
   SATISFIED` is among the notices held. It is not, and after this PR it structurally cannot
-  be: `rddrive::gate_satisfied_notice` ends every such line `Disposition is yours (INVARIANT
+  be. `rddrive::gate_satisfied_notice` ends every such line `Disposition is yours (INVARIANT
   3): list_verdicts("N")`, and `is yours` is now a `NEEDS_YOU_MARKERS` entry, so the notice
-  is a needs-you DELIVER before the rule table is consulted. The paragraph now names that
-  notice on the never-triaged side, in orrerix's own words, and adds the two provisos the
-  same PR put on the green rules and on `agent-exited` — plus one operational instruction
-  the change creates work for: write the green-path move into a watch's `note`, because a
-  note saying what happens when it goes green is what keeps that verdict coming to the pane.
+  is a needs-you DELIVER before the rule table is consulted — and at the human's direction
+  the shadowed `gate-satisfied` rule was then RETIRED outright, so no rule can hold one back
+  even if the notice were reworded. The paragraph now says both, in orrerix's own words, and
+  adds the two provisos the same PR put on the green rules and on `agent-exited` — plus one
+  operational instruction the change creates work for: write the green-path move into a
+  watch's `note`, because a note saying what happens when it goes green is what keeps that
+  verdict coming to the pane.
 
   Nothing else in the file moved. Both re-bless checks above ("Verifying a re-bless by
-  hand") were run: the patch on the golden is byte-identical to the patch on its live
-  template (`git diff -U0` on each, compared — 20 insertions, 14 deletions across the pair,
-  10 and 7 per file), and `live-minus-keys == golden` reports OK for
-  `orchestrator-playbook.md` with the three keys `LIVE` lists for it
+  hand") were run, and re-run after the retirement commit: the patch on the golden is
+  byte-identical to the patch on its live template (`git diff -U0` on each, compared — 22
+  insertions, 14 deletions across the pair, 11 and 7 per file), and `live-minus-keys ==
+  golden` reports OK for `orchestrator-playbook.md` with the three keys `LIVE` lists for it
   (`{{MERGE_QUEUE}}{{REVIEW_DRIVER}}`, `{{POST_MERGE_WORKFLOW_HOOK}}`, `{{PLAN_DRIVER}}`).

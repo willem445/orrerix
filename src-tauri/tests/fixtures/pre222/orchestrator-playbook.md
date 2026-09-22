@@ -578,7 +578,8 @@ drive, and the middle chunks of a plan split `---BEGIN PLAN k/n---`. Everything 
 and the default for any shape the rules do not positively recognise is to deliver — so a new
 notice kind wakes you exactly as it did before. A delivery that NAMES you — and a `GATE SATISFIED`
 does, in orrerix's own words, since it ends `Disposition is yours (INVARIANT 3)` — a `HELD` drive,
-a `blocked` report, a watchdog stall and a re-grounding notice are never triaged at all. So write
+a `blocked` report, a watchdog stall and a re-grounding notice are never triaged at all — and the gate rule that
+used to hold a satisfied gate back is retired outright, so one always reaches you. So write
 the green-path move into the `note` when you register a watch: a note saying what happens if it
 goes green is what keeps that verdict coming to you (#3324).
 

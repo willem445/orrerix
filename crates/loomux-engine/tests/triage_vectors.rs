@@ -47,7 +47,6 @@ fn decision_json(d: Decision) -> Value {
     match d {
         Decision::Deliver(r) => serde_json::json!({ "action": "deliver", "reason": r.as_str() }),
         Decision::Defer(r) => serde_json::json!({ "action": "defer", "rule": r.as_str() }),
-        Decision::TryEnqueue { pr } => serde_json::json!({ "action": "try-enqueue", "pr": pr }),
     }
 }
 
@@ -63,7 +62,10 @@ fn every_golden_vector_matches_the_engine() {
         let name = case["name"].as_str().expect("name");
         let text = case["text"].as_str().expect("text");
         let human_actor = case["human_actor"].as_bool().expect("human_actor");
-        let merge_queue_enabled = case["merge_queue_enabled"].as_bool().expect("merge_queue_enabled");
+        // `merge_queue_enabled` was read here until #3324 retired the rule
+        // that consumed it. The fixture still carries the field on every case
+        // and it is now inert; it is left in place rather than swept out of
+        // 42 cases in a slice about the rule, and nothing reads it.
 
         let kinds: Vec<Kind> = case["policy"]["kinds"]
             .as_array()
@@ -91,7 +93,7 @@ fn every_golden_vector_matches_the_engine() {
         assert_eq!(never, want_never, "{name}: never_triaged");
 
         let got = decision_json(triage::decide(
-            &Input { text, from: "w-1", human_actor, merge_queue_enabled },
+            &Input { text, from: "w-1", human_actor },
             &policy,
         ));
         assert_eq!(got, case["expect"]["decision"], "{name}: decide");
@@ -121,12 +123,12 @@ fn the_corpus_exercises_every_rule_and_every_deliver_reason() {
         }
     }
 
-    // `gate-satisfied` is the one rule NO vector can name, and the reason is
-    // the rule itself: `decide` answers `TryEnqueue` for it and the caller
-    // turns that into `Defer(GateSatisfied)` only once a real merge-queue
-    // enqueue has succeeded — an impure step this fixture cannot contain. The
-    // `try-enqueue` case above is its witness, and this assertion states the
-    // carve-out rather than leaving a reader to find the gap.
+    // There is no carve-out any more. `gate-satisfied` used to be the one rule
+    // no vector could name — `decide` answered `TryEnqueue` and only a real,
+    // impure merge-queue enqueue turned that into a defer — and #3324 retired
+    // it, so every rule this enum has is now nameable by a vector and the list
+    // below is the whole of `Rule`. The counterfactual gate notice is a vector
+    // too, expecting DELIVER.
     let want_rules: Vec<&str> = vec![
         Rule::RunGreen.as_str(),
         Rule::ChecksGreen.as_str(),
@@ -138,10 +140,15 @@ fn the_corpus_exercises_every_rule_and_every_deliver_reason() {
     for r in &want_rules {
         assert!(rules_seen.iter().any(|s| s == r), "no vector exercises rule {r}");
     }
-    assert!(
-        cases.iter().any(|c| c["expect"]["decision"]["action"] == "try-enqueue"),
-        "no vector exercises Decision::TryEnqueue (the gate-satisfied arm)",
-    );
+    // The retirement, from the fixture's side: no case may expect the retired
+    // action or the retired rule, so re-adding either to the engine without
+    // re-adding it here cannot pass, and re-adding a vector for it cannot pass
+    // either.
+    for c in cases {
+        let d = &c["expect"]["decision"];
+        assert_ne!(d["action"], "try-enqueue", "the try-enqueue action is retired (#3324)");
+        assert_ne!(d["rule"], "gate-satisfied", "the gate-satisfied rule is retired (#3324)");
+    }
 
     for r in [
         DeliverReason::Disabled.as_str(),

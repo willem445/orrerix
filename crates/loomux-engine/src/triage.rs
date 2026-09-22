@@ -460,11 +460,16 @@ pub fn never_triaged(text: &str, human_actor: bool) -> Option<NeverReason> {
 /// A rule that closed a delivery without waking the pane. The wire spelling
 /// is what the audit row's `action` carries as `rule:<name>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// **There is no `GateSatisfied` (#3324).** The rule shipped on the reading
+/// that the merge queue's own gate re-check was the decision; it is not. A
+/// `GATE SATISFIED` notice ends `Disposition is yours (INVARIANT 3)` because
+/// under that invariant the disposition IS an orchestrator decision, so the
+/// notice can never be an FYI and the rule was wrong on its own terms. It is
+/// retired rather than reworded: the marker in [`NEEDS_YOU_MARKERS`] already
+/// delivers every one of these, and a rule that can only ever be shadowed is
+/// a rule with no behaviour to test.
 pub enum Rule {
-    /// `GATE SATISFIED` on a repo whose merge queue is on: the queue's own
-    /// gate re-check is the decision, and the orchestrator's next move was
-    /// `queue_merge` anyway.
-    GateSatisfied,
     /// A `notify_when` `workflow_run` that came back `conclusion: success`
     /// AND whose registered note names no green-path action (#3324).
     RunGreen,
@@ -488,7 +493,6 @@ pub enum Rule {
 impl Rule {
     pub fn as_str(self) -> &'static str {
         match self {
-            Rule::GateSatisfied => "gate-satisfied",
             Rule::RunGreen => "run-green",
             Rule::ChecksGreen => "checks-green",
             Rule::PlannerExited => "planner-exited",
@@ -530,18 +534,12 @@ pub enum Decision {
     /// rides in front of it — that is what "the next genuine wake" means.
     Deliver(DeliverReason),
     /// Hold it; audit only.
-    Defer(Rule),
-    /// `GATE SATISFIED` on PR N with the merge queue ENABLED. The caller
-    /// attempts the enqueue and turns this into `Defer(Rule::GateSatisfied)`
-    /// on success, or `Deliver(DeliverReason::NoRule)` on any refusal.
     ///
-    /// It is a third variant rather than a `Defer` the caller may undo
-    /// because the enqueue is the whole of the rule's justification: the
-    /// orchestrator's next step for a satisfied gate is `queue_merge`, so a
-    /// notice suppressed WITHOUT one having happened is a PR nobody is
-    /// driving. The impure attempt cannot live in this module, and the
-    /// decision must not be readable as "deferred" until it has succeeded.
-    TryEnqueue { pr: u64 },
+    /// Two variants, not three: the `TryEnqueue` arm that let the caller
+    /// resolve a satisfied gate by attempting a merge-queue enqueue went with
+    /// the rule it justified (#3324). Every decision this module makes is
+    /// now pure and final.
+    Defer(Rule),
 }
 
 /// One delivery, as the rule tier sees it.
@@ -551,9 +549,6 @@ pub struct Input<'a> {
     pub from: &'a str,
     /// True when the sender is the human rather than the fleet.
     pub human_actor: bool,
-    /// Whether this repo's `merge_queue:` block is on. Read by the
-    /// `GATE SATISFIED` rule and by nothing else.
-    pub merge_queue_enabled: bool,
 }
 
 /// What a repo declares about triage. Mirrors `workflow::TriagePolicy`, which
@@ -679,13 +674,10 @@ pub fn decide(input: &Input<'_>, policy: &Policy) -> Decision {
         return Decision::Deliver(DeliverReason::KindNotTriaged);
     }
     match kind {
-        Kind::DriveGateSatisfied => match (input.merge_queue_enabled, pr_of(input.text)) {
-            // The queue is the rule's justification, so no queue means no
-            // rule — a satisfied gate on a repo that merges by hand is a
-            // thing the orchestrator has to act on.
-            (true, Some(pr)) => Decision::TryEnqueue { pr },
-            _ => Decision::Deliver(DeliverReason::NoRule),
-        },
+        // `Kind::DriveGateSatisfied` has no arm: it falls to the fail-safe
+        // below, and never reaches even that in practice because the marker
+        // claims it first (#3324).
+        //
         // Both green rules are subordinate to the registered note: a note that
         // names a green-path action is the registrant saying the green verdict
         // is the trigger for their next move (#3324).
@@ -931,12 +923,12 @@ mod tests {
                                      91000ms after spawn — produced no output before exiting — it \
                                      likely exited before the CLI printed anything at all. Update \
                                      your plan and state accordingly.";
-    // `GATE` with its closing sentence removed. Not a shape orrerix emits
-    // TODAY — that is the finding, not an oversight: #3324's `is yours` marker
-    // takes every real gate notice out of the rule's reach, so this
-    // counterfactual is the only witness the `TryEnqueue` arm has left, and it
-    // is what a reworded gate notice would look like. See
-    // `docs/design/delivery-triage.md` §"The marker outranks the rule".
+    // `GATE` with its closing sentence removed. Kept after the gate rule was
+    // retired (#3324) as the NEGATIVE control for that retirement: it carries
+    // no marker, so nothing in the never-triaged set claims it, and it must
+    // STILL deliver — off the fail-safe rather than off a rule. A gate notice
+    // reworded to stop naming an orchestrator action would look like this, and
+    // this is the test that says it would still wake the pane.
     const GATE_NO_MARKER: &str = "[orrerix] review drive PR #1758: GATE SATISFIED at df6a73d0 \
                                   (body 4a1c) — rev-lead pass; 1 rounds, 1 CI, 0 rebases.";
     const DONE: &str = "[orrerix] w-2902 reports done: #3304 — PR #3310, CI green.";
@@ -1013,7 +1005,7 @@ mod tests {
     }
 
     fn input<'a>(text: &'a str) -> Input<'a> {
-        Input { text, from: "w-1", human_actor: false, merge_queue_enabled: true }
+        Input { text, from: "w-1", human_actor: false }
     }
 
     #[test]
@@ -1093,13 +1085,28 @@ mod tests {
     }
 
     #[test]
-    fn a_satisfied_gate_asks_the_caller_to_enqueue_rather_than_deferring_on_its_own() {
-        // NOT a `Defer`: the rule is justified by the enqueue, so the decision
-        // stays unresolved until the registry has actually made one.
+    fn no_gate_satisfied_notice_is_ever_held_back_by_any_rule() {
+        // The retirement (#3324), pinned from BOTH sides so that neither half
+        // can come back alone.
         //
-        // On `GATE_NO_MARKER`, because `GATE` — the line orrerix really emits —
-        // no longer reaches this arm at all (#3324, the test below).
-        assert_eq!(decide(&input(GATE_NO_MARKER), &on()), Decision::TryEnqueue { pr: 1758 });
+        // The line orrerix really emits is claimed by the marker, before the
+        // rule table is consulted at all:
+        assert_eq!(
+            decide(&input(GATE), &on()),
+            Decision::Deliver(DeliverReason::Never(NeverReason::NeedsYou))
+        );
+        // And one with the marker removed — the shape a reword would produce —
+        // delivers too, off the FAIL-SAFE, because no rule matches its class
+        // any more. This is the assertion the retirement would break if the
+        // rule were reinstated, and the reason it is not just a duplicate of
+        // the test above.
+        assert_eq!(decide(&input(GATE_NO_MARKER), &on()), Decision::Deliver(DeliverReason::NoRule));
+        assert_eq!(never_triaged(GATE_NO_MARKER, false), None, "nothing claims it before the table");
+        assert_eq!(classify(GATE_NO_MARKER), Kind::DriveGateSatisfied, "the CLASS survives the rule");
+        // That the wire vocabulary no longer carries the rule at all is pinned
+        // where it can be: the mirror's vocabulary scan in
+        // `test/orchtriageeval.test.ts`, which reads `Rule::as_str`'s arms out of
+        // this file and asserts set-equality with the JS `RULES` table.
     }
 
     #[test]
@@ -1115,13 +1122,13 @@ mod tests {
             decide(&input(GATE), &on()),
             Decision::Deliver(DeliverReason::Never(NeverReason::NeedsYou))
         );
-        // And it outranks the rule whatever the queue says — a marker is read
-        // before `covers`, before `classify`'s answer is acted on, and before
-        // the merge-queue flag is looked at.
-        let mut off_queue = input(GATE);
-        off_queue.merge_queue_enabled = false;
+        // And it outranks the rule table wherever the class would have led: a
+        // marker is read before `covers` and before `classify`'s answer is
+        // acted on, so narrowing `kinds` to this very class changes nothing.
+        let narrow =
+            Policy { enabled: true, kinds: vec![Kind::DriveGateSatisfied], ..Policy::default() };
         assert_eq!(
-            decide(&off_queue, &on()),
+            decide(&input(GATE), &narrow),
             Decision::Deliver(DeliverReason::Never(NeverReason::NeedsYou))
         );
     }
@@ -1212,13 +1219,6 @@ mod tests {
         ];
         let (got, want) = decide_table(&cases, &on());
         assert_eq!(got, want);
-    }
-
-    #[test]
-    fn a_satisfied_gate_with_the_queue_disabled_is_delivered() {
-        let mut i = input(GATE_NO_MARKER);
-        i.merge_queue_enabled = false;
-        assert_eq!(decide(&i, &on()), Decision::Deliver(DeliverReason::NoRule));
     }
 
     #[test]

@@ -113,7 +113,6 @@ const KINDS = [
 
 /** `Rule::as_str`. */
 const RULES = [
-  'gate-satisfied',
   'run-green',
   'checks-green',
   'planner-exited',
@@ -332,7 +331,6 @@ function prOf(text) {
  * `triage.rs`'s `decide`. Returns the Rust `Decision` as a tagged object:
  *   {action: 'deliver', reason}        — Decision::Deliver(reason)
  *   {action: 'defer', rule}            — Decision::Defer(rule)
- *   {action: 'try-enqueue', pr}        — Decision::TryEnqueue { pr }
  */
 function decide(input, policy) {
   if (!policy.enabled) return { action: 'deliver', reason: 'disabled' };
@@ -341,11 +339,8 @@ function decide(input, policy) {
   const kind = classify(input.text);
   const covers = !policy.kinds || policy.kinds.length === 0 || policy.kinds.includes(kind);
   if (!covers) return { action: 'deliver', reason: 'kind-not-triaged' };
-  if (kind === 'drive-gate-satisfied') {
-    const pr = prOf(input.text);
-    if (input.merge_queue_enabled === true && pr !== null) return { action: 'try-enqueue', pr };
-    return { action: 'deliver', reason: 'no-rule' };
-  }
+  // `drive-gate-satisfied` has no branch: the gate rule is retired (#3324) and
+  // the class falls through to the fail-safe below, exactly as in Rust.
   if (kind === 'run-completed' && runIsGreen(input.text) && !noteNamesGreenPath(input.text)) {
     return { action: 'defer', rule: 'run-green' };
   }
@@ -366,21 +361,17 @@ function decide(input, policy) {
 }
 
 /**
- * What the REPLAY does with `TryEnqueue`, which the live path resolves by
- * attempting a real merge-queue enqueue.
+ * Formerly: what the REPLAY did with `TryEnqueue`, the one decision the live
+ * path resolved impurely by attempting a real merge-queue enqueue, which the
+ * replay could not observe and so resolved optimistically.
  *
- * The replay has no queue, so it cannot observe the attempt — and inventing a
- * success would report a saving the live tier may never deliver. It resolves
- * the variant OPTIMISTICALLY (enqueue succeeds -> `Defer(gate-satisfied)`),
- * which is the direction that makes the harness's own headline WORSE rather
- * than better: every false-defer this resolution can manufacture is counted
- * against the tier, and every one it hides would have been a delivery. The
- * report prints the count separately so a reader can subtract it.
+ * #3324 retired the gate rule, so `decide` is now pure and total on both sides
+ * and there is nothing left to resolve. The function stays as the identity so
+ * `replay` reads the same and the mirror keeps a named seam for any future
+ * decision that needs caller resolution; `assumed_enqueue` is never set and
+ * the report's optimistic-resolution caveat is gone with it.
  */
 function resolveDecision(decision) {
-  if (decision.action === 'try-enqueue') {
-    return { action: 'defer', rule: 'gate-satisfied', assumed_enqueue: true };
-  }
   return decision;
 }
 
@@ -690,7 +681,6 @@ function replay(deliveryList, policy, opts) {
   const byDeliverReason = {};
   const rows = [];
   let ruleDeferred = 0;
-  let assumedEnqueues = 0;
   let providerDeferred = 0;
   let providerCalls = 0;
   let providerNoVerdict = 0;
@@ -702,12 +692,10 @@ function replay(deliveryList, policy, opts) {
         text: d.text,
         from: d.from,
         human_actor: d.human_actor,
-        merge_queue_enabled: policy.merge_queue_enabled,
       },
       policy,
     );
     const resolved = resolveDecision(raw);
-    if (resolved.assumed_enqueue) assumedEnqueues += 1;
 
     const row = {
       ts_ms: d.ts_ms,
@@ -760,7 +748,6 @@ function replay(deliveryList, policy, opts) {
     total,
     rule_deferred: ruleDeferred,
     provider_deferred: providerDeferred,
-    assumed_enqueues: assumedEnqueues,
     delivered: total - deferred,
     deferred,
     by_kind: byKind,
@@ -923,15 +910,6 @@ function renderMarkdown(ctx) {
     L.push(`| \`${rule}\` | ${c ? c.deferred : 0} | ${pct(c ? c.deferred : 0, result.total)} |`);
   }
   L.push('');
-  if (result.assumed_enqueues > 0) {
-    L.push(
-      `\`gate-satisfied\` includes **${result.assumed_enqueues}** \`TryEnqueue\` decisions the replay ` +
-        'resolved optimistically — the live tier defers one only if the merge-queue enqueue SUCCEEDS, ' +
-        'which no replay can observe. Subtract them for the pessimistic reading.',
-    );
-    L.push('');
-  }
-
   L.push('### Per kind');
   L.push('');
   L.push('| kind | deferred | delivered |');
@@ -1060,7 +1038,6 @@ const USAGE_TEXT = `
   --floors A,B,C      sweep these floors instead of the default 0.50..0.95 by 0.05
   --no-provider       ignore --verdicts; rule tier only
   --kinds A,B         restrict triage to these kinds (default: every kind)
-  --no-merge-queue    replay as a repo whose merge_queue is OFF (gate-satisfied delivers)
   --triage-disabled   replay with triage.enabled false — the control: everything delivers
   --emit-labels       print a hand-label CSV template for the RESIDUAL (one row per
                       delivery the rule tier left as no-rule, label column empty,
@@ -1083,7 +1060,6 @@ function parseArgs(argv) {
     floors: null,
     noProvider: false,
     kinds: [],
-    mergeQueue: true,
     enabled: true,
     dropKickoff: true,
     from: null,
@@ -1109,7 +1085,6 @@ function parseArgs(argv) {
       case '--floors': opts.floors = next().split(',').map((s) => Number(s.trim())); break;
       case '--no-provider': opts.noProvider = true; break;
       case '--kinds': opts.kinds = next().split(',').map((s) => s.trim()).filter(Boolean); break;
-      case '--no-merge-queue': opts.mergeQueue = false; break;
       case '--triage-disabled': opts.enabled = false; break;
       case '--emit-labels': opts.emitLabels = true; break;
       case '--no-drop-kickoff': opts.dropKickoff = false; break;
@@ -1169,7 +1144,6 @@ function main(argv, out) {
   const policy = {
     enabled: opts.enabled,
     kinds: opts.kinds,
-    merge_queue_enabled: opts.mergeQueue,
   };
   const result = replay(pop.deliveries, policy, { provider, floor: opts.floor });
 

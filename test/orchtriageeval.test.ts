@@ -58,7 +58,7 @@ const synthLabels = ev.parseLabels(readFileSync(path.join(fixtures, 'labels-synt
 const synthVerdicts = JSON.parse(readFileSync(path.join(fixtures, 'verdicts-synth.json'), 'utf8'));
 
 const roles = ev.indexRoles(agents);
-const POLICY = { enabled: true, kinds: [], merge_queue_enabled: true };
+const POLICY = { enabled: true, kinds: [] };
 
 function population(dropKickoff = true) {
   return ev.deliveries(auditRows, roles, dropKickoff);
@@ -83,7 +83,6 @@ test('the mirror answers every golden vector exactly as the fixture says', () =>
         text: c.text,
         from: 'w-1',
         human_actor: c.human_actor,
-        merge_queue_enabled: c.merge_queue_enabled,
       },
       { enabled: c.policy.enabled, kinds: c.policy.kinds },
     );
@@ -99,18 +98,20 @@ test('the vector corpus exercises every rule and every deliver reason', () => {
     if (c.expect.decision.rule) rules.add(c.expect.decision.rule);
     if (c.expect.decision.reason) reasons.add(c.expect.decision.reason);
   }
-  // `gate-satisfied` is the one rule no vector can name: `decide` answers
-  // `try-enqueue` for it and only a successful merge-queue enqueue turns that
-  // into a defer, which is impure and cannot live in a fixture. Its witness is
-  // the `try-enqueue` case, asserted separately so the carve-out is stated
-  // rather than read off a gap.
-  for (const r of ev.RULES.filter((r: string) => r !== 'gate-satisfied')) {
+  // No carve-out. `gate-satisfied` used to be the one rule no vector could
+  // name — `decide` answered `try-enqueue` for it and only a successful,
+  // impure merge-queue enqueue turned that into a defer — and #3324 retired
+  // it, so EVERY rule is now nameable and the filter that used to sit here is
+  // gone rather than kept as an exemption nothing needs.
+  for (const r of ev.RULES) {
     assert.ok(rules.has(r), `no vector exercises rule ${r}`);
   }
-  assert.ok(
-    cases.some((c) => c.expect.decision.action === 'try-enqueue'),
-    'no vector exercises the gate-satisfied / try-enqueue arm',
-  );
+  // The retirement, pinned from the fixture's side too: no case may expect the
+  // retired action or the retired rule.
+  for (const c of cases) {
+    assert.notEqual(c.expect.decision.action, 'try-enqueue', `${c.name}: try-enqueue is retired`);
+    assert.notEqual(c.expect.decision.rule, 'gate-satisfied', `${c.name}: the rule is retired`);
+  }
   for (const r of [...ev.DELIVER_REASONS, ...ev.NEVER_REASONS]) {
     assert.ok(reasons.has(r), `no vector exercises deliver reason ${r}`);
   }
@@ -248,7 +249,7 @@ test('the green-path scan reads the NOTE, not the verdict around it', () => {
   const noNote = '[orrerix] run 17812: completed — conclusion: success. (watch n-1)';
   assert.equal(ev.registeredNote(noNote), null);
   assert.equal(ev.noteNamesGreenPath(noNote), false);
-  assert.deepEqual(ev.decide({ text: noNote, from: 'orrerix', human_actor: false, merge_queue_enabled: true }, POLICY), {
+  assert.deepEqual(ev.decide({ text: noNote, from: 'orrerix', human_actor: false }, POLICY), {
     action: 'defer',
     rule: 'run-green',
   });
@@ -321,9 +322,9 @@ test('--no-drop-kickoff keeps the first delivery per pane, and the count says so
 test('the rule tier defers exactly the eight rule hits, per rule', () => {
   const r = ev.replay(population().deliveries, POLICY, {});
   assert.equal(r.total, 23);
-  assert.equal(r.rule_deferred, 8);
+  assert.equal(r.rule_deferred, 7);
   assert.equal(r.provider_deferred, 0);
-  assert.equal(r.delivered, 15);
+  assert.equal(r.delivered, 16);
   assert.deepEqual(
     Object.fromEntries(Object.entries(r.by_rule).map(([k, v]: any) => [k, v.deferred])),
     {
@@ -333,20 +334,29 @@ test('the rule tier defers exactly the eight rule hits, per rule', () => {
       'agent-exited': 1,
       'drive-cancelled': 1,
       'plan-chunk': 1,
-      'gate-satisfied': 1,
     },
   );
-  // The optimistic TryEnqueue resolution is COUNTED, not hidden: a reader who
-  // wants the pessimistic figure subtracts it, and cannot do that if the
-  // harness folds it into `gate-satisfied` silently.
-  assert.equal(r.assumed_enqueues, 1);
+  // No `gate-satisfied` row and no `assumed_enqueues` counter: #3324 retired
+  // the rule, so the only impure decision this harness ever had to resolve
+  // optimistically is gone and every figure here is exact.
+  assert.ok(!('gate-satisfied' in r.by_rule));
 });
 
-test('a repo with no merge queue has no gate-satisfied rule at all', () => {
-  const r = ev.replay(population().deliveries, { ...POLICY, merge_queue_enabled: false }, {});
-  assert.equal(r.by_rule['gate-satisfied'], undefined);
-  assert.equal(r.assumed_enqueues, 0);
-  assert.equal(r.rule_deferred, 7);
+test('NO rule holds a gate-satisfied notice, whatever the merge queue is doing', () => {
+  // #3324 retired the rule, so this is no longer a fact about the queue: the
+  // harness does not read one and `decide` takes no such input. Both gate
+  // rows in the corpus deliver — ts 11000 by the `is yours` marker, ts 25000
+  // (the same notice with the marker removed) off the fail-safe.
+  const r = ev.replay(population().deliveries, POLICY, {});
+  assert.equal(r.by_rule['gate-satisfied'], undefined, 'the rule is retired');
+  assert.ok(!('assumed_enqueues' in r), 'the optimistic-resolution counter is gone with it');
+  const gate = r.rows.filter((x: any) => x.kind === 'drive-gate-satisfied');
+  assert.equal(gate.length, 2, 'both gate rows are in the population');
+  assert.deepEqual(
+    gate.map((x: any) => [x.action, x.reason]).sort(),
+    [['deliver', 'needs-you'], ['deliver', 'no-rule']],
+    'one by the marker, one by the fail-safe — neither by a rule',
+  );
 });
 
 test('triage disabled is the negative control: nothing is deferred', () => {
@@ -368,10 +378,9 @@ test('a delivery labelled decision and deferred is a FALSE DEFER, whichever tier
 
   assert.equal(s.labelled, 21, 'two rows are deliberately unlabelled');
   assert.equal(s.population, 23, 'and the report must state both numbers');
-  assert.equal(s.false_defers, 3);
+  assert.equal(s.false_defers, 2);
   assert.deepEqual(s.false_defer_by_reason, {
     'rule:agent-exited': 1,
-    'rule:gate-satisfied': 1,
     'provider:fyi': 1,
   });
   // The case #3304's plan names by hand: labelled `decision`, given a
@@ -385,7 +394,7 @@ test('a delivery labelled decision and deferred is a FALSE DEFER, whichever tier
   assert.equal(row.action, 'defer');
 
   assert.equal(s.wasted_wakes, 2);
-  assert.equal(s.agreement, 16 / 21);
+  assert.equal(s.agreement, 17 / 21);
 });
 
 test('agreement is scored on the BINARY, so a four-way class disagreement is not an error', () => {
@@ -423,14 +432,14 @@ test('only the rule tier’s no-rule residual is ever shown to a provider', () =
   // excluded by construction — that exclusion is what makes "a human's words
   // are never sent to a classifier" a property of the code rather than of the
   // rule table happening not to match them.
-  assert.equal(provider.calls, 8);
+  assert.equal(provider.calls, 9);
 });
 
 test('a provider that returns no verdict delivers — the fail-safe, not a defer', () => {
   const provider = new ev.FakeTriage({});
   const r = ev.replay(population().deliveries, POLICY, { provider, floor: 0.85 });
-  assert.equal(r.provider_calls, 8);
-  assert.equal(r.provider_no_verdict, 8);
+  assert.equal(r.provider_calls, 9);
+  assert.equal(r.provider_no_verdict, 9);
   assert.equal(r.provider_deferred, 0);
 });
 
@@ -488,14 +497,14 @@ test('the floor sweep moves, and the harmful error is reported per floor', () =>
   assert.deepEqual(
     rows.map((r: any) => [r.floor, r.provider_deferred, r.false_defers, r.wasted_wakes]),
     [
-      [0.6, 3, 3, 1],
-      [0.85, 2, 3, 2],
-      [0.95, 0, 2, 3],
+      [0.6, 3, 2, 1],
+      [0.85, 2, 2, 2],
+      [0.95, 0, 1, 3],
     ],
   );
   // The rule tier is re-run at every floor rather than reused, so a table that
   // silently held it constant would be right by accident.
-  assert.deepEqual(new Set(rows.map((r: any) => r.rule_deferred)), new Set([8]));
+  assert.deepEqual(new Set(rows.map((r: any) => r.rule_deferred)), new Set([7]));
 });
 
 // ---------------------------------------------------------------------------
@@ -564,7 +573,7 @@ test('--emit-labels prints the RESIDUAL as fillable CSV, and nothing else', () =
   // nothing reads, and would put a human's own words in front of a labeller.
   const residual = result.rows.filter((r: any) => r.action === 'deliver' && r.reason === 'no-rule');
   assert.equal(rows.length, residual.length);
-  assert.equal(rows.length, 8, 'the synthetic corpus has eight residual deliveries');
+  assert.equal(rows.length, 9, 'the synthetic corpus has nine residual deliveries');
   assert.deepEqual(
     rows.map((l: string) => Number(l.split(',')[0])),
     residual.map((r: any) => r.ts_ms),
@@ -637,16 +646,18 @@ test('the markdown report states the denominator and names the false-defer floor
     meta: { group: 'synth-1', audit_files: ['a.jsonl'], dropped_kickoffs: 1, window: '' },
   });
   assert.match(md, /\*\*21\*\* of 23 deliveries carry a hand label/);
-  assert.match(md, /\*\*FALSE DEFERS: 3\*\*/);
+  assert.match(md, /\*\*FALSE DEFERS: 2\*\*/);
   assert.match(md, /Kickoff proxy dropped \*\*1\*\*/);
   // The rotation caveat is printed by the REPORT, not left to whoever pastes
   // it: `audit.jsonl` rotates, so a population figure is a snapshot and a
   // reader re-running the command later cannot otherwise tell drift from
   // breakage (review round 1, finding 3).
   assert.match(md, /Population figures are a snapshot of a rotating artifact/);
-  // The optimistic TryEnqueue resolution must be disclosed in the report, not
-  // only in the JSON: the markdown is what gets pasted onto an issue.
-  assert.match(md, /resolved optimistically/);
+  // The optimistic-resolution caveat is gone with the rule it described
+  // (#3324): every figure in this report is now exact, so a caveat saying
+  // otherwise would be the false claim. Asserted as an ABSENCE — the
+  // matches above are its positive control that the report rendered at all.
+  assert.ok(!/resolved optimistically/.test(md), 'a retired caveat must not survive its rule');
   // A table's rows must survive as a table — a blank line inside one ends it
   // and the rows render as literal pipes (#926).
   const rulesTable = md.slice(md.indexOf('### Per rule'), md.indexOf('### Per kind'));
@@ -684,8 +695,8 @@ test('the CLI replays the synthetic corpus end to end', () => {
     '--group', 'synth-1',
   ]);
   assert.equal(code, 0);
-  assert.match(out, /Deferred 10 \/ 23/);
-  assert.match(out, /\*\*FALSE DEFERS: 3\*\*/);
+  assert.match(out, /Deferred 9 \/ 23/);
+  assert.match(out, /\*\*FALSE DEFERS: 2\*\*/);
   assert.match(out, /ECE 0\.258/);
 });
 
@@ -712,6 +723,8 @@ test('--no-provider ignores a verdict file, so a rules-only figure is reproducib
     '--no-provider',
   ]);
   assert.equal(code, 0);
-  assert.match(out, /Deferred 8 \/ 23/);
-  assert.match(out, /\*\*FALSE DEFERS: 2\*\*/);
+  assert.match(out, /Deferred 7 \/ 23/);
+  assert.match(out, /\*\*FALSE DEFERS: 1\*\*/);
+  // ONE, not two: rules-only drops the provider's own false defer, and since
+  // #3324 the rule tier contributes exactly one (`rule:agent-exited`).
 });

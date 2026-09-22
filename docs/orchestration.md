@@ -2731,9 +2731,10 @@ exited; a pane that exited having printed something; a cancelled drive; and the 
 chunks of a plan a planner split across several messages. That is the whole list, and it is
 compiled in — nothing in this block writes a rule.
 
-A drive's `GATE SATISFIED` on a PR the merge queue accepted is in the rule table too, and
-in practice it never fires: the notice orrerix emits for one ends `Disposition is yours
-(INVARIANT 3)`, which is a text naming the orchestrator, and those are never held (#3324).
+A drive's `GATE SATISFIED` used to be on that list. It no longer is: the notice orrerix
+emits for one ends `Disposition is yours (INVARIANT 3)`, and under that invariant the
+disposition is an orchestrator decision — so the rule was wrong on its own terms and was
+retired (#3324). Triage no longer reads the merge queue at all.
 
 **What is never held.** Anything whose text names the orchestrator (`blocking on you`,
 `needs you`, `your call`, `is yours`), a `HELD` drive, a `blocked` report, a watchdog

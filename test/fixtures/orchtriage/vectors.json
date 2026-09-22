@@ -17,11 +17,11 @@
     "A case is:",
     "  text                  the delivery text, verbatim",
     "  human_actor           the audit row's actor is the human",
-    "  merge_queue_enabled   the repo's merge_queue: block is on",
+    "  merge_queue_enabled   INERT since #3324 retired the gate rule — no reader passes it",
     "  policy                {enabled, kinds}; kinds [] means every kind",
     "  expect.kind           classify()",
     "  expect.never          never_triaged(), or null",
-    "  expect.decision       decide(), as {action, reason} | {action, rule} | {action, pr}",
+    "  expect.decision       decide(), as {action, reason} | {action, rule}",
     "",
     "Texts are SYNTHETIC, written to the shapes orrerix emits. No line of a real",
     "group's agent-authored prose is checked in here.",
@@ -37,7 +37,7 @@
   ],
   "cases": [
     {
-      "name": "gate-satisfied with the queue on is a TryEnqueue, not a Defer",
+      "name": "a satisfied gate is DELIVERED — the rule is retired, the notice names an orchestrator action (#3324)",
       "text": "[orrerix] review drive PR #3220: GATE SATISFIED at 7dabd366 (body f523..) — rev-std PASS, rev-final PASS; 2 rounds.",
       "human_actor": false,
       "merge_queue_enabled": true,
@@ -49,13 +49,13 @@
         "kind": "drive-gate-satisfied",
         "never": null,
         "decision": {
-          "action": "try-enqueue",
-          "pr": 3220
+          "action": "deliver",
+          "reason": "no-rule"
         }
       }
     },
     {
-      "name": "gate-satisfied with the queue OFF has no rule — the enqueue IS the justification",
+      "name": "a satisfied gate delivers whatever the merge queue is doing — triage no longer reads it (#3324)",
       "text": "[orrerix] review drive PR #3220: GATE SATISFIED at 7dabd366 (body f523..) — rev-std PASS.",
       "human_actor": false,
       "merge_queue_enabled": false,
@@ -593,8 +593,8 @@
         "kind": "drive-gate-satisfied",
         "never": null,
         "decision": {
-          "action": "try-enqueue",
-          "pr": 42
+          "action": "deliver",
+          "reason": "no-rule"
         }
       }
     },
@@ -671,7 +671,7 @@
       }
     },
     {
-      "name": "a gate notice WITHOUT the marker still reaches the rule — the counterfactual that keeps it alive",
+      "name": "a gate notice WITHOUT the marker delivers off the fail-safe — the gate rule is retired (#3324)",
       "text": "[orrerix] review drive PR #1758: GATE SATISFIED at df6a73d0 (body 4a1c) — rev-lead pass; 1 rounds, 1 CI, 0 rebases.",
       "human_actor": false,
       "merge_queue_enabled": true,
@@ -683,8 +683,8 @@
         "kind": "drive-gate-satisfied",
         "never": null,
         "decision": {
-          "action": "try-enqueue",
-          "pr": 1758
+          "action": "deliver",
+          "reason": "no-rule"
         }
       }
     },

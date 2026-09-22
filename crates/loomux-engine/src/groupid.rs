@@ -58,7 +58,7 @@
 //! the root themselves, and only a reviewer noticed — then the first version of
 //! the guard was a fixed needle list that missed the very spelling the fix had
 //! deleted, and a reviewer noticed that too. See
-//! `doc/design/groupid-and-path-roots.md`.
+//! `docs/design/groupid-and-path-roots.md`.
 //!
 //! # The alphabet, and why it is this one
 //!

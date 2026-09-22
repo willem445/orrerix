@@ -1,6 +1,6 @@
 // Regression class: an overlay docked over a terminal pane rendering behind
 // or clipped by the terminal instead of on top (the "plugin z-order / embed
-// docking" bug class this spike targets — see doc/design/e2e-testing.md).
+// docking" bug class this spike targets — see docs/design/e2e-testing.md).
 //
 // Substitutes for a task-board overlay test: the task board only appears on
 // an orchestrator-role pane, which requires actually running one of the

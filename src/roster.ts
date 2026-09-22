@@ -77,7 +77,7 @@ export interface RosterBlock {
    *  the pre-#687 command line byte for byte. Shown in the roster because the
    *  preview's job is to state what will actually be spawned, and because the
    *  trust argument for letting a repo file pin these on the ORCHESTRATOR block
-   *  (`doc/design/workflows.md`) rests on the human seeing every block's resolved
+   *  (`docs/design/workflows.md`) rests on the human seeing every block's resolved
    *  value here, before the toggle that reads the file at all. */
   effort?: string;
   context?: string;
@@ -85,7 +85,7 @@ export interface RosterBlock {
    *  `"process"` | `"liaison"` | absent. Backend-resolved, so it is never a
    *  value the backend's own `role_hint_requires` wouldn't accept. In THIS
    *  module it only ever drives {@link describeBlock}'s cosmetic chip; the hint
-   *  is not capability-inert in general (see `doc/design/liaison.md`). */
+   *  is not capability-inert in general (see `docs/design/liaison.md`). */
   role_hint?: string | null;
 }
 

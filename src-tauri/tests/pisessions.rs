@@ -18,7 +18,7 @@
 //! only for `-tests`-scoped targets.
 //!
 //! **No pi is ever run** (constraint 3). Every fixture below is written here
-//! from the format recorded in `doc/design/pi.md`, read off
+//! from the format recorded in `docs/design/pi.md`, read off
 //! `earendil-works/pi@b79e4cc8` (= tag `v0.84.4`),
 //! `packages/coding-agent/docs/session-format.md`.
 

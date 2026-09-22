@@ -6,7 +6,7 @@
 // has one place that decides it instead of each caller re-deriving it.
 //
 // The gate is a property of the CURRENT SESSION, not any one PR's provenance
-// (doc/design/workflows.md, "a gate lives and dies with the toggle that
+// (docs/design/workflows.md, "a gate lives and dies with the toggle that
 // authorized it") — so every function here reads the live `WorkflowStatus`,
 // never a task's own history.
 

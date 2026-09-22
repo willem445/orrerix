@@ -15,6 +15,8 @@ nav_order: 11
 {:toc}
 </details>
 
+*Behind the scenes:* the design note [`docs/design/agents-tab.md`](https://github.com/willem445/orrerix/blob/main/docs/design/agents-tab.md) argues the *why* — it is a contributor document and is not part of this site.
+
 ---
 
 ## What it is

@@ -40,7 +40,7 @@ pub mod views;
 // orchestration core without Tauri; the re-export is what makes it a pure
 // relocation rather than a rename of every call site. The `pub use` lines below
 // are the list, so it cannot go stale; read the modules themselves in
-// crates/loomux-engine/src/. See doc/design/engine-extraction.md.
+// crates/loomux-engine/src/. See docs/design/engine-extraction.md.
 pub use loomux_engine::report;
 pub use loomux_engine::termgrid;
 /// The persisted usage time series' pure core (#2011 slice B): the row schema,
@@ -499,7 +499,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Weak};
 // #1609: the thread-local read budget, MutationScope and the six budget
-// constants. See `doc/design/lock-liveness.md`.
+// constants. See `docs/design/lock-liveness.md`.
 use loomux_engine::budget;
 use loomux_engine::lockwatch::TrackedMutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -988,7 +988,7 @@ const BLOCK_TPL: &str = include_str!("templates/block.md");
 /// `loomux_engine::model` in batch 5 (re-exported below) because it loads no
 /// bytes — it names a file in the *group dir*, and `workflow::Block` calls it
 /// from inside the engine. Content stays; a name that happens to resemble one
-/// travels. See `doc/design/engine-extraction.md` §6.
+/// travels. See `docs/design/engine-extraction.md` §6.
 pub(crate) fn role_template(role: Role) -> &'static str {
     match role {
         Role::Orchestrator => ORCHESTRATOR_TPL,
@@ -2422,7 +2422,7 @@ fi
 # to the orchestrator: the shim's only channel into loomux is audit.jsonl, and
 # building a durable agent-writable file whose text lands in the orchestrator's
 # tool results would be a prompt-injection channel into the trust root. See
-# doc/design/workflows.md → "The PR-open advisory, and which way each half fails".
+# docs/design/workflows.md → "The PR-open advisory, and which way each half fails".
 #
 # The REFUSAL is the enforced half and lives in the merge gate below, where
 # "unknown is never safe" applies in full.
@@ -2485,7 +2485,7 @@ fi
 # without this, an unset variable still slipped a NON-default merge past the workflow
 # gate — with nothing in the audit, because there is no audit log to write to.
 # Symmetry is the honest fix. (This closes the cheap shape only: an agent with a
-# shell can still call the real gh by absolute path. See doc/design/workflows.md →
+# shell can still call the real gh by absolute path. See docs/design/workflows.md →
 # "The bypass surface, honestly".)
 if [ -z "$ORX_GD" ]; then
   printf '%s\n' "orrerix: refusing to merge — neither ORRERIX_GROUP_DIR nor LOOMUX_GROUP_DIR is set, so this merge cannot be checked against the group's gates. Run gh from your agent pane's normal environment; do NOT unset them." >&2
@@ -3081,7 +3081,7 @@ const GH_GIT_PLUMBING_CMDS: &[&str] =
 /// creates the tag through the API, and is gated by this same shim), so the
 /// residual is a third-party program gh runs on the agent's behalf — which is
 /// why aliases and extensions are excluded above. See
-/// `doc/design/shim-path-integrity.md` and workflows.md's "The bypass surface,
+/// `docs/design/shim-path-integrity.md` and workflows.md's "The bypass surface,
 /// honestly".
 /// Resolve everything the shims need baked in, from ONE walk of this machine's
 /// Git for Windows install layout: the absolute `sh.exe` for the `.cmd`
@@ -3128,7 +3128,7 @@ fn gh_shim_git_plumbing(git_dir: Option<&str>) -> String {
          # is in the caller's cmd.exe, so the `.cmd` cannot quote its way out — only a\n\
          # native `git.exe` receives the argument intact. Restricted to gh BUILT-IN\n\
          # commands (an alias or extension can never shadow one), so `gh <alias>` and\n\
-         # `gh ext …` keep the gated git. See doc/design/shim-path-integrity.md.\n\
+         # `gh ext …` keep the gated git. See docs/design/shim-path-integrity.md.\n\
          case \"$cmd\" in\n\
          \x20 {arms}) PATH=\"{dir}:$PATH\"; export PATH ;;\n\
          esac\n",
@@ -3400,7 +3400,7 @@ pub fn git_shim_cmd(real_git: &str, sh_path: Option<&str>) -> String {
 /// which one invoked it. The function keeps its `loomux_` prefix because that is
 /// the cargo-crate axis, whose LIBRARY half (`loomux_lib`) the rebrand
 /// deliberately left alone even after #1562 renamed the binary to
-/// `orrerix`; see doc/design/rebrand-bundle.md.
+/// `orrerix`; see docs/design/rebrand-bundle.md.
 ///
 /// Unlike the gh/git shims this is not a gate: there is no agent use of the
 /// launcher to authorize (agents reach loomux through its MCP tools), so there is
@@ -4744,7 +4744,7 @@ pub enum SessionBaseline {
     /// **NOT group-local**, unlike opencode's, and that is a decision rather
     /// than an omission: codex's only relocation knob is `CODEX_HOME`, which
     /// moves `auth.json` with it, so a per-group store would boot every pane
-    /// logged out. `doc/design/codex.md` carries the argument. The practical
+    /// logged out. `docs/design/codex.md` carries the argument. The practical
     /// consequence for this watcher is that the store it polls is shared with
     /// the human's own codex sessions, which is why a cwd match is required
     /// and a contest is refused rather than resolved.
@@ -5341,7 +5341,7 @@ pub fn solo_group_id() -> &'static GroupId {
 /// `read_blocks` resolves every persisted block `kind` through
 /// `workflow::kind_from_str`, which has no `lead` arm by design — that absence
 /// is what stops a repo's workflow file declaring one and stops a lead opening
-/// a lead (`doc/design/lead-pane.md`, *Consent*) — so a `kind: "lead"` row in
+/// a lead (`docs/design/lead-pane.md`, *Consent*) — so a `kind: "lead"` row in
 /// `group.json` is DROPPED on reload rather than restored. Every reader that
 /// needs the fact after a restart asks this file instead.
 ///
@@ -6206,7 +6206,7 @@ pub struct Guardrails {
     /// calling pane has a group, and the repo's `default` workflow file only
     /// when it does not (#2663; the issues view can be open on a plain pane).
     /// So for a pane inside a group there is one resolution rather than two.
-    /// See `doc/design/orchestration.md`'s full-autonomy section for the
+    /// See `docs/design/orchestration.md`'s full-autonomy section for the
     /// no-group arm and for which way the drift case points.
     ///
     /// Available regardless of the toggle: autonomous mode can run with the
@@ -6929,7 +6929,7 @@ pub const CLAUDE_QUESTION_DENY_TOOLS: &[&str] = &["AskUserQuestion"];
 /// report, queues instead of landing, and that queue is bounded
 /// (`queue::QUEUE_MAX_PER_PANE`, today 8): once full, further admissions are
 /// refused. A blocking question doesn't just stall the asker, it strands
-/// every agent trying to report to it — the incident `doc/design/
+/// every agent trying to report to it — the incident `docs/design/
 /// human-questions.md`'s "The problem" section narrates (a run held
 /// overnight on one unanswered question, nothing reviewed or merged until
 /// morning). `ask_human` (#946 Q1, shipped) is the non-blocking replacement
@@ -7339,7 +7339,7 @@ pub fn cli_extra_env(cli: &str, cfg: &Path, token: &str) -> Vec<(String, String)
         // per-agent config are mutually exclusive at the pin, loomux takes the
         // per-agent config, and the merge that leaves is measured by
         // `pi_repo_mcp_exposure` and documented as an open residual in
-        // `doc/design/pi.md`. Setting the variable here would not harden this
+        // `docs/design/pi.md`. Setting the variable here would not harden this
         // pane; it would point it at somebody else's file.
         "pi" => vec![(PI_SKIP_VERSION_CHECK_ENV.to_string(), "1".to_string())],
         _ => Vec::new(),
@@ -7453,7 +7453,7 @@ pub fn gemini_policy_toml(containment: Containment) -> String {
 // ── OpenCode (#722) ────────────────────────────────────────────────────────
 //
 // Every claim below is verified against the CLI's own source at the version
-// pin recorded in `doc/design/opencode.md` (its published docs do not cover
+// pin recorded in `docs/design/opencode.md` (its published docs do not cover
 // the load-bearing parts), and that document carries the citations and the
 // full containment argument. Kept here in the same shape as the gemini block
 // above: literals in constants, the generated documents in pure functions, so
@@ -7796,7 +7796,7 @@ pub fn opencode_pane_env(
 // ── pi (#2126) ─────────────────────────────────────────────────────────────
 //
 // Every claim below is verified against the vendors' own source and docs at
-// the version pins recorded in `doc/design/pi.md` — pi itself, and separately
+// the version pins recorded in `docs/design/pi.md` — pi itself, and separately
 // the community `pi-mcp-adapter` extension that gives pi MCP at all. That
 // document carries the citations, the containment argument and the residuals.
 // Same shape as the gemini and opencode blocks above: literals in constants,
@@ -8069,7 +8069,7 @@ const PI_REPO_MCP_FILES: &[&str] = &[".mcp.json", ".pi/mcp.json"];
 /// **Per-agent on purpose, and free only here.** pi's adapter merges its
 /// config sources and resolves a collision by server NAME, later source
 /// winning — and the repo's own `.mcp.json` / `.pi/mcp.json` are LATER than
-/// the file loomux names on `--mcp-config` (`doc/design/pi.md`, "Why the
+/// the file loomux names on `--mcp-config` (`docs/design/pi.md`, "Why the
 /// bridge is not exclusive"). A repo declaring a server called `orrerix`
 /// would therefore REPLACE loomux's entry outright, and the pane would boot
 /// with no orrerix tools, or with something else's. An id a repo cannot guess
@@ -8103,7 +8103,7 @@ pub fn pi_server_name(agent: &PathSegment) -> String {
 /// says" must be answerable directly.
 ///
 /// Every key is checked against the adapter's own `readValidatedConfig` /
-/// `validateConfig` at the pin in `doc/design/pi.md`: the document is
+/// `validateConfig` at the pin in `docs/design/pi.md`: the document is
 /// `{ mcpServers, imports?, settings? }`, `mcpServers` is a name→entry map and
 /// an entry is accepted as any JSON object, so the per-entry keys below are
 /// read by the runtime rather than the validator.
@@ -8162,7 +8162,7 @@ pub fn pi_mcp_config_json(port: u16, token: &str, server_name: &str) -> String {
 /// reach: the adapter's `PI_MCP_CONFIG_MODE=exclusive` DISCARDS the
 /// `--mcp-config` override and reads one fixed per-user file instead, so a
 /// per-agent config and exclusivity are mutually exclusive at the pin (see
-/// `doc/design/pi.md`, which cites the two lines). loomux takes the per-agent
+/// `docs/design/pi.md`, which cites the two lines). loomux takes the per-agent
 /// config, which means the repo's own MCP files are merged in — repo-authored
 /// input, in a threat model where the repo is the thing under review.
 ///
@@ -8251,7 +8251,7 @@ pub fn pi_repo_mcp_exposure(
 // `CODEX_HOME/<brand>-<agent>.config.toml`, selected with `-p/--profile`,
 // documented "Layer $CODEX_HOME/<name>.config.toml on top of the base user
 // config" (`utils/cli/src/shared_options.rs` at the pin in
-// `doc/design/codex.md`; the name is built by `resolve_profile_v2_config_path`,
+// `docs/design/codex.md`; the name is built by `resolve_profile_v2_config_path`,
 // `format!("{profile_name}{CONFIG_PROFILE_V2_SUFFIX}")` against `codex_home`).
 // That is a whole `ConfigToml` document layered over the human's own — NOT the
 // narrow `[profiles.<name>]` table, which is the legacy shape and cannot carry
@@ -8575,7 +8575,7 @@ pub fn codex_profile_toml(
     let mut s = String::new();
     s.push_str(&format!(
         "# Generated by {} — do not edit; this file is rewritten on every spawn and\n\
-         # removed with the agent that owns it. See doc/design/codex.md.\n\n",
+         # removed with the agent that owns it. See docs/design/codex.md.\n\n",
         brand::NAME
     ));
 
@@ -8958,7 +8958,7 @@ pub fn claude_permission_mode(unattended: bool) -> &'static str {
 /// change, which is exactly the property `auto` mode's background
 /// safety-classifier fallback could never give: `auto` still lets Claude
 /// **choose** any tool, including one #448/#465's literal deny lists don't
-/// know about yet. See `doc/design/orchestration.md`'s `#465` section for
+/// know about yet. See `docs/design/orchestration.md`'s `#465` section for
 /// the full argument, the two rejected alternatives (Copilot's
 /// `--available-tools`; listening for the CLI's own startup warning), and
 /// why Copilot's side of this issue is documented open rather than closed
@@ -8992,7 +8992,7 @@ pub fn claude_permission_mode(unattended: bool) -> &'static str {
 /// denial is fail-open to a future tool by construction, and closing it would
 /// need a mechanism that separates "new editing tool" from "shell command",
 /// which neither CLI offers today. Recorded, not fixed — see
-/// `doc/design/orchestration.md`'s reviewer-containment section.
+/// `docs/design/orchestration.md`'s reviewer-containment section.
 pub fn claude_effective_permission_mode(unattended: bool, read_only: bool) -> &'static str {
     if read_only {
         "dontAsk"
@@ -10226,7 +10226,7 @@ fn auto_compact_banner_substrings(cli: &str) -> &'static [&'static str] {
 /// streamed reply that ends its turn on a sentence naming the string, with
 /// nothing rendered yet after it). That case is not defended against here —
 /// doing so would need either a structural signal from the CLI itself (see
-/// `doc/design/orchestration.md`'s note on #397's `PreCompact` hook) or a
+/// `docs/design/orchestration.md`'s note on #397's `PreCompact` hook) or a
 /// second-tick confirmation before latching, which was judged not worth the
 /// added state for how narrow the remaining window is. If this assumption
 /// stops holding in practice, that added confirmation tick is the next move,
@@ -12864,7 +12864,7 @@ pub fn is_demo_gated(status: &str) -> bool {
 /// The levels are STRICT since #1156: an epic is top-level only, and a
 /// feature/story/task must sit directly inside the level above it
 /// (`ladder_rule`). #958 shipped them ADVISORY and argued for it; the
-/// human overturned that from using it — see `doc/design/task-hierarchy.md` §2
+/// human overturned that from using it — see `docs/design/task-hierarchy.md` §2
 /// for both sides of the argument. A KIND-LESS row is exempt from the ladder
 /// and always will be (§2.1): that is what keeps a flat board — the shape a
 /// group that runs no Agile at all wants, and the shape every pre-#1156 board
@@ -12882,7 +12882,7 @@ pub const TASK_KINDS: [&str; 4] = ["epic", "feature", "story", "task"];
 pub const TASK_LINK_TYPES: [&str; 6] = [
     "requirement",  // the spec clause this work must satisfy
     "spec",         // an acceptance spec or API contract
-    "design-note",  // a doc/design/*.md argument governing the approach
+    "design-note",  // a docs/design/*.md argument governing the approach
     "test-case",    // a test that pins the behaviour (a review input too)
     "doc",          // user-facing documentation this work must keep true
     "link",         // anything else worth reading first
@@ -13042,7 +13042,7 @@ fn check_ladder(
 /// referenced by `deps`/`related`/`parent`, by the audit log, by agents' stored
 /// session state and by a human's memory, and rewriting one would break every
 /// one of those at once. The `kind` field is the truth; the badge renders it
-/// beside the id (`doc/design/task-hierarchy.md` §2.2).
+/// beside the id (`docs/design/task-hierarchy.md` §2.2).
 fn kind_id_prefix(kind: Option<&str>) -> &'static str {
     match kind {
         Some("epic") => "e",
@@ -13333,7 +13333,7 @@ pub struct TaskLink {
     #[serde(rename = "type")]
     pub link_type: String,
     /// What the link points AT — an issue/PR ref (`#123`), a repo-relative
-    /// path (`doc/design/x.md`), or a URL. Free-form on purpose (see above).
+    /// path (`docs/design/x.md`), or a URL. Free-form on purpose (see above).
     pub target: String,
     /// Optional one-line gloss shown instead of a bare target. Skipped when
     /// absent so a label-less link costs no bytes and no board gains the key.
@@ -13482,7 +13482,7 @@ pub struct Task {
     /// would need a sync subsystem loomux does not have, two writable
     /// authorities to reconcile, and could not be the truth even in principle
     /// — a board row with no `issue` is routine and must still be sprintable.
-    /// See `doc/design/board-sprints-and-links.md`.
+    /// See `docs/design/board-sprints-and-links.md`.
     ///
     /// **Nothing gates on it.** Not readiness, not `claim`, not WIP, not any
     /// permission — a sprint reorders what the orchestrator SHOULD pick up
@@ -13891,7 +13891,7 @@ fn etag_field(h: &mut u64, bytes: &[u8]) {
 /// The hazard is a whole-array replace composed from a stale snapshot, so the
 /// token covers exactly what such a write destroys. Hashing the whole row
 /// instead (or reusing `updated_ms`, which is the same thing with worse
-/// granularity — see `doc/design/board-sprints-and-links.md` §16) would refuse a
+/// granularity — see `docs/design/board-sprints-and-links.md` §16) would refuse a
 /// human's half-finished link edit because a worker appended a progress note to
 /// the same row, which is a spurious refusal on the board's most active rows.
 ///
@@ -14161,7 +14161,7 @@ pub fn unmet_deps<'a>(task: &'a Task, board: &[Task]) -> Vec<&'a str> {
 /// everything it contains.
 ///
 /// Tolerant on a hand-edited board, in the direction §5 of
-/// doc/design/task-hierarchy.md already stakes out: a `parent` naming no live
+/// docs/design/task-hierarchy.md already stakes out: a `parent` naming no live
 /// row ends the chain (an orphan renders at top level, so it has no container
 /// to be blocked by), and a cycle terminates on the repeat with every member
 /// reached. Reached, deliberately not "checked exactly once": a cycle that does
@@ -14442,7 +14442,7 @@ fn normalize_task_links(raw: Vec<TaskLink>, board: &[Task], field: &str) -> Resu
 /// no second authority that can drift from the rows. `tasks.json` stays the flat
 /// array it has always been — storing a board-level integer would mean either an
 /// array-to-object migration for one number, or a sidecar file that can go stale
-/// (the failure `doc/design/board-order-and-archive.md` already documents
+/// (the failure `docs/design/board-order-and-archive.md` already documents
 /// rejecting).
 ///
 /// **A sprint therefore completes only as a consequence of its rows completing**,
@@ -14673,7 +14673,7 @@ fn subtree_height(root: &str, tasks: &[Task]) -> usize {
 /// PROMOTION CAN LAND A ROW WHERE THE #1156 LADDER WOULD NOT HAVE PUT IT — a
 /// `feature` whose epic was deleted ends up at top level, which no write could
 /// have asked for. That is deliberate, and it is the same strict-write/tolerant-
-/// read split the rest of hierarchy already has (`doc/design/task-hierarchy.md`
+/// read split the rest of hierarchy already has (`docs/design/task-hierarchy.md`
 /// §5): the alternatives are refusing the human's delete, cascading it into the
 /// work items, or silently STRIPPING the survivor's level — destroying data to
 /// preserve an invariant about a label. The row reads and renders fine; the
@@ -15024,8 +15024,8 @@ pub struct UsageSnapshot {
     ///
     /// **Seven values, on SIX surfaces that must move together**: this doc,
     /// `AgentUsage.source`'s union in `src/orchestration.ts`, the enumeration
-    /// in `doc/design/group-cost-tracking.md`, the `source`→`cli` table in
-    /// `doc/design/orchestration-evals.md`, and TWO in
+    /// in `docs/design/group-cost-tracking.md`, the `source`→`cli` table in
+    /// `docs/design/orchestration-evals.md`, and TWO in
     /// `scripts/orch-scorecard.cjs`: `SOURCE_TO_CLI` (whose test pins it) and
     /// the H10 hazard entry, which states the same mapping in prose.
     ///
@@ -15213,7 +15213,7 @@ pub struct Caller {
     /// One WIDENS: `group_usage`, `require_orchestrator`-only for every other
     /// tier, is granted to a caller that is BOTH `Role::Reviewer` and
     /// `role_hint == liaison` (#891 S2). The full enumeration, and why a grant
-    /// owes an argument a narrowing does not, lives in `doc/design/liaison.md`.
+    /// owes an argument a narrowing does not, lives in `docs/design/liaison.md`.
     ///
     /// **This field is roster-derived, never caller-supplied**, and the gates
     /// above depend on that: [`OrchRegistry::resolve_token`] reads it from the
@@ -16090,7 +16090,7 @@ pub mod lockorder {
     /// Stated as what the code does rather than as a quotation from that
     /// function's doc (#1702): the doc used to promise exactly this and the
     /// promise was worthless to its CALLER, which was holding `agents` when it
-    /// called in. See `doc/design/lock-liveness.md` §6.
+    /// called in. See `docs/design/lock-liveness.md` §6.
     pub const BY_PTY: LockRank = LockRank::new(500);
 
     /// `agents` — the agent table. Under `by_pty`, over `groups`.
@@ -16839,7 +16839,7 @@ pub struct OrchRegistry {
     /// Since #1608 the frontend asks for none of them: the snapshot publisher
     /// computes `usage` and `autonomy` in one pass, so the memo's remaining
     /// callers are that pass and the `group_usage` MCP tool. It is not redundant
-    /// yet for exactly that reason — see `doc/design/polled-views.md`.
+    /// yet for exactly that reason — see `docs/design/polled-views.md`.
     ///
     /// **`Arc<Mutex<..>>` per group, not one map lock.** The outer map lock is
     /// held only long enough to clone the per-group cell out (pty.rs's
@@ -18895,7 +18895,7 @@ fn append_ledger_line(path: &Path, line: &str) -> std::io::Result<()> {
 
 /// The usage series' file name inside a group directory (#2011 slice B).
 ///
-/// A **persisted schema** — `doc/design/token-charts.md` is its contract. It is
+/// A **persisted schema** — `docs/design/token-charts.md` is its contract. It is
 /// append-only, has **exactly one writer at a time** (see
 /// [`OrchRegistry::series_sample`]: the usage tick, whichever thread is running
 /// it, serialized per group by the usage memo cell), is **never rotated** and
@@ -18921,7 +18921,7 @@ pub const USAGE_SERIES_FILE: &str = "usage-series.jsonl";
 /// 30 s poll would stall. Crossing it sets `oversize` on the payload; it never
 /// shortens the answer. When it does start firing, the fix is one of the two
 /// this slice consciously deferred: seek to `since_ms` rather than filter, or
-/// compact. See `doc/design/token-charts.md`.
+/// compact. See `docs/design/token-charts.md`.
 pub const SERIES_REVISIT_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Append one row to a group's `usage-series.jsonl`.
@@ -19408,7 +19408,7 @@ impl RefusalReason {
 /// and a synthetic id would be a number that joins against nothing while
 /// looking like one that does. So refusals are surfaced as their own list, on
 /// their own key — `{from, to, preview}`, the same naming [`SuppressedDelivery`]
-/// settled on for the same reason. See `doc/design/orchestration.md`'s
+/// settled on for the same reason. See `docs/design/orchestration.md`'s
 /// "Front-door refusals (#579)".
 ///
 /// The other half of that argument is behavioral: an orphan is a payload
@@ -20944,7 +20944,7 @@ pub fn recorded_confirmed(last_delivery: &TrackedMutex<HashMap<u32, DeliveryOutc
 /// a brief (#2089). `None` from [`pane_delivery_readiness`] means it is.
 ///
 /// Every variant is a fact orrerix's own delivery machinery already recorded —
-/// never a reading of the pane's screen, which `doc/design/review-driver.md` §3
+/// never a reading of the pane's screen, which `docs/design/review-driver.md` §3
 /// keeps out of the review driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneNotReady {
@@ -20964,7 +20964,7 @@ pub enum PaneNotReady {
     /// Narrowing to `Box`/`Hook` needs [`ConfirmSource`] carried on
     /// `DeliveryOutcome`, which nothing stores; the trade and how to settle it
     /// from `prompt-typed`'s own `confirm_source` column are in
-    /// `doc/design/review-driver.md` §3.1 item 5.
+    /// `docs/design/review-driver.md` §3.1 item 5.
     Unconfirmed,
     /// Nothing has ever been delivered to this pty, so there is no evidence
     /// either way. Refused rather than assumed: "we could not look" is not
@@ -21006,7 +21006,7 @@ impl PaneNotReady {
 /// pane's queue between this answer and `deliver_prompt` is pasted first. The
 /// window is not widened by #2089 — the arm it replaces had the same gap with no
 /// readiness read to race — but "ready" means "was ready when asked", not "will
-/// still be when the brief lands". See `doc/design/review-driver.md` §3.1 item 5
+/// still be when the brief lands". See `docs/design/review-driver.md` §3.1 item 5
 /// for both residuals and the trade behind the wider `Confirmed`.
 #[doc(hidden)] // pub for integration tests
 pub fn pane_delivery_readiness(
@@ -22126,7 +22126,7 @@ pub enum StrandedBlocker {
     /// real reading. Note it is NOT a drop-in — `termgrid::render_screen`
     /// returns scrolled-off history rows *followed by* the on-screen rows, so
     /// pointing the detector at it unchanged would reproduce this same bug.
-    /// See `doc/design/orchestration.md`'s #532 section for what the follow-up
+    /// See `docs/design/orchestration.md`'s #532 section for what the follow-up
     /// actually needs.
     QuestionStale,
     /// #569: deliveries aimed at this pane were DISCARDED while the group was
@@ -24448,7 +24448,7 @@ enum DeliverOutcome {
 /// admitted into `pty_id`'s queue at arrival (`deliver_prompt`'s front
 /// door), and only the queue's front entry is ever handed to this function
 /// — there is no more separate "fresh delivery races a raw mutex" path for
-/// this to serve (see `doc/design/orchestration.md`'s Ordering subsection
+/// this to serve (see `docs/design/orchestration.md`'s Ordering subsection
 /// for why that path was the actual ordering bug, not merely unfair). `reg`
 /// is used only for the pre-existing (#103/#112)
 /// `notify_unconfirmed_delivery`/late-monitor wiring, unrelated to the
@@ -24945,7 +24945,7 @@ fn deliver_now(
     // that timed out its own hold and enqueued WHILE this one was blocked
     // could otherwise be overtaken. #470 removes the recheck rather than
     // widening it (a reviewer proved widening it to 3+ contenders
-    // insufficient — see `doc/design/orchestration.md`'s Ordering
+    // insufficient — see `docs/design/orchestration.md`'s Ordering
     // subsection): every delivery, including this one, is now admitted
     // into the SAME queue at `deliver_prompt`'s front door, atomically with
     // the emptiness check that decided whether it or something else runs
@@ -25144,7 +25144,7 @@ fn deliver_now(
             // code unreachable. The residual that leaves — a dialog painted above
             // a composer holding our paste, showing no token evidence, inside the
             // override window — is argued in
-            // `doc/design/question-gate-authorship.md`; `h13`'s dialog is caught
+            // `docs/design/question-gate-authorship.md`; `h13`'s dialog is caught
             // by the menu-structure TOKEN clause and is not in it.
             if question_overridden
                 && preenter_override_admits(
@@ -25794,7 +25794,7 @@ pub enum StrandedMarkerAction {
 }
 
 /// **A marker is a repair, not a payload** — and that is the whole argument for
-/// #813 (see `doc/design/orchestration.md`).
+/// #813 (see `docs/design/orchestration.md`).
 ///
 /// Before this, a marker that could not fire stayed at the FRONT of the pane's
 /// queue and was retried "next tick, no cap, exactly like every other queued
@@ -26056,7 +26056,7 @@ pub fn drain_stranded_submit(
 /// existing queue a drainer is already (or about to be) working through.
 /// There is no longer a separate "race a raw mutex, bypass the queue
 /// entirely" path for a later arrival to use to cut ahead — see
-/// `doc/design/orchestration.md`'s Ordering subsection for the argument
+/// `docs/design/orchestration.md`'s Ordering subsection for the argument
 /// this closes (a plain fair mutex does NOT: a reviewer proved a delivery
 /// deferred at its OWN paste-point recheck can still lose its arrival
 /// position to a later arrival that queued via a bypass the fair lock never
@@ -26585,7 +26585,7 @@ fn run_queue_drainer(
             // reading the grant exists because loomux has stopped believing. It
             // was the abort that stranded the paste and wedged the queue behind
             // it; the residual that carrying leaves is named in
-            // `doc/design/question-gate-authorship.md`.
+            // `docs/design/question-gate-authorship.md`.
             //
             // The chip is NOT lowered here: the pane is still held as far as
             // every gate is concerned, and a successful delivery lowers it below
@@ -27984,7 +27984,7 @@ fn reconstructs_to_end(rows: &[String], from: usize, line: &str, at: usize) -> O
 /// The residual that remains — an orchestrator delivering rows that coincide
 /// with a real dialog's, a dialog with no question row of its own, a header
 /// whose text the same party controls — is argued in
-/// `doc/design/question-gate-authorship.md` and is bounded, not closed.
+/// `docs/design/question-gate-authorship.md` and is bounded, not closed.
 ///
 /// **Two rules, both anchored in the record:**
 ///
@@ -28140,7 +28140,7 @@ pub fn mask_loomux_notices_with_record(tail: &str, delivered: &[String]) -> Stri
         // from under the detector while the dialog's own question row is still
         // above them; `dialog_header_above` is the same shape-tracking scan
         // `mask_own_paste` uses for its short-pointer case. What it does NOT
-        // bound is stated in `doc/design/question-gate-authorship.md`: a dialog
+        // bound is stated in `docs/design/question-gate-authorship.md`: a dialog
         // with no question row of its own, and a header whose text the same
         // party controls.
         if claimed.is_some() && dialog_header_above(&rows, &norm, &keep, i) {
@@ -28349,7 +28349,7 @@ pub fn record_contributions_for(batch: &[queue::QueuedDelivery]) -> Vec<(String,
 ///   `[orch] Round 3 (cap) re-record…` that wedged `rev-1277` reached `rev-1262`
 ///   on this kind, so refusing it would close the door by regressing #903.
 /// - `MidSession` — a `send_prompt` body, orchestrator-authored. The accepted
-///   two-party residual, argued in `doc/design/question-gate-authorship.md`.
+///   two-party residual, argued in `docs/design/question-gate-authorship.md`.
 /// - `Regrounding` — REFUSED. Its entire payload is the post-compact notice
 ///   whose body is the agent's own directive ledger.
 ///
@@ -28599,7 +28599,7 @@ impl DeliveredPrompts {
 /// would have painted on its own, so masking them would blind the gate to
 /// ordinary pane content that no other delivery path hides. They are passed in
 /// here and excused; everything else in the block is loomux's own framing and
-/// must mask away. See the #632 section of `doc/design/orchestration.md` for
+/// must mask away. See the #632 section of `docs/design/orchestration.md` for
 /// why leaving them to latch is the conservative direction.
 ///
 /// Comparison is on trimmed, non-empty rows: blank rows carry no tokens for
@@ -29384,7 +29384,7 @@ pub fn hold_bound_elapsed(held_since_ms: u64, now_ms: u64, bound_ms: u64) -> boo
 /// withholds the Enter from a live dialog is [`override_enter_admits`]: fresh
 /// re-reads, every one of which must show this pane's own composer holding this
 /// delivery's paste. What that does NOT bound is written up in
-/// `doc/design/question-gate-authorship.md` rather than left implicit here. See
+/// `docs/design/question-gate-authorship.md` rather than left implicit here. See
 /// [`question_override_admits`] for the grant itself.
 ///
 /// **Sized between the two clocks that already exist**, which is the whole of
@@ -33273,7 +33273,7 @@ impl OrchRegistry {
     /// recurrence. The cost of this feature is linear in it — each one is a
     /// transcript read plus a friction-extraction pass — and it is charged
     /// per call, because nothing is cached (see
-    /// `doc/design/supervisor-skills.md`, "Recurrence is derived on read").
+    /// `docs/design/supervisor-skills.md`, "Recurrence is derived on read").
     /// Small on purpose: recurrence is a yes/no-ish signal ("did anyone else
     /// hit this?"), and the difference between scanning 8 sessions and 40 is
     /// a much larger bill for a marginally better answer.
@@ -35491,7 +35491,7 @@ impl OrchRegistry {
     ///
     /// **Why loomux's own record and not a CLI's.** The sidebar's session
     /// scan reads each CLI's own store, and for opencode that is deliberately
-    /// the human's GLOBAL store only (`doc/design/opencode.md`): a group's
+    /// the human's GLOBAL store only (`docs/design/opencode.md`): a group's
     /// opencode sessions live in `<group>/opencode/opencode.db`, which is
     /// excluded on purpose because a bare `--session` pane spawned from such a
     /// row would be powerless. Before #1563 that left a fresh opencode
@@ -35518,7 +35518,7 @@ impl OrchRegistry {
     /// deleted — so the cost argument above stands on the fan-out alone, which
     /// is what it always rested on. What #749 still owns is narrower: an index
     /// or live-groups filter, so `session_roles` stops scaling with groups
-    /// EVER created. See `doc/design/performance.md` §5.) The cost here is two
+    /// EVER created. See `docs/design/performance.md` §5.) The cost here is two
     /// small JSON reads per group, plus a store membership test per group with
     /// a recorded orchestrator session.
     ///
@@ -36736,7 +36736,7 @@ impl OrchRegistry {
     ///
     /// **Reads, never mutates.** The suppressed set comes out of the audit log
     /// — no new state, no new `queues` mutation, and therefore no
-    /// `persist_queues` obligation (see `doc/design/orchestration.md`'s
+    /// `persist_queues` obligation (see `docs/design/orchestration.md`'s
     /// persistence table). The one write anywhere on this path is the notice
     /// itself, admitted through the ordinary front door
     /// (`deliver_to_orchestrator` → `deliver_prompt` → `enqueue_text`), which
@@ -36858,7 +36858,7 @@ impl OrchRegistry {
     /// `report`s `done`/`blocked` and is then reaped out from under the human,
     /// whose only notice of it goes to the OTHER pane. The cost argument does not
     /// carry it either — an idle pane spends nothing, and the slot it holds is
-    /// deliberate (`doc/design/liaison.md`: size the roster +1).
+    /// deliberate (`docs/design/liaison.md`: size the roster +1).
     ///
     /// The hint is read from the group's own roster via the agent's recorded
     /// block, never from anything the agent supplied — the same source
@@ -36927,7 +36927,7 @@ impl OrchRegistry {
     /// carry the disclosure: giving them one is a wire-shape change to each of
     /// the six, which is a bigger change than this slice should make on its own
     /// initiative. The breadcrumb is what an operator has meanwhile, and
-    /// `doc/design/lock-liveness.md` §3 carries the row.
+    /// `docs/design/lock-liveness.md` §3 carries the row.
     ///
     /// Takes no `self`: it is called from inside `run_blocking(move || ..)` in
     /// the module-level `#[tauri::command]` functions, which have moved `reg`
@@ -36978,7 +36978,7 @@ impl OrchRegistry {
     /// exactly the corruption rider R1 exists to prevent. Inside the scope a
     /// timeout waits, unbounded, as it always did; only the re-entrant refusal
     /// unwinds, because it is the one wait that never ends
-    /// (`doc/design/lock-liveness.md` §4.1). So this changes what a *defect*
+    /// (`docs/design/lock-liveness.md` §4.1). So this changes what a *defect*
     /// does and changes nothing about what contention does.
     ///
     /// It does NOT make a genuine panic in one of these commands survivable —
@@ -37666,7 +37666,7 @@ impl OrchRegistry {
     // The engine is `locks::LockTable` (pure, unit-tested there); everything
     // below is the wiring: one reader for the config, one guarded accessor for
     // the table, audit lines, and pane notices. Design note:
-    // `doc/design/lock-resources.md`.
+    // `docs/design/lock-resources.md`.
 
     /// What this group's repo currently declares under `resources:`. **One
     /// reader for the whole block**, the same rule `merge_queue_policy` states:
@@ -38109,7 +38109,7 @@ impl OrchRegistry {
     /// posting to that PR's conversation. So this tool can address a PR. What it
     /// cannot do to one is anything but comment, which is the capability bound
     /// that matters; refusing the number would cost a second round trip per post
-    /// to buy nothing. `doc/design/orchestration.md` carries the same statement.
+    /// to buy nothing. `docs/design/orchestration.md` carries the same statement.
     ///
     /// **The body travels as a FILE, not as an argument** — see
     /// [`crate::gh::comment_file_argv`] for the two limits that forces: Windows'
@@ -38953,7 +38953,7 @@ impl OrchRegistry {
     //
     // A "workspace" is a project tab, and each tab owns at most one
     // orchestration group — so "cross-workspace" is cross-group inside this
-    // one process, one registry (`doc/design/cross-workspace-channel.md`).
+    // one process, one registry (`docs/design/cross-workspace-channel.md`).
     // A channel is shared in-memory state, mirroring `watches`; a message is
     // delivered through the SAME `deliver_prompt` visible-prompt path every
     // other agent-to-pane delivery uses (`report`, `send_prompt`, a fired
@@ -40079,7 +40079,7 @@ impl OrchRegistry {
     // `create_orchestration_group`, the identity/flag half from
     // `solo_prepare` — rather than either being copied.
     //
-    // See `doc/design/lead-pane.md` for the class, the surface and the
+    // See `docs/design/lead-pane.md` for the class, the surface and the
     // consent argument.
 
     /// Human-only (the launcher's "orrerix subagents" toggle, constraint 5):
@@ -40110,7 +40110,7 @@ impl OrchRegistry {
     /// **The roster carries reviewer and planner blocks it will never open**,
     /// on purpose. The refusal a lead gets for `kind: "reviewer"` is the
     /// caller-class check in `mcp::call_tool`, which is the refusal
-    /// `doc/design/lead-pane.md` argues for and
+    /// `docs/design/lead-pane.md` argues for and
     /// `a_lead_may_spawn_a_worker_and_nothing_else` pins. Drop the blocks and
     /// the same call fails on "no such block" instead — a different refusal,
     /// from a different mechanism, and one that would silently start passing if
@@ -40152,7 +40152,7 @@ impl OrchRegistry {
                 "{cli} cannot host a lead pane yet: its MCP config is delivered through the \
                  pane's environment or a config file, not as flags on the command line the \
                  launcher builds, and a lead with no orrerix MCP server holds none of the \
-                 tools this toggle grants. See doc/design/lead-pane.md — widening the prepare \
+                 tools this toggle grants. See docs/design/lead-pane.md — widening the prepare \
                  seam to carry environment pairs is the follow-up that lifts this."
             ));
         }
@@ -40165,7 +40165,7 @@ impl OrchRegistry {
         // string never becomes a name.
         if cli == "codex" {
             return Err(
-                "codex cannot host a lead pane yet: its MCP identity rides a profile file the lead path does not write. See doc/design/lead-pane.md - the codex lead arm is the follow-up (#2833) that lifts this."
+                "codex cannot host a lead pane yet: its MCP identity rides a profile file the lead path does not write. See docs/design/lead-pane.md - the codex lead arm is the follow-up (#2833) that lifts this."
                     .into(),
             );
         }
@@ -40362,7 +40362,7 @@ impl OrchRegistry {
         self.by_token.lock_safe().insert(token, agent_id.clone());
         // Persisted, unlike a solo pane's: this row is what makes the pane
         // visible to the session browser and the Agents tab, and it is the
-        // `"role": "lead"` row `doc/design/lead-pane.md` lists as a
+        // `"role": "lead"` row `docs/design/lead-pane.md` lists as a
         // public-contract change.
         self.persist_agent_record(&entry, "running");
         Ok((agent_id, mcp_args))
@@ -44160,7 +44160,7 @@ impl OrchRegistry {
     /// `sync_merge_gate` sequence a fresh launch runs (`create_group`'s `Fresh`
     /// arm); turning it OFF clears the gate and restores the built-in roster.
     /// The gate is scoped to the CURRENT SESSION, not to any one PR's
-    /// provenance — see `doc/design/workflows.md`, "a gate lives and dies with
+    /// provenance — see `docs/design/workflows.md`, "a gate lives and dies with
     /// the toggle that authorized it" — so toggling OFF opens even a PR built
     /// earlier under workflow mode, and toggling back ON re-arms it.
     ///
@@ -45076,7 +45076,7 @@ impl OrchRegistry {
         //                                            attention maps
         //
         // Phase 2 is where every nested acquisition now happens, and it happens
-        // with the registry free. `doc/design/lock-liveness.md` §6 is the
+        // with the registry free. `docs/design/lock-liveness.md` §6 is the
         // contract; `liveness.rs`'s `l6a_`/`l6b_` rows are the guard.
         let roster: Vec<AgentEntry> = self.agents.lock_safe().values().cloned().collect();
 
@@ -45230,7 +45230,7 @@ impl OrchRegistry {
         //
         // Keyed on the provider DETECTED IN THE TEXT rather than on the
         // block's model prefix, which is the one place this deviates from
-        // plan-2504 §3 S5a — see `doc/design/attention-provider-limit.md`. pi
+        // plan-2504 §3 S5a — see `docs/design/attention-provider-limit.md`. pi
         // and opencode surface OpenRouter's refusal verbatim, so a pane whose
         // model reads `opencode/...` is stopped by OpenRouter's limit; keying
         // on the prefix would file it under a third "provider" that has no
@@ -45310,7 +45310,7 @@ impl OrchRegistry {
         //
         // Keyed on the provider DETECTED IN THE TEXT rather than on the block's
         // model prefix, which is the one place this deviates from plan-2504 §3
-        // S5a — see `doc/design/attention-provider-limit.md`. pi and opencode
+        // S5a — see `docs/design/attention-provider-limit.md`. pi and opencode
         // surface OpenRouter's refusal verbatim, so a pane whose model reads
         // `opencode/...` is stopped by OpenRouter's limit; keying on the prefix
         // would file it under a third "provider" that has no remedy and would
@@ -46177,7 +46177,7 @@ impl OrchRegistry {
         // codex writes a JSONL rollout per thread, like claude and pi -- but
         // into the HUMAN's own store (`CODEX_HOME/sessions/YYYY/MM/DD/`), not a
         // per-group one, because a per-agent `CODEX_HOME` would relocate
-        // `auth.json` and boot every pane logged out (`doc/design/codex.md`,
+        // `auth.json` and boot every pane logged out (`docs/design/codex.md`,
         // "Deliberately not done"). Three consequences worth stating here,
         // because they are what this arm's shape is:
         //
@@ -46642,7 +46642,7 @@ impl OrchRegistry {
     /// `since_ms` filters, it does not seek: the file is read whole. That is
     /// the honest shape while the writer is append-only and unrotated, and the
     /// panel polls at 30 s rather than at the 1 s tiers, so this is not on a
-    /// hot path (`doc/design/polled-views.md`).
+    /// hot path (`docs/design/polled-views.md`).
     ///
     /// **The residual that shape leaves is BOUNDED rather than open-ended**
     /// (#2941 review). A file nothing rotates grows with the calendar, so
@@ -47083,7 +47083,7 @@ impl OrchRegistry {
             // two: a group that declares one and has none is a human whose own
             // interface to this group is not there — because the launch open
             // failed, or because the pane died or was closed — and nothing
-            // automatic reopens it, deliberately (see `doc/design/manager.md`).
+            // automatic reopens it, deliberately (see `docs/design/manager.md`).
             // A group that declares none is the overwhelmingly common case and
             // has nothing to say.
             //
@@ -47390,7 +47390,7 @@ impl OrchRegistry {
     /// its job — spawn by block id rather than by kind, run *every* declared
     /// reviewer on each PR rather than one, and treat a declared gate as a hard
     /// precondition — and the one thing it does not: the edges are advisory, and
-    /// the scheduling judgment stays the orchestrator's. See doc/design/workflows.md
+    /// the scheduling judgment stays the orchestrator's. See docs/design/workflows.md
     /// ("Why edges are advisory") for why that asymmetry is the whole design.
     ///
     /// `{{MAX_AGENTS}}` is rendered here rather than left to the caller: the
@@ -47571,7 +47571,7 @@ impl OrchRegistry {
         // keeps the four goldened role templates byte-identical.
         //
         // Every claim here is scoped to what M1 and M2 SHIPPED, deliberately (the
-        // #1026 fail-open line, and `doc/design/manager.md`'s "what M2 does not
+        // #1026 fail-open line, and `docs/design/manager.md`'s "what M2 does not
         // ship"):
         //
         // - `spawn_agent` refuses a manager by `kind` AND by `block` (M1), so
@@ -47589,7 +47589,7 @@ impl OrchRegistry {
         //   `counts_against_max_agents`, the reaper's role-keyed skip and the
         //   watchdog's own `Role::Manager` arm — so an orchestrator acting on this
         //   note cannot violate them, and a second surface ASSERTING them would be
-        //   a copy free to drift from the predicates. `doc/design/manager.md`'s
+        //   a copy free to drift from the predicates. `docs/design/manager.md`'s
         //   Lifecycle table is where they are documented. The instruction here —
         //   never `kill_agent` it — is the rule that matters to this reader either
         //   way: the orchestrator is the one thing in this group that can end the
@@ -49866,7 +49866,7 @@ impl OrchRegistry {
     ) -> ReusablePane {
         // The candidates are collected under `agents` and that guard is DROPPED
         // before any readiness read. `queues` is rank 400 and `agents` 510
-        // (`doc/design/lock-order.md` §4), so asking a candidate's queue depth
+        // (`docs/design/lock-order.md` §4), so asking a candidate's queue depth
         // from inside the filter would take them in the inverted order.
         let mut candidates: Vec<(u64, String, u32)> = self
             .agents
@@ -51185,7 +51185,7 @@ impl OrchRegistry {
                 // around it would trade that carefully-resolved trust
                 // property (`profiles::handle_resolves_to`) for mechanics-
                 // core coverage this one case still lacks — a residual,
-                // documented gap (doc/design/orchestration.md's #416 note),
+                // documented gap (docs/design/orchestration.md's #416 note),
                 // not something worth reaching across that boundary for.
                 // `contract_carrier` stays its default (`KickoffOnly`) —
                 // only the user's OWN file rides `--agent`, never anything
@@ -51709,7 +51709,7 @@ impl OrchRegistry {
             // present lives on the generated files instead.
             //
             // Two persona surfaces are deliberately NOT wired, and both are
-            // stated rather than silently dropped (see `doc/design/workflows.md`):
+            // stated rather than silently dropped (see `docs/design/workflows.md`):
             //
             // - **No native custom-agent flag.** Gemini has no `--agent`
             //   equivalent, so a gemini block's persona reaches it through the
@@ -53422,7 +53422,7 @@ impl OrchRegistry {
     /// about what to run when (serialize a sprawling change, parallelize
     /// independent ones, plan first or go straight to a worker) is the thing
     /// that makes it good, and a static graph would replace it with something
-    /// dumber. See doc/design/workflows.md.
+    /// dumber. See docs/design/workflows.md.
     fn roster_note(&self, g: &GroupInfo) -> String {
         if !workflow::roster_is_custom(&g.guardrails.blocks) {
             return String::new();
@@ -53463,7 +53463,7 @@ impl OrchRegistry {
     /// kickoff (#268). Empty — so a repo with no lessons file gets a
     /// kickoff byte-identical to before this existed — unless the file is
     /// present and non-empty, in which case `lessons::load_lessons_note`
-    /// already capped it (see `doc/design/lessons.md`'s trust guardrails).
+    /// already capped it (see `docs/design/lessons.md`'s trust guardrails).
     ///
     /// Orchestrator-only, deliberately (#268's brief): the orchestrator is the
     /// one session per group carrying strategic memory across its whole
@@ -53705,7 +53705,7 @@ impl OrchRegistry {
     /// it once the mutex-holder's own paste-point recheck deferred to the
     /// tail — losing its arrival position to something that arrived after
     /// it. A reviewer proved this survives even a perfectly FAIR mutex (see
-    /// `doc/design/orchestration.md`'s Ordering subsection), which is why
+    /// `docs/design/orchestration.md`'s Ordering subsection), which is why
     /// the fix is unifying admission, not fairing the old lock. Only the
     /// admission that observes an empty queue (`was_first`) is responsible
     /// for kicking off `run_queue_drainer`, below, which is now the ONLY
@@ -53783,7 +53783,7 @@ impl OrchRegistry {
         // The permitted set is a property of `Delivery`, not a list here:
         // `permitted_into_manager_pane` is the whole of it, and it is pinned
         // as a set so a fourth carve-out cannot be added quietly. See
-        // `doc/design/manager.md`.
+        // `docs/design/manager.md`.
         if a.role == Role::Manager && !delivery.permitted_into_manager_pane() {
             self.audit_delivery_refused(
                 &a.group, agent_id, from, text, RefusalReason::ManagerPane,
@@ -54050,7 +54050,7 @@ impl OrchRegistry {
     /// wins the right to kick off processing (`deliver_prompt`'s front
     /// door); every other admission, no matter how it got here, lands
     /// behind whatever's already there. This is what closes the 3+-contender
-    /// ordering gap (see `doc/design/orchestration.md`'s Ordering
+    /// ordering gap (see `docs/design/orchestration.md`'s Ordering
     /// subsection): there is no longer a separate "race a raw mutex for an
     /// empty queue" path for a later arrival to bypass.
     #[doc(hidden)] // pub for integration tests
@@ -54125,7 +54125,7 @@ impl OrchRegistry {
             match queue::admit(q, text, reason) {
                 queue::AdmitDecision::RejectFull => {
                     // Nothing mutated `queues` on this arm, so no snapshot
-                    // is owed (see doc/design/orchestration.md's
+                    // is owed (see docs/design/orchestration.md's
                     // persistence table). The `entry().or_default()` above
                     // can INTERN an empty deque, which is a mutation of the
                     // map but not of anything the file carries:
@@ -56544,7 +56544,7 @@ impl OrchRegistry {
     /// lock — so the only remaining direct callers are the ones with no
     /// mutation of their own (`readmit_recovered`'s `put_back`, which makes
     /// a `recovered_queue` change durable). The old arrangement — a table
-    /// in `doc/design/orchestration.md` listing who owed this call — is
+    /// in `docs/design/orchestration.md` listing who owed this call — is
     /// what let #533's two new mutators merge clean while owing a write
     /// nobody knew about.
     ///
@@ -58037,7 +58037,7 @@ impl OrchRegistry {
     // ---------- the bisecting merge queue (#581 slice D2) ----------
 
     /// Reconcile a group's merge queue against reality after a restart
-    /// (`doc/design/merge-queue.md` §4), following `recover_persisted_queue`'s
+    /// (`docs/design/merge-queue.md` §4), following `recover_persisted_queue`'s
     /// **two-phase** shape for the reason that function documents: phase 1 runs
     /// under a once-only guard and may not deliver, because this lock is not
     /// reentrant; phase 2 sends what phase 1 collected, after the guard drops.
@@ -58488,8 +58488,8 @@ impl OrchRegistry {
     /// route a report at a manager — which `deliver_prompt` would then refuse,
     /// correctly, but only after the report had been addressed to a pane that
     /// can never receive one. [`Role::is_root`] and [`Role::is_fixture`] differ
-    /// by exactly that class; see their docs, `doc/design/manager.md` and
-    /// `doc/design/lead-pane.md`. Nothing here weakens the no-injection
+    /// by exactly that class; see their docs, `docs/design/manager.md` and
+    /// `docs/design/lead-pane.md`. Nothing here weakens the no-injection
     /// guarantee — it keys on `Role::Manager` and the `Delivery` kind at the
     /// door, and neither moves.
     ///
@@ -59574,7 +59574,7 @@ pub fn start_max_notice_flusher(reg: Arc<OrchRegistry>) {
 /// [`views::VIEW_STALE_AFTER_MS`]. Started once at app setup.
 ///
 /// **The pass is supervised** (#1702, `obs::TickSupervisor`). It was not, and
-/// `doc/design/polled-views.md` disclosed that: a panic inside one group's
+/// `docs/design/polled-views.md` disclosed that: a panic inside one group's
 /// `compute_group` ended this thread permanently and froze the snapshot for
 /// BOTH polled surfaces at once, with only the stale badge between a dead
 /// publisher and a plausible-looking frozen UI. A panic now costs one pass and
@@ -59756,7 +59756,7 @@ pub fn start_attention(reg: Arc<OrchRegistry>) {
 /// inline in the WebView2 COM callback's frame, where an unwind reaches a plain
 /// `extern "system"` thunk with no `catch_unwind` anywhere in between and
 /// ABORTS the process. Those commands are given a frame instead — see
-/// [`OrchRegistry::mutating_command`] and `doc/design/lock-order.md` §2.1 for
+/// [`OrchRegistry::mutating_command`] and `docs/design/lock-order.md` §2.1 for
 /// the measured call chain — and `src-tauri/tests/synccommands.rs` keeps that
 /// true for the next one added.
 async fn run_blocking<T, F>(f: F) -> T
@@ -60576,7 +60576,7 @@ pub fn orch_workflow_preview_sync(repo: String, agent_cli: String, name: Option<
             // `clamped()` above), because the preview's job is to state the whole
             // spawn and a thinking level is part of it. It is also what makes the
             // trust argument for letting a repo file pin `effort:` on the
-            // ORCHESTRATOR block (doc/design/workflows.md) true rather than
+            // ORCHESTRATOR block (docs/design/workflows.md) true rather than
             // aspirational: that argument rests on the human being shown every
             // block's resolved value here, before the toggle that reads the file.
             "effort": b.effort,
@@ -61420,7 +61420,7 @@ pub async fn orch_autonomy(app: AppHandle, group_id: String) -> Value {
 /// #904: a refused id answers `Value::Null` — and so does a group created
 /// since the last publish pass, deliberately, because the caller's response to
 /// both is the same: keep the previous render and ask again. See
-/// `command_group` and `doc/design/polled-views.md`.
+/// `command_group` and `docs/design/polled-views.md`.
 ///
 /// **Reentrancy.** A read of an immutable snapshot; the only mutation is the
 /// lease stamp, which is last-writer-wins on a monotonic instant and cannot
@@ -61715,7 +61715,7 @@ pub async fn orch_apply_workflow(
 /// payload reaches the panel as that read's `workflow` section — computed by
 /// the publisher thread through the same `workflow_status` call below, so the
 /// wire shape is unchanged. What remains here are the non-poll callers
-/// (`tasksview.ts` reads it once on open). See `doc/design/polled-views.md`.
+/// (`tasksview.ts` reads it once on open). See `docs/design/polled-views.md`.
 ///
 /// The off-thread argument below still stands and is the reason the PUBLISHER
 /// pays it on a 1 s cadence rather than a poll paying it per tick.
@@ -63008,7 +63008,7 @@ pub fn resume_recorded_session(
     // relaunch, so rejoining one of its children would put a worker into a group
     // whose `report` resolves no root at all — a delegate typing into nothing, on
     // a branch and worktree whose owner is gone. That is the restore residual
-    // `doc/design/lead-pane.md` records, and this is the message the session
+    // `docs/design/lead-pane.md` records, and this is the message the session
     // browser shows in its place.
     //
     // Decided by the group MARKER, not by the roster: `read_blocks` drops a
@@ -63888,7 +63888,7 @@ pub async fn orch_audit(app: AppHandle, group_id: String) -> Vec<AuditEntry> {
 
 /// The group's persisted usage time series, for the token time-plot (#2011
 /// slice B) — read-only, and a **command signature**:
-/// `doc/design/token-charts.md` carries its contract beside the file schema.
+/// `docs/design/token-charts.md` carries its contract beside the file schema.
 ///
 /// `since_ms` is a filter, not a seek, and is optional: a webview bundle older
 /// than this field degrades to the whole series rather than failing the read.
@@ -63902,7 +63902,7 @@ pub async fn orch_audit(app: AppHandle, group_id: String) -> Vec<AuditEntry> {
 ///
 /// Off-thread (#743 S4c) through [`run_blocking`]: it reads and parses a whole
 /// JSONL file. It is polled at 30 s by the chart panel and is deliberately not
-/// on the 1 s publisher tiers (`doc/design/polled-views.md`) — the series moves
+/// on the 1 s publisher tiers (`docs/design/polled-views.md`) — the series moves
 /// once per five-minute bucket, so a faster poll could only redraw the same
 /// picture.
 ///

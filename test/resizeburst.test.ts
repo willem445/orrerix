@@ -98,7 +98,7 @@ function widthTransitionMs(selector: string): number {
 /** The panels that share `#workspace`'s flex row with `#grid-area`, so that
  *  toggling one animates every pane's `termEl` through the whole transition:
  *  `#sessions` on the left, and `.sidedock` on the right since #1150 moved it
- *  from an overlay into the row (doc/design/side-dock.md).
+ *  from an overlay into the row (docs/design/side-dock.md).
  *
  *  TWO LIMITS, stated rather than left to be discovered.
  *

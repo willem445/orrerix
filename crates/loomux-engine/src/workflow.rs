@@ -28,8 +28,8 @@
 //! "never writes a file" for anything a shell command can do. What the closed
 //! enum guarantees is that a repo file cannot *change* which posture a block
 //! gets — not that any posture is a sandbox. (See
-//! `doc/design/orchestration.md` on structural vs instruction-backed enforcement;
-//! the capability table in `doc/design/workflows.md` is the honest summary.)
+//! `docs/design/orchestration.md` on structural vs instruction-backed enforcement;
+//! the capability table in `docs/design/workflows.md` is the honest summary.)
 //!
 //! # The capability-closure rule (the security spine)
 //!
@@ -158,7 +158,7 @@ pub const WORKFLOW_PATH: &str = ".orrerix/workflow.yml";
 /// The pre-#1153 spelling, still discovered when `.orrerix/workflow.yml` is
 /// absent — permanently, and never renamed on the repo's behalf: it is a
 /// tracked file in somebody's git history. See [`crate::brand`] for the rule
-/// and `doc/design/rebrand-filesystem.md` for the argument.
+/// and `docs/design/rebrand-filesystem.md` for the argument.
 pub const LEGACY_WORKFLOW_PATH: &str = ".loomux/workflow.yml";
 
 /// Which of the two spellings a given repo actually uses — the string every
@@ -640,7 +640,7 @@ pub struct Block {
     /// The STRUCTURAL containment never reads it: `kind.containment()` and the
     /// CLI deny-flags take a `Role`, not a `Block`. `mcp::tool_defs` does read
     /// it, for a short list of exceptions enumerated in
-    /// `doc/design/liaison.md` — two narrow (`session_digest` to `process`,
+    /// `docs/design/liaison.md` — two narrow (`session_digest` to `process`,
     /// `review_verdict` away from `liaison`) and two widen toward that same
     /// `liaison`, both orchestrator-only for every other hint-carrying class
     /// (`group_usage`; and `ask_human`, the pose only). `Role::Lead` also holds
@@ -1007,7 +1007,7 @@ pub const MERGE_QUEUE_MAX_BATCH_DEFAULT: u32 = 3;
 
 /// The `merge_queue:` block — a sibling of [`Gate`]'s `gates:`, and the whole
 /// of what a repo declares about the queue. Design note:
-/// `doc/design/merge-queue.md` §11.2; the queue's own core is [`crate::mergeq`]
+/// `docs/design/merge-queue.md` §11.2; the queue's own core is [`crate::mergeq`]
 /// (here since #888 batch 6), its write primitives are [`crate::mqdriver`]
 /// (batch 12a), and the loop that sequences them is [`crate::mqloop`] (batch
 /// 12b). None of that wiring reaches a pane host: this line used to say it did,
@@ -1130,7 +1130,7 @@ pub fn clamp_drive_timeout_minutes(raw: Option<u32>) -> u32 {
 }
 
 /// The `driver:` block — policy for the engine-driven review-loop driver
-/// (`doc/design/review-driver.md`), a sibling of [`MergeQueuePolicy`] and the
+/// (`docs/design/review-driver.md`), a sibling of [`MergeQueuePolicy`] and the
 /// whole of what a repo declares about the drive. The driver's own core is
 /// [`crate::reviewdrive`]; this struct is what the FILE means, the half a repo
 /// author can get wrong.
@@ -1235,7 +1235,7 @@ impl Default for DriverPolicy {
 // ── triage: orchestrator delivery triage (#3304 S1) ────────────────────────
 
 /// The `triage:` block — policy for the delivery-triage gate
-/// (`doc/design/delivery-triage.md`), a sibling of [`DriverPolicy`] and read
+/// (`docs/design/delivery-triage.md`), a sibling of [`DriverPolicy`] and read
 /// in exactly the same posture: an absent block means the feature is off and
 /// behaviour is byte-for-byte unchanged.
 ///
@@ -1322,7 +1322,7 @@ pub const WIP_UNCAPPABLE_STATUS: &str = "done";
 
 /// The `board:` block — what a repo declares about how much work may sit in
 /// each board status at once (#1175; the practice is kanban's WIP limit, and
-/// the loomux-specific motivation is in `doc/design/board-wip.md`).
+/// the loomux-specific motivation is in `docs/design/board-wip.md`).
 ///
 /// **Policy, not mechanism** (CLAUDE.md constraint 8). Nothing here names a
 /// toolchain, a branch, a repo path or an agent: the whole schema is a handful
@@ -2721,7 +2721,7 @@ pub fn kind_names() -> String {
 /// This function is the whole enforcement of the part that IS invariant: a
 /// hint may only sit on an existing kind, so a workflow file can never spell a
 /// fifth capability class. What a hint then MEANS is decided elsewhere, in
-/// loomux's own code — see `doc/design/liaison.md` for the enumerated list of
+/// loomux's own code — see `docs/design/liaison.md` for the enumerated list of
 /// MCP-tier exceptions, which today all narrow but are not guaranteed to.
 pub fn role_hint_requires(hint: &str) -> Option<Role> {
     match hint.trim().to_ascii_lowercase().as_str() {
@@ -2758,7 +2758,7 @@ pub fn role_hint_requires(hint: &str) -> Option<Role> {
 ///
 /// Not used for the *capacity* advisories (`recommend_capacity`/`extra_tiers`),
 /// which count live panes and are right to count a liaison as one — see
-/// `doc/design/liaison.md`.
+/// `docs/design/liaison.md`.
 pub fn is_reviewing_block(b: &Block) -> bool {
     b.kind == Role::Reviewer && b.role_hint.as_deref() != Some("liaison")
 }
@@ -3257,7 +3257,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
         // `effort:` / `context:` (#687). Both are VALUE-SET picks — they author
         // no text and pre-approve no tool — so the capability-closure argument
         // is unchanged and they are legal on an orchestrator block too (see
-        // that check above, and `doc/design/workflows.md`). `validate_knob`
+        // that check above, and `docs/design/workflows.md`). `validate_knob`
         // carries the whole rule; the CLI half is checked only for an explicit
         // `cli:`, exactly like `cli_can_host` above.
         let caps = (!cli.is_empty()).then(|| crate::model::cli_caps(&cli)).flatten();
@@ -4145,7 +4145,7 @@ pub fn workflow_file_exists(repo: &str) -> bool {
 /// reaching this function with a real `Block` — [`kind_from_str`] has no `lead`
 /// arm, so a repo cannot declare one to give a persona to in the first place. A
 /// lead group runs the built-in roster and never a workflow file, which is the
-/// consent argument in `doc/design/lead-pane.md`: no roster preview, so no
+/// consent argument in `docs/design/lead-pane.md`: no roster preview, so no
 /// roster the human was shown and agreed to.
 pub fn persona_allowed(block: &Block) -> bool {
     !block.kind.is_fixture()

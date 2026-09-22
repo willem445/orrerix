@@ -1,4 +1,4 @@
-//! The backend half of #743's enforcement — **E1** in `doc/design/performance.md`.
+//! The backend half of #743's enforcement — **E1** in `docs/design/performance.md`.
 //!
 //! THE INVARIANTS. Two of the six in that note are properties of the command
 //! surface as a *set*, which no test of any single module can see:
@@ -1126,8 +1126,8 @@ fn cheap_commands_carry_no_spawn_shell_out_or_filesystem_marker() {
 
 #[test]
 fn every_manifest_row_carries_an_argument_that_still_points_somewhere() {
-    let design = std::fs::read_to_string(crate_root().join("../doc/design/performance.md"))
-        .expect("doc/design/performance.md is the citable ground for every exception row");
+    let design = std::fs::read_to_string(crate_root().join("../docs/design/performance.md"))
+        .expect("docs/design/performance.md is the citable ground for every exception row");
     let mut problems: Vec<String> = Vec::new();
 
     for row in SYNC_COMMANDS {
@@ -1173,7 +1173,7 @@ fn every_manifest_row_carries_an_argument_that_still_points_somewhere() {
                         if !design.contains(&format!("**X{id}**")) {
                             problems.push(format!(
                                 "{at}: cites §4 X{id}, which is not a row in \
-                                 doc/design/performance.md — the argument moved or was renamed, \
+                                 docs/design/performance.md — the argument moved or was renamed, \
                                  and the citation went stale with it"
                             ));
                         }

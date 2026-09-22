@@ -310,7 +310,7 @@ export class SessionBrowser {
    *  as an empty success, so the next caller retries; the call site's own
    *  empty-vs-error handling is unchanged (main.ts's pre-existing `seenAny`
    *  guard treats a successful empty list and a rejection ALIKE — see
-   *  doc/design/session-index.md). */
+   *  docs/design/session-index.md). */
   ensureLoaded(): Promise<readonly SessionInfo[]> {
     return this.store.ensureLoaded();
   }
@@ -376,7 +376,7 @@ export class SessionBrowser {
    *  recorded orchestration that reads neither a CLI's session store nor
    *  `tabs.json`: an opencode group's sessions live in
    *  `<group>/opencode/opencode.db`, which the sidebar's scan deliberately
-   *  excludes (`doc/design/opencode.md`), and the dormant-group card that
+   *  excludes (`docs/design/opencode.md`), and the dormant-group card that
    *  #1563 slice A taught to carry a learned id needs the pane to have been
    *  open when the watcher bound it AND that tab set to survive. This reads
    *  the group's own `agents.json`, so it needs neither. Listing claude and

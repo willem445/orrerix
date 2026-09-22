@@ -243,7 +243,7 @@ fn two_unclaimed_candidates_refuse_rather_than_bind_the_wrong_conversation() {
     // Newest-wins would answer `OTHER` here, confidently and possibly wrongly.
     // The refusal is the point: a wrong bind reports one agent's spend as
     // another's and resumes a human into someone else's conversation, with
-    // nothing to see. `doc/design/session-id-learning.md`'s ambiguity policy.
+    // nothing to see. `docs/design/session-id-learning.md`'s ambiguity policy.
     assert_eq!(
         opencodedb::identify_session(&s.db(), CWD, &none(), &none()).unwrap(),
         Identified::Contested(2),
@@ -637,7 +637,7 @@ fn an_opencode_resume_reads_its_own_store_and_not_claudes() {
 /// (`orch_list_recorded` → `OrchRegistry::recorded_orchestrations`).
 ///
 /// WHY THIS TEST IS THE POINT OF THE SLICE. The sidebar's session scan reads
-/// the human's GLOBAL opencode store on purpose (`doc/design/opencode.md`), so
+/// the human's GLOBAL opencode store on purpose (`docs/design/opencode.md`), so
 /// a group-store session — the only kind an orchestrator ever has, since every
 /// opencode pane in a group is pointed at `<group>/opencode/opencode.db` via
 /// `OPENCODE_DB` — is invisible to it. That left a fresh opencode orchestrator

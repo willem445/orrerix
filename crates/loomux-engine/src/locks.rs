@@ -34,7 +34,7 @@
 //! holder or waiter whose pane is gone is dropped on the next sweep. Every one
 //! of those is an audited event, never a silent state change.
 //!
-//! Design note: `doc/design/lock-resources.md`.
+//! Design note: `docs/design/lock-resources.md`.
 
 use std::collections::{BTreeMap, VecDeque};
 

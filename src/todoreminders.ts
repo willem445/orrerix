@@ -17,7 +17,7 @@
 // for the life of the pane and dropped with it. The cost is honest and stated:
 // a reminder fires again in a pane opened after it was dismissed in another,
 // and nothing survives a reload. That is the right trade for a nudge — see
-// `doc/design/todo-pane.md` §"Reminders never write".
+// `docs/design/todo-pane.md` §"Reminders never write".
 //
 // THE CLOCK IS A PARAMETER, as in `todomodel.ts` and `todoview.ts`. Nothing
 // here reads `Date.now()`: a reminder scan tested against the host clock is a

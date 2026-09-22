@@ -6,7 +6,8 @@
 // `get_output`, replay, thumbnails and `last_exit_tail` working — is
 // `transcript::Renderer` in the engine, in Rust. Both are fed from the same
 // `events()` stream by the same drainer, so neither can show what the other
-// has not seen. (`demo/structured-pane/DESIGN.md` §9 assigned the VT half to a
+// has not seen. (The S0 mock's `DESIGN.md` §9 — PR #2945, a tree #3315
+// removed — assigned the VT half to a
 // `projectText()` here; §5.1 landed after that mock and puts it in the engine.
 // The note wins, as that file says it must.)
 //

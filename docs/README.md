@@ -1,12 +1,24 @@
 # Orrerix documentation site
 
-The user-facing documentation for orrerix, published to **GitHub Pages** at
-<https://willem445.github.io/orrerix/>. This folder is the whole site: Markdown
-pages plus one `_config.yml`.
+The repository's ONE documentation root (#3315). Two things live here and only
+one of them is published:
+
+- **the user-facing site**, published to **GitHub Pages** at
+  <https://willem445.github.io/orrerix/> — `index.md`, `getting-started.md`,
+  `features/`, and the rest of the top level;
+- **the internal notes** — `design/` (the design notes and ADRs `CLAUDE.md`
+  points at) and `plans/` — which are **excluded from the Jekyll build** by
+  `exclude:` in `_config.yml`, because they are written for contributors and
+  agents rather than for users. `_config.yml` carries the argument, and the
+  alternative it was weighed against.
+
+So "add a page to the docs" and "write a design note" both land in this folder,
+and the `exclude:` list is what separates them. A user-facing behaviour change
+updates a page above; a non-obvious architecture decision gets a note in
+`design/`.
 
 > This `README.md` is a **contributor** note — it is excluded from the published
-> site (`exclude:` in `_config.yml`). The reader-facing entry point is
-> [`index.md`](index.md).
+> site too. The reader-facing entry point is [`index.md`](index.md).
 
 ## How the site is built
 
@@ -47,9 +59,13 @@ break the PR dry-run before the one-time setup below. It runs:
   refreshes with each release;
 - **on `workflow_dispatch`** — a manual button for docs-only fixes between
   releases;
-- **on pull requests that touch `docs/`** — a **build-only dry-run** (the deploy
-  job is skipped) so a broken config is caught before it ships. The app's regular
-  CI (`ci.yml`) does **not** build the docs, so PR CI on code changes stays fast.
+- **on pull requests that touch a PUBLISHED page under `docs/`** — a
+  **build-only dry-run** (the deploy job is skipped) so a broken config is
+  caught before it ships. `design/` and `plans/` are negated in that workflow's
+  `paths:` filter, because `_config.yml` excludes them from the build and an
+  edit to one cannot change a published byte — so a design-note-only PR runs no
+  dry-run, deliberately. The app's regular CI (`ci.yml`) does **not** build the
+  docs either, so PR CI on code changes stays fast.
 
 ### One-time human setup (required once, can't be automated here)
 

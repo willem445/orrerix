@@ -87,7 +87,7 @@ export function isWorkflowCli(v: string): v is WorkflowCli {
 /** The role hints a block may declare (#250/#324, #891) — an OPTIONAL persona/
  *  template/badge marker. `kind` alone decides the deny-flags and the cwd rule;
  *  the MCP tool scope has a short enumerated list of hint-keyed exceptions
- *  (`doc/design/liaison.md`): two narrowing — `session_digest` to `process`,
+ *  (`docs/design/liaison.md`): two narrowing — `session_digest` to `process`,
  *  `review_verdict` away from `liaison` — and TWO widening toward that same
  *  `liaison`, both otherwise orchestrator-only: `group_usage`, and `ask_human`
  *  (the pose only — nothing answers on the human's behalf, and
@@ -316,7 +316,7 @@ export const CONFIG_DIR = ".orrerix";
 
 /** The pre-#1153 spelling of {@link CONFIG_DIR}, still read when `.orrerix/` is absent.
  *  NEVER renamed on the user's behalf — it is a tracked directory in their repository.
- *  See `doc/design/rebrand-filesystem.md`. */
+ *  See `docs/design/rebrand-filesystem.md`. */
 export const LEGACY_CONFIG_DIR = ".loomux";
 
 /** Where the workflow lives, relative to the repo root. */

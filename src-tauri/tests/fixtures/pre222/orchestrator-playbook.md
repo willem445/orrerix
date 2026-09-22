@@ -483,7 +483,7 @@ code exists) or bounce a **PR** (still cheaper than a merge):
 - **A public-contract change with no design note** — a command signature, a wire shape, a file
   format, a persisted schema, a CLI flag: anything another component or an older version depends
   on. *It ships with a note in the repo's docs convention, or it doesn't ship.*
-- **Contradicting the repo's design notes** (`doc/design/` or its equivalent) — those are its
+- **Contradicting the repo's design notes** (`docs/design/` or its equivalent) — those are its
   argued positions. A change may *overturn* one, deliberately, in the note, with the argument. It
   may not quietly ignore one.
 - **Scope drift** — a diff that outgrew its brief is unreviewable, and an unreviewable diff gets

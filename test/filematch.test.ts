@@ -22,7 +22,7 @@ const FILES = [
   "src/fileedit.ts",
   "test/panerestore.test.ts",
   "test/panesetup.test.ts",
-  "doc/design/session-restore.md",
+  "docs/design/session-restore.md",
   "README.md",
 ];
 

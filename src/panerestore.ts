@@ -68,7 +68,7 @@ export type RestoreAction =
       /** This pane was a LEAD (#2519): re-mint it a FRESH lead group before it
        *  boots, instead of the channel-scoped solo identity an ordinary agent
        *  pane re-mints. See `PersistedPane.lead` for why a lead is re-minted
-       *  rather than resumed, and doc/design/lead-pane.md for what does NOT
+       *  rather than resumed, and docs/design/lead-pane.md for what does NOT
        *  come back with it (its children are not restored). */
       lead: boolean;
     }
@@ -988,7 +988,7 @@ const COPILOT_SOLO_MCP_RE = new RegExp(
  *  a line this module has already identified as pi's costs nothing and closes
  *  that. (A pi line the human typed with their OWN `--mcp-config` is the
  *  residual: it is stripped and re-minted rather than preserved. Stated in
- *  `doc/design/pi.md`; the same trade claude's group has always made, one flag
+ *  `docs/design/pi.md`; the same trade claude's group has always made, one flag
  *  narrower.)
  *
  *  **`--mcp-config` is not pi's own flag, and that matters to whoever sets

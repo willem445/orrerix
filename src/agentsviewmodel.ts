@@ -28,7 +28,7 @@ import { agentMark, type AgentMarkInput, type AgentMarkView } from "./agenticons
  *  The words are the issue's own vocabulary, not a synonym set: `turn-done`
  *  reads "turn done" because "ready" or "waiting" would each claim something
  *  the latch does not measure (see the per-harness trust table in
- *  `doc/design/agents-tab.md`), and `working` reads "working" while honestly
+ *  `docs/design/agents-tab.md`), and `working` reads "working" while honestly
  *  meaning "no evidence of a prompt". */
 export const AGENT_STATE_LABEL: Record<AgentState, string> = {
   attention: "needs you",

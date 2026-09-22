@@ -16,7 +16,7 @@
 // Why the frontend and not Rust: extraction is presentation-shaped, the same
 // ≤5000-entry payload already crosses IPC for the audit view, and the repo's
 // convention is to keep testable logic in DOM-free TS. See
-// doc/design/progress-timeline.md.
+// docs/design/progress-timeline.md.
 //
 // The one rule that shapes everything here: **nothing is silently dropped.**
 // An entry either becomes a plotted event, becomes an `ops` event (a real
@@ -79,7 +79,7 @@ export interface GhActivityLike {
 /** What a plotted dot IS. One kind per distinguishable real-world event.
  *
  *  Three refinements to the kind list the plan sketched, each additive and
- *  argued in doc/design/progress-timeline.md:
+ *  argued in docs/design/progress-timeline.md:
  *  - `delivery` rather than `kickoff`: the `prompt` audit detail is only
  *    `{to, text}`, so nothing in the data separates a first kickoff from a
  *    mid-stream delivery. Naming the kind for what the data actually is beats

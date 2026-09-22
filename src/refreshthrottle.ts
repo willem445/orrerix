@@ -1,5 +1,5 @@
 // The leading-edge time-window throttle the git surfaces react through, as a
-// pure decision (P4's shape, doc/design/performance.md §2 — panethrottle.ts is
+// pure decision (P4's shape, docs/design/performance.md §2 — panethrottle.ts is
 // the same split: the module owns the policy, the caller owns the timer).
 //
 // What it bounds. A pane learns its repository may have moved from two

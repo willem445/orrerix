@@ -19,9 +19,11 @@
 //     over a height array — arithmetic over numbers, once per frame, with no
 //     element in sight. Put it in the renderer and the only way to test it is a
 //     fake DOM, which this repo does not do.
-//  2. **The gutter segment** (`segmentOf`). `demo/structured-pane/DESIGN.md` §3:
-//     the warp gutter's vocabulary is the six state dyes AND NOTHING ELSE, and
-//     anything that is not an agent state is marked by FORM. That is a total
+//  2. **The gutter segment** (`segmentOf`). The rule, from the S0 mock's
+//     `DESIGN.md` §3 (PR #2945; the mock tree was removed by #3315, so the
+//     rule is restated here rather than pointed at): the warp gutter's
+//     vocabulary is the six state dyes AND NOTHING ELSE, and anything that is
+//     not an agent state is marked by FORM. That is a total
 //     function from a block to one of six names, which is exactly the shape a
 //     test can pin exhaustively — and a channel violation is a thing a reviewer
 //     should be able to see fail, not have to spot in a stylesheet.
@@ -495,7 +497,8 @@ export function pinnedAtBottom(
  * A search is identified by its pattern and a read by its path. Taking
  * whichever key happens to come first in one fixed list renders every `Grep` in
  * a session as the same word (`"src"`) and throws the identifying half away —
- * which is the failure `demo/structured-pane/render.js` records having made.
+ * which is the failure the S0 mock's `render.js` records having made (PR #2945;
+ * the mock tree was removed by #3315).
  *
  * Tool names are matched case-insensitively because the two harnesses spell
  * them differently: Claude Code emits `Bash`, pi emits `bash`. That is a

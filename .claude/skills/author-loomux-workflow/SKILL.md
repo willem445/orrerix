@@ -157,7 +157,7 @@ soft warning:
    `review_verdict` withheld from a `liaison`-hinted reviewer) and two WIDEN it
    (`group_usage` and `ask_human`, both otherwise orchestrator-only, offered to
    that same liaison; `withdraw_question` is not).
-   Every exception is enumerated in `doc/design/liaison.md`. What you cannot do
+   Every exception is enumerated in `docs/design/liaison.md`. What you cannot do
    from a workflow file is invent one: you pick from a closed set and orrerix's
    code decides the effect.
 5. **The orchestrator block is orrerix-owned.** A workflow file may pin its

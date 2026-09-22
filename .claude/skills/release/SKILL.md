@@ -121,7 +121,7 @@ order.
   `publish-npm`'s already-published skip then makes that release's automatic publish a
   deliberate no-op, and the release after it is the first real OIDC publish. Until that
   runbook is **carried out** — it is written and merged, at
-  `doc/design/rebrand-external.md` section 2, which also carries the ordering and the
+  `docs/design/rebrand-external.md` section 2, which also carries the ordering and the
   quoted npm prerequisites — expect `publish-npm` to fail on a stable tag (#1153, #1297).
   **Delete this bullet once `npm view orrerix version` resolves**: it asserts a
   transient registry state and goes false the moment the hand-publish happens.

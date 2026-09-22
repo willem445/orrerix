@@ -45,7 +45,7 @@ invisible to agents and auditors.
 
 6. **Docs — `docs/orchestration.md`** (the user-docs orchestration guide) if the
    tool changes what a human sees (new pane behavior, board fields, audit rows).
-   Deeper design rationale goes in `doc/design/orchestration.md`.
+   Deeper design rationale goes in `docs/design/orchestration.md`.
 
 ## Changing an EXISTING tool's behaviour for one caller — the hook class
 

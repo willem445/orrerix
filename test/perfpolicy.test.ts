@@ -1,4 +1,4 @@
-// The frontend half of #743's enforcement — **E2** in `doc/design/performance.md`.
+// The frontend half of #743's enforcement — **E2** in `docs/design/performance.md`.
 //
 // THE INVARIANTS. Two of the six in that note are properties of frontend code
 // that no unit test of any single module can see:
@@ -199,7 +199,8 @@ const STREAMS: StreamRow[] = [
       "requestAnimationFrame renders whatever arrived in that frame. That is P5, the same " +
       "gate ft-files established. The frame itself does every write before every read, so a " +
       "burst costs one forced layout rather than one per row — the O(n²) follow-the-live-end " +
-      "defect the S0 mock's storm fixture found (demo/structured-pane/DESIGN.md §7).",
+      "defect the S0 mock's storm fixture found (its DESIGN.md §7, PR #2945 — the mock " +
+      "tree was removed by #3315).",
     debt: null,
   },
   {
@@ -435,7 +436,7 @@ const STREAMS: StreamRow[] = [
       "slice's argument to make with figures. (b) The event's scope field is DISCARDED: a " +
       "write to the global list wakes a workspace-scoped pane and vice versa. Filtering on it " +
       "is not a one-liner — the payload names a workspace KEY and the frontend may never name " +
-      "one (doc/design/todo-pane.md), so it would have to go through TodoSnapshot.workspaces, " +
+      "one (docs/design/todo-pane.md), so it would have to go through TodoSnapshot.workspaces, " +
       "which is the key-to-root map that exists for it.",
     debt: null,
   },
@@ -1319,7 +1320,7 @@ test("a timer's `gated` claim and the file's actual gate agree, in both directio
 
 test("a row naming an overlap gate is really wired to one (#1602)", () => {
   // N2 on PR #1604: "every poll body is single-flighted" (INV-4's new
-  // sentence, doc/design/performance.md) had no guard — un-wiring either
+  // sentence, docs/design/performance.md) had no guard — un-wiring either
   // #1602 poll site left `npm test` at 2383/2383. This pins the two rows
   // that declare an `overlapGate`: the field must exist as an instance of
   // the declared class AND actually be driven (`.run(` for `SingleFlight`,

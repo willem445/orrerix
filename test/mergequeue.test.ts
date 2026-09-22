@@ -2,7 +2,7 @@
 // lifecycle chrome's queue row.
 //
 // What these tests defend, all three from the design note
-// (doc/design/merge-queue.md) and the brief that slices it:
+// (docs/design/merge-queue.md) and the brief that slices it:
 //
 // 1. **Eight states and no ninth** (§4). Every state the core defines renders
 //    as itself — a distinct, non-empty label and a tone — so no queue entry can

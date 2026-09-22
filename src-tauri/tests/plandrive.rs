@@ -1,6 +1,6 @@
 //! Integration tests for the engine-driven PLAN driver (#3040 P3a).
 //!
-//! Design note: `doc/design/plan-driver.md`. The pure core's own properties are
+//! Design note: `docs/design/plan-driver.md`. The pure core's own properties are
 //! pinned inline in `crates/loomux-engine/src/plandrive.rs`; what lives here is
 //! everything that needs a **crate boundary** or the registry — the tick's
 //! wiring, the four tools, the planner interception, and the post-time plan
@@ -3710,7 +3710,7 @@ fn every_plan_tool_signature_in_the_playbook_names_parameters_the_tool_has() {
 /// (#3161 review round 1, finding 2).
 ///
 /// P2 shipped that pointer in WILL tense — "the full schema … WILL live in
-/// `doc/design/plan-driver.md` (#3040 P1); until then this paragraph is the
+/// `docs/design/plan-driver.md` (#3040 P1); until then this paragraph is the
 /// whole schema you have" — which was correct when written and false the moment
 /// P1 merged as #3062. Nothing went red: a WILL-tense promise decays silently,
 /// and every planner spawned in between was told to treat a summary as the
@@ -3732,7 +3732,7 @@ fn the_planner_is_pointed_at_the_schemas_one_home_and_not_promised_one() {
         "the planner's plan-block contract is still in its instructions"
     );
     assert!(
-        tpl.contains("doc/design/plan-driver.md"),
+        tpl.contains("docs/design/plan-driver.md"),
         "and it names where the full schema lives, so a planner can read the contract \
          rather than a summary of it"
     );

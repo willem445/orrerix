@@ -7,7 +7,7 @@
 //
 // "Start work" here is just *labelling*: applying agent-ready is what a running
 // orchestrator's poll loop pulls onto its board, so this view needs zero
-// orchestrator coupling (see doc/design/orchestration.md and the plan on #82).
+// orchestrator coupling (see docs/design/orchestration.md and the plan on #82).
 
 import { gitRepoRoot } from "./git";
 import {

@@ -115,7 +115,7 @@ export class TabBar<T extends ManagedWorkspace = ManagedWorkspace> {
   private draggingId: string | null = null;
 
   /** Who else wants each strip read (#2122 slice B). The strip poll is the
-   *  app's ONE read of `orch_strip_view` (doc/design/polled-views.md: one read
+   *  app's ONE read of `orch_strip_view` (docs/design/polled-views.md: one read
    *  per strip), so a second consumer subscribes to what this one already
    *  fetched rather than issuing a poll of its own — the Agents tab needs the
    *  roster's `idle_since_ms` and that is the only place it arrives. */

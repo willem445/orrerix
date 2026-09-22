@@ -509,7 +509,7 @@ test("an ancestor's STATUS is never read — only its deps", () => {
 
 test("a hand-edited container never wedges readiness", () => {
   // A broken container must fail in the tolerate direction (§5 of
-  // doc/design/task-hierarchy.md) — the opposite of an unknown DEP id, which
+  // docs/design/task-hierarchy.md) — the opposite of an unknown DEP id, which
   // deliberately blocks. The asymmetry has a reason: readiness only ever reads
   // the DEPS of the containers it finds, so a chain ending nowhere contributes
   // nothing to check. An orphan has no container to be blocked by, and a cycle
@@ -1272,7 +1272,7 @@ test("sinking happens inside every container, not only at the top level", () => 
 test("a hand-edited containment cycle never sinks or hides, and still renders once", () => {
   // closedSubtrees fails safe on a cycle: a row it cannot finish walking is
   // never treated as a closed finished/cleared subtree, so the tolerate-and-show
-  // rule (section 5 of doc/design/task-hierarchy.md) survives the projection.
+  // rule (section 5 of docs/design/task-hierarchy.md) survives the projection.
   const board = [
     orow("t-1", "done", { parent: "t-2", cleared_ms: 1 }),
     orow("t-2", "done", { parent: "t-1", cleared_ms: 1 }),
@@ -1735,7 +1735,7 @@ test("linkTargetKind classifies issue refs, URLs and repo paths", () => {
   assert.equal(linkTargetKind("#foo"), "other", "a fragment is not an issue ref");
   assert.equal(linkTargetKind("https://example.com/a/b"), "url");
   assert.equal(linkTargetKind("HTTP://EXAMPLE.COM"), "url", "scheme match is case-insensitive");
-  assert.equal(linkTargetKind("doc/design/x.md"), "path");
+  assert.equal(linkTargetKind("docs/design/x.md"), "path");
   assert.equal(linkTargetKind("README.md"), "path", "an extension alone is enough");
   assert.equal(linkTargetKind("src-tauri/tests/orchestration.rs"), "path");
   // A bare word claims nothing — otherwise it would swallow every unclassified
@@ -2343,7 +2343,7 @@ test("clicking an issue ref opens it, and only an issue ref asks for the issue p
   // `kind: "issue"` is what picks the `/issues/N` segment backend-side. Any
   // other target reaching that arm would be turned into an issue URL on this
   // repo — a page that has nothing to do with what the link pointed at.
-  for (const other of ["https://example.com/a", "doc/design/x.md", "README", "", "#foo"]) {
+  for (const other of ["https://example.com/a", "docs/design/x.md", "README", "", "#foo"]) {
     const plan = linkOpenPlan(other);
     assert.notEqual(
       plan.action === "open" ? plan.kind : null,
@@ -2384,7 +2384,7 @@ test("anything the board cannot classify is copied, never launched", () => {
   // half: a link target is agent-writable, so the only shapes that may reach
   // an opener are the two above — everything else lands on the clipboard.
   for (const target of [
-    "doc/design/x.md",
+    "docs/design/x.md",
     "README.md",
     "/etc/passwd",
     "C:/Windows/system32",
@@ -2637,7 +2637,7 @@ test("a re-applied add composes against the CURRENT row, so a concurrent link su
     status: "queued",
     links: [
       { type: "requirement", target: "#1349" },
-      { type: "design-note", target: "doc/design/board-sprints-and-links.md" },
+      { type: "design-note", target: "docs/design/board-sprints-and-links.md" },
     ],
     link_etag: "aaaaaaaaaaaaaaaa",
   };
@@ -2651,13 +2651,13 @@ test("a re-applied add composes against the CURRENT row, so a concurrent link su
   const first = composeLinkArrayWrite(add, painted);
   assert.deepEqual(
     first.links?.map((l) => l.target),
-    ["#1349", "doc/design/board-sprints-and-links.md", "docs/x.md"],
+    ["#1349", "docs/design/board-sprints-and-links.md", "docs/x.md"],
     "the first attempt is composed from what the human saw — and would drop tests/t.rs"
   );
   const retry = composeLinkArrayWrite(add, fresh);
   assert.deepEqual(
     retry.links?.map((l) => l.target),
-    ["#1349", "doc/design/board-sprints-and-links.md", "tests/t.rs", "docs/x.md"],
+    ["#1349", "docs/design/board-sprints-and-links.md", "tests/t.rs", "docs/x.md"],
     "re-applied against the current row, the human's link lands AND the agent's survives"
   );
   assert.equal(

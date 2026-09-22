@@ -51,7 +51,7 @@
 //!
 //! The third row is the one that is deliberately not the other two: a store
 //! from a newer build is not corrupt, it is *ahead*, and a human's to-do list
-//! has to survive an app downgrade. See `doc/design/todo-pane.md`.
+//! has to survive an app downgrade. See `docs/design/todo-pane.md`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -115,7 +115,7 @@ fn quarantine_path(path: &Path) -> PathBuf {
 ///
 /// **WITHIN ONE PROCESS**, and the qualifier is load-bearing rather than
 /// pedantic. `TODO_WRITE_LOCK` is a process-local `Mutex`, so a second app
-/// instance — or the `loomux-server` daemon (`doc/design/remote-engine-daemon.md`)
+/// instance — or the `loomux-server` daemon (`docs/design/remote-engine-daemon.md`)
 /// — against the same data root can still interleave exactly as described
 /// above, and nothing here or in the suite can see it. That is pre-existing
 /// and not something this guard introduced; it is named because a doc that

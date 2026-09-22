@@ -14,7 +14,7 @@
 // orchestration group id (so a restored group's session rehydrates into the
 // right tab — see restoreSession). From #194 the schema ALSO carries a per-tab
 // pane LAYOUT tree, a top-level restore PREFERENCE, and a schemaVersion — the
-// data layer for full session restore (doc/design/session-restore.md). The
+// data layer for full session restore (docs/design/session-restore.md). The
 // live panes/PTYs are still never captured; a persisted leaf records only what
 // is needed to re-spawn or resume a pane (kind, cwd, command/argv, shell kind,
 // agent session id). Group panes are revived by the group-resume path, not from
@@ -63,7 +63,7 @@ export type RestorePref = "ask" | "restore" | "fresh";
  *  than a per-entry drop: an older build's `decodePane` rejects the unknown kind,
  *  and `decodeLayout`'s whole-tree fail-safe then collapses THAT TAB's entire
  *  layout to one empty welcome pane (a docked ssh pane is the softer case — dropped
- *  individually). Recorded in doc/design/session-restore.md rather than softened:
+ *  individually). Recorded in docs/design/session-restore.md rather than softened:
  *  the alternative (persisting an ssh pane as some kind an old build recognizes)
  *  means an old build spawning the wrong process under the right title. */
 export type PersistedPaneKind =
@@ -142,7 +142,7 @@ export interface PersistedPane {
   /** The file an EDITOR pane (#217) had open, root-relative — a PATH, never a buffer.
    *  A pane opened on a file is titled after it, so without this a restore would show a
    *  bare tree under a title naming a file it isn't showing. The content is re-read from
-   *  disk; unsaved edits are deliberately NOT persisted (see doc/design/content-panes.md
+   *  disk; unsaved edits are deliberately NOT persisted (see docs/design/content-panes.md
    *  — the close guard's whole point is that the human was asked).
    *
    *  A WORKFLOW pane (#222) rides the same field for the same reason: the workflow file
@@ -199,7 +199,7 @@ export interface PersistedPane {
    *  view opens as its floating overlay (the pre-#361 default). Only the
    *  views named in `PersistedEmbedView` are ever captured here; `issues` is
    *  embeddable on every pane kind but has no restore hook to carry it
-   *  through (see doc/design/embedded-panels.md's persistence section).
+   *  through (see docs/design/embedded-panels.md's persistence section).
    *  Absent from any snapshot written before #361 (or before the
    *  multi-slot/git+editor generalizations), which all decode as `[]` —
    *  same as a pane that was simply never docked. */

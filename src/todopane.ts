@@ -1,7 +1,7 @@
-// The To-Do content pane (#3263 S4) — the S0 mock built for real. The mock is
-// `demo/todo-pane` in PR #3271, which is UNMERGED at this slice: every citation
-// of it below names a tree that is not on `main` and not in this diff, and is
-// written so a reader who cannot find it knows why. The sixth `ContentPaneKind`, hosted in a grid cell like the file
+// The To-Do content pane (#3263 S4) — the S0 mock built for real. The mock
+// shipped as `demo/todo-pane` in PR #3271 and was removed from the tree by
+// #3315, so every citation of it below names that PR's diff, not a path you
+// can open. The sixth `ContentPaneKind`, hosted in a grid cell like the file
 // explorer, the editor, the git view, the workflow builder and the structured
 // transcript.
 //
@@ -35,8 +35,8 @@
 // this view; every control is seeded from them and writes back on `input`; and
 // the caret is restored once, centrally, after each render.
 //
-// See `doc/design/todo-pane.md` §"The pane" — which is on `main` — and
-// `demo/todo-pane/DESIGN.md` (PR #3271, unmerged).
+// See `docs/design/todo-pane.md` §"The pane", and the S0 mock's `DESIGN.md`
+// in PR #3271 (removed from the tree by #3315).
 
 import { CoalescingRefresh } from "./refreshgate";
 import { showToast } from "./toast";
@@ -97,7 +97,7 @@ export interface TodoPaneOptions {
   /** The pane's ROOT — the workspace whose list the `◆` half of the scope
    *  switch shows. The caller resolves it (git work-tree root, falling back to
    *  the pane's cwd) and this view hands it to the backend RAW: `todo.ts`'s
-   *  header and `doc/design/todo-pane.md` §"The caller names a ROOT, never a
+   *  header and `docs/design/todo-pane.md` §"The caller names a ROOT, never a
    *  key" are the reason — the frontend must never name a workspace KEY, or two
    *  spellings of one project become two lists.
    *
@@ -551,7 +551,7 @@ export class TodoPaneView {
    * Refusals are the human's to see, not the console's: a cap, an unknown id, a
    * store a newer build wrote. `todoApply` rejects with the backend's own
    * message precisely so it can go straight into a toast
-   * (`doc/design/todo-pane.md` §"Caps refuse; they never truncate").
+   * (`docs/design/todo-pane.md` §"Caps refuse; they never truncate").
    *
    * It does NOT re-read on success: the backend emits `todo-changed` for every
    * successful write including this one, and the subscription's
@@ -1470,7 +1470,7 @@ export class TodoPaneView {
     const sel = this.selected !== null ? this.itemById(this.selected) : null;
 
     // REORDER IS Shift+↑/↓, NOT THE MOCK'S Alt+↑/↓ — a deliberate departure
-    // from `demo/todo-pane/DESIGN.md` §6 (PR #3271, unmerged), and the one place
+    // from the S0 mock's `DESIGN.md` §6 (PR #3271, removed by #3315), and the one place
     // this pane does not
     // build what the mock drew. `Alt+ArrowUp`/`Alt+ArrowDown` are already the
     // app's `focus-up`/`focus-down` (`shortcuts.ts`), matched on `document` in
@@ -1749,7 +1749,7 @@ export class TodoPaneView {
     // read has been asked for, so without this it would paint the OLD scope's
     // rows under the NEW scope's header and switch. Those rows are live — and
     // the engine resolves `update`/`complete`/`delete` by id WITHOUT a scope
-    // check (`doc/design/todo-pane.md`), so completing one in that window
+    // check (`docs/design/todo-pane.md`), so completing one in that window
     // writes to whichever store actually holds it while the header says
     // otherwise. One paint deep, and entirely avoidable.
     //

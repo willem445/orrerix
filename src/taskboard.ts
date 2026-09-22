@@ -439,7 +439,7 @@ export function withoutDep(deps: readonly string[] | null | undefined, id: strin
  *  backend stays the authority — every refusal it makes surfaces in this view's
  *  toast — and this copy is a convenience, which is a claim #958 explicitly
  *  refused to make for the cycle and depth-cap rules (§9 of
- *  doc/design/task-hierarchy.md). The difference is what the rule reads: a
+ *  docs/design/task-hierarchy.md). The difference is what the rule reads: a
  *  cycle or a depth bust is a property of the whole mutable tree, re-derived
  *  per candidate, where the ladder is a fixed table over two closed
  *  vocabularies that both sides enumerate in full. What makes a divergence
@@ -1364,7 +1364,7 @@ export function siblingPosition<T extends OrderedRow>(
  *  deep, so its second and third members are ordered among the roots while
  *  displayed nested. Their up/down buttons then act on the root list. Left as
  *  is deliberately — the move is still a valid permutation and every row still
- *  renders exactly once (§5 of doc/design/task-hierarchy.md stakes out
+ *  renders exactly once (§5 of docs/design/task-hierarchy.md stakes out
  *  tolerate-and-show for cycles), and only a hand-edited `tasks.json` can
  *  produce one at all. */
 function siblingRows<T extends HasParent>(tree: TaskTree<T>, id: string): T[] {
@@ -2137,7 +2137,7 @@ export function withoutArtifactLinkAt(
 // whose `expect_link_etag` no longer matches; this section is what sends it and
 // what decides whether the human's intent can simply be re-applied.
 //
-// See `doc/design/board-sprints-and-links.md` §16.
+// See `docs/design/board-sprints-and-links.md` §16.
 
 /** The opening words of the backend's stale-`link_etag` refusal.
  *

@@ -152,7 +152,7 @@ const WITH_MANAGER: &str = "version: 1\nblocks:\n\
      \x20 - id: manager\n    kind: manager\n\
      \x20 - id: worker\n    kind: worker\n";
 
-/// Every tool `doc/design/manager.md`'s enumeration WITHHOLDS from
+/// Every tool `docs/design/manager.md`'s enumeration WITHHOLDS from
 /// `Role::Manager`, spelled as the manager's prose would have to spell it to
 /// send anyone after one.
 ///
@@ -334,7 +334,7 @@ fn the_managers_contract_never_names_a_tool_it_does_not_have() {
         assert!(
             !doc.contains(tool),
             "manager.md names `{tool}`, which `Role::Manager`'s enumerated surface WITHHOLDS \
-             (mcp.rs's manager arm refuses it, and doc/design/manager.md argues why). Prose \
+             (mcp.rs's manager arm refuses it, and docs/design/manager.md argues why). Prose \
              naming a tool the reader cannot call sends it after a refusal in front of the \
              human. Say what the manager does in words, or name a tool it holds."
         );

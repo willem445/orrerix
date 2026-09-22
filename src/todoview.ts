@@ -11,9 +11,9 @@
 //     elision line under it, the tag rail, and the per-viewer preferences that
 //     decide which scope and which view a fresh pane opens on.
 //
-// The split is the S0 mock's own (`demo/todo-pane/render.js` §"two halves" — PR
-// #3271, UNMERGED at this slice, so that path is on neither `main` nor this
-// diff), and it is what keeps `todopane.ts` a renderer rather than a place
+// The split is the S0 mock's own (its `render.js` §"two halves" — PR #3271; the
+// mock tree was removed by #3315, so read it in that PR's diff), and it is what
+// keeps `todopane.ts` a renderer rather than a place
 // decisions hide. Everything the pane DECIDES is below; `todopane.ts` owns only
 // elements.
 //
@@ -51,7 +51,7 @@ export const ROW_BUDGET = 200;
 
 /** Which list the pane is looking at. NOT the backend's `Scope`: that one names
  *  a workspace by KEY, and the frontend must never name a key (it sends a ROOT
- *  and the backend derives the key — `doc/design/todo-pane.md` §"The caller
+ *  and the backend derives the key — `docs/design/todo-pane.md` §"The caller
  *  names a ROOT, never a key"). This is the SWITCH's two positions, and the
  *  pane turns `"workspace"` into the active root at the call site. */
 export type ScopeChoice = "global" | "workspace";
@@ -216,7 +216,7 @@ export const EMPTY_TEXT: Record<EmptyReason, string> = {
  *
  * **Preferences, never items.** This is `localStorage`, which is per-browser,
  * per-device and invisible to every other writer — the exact reason
- * `doc/design/todo-pane.md` puts the LIST in a backend-owned store instead.
+ * `docs/design/todo-pane.md` puts the LIST in a backend-owned store instead.
  * What lives here is the two conveniences a human would be annoyed to re-set on
  * every launch and would not miss if a wiped profile lost them: which scope the
  * switch is on, and which view the strip is on. `sidedockmodel.ts`'s dock prefs

@@ -532,7 +532,7 @@ export function sshDiscardedFieldError(raw: SshProfile, kept: SshProfile): strin
  *  login shell". #2395 retired the phrasing, not the decision: `$SHELL` comes
  *  from the environment sshd built from the account, and the POSIX builder now
  *  emits `exec "$SHELL" -l -i -c` around every remote command it builds — the
- *  cmd.exe builder is unchanged (see doc/design/ssh-panes.md). What this
+ *  cmd.exe builder is unchanged (see docs/design/ssh-panes.md). What this
  *  warning protects is the session shape. */
 export function sshRemoteCwdWarning(remoteCli: string | null, remoteCwd: string | null): string {
   if (!remoteCwd || remoteCli) return "";

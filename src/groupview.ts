@@ -237,7 +237,7 @@ export class GroupView {
    *  same way the launcher's own listing degrades. */
   private workflowListing: Promise<WorkflowListing | null> | null = null;
   // Merge-queue chrome (#581 slice F): read-only. There is no control here and
-  // deliberately so — the queue is host-run (doc/design/merge-queue.md §3) and
+  // deliberately so — the queue is host-run (docs/design/merge-queue.md §3) and
   // this panel's job is to say what it is doing, not to drive it.
   private mqRow: HTMLElement;
   private mqLineEl: HTMLElement;

@@ -1,6 +1,6 @@
 // Regression class: an overlay/side-panel that resizes the workspace instead
 // of floating (constraint: "never resize the PTY for a UI feature" — see
-// CLAUDE.md and doc/design/e2e-testing.md) should still leave the workspace
+// CLAUDE.md and docs/design/e2e-testing.md) should still leave the workspace
 // exactly where it found it once closed. `#sessions` animates its own width
 // (src/styles.css) rather than the grid resizing itself, so this asserts the
 // grid area's width returns to its pre-open value, not just that the panel

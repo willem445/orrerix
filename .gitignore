@@ -26,5 +26,8 @@ playwright-report/
 # workflow IS. Disposable and per-developer — the workflow itself (.orrerix/workflow.yml)
 # is committed, this is not.
 .orrerix/workflow.layout.json
-.scratch/
+
+# Agent scratch SCRIPTS at the repo root (#3310): one-off .cjs helpers an agent
+# writes to run a sweep or a mutation. Same disposable-and-worktree-local reason
+# as .scratch/ above; separate rule because these are not inside that folder.
 .scratch-*.cjs

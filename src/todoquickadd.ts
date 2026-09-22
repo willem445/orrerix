@@ -1,6 +1,7 @@
 // Natural-language quick-add parser for the To-Do pane (#3263 S3, plan §3).
 //
-// Lifted from `demo/todo-pane/quickadd.js` (the S0 mock, PR #3271), which was
+// Lifted from the S0 mock's `quickadd.js` (PR #3271; the mock tree was removed
+// by #3315, so read it in that PR's diff), which was
 // written to be lifted: pure, clock-injected, and written to the same token
 // list. Types added, and one header claim corrected — see THE WEEKDAY RULE
 // below.

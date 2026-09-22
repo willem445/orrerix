@@ -1,6 +1,6 @@
 import { defineConfig } from "@playwright/test";
 
-// E2E PoC (spike — see doc/design/e2e-testing.md). Drives the real WebView2
+// E2E PoC (spike — see docs/design/e2e-testing.md). Drives the real WebView2
 // webview over CDP (Playwright's native WebView2 support), never a Tauri
 // plugin or a bundled browser: `chromium.connectOverCDP` just needs the CDP
 // client, not a downloaded Chromium, so there's nothing to `playwright
@@ -17,7 +17,7 @@ import { defineConfig } from "@playwright/test";
 // per-worker identifiers or an isolation mechanism that survives High IL
 // (WEBVIEW2_USER_DATA_FOLDER does — see e2e/fixtures.ts's module doc — but
 // using it would break the identifier-based build verification that same
-// file performs). See doc/design/e2e-testing.md's roadmap.
+// file performs). See docs/design/e2e-testing.md's roadmap.
 export default defineConfig({
   testDir: "./e2e/tests",
   // CI runners are slower to first-open the CDP port than a dev machine

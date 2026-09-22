@@ -19,7 +19,7 @@
 //!
 //! **No codex is ever run** (constraint 3). Every fixture below is written here
 //! from the format read off `openai/codex` at tag `rust-v0.153.4`, blob by blob
-//! through the GitHub blob API, and quoted in `doc/design/codex.md`:
+//! through the GitHub blob API, and quoted in `docs/design/codex.md`:
 //! `rollout/src/recorder.rs` (the `sessions/YYYY/MM/DD` path and the
 //! `session_meta` first line), `rollout/src/rollout_file_name.rs` (the two
 //! filename forms), `rollout/src/compression.rs` (the `.zst` representation)

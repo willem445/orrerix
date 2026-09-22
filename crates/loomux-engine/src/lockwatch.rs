@@ -8,7 +8,7 @@
 //!
 //! Three betas in a row shipped a responsiveness fix derived from *reading*
 //! code, and each relocated the symptom instead of removing it
-//! (`doc/plans/responsiveness-root-cause.md` §1). The reason a reading was the
+//! (`docs/plans/responsiveness-root-cause.md` §1). The reason a reading was the
 //! best evidence available is that plan's §2.3: a hang produces no artifact at
 //! all. `obs` writes a crash log when the process dies, and a process wedged on
 //! a mutex does not die — so the total evidence for the last three incidents
@@ -25,7 +25,7 @@
 //! the holder the instrument above already knows about. The policy half —
 //! the thread-local budget, [`crate::budget::MutationScope`] and the six
 //! budget constants — is [`crate::budget`], and the contract both halves
-//! publish is `doc/design/lock-liveness.md`.
+//! publish is `docs/design/lock-liveness.md`.
 //!
 //! # The shape
 //!
@@ -484,7 +484,7 @@ pub fn hold_report_ring_for_test(ms: u64) {
 /// - past it a hold is already *reportable* (`lock-slow`/`lock-freed`), so
 ///   nothing here calls a hold bad that the shipped build thought was fine;
 /// - past it every cadenced tick's gate probe has already given up
-///   (`doc/design/lock-liveness.md` section 3), so the app has *visibly*
+///   (`docs/design/lock-liveness.md` section 3), so the app has *visibly*
 ///   stopped serving — badges freeze, the publisher's sections go partial;
 /// - so a build that is green while a hold sits above this figure is a build
 ///   asserting the opposite of what its own breadcrumbs say.
@@ -730,7 +730,7 @@ pub fn hold_violation_message(v: &HoldReport, fail_ms: u64) -> String {
          {fail_ms} ms a test build refuses. Past that figure every cadenced tick's gate probe \
          has already skipped its tick and the hold is already breadcrumbed as `{}`. A registry \
          lock may not be held across a call that can take a registry lock, read a file, or wait \
-         — see doc/design/lock-liveness.md section 7. If this hold is DELIBERATE the site takes \
+         — see docs/design/lock-liveness.md section 7. If this hold is DELIBERATE the site takes \
          a `lockwatch::LongHoldPermit` and says why; adding one is a reviewed change, not a way \
          to make this quiet",
         v.lock,
@@ -889,8 +889,8 @@ pub struct HolderInfo {
 /// duplicated all four fields to distinguish them, and rewritten every consumer
 /// (`mcp.rs`'s `rpc_busy` / `busy_tool_text`, `views.rs`'s fallbacks,
 /// `budget.rs`'s unwind payload) to match on a shape whose halves are the same.
-/// The deviation is recorded in `doc/design/lock-liveness.md` §3, and the rank
-/// mechanism it belongs to in `doc/design/lock-order.md`.
+/// The deviation is recorded in `docs/design/lock-liveness.md` §3, and the rank
+/// mechanism it belongs to in `docs/design/lock-order.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BusyKind {
     /// The budget ran out while someone ELSE held the lock. Phase 2.1's
@@ -989,7 +989,7 @@ impl std::fmt::Display for Busy {
     /// One line, and it is a PUBLIC CONTRACT: this text is what reaches an
     /// agent's context inside `loomux busy: <this>. Nothing was executed; retry
     /// in ~N s.` and what a human reads in the group view's partial badge. See
-    /// `doc/design/lock-liveness.md` §3.
+    /// `docs/design/lock-liveness.md` §3.
     ///
     /// The plan's sketch prefixed it with `registry busy: `. Dropped, because
     /// every caller that renders this already says "busy" in its own first
@@ -1535,7 +1535,7 @@ fn reentrant_panic_message(
 /// Report an INVERSION: panic in debug, stamp for the watchdog in release.
 ///
 /// Inversions only, since #1702. A re-entrant acquisition is refused on every
-/// path instead — [`TrackedMutex::check_order`] and `doc/design/lock-order.md`
+/// path instead — [`TrackedMutex::check_order`] and `docs/design/lock-order.md`
 /// §6 — because the two verdicts are different facts: an inversion is a
 /// *possible* deadlock that needs the other thread to show up, and a re-entrant
 /// acquire on a non-reentrant mutex is a certain one, on this thread, now.
@@ -1900,7 +1900,7 @@ impl<T> TrackedMutex<T> {
     /// So the two entry points differ in what they DO with the `Err`, not in
     /// whether they get one: [`lock_within`] hands it to its caller;
     /// [`lock_safe`] unwinds. An inversion is still fail-open — see
-    /// [`report_order_violation`] and `doc/design/lock-order.md` §2.1 for why the
+    /// [`report_order_violation`] and `docs/design/lock-order.md` §2.1 for why the
     /// two verdicts get different answers.
     ///
     /// [`lock_within`]: Self::lock_within
@@ -1930,7 +1930,7 @@ impl<T> TrackedMutex<T> {
     /// which has no `Err` to put one in (#1702).
     ///
     /// **Why this one does not fail open the way an inversion does.** The
-    /// release fail-open (`doc/design/lock-order.md` §2.1) rests on "refusing
+    /// release fail-open (`docs/design/lock-order.md` §2.1) rests on "refusing
     /// would convert a *possible* hang into a *certain* crash on a path nobody
     /// has proven wrong". That argument is sound for an INVERSION, which needs
     /// a second thread taking the same two locks the other way round before
@@ -1980,10 +1980,10 @@ impl<T> TrackedMutex<T> {
     /// they run inside `OrchRegistry::mutating_command` / `read_command`, whose
     /// `read_budget` frame catches the unwind at the boundary, and
     /// `src-tauri/tests/synccommands.rs` default-denies any that does not.
-    /// `doc/design/lock-order.md` §2.1 carries the measured call chain.
+    /// `docs/design/lock-order.md` §2.1 carries the measured call chain.
     ///
     /// **Two costs beyond the hang it removes**, both argued in
-    /// `doc/design/lock-order.md` §2.2 rather than only here. A mutation can be
+    /// `docs/design/lock-order.md` §2.2 rather than only here. A mutation can be
     /// abandoned half-applied, because this unwinds inside a
     /// [`crate::budget::MutationScope`] as much as outside one — accepted
     /// because the alternative on this path leaves the SAME half-applied state
@@ -2179,7 +2179,7 @@ impl<T> Drop for TrackedGuard<'_, T> {
     /// `self.guard`'s own drop releases the mutex. Nothing below can panic —
     /// there is no allocation, no indexing and no arithmetic that can overflow
     /// (`saturating_sub`) — so this cannot become the double-panic that turns
-    /// an unwind into an abort. `doc/design/lock-liveness.md` §4.2 carries the
+    /// an unwind into an abort. `docs/design/lock-liveness.md` §4.2 carries the
     /// argument and `budget::tests::an_unwind_leaves_no_tracked_lock_held` pins
     /// it.
     fn drop(&mut self) {

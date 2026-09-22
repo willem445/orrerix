@@ -95,7 +95,7 @@
 //! 2. **The `crates/` root.** L4 walked it; `selfwatch.rs` walks `src-tauri/src`
 //!    only. Vacuous today: the pool is `tauri::async_runtime`'s, and
 //!    `loomux-engine` is Tauri-free by construction
-//!    (`doc/design/engine-extraction.md`) — neither crate's manifest carries
+//!    (`docs/design/engine-extraction.md`) — neither crate's manifest carries
 //!    tauri or tokio, so the call is unreachable there. If a crate under
 //!    `crates/` ever links Tauri, that scan's root list is the thing to widen.
 
@@ -481,7 +481,7 @@ fn l3b_a_wedged_pane_does_not_stop_another_panes_frontend_write() {
 
 #[test]
 fn a_cd_and_the_keystrokes_around_it_land_in_arrival_order() {
-    // `doc/design/pty-input-path.md`'s ordering table says `write_pty` vs
+    // `docs/design/pty-input-path.md`'s ordering table says `write_pty` vs
     // `change_dir` on one pane is "ordered by arrival again (#1607)" — it was
     // ordered before #719, "either order" while both bodies went to a shared
     // pool, and ordered again now that both go to one pane-owned queue.
@@ -886,7 +886,7 @@ fn l2d_a_read_budget_around_a_real_registry_read_answers_busy_instead_of_parking
 fn l2d_a_timeout_inside_a_mutation_scope_waits_rather_than_unwinding() {
     // The safety lever, on a real read path. A mutating frame must never be
     // abandoned partway between two maps, so inside a `MutationScope` the same
-    // timeout WAITS — and this row is what makes `doc/design/lock-liveness.md`
+    // timeout WAITS — and this row is what makes `docs/design/lock-liveness.md`
     // §4's argument checkable rather than merely stated.
     let (reg, _dir) = test_registry();
     let group = reg.create_group("C:/tmp/repo", rails()).expect("create a group");
@@ -1076,7 +1076,7 @@ fn l2b_a_slow_mutating_tool_answers_early_and_is_never_double_executed() {
     //
     // The name says "never double-executed" rather than "completes exactly
     // once" because the second is the claim #1702 P3 retracted (see
-    // `doc/design/lock-liveness.md`): a helper thread that PANICS never
+    // `docs/design/lock-liveness.md`): a helper thread that PANICS never
     // completes at all, so the guarantee the shipped code makes is at most
     // once, not exactly once. This row drives the non-panicking case — a tool
     // slow only because a lock is held — where the work does land, and what it
@@ -3112,7 +3112,7 @@ impl Drop for LockOrderPanics {
     }
 }
 
-/// L8 (#1702 P5(B)). `doc/design/lock-liveness.md` §7's "The panic is armed, not
+/// L8 (#1702 P5(B)). `docs/design/lock-liveness.md` §7's "The panic is armed, not
 /// default" section draws a sharp line: `LOCK_ORDER_PANICS` defaults to
 /// `cfg!(debug_assertions)` — true in every test binary — so a re-entrant
 /// acquisition panics HERE by default, which is correct for a *test* build

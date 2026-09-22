@@ -1,0 +1,927 @@
+# SSH panes (#887): a remote solo pane, and the boundary it stops at
+
+An **SSH pane** is a pane whose child process is a local `ssh.exe` connected to a
+remote host, optionally launching an agent CLI there. Shipped across five slices:
+S1 the profile store (#907), S2 the pure argv builder (#906), S3 the launch flow
+(#921), S4 persistence and reconnect (#926), S5 the docs and this note.
+
+The user-facing page is `docs/features/ssh-panes.md`. This note is the *why*: the
+decisions that are not obvious from the code, and the arguments that have to
+survive the next person who wants to make one more thing work remotely.
+
+## The shape: no backend, no dependency, no protocol
+
+The transport is **the system `ssh.exe`, spawned as an ordinary ConPTY pane
+child**, and it needed **zero backend spawn code**. `pty.rs`'s direct-native-exe
+path (`try_direct_command`) already spawns a resolved native executable from an
+argv with no shell in between; `ssh.exe` is one. The whole feature is therefore a
+frontend that composes an argv, plus one command to find the client
+(`discover_ssh`) and two to persist connections.
+
+An SSH library (russh, libssh2 bindings) was rejected on three counts, in order of
+weight:
+
+1. **Constraint 2.** The pure-Rust options pull `rand`/`getrandom`, which imports
+   `bcryptprimitives.dll!ProcessPrng` — absent on this project's Windows 10
+   baseline, where the binary then fails to load with `0xc0000139`.
+2. **It would move key handling into loomux**, which is precisely the posture
+   `gh.rs` exists to avoid (loomux stores no GitHub token; it shells out to the
+   user's authenticated `gh`).
+3. **It is a permanent dependency for something the OS ships** — and `ssh.exe`
+   inherits the user's entire `ssh_config`, agent, `ProxyJump` and known-hosts for
+   free, which no library would.
+
+`discover_ssh` resolves **PATH first**, then the inbox OpenSSH directory under
+`%SystemRoot%` — both `System32\OpenSSH` and `Sysnative\OpenSSH`, the same
+directory under the name a 32-bit process must use (for which `System32` is
+redirected to `SysWOW64`, which has no OpenSSH). One extra `is_file` on a path
+that simply doesn't exist for a 64-bit process, and the difference between "found"
+and "not installed" for one that isn't. PATH winning is not an ordering accident: a user who installed a newer
+OpenSSH or put a wrapper ahead of the inbox client has already said which `ssh`
+they mean, and every other program on the machine honours that. The candidate list
+exists for the stripped-PATH case, and it is derived from `SystemRoot` rather than
+hardcoding `C:\Windows` (constraint 8 — no assumptions about this machine).
+Resolution happens **once**, in the launcher, and the absolute path is what is
+spawned: a bare `"ssh"` would be re-resolved at spawn time against a different
+PATH snapshot and could silently be a different binary.
+
+## No credentials, and what makes that structural
+
+`sshprofiles.json` (a sibling of `tabs.json`/`settings.json` under the loomux data
+root, written through `uistate.rs`'s existing atomic-write + corrupt-quarantine
+helpers, opaque to the backend) stores hostnames, ports, an identity-file **path**,
+a remote directory, a CLI name and extra ssh flags. loomux never writes key
+material into it.
+
+Stating that would be worth little; two guards make it hold — and the second has a
+residual, stated with it rather than after it:
+
+- **Both directions are allowlists.** `normalizeSshProfile` reads only declared
+  fields and `profileToWire` writes only declared fields, so a `password` key
+  hand-added to the file — or hung on a profile object by some future caller —
+  cannot survive one load/save cycle.
+- **`identityFile` is checked to be a path**, because it is the one field through
+  which key material could enter by the front door. A value carrying a line break
+  (which every real PEM/OpenSSH key body has) or a `-----BEGIN` header is refused,
+  and the profile survives without `-i`. What the guard is *not* is a content
+  classifier: a single-line base64 key body with no armour is indistinguishable
+  from a path by shape and passes — and is then handed to `ssh -i` as a filename
+  that does not exist, which fails loudly rather than storing anything.
+
+Encode routes through the same normalizer decode uses, so there is exactly one
+implementation of every field guard rather than a write-side copy that drifts. And
+a save carries the file's **own** `schemaVersion` through rather than re-stamping
+it: an older build editing a newer file must not silently re-label it as v1.
+
+### The schema, as a public contract
+
+A file on the user's disk that older and newer builds both read, and that the user
+is invited to hand-edit — so the shape is a contract, not an implementation
+detail. `{schemaVersion: 1, profiles: [...]}`, each profile:
+
+| Key | Required | Meaning when absent |
+| --- | --- | --- |
+| `id` | yes | — (entry dropped; it is what a persisted pane records) |
+| `name` | yes | — (entry dropped) |
+| `destination` | yes | — (entry dropped; `user@host`, `host`, or an `ssh_config` alias) |
+| `remoteShell` | always written | defaults to `"posix"` on read |
+| `port` | no | loomux passes no `-p` |
+| `identityFile` | no | loomux passes no `-i` |
+| `remoteCwd` | no | the remote login directory |
+| `defaultCli` | no | a plain remote login shell |
+| `keepaliveSeconds` | no | loomux emits no `ServerAliveInterval` at all |
+| `extraArgs` | no | no extra ssh flags |
+
+Two conventions carry the no-credentials posture into the file's *shape*: an unset
+optional field is **omitted**, never written as `null`, because "loomux passes
+nothing and your ssh_config decides" should look like absence in a file a human
+reads; and `keepaliveSeconds` refuses `0` rather than accepting it as a second
+spelling of "disabled" (absence already means that, and one meaning spelled two
+ways is how a user ends up believing they enabled what they disabled).
+
+Only `id`, `name` and `destination` can fail an entry — without any one of them
+there is nothing to show, nothing to point a pane at, or nothing to connect to.
+Every other field degrades to its unset value on its own, so one bad key costs a
+setting rather than a connection, and one bad entry costs an entry rather than the
+list.
+
+### NB4 — `remoteCwd`, `defaultCli` and `extraArgs` are unsanitised, and why that is accepted
+
+Carried forward from #907's review, because the honest statement of the trust
+boundary belongs beside the guards rather than implicit two paragraphs away.
+
+S1 guards `destination` (leading dash on the whole word *and* on the host half
+after the last `@` — the `%h`-expansion shape of CVE-2023-51385) and
+`identityFile` (above). **Everything else is trimmed-or-nulled and passes through
+verbatim.** Precisely, as S2's builder consumes them:
+
+| Field | How it reaches `ssh` | Containment |
+| --- | --- | --- |
+| `remoteCwd` | Inside the single remote-command **string**, as the argument of `cd` | Quoted for the declared `remoteShell` — `posixQuote` (single quotes, provably safe) or `cmdQuoteCwd` (double-quote doubling; refuses a newline, which would truncate a `/C` line). May contain `;`, backticks, `$(…)` — the quoting is the containment, not a filter. |
+| `defaultCli` | `remoteCommand[0]`, quoted the same way | One quoted argv token in the remote command, never a command line of its own. Not validated against loomux's catalog — an unknown name **warns and runs** (a profile naming a CLI this build doesn't know is a profile to warn about, not one to silently delete). |
+| `extraArgs` | **Raw argv words handed to the local `ssh`**, before the `--` separator | *None.* This is real `ssh` option surface: `-oProxyCommand=…` runs a command on the **local** machine. Deliberately unfiltered. |
+
+The trust boundary that makes that acceptable, stated as a claim that can be
+checked rather than a reassurance:
+
+1. **These values are the user's own, on the user's own machine.** They are typed
+   into the launcher by the human at the keyboard, or hand-edited into a file in
+   their own `%APPDATA%`. Anyone who can write that file can already do worse to
+   that user than run a command as them.
+2. **They are exactly what `~/.ssh/config` already grants.** `ProxyCommand`,
+   `LocalCommand`, `PermitLocalCommand` are all one line in a file the same user
+   owns. A filter over `extraArgs` would be theatre against an attacker who has
+   the easier route open, while breaking legitimate flags.
+3. **No agent can reach them.** Agents get MCP tools and a pane to type into;
+   neither exposes SSH profiles, the group spawn surfaces never offer one, and
+   `sshOrchestrationRefusal` (below) refuses the combination outright. The values
+   are never attacker-controlled *through loomux* — which is the property that
+   would change the answer, and the one to re-check before wiring any new caller
+   into this store.
+4. **They never traverse a local shell.** The pane spawns from an argv through the
+   direct-native-exe path. Even the fallback is safe by omission: if the direct
+   spawn is disabled or fails, `spawn_pane_child` drops to a plain interactive
+   shell — an SSH pane passes no `command` string, so its argv is never
+   re-interpreted as a command line. There is no path on which these values become
+   local shell input.
+5. **The webview is the only writer.** Constraint 5's seam means the frontend
+   reaches the store through two typed commands and the backend never parses the
+   schema, so this is local-user surface end to end — the same "trusted because
+   the caller is our own in-process webview, not a network client" reading
+   constraint 6 makes explicit for `group_id`.
+
+What would invalidate this argument, so it is not re-derived from scratch: any
+change that lets a **non-human** author a profile, or that hands one to a process
+loomux did not spawn for a human at the keyboard. Then `extraArgs` becomes remote
+code execution on the local box, and the answer is a capability boundary, not a
+filter.
+
+## Passphrases: the agent holds the key, orrerix holds nothing (#2368 slice A)
+
+A passphrase-protected key makes the section above expensive rather than wrong:
+every pane asks again, because every pane is a fresh `ssh`. The fix that keeps
+"orrerix holds none" **literally** true is to use the passphrase **once**, to run
+the user's own `ssh-add`, and let OpenSSH's own agent hold the decrypted key —
+exactly the state the machine would be in after a hand-run `ssh-add`. The key
+material never enters orrerix at all, and `sshprofiles.json`'s schema is
+unchanged: the allow-lists above still drop a `passphrase` key at both ends, and
+slice A extends the *tests* that prove it rather than the schema.
+
+### Vendor facts the choice rests on
+
+Checked in Win32-OpenSSH's own sources and issue tracker, because each one is the
+reason an obvious alternative does not work on this project's baseline:
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| Windows askpass runs only when `SSH_ASKPASS` is set; `SSH_ASKPASS_REQUIRE=force` postdates the in-box 8.1p1 client | `readpass.c`; [Win32-OpenSSH #2115](https://github.com/PowerShell/Win32-OpenSSH/issues/2115) (honoured on 8.1p1, ignored on 8.6p1) | askpass is version roulette on the baseline |
+| `read_passphrase` takes `RP_ALLOW_STDIN`, but a **non-tty** stdin routes back to askpass | `readpass.c` | a pipe is not a way in either |
+| The agent pipe is hardcoded `\\.\pipe\openssh-ssh-agent`; `ssh-agent -d` serves one connection then exits | `ssh-agent/agent.c`, `agent-main.c` | a private per-app agent is not constructible from the shipped binary |
+| The Windows agent persists loaded keys across reboots and ignores `-t` | `HKCU\OpenSSH\Agent\Keys` (DPAPI); [Win32-OpenSSH #1056](https://github.com/PowerShell/Win32-OpenSSH/issues/1056) | "session memory" is really *until forgotten* — a docs fact, not something to imply away |
+| `ssh-agent.exe` with no args asks the SCM to start the service and `fatal`s when it cannot; the service ships **Disabled** | `agent-main.c` | the refusal has to carry a one-time **admin** step |
+| `SSH_AUTH_SOCK` on Windows accepts only a named-pipe path; the client defaults to the hardcoded pipe when unset | [Win32-OpenSSH #1761](https://github.com/PowerShell/Win32-OpenSSH/issues/1761) | nothing needs threading into the pane env on Windows; off Windows the pane child inherits the app's own `SSH_AUTH_SOCK` through `CommandBuilder` |
+
+### The options, and why 1a
+
+| Option | What orrerix would hold | Windows mechanism | Verdict |
+| --- | --- | --- | --- |
+| **1a. Agent-held via the OS agent** | nothing — the passphrase lives for one `ssh-add` call; the **agent** holds the decrypted key | the OpenSSH Authentication Agent service; orrerix runs `ssh-add <key>` in a hidden ConPTY it owns and answers the prompt | **built** — zero new crates, and the base of option 3 |
+| 1b. A private `ssh-agent` per app run, `SSH_AUTH_SOCK` into the pane env | nothing | not constructible: hardcoded pipe, single-shot `-d`; an in-process agent needs key parsing and signing crates, which means `getrandom` (constraint 2) | rejected on Windows; the natural macOS/Linux follow-up |
+| 1c. `SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force` at connect time | the passphrase in memory, re-fed per connect | needs an askpass **executable** orrerix does not ship, and 8.1p1 has no `REQUIRE` while 8.6p1 is reported to ignore `SSH_ASKPASS` | rejected — version roulette, and a stale env var breaks prompting for every pane |
+| 1d. Type the passphrase into the pane when its prompt appears | the passphrase in memory | prompt-text matching on the byte stream; the echo-off race can land the passphrase in scrollback | rejected — exactly the hazard the never-in-the-pane rule exists for |
+| 2. OS keychain plus a *remember* toggle | the **passphrase itself**, persisted | Credential Manager through the `windows` crate already depended on | only on the human's say-so (slice B); it flips the rule from "holds none" to "holds one, opt-in, in the OS store" |
+
+### The hidden ConPTY is the seam, and that is the one boundary crossed
+
+The feature's original shape (§ *The shape*) is **zero backend spawn code**. This
+adds one backend command, and the argument for it is narrow: a console can only
+be opened backend-side, and giving `ssh-add` a real console is the only mechanism
+that behaves the same on 8.1p1 and 8.6p1. It is the same
+`native_pty_system().openpty` call `spawn_pty_blocking` already makes — no new
+dependency, no new mechanism — and the pty is **hidden**: never registered with
+`PtyManager`, never streamed, dropped when the call returns.
+
+What it does **not** do is move key handling into orrerix; the argument against an
+SSH library (§ *The shape*, point 2) is untouched. orrerix drives OpenSSH's own
+`ssh-add` exactly as a human would, and `ssh-add` is resolved **beside** the
+`ssh` that `discover_ssh` picked, so the pair is always one OpenSSH — a PATH-found
+`ssh-add` can be Git for Windows' MSYS build, whose agent is not the one the inbox
+`ssh.exe` talks to.
+
+### The wire shape, as a public contract
+
+One new `#[tauri::command]`:
+`ssh_add_identity(sshPath, identityFile, passphrase) -> SshAddOutcome`, `async`
+through `run_blocking` and never sync (constraint 10 — it spawns processes, which
+INV-2 refuses on the webview thread outright).
+
+| `kind` | Payload | Means |
+| --- | --- | --- |
+| `added` | — | the agent now holds the key |
+| `badPassphrase` | `detail` | `ssh-add` rejected it; `detail` is its own last line, scrubbed |
+| `noAgent` | `hint` | nothing to add the key to; `hint` is the platform's one-time fix |
+| `timeout` | — | the conversation outran its 15 s bound and the child was killed (the human waits up to **29 s** end to end — see below) |
+| `failed` | `detail` | `ssh-add` missing, a spawn failure, or an unrecognised refusal |
+
+The conversation itself answers **at most one** prompt with the passphrase and
+**at most one** retry ask with an *empty* line, which is `ssh-add`'s own
+documented give-up: it re-asks until handed an empty passphrase, so re-sending
+the same wrong value is a spin that ends at the deadline. Both asks carry **no
+trailing newline** — they are asks, not lines — which is why the driver
+classifies the whole transcript rather than complete lines.
+
+#### The bytes decide the conversation; the exit status decides the verdict
+
+Two ConPTY properties make the transcript an unreliable *verdict*, and both were
+measured rather than anticipated — on CI, where all three prompting fixtures
+answered correctly, exited, and were still reported `Timeout`:
+
+- **A ConPTY master read never returns EOF when the child dies**, because the
+  read side stays open as long as the caller holds the master. So a driver that
+  waits for the stream to end waits until its deadline, every time.
+  `spawn_pty_blocking` never hit this because a pane's death is reported by its
+  own `child.wait()` waiter thread — a mechanism this one-shot call does not
+  have and therefore has to supply.
+- **ConPTY renders a screen, not a stream.** A process that prints one line and
+  exits immediately can have that frame dropped: the success fixture's
+  `Identity added` line never arrived at all.
+
+The driver therefore polls `try_wait` between reads, drains for a moment after
+the exit, and — when no line decided the outcome — falls back to `ssh-add`'s own
+exit code, where **0 means the identity was added**. The transcript remains the
+only thing that can decide *what to answer and when to give up*; it is simply not
+the last word on whether the key went in.
+
+#### The answer is one write, and it is re-sent once
+
+A third measured fact, from the same logs: the answer and its Enter sent as
+**two** writes lost the Enter on roughly one run in three. The console had
+echoed the passphrase back — so the read was live and cooked-mode echo had
+run — and the lone `\r` that followed simply never took effect, leaving
+`ssh-add` blocked on a read nobody would finish. The line and its Enter now go
+in one buffer, and the write result is **returned rather than dropped**: `let _
+= write_all(…)` is what made this invisible in the first place, and a refusal
+naming the failed write is a bug report where a fifteen-second `Timeout` is not.
+
+What is left of the race is bounded by exactly one re-send, of whichever answer
+is still outstanding — the passphrase while the first ask is what is parked, the
+empty give-up once it is not. The cost of being wrong is asymmetric: a duplicate
+answer is read by nobody if the first one landed, while a lost one costs the user
+the whole bound and refuses a launch that would have worked.
+
+The re-send's own write result was itself dropped until #2594 item 3 — the same
+`let _ = …` one paragraph up, on the one write the paragraph did not cover. Every
+answer, the re-send included, now goes through `write_refusal`, so a console that
+went away mid-conversation is a `failed` naming the write rather than a
+fifteen-second `timeout`. A failed re-send is if anything the stronger signal:
+the first write to that console already succeeded.
+
+#### The success line is anchored; the asks are not
+
+`classify_ssh_add_chunk` requires `Identity added` to begin a **line**, and tests
+the two asks and the no-agent spellings as bare substrings. The asymmetry is
+deliberate (#2594 item 4).
+
+The driver classifies the transcript tail *since it last acted*, and right after
+it answers the first ask that tail begins in the middle of the prompt line —
+which is where a console echo of what was typed lands. A bare substring test
+therefore reads a passphrase containing `Identity added` as ssh-add's own
+verdict: a wrong passphrase reported as a loaded key. The real `ssh-add` reads
+with echo off and prints nothing back, so this is failure-safe against the vendor
+binary and reachable only through the same foreign shim `scrub_secret` defends
+against — anchored rather than argued away, because `ssh-add` prints that line at
+the start of a line and nowhere else, so the anchor costs nothing.
+
+The asks stay unanchored because their failure runs the other way. Missing an ask
+costs the whole bound and refuses a launch that would have worked, and ConPTY
+renders a screen, so an ask can arrive with a repaint in front of it. Missing a
+no-agent line costs the hint, not correctness. Only `Added` can turn a miss into
+a success that did not happen.
+
+#### One reap, and a close the reader is still draining
+
+The conversation ends four ways — a transcript line decided it, the child exited,
+the deadline fell, or a write failed — and until #2594 only some of them waited
+for the child. The arm that did not was the one a **successful** launch takes: a
+run whose outcome `Identity added` had already settled merely killed the child,
+on the argument that waiting for a status nobody reads was an unbounded block.
+
+That argument was wrong twice over. The wait available there is `reap_bounded`,
+whose 2 s `CHILD_REAP_BUDGET` is already the third term of the total above, so it
+was never unbounded. And off Windows the consequence was not cosmetic:
+`sshagent.rs` is not platform-gated, `spawn_command` yields a
+`std::process::Child` whose `Drop` does no wait, and nothing else in the process
+ever reaps it — so every key a macOS or Linux user loaded left a zombie behind
+for the life of the app. There is now exactly one bounded reap, in the driver's
+tail, on every path out of the conversation; `src-tauri/tests/sshagent_unix.rs`
+pins it on the platform it actually bit, by looking for the child in the process
+table afterwards. A zombie is still *listed* there, which is what separates
+"reaped" from "merely killed" — the distinction a `kill` on its own cannot make.
+
+That probe asks whether the pid is still **this test's own unreaped shell child**
+(`ppid` and `comm`), not whether the slot is occupied. The slot is the wrong
+question: between the reap and the probe the OS may hand that pid to something
+else, and a correctly-reaped child would then be reported as a leak (#2661
+review). `ppid` stays the parent until the child is reaped — which is exactly the
+transition under test — so it identifies the process rather than the number.
+
+The console is then closed in one order, and it is a load-bearing one. Dropping
+the master is `ClosePseudoConsole`, documented to wait for an attached client to
+finish with the console; the reader thread stops draining the moment its channel
+receiver goes away. Closing with the receiver already gone would therefore be a
+close that may wait on a pipe nothing is reading — an unbounded block on the
+blocking pool, in the one function whose whole design is about not having one.
+The order was the wrong way round by accident: three locals dropped in reverse
+declaration order, which put the receiver first. `close_console_while_the_reader_drains`
+now takes the three ends **by value, in the order they must go**, so the ordering
+is a property of a signature rather than of where bindings happen to sit. The
+reader thread is not joined — that would be the unbounded wait again, in the
+place this removes it.
+
+The residual, stated: nothing here fails on a host where `ClosePseudoConsole`
+does not block, which is every host CI runs on, so this ordering has no
+discriminating test. It is an argument in a signature, checked by reading it.
+
+#### Two things this widens, named rather than left implicit
+
+**The bound a human experiences is 29 s, and it is enforced rather than summed.**
+The launcher awaits the whole sequence behind one modal "Connecting…", so the
+15 s conversation bound is not the number anyone waits.
+
+The first attempt at stating that got it wrong, and the way it was wrong is the
+reason the shape changed. Per-step ceilings — probe 5 s, start-attempt 10 s,
+re-probe 5 s, conversation 15 s — **compose**, and `run_ssh_add`'s agent check
+does not return on success: it falls through to the conversation. So there was a
+fourth-step path, probe + start + probe + drive = **35 s**, against a constant
+claiming 20 and a test that pinned only the two compositions someone had listed.
+The constant had been picked to satisfy that list, so the test certified the
+false number instead of exposing it.
+
+A second review round then found the same claim falsified one layer down: the
+conversation ends by killing its child and then waiting for it, and
+`portable-pty` 0.9.0's `Child::wait` is `WaitForSingleObject(INFINITE)` behind a
+`kill` whose result is **inverted** — `Err` when `TerminateProcess` succeeded,
+`Ok` when it failed — so a child that survives the kill is indistinguishable from
+one that died, and the wait never returns. `CHILD_REAP_BUDGET` bounds it: the
+child is polled for at most 2 s and then **abandoned**, the same trade
+`subproc::abandon_child_and_readers` makes, because a leaked process is far
+better than a wedged app. That budget is the third term of the total.
+
+The fix is structural, because a corrected sum would have had the same defect one
+step later. Everything before the conversation now shares **one** deadline
+(`AGENT_SETUP_BUDGET`, 10 s, enforced in `ensure_agent`), and the conversation
+always gets its own full `SSH_ADD_TIMEOUT` whatever the setup spent. Every path
+is therefore setup-then-conversation — there is no path *set* to enumerate — and
+`WORST_CASE_TOTAL` is their sum by construction. A step added to the setup phase
+tomorrow costs budget rather than inventing a path the pin misses.
+
+**A fourth term, and the third time this claim was found short (#2594 item 2).**
+A shared budget bounds when a setup step may *start*; it cannot bound what a step
+spends past its own deadline. Each of those steps is a
+`subproc::capture_raw_with_timeout`, and that primitive's last act on the timeout
+path is to kill its child and reap it under `GH_CAPTURE_REAP_TIMEOUT` — 2 s that
+run **after** the timeout it was handed, where the caller's budget cannot reach.
+So the setup phase really ended at its budget plus an overrun *per step*, and
+the constant said 27 s against a path that could take 33.
+
+One overrun, and not one per step, because `ensure_agent`'s steps now run through
+`run_setup_steps`, which re-reads the shared deadline **between** them and starts
+no step once it has passed. At most one step can therefore be in flight when the
+deadline falls, however many the phase has. That is deliberately not a corrected
+sum: multiplying 2 s by today's three steps would have been a step *count* in the
+pin, which is the enumeration shape this section's own history is about — a
+fourth step tomorrow would falsify it in silence, exactly as the fourth path did
+in #2397. `a_fourth_setup_step_costs_no_more_than_the_third` pins the phase's
+shape by adding a step and showing the bound does not move.
+
+An exhausted budget fails **closed**, and now does so sooner: `run_setup_steps`
+starts no further step and nothing below it reports success, so the run ends in
+the refusal that carries the platform's fix rather than in a launch with no agent
+behind it. The one behaviour this changed is that a start attempt with no budget
+left is skipped rather than spawned and killed at once — the same refusal, one
+process earlier.
+
+**The set of binaries this feature will execute goes from one to three.** An SSH
+pane used to run exactly the `ssh` the human named. This adds `ssh-add` and, on
+the no-agent path, `ssh-agent.exe` — both taken from that `ssh`'s own directory,
+neither named by the human. Accepted on the same footing as the `ssh` itself:
+anyone who can write that directory has already replaced the `ssh`, and the
+beside-rule is what keeps the agent the client's own rather than whichever
+OpenSSH leads PATH. Stated here because it is a widening, and a reader
+comparing this note against the "no backend, no dependency" shape above should
+not have to infer it.
+
+### Persistence honesty
+
+On Windows the agent keeps the key **until it is forgotten** (`ssh-add -D`, or
+`ssh-add -d <key>`), across reboots, and `-t` is ignored — so this feature really
+does buy "remember" semantics there, and the docs say so rather than implying a
+session lifetime nobody delivers. That is also why option 2 buys little on
+Windows: the agent already persists, and storing the *passphrase* as well would
+add a secret where none is stored today.
+
+### The refusal spawns no pane, and never dead-ends
+
+A non-`added` outcome ends the launch: the message is shown, the passphrase field
+is focused, and **nothing is spawned**. That is the point rather than a
+limitation — a wrong passphrase can never hang a pane because it never reaches
+one. Every refusal names the same escape (blank the field and let ssh ask inside
+the pane, which is the pre-#2368 path), because a refusal that leaves someone
+stuck is worse than the prompt it replaced.
+
+### Residuals, stated rather than claimed away
+
+- **The passphrase's transient copies.** It reaches the backend as a `String`
+  through Tauri's IPC deserialization, and the webview holds it in an `<input>`
+  before that. `zero_secret` overwrites only the buffer `sshagent.rs` owns;
+  neither of the other two is under this module's control, and no crate would
+  change that. orrerix does not *store* the passphrase — it does not claim to
+  have scrubbed every copy out of two runtimes it does not own.
+- **A fake `ssh-add` that echoes.** The real one reads with echo off and never
+  prints a passphrase back, so `scrub_secret` is a belt against the case where the
+  program on the other end of the pty is a shim or a wrapper. `detail` is the one
+  field carrying foreign text, so it is the one place a leak could ride out;
+  `src-tauri/tests/sshagent.rs` drives exactly that program.
+- **Service-start ACL.** Whether a non-elevated `ssh-agent.exe` can start a
+  *Manual*-start service is unverified here (constraint 3 keeps a live agent off
+  CI). The code handles both answers: one start attempt, one re-probe, then the
+  refusal carrying the admin step.
+- **The breadcrumb.** Exactly one is written, `ssh-add outcome=<variant>`, and
+  `SshAddOutcome::variant` returns `&'static str` — so `detail` (foreign text) and
+  the identity path (the human's filesystem) are not reachable from it by
+  construction, not by care.
+
+## Who owns `RemoteShell`
+
+**`sshprofile.ts` (S1) owns the value set.** It declares the canonical triple —
+the `RemoteShell` union, the `REMOTE_SHELLS` list the launcher's picker is built
+from, and `DEFAULT_REMOTE_SHELL` — validates it on the way in and out of disk, and
+is what the UI imports. `sshcommand.ts` (S2) declares a **structurally identical
+union of its own**, deliberately: S2 takes flat primitives and never imports S1, so
+the two slices could land from parallel worktrees. Nothing in TypeScript notices
+that they are two declarations, because two identical string unions type-check
+happily against each other — which is exactly why ownership has to be *written
+down* rather than inferred.
+
+The drift is not left to a human to catch, though — and it is worth being exact
+about *which* mechanism catches it, because there are two and they fire at
+different times.
+
+**The build-time catch is `tsc`, at the S1→S2 seam.** The two unions meet in
+exactly one place: `sshLaunchParams` (`panesetup.ts`) assigns
+`remoteShell: profile.remoteShell` — S1's type — into an `SshCommandParams` —
+S2's type. Grow S1's set by a third member that S2 doesn't declare and that
+assignment stops type-checking, so `npm run build`'s `tsc --noEmit` fails before
+anything runs. That is the real guarantee behind the paragraph above, and it is
+why the seam being a *single* assignment matters.
+
+**`buildRemoteCommand`'s `default:` arm is a runtime backstop, not that catch.**
+It throws on any value outside `"posix" | "cmd"` — deliberately as a runtime test
+(it casts, `remoteShell as string`, rather than using the `never`-exhaustiveness
+idiom that would be a compile-time check), because it is guarding against a
+*caller* that reaches the builder without S1's normalizer. **No shipped path can
+reach it.** Both the launch path (`planPaneSetup` → `normalizeSshProfile`) and the
+reconnect path (`decodeSshProfiles` → `normalizeSshProfile`) coerce an
+unrecognized `remoteShell` to `DEFAULT_REMOTE_SHELL` first. So hand-editing
+`"remoteShell": "powershell"` into `sshprofiles.json` does **not** produce a loud
+refusal: it silently reads as `"posix"`, which is the store's intended
+unrecognized-value degradation, not a hole. The arm exists for the next caller,
+not for the file.
+
+That third member is a real prospect, and the naming reflects it: the value is
+`"cmd"`, meaning **cmd.exe specifically** — not "a Windows host". A spelling of
+`"windows"` would have been a promise the schema cannot keep, because a
+PowerShell-`DefaultShell` remote expands `$(…)` inside double quotes and is a
+strictly worse surface than the one cmd.exe quoting was written for. PowerShell
+remotes are unsupported in v1 and reachable as a plain login shell; naming
+cmd.exe's own case is what lets a later slice add PowerShell without redefining a
+value users already have on disk.
+
+## The posix remote command runs in a login+interactive shell
+
+`buildPosixRemoteCommand` emits
+
+```
+exec "$SHELL" -l -i -c '<cd … && exec <cli> …>'
+```
+
+rather than the bare `cd … && exec …` it emitted through v1.3.0-beta7. The
+reason is a live bug (#2395): an SSH pane to Ubuntu with a remote folder and
+**copilot** answered `bash: exec: copilot: not found` on a host where an
+interactive login finds `copilot` immediately.
+
+**Why it broke, and why only the CLI form broke.** sshd runs a remote command
+through the account's shell with `-c` — sshd(8): "the client either requests an
+interactive shell or execution of a non-interactive command, which `sshd` will
+execute via the user's shell using its `-c` option". That shell is neither a
+login shell nor an interactive one, so it reads neither `~/.profile` nor the part
+of `~/.bashrc` below Ubuntu's `case $- in *i*) ;; *) return;; esac`. Everything
+that puts a user-installed CLI on `PATH` — nvm, `~/.local/bin`,
+`~/.npm-global/bin`, pnpm/volta/bun shims — lives in exactly those files. A CLI
+in `/usr/bin` resolved; the ones agents actually install did not. The
+no-`remoteCommand` form was unaffected because sshd starts a real login shell
+there itself, which is why "connect" worked and "connect + folder + CLI" did not.
+
+**Why both flags.** They fix different files and neither alone closes the bug:
+
+- **`-l` alone** reads `/etc/profile` and `~/.profile`, so it recovers
+  `~/.local/bin` and `~/.npm-global/bin` — and still misses nvm on a stock
+  Ubuntu account, whose `NVM_DIR`/`PATH` export sits in `~/.bashrc` *below* the
+  interactive early-return a non-interactive shell takes.
+- **`-i` alone** gets past that early return, and misses `~/.profile` entirely —
+  which is where the other half of the reported host's `PATH` came from.
+
+**Why `"$SHELL"` and not `bash`.** `bash -lic` is shorter and wrong: an account
+whose shell is zsh or fish would be handed a bash login, sourcing files it does
+not use and skipping the ones it does. That *is* the class of guess `remoteShell`
+exists to refuse. `$SHELL` is not a guess in the same sense — it is not detected
+by us at all, it is read from the environment sshd itself built from the
+account's passwd entry (openssh-portable `session.c`:
+`child_set_env(&env, &envsize, "SHELL", shell)` over
+`shell = (pw->pw_shell[0] == '\0') ? _PATH_BSHELL : pw->pw_shell`), so on this
+path it is always set and always non-empty. It is double-quoted so a shell path
+containing a space stays one word.
+
+**Why not a `PATH=` prefix.** Prepending `PATH=$HOME/.local/bin:$HOME/.nvm/…` to
+the remote command would name the directories a CLI *might* be installed in —
+this machine's layout baked into product code, which is what CLAUDE.md constraint
+8 forbids. It also silently stops working for the next installer that picks a
+different directory, with no error to say so.
+
+**Why two `exec`s.** The outer one replaces sshd's `-c` shell with the login
+shell; the inner one replaces the login shell with the CLI. The wrap therefore
+costs no extra process on the far host — the CLI still ends up as the session's
+only process, which is what makes ssh's own disconnect handling behave the same
+as before.
+
+**Quoting.** The `cd`-then-`exec` core is `posixQuote`d once *more*, so it
+arrives as a single `-c` argument regardless of what is in `remoteCwd` or the
+command tokens. The security argument is unchanged from the single-layer form,
+because it is the same scheme applied twice: nothing inside single quotes is
+special except `'`, which is closed/escaped/reopened. `test/sshcommand.test.ts`
+executes the built string through a real `sh` and checks that a hostile
+`remoteCwd` still fails closed under the wrap.
+
+**The accepted cost.** An interactive login shell prints what a login shell
+prints: MOTD, banners, anything an rc file `echo`s. That lands in the pane above
+the TUI. `-t` is already forced for a remote TUI, so a pty was always expected,
+and the alternative — a CLI that cannot be found at all — is strictly worse.
+Documented for users in `docs/features/ssh-panes.md`.
+
+**Known limit, stated rather than guessed around.** csh(1) documents `-l` as
+"the shell is a login shell (only applicable if `-l` is the only flag
+specified)", so an account whose shell is `csh`/`tcsh` cannot run the wrapped
+form. No mitigation is attempted: guessing per-shell flag grammar from here is
+the same class of guess as guessing the shell, and such a host is still
+reachable as a plain login shell (**Remote CLI = None**). If it turns out to
+matter, the honest fix is a declared field, the way `remoteShell` already is.
+
+**What has actually been exercised.** `test/sshcommand.test.ts` runs the built
+string through a real local shell on every CI platform, and gives **each flag
+its own startup-file witness**, because the two select disjoint classes: `-l`
+sources `~/.profile` (login only) and `-i` sources `$ENV` (interactive only).
+The test points `HOME` at a scratch directory and `ENV` at a scratch file, then
+asserts both markers appear *and* that what each file exported reaches the
+program the remote command finally `exec`s — which is the property the bug is
+actually about, one variable over from `PATH`. So "both flags are load-bearing"
+is measured rather than asserted: dropping `-l` reddens that test, dropping
+`-i` reddens it and three others.
+
+That holds under **dash** (ubuntu-22.04's `/bin/sh`), **bash in sh-mode**
+(macos-latest) and **bash** (windows-latest, via Git Bash). zsh and fish are
+covered by the declaration model, not by a run — as is the specific claim that
+nvm's export sits below `~/.bashrc`'s interactive early-return, which is an
+argument about a stock Ubuntu account's files rather than something a test here
+reproduces.
+
+**`buildCmdRemoteCommand` is deliberately untouched.** cmd.exe has no
+login/non-login distinction and no per-user rc file that sshd's `-c` invocation
+skips, so there is no lost `PATH` for a wrap to recover — and `"$SHELL"` would
+reach cmd.exe as that literal text rather than an expansion (cmd.exe's own
+variable syntax is `%VAR%`). A test pins that path byte-for-byte against its
+pre-#2395 shape, so "unchanged" is checked rather than asserted.
+
+## The launch seam, and the two rules it taught
+
+S3's review (#921) produced two findings whose lesson generalizes past this
+feature. Both are recorded here rather than as repo lore, because both are
+arguments about *this* code that a future edit could quietly undo.
+
+### Symmetric input read: a guardrail must read every input by one rule
+
+`sshOrchestrationRefusal(opts, pane)` is the #887/#888 boundary in code. Its first
+shipped form read **ssh-ness from both** the spawn options and the pane's existing
+state, but the **orchestration identity from `opts` only**. That asymmetry is
+exactly the width of a bypass: `respawnFresh({ ssh: {...} })` on a pane that is
+*already* an orchestration member carries its group on the pane and nothing in the
+options — so an opts-only read of the identity waves it through and produces the
+combination the guard exists to refuse, with the merge gate unenforced for its
+children.
+
+It was not reachable at the time, and that is the point worth keeping: a guard
+whose stated job is to survive future edits cannot be justified by today's call
+sites, and S4 was about to add a reconnect path that calls `respawnFresh` with
+`opts.ssh`.
+
+What shipped: **two same-shaped inputs, unioned field by field**.
+
+```ts
+const ssh = !!opts.ssh || !!pane.ssh;
+if (!ssh) return null;
+const identity =
+  opts.orchGroup || pane.orchGroup ||
+  opts.orchRole  || pane.orchRole  ||
+  opts.orchAgent || pane.orchAgent;
+```
+
+Three properties, each deliberate:
+
+- **Neither side is authoritative alone**, so neither is trusted alone. It refuses
+  on *any* ssh signal crossed with *any* orchestration marker, from either side —
+  fail-closed, including a spawn carrying only half an identity on only one side.
+- **The union happens in the pure module**, not at the two DOM call sites in
+  `pane.ts`. A rule spelled at two call sites is a rule that drifts at one of them;
+  here it lives in the unit-tested function, and the call sites just hand it what
+  they know.
+- **It cannot over-refuse.** With no ssh signal it returns null before reading the
+  identity at all, so no existing orchestration flow changes behaviour.
+
+Coverage sits in two tests, not one: *the guardrail reads BOTH sides by the same
+rule* enumerates all four crossings of {which side says ssh} × {which side says
+orchestrated} and adds `orchRole`/`orchAgent` on the pane side, while *…and the
+guardrail refuses ONLY that combination* holds the negative controls (an ordinary
+orchestration pane; an ordinary ssh pane; orchestration on both sides with no ssh
+→ null) so "refuse everything" would not pass.
+
+The same rule is what makes the restore path safe by construction rather than by
+vigilance: the `dormant-ssh` action has **no field** that could carry `role`,
+`groupId` or an agent id, even though the persisted leaf it is built from has room
+for all three. An `ssh` leaf hand-edited into `tabs.json` claiming `role: "worker"`
+restores as an ordinary dormant SSH card, because there is nothing to carry the
+claim through.
+
+### No silent data loss: refuse it or honour it, using the mechanism that already exists
+
+The launch form accepted values the launch would then drop. Type `99999` into
+Port: `normalizeSshProfile`'s bounds drop it, the pane connects on port 22, and
+nothing says so. Worse for `identityFile`, where a rejected value means connecting
+with no `-i` at all and the failure surfaces as an unexplained auth problem.
+
+Normalization dropping those values is **right** — they are the store's own guards.
+The defect is dropping them *quietly*.
+
+What shipped, per field:
+
+| Field | Answer | Where |
+| --- | --- | --- |
+| `port`, `keepaliveSeconds`, `identityFile` | **Refuse at the launch seam**, naming the field and the range | `sshDiscardedFieldError`, called from `planPaneSetup` |
+| `remoteCwd` with no remote CLI | **Keep and warn** — the value stays on the saved connection and the form says it won't apply | `sshRemoteCwdWarning` |
+| `defaultCli` loomux doesn't know | **Keep and warn** — it runs on the far host exactly as written, with no session id and no autopilot flags | `sshRemoteCliWarning` |
+
+The refusal is one mechanism, not a second one: it **asks the store's normalizer
+what it kept** and refuses the difference, rather than re-spelling the bounds at
+the seam. `MIN_SSH_PORT`/`MAX_SSH_PORT`/`MIN_KEEPALIVE_SECONDS`/
+`MAX_KEEPALIVE_SECONDS` moved into `sshprofile.ts` so the input attributes, the
+refusal text and `boundedInt` all name one range. A bound spelled three times is a
+bound that ends up meaning three things.
+
+Two consequences worth stating because they are what makes it safe:
+
+- **A saved connection can never be bounced by this.** Values off disk were
+  normalized on the way in, so raw and kept agree and nothing is refused. The
+  regression control for that is its own test.
+- **The launched profile *is* the saved profile.** The seam runs the store's
+  normalizer over the form's raw object, so the connection a pane launches and the
+  connection written to `sshprofiles.json` are the same object — an out-of-range
+  port or a pasted key is dropped from both or from neither.
+
+`remoteCwd` is the case where "honour it" was the wrong answer, and the reason
+generalizes: honouring it with no remote CLI would mean synthesizing a remote
+command whose entire job is a `cd`, and *any* remote command changes what the
+pane is. With none, ssh asks sshd for an interactive session and sshd starts the
+account's login shell itself; with one, ssh forces a pty and sshd runs
+`<shell> -c <string>` instead. Refusing to *save* the value would throw away a
+setting that becomes correct the moment a CLI is picked. So it is kept, and the
+human is told. Not silent, not lost, not substituted for something else.
+
+That argument used to be written as "`cd … && exec $SHELL -l` is a **guess**
+about the remote's login shell". #2395 retired that phrasing rather than the
+decision: `$SHELL` is read from the environment sshd built from the account, so
+it was never the guessing this codebase refuses — and the posix builder now emits
+exactly `exec "$SHELL" -l -i -c` (see *The posix remote command runs in a
+login+interactive shell*). What the warning is really protecting is the session
+*shape*, which is why the behaviour is unchanged.
+
+### The other silent loss: a save that publishes a list it never read (#1332)
+
+The section above is about one field going quietly missing. This one is about the
+whole file, and it is the same defect class `BoardPrefsStore` was built for on
+`boardprefs.json` (#1270 review B1) — surfaced here by the #1299 process review,
+then confirmed on the code.
+
+`sshprofiles.json` is republished **whole** on every launch: there is no
+per-profile write. The launcher used to hold the list in a field seeded
+`emptySshProfileStore()`, fill it when a fire-and-forget `loadSshProfilesOnce()`
+resolved, and serialize that field at submit. Two orderings reach the save with a
+list nobody read, and both delete every saved connection:
+
+- **The read had not come back.** `applyKind` starts the load when the human picks
+  SSH; nothing awaits it. `submit` awaits `discoverSsh` — an independent `invoke`
+  started in the same tick, so nothing orders the two — and then saves.
+- **The read had FAILED.** `.catch(() => emptySshProfileStore())` read a rejected
+  IPC call as "you have no saved connections", and the `??=` memo latched that for
+  the life of the form. No race needed; the next launch publishes it.
+
+Both are silent, because every individual step succeeds — and `persistSshProfile`
+is best-effort by design, so even a thrown save is swallowed. The read side of
+this feature already refused the same conflation: `restoreSshCard` says *"A store
+we could not READ is not a store that says the connection is gone"*. The write
+side is what #1332 brings into line.
+
+`SshProfilesStore` (in `sshprofile.ts`, beside the schema it publishes) owns the
+lifecycle: read once, share the in-flight read, and **await it before publishing
+anything**. A read that rejected returns `declined-unread` and writes nothing; the
+failure is not latched, so the next launch retries. A read that *resolves* is a
+complete answer even when there is nothing usable in it — an absent file is first
+run, and a blob the decoder refuses has already been renamed aside to
+`sshprofiles.corrupt.json` by `uistate.rs` — so both seed empty and both may be
+published over. That is the designed first-run path, not the accident.
+
+**Why it is unrepresentable rather than merely fixed.** `write` takes ONE
+`SshProfile` and nothing else, the `GroupBoardEdit` argument applied here. The
+caller cannot hand over a profile list, so it cannot hand over an empty one; and
+it cannot hand over a `schemaVersion` either, which closes a third, quieter leak
+in the old shape — `{ ...this.sshStore, profiles }` carried the version from the
+same unread store, so a v2 file could be re-stamped v1 by a form that never saw
+it, defeating `stampedVersion` (#907 NB2) on exactly the path it was written for.
+
+The launcher keeps a `sshKnown` snapshot for the picker and the field editor, and
+it is a **display** copy only — `read()` hands out a deep copy, so an edit to it
+cannot reach disk without going through `write`. The copy is on **both** sides for
+the same reason in mirror: the store outlives the call, so `write` copies the
+profile in as well, or a caller keeping its object could change what a LATER save
+publishes without ever handing anything over. The display load is still memoized
+per form, but the memo is now released on failure, so re-picking SSH retries
+instead of leaving the human staring at a list this form has given up on.
+
+**The second ordering, one level up: writes serialize** (#1358 review N2). A save
+publishes the whole file, so two overlapping writes each publish a whole blob —
+and the backend applies them in COMPLETION order, not call order. The blob
+computed first can land second and silently drop whatever the other one added.
+That is the same lost update as the defect above, with a different cause: the
+read-before-publish rule stops a save built from a list nobody read, and this
+stops a save built from a list that was correct when computed and stale by the
+time it landed.
+
+It is enforced in the store rather than left to the caller, and the reason is the
+one this whole note argues. Today the interleaving is unreachable — `write`'s only
+caller is `persistSshProfile`, behind `SubmitLatch`, and `submit` takes
+`latch.begin()` before any await, so a second concurrent submit cannot start. A
+class whose thesis is "an ordering nobody enforces is not an ordering" cannot then
+ship a doc-comment asking its next caller to be single-flight; the invariant is
+cheaper to keep than to document. `write` chains onto a shared tail and `publish`
+holds the read-modify-save, which is private, so there is no way to reach the
+publish and skip the queue.
+
+`BoardPrefsStore`, the precedent this class is modelled on, does **not** serialize.
+That divergence is deliberate and is not a claim either way about whether its own
+caller is safe — it is a different feature's module, and widening this change into
+it would make the review worse than the finding. Flagged here so whoever picks it
+up has the argument already written.
+
+One piece of this is deliberately unpinned and is called out rather than implied:
+the queue's tail discharges a rejection (`.then(() => undefined, () => undefined)`)
+so one throw cannot wedge every later write. `publish` resolves an outcome on
+every path and never rejects, so no test can redden that handler — it guards a
+future edit, not a reachable state today.
+
+The ordering lives in a class with injected IO rather than a pure function
+because the invariant IS an ordering between two async calls — there is nothing
+to assert about a single value. `test/sshprofile.test.ts`'s last section is the
+pin; each of its assertions is witnessed by a mutation recorded on the PR.
+
+## Restore: the leaf records a connection, not a command line
+
+The full argument lives in `docs/design/session-restore.md`'s #887 S4 section; the
+two decisions worth repeating here are the policy and the forward-compat story.
+
+**Dormant-with-Reconnect, never auto-connect.** Two independent reasons, neither
+of which applies to a local shell: the far end is an agent on someone else's
+machine, so an auto-reconnect spends **remote** credits with no human present (the
+orch-pane credit argument, one host removed); and a host that is down, asleep or
+behind a VPN puts a TCP connect — which may not fail for a minute — on the boot
+path. Autossh-style automatic reconnection was rejected for a third reason that
+applies mid-session too: a surprise reconnect re-enters a remote TUI in a state
+nobody has looked at.
+
+**The record's meaningful content is `{paneKind: "ssh", name, sshProfileId,
+sessionId}`** — no `cwd` (there is no meaningful local one) and deliberately **no
+argv**. That is the non-null *subset*, not the literal JSON: `Pane.capture()`
+returns a full `PersistedPane` and `encodeTabs` stringifies it wholesale, so the
+bytes on disk also carry `"cwd":null,"command":null,"argv":null,"shellKind":null,
+"role":null,"groupId":null,"file":null`. Worth the clause because the file is
+hand-editable and this note is presenting a shape: those keys are present and
+empty, not absent. "No `cwd`, no argv" is a statement about the **value**. Reconnect
+re-derives everything through the same builders a fresh launch uses, which is what
+makes an edit between boots apply, and what avoids re-parsing a quoting scheme
+`sshcommand.ts` exists to be the sole implementation of. A deleted profile
+therefore reconnects with *nothing* — the click refuses with `SSH_PROFILE_GONE` —
+rather than replaying a stale command line into a host the human removed on
+purpose.
+
+That refusal is **click-time**, and the distinction follows from what the card can
+know without doing I/O at boot. Its `initial` error state is gated on the *record*
+having no `profileId` at all, which is a different state from a profile that has
+since been deleted: the record still names its connection, so the card cannot know
+at mount whether that connection exists without reading the store, and it reads
+the store on the click anyway — as it must, since the whole point is that the
+profile is re-read at reconnect time rather than captured. A record that never had
+a connection needs no read to know it has nothing, so it says so up front.
+
+### Schema forward-compat: `SCHEMA_VERSION` stays at 2
+
+The `ssh` leaf adds one field (`sshProfileId`) and one kind value, both additive,
+and `tabs.json` decode is shape-driven — so **`SCHEMA_VERSION` stays at 2**, for
+the same reason the content kinds left it there: a v2 file written before this
+build simply never carries an `ssh` leaf and decodes exactly as it always did.
+
+The **downgrade** direction is the one that costs something, and it costs more
+here than a per-entry drop, which is why it is recorded rather than softened:
+
+- a **docked** `ssh` pane is the soft case — an older build drops that entry and
+  keeps everything else;
+- a **tiled** `ssh` pane is the sharp one — an older build's `decodePane` rejects
+  the unknown kind, and `decodeLayout`'s whole-tree fail-safe then collapses
+  **that tab's entire layout** to `null`, so the tab comes back as **one empty
+  pane on the welcome surface** (`main.ts`'s empty-tab fill; nothing spawns until
+  the human picks a kind) — so that tab's *other* panes are lost with it, which is
+  what makes this the sharp case rather than merely an untidy one.
+
+Accepted, because the alternative is worse: persisting an SSH pane under a kind an
+old build *does* recognize means an old build spawning the wrong process under the
+right title. Losing a layout is recoverable and visible; a terminal pretending to
+be a remote agent session is neither.
+
+`sshprofiles.json` carries its own independent `schemaVersion` (v1) and has no
+such problem: an unknown-version file still decodes field by field, and an entry
+an older build cannot make sense of is dropped alone.
+
+## The #888 boundary, and how to tell whether a follow-up crosses it
+
+**SSH panes are display-only in v1: a remote solo pane the human drives.** They
+are not orchestration members, and the refusal is enforced rather than documented
+(above).
+
+The concrete failures behind that line, none of which degrade gracefully:
+
+- **worktrees** are local directories made by local `git` against a repo that is
+  on the other machine;
+- **the MCP server** is loopback-only and its per-agent config reaches only
+  children loomux spawns itself, so a remote agent cannot `report` at all;
+- **the `gh` shim** — the thing that *enforces* the merge gate — likewise reaches
+  only locally-spawned children, so a remote `gh` would run with **no gate**. That
+  is a security regression, and it is why this is a refusal and not a best-effort
+  degradation;
+- **`gh` auth** on the far host is unknown to loomux;
+- **session identification, transcripts and usage** are local-store scans;
+- **briefs** written by a local orchestrator name local paths.
+
+There is also a timing argument that would bite even if all of the above were
+solved. Prompt delivery is byte-stream machinery — bracketed paste, the submit
+sequence, stranded/stuck detection — and it *mechanically* survives ssh, because
+the channel is transparent. What breaks is that its constants assume local echo: on
+a 200–400 ms-RTT link the submit-confirm window misses submits that actually
+landed, the retry then presses Enter into a pane whose first Enter already went
+through, and **a prompt gets submitted twice**. Kickoff delivery-id dedup catches a
+duplicated kickoff; an arbitrary prompt has no such guard. v1's answer is
+structural — that machinery never targets an SSH pane, because an SSH pane is never
+a group member — and a human typing into the pane is their own confirmation loop.
+
+**The test for a follow-up:** does it need a loomux process, or loomux-owned state,
+on the remote host? Remote sessions in the browser, remote usage readback, remote
+transcripts, remote group members, a tunnelled MCP server, RTT-scaled delivery
+timing for a remote worker — every one of them does. They are **#888** (the remote
+engine), not this issue. The docs page states the boundary in one sentence, the
+guardrail and its test hold the line in code, and this paragraph is the reason both
+exist: "make *X* work remotely" is the shape of scope creep this feature attracts.
+
+## Test strategy: the ssh side is faked, and the live half is the human's
+
+Everything SSH-specific is **pure and unit-tested**: the profile schema and its
+guards, the argv builder and its two quoting schemes (with adversarial cases — a
+hostile quote, a trailing backslash, the `cmd /C` leading-quote strip), the
+fresh-vs-resume rewrite, the launch seam's refusals and warnings, the restore
+policy, and the orchestration guardrail. `buildSshArgv`'s `program` parameter is
+the **fake-ssh seam**: a test (or a hand validation) substitutes a local stub for
+`ssh.exe`, the same way `src-tauri/tests/` fakes agent CLIs. No sshd, no network,
+no credits.
+
+A real loopback sshd rig was considered and rejected: Windows CI has no OpenSSH
+Server enabled, enabling it is privileged machine setup (constraint 8), and every
+property it would add — auth, crypto, the wire — is OpenSSH's to test, not ours.
+
+So **live validation is the human's**, per repo convention and constraint 3: a real
+host, a real prompt, a real drop. The checklist is in S5's PR body — connect and
+authenticate, the connection saved with no credential, a remote Claude Code landing
+in the remote folder, the degradation showing up as degradation, the no-client
+refusal, and a mid-session drop reconnecting into the same remote session.

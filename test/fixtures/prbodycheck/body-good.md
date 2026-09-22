@@ -15,7 +15,7 @@ Part of #900.
 ### Diffstat, measured at both ends
 
 `git diff 517073c4..c7a3626a --numstat`: 4 files changed, 773 insertions(+), 27 deletions(-)
-— `crates/loomux-engine/src/reviewdrive.rs` 125, `doc/design/review-driver.md` 67,
+— `crates/loomux-engine/src/reviewdrive.rs` 125, `docs/design/review-driver.md` 67,
 `src-tauri/src/orchestration/rdtick.rs` 65, `src-tauri/tests/reviewdrive.rs` 516. Per-file
 deltas sum to the total.
 

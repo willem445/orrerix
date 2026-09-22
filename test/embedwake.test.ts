@@ -183,7 +183,7 @@ test("every view something can WAKE registers a hide hook", () => {
   assert.deepEqual(
     missing.map((v) => v.kind),
     [],
-    "a woken view with no `hide` keeps working off screen — see doc/design/embedded-panels.md, 'What `hide` is actually for'"
+    "a woken view with no `hide` keeps working off screen — see docs/design/embedded-panels.md, 'What `hide` is actually for'"
   );
 });
 

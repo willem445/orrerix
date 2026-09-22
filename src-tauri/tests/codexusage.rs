@@ -10,7 +10,7 @@
 //!
 //! **No codex is ever run** (constraint 3). Every fixture below is written here
 //! from shapes read off `openai/codex` at tag `rust-v0.153.4`, blob by blob
-//! through the GitHub blob API and quoted in `doc/design/codex.md`:
+//! through the GitHub blob API and quoted in `docs/design/codex.md`:
 //!
 //! - `history/src/rollout_payload.rs` — `RolloutItemWire`,
 //!   `#[serde(tag = "type", rename_all = "snake_case")]`, so a line is

@@ -3,7 +3,7 @@
 //! is the twin this file is deliberately shaped after, and the registry-side
 //! wiring is `src-tauri/src/orchestration/pdtick.rs`, `rdtick.rs`'s twin.
 //!
-//! Design note: `doc/design/plan-driver.md`. The plan document itself — the
+//! Design note: `docs/design/plan-driver.md`. The plan document itself — the
 //! fenced ```orrerix-plan block a planner posts — is [`crate::plandoc`]'s, and
 //! nothing here re-parses it: a [`PdEntry`] stores the *parsed*
 //! [`PlanDoc`](crate::plandoc::PlanDoc) that the hook validated at post time.

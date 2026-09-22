@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # The Tauri-free orchestration core (#888 slice A2). THE ARROW ONLY POINTS THIS
 # WAY: src-tauri depends on the engine, never the reverse — see
-# doc/design/engine-extraction.md. A workspace path dependency, not a version:
+# docs/design/engine-extraction.md. A workspace path dependency, not a version:
 # the crate is `publish = false` and both its consumers are in this repo.
 #
 # NO GETRANDOM AUDIT ENTRY IS NEEDED FOR IT HERE, and that is a property to
@@ -120,12 +120,12 @@ crc = "3"
 # repo is one whose source code loomux's agents already read and execute, so this
 # does not cross a trust boundary that wasn't already crossed — but it is why
 # the parser's *output* is treated as untrusted (capability closure, id/persona
-# sanitization) rather than merely its input. See doc/design/workflows.md.
+# sanitization) rather than merely its input. See docs/design/workflows.md.
 serde_norway = "0.9.42"
 
 # Read-only SQLite, for OpenCode's session/message store (#722). OpenCode keeps
 # per-session cost and token counters in one `session` row of a single SQLite
-# database (`OPENCODE_DB`, per group — see doc/design/opencode.md); loomux reads
+# database (`OPENCODE_DB`, per group — see docs/design/opencode.md); loomux reads
 # that row and never writes it (`src/opencodedb.rs` opens `mode=ro`).
 #
 # VETTED AGAINST THE GETRANDOM BAN above. Audit run 2026-08-03; reproduce with
@@ -246,7 +246,7 @@ windows = { version = "0.57", features = [
     # already OleInitialize'd it as an STA. Move the call to a worker and the worker must
     # enter its own apartment — CoInitializeEx(COINIT_APARTMENTTHREADED) / CoUninitialize,
     # RAII-guarded. That is the whole reason this was NOT a naive `async fn`. See
-    # `filemgr::ComApartment` and doc/design/files-pane.md.
+    # `filemgr::ComApartment` and docs/design/files-pane.md.
     "Win32_System_Com",
 ] }
 
@@ -322,4 +322,4 @@ tokio = { version = "1", default-features = false, features = ["rt-multi-thread"
 # and merely WARNS about a profile in a member, so leaving it here would have
 # silently dropped lto/codegen-units and the symbolicated-backtrace settings
 # (#53) from every release build. Don't move it back; see the root Cargo.toml
-# and doc/design/engine-extraction.md.
+# and docs/design/engine-extraction.md.

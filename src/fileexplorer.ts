@@ -679,7 +679,7 @@ export class FileExplorerView {
    *  There is no Cancel, deliberately. SHFileOperationW is one call with no cancel handle,
    *  and a delete stopped mid-tree leaves half the children in the Recycle Bin and half on
    *  disk — an outcome nobody can reason about. So the busy state says "in progress" and
-   *  never offers a button it could not honour. (doc/design/files-pane.md.) */
+   *  never offers a button it could not honour. (docs/design/files-pane.md.) */
   private async deleteTarget(target: OpTarget): Promise<void> {
     if (!this.allow("delete")) return;
     const what = target.isDir ? "folder" : "file";

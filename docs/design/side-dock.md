@@ -1,0 +1,588 @@
+# The right-side dock: git, files and editor, following the active pane (#1020 item 6)
+
+> The user-facing page for the side dock is [`docs/features/side-dock.md`](../features/side-dock.md) —
+> what it does. This note is the *why*.
+
+Status: implemented (main). Issues: #1020 item 6 (the ask this builds), #934
+(the original ORCA-sidebar direction), #1018 (the PR it landed in), #1150 (the
+beta1 feedback that made it displace the grid rather than cover it).
+
+The ask, from the human's live demo of #1018: *"right sidebar hosting the
+built-in git / file-explorer / file-editor, optionally open, auto-loaded to the
+active pane's current directory."* #934 says the same thing earlier and adds the
+reference — ORCA's right sidebar, a strip of view-switch buttons over one docked
+panel — plus one requirement worth quoting because it shapes the whole design:
+*"the sidebar auto-updates to the directory of whichever pane is currently
+highlighted/focused."*
+
+## The one structural decision, and it was reversed on purpose (#1150)
+
+**The dock is a flex sibling of `#grid-area`. Opening it shrinks the grid and
+the open panes autosize to share the row; closing it gives the column back.**
+
+It shipped as the exact opposite — `position: absolute` inside `#workspace`,
+out of flow, occluding panes precisely so that no code path here could reach a
+terminal — and the reversal is the whole of #1150. It is worth writing down both
+halves, because the first one was right when it was written and the second one
+is right now, and the difference between them is not a change of mind.
+
+### What the overlay bought, and why it stopped being worth it
+
+The overlay's argument was a cost argument. `#sessions` — the left session
+browser, an in-flow flex sibling at `width: 344px` with a `0.24s` width
+transition — shrinks the grid when it opens, which refits every terminal and
+resizes every ConPTY behind them, and that used to happen **on every frame of
+the animation**: ~15 xterm reflows plus 15 `ResizePseudoConsole` calls per pane
+per toggle, ~90 with six panes open. Against that, an out-of-flow panel paying
+*zero* was not a close call.
+
+Two things changed.
+
+**#1149 removed the multiplier.** The coalescing now lives in the fit debounce
+itself (`src/resizeburst.ts`), so a whole animated burst collapses into **one**
+fit per pane at the settled geometry. The displacing panel's cost went from
+~15 per pane per toggle to 1. That is not a rounding difference; it is the
+difference between a per-frame storm and a discrete event.
+
+**The human used it and asked for the other trade** (#1150, beta1 feedback:
+*"the side dock's button should autosize the OPEN panes the way the Sessions UI
+does, not the current hover behavior"*). The overlay's stated cost — "an open
+dock covers the right-hand panes" — was mitigated by defaulting closed and by
+being one click from open. Neither mitigation helps the person who wants it
+**open**, which is the person who asked: for them the dock was permanently
+covering the panes they were watching, and "you can close it" is not an answer
+to "I want to see both".
+
+### Why this does not break the constraint it looks like it breaks
+
+CLAUDE.md constraint 1 says a UI feature must not resize the PTY, and the thing
+it exists to prevent is *continuous, chrome-driven* resizing — the repaint tax
+`docs/design/xterm-resize-reflow.md` documents, where a ConPTY resize makes the
+Win10 inbox conhost repaint the screen and TUIs duplicate frames into scrollback.
+The repo already distinguishes that from a **discrete, user-initiated** geometry
+change: `docs/design/embedded-panels.md` builds dividers that resize the PTY
+deliberately, on the argument that docking a panel *inside* a pane is a gesture
+the human made, not a tax the chrome levies.
+
+The dock's two triggers fall on opposite sides of exactly that line, and only
+one of them moved:
+
+- **Opening or closing the dock** is a click. One coalesced resize per open
+  pane, at the settled geometry, on a gesture whose entire purpose is to change
+  how much room the terminals get. That is the discrete category, and it is now
+  what happens.
+- **Following the active pane** — the frequent, passive trigger, firing on every
+  focus change, every Alt+arrow step, every project-tab switch — still resizes
+  **nothing at all**. It re-points a panel inside a column whose width did not
+  move. This was the trigger the original note called out as "passive, frequent,
+  and exactly the trigger the constraint targets", and it remains free.
+
+So the rule is unchanged and the dock's membership in it changed. What is *not*
+licensed by this: the overlay-class features stay overlays (the per-pane git
+view, the task board, the audit viewer, badges, the compose strip), and nothing
+here permits a *passive* signal to resize a terminal.
+
+### The residual costs, stated rather than hidden
+
+- **One xterm reflow + one ConPTY resize per open pane per toggle.** The floor
+  for anything that displaces the grid. `test/resizeburst.test.ts` measures it
+  as exactly one, through the same simulator #1149 used for `#sessions`.
+- **The per-frame *layout* work of the 240 ms animation**, which #1149 did not
+  remove and this does not either. On a *toggle* the panel's own contents are
+  lifted out of it (below), so what re-lays-out each frame is the grid and not a
+  git graph — but that exemption is the toggle's, not a property of the panel:
+  a *room* change re-lays-out the contents too (#1203, below).
+- **The grip drag now has terminals on the other side of it** (below).
+- **A narrow window with both side panels open squeezes the dock**, deliberately,
+  rather than squeezing the grid — down to the point where a readable dock no
+  longer fits beside the grid's reserve, below which it is not shown at all
+  (below).
+
+### The mechanism, and the two things that are easy to get wrong
+
+**Closed is a zero-width column, not `display: none`.** `el.hidden` is what the
+overlay used, and it is the obvious way to hide a panel — but `display: none`
+gives the column back in one jump, with no transition. No transition means no
+burst, which means nothing for the coalescer to coalesce and no autosize for the
+human to watch; it also means the panes snap, which is the "feel" half of what
+#1150 asked for. `dockBoxes` (`sidedockmodel.ts`) returns `columnPx: 0` for a
+closed dock, and `test/sidedockmodel.test.ts` pins both that and the absence of
+`this.el.hidden =` in the DOM half, because `display: none` would hide the dock
+perfectly well and break the feature silently.
+
+**A closed column is only *visually* empty, so it is `inert`.** `display: none`
+took the dock out of the tab order and out of a screen reader's traversal for
+free. A zero-width column with `overflow: hidden` does not: without the `inert`
++ `aria-hidden` that `applyOpenState` sets, a closed dock's tab buttons and its
+editor's buffer would still be focusable and still announced. Applied at the
+moment of the toggle rather than on `transitionend` — a dismissed panel should
+stop taking input immediately, and there is nothing to schedule or clean up.
+
+**The contents do not animate on a toggle; only the column does.**
+`.sidedock-inner` is absolutely positioned at a fixed width (`contentPx`, set
+from the same `dockBoxes` call as the column's own width, so the two cannot
+disagree) and the column clips it. Otherwise every frame of the slide would
+re-lay-out a git graph or a file tree at an intermediate width — cheap for the
+terminals, expensive for the panel. `.sessions-inner` is the same device for the
+same reason; anchored right instead of left, so the collapse wipes from the grid
+side.
+
+**The boundary of that guarantee, because it is narrower than it reads.** The
+width is fixed *per toggle*, not fixed absolutely: when the ROOM moves, the
+panel is re-laid-out to follow it, which is exactly what stops the cropping the
+next section is about. So a room that moves over time — `#sessions` animating
+its own 240 ms slide — does put the panel's contents back into an animation, at
+every intermediate width. You cannot have both: following the room is what makes
+a squeezed dock narrow instead of cropped, and following it *smoothly* is what
+puts the layout work back. That residual is open as **#1203**, with the
+measurement left to the live pass rather than guessed at here.
+
+That fixed width is derived from the room, not from the preference alone
+(`clampDockWidth(width, room)`), so a column the flex row squeezed gets a panel
+laid out FOR that width rather than a cropped slice of a wider one. An earlier
+revision of this section recorded the cropping as an accepted residual; a
+reviewer of #1189 was right that it is not one, and the next section is what
+replaced it.
+
+### The floor: readable, or absent — never a sliver
+
+The fixed-width panel above has a consequence that only shows up at the narrow
+end, and a reviewer of #1189 found it before the human did. `#sessions` takes
+344px of the row, so the dock and the grid share `workspace - 344`; the grid
+keeps 240 of that; the dock gets the rest. Below a **864px window** — a
+half-screen window on a 1366 laptop, not some pathological minimum — the rest is
+less than `DOCK_MIN_W`, and a panel laid out for 420px was being *cropped* into
+it. At the app's own 640px minimum that is a 56px strip of a 420px panel, which
+does not read as "narrow", it reads as broken.
+
+Two things fix it, and they are different fixes:
+
+**The panel follows the room down.** `contentPx` is `clampDockWidth(width,
+room)`, so a squeezed column gets a panel laid out *for* that width rather than
+a slice of a wider one. The human's own preference is an input here and is never
+written back, so widening the window restores it exactly.
+
+**Below the room a readable dock needs, it takes no column at all.**
+`dockBoxes` returns `starved` when `room - reserve < DOCK_MIN_W`, and a starved
+dock renders as a zero-width column — the same rendering as a closed one, and
+inert for the same reason. This is the honest end of the trade the section above
+describes: the grid keeps its reserve, the dock is what yields, and yielding now
+has a point at which it stops being a strip of cropped chrome and becomes
+nothing at all.
+
+**`open` is not touched by any of it.** Starving is a rendering verdict, not a
+close: the dock comes back on its own, in the state the human left it, as soon
+as the room returns. What makes that automatic is a `ResizeObserver` on
+`#grid-area` — the one piece of JS that reacts to the room, and worth justifying
+because an earlier revision of this note refused exactly that ("a JS re-clamp
+would mean a resize handler running next to the one subsystem this whole note
+exists to keep away from the grid"). Three things make it different:
+
+- it fires on the row's geometry, so it catches `#sessions` opening — which is
+  not a window resize and produces no `resize` event at all;
+- it **cannot oscillate**, and that is a property rather than a hope: the room
+  it measures is `grid + dock`, which is invariant to how wide it makes the
+  dock, so a write produces at most one more delivery that measures the same
+  room and returns without writing;
+- the expensive half — the collapse class, `inert`, `aria-hidden`, the toggle
+  button — runs only when the starve verdict actually flips. A window drag that
+  never crosses 864px costs two style writes per frame.
+
+**What that last sentence does NOT claim, since an earlier revision of it did.**
+It said the geometry change "is coalesced by `resizeburst.ts` like every other
+one". It is coalesced — but the ceiling (`FIT_MAX_WAIT_MS`, 400 ms) is sized for
+ONE 240 ms transition plus a window, and a room-driven write re-targets
+`.sidedock`'s own 240 ms ease rather than suppressing it, the way the grip drag
+does via `.sidedock.resizing`. Chain the two — `#sessions` sliding for 240 ms,
+the dock's re-targeted ease running on past it — and the composite burst can
+outlast the ceiling, taking one mid-slide fit per pane before the settled one.
+
+The band is narrow and worth stating rather than rounding off: `columnPx` only
+moves at all when `room - 240 < width`, so a workspace over ~1004px with the
+session browser open never enters it, and above that the observer computes the
+same boxes and writes the same value, which starts no transition. Inside the
+band the cost is bounded at one extra resize per pane, on a gesture that already
+resizes every PTY.
+
+It is **#1203**, deferred deliberately: the whole chain is a claim about how CSS
+transitions re-target under repeated JS writes, which nothing in this repo's
+test rig can execute, and the cheapest fix — suppressing the transition on the
+room-driven write, the treatment the drag already gets — changes animation
+behaviour on a path no test here can exercise. `test/resizeburst.test.ts` cannot
+see it either: it checks each panel's own transition against the ceiling in
+isolation, so a composite burst is invisible to it. That is a gap in the guard as
+much as in the behaviour, and it is named here rather than left for the next
+reader to rediscover.
+
+**The toggle button says so.** A dock that cannot be shown would otherwise make
+the top-bar control appear dead — click, nothing, click, nothing. `SideDockHost`
+gained `setToggleAvailability`, so the button disables itself and names both ways
+out: close the session browser, or widen the window. A control that explains why
+it cannot help is the difference between a constraint and a bug.
+
+### Why not the per-pane embed engine, which already docks things to a right edge
+
+`docs/design/embedded-panels.md` builds exactly that — up to three views docked
+left/right/bottom **inside one pane**, with real dividers that **do** resize the
+PTY, deliberately, on the argument that docking is a discrete user-initiated
+split rather than chrome tax. It is a good mechanism and it is not this one.
+Two differences, either of which is decisive:
+
+- **Scope.** An embed belongs to one pane and dies with it. The thing asked for
+  here is a property of the *app*: one panel that keeps showing one folder while
+  the human clicks through four panes across three project tabs, and that
+  survives the pane it happens to be following being closed.
+- **Trigger.** An embed's resize is paid for by an explicit "put this here"
+  gesture. The dock re-points itself every time the active pane changes — which
+  is passive, frequent, and exactly the trigger the constraint targets. A dock
+  built on the embed engine would resize terminals on every focus change, which
+  is the one thing this feature must never do.
+
+They coexist without interacting: the dock builds its own view instances, and a
+pane's Alt+G / Alt+F overlays and embed slots are untouched.
+
+## Following the active pane
+
+Two triggers, one debounced pull, one decision:
+
+- **`Grid.setActive`** gained an `onActive` callback, threaded through
+  `Workspace` to `main.ts`. It is hung off `setActive` rather than
+  `PaneEvents.onFocus` because focus is only one of the ways the active pane
+  moves — closing a pane and inheriting its neighbour, finishing a drag,
+  `moveFocus`, opening a pane and toggling maximize all reach `setActive`
+  directly, and a dock wired to focus alone would sit on a stale folder after
+  every one of them. It fires inside the existing same-pane early return, so
+  re-focusing the pane you are already on stays free. **Every workspace has a
+  grid and therefore gets this callback, so the handler is gated on
+  `followsPaneChange(w.id, tabs.activeTabId)`** — only the foreground tab's
+  pane changes may move the dock (below).
+- **An active-tab change**, because switching *project tabs* changes the active
+  pane with no grid's `setActive` firing at all: `applyActive` focuses the
+  incoming tab's already-active pane, and `setActive` early-returns on it.
+  Without this second trigger the dock keeps showing the previous tab's repo —
+  plainly broken, and invisible until you have two tabs open. There is no
+  active-tab event to subscribe to, only the tab-**set** listener
+  `tabs.onChange`, so the dock filters it through `isActiveTabChange` (below);
+  subscribing to it raw is a defect, not a shortcut.
+
+Both funnel into one trailing-edge debounce (250ms). A human walking the grid
+with Alt+arrow fires `setActive` per keystroke, and only where they stop
+matters. Both also **pull** the active pane's cwd rather than trusting the pane
+the event fired for, so the dock can never hold a stale snapshot of a value that
+moves.
+
+**That pull is why the gating matters, not a substitute for it.** An earlier
+revision reasoned the opposite way — the dock reads the active pane itself, so
+surely it does not matter which workspace's event woke it — and that is exactly
+backwards. Reading the *right* pane at the *wrong moment* is the entire defect:
+the cwd is live, so any uncaused wake-up can adopt a directory change the human
+made long ago. Both gates below exist because a follow's *timing* is as
+load-bearing as its *target*.
+
+The decision itself is `decideFollow` (`sidedockmodel.ts`), and it carries two
+rules worth naming:
+
+**A pane with no local cwd never blanks the dock.** An SSH pane reports no local
+directory at all — `Pane.onCwdReported` refuses OSC 7 outright for one, because
+the path names a folder on the *far* end — and a welcome pane has none yet.
+Clicking one of those is not a request to empty the sidebar, so the dock keeps
+the last real root it had.
+
+**A closed dock does nothing at all** — not even bookkeeping. `decideFollow`
+returns `none` outright, `followActivePane` arms no timer, and no view is
+constructed, refreshed or measured. It deliberately keeps **no pending root**:
+opening the dock runs the same decision against the *live* cwd, which is
+strictly more accurate than replaying a root that was current several minutes
+ago.
+
+An earlier revision did park a root, and it was wrong twice over: it recorded
+the root on the *closed* call, so the reopen saw `dockRoot === paneCwd` and
+returned `none` — the redemption actually happened as a side effect of
+`syncActiveView` building from the already-set field — and the `adopt` its own
+test witnessed was therefore a state the implementation could never reach (#1097
+rev-767 N3). Dropping `park` makes every state this function can return
+reachable from the real flow.
+
+### The trigger is the whole correctness argument
+
+A follow re-reads the active pane's **live** cwd. That is right for the two
+signals above and wrong for anything else, because the cwd moves continuously
+(OSC 7 rewrites it on every prompt) while those signals do not.
+
+This is exactly where the first revision was broken (#1097 rev-767 B1). It
+subscribed to `tabs.onChange` directly — which is a tab-**set** listener, not an
+active-tab one: `emit()` also fires from `renameTab`, `setColor`, `moveTab`,
+`closeTab`, `setTabAttention` (every time a background agent's attention flips)
+and `touch()` (orch-channel traffic). So a `cd` the human typed and that was
+correctly ignored at the time would be silently adopted **later**, at whatever
+unrelated moment some other tab's chip happened to change: the file explorer
+rebuilt out from under them, a clean editor file closed, and *whether it
+happened at all* depended on background activity. Nondeterministic following is
+worse than either pure choice.
+
+`isActiveTabChange(prev, next)` is the fix and it is pinned in
+`test/sidedockmodel.test.ts`: the dock compares tab ids rather than trusting the
+event, and every other emit source leaves the id alone.
+
+**There were two doors onto that defect, and the first fix closed only one.**
+The other is `Grid.setActive`'s own callback, which is wired **per workspace** —
+every project tab has a grid, so every project tab gets one. A *background* tab
+opening or closing a pane (an agent finishing, a delegate spawning, a group
+resuming) calls `setActive` on the survivor, and an ungated handler would then
+re-read the *foreground* pane's live cwd and adopt a stale `cd` — the identical
+user-visible failure, arriving through a different event, and equally dependent
+on whether some other tab's agent happened to be busy.
+
+`followsPaneChange(workspaceId, activeTabId)` closes it, and the `Workspace` is
+already passed to the callback, so the gate is one comparison. Both predicates
+are pinned by mutation: restoring either defect reddens the suite.
+
+The general rule, worth stating once because it is what both fixes have in
+common: **a follow re-reads a value that moves, so every signal that can fire
+one has to be justified — reading the right pane is not the same as reading it
+at a moment the human caused.**
+
+### What is *not* followed: a `cd` on its own
+
+The dock re-reads the active pane's folder **only when the active pane or the
+active tab changes**. Typing `cd ../other-repo` in the focused terminal does not
+move it; nothing else does either, until you click somewhere.
+
+The precise consequence, stated because it is the honest version of "does not
+follow a `cd`": if you `cd` in pane A, click pane B, then click back to pane A,
+the dock lands on A's *new* folder — the cwd is read fresh at the moment of a
+signal, never snapshotted at spawn. That is deterministic and human-caused,
+which is the property that matters; what the dock refuses is moving at a moment
+nobody asked for.
+
+Following a `cd` *as it happens* is the brief's own boundary (`Grid.setActive`
+is named as the trigger) and #934's wording ("whichever pane is currently
+highlighted/focused"), and it is left where it is rather than quietly widened.
+It is also not free to add: there is no event for a cwd change today —
+`Pane.onCwdReported` assigns `cwdRaw` and calls a 500ms-throttled
+`signalDirRefresh` — so following it means a new pane event and a second
+throttle interacting with this one. Worth doing if the human asks at demo; not
+worth smuggling in here.
+
+## Hosting the three views, and the one thing that made it interesting
+
+All three are already host-parameterized, and all three have the same shape:
+`new XView(host)` → append `view.el` → `view.show()` → `view.dispose()`. The
+root is **pulled** through a `getCwd()`/`getRoot()` callback. `GitView` and
+`FileEditView` are constructed with `embedded: true`, which drops their own ✕
+and Escape-to-close binding: the dock owns closing, and a second close
+affordance inside a panel that already has one in its header is how the #361
+demo found a dead empty rectangle.
+
+**None of the three exposes a public setter for its root.** `GitView` and
+`FileExplorerView` re-read the callback on their next refresh;
+`FileEditView` latches the root on its first `show()` and never re-reads it.
+Only one operation is correct for all three, so `decideViewSync` uses it
+uniformly: **dispose and reconstruct**. That is also the only thing that drops
+the caches a re-root would otherwise strand — `FileExplorerView` invalidates its
+go-to-file index and content hashes on its own picker path only, so a view
+re-rooted any other way would answer Go-to-file from the previous repo.
+
+**And that is what makes the editor a design problem rather than a third case.**
+Reconstructing a `FileEditView` throws its buffer away. Doing so because the
+human clicked a different *pane* would destroy work they never agreed to lose,
+which is exactly the rule #219 exists to state. So:
+
+- a dirty editor returns **`hold`**: it stops following, keeps its file, and
+  says so in a notice naming the folder it is still showing;
+- it resumes on the next sync after it goes clean — saving or discarding both
+  reach that — which is why the dock re-asks `decideViewSync` on **every tab
+  activation** and not only when the root moves;
+- **only the active tab's view is ever synced.** An inactive tab's view is left
+  exactly as it was, which is what makes a hidden dirty editor safe and what
+  stops a root change from rebuilding three views nobody is looking at. Each
+  catches up when its tab is next selected.
+- **closing the dock disposes nothing.** Closing is hiding: it must not destroy
+  the editor's buffer, and it should not throw away a loaded git log either.
+
+### Liveness: the git tab refreshes, the other two do not
+
+A view built once and only reparented is a **snapshot**, and for git that reads
+as a bug: commit in the very pane the dock is following, and the graph would
+still show the repo as of whenever the tab was built (#1097 rev-767 N2).
+
+So `Hosted` carries an optional `refresh()`, called when the active tab is
+selected, when the dock opens, and on any follow signal that resolves to `none`
+(same folder — the "clicked back after committing" case). Only git implements
+it, via `GitView.notifyPrompt()`: the same throttled (500ms) call `Pane` already
+drives from OSC 7 for its own instance, and a no-op unless the view is visible,
+so a closed dock still costs nothing.
+
+The explorer and the editor deliberately have **no** `refresh`. For them a
+reload means re-navigating to the root or rebuilding the tree, which throws away
+the human's place in it — a destructive operation that belongs behind their own
+explicit refresh affordances, not on a signal they did not ask for. The
+asymmetry is the point: a refresh is only free where it is free.
+
+### The dock's editor is the one buffer holder outside every pane
+
+The app-quit guard sweeps tabs, then panes (`main.ts`'s `unsavedBuffers`). The
+dock's editor is in neither, so the sweep cannot reach it, and a quit that
+misses a holder silently destroys it. `SideDock.bufferReport()` is concatenated
+into that sweep deliberately, and `DirtyHost` gained a fourth value,
+`"sidedock"`, so the confirm can say where to go look. Its line does **not**
+name a pane — inventing one would point the human at a place they cannot go —
+and instead carries the folder the dock was pointed at, which is the
+disambiguator a tab name provides for every other line.
+
+The other #219 paths need nothing: pane-kill and tab-close route through
+`Pane.unsavedHolder()`, and the dock is not a pane's holder, so neither can
+destroy its buffer in the first place.
+
+### A quirk inherited, checked rather than assumed
+
+`GitView`'s sub-divider sizes (`loomux.gitview.graphW`, `loomux.gitview.changesH`)
+are **global** localStorage keys, shared by every instance — so the dock is now
+a third consumer alongside a pane's overlay and a git content pane. This is
+benign, and it was verified rather than hoped: `relayout()` re-applies the
+*stored* value clamped to the live container with `persist: false`, so hosting a
+git view in a 420px dock never writes the clamped-down width back. Only a real
+divider drag persists. A wide pane's preference survives the dock, and vice
+versa.
+
+## Persistence
+
+One localStorage key, `loomux.sidedock`, holding `{open, tab, width}` — the
+`loomux.*` UI-chrome convention `agents.ts`, `editor.ts` and `gitlayout.ts`
+already use, not the backend settings file, which is for durable app/session
+config.
+
+`decodeDockPrefs` is total and **field-wise lenient**: a malformed `tab` costs
+the human their tab choice and nothing else, while `open` and `width` survive.
+That is `tabstore.decodePane`'s leniency applied at a smaller scale, for the
+same reason — record-wise rejection silently discards a whole preference on the
+next boot after a stray hand-edit or a version that wrote one extra field.
+
+**A persisted width is bounded on the way in to `[DOCK_MIN_W, DOCK_MAX_W]` and
+no further** — `decodeDockPrefs` has no live window width, so it cannot apply
+the workspace reserve, and it does not pretend to.
+
+### Where the reserve is actually enforced, and why it is now in three places
+
+`DOCK_TERM_RESERVE_PX` (240px) changed meaning without changing value when the
+dock started displacing: it used to be how much of the grid an open dock could
+never *cover*, and it is now how much of the row the grid never *gives up*. Same
+promise either way — a panel that can consume its own host entirely is a way to
+lose the app, the same reason `overlaysize.ts` reserves `TERM_RESERVE_H` on the
+other axis.
+
+**`.sidedock { max-width: max(280px, calc(100% - 240px)) }`** bounds what the
+dock *asks for*. The first revision applied the reserve **only on the drag path**
+(`clampDockWidth(…, workspaceEl.clientWidth)`), which left three ways to get a
+dock that took the entire grid: boot, a restore from persistence, and any window
+resize after the drag. Drag to 900px on a wide monitor, then shrink the window
+toward the app's own 640px `minWidth`, and the dock is still 900px over a ~640px
+workspace, with 0 of the promised 240px delivered (#1097 rev-767 B2). CSS closes
+all three at once, with no listener to forget. `max()` preserves the documented
+narrow-window degradation: below the reserve the minimum wins, exactly as
+`clampDockWidth` already decided.
+
+**`#grid-area { min-width: 240px }`** is the floor the grid *keeps*, and it
+exists because the max-width above is measured against the whole workspace and
+**cannot see `#sessions`**, which takes 344px of the same row. That was harmless
+while the dock only covered the grid; once it displaces, the two panels compete
+for one row. On a 640px window with both open they want 764px, and a grid at
+`min-width: 0` would hand over every pixel it had and render nothing while both
+panels kept their full width. So the floor goes on the thing being protected,
+and `.sidedock`'s `flex: 0 1 auto` is its other half: the dock is the row's only
+shrinkable item, so a squeezed row costs the dock its width rather than costing
+the grid its existence.
+
+**`clampDockWidth`, against the room the dock and the grid SHARE**, is the third,
+and it bounds the two things CSS cannot see: the width that gets *persisted*, and
+the width the panel inside the column is laid out at. The quantity matters — it
+is not the workspace's width. Those were the same number while the dock was an
+overlay, and #1150 pulled them apart by 344px: passing the workspace's width
+accepted every width in that gap, so a drag past what the row could seat stopped
+tracking the pointer while the number being persisted kept climbing, and the next
+boot restored a width the layout silently ignored (#1189 review, finding 2 — the
+same "measured against the wrong whole" defect as the CSS half, caught at the
+other call site).
+
+`test/sidedockmodel.test.ts` reads **both** stylesheet rules off disk and fails if
+either copy of `DOCK_MIN_W` or `DOCK_TERM_RESERVE_PX` drifts from the module — the
+same both-ways pinning `theme.test.ts` applies to the palette, and the reason
+duplicating the numbers is safe here — and pins the drag's own call site to the
+shared room, because the function being right is worth nothing if its argument is
+the wrong quantity.
+
+## Colour, and the two channels on one row
+
+The tabs sit on two of the three colour channels at once
+(`docs/design/ui-redesign.md` §The three colour channels), on different
+properties, which is what keeps them readable as different questions:
+
+- the **active tab's underline** is `--accent` — the one interaction colour, and
+  "the active tab" is one of the four positions the brief lists for it;
+- each tab's **icon** carries its own identity dye, through the registry's
+  documented role mapping and never a hue picked here: `git-graph` is `vcs`
+  (lime), `folder-open` is `workspace` (cyan), `file-pen` is `source` (amber) —
+  the same three questions the tabs themselves answer.
+
+The `hold` notice is **achromatic on purpose**. The honest dye for an
+unsaved-edits warning is `--state-attention`, and that token is reserved to the
+agent *state* positions (the warp thread, the status chip, the state dot);
+reaching for a different hue merely because it is permitted is the "it needed a
+slightly different blue" failure maintainability rule 2 refuses. It says it with
+primary ink and a hairline instead.
+
+**No shadow.** `--shadow-float` is a 40px soft shadow and its penumbra would
+fall on a live WebGL terminal canvas — the documented way to make this app slow
+(`docs/design/performance.md`) and what maintainability rule 5 refuses. The dock
+separates the way principle 1 says surfaces should: elevation plus a hairline.
+
+## The resize grip, which is a real divider now
+
+The dock is width-draggable, persisted on release only. This used to be the
+cheapest drag in the app — there was no terminal on the other side of it, so the
+gesture moved nothing but the dock's own box. #1150 put the grid on the other
+side of it, which makes it a divider like any other, and it is treated like one:
+
+**The drag is bracketed with `beginResizeHold` / `endResizeHold` (#432)**, the
+mechanism `grid.ts` already uses for a split divider, reached through a
+`holdPaneResizes()` callback on `SideDockHost` because app-level chrome has no
+business knowing which panes exist. xterm keeps re-fitting on every tick so the
+terminals track the drag; the `ResizePseudoConsole` call is withheld until
+release. This is not a second coalescer — it is the one that was already there,
+for the gesture shape it was built for.
+
+The distinction from the toggle is the point, and `test/resizeburst.test.ts`
+measures both. A **transition** has no end to hook but it *settles*, so
+`resizeburst.ts`'s window resolves it: one fit per pane, at the settled size, no
+bracketing required — for one transition. Chain a second onto its tail (the room
+moving under the dock while `#sessions` slides) and the composite burst can
+outlast the ceiling instead, which is #1203 above. A **drag** never settles for as long as the human holds the
+mouse, so the coalescer correctly falls back to its ceiling and fits every
+`FIT_MAX_WAIT_MS` (400 ms) — deliberately, because a terminal frozen at its
+pre-drag size for the whole gesture is the failure that ceiling exists to
+prevent. A drag *does* have an end to hook, so it gets the bracket, and a 2 s
+drag costs one ConPTY resize per pane instead of five.
+
+Two smaller pieces: the drag goes through `startDragSession` (so the hold cannot
+strand on an Alt-Tab-away mid-drag — `onEnd` fires exactly once, from mouseup,
+blur or Escape), and `.sidedock.resizing` turns the width transition **off**,
+because the toggle's 240 ms ease on a mousemove-driven width would both trail the
+pointer and keep the geometry moving after the human stopped. The same
+`.resizing` class keeps its `content-visibility: hidden` treatment for the hosted
+views' heavy lists, shared with the embed slots and floating overlays.
+
+## Deliberately out of scope
+
+- **A tasks tab.** #934's sketch includes one, and #1020 item 6 — the ask this
+  actually implements — lists git, file-explorer and file-editor only. A tasks
+  tab is a small addition on top of `DOCK_TABS` (`test/sidedockmodel.test.ts`
+  pins the set at three, so one arriving without the wiring is noticed), but it
+  is not what was asked for here, and `TasksView` is gated on a pane's
+  orchestration group in a way an app-level dock has no answer for yet.
+- **A keyboard toggle.** Every free chord has to clear the
+  `agent-cli-reference` check first — a `Ctrl+Shift+` binding is withheld from
+  every terminal pane, so taking one steals it from whatever CLI is running,
+  with no escape hatch — and that check is a doc read this change did not do. A
+  dock nobody can toggle from the keyboard is a missing convenience; a dock that
+  eats an agent's binding is a defect.
+- **Following a `cd` within the focused pane** — see above.

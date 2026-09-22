@@ -1,4 +1,4 @@
-// E2E harness (spike, see doc/design/e2e-testing.md): launches the built
+// E2E harness (spike, see docs/design/e2e-testing.md): launches the built
 // orrerix.exe against an isolated profile and hands back a connected Playwright
 // Page talking to its main WebView2 webview over CDP.
 //
@@ -20,7 +20,7 @@
 // for isolating concurrent E2E workers from each other in the future — but it
 // would also replace the identifier-derived path this file verifies below,
 // destroying the one observable signal that distinguishes an E2E build from
-// a stale production one. Not used here for that reason (see doc/design/
+// a stale production one. Not used here for that reason (see docs/design/
 // e2e-testing.md's roadmap on parallelization).
 //
 // None of the above is asserted and trusted blindly: `verifyIsolatedBuild`
@@ -82,7 +82,7 @@ const EXPECTED_IDENTIFIER = "dev.orrerix.e2e";
 // Runtime 150+ drops the env-var channel at High integrity level —
 // MicrosoftEdge/WebView2Feedback#5640 — so the port has to be the SAME fixed
 // value the policy names, not something computed per worker/retry). See
-// doc/design/e2e-testing.md's roadmap on parallelization for what would
+// docs/design/e2e-testing.md's roadmap on parallelization for what would
 // actually need to change to make per-worker ports meaningful again.
 const CDP_PORT = Number(process.env.LOOMUX_E2E_CDP_PORT ?? 9333);
 

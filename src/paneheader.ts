@@ -26,7 +26,7 @@
 //
 // WHY THE MENU IS AN OVERLAY, not a second header row: CLAUDE.md constraint 1.
 // A wrapping header would change `.pane-term`'s box, which resizes the PTY and
-// repaints the user's scrollback. doc/design/pane-header.md carries the argument.
+// repaints the user's scrollback. docs/design/pane-header.md carries the argument.
 
 /** Gap between two adjacent header items (`.pane-header { gap: 6px }`). */
 export const HEADER_GAP_W = 6;

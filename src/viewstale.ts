@@ -38,7 +38,7 @@
 // bake the clock skew of every machine into the badge.
 
 /** The `meta` block every published-view payload carries (`orch_group_view`,
- *  `orch_strip_view`). The wire contract is `doc/design/polled-views.md`. */
+ *  `orch_strip_view`). The wire contract is `docs/design/polled-views.md`. */
 export interface ViewMeta {
   /** Monotonic publication counter. A reader that sees the same `seq` twice
    *  read the same publication twice. */

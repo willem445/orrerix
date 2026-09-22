@@ -3458,7 +3458,7 @@ export class WorkflowView {
     // its own, no roster row and no entry in the layout file, and dragging it would imply it
     // can be moved in a graph it is not part of. It IS a drop target (#1388): a reviewer's
     // out-port may be released on it, which adds that id to `gates.merge.reviewers` and
-    // nothing else. Wireable one way, still not a block — see doc/design/content-panes.md.
+    // nothing else. Wireable one way, still not a block — see docs/design/content-panes.md.
     const gate = g.gates[0];
     const right = Math.max(...[...pos.values()].map((p) => p.x + NODE_W), PAD);
     // The box's rect comes from `gateRect` (workflowlayout.ts) rather than being arithmetic

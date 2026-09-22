@@ -60,8 +60,8 @@ OPTIONS:
     --version, -V      Version.
 
 This build has NO LISTENER: it resolves its configuration and exits (see
-doc/design/remote-engine-daemon.md). The daemon has no authentication at all —
-read doc/design/remote-engine-protocol.md §1.2 and §1.3 before running it
+docs/design/remote-engine-daemon.md). The daemon has no authentication at all —
+read docs/design/remote-engine-protocol.md §1.2 and §1.3 before running it
 anywhere but a workstation you reach over SSH.
 ";
 
@@ -170,7 +170,7 @@ pub fn run(inv: Invocation, version: &str) -> Outcome {
                 err.push_str(
                     "WARNING: allow_routable_bind is set, so this daemon is reachable from other \
                      machines. It has NO AUTHENTICATION: anything that can reach it can run \
-                     arbitrary commands (doc/design/remote-engine-protocol.md §1.3).\n",
+                     arbitrary commands (docs/design/remote-engine-protocol.md §1.3).\n",
                 );
             }
 

@@ -1,7 +1,7 @@
 //! Harness adapters — a pane that **reports** what it did, instead of a pane
 //! loomux has to **read** (#84, slice R1).
 //!
-//! `doc/design/harness-adapters.md` is this module's contract (PR #2193). Every
+//! `docs/design/harness-adapters.md` is this module's contract (PR #2193). Every
 //! name below is fixed by its §1, and R2 may not change one without amending
 //! that note in the same PR. What follows is the reason each shape is what it
 //! is; the note carries the argument in full.
@@ -308,7 +308,7 @@ pub struct Usage {
 /// **Thinking tokens fold into `output`.** The docs say `outputTokens` already
 /// includes `thinkingTokens` and that the two must not be added
 /// (<https://code.claude.com/docs/en/agent-sdk/typescript#modelusage>), and
-/// `doc/design/opencode.md` already folded opencode's separate reasoning counter
+/// `docs/design/opencode.md` already folded opencode's separate reasoning counter
 /// the same way — so one bucket means one thing across harnesses.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tokens {
@@ -661,7 +661,7 @@ pub type EventRx = std::sync::mpsc::Receiver<HarnessEvent>;
 ///
 /// `PaneHost::request_pane` hands one of these back instead of a byte pipe
 /// (#888 A4-18′, and the paragraph this slice added to
-/// `doc/design/engine-extraction.md` §2). That is what keeps one spawn path, one
+/// `docs/design/engine-extraction.md` §2). That is what keeps one spawn path, one
 /// delivery front door and one idle model across both pane kinds, and it is what
 /// the daemon-side `PaneHost` implements once instead of twice.
 pub trait AgentPane: Send + Sync {

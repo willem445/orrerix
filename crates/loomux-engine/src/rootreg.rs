@@ -81,7 +81,7 @@
 //! Holding one is **not** membership. "May this caller touch this root?" is a
 //! separate question, exactly as it is for a `GroupId`.
 //!
-//! See `doc/design/groupid-and-path-roots.md`.
+//! See `docs/design/groupid-and-path-roots.md`.
 
 use std::collections::BTreeSet;
 use std::fmt;

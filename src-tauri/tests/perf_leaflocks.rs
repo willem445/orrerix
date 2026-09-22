@@ -1,5 +1,5 @@
 //! Leaf-lock and request-sized-read pins for the orchestration poll paths
-//! (#743 S7) — the enforcement `doc/design/performance.md` INV-5 says a source
+//! (#743 S7) — the enforcement `docs/design/performance.md` INV-5 says a source
 //! scan cannot give it, because no scan can see lock *scope*.
 //!
 //! Must be an integration test, not a unit test (CLAUDE.md constraint 4 — the

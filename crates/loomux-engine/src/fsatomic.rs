@@ -22,7 +22,7 @@
 //! destroys the previous contents of a state file, so a bounded acquisition
 //! that unwound after it would leave a world nothing else agrees with. The
 //! call SEALS the surrounding budget frame, which is what makes that
-//! impossible (`doc/design/lock-liveness.md` §4.1).
+//! impossible (`docs/design/lock-liveness.md` §4.1).
 //!
 //! **It is not the only durable-write door, and an earlier version of this
 //! note said it was** (#1609 review B3). `append_audit` and
@@ -73,7 +73,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     // waits instead of unwinding, which is what makes it impossible to
     // abandon the work that completes this write's invariant. Before the
     // write the frame keeps its bound. See `budget::note_durable_write` and
-    // `doc/design/lock-liveness.md` §4.1.
+    // `docs/design/lock-liveness.md` §4.1.
     //
     // Called BEFORE the write rather than after it, deliberately: the seal
     // has to be in place for every acquisition that could follow, and the

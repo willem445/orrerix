@@ -13,7 +13,7 @@
 //
 // Each agent CLI already keeps its own session log — Claude Code's transcripts,
 // Copilot's, OpenCode's store — and the sessions browser lists sessions by
-// scanning them (`doc/design/session-index.md`). Those files are the harness's
+// scanning them (`docs/design/session-index.md`). Those files are the harness's
 // and orrerix NEVER writes them. This is the other half: the things orrerix
 // knows and the harness does not — the name the human gave the pane, and what
 // they wrote about the session.
@@ -304,7 +304,7 @@ export class SessionLogStore {
   /** Notes written against a pane whose session id is not known yet, keyed by
    *  `Pane.key`. In memory only and never persisted: there is nothing durable
    *  to key them to (see `rekey`, and the residual in
-   *  `doc/design/session-notes.md`). */
+   *  `docs/design/session-notes.md`). */
   private pending = new Map<string, SessionNote[]>();
   private listeners = new Set<() => void>();
   /** Explicit fields, not constructor parameter properties: node's strip-only
@@ -503,7 +503,7 @@ export class SessionLogStore {
 
   /** Attach a pane's pending notes to the session id orrerix has just learned
    *  (`Pane.adoptSessionId` — the single choke point every late-learned id
-   *  passes through, `doc/design/session-id-learning.md`).
+   *  passes through, `docs/design/session-id-learning.md`).
    *
    *  Appends onto whatever the record already carries — a RESUMED session
    *  already has notes, and they must not be lost or reordered — and writes

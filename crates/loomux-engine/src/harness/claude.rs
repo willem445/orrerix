@@ -1,5 +1,5 @@
 //! The Claude Code adapter: `--output-format stream-json` in, [`HarnessEvent`]
-//! out (#84 slice R1, `doc/design/harness-adapters.md` §6–§8).
+//! out (#84 slice R1, `docs/design/harness-adapters.md` §6–§8).
 //!
 //! # Every CLI fact here is cited, and none was observed
 //!
@@ -603,7 +603,7 @@ pub fn permission_answer_unavailable(req: &RequestId, decision: Decision) -> Str
     format!(
         "cannot settle {req:?} as {decision:?}: the permission channel \
          (permissions.json + the permission_prompt MCP tool) lands in R2 — see \
-         doc/design/harness-adapters.md §3"
+         docs/design/harness-adapters.md §3"
     )
 }
 
@@ -619,7 +619,7 @@ pub fn permission_answer_unavailable(req: &RequestId, decision: Decision) -> Str
 pub fn interrupt_unavailable() -> String {
     "interrupt is not wired: the `interrupt` control-request envelope is \
      undocumented and this baseline has no SIGINT — see \
-     doc/design/harness-adapters.md §9 item 4. close_input() is the documented \
+     docs/design/harness-adapters.md §9 item 4. close_input() is the documented \
      alternative that IS available."
         .to_string()
 }

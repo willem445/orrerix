@@ -23,6 +23,13 @@ on:
     branches: ["main"]
     paths:
       - "docs/**"
+      # …but NOT the internal notes folded in by #3315: `docs/design/` and
+      # `docs/plans/` are in `_config.yml`'s `exclude:`, so an edit to one cannot
+      # change a published byte. Without these two lines every design-note PR
+      # would run a dry-run that proves nothing, and every design-note merge
+      # would redeploy an identical site.
+      - "!docs/design/**"
+      - "!docs/plans/**"
       - ".github/workflows/docs.yml"
   # Manual button to force a re-publish from main at any time.
   workflow_dispatch:
@@ -31,6 +38,13 @@ on:
   pull_request:
     paths:
       - "docs/**"
+      # …but NOT the internal notes folded in by #3315: `docs/design/` and
+      # `docs/plans/` are in `_config.yml`'s `exclude:`, so an edit to one cannot
+      # change a published byte. Without these two lines every design-note PR
+      # would run a dry-run that proves nothing, and every design-note merge
+      # would redeploy an identical site.
+      - "!docs/design/**"
+      - "!docs/plans/**"
       - ".github/workflows/docs.yml"
 
 # Least-privilege token scoped to what deploy-pages needs.

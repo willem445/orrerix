@@ -56,7 +56,7 @@ OpenCode (root: https://opencode.ai/docs/):
 Its docs are silent on several surfaces orrerix depends on (the session store's
 layout, the exact merge ranks, `--agent` failure behavior, `run` without
 `--auto`), so those are read from the CLI's own source at a pinned commit and
-recorded as labeled observations in `doc/design/opencode.md` — not inferred,
+recorded as labeled observations in `docs/design/opencode.md` — not inferred,
 and not presented as contract.
 
 Codex (root: https://developers.openai.com/codex/ — every URL there
@@ -82,7 +82,7 @@ depends on — that `--profile` layers a WHOLE config document rather than the
 legacy `[profiles.<name>]` table, the rollout store's layout and its `.zst`
 compression, `ReasoningEffort`'s real vocabulary, and when the rollout file is
 first created. Those are read from `openai/codex`'s own source at the tag
-pinned in `doc/design/codex.md` and recorded there as labeled observations —
+pinned in `docs/design/codex.md` and recorded there as labeled observations —
 not inferred, and not presented as contract. Three of them corrected #2515's
 own slice plan, which is the reason the pin is a tag rather than `main`.
 
@@ -107,22 +107,22 @@ pi (root: https://github.com/earendil-works/pi/tree/main/packages/coding-agent/d
 
 Two things about pi's index in particular. Its docs are **versioned with the
 source**, not published as a site, so read them at a TAG rather than at
-`main` — `doc/design/pi.md` carries the pin orrerix's code was written
+`main` — `docs/design/pi.md` carries the pin orrerix's code was written
 against. And they are silent on several surfaces orrerix depends on, most
 sharply `--session-id`, which is in `src/cli/args.ts` and in `--help` but in
 no `docs/` page at all; those are read from source at that pin and recorded
-as labeled observations in `doc/design/pi.md`.
+as labeled observations in `docs/design/pi.md`.
 
 pi ships **no MCP** by design, so orrerix's tools reach a pi pane through a
 THIRD-PARTY extension: `nicobailon/pi-mcp-adapter`, pinned separately in
-`doc/design/pi.md`. Facts about `--mcp-config`, `PI_MCP_CONFIG_MODE` and the
+`docs/design/pi.md`. Facts about `--mcp-config`, `PI_MCP_CONFIG_MODE` and the
 config merge order are facts about that adapter and not about pi — cite it
 as its own subject, and never assume a pi doc covers it.
 
 Any other agent CLI: find the vendor's official reference before wiring
 anything, and ADD its root URL to this index in the
 same PR that introduces the dependency. A CLI with no reference docs gets
-its observed behavior recorded in `doc/design/` with the version it was
+its observed behavior recorded in `docs/design/` with the version it was
 observed against — labeled observation, never presented as contract.
 
 ## Citation discipline

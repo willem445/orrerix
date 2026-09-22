@@ -16,7 +16,7 @@
 //! `gh`, hold the state lock across the read-modify-write, perform the planner
 //! spawn, emit the audit rows, and deliver the notices.
 //!
-//! Design note: `doc/design/plan-driver.md`.
+//! Design note: `docs/design/plan-driver.md`.
 
 use std::sync::Arc;
 

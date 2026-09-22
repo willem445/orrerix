@@ -31,7 +31,7 @@
 //!
 //! ## Why a file, not a `#[tauri::command]`
 //!
-//! `doc/design/e2e-testing.md` states the harness's own goal as "zero new
+//! `docs/design/e2e-testing.md` states the harness's own goal as "zero new
 //! Tauri commands or ACL surface", and the queue-badge spec turned down a
 //! test hook for the same reason. A command would have been permanent
 //! product surface: a name in `generate_handler!`, an entry in

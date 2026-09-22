@@ -7,7 +7,7 @@
 //! captured as a string), so it is unit-testable with canned fixtures. See
 //! `OrchRegistry::poll_intake`/`idle_tick_tick` (`src-tauri`'s
 //! `orchestration/mod.rs`) for the impure half and
-//! `doc/design/orchestration.md`'s "Idle-tick intake gate" section for
+//! `docs/design/orchestration.md`'s "Idle-tick intake gate" section for
 //! the design rationale.
 
 use crate::notify;

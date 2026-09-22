@@ -2,7 +2,7 @@
 # / #847 Phase 0). It landed empty and is filling up in batches, each module
 # re-exported from `src-tauri/src/orchestration/mod.rs` under its original path
 # so no call site moved with it. `src/lib.rs` is the running account of what is
-# here and why it arrived in that order; doc/design/engine-extraction.md is the
+# here and why it arrived in that order; docs/design/engine-extraction.md is the
 # boundary argument and the order of what is still to come.
 [package]
 name = "loomux-engine"

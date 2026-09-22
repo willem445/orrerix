@@ -601,7 +601,7 @@ pub fn set_copilot_session_state_root_for_test(root: Option<PathBuf>) {
 //
 // Facts pinned against `earendil-works/pi@b79e4cc8` (= tag `v0.84.4`),
 // `packages/coding-agent/docs/session-format.md` §File Location and its
-// SessionHeader / SessionMessageEntry shapes; quoted in `doc/design/pi.md`.
+// SessionHeader / SessionMessageEntry shapes; quoted in `docs/design/pi.md`.
 
 thread_local! {
     /// Test seam for `pi_sessions_root()`, same thread-scoping rationale as
@@ -638,7 +638,7 @@ pub fn set_pi_sessions_root_for_test(root: Option<PathBuf>) {
 /// `~/.pi/agent/settings.json` — a second vendor file whose schema loomux would
 /// then be pinned to. A human who has moved their store that way sees no pi
 /// rows in the Sessions tab; they see no WRONG rows, which is the failure mode
-/// that matters. `doc/design/pi.md` records it.
+/// that matters. `docs/design/pi.md` records it.
 #[doc(hidden)] // pub for integration tests
 pub fn pi_sessions_root_from(
     env_session_dir: Option<&str>,
@@ -695,7 +695,7 @@ fn pi_file_suffix(session_id: &PathSegment) -> String {
 /// **A never-prompted session has no file at all.** pi defers file creation to
 /// the first assistant response (`SOURCE` `session-manager.ts`), so an id this
 /// returns `Ok(None)` for may still be a live pane's — the same "no transcript
-/// until prompted" fact `doc/design/session-id-learning.md` records for claude.
+/// until prompted" fact `docs/design/session-id-learning.md` records for claude.
 /// Walk every session file a pi store can hold, in **both** layouts pi writes,
 /// calling `visit` on each and stopping at its first `Some` (#2126, review
 /// round 1 finding 1).
@@ -923,7 +923,7 @@ fn find_copilot_session_cwd(root: &Path, session_id: &PathSegment) -> Result<Opt
 //     $CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread id>.jsonl
 //
 // Facts pinned against `openai/codex` at tag `rust-v0.153.4`, read blob by blob
-// through the GitHub blob API; quoted in `doc/design/codex.md`. Three of them
+// through the GitHub blob API; quoted in `docs/design/codex.md`. Three of them
 // shape everything below, and two are corrections to what this slice was
 // planned from (posted on #2515 before any of this was written):
 //
@@ -1421,7 +1421,7 @@ fn find_codex_session_cwd(root: &Path, session_id: &PathSegment) -> Result<Optio
 /// same answer a pane whose session has not been identified yet already gets.
 /// It is not an error: nothing is broken, and codex compresses on a seven-day
 /// schedule, so it is the ordinary end state of every session a group has
-/// finished with. `doc/design/codex.md` §Usage carries the residual.
+/// finished with. `docs/design/codex.md` §Usage carries the residual.
 ///
 /// The compression check is applied to the WINNER, never as a filter before the
 /// choice: skipping compressed candidates first would let an OLDER readable file

@@ -25,7 +25,7 @@
 //
 // Cross-direction splits need no policy: nesting a two-way split inside the
 // target's slot already halves the target alone. See
-// doc/design/pane-splitting-and-floors.md.
+// docs/design/pane-splitting-and-floors.md.
 //
 // WHERE THE THREE PANE SLICES MEET. `halve` is #885's `splitfloor.planRowSplit`.
 // `share` is #936's `paneequalize.planEvenInsert` — NOT splitfloor's own
@@ -571,7 +571,7 @@ export class Grid {
       // deliberately does not get one — it preserves the row's total EXACTLY,
       // which is the guarantee that makes a human split local, and a re-base
       // would rewrite the very numbers that guarantee is about. See
-      // doc/design/pane-splitting-and-floors.md, "Where the clamp sits".
+      // docs/design/pane-splitting-and-floors.md, "Where the clamp sits".
       //
       // Same plan shape (`weights` + `insertedIndex`) either way, so the
       // write-back below is common to both.
@@ -822,7 +822,7 @@ export class Grid {
    *  `src/filemenu.ts`), so a textual check cannot separate this method from
    *  the others and refused two known-good files on its first run. A guard that
    *  green-lights by accident is worse than none, so the precondition is
-   *  carried here and in `doc/design/agents-tab.md` instead.
+   *  carried here and in `docs/design/agents-tab.md` instead.
    *
    *  Constraint 1 (no PTY resize for a UI feature) — and WHO ASKED decides it.
    *  `restore` and `exitMaximize` genuinely resize a PTY: see their own docs

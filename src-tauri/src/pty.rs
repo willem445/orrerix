@@ -140,7 +140,7 @@ pub type WriteReceiver = tauri::async_runtime::Receiver<Result<(), String>>;
 /// fire-and-forget queue #719 declined: the command still resolves only when
 /// the bytes are actually out, so `src/ptywrite.ts`'s one-in-flight-per-pane
 /// chain remains the ordering guarantee (#65) and P6's back pressure is
-/// unchanged. See `doc/design/pty-input-path.md` § "719 revisited on isolation".
+/// unchanged. See `docs/design/pty-input-path.md` § "719 revisited on isolation".
 enum WriterJob {
     /// A keystroke or paste from the frontend — `write_from_frontend`'s body.
     Frontend { data: String, human: bool, reply: WriteReply },
@@ -1475,7 +1475,7 @@ fn effective_shell_kind(requested: ShellKind) -> ShellKind {
 /// Windows, where Git Bash isn't a concept.
 ///
 /// Off-thread (#746 — `crate::blocking::run_blocking`, P1 of
-/// `doc/design/performance.md`): `find_git_bash` stats a bounded candidate list
+/// `docs/design/performance.md`): `find_git_bash` stats a bounded candidate list
 /// and scans PATH, on the thread that services paint, at launcher time.
 ///
 /// **Reentrancy.** A pure read of the machine, with no lock and no mutation:
@@ -1556,7 +1556,7 @@ fn find_ssh() -> Option<PathBuf> {
 /// a different PATH snapshot, and could silently be a different binary, or none).
 ///
 /// Off-thread (#746 — `crate::blocking::run_blocking`, P1 of
-/// `doc/design/performance.md`) for the same reason as `discover_git_bash`: it
+/// `docs/design/performance.md`) for the same reason as `discover_git_bash`: it
 /// scans PATH and stats a small candidate list, at launcher time, on the thread
 /// that services paint. Always `None` off Windows — the pane kind is Windows-only
 /// like every other spawn path here.
@@ -1751,7 +1751,7 @@ pub fn spawn_pane_child(
 /// Open a ConPTY and spawn the pane's child on it, returning the pane's id.
 ///
 /// Off-thread (#746 — `crate::blocking::run_blocking`, P1 of
-/// `doc/design/performance.md`): `openpty` plus `CreateProcess` is a **process
+/// `docs/design/performance.md`): `openpty` plus `CreateProcess` is a **process
 /// spawn**, which INV-2 refuses on the webview thread outright — and the
 /// ConPTY handshake in front of it is not bounded by anything loomux controls.
 /// Once per pane and human-gestured, so it is not a hot path; it is the one
@@ -2190,7 +2190,7 @@ pub struct DirInfo {
 /// from the frontend each time a pane emits its working directory.
 ///
 /// Off-thread (#746 — `crate::blocking::run_blocking`, P1 of
-/// `doc/design/performance.md`): `git_branch` stats and reads `.git` and `HEAD`
+/// `docs/design/performance.md`): `git_branch` stats and reads `.git` and `HEAD`
 /// walking up the parent directories.
 ///
 /// **Why converted rather than left to the throttle.** #743's plan allowed this

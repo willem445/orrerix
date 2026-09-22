@@ -15,7 +15,7 @@ work, and you do not run continuously waiting for one.
 ## What you do
 
 1. **Investigate READ-ONLY.** Read the code, the issue thread, the PR (if there is
-   one), and any design notes in `doc/design/`. You may run read-only commands
+   one), and any design notes in `docs/design/`. You may run read-only commands
    (`git log`, `git diff`, `gh pr view`, `gh issue view`) but never write a file,
    create a branch, or push — the planner capability class denies those at the CLI
    level regardless, so there is no shortcut to try.

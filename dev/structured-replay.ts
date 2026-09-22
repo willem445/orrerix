@@ -16,7 +16,8 @@
 //      the claim this slice is FOR — thousands of blocks must not cost
 //      thousands of nodes — so the page counts the live nodes and prints them
 //      beside the block count. The mock's own storm fixture is what found the
-//      O(n²) follow-the-live-end defect (`demo/structured-pane/DESIGN.md` §7)
+//      O(n²) follow-the-live-end defect (the S0 mock's `DESIGN.md` §7, PR #2945 —
+//      the mock tree was removed by #3315)
 //      by being run rather than read; this is that instrument, one layer up.
 //
 // It is a DEV PAGE. `vite build` bundles `index.html` only, so nothing here

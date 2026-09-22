@@ -195,7 +195,7 @@ fn lead_tool_surface_is_exactly_the_enumerated_set() {
         .into_iter()
         .map(String::from)
         .collect::<Vec<_>>(),
-        "the lead's surface is a positive enumeration — see doc/design/lead-pane.md"
+        "the lead's surface is a positive enumeration — see docs/design/lead-pane.md"
     );
 
     let names = listed_tools(&reg, &c);
@@ -251,7 +251,7 @@ fn the_group_state_pair_is_granted_together_or_not_at_all() {
          without the write is a call that returns \"{{}}\" forever — nothing in a lead group \
          can write that blob. Grant both with an argument for the write, or neither."
     );
-    assert!(!has_read, "today it is neither — see doc/design/lead-pane.md's Withheld table");
+    assert!(!has_read, "today it is neither — see docs/design/lead-pane.md's Withheld table");
 
     // The non-vacuity control: the equality above also holds when the surface
     // is empty or broken, so pin that this pane really does have a surface and
@@ -1703,7 +1703,7 @@ fn a_failed_lead_prepare_leaves_no_marker() {
 /// The lead's own pane is a human-launched CLI orrerix never opened and cannot
 /// relaunch; its helpers, rejoined into a group whose root is gone, would have
 /// no pane to report into at all. That is the restore residual
-/// `doc/design/lead-pane.md` records, and the refusal is what the session
+/// `docs/design/lead-pane.md` records, and the refusal is what the session
 /// browser shows in its place.
 ///
 /// **A helper's session is the only one this can be driven with**, and that is

@@ -1,6 +1,6 @@
 //! The engine-driven review-loop driver: the pure core (#1778 S1).
 //!
-//! Design note: `doc/design/review-driver.md`. That note is the spec, and this
+//! Design note: `docs/design/review-driver.md`. That note is the spec, and this
 //! module is the half of it that has no I/O in it at all — the state machine
 //! (§2.1), the persisted shape (§5.2), the counters (§2.3) and the decision
 //! `rd_driver_tick` makes once its facts are in hand (§2.4). The tick itself,
@@ -105,7 +105,7 @@
 //! one. What that means for a later change is that this shape may be reworked
 //! on its own merits, where [`DriveState`], [`transition`] and
 //! [`ReviewDrivesState`] may not: those three are the note's, and changing one
-//! changes `doc/design/review-driver.md` first.
+//! changes `docs/design/review-driver.md` first.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -739,7 +739,7 @@ pub const MAX_REBASE_CEILING: u32 = 1;
 /// template promises; it may not run a looser one, because the driver acts on
 /// the orchestrator's authority and a repo file that raised the bound would be
 /// loosening the orchestrator's own invariant from a configuration file. That
-/// is `doc/design/workflows.md`'s closure exactly — **a workflow file may
+/// is `docs/design/workflows.md`'s closure exactly — **a workflow file may
 /// select from what loomux permits and may never widen it** — so a
 /// `driver.max_review_rounds: 9` that reached a decision would be a repo file
 /// granting a capability, not a validation slip.
@@ -3502,7 +3502,7 @@ pub struct DriveFacts {
     ///
     /// A DRIVE-level fact rather than a per-[`LaneFact`] one, and that is a
     /// departure from plan-2504's wording ("`LaneFact::provider_limited`")
-    /// argued in `doc/design/review-driver.md`: a drive in `fix-wait` owns a
+    /// argued in `docs/design/review-driver.md`: a drive in `fix-wait` owns a
     /// WORKER pane and no open lane at all, and that is precisely a drive the
     /// hold must cover. A per-lane field cannot see it. The tick unions every
     /// pane the drive owns — lanes and worker alike — and reports the provider,
@@ -3956,7 +3956,7 @@ pub fn decide(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> D
     // **The bounds are clamped HERE, on the values actually read.** §2.3's
     // ranges are a capability boundary, not input hygiene: a repo's `driver:`
     // block may run a tighter loop than INVARIANT 9 and may never run a looser
-    // one, because `doc/design/workflows.md`'s closure is that a workflow file
+    // one, because `docs/design/workflows.md`'s closure is that a workflow file
     // selects from what loomux permits and never widens it. S2 clamps as it
     // parses; this clamps again, and the second is not redundant, because this
     // is a `pub fn` over a plain value type that any caller in any crate can
@@ -5738,7 +5738,7 @@ mod tests {
         // tests, and `decide` used the raw values). A fixture that cannot vary
         // the axis cannot witness it.
         //
-        // `doc/design/workflows.md`: a workflow file selects from what loomux
+        // `docs/design/workflows.md`: a workflow file selects from what loomux
         // permits and never widens it. A `driver:` block asking for nine review
         // rounds must get three at the decision, not nine.
         let wide = DriveLimits {

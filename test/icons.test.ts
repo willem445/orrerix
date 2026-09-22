@@ -3,7 +3,7 @@
 // The human's ask was "really nice icons of different colours", and the design note turns
 // that into something checkable: colour is the IDENTITY channel, an icon's hue says WHICH
 // thing it is, and it may only reach a hue through a documented role mapping
-// (doc/design/ui-redesign.md, §The three colour channels, maintainability rule 3). Prose
+// (docs/design/ui-redesign.md, §The three colour channels, maintainability rule 3). Prose
 // like that survives exactly as long as the next person who edits the table, so the claims
 // are measured here instead:
 //

@@ -291,7 +291,7 @@ struct ChangedPayload {
 /// repo.
 ///
 /// Off-thread (#746 — `crate::blocking::run_blocking`, P1 of
-/// `doc/design/performance.md`): computing the repo signature stats several
+/// `docs/design/performance.md`): computing the repo signature stats several
 /// files and reads `HEAD`, which Tauri ran on the thread that services paint.
 /// #743 S7 had already moved that I/O out from under the watches mutex, so the
 /// lock-scope half was done; this is the plain half.

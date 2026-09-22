@@ -5,7 +5,7 @@ as provenance. Newest at the bottom. Only ~4 KB reaches a kickoff, and eviction 
 silent to whoever wrote the entry: append, then check the file still fits, and say in
 the PR what you displaced. A permanent rule belongs on an uncapped surface (`CLAUDE.md`,
 a skill, the role templates) — this file is for what must reach every kickoff. See
-`doc/design/lessons.md`.
+`docs/design/lessons.md`.
 
 ## No getrandom-based crates in src-tauri [pinned]
 

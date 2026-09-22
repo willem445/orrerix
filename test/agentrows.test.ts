@@ -795,7 +795,7 @@ test("an SSH pane that declares no far-end CLI is not an agent row (#2514)", () 
   // Deliberate, and the honest answer: nothing here says an agent is running.
   // The launch line is the TRANSPORT — reading `ssh` as the pane's CLI is the
   // confident-wrong-answer `agenticons.ts` exists to refuse — and the profile
-  // named nothing. RESIDUAL, stated in `doc/design/agents-tab.md`: a human who
+  // named nothing. RESIDUAL, stated in `docs/design/agents-tab.md`: a human who
   // SSHes out and starts an agent BY HAND gets no row until the profile
   // declares one. Declaring it is the fix; guessing is not.
   const pane = shell({ name: "box", mark: { command: "ssh box", argv: null, knownCli: null, remote: true } });

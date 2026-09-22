@@ -44,7 +44,7 @@
 //     manifest-vs-pane pins never read this page). Each is a slice of the same shape.
 //   * Every `help:` string in the manifest. The docs prose paraphrases those rather
 //     than quoting them, so nothing here compares them.
-//   * Any file other than `docs/orchestration.md`. `doc/design/review-driver.md`
+//   * Any file other than `docs/orchestration.md`. `docs/design/review-driver.md`
 //     restates these numbers in two places and NEITHER is pinned: §5.3's example shows
 //     the seven defaults, and §2.3 ("Three consequences that are decisions, not
 //     defaults") states the counters' ranges as `1..=3` and `0..=1` because its whole

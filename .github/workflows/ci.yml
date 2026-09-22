@@ -143,7 +143,7 @@ jobs:
       # the platform-specific code this project has most of. The report job merges
       # the legs and keeps the larger value per function. If this ever costs more
       # than it is worth on a leg, the honest fix is to drop that leg AND record in
-      # `doc/design/code-metrics.md` that its `cfg` bodies are unmetered — not to
+      # `docs/design/code-metrics.md` that its `cfg` bodies are unmetered — not to
       # leave the merged number looking complete.
       #
       # `CLIPPY_CONF_DIR` is scoped to this step, so `.github/clippy/clippy.toml`'s
@@ -240,7 +240,7 @@ jobs:
           fi
           echo "ok: no new worktree-fixture leaks (baseline $LOOMUX_LEAK_BASELINE, now $count)"
 
-  # E2E PoC (spike, doc/design/e2e-testing.md): drives the real WebView2
+  # E2E PoC (spike, docs/design/e2e-testing.md): drives the real WebView2
   # webview over CDP (Playwright's native WebView2 support). Windows-only —
   # that's the only platform CDP-over-WebView2 covers, and it's this project's
   # Windows-10 baseline anyway. Runs against an isolated profile
@@ -280,7 +280,7 @@ jobs:
       # HKCU-policy channels for an elevated host process as local-privilege-
       # escalation hardening — by design, not a bug
       # (MicrosoftEdge/WebView2Feedback#5640, closed as completed 2026-07-09;
-      # see doc/design/e2e-testing.md "CI status"). The one channel Microsoft
+      # see docs/design/e2e-testing.md "CI status"). The one channel Microsoft
       # names as surviving elevation is an HKLM policy — set it here, machine-
       # wide, before launching: this is CI-only config on an ephemeral runner
       # VM, nothing in product code, and nothing to clean up (the VM is
@@ -324,7 +324,7 @@ jobs:
           # assertion 48.6 s = ~4.4 min of a 5.5 min suite, inside a 9m22s
           # job whose remainder is mostly the debug `tauri build`. A retry
           # of the soak spec adds ~3.3 min. Raising these knobs is what a
-          # long local soak does; see doc/design/e2e-testing.md "The soak
+          # long local soak does; see docs/design/e2e-testing.md "The soak
           # lane".
           ORRERIX_SOAK_MS: "180000"
           ORRERIX_SOAK_LOCK_HOLD_MS: "90000"
@@ -341,11 +341,11 @@ jobs:
       # failed run sees. The HKLM policy fix (above) is confirmed working, so
       # a red run here is most likely a real spec/app problem now, not the
       # runner's execution context — this is a pointer to check, not a
-      # default explanation. See doc/design/e2e-testing.md "CI status".
+      # default explanation. See docs/design/e2e-testing.md "CI status".
       - name: Note where to start debugging a red run
         if: failure()
         run: |
-          echo "::warning::e2e-windows failed. This job is continue-on-error and does not gate merges, but treat this as a real signal first -- the CI-side HKLM policy workaround for WebView2's High-IL restriction is confirmed working (see doc/design/e2e-testing.md 'CI status'), so a red run here is unlikely to be that issue recurring. Check the specs/app first."
+          echo "::warning::e2e-windows failed. This job is continue-on-error and does not gate merges, but treat this as a real signal first -- the CI-side HKLM policy workaround for WebView2's High-IL restriction is confirmed working (see docs/design/e2e-testing.md 'CI status'), so a red run here is unlikely to be that issue recurring. Check the specs/app first."
 
       - name: Upload Playwright report
         if: always()

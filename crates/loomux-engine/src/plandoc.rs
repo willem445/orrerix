@@ -1,6 +1,6 @@
 //! The `orrerix-plan` block: extract, parse, validate (#3040 P1).
 //!
-//! Design note: `doc/design/plan-driver.md` (contract 1 — the fence schema).
+//! Design note: `docs/design/plan-driver.md` (contract 1 — the fence schema).
 //! This module is the whole of that contract's implementation and nothing else:
 //! it turns an issue-comment body into a [`PlanDoc`] or into a list of
 //! line-numbered refusals. It reads no files, spawns nothing, and knows nothing

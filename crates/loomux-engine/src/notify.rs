@@ -5,7 +5,7 @@
 //! --json` fixtures and no subprocess. See `OrchRegistry`'s `notify_*`
 //! methods (`src-tauri`'s `orchestration/mod.rs` — the impure half, i.e. the
 //! poll thread and the registry state, which has not moved into this crate) and
-//! `doc/design/orchestration.md`'s "Notification backend" section for the
+//! `docs/design/orchestration.md`'s "Notification backend" section for the
 //! design rationale — in particular why this is a fixed set of structured
 //! conditions and not a caller-supplied poll command.
 //!

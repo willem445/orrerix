@@ -12,7 +12,7 @@ import { IDENTITY } from "./theme.ts";
 
 /**
  * One lane, one hue — the git graph is the identity channel's own example (#879 slice B,
- * doc/design/ui-redesign.md §The three colour channels). A lane says WHICH line of history
+ * docs/design/ui-redesign.md §The three colour channels). A lane says WHICH line of history
  * this is; it never says how an agent is doing, so nothing here may name a `--state-*`
  * colour even where the pigment would be identical.
  *

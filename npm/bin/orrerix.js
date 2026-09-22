@@ -68,7 +68,7 @@ const { version: PKG_VERSION, name: PKG_NAME } = require("../package.json");
 //                  though it never changes is how a probe stops finding the
 //                  install it is supposed to protect.
 //
-// The rule from doc/design/rebrand-protocol.md applies here verbatim: emit
+// The rule from docs/design/rebrand-protocol.md applies here verbatim: emit
 // exactly one spelling, accept every spelling on every reading surface, and
 // write the accepted set down exactly once. These arrays are that one place —
 // index 0 is the emit spelling, and every reader iterates the whole array
@@ -112,7 +112,7 @@ const EXE_NAMES = [MAIN_BINARY, LEGACY_MAIN_BINARY, ...PRODUCT_NAMES];
 
 // The command this package installs, and the launcher's own cache directory
 // name. That cache is ours alone — nothing but this launcher writes it — so by
-// the ownership rule in doc/design/rebrand-filesystem.md it is ours to rename.
+// the ownership rule in docs/design/rebrand-filesystem.md it is ours to rename.
 // It is renamed but never MOVED: a cached AppImage may be the running process
 // and this launcher has no way to know. CLI_NAMES[0] is the only directory
 // ever written; the rest are read, so a pre-rename cache stays launchable and

@@ -30,7 +30,7 @@
 // `repository.url` is the source of truth because it is the field npm itself
 // validates against.
 //
-// See doc/design/rebrand-external.md, "The human runbook".
+// See docs/design/rebrand-external.md, "The human runbook".
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";

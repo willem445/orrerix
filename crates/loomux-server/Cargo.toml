@@ -3,8 +3,8 @@
 # This crate is the process that will host the orchestration engine on a
 # server. Today it starts, reads a config, decides which address a listener
 # would be ALLOWED to bind, and serves nothing — the listener itself is C2.
-# `doc/design/remote-engine-daemon.md` is the argument for that split and for
-# the config contract; `doc/design/remote-engine-protocol.md` is the wire
+# `docs/design/remote-engine-daemon.md` is the argument for that split and for
+# the config contract; `docs/design/remote-engine-protocol.md` is the wire
 # contract C2 implements.
 #
 # DEPLOYMENT TARGET IS LINUX (a standing #888 decision), but the crate is

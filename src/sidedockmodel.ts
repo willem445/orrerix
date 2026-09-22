@@ -1,6 +1,6 @@
 // Pure decisions for the right-side dock (#1020 item 6, #934). DOM-free so
 // `node --test` can import it directly — no jsdom, no bundler, no localStorage
-// shim. The DOM half is src/sidedock.ts; see doc/design/side-dock.md.
+// shim. The DOM half is src/sidedock.ts; see docs/design/side-dock.md.
 //
 // Three questions live here, and they are separate on purpose:
 //
@@ -137,7 +137,7 @@ export interface DockBoxes {
  * control that silently does nothing is the other way to look broken.
  *
  * The direction of the trade is not in question — the grid keeps its reserve and
- * the dock is what yields (doc/design/side-dock.md). What this adds is a point
+ * the dock is what yields (docs/design/side-dock.md). What this adds is a point
  * at which yielding stops being a cropped strip.
  *
  * `roomPx` is the width the dock and the grid SHARE (see `clampDockWidth`). A

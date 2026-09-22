@@ -2,7 +2,7 @@
 //! turns into [`crate::reviewdrive`] facts, the audit vocabulary and the
 //! kick-back notices (#1778 S3).
 //!
-//! Design note: `doc/design/review-driver.md`. This module is to
+//! Design note: `docs/design/review-driver.md`. This module is to
 //! [`crate::reviewdrive`] what [`crate::mqdriver`] is to [`crate::mqloop`]: the
 //! half that runs child processes and renders text, with every decision still
 //! made next door by [`crate::reviewdrive::decide`]. It is Tauri-free, so the

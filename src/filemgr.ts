@@ -1,7 +1,7 @@
 // Typed bridge to the Rust file-MANAGER backend (issue #214). Follows the
 // per-feature wrapper precedent set by `git.ts` / `gh.ts` / `fileapi.ts` — a
 // self-contained feature gets its own wrapper module, and no other frontend module
-// calls `invoke` for these commands (doc/design/architecture.md's "Extension seams"
+// calls `invoke` for these commands (docs/design/architecture.md's "Extension seams"
 // names this as the sanctioned alternative to piling everything into `pty.ts`).
 //
 // Every command takes the pane's `root` plus a `rel` path relative to it. ALL path
@@ -85,7 +85,7 @@ export interface DeleteEvent {
  *  There is deliberately NO cancel. SHFileOperationW is one call with no cancel handle,
  *  and a delete stopped mid-tree would leave half the children in the Recycle Bin and
  *  half on disk. The pane shows "in progress" rather than offering a Cancel it could not
- *  honor. See doc/design/files-pane.md. */
+ *  honor. See docs/design/files-pane.md. */
 export const fmDeleteStart = (id: number, root: string, rel: string): Promise<void> =>
   invoke("fm_delete_start", { id, root, rel });
 

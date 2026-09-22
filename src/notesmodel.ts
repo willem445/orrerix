@@ -75,7 +75,7 @@ export function orderedNotes(notes: readonly SessionNote[]): SessionNote[] {
  *  an id for will keep what the human writes; a pane whose id is not known yet
  *  will not, until it is learned — and that is a residual worth stating rather
  *  than hiding, because an app restart in between loses those notes
- *  (`doc/design/session-notes.md`). `null` for a session id means "we are not
+ *  (`docs/design/session-notes.md`). `null` for a session id means "we are not
  *  keyed on a session yet", never "there are no notes". */
 export function notesEmptyState(sessionId: string | null): string {
   return sessionId === null

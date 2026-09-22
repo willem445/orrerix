@@ -1843,7 +1843,7 @@ fn a_liaison_is_not_fanned_out_to_as_a_reviewer_on_either_surface() {
 
 #[test]
 fn a_plain_reviewer_kind_spawn_never_resolves_to_the_liaison() {
-    // #891 S4, closing the trap S1 shipped and `doc/design/liaison.md` recorded.
+    // #891 S4, closing the trap S1 shipped and `docs/design/liaison.md` recorded.
     // `spawn_agent` may name a `kind` instead of a `block`, and a block-less
     // spawn falls to `block_for(role)` — "the first block of that kind in roster
     // order". A liaison is reviewer-KIND, so a roster that declares it FIRST
@@ -2087,7 +2087,7 @@ fn default_roster_command_lines_now_carry_the_durable_contract_via_a_generated_c
     // #416 deliberately changed that: the built-in role CONTRACT (mechanics +
     // class template — exactly the bytes written to the block's instructions
     // file) now rides the CLI's native system-prompt mechanism for EVERY
-    // block, persona or not — closing a real gap (see doc/design/
+    // block, persona or not — closing a real gap (see docs/design/
     // orchestration.md's #416 note): compaction could dilute the contract
     // when it lived only in a "read this file" kickoff step.
     //
@@ -4008,7 +4008,7 @@ fn copilot_uses_its_native_agent_flag_only_for_a_user_authored_github_agents_fil
     // A `profile:` under .github/agents is exactly what Copilot's `--agent` can
     // resolve — so use the native flag and hand it the NAME, unwrapped: loomux
     // never synthesizes a file around a user-authored one (residual #416 gap,
-    // documented in doc/design/orchestration.md — this one case still relies
+    // documented in docs/design/orchestration.md — this one case still relies
     // on the kickoff/file-read for mechanics-core coverage).
     let (cmd, argv, kickoff) = compile(&reg, &g, "worker");
     assert!(cmd.contains("--agent repo-worker"), "native copilot persona: {cmd}");
@@ -5922,7 +5922,7 @@ const GOLDENS: [(&str, &str); 8] = [
     // `PRE222` above and in both default-group pins.
     PRE222[4],
     // #2519 slice B. Golden-pinned in the slice that DELIVERS it, which is
-    // what `doc/design/lead-pane.md` said slice A was deferring: the pin
+    // what `docs/design/lead-pane.md` said slice A was deferring: the pin
     // exists to make an accidental edit to bytes a shipped pane already reads
     // fail loudly, and until the launch path existed no pane read this file.
     // Not in `PRE222`, for `manager.md`'s reason exactly: a default group has
@@ -7872,7 +7872,7 @@ fn the_repos_own_workflow_file_parses_clean_against_the_real_parser() {
     // The model id is pinned in FULL on purpose, and this checks EVERY pi block —
     // the default worker as well as the reviewer, since both tiers of the cheap
     // roster run on it (#2817). pi's `--model` takes `provider/id`
-    // (doc/design/pi.md, the launch line), so a block that dropped the
+    // (docs/design/pi.md, the launch line), so a block that dropped the
     // `openrouter/` half would name a model that does not exist. This asserts the
     // `/` survives the parser. The provider is not hardcoded, and a second `/` is
     // allowed, because this provider's own model ids carry one (`openrouter` +
@@ -9168,7 +9168,7 @@ fn intake_only_drift_is_audited_even_when_the_roster_is_unchanged() {
 
 // ───────── #581 §11.2: the `merge_queue:` block ─────────
 //
-// Policy for the bisecting merge queue (`doc/design/merge-queue.md`), parsed
+// Policy for the bisecting merge queue (`docs/design/merge-queue.md`), parsed
 // here beside `gates:`. The engine is `orchestration::mergeq`; this file only
 // ever pins what the FILE means, which is the half a repo author can get wrong.
 
@@ -9283,7 +9283,7 @@ fn the_merge_queue_block_can_never_name_a_branch_or_widen_anything() {
 
 // ───────── #1778 §5.3: the `driver:` block ─────────
 //
-// Policy for the engine-driven review-loop driver (`doc/design/review-driver.md`),
+// Policy for the engine-driven review-loop driver (`docs/design/review-driver.md`),
 // parsed beside `merge_queue:`. This file only ever pins what the FILE means,
 // which is the half a repo author can get wrong; the driver's own core is
 // `reviewdrive`, and this suite never drives anything.
@@ -9711,7 +9711,7 @@ fn a_refused_workflow_file_reports_errors_and_never_blocks_a_launch() {
 
 /// The orchestrator block's pin list widens by exactly two value-set picks
 /// (#687) — and by nothing else. This is the deliberate design change the PR
-/// argues for in `doc/design/workflows.md`: a level from a closed enum authors
+/// argues for in `docs/design/workflows.md`: a level from a closed enum authors
 /// no text and pre-approves no tool, so it opens no injection seam into the
 /// trust root, while `prompt:`/`profile:`/`allow:` stay refused.
 #[test]

@@ -1,6 +1,6 @@
 //! The bisecting merge queue — **pure core** (#581 slice C).
 //!
-//! Design note: `doc/design/merge-queue.md`. Section references below (§4, §6,
+//! Design note: `docs/design/merge-queue.md`. Section references below (§4, §6,
 //! §8, §9, §11.3, §11.4) point into it; that note is the spec this file
 //! implements and the argument for every choice made here.
 //!
@@ -924,7 +924,7 @@ pub fn recheck_gate(
 /// definition, asked here of the routed reviewer list.
 ///
 /// Public because the review driver asks the same question before it decides
-/// whether to re-brief a lane, and §4 of `doc/design/review-driver.md` makes
+/// whether to re-brief a lane, and §4 of `docs/design/review-driver.md` makes
 /// the driver a *reader* of the gate rather than a third implementation of it.
 /// If these two ever answered differently, a drive would report `satisfied` on
 /// a merge the shim then refuses — the exact failure the one-gate-decision rule

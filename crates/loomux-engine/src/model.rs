@@ -127,7 +127,7 @@ pub enum Role {
     ///
     /// A fifth capability class rather than a `role_hint` on a reviewer,
     /// because what distinguishes it is *structural* and a hint cannot express
-    /// it: `doc/design/liaison.md` states its own promotion trip-wire — a third
+    /// it: `docs/design/liaison.md` states its own promotion trip-wire — a third
     /// capability tool granted off "faces the human" — and this class fires it.
     ///
     /// Optional and **workflow-only**: a manager exists only when a repo's
@@ -334,7 +334,7 @@ impl Role {
     /// `Role::Manager`.** A manager is the human's pane too, and it is
     /// emphatically NOT a report target: the no-injection guarantee
     /// ([`Delivery::permitted_into_manager_pane`]) refuses every mid-session
-    /// delivery into one, which is the whole of `doc/design/manager.md`. A
+    /// delivery into one, which is the whole of `docs/design/manager.md`. A
     /// lead is the opposite pole — a human who turned on a toggle whose
     /// stated effect is that children report into their pane — so the two
     /// predicates must stay separate rather than one being derived from the
@@ -557,7 +557,7 @@ impl ReadyMarker {
     /// misreads waits out `READY_MAX_WAIT` — the direction the design note
     /// argues is safe — and never releases a paste early. The residual the
     /// label rule does NOT close (a label-shaped decoy elsewhere on the
-    /// rendered screen) is stated in `doc/design/opencode.md`.
+    /// rendered screen) is stated in `docs/design/opencode.md`.
     ///
     /// Every occurrence of the literal is examined, not just the first: the
     /// footer this was written for carries other text on the same row, and a
@@ -818,14 +818,14 @@ pub const CONTEXT_VARIANTS: &[&str] = &["1m"];
 ///   `write_file`/`replace` while leaving `run_shell_command` — see
 ///   `GEMINI_EDIT_DENY_TOOLS`.
 /// - **pi** — its load-bearing facts are read off the vendor's own source and
-///   docs at the version pin recorded in `doc/design/pi.md` (`pi` 0.84.4, and
+///   docs at the version pin recorded in `docs/design/pi.md` (`pi` 0.84.4, and
 ///   the community `pi-mcp-adapter` extension separately pinned there),
 ///   because the published docs do not cover all of them: `--session-id` is
 ///   in the CLI's argument parser and its help text but not in
 ///   `docs/sessions.md`, while `--exclude-tools`, `--thinking` and the
 ///   design principle "It intentionally does not include built-in MCP,
 ///   sub-agents, permission popups, plan mode…" are documented. The same
-///   labelled-observation rule `doc/design/opencode.md` states applies: a
+///   labelled-observation rule `docs/design/opencode.md` states applies: a
 ///   source-read fact is an observation against a pin, not a contract.
 /// - **codex** — spawnable since #2515 C1, and still **rejected as a reviewer
 ///   or planner host**. Those are two separate findings and only the first of
@@ -835,7 +835,7 @@ pub const CONTEXT_VARIANTS: &[&str] = &["1m"];
 ///   block already runs at.
 ///
 ///   The ceiling stands, re-verified at the pin recorded in
-///   `doc/design/codex.md`. codex's only containment axis is `sandbox_mode`
+///   `docs/design/codex.md`. codex's only containment axis is `sandbox_mode`
 ///   (`read-only | workspace-write | danger-full-access`,
 ///   [config reference](https://developers.openai.com/codex/config-reference)),
 ///   and its `tools` section exposes only `view_image` / `web_search` — there
@@ -859,7 +859,7 @@ pub const CONTEXT_VARIANTS: &[&str] = &["1m"];
 ///   Everything loomux configures on codex rides ONE generated profile file
 ///   selected by `-p/--profile` — trust, approval policy, sandbox mode,
 ///   network access, the MCP server, the role contract and the effort knob.
-///   `doc/design/codex.md` carries every key and why it is there; the two
+///   `docs/design/codex.md` carries every key and why it is there; the two
 ///   facts this row rests on are that `-p` names a file in `CODEX_HOME`
 ///   (so the config is argv-*selectable* even though it is not argv-*carried*
 ///   — that is what [`Self::mcp_argv_seam`] asks) and that codex exposes no
@@ -890,7 +890,7 @@ pub const CONTEXT_VARIANTS: &[&str] = &["1m"];
 ///   the schema needs a live verification loomux's own agents may not perform
 ///   (CLAUDE.md constraint 3), so it stays unwired and the row says so.
 /// - **opencode** — its knobs are read from the CLI's own source at the
-///   version pin recorded in `doc/design/opencode.md`, because the published
+///   version pin recorded in `docs/design/opencode.md`, because the published
 ///   docs describe reasoning effort only as per-model provider config. There
 ///   IS a session-scoped variant flag, but only on `opencode run`
 ///   (`--variant`, "model variant (provider-specific reasoning effort, e.g.,
@@ -990,7 +990,7 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // NON-BLOCKING tail of `bootstrap()` — after `store.status` has left
         // `"loading"`, which is the same `ready()` the prompt box renders
         // under. So the segment cannot precede the input box. See
-        // `doc/design/opencode.md`'s Readiness section for the premise, its
+        // `docs/design/opencode.md`'s Readiness section for the premise, its
         // falsifier, and what a third-party footer plugin does to it.
         //
         // Matched as a SHAPE (a digit, then " MCP") rather than against a
@@ -1025,7 +1025,7 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // config. The consequence is that a pi pane also merges whatever the
         // repo's own `.mcp.json`/`.pi/mcp.json` declare; that residual is
         // measured (`pi_repo_mcp_exposure`) rather than claimed closed, and
-        // `doc/design/pi.md` carries the two adapter lines that decide it.
+        // `docs/design/pi.md` carries the two adapter lines that decide it.
         // Anyone tempted to "restore" `PI_MCP_CONFIG_MODE=exclusive` here
         // would point every pi pane at somebody else's config and silently
         // take its orrerix tools away — see `cli_extra_env`'s pi arm, which
@@ -1104,7 +1104,7 @@ pub const CLI_CAPS: &[CliCaps] = &[
         //
         // Delivered in the PROFILE (`model_reasoning_effort`), not on argv:
         // codex has no effort flag, and `-c` is refused for the reasons
-        // `doc/design/codex.md` gives. Whether a given MODEL serves a level is
+        // `docs/design/codex.md` gives. Whether a given MODEL serves a level is
         // a separate, per-model fact codex advertises in its own catalog
         // (`supported_reasoning_efforts`) and loomux does not read — the same
         // position claude's row takes, and unverified against a live run.
@@ -1330,7 +1330,7 @@ pub fn role_instructions_file(role: Role) -> &'static str {
 // data (a wire-form enum, two tunable defaults) rather than registry state.
 // `mod.rs` re-exports all four under their original names, so every existing
 // call site — in this crate and the integration suite — resolves unchanged.
-// See doc/design/engine-extraction.md §6 for the batch record.
+// See docs/design/engine-extraction.md §6 for the batch record.
 
 /// How a `deliver_prompt` call relates to the pane's lifecycle. Governs the boot
 /// readiness wait AND the one-time copilot autopilot-consent confirm (#101).
@@ -1709,7 +1709,7 @@ mod tests {
         assert!(
             !Role::Manager.is_root(),
             "a manager is the human's pane and takes NO mid-session delivery — see \
-             doc/design/manager.md; is_root must never become is_fixture"
+             docs/design/manager.md; is_root must never become is_fixture"
         );
         // …and the two predicates really do differ, rather than agreeing today
         // and being kept apart by convention. Without this, a later edit could
@@ -1761,7 +1761,7 @@ mod delivery_tests {
             permitted,
             vec![Delivery::FreshKickoff, Delivery::ResumeKickoff, Delivery::Regrounding],
             "the manager pane's permitted deliveries are the two kickoffs and the post-compact \
-             re-grounding notice, and nothing else — see doc/design/manager.md"
+             re-grounding notice, and nothing else — see docs/design/manager.md"
         );
         // The negative control, named rather than implied: MidSession is what
         // channel_send, send_prompt, every watchdog/stall notice, the answer

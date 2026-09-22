@@ -3,7 +3,7 @@
 //
 // WHY A TAB AND NOT A THIRD PANEL. CLAUDE.md constraint 1: `#sessions` and
 // `.sidedock` are the two in-flow panels, and a third needs the argument
-// `doc/design/side-dock.md` describes before it may exist. Two tabs inside one
+// `docs/design/side-dock.md` describes before it may exist. Two tabs inside one
 // panel need none — the panel's own open/close is the same discrete human click
 // it always was, `resizeburst.ts` coalesces the fit exactly as before, and a tab
 // SWITCH moves no column at all, so it costs no PTY resize. The transition table

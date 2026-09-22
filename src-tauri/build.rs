@@ -15,7 +15,7 @@ fn main() {
     // window regardless of capability grants — capability-based per-window
     // command denial does nothing (see the #360 Phase-0.5 spike findings,
     // https://github.com/willem445/orrerix/issues/360#issuecomment-4992837152,
-    // and doc/design/acl-manifest.md).
+    // and docs/design/acl-manifest.md).
     //
     // This flip is all-or-nothing: from this line on, every command in
     // APP_COMMANDS that isn't explicitly granted in `capabilities/` is

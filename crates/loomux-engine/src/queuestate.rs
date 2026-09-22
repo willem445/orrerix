@@ -6,7 +6,7 @@
 //! `orchestration/mod.rs` is one 31k-line module: a field declared private
 //! there is still reachable from every line of it, so "the only way to
 //! mutate `queues` is through the sanctioned path" was not a claim the
-//! compiler could check — it was a claim `doc/design/orchestration.md`'s
+//! compiler could check — it was a claim `docs/design/orchestration.md`'s
 //! #470/#523 mutation-site table made on the compiler's behalf, and that
 //! table was wrong in both possible directions on the same day (stale for
 //! #533's two new mutators, and mis-transcribed for a row its own grep DID

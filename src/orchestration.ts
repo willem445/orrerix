@@ -1683,7 +1683,7 @@ export const groupUsage = (groupId: string): Promise<GroupUsage | null> =>
 
 /** One row of `<group>/usage-series.jsonl`, as `orch_usage_series` returns it.
  *
- *  A **persisted schema** — `doc/design/token-charts.md` is its contract, and
+ *  A **persisted schema** — `docs/design/token-charts.md` is its contract, and
  *  these declarations are the frontend half of it. The union is discriminated
  *  by `kind`, exactly as the file is. */
 export type UsageSeriesRow = UsageSeriesSample | UsageSeriesMark;
@@ -1760,7 +1760,7 @@ export interface UsageSeries {
    *  **report, not a truncation**: every row is still returned. Nothing
    *  rotates or compacts this file, so this is the trigger for the work slice
    *  B deliberately deferred — seek to `since_ms` rather than filter, or
-   *  compact. See `doc/design/token-charts.md`. */
+   *  compact. See `docs/design/token-charts.md`. */
   oversize: boolean;
   rows: UsageSeriesRow[];
   /** The agent dimension the projection attributes by, roster-wide (a dead
@@ -2020,7 +2020,7 @@ export const groupSummary = (groupId: string): Promise<GroupSummary | null> =>
 // ONE invoke replaces the group view's ten and the tab strip's two-per-tab.
 // The backend publishes an immutable snapshot on a 1 s cadence and serves
 // these two commands by pointer clone, so neither takes a registry lock and
-// neither can park (`doc/design/polled-views.md`). The ten single-payload
+// neither can park (`docs/design/polled-views.md`). The ten single-payload
 // wrappers above STAY: `tasksview.ts` reads summary and workflow status when
 // it opens, and a once-per-open read is not what Phase 1 is about.
 
@@ -2415,7 +2415,7 @@ export const applyWorkflow = (
 
 // ---------- merge queue (#581 slice F): READ-ONLY visibility ----------
 //
-// The queue itself is host-run (doc/design/merge-queue.md §3) — the frontend
+// The queue itself is host-run (docs/design/merge-queue.md §3) — the frontend
 // neither enqueues, cancels, nor lands anything, and there is deliberately no
 // wrapper here that could. This is one read of the group's `merge_queue.json`,
 // projected backend-side by `mergeqview::project`; the DOM-free model that
@@ -2669,7 +2669,7 @@ export const confirmSoloCopilotAutopilot = (ptyId: number, cli: string): Promise
 // boots so the MCP flags can go on its command line, bind once the pty is up —
 // and differ in what they mint: a whole group with the lead as its ROOT, not a
 // channel-scoped identity in the shared `__solo__` group. See
-// `doc/design/lead-pane.md`.
+// `docs/design/lead-pane.md`.
 
 /** What `orch_lead_prepare` returns: the group it just minted, the lead's own
  *  agent id in it, and the exact per-CLI flag string to append to the launched

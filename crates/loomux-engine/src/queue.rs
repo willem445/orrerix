@@ -32,7 +32,7 @@
 //! queue's own front/back discipline makes that structurally impossible to
 //! answer wrong. See `notify.rs`'s module doc for why this codebase
 //! otherwise splits every backend feature this way (pure policy here,
-//! impure wiring in `mod.rs`) and `doc/design/orchestration.md`'s "Delivery
+//! impure wiring in `mod.rs`) and `docs/design/orchestration.md`'s "Delivery
 //! queue (#445)" section — its "Ordering" subsection covers #470's redesign
 //! specifically, and its "Durability (#468/#467)" subsection the on-disk
 //! snapshot below — for the full design rationale.
@@ -45,7 +45,7 @@
 //! `parse_snapshot` → `split_recovered` here, `OrchRegistry::
 //! recover_persisted_queue`/`readmit_recovered` in `mod.rs`. What that buys,
 //! stated exactly, because the honest limits are the point (see this
-//! module's `PersistedEntry` doc and `doc/design/orchestration.md`'s
+//! module's `PersistedEntry` doc and `docs/design/orchestration.md`'s
 //! "Durability (#468/#467)" subsection):
 //!
 //! - A queued `Text` payload survives the restart with its bytes intact.
@@ -1287,7 +1287,7 @@ pub const QUEUE_STALLED_AFTER: Duration = Duration::from_secs(60);
 /// the reading on the attention tick (`OrchRegistry::queue_depth_push`), and that
 /// push is skipped when the new set is identical to the last one sent. A raw
 /// millisecond age is never identical, so every tick would emit — and a Tauri
-/// emit is a JS compile on the webview thread (`doc/design/performance.md` §1),
+/// emit is a JS compile on the webview thread (`docs/design/performance.md` §1),
 /// paid whether or not the human could see any difference. Coarsening to what
 /// the badge can actually *render* differently makes the skip real: a pane stuck
 /// for an hour emits about once a minute instead of once every 3 s.
@@ -2985,7 +2985,7 @@ mod tests {
 /// residual this module ALSO proves (below) is exactly the defect #470's
 /// unified-admission redesign closes — see `unified_admission_property`
 /// (this file) for the model of what replaced this mechanism, and
-/// `doc/design/orchestration.md`'s Ordering subsection for the argument.
+/// `docs/design/orchestration.md`'s Ordering subsection for the argument.
 /// Every test in this module still passes unmodified: they are pure math
 /// about an algorithm this PR stops running in production, not a live
 /// regression pin — keeping them intact is what lets `unified_admission_

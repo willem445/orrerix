@@ -69,7 +69,7 @@ export function planGroupMinimize<T extends GroupPaneState>(
  *  legitimate act — and a pane that crashed is indistinguishable from one the
  *  human deliberately closed. Auto-reopening would contradict a shipped promise
  *  on a guess. So the app states the fact and names the route back; the human
- *  decides. See `doc/design/manager.md`, "Why nothing reopens a dead manager".
+ *  decides. See `docs/design/manager.md`, "Why nothing reopens a dead manager".
  *
  *  It covers BOTH of #1433's cases with one surface, because from here they are
  *  the same fact: the launch-time open failed, or the pane died later. What the

@@ -887,7 +887,7 @@ pub fn capabilities() -> Caps {
 // ---------- commands ----------
 //
 // #746: thin async wrappers over the blocking pool (P1 of
-// `doc/design/performance.md`). Every one of these was a synchronous
+// `docs/design/performance.md`). Every one of these was a synchronous
 // `#[tauri::command]`, which Tauri dispatches on the webview thread — so a
 // directory enumeration nothing bounds, a `CreateDirectory`, a rename across a
 // network share, an `explorer.exe` spawn and a BLOCKING `ShellExecuteW` all ran

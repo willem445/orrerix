@@ -15,6 +15,8 @@ nav_order: 10
 {:toc}
 </details>
 
+*Behind the scenes:* the design note [`docs/design/manager.md`](https://github.com/willem445/orrerix/blob/main/docs/design/manager.md) argues the *why* — it is a contributor document and is not part of this site.
+
 ---
 
 Most orrerix panes are agents doing work. The **manager** is not: it is the pane

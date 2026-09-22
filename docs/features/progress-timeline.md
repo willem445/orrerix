@@ -15,6 +15,8 @@ nav_order: 7
 {:toc}
 </details>
 
+*Behind the scenes:* the design note [`docs/design/progress-timeline.md`](https://github.com/willem445/orrerix/blob/main/docs/design/progress-timeline.md) argues the *why* — it is a contributor document and is not part of this site.
+
 ---
 
 Press **`Alt+W`** (or the timeline icon — dots over an axis — in the pane

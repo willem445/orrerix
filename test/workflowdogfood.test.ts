@@ -105,7 +105,7 @@ test("the roster is the one the repo means to run", () => {
   // The model id is pinned in FULL on purpose, and the loop below covers every
   // pi block (both tiers of it — the default worker AND the every-round
   // reviewer), not just the reviewers. pi's `--model` takes `provider/id`
-  // (doc/design/pi.md, the launch line), so a block that dropped the
+  // (docs/design/pi.md, the launch line), so a block that dropped the
   // `openrouter/` half would spawn against a model that does not exist. This
   // asserts the `/` survives the parser; the pattern allows a second one
   // because this provider's own model ids carry it (`openrouter` +
@@ -161,7 +161,7 @@ test("every declared reviewer lane is named by the gate or by a routing rule, be
   // "In the gate" is a UNION of two lists, and that is the roster's design rather
   // than a loosening: `rev-std` is static (every PR), `rev-final` is REQUIRED BY
   // ROUTING (#1176) on the paths a prose review cannot judge — code, tests, CI,
-  // manifests, doc/design. A docs-only PR that runs rev-std alone is the rule
+  // manifests, docs/design. A docs-only PR that runs rev-std alone is the rule
   // working (#1952), not a hole.
   const declaredReviewers = workflow.blocks.filter((b) => b.kind === "reviewer").map((b) => b.id);
   const namedBy = (g: typeof gate): Set<string> =>

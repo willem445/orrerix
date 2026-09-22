@@ -90,7 +90,7 @@
 //! pins it. The ten commands themselves stay: `tasksview.ts` reads summary and
 //! workflow status on open, and the MCP tools read their own paths.
 //!
-//! See `doc/design/polled-views.md` for the wire contract this file implements.
+//! See `docs/design/polled-views.md` for the wire contract this file implements.
 
 use std::cell::Cell;
 use std::collections::HashMap;

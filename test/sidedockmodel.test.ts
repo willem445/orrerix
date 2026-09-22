@@ -489,7 +489,7 @@ test("the dock is an IN-FLOW flex item, and the stylesheet is where that is true
   // The dock used to be `position: absolute` — out of flow, occluding panes,
   // unable to squeeze `#grid-area` by construction. #1150 moved it into the
   // flex row at the human's direction so the open panes autosize the way
-  // `#sessions` already makes them (doc/design/side-dock.md).
+  // `#sessions` already makes them (docs/design/side-dock.md).
   //
   // Out of flow is therefore now the REGRESSION, not the invariant: an
   // absolutely-positioned `.sidedock` would silently stop displacing the grid,

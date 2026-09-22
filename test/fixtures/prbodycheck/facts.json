@@ -14,7 +14,7 @@
   "diffstat": { "files": 4, "insertions": 773, "deletions": 27 },
   "numstat": {
     "crates/loomux-engine/src/reviewdrive.rs": { "insertions": 125, "deletions": 9 },
-    "doc/design/review-driver.md": { "insertions": 67, "deletions": 12 },
+    "docs/design/review-driver.md": { "insertions": 67, "deletions": 12 },
     "src-tauri/src/orchestration/rdtick.rs": { "insertions": 65, "deletions": 6 },
     "src-tauri/tests/reviewdrive.rs": { "insertions": 516, "deletions": 0 }
   },

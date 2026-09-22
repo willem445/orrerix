@@ -476,7 +476,7 @@ test("models() paints from curated before the probe lands, merged after", async 
 // answer never being allowed to narrow what the human can already pick.
 //
 // If you are auditing constraint-3 compliance, the spawn you are looking for is
-// in `modelwire.rs`'s `start_startup_sweep`, not here. `doc/design/model-catalog.md`
+// in `modelwire.rs`'s `start_startup_sweep`, not here. `docs/design/model-catalog.md`
 // §Credit safety carries the decision and what remains unverified about it.
 
 const detail = (over: Partial<ModelDetail> & { id: string }): ModelDetail => ({

@@ -19,7 +19,7 @@
 //!
 //! **No codex is ever run** (constraint 3), and not even `--help`: every vendor
 //! fact these assertions encode is read blob-by-blob out of `openai/codex` at
-//! tag `rust-v0.153.4` and quoted in `doc/design/codex.md`.
+//! tag `rust-v0.153.4` and quoted in `docs/design/codex.md`.
 
 use loomux_lib::orchestration::{
     codex_profile_file_name, codex_profile_name, codex_profile_name_of_path,

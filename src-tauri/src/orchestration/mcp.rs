@@ -1376,6 +1376,7 @@ fn tool_defs(
                 "priority": { "type": "integer", "minimum": 0, "maximum": 3, "description": "0 to 3." },
                 "important": { "type": "boolean", "description": "Star or un-star it." },
                 "tags": { "type": "array", "items": { "type": "string" }, "description": "REPLACES the whole tag list. At most 20." },
+                "color": { "type": ["string", "null"], "description": format!("The human's colour label for this row — one of {} — or null to clear it. Leave it alone unless the human asked: it is THEIR way of grouping the list, not a status.", todo::COLORS.join(", ")) },
                 "steps": { "type": "array", "items": { "type": "object" }, "description": "REPLACES the whole step list, in order: `[{\"id\": \"st-…\", \"title\": \"…\", \"done\": false}]`. Keep an existing step's `id` to keep the step; omit `id` for a new one. At most 100." },
                 "order_after": { "type": ["string", "null"], "description": "Move this item directly after the to-do with this id, or null to move it to the top of its list." },
             }),
@@ -2440,6 +2441,19 @@ fn arg_nullable_u64(args: &Value, key: &str) -> Result<Option<Option<u64>>, Stri
             .as_u64()
             .map(|n| Some(Some(n)))
             .ok_or_else(|| format!("{key} must be a whole number >= 0, or null to clear it")),
+    }
+}
+
+/// `color` (#3335): absent = leave alone, `null` = clear, a string = set —
+/// [`arg_nullable_u64`]'s three states, for a string. The vocabulary is the
+/// engine's (`todo::COLORS`, checked in `check_color`) and is deliberately not
+/// repeated here, for `arg_priority`'s reason: two copies of one bound drift.
+fn arg_nullable_str(args: &Value, key: &str) -> Result<Option<Option<String>>, String> {
+    match args.get(key) {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(s)) => Ok(Some(Some(s.clone()))),
+        Some(_) => Err(format!("{key} must be a string, or null to clear it")),
     }
 }
 
@@ -5286,6 +5300,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 priority: arg_priority(args, "priority")?,
                 important: arg_bool_opt(args, "important")?,
                 tags: arg_str_array_named(args, "tags")?,
+                color: arg_nullable_str(args, "color")?,
                 steps: arg_step_patches(args, "steps")?,
                 order_after,
             });

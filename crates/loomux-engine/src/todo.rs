@@ -113,6 +113,23 @@ pub const ARCHIVE_IDS_MAX: usize = ITEMS_MAX;
 /// Highest accepted `priority`.
 pub const PRIORITY_MAX: u8 = 3;
 
+/// The colours an item may carry (#3335) — a CLOSED vocabulary, and the names
+/// are the theme's eight identity hues (`IDENTITY` in `src/theme.ts`).
+///
+/// Closed, and checked HERE rather than in the pane, because two writers meet
+/// in this store and one of them is an agent through MCP: a free-form string
+/// would let an agent write a colour no build can paint, and the pane would
+/// have to choose between drawing nothing (a silent loss the human cannot see
+/// the reason for) and drawing a guess. Names rather than hex values because
+/// the store is data and the palette is presentation — a theme retune moves
+/// every item's paint without a migration, which a stored `#6f93c4` could not.
+///
+/// `test/todomodel.test.ts` pins this list against the frontend's
+/// `TODO_COLORS` by reading this file, so the two cannot drift apart.
+pub const COLORS: &[&str] = &[
+    "rose", "amber", "lime", "jade", "cyan", "azure", "violet", "orchid",
+];
+
 // ---------- scope ----------
 
 /// Which list an item belongs to.
@@ -231,6 +248,17 @@ pub struct TodoItem {
     pub important: bool,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// The human's colour label, one of [`COLORS`], or `None` (#3335).
+    ///
+    /// ADDITIVE, and the envelope stays at version 1: `#[serde(default)]`
+    /// reads a file an older build wrote as "no colour", and an older build
+    /// reading a file this one wrote keeps the key in its `extra` map and
+    /// writes it back untouched (module header, half 2) — which is exactly
+    /// the round-trip an additive field needs, so no version bump is owed.
+    /// Omitted from the file when absent, so an item nobody coloured is
+    /// byte-for-byte what it was before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     #[serde(default)]
     pub steps: Vec<Step>,
     /// Sort position within the scope; gaps of [`ORDER_GAP`].
@@ -442,6 +470,9 @@ pub struct TodoUpdate {
     pub priority: Option<u8>,
     pub important: Option<bool>,
     pub tags: Option<Vec<String>>,
+    /// `Some(Some(c))` sets the colour (one of [`COLORS`]), `Some(None)`
+    /// clears it — the same three-state shape as the nullable timestamps.
+    pub color: Option<Option<String>>,
     /// Replaces the whole step list when present.
     pub steps: Option<Vec<StepPatch>>,
     pub order_after: Option<OrderAfter>,
@@ -692,6 +723,19 @@ fn check_priority(p: u8) -> Result<(), TodoError> {
     Ok(())
 }
 
+/// A colour must be one of [`COLORS`], spelled exactly. No case-folding and no
+/// trimming: the value is a key the pane looks up, and accepting `"Azure"` here
+/// would store a spelling the frontend's table does not contain.
+fn check_color(c: &str) -> Result<(), TodoError> {
+    if COLORS.contains(&c) {
+        return Ok(());
+    }
+    Err(TodoError::Invalid(
+        "color",
+        format!("{c:?} is not one of {}", COLORS.join(", ")),
+    ))
+}
+
 fn check_steps_len(n: usize) -> Result<(), TodoError> {
     if n > STEPS_MAX {
         return Err(TodoError::Cap("steps", STEPS_MAX));
@@ -743,6 +787,7 @@ fn apply_add(
         priority,
         important: add.important.unwrap_or(false),
         tags,
+        color: None,
         steps: step_titles
             .into_iter()
             .map(|title| Step {
@@ -808,16 +853,33 @@ fn apply_update(
     check_if_rev(&store.items[ix], up.if_rev)?;
     check_update(&up)?;
     // The one check that needs the STORE rather than the patch: a destination
-    // is resolved against the item's live neighbours.
-    let new_order = match &up.order_after {
+    // is resolved against the item's live neighbours. It is the LAST thing that
+    // may refuse; everything below writes.
+    let placement = match &up.order_after {
         None => None,
         Some(after) => Some(order_for(store, &store.items[ix], after)?),
     };
 
     let scope = store.items[ix].scope.clone();
+    let new_order = match &placement {
+        Some(Placement::At(o)) => Some(*o),
+        _ => None,
+    };
     write_update(&mut store.items[ix], up, new_order, actor, now_ms);
-    if new_order.is_some() {
-        renumber_if_crowded(store, &scope);
+    match placement {
+        // The gap was exhausted: re-space the scope with the mover already at
+        // its destination (#3307 item 4, #3335). One write, under the one lock
+        // every write takes, so no other writer can land between the re-space
+        // and the move — which a separate "renumber" op sent ahead of the move
+        // could not promise.
+        Some(Placement::Respace(ids)) => respace(store, &ids),
+        // A free integer was found, so the move itself collided with nothing.
+        // The sweep stays for a collision the move did NOT cause — a store an
+        // older build or a hand edit left with two equal orders elsewhere in
+        // the scope — and it re-spaces in the order `live` already shows, so
+        // it moves no row the human can see.
+        Some(Placement::At(_)) => renumber_if_crowded(store, &scope),
+        None => {}
     }
     let item = store.items[ix].clone();
     Ok(Applied {
@@ -844,6 +906,9 @@ fn check_update(up: &TodoUpdate) -> Result<(), TodoError> {
     }
     if let Some(p) = up.priority {
         check_priority(p)?;
+    }
+    if let Some(Some(c)) = &up.color {
+        check_color(c)?;
     }
     if let Some(s) = &up.steps {
         check_steps_len(s.len())?;
@@ -887,6 +952,9 @@ fn write_update(
     if let Some(t) = up.tags {
         item.tags = t;
     }
+    if let Some(c) = up.color {
+        item.color = c;
+    }
     if let Some(s) = up.steps {
         item.steps = merge_steps(&item.steps, s);
     }
@@ -927,45 +995,102 @@ fn merge_steps(prior: &[Step], patches: Vec<StepPatch>) -> Vec<Step> {
         .collect()
 }
 
-/// The `order` value that puts `moving` where `after` says — midway between its
-/// new neighbours. When the gap has closed to nothing the caller renumbers.
-fn order_for(store: &TodoStore, moving: &TodoItem, after: &OrderAfter) -> Result<i64, TodoError> {
+/// Where a move lands.
+#[derive(Debug)]
+enum Placement {
+    /// A free `order` strictly between the new neighbours.
+    At(i64),
+    /// No integer is left between them. Carries the scope's live ids in their
+    /// NEW order, the mover included at its destination, for [`respace`].
+    Respace(Vec<String>),
+}
+
+/// Where `moving` lands when `after` says so — midway between its new
+/// neighbours, or a re-space of the whole scope when there is no integer left
+/// between them (#3307 item 4, built by #3335).
+///
+/// **Why the exhausted case is decided HERE, before anything is written.** The
+/// previous shape computed `p + (n - p) / 2` unconditionally; once `n - p` fell
+/// to 1 that is `p` itself, so the mover COLLIDED with its predecessor and a
+/// sweep afterwards re-spaced the scope in `live`'s order, which breaks the tie
+/// on `created_ms`. A mover OLDER than its new predecessor therefore sorted in
+/// FRONT of it and landed one place above where it was dropped — a silent
+/// misplacement, not a refusal (`an_exhausted_gap_misplaced_an_older_mover` in
+/// `src-tauri/tests/todo.rs`). Deciding the destination by POSITION, and only
+/// then numbering it, cannot tie at all.
+fn order_for(
+    store: &TodoStore,
+    moving: &TodoItem,
+    after: &OrderAfter,
+) -> Result<Placement, TodoError> {
     let live: Vec<&TodoItem> = store
         .live(&moving.scope)
         .into_iter()
         .filter(|i| i.id != moving.id)
         .collect();
-    let (prev, next) = match after {
-        OrderAfter::Start => (None, live.first().copied()),
+    // The index in `live` the mover will occupy.
+    let pos = match after {
+        OrderAfter::Start => 0,
         OrderAfter::Item(id) => {
-            let pos = live
-                .iter()
+            live.iter()
                 .position(|i| i.id == *id)
-                .ok_or_else(|| TodoError::Unknown(id.clone()))?;
-            (Some(live[pos]), live.get(pos + 1).copied())
+                .ok_or_else(|| TodoError::Unknown(id.clone()))?
+                + 1
         }
     };
-    Ok(match (prev, next) {
-        (None, None) => ORDER_GAP,
-        (None, Some(n)) => n.order - ORDER_GAP,
-        (Some(p), None) => p.order + ORDER_GAP,
-        (Some(p), Some(n)) => p.order + (n.order - p.order) / 2,
+    let prev = pos.checked_sub(1).map(|p| live[p]);
+    let next = live.get(pos).copied();
+    // `checked_*` because `order` comes off a file two writers (and a hand
+    // edit) can produce: an order near `i64::MIN`/`MAX` must re-space rather
+    // than wrap or panic (a panic here aborts a synchronous command, CLAUDE.md
+    // constraint 10).
+    let at = match (prev, next) {
+        (None, None) => Some(ORDER_GAP),
+        (None, Some(n)) => n.order.checked_sub(ORDER_GAP),
+        (Some(p), None) => p.order.checked_add(ORDER_GAP),
+        (Some(p), Some(n)) => match n.order.checked_sub(p.order) {
+            Some(gap) if gap >= 2 => Some(p.order + gap / 2),
+            _ => None,
+        },
+    };
+    Ok(match at {
+        Some(o) => Placement::At(o),
+        None => {
+            let mut ids: Vec<String> = live.iter().map(|i| i.id.clone()).collect();
+            ids.insert(pos, moving.id.clone());
+            Placement::Respace(ids)
+        }
     })
 }
 
-/// Re-space a scope on [`ORDER_GAP`] when two live items have collided on one
-/// `order` — the case a long run of midpoint inserts eventually reaches.
+/// Number `ids` — one scope's live items, in their intended order — on
+/// [`ORDER_GAP`].
+///
+/// Only `order` changes: no `rev`, `updated_ms` or `updated_by` moves on the
+/// items re-spaced around the mover, because none of them was edited. Their
+/// place in the list is exactly what it was, so an agent holding one of their
+/// revs has lost nothing it could have read.
+fn respace(store: &mut TodoStore, ids: &[String]) {
+    for (n, id) in ids.iter().enumerate() {
+        if let Some(ix) = store.index_of(id) {
+            store.items[ix].order = (n as i64 + 1) * ORDER_GAP;
+        }
+    }
+}
+
+/// Re-space a scope on [`ORDER_GAP`] when two live items share one `order`.
+///
+/// Since #3335 a move can no longer CAUSE that ([`order_for`] re-spaces instead
+/// of colliding), so this only ever meets a collision a store arrived with. It
+/// re-spaces in `live`'s order, which is the order the pane already draws, so it
+/// moves nothing a human can see.
 fn renumber_if_crowded(store: &mut TodoStore, scope: &Scope) {
     let ordered: Vec<String> = store.live(scope).iter().map(|i| i.id.clone()).collect();
     let orders: Vec<i64> = store.live(scope).iter().map(|i| i.order).collect();
     if !orders.windows(2).any(|w| w[1] <= w[0]) {
         return;
     }
-    for (n, id) in ordered.iter().enumerate() {
-        if let Some(ix) = store.index_of(id) {
-            store.items[ix].order = (n as i64 + 1) * ORDER_GAP;
-        }
-    }
+    respace(store, &ordered);
 }
 
 fn apply_complete(

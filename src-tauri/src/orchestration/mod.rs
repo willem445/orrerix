@@ -52992,10 +52992,17 @@ impl OrchRegistry {
             ));
         }
         let use_worktree = dedicated || worktree.unwrap_or(false);
-        // Cut from where the PARENT is: its own branch, when it has one. A
-        // parent with no branch (a planner, a shared-repo pane) leaves `base`
-        // to its default, which is the repo's default branch.
-        let base = if use_worktree { src.branch.clone() } else { None };
+        // Cut from where the PARENT is: its own branch, when it has one that
+        // EXISTS. A worktree pane's recorded branch was cut at its spawn; a
+        // shared-repo pane's is only the name it was told to create, which it
+        // may not have yet (CI caught exactly that: `cannot resolve base
+        // "agent/w-5"`). A branch that is not there, or no branch at all (a
+        // planner), leaves `base` to its default — the repo's default branch.
+        let base = if use_worktree {
+            src.branch.clone().filter(|b| crate::git::local_branch_exists(&group.repo, b))
+        } else {
+            None
+        };
         let name = if sanitize_agent_name(name).is_empty() {
             format!("{} (fork)", src.name)
         } else {

@@ -492,7 +492,11 @@ fn list_remotes(repo: &str) -> Vec<String> {
 
 /// True when `refs/heads/<name>` resolves — i.e. a local branch of that name
 /// already exists.
-fn local_branch_exists(repo: &str, name: &str) -> bool {
+///
+/// `pub(crate)` for #3318 F2's `fork_agent`, which asks it of a source's
+/// RECORDED branch before cutting a fork from it: a shared-repo pane's branch
+/// is an instruction it was given, not proof the branch exists.
+pub(crate) fn local_branch_exists(repo: &str, name: &str) -> bool {
     run_git(
         repo,
         &["show-ref", "--verify", "--quiet", &format!("refs/heads/{name}")],

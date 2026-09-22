@@ -1,4 +1,4 @@
-// The right-side dock (#1020 item 6, #934): git / files / editor in one
+// The right-side dock (#1020 item 6, #934): git / files / editor / to-do in one
 // collapsible panel down the right edge of the workspace, pointed at whichever
 // pane is currently active. The pure decisions are in sidedockmodel.ts; the
 // argument for the whole shape is docs/design/side-dock.md.
@@ -46,6 +46,7 @@
 import { FileEditView } from "./fileedit";
 import { FileExplorerView } from "./fileexplorer";
 import { GitView } from "./gitview";
+import { TodoPaneView } from "./todopane";
 import { icon } from "./icons";
 import { startDragSession } from "./dragsession";
 import type { PaneBufferReport } from "./dirtystate";
@@ -124,20 +125,27 @@ interface Hosted {
   /** The dock root this instance was built for — the input to `decideViewSync`. */
   builtRoot: string;
   dispose(): void;
-  /** Unsaved edits? Only the editor can answer yes. */
+  /** Unsaved edits? The editor's buffer, or a To-Do tab's half-typed text. */
   dirty(): boolean;
   /** Re-read the repo/disk in place, cheaply. Absent where a refresh would
    *  cost the human their place — see `refreshActiveView`. */
   refresh?(): void;
+  /** Told when this view goes on or off screen (#3335). Only the To-Do tab has
+   *  one: it runs a one-minute reminder tick and a `todo-changed` refresh that
+   *  are meant to stop while nobody is looking — the pane's own `hide()`
+   *  contract — and `el.hidden` alone would leave both running behind another
+   *  tab. The other three already no-op while hidden. */
+  setVisible?(visible: boolean): void;
 }
 
-const TAB_LABEL: Record<DockTab, string> = { git: "Git", files: "Files", editor: "Editor" };
+const TAB_LABEL: Record<DockTab, string> = { git: "Git", files: "Files", editor: "Editor", todo: "To-Do" };
 
 /** Tab marks, through the icon registry's documented role mapping — never a hue
  *  picked here (ui-redesign.md maintainability rule 3). `git-graph` is `vcs`,
- *  `folder-open` is `workspace`, `file-pen` is `source`: the same three
- *  questions these tabs answer. */
-const TAB_ICON = { git: "git-graph", files: "folder-open", editor: "file-pen" } as const;
+ *  `folder-open` is `workspace`, `file-pen` is `source`, and `list-checks` is
+ *  `board` — the To-Do tab is a list panel like the board's, the same role
+ *  the pane menu's task list wears (#3335). */
+const TAB_ICON = { git: "git-graph", files: "folder-open", editor: "file-pen", todo: "list-checks" } as const;
 
 export class SideDock {
   /** The dock's own column in `#workspace`'s flex row. */
@@ -290,6 +298,7 @@ export class SideDock {
     // through paths that require `open`), which is the whole of "no work when
     // closed".
     this.clearFollowTimer();
+    this.syncVisibility();
   }
 
   /**
@@ -449,8 +458,16 @@ export class SideDock {
     }
 
     for (const [key, v] of this.views) v.el.hidden = key !== tab;
+    this.syncVisibility();
     this.renderHoldNotice(action === "hold");
     this.renderRootChip();
+  }
+
+  /** Tell each view that tracks it whether it is on screen: the active tab of
+   *  a dock that is showing, and nothing else. Idempotent per view — the
+   *  hosted wrapper forwards only a real flip. */
+  private syncVisibility(): void {
+    for (const [key, v] of this.views) v.setVisible?.(this.shown && key === this.prefs.tab);
   }
 
   /** Construct one tab's view at `root`, attached and shown.
@@ -495,6 +512,35 @@ export class SideDock {
       this.bodyEl.appendChild(view.el);
       view.show();
       return { el: view.el, builtRoot: root, dispose: () => view.dispose(), dirty: () => false };
+    }
+    if (tab === "todo") {
+      // The To-Do pane, unchanged, in the dock's narrower column — its compact
+      // layout is the pane's own container query (`.tdp` is
+      // `container-type: inline-size`), so the dock needs no second
+      // stylesheet. Rooted at the dock's root, so the `◆` half of its scope
+      // switch is the ACTIVE pane's project and follows it (#3335 AC 1).
+      //
+      // No PTY is touched here or anywhere under it: the view is DOM over a
+      // store, and the only width change it ever sees is the dock's own
+      // discrete click (CLAUDE.md constraint 1).
+      const view = new TodoPaneView({ getRoot: () => root, embedded: true });
+      this.bodyEl.appendChild(view.el);
+      let visible = false;
+      const hosted: Hosted = {
+        el: view.el,
+        builtRoot: root,
+        dispose: () => view.dispose(),
+        // A half-typed line is work the human has not agreed to lose, so a
+        // re-root HOLDS rather than rebuilding it away — the editor's rule.
+        dirty: () => view.hasUnsubmitted(),
+        setVisible: (v) => {
+          if (v === visible) return;
+          visible = v;
+          if (v) view.show();
+          else view.hide();
+        },
+      };
+      return hosted;
     }
     const view = new FileEditView({
       getCwd: () => root,
@@ -697,6 +743,9 @@ export class SideDock {
     // A toggle that silently does nothing is the other way to look broken, so
     // the button says why instead of pretending it can help.
     this.host.setToggleAvailability(!boxes.starved, boxes.starved ? NO_ROOM_REASON : null);
+    // A dock squeezed shut (or opened back into room) takes its To-Do tab's
+    // tick with it, the same as a click on the toggle.
+    this.syncVisibility();
   }
 
   /**

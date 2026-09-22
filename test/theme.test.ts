@@ -34,6 +34,7 @@ import {
   TERMINAL_THEME,
 } from "../src/theme.ts";
 import { agentMarkFor } from "../src/agenticons.ts";
+import { TAG_HUES, TODO_COLORS } from "../src/todomodel.ts";
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
 const stripCssComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "");
@@ -601,7 +602,7 @@ test("the structured pane's three role positions each stay in their own channel"
   );
 });
 
-test("the To-Do pane's two coloured positions each stay in their own channel", () => {
+test("the To-Do pane's coloured positions each stay in their own channel", () => {
   // #3263 S4, and the same argument the structured pane's test one up makes: the
   // general channel guard below compares a position's variants against EACH
   // OTHER, so a position whose every variant reached for the same wrong channel
@@ -616,8 +617,32 @@ test("the To-Do pane's two coloured positions each stay in their own channel", (
   //    the only one: a to-do has no agent state, so the other dyes never appear;
   //  - the attribution dot answers "WHICH agent touched this row" — identity,
   //    and it may never be read as a status.
+  //
+  // #3335 adds three, all identity, each pinned here BY NAME for the same
+  // population reason: the item's colour stripe and its picker swatches ("which
+  // group did the human put this in"), and a tag chip's hue ("which label is
+  // this"). The general guard below could not see a position whose every
+  // variant reached for the wrong channel.
   const css = stripCssComments(read("../src/styles.css"));
   const POSITIONS: Array<{ what: string; re: RegExp; want: "state" | "id"; min: number }> = [
+    {
+      what: "the item's colour stripe",
+      re: /\.tdp-row\[data-color="[a-z-]+"\]\s*\{([^}]*)\}/g,
+      want: "id",
+      min: 8,
+    },
+    {
+      what: "a colour-picker swatch",
+      re: /\.tdp-swatch\[data-color="[a-z-]+"\]\s*\{([^}]*)\}/g,
+      want: "id",
+      min: 8,
+    },
+    {
+      what: "a tag chip's hue",
+      re: /\.tdp-tagchip\[data-hue="[a-z-]+"\]\s*\{([^}]*)\}/g,
+      want: "id",
+      min: 5,
+    },
     {
       what: "the overdue due date",
       re: /\.tdp-due\[data-overdue="true"\]\s*\{([^}]*)\}/g,
@@ -654,6 +679,27 @@ test("the To-Do pane's two coloured positions each stay in their own channel", (
       }
     }
   }
+  // #3335: each hue rule's HOOK names the very token it paints
+  // (`[data-color="id-azure"]` sets `--id-azure`), and the hooks cover exactly
+  // the model's lists — every colour an item may carry and every hue a tag can
+  // hash to has a rule, and nothing else does. A colour added to the model with
+  // no rule would draw nothing; a rule for a colour the model cannot produce
+  // is decoration nobody reaches.
+  const hooked = (re: RegExp) =>
+    [...css.matchAll(re)].map((m) => {
+      const hook = m[1]!;
+      const toks = tokensIn(m[2]!);
+      if (toks.length !== 1 || toks[0] !== `--${hook}`) {
+        wrong.push(`[${hook}] paints ${toks.join(", ")}, not --${hook}`);
+      }
+      return hook.replace(/^id-/, "");
+    });
+  const stripes = hooked(/\.tdp-row\[data-color="([a-z-]+)"\]\s*\{([^}]*)\}/g);
+  const swatches = hooked(/\.tdp-swatch\[data-color="([a-z-]+)"\]\s*\{([^}]*)\}/g);
+  const tagHues = hooked(/\.tdp-tagchip\[data-hue="([a-z-]+)"\]\s*\{([^}]*)\}/g);
+  assert.deepEqual([...stripes].sort(), [...TODO_COLORS].sort(), "one stripe rule per item colour");
+  assert.deepEqual([...swatches].sort(), [...TODO_COLORS].sort(), "one swatch rule per item colour");
+  assert.deepEqual([...tagHues].sort(), [...TAG_HUES].sort(), "one chip rule per tag hue");
   assert.deepEqual(
     wrong,
     [],

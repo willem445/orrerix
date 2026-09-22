@@ -625,7 +625,7 @@ test("a persisted width is bounded to the absolute range on the way in", () => {
 test("the tab set is exactly the three views the dock hosts", () => {
   // #934 also envisioned a tasks tab; it is deliberately out of scope here, and
   // this is the line that would notice one arriving without the wiring.
-  assert.deepEqual([...DOCK_TABS], ["git", "files", "editor"]);
+  assert.deepEqual([...DOCK_TABS], ["git", "files", "editor", "todo"]);
   assert.ok(DOCK_TABS.every(isDockTab));
   assert.equal(isDockTab("tasks"), false);
   assert.equal(isDockTab(undefined), false);

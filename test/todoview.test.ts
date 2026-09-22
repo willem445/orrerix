@@ -22,6 +22,7 @@ import {
   rowDraftIsPristine,
   seedRowDraft,
   type RowDraft,
+  type TodoPrefs,
 } from "../src/todoview.ts";
 import { SMART_VIEWS, inView, type TodoItem } from "../src/todomodel.ts";
 
@@ -45,6 +46,7 @@ function item(over: Partial<TodoItem> = {}): TodoItem {
     priority: 0,
     important: false,
     tags: [],
+    color: null,
     steps: [],
     order: seq * 1024,
     created_ms: seq,
@@ -139,7 +141,7 @@ test("the tag rail is the SCOPE's open tags, not the filtered rows' — else it 
   // switch to `#release` from it.
   const items = [item({ tags: ["infra"] }), item({ tags: ["release"] }), item({ tags: ["infra"] })];
   const p = projectPane({ items, view: "all", query: "", tagFilter: "infra" }, NOW);
-  assert.deepEqual(p.tags, ["infra", "release"]);
+  assert.deepEqual(p.tags.map((t) => t.tag), ["infra", "release"]);
   assert.equal(p.total, 2, "the LIST is still filtered");
 });
 
@@ -149,7 +151,7 @@ test("a DONE item's tag leaves the rail when the item does", () => {
   // (every tag on every item) passes every other test in this file.
   const open = item({ tags: ["release"] });
   const p1 = projectPane({ items: [open], view: "all", query: "", tagFilter: null }, NOW);
-  assert.deepEqual(p1.tags, ["release"]);
+  assert.deepEqual(p1.tags.map((t) => t.tag), ["release"]);
   const done = { ...open, status: "done", done_ms: NOW };
   const p2 = projectPane({ items: [done], view: "all", query: "", tagFilter: null }, NOW);
   assert.deepEqual(p2.tags, [], "a finished item's tag is not a filter you can still use");
@@ -185,16 +187,18 @@ test("EMPTY_TEXT has a sentence for every view, and for the filtered case", () =
 // ── per-viewer prefs ──────────────────────────────────────────────────────────
 
 test("prefs round-trip, and a malformed field costs only that field", () => {
-  const p = { scope: "global", view: "completed" } as const;
+  const p = { scope: "global", view: "completed", byPriority: ["important"] } as TodoPrefs;
   assert.deepEqual(decodeTodoPrefs(encodeTodoPrefs(p)), p);
   // Field-wise, not record-wise: the good half survives the bad half.
   assert.deepEqual(decodeTodoPrefs('{"scope":"global","view":"nonsense"}'), {
     scope: "global",
     view: DEFAULT_TODO_PREFS.view,
+    byPriority: [],
   });
   assert.deepEqual(decodeTodoPrefs('{"scope":7,"view":"planned"}'), {
     scope: DEFAULT_TODO_PREFS.scope,
     view: "planned",
+    byPriority: [],
   });
 });
 
@@ -208,11 +212,11 @@ test("decoding prefs never throws, whatever is in the slot", () => {
   }
 });
 
-test("the encoder writes only the two known keys", () => {
+test("the encoder writes only the three known keys", () => {
   // A pref record that round-trips a stray key would grow the blob without
   // anything reading it back.
   const raw = encodeTodoPrefs({ ...DEFAULT_TODO_PREFS, extra: 1 } as never);
-  assert.deepEqual(Object.keys(JSON.parse(raw)).sort(), ["scope", "view"]);
+  assert.deepEqual(Object.keys(JSON.parse(raw)).sort(), ["byPriority", "scope", "view"]);
 });
 
 // ── the un-submitted draft ────────────────────────────────────────────────────

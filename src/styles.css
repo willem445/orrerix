@@ -7024,6 +7024,23 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tdp-chip:hover { color: var(--ink-dim); }
 .tdp-chip[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 .tdp-chip-n { font-size: var(--text-xs); color: var(--ink-faint); }
+
+/* The per-view "by priority" sort (#3335 AC 4) — view chrome, so ink only. */
+.tdp-sortbtn {
+  flex: 0 0 auto;
+  align-self: center;
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-s);
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  padding: 1px var(--space-2);
+  white-space: nowrap;
+}
+.tdp-sortbtn:hover { color: var(--ink-dim); border-color: var(--line-strong); }
+.tdp-sortbtn[aria-pressed="true"] { color: var(--ink); border-color: var(--ink-faint); }
 .tdp-chip[aria-pressed="true"] .tdp-chip-n { color: var(--ink-dim); }
 
 /* The Completed view's own bar (#3263 S5): archive-all on the left, the
@@ -7171,11 +7188,73 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tdp-row[data-expanded="true"] { background: var(--surface-1); }
 
 .tdp-rowhead {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
   padding: var(--space-2);
+  /* The whole head is a click target since #3335 AC 6: a click that is not on
+     a control expands or collapses the row. */
+  cursor: pointer;
 }
+
+/* THE ITEM'S COLOUR (#3335 AC 3) — the human's own label, IDENTITY channel, in
+   ONE position: a short rounded stripe inside the row's left padding. Inset
+   3px so it never sits in the 2px left edge, which is the accent's (!!!
+   priority) — and never the warp position, whose colour must always answer the
+   agent-state question. All eight identity hues are offered: this position is
+   nowhere near the overdue date, so the state-sharing three cannot be misread. */
+.tdp-stripe {
+  position: absolute;
+  left: 3px;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  width: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--tdp-stripe);
+}
+.tdp-row[data-color="id-rose"] { --tdp-stripe: var(--id-rose); }
+.tdp-row[data-color="id-amber"] { --tdp-stripe: var(--id-amber); }
+.tdp-row[data-color="id-lime"] { --tdp-stripe: var(--id-lime); }
+.tdp-row[data-color="id-jade"] { --tdp-stripe: var(--id-jade); }
+.tdp-row[data-color="id-cyan"] { --tdp-stripe: var(--id-cyan); }
+.tdp-row[data-color="id-azure"] { --tdp-stripe: var(--id-azure); }
+.tdp-row[data-color="id-violet"] { --tdp-stripe: var(--id-violet); }
+.tdp-row[data-color="id-orchid"] { --tdp-stripe: var(--id-orchid); }
+
+/* DRAG TO REORDER (#3335 AC 5). The dragged row dims; the row it would land
+   beside shows a thin ACCENT line on that edge — the tab strip's "target shows
+   where it lands" convention. A top/bottom edge, never the left one. */
+.tdp-row[data-dragging="true"] { opacity: 0.45; }
+.tdp-row[data-drop="before"] { box-shadow: inset 0 var(--thread) 0 0 var(--accent); }
+.tdp-row[data-drop="after"] { box-shadow: inset 0 calc(-1 * var(--thread)) 0 0 var(--accent); }
+.tdp.tdp-dragging,
+.tdp.tdp-dragging * { cursor: grabbing; user-select: none; }
+
+/* THE PRIORITY CONTROL (#3335 AC 4): the one priority the quick-add's `!`s
+   write, as a clickable mark. Ink for Low/Medium, the ACCENT for High (the
+   same level that takes the accent edge), and a None row shows it only on
+   hover or selection, like the star. Mono, because `!!` is a quantity. */
+.tdp-pri {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--text-s);
+  font-weight: 700;
+  line-height: 1.2;
+  min-width: 3ch;
+  text-align: center;
+  color: var(--ink-dim);
+  padding: 1px 2px;
+}
+.tdp-pri[data-level="0"] { color: var(--ink-faint); opacity: 0; }
+.tdp-row:hover .tdp-pri[data-level="0"],
+.tdp-row[data-selected="true"] .tdp-pri[data-level="0"],
+.tdp-pri[data-level="0"]:focus-visible { opacity: 1; }
+.tdp-pri[data-level="3"] { color: var(--accent); }
+.tdp-pri:hover { color: var(--ink); }
 
 /* The checkbox: an ACCENT RING with accent INK inside it when checked, never a
    gold fill. Unchecked it is a hairline circle in --line-strong, so a full list
@@ -7263,16 +7342,40 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tdp-due[data-overdue="false"] { color: var(--ink-dim); }
 .tdp-due[data-overdue="true"] { color: var(--state-attention); }
 .tdp-steps { color: var(--ink-faint); }
-.tdp-metatag {
-  border: 0;
+/* TAG CHIPS (#3335 AC 2) — on the row, in the rail and in the expanded row's
+   editor, one rule for all three. IDENTITY CHANNEL: a tag is "which label is
+   this", and its hue is the tag's own, picked by `tagHue` from the theme's
+   identity table — the hash chooses an INDEX, the table the pigment, so no hue
+   is ever invented here. The S0 mock drew tags in ink; colour is the human's
+   ask on #3335, and docs/design/todo-pane.md §v2 argues the deviation.
+   The chip is the ground plus a hairline, per theme.ts §PALETTE (no per-hue
+   fill), and the hue sits on the TEXT. Only the five identity-only hues are
+   reachable (TAG_HUES): amber/rose/jade double as state dyes, and a tag chip
+   shares its line with the overdue date's --state-attention. */
+.tdp-tagchip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-pill);
   background: none;
   font: inherit;
   cursor: pointer;
-  color: var(--ink-faint);
   font-size: var(--text-xs);
-  padding: 0;
+  color: var(--tdp-tag-hue, var(--ink-dim));
+  padding: 0 var(--space-2);
+  white-space: nowrap;
 }
-.tdp-metatag:hover { color: var(--ink-dim); }
+.tdp-tagchip:hover { border-color: var(--line-strong); }
+.tdp-tagchip[data-on="true"] { border-color: var(--tdp-tag-hue, var(--line-strong)); }
+.tdp-tagchip[data-hue="id-lime"] { --tdp-tag-hue: var(--id-lime); }
+.tdp-tagchip[data-hue="id-cyan"] { --tdp-tag-hue: var(--id-cyan); }
+.tdp-tagchip[data-hue="id-azure"] { --tdp-tag-hue: var(--id-azure); }
+.tdp-tagchip[data-hue="id-violet"] { --tdp-tag-hue: var(--id-violet); }
+.tdp-tagchip[data-hue="id-orchid"] { --tdp-tag-hue: var(--id-orchid); }
+.tdp-tagchip-n { color: var(--ink-faint); font-size: var(--text-xs); }
+.tdp-tagchip-x { color: var(--ink-faint); }
+.tdp-tagchip[data-act="tag-remove"]:hover .tdp-tagchip-x { color: var(--ink); }
 .tdp-notemark { color: var(--ink-faint); font-style: italic; }
 .tdp-sun { color: var(--ink-faint); display: inline-flex; }
 .tdp-sun svg { width: 11px; height: 11px; display: block; }
@@ -7372,6 +7475,45 @@ button.wf-finding:hover { background: var(--surface-2); }
   color: var(--ink);
 }
 
+/* The expanded row's tag editor (#3335 AC 2): the chips with their ✕, then a
+   field that takes the quick-add's `#tag` grammar. */
+.tdp-tagedit { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
+.tdp-tagin {
+  flex: 1 1 8ch;
+  min-width: 6ch;
+  padding: 1px var(--space-2);
+  background: var(--surface-0);
+  border: var(--line-w) solid var(--line);
+  border-radius: var(--radius-pill);
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--ink);
+}
+.tdp-tagin::placeholder { color: var(--ink-faint); }
+
+/* The item's colour picker (#3335 AC 3): eight identity swatches and "none".
+   The chosen one is marked by FORM — an ink ring — because its fill already
+   IS the hue, and a second colour on it would be a second answer. */
+.tdp-swatches { display: flex; gap: var(--space-1); flex-wrap: wrap; align-items: center; }
+.tdp-swatch {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  border: var(--line-w) solid var(--line-strong);
+  background: var(--tdp-swatch, none);
+  cursor: pointer;
+}
+.tdp-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface-1), 0 0 0 3px var(--ink); }
+.tdp-swatch[data-color="id-rose"] { --tdp-swatch: var(--id-rose); }
+.tdp-swatch[data-color="id-amber"] { --tdp-swatch: var(--id-amber); }
+.tdp-swatch[data-color="id-lime"] { --tdp-swatch: var(--id-lime); }
+.tdp-swatch[data-color="id-jade"] { --tdp-swatch: var(--id-jade); }
+.tdp-swatch[data-color="id-cyan"] { --tdp-swatch: var(--id-cyan); }
+.tdp-swatch[data-color="id-azure"] { --tdp-swatch: var(--id-azure); }
+.tdp-swatch[data-color="id-violet"] { --tdp-swatch: var(--id-violet); }
+.tdp-swatch[data-color="id-orchid"] { --tdp-swatch: var(--id-orchid); }
+
 .tdp-controls { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .tdp-rowbtn {
   border: var(--line-w) solid var(--line);
@@ -7420,18 +7562,6 @@ button.wf-finding:hover { background: var(--surface-2); }
   flex-wrap: wrap;
 }
 .tdp-tagrail { display: flex; gap: var(--space-1); flex-wrap: wrap; }
-.tdp-tagbtn {
-  border: var(--line-w) solid transparent;
-  border-radius: var(--radius-pill);
-  background: none;
-  font: inherit;
-  cursor: pointer;
-  font-size: var(--text-xs);
-  color: var(--ink-faint);
-  padding: 1px var(--space-2);
-}
-.tdp-tagbtn:hover { color: var(--ink-dim); border-color: var(--line); }
-.tdp-tagbtn[data-on="true"] { color: var(--ink); border-color: var(--line-strong); }
 .tdp-hint {
   color: var(--ink-faint);
   white-space: nowrap;
@@ -7447,6 +7577,15 @@ button.wf-finding:hover { background: var(--surface-2); }
   .tdp-hint,
   .tdp-rootpath { display: none; }
   .tdp-scope-btn { max-width: 10ch; }
+  /* The side dock's width (#3335 AC 1): a COMPACT layout, not a squashed one.
+     The strip's chips tighten so five views and the sort toggle fit before it
+     scrolls, the expanded body gives back the checkbox's indent, and the
+     search field starts narrower. */
+  .tdp-strip { gap: 0; padding-left: var(--space-2); padding-right: var(--space-2); }
+  .tdp-chip { padding-left: var(--space-2); padding-right: var(--space-2); }
+  .tdp-list { padding-left: var(--space-2); padding-right: var(--space-2); }
+  .tdp-rowbody { padding-left: var(--space-3); }
+  .tdp-search-in { width: 6ch; }
 }
 
 /* ------------------------------- motion ---------------------------------- */

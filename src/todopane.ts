@@ -51,15 +51,22 @@ import {
   type TodoSnapshot,
 } from "./todo";
 import {
+  PRIORITY_LABEL,
   SMART_VIEWS,
   SMART_VIEW_LABEL,
+  TODO_COLORS,
   UndoStack,
+  canReorder,
+  colorOf,
+  dropTarget,
   isArchived,
   isDone,
   moveTarget,
-  needsRenumber,
+  nextPriority,
   opLabel,
+  tagHue,
   visibleItems,
+  type OrderAfter,
   type SmartView,
 } from "./todomodel";
 import { pruneFired, reminderSummary, scanReminders } from "./todoreminders";
@@ -84,14 +91,17 @@ import {
   pruneDrafts,
   renderedRows,
   reseedPristineDrafts,
+  rowClickToggles,
   rowDraftIsPristine,
   seedRowDraft,
+  sortsByPriority,
+  togglePrioritySort,
   type PaneProjection,
   type RowDraft,
   type ScopeChoice,
   type TodoPrefs,
 } from "./todoview";
-import { formatDue, parseQuickAdd } from "./todoquickadd";
+import { formatDue, normalizeTag, parseQuickAdd } from "./todoquickadd";
 
 export interface TodoPaneOptions {
   /** The pane's ROOT — the workspace whose list the `◆` half of the scope
@@ -144,6 +154,20 @@ const TAG_RAIL_MAX = 8;
  */
 const REMINDER_TICK_MS = 60_000;
 
+/** How far the pointer must travel before a press on a row becomes a DRAG
+ *  (#3335). Below it the gesture is a click — which is what makes
+ *  click-to-expand and drag-to-reorder able to share one target. The same
+ *  small dead-zone the tab strip's and the grid's pointer drags use. */
+const ROW_DRAG_THRESHOLD_PX = 5;
+
+/** A live row drag (#3335). View state, so a re-render an agent's write causes
+ *  mid-drag redraws the dimmed row and the drop line from here rather than
+ *  losing them with the elements. */
+interface RowDrag {
+  id: string;
+  /** The row the pointer is over, and which half — null when over none. */
+  hover: { id: string; before: boolean } | null;
+}
 const CHECK_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4.5 4.5L19 7"/></svg>';
@@ -293,6 +317,17 @@ export class TodoPaneView {
   private visible = false;
   private disposed = false;
   private caret: CaretMark | null = null;
+  /** The row being dragged, once the pointer has passed the threshold. */
+  private drag: RowDrag | null = null;
+  /** The `timeStamp` of the pointerup that ENDED a drag, so the click the
+   *  browser synthesises from that same press is recognised as the drop and
+   *  not as a request to expand the row (`rowClickToggles`'s `dragged`). A
+   *  timestamp rather than a boolean, so a drop that produced no click cannot
+   *  leave a flag armed to eat the human's next real one. */
+  private dragEndedAt: number | null = null;
+  /** Tears down a pending or live drag's window listeners — set while a press
+   *  is in flight, so `dispose` never strands one. */
+  private endDrag: (() => void) | null = null;
 
   constructor(opts: TodoPaneOptions) {
     this.opts = opts;
@@ -308,7 +343,21 @@ export class TodoPaneView {
     this.el.addEventListener("click", this.onClick);
     this.el.addEventListener("input", this.onInput);
     this.el.addEventListener("keydown", this.onKeyDown);
+    this.el.addEventListener("pointerdown", this.onPointerDown);
     this.render();
+  }
+
+  /**
+   * Is there anything typed here that has not been sent? A half-typed quick-add
+   * line, or an expanded row's draft (notes, next step, due, tag) that differs
+   * from its seed. The side dock asks before re-rooting this view (#3335), so a
+   * click on another pane cannot rebuild the tab out from under a sentence —
+   * the rule its editor tab already follows.
+   */
+  hasUnsubmitted(): boolean {
+    if (this.draft.trim() !== "") return true;
+    for (const d of this.drafts.values()) if (!rowDraftIsPristine(d)) return true;
+    return false;
   }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -465,6 +514,8 @@ export class TodoPaneView {
     this.el.removeEventListener("click", this.onClick);
     this.el.removeEventListener("input", this.onInput);
     this.el.removeEventListener("keydown", this.onKeyDown);
+    this.el.removeEventListener("pointerdown", this.onPointerDown);
+    this.endDrag?.();
     this.drafts.clear();
     this.expanded.clear();
   }
@@ -637,9 +688,15 @@ export class TodoPaneView {
         tagFilter: this.tagFilter,
         showArchived: this.showArchived,
         loaded: isLoaded(this.scope),
+        byPriority: sortsByPriority(this.prefs, this.prefs.view),
       },
       nowMs
     );
+  }
+
+  /** May the rows on screen be reordered by hand right now? */
+  private reorderable(): boolean {
+    return canReorder(this.prefs.view, sortsByPriority(this.prefs, this.prefs.view));
   }
 
   private itemById(id: string): TodoItem | null {
@@ -886,6 +943,25 @@ export class TodoPaneView {
         )
       );
     });
+    // THE PRIORITY SORT (#3335 AC 4), per view. Absent on Completed, which is a
+    // log ordered by finish and has no manual order to depart from. Off is the
+    // default and restores the manual order, because the sort writes nothing.
+    if (this.prefs.view !== "completed") {
+      const on = sortsByPriority(this.prefs, this.prefs.view);
+      strip.append(el("span", { class: "tdp-grow" }));
+      strip.append(
+        el("button", {
+          class: "tdp-sortbtn",
+          type: "button",
+          "data-act": "sort-priority",
+          "aria-pressed": on ? "true" : "false",
+          title: on
+            ? "Sorted by priority — click for your own order"
+            : "Your own order — click to sort by priority",
+          text: on ? "↓ Priority" : "↕ Manual",
+        })
+      );
+    }
     return strip;
   }
 
@@ -1055,6 +1131,13 @@ export class TodoPaneView {
   private row(item: TodoItem, nowMs: number): HTMLElement {
     const open = this.expanded.has(item.id);
     const done = isDone(item);
+    const color = colorOf(item);
+    const drop =
+      this.drag !== null && this.drag.hover !== null && this.drag.hover.id === item.id
+        ? this.drag.hover.before
+          ? "before"
+          : "after"
+        : null;
     const row = el("div", {
       class: "tdp-row",
       "data-id": item.id,
@@ -1063,10 +1146,19 @@ export class TodoPaneView {
       "data-expanded": open ? "true" : "false",
       "data-archived": isArchived(item) ? "true" : "false",
       "data-priority": String(item.priority),
+      // The human's colour (#3335 AC 3) — drawn by the stylesheet as the row's
+      // left stripe, in `--id-<colour>`. An unknown name from a newer build
+      // (`colorOf` answers null) draws no stripe rather than a guessed one.
+      // Spelled as the TOKEN it paints (`id-azure` for `--id-azure`), which
+      // also keeps a bare CSS colour keyword out of the stylesheet's selectors.
+      "data-color": color === null ? null : `id-${color}`,
+      "data-dragging": this.drag !== null && this.drag.id === item.id ? "true" : null,
+      "data-drop": drop,
       role: "listitem",
     });
 
-    const head = el("div", { class: "tdp-rowhead" });
+    const head = el("div", { class: "tdp-rowhead", "data-reorder": this.reorderable() ? "true" : null });
+    if (color !== null) head.append(el("span", { class: "tdp-stripe", "aria-hidden": "true" }));
     head.append(
       el(
         "button",
@@ -1108,6 +1200,23 @@ export class TodoPaneView {
     const meta = this.metaLine(item, nowMs);
     if (meta !== null) main.append(meta);
     head.append(main);
+
+    // THE PRIORITY CONTROL (#3335 AC 4) — the ONE priority the quick-add's
+    // `!`/`!!`/`!!!` writes, made visible and clickable. A click steps it up a
+    // level and wraps High → None. Shown at rest whenever there is a level to
+    // show; a None row reveals it on hover/selection, like the star.
+    const pri = Math.max(0, Math.min(3, Math.trunc(item.priority)));
+    head.append(
+      el("button", {
+        class: "tdp-pri",
+        type: "button",
+        "data-act": "priority",
+        "data-level": String(pri),
+        "aria-label": `Priority: ${PRIORITY_LABEL[pri]} — click for ${PRIORITY_LABEL[nextPriority(pri)]}`,
+        title: `Priority: ${PRIORITY_LABEL[pri]}`,
+        text: pri === 0 ? "!" : "!".repeat(pri),
+      })
+    );
 
     head.append(
       el(
@@ -1160,20 +1269,40 @@ export class TodoPaneView {
         el("span", { class: "tdp-steps tdp-num", text: `${done}/${item.steps.length}` })
       );
     }
-    for (const tag of item.tags) {
-      bits.push(
-        el("button", { class: "tdp-metatag", type: "button", "data-act": "tag", "data-tag": tag, text: `#${tag}` })
-      );
-    }
     if (item.my_day !== null) bits.push(icon(SUN_SVG, "tdp-sun"));
     if (item.notes !== "") bits.push(el("span", { class: "tdp-notemark", text: "note" }));
-    if (bits.length === 0) return null;
+    // TAG CHIPS ON THE ROW (#3335 AC 2), each in its tag's stable hue — the
+    // hash picks an identity token, never a hue (`tagHue`). A click filters to
+    // the tag, exactly as the rail does; clicking the active one clears it.
+    const chips = item.tags.map((tag) => this.tagChip(tag, "tag"));
+    if (bits.length === 0 && chips.length === 0) return null;
     const line = el("div", { class: "tdp-meta" });
     bits.forEach((b, i) => {
       if (i > 0) line.append(el("span", { class: "tdp-metasep", text: "·" }));
       line.append(b);
     });
+    for (const c of chips) line.append(c);
     return line;
+  }
+
+  /** One tag chip. `act` is `tag` (filter) on the row and the rail, and
+   *  `tag-remove` in the expanded row's editor, where the chip carries a ✕. */
+  private tagChip(tag: string, act: "tag" | "tag-remove", count?: number): HTMLElement {
+    return el(
+      "button",
+      {
+        class: "tdp-tagchip",
+        type: "button",
+        "data-act": act,
+        "data-tag": tag,
+        "data-hue": `id-${tagHue(tag)}`,
+        "data-on": act === "tag" && this.tagFilter === tag ? "true" : "false",
+        title: act === "tag-remove" ? `Remove #${tag}` : `Show only #${tag}`,
+      },
+      el("span", { text: `#${tag}` }),
+      count !== undefined && el("span", { class: "tdp-tagchip-n tdp-num", text: String(count) }),
+      act === "tag-remove" && el("span", { class: "tdp-tagchip-x", "aria-hidden": "true", text: "✕" })
+    );
   }
 
   /** The inline expansion — never a side panel. The pane can be a 320 px grid
@@ -1257,6 +1386,56 @@ export class TodoPaneView {
     }
     body.append(dueRow);
 
+    // TAGS, EDITED IN PLACE (#3335 AC 2): the row's chips, each with a ✕, and
+    // a field that takes the quick-add's own `#tag` grammar (`normalizeTag`).
+    // Both go out as `todo_update`'s `tags` — the whole list, the engine's
+    // contract — never a new op. The field is a DRAFT, seeded empty and written
+    // on input like every other field here.
+    const tagRow = el("div", { class: "tdp-tagedit" });
+    for (const tag of item.tags) tagRow.append(this.tagChip(tag, "tag-remove"));
+    tagRow.append(
+      el("input", {
+        class: "tdp-tagin",
+        type: "text",
+        "data-act": "tag-add",
+        placeholder: "#tag",
+        value: draft.tag,
+        "aria-label": "Add a tag",
+      })
+    );
+    body.append(tagRow);
+
+    // THE ITEM'S COLOUR (#3335 AC 3): eight swatches — the theme's identity
+    // hues, by name, through `--id-*` — plus "none". The chosen one is marked
+    // by FORM (a ring), since the swatch's own fill already is the hue.
+    const current = colorOf(item);
+    const swatches = el("div", { class: "tdp-swatches", role: "group", "aria-label": "Colour" });
+    swatches.append(
+      el("button", {
+        class: "tdp-swatch",
+        type: "button",
+        "data-act": "color",
+        "data-color": "none",
+        "aria-pressed": current === null ? "true" : "false",
+        "aria-label": "No colour",
+        title: "No colour",
+      })
+    );
+    for (const c of TODO_COLORS) {
+      swatches.append(
+        el("button", {
+          class: "tdp-swatch",
+          type: "button",
+          "data-act": "color",
+          "data-color": `id-${c}`,
+          "aria-pressed": current === c ? "true" : "false",
+          "aria-label": c,
+          title: c,
+        })
+      );
+    }
+    body.append(swatches);
+
     const controls = el("div", { class: "tdp-controls" });
     const pairs: [string, string, boolean][] = [
       ["myday", item.my_day !== null ? "In My Day" : "Add to My Day", item.my_day !== null],
@@ -1289,19 +1468,10 @@ export class TodoPaneView {
   private footer(vm: PaneProjection): HTMLElement {
     const foot = el("footer", { class: "tdp-foot" });
     if (vm.tags.length > 0) {
+      // The rail (#3335 AC 2): most-used first, each chip in its tag's hue with
+      // the count of open items the filter would show.
       const rail = el("div", { class: "tdp-tagrail" });
-      for (const t of vm.tags.slice(0, TAG_RAIL_MAX)) {
-        rail.append(
-          el("button", {
-            class: "tdp-tagbtn",
-            type: "button",
-            "data-act": "tag",
-            "data-tag": t,
-            "data-on": this.tagFilter === t ? "true" : "false",
-            text: `#${t}`,
-          })
-        );
-      }
+      for (const t of vm.tags.slice(0, TAG_RAIL_MAX)) rail.append(this.tagChip(t.tag, "tag", t.count));
       foot.append(rail);
     }
     foot.append(el("span", { class: "tdp-grow" }));
@@ -1319,8 +1489,30 @@ export class TodoPaneView {
   private onClick = (ev: MouseEvent): void => {
     const target = ev.target;
     if (!(target instanceof Element)) return;
+    // The click the browser synthesises from a press that ENDED a drag is the
+    // drop, not a click. Consumed once, whatever it landed on.
+    const dragged = this.dragEndedAt !== null && Math.abs(ev.timeStamp - this.dragEndedAt) < 250;
+    this.dragEndedAt = null;
     const btn = target.closest<HTMLElement>("[data-act]");
-    if (btn === null || !this.el.contains(btn)) return;
+    if (btn === null || !this.el.contains(btn)) {
+      // CLICK THE ROW TO EXPAND (#3335 AC 6). Anything that is not a control
+      // but IS inside a row's head toggles that row; `rowClickToggles` carries
+      // the exclusions (the expanded body, a text selection, a drop).
+      const head = target.closest<HTMLElement>(".tdp-rowhead");
+      const rowId = head?.closest<HTMLElement>("[data-id]")?.dataset.id ?? null;
+      const toggles = rowClickToggles({
+        onControl: false,
+        inHead: head !== null && head !== undefined && this.el.contains(head),
+        selecting: (document.getSelection()?.toString() ?? "") !== "",
+        dragged,
+      });
+      if (toggles && rowId !== null) {
+        this.selected = rowId;
+        this.toggleExpand(rowId);
+      }
+      return;
+    }
+    if (dragged) return;
     const act = btn.dataset.act ?? "";
     const rowId = btn.closest<HTMLElement>("[data-id]")?.dataset.id ?? null;
     const item = rowId !== null ? this.itemById(rowId) : null;
@@ -1350,6 +1542,30 @@ export class TodoPaneView {
       case "cleartag":
         this.tagFilter = null;
         this.render();
+        return;
+      case "sort-priority":
+        this.prefs = togglePrioritySort(this.prefs, this.prefs.view);
+        this.writePrefs();
+        this.render();
+        return;
+      case "priority":
+        if (item !== null) {
+          void this.applyUndoable({ update: { id: item.id, priority: nextPriority(item.priority) } }, item);
+        }
+        return;
+      case "color":
+        if (item !== null) {
+          const c = btn.dataset.color ?? "none";
+          const next = c === "none" ? null : c.replace(/^id-/, "");
+          if (next === colorOf(item)) return; // the chosen swatch: nothing to write
+          void this.applyUndoable({ update: { id: item.id, color: next } }, item);
+        }
+        return;
+      case "tag-remove":
+        if (item !== null) {
+          const tag = btn.dataset.tag ?? "";
+          void this.applyUndoable({ update: { id: item.id, tags: item.tags.filter((t) => t !== tag) } }, item);
+        }
         return;
       case "toggle":
         if (item !== null) {
@@ -1418,12 +1634,14 @@ export class TodoPaneView {
         return;
       case "notes":
       case "due":
+      case "tag-add":
       case "step-add": {
         const item = rowId !== null ? this.itemById(rowId) : null;
         if (item === null) return;
         const d = this.draftFor(item);
         if (act === "notes") d.notes = field.value;
         else if (act === "due") d.due = field.value;
+        else if (act === "tag-add") d.tag = field.value;
         else d.step = field.value;
         // Re-render so the Save control appears the moment the draft stops
         // being pristine. The caret restore is what makes that free.
@@ -1449,7 +1667,7 @@ export class TodoPaneView {
         void this.submitQuickAdd();
         return;
       }
-      if (ev.key === "Enter" && (act === "step-add" || act === "due")) {
+      if (ev.key === "Enter" && (act === "step-add" || act === "due" || act === "tag-add")) {
         ev.preventDefault();
         const id = (ev.target as HTMLElement).closest<HTMLElement>("[data-id]")?.dataset.id ?? null;
         const item = id !== null ? this.itemById(id) : null;
@@ -1574,34 +1792,166 @@ export class TodoPaneView {
     }
   };
 
-  private moveSelected(delta: -1 | 1): void {
-    if (this.selected === null) return;
-    const ordered = visibleItems(
+  /** The rows in the order a hand reorder is relative to: the manual order,
+   *  filtered to what is on screen. */
+  private manualOrder(): TodoItem[] {
+    return visibleItems(
       this.items(),
       { view: this.prefs.view, query: this.query, tag: this.tagFilter },
       this.now()
     );
-    const target = moveTarget(ordered, this.selected, delta);
-    if (target === null) return;
-    if (needsRenumber(ordered)) {
-      // The backend places a moved item at the MIDPOINT of its new neighbours,
-      // so once the gap runs out the move is a silent no-op: the item does not
-      // budge and nothing says why. `needsRenumber` is what lets the pane
-      // notice — and saying so beats a drag that does nothing.
-      // NOT "(#3263 S5)" any more: S5 is this slice, and it is not building
-      // the renumber. A message that names the slice fixing it is a promise,
-      // and a promise that ships unfulfilled is worse than no promise — the
-      // rule the S4 hooks followed when they said "arrives with S5" and the
-      // reason all three of those are now real controls.
-      showToast("This list has run out of room between two tasks and cannot be reordered.", "info");
+  }
+
+  /** Why this view cannot be reordered by hand, for the one toast that says so. */
+  private reorderRefusal(): string {
+    if (sortsByPriority(this.prefs, this.prefs.view)) {
+      return "Sorted by priority — switch to Manual to reorder by hand.";
+    }
+    return this.prefs.view === "planned"
+      ? "Planned is ordered by due date — reorder from My Day, Important or All."
+      : "Completed is ordered by when things finished.";
+  }
+
+  private moveSelected(delta: -1 | 1): void {
+    if (this.selected === null) return;
+    if (!this.reorderable()) {
+      showToast(this.reorderRefusal(), "info");
       return;
     }
-    // A reorder is applied WITHOUT an undo entry, and `inverseOp` is where the
-    // argument lives: `order_after` is a destination rather than a value, and
-    // the neighbour it names may itself have moved since. Passing `null` for
-    // `before` would make the stack refuse it anyway; going through `apply`
-    // says so at the call site instead of relying on that.
-    void this.apply({ update: { id: this.selected, order_after: target } });
+    const target = moveTarget(this.manualOrder(), this.selected, delta);
+    if (target === null) return;
+    // NO GAP CHECK HERE ANY MORE (#3335). The engine re-spaces the scope in the
+    // same write when the gap between the new neighbours has run out (#3307
+    // item 4), so every legal move lands. The pane used to refuse one it
+    // predicted would collide, which could only guess from the VISIBLE rows.
+    this.sendMove(this.selected, target);
+  }
+
+  /**
+   * Send a reorder. WITHOUT an undo entry, and `inverseOp` is where the
+   * argument lives: `order_after` is a destination rather than a value, and the
+   * neighbour it names may itself have moved since. Passing `null` for
+   * `before` would make the stack refuse it anyway; going through `apply` says
+   * so at the call site instead of relying on that.
+   */
+  private sendMove(id: string, target: OrderAfter): void {
+    void this.apply({ update: { id, order_after: target } });
+  }
+
+  // ── drag to reorder (#3335 AC 5) ──────────────────────────────────────────
+  //
+  // POINTER EVENTS, NOT NATIVE HTML5 DnD — the tab strip's measured lesson
+  // (`tabbar.ts`'s `wireDrag`, #379/#402): in a real WebView2 window a native
+  // drag "grabs" and then never accepts a drop, a failure no synthetic-input
+  // test reproduces. So this is the grid's and the tab strip's shape: a press,
+  // a threshold, hit-testing the live rows, `Escape` to cancel, and the index
+  // math in a pure function (`dropTarget`).
+  //
+  // Nothing here writes until the drop, and nothing here can reach a PTY: the
+  // rows are DOM over a store (CLAUDE.md constraint 1).
+
+  private onPointerDown = (down: PointerEvent): void => {
+    if (down.button !== 0 || this.drag !== null) return;
+    const target = down.target;
+    if (!(target instanceof Element)) return;
+    // Controls keep their own press — never start a drag from a checkbox, a
+    // chip, a field — and only a collapsed row's HEAD is a handle: the
+    // expanded body holds text fields a press must be free to select in.
+    if (target.closest("button, input, textarea, [data-act]")) return;
+    const head = target.closest<HTMLElement>(".tdp-rowhead");
+    if (head === null || !this.el.contains(head) || head.dataset.reorder !== "true") return;
+    const id = head.closest<HTMLElement>("[data-id]")?.dataset.id ?? null;
+    if (id === null) return;
+
+    const startX = down.clientX;
+    const startY = down.clientY;
+    let started = false;
+
+    const hitTest = (x: number, y: number): RowDrag["hover"] => {
+      for (const rowEl of Array.from(this.el.querySelectorAll<HTMLElement>(".tdp-row[data-id]"))) {
+        const rid = rowEl.dataset.id;
+        if (!rid || rid === id) continue;
+        const r = rowEl.getBoundingClientRect();
+        if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+        return { id: rid, before: y < r.top + r.height / 2 };
+      }
+      return null;
+    };
+
+    const move = (ev: PointerEvent): void => {
+      if (!started) {
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < ROW_DRAG_THRESHOLD_PX) return;
+        started = true;
+        // A drag is not a text selection: drop the one the press began.
+        document.getSelection()?.removeAllRanges();
+        this.drag = { id, hover: null };
+        this.el.classList.add("tdp-dragging");
+      }
+      const hover = hitTest(ev.clientX, ev.clientY);
+      const was = this.drag?.hover ?? null;
+      if (this.drag !== null && (was?.id !== hover?.id || was?.before !== hover?.before)) {
+        this.drag.hover = hover;
+        this.paintDrop();
+      }
+    };
+
+    const finish = (commit: boolean, at: number | null): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("blur", onBlur);
+      this.endDrag = null;
+      const drag = this.drag;
+      this.drag = null;
+      this.el.classList.remove("tdp-dragging");
+      if (!started) return; // a plain click — `onClick` owns it
+      this.dragEndedAt = at;
+      this.paintDrop();
+      if (!commit || drag === null || drag.hover === null) return;
+      const ordered = this.manualOrder();
+      // "After the hovered row" is "before the row that follows it".
+      let beforeId: string | null = drag.hover.id;
+      if (!drag.hover.before) {
+        const ix = ordered.findIndex((i) => i.id === drag.hover!.id);
+        beforeId = ix >= 0 && ix + 1 < ordered.length ? ordered[ix + 1].id : null;
+      }
+      const target = dropTarget(ordered, drag.id, beforeId);
+      if (target !== null) this.sendMove(drag.id, target);
+    };
+    const up = (ev: PointerEvent): void => finish(true, ev.timeStamp);
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === "Escape" && started) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        finish(false, null);
+      }
+    };
+    // Alt-Tab mid-drag delivers `blur`, never a `pointerup` (`dragsession.ts`
+    // carries the incident): cancel rather than strand the dimmed row.
+    const onBlur = (): void => finish(false, null);
+    this.endDrag = () => finish(false, null);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("blur", onBlur);
+  };
+
+  /** Mirror the drag state onto the live rows without a re-render — a render
+   *  per pointermove would rebuild every row at pointer rate. `row()` draws the
+   *  same attributes from the same state, so a re-render an agent's write
+   *  causes mid-drag agrees with this. */
+  private paintDrop(): void {
+    const d = this.drag;
+    for (const rowEl of Array.from(this.el.querySelectorAll<HTMLElement>(".tdp-row[data-id]"))) {
+      const rid = rowEl.dataset.id ?? "";
+      if (d !== null && d.id === rid) rowEl.dataset.dragging = "true";
+      else delete rowEl.dataset.dragging;
+      if (d !== null && d.hover !== null && d.hover.id === rid) {
+        rowEl.dataset.drop = d.hover.before ? "before" : "after";
+      } else {
+        delete rowEl.dataset.drop;
+      }
+    }
   }
 
   /**
@@ -1661,8 +2011,22 @@ export class TodoPaneView {
       id: string;
       notes?: string;
       due_ms?: number | null;
+      tags?: string[];
       steps?: { id?: string; title: string; done: boolean }[];
     } = { id: item.id };
+    const rawTag = draft.tag.trim();
+    if (rawTag !== "") {
+      // The quick-add's own grammar (`normalizeTag`), so a tag typed here is
+      // the tag `#…` would have made. Unreadable text is REPORTED and the whole
+      // write abandoned — the due field's rule, for its reason.
+      const tag = normalizeTag(rawTag);
+      if (tag === null) {
+        showToast(`“${rawTag}” is not a tag — letters, digits, - and _ only.`, "info");
+        return;
+      }
+      // Already there: nothing to add, but the rest of the draft still commits.
+      if (!item.tags.includes(tag)) update.tags = [...item.tags, tag];
+    }
     if (draft.notes !== item.notes) update.notes = draft.notes;
     const due = draft.due.trim();
     if (due !== "") {
@@ -1684,6 +2048,14 @@ export class TodoPaneView {
         { title: step, done: false },
       ];
     }
+    if (Object.keys(update).length === 1) {
+      // Nothing left to send — the one thing typed was a tag the row already
+      // has. Writing an empty update would still bump the rev and re-attribute
+      // the row to the human, for no change; clear the field instead.
+      draft.tag = "";
+      this.render();
+      return;
+    }
     const ok = await this.applyUndoable({ update }, item);
     if (ok === null) return;
     // Cleared on SUCCESS only, and on BOTH routes — the Save button and the
@@ -1692,7 +2064,7 @@ export class TodoPaneView {
     // Re-seeded, not merely cleared: the committed notes ARE the new seed, so
     // the draft is pristine again against what the store now holds. Writing a
     // seed of the OLD value here would leave the row looking edited forever.
-    this.drafts.set(item.id, { notes: draft.notes, step: "", due: "", seededNotes: draft.notes });
+    this.drafts.set(item.id, { notes: draft.notes, step: "", due: "", tag: "", seededNotes: draft.notes });
   }
 
   private async submitQuickAdd(): Promise<void> {

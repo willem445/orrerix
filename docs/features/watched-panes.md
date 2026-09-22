@@ -33,7 +33,7 @@ Press **`Ctrl+Shift+H`** to jump straight to the next watched pane, in any tab.
 | Where | What you see |
 | --- | --- |
 | The pane itself | A violet bar down its left edge, and a `◉` in the header |
-| The minimize dock | A violet bar on the chip, so minimizing one doesn't hide it |
+| The minimize dock | A violet `◉` on the chip, so minimizing one doesn't hide it |
 | The tab strip | `◉3` on any tab holding watched panes |
 | The Agents tab | A `◉` on the row, and a **watched** filter chip |
 

@@ -31,7 +31,7 @@ import {
   AGENT_ORDER_LABEL,
   AGENT_STATE_LABEL,
   emptyMessage,
-  watchedNotInList,
+  watchedListLines,
   ORDER_CHOICES,
   agentIdentityLine,
   agentRowMark,
@@ -390,19 +390,30 @@ export class AgentsView {
   /** The "nothing to show" line. Unhidden rather than created, and re-appended
    *  last, so it is never in the way of the placement walk above. */
   private renderEmpty(rowCount: number): void {
-    this.emptyEl.hidden = rowCount > 0;
-    this.emptyEl.textContent = emptyMessage(this.filter);
-    if (!this.emptyEl.hidden) this.listEl.appendChild(this.emptyEl);
-    // The watched-but-unlistable note (#3320 review round 1, B2). Shown only on
-    // the `watched` chip: on any other chip it would be answering a question
-    // nobody asked, and on `all` it would fire for every human who has ever
-    // watched a shell. Appended LAST, after the empty line, so it reads as a
-    // footnote to the list whether or not the list has rows — the gap it
-    // describes exists in both cases.
-    const note = this.filter === "watched" ? watchedNotInList(this.watchedTotal, rowCount) : null;
-    this.watchedNoteEl.hidden = note === null;
-    if (note !== null) {
-      this.watchedNoteEl.textContent = note;
+    // The `watched` chip decides BOTH lines in one place (#3320 review round 2,
+    // N4). Each half was right alone and the pair was not: with two watched
+    // shells and no agent panes, "You are not watching any panes." rendered
+    // directly above "2 watched panes are not an agent pane…". Both sentences
+    // were true of their own subject and read together they contradict, and no
+    // test could notice because nothing composed them. `watchedListLines` does,
+    // so the composition is pinned rather than wired.
+    //
+    // Every other chip keeps `emptyMessage` alone: the note is only ever about
+    // a watch, so on any other filter it would answer a question nobody asked.
+    const lines =
+      this.filter === "watched"
+        ? watchedListLines(this.watchedTotal, rowCount)
+        : { empty: rowCount > 0 ? null : emptyMessage(this.filter), note: null };
+
+    this.emptyEl.hidden = lines.empty === null;
+    if (lines.empty !== null) {
+      this.emptyEl.textContent = lines.empty;
+      this.listEl.appendChild(this.emptyEl);
+    }
+    // Appended LAST, so it reads as a footnote to whatever is above it.
+    this.watchedNoteEl.hidden = lines.note === null;
+    if (lines.note !== null) {
+      this.watchedNoteEl.textContent = lines.note;
       this.listEl.appendChild(this.watchedNoteEl);
     }
   }

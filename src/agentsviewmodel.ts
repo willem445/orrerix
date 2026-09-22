@@ -131,21 +131,6 @@ export function visibleGroups(
   return groupRows(rows.filter((r) => matchesFilter(r, filter)), order);
 }
 
-/** The line the list shows when it has no rows to show.
- *
- *  Pure, and here rather than in the view, because it is a CLAIM about the
- *  window and it went false the moment membership arrived (#2514 review
- *  round 2, W1). It used to read "No panes open in this window." and was true
- *  by construction: the view projected every pane, so no rows MEANT no panes.
- *  `agentRows` filters, so a window holding four shells and a git view would
- *  have told a human staring at five panes that none were open — the same
- *  class of false statement this whole change exists to stop, on the one
- *  surface the human actually reads. It was pinned by no test, which is why a
- *  green suite said nothing about it; it is pinned by one now.
- *
- *  The filtered branch was and stays correct: a chip is offered only for a
- *  state something is in, so "No panes are X" is reachable mid-refresh and
- *  says nothing about how many panes exist. */
 /** The line the Agents list adds when the human is watching panes it cannot
  *  show (#3320 review round 1, B2).
  *
@@ -164,11 +149,61 @@ export function visibleGroups(
 export function watchedNotInList(total: number, listed: number): string | null {
   const missing = total - listed;
   if (missing <= 0) return null;
-  const s = missing === 1 ? "" : "s";
-  const it = missing === 1 ? "it" : "them";
-  return `${missing} watched pane${s} ${missing === 1 ? "is" : "are"} not an agent pane and ${missing === 1 ? "is" : "are"} not listed here — press Ctrl+Shift+H to reach ${it}.`;
+  const one = missing === 1;
+  const reach = `press Ctrl+Shift+H to reach ${one ? "it" : "them"}.`;
+  // The two readings are different sentences, not one with a plural (#3320
+  // review round 2, N4). With rows on screen the note is a footnote about the
+  // REST; with none it has to carry the whole answer, because the generic
+  // empty line is suppressed under it — see `watchedListLines`.
+  if (listed === 0) {
+    return one
+      ? `The one pane you are watching is not an agent pane, so it is not listed here — ${reach}`
+      : `None of the ${total} panes you are watching is an agent pane, so none is listed here — ${reach}`;
+  }
+  return `${missing} watched pane${one ? "" : "s"} ${one ? "is" : "are"} not an agent pane and ${one ? "is" : "are"} not listed here — ${reach}`;
 }
 
+/** What the Agents list says on the `watched` chip: the "nothing to show" line
+ *  and the footnote TOGETHER, decided in one place.
+ *
+ *  WHY BOTH AT ONCE. Each half was correct alone and the pair was not (#3320
+ *  review round 2, N4): watch two shells and no agent panes, select the chip,
+ *  and the list rendered "You are not watching any panes." directly above
+ *  "2 watched panes are not an agent pane…". Both sentences were true of their
+ *  own subject — the first counts rows this surface can show, the second counts
+ *  panes — and read together they simply contradict. Two functions cannot
+ *  notice that; one can, which is why the composition is here rather than in
+ *  `agentsview.ts` where nothing would test it.
+ *
+ *  `empty` is null when the note is speaking, because the note then carries the
+ *  whole answer including the "none here" part. */
+export interface WatchedListLines {
+  readonly empty: string | null;
+  readonly note: string | null;
+}
+
+/** The pair, decided together — see `WatchedListLines`. */
+export function watchedListLines(total: number, listed: number): WatchedListLines {
+  const note = watchedNotInList(total, listed);
+  if (note !== null) return { empty: null, note };
+  return { empty: listed === 0 ? emptyMessage("watched") : null, note: null };
+}
+
+/** The line the list shows when it has no rows to show.
+ *
+ *  Pure, and here rather than in the view, because it is a CLAIM about the
+ *  window and it went false the moment membership arrived (#2514 review
+ *  round 2, W1). It used to read "No panes open in this window." and was true
+ *  by construction: the view projected every pane, so no rows MEANT no panes.
+ *  `agentRows` filters, so a window holding four shells and a git view would
+ *  have told a human staring at five panes that none were open — the same
+ *  class of false statement this whole change exists to stop, on the one
+ *  surface the human actually reads. It was pinned by no test, which is why a
+ *  green suite said nothing about it; it is pinned by one now.
+ *
+ *  The filtered branch was and stays correct: a chip is offered only for a
+ *  state something is in, so "No panes are X" is reachable mid-refresh and
+ *  says nothing about how many panes exist. */
 export function emptyMessage(filter: AgentFilter): string {
   if (filter === "all") return "No agent panes in this window.";
   // "watched" is the one filter that is not a state, so it does not read out of

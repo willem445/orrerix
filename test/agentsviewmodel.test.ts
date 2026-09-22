@@ -23,6 +23,7 @@ import {
   markKey,
   sweep,
   visibleGroups,
+  watchedListLines,
   watchedNotInList,
 } from "../src/agentsviewmodel.ts";
 
@@ -581,4 +582,71 @@ test("#3320 B2: no note when the list can show them all", () => {
   // Positive control on the three above: the function DOES speak when there is
   // a gap, so the nulls are a decision and not a function that never returns.
   assert.notEqual(watchedNotInList(1, 0), null);
+});
+
+// ---------- #3320 review round 2, N4: the two lines, composed ----------
+
+test("#3320 N4: the empty line and the footnote never contradict each other", () => {
+  // THE DEFECT, as a fixture: two watched shells, no agent panes, watched chip
+  // selected. Before this, `emptyMessage` said "You are not watching any
+  // panes." and the footnote said "2 watched panes are not an agent pane…" —
+  // one counting rows, the other counting panes, both true alone, nonsense
+  // together. Neither function could see the other, which is why the
+  // composition is what is pinned.
+  const lines = watchedListLines(2, 0);
+  assert.equal(lines.empty, null, "the generic empty line must not run alongside the note");
+  assert.ok(lines.note);
+  assert.doesNotMatch(
+    lines.note,
+    /not watching any panes/,
+    "the note must not repeat the claim the empty line was making",
+  );
+  // And it has to carry the whole answer now that it is alone: that NONE is
+  // listed, not that some remainder is missing.
+  assert.match(lines.note, /none is listed here/);
+  assert.match(lines.note, /Ctrl\+Shift\+H/);
+});
+
+test("#3320 N4: one watched non-agent pane reads as one, not as a remainder", () => {
+  const lines = watchedListLines(1, 0);
+  assert.equal(lines.empty, null);
+  assert.match(lines.note ?? "", /^The one pane you are watching is not an agent pane/);
+  assert.match(lines.note ?? "", /reach it\.$/);
+});
+
+test("#3320 N4: with rows on screen the note is about the REST", () => {
+  // The other reading of the same gap, and it must not claim "none is listed"
+  // when three are. The two sentences are genuinely different, which is why
+  // this is not one string with a plural.
+  const lines = watchedListLines(5, 3);
+  assert.equal(lines.empty, null, "there are rows, so there is no empty line either way");
+  assert.match(lines.note ?? "", /^2 watched panes are not an agent pane/);
+  assert.doesNotMatch(lines.note ?? "", /none is listed/);
+});
+
+test("#3320 N4: no gap means the ordinary empty line, or nothing at all", () => {
+  // Watching nothing, on the watched chip: the plain sentence, no footnote.
+  assert.deepEqual(watchedListLines(0, 0), { empty: "You are not watching any panes.", note: null });
+  // Every watched pane listed: no chrome at all.
+  assert.deepEqual(watchedListLines(3, 3), { empty: null, note: null });
+  // Positive control on the two nulls above: the pair DOES speak when there is
+  // a gap, so these are decisions and not a function that always answers null.
+  assert.notEqual(watchedListLines(1, 0).note, null);
+});
+
+test("#3320 N4: exactly one of the two lines ever speaks", () => {
+  // The invariant the composition exists to hold, swept over the quadrants
+  // rather than asserted once — a later edit that reintroduced the empty line
+  // beside the note would pass every test above that names one line.
+  let spoke = 0;
+  for (const total of [0, 1, 2, 5]) {
+    for (let listed = 0; listed <= total; listed++) {
+      const { empty, note } = watchedListLines(total, listed);
+      assert.ok(!(empty !== null && note !== null), `both lines speak at total=${total} listed=${listed}`);
+      if (empty !== null || note !== null) spoke += 1;
+    }
+  }
+  // Population control (#1209): a sweep where nothing ever spoke would satisfy
+  // the assertion above in silence.
+  assert.ok(spoke >= 5, `only ${spoke} of the quadrants said anything — the sweep is blind`);
 });

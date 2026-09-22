@@ -1100,9 +1100,17 @@ export class Grid {
       chip.title = attn.title;
 
       // The human's watch (#3319). Minimizing a watched pane must not hide the
-      // mark — a docked pane is exactly the one you would forget. A CLASS, not
-      // a chip element: the dock is a narrow strip and the frame's own violet
-      // bar is what reads there, the same mark the pane wears un-minimized.
+      // mark — a docked pane is exactly the one you would forget.
+      //
+      // A MARKER SPAN, the idiom this dock already uses for the queue and mail
+      // readings below, and NOT an edge or a class on the chip. Both of the
+      // chip's edges are spoken for by identity — `border-left` is
+      // `--dock-accent` (the pane's group or CLI colour) and
+      // `.dock-chip.connected` takes `border-right` — so the first draft's
+      // `border-color` recoloured both, and the inset box-shadow that replaced
+      // it rendered inside the border box as a 6px double stripe beside the
+      // accent (#3320 review round 1, N3). The span touches no identity colour
+      // at all.
       //
       // THE MARK NEVER LOSES; only the TOOLTIP does. The chip has one title
       // slot and three writers, and this one is LAST in priority, not second:
@@ -1110,8 +1118,8 @@ export class Grid {
       // the channel badge and queue marker below overwrite it outright under
       // the same `!attn.needsAttention` guard. That order is right — "this
       // agent needs you" and "this pane is driving another" are both things
-      // you can act on, and "you marked this" is already said in violet by the
-      // class above, which nothing overwrites.
+      // you can act on, and "you marked this" is already said by the glyph,
+      // which nothing overwrites.
       //
       // Written only when the pane IS watched: `dockChipWatched`'s unwatched
       // title is the bare pane name, which is what `attn.title` already says,

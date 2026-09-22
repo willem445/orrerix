@@ -25,6 +25,13 @@ same list**, and every row says which one touched it.
 open. It is a pane, not a pop-up panel — it stays put while you work in the
 panes beside it, and it never resizes your terminals.
 
+**It also lives in the side dock.** Open the [side dock](side-dock.html) and pick
+its **To-Do** tab: the same list, with the same switch and views, laid out for
+the dock's narrower column. The dock's to-do follows the pane you are working
+in, so its project list is always the active pane's project. If you have typed
+something and not sent it, the tab stays on the list it was showing until you
+do, rather than throwing your text away.
+
 ## Two lists: Global and this project
 
 The switch in the header picks which list you are looking at, and which list a
@@ -67,7 +74,7 @@ ship release notes fri 4pm #release !!
 | `in 3 days`, `in 2 weeks` | a distance |
 | `at 4pm`, `at 16:00`, `4:30pm` | a time — otherwise a bare date means 09:00 |
 | `#tag` | a tag |
-| `!`, `!!`, `!!!` | priority — `!!` and `!!!` embolden the row |
+| `!`, `!!`, `!!!` | priority — Low, Medium, High (see *Priority* below) |
 | `*` | important (the star) |
 | `@myday` | put it in My Day |
 
@@ -106,16 +113,55 @@ is plain: if every date on screen were amber, none of them would mean anything.
 ## Rows, and opening one up
 
 A row is a checkbox, the title, and one line of detail — the due date, `2/5`
-step progress, tags, a sun for My Day, a `note` mark.
+step progress, a sun for My Day, a `note` mark — and its tags, as coloured
+chips.
 
-Click the chevron (or press `e`) and the row opens **in place**: its steps, a
-field for the next one, its notes, and the My Day / Delete controls. It opens
+**Click anywhere on a row to open it** (or press `e`, or click the chevron). It
+opens **in place**: its steps, a field for the next one, its notes, its tags,
+its colour, and the My Day / Delete controls. Clicking a control on the row —
+the checkbox, a tag, the priority mark, the star — does that control's job and
+does not open the row; clicking inside an open row does not close it. It opens
 inline rather than in a side panel on purpose — this pane can be a narrow grid
 cell, and a detail panel at that width is a pop-up with extra steps.
 
-Notes and a new step are saved by the **Save** button that appears once you
-have typed something, or by pressing Enter in the step field. What you have
-typed and not saved is never lost to an agent writing to an unrelated row.
+Notes, a new step and a new tag are saved by the **Save** button that appears
+once you have typed something, or by pressing Enter in the step, due or tag
+field. What you have typed and not saved is never lost to an agent writing to
+an unrelated row.
+
+## Colours
+
+Give a task a colour from the eight swatches in its open row; it shows as a
+short coloured stripe down the row's left edge. The colour is yours to mean
+whatever you like — a project, a person, "waiting on someone". The first
+swatch takes the colour off. Agents leave it alone unless you ask them.
+
+## Priority
+
+Every row has a priority mark to the right of the title: `!` Low, `!!` Medium,
+`!!!` High. **Click it to step up a level**; from High it goes back to none. A
+row with no priority shows the mark only when you hover or select it. It is the
+same priority the quick-add's `!`, `!!` and `!!!` set — there is only one.
+
+The **↕ Manual / ↓ Priority** button at the end of the view strip sorts the view
+by priority, highest first; tasks at the same level keep your own order. It is
+remembered per view, and turning it off puts your own order back exactly —
+sorting never changes the order you arranged. In **Planned** it sorts within
+each date group rather than mixing the days; **Completed** has no sort, since it
+is always newest-finished first.
+
+## Reordering
+
+**Drag a row** to move it: press on it, move a few pixels, and a line shows
+where it will land. `Esc` while dragging cancels. `Shift+↑`/`Shift+↓` moves
+the selected row one place.
+
+Reordering works in **My Day**, **Important** and **All** while the priority
+sort is off — the views where the order you see is your own order. Planned is
+ordered by due date and Completed by when things finished, so there is nothing
+to drag there; `Shift+↑`/`↓` says so instead of silently doing nothing. However
+long you reorder for, a move always lands: when two tasks run out of room
+between them, the list is quietly re-spaced in the same step.
 
 ## Who did what
 
@@ -161,9 +207,18 @@ row containing both, and it is substring matching, not fuzzy: searching `omai`
 will not find `domain`. Click a `#tag` on a row, or one in the footer, to see
 only that tag; click it again, or press `Esc`, to clear it.
 
-The tag rail in the footer shows the tags on your open tasks in this list — not
-just the ones you can currently see, so you can always use it to widen a
-filter.
+**Each tag has its own colour**, and keeps it — `#release` is the same colour
+in every list, on every machine, every time you open orrerix. The colours come
+from the app's own palette, and never from the ones orrerix uses for "overdue",
+"error" or "done", so a tag can never be mistaken for a warning.
+
+The tag rail in the footer shows the tags on your open tasks in this list, most
+used first, each with how many open tasks carry it — not just the ones you can
+currently see, so you can always use it to widen a filter.
+
+To tag a task, type `#tag` in the quick-add, or open the row and type into its
+tag field (a leading `#` is optional). Remove one with the ✕ on its chip in the
+open row.
 
 ## Long lists
 
@@ -247,8 +302,6 @@ Midnight means midnight where you are, on the day you are actually having: a
 Being honest about the edges, since a button that silently does nothing is
 worse than no button:
 
-- **Reordering** works until a list runs out of room between two tasks, at
-  which point it says so instead of silently not moving the row.
 - **Reminders are a toast in orrerix**, not a desktop notification — if the
   window is not open you will not see one.
 - **Redo** is not there. Undo walks backwards only.

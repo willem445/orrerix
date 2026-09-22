@@ -622,9 +622,11 @@ test("a persisted width is bounded to the absolute range on the way in", () => {
   assert.equal(JSON.parse(encodeDockPrefs({ open: true, tab: "git", width: 99999 })).width, DOCK_MAX_W);
 });
 
-test("the tab set is exactly the three views the dock hosts", () => {
+test("the tab set is exactly the four views the dock hosts", () => {
   // #934 also envisioned a tasks tab; it is deliberately out of scope here, and
-  // this is the line that would notice one arriving without the wiring.
+  // this is the line that would notice one arriving without the wiring. The
+  // To-Do tab (#3335) is the fourth, and a persisted 'todo' must decode.
+  assert.equal(decodeDockPrefs('{"tab":"todo"}').tab, "todo");
   assert.deepEqual([...DOCK_TABS], ["git", "files", "editor", "todo"]);
   assert.ok(DOCK_TABS.every(isDockTab));
   assert.equal(isDockTab("tasks"), false);

@@ -490,11 +490,12 @@ runner with no DST of its own.
 ### Reorder, and the gap that runs out
 
 The backend places a moved item at the **midpoint** of its new neighbours
-(`order_for`). After enough halvings there is no integer strictly between them
-and the move becomes a silent no-op: the item does not budge and nothing says
-why. `needsRenumber` is what lets the pane notice. `moveTarget` computes the
-`order_after` for a one-step move relative to what the human can SEE — the list
-`visibleItems` returned, not the whole store.
+(`order_for`). After enough halvings there is no integer strictly between them;
+since #3335 the engine then **re-spaces the scope in the same write**, with the
+mover already at its destination (§v2, "The renumber"). `moveTarget` (one step)
+and `dropTarget` (a drag) compute the `order_after` relative to what the human
+can SEE — the list `visibleItems` returned, not the whole store — and do no gap
+arithmetic of their own.
 
 ### Undo refuses rather than guesses
 
@@ -970,9 +971,13 @@ Two places, both because the app around it had already answered the question:
   capture phase and withheld from every pane — so a handler in this view would
   never see them and "reorder" would silently be "move focus to the pane above";
 * **the attribution hue is the role table's**, per the section above, rather
-  than a local hash of the agent id.
+  than a local hash of the agent id;
+* **tags are coloured** (#3335), where the mock drew them in ink. That one is
+  the human's ask rather than the app's prior answer — "tags like was shown in
+  the demo, as well as color coding" — and §v2 carries how it stays inside the
+  channel rule.
 
-Both are recorded here so the mock's tables and the shipped ones do not quietly
+All three are recorded here so the mock's tables and the shipped ones do not quietly
 disagree.
 
 ### Reminders are per-viewer, and they never write
@@ -1095,7 +1100,144 @@ in-row due control is a text field parsed by `parseQuickAdd` (one date grammar
 per pane — a calendar widget with its own idea of what "next Monday" means
 would be a second), and the Completed view has Archive.
 
-The one that remains is the reorder gap: a move that has run out of integers
-between two neighbours still says the list needs re-spacing instead of not
-moving the row. A renumber op is a store-wide rewrite with its own argument to
-make, and "it says so" is the correct behaviour until someone makes it.
+The one that remained was the reorder gap — a move that had run out of integers
+between two neighbours said so instead of moving the row. #3335 built the
+renumber; §v2 carries its argument.
+
+## v2 (#3335): the dock, colour, priority, drag, and the row as a target
+
+The human's ask, after using S5: the pane in the side dock, tags "like the
+demo", colour-coded tasks, prioritisation and reordering, and "when I click on a
+task, it should expand". Each piece below is built on the mechanism S1–S5
+already had, and the section says which, because the issue's one standing rule
+was "do not add a second mechanism beside an existing one".
+
+### The colour field — a public contract
+
+`TodoItem` gains `color: Option<String>` (engine, `crates/loomux-engine/src/todo.rs`)
+/ `color: string | null` (frontend). It is the store's first field added after
+S1, so its compatibility argument is written out:
+
+* **Envelope v1 stays readable in both directions, with no version bump.** An
+  older file loads with `#[serde(default)]` as "no colour". A file this build
+  writes and an OLDER build reads keeps `color` in that build's `extra` map
+  (module header, half 2) and writes it back untouched on its next save. That
+  round-trip is exactly the property an additive field needs; a version bump
+  would instead have made every older build read-only against the file, which
+  is the price reserved for a change an older build could MIS-read.
+* **Absent when unset** (`skip_serializing_if`), so an item nobody coloured is
+  byte-for-byte what it was before the field existed.
+* **A closed vocabulary, checked by the engine**: `COLORS` — the eight names of
+  `theme.ts`'s `IDENTITY` table. Closed because the store has two writers and
+  one of them is an agent: a free string would let an agent write a colour no
+  build can paint. Names, not hex, because the store is data and the palette is
+  presentation — a theme retune repaints every item without a migration. The
+  TS mirror (`TODO_COLORS`) is pinned to the Rust list by a test that reads the
+  Rust file, and to `IDENTITY`'s keys by another.
+* **Written only through `todo_update`** — `color: "azure"` sets, `null` clears,
+  absent leaves alone: the three states the nullable timestamps already use.
+  The webview's op reader and the MCP tool both carry it; neither repeats the
+  vocabulary (the engine's refusal names it). `todo_add` does not take one: a
+  colour is a human's grouping of a list that exists, not part of capturing a
+  task, and the tool description tells an agent to leave it alone unless asked.
+* **A newer build's name this build does not know** decodes and round-trips as a
+  string, and `colorOf` renders it as no stripe — never a guessed one.
+
+### Where the colours may sit
+
+Two new coloured positions, both IDENTITY, both pinned BY NAME in
+`test/theme.test.ts`'s To-Do positions test beside the dot and the overdue date
+(#1344's population rule):
+
+* **the item's colour** is a 3px rounded stripe inside the row's left padding,
+  offset 3px from the edge — never the 2px left edge, which is the accent's
+  (`!!!`) and the warp's position — and the expanded row's eight swatches. All
+  eight identity hues are offered: the stripe is nowhere near the one state
+  position (the overdue date), so the three state-sharing hues cannot be misread
+  there. The chosen swatch is marked by FORM (an ink ring), since its fill
+  already is the hue.
+* **a tag's hue** is its chip's TEXT on a hairline chip. `tagHue` is an FNV-1a
+  hash of the tag's text used as an INDEX into `TAG_HUES` — the hash picks a
+  slot, the table picks the pigment, so there is no hash-to-hue. `TAG_HUES` is
+  the five identity-ONLY hues (lime, cyan, azure, violet, orchid): the chip
+  shares the meta line with the overdue date's `--state-attention`, and an amber
+  `#release` beside an amber overdue date would say two things in one pigment on
+  one line. Stable across launches and machines, pinned by goldens — a hash
+  change would repaint every tag a human has learned.
+
+Each rule's hook is spelled as the token it paints (`[data-color="id-azure"]`
+sets `--id-azure`), and the test asserts the hook sets equal the model's lists
+exactly, so a colour with no rule, or a rule nothing can reach, reddens. Tag
+EDITING reuses `todo_update`'s `tags` (whole list, the engine's contract) and
+the quick-add's grammar, exported as `normalizeTag`.
+
+### Priority, and the sort that writes nothing
+
+There is still one priority: the store's `priority` 0..=3, which the quick-add's
+`!`/`!!`/`!!!` already wrote. v2 makes it a control — a mark on the row,
+click to step up, High wraps to None (`nextPriority`) — and a per-view
+**"by priority" sort**.
+
+**The sort/order rule.** The manual `order` is the only order the store has, and
+the sort never writes it: it re-sorts the projection by priority (highest
+first), with the manual order as the tiebreak, so turning it off restores
+exactly what the human arranged. Per VIEW, persisted with the other pane prefs
+(`TodoPrefs.byPriority`), off by default. Completed ignores it (a log, newest
+finish first). Planned keeps its date buckets and sorts inside each — the
+buckets answer "when", and dissolving them would answer another question.
+
+**Reorder is offered only where the rows ARE the manual order** (`canReorder`):
+My Day, Important and All, with the sort off. Everywhere else a drag would
+write an `order` the human could not see take effect, so there is no drag and
+`Shift+↑`/`↓` says why.
+
+### Drag, and the renumber (#3307 item 4)
+
+The drag is **pointer events with a threshold**, never native HTML5 DnD — the tab
+strip's measured WebView2 failure (`tabbar.ts`'s `wireDrag`, #379/#402), where a
+native drag grabs and never drops. Only a reorderable, collapsed row's head is a
+handle; controls and the expanded body are not. `dropTarget` turns "dropped
+before row X" into `order_after` — the row that will sit above — and answers
+null for a drop into the row's own slot, so a wobble past the threshold writes
+nothing. The drag state lives on the view, so a re-render an agent's write
+causes mid-drag redraws the dimmed row and the drop line from it.
+
+**The renumber is an engine operation inside the move, not a new op.** When
+`order_for` finds no integer between the new neighbours it returns a
+`Placement::Respace` carrying the scope's ids in their new order, mover
+included, and the same locked write numbers them on `ORDER_GAP`. The
+alternative — a `renumber` op the pane sends before the move — was rejected:
+two writes with the other writer free to land between them, and a new public
+op for a state no caller needs to name. Re-spaced neighbours keep their `rev`:
+their place in the list is unchanged, so an agent holding one has lost nothing.
+The pane's old refusal (`needsRenumber`) is gone with it — it could only guess
+from the VISIBLE rows, when the gap that matters is in the whole scope.
+
+**It also fixed a latent misplacement.** The old code computed the midpoint
+unconditionally; at a gap of 1 that is the predecessor's own `order`, and the
+sweep afterwards re-spaced by `live`'s order, whose tiebreak is `created_ms` —
+so a mover OLDER than its new predecessor landed one place ABOVE where it was
+sent, with no refusal. Deciding the destination by position before numbering it
+cannot tie. The same rewrite made the edge arithmetic `checked_*`: an `order`
+near `i64::MIN` (a hand edit) re-spaces instead of panicking on subtraction.
+
+### The row is the target
+
+A click anywhere on a row's HEAD toggles its expansion (`rowClickToggles`); the
+chevron stays as the visible affordance and `e` is unchanged. Four clicks are
+not for the row, each pinned: one on a control (anything with `data-act` —
+checkbox, tag chip, priority, star), one inside the expanded body (work on the
+row is not a request to close it), one that ended a text selection, and the
+click the browser synthesises from a press that ended a DRAG (recognised by the
+pointerup's timestamp, so a drop that produced no click cannot leave a flag
+armed to eat the next real one).
+
+### In the side dock
+
+The dock hosts the pane as its fourth tab (`docs/design/side-dock.md`, "The
+To-Do tab"). The pane needed no second layout: it was already
+`container-type: inline-size` for the 320px grid cell, so its compact rules key
+off its own width and serve the dock's column unchanged — v2 tightens the strip,
+list and body padding in that query so five views and the sort toggle fit
+before the strip scrolls. The tab's `◆` scope is the DOCK's root, so it follows
+the active pane.

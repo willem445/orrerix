@@ -20,7 +20,7 @@ nav_order: 9
 ---
 
 Click **`⬔ dock`** in the top bar to open a panel down the right edge of the
-window holding three tools — **Git**, **Files** and **Editor** — all pointed at
+window holding four tools — **Git**, **Files**, **Editor** and **To-Do** — all pointed at
 the folder of whichever pane you are currently working in. Click it again (or
 the ✕ in the dock's header) to close it.
 
@@ -28,13 +28,14 @@ The dock is one panel for the whole window, not one per pane. Click a pane in
 another split, or switch to another project tab, and the dock re-points itself
 at that pane's folder.
 
-## The three tabs
+## The four tabs
 
 | Tab | What it is |
 | --- | --- |
 | **Git** | The same commit graph, diff preview and staging/commit surface as the [git view](git-view.html) — scoped to the dock's folder instead of one pane's. It refreshes when you select the tab, when you open the dock, and when you click back onto a pane in the same folder, so a commit you just made shows up. |
 | **Files** | The file explorer: browse the folder, open a file in the application your OS associates with it, create, rename and delete. |
 | **Editor** | orrerix's own editor — a file tree, project search, and a text buffer for a quick read or a one-line fix. |
+| **To-Do** | Your [to-do list](todo-pane.html) — the same list, switch and views as the to-do pane, laid out for the dock's narrower column. Its project list is the dock's folder, so it follows the pane you are working in. |
 
 In the **Files** tab, right-clicking a file and choosing *Open in editor pane*
 opens it in the dock's own **Editor** tab rather than taking a whole new pane —
@@ -42,7 +43,8 @@ the dock is the small-surface answer, so it keeps the work inside itself.
 
 Each tab also has its own 📁 folder picker. Using one re-points the **whole
 dock**, not just that tab, so the three never disagree about which folder you
-are looking at.
+are looking at. (The **To-Do** tab has no picker: its Global ⇄ project switch
+is its own, and the project it shows is the dock's folder.)
 
 ## Following the active pane
 
@@ -70,6 +72,10 @@ If the **Editor** tab is holding unsaved changes, re-pointing it would throw
 them away — so it doesn't. The tab keeps your file, stops following, and shows a
 notice naming the folder it is still on. Save (or discard) and it rejoins the
 active pane the next time you click the tab.
+
+The **To-Do** tab does the same with text you have typed and not sent — a
+half-written quick-add line, or an open row's unsaved note, step or tag. Send
+it (or clear it) and the tab follows again.
 
 Closing the dock never discards anything either: closing is hiding, and your
 buffer, the loaded commit log and your place in the file tree are all still

@@ -5,7 +5,8 @@
 
 Status: implemented (main). Issues: #1020 item 6 (the ask this builds), #934
 (the original ORCA-sidebar direction), #1018 (the PR it landed in), #1150 (the
-beta1 feedback that made it displace the grid rather than cover it).
+beta1 feedback that made it displace the grid rather than cover it), #3335 (the
+To-Do tab — "The To-Do tab" below).
 
 The ask, from the human's live demo of #1018: *"right sidebar hosting the
 built-in git / file-explorer / file-editor, optionally open, auto-loaded to the
@@ -400,7 +401,33 @@ which is exactly the rule #219 exists to state. So:
 - **closing the dock disposes nothing.** Closing is hiding: it must not destroy
   the editor's buffer, and it should not throw away a loaded git log either.
 
-### Liveness: the git tab refreshes, the other two do not
+### The To-Do tab (#3335)
+
+The fourth view is `TodoPaneView`, rooted at the dock's root through the same
+`getRoot` callback shape, so its `◆` list is the active pane's project and
+follows it. Two things it needed that the other three did not:
+
+- **`dirty` means un-sent text.** A half-typed quick-add line or an expanded
+  row's unsaved draft is work the human has not agreed to lose, so
+  `hasUnsubmitted()` feeds `decideViewSync` and a re-root HOLDS the tab exactly
+  as it holds a dirty editor — same notice, same resume-when-clean. (The quit
+  guard does not list it: nothing on disk is at stake, which is what that sweep
+  is for.)
+- **`setVisible`.** The pane runs a one-minute reminder tick and a
+  `todo-changed` refresh that its own `hide()` contract stops while nobody is
+  looking; `el.hidden` alone would leave both running behind another tab, or in
+  a closed dock. `Hosted` gains an optional `setVisible`, forwarded only on a
+  real flip, and the dock calls it on every tab sync, on close, and when a
+  squeeze starves or un-starves the column.
+
+**Constraint 1 is unchanged by it.** The tab adds no width change of any kind:
+the dock's column still moves only on the human's discrete toggle or grip drag
+(the argument above), and what is inside it is DOM over a store, with no PTY
+anywhere below it. A reminder tick re-renders the list, not the column. It has
+no 📁 picker — its Global ⇄ project switch is its own control — so it never
+re-roots the dock.
+
+### Liveness: the git tab refreshes, files and editor do not (to-do refreshes itself)
 
 A view built once and only reparented is a **snapshot**, and for git that reads
 as a bug: commit in the very pane the dock is following, and the graph would

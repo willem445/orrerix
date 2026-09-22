@@ -1574,7 +1574,7 @@ test("the watched mark and the fleet identity are ONE pigment, deliberately", ()
   // every program outside the dyed roster to it (`null` included), and that
   // glyph is painted on the pane header and the Agents row — the same two
   // surfaces the watch marks. The design accepts that and separates the two by
-  // form and position instead (doc/design/watched-panes.md, §The colour).
+  // form and position instead (docs/design/watched-panes.md, §The colour).
   //
   // This is the pin that makes the acceptance survive: the identity channel
   // exists to be RETUNED (that is what `--id-*` is for — git-lane and icon-role

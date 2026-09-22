@@ -313,7 +313,12 @@ function forkItem(p: PaneConnectState): PaneMenuItem | null {
 
   const refuse = (reason: string): PaneMenuItem => ({ label: FORK_LABEL, disabled: true, reason });
   if (!canForkCli(p.agentCli)) return refuse(FORK_CLI_REASON);
-  if (delegate && p.group !== null && p.agentId !== null) {
+  if (delegate) {
+    // A delegate's fork is the backend's, keyed on its agent id — and a
+    // delegate pane with no id to name has no route at all, rather than
+    // falling through to the SOLO route below and forking a group agent as a
+    // standalone pane nobody's roster knows.
+    if (p.group === null || p.agentId === null) return null;
     return {
       label: FORK_LABEL,
       action: { kind: "fork-delegate", group: p.group, agentId: p.agentId, sourceName: p.name },

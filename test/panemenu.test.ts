@@ -517,6 +517,9 @@ test("#3318 F2: three routes by owner — a delegate forks through the backend, 
       role
     );
   }
+  // A delegate with no agent id has no route — never the Solo route, which
+  // would fork a group agent as a standalone pane no roster knows.
+  assert.equal(forkOf(buildPaneMenu(free({ agentId: null }), null)), undefined);
   // A delegate on a CLI with no seam is a DISABLED row, not a backend call
   // that can only fail.
   assert.equal(forkOf(buildPaneMenu(free({ agentCli: "copilot" }), null))?.disabled, true);

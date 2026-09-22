@@ -255,6 +255,18 @@ const STREAMS: StreamRow[] = [
     debt: null,
   },
   {
+    event: "orch-fork-solo-request",
+    rate: "lifecycle",
+    bound: "argued-none",
+    cite: "src-tauri/src/orchestration/mod.rs",
+    reason:
+      "One per lead `fork_session` on its own pane (#3318 F2), and each one is admitted through " +
+      "the group's spawn-rate backstop (`request_solo_fork` → `check_and_record_spawn`) before it " +
+      "is emitted, so a runaway lead is bounded by `max_spawns_per_hour` like any spawn. The " +
+      "handler is one O(panes) sweep to find the lead's pane, then the ordinary fork gesture.",
+    debt: null,
+  },
+  {
     event: "orch-session-learned",
     rate: "lifecycle",
     bound: "argued-none",

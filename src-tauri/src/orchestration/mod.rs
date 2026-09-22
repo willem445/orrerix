@@ -53059,6 +53059,13 @@ impl OrchRegistry {
              your next turn."
                 .to_string()
         })?;
+        // The Solo pane is outside the delegate cap — it is the human's, not a
+        // helper — but it is still a pane an agent's tool call opened, and a
+        // runaway loop is possible in a human-driven pane too
+        // (`docs/design/lead-pane.md`, Guardrails). So it takes the group's
+        // spawn-rate backstop, recorded only when admitted, exactly as a
+        // delegate spawn does.
+        self.check_and_record_spawn(group_id, group.guardrails.max_spawns_per_hour)?;
         self.audit(group_id, &lead.id, "agent-fork", json!({
             "agent": null,
             "parent_agent": lead.id,

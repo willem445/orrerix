@@ -794,11 +794,19 @@ const orchWiring: OrchWiring = {
     // a failed mint opens a delivery-only pane, adoptable later via Connect,
     // rather than failing a fork the human asked for.
     //
-    // `lead: false` unconditionally, and that is not a shortcut: the fork
-    // gesture is not offered on a lead pane at all (`forkItem` takes only a
-    // pane whose role is `solo` or none), so there is never a lead group to
-    // re-mint here. A lead fork is #3318 F2's.
-    const remint = await remintSoloIdentity(opts.name, opts.cwd, opts.command, opts.argv, false);
+    // `lead: false` unconditionally: a fork is never a lead, whatever its
+    // source was (the one-root invariant). What a LEAD source does change
+    // (#3318 F2) is the STRIP — its line carries loomux's lead marker beside
+    // the identity, and a plain Solo re-mint must not inherit it — so the
+    // marker is shed while the identity re-minted is a solo one.
+    const remint = await remintSoloIdentity(
+      opts.name,
+      opts.cwd,
+      opts.command,
+      opts.argv,
+      false,
+      opts.sourceWasLead === true
+    );
     const pane = await ws.grid.openPane(
       {
         name: opts.name,
@@ -1053,7 +1061,11 @@ async function remintSoloIdentity(
   // #2519: this pane was a LEAD, so what gets re-minted is a whole lead GROUP
   // rather than a channel identity. Defaulted so every pre-existing caller
   // reads unchanged; only the three agent-restore arms pass it.
-  lead = false
+  lead = false,
+  // #3318 F2: strip the lead marker WITHOUT re-minting a lead — a fork of a
+  // lead pane is a Solo pane. Defaults to `lead`, so every other caller's
+  // strip is exactly what it was.
+  stripLeadMarker = lead
 ): Promise<{
   command?: string;
   argv?: string[];
@@ -1070,7 +1082,7 @@ async function remintSoloIdentity(
   // claude arm excises loomux's `--disallowedTools Agent` marker only for a pane
   // that really was a lead, so a SOLO pane whose human typed that same flag
   // themselves keeps it across a restore (C1 review F2, closed here).
-  const stripped = stripSoloMcpFlags(command, argv, lead);
+  const stripped = stripSoloMcpFlags(command, argv, stripLeadMarker);
   if (lead) return remintLeadIdentity(name, cwd, stripped);
   if (!stripped.cli) return { command: stripped.command, argv: stripped.argv, bind: () => {} };
   try {
@@ -3098,7 +3110,17 @@ const sessionsPrefetch: Promise<void> = sessions.refresh().catch(() => {
  *  id that looks authoritative but silently discards itself later — see
  *  `Pane.hasForkSession`'s comment and the design note. Panes with no
  *  recognized CLI or no cwd yet can't be matched and are excluded before the
- *  caller even checks non-emptiness. */
+ *  caller even checks non-emptiness.
+ *
+ *  **Except a fork loomux BUILT** (#3318 F2, `Pane.forkedFrom`): a codex or
+ *  opencode Solo fork's child id is the vendor's to mint, and this reconciler is
+ *  the only thing that can learn it. B3's objection — the id on the line is
+ *  the PARENT's, so an id inferred from it is wrong — does not reach it: this
+ *  pass never reads an id off the line, it matches the CLI's own store, and
+ *  `claimedSessionIds` holds every fork's parent out of the match. Once the
+ *  child's id is adopted, `forkRecordCommand` discharges the fork token so the
+ *  record resumes the child. A HUMAN's fork line (`forkedFrom` null) stays
+ *  excluded, exactly as B3 decided. */
 function reconcileCandidates(): Pane[] {
   return tabs.tabs
     .flatMap((ws) => ws.grid.allPanes())
@@ -3111,20 +3133,24 @@ function reconcileCandidates(): Pane[] {
         p.workdir !== null &&
         p.firstInputAt !== null &&
         p.ptyId !== null && // input can queue before the PTY attaches; the key below needs it
-        !p.hasForkSession
+        (!p.hasForkSession || p.forkedFrom !== null)
     );
 }
 
 /** Session ids that must NOT be adopted onto a different pane: every live
  *  pane's own recorded id, plus every dormant placeholder's captured id (a
  *  session with no live pane is still "spoken for" — the D2 card, not this
- *  reconciler, is how a human reclaims it). */
+ *  reconciler, is how a human reclaims it) — plus every fork's PARENT (#3318
+ *  F2), so a fork pane can never adopt the very session it branched off, even
+ *  after the parent's own pane is gone. */
 function claimedSessionIds(): Set<string> {
   const ids = new Set<string>();
   for (const ws of tabs.tabs) {
     for (const p of ws.grid.allPanes()) {
       const id = p.isDormant ? p.restoreRecord?.sessionId : p.sessionId;
       if (id) ids.add(id);
+      const parent = p.isDormant ? p.restoreRecord?.forkOf : p.forkedFrom;
+      if (parent) ids.add(parent);
     }
   }
   return ids;

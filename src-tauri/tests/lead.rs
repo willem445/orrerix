@@ -1890,3 +1890,29 @@ fn a_leads_fork_of_its_helper_is_a_worker_in_the_helpers_block() {
     assert_eq!(fork.forked_from, helper.session_id);
     assert_eq!(rows[0]["detail"]["requested_by"], json!(lead.id));
 }
+
+/// A lead's self-fork opens a pane OUTSIDE the delegate cap (it is the human's,
+/// not a helper), so the spawn-rate backstop is what bounds a lead calling
+/// `fork_session` on itself in a loop. With a budget of one: the first request
+/// is admitted — the control — and the second is refused by the backstop, with
+/// nothing audited for it.
+#[test]
+fn a_leads_self_fork_takes_the_spawn_rate_backstop() {
+    let (reg, _d) = test_registry();
+    let td = tempfile::tempdir().unwrap();
+    let gid = reg
+        .create_group(&td.path().to_string_lossy(), Guardrails { max_spawns_per_hour: 1, ..lead_rails() })
+        .unwrap()
+        .id;
+    // The lead itself is exempt from the backstop (a fixture, not a delegate),
+    // so the whole budget of one is still unspent here.
+    let lead = reg.spawn_agent(&gid, Role::Lead, "lead", "", false, None).unwrap();
+    let c = caller_for(&reg, &lead);
+
+    let first = q_call(&reg, &c, "fork_session", json!({ "agent": lead.id }));
+    assert_ne!(first["isError"], json!(true), "the control is admitted: {}", q_text(&first));
+    let second = q_call(&reg, &c, "fork_session", json!({ "agent": lead.id }));
+    assert_eq!(second["isError"], json!(true), "the second is refused: {}", q_text(&second));
+    assert!(q_text(&second).contains("spawn-rate limit"), "{}", q_text(&second));
+    assert_eq!(fork_rows(&reg, &gid).len(), 1, "only the admitted request is on the record");
+}

@@ -10,7 +10,14 @@
 // whole menu.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildPaneMenu, type PaneConnectState, type PaneMenuItem, type PendingConnect } from "../src/panemenu.ts";
+import {
+  buildPaneMenu,
+  forkActionFor,
+  forkClickRefusal,
+  type PaneConnectState,
+  type PaneMenuItem,
+  type PendingConnect,
+} from "../src/panemenu.ts";
 
 const free = (overrides: Partial<PaneConnectState> = {}): PaneConnectState => ({
   group: "g1",
@@ -55,9 +62,16 @@ const pendingFrom = (overrides: Partial<PendingConnect> = {}): PendingConnect =>
  *  the same menu, offered on every pane unconditionally, so folding it into
  *  every connect expectation would say "and a watch item" eleven times and
  *  pin it nowhere. It has its own block at the bottom of this file, where it
- *  can be asserted as the thing it is. */
+ *  can be asserted as the thing it is.
+ *
+ *  #3318 F2's `fork-delegate` row is dropped for the same reason: it is
+ *  offered on EVERY orchestration delegate pane — which is what most of this
+ *  file's fixtures are — so it would otherwise say "and a fork row" in every
+ *  connect expectation. Its own block at the bottom pins it. */
 const kinds = (items: ReturnType<typeof buildPaneMenu>) =>
-  items.filter((i) => !i.separator && i.action?.kind !== "toggle-watch").map((i) => i.action?.kind);
+  items
+    .filter((i) => !i.separator && i.action?.kind !== "toggle-watch" && i.action?.kind !== "fork-delegate")
+    .map((i) => i.action?.kind);
 
 /** Everything the menu offers, watch item included — for the assertions that
  *  are about the menu as a whole rather than about connecting. */
@@ -68,7 +82,9 @@ const allKinds = (items: ReturnType<typeof buildPaneMenu>) =>
  *  assertions — which are about what CONNECTING offers on an ineligible pane,
  *  not about the menu's length. */
 const connectItemsOf = (items: ReturnType<typeof buildPaneMenu>): PaneMenuItem[] =>
-  items.filter((i) => !i.separator && i.action?.kind !== "toggle-watch");
+  items.filter(
+    (i) => !i.separator && i.action?.kind !== "toggle-watch" && i.action?.kind !== "fork-delegate"
+  );
 
 test("a free, MCP-capable pane with no pending arm offers only Connect (arm)", () => {
   const items = buildPaneMenu(free(), null);
@@ -443,7 +459,26 @@ test("#3318 F1: a solo claude pane with a session, a workdir and a line offers F
     command: forkLine,
     argv: null,
     sourceName: soloPane().name,
+    sourceWasLead: false,
   });
+});
+
+test("#3318 F2: a solo codex, pi or opencode pane offers Fork too — the menu is widened to every CLI with a seam", () => {
+  for (const [cli, command] of [
+    ["codex", "codex -C /repo/poc resume 11111111-2222-3333-4444-555555555555"],
+    ["pi", "pi --session-id 11111111-2222-3333-4444-555555555555"],
+    ["opencode", "opencode --session 11111111-2222-3333-4444-555555555555"],
+  ] as const) {
+    const fork = forkOf(buildPaneMenu(soloPane({ agentCli: cli, command }), null));
+    assert.ok(fork, `${cli}: offered`);
+    assert.equal(fork.disabled, undefined, `${cli}: enabled`);
+    assert.equal(fork.action?.kind, "fork", cli);
+  }
+  // The negative control: copilot and gemini have no argv fork, and say so.
+  for (const cli of ["copilot", "gemini"]) {
+    const fork = forkOf(buildPaneMenu(soloPane({ agentCli: cli }), null));
+    assert.equal(fork?.disabled, true, cli);
+  }
 });
 
 test("#3318 F1: each ineligibility is a DISABLED row naming its own reason, never a silent omission", () => {
@@ -452,7 +487,7 @@ test("#3318 F1: each ineligibility is a DISABLED row naming its own reason, neve
   // a single shared string would pass a per-case test while telling the human
   // the wrong thing three times out of four.
   const cases: Array<[string, Partial<PaneConnectState>, RegExp]> = [
-    ["a CLI F1 has not wired", { agentCli: "copilot" }, /Claude-only/i],
+    ["a CLI with no argv fork", { agentCli: "copilot" }, /no command-line fork/i],
     ["no session yet", { sessionId: null }, /prompt/i],
     ["no working directory", { workdir: null }, /working directory/i],
     ["no recorded launch line", { command: null, argv: null }, /launch line/i],
@@ -469,15 +504,58 @@ test("#3318 F1: each ineligibility is a DISABLED row naming its own reason, neve
   assert.equal(reasons.size, cases.length, "each refusal says its own thing");
 });
 
-test("#3318 F1: a pane the gesture is not about gets NO row — a shell, and an orchestration delegate", () => {
+test("#3318 F2: three routes by owner — a delegate forks through the backend, a lead into a Solo pane, a fixture pane not at all", () => {
   // A shell/build-watcher pane: no agent CLI at all, so no permanently-dead row.
   assert.equal(forkOf(buildPaneMenu(free({ group: null, agentId: null, role: null, agentCli: null }), null)), undefined);
-  // An orchestration delegate. Not a refusal with a reason but no row at all,
-  // and that is a SCOPE line: forking a delegate is #3318 F2, which owes it a
-  // roster row, an audit row, a worktree policy and a drive-owned refusal.
-  assert.equal(forkOf(buildPaneMenu(free(), null)), undefined, "a group worker is F2's");
-  // ...and a lead's own pane is excluded by the same rung.
-  assert.equal(forkOf(buildPaneMenu(free({ role: "lead" }), null)), undefined, "a lead pane is F2's");
+  // An orchestration DELEGATE, every class: the backend route, carrying the
+  // identity only — the session, line and workspace are the roster's.
+  for (const role of ["worker", "reviewer", "planner"]) {
+    const fork = forkOf(buildPaneMenu(free({ role }), null));
+    assert.deepEqual(
+      fork?.action,
+      { kind: "fork-delegate", group: "g1", agentId: "w-1", sourceName: "w-1" },
+      role
+    );
+  }
+  // A delegate on a CLI with no seam is a DISABLED row, not a backend call
+  // that can only fail.
+  assert.equal(forkOf(buildPaneMenu(free({ agentCli: "copilot" }), null))?.disabled, true);
+  // A LEAD's own pane: the frontend route, marked so the child sheds the
+  // lead's identity — a Solo pane, never a second lead.
+  const lead = forkOf(buildPaneMenu(free({ role: "lead", agentId: "lead-1" }), null));
+  assert.equal(lead?.action?.kind, "fork");
+  assert.equal(lead?.action?.kind === "fork" && lead.action.sourceWasLead, true);
+  // The orchestrator and the manager: no row at all — neither is a delegate
+  // anyone may open a second of, and the backend refuses both.
+  for (const role of ["orchestrator", "manager"]) {
+    assert.equal(forkOf(buildPaneMenu(free({ role }), null)), undefined, role);
+  }
+});
+
+test("#3331: the click re-reads the pane — a session or CLI that moved since the menu opened refuses the fork", () => {
+  const action = { sessionId: "11111111-2222-3333-4444-555555555555", cli: "claude" };
+  // The control first: nothing moved, nothing refused.
+  assert.equal(forkClickRefusal(action, { sessionId: action.sessionId, agentCli: "claude" }), null);
+  // Restarted into another session between the right-click and the click.
+  assert.match(
+    forkClickRefusal(action, { sessionId: "99999999-8888-7777-6666-555555555555", agentCli: "claude" }) ?? "",
+    /session changed/
+  );
+  // …or into no known session yet.
+  assert.match(forkClickRefusal(action, { sessionId: null, agentCli: "claude" }) ?? "", /session changed/);
+  // A different CLI is a different fork grammar altogether.
+  assert.match(forkClickRefusal(action, { sessionId: action.sessionId, agentCli: "codex" }) ?? "", /different CLI/);
+});
+
+test("#3318 F2: forkActionFor holds a backend-requested fork to the menu's own rules", () => {
+  // The lead's self-fork arrives with no menu open; it must build exactly what
+  // a right-click would, and refuse exactly where one would.
+  const lead = forkActionFor(free({ role: "lead", agentId: "lead-1" }));
+  assert.ok("action" in lead && lead.action.sourceWasLead, "a lead's own pane yields its Solo fork action");
+  const nosession = forkActionFor(free({ role: "lead", sessionId: null }));
+  assert.ok("refusal" in nosession && /prompt/i.test(nosession.refusal), JSON.stringify(nosession));
+  // A delegate is never built here — its fork is the backend's.
+  assert.ok("refusal" in forkActionFor(free()), "a delegate yields no FRONTEND fork action");
 });
 
 test("#3318 F1: the fork item survives every connect short-circuit the menu has", () => {

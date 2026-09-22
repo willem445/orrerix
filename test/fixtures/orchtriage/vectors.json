@@ -777,6 +777,24 @@
           "rule": "agent-exited"
         }
       }
+    },
+    {
+      "name": "a green-path phrase OUTSIDE the note does not reach the rule — the scope control (#3324)",
+      "text": "[orrerix] run 17812: completed — conclusion: success, on success nothing follows. Note (registered): \"post-merge main; red → INVARIANT 6\" (watch n-1)",
+      "human_actor": false,
+      "merge_queue_enabled": true,
+      "policy": {
+        "enabled": true,
+        "kinds": []
+      },
+      "expect": {
+        "kind": "run-completed",
+        "never": null,
+        "decision": {
+          "action": "defer",
+          "rule": "run-green"
+        }
+      }
     }
   ]
 }

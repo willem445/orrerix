@@ -2,13 +2,17 @@
 
 From a live agent pane, open a **new** pane whose session starts as the vendor's
 own fork of the source's conversation at this moment, in the source's own
-directory, without disturbing the source. Slice **F1** ships that gesture for
-**Claude Code alone**, on a standalone (Solo) pane; F2 adds the delegate fork and
-the other CLIs, F3 adds a one-shot rejoin summary.
+directory, without disturbing the source. Slice **F1** shipped that gesture for
+**Claude Code alone**, on a standalone (Solo) pane. Slice **F2** adds codex, pi and
+opencode, the delegate fork (`fork_session` / `orch_fork_agent`), a lead's
+self-fork into a Solo pane, and the two F1 residuals #3331 names. The rejoin
+slice (F3) is dropped at the human's direction, and copilot stays refused (F4,
+held on live check L4).
 
-This note carries the survey citations F1 rests on, the argued carve-out of
-[session-id-learning.md](session-id-learning.md) B3, and the one live check the
-human must run before the last arm is fixed.
+This note carries the survey citations both slices rest on, the argued carve-out
+of [session-id-learning.md](session-id-learning.md) B3, the live checks (L1 still
+the human's; L2 and L3 answered from the vendors' own code in F2), and every
+public contract the feature changed.
 
 ## Why the vendor's fork and not a file copy
 
@@ -47,21 +51,61 @@ that answers "does this vendor have a fork, and what is it spelled". Data, not a
 branch (CLAUDE.md constraint 8), and `fork_refusal` is the single predicate a
 gesture asks.
 
-| CLI | F1 row | why |
-| --- | --- | --- |
-| **claude** | `Flag("--fork-session")` | documented: "When resuming, create a new session ID instead of reusing the original" (CLI reference, checked 2026-09-21) |
-| **copilot** | `None` | no argv fork exists. `/fork` is interactive, absent from both published references, and per the issue lead it moves the *current* pane into the fork — which would invert the roster. Held behind live check L4 (#3318 F4) |
-| **gemini** | `None` | documented *not* to exist: the command reference lists `/chat save\|resume\|list\|delete\|share` and `/resume`, and no fork |
-| **opencode** | `None` | `--fork` **is** documented ("Fork the session when continuing") — not wired in F1 |
-| **pi** | `None` | `--fork <path\|id>` **is** documented — not wired in F1, and it has an open question of its own (L2, below) |
-| **codex** | `None` | `codex fork [SESSION_ID]` **is** documented — not wired in F1, and it is a *subcommand*, so its row will need a variant `ForkSeam` does not have yet |
+| CLI | row | the fork line | child id | why |
+| --- | --- | --- | --- | --- |
+| **claude** | `Flag { flag: "--fork-session", premints_child: L1 }` | the resume line + `--fork-session` | pre-minted (L1 arm) | documented: "When resuming, create a new session ID instead of reusing the original" (CLI reference, checked 2026-09-21) |
+| **opencode** | `Flag { flag: "--fork", premints_child: false }` | `--session <parent> --fork` | learned by the store watcher | documented: "Fork the session when continuing (use with `--continue` or `--session`)"; read at the pinned tag `v1.18.25` (also the installed build): `cli/cmd/tui.ts` refuses `--fork` without `--session`/`--continue`, and the TUI calls `session.fork` once sync completes |
+| **codex** | `Subcommand("fork")` | `fork <parent>` in `resume <id>`'s slot, last on the line | learned by the store watcher | `codex fork [SESSION_ID]` — `cli/src/main.rs` at the pin `rust-v0.153.4` (`Subcommand::Fork`, `ForkCommand`); the TUI resolves a fork's cwd through the same `resolve_cwd_for_resume_or_fork` a resume uses, so the resume line's `-C` does the same work |
+| **pi** | `ParentFlag("--fork")` | `--session-id <child> --fork <parent>` | pre-minted, always | `--fork <path\|id>` ("Fork a session file or partial session ID into a new session"), and L2 answered below from the installed package |
+| **copilot** | `None` | — | — | no argv fork exists. `/fork` is interactive, absent from both published references, and per the issue lead it moves the *current* pane into the fork — which would invert the roster. Held behind live check L4 (#3318 F4) |
+| **gemini** | `None` | — | — | documented *not* to exist: the command reference lists `/chat save\|resume\|list\|delete\|share` and `/resume`, and no fork |
 
-The last three rows are the ones worth being precise about: they say "loomux has
-not wired or tested it yet", not "this CLI cannot fork". F1's scope is one CLI
-because the human demos and tests a fork on claude before the rest are added, and
-a row claiming a spelling no test has exercised is a claim loomux could not keep.
-`every_cli_row_states_its_fork_position` pins that exactly one row carries a
-flag, so F2 changes that number together with the rows it adds.
+**Four variants, because the four vendors spell a fork three ways.** A flag with
+no value on the resume line (claude, opencode); a subcommand in the resume
+subcommand's slot (codex); a flag carrying the PARENT beside the CLI's own
+open-or-create id flag naming the CHILD (pi). Each row is pinned by a test that
+builds the fork line and the same CLI's resume (or, for pi, fresh) line and
+asserts they differ in exactly the documented token(s) — `a_codex_fork_line_…`,
+`an_opencode_fork_line_…`, `a_pi_fork_line_…` beside F1's claude test — and
+`every_fork_line_tokenizes_to_its_argv_form` keeps the two spawn forms equal.
+
+The frontend holds a mirror of the four rows (`FORK_SEAMS`, `src/panerestore.ts`),
+because a Solo fork builds its line there and never reaches the backend builder.
+`the frontend's fork table agrees with the engine's CliCaps rows, row by row`
+(`test/panerestore.test.ts`) reads the Rust table off disk, with a population
+control that every row was parsed, and requires each forkable row's token to be
+on the line the frontend emits — so a row cannot move on one side alone.
+
+### L2 and L3, answered from the vendors' own code
+
+**L2 — does `pi --fork <old> --session-id <new> --session-dir <d>` compose?**
+Yes, read from the INSTALLED package (`@earendil-works/pi-coding-agent` 0.85.1,
+`dist/main.js`, per the `agent-cli-reference` skill's installed-build rule):
+`validateForkFlags` refuses `--fork` beside `--session`, `--continue`, `--resume`
+and `--no-session`, and NOT beside `--session-id`; `createSessionManager` then
+calls `SessionManager.forkFrom(source, cwd, sessionDir, { id: sessionId })`,
+which writes the child's header under exactly that id and refuses up front
+("Session already exists with id …") if one already exists. So the **exact-id
+arm ships** for pi and the flat-dir baseline watcher the plan designed as a
+fallback is not built: pi's fork is as exact as its resume, and needs no
+watcher. The parent must have a session file (pi writes one on the first
+assistant response), or pi exits with "No session found" — a loud failure, not
+a silent fresh session.
+
+**L3 — does `opencode --session <id> --fork` set `parent_id` on the new row?**
+No, read from `session/session.ts` at `v1.18.25`: `Session.fork` creates the
+new row through `createNext` with no `parentID`, then copies the messages. So a
+fork is a TOP-LEVEL session: the store watcher sees it as a new session in its
+directory, and the subagent spend rollup (which follows `parent_id`) never folds
+the fork's spend into its parent's.
+
+Both are source readings, not runs — constraint 3 forbids loomux spawning a real
+CLI — and both are labelled against the version read. What neither source read
+settles is **opencode across directories**: a delegate fork runs in a NEW
+worktree, and `validateSession` fetches the parent with the TUI's own directory
+header. The group-local `OPENCODE_DB` holds the parent's row either way; whether
+opencode scopes that lookup by project, and a worktree of the same repo is the
+same project, is the human's to confirm in passing.
 
 ## The child's id, and live check L1
 
@@ -83,36 +127,37 @@ So both arms are built, and one bit chooses between them:
   from its first turn, exactly like every other claude pane.
 - **Learned arm** (`false`): `claude --resume <parent> … --fork-session`, and the
   child's id is whatever claude mints. Correct under *either* answer to L1, and
-  it costs the child's identity: claude takes no session baseline today
-  (`premints_session_id` is true for it), so nothing can learn that id until F2
-  adds one.
+  it costs the child's identity: claude takes no session baseline
+  (`premints_session_id` is true for it), so nothing learns that id. The human
+  ran F1 and kept the pre-mint arm, so F2 did not add a claude baseline; a
+  delegate fork on the learned arm records NO session rather than one the pane
+  is not running under.
 
-**L1 is the human's to run**, and this is the one thing about F1 that needs
-confirming rather than reviewing:
+**L1 is the human's to run**, and this is the one thing about the claude arm
+that needs confirming rather than reviewing:
 
 > Does `claude --session-id <new> --resume <old> --fork-session` produce a
 > session whose id is `<new>`?
 
-If **yes**, F1 is already correct and nothing changes. If **no**, flip
-`CLAUDE_FORK_PREMINTS_CHILD_ID` to `false` (and its frontend mirror
-`FORK_PREMINTS_CHILD_ID`, which a source-reading test keeps equal to it).
+If **yes**, nothing changes. If **no**, flip `CLAUDE_FORK_PREMINTS_CHILD_ID` to
+`false` (and its frontend mirror `FORK_PREMINTS_CHILD_ID`, which a
+source-reading test keeps equal to it).
 
 **That flip is a real one-line edit on both sides, and it is pinned as such.**
 Every reader selects its arm by reading the constant, never by inferring one
-from what a caller passed: `build_agent_command_ex` and `build_agent_argv_ex`
-each read `CLAUDE_FORK_PREMINTS_CHILD_ID` inside their claude fork arm, and
-`agentForkCommand` reads the mirror through `forkIdFlags`. Two tests keep that
-honest —
+from what a caller passed. Since F2 the constant is carried on claude's ROW as
+its seam's `premints_child`, and every backend reader asks the row: the claude
+arms of `build_agent_command_ex` / `build_agent_argv_ex`, and `fork_agent`
+deciding whether to mint the child an id at all. `agentForkCommand` reads the
+frontend mirror through `forkIdFlags`. The tests that keep it honest —
 `the_claude_fork_arm_is_selected_by_the_constant_not_by_the_caller` reads the
-same constant the builder reads and requires the emitted line to agree with it
-(so a builder that ignored the constant reddens **once the constant is
-flipped** — at the shipped `true` the two shapes coincide byte for byte, so a
-revert to caller-selection stays invisible until the flip, which is exactly when
-it would do harm), and `forkIdFlags` takes the
-bit as a parameter so **both** arms are executed by a test rather than only the
-one the shipped value selects. Review round 1 found the first version of this
-guilty of exactly the failure it warns about: the constant had no Rust reader at
-all, so the documented flip was inert on the backend.
+same constant and requires the emitted line to agree with it (and, since F2,
+that claude's row carries it), so a builder that ignored the constant reddens
+**once the constant is flipped** — at the shipped `true` the two shapes
+coincide byte for byte, so a revert to caller-selection stays invisible until
+the flip, which is exactly when it would do harm (the residual #3331 item 3
+records). `forkIdFlags` takes the bit as a parameter so **both** arms are
+executed by a test rather than only the one the shipped value selects.
 
 **The failure is bounded and stated rather than silent.** With L1 false and the
 flag left true, the pane really *is* a fork of the right parent — that half is
@@ -120,11 +165,6 @@ documented — and only its *recorded* id is another session's. A later restart
 then resumes the parent's fork-point rather than the child, and the pane's own
 work since is not reachable from loomux. It is not a wrong-transcript write and
 not a loss of the parent; it is a restore that lands one branch over.
-
-Two sibling checks belong to F2 and are recorded here so they are not re-derived:
-**L2** — does `pi --fork <old> --session-id <new> --session-dir <d>` compose, or
-does pi refuse the pair as it already refuses `--session` beside `--session-id`?
-**L3** — does `opencode --session <id> --fork` set `parent_id` on the new row?
 
 ## The one-shot rule — an argued carve-out of B3
 
@@ -135,75 +175,219 @@ silently dropping the flag felt like a second instance of the exact objection
 that already bars rewriting a command line the human owns".
 
 That argument is about a line **the human owns**. An orrerix-built fork line is
-different in exactly the way that matters, and F1 carves out only that case:
+different in exactly the way that matters, and the carve-out covers only that
+case:
 
-- **The flag is one-shot.** It is consumed at the fork spawn. A recorded
-  `--fork-session` line re-forks on *every* restart, minting a fresh session each
-  boot and losing whatever the human did in that pane — which is the same harm
-  B3 refused to paper over with a learned id, arriving by the other road.
-- **`PersistedPane.forkOf` is the gate, and it is not the flag's presence.**
+- **The fork token is one-shot.** It is consumed at the fork spawn. A recorded
+  fork line re-forks on *every* restart, minting a fresh session each boot and
+  losing whatever the human did in that pane — which is the same harm B3 refused
+  to paper over with a learned id, arriving by the other road.
+- **`PersistedPane.forkOf` is the gate, and it is not the token's presence.**
   Only loomux's own fork gesture sets it. `forkRecordCommand`
   (`src/panerestore.ts`) rewrites the record **only** for a pane that field marks,
-  so a human-typed `--fork-session` line still comes back byte-identical and
-  B3's exclusion continues to govern it, unchanged. That is pinned from both
-  poles: `a_fork_line_never_persists_its_fork_flag` and the B3 control beside it.
-- **What gets written.** With the child's id known, the record is that child's
-  own plain `--resume <child>` line — no fork flag, nothing to re-fork. With no
-  id (the learned arm), the fork flag *and* the parent's `--resume` are both
-  dropped, leaving a fresh-session line: keeping `--resume <parent>` would be
-  worse than dropping it, because two panes resumed into one session id is the
-  interleaved transcript claude's docs describe, not a degraded restore.
+  so a human-typed fork line still comes back byte-identical and B3's exclusion
+  continues to govern it, unchanged. That is pinned from both poles:
+  `a_fork_line_never_persists_its_fork_flag` and the B3 control beside it.
+- **What gets written — in each CLI's own grammar (F2).** With the child's id
+  known, the record is that CLI's plain resume of the CHILD: `--resume <child>`
+  on claude, `--session <child>` on opencode, `--session-id <child>` on pi,
+  `resume <child>` on codex — no fork token (pi's with its value), nothing to
+  re-fork. With no id yet (claude's learned arm; a codex or opencode fork the
+  reconciler has not matched), the fork token *and* the parent's session are both
+  dropped, leaving a fresh-session line: keeping the parent's would be two panes
+  resumed into one session id, which is the interleaved transcript claude's docs
+  describe, not a degraded restore.
 - **It is idempotent**, which is what makes it safe on *every* capture rather
   than on a special one: a record already discharged comes back unchanged.
 
+**F2's one exception to B3's reconciler exclusion.** A codex or opencode fork
+cannot be handed its child's id at open, so the frontend reconciler is the only
+thing that can learn it for a Solo pane — and B3's objection does not reach it:
+that pass matches the CLI's own session store and never reads an id off the
+line, and `claimedSessionIds` holds every fork's PARENT out of the match (even
+once the parent's pane is gone). So a pane `forkOf` marks may be a reconcile
+candidate while its line still forks; a human's own fork line may not. The
+argument is recorded beside B3 in [session-id-learning.md](session-id-learning.md).
+
 `forkOf` also survives the discharge as the pane's **provenance** — after the
 command line is scrubbed, it is the only thing that still says this conversation
-began as a copy of that one, and it is what F2's roster row will read.
+began as a copy of that one.
+
+## The delegate fork (F2)
+
+`OrchRegistry::fork_agent` is the registry half of both the `fork_session` MCP
+tool and the human's `orch_fork_agent` command, so an agent and a human meet the
+same refusals in the same words.
+
+**One spawn path, not two.** A fork is `spawn_agent_full` — the ordinary spawn,
+under `spawn_agent_bound` as a new tier — with a `ForkSpawn` naming the parent.
+The fork is read at exactly four places and nowhere else: the child's session id
+(minted only where the seam's `premints_child` says the line names it), the
+launch line (`fork_of`), the roster row (`forked_from`) and the audit/kickoff
+pair. The cap, the spawn-rate backstop, the CLI pin, the persona, the MCP
+identity and the worktree cut are the ordinary spawn's, unchanged — which is the
+argument against a separate fork path: every guardrail a second path would have
+to remember is one this path cannot forget.
+
+**It inherits the source's BLOCK**, and therefore its persona, CLI, model and
+capability class. That inheritance is also what makes several refusals
+structural: an orchestrator or manager source would be a second fixture, and a
+lead source a second root, so all three are refused outright.
+
+**Refusals, all before anything is minted or cut**, each with its own sentence:
+
+| refused | why |
+| --- | --- |
+| an unknown or foreign agent | the `unknown agent` wording, so no other group's ids leak |
+| orchestrator, manager, lead | a fork inherits the block; none of those is a delegate anyone may open a second of (a lead's own pane forks into a Solo pane instead, below) |
+| a pane a live review or plan drive owns | the drivers' ownership ladders are per agent id (`rd_owner`, `pd_owner`), and a fork is a new agent they never briefed — refusing is honest, a third owner would be invention. An UNREADABLE review-drive record refuses too (`rd_driven_panes`), the same fail-closed reading `kill_agent` takes on the same file |
+| a CLI whose seam is `None` | the row's own note, verbatim (`fork_refusal`) |
+| a structured-driver block | `pi_launch_spec` has no fork parameter, so a fork there would start a FRESH session and call it a fork |
+| a source with no recorded session | nothing to fork yet; codex and opencode record theirs a few seconds after the first prompt |
+| `worktree: false` on a worker or reviewer | #338/#359: two agents sharing one checkout is the conflict that rule exists for |
+
+**The workspace.** A worker or reviewer fork gets a NEW worktree cut from the
+source's branch — when that branch EXISTS. A worktree pane's recorded branch was
+cut at its spawn; a shared-repo pane's is only the name it was told to create,
+which it may not have yet (CI caught exactly this on the first run:
+`cannot resolve base "agent/w-5"`), so such a fork cuts from the default branch.
+A planner fork gets no worktree, as no planner does.
+
+**The first turn.** A fork already holds its role and its whole history, so it
+gets a `ResumeKickoff`-class turn (`fork_kickoff_prompt`), never the fresh
+kickoff that would re-brief a conversation mid-stream. It names the three things
+that changed at the fork: its NEW agent id (every orrerix call it makes is
+attributed to it, not to the parent whose id fills its history), its workspace,
+and its task — or, with none, that it waits for a brief rather than carrying on
+with the parent's work. It carries its own delivery id: the parent's is in the
+copied history already acted on, and a fork that took its brief for a duplicate
+of its parent's would do nothing.
+
+**The record.** `AgentEntry.forked_from` and its durable twin
+`AgentRecord.forked_from` hold the parent SESSION (not the parent agent, which
+may be long dead when anyone reads this); one `agent-fork` audit row names both
+sides — `agent`, `parent_agent`, `parent_session`, `child_session` (null where the
+vendor mints it; the child's later `session-bound` row is unchanged), `cli`,
+`cwd`, `worktree`, `branch`, `base`, `requested_by`.
+
+**What F2 does not carry across a rejoin.** A session-browser rejoin of a forked
+agent re-spawns it under a new agent id, and that row's `forked_from` is empty:
+the provenance lives on the original row (which stays in `agents.json`) and in
+the audit log, not on every later row naming the session.
+
+## A lead forks into a Solo pane
+
+A lead is its group's ROOT (`docs/design/lead-pane.md`), `kind_from_str` has no
+`lead` arm, and a fork inheriting the lead's block would be a second root. So
+`fork_session` on a lead's OWN id is not a `fork_agent`: `request_solo_fork`
+refuses the same facts the gesture would (no fork seam, no session yet), takes
+the group's spawn-rate backstop — a Solo pane is outside the delegate cap, but
+it is still a pane an agent's call opened, and a runaway loop is possible in a
+human-driven pane too — audits `agent-fork` with `into: "solo"`, and emits
+`orch-fork-solo-request`. The frontend then runs the ordinary Solo fork on the
+lead's pane, built through `forkActionFor` from the pane's state NOW, so a
+request from the backend is held to exactly the rules a right-click is. The
+lead's line sheds its identity AND its `--disallowedTools Agent` marker
+(`remintSoloIdentity`'s `stripLeadMarker`) before a plain solo identity is
+minted — never a lead one. The human can do the same from the lead pane's menu.
+
+## The pane menu's three routes
+
+| pane | route | built where |
+| --- | --- | --- |
+| Solo (or no identity yet) | a Solo fork beside it | frontend (`agentForkCommand`) — every CLI with a seam since F2 |
+| a lead's own pane | a Solo fork, the lead identity shed | frontend, the same route |
+| worker / reviewer / planner | a new delegate of the same block | backend (`fork-delegate` → `orch_fork_agent` → `fork_agent`) |
+| orchestrator / manager | no row | — |
+
+A delegate row decides nothing beyond the CLI's seam, so the menu can never
+contradict the backend: every other refusal is `fork_agent`'s, surfaced as a
+toast.
+
+## #3331: the two F1 residuals F2 had to take
+
+- **Item 1 — the click re-reads the pane.** The menu binds the session when it
+  opens, and a pane can be restarted or re-bound before the click. `forkClickRefusal`
+  (`src/panemenu.ts`) refuses when the session or the CLI moved, and the line the
+  fork is built from is re-read at the click too. Refusing rather than forking
+  the new session: the human chose the conversation they were looking at.
+- **Item 2 — the builder refuses loudly.** F1's builders dropped `fork_of`
+  silently for a CLI with no seam; F2's tool is the first caller that could
+  reach that with a copilot or gemini source, and the silent drop would have
+  launched a FRESH session and reported it as a fork. `build_agent_command_ex`
+  and `build_agent_argv_ex` now return `Result`, refusing through `fork_line`
+  with `fork_refusal`'s sentence. Their infallible bodies (`agent_command_line`,
+  `agent_argv`) are split out so the wrappers that never fork need no `unwrap` —
+  a panic on a spawn path is a process abort (constraint 10).
+- **Item 3** stays as F1 recorded it: the constant-selection test only bites
+  once the constant is flipped, and L1 is still the human's.
 
 ## Where the pieces live
 
 | piece | where | what |
 | --- | --- | --- |
-| the table | `crates/loomux-engine/src/model.rs` | `ForkSeam`, `CliCaps.fork`, `fork_refusal`, `CLAUDE_FORK_PREMINTS_CHILD_ID` |
-| the backend line | `src-tauri/src/orchestration/mod.rs` | `build_agent_command_ex` / `build_agent_argv_ex` grow `fork_of: Option<&str>`; the claude arm reads the table |
-| the frontend line | `src/panerestore.ts` | `agentForkCommand`, `canForkCli`, `forkPaneName`, `FORK_PREMINTS_CHILD_ID` |
-| the one-shot rule | `src/panerestore.ts` + `src/pane.ts` | `forkRecordCommand`, applied in `Pane.capture` |
+| the table | `crates/loomux-engine/src/model.rs` | `ForkSeam` (`Flag`/`Subcommand`/`ParentFlag`/`None`), `CliCaps.fork`, `fork_refusal`, `CLAUDE_FORK_PREMINTS_CHILD_ID` |
+| the backend line | `src-tauri/src/orchestration/mod.rs` | `build_agent_command_ex` / `build_agent_argv_ex` (`Result`), `fork_line`, each CLI arm reading its row |
+| the delegate fork | `src-tauri/src/orchestration/mod.rs` | `fork_agent`, `spawn_agent_full`, `ForkSpawn`, `fork_kickoff_prompt`, `request_solo_fork` |
+| the MCP tool | `src-tauri/src/orchestration/mcp.rs` | `fork_session_tool`, the `fork_session` arm, the lead's listing and gate rows |
+| the command | `src-tauri/src/orchestration/mod.rs` + `src/orchestration.ts` | `orch_fork_agent` / `orchForkAgent` |
+| the frontend line | `src/panerestore.ts` | `FORK_SEAMS`, `forkGrammarOf`, `agentForkCommand`, `canForkCli`, `forkPremintsChild`, `forkPaneName` |
+| the one-shot rule | `src/panerestore.ts` + `src/pane.ts` | `forkRecordCommand`, applied in `Pane.capture`; `hasForkSession` per CLI |
+| the reconciler exception | `src/main.ts` + `src/pane.ts` | `reconcileCandidates`, `claimedSessionIds`, `Pane.forkedFrom` |
 | the record | `src/tabstore.ts` | `PersistedPane.forkOf` (additive, blank coerces to null) |
-| the gesture | `src/panemenu.ts` | `forkItem` — the eligibility matrix and every refusal's wording |
-| the execution | `src/orchestration.ts` + `src/main.ts` | `forkPaneSession` → `OrchWiring.openForkedPane` |
-
-**The backend line has no production caller in F1**, and that is deliberate
-rather than an oversight: F1's gesture is a Solo pane's, which builds its line in
-the frontend and never goes through `build_agent_command_ex`. The `fork_of`
-parameter, the table and their tests land here because F2's `fork_session` MCP
-tool is the caller, and landing the seam with the slice that argues for it is
-what keeps F2 a wiring change rather than a design one.
+| the gesture | `src/panemenu.ts` | `forkItem`, `forkActionFor`, `forkClickRefusal` |
+| the execution | `src/orchestration.ts` + `src/main.ts` | `forkPaneSession` → `OrchWiring.openForkedPane`; the `orch-fork-solo-request` listener |
 
 ## Public-contract changes
 
-- **`PersistedPane.forkOf`** (`tabs.json`) — additive. Absent, blank or malformed
-  decodes as `null`, i.e. "not a fork", so every pre-F1 snapshot restores exactly
-  as it did.
+- **`PersistedPane.forkOf`** (`tabs.json`, F1) — additive. Absent, blank or
+  malformed decodes as `null`, i.e. "not a fork", so every pre-F1 snapshot
+  restores exactly as it did.
 - **`CliCaps.fork`** — an internal table, no workflow-schema key. A workflow file
-  cannot ask for a fork and nothing in it parses differently.
+  cannot ask for a fork and nothing in it parses differently. F2 changes its
+  TYPE (four variants; `ForkSeam::flag()` is replaced by `token()` and
+  `premints_child()`), which reaches no file and no wire.
+- **`build_agent_command_ex` / `build_agent_argv_ex` return `Result`** (F2) —
+  `#[doc(hidden)]` integration-test seams, not an external surface; every caller
+  in the tree moved with them.
+- **`AgentRecord.forked_from`** (`agents.json`, F2) — additive in both
+  directions: `#[serde(default, skip_serializing_if = "Option::is_none")]`, so a
+  pre-F2 row reads `None`, a non-fork row never gains the key, and an older
+  loomux reading a newer roster ignores it. Pinned by
+  `forked_from_is_additive_on_the_durable_roster`.
+- **The `fork_session` MCP tool** (F2) — agent-facing; listed for the
+  orchestrator and, as an argued row of its positive enumeration, the lead; gated
+  by `require_spawner` and, for the lead, the dispatch gate's own row.
+- **The `orch_fork_agent` Tauri command** (F2) — in the `orch-control` ACL set.
+  **`async` through `run_blocking`, not a synchronous `mutating_command`, and
+  that is forced**: a fork is a spawn, and a spawn blocks until the FRONTEND opens
+  and binds the new pane, which it does on the webview thread a synchronous
+  command would be occupying — a sync fork would wait on itself for the whole
+  bind timeout. Constraint 10's barrier is for commands on that thread; this is
+  `resume_orch_session`'s shape, for the same reason.
+- **The `orch-fork-solo-request` event** (F2) — backend → frontend, one per lead
+  self-fork, declared in `test/perfpolicy.test.ts`'s stream manifest.
+- **The `agent-fork` audit action** (F2) — one row per fork, fields above.
 
 No new dependencies. No PTY resize (a fork is one more pane through the ordinary
-open path). No getrandom (the child's id is `crypto.randomUUID`, the webview's
-Web Crypto, on the frontend — constraint 2 governs `src-tauri` Rust).
+open path). No getrandom (a Solo child's id is `crypto.randomUUID`, the webview's
+Web Crypto; a delegate child's is the existing `new_session_uuid` mint). No new
+path join: the parent session id is validated by `sanitize_session`
+(`pathseg::check_segment`) before it reaches a line.
 
-## Scope lines F1 draws on purpose
+## What F2 did not change, and why
 
-- **A delegate is not forkable from this menu** — no row at all, rather than a
-  disabled one. Forking an orchestration delegate needs a roster row naming the
-  parent, an audit row, a worktree policy, and a refusal for a pane a review or
-  plan drive owns. All of that is F2; offering a greyed row for it here would
-  promise a gesture that does not exist yet.
-- **A lead's own pane is excluded by the same rung.** F2 makes a lead fork yield
-  a *Solo* pane, never a second lead (the one-root invariant in
-  [lead-pane.md](lead-pane.md)).
+- **`orchestrator.md` did not move.** The resident core sits at 44,955 B against
+  the 45,000 B `RESIDENT_CORE_BUDGET`, and a new playbook section needs a resident
+  stub there too. The orchestrator learns `fork_session` from the tool's own
+  description (read on every call) and from one paragraph in the playbook's
+  **Planning and scheduling** section; `lead.md` carries its own bullet.
 - **No rejoin.** Nothing merges two session files, in any harness surveyed: the
   single vendor mechanism that folds one path into another is pi's `/tree` branch
   summary, and it is intra-file. claude's docs describe cross-terminal sharing of
-  one id as *interleaving*, i.e. the failure mode. F3 offers a one-shot summary
-  *delivery* into the parent pane; a true transcript merge would mean writing a
-  vendor's internal format, and orrerix will not.
+  one id as *interleaving*, i.e. the failure mode. The rejoin slice (F3) was
+  dropped by the human; a true transcript merge would mean writing a vendor's
+  internal format, and orrerix will not.
+- **copilot stays refused** (F4, held on live check L4).
+- **The Agents tab does not show "fork of …" yet.** The roster records the
+  parent; rendering it is a UI follow-up, not part of F2's brief.

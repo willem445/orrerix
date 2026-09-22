@@ -329,9 +329,24 @@ exclusion above, unchanged. Both poles are pinned:
 `a_fork_line_never_persists_its_fork_flag` and the B3 control beside it in
 `test/panerestore.test.ts`.
 
-`Pane.hasForkSession`'s exclusion from `reconcileCandidates` is untouched and
-still correct for a forked pane on the pre-mint arm: that pane is handed its id
-at open, so it is not a reconciliation candidate in the first place. Full design:
+**#3318 F2 widens both halves to every CLI that can fork, and makes one
+exception to the reconciler's exclusion.** `hasForkSession` now reads each
+CLI's own fork token — claude's `--fork-session` as before, and, gated on the
+program, opencode's `--fork`, pi's `--fork <id>` and codex's `fork` subcommand —
+because B3's reason (the id NAMED on a forking line is the parent's) is exactly
+as true of each. The one-shot discharge writes each CLI's own resume grammar
+(`--resume`, `--session`, `--session-id`, `resume <id>`).
+
+The exception: a pane orrerix itself forked (`Pane.forkedFrom`, i.e.
+`PersistedPane.forkOf`) **may** be a `reconcileCandidates` entry while its line
+still forks. A codex or opencode fork cannot be handed its child's id at open —
+those CLIs have no flag that names one — so the reconciler is the only thing
+that can learn it, and B3's objection does not reach it: this pass never reads
+an id off the line, it matches the CLI's own store, and `claimedSessionIds` now
+holds every fork's PARENT out of the match, even once the parent's own pane is
+gone. A human's own fork line (`forkedFrom` null) stays excluded, exactly as B3
+decided. claude on the pre-mint arm and pi are handed their child's id at open,
+so they are not candidates in the first place. Full design:
 [session-fork.md](session-fork.md).
 
 ## D2: the dormant card, when reconciliation comes up empty (or hasn't run yet)

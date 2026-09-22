@@ -1669,6 +1669,45 @@ after a restart, reconnect the panes you want linked. A pane holds **at most one
 at a time (see Multi-party, above). Full (sender-capable) standalone membership only works
 for claude/copilot today — see "Standalone panes" above.
 
+## Forking an agent's session
+
+A **fork** opens a new agent whose conversation starts as a copy of an existing agent's,
+while the original keeps running untouched — for a side quest that needs what that agent
+already knows (an alternative approach, an investigation off a half-finished task), without
+briefing a fresh agent from nothing. It is the CLI's own fork, never a copy of its files:
+Claude Code, codex, pi and opencode can fork; copilot and gemini have no command-line fork,
+and orrerix refuses them with the reason.
+
+**Who can fork what.** The orchestrator calls `fork_session(agent, task?, worktree?,
+branch?, name?)`; so does a lead, for one of its helpers. You can do the same from any
+worker, reviewer or planner pane's header menu (**Fork session…**). A fork of a delegate is
+a new delegate of the **same block** — persona, CLI, model and capability class — and it:
+
+- counts against the group's agent limit and the spawn-rate limit, like any spawn;
+- gets its own worktree when the original is a worker or reviewer, cut from the original's
+  branch (so it starts at the original's last commit — uncommitted work in the original's
+  worktree is not carried); a planner fork, like any planner, gets none;
+- is told on its first turn that it is a fork, of which agent, and what its task is — or, with
+  no task, that it should wait for one rather than carry on with the original's work;
+- reports to the orchestrator (or the lead) like any delegate, under its own agent id.
+
+**What is refused**, each with its reason: an orchestrator, manager or lead as the source;
+a pane a live review or plan drive is using (the drive briefs and routes its panes by agent
+id, and never briefed the fork); a CLI with no fork; a block on the structured driver; and an
+agent whose session orrerix has not recorded yet (codex and opencode learn theirs a few
+seconds after the first prompt).
+
+**A lead forking its own pane** gets a standalone pane beside it, for you — never a second
+lead. It does not report to the lead; it is yours.
+
+**What you can see.** The group's audit log has one `agent-fork` row per fork, naming both
+sides (`parent_agent`, `parent_session`, the new agent and — where the CLI names it up front —
+its session) and who asked. The group's `agents.json` records the parent session on the
+forked agent's row (`forked_from`).
+
+**No merge-back.** Nothing joins two conversations again — no CLI offers it — so a fork's
+results come back the way any delegate's do: its report, and its own branch and PR.
+
 ## Group lifecycle
 
 The orchestrator pane has a lifecycle toggle (`Alt+O` or the group icon) with a

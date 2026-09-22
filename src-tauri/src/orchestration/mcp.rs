@@ -1038,6 +1038,42 @@ fn fleet_control_tool_defs() -> [Value; 5] {
     ]
 }
 
+/// **`fork_session`** (#3318 F2) — one definition, listed for the two classes
+/// that may open panes: the orchestrator, and a lead as an argued row of its
+/// positive enumeration (see the lead block in [`tool_defs`]).
+///
+/// One wording for both rather than the two `spawn_agent` has, because nothing
+/// in it is a route one of them is refused: the lead-only sentence (forking its
+/// own pane opens a Solo pane) and the drive refusal (a lead group has no
+/// drives, so it can never fire there) are each true for the class that can
+/// reach them and inert for the other.
+fn fork_session_tool() -> Value {
+    tool("fork_session",
+        "Fork an agent's session into a NEW agent pane: the new agent starts as the CLI's own copy of \
+         that agent's conversation at this moment (Claude Code --fork-session, codex fork, pi --fork, \
+         opencode --fork), in the SAME block — persona, CLI, model and capability class — while the \
+         source keeps running untouched. Use it for a side quest that needs the source's context (an \
+         alternative approach, an investigation off a half-finished task) instead of re-briefing a \
+         fresh agent from nothing. The fork is an ordinary delegate with a new agent id: it counts \
+         against the live-agent cap, reports to you like any other, and its first turn tells it that it \
+         is a fork and what its task is. A worker or reviewer fork gets its OWN worktree cut from the \
+         source's branch (worktree:false is refused — two agents in one checkout is the conflict that \
+         rule exists for). REFUSED, with the reason: an orchestrator, manager or lead source; a source a \
+         review or plan drive owns (the driver routes its panes by agent id and never briefed the \
+         fork); a CLI with no command-line fork (copilot, gemini); a structured-driver block; a source \
+         with no recorded session yet. As a LEAD, forking your OWN pane (agent = your id) opens a \
+         standalone pane beside yours for your human instead — never a second lead. Nothing merges a \
+         fork back: its results come back through its reports and its own PR.",
+        json!({
+            "agent": { "type": "string", "description": "Id of the agent whose session to fork (list_agents). As a lead, your own id forks your pane into a standalone one." },
+            "task": { "type": "string", "description": "What the fork should do. Empty = the fork idles and asks for a brief instead of continuing the source's work." },
+            "worktree": { "type": "boolean", "description": "Defaults ON for a worker or reviewer source and cannot be false for either; a planner source never gets one." },
+            "branch": { "type": "string", "description": "Branch for the fork's worktree (default agent/<new id>). Cut from the source's own branch." },
+            "name": { "type": "string", "description": "Pane name (default: the source's name with ' (fork)')." }
+        }),
+        &["agent"])
+}
+
 /// **A lead's `spawn_agent`** (#2519) — the same tool name, a deliberately
 /// different description, for the reason [`fleet_control_tool_defs`] gives.
 ///
@@ -1571,6 +1607,16 @@ fn tool_defs(
         ];
         tools.retain(|t| LEAD_SHARED.contains(&t["name"].as_str().unwrap_or_default()));
         tools.push(lead_spawn_agent_tool());
+        // #3318 F2 — `fork_session`, argued as its own row rather than riding
+        // in with the fleet-control five: it OPENS a pane, which is the
+        // capability `spawn_agent` above is this class's one grant of, and it
+        // opens nothing a lead could not already open. A fork of a lead's
+        // helper is a worker in the helper's own block — the "a worker and
+        // nothing else" rule holds by inheritance, since a lead group's only
+        // delegates are workers — and it rides the same cap and spawn-rate
+        // backstop. A fork of the lead's OWN pane is not a delegate at all: it
+        // is a standalone pane for the human, the one-root invariant intact.
+        tools.push(fork_session_tool());
         tools.extend(fleet_control_tool_defs());
         tools.extend(channel_tool_defs());
         tools.push(group_usage_tool());
@@ -1697,6 +1743,7 @@ fn tool_defs(
     }
     if role == Role::Orchestrator {
         tools.extend(fleet_control_tool_defs());
+        tools.push(fork_session_tool());
         tools.extend([
             tool("spawn_agent",
                 "Open a new worker, reviewer, or planner agent pane in this group. A FRESH SPAWN MUST NAME ITS CAPABILITY CLASS: pass kind (worker | reviewer | planner) or block (a block id from this group's roster). Omitting both is REFUSED — there is no default class (#544). Before that refusal existed, forgetting `kind` handed you the MOST-privileged class: three reviewer-shaped briefs (\"review PR #536\", \"record your verdict\") were spawned as read-write worker panes, with edit tools and git commit/push, and nothing objected. A capability class is only ever acquired deliberately; the only spawn that may omit both is a resume_session, which INHERITS the resumed session's own block (see below) rather than defaulting to anything. Guardrails apply: live-agent cap and per-role pinned CLI + model. Give branch a meaningful name. Empty task spawns an idle agent awaiting prompts. A planner explores the codebase read-only and writes an implementation plan as a GitHub issue comment, then reports and exits. Its read-only contract is enforced structurally where the CLI allows it — it never gets a worktree, and its file-editing tools plus git commit/push are denied at the CLI level — so it cannot edit files or push code; not opening PRs is asked of it in its instructions (gh stays available so it can post the plan comment). WORKTREE DEFAULTS ON FOR WORKERS AND REVIEWERS AND CANNOT BE TURNED OFF (#338/#359): the main clone is the human's environment, and neither a worker (branching/committing there) nor a reviewer (contending on its checkout state with another reviewer or your own fetch/merge traffic — two concurrent reviewers colliding in the shared clone is the incident #359 names) may conflict with it — passing worktree=false for either (or a worker-/reviewer-kind block) is rejected outright, not silently coerced. A reviewer's own worktree is scratch space cut from the default branch, not a checkout of the PR it's reviewing (that branch may already be checked out in the worker's own worktree) — its kickoff note and reviewer.md cover the `gh pr checkout <n> --detach` convention for inspecting the PR's actual code locally. A planner is unaffected: it never gets one under any circumstance. For your OWN mechanical work (rebases, conflict fixes) that would otherwise mean checking out a branch in the main clone, use a staging worktree of your own instead of spawning a worker or reviewer just to get one. THE SAME GUARANTEE COVERS A FRESH SPAWN'S cwd, not just worktree: passing cwd on a worker or reviewer spawn with no resume_session is rejected too (it would override the worktree exactly like worktree=false would) — cwd only has a role once resume_session is set; a planner still honors an explicit cwd on a fresh spawn, unchanged. For a FOLLOW-UP on a finished task, pass resume_session (from list_agents/the task board) plus cwd (where that work happened) — the pane reopens that conversation with its context instead of cold-starting, and the worktree default/guard above does not apply (the resume's cwd is what governs its workspace). cwd is optional on a resume: omit it and orrerix INHERITS the session's recorded workspace from this group's roster (the same last-touched-record lookup the block inheritance below uses) rather than guessing — but if nothing is recorded for that session AND the resumed agent is a worker or reviewer, the spawn is a hard error rather than a silent fall-back into the main clone (#338/#359 again: neither's workspace is ever the human's own checkout). A planner is unaffected by that guard; pass cwd explicitly whenever you have it, which you almost always will. A resume with no kind/block INHERITS the resumed session's original block (and therefore its persona, model and capability class) from this group's roster — it never re-derives a default from `kind`, so a reviewer resumed bare comes back a reviewer, not a worker. An unrecognized session id with no block is a hard error, never a silent worker spawn. To deliberately re-role a resumed session into a different capability class, pass `block` explicitly — same as any other spawn, and audited the same way (the agent-spawn record always carries block + session + resume). GROUNDING (#1273): pass task_id (a board task id from list_tasks) to spawn this agent AGAINST that row. Its grounding links — the requirement, spec, design note, test case or doc recorded on the task — are composed into the agent's kickoff as a `Grounding (board task t-N):` section, so the delegate reads what governs the work before it starts instead of you pasting the same pointers into every brief. Reviewers get the section too (a test-case link is a review input). Record the links on the row with upsert_task first — a bound row with no links is legal and simply adds no section. An UNKNOWN id is refused outright rather than silently spawning with no grounding, so a typo fails where you can see it. The binding is context only: it assigns nothing, claims nothing, and does not set assignee (still your own upsert_task call).",
@@ -2912,6 +2959,9 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 | "request_compact"
                 | "note_directive"
                 | "spawn_agent"
+                // #3318 F2 — spelled again here for the double gate; the
+                // listing's comment carries the argument.
+                | "fork_session"
                 | "send_prompt"
                 | "get_output"
                 | "kill_agent"
@@ -4062,6 +4112,54 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 a.role,
                 if resumed { " resuming its previous session" } else { "" },
                 session,
+            ))
+        }
+        // #3318 F2. `require_spawner` is the gate (orchestrator or lead — the
+        // listing is advertisement), and every refusal that is about the
+        // SOURCE lives in `OrchRegistry::fork_agent`, so the human's
+        // `orch_fork_agent` command gets the same sentences this does.
+        "fork_session" => {
+            require_spawner(caller)?;
+            let target = arg_str(args, "agent").ok_or("agent required")?;
+            let task = arg_str(args, "task").unwrap_or("");
+            let name = arg_str(args, "name").unwrap_or("");
+            let worktree = args.get("worktree").and_then(Value::as_bool);
+            let branch = arg_str(args, "branch").map(str::to_string);
+            // A lead forking its OWN pane: a standalone pane for its human,
+            // never a second lead (the one-root invariant). Decided on the
+            // caller's TOKEN identity, never on anything in `args` beyond the
+            // id it names — a lead naming any other id takes the delegate path
+            // below, where a lead source is refused.
+            if caller.role == Role::Lead && target == caller.agent_id {
+                let session = reg.request_solo_fork(&caller.group, &caller.agent_id)?;
+                return Ok(format!(
+                    "fork requested: a standalone pane forked from your session {session} opens \
+                     beside yours for your human — it is theirs, not one of your helpers, so it will \
+                     not report to you. You keep running as you were."
+                ));
+            }
+            let src = require_in_group(reg, caller, target)?;
+            let a = reg.fork_agent(&caller.group, &caller.agent_id, &src.id, task, worktree, branch, name)?;
+            let session = a
+                .session_id
+                .as_deref()
+                .map(|s| format!("Its session is {s}."))
+                .unwrap_or_else(|| {
+                    "Its session id is the CLI's to mint; it appears in list_agents once orrerix \
+                     learns it."
+                        .into()
+                });
+            // #802: the same persona notices `spawn_agent` relays.
+            let notices = reg.take_spawn_notices(&a.id);
+            let noted = if notices.is_empty() {
+                String::new()
+            } else {
+                format!(" NOTE: {}", notices.join(" "))
+            };
+            Ok(format!(
+                "forked {} into {} (\"{}\", block {}, {:?}). {session} {} keeps running untouched; \
+                 the fork reports to you like any delegate.{noted}",
+                src.id, a.id, a.name, a.block, a.role, src.id,
             ))
         }
         "send_prompt" => {

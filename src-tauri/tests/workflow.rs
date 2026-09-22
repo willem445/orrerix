@@ -3931,7 +3931,7 @@ fn compile(reg: &OrchRegistry, g: &loomux_lib::orchestration::GroupInfo, block_i
         Role::Worker,
         None,
     None,
-    );
+    ).unwrap();
     let argv = reg.build_agent_argv_ex(
         cli,
         workflow::model_of(b, &g.guardrails.agent_cli),
@@ -3948,7 +3948,7 @@ fn compile(reg: &OrchRegistry, g: &loomux_lib::orchestration::GroupInfo, block_i
         Role::Worker,
         None,
     None,
-    );
+    ).unwrap();
     (cmd, argv, inject.kickoff)
 }
 

@@ -3749,3 +3749,30 @@ fn the_planner_is_pointed_at_the_schemas_one_home_and_not_promised_one() {
          summary read as the contract"
     );
 }
+
+/// **#3318 F2 — a plan drive's planner cannot be forked**, for the review
+/// driver's reason: the driver routes its planner's reports by agent id, and a
+/// fork would be a planner it never briefed. A second, unowned planner in the
+/// same group is the control, admitted by the same call.
+#[test]
+fn a_fork_of_a_driven_planner_is_refused_and_an_undriven_one_is_not() {
+    let (reg, _d) = test_registry();
+    let repo = Repo::new();
+    let gh = FakeGh::open(&["agent-ready"]);
+    let (group, orch, planner) = driven(&reg, &repo, &gh);
+    assert_eq!(reg.pd_owner(&group, &planner), Some(3040), "the premise: the drive owns it");
+
+    let refused = reg
+        .fork_agent(&group, &orch, &planner, "", None, None, "")
+        .expect_err("a driven planner is the driver's");
+    assert!(refused.contains("plan drive's planner for issue #3040"), "{refused}");
+
+    let other = reg
+        .spawn_agent(&group, Role::Planner, "p2", "", false, None)
+        .expect("a second planner");
+    assert_eq!(reg.pd_owner(&group, &other.id), None, "…and it really is unowned");
+    let fork = reg
+        .fork_agent(&group, &orch, &other.id, "", None, None, "")
+        .unwrap_or_else(|e| panic!("the undriven control must be admitted: {e}"));
+    assert_eq!(fork.forked_from, other.session_id);
+}

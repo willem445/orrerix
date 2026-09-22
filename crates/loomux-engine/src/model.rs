@@ -799,23 +799,40 @@ pub struct CliCaps {
 /// written down once here and consulted, never re-derived as an
 /// `if cli == "..."` at a spawn site.
 ///
-/// **One variant carries a spelling today and that is deliberate, not an
-/// oversight.** #3318's F1 slice ships the claude arm alone, because the human
-/// tests and demos a fork on claude before any other CLI is added; the survey
-/// on #3318 found argv-reachable forks for codex, pi and opencode too, and
-/// F2 is where each of those rows is filled in with its own citation and its
-/// own test. A row that said `--fork` today on the strength of a doc page
-/// nobody had exercised would be a claim loomux could not keep.
+/// **Four variants, because the four vendors that can fork spell it three
+/// different ways** (#3318 F2). Each spelling is a fact read off the vendor at
+/// the version loomux pins — `docs/design/session-fork.md` carries the
+/// citation per row — and each row is exercised by a test that pins the fork
+/// line against the same CLI's resume line, token for token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForkSeam {
-    /// The resume line plus one flag: loomux builds the CLI's ordinary
-    /// `--resume <id>` invocation and appends this token.
+    /// The resume line plus one flag that takes no value: loomux builds the
+    /// CLI's ordinary "continue this session" invocation and adds this token.
     ///
     /// claude's `--fork-session` — "When resuming, create a new session ID
     /// instead of reusing the original"
     /// ([CLI reference](https://code.claude.com/docs/en/cli-reference), per the
-    /// `agent-cli-reference` skill).
-    Flag(&'static str),
+    /// `agent-cli-reference` skill) — and opencode's `--fork`, "Fork the
+    /// session when continuing (use with `--continue` or `--session`)".
+    ///
+    /// `premints_child` answers "does the line also NAME the child's id?".
+    /// claude's answer is live check L1 (`CLAUDE_FORK_PREMINTS_CHILD_ID`);
+    /// opencode's is no, because opencode has no flag that pre-assigns an id at
+    /// all — its fork is learned by the same store watcher a fresh opencode
+    /// pane's session is.
+    Flag { flag: &'static str, premints_child: bool },
+    /// The resume SUBCOMMAND's word replaced by this one, in the same slot:
+    /// codex's `codex [OPTIONS] fork <SESSION_ID>` beside `codex [OPTIONS]
+    /// resume <SESSION_ID>`. Never pre-mints (codex has no flag that names a
+    /// thread id up front — see `premints_session_id` on its row), so the
+    /// child is learned by the codex store watcher, unchanged.
+    Subcommand(&'static str),
+    /// A flag that takes the PARENT as its value, composed with the CLI's own
+    /// open-or-create id flag naming the CHILD: pi's
+    /// `--session-id <child> --fork <parent>`. The child's id is always
+    /// pre-minted — that composition is the whole point of this variant, and
+    /// it is measured on the installed pi rather than assumed (see pi's row).
+    ParentFlag(&'static str),
     /// loomux cannot fork this CLI from argv. The note says *why*, and is
     /// quoted into the refusal so a rejected gesture names what is missing
     /// rather than saying "unsupported".
@@ -823,12 +840,25 @@ pub enum ForkSeam {
 }
 
 impl ForkSeam {
-    /// The flag to append to the resume line, or `None` for a CLI loomux
-    /// cannot fork.
-    pub fn flag(&self) -> Option<&'static str> {
+    /// The vendor's fork token, or `None` for a CLI loomux cannot fork. For
+    /// [`ForkSeam::Subcommand`] this is the subcommand WORD, not a flag.
+    pub fn token(&self) -> Option<&'static str> {
         match self {
-            ForkSeam::Flag(f) => Some(f),
+            ForkSeam::Flag { flag, .. } => Some(flag),
+            ForkSeam::Subcommand(word) => Some(word),
+            ForkSeam::ParentFlag(flag) => Some(flag),
             ForkSeam::None(_) => None,
+        }
+    }
+
+    /// Whether a fork line names the CHILD's session id up front. `false` for
+    /// every variant whose child is learned after boot, and for `None`, which
+    /// never builds a fork line at all.
+    pub fn premints_child(&self) -> bool {
+        match self {
+            ForkSeam::Flag { premints_child, .. } => *premints_child,
+            ForkSeam::ParentFlag(_) => true,
+            ForkSeam::Subcommand(_) | ForkSeam::None(_) => false,
         }
     }
 }
@@ -845,18 +875,22 @@ impl ForkSeam {
 /// loomux spawning a real claude to find out. So this is a stated assumption,
 /// not a measurement, and **the human confirms or flips it**.
 ///
-/// **Both readers select their arm from this constant**, rather than from what
+/// **Every reader selects its arm from this constant**, rather than from what
 /// a caller happened to pass — which is what makes the flip below a real
-/// one-line edit instead of a documented intention. `build_agent_command_ex`
-/// and `build_agent_argv_ex` (`src-tauri`) each read it inside their claude
-/// fork arm, and `src/panerestore.ts`'s `agentForkCommand` reads its mirror.
+/// one-line edit instead of a documented intention. claude's row carries it as
+/// its seam's `premints_child`, which `build_agent_command_ex` and
+/// `build_agent_argv_ex` (`src-tauri`) read inside their claude fork arm and
+/// which `fork_agent` reads to decide whether to mint the child an id (#3318
+/// F2); `src/panerestore.ts`'s `agentForkCommand` reads its mirror.
 ///
 /// `true` (shipped default) selects the PRE-MINT line, which keeps the exact-id
 /// property every claude pane already has: the child's id is known before it
 /// boots, so nothing has to be learned and the one-shot record is exact.
 /// `false` selects the LEARNED line (`--resume <parent> --fork-session`, no
 /// `--session-id`), which is correct under either answer and costs the child's
-/// identity until #3318 F2 adds claude a session baseline to learn it from.
+/// identity: claude takes no session baseline, so nothing learns that id. F2
+/// did not add one, because the human ran F1 and kept this arm; the learned arm
+/// is a fallback that is built and pinned, not the one that ships.
 ///
 /// If L1 turns out FALSE and this is still `true`, the failure is bounded and
 /// visible rather than silent-and-wrong: the pane really is a fork of the right
@@ -882,8 +916,8 @@ pub const CLAUDE_FORK_PREMINTS_CHILD_ID: bool = true;
 pub fn fork_refusal(cli: &str) -> Option<String> {
     match cli_caps(cli) {
         Some(caps) => match caps.fork {
-            ForkSeam::Flag(_) => None,
             ForkSeam::None(note) => Some(format!("loomux cannot fork a {cli} session: {note}")),
+            ForkSeam::Flag { .. } | ForkSeam::Subcommand(_) | ForkSeam::ParentFlag(_) => None,
         },
         None => Some(format!(
             "loomux cannot fork a {cli} session: loomux has no capability record for {cli} at all, \
@@ -1027,13 +1061,17 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // a pane through it yet — the spawn-path wiring is #84's R2. Flipping
         // this row is R2's change to make, with its own tests.
         structured_driver: None,
-        // Claude Code's native fork, and the ONE row #3318 F1 fills in:
-        // `--fork-session` — "When resuming, create a new session ID
-        // instead of reusing the original" (CLI reference, checked
-        // 2026-09-21 per the `agent-cli-reference` skill). It rides the
-        // resume line loomux already builds, so a fork is that line plus
-        // one token — see `build_agent_command_ex`'s claude arm.
-        fork: ForkSeam::Flag("--fork-session"),
+        // Claude Code's native fork (#3318 F1): `--fork-session` — "When
+        // resuming, create a new session ID instead of reusing the original"
+        // (CLI reference, checked 2026-09-21 per the `agent-cli-reference`
+        // skill). It rides the resume line loomux already builds, so a fork is
+        // that line plus one token — see `build_agent_command_ex`'s claude
+        // arm. Whether the child is ALSO pre-minted is live check L1, and the
+        // constant is the one place that answer is written.
+        fork: ForkSeam::Flag {
+            flag: "--fork-session",
+            premints_child: CLAUDE_FORK_PREMINTS_CHILD_ID,
+        },
     },
     CliCaps {
         cli: "copilot",
@@ -1136,16 +1174,19 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // No structured surface loomux can drive; R3 is where one would come
         // from.
         structured_driver: None,
-        // opencode DOES document `--fork` ("Fork the session when
-        // continuing (use with --continue or --session)"), and the survey on
-        // #3318 expects it to compose with the `--session <id>` line loomux
-        // already builds. It is `None` here because #3318 F1 ships claude
-        // ALONE — the human demos one CLI before the rest are added — and a
-        // row claiming a spelling no test has exercised is a claim loomux
-        // cannot keep. F2 fills this in with its own citation and test.
-        fork: ForkSeam::None(
-            "opencode documents --fork, but loomux has not wired or tested it yet — #3318 F2",
-        ),
+        // #3318 F2: `--fork` — "Fork the session when continuing (use with
+        // --continue or --session)" (opencode.ai/docs/cli) — composed with
+        // the `--session <id>` line loomux already builds. Read at the pinned
+        // tag (`v1.18.25`, which is also the installed build):
+        // `cli/cmd/tui.ts` refuses `--fork` without `--continue`/`--session`,
+        // and the TUI calls `session.fork({ sessionID })` once sync
+        // completes. `Session.fork` (`session/session.ts`) creates the new
+        // row through `createNext` with NO `parentID`, so a fork is a
+        // top-level session the store watcher can see and the subagent
+        // spend rollup (which follows `parent_id`) never folds into its
+        // parent — live check L3 answered from source. Never pre-mints:
+        // opencode has no flag that names an id up front.
+        fork: ForkSeam::Flag { flag: "--fork", premints_child: false },
     },
     CliCaps {
         cli: "pi",
@@ -1204,16 +1245,18 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // extension-UI dialogs the PTY scrape cannot see. This row is what a
         // block's `driver: structured` is checked against.
         structured_driver: Some(crate::harness::Harness::Pi),
-        // pi documents `--fork <path|id>` ("Fork a session file or partial
-        // session ID into a new session"). `None` for #3318 F1's
-        // claude-only reason (see opencode's row), and pi has a second open
-        // question besides: whether `--fork` composes with the
-        // `--session-id` pre-mint above, or refuses it the way pi already
-        // refuses `--session` beside `--session-id`. That is live check L2
-        // on #3318, and F2 answers it before this row moves.
-        fork: ForkSeam::None(
-            "pi documents --fork, but loomux has not wired or tested it yet — #3318 F2",
-        ),
+        // #3318 F2: `--fork <path|id>` — "Fork a session file or partial
+        // session ID into a new session" (`docs/sessions.md`). Live check L2
+        // (does it compose with the `--session-id` pre-mint?) answered from
+        // the INSTALLED package, `@earendil-works/pi-coding-agent` 0.85.1,
+        // `dist/main.js`: `validateForkFlags` refuses `--fork` beside
+        // `--session`/`--continue`/`--resume`/`--no-session` and NOT beside
+        // `--session-id`; `createSessionManager` then calls
+        // `SessionManager.forkFrom(source, cwd, sessionDir, { id: sessionId })`,
+        // which writes the child under exactly that id — and refuses up front
+        // ("Session already exists with id …") if one already does. So a pi
+        // fork is as exact as a pi resume and needs no watcher.
+        fork: ForkSeam::ParentFlag("--fork"),
     },
     CliCaps {
         cli: "codex",
@@ -1273,15 +1316,17 @@ pub const CLI_CAPS: &[CliCaps] = &[
         ready_marker: None,
         // No structured surface loomux can drive.
         structured_driver: None,
-        // codex documents `codex fork [SESSION_ID]` ("Fork a previous
-        // interactive session into a new chat, preserving the original
-        // transcript") — a SUBCOMMAND in the same positional slot as
-        // `resume <id>`, not a flag, so its row will need a variant this
-        // enum does not have yet. `None` for #3318 F1's claude-only reason;
-        // F2 adds both the variant and the row.
-        fork: ForkSeam::None(
-            "codex documents a codex-fork subcommand, but loomux has not wired or tested it yet — #3318 F2",
-        ),
+        // #3318 F2: `codex fork [SESSION_ID]` — "Fork a previous interactive
+        // session (picker by default; use --last to fork the most recent)",
+        // `cli/src/main.rs` at the pin (`rust-v0.153.4`). A SUBCOMMAND in the
+        // same positional slot as `resume <id>`, and `-p` is documented to
+        // apply to it ("--profile only applies to runtime commands …
+        // `codex resume` … `codex fork`"). The TUI resolves a fork's cwd
+        // through the SAME `resolve_cwd_for_resume_or_fork` a resume uses, so
+        // the `-C` the resume line carries does the same work here. The child
+        // is a new thread (a new rollout), learned by the codex store watcher
+        // unchanged.
+        fork: ForkSeam::Subcommand("fork"),
     },
 ];
 

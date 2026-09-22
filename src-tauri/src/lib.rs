@@ -325,6 +325,7 @@ pub fn run() {
             orchestration::orch_lead_bind,
             orchestration::orch_confirm_solo_copilot_autopilot,
             orchestration::orch_solo_adopt,
+            orchestration::orch_fork_agent,
             orchestration::todo::todo_snapshot,
             orchestration::todo::todo_apply,
             cliprobe::probe_agent_cli,

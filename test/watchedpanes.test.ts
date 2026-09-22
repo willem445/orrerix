@@ -33,6 +33,32 @@ test("the mark and its tooltip say how to clear it", () => {
   assert.match(WATCHED_TITLE, /stop/i);
 });
 
+test("the tooltip's unconditional gesture is the CLICK, and the chord is qualified", () => {
+  // #3320 rev-final. The tooltip used to read "click, or press Alt+H, to
+  // stop", which is false of the pane most likely to be wearing the mark:
+  // `toggle-watch` acts on the ACTIVE pane, so following that instruction on
+  // an unfocused watched pane clears the watch on a DIFFERENT pane — the one
+  // thing this feature promises cannot happen.
+  //
+  // Pinned as an ORDER plus a condition rather than as the whole sentence, so
+  // rewording stays free and dropping the qualifier does not.
+  const clickAt = WATCHED_TITLE.indexOf("click");
+  const chordAt = WATCHED_TITLE.indexOf(WATCH_CHORD);
+  assert.ok(clickAt >= 0, "the tooltip must name the gesture that always works on THIS pane");
+  assert.ok(chordAt >= 0, "the tooltip must still make the chord discoverable");
+  assert.ok(clickAt < chordAt, "the unconditional gesture must lead");
+  assert.match(
+    WATCHED_TITLE,
+    /focused/,
+    "the chord must be qualified by the condition that makes it true — it acts on the ACTIVE pane",
+  );
+  // And the shape rule this repo applies to every user-facing message: one
+  // paragraph, no embedded newline, no run of indentation from the source.
+  assert.doesNotMatch(WATCHED_TITLE, /\n/, "a tooltip is one paragraph");
+  assert.doesNotMatch(WATCHED_TITLE, / {10}/, "a collapsed line-continuation left its indent in the string");
+});
+
+
 test("watchedCount counts only the watched", () => {
   assert.equal(watchedCount([]), 0);
   assert.equal(watchedCount([pane("a"), pane("b")]), 0);

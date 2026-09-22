@@ -69,8 +69,21 @@ export const NEXT_WATCHED_CHORD = "Ctrl+Shift+H";
 
 /** The chip's tooltip. Says what UNDOES it, because the mark itself already
  *  says what it is and "never cleared automatically" (#3319 AC5) is only
- *  reassuring if the human can see how to clear it. */
-export const WATCHED_TITLE = `You are watching this pane — click, or press ${WATCH_CHORD}, to stop`;
+ *  reassuring if the human can see how to clear it.
+ *
+ *  THE CHORD IS QUALIFIED, and that qualification is the whole point (#3320
+ *  rev-final). This read "click, or press Alt+H, to stop", which is false of
+ *  the pane most likely to be wearing the mark: `toggle-watch` acts on the
+ *  ACTIVE pane (`toggleWatchOnActivePane`), so a human reading this tooltip on
+ *  a watched pane they have NOT focused and pressing the chord would clear the
+ *  watch on some other pane — the opposite of what the sentence promised, on a
+ *  feature whose one guarantee is that only they clear it.
+ *
+ *  The click is unconditional (the chip is on this pane's own header), so it
+ *  leads; the chord keeps its discoverability behind the condition that makes
+ *  it true. */
+export const WATCHED_TITLE =
+  `You are watching this pane — click to stop, or press ${WATCH_CHORD} while it is focused`;
 
 /** How many of these are watched.
  *

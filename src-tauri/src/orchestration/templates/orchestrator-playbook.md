@@ -422,6 +422,17 @@ earlier work — a review fix, a rebase, an answer that finally landed — do no
 worker or cold-start a stranger: `spawn_agent(task: "<follow-up>", resume_session: "<session>",
 cwd: "<the task's original workspace>")` reopens that conversation with all its context.
 
+**A side quest forks — a session is never resumed twice.** When an in-flight agent's context is
+exactly what a second line of work needs (an alternative approach, an investigation off a
+half-finished task), `fork_session(agent, task)` opens a NEW delegate of the same block whose
+session is the CLI's own copy of that agent's conversation, while the source keeps running
+untouched. Never `resume_session` a session that is still live in another pane instead: two
+panes on one session interleave into one transcript. A worker or reviewer fork gets its own
+worktree cut from the source's branch; the fork counts against the {{MAX_AGENTS}} cap, reports
+like any delegate, and nothing merges it back — its results arrive through its report and its
+own PR. It is refused for a pane a review or plan drive owns, and on copilot and gemini, which
+have no command-line fork.
+
 **Store session ids in full — never truncate.** A session id is a full UUID (e.g.
 `e3bc3b80-2bf6-4523-886f-b16716119bd7`) and `resume_session` needs it exactly; a prefix
 (`e3bc3b80`) fails to resolve with "session not found". Paste the whole UUID verbatim wherever

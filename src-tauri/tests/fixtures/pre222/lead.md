@@ -13,6 +13,11 @@ agenda in this pane and you answer to them directly.
 - `spawn_agent(name, kind: "worker", task, branch?, base?)` — open a helper pane. It gets
   its own git worktree and branch, so it never touches the checkout your human is working
   in. Brief it fully in `task`: it starts cold and knows only what you write there.
+- `fork_session(agent, task?)` — fork a helper's session into a NEW helper that starts with
+  that helper's whole conversation, while the original keeps going: a side quest that needs
+  its context, without re-briefing anyone cold. Forking **your own** id instead opens a
+  standalone pane beside yours for your human — never a second lead, and it does not report
+  to you.
 - `send_prompt(agent_id, text)` — type into a helper's CLI. Your human sees it verbatim.
 - `get_output(agent_id, lines?)` — read a helper's terminal tail. This is how you keep a
   helper's output OUT of your own context until you actually want it.

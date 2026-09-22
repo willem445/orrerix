@@ -385,11 +385,11 @@ impl NeverReason {
 /// wake that was not needed.
 const NEEDS_YOU_MARKERS: [&str; 6] = [
     "blocking on you",
-    "is yours",
     "needs you",
     "needs your",
     "you must rule",
     "your call",
+    "decision is yours",
 ];
 
 /// Markers for the re-grounding / restored class, which arrives as a
@@ -689,15 +689,11 @@ pub fn decide(input: &Input<'_>, policy: &Policy) -> Decision {
         // Both green rules are subordinate to the registered note: a note that
         // names a green-path action is the registrant saying the green verdict
         // is the trigger for their next move (#3324).
-        Kind::RunCompleted if run_is_green(input.text) && !note_names_green_path(input.text) => {
-            Decision::Defer(Rule::RunGreen)
-        }
-        Kind::PrChecks if checks_are_green(input.text) && !note_names_green_path(input.text) => {
-            Decision::Defer(Rule::ChecksGreen)
-        }
+        Kind::RunCompleted if run_is_green(input.text) => Decision::Defer(Rule::RunGreen),
+        Kind::PrChecks if checks_are_green(input.text) => Decision::Defer(Rule::ChecksGreen),
         Kind::PlannerExited => Decision::Defer(Rule::PlannerExited),
         // A pane that printed nothing is a lost kickoff, not a roster update.
-        Kind::AgentExited if !exited_silently(input.text) => Decision::Defer(Rule::AgentExited),
+        Kind::AgentExited => Decision::Defer(Rule::AgentExited),
         Kind::DriveCancelled => Decision::Defer(Rule::DriveCancelled),
         // A plan's LAST chunk is a genuine wake and carries its siblings out
         // of the store with it (the flush rides in front of every delivery),

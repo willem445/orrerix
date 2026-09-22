@@ -7199,7 +7199,7 @@ button.wf-finding:hover { background: var(--surface-2); }
 }
 
 /* THE ITEM'S COLOUR (#3335 AC 3) — the human's own label, IDENTITY channel, in
-   ONE position: a short rounded stripe inside the row's left padding. Inset
+   ONE position: a short 2px stripe inside the row's 6px left padding. Inset
    3px so it never sits in the 2px left edge, which is the accent's (!!!
    priority) — and never the warp position, whose colour must always answer the
    agent-state question. All eight identity hues are offered: this position is
@@ -7209,7 +7209,7 @@ button.wf-finding:hover { background: var(--surface-2); }
   left: 3px;
   top: var(--space-2);
   bottom: var(--space-2);
-  width: 3px;
+  width: 2px;
   border-radius: var(--radius-pill);
   background: var(--tdp-stripe);
 }

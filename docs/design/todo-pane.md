@@ -1149,8 +1149,8 @@ Two new coloured positions, both IDENTITY, both pinned BY NAME in
 `test/theme.test.ts`'s To-Do positions test beside the dot and the overdue date
 (#1344's population rule):
 
-* **the item's colour** is a 3px rounded stripe inside the row's left padding,
-  offset 3px from the edge — never the 2px left edge, which is the accent's
+* **the item's colour** is a 2px rounded stripe inside the row's 6px left
+  padding, offset 3px from the edge — never the 2px left edge, which is the accent's
   (`!!!`) and the warp's position — and the expanded row's eight swatches. All
   eight identity hues are offered: the stripe is nowhere near the one state
   position (the overdue date), so the three state-sharing hues cannot be misread

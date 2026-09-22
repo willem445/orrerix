@@ -29,6 +29,7 @@
 // now legitimately can.
 
 import type { MenuItem } from "./contextmenu";
+import { watchMenuLabel } from "./watchedpanes.ts";
 
 /** One pane's orchestration identity, as a connect action needs it — bound at
  *  arm/complete time (the same identity-vs-index discipline filemenu.ts's header
@@ -67,6 +68,14 @@ export type PaneMenuAction =
    *  `to.agentId`, chosen at completion, never inferred from gesture order. */
   | { kind: "connect-complete"; from: PaneIdentity; to: PaneIdentity; senderAgent: string }
   | { kind: "connect-cancel" }
+  /** Watch, or stop watching, the pane the menu was opened on (#3319). It
+   *  carries NO pane reference, deliberately unlike its siblings here: the
+   *  other actions are fired at a pane named in the action because the pane
+   *  they act on may not be the one you right-clicked (a connect names both
+   *  ends). This one always acts on the pane the menu belongs to, which the
+   *  dispatcher already holds, and inventing a second way to say so would be a
+   *  second thing that can disagree. */
+  | { kind: "toggle-watch" }
   | { kind: "disconnect"; pane: PaneIdentity }
   /** Human-only sender swap (B5) — "Make this pane the sender" on a
    *  token-holding receiver of an already-live channel. */
@@ -134,6 +143,10 @@ export interface PaneConnectState {
   sessionId: string | null;
   /** The pane's working directory — becomes the promoted group's repo. */
   workdir: string | null;
+  /** Whether the human is currently watching this pane (#3319) — the only
+   *  field here that gates nothing and enables nothing. Every pane can be
+   *  watched, so this decides the item's VERB and never its presence. */
+  watched: boolean;
 }
 
 const NOT_CAPABLE_REASON =
@@ -238,6 +251,19 @@ export function buildPaneMenu(pane: PaneConnectState, pending: PendingConnect | 
     if (items.length) items.push({ label: "", separator: true });
     items.push(promote);
   }
+  // The watch (#3319), composed HERE and outside `connectItems` for the reason
+  // the promote item is: those branches short-circuit on a pane with no channel
+  // identity, and this gesture is about EVERY pane — a plain shell and a files
+  // pane are watchable, and a human who right-clicks one and finds only a
+  // greyed "Connect" has been told the menu has nothing for them.
+  //
+  // LAST in the menu, after its own separator: it is the only item here that
+  // changes nothing outside this window and asks nothing of any agent, so it
+  // sits below the two that do. It is never `disabled` — there is no pane this
+  // question cannot be asked about, which is why `PaneConnectState.watched`
+  // gates nothing.
+  if (items.length) items.push({ label: "", separator: true });
+  items.push({ label: watchMenuLabel(pane.watched), action: { kind: "toggle-watch" } });
   return items;
 }
 

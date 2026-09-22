@@ -50,6 +50,12 @@ export interface TabPaneInfo {
    *  null/absent. Only ever set on an agent/orch pane — content and terminal
    *  panes have no MCP identity to join a channel with. */
   connectedChannel?: string | null;
+  /** The human's watch on this pane (#3319). Absent reads as false — every
+   *  caller that does not care keeps its existing literals. Counted for EVERY
+   *  kind, deliberately unlike `agents`: that count is about what loomux is
+   *  running, and this one is about what the human said to look at, which they
+   *  may say about a terminal or an editor pane as readily as about an agent. */
+  watched?: boolean;
 }
 
 /** What the tab strip renders for one tab. */
@@ -72,6 +78,11 @@ export interface TabCounts {
    *  connected pane is otherwise invisible until you switch to it (its header
    *  chip is the per-pane indicator; this is the cross-tab one). */
   connectedChannels: number;
+  /** Panes in this tab the human is watching (#3319) — the tab strip's answer
+   *  to "are any of the ones I care about over there". A COUNT rather than a
+   *  boolean because a tab is not a pane: "one of these" and "four of these"
+   *  are different amounts of reason to switch, and the strip can show it. */
+  watched: number;
 }
 
 /** Count a tab's live agents and classify its orchestration state.
@@ -85,8 +96,14 @@ export function tabCounts(panes: readonly TabPaneInfo[], groupBound: boolean): T
   let agents = 0;
   let liveOrch = false;
   let dormantOrchPane = false;
+  let watched = 0;
   const channelIds = new Set<string>();
   for (const p of panes) {
+    // Before the kind switch, not inside it: a watch is not about what the pane
+    // IS (#3319). Counted inline rather than through `watchedpanes.ts`'s
+    // `watchedCount`, which would be a second pass over an array this loop is
+    // already walking for the agent and channel counts.
+    if (p.watched) watched++;
     if (p.kind === "agent") {
       if (p.live) agents++;
     } else if (p.kind === "orch") {
@@ -103,5 +120,5 @@ export function tabCounts(panes: readonly TabPaneInfo[], groupBound: boolean): T
   // in the layout. Suppressed the moment any orch pane is live — then the live
   // icon speaks for the tab instead.
   const dormantOrch = !liveOrch && (groupBound || dormantOrchPane);
-  return { agents, liveOrch, dormantOrch, connectedChannels: channelIds.size };
+  return { agents, liveOrch, dormantOrch, connectedChannels: channelIds.size, watched };
 }

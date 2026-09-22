@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 
 import { agentMark } from "../src/agenticons.ts";
 import { AGENTS } from "../src/agents.ts";
-import type { AgentRow, AgentState, TabRef } from "../src/agentrows.ts";
+import { matchesFilter, type AgentRow, type AgentState, type TabRef } from "../src/agentrows.ts";
 import { sessionCliFromCommand } from "../src/panerestore.ts";
 import {
   AGENT_ORDER_LABEL,
@@ -17,11 +17,14 @@ import {
   ORDER_CHOICES,
   agentIdentityLine,
   agentRowMark,
+  emptyMessage,
   filterChips,
   listSlots,
   markKey,
   sweep,
   visibleGroups,
+  watchedListLines,
+  watchedNotInList,
 } from "../src/agentsviewmodel.ts";
 
 /** One tab, so every fixture below lands in one group and the assertions stay
@@ -41,6 +44,10 @@ const row = (state: AgentState, over: Partial<AgentRow> = {}): AgentRow => ({
   notes: null,
   tab: WS,
   mark: LOCAL_SHELL,
+  // #3319: unwatched unless a case says so. Explicit because this file is
+  // outside tsconfig's `include`, so an omitted required field reads as
+  // `undefined` at runtime rather than failing to compile.
+  watched: false,
   ...over,
 });
 
@@ -502,4 +509,144 @@ test("a workflow block shows as itself, not as the built-in role it resembles", 
   // `rev-security` agent must read `rev-security` here. Branching on a known
   // role name to produce a label is the #722/#841 defect one channel over.
   assert.equal(agentIdentityLine(row("working", { role: "rev-security" })), "rev-security");
+});
+
+// ---------- #3319 / #3320 review round 1 B2: the watched chip ----------
+
+test("#3319: the watched chip counts the watched rows and sits second", () => {
+  const rows = [row("idle"), row("working", { watched: true }), row("idle", { watched: true })];
+  const chips = filterChips(rows, "all");
+  assert.deepEqual(
+    chips.map((c) => c.filter),
+    ["all", "watched", "working", "idle"],
+    "watched must sit directly after `all`, ahead of the state ladder",
+  );
+  const watched = chips.find((c) => c.filter === "watched");
+  assert.equal(watched?.count, 2);
+  // The discriminator against counting rows.length or the selected state: two
+  // of three rows are watched and they are on DIFFERENT rungs, so a count that
+  // came off the ladder would answer 1.
+  assert.notEqual(watched?.count, rows.length);
+});
+
+test("#3319: no watched chip until something is watched — and it survives being selected", () => {
+  assert.equal(
+    filterChips([row("idle"), row("working")], "all").some((c) => c.filter === "watched"),
+    false,
+    "the chip must not clutter the strip for someone who has never set a watch",
+  );
+  // The other half, which is the state-chip rule this one follows: the chip the
+  // human is STANDING on is offered even at zero, or the filter becomes
+  // unclearable.
+  const chips = filterChips([row("idle")], "watched");
+  const watched = chips.find((c) => c.filter === "watched");
+  assert.ok(watched, "the selected chip vanished, leaving the filter unclearable");
+  assert.equal(watched.count, 0);
+  assert.equal(watched.selected, true);
+});
+
+test("#3319: the watched filter matches on the watch, not on a rung", () => {
+  const watched = row("idle", { watched: true });
+  const unwatched = row("idle");
+  assert.equal(matchesFilter(watched, "watched"), true);
+  assert.equal(matchesFilter(unwatched, "watched"), false);
+  // Both rows are `idle`, so a filter that had been folded into the state
+  // ladder would answer the same for the two of them.
+  assert.equal(matchesFilter(watched, "idle"), true);
+  assert.equal(matchesFilter(unwatched, "idle"), true);
+});
+
+test("#3319: the empty line for `watched` is not the state sentence", () => {
+  // "No panes are watched" would be wrong English about a thing the human DOES
+  // to a pane, and `AGENT_STATE_LABEL` has no entry to build it from anyway.
+  assert.equal(emptyMessage("watched"), "You are not watching any panes.");
+  assert.doesNotMatch(emptyMessage("watched"), /No panes are/);
+});
+
+test("#3320 B2: the list says how many watched panes it cannot show", () => {
+  // The finding: `agentRows` is `isAgentPane`-filtered, so a watched shell has
+  // no row here — and the surface said nothing while the docs called it the
+  // overview. `total` comes from the UNFILTERED facts, `listed` from the rows.
+  assert.equal(watchedNotInList(3, 1), "2 watched panes are not an agent pane and are not listed here — press Ctrl+Shift+H to reach them.");
+  assert.match(watchedNotInList(2, 1) ?? "", /^1 watched pane is not an agent pane/, "singular");
+  assert.match(watchedNotInList(2, 1) ?? "", /reach it\.$/, "singular pronoun");
+});
+
+test("#3320 B2: no note when the list can show them all", () => {
+  // The common case, and the one that must add no chrome. Equality and the
+  // impossible-but-cheap negative both answer null, so a wrong sign cannot
+  // render "-1 watched panes".
+  assert.equal(watchedNotInList(0, 0), null);
+  assert.equal(watchedNotInList(4, 4), null);
+  assert.equal(watchedNotInList(1, 3), null);
+  // Positive control on the three above: the function DOES speak when there is
+  // a gap, so the nulls are a decision and not a function that never returns.
+  assert.notEqual(watchedNotInList(1, 0), null);
+});
+
+// ---------- #3320 review round 2, N4: the two lines, composed ----------
+
+test("#3320 N4: the empty line and the footnote never contradict each other", () => {
+  // THE DEFECT, as a fixture: two watched shells, no agent panes, watched chip
+  // selected. Before this, `emptyMessage` said "You are not watching any
+  // panes." and the footnote said "2 watched panes are not an agent pane…" —
+  // one counting rows, the other counting panes, both true alone, nonsense
+  // together. Neither function could see the other, which is why the
+  // composition is what is pinned.
+  const lines = watchedListLines(2, 0);
+  assert.equal(lines.empty, null, "the generic empty line must not run alongside the note");
+  assert.ok(lines.note);
+  assert.doesNotMatch(
+    lines.note,
+    /not watching any panes/,
+    "the note must not repeat the claim the empty line was making",
+  );
+  // And it has to carry the whole answer now that it is alone: that NONE is
+  // listed, not that some remainder is missing.
+  assert.match(lines.note, /none is listed here/);
+  assert.match(lines.note, /Ctrl\+Shift\+H/);
+});
+
+test("#3320 N4: one watched non-agent pane reads as one, not as a remainder", () => {
+  const lines = watchedListLines(1, 0);
+  assert.equal(lines.empty, null);
+  assert.match(lines.note ?? "", /^The one pane you are watching is not an agent pane/);
+  assert.match(lines.note ?? "", /reach it\.$/);
+});
+
+test("#3320 N4: with rows on screen the note is about the REST", () => {
+  // The other reading of the same gap, and it must not claim "none is listed"
+  // when three are. The two sentences are genuinely different, which is why
+  // this is not one string with a plural.
+  const lines = watchedListLines(5, 3);
+  assert.equal(lines.empty, null, "there are rows, so there is no empty line either way");
+  assert.match(lines.note ?? "", /^2 watched panes are not an agent pane/);
+  assert.doesNotMatch(lines.note ?? "", /none is listed/);
+});
+
+test("#3320 N4: no gap means the ordinary empty line, or nothing at all", () => {
+  // Watching nothing, on the watched chip: the plain sentence, no footnote.
+  assert.deepEqual(watchedListLines(0, 0), { empty: "You are not watching any panes.", note: null });
+  // Every watched pane listed: no chrome at all.
+  assert.deepEqual(watchedListLines(3, 3), { empty: null, note: null });
+  // Positive control on the two nulls above: the pair DOES speak when there is
+  // a gap, so these are decisions and not a function that always answers null.
+  assert.notEqual(watchedListLines(1, 0).note, null);
+});
+
+test("#3320 N4: exactly one of the two lines ever speaks", () => {
+  // The invariant the composition exists to hold, swept over the quadrants
+  // rather than asserted once — a later edit that reintroduced the empty line
+  // beside the note would pass every test above that names one line.
+  let spoke = 0;
+  for (const total of [0, 1, 2, 5]) {
+    for (let listed = 0; listed <= total; listed++) {
+      const { empty, note } = watchedListLines(total, listed);
+      assert.ok(!(empty !== null && note !== null), `both lines speak at total=${total} listed=${listed}`);
+      if (empty !== null || note !== null) spoke += 1;
+    }
+  }
+  // Population control (#1209): a sweep where nothing ever spoke would satisfy
+  // the assertion above in silence.
+  assert.ok(spoke >= 5, `only ${spoke} of the quadrants said anything — the sweep is blind`);
 });

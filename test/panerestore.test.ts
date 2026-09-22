@@ -45,6 +45,7 @@ const pane = (over: Partial<PersistedPane>): PersistedPane => ({
   file: null,
   sshProfileId: null,
   lead: false,
+  watched: false,
   embeds: [],
   ...over,
 });
@@ -1625,6 +1626,7 @@ test("GUARDRAIL: a persisted ssh leaf can NEVER restore into an orchestration id
       name: "remote box",
       sshProfileId: "prof-1",
       lead: false,
+      watched: false,
       sessionId: "s-1",
       role: "worker",
       groupId: "loomux-deadbeef",
@@ -1655,6 +1657,7 @@ test("a recorded ssh command line is NOT carried into the restore action", () =>
       name: "box",
       sshProfileId: "p1",
       lead: false,
+      watched: false,
       command: "ssh host",
       argv: ["ssh", "-t", "host", "--", "claude --session-id s-1"],
     })
@@ -2146,4 +2149,87 @@ test("LEAD_CLIS is exactly the set `lead_mcp_args` has an arm for (#2519 C2)", (
     "the named refusal and the arm set say the same thing about codex"
   );
   assert.equal(refusesCodexByName, !isLeadCli("codex"), "…and the launcher gate says it too");
+});
+
+// ---------- #3319 AC3 on the LAYOUT path (rev-final B1) ----------
+
+test("#3319 AC3: planLayoutRestore carries each leaf's OWN watch to its own step", () => {
+  // THE HOLE THIS CLOSES. `RestoreOpenStep.watched` is how a watch survives an
+  // app restart for every pane that is not docked — main.ts's layout replay
+  // reads it and calls `setWatched(true)`. Both expressions that fill it
+  // (`entryLeafPane(layout).watched` and `entryLeafPane(node.children[i])
+  // .watched`) were pinned by nothing: replacing BOTH with a literal
+  // `watched: false` left the whole suite green and `tsc` clean, which is
+  // AC3 silently gone for every non-docked pane.
+  //
+  // The fixture DIVERGES on purpose — watched and unwatched leaves
+  // interleaved, in both the entry position and the sibling positions. An
+  // all-false tree would pass against `watched: false`, and an all-true one
+  // against `watched: true`; only a mixture can tell the expressions from a
+  // constant.
+  const tree: PersistedLayoutNode = {
+    kind: "split",
+    dir: "row",
+    weight: 1,
+    children: [
+      // The ENTRY leaf of the whole tree — the first expression's subject.
+      leaf(1, { paneKind: "terminal", name: "entry-watched", watched: true }),
+      leaf(1, { paneKind: "terminal", name: "sibling-plain", watched: false }),
+      // A nested split, so the second expression has to reach the entry leaf of
+      // a SUBTREE rather than a direct child.
+      {
+        kind: "split",
+        dir: "column",
+        weight: 1,
+        children: [
+          leaf(1, { paneKind: "terminal", name: "nested-entry-watched", watched: true }),
+          leaf(1, { paneKind: "terminal", name: "nested-plain", watched: false }),
+        ],
+      },
+    ],
+  };
+
+  const steps = planLayoutRestore(tree);
+  // Keyed by the pane each step actually opens, so the assertion does not
+  // depend on the order `expand` happens to emit steps in — that order is
+  // pinned by its own tests above.
+  const byName = new Map(steps.map((s) => [s.action.name, s.watched]));
+  assert.deepEqual(
+    [...byName.entries()].sort(),
+    [
+      ["entry-watched", true],
+      ["nested-entry-watched", true],
+      ["nested-plain", false],
+      ["sibling-plain", false],
+    ],
+    "a step's `watched` must be its own leaf's, not a constant and not a neighbour's",
+  );
+  // The discriminators, stated separately so a failure says which half broke:
+  // a constant `false` fails the first, a constant `true` the second.
+  assert.equal(byName.get("entry-watched"), true, "the tree's entry leaf lost its watch");
+  assert.equal(byName.get("sibling-plain"), false, "an unwatched sibling gained one");
+  assert.equal(byName.get("nested-entry-watched"), true, "a nested subtree's entry leaf lost its watch");
+  // Population control (#1209): four steps, one per leaf. A plan that had
+  // stopped emitting steps would satisfy the map comparison with an empty map.
+  assert.equal(steps.length, 4, `planLayoutRestore emitted ${steps.length} steps, not 4`);
+});
+
+test("#3319 AC3: a tree nobody watched carries no watch anywhere", () => {
+  // The negative control on the test above: with the same shape and every
+  // watch cleared, every step must read false. Without this, an implementation
+  // that returned `true` unconditionally would pass every assertion there
+  // except the two `false` ones — and those two are exactly what a careless
+  // fixture edit would drop.
+  const tree: PersistedLayoutNode = {
+    kind: "split",
+    dir: "row",
+    weight: 1,
+    children: [
+      leaf(1, { paneKind: "terminal", name: "a" }),
+      leaf(1, { paneKind: "terminal", name: "b" }),
+    ],
+  };
+  const steps = planLayoutRestore(tree);
+  assert.equal(steps.length, 2);
+  assert.deepEqual(steps.map((s) => s.watched), [false, false]);
 });

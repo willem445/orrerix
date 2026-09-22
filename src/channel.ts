@@ -31,8 +31,20 @@ export type ConnectEffect =
  *  happened to be the armed source (there is nothing left to complete against);
  *  `set-sender` doesn't touch the pending-arm state at all — it's a mutation on an
  *  already-live channel, orthogonal to the connect gesture. */
+/** The pane-menu actions this reducer is about — every one EXCEPT the watch
+ *  toggle (#3319), which is a local mark on one pane with no channel meaning
+ *  at all.
+ *
+ *  Subtracted from `PaneMenuAction` rather than listed, so a NEW connect action
+ *  is covered here the moment it is declared and only a deliberate second
+ *  exclusion can ever narrow this. The compiler is what enforces the split: the
+ *  switch below is exhaustive with no `default`, so adding `toggle-watch` to
+ *  the union without this made `reduceConnect` fail to compile — which is how
+ *  the exclusion was found rather than assumed. */
+export type ConnectAction = Exclude<PaneMenuAction, { kind: "toggle-watch" }>;
+
 export function reduceConnect(
-  action: PaneMenuAction,
+  action: ConnectAction,
   pending: PendingConnect | null
 ): { pending: PendingConnect | null; effect: ConnectEffect } {
   switch (action.kind) {

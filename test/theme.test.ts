@@ -1432,6 +1432,176 @@ test("the four agent states stay separable under colour-vision deficiency", () =
   }
 });
 
+test("the human's watched mark cannot be mistaken for anything the agent says", () => {
+  // #3319 AC2: a watched pane must read BESIDE the attention chip, not fight
+  // it. That is a measurement, and this is where it is made rather than where
+  // it is remembered — theme.ts §SEMANTIC.watched states 20.5 ΔE and names the
+  // candidates it beat, and a sentence in a comment is not a guard.
+  //
+  // The comparison set is every state dye PLUS `held`, `idle` and the accent.
+  // The two achromatic states are in it deliberately: `held` is `mist400` and a
+  // violet at this luminance is the pigment most at risk of collapsing toward a
+  // grey under CVD — and it is indeed where the worst case lands (tritan).
+  // The accent is in it because gold was the structural alternative: a mark the
+  // human sets is arguably the interaction channel's, and the reason it is not
+  // is that gold already means focus and sits 12.8 ΔE from attention.
+  const others: Record<string, string> = {
+    working: SEMANTIC.stateWorking,
+    attention: SEMANTIC.stateAttention,
+    ok: SEMANTIC.stateOk,
+    danger: SEMANTIC.stateDanger,
+    held: SEMANTIC.stateHeld,
+    idle: SEMANTIC.stateIdle,
+    accent: SEMANTIC.accent,
+  };
+  let worst = Number.POSITIVE_INFINITY;
+  let worstAt = "";
+  let compared = 0;
+  for (const kind of [null, ...CVD_KINDS] as (null | Cvd)[]) {
+    const view = (hex: string) => (kind === null ? hex : simulate(hex, kind));
+    for (const [name, hex] of Object.entries(others)) {
+      const d = deltaE(view(SEMANTIC.watched), view(hex));
+      compared += 1;
+      if (d < worst) {
+        worst = d;
+        worstAt = `${name} / ${kind ?? "normal vision"}`;
+      }
+    }
+  }
+  // The population control (#1209): a comparison set that had gone empty leaves
+  // `worst` at Infinity, which passes the floor below in silence.
+  assert.equal(compared, 28, `only ${compared} comparisons ran — the sweep is blind, not the mark clean`);
+  assert.ok(
+    worst >= 9,
+    `the watched mark is ${worst.toFixed(1)} ΔE from "${worstAt}" — below the state channel's ` +
+      "own floor, so a human cannot tell their own bookmark from something the agent said",
+  );
+  // And the figure theme.ts prints, to one decimal, so that retuning any dye
+  // here reddens instead of silently making that table a historical note.
+  assert.equal(
+    worst.toFixed(1),
+    "20.5",
+    `theme.ts §SEMANTIC.watched says 20.5 ΔE; the palette now measures ${worst.toFixed(1)} ` +
+      `(worst at ${worstAt}) — re-derive the candidate table there`,
+  );
+  // It is a MARK: it paints glyphs and edges, so it takes the ramp's AA floor
+  // on every ground a pane, a dock chip, a tab or an agents row can sit on.
+  for (const ground of [SEMANTIC.surfaceTerm, SEMANTIC.surface0, SEMANTIC.surface1, SEMANTIC.surface2]) {
+    const ratio = contrast(SEMANTIC.watched, ground);
+    assert.ok(ratio >= 4.5, `the watched mark on ${ground} is ${ratio.toFixed(2)}:1, below AA`);
+  }
+  // Not a state dye, and this is the assertion that keeps it out rather than
+  // the naming convention: promoting it into SEMANTIC.state* would widen the
+  // closed six the CVD guard above measures, and that is a decision to argue,
+  // not to arrive at.
+  for (const [role, hex] of Object.entries(others)) {
+    assert.notEqual(
+      hex,
+      SEMANTIC.watched,
+      `the watched mark is now also the "${role}" pigment — the human's bookmark and the ` +
+        "agent's reading would be the same colour, which is the one thing #3319 forbids",
+    );
+  }
+});
+
+test("one watched mark: every surface that marks a watched pane paints it --mark-watched", () => {
+  // The one-table rule (the CLI and level guards' own shape), applied to the
+  // four surfaces #3319 marks. Its point is that a fifth surface added later
+  // cannot reach for `--id-violet` — the identical pigment — and give the
+  // reuse a third meaning nobody argued for.
+  // Default-deny over the four CHANNEL prefixes, which are the pigments a
+  // watched mark could actually be confused with — a reading the agent
+  // produced. It is deliberately not "every token but --mark-watched":
+  // `.pane.watched.active` legitimately restates the focus ring in `--accent`
+  // (a `box-shadow` is one declaration, so composing with the pane's own
+  // affordance means naming it), and `--shadow-card` carries no hue at all.
+  // Denying by channel says the thing that matters and lets those through
+  // without an allowlist that would have to be maintained by hand.
+  const css = stripCssComments(read("../src/styles.css"));
+  const CHANNEL = /^--(id|cli|kind|state)-/;
+  const wrong: string[] = [];
+  let seen = 0;
+  let naming = 0;
+  // The POPULATION is the rules that reach for the mark — a TOKEN, not a class
+  // name, which is what keeps this from deciding anything off a binding's
+  // spelling (CLAUDE.md's source-scanning-guard convention). Scoping it by
+  // selector name instead was the first draft and it swept in
+  // `.group-watch-line`, git's file-watch line, which has nothing to do with
+  // this feature: a population picked by a word rather than by the thing it
+  // means picks up every other use of that word.
+  const selectors: string[] = [];
+  for (const [, sel, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = sel.trim().replace(/\s+/g, " ");
+    if (selector.startsWith("@")) continue;
+    const tokens = [...new Set(tokensIn(body))];
+    if (!tokens.includes("--mark-watched")) continue;
+    seen += 1;
+    naming += 1;
+    selectors.push(selector);
+    const off = tokens.filter((t) => CHANNEL.test(t));
+    if (off.length) {
+      wrong.push(
+        `"${selector}" paints a watched pane with ${off.join(", ")} — that is a channel ` +
+          "pigment, and a watched pane is neither a state nor an identity",
+      );
+    }
+  }
+  assert.deepEqual(wrong, [], wrong.join("\n"));
+  assert.ok(seen >= 7, `only ${seen} rules name --mark-watched — the sweep is blind, not the mark clean`);
+  // And the other direction, which the token-scoped population cannot see by
+  // itself: each of the four surfaces #3319 marks must still be one of them.
+  // One row per SURFACE, each required, so a renamed class fails loudly here
+  // rather than quietly dropping a surface out of the sweep above — the
+  // "one row per family" shape `tests/groupid.rs` uses for the same reason.
+  // EXACT match, not a prefix. The prefix form was the first draft and a
+  // mutation round found it hollow: repainting `.pane.watched` in
+  // `--state-attention` reddened NOTHING, because `.pane.watched.active` — a
+  // different rule, for the focused case — still started with the required
+  // string and satisfied the row on its behalf. A row that another rule can
+  // answer for is not a row.
+  for (const required of [".pane.watched", ".dock-chip-watch", ".tab-watched", ".agents-item.watched"]) {
+    assert.ok(
+      selectors.includes(required),
+      `no rule paints exactly "${required}" with --mark-watched — a surface #3319 marks has lost ` +
+        `its mark or been renamed. Rules that do name it: ${selectors.join(", ")}`,
+    );
+  }
+});
+
+test("the watched mark and the fleet identity are ONE pigment, deliberately", () => {
+  // #3320 review round 1, B1. `--mark-watched` and `--id-violet` are the same
+  // bytes, and they CO-OCCUR: `.ic-fleet` is `--id-violet`, `cliDyeClass` sends
+  // every program outside the dyed roster to it (`null` included), and that
+  // glyph is painted on the pane header and the Agents row — the same two
+  // surfaces the watch marks. The design accepts that and separates the two by
+  // form and position instead (docs/design/watched-panes.md, §The colour).
+  //
+  // This is the pin that makes the acceptance survive: the identity channel
+  // exists to be RETUNED (that is what `--id-*` is for — git-lane and icon-role
+  // separability), and a retune of violet would silently move the human's watch
+  // mark with it. Equality asserted, not inequality, so that edit has to come
+  // back here and decide on purpose.
+  assert.equal(
+    SEMANTIC.watched,
+    IDENTITY.violet,
+    "the watched mark has drifted off `--id-violet`. That may be right — but it is a " +
+      "DECISION, because the two share a pigment on purpose and the ΔE table in " +
+      "theme.ts §SEMANTIC.watched was measured on this value. Re-derive it and update " +
+      "the design note's colour section before changing this.",
+  );
+  // And the half that must NOT be true: sharing a pigment with an identity hue
+  // is permitted, sharing one with a STATE dye is the thing #3319 forbids.
+  // Asserted here beside its opposite so the two rules read together.
+  for (const [role, hex] of Object.entries({
+    working: SEMANTIC.stateWorking,
+    attention: SEMANTIC.stateAttention,
+    ok: SEMANTIC.stateOk,
+    danger: SEMANTIC.stateDanger,
+  })) {
+    assert.notEqual(SEMANTIC.watched, hex, `the watched mark is now the "${role}" dye`);
+  }
+});
+
 test("no identity-only hue may fill a state role", () => {
   // The channel rule, enforced where a token could actually break it.
   //

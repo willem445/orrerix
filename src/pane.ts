@@ -51,6 +51,7 @@ import { planWebglRetry } from "./webglretry";
 import { showToast } from "./toast";
 import { isAppShortcut } from "./shortcuts";
 import { attentionPresentation, attentionDismiss, attentionChanged } from "./attention";
+import { WATCHED_MARK, WATCHED_TITLE } from "./watchedpanes";
 import {
   dismissStranded,
   endGroup,
@@ -938,6 +939,15 @@ export class Pane implements VoiceTargetPane {
   private attnDismiss: HTMLButtonElement;
   private attentionReason: string | null = null;
   private attentionDetail: string | null = null;
+  /** The human's "come back to this one" mark (#3319). Header chrome beside
+   *  the attention chip, and it is NOT a second attention reason: that one is
+   *  derived by the backend from what the agent is doing and cleared by
+   *  whatever caused it, while this is set by a human gesture and cleared by
+   *  nothing else — not focus, not a report arriving, not the pane going
+   *  quiet. The two co-exist on one pane and that is the case the feature
+   *  exists for. Hidden when the pane is not watched. */
+  private watchChip: HTMLButtonElement;
+  private isWatched = false;
   /** "delivery held" chip in the header (#246): the moment loomux is
    *  withholding an outbound prompt to this pane because it believes the
    *  human's own input occupies the CLI's box. Hidden until the backend
@@ -1193,6 +1203,25 @@ export class Pane implements VoiceTargetPane {
       this.dismissAttention();
     });
     header.appendChild(this.attnDismiss);
+
+    // The watched mark (#3319). Header chrome like the two chips above it — it
+    // floats in the header and never touches the terminal's size, so
+    // constraint 1 holds trivially and toggling a watch can never reach a
+    // ConPTY resize. Clicking it STOPS the watch rather than focusing the
+    // pane: the mark's whole job is to be visible from somewhere else, and a
+    // human who clicks their own mark is saying they are done with it (the
+    // same reading `attnDismiss` takes, and the opposite of `attnChip`, which
+    // exists to take you to the pane).
+    this.watchChip = document.createElement("button");
+    this.watchChip.className = "pane-watch";
+    this.watchChip.textContent = WATCHED_MARK;
+    this.watchChip.title = WATCHED_TITLE;
+    this.watchChip.hidden = true;
+    this.watchChip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.setWatched(false);
+    });
+    header.appendChild(this.watchChip);
 
     // "Delivery held" chip (#246): purely informational, no click handler —
     // the hold only clears when the backend resolves it.
@@ -3696,6 +3725,44 @@ export class Pane implements VoiceTargetPane {
     this.dockSyncListener?.();
   }
 
+  /** Is the human watching this pane (#3319)? */
+  get watched(): boolean {
+    return this.isWatched;
+  }
+
+  /** Set, or clear, the human's watch on this pane.
+   *
+   *  THE ONLY WRITER of `isWatched`, and that is the feature's AC5 rather than
+   *  a style preference: a watch is cleared by the human and by nothing else.
+   *  There is deliberately no call to this from the focus path, the attention
+   *  path, the activity tick, or respawn — `test/watchedwiring.test.ts` scans
+   *  this file for exactly that and default-denies a new caller, because "no
+   *  auto-clear" is the kind of promise that is true when written and quietly
+   *  false two slices later, with nothing red to say so.
+   *
+   *  Returns the new state so a toggle caller can report it without reading
+   *  back. Idempotent: setting what is already set touches no DOM and fires no
+   *  dock sync, so the once-a-second refresh paths cannot make this churn. */
+  setWatched(watched: boolean): boolean {
+    if (watched === this.isWatched) return this.isWatched;
+    this.isWatched = watched;
+    this.watchChip.hidden = !watched;
+    this.el.classList.toggle("watched", watched);
+    // No explicit header refit, for the same reason `setAttention` needs none:
+    // the chip is a header child and the meta box is the header's flex spacer,
+    // so showing one moves that box's width and the ResizeObserver on it
+    // schedules the overflow pass. That pass measures and toggles classes; it
+    // never reaches a PTY resize (constraint 1).
+    this.dockSyncListener?.();
+    return this.isWatched;
+  }
+
+  /** Flip the watch. The chord's and the menu item's one entry point, so the
+   *  two gestures cannot drift apart on what "toggle" means. */
+  toggleWatched(): boolean {
+    return this.setWatched(!this.isWatched);
+  }
+
   /** Flag (or clear) that loomux is currently withholding a prompt delivery
    *  to this pane because it believes the human's own input occupies the
    *  CLI's box (#246) — driven by the backend's paired
@@ -5484,7 +5551,13 @@ export class Pane implements VoiceTargetPane {
     if (this.isWelcome) return null;
     // A dormant restore placeholder persists exactly as it came in, so a session
     // closed without resuming offers the identical restore next boot.
-    if (this.dormantRecord) return { ...this.dormantRecord };
+    // …except for the watch (#3319), which is the human's and not the dormant
+    // session's: a Reconnect card is exactly the kind of pane someone marks
+    // ("come back and resume this one"), and re-emitting the record verbatim
+    // would drop that mark on the next capture with nothing to show for it.
+    // `isWatched` is seeded FROM this record on restore, so a placeholder
+    // nobody touched re-emits the identical value.
+    if (this.dormantRecord) return { ...this.dormantRecord, watched: this.isWatched };
     const kind = this.liveKind();
     return {
       paneKind: kind,
@@ -5537,6 +5610,13 @@ export class Pane implements VoiceTargetPane {
       // pane that is somehow both cannot smuggle the flag onto another kind's
       // record.
       lead: kind === "agent" && this.isLead,
+      // The human's watch (#3319). Deliberately NOT gated on `kind`, unlike
+      // every field above it: those are per-kind launch inputs that would be
+      // meaningless or actively wrong on another kind's record, and this is a
+      // mark the human puts on a PANE. Someone who marks the editor pane
+      // holding the file they were mid-way through means it, and a gate would
+      // silently drop that watch on restart rather than refuse it visibly.
+      watched: this.isWatched,
       // Every view CURRENTLY docked (#361), and at what side + share of the
       // split — up to three entries, one per occupied slot. Empty = nothing
       // embedded — every view opens as its floating overlay (the default).
@@ -5673,6 +5753,11 @@ export class Pane implements VoiceTargetPane {
         ? { reason: this.attentionReason, detail: this.attentionDetail }
         : null,
       held: this.heldReason,
+      // The human's mark (#3319), beside the agent's reading and never folded
+      // into it: a listing surface shows both, and a consumer that wanted
+      // "does this pane want me" must not be able to get a human's bookmark by
+      // accident.
+      watched: this.isWatched,
       activity: this.activity.snapshot(Date.now()),
     };
   }

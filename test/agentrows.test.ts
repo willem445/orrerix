@@ -69,6 +69,10 @@ function facts(patch: FactsPatch = {}): PaneFacts {
     welcome: false,
     attention: null,
     held: null,
+    // #3319: unwatched unless a case says otherwise. Spelled out because this
+    // file is outside tsconfig's `include`, so a missing required field reads
+    // as `undefined` at runtime rather than failing to compile.
+    watched: false,
     ...rest,
     activity: {
       lastOutputMs: T0,
@@ -380,6 +384,7 @@ test("toAgentRow carries the identity fields through and derives the state", () 
     agentId: "w-1",
     role: "worker",
     state: "question",
+    watched: false,
     notes: 3,
     tab: { id: "ws-1", title: "loomux", index: 0 },
     mark: { command: "claude", argv: null, knownCli: null, remote: false },

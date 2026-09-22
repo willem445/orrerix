@@ -122,6 +122,12 @@ export interface PaneFacts {
   readonly attention: { readonly reason: string; readonly detail: string | null } | null;
   /** The delivery-held reason (#246), or null when nothing is held. */
   readonly held: string | null;
+  /** The HUMAN's watch on this pane (#3319) — the one field here that no
+   *  backend reading produces. It sits beside `attention` rather than inside
+   *  it on purpose: a consumer asking "does this pane want me" must not be
+   *  able to receive a human's own bookmark as an answer, and a listing
+   *  surface shows both marks at once. */
+  readonly watched: boolean;
   /** The activity reading at the moment `facts()` was called. */
   readonly activity: ActivitySnapshot;
 }
@@ -347,6 +353,9 @@ export interface AgentRow {
    *  whose lead the filter dropped, which is why `toAgentRow` cannot compute
    *  it: that function sees one pane and has no fleet to ask. */
   readonly parent: string | null;
+  /** The human's watch (#3319), straight off `PaneFacts.watched`. A second
+   *  axis beside `state`, never part of it. */
+  readonly watched: boolean;
 }
 
 /** Project one pane's facts into a row. `notes` is supplied by the caller
@@ -360,6 +369,12 @@ export function toAgentRow(facts: PaneFacts, notes: number | null = null): Agent
     agentId: facts.orch?.agentId ?? null,
     role: facts.orch?.role ?? null,
     state: deriveAgentState(facts),
+    // Carried through UNCHANGED, and never folded into `state` (#3319). The
+    // state ladder is the agent's own rung and its order drives the badge and
+    // the sort; a human's watch is a second, orthogonal axis, and merging it
+    // into the ladder would make "watched" compete with "blocked" for one slot
+    // that can only hold one answer.
+    watched: facts.watched,
     notes,
     tab: facts.tab,
     mark: facts.mark,
@@ -398,11 +413,23 @@ export function agentRows(facts: readonly PaneFacts[]): AgentRow[] {
 }
 
 /** A filter chip's selection: one state, or everything. */
-export type AgentFilter = "all" | AgentState;
+/** The chips a human can stand on. Every AGENT STATE, plus `all`, plus the one
+ *  filter that is not a state at all: `watched` (#3319).
+ *
+ *  It is a member of this union rather than a second, independent toggle
+ *  because the two would otherwise compose — "watched AND blocked" — and that
+ *  is a filter grammar, not a chip strip. One selection, and the human picks
+ *  which question they are asking right now. */
+export type AgentFilter = "all" | "watched" | AgentState;
 
 /** Whether a row survives the current filter chip. */
 export function matchesFilter(row: AgentRow, filter: AgentFilter): boolean {
-  return filter === "all" || row.state === filter;
+  if (filter === "all") return true;
+  // Not `row.state === filter` with "watched" smuggled into the ladder: the
+  // watch is a SECOND axis (see `AgentRow.watched`), so it is matched on its
+  // own field. A watched pane keeps whatever rung it is on.
+  if (filter === "watched") return row.watched;
+  return row.state === filter;
 }
 
 /** Rows in display order: most-wants-you state first, then by name so the

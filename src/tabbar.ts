@@ -22,6 +22,7 @@ import {
 
 
 import { tabCounts } from "./tabcounts";
+import { WATCHED_MARK } from "./watchedpanes";
 import { PollGate } from "./pollgate";
 import { SingleFlight } from "./singleflight";
 import { IDENTITY } from "./theme.ts";
@@ -334,6 +335,18 @@ export class TabBar<T extends ManagedWorkspace = ManagedWorkspace> {
       // sometimes and flash a stray "+0". Cost/paused still come from the poll
       // (backend-only facts), shown alongside.
       const counts = tabCounts(ws.paneInfos(), !!groupId);
+      // The human's own marks in THAT tab (#3319). Before the agent counter
+      // rather than after it: when you come back to a wall of tabs, "which one
+      // has the panes I said to look at" is the question you are asking, and
+      // the agent count is context for it. Silent at zero, so a tab nobody has
+      // marked gains no chrome.
+      if (counts.watched > 0) {
+        const watched = document.createElement("span");
+        watched.className = "tab-watched";
+        watched.textContent = `${WATCHED_MARK}${counts.watched}`;
+        watched.title = `${counts.watched} watched pane(s) in "${ws.name}"`;
+        tab.appendChild(watched);
+      }
       if (counts.agents > 0) {
         const status = document.createElement("span");
         status.className = "tab-status";

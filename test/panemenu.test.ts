@@ -26,6 +26,10 @@ const free = (overrides: Partial<PaneConnectState> = {}): PaneConnectState => ({
   agentCli: "claude",
   sessionId: "11111111-2222-3333-4444-555555555555",
   workdir: "/repo/poc",
+  // #3319: unwatched by default, which is the state every pane is born into.
+  // Spelled out rather than left to fall through as `undefined`: this file is
+  // not in tsconfig's `include`, so nothing would have told us it was missing.
+  watched: false,
   ...overrides,
 });
 
@@ -40,7 +44,27 @@ const pendingFrom = (overrides: Partial<PendingConnect> = {}): PendingConnect =>
   ...overrides,
 });
 
-const kinds = (items: ReturnType<typeof buildPaneMenu>) => items.filter((i) => !i.separator).map((i) => i.action?.kind);
+/** The CONNECT items alone — the gesture this file's first block is about.
+ *
+ *  `toggle-watch` (#3319) is dropped here for the same reason #407's promote
+ *  tests assert on the promote item alone: it is a THIRD independent gesture on
+ *  the same menu, offered on every pane unconditionally, so folding it into
+ *  every connect expectation would say "and a watch item" eleven times and
+ *  pin it nowhere. It has its own block at the bottom of this file, where it
+ *  can be asserted as the thing it is. */
+const kinds = (items: ReturnType<typeof buildPaneMenu>) =>
+  items.filter((i) => !i.separator && i.action?.kind !== "toggle-watch").map((i) => i.action?.kind);
+
+/** Everything the menu offers, watch item included — for the assertions that
+ *  are about the menu as a whole rather than about connecting. */
+const allKinds = (items: ReturnType<typeof buildPaneMenu>) =>
+  items.filter((i) => !i.separator).map((i) => i.action?.kind);
+
+/** The connect-gesture items, for the "offers a single disabled item" shape
+ *  assertions — which are about what CONNECTING offers on an ineligible pane,
+ *  not about the menu's length. */
+const connectItemsOf = (items: ReturnType<typeof buildPaneMenu>): PaneMenuItem[] =>
+  items.filter((i) => !i.separator && i.action?.kind !== "toggle-watch");
 
 test("a free, MCP-capable pane with no pending arm offers only Connect (arm)", () => {
   const items = buildPaneMenu(free(), null);
@@ -53,18 +77,25 @@ test("a non-orchestration pane (shell/content) offers a single disabled item, ne
   // two apart, and this fixture meant both; now they diverge (an agent pane
   // keeps a promote item — see the #407 block below), so the fixture has to say
   // which one it is. The connect assertion itself is unchanged.
+  // Asserted on the CONNECT items, not on `items.length` (#3319): the menu now
+  // also carries an unconditional watch item, and the property this test is
+  // about — an ineligible pane is offered no LIVE connect action, only a
+  // disabled one saying why — is unchanged by that. Relocating it onto a
+  // witness that still distinguishes, rather than relaxing it to fit.
   const items = buildPaneMenu(free({ group: null, agentId: null, role: null, agentCli: null }), null);
-  assert.equal(items.length, 1);
-  assert.equal(items[0].disabled, true);
-  assert.ok(items[0].reason && items[0].reason.length > 0);
-  assert.equal(items[0].action, undefined);
+  const connect = connectItemsOf(items);
+  assert.equal(connect.length, 1);
+  assert.equal(connect[0].disabled, true);
+  assert.ok(connect[0].reason && connect[0].reason.length > 0);
+  assert.equal(connect[0].action, undefined);
 });
 
 test("a planner pane offers a single disabled item naming why, even though it has an agent id", () => {
   const items = buildPaneMenu(free({ role: "planner" }), null);
-  assert.equal(items.length, 1);
-  assert.equal(items[0].disabled, true);
-  assert.match(items[0].reason ?? "", /planner/i);
+  const connect = connectItemsOf(items);
+  assert.equal(connect.length, 1);
+  assert.equal(connect[0].disabled, true);
+  assert.match(connect[0].reason ?? "", /planner/i);
 });
 
 test("a standalone solo pane with a channel identity is capable — it offers Connect like any other agent pane", () => {
@@ -101,7 +132,9 @@ test("a fresh two-party connect (neither side has a channel yet) offers BOTH dir
 test("a delivery-only side of a fresh connect is disabled as sender, with a reason, but still offered as the OTHER direction", () => {
   const pending = pendingFrom({ canSend: false }); // the armed pane has no token
   const items = buildPaneMenu(free(), pending);
-  assert.equal(items.length, 2);
+  // Two CONNECT items (#3319: the menu also carries the unconditional watch
+  // item and its separator, which this test is not about).
+  assert.equal(connectItemsOf(items).length, 2);
   const asPendingSender = items.find((i) => i.action?.kind === "connect-complete" && i.action.senderAgent === "orch-1");
   const asThisSender = items.find((i) => i.action?.kind === "connect-complete" && i.action.senderAgent === "w-1");
   assert.equal(asPendingSender?.disabled, true, "the delivery-only pane can't be designated sender");
@@ -243,7 +276,7 @@ test("#407: an agent pane with NO channel identity yet still offers promote — 
     soloAgentId: null, // nothing to retire — there is no solo identity
   });
   // …and the connect half is unchanged: still exactly one disabled Connect item.
-  const connect = items.filter((i) => !i.separator && i !== promote);
+  const connect = connectItemsOf(items).filter((i) => i !== promote);
   assert.equal(connect.length, 1);
   assert.equal(connect[0].disabled, true);
 });
@@ -288,8 +321,9 @@ test("#407: a pane that is already an orchestration member has NO promote item a
 test("#407: a planner pane offers neither promote nor connect — its single disabled item is unchanged", () => {
   const items = buildPaneMenu(free({ role: "planner" }), null);
   assert.equal(promoteOf(items), undefined);
-  assert.equal(items.length, 1);
-  assert.match(items[0].reason ?? "", /planner/i);
+  const connect = connectItemsOf(items);
+  assert.equal(connect.length, 1);
+  assert.match(connect[0].reason ?? "", /planner/i);
 });
 
 test("#407: no recognized agent CLI, no promote item — a shell, a content pane, and a command that isn't an agent CLI are one case (rev-1 N1, rev-2 B1)", () => {
@@ -305,8 +339,9 @@ test("#407: no recognized agent CLI, no promote item — a shell, a content pane
     assert.equal(promoteOf(buildPaneMenu(pane, null)), undefined, pane.name);
   }
   const items = buildPaneMenu(shell, null);
-  assert.equal(items.length, 1, "a non-agent pane keeps its single not-capable item");
-  assert.equal(items[0].disabled, true);
+  const connect = connectItemsOf(items);
+  assert.equal(connect.length, 1, "a non-agent pane keeps its single not-capable item");
+  assert.equal(connect[0].disabled, true);
 });
 
 test("#407: promote is offered alongside an in-progress connect gesture, not swallowed by it", () => {
@@ -315,4 +350,59 @@ test("#407: promote is offered alongside an in-progress connect gesture, not swa
   const items = buildPaneMenu(soloPane(), pendingFrom());
   assert.ok(promoteOf(items), "an armed connect elsewhere must not hide promote");
   assert.equal(kinds(items).filter((k) => k === "connect-complete").length, 2);
+});
+
+
+// ---------- #3319: the watch item, a third independent gesture ----------
+
+test("#3319: every pane offers the watch item, including the ones connect refuses", () => {
+  // THE POINT OF COMPOSING IT IN `buildPaneMenu` RATHER THAN IN
+  // `connectItems`. Those branches short-circuit on a pane with no channel
+  // identity and on a planner, returning a single disabled row — and a human
+  // who right-clicks a plain shell to mark it would otherwise find a menu with
+  // nothing in it they can use. The three panes below are exactly the ones
+  // that short-circuit, plus one that does not.
+  const cases: [string, PaneConnectState][] = [
+    ["a worker", free()],
+    ["a shell", free({ group: null, agentId: null, role: null, agentCli: null })],
+    ["a planner", free({ role: "planner" })],
+    ["a connected pane", free({ channelId: "c1", senderId: "orch-1", senderName: "orch-1" })],
+  ];
+  for (const [what, pane] of cases) {
+    const items = buildPaneMenu(pane, null);
+    const watch = items.find((i) => i.action?.kind === "toggle-watch");
+    assert.ok(watch, `${what} offers no watch item`);
+    assert.equal(watch.disabled, undefined, `${what}'s watch item is disabled — no pane is unwatchable`);
+  }
+});
+
+test("#3319: the watch item's verb follows the pane's current state", () => {
+  const off = buildPaneMenu(free({ watched: false }), null).find((i) => i.action?.kind === "toggle-watch");
+  const on = buildPaneMenu(free({ watched: true }), null).find((i) => i.action?.kind === "toggle-watch");
+  assert.match(off?.label ?? "", /^Watch/);
+  assert.match(on?.label ?? "", /^Stop watching/);
+  // The discriminator: a label built from the state rather than from the
+  // action would read the same on both, and both menus would still "have a
+  // watch item".
+  assert.notEqual(off?.label, on?.label);
+});
+
+test("#3319: the watch item is last, behind its own separator", () => {
+  // Position is the claim `buildPaneMenu`'s comment makes — the item that
+  // changes nothing outside this window sits below the two that do — and a
+  // separator is what keeps it from reading as a third connect option.
+  const items = buildPaneMenu(soloPane(), null);
+  assert.equal(items[items.length - 1].action?.kind, "toggle-watch");
+  assert.equal(items[items.length - 2].separator, true);
+  // And it does not displace what was there: promote is still offered on the
+  // same menu.
+  assert.ok(promoteOf(items));
+});
+
+test("#3319: a watch toggle names no pane — it is always the menu's own", () => {
+  // The action carries no pane reference, unlike every connect action here.
+  // Pinned because the alternative (a `pane` field the dispatcher could
+  // disagree with) is the shape a reader would expect from its siblings.
+  const watch = buildPaneMenu(free(), null).find((i) => i.action?.kind === "toggle-watch");
+  assert.deepEqual(watch?.action, { kind: "toggle-watch" });
 });

@@ -33,7 +33,9 @@ export type ShortcutAction =
   | "focus-left"
   | "focus-right"
   | "focus-up"
-  | "focus-down";
+  | "focus-down"
+  | "toggle-watch"
+  | "next-watched";
 
 export function matchShortcut(e: KeyboardEvent): ShortcutAction | null {
   if (e.ctrlKey && e.shiftKey && !e.altKey) {
@@ -65,6 +67,33 @@ export function matchShortcut(e: KeyboardEvent): ShortcutAction | null {
       // checklist item, open at the time of writing.
       case "KeyA": return "autosize-panes";
       case "KeyM": return "maximize-pane";
+      // Ctrl+Shift+H (#3319) — jump to the next WATCHED pane, fleet-wide and
+      // wrapping. The other half of Alt+H, and the shifted form of the same
+      // letter on purpose: the pair is one idea, "mark" and "go to the marks".
+      //
+      // It is in the Ctrl+Shift block rather than the Alt one because that is
+      // where this app's cross-tab NAVIGATION already lives (the bracket keys
+      // page between tabs, Ctrl+Shift+A evens out the grid) while Alt+<key> is
+      // overlays and per-pane gestures. This one leaves the tab you are on.
+      //
+      // CHECKED against every CLI this repo spawns, per the
+      // agent-cli-reference discipline, with the references fetched:
+      //   - Claude Code's keybindings reference carries exactly two
+      //     Ctrl+Shift defaults — `chat:undo` (Ctrl+_, Ctrl+Shift+-) and
+      //     `selection:copy` (Ctrl+Shift+C) — and no Ctrl+Shift+H.
+      //   - Copilot CLI's command reference carries NO Ctrl+Shift row at all;
+      //     its Ctrl rows are A/E/H/K/U/W/G/L/V/Space/Enter/Q/R/P. Plain
+      //     Ctrl+H is theirs (delete previous character) and stays theirs: the
+      //     `e.shiftKey` requirement on this block is what keeps it reaching
+      //     the pane, and test/shortcuts.test.ts pins that.
+      //   - opencode's keybinds reference has one ctrl+shift default,
+      //     `input_delete_line` (ctrl+shift+d); no ctrl+shift+h.
+      //   - pi's ctrl+shift defaults are up/down/f/g only; no ctrl+shift+h.
+      //   - Codex documents no Ctrl+Shift binding at all — UNVERIFIED rather
+      //     than confirmed free, the same standing as its Alt row.
+      // Not a WebView2 accelerator either (Ctrl+Shift+F/G are, which is why
+      // the git overlay is Alt+G).
+      case "KeyH": return "next-watched";
       // Project tabs (#63). T=new, K=close; the bracket keys page between tabs
       // (VSCode-style) and stay clear of Alt+arrows (pane focus) and the browser
       // accelerators WebView2 eats (Ctrl+Tab / Ctrl+PageUp).
@@ -130,6 +159,40 @@ export function matchShortcut(e: KeyboardEvent): ShortcutAction | null {
       // user-config collision rather than a shipped default, and the same for
       // either letter, so it does not separate them.
       case "KeyJ": return "open-todo";
+      // Alt+H (#3319) — watch, or stop watching, the focused pane. H for
+      // HIGHLIGHT, which is the human's own verb in the issue ("I want to
+      // easily right click and highlight panes"). It is the chord's whole job:
+      // a watch is a mark the human sets and only the human clears, so this
+      // toggles and never does anything else.
+      //
+      // CHECKED against every CLI this repo spawns, per the
+      // agent-cli-reference discipline, with the references fetched rather
+      // than recalled (all re-read for this slice, not carried from #3263):
+      //   - Claude Code's interactive-mode reference documents Alt+B/D/F/M/O/
+      //     P/T/V/Y and the arrows; no Alt+H. Its keybindings reference lists
+      //     no meta+h default either — its only Meta rows are Meta+P/O/T and
+      //     Meta+Up/Down. It RESERVES plain `Ctrl+H` (the ASCII backspace
+      //     byte) and cannot rebind it; the `!e.ctrlKey` guard on this block
+      //     is what keeps loomux out of that.
+      //   - Copilot CLI's command reference DOES carry key tables, and its Alt
+      //     rows are Alt+V, Alt+Enter, Alt+arrows and Alt+scroll — no Alt+H.
+      //     It binds plain Ctrl+H (delete previous character), which this does
+      //     not touch.
+      //   - opencode's keybinds reference has alt+a/b/d/e/f, the alt+shift
+      //     pairs and the ctrl+alt rows; no alt+h.
+      //   - pi's keybindings reference has no alt+h DEFAULT. It appears once
+      //     in that page, inside the opt-in `### Vim Example` custom config
+      //     (`tui.editor.cursorLeft: ["left", "alt+h"]`), which a user pastes
+      //     in by hand — a user-config collision, not a shipped default, and
+      //     the same standing Alt+J already ships with.
+      //   - Codex's reference documents Up/Down, Ctrl+R/O/C, Tab, Enter and
+      //     Esc, and no Alt or Ctrl+Shift binding at all. Its list is prose
+      //     rather than a declared-complete table, so that one is UNVERIFIED
+      //     rather than confirmed free.
+      //   - Readline leaves `\eh` unbound in this repo's bash (`\eH` is only
+      //     do-lowercase-version), the same shape Alt+W, Alt+Q and Alt+J rely
+      //     on, and Alt+H is not a WebView2 accelerator.
+      case "KeyH": return "toggle-watch";
       case "KeyT": return "toggle-tasks";
       // Alt+Q (#1091) — the NEEDS-YOU panel, the board's decision sibling.
       // NOT Alt+D, which is readline's kill-word in every bash pane.

@@ -1036,6 +1036,7 @@ function paneConnectState(pane: Pane): PaneConnectState {
     role,
     channelId: pane.channelId,
     canSend,
+    watched: pane.watched,
     senderId: badge?.senderId ?? null,
     senderName: badge?.senderName ?? null,
     // #407: the promote gesture's inputs, read straight off the pane. Not
@@ -1145,6 +1146,16 @@ export function cancelPendingConnect(): void {
 }
 
 async function handlePaneMenuAction(action: PaneMenuAction, pane: Pane): Promise<void> {
+  // #3319, BEFORE `reduceConnect`: a watch is a purely local mark on one pane
+  // — no backend call, no channel state, nothing an agent can observe — so it
+  // has no business passing through the connect reducer at all. Early-returning
+  // here rather than adding a no-op arm there keeps `reduceConnect` a total
+  // function over the actions that really are about connecting.
+  if (action.kind === "toggle-watch") {
+    const now = pane.toggleWatched();
+    showToast(now ? `Watching "${pane.name}".` : `No longer watching "${pane.name}".`, "info");
+    return;
+  }
   const { pending, effect } = reduceConnect(action, pendingConnect);
   // #407: promotion is not a connect action — `reduceConnect` only clears an arm
   // pointing at the identity this promotion retires (see its `promote` case), and

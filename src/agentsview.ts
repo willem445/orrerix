@@ -31,6 +31,7 @@ import {
   AGENT_ORDER_LABEL,
   AGENT_STATE_LABEL,
   emptyMessage,
+  watchedListLines,
   ORDER_CHOICES,
   agentIdentityLine,
   agentRowMark,
@@ -41,6 +42,7 @@ import {
   visibleGroups,
 } from "./agentsviewmodel";
 import { PollGate } from "./pollgate";
+import { WATCHED_MARK, watchedCount } from "./watchedpanes";
 import { spinnerSvg } from "./spinner";
 
 /** How often an open Agents tab re-derives its rows.
@@ -79,6 +81,8 @@ interface RowEls {
   name: HTMLElement;
   identity: HTMLElement;
   state: HTMLElement;
+  /** The human's watch mark (#3319) — shown or hidden, never rebuilt. */
+  watch: HTMLElement;
   row: AgentRow;
 }
 
@@ -105,6 +109,12 @@ export class AgentsView {
   private chipsEl: HTMLElement;
   private listEl: HTMLElement;
   private emptyEl: HTMLElement;
+  /** The "watched panes this list cannot show" footnote (#3320 review round 1,
+   *  B2). */
+  private watchedNoteEl: HTMLElement;
+  /** Watched panes in the window, counted BEFORE `isAgentPane` filters — the
+   *  one figure on this surface taken from the unfiltered facts. */
+  private watchedTotal = 0;
   private rows = new Map<string, RowEls>();
   /** One header per tab that currently has rows, keyed so it outlives a refresh
    *  — the same reason the chips and rows are keyed: rebuilding a subtree the
@@ -181,6 +191,11 @@ export class AgentsView {
     this.emptyEl = document.createElement("div");
     this.emptyEl.className = "sessions-empty";
     this.emptyEl.hidden = true;
+    // #3320 review round 1, B2 — see `renderEmpty`. Built once and hidden,
+    // never created per refresh, like every other element in this view.
+    this.watchedNoteEl = document.createElement("div");
+    this.watchedNoteEl.className = "agents-watch-note";
+    this.watchedNoteEl.hidden = true;
 
     this.listEl.append(this.emptyEl);
     this.el.append(head, this.chipsEl, this.listEl);
@@ -228,11 +243,17 @@ export class AgentsView {
     // (#2514) rides on the projection, so the BADGE below and the rendered
     // list below that cannot come to disagree about which panes are agents.
     // A plain shell the human has typed into is not one of them.
-    const rows = agentRows(this.deps.facts());
+    const facts = this.deps.facts();
+    const rows = agentRows(facts);
     this.deps.onCountChanged(needsYouCount(rows));
     if (!this.open) return;
     this.renderChips(rows);
     this.renderOrder();
+    // Counted over the UNFILTERED facts, which is the whole point (#3320 review
+    // round 1, B2): the gap between this and the rows is exactly the watched
+    // panes `isAgentPane` removes, and it is the only number on this surface
+    // that has to be taken from before the filter.
+    this.watchedTotal = watchedCount(facts);
     this.renderGroups(visibleGroups(rows, this.filter, this.order));
   }
 
@@ -369,9 +390,32 @@ export class AgentsView {
   /** The "nothing to show" line. Unhidden rather than created, and re-appended
    *  last, so it is never in the way of the placement walk above. */
   private renderEmpty(rowCount: number): void {
-    this.emptyEl.hidden = rowCount > 0;
-    this.emptyEl.textContent = emptyMessage(this.filter);
-    if (!this.emptyEl.hidden) this.listEl.appendChild(this.emptyEl);
+    // The `watched` chip decides BOTH lines in one place (#3320 review round 2,
+    // N4). Each half was right alone and the pair was not: with two watched
+    // shells and no agent panes, "You are not watching any panes." rendered
+    // directly above "2 watched panes are not an agent pane…". Both sentences
+    // were true of their own subject and read together they contradict, and no
+    // test could notice because nothing composed them. `watchedListLines` does,
+    // so the composition is pinned rather than wired.
+    //
+    // Every other chip keeps `emptyMessage` alone: the note is only ever about
+    // a watch, so on any other filter it would answer a question nobody asked.
+    const lines =
+      this.filter === "watched"
+        ? watchedListLines(this.watchedTotal, rowCount)
+        : { empty: rowCount > 0 ? null : emptyMessage(this.filter), note: null };
+
+    this.emptyEl.hidden = lines.empty === null;
+    if (lines.empty !== null) {
+      this.emptyEl.textContent = lines.empty;
+      this.listEl.appendChild(this.emptyEl);
+    }
+    // Appended LAST, so it reads as a footnote to whatever is above it.
+    this.watchedNoteEl.hidden = lines.note === null;
+    if (lines.note !== null) {
+      this.watchedNoteEl.textContent = lines.note;
+      this.listEl.appendChild(this.watchedNoteEl);
+    }
   }
 
   private createGroup(): GroupEls {
@@ -399,7 +443,17 @@ export class AgentsView {
     name.className = "agents-name";
     const state = document.createElement("span");
     state.className = "agents-state";
-    top.append(mark, name, state);
+    // The human's watch mark (#3319), FIRST in the row — ahead of the agent's
+    // own mark, because the question it answers ("is this one of mine") is the
+    // one a human scanning the list back at their desk asks first. Hidden when
+    // the pane is not watched rather than absent, so `updateRow` only ever
+    // toggles a flag on a stable element (the keyed-not-rebuilt rule this view
+    // already follows for its chips and rows).
+    const watch = document.createElement("span");
+    watch.className = "agents-watch-mark";
+    watch.textContent = WATCHED_MARK;
+    watch.hidden = true;
+    top.append(watch, mark, name, state);
     const identity = document.createElement("div");
     identity.className = "agents-identity";
     el.append(top, identity);
@@ -408,7 +462,7 @@ export class AgentsView {
     // paints. `""` is not a candidate — `markKey` always emits a JSON array —
     // and the `was === row` arm covers it too; belt and braces on the one path
     // where an unpainted element must not be mistaken for a current one.
-    return { el, mark, markKey: "", name, identity, state, row };
+    return { el, mark, markKey: "", name, identity, state, watch, row };
   }
 
   /** Paint the agent-type mark (#2371).
@@ -468,6 +522,12 @@ export class AgentsView {
     // painted at all. `classList.toggle` with an explicit second argument is
     // idempotent, so running it every tick costs nothing and cannot drift.
     els.el.classList.toggle("child", row.parent !== null);
+    // AFTER the state block for the same reason `child` is (#3319): that block
+    // rewrites `className` wholesale and is guarded on the state CHANGING, so a
+    // watch toggled on a tick where the state did not move would be painted and
+    // then wiped. `toggle` with an explicit second argument is idempotent.
+    els.el.classList.toggle("watched", row.watched);
+    if (els.watch.hidden === row.watched) els.watch.hidden = !row.watched;
     const title = this.rowTitle(row);
     if (els.el.title !== title) els.el.title = title;
   }

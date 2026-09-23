@@ -2311,8 +2311,8 @@ family — read each row as its own policy, never inferred from a neighbour:
   no ceiling; `checks_timeout_minutes` is 5–240 minutes, **clamped**.
 - **Review driver** (`driver:`): `max_review_rounds` and
   `max_ci_attempts` are 1–3 rounds each, `max_rebase_attempts` is 0–1 rebases,
-  `plan_review_minutes` is 0–120 minutes and `planner_timeout_minutes` is
-  15–180 minutes, all **refused** outside; `lane_timeout_minutes` and
+  `plan_review_minutes` is 0–120 minutes, `planner_timeout_minutes` is
+  15–180 minutes and `fix_nonblocking_rounds` is 0–3 rounds, all **refused** outside; `lane_timeout_minutes` and
   `fix_timeout_minutes` are 5–240 minutes and `drive_timeout_minutes` is
   5–1440 minutes, all **clamped**.
 - **Lock resources** (`resources:`): `slots` is 1–64 and `max_hold_minutes`
@@ -2672,12 +2672,15 @@ driver:
   plan_enabled: true
   plan_review_minutes: 0
   planner_timeout_minutes: 60
+  fix_nonblocking_rounds: 0
+  auto_drive_on_done: true
 ```
 
 Every number in that example is its field's own default, so a block naming only
-`enabled: true` behaves exactly like the one above. The two switches are the lines
-the example does not show at their defaults: `enabled:` and `plan_enabled:` both
-default to **false**, and an absent `driver:` block means the whole feature is off.
+`enabled: true` behaves exactly like the one above. The three switches are the lines
+the example does not show at their defaults: `enabled:`, `plan_enabled:` and
+`auto_drive_on_done:` all default to **false**, and an absent `driver:` block means the
+whole feature is off.
 
 `plan_enabled` is a **second switch, not a widening of the first**, and it is read
 UNDER it: the plan driver is off wherever the review driver is. The separation is
@@ -2700,6 +2703,8 @@ second switch actually buys.
 | `plan_enabled` | — | false | — |
 | `plan_review_minutes` | 0–120 | 0 | refuse |
 | `planner_timeout_minutes` | 15–180 | 60 | refuse |
+| `fix_nonblocking_rounds` | 0–3 | 0 | refuse |
+| `auto_drive_on_done` | — | false | — |
 
 **refuse** fails the parse of the whole file: a value outside the range is a policy
 you believe is in force and is not, so orrerix will not load the file at all.
@@ -2743,8 +2748,36 @@ back, and a drive that was waiting on the CI receipts of a push its worker had a
 made goes straight on to review at that head. None of it is charged as a review round, and
 `drive_review` on such a drive resumes it rather than answering "already driven".
 
-The block **enables** the feature; it can never start, target or widen a drive - no drive
-exists until an orchestrator makes its own role-gated `drive_review` call naming one PR.
+**Non-blocking rounds the driver runs itself (`fix_nonblocking_rounds`).** At the default
+`0`, a gate satisfied with findings still open wakes the orchestrator with `GATE SATISFIED`,
+as it always did. Set it to 1–3 and, when every required reviewer **passed** and every one of
+them states in its verdict summary that it left **zero blocking** findings - with at least one
+stating a non-blocking count above zero - the driver hands the PR back to the worker itself
+("review: request-changes, findings on PR #N, address all, report when green"), waits for the
+report and a green run, re-briefs the reviewers, and repeats. It wakes the orchestrator when a
+reviewer escalates, when one states a blocking finding or does not say how many it left (an
+unstated count is never read as zero), when the rounds are spent, when the worker hands back a
+PR it did not change, and when the gate is satisfied with nothing left open. A `fail` after
+one of these rounds takes the ordinary fail hand-back. **Each such round is also a review
+round**: the three-round bound is shared, so this never takes a drive past
+`max_review_rounds`. The final `GATE SATISFIED` line says how many rounds the driver ran and
+what each reviewer stated it left, so the disposition is still yours. Each round is on the audit
+log as `rd-auto-handback`, and `review_drive_status` shows the count as `nit_rounds`.
+
+**A worker's `report(done)` can start a drive (`auto_drive_on_done`).** Off by default. With
+it on, a worker that reports `done` with `ref: #N` for **its own** open PR - the branch orrerix
+recorded when it spawned the worker is that PR's head branch - starts a drive on PR #N with that
+worker's session, and the report is not typed into the orchestrator's pane on its own: it rides
+in the drive's first notice, and `rd-auto-started` records it. It is refused, and the report is
+delivered exactly as before, for a `[scratch]` PR, a `ref` that is not a PR, a worker whose
+branch is not the PR's head, a PR that already has a drive (running or parked), and a PR that
+already carries any recorded verdict - a drive starts its round count at zero, which is only
+true of a PR nobody has reviewed. Every refusal is on the audit log as
+`rd-auto-start-declined` with its reason, so you can see why a PR did not auto-drive.
+
+Apart from that one switch, the block **enables** the feature; it can never target or widen
+a drive - no other drive exists until an orchestrator makes its own role-gated
+`drive_review` call naming one PR.
 (The workflow pane edits this block too: an enable-toggle whose state is the `enabled:`
 line, plus number fields bounded to the ranges shown above - #1869.)
 
@@ -3381,11 +3414,15 @@ for the design. The `driver:` block's own fields are documented with the other w
 #1784, which lands beside this — until it does, this page describes what the driver *does* and not
 what you may set.
 
-**Nothing starts by itself.** The block only *enables* the feature. No PR is driven until the
-orchestrator makes a deliberate per-PR call naming that PR and the worker session that owns it —
-and in particular a drive does **not** start when a worker reports it is done, because the PRs
-where a drive would be wrong are ordinary ones: a scratch PR, a release bump, a PR you said you
-would read yourself.
+**Nothing starts by itself unless you ask for it.** The block only *enables* the feature. No PR
+is driven until the orchestrator makes a deliberate per-PR call naming that PR and the worker
+session that owns it — and by default a drive does **not** start when a worker reports it is
+done, because the PRs where a drive would be wrong are ordinary ones: a scratch PR, a release
+bump, a PR you said you would read yourself. The one exception is opt-in:
+`driver.auto_drive_on_done` (above) lets a worker's `report(done)` on its own PR start the
+drive, and it still refuses a `[scratch]` PR and any PR already reviewed. A release bump or a PR
+you want to read yourself is not something orrerix can tell apart, so leave the switch off in a
+repo where those come from workers.
 
 **The call checks that the session can actually take a hand-back.** `drive_review` refuses at the
 moment of the call — with the same line the hold would have printed — when the session you named

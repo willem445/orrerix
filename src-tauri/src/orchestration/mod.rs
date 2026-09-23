@@ -8643,12 +8643,23 @@ pub fn codex_profile_toml(
     // those constants used to be. codex's own defaults (30s and 300s) are more
     // generous than anything loomux would set, and the first version of this
     // function set both LOWER while claiming to raise them.
-    // `auto` is codex's own default, spelled out rather than inherited: a
-    // human's `config.toml` may set a different `default_tools_approval_mode`
-    // globally, and an agent whose `report` needs approving has nobody to
-    // approve it. The profile layer wins over the user layer, so stating it
-    // here is what makes the pane's tool surface independent of their setting.
-    s.push_str("default_tools_approval_mode = \"auto\"\n");
+    // `approve` — NOT codex's default `auto`, which is what this line wrote
+    // until #3405 on the false premise that `auto` means "never ask". It does
+    // not: `requires_mcp_tool_approval_for_mode` (core/src/mcp_tool_call.rs,
+    // identical at rust-v0.153.4 and rust-v0.156.1) maps `Auto` to "ask unless
+    // the tool's annotations say read-only, or non-destructive AND
+    // closed-world", and an un-annotated tool counts as destructive — every
+    // one of loomux's tools. Under `approval_policy = "never"` that ask is a
+    // refusal ("MCP tool call requires approval, but approval policy is
+    // never"), so an unattended pane could not `report` at all. `Approve` is
+    // the one value `mcp_permission_prompt_is_auto_approved`
+    // (codex-mcp/src/mcp/mod.rs) short-circuits on BEFORE it reads the policy,
+    // so it holds for both postures — an attended pane's `report` is no more
+    // the human's to click through than an unattended one's. It is scoped to
+    // this one server, and the profile layer wins over the user layer, so a
+    // human's own setting can neither re-impose a prompt here nor be widened
+    // by this line anywhere else.
+    s.push_str("default_tools_approval_mode = \"approve\"\n");
     let header = brand::AGENT_TOKEN_HEADER;
     match auth {
         CodexMcpAuth::EnvVar(var) => {
@@ -31543,6 +31554,84 @@ impl OrchRegistry {
         Ok((path, codex_profile_name(agent)?))
     }
 
+    /// `GH_TOKEN` for a codex GROUP pane, read from the human's own `gh`
+    /// (`gh auth token`) — or nothing, with an audit row saying why (#3405).
+    ///
+    /// **Why codex needs this and claude/copilot/pi do not.** Those CLIs run
+    /// `gh` as the human, so `gh` finds its token wherever `gh auth login` put
+    /// it. codex runs shell commands inside its own sandbox, and on Windows the
+    /// `elevated` sandbox runs them as a DIFFERENT local account
+    /// (`CodexSandboxOnline`, logged on with `LogonUserW` —
+    /// windows-sandbox-rs/src/identity.rs at rust-v0.156.1). `gh`'s default
+    /// token store is the per-account system keyring (Windows Credential
+    /// Manager), which that account cannot see; `hosts.yml` still names the
+    /// login, so `gh` sends its request with no token and GitHub answers
+    /// `HTTP 401: Requires authentication`. What DOES cross the sandbox is the
+    /// environment: codex's `shell_environment_policy` defaults to
+    /// `inherit = all` with `ignore_default_excludes = true`
+    /// (config/src/shell_environment_policy.rs at the same tag), and `gh`
+    /// prefers `GH_TOKEN` over any stored credential.
+    ///
+    /// **The pane env, never the profile**, per the design note's rule for a
+    /// group pane's secrets: the profile lives in the human's `CODEX_HOME` and
+    /// outlives a crash until the sweep; the env dies with the pane. And codex
+    /// GROUP panes only: a solo pane has no environment loomux sets
+    /// (`solo_prepare` only appends flags to the human's own line), and a
+    /// non-codex pane already reaches the keyring as the human.
+    ///
+    /// **No capability is added.** Any group agent can already run
+    /// `gh auth token` as the human; this hands a codex agent the credential its
+    /// peers hold, not a wider one.
+    ///
+    /// **Degrades, never refuses.** A pane without `gh` access is still a pane
+    /// that can `report` — failing its spawn would turn one broken tool into
+    /// zero working ones. So a failed or empty read writes a
+    /// `codex-gh-token-unavailable` audit row (the reason, never a token) and
+    /// the pane starts without the variable. Runs through [`Self::gh_capture`],
+    /// the one bounded place the backend spawns `gh`; on the orchestrator and
+    /// lead paths that is inside the `creation` mutex, which fires once per
+    /// group launch (`performance.md` X6), for one local keyring read.
+    fn codex_gh_token_env(
+        &self,
+        group: &GroupId,
+        agent_id: &str,
+        workdir: &Path,
+    ) -> Option<(String, String)> {
+        // #502's containment rule, asked through its one predicate: a registry
+        // that is not the user's live one never reads the human's credential.
+        // Without this every codex spawn in the test suite would run the REAL
+        // `gh auth token` on the developer's machine and carry their token in
+        // a test `SpawnRequest`. A test that means to exercise this path says
+        // so explicitly by installing the `gh_exec_override` fake.
+        if !self.is_live_registry() && self.gh_exec_override.lock_safe().is_none() {
+            return None;
+        }
+        let why = match self.gh_capture(&workdir.display().to_string(), &["auth", "token"]) {
+            // One token, one line. Anything with interior whitespace is not a
+            // token `gh` printed, and exporting it would present garbage as a
+            // credential rather than presenting none.
+            Ok(out) => {
+                let tok = out.trim();
+                if !tok.is_empty() && !tok.contains(char::is_whitespace) {
+                    return Some(("GH_TOKEN".to_string(), tok.to_string()));
+                }
+                "gh auth token printed no token".to_string()
+            }
+            Err(e) => e,
+        };
+        self.audit(
+            group,
+            brand::AUDIT_ACTOR,
+            "codex-gh-token-unavailable",
+            json!({
+                "agent": agent_id,
+                "why": notify::sanitize_gh_text(&why, notify::NOTICE_FIELD_CAP),
+                "effect": "gh inside this codex pane's sandbox will be unauthenticated",
+            }),
+        );
+        None
+    }
+
     /// Remove one agent's codex profile file. Best-effort and idempotent: the
     /// agent may have been on another CLI, the file may already be gone, or
     /// `CODEX_HOME` may have moved since it was written — none of which is
@@ -50379,7 +50468,11 @@ impl OrchRegistry {
                 knobs.effort,
                 persona.codex_developer_instructions.as_deref(),
             )?;
-            let env = cli_extra_env(cli, &path, token);
+            let mut env = cli_extra_env(cli, &path, token);
+            // #3405: the human's `gh` credential, which codex's sandbox cannot
+            // reach on its own — see `codex_gh_token_env`. Pane environment
+            // only, never the profile: the file above names no GitHub token.
+            env.extend(self.codex_gh_token_env(group, agent_id, workdir));
             return Ok(AgentCliConfig { path, env });
         }
         // pi (#2126): the file written here IS the file named on

@@ -5409,7 +5409,14 @@ impl OrchRegistry {
         // The text the drive's first notice will carry: the pane's own line,
         // minus the marker a notice already opens with — nesting a second
         // `[orrerix]` mid-line would read as a forged one.
-        let text = report.trim_start_matches("[orrerix]").trim().to_string();
+        //
+        // **Capped at `RD_FACT_CAP`, one paragraph** (rev-std premortem on
+        // #3371): the legacy `summary` path is scrubbed but uncapped, and this
+        // text is persisted on the entry — rewritten whole on every drive write
+        // for the drive's life — and copied into the audit row. The pane line a
+        // delivered report would have produced is not bounded here; the record
+        // this one is persisted into is.
+        let text = rd_fact(report.trim_start_matches("[orrerix]").trim());
         let out =
             self.drive_review_seeded(group, runner, pr, &session, false, 0, &orch, now, Some(text.clone()));
         if let Some(reason) = out.get("refused").and_then(Value::as_str) {

@@ -4810,6 +4810,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 // on the audit log, never in this pane.
                 None if status == "done"
                     && caller.role == Role::Worker
+                    && false // [scratch] R5: auto-start not wired
                     && reg.rd_auto_start(
                         &caller.group,
                         &caller.agent_id,

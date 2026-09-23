@@ -6,6 +6,7 @@
 // the resulting pty id back (`bind_agent`), badge/color panes by group and
 // role, and focus panes on request.
 
+import type { WakeCostReading } from "./cacheage";
 import { invoke, listen } from "./transport.ts";
 import type { Grid } from "./grid";
 import type { Pane, PaneEvents } from "./pane";
@@ -212,6 +213,14 @@ export const ackAttention = (agentId: string): Promise<void> =>
  *  released, no Enter is pressed. Resolves to whether a badge was actually up. */
 export const dismissStranded = (agentId: string): Promise<boolean> =>
   invoke<boolean>("orch_dismiss_stranded", { agentId });
+
+/** The cache-age chip's "Compact now" (#3407): asks the backend to type
+ *  `/compact` into this agent's pane at its next idle moment, through the same
+ *  path an agent's own `request_compact` takes. Resolves to the backend's
+ *  one-line answer ("requested — …" / "queued — …"); rejects with its refusal
+ *  (an agent outside this group, a dead one, a CLI with no `/compact`). */
+export const requestCompact = (groupId: string, agentId: string): Promise<string> =>
+  invoke<string>("orch_request_compact", { groupId, agentId });
 
 /** Whether desktop notifications are enabled for a group. */
 export const notifyEnabled = (groupId: string): Promise<boolean> =>
@@ -1848,6 +1857,18 @@ export interface AgentUsage {
   /** true = dollars estimated from the price table; false = reported by the CLI. */
   estimated: boolean;
   tokens: UsageTokens;
+  /** #3407, the cache-age chip's inputs. Unix-ms this row's counters last
+   *  moved (null = never observed); the TTL in force, RESOLVED by the backend
+   *  (block override, else the CLI's `CliCaps` row; null = unknown) with the
+   *  idle threshold at which it reads cooling; the last wake's cost; and
+   *  whether "Compact now" can act on this CLI. Optional on the type because
+   *  a backend that predates them sends none — `cacheage.ts` reads absence as
+   *  "nothing known". */
+  last_active_ms?: number | null;
+  cache_ttl_minutes?: number | null;
+  cache_cooling_after_ms?: number | null;
+  last_wake?: WakeCostReading | null;
+  compact_supported?: boolean;
 }
 
 /** Aggregated per-group cost/usage (backend `orch_group_usage`), with a live

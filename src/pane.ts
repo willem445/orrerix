@@ -57,8 +57,10 @@ import {
   endGroup,
   notifyPaneDisposed,
   registerStructuredPane,
+  requestCompact,
   seedMailUnread,
 } from "./orchestration";
+import { cacheChipLabel, cacheChipTitle, cacheState, wakeCostLine, type CacheAgeReading } from "./cacheage";
 import { heldPresentation } from "./heldbadge";
 import { queuePresentation, type QueueDepthReading } from "./queuebadge";
 import { mailboxPresentation } from "./mailboxbadge";
@@ -992,6 +994,15 @@ export class Pane implements VoiceTargetPane {
    *  The thing that makes it read is the human speaking to it. */
   private mailChip: HTMLElement;
   private mailUnread = 0;
+  /** The prompt-cache age chip (#3407): `hot 3m` / `cooling 48m/60m` / `cold`,
+   *  or `idle 12m` where no TTL is known. Header chrome like the chips beside
+   *  it — it floats in the header and never touches the terminal's geometry, so
+   *  constraint 1 holds trivially. Fed by `noteCacheAge` off the tab strip's
+   *  existing snapshot read; a click opens its menu (the last wake's cost and
+   *  "Compact now"). Hidden until a request has been observed. */
+  private cacheChip: HTMLButtonElement;
+  /** The last reading `noteCacheAge` was handed, for the menu and `facts()`. */
+  private cacheReading: CacheAgeReading | null = null;
   /** Whether an `orch-mailbox-changed` PUSH has ever been applied to this pane.
    *  The seed read (`applyMailSeed`) is asynchronous and a push can land while
    *  it is in flight, so without this the seed's older number would overwrite a
@@ -1295,6 +1306,21 @@ export class Pane implements VoiceTargetPane {
     this.mailChip.className = "pane-mail chip-yields";
     this.mailChip.hidden = true;
     header.appendChild(this.mailChip);
+
+    // The prompt-cache age chip (#3407). `chip-yields`, like the queue and mail
+    // chips: it is informational, so it gives up its room before the title (the
+    // pane's drag handle) does. A button, because it opens a menu — but the
+    // menu is `showContextMenu`'s floating overlay, never header geometry.
+    this.cacheChip = document.createElement("button");
+    this.cacheChip.className = "pane-cache chip-yields";
+    this.cacheChip.type = "button";
+    this.cacheChip.hidden = true;
+    this.cacheChip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const r = this.cacheChip.getBoundingClientRect();
+      this.openCacheMenu(r.left, r.bottom);
+    });
+    header.appendChild(this.cacheChip);
 
     // Cross-workspace channel chip (#271): shown only while this pane is a live
     // channel member. Clicking it disconnects directly — the "easy close from the
@@ -3963,6 +3989,68 @@ export class Pane implements VoiceTargetPane {
     return this.mailUnread;
   }
 
+  /** Hand this pane its prompt-cache reading (#3407), or `null` when the strip
+   *  does not cover it. Called on every strip delivery, which is also what
+   *  advances the label against the clock — so the chip needs no timer of its
+   *  own. Idempotent on the rendered text: re-writing identical text would churn
+   *  the DOM once per delivery for nothing. Header chrome only — never touches
+   *  the pane's size. */
+  noteCacheAge(reading: CacheAgeReading | null, nowMs: number = Date.now()): void {
+    this.cacheReading = reading;
+    const label = reading === null ? null : cacheChipLabel(reading, nowMs);
+    if (label === null || reading === null) {
+      if (!this.cacheChip.hidden) {
+        this.cacheChip.hidden = true;
+        this.cacheChip.textContent = "";
+        this.cacheChip.title = "";
+        delete this.cacheChip.dataset.state;
+      }
+      return;
+    }
+    const state = cacheState(reading, nowMs).state;
+    if (this.cacheChip.textContent !== label) this.cacheChip.textContent = label;
+    if (this.cacheChip.dataset.state !== state) this.cacheChip.dataset.state = state;
+    const title = cacheChipTitle(reading, nowMs);
+    if (this.cacheChip.title !== title) this.cacheChip.title = title;
+    if (this.cacheChip.hidden) this.cacheChip.hidden = false;
+  }
+
+  /** The cache chip's menu: what the last wake cost (read-only rows) and
+   *  "Compact now", which asks the backend to type `/compact` at the pane's next
+   *  idle moment through the same path an agent's own `request_compact` takes.
+   *  Disabled, with the reason, where it cannot do anything — never offered as a
+   *  click that silently fails. */
+  private openCacheMenu(x: number, y: number): void {
+    const reading = this.cacheReading;
+    if (reading === null) return;
+    type CacheAction = "compact";
+    const items: MenuItem<CacheAction>[] = [];
+    const wake = wakeCostLine(reading.lastWake);
+    items.push({
+      label: wake ?? "No wake recorded yet",
+      disabled: true,
+      reason: "Read-only: tokens the first request after the last quiet stretch read from the cache, wrote to it, and sent uncached.",
+    });
+    items.push({ label: "", separator: true });
+    const group = this.orchGroup;
+    const agent = this.orchAgent;
+    const why =
+      group === null || agent === null
+        ? "Only an orchestration agent pane can be compacted from here."
+        : !reading.compactSupported
+          ? "This pane's CLI has no /compact that orrerix can type."
+          : null;
+    items.push(
+      why === null ? { label: "Compact now", action: "compact" } : { label: "Compact now", disabled: true, reason: why }
+    );
+    showContextMenu(x, y, items, (action) => {
+      if (action !== "compact" || group === null || agent === null) return;
+      requestCompact(group, agent)
+        .then((msg) => showToast(`Compact ${msg}`, "info"))
+        .catch((err) => showToast(`Compact refused: ${String(err)}`));
+    });
+  }
+
   /** Mark (or clear) this pane's cross-workspace channel membership (#271): a
    *  colored/numbered chip before the title plus a `--connect-color` accent, so
    *  panes on either end of a channel — and a third pane joined into it — read as
@@ -5836,6 +5924,9 @@ export class Pane implements VoiceTargetPane {
       // accident.
       watched: this.isWatched,
       activity: this.activity.snapshot(Date.now()),
+      // The backend's reading, as last delivered (#3407); the Agents tab derives
+      // its own label from it against its own clock.
+      cache: this.cacheReading,
     };
   }
 

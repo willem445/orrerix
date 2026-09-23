@@ -1657,15 +1657,3 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   scheduling` rather than the core's `&` spelling, `Task board` and `Prototype → Proceed` in
   their real directions, and "the resident **Durability rules**" where the target exists only
   in the core. The same checks were re-run: `live-minus-keys == golden` OK for both files.
-
-- **#3367 item 5, `review_verdict.open_findings`** — `reviewer.md`. The other seven goldens are
-  byte-identical to their previous blessed copies.
-
-  Step 6 gains one sentence group at the end of its "tell it the truth about what you left
-  behind" paragraph: where the group has `review_verdict`, declare the same count as
-  `open_findings`, `0` only when nothing is left, and never omit it to mean `0`. The tool's own
-  description says the same, and is what an agent reads at call time; the template is where a
-  reviewer learns the count is part of the verdict rather than an optional nicety.
-
-  The re-bless check was run: the patch on the golden is identical to the patch on its live
-  template (`git diff -U0`, compared line by line).

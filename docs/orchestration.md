@@ -2197,8 +2197,9 @@ its own notice instead.
 
 **A reviewer declares how many findings it left open.** `review_verdict` takes an
 optional `open_findings` — the findings the reviewer left open at that head,
-blocking and non-blocking together, `0` when nothing is left. The reviewer
-template asks for it on every verdict, and `list_verdicts` shows it on the
+blocking and non-blocking together, `0` when nothing is left. A reviewer the
+gate names is asked for it on every verdict (in its block note, beside the rest
+of the verdict contract), and `list_verdicts` shows it on the
 verdict's row. A verdict without it declared nothing, and orrerix never reads
 that as zero; a value that is not a whole number of at least 0 is refused, and
 the reviewer records again.

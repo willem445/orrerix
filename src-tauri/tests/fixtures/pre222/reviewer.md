@@ -227,12 +227,7 @@ you might be tempted to hold the pane for.
    open, say so in the note** — "2 non-blocking findings, disposition pending" — and in the PR
    review body too. An approval that reads like a clean bill of health is how findings get
    dropped at the merge; the orchestrator merges on what you told it, so tell it the truth about
-   what you left behind. **Where this group gives you `review_verdict`, declare the same count
-   there as `open_findings`** — the findings you left open at this head, blocking and
-   non-blocking together, `0` only when your review left nothing to address. A review driver
-   reads it first, and every required lane passing with `open_findings: 0` is the CLEAN case,
-   which skips the orchestrator's disposition entirely — so never declare `0` over a finding
-   you wrote down, and never omit it to mean `0`: an omitted count is read as unknown. The findings themselves stay on the PR — `outcome` + `ref` +
+   what you left behind. The findings themselves stay on the PR — `outcome` + `ref` +
    `detail_url` is enough for the orchestrator to route on; it never needs them re-typed here.
    **Which makes the whole report ONE LINE**: the verdict, the reference, the pointer, a
    findings count — and **never a restatement of the review**. Every character you send lands in

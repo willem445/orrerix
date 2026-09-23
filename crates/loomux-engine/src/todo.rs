@@ -124,7 +124,7 @@ pub const PRIORITY_MAX: u8 = 3;
 /// the store is data and the palette is presentation — a theme retune moves
 /// every item's paint without a migration, which a stored `#6f93c4` could not.
 ///
-/// `test/todomodel.test.ts` pins this list against the frontend's
+/// `test/todov2.test.ts` pins this list against the frontend's
 /// `TODO_COLORS` by reading this file, so the two cannot drift apart.
 pub const COLORS: &[&str] = &[
     "rose", "amber", "lime", "jade", "cyan", "azure", "violet", "orchid",

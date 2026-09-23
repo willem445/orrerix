@@ -1228,9 +1228,11 @@ chevron stays as the visible affordance and `e` is unchanged. Four clicks are
 not for the row, each pinned: one on a control (anything with `data-act` —
 checkbox, tag chip, priority, star), one inside the expanded body (work on the
 row is not a request to close it), one that ended a text selection, and the
-click the browser synthesises from a press that ended a DRAG (recognised by the
-pointerup's timestamp, so a drop that produced no click cannot leave a flag
-armed to eat the next real one).
+click the browser synthesises from a press that ended a DRAG. That last one is
+recognised by `DropClickGuard`, bound to the PRESS rather than a clock: a
+drag that really started arms it, EVERY press disarms it, and it swallows at
+most one pointer click — never a keyboard one. (Round 1 used a 250 ms window
+after the `pointerup`, which could eat a genuine click inside it.)
 
 ### In the side dock
 

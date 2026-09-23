@@ -627,6 +627,45 @@ export function rowClickToggles(c: {
   return c.inHead && !c.onControl && !c.selecting && !c.dragged;
 }
 
+/**
+ * Which click is a DROP (#3335 review round 1).
+ *
+ * A press that ends a drag makes the browser synthesise a `click` from the
+ * same press, and that click must not expand the row it landed on. The first
+ * cut recognised it by a 250 ms window after the `pointerup` — which also ate a
+ * genuine click the human made inside that window, and left the window armed
+ * when the drop produced no click at all (released outside the pane).
+ *
+ * So the guard is bound to the PRESS, not to a clock:
+ *
+ *  - `arm()` when a drag that really started ends;
+ *  - `pointerDown()` on EVERY press disarms — a click that follows a new press
+ *    is that press's click, never the drop's;
+ *  - `click(fromPointer)` swallows at most one pointer click while armed and
+ *    disarms either way. A keyboard-activated click (`fromPointer` false) is
+ *    never swallowed: no press preceded it, so it cannot be the drop.
+ *
+ * Nothing can therefore vanish except the one click the drop itself produced.
+ */
+export class DropClickGuard {
+  private armed = false;
+
+  arm(): void {
+    this.armed = true;
+  }
+
+  pointerDown(): void {
+    this.armed = false;
+  }
+
+  /** Is this click the drop's? Consumes the arm either way. */
+  click(fromPointer: boolean): boolean {
+    const eaten = this.armed && fromPointer;
+    this.armed = false;
+    return eaten;
+  }
+}
+
 /** Every row in a projection, flattened in display order. The selection walks
  *  this, and so does the keyboard's notion of "the selected row". */
 export function renderedRows(p: PaneProjection): TodoItem[] {

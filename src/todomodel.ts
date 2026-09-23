@@ -107,7 +107,7 @@ const MS_PER_DAY = 86400000;
  * The colours an item may carry — the engine's `COLORS`, mirrored.
  *
  * Mirrored rather than fetched, like `ORDER_GAP`: the two live in different
- * languages. `test/todomodel.test.ts` reads `crates/loomux-engine/src/todo.rs`
+ * languages. `test/todov2.test.ts` reads `crates/loomux-engine/src/todo.rs`
  * and fails if the lists ever differ, and a second test fails unless every
  * name is a key of `theme.ts`'s `IDENTITY` table — so a colour can only ever
  * be painted by an identity token, never by a hue invented here.

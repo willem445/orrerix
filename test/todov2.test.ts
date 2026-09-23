@@ -32,6 +32,7 @@ import {
   sortsByPriority,
   togglePrioritySort,
   DEFAULT_TODO_PREFS,
+  DropClickGuard,
 } from "../src/todoview.ts";
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
@@ -328,4 +329,28 @@ test("a click on the row's own area toggles it; a control, the body, a selection
   assert.equal(rowClickToggles({ ...base, inHead: false }), false, "inside the expanded body");
   assert.equal(rowClickToggles({ ...base, selecting: true }), false, "someone copying the title");
   assert.equal(rowClickToggles({ ...base, dragged: true }), false, "the end of a drag is a drop");
+});
+
+test("only the click a drop produced is swallowed — a later click never vanishes", () => {
+  // Review round 1: a 250 ms window after the pointerup ate a genuine click
+  // made inside it. The guard is bound to the PRESS instead.
+  const g = new DropClickGuard();
+  assert.equal(g.click(true), false, "no drag, no arm: every click is a click");
+
+  // The drop's own click: armed at drag end, swallowed once.
+  g.arm();
+  assert.equal(g.click(true), true, "the click synthesised from the drop press");
+  assert.equal(g.click(true), false, "swallowed at most once");
+
+  // A drop released outside the pane produces no click; the NEXT press
+  // disarms, so the human's next click is theirs, however soon it comes.
+  g.arm();
+  g.pointerDown();
+  assert.equal(g.click(true), false, "a click that follows a new press is that press's");
+
+  // A keyboard-activated click has no press behind it and is never the drop,
+  // and it disarms rather than leaving the arm for a later pointer click.
+  g.arm();
+  assert.equal(g.click(false), false, "keyboard click passes");
+  assert.equal(g.click(true), false, "and the arm is gone");
 });

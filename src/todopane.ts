@@ -89,6 +89,7 @@ import {
   planReveal,
   projectPane,
   pruneDrafts,
+  DropClickGuard,
   renderedRows,
   reseedPristineDrafts,
   rowClickToggles,
@@ -319,15 +320,13 @@ export class TodoPaneView {
   private caret: CaretMark | null = null;
   /** The row being dragged, once the pointer has passed the threshold. */
   private drag: RowDrag | null = null;
-  /** The `timeStamp` of the pointerup that ENDED a drag, so the click the
-   *  browser synthesises from that same press is recognised as the drop and
-   *  not as a request to expand the row (`rowClickToggles`'s `dragged`). A
-   *  timestamp rather than a boolean, so a drop that produced no click cannot
-   *  leave a flag armed to eat the human's next real one. */
-  private dragEndedAt: number | null = null;
-  /** Tears down a pending or live drag's window listeners — set while a press
-   *  is in flight, so `dispose` never strands one. */
-  private endDrag: (() => void) | null = null;
+  /** A press on a reorderable row that may become a drag: where it started,
+   *  and whether it has passed the threshold. Null between presses. */
+  private press: { id: string; x: number; y: number; started: boolean } | null = null;
+  /** Recognises the one click the browser synthesises from a press that ENDED
+   *  a drag, so it is read as the drop rather than as "expand this row"
+   *  (`rowClickToggles`'s `dragged`). Bound to that press, not to a clock. */
+  private readonly dropClick = new DropClickGuard();
 
   constructor(opts: TodoPaneOptions) {
     this.opts = opts;
@@ -515,7 +514,7 @@ export class TodoPaneView {
     this.el.removeEventListener("input", this.onInput);
     this.el.removeEventListener("keydown", this.onKeyDown);
     this.el.removeEventListener("pointerdown", this.onPointerDown);
-    this.endDrag?.();
+    this.finishDrag(false);
     this.drafts.clear();
     this.expanded.clear();
   }
@@ -1490,9 +1489,9 @@ export class TodoPaneView {
     const target = ev.target;
     if (!(target instanceof Element)) return;
     // The click the browser synthesises from a press that ENDED a drag is the
-    // drop, not a click. Consumed once, whatever it landed on.
-    const dragged = this.dragEndedAt !== null && Math.abs(ev.timeStamp - this.dragEndedAt) < 250;
-    this.dragEndedAt = null;
+    // drop, not a click. `detail === 0` is a keyboard-activated click, which no
+    // press preceded and so can never be the drop.
+    const dragged = this.dropClick.click(ev.detail !== 0);
     const btn = target.closest<HTMLElement>("[data-act]");
     if (btn === null || !this.el.contains(btn)) {
       // CLICK THE ROW TO EXPAND (#3335 AC 6). Anything that is not a control
@@ -1850,91 +1849,114 @@ export class TodoPaneView {
   // Nothing here writes until the drop, and nothing here can reach a PTY: the
   // rows are DOM over a store (CLAUDE.md constraint 1).
 
+  /**
+   * A press on the pane. Two jobs, kept apart: every press DISARMS the
+   * drop-click guard (so the click that follows a real press is never mistaken
+   * for a drop — `DropClickGuard`), and a press on a reorderable row's head
+   * ARMS a possible drag, which only starts once the pointer passes the
+   * threshold (`onDragMove`).
+   */
   private onPointerDown = (down: PointerEvent): void => {
-    if (down.button !== 0 || this.drag !== null) return;
-    const target = down.target;
-    if (!(target instanceof Element)) return;
-    // Controls keep their own press — never start a drag from a checkbox, a
-    // chip, a field — and only a collapsed row's HEAD is a handle: the
-    // expanded body holds text fields a press must be free to select in.
-    if (target.closest("button, input, textarea, [data-act]")) return;
-    const head = target.closest<HTMLElement>(".tdp-rowhead");
-    if (head === null || !this.el.contains(head) || head.dataset.reorder !== "true") return;
-    const id = head.closest<HTMLElement>("[data-id]")?.dataset.id ?? null;
+    this.dropClick.pointerDown();
+    if (down.button !== 0 || this.press !== null) return;
+    const id = this.dragHandleAt(down.target);
     if (id === null) return;
-
-    const startX = down.clientX;
-    const startY = down.clientY;
-    let started = false;
-
-    const hitTest = (x: number, y: number): RowDrag["hover"] => {
-      for (const rowEl of Array.from(this.el.querySelectorAll<HTMLElement>(".tdp-row[data-id]"))) {
-        const rid = rowEl.dataset.id;
-        if (!rid || rid === id) continue;
-        const r = rowEl.getBoundingClientRect();
-        if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
-        return { id: rid, before: y < r.top + r.height / 2 };
-      }
-      return null;
-    };
-
-    const move = (ev: PointerEvent): void => {
-      if (!started) {
-        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < ROW_DRAG_THRESHOLD_PX) return;
-        started = true;
-        // A drag is not a text selection: drop the one the press began.
-        document.getSelection()?.removeAllRanges();
-        this.drag = { id, hover: null };
-        this.el.classList.add("tdp-dragging");
-      }
-      const hover = hitTest(ev.clientX, ev.clientY);
-      const was = this.drag?.hover ?? null;
-      if (this.drag !== null && (was?.id !== hover?.id || was?.before !== hover?.before)) {
-        this.drag.hover = hover;
-        this.paintDrop();
-      }
-    };
-
-    const finish = (commit: boolean, at: number | null): void => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("keydown", onKey, true);
-      window.removeEventListener("blur", onBlur);
-      this.endDrag = null;
-      const drag = this.drag;
-      this.drag = null;
-      this.el.classList.remove("tdp-dragging");
-      if (!started) return; // a plain click — `onClick` owns it
-      this.dragEndedAt = at;
-      this.paintDrop();
-      if (!commit || drag === null || drag.hover === null) return;
-      const ordered = this.manualOrder();
-      // "After the hovered row" is "before the row that follows it".
-      let beforeId: string | null = drag.hover.id;
-      if (!drag.hover.before) {
-        const ix = ordered.findIndex((i) => i.id === drag.hover!.id);
-        beforeId = ix >= 0 && ix + 1 < ordered.length ? ordered[ix + 1].id : null;
-      }
-      const target = dropTarget(ordered, drag.id, beforeId);
-      if (target !== null) this.sendMove(drag.id, target);
-    };
-    const up = (ev: PointerEvent): void => finish(true, ev.timeStamp);
-    const onKey = (ev: KeyboardEvent): void => {
-      if (ev.key === "Escape" && started) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        finish(false, null);
-      }
-    };
+    this.press = { id, x: down.clientX, y: down.clientY, started: false };
+    window.addEventListener("pointermove", this.onDragMove);
+    window.addEventListener("pointerup", this.onDragUp);
+    window.addEventListener("keydown", this.onDragKey, true);
     // Alt-Tab mid-drag delivers `blur`, never a `pointerup` (`dragsession.ts`
     // carries the incident): cancel rather than strand the dimmed row.
-    const onBlur = (): void => finish(false, null);
-    this.endDrag = () => finish(false, null);
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("keydown", onKey, true);
-    window.addEventListener("blur", onBlur);
+    window.addEventListener("blur", this.onDragBlur);
   };
+
+  /** The row a press on `target` may drag, or null. Controls keep their own
+   *  press — never a drag from a checkbox, a chip, a field — and only a
+   *  reorderable row's HEAD is a handle: the expanded body holds text fields a
+   *  press must be free to select in. */
+  private dragHandleAt(target: EventTarget | null): string | null {
+    if (!(target instanceof Element)) return null;
+    if (target.closest("button, input, textarea, [data-act]")) return null;
+    const head = target.closest<HTMLElement>(".tdp-rowhead");
+    if (head === null || !this.el.contains(head) || head.dataset.reorder !== "true") return null;
+    return head.closest<HTMLElement>("[data-id]")?.dataset.id ?? null;
+  }
+
+  private onDragMove = (ev: PointerEvent): void => {
+    const p = this.press;
+    if (p === null) return;
+    if (!p.started) {
+      if (Math.hypot(ev.clientX - p.x, ev.clientY - p.y) < ROW_DRAG_THRESHOLD_PX) return;
+      p.started = true;
+      // A drag is not a text selection: drop the one the press began.
+      document.getSelection()?.removeAllRanges();
+      this.drag = { id: p.id, hover: null };
+      this.el.classList.add("tdp-dragging");
+    }
+    const hover = this.dropHoverAt(ev.clientX, ev.clientY, p.id);
+    const was = this.drag?.hover ?? null;
+    if (this.drag !== null && (was?.id !== hover?.id || was?.before !== hover?.before)) {
+      this.drag.hover = hover;
+      this.paintDrop();
+    }
+  };
+
+  private onDragUp = (): void => this.finishDrag(true);
+
+  private onDragKey = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape" && this.press?.started) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.finishDrag(false);
+    }
+  };
+
+  private onDragBlur = (): void => this.finishDrag(false);
+
+  /** The row under (x, y) other than the dragged one, and which half. */
+  private dropHoverAt(x: number, y: number, dragged: string): RowDrag["hover"] {
+    for (const rowEl of Array.from(this.el.querySelectorAll<HTMLElement>(".tdp-row[data-id]"))) {
+      const rid = rowEl.dataset.id;
+      if (!rid || rid === dragged) continue;
+      const r = rowEl.getBoundingClientRect();
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+      return { id: rid, before: y < r.top + r.height / 2 };
+    }
+    return null;
+  }
+
+  /** End a press, however it ends. Idempotent: `dispose` calls it too. */
+  private finishDrag(commit: boolean): void {
+    window.removeEventListener("pointermove", this.onDragMove);
+    window.removeEventListener("pointerup", this.onDragUp);
+    window.removeEventListener("keydown", this.onDragKey, true);
+    window.removeEventListener("blur", this.onDragBlur);
+    const press = this.press;
+    const drag = this.drag;
+    this.press = null;
+    this.drag = null;
+    this.el.classList.remove("tdp-dragging");
+    if (press === null || !press.started) return; // a plain click — `onClick` owns it
+    // The click the browser synthesises from THIS press is the drop, not a
+    // click. Armed only by a drag that really started, and disarmed by the
+    // next press, so it can never eat a later click (`DropClickGuard`).
+    this.dropClick.arm();
+    this.paintDrop();
+    if (commit && drag !== null && drag.hover !== null) this.commitDrop(drag.id, drag.hover);
+  }
+
+  /** Send the move a drop describes. "After the hovered row" is "before the
+   *  row that follows it", which is the shape `dropTarget` takes. */
+  private commitDrop(id: string, hover: NonNullable<RowDrag["hover"]>): void {
+    const ordered = this.manualOrder();
+    let beforeId: string | null = hover.id;
+    if (!hover.before) {
+      const ix = ordered.findIndex((i) => i.id === hover.id);
+      beforeId = ix >= 0 && ix + 1 < ordered.length ? ordered[ix + 1].id : null;
+    }
+    const target = dropTarget(ordered, id, beforeId);
+    if (target !== null) this.sendMove(id, target);
+  }
 
   /** Mirror the drag state onto the live rows without a re-render — a render
    *  per pointermove would rebuild every row at pointer rate. `row()` draws the

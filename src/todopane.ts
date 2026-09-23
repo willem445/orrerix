@@ -90,6 +90,7 @@ import {
   projectPane,
   pruneDrafts,
   DropClickGuard,
+  type DragEnd,
   renderedRows,
   reseedPristineDrafts,
   rowClickToggles,
@@ -514,7 +515,7 @@ export class TodoPaneView {
     this.el.removeEventListener("input", this.onInput);
     this.el.removeEventListener("keydown", this.onKeyDown);
     this.el.removeEventListener("pointerdown", this.onPointerDown);
-    this.finishDrag(false);
+    this.finishDrag("dispose");
     this.drafts.clear();
     this.expanded.clear();
   }
@@ -1868,6 +1869,12 @@ export class TodoPaneView {
     // Alt-Tab mid-drag delivers `blur`, never a `pointerup` (`dragsession.ts`
     // carries the incident): cancel rather than strand the dimmed row.
     window.addEventListener("blur", this.onDragBlur);
+    // The platform can take the pointer away mid-press (a touch turned into a
+    // scroll, a pen leaving range, the OS claiming the gesture): that arrives
+    // as `pointercancel` and NO `pointerup` ever follows, so without this the
+    // session would stay open with the row dimmed and the window listeners
+    // live. `dragsession.ts` states the rule for every Pointer Events caller.
+    window.addEventListener("pointercancel", this.onDragCancel);
   };
 
   /** The row a press on `target` may drag, or null. Controls keep their own
@@ -1901,17 +1908,19 @@ export class TodoPaneView {
     }
   };
 
-  private onDragUp = (): void => this.finishDrag(true);
+  private onDragUp = (): void => this.finishDrag("drop");
 
   private onDragKey = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape" && this.press?.started) {
       ev.preventDefault();
       ev.stopPropagation();
-      this.finishDrag(false);
+      this.finishDrag("escape");
     }
   };
 
-  private onDragBlur = (): void => this.finishDrag(false);
+  private onDragBlur = (): void => this.finishDrag("blur");
+
+  private onDragCancel = (): void => this.finishDrag("cancel");
 
   /** The row under (x, y) other than the dragged one, and which half. */
   private dropHoverAt(x: number, y: number, dragged: string): RowDrag["hover"] {
@@ -1925,24 +1934,27 @@ export class TodoPaneView {
     return null;
   }
 
-  /** End a press, however it ends. Idempotent: `dispose` calls it too. */
-  private finishDrag(commit: boolean): void {
+  /** End a press, however it ends. Idempotent: `dispose` calls it too. Only
+   *  a `"drop"` writes; every other ending abandons the move. */
+  private finishDrag(how: DragEnd): void {
     window.removeEventListener("pointermove", this.onDragMove);
     window.removeEventListener("pointerup", this.onDragUp);
     window.removeEventListener("keydown", this.onDragKey, true);
     window.removeEventListener("blur", this.onDragBlur);
+    window.removeEventListener("pointercancel", this.onDragCancel);
     const press = this.press;
     const drag = this.drag;
     this.press = null;
     this.drag = null;
     this.el.classList.remove("tdp-dragging");
     if (press === null || !press.started) return; // a plain click — `onClick` owns it
-    // The click the browser synthesises from THIS press is the drop, not a
-    // click. Armed only by a drag that really started, and disarmed by the
-    // next press, so it can never eat a later click (`DropClickGuard`).
-    this.dropClick.arm();
+    // Whether a click from THIS press is still to come decides the guard:
+    // armed where the release will produce one (a drop, an Escape with the
+    // button still held), cleared where it will not (a cancel, a blur, a
+    // dispose) — `DropClickGuard.dragEnded` carries the table.
+    this.dropClick.dragEnded(how);
     this.paintDrop();
-    if (commit && drag !== null && drag.hover !== null) this.commitDrop(drag.id, drag.hover);
+    if (how === "drop" && drag !== null && drag.hover !== null) this.commitDrop(drag.id, drag.hover);
   }
 
   /** Send the move a drop describes. "After the hovered row" is "before the

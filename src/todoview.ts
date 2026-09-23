@@ -627,6 +627,9 @@ export function rowClickToggles(c: {
   return c.inHead && !c.onControl && !c.selecting && !c.dragged;
 }
 
+/** How a row drag ended. Only `"drop"` writes a move. */
+export type DragEnd = "drop" | "escape" | "blur" | "cancel" | "dispose";
+
 /**
  * Which click is a DROP (#3335 review round 1).
  *
@@ -638,7 +641,8 @@ export function rowClickToggles(c: {
  *
  * So the guard is bound to the PRESS, not to a clock:
  *
- *  - `arm()` when a drag that really started ends;
+ *  - `dragEnded(how)` when a drag that really started ends — arming only
+ *    where a click from that press is still to come (below);
  *  - `pointerDown()` on EVERY press disarms — a click that follows a new press
  *    is that press's click, never the drop's;
  *  - `click(fromPointer)` swallows at most one pointer click while armed and
@@ -646,12 +650,21 @@ export function rowClickToggles(c: {
  *    never swallowed: no press preceded it, so it cannot be the drop.
  *
  * Nothing can therefore vanish except the one click the drop itself produced.
+ *
+ * **How the drag ended decides whether that click is still coming**
+ * (`dragEnded`, #3335 review round 2). A drop, and an Escape with the button
+ * still held, are followed by a release whose click lands on the pane — so
+ * both arm. A `pointercancel` (the platform took the pointer: no `pointerup`,
+ * no click follows), a window blur and a dispose produce no click from this
+ * press — so all three CLEAR, rather than leaving an arm for the next press to
+ * find.
  */
 export class DropClickGuard {
   private armed = false;
 
-  arm(): void {
-    this.armed = true;
+  /** A drag that really started has ended, this way. */
+  dragEnded(how: DragEnd): void {
+    this.armed = how === "drop" || how === "escape";
   }
 
   pointerDown(): void {

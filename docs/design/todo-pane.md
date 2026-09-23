@@ -1195,12 +1195,34 @@ write an `order` the human could not see take effect, so there is no drag and
 
 The drag is **pointer events with a threshold**, never native HTML5 DnD — the tab
 strip's measured WebView2 failure (`tabbar.ts`'s `wireDrag`, #379/#402), where a
-native drag grabs and never drops. Only a reorderable, collapsed row's head is a
-handle; controls and the expanded body are not. `dropTarget` turns "dropped
+native drag grabs and never drops. Only a reorderable row's head is a handle;
+controls and the expanded body are not — which costs one thing, stated on the
+user page: in a reorderable view a press-and-move on a title drags the row, so
+title text cannot be drag-selected there. `dropTarget` turns "dropped
 before row X" into `order_after` — the row that will sit above — and answers
 null for a drop into the row's own slot, so a wobble past the threshold writes
 nothing. The drag state lives on the view, so a re-render an agent's write
 causes mid-drag redraws the dimmed row and the drop line from it.
+
+Every way a press can end is handled, because a session left open strands a
+dimmed row and four window listeners: `pointerup` (the drop), `Escape`,
+window `blur` (Alt-Tab delivers no `pointerup`), dispose, and — round 2 —
+`pointercancel`, which the platform sends when it takes the pointer away (a
+touch turned into a scroll, a pen out of range) and after which no `pointerup`
+ever arrives. `dragsession.ts` states that rule for every Pointer Events
+caller. How the press ended also decides the drop-click guard (below):
+`DropClickGuard.dragEnded` arms for a drop and for Escape — the button is still
+held and its release will click — and clears for a cancel, a blur or a
+dispose, since no click from that press is coming.
+
+**Residual, accepted: a row deleted mid-drag makes the drop a silent no-op.**
+If an agent deletes (or completes out of the view) the dragged row or the row
+it hovers while the drag is in flight, the drop resolves against a list that no
+longer holds it, `dropTarget` answers null, and nothing is sent and nothing is
+said. The row the human was dragging has already vanished from under the
+pointer, which is its own explanation, and a toast for it would describe a
+race rather than anything the human can act on. Pinned as behaviour by
+`dropTarget`'s "left the list mid-drag" case in `test/todov2.test.ts`.
 
 **The renumber is an engine operation inside the move, not a new op.** When
 `order_for` finds no integer between the new neighbours it returns a

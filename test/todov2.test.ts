@@ -338,19 +338,47 @@ test("only the click a drop produced is swallowed — a later click never vanish
   assert.equal(g.click(true), false, "no drag, no arm: every click is a click");
 
   // The drop's own click: armed at drag end, swallowed once.
-  g.arm();
+  g.dragEnded("drop");
   assert.equal(g.click(true), true, "the click synthesised from the drop press");
   assert.equal(g.click(true), false, "swallowed at most once");
 
   // A drop released outside the pane produces no click; the NEXT press
   // disarms, so the human's next click is theirs, however soon it comes.
-  g.arm();
+  g.dragEnded("drop");
   g.pointerDown();
   assert.equal(g.click(true), false, "a click that follows a new press is that press's");
 
   // A keyboard-activated click has no press behind it and is never the drop,
   // and it disarms rather than leaving the arm for a later pointer click.
-  g.arm();
+  g.dragEnded("drop");
   assert.equal(g.click(false), false, "keyboard click passes");
   assert.equal(g.click(true), false, "and the arm is gone");
+});
+
+test("a drag the platform CANCELS ends with no click owed — and a later click is never eaten", () => {
+  // Review round 2: `pointercancel` (touch turned scroll, pen out of range,
+  // the OS claiming the gesture) ends a press with NO pointerup and no click.
+  // An arm left behind would sit waiting for a click that is not coming.
+  const g = new DropClickGuard();
+  g.dragEnded("cancel");
+  assert.equal(g.click(true), false, "nothing is swallowed after a cancelled drag");
+
+  // It also CLEARS an arm already standing (a drop whose click never arrived,
+  // then a second drag the platform cancelled).
+  g.dragEnded("drop");
+  g.dragEnded("cancel");
+  assert.equal(g.click(true), false, "a cancel clears the previous arm");
+
+  // Blur and dispose are the same: no release of this press will reach us.
+  for (const how of ["blur", "dispose"] as const) {
+    g.dragEnded("drop");
+    g.dragEnded(how);
+    assert.equal(g.click(true), false, `${how} leaves nothing armed`);
+  }
+
+  // Escape is the one non-drop ending that DOES arm: the button is still
+  // held, and its release produces a click that must not expand the row.
+  g.dragEnded("escape");
+  assert.equal(g.click(true), true, "the release after Escape is swallowed");
+  assert.equal(g.click(true), false, "once");
 });

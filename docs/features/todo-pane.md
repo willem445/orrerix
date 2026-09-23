@@ -154,7 +154,9 @@ is always newest-finished first.
 
 **Drag a row** to move it: press on it, move a few pixels, and a line shows
 where it will land. `Esc` while dragging cancels. `Shift+↑`/`Shift+↓` moves
-the selected row one place.
+the selected row one place. Because pressing and moving on a row now drags it,
+you cannot drag-select a task's title text in the views you can reorder — open
+the row, or use Planned or Completed, to copy from it.
 
 Reordering works in **My Day**, **Important** and **All** while the priority
 sort is off — the views where the order you see is your own order. Planned is

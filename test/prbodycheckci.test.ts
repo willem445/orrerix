@@ -128,6 +128,29 @@ test('the corpus dry run over the last 10 merged PRs is part of the SAME job', (
   assert.match(wf, /the check must not ship as required/, 'the corpus step must carry the escalation sentence, so a red corpus is legible without this test');
 });
 
+test('the skill text carries the report-only arm, never a job-level-skip sentence (#3373 round 2)', () => {
+  // Round 2's blocking finding lived HERE, not in the workflow: the round-1 fix
+  // corrected the workflow, the body and the test file but left the ci-validate
+  // skill telling workers the required check is *skipped* on a scratch PR — the
+  // same wrong thing, one surface over. This pin is the twin sweep the
+  // disposition claimed: the skill's CI paragraph must state the report-only
+  // arm (the steps run and print), and must not state a job-level skip about
+  // this workflow. Scoped to the paragraph that names the check, so unrelated
+  // prose (docs/README.md's deploy-job sentence) cannot trip it.
+  const skill = fs.readFileSync(path.join(root, '.claude', 'skills', 'ci-validate', 'SKILL.md'), 'utf8');
+  const para = skill.split('\n').find((l) => l.includes('prbodycheck.yml')); // the CI paragraph's first line
+  assert.ok(para && para.includes('prbodycheck.yml'), 'the skill must have a paragraph naming the prbodycheck.yml workflow');
+  const start = skill.indexOf(para);
+  const slice = skill.slice(start, skill.indexOf('CI running it does not retire', start));
+  assert.match(slice, /REPORT-ONLY/, 'the skill must tell workers a scratch PR runs the job report-only');
+  assert.match(slice, /continue-on-error/, 'the skill must name the mechanism, so the arm stays observable in the text agents read');
+  assert.doesNotMatch(
+    slice,
+    /skip[s]? the (job|pr-body-check check)|job is skipped/i,
+    'the skill must not say the job is skipped on a scratch PR — the round-2 blocking class, on the surface agents execute',
+  );
+});
+
 test('the workflow pins the checker call to this repo, so the corpus is this repo’s', () => {
   // Without `--repo`, `gh` resolves from the checkout's remote — right for
   // same-repo PRs, wrong the day this workflow runs on a fork or the repo is

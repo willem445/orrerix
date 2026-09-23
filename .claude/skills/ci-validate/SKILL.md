@@ -356,8 +356,10 @@ job runs it on every `pull_request` `opened`/`synchronize`/`reopened`/`edited` e
 body-only fix re-runs it with no push — and fails the run on any MISMATCH, printing every
 CHECK row. That moves the receipt round into your own loop *before* the reviewer or the
 orchestrator spends a wake: read the rows in the failed run's log the way you read this
-section, fix the figures, and push or edit the body. `[scratch]`-titled PRs skip the
-job entirely (a scratch body is deliberately stale — its MISMATCH rows gate nothing),
+section, fix the figures, and push or edit the body. `[scratch]`-titled PRs run the
+job REPORT-ONLY (both steps execute and print their rows; `continue-on-error` keyed
+on the title keeps their MISMATCH rows from failing the run — a scratch body is
+deliberately stale, and its rows are still worth reading),
 and the same job re-runs the script over the last 10 merged PRs, so
 a body shape the checker false-flags shows up as a red corpus step rather than a red
 gate. CI running it does not retire step 1 above: you still run it locally before

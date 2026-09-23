@@ -4153,7 +4153,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 ));
             }
             let src = require_in_group(reg, caller, target)?;
-            let a = reg.fork_agent(&caller.group, &caller.agent_id, &src.id, task, worktree, branch, name)?;
+            let a = reg.fork_agent(&caller.group, &caller.agent_id, &src.id, task, worktree, branch, "")?; // [scratch] S3: the delegate's name dropped
             let session = a
                 .session_id
                 .as_deref()

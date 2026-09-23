@@ -4687,7 +4687,7 @@ fn decide_gate_check(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimit
         // counter it spends. Every precondition, the shared bound included,
         // is in [`nonblocking_round_applies`]; anything it cannot establish
         // falls through to arc 9, which is today's behaviour.
-        GateOutcome::Satisfied if nonblocking_round_applies(entry, facts, limits) => {
+        GateOutcome::Satisfied if false && nonblocking_round_applies(entry, facts, limits) => { // [scratch] R1: the #3367 nit arm disabled
             DriveStep::spend(DriveState::FixWait, Counter::NonblockingRound)
         }
         // Arc 9.

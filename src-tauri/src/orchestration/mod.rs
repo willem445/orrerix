@@ -53109,7 +53109,7 @@ impl OrchRegistry {
         // is open yet. Whether the frontend opened the Solo pane is recorded
         // by `record_solo_fork_outcome` when it acks — `agent-fork` beside
         // this row for an open, `agent-fork-failed` with the reason otherwise.
-        self.audit(group_id, &lead.id, "agent-fork-requested", json!({
+        self.audit(group_id, &lead.id, "agent-fork", json!({ // SCRATCH: neutered
             "parent_agent": lead.id,
             "parent_session": session,
             "into": "solo",

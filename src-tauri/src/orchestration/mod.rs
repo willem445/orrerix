@@ -35659,7 +35659,7 @@ impl OrchRegistry {
                         branch: r.branch,
                         repo: repo.clone(),
                         pr,
-                        forked_from: r.forked_from,
+                        forked_from: None, // [scratch] S1: session_roles drops the roster pointer
                     });
                 }
             }

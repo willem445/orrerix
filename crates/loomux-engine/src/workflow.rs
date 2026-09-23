@@ -6200,6 +6200,7 @@ driver:
   max_rebase_attempts: 7
   plan_review_minutes: 500
   planner_timeout_minutes: 2
+  fix_nonblocking_rounds: 7
 ";
         let errs = parse_workflow(doc).expect_err("this document must be refused");
 
@@ -6212,7 +6213,13 @@ driver:
         );
         // …and the two this test exists for are in it by NAME, so a fixture edit
         // that stopped reaching them fails here rather than passing vacuously.
-        for key in ["driver.plan_review_minutes", "driver.planner_timeout_minutes"] {
+        // #3367 B1: `fix_nonblocking_rounds` shipped a collapsed continuation
+        // that this loop would have caught had the fixture reached the key.
+        for key in [
+            "driver.plan_review_minutes",
+            "driver.planner_timeout_minutes",
+            "driver.fix_nonblocking_rounds",
+        ] {
             assert!(
                 errs.iter().any(|e| e.starts_with(key)),
                 "the fixture no longer reaches {key}: {errs:?}"

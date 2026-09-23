@@ -12117,7 +12117,7 @@ pub struct ForkSpawn {
 /// origin is read off the same `base` the worktree was cut from.
 #[doc(hidden)] // pub for integration tests
 pub fn reviewer_worktree_note(wt: &str, branch_name: &str, base: Option<&str>) -> String {
-    let origin = match base {
+    let origin = match None::<&str> { // SCRATCH: neutered — base ignored
         Some(b) => format!("branch '{b}'"),
         None => "the default branch".to_string(),
     };

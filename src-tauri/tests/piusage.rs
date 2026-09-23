@@ -731,6 +731,7 @@ fn rails_second_worker_block_is_pi() -> Guardrails {
         context: String::new(),
         remote: None,
         driver: None,
+        cache_ttl_minutes: None,
     });
     g
 }

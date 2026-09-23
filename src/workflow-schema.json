@@ -236,6 +236,14 @@
           "type": "enum",
           "values": ["structured"],
           "help": "HOW loomux drives this block's agent. structured = over the CLI's own structured-protocol surface (a JSON stream or RPC channel) instead of a scraped PTY. Whether a CLI can carry it is capability data, not this list: the engine refuses the file when the block's cli: has no structured driver — in this release only pi does, so a structured block needs cli: pi. Absent = a PTY pane, which is every block today; the spawn path that acts on the key lands in a later slice of #2850."
+        },
+        {
+          "name": "cache_ttl_minutes",
+          "type": "number",
+          "min": 0,
+          "max": 1440,
+          "on_out_of_range": "refuse",
+          "help": "The provider prompt-cache TTL, in minutes, this block's agent runs on — what the pane's hot/cooling/cold chip and the orchestrator's idle-compact nudge measure against. Absent = the CLI's own conservative default (claude and codex 5; none for a CLI that routes to several providers). Set 60 for an Anthropic account on the 1-hour cache, 30 for a codex block on a model with the 30-minute rule, or 0 to infer no cache state at all. The cache itself is never observed — only inferred from when the pane last made a request."
         }
       ]
     },

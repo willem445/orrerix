@@ -12340,6 +12340,13 @@ fn read_blocks(g: &Value) -> Vec<workflow::Block> {
                         let want = raw.trim().to_ascii_lowercase();
                         workflow::DRIVER_MODES.contains(&want.as_str()).then_some(want)
                     }),
+                    // #3407, the same defense in depth: a hand-edited value above
+                    // the parser's ceiling is DROPPED (the CLI default applies)
+                    // rather than resurrected into a display nobody validated.
+                    cache_ttl_minutes: b["cache_ttl_minutes"]
+                        .as_u64()
+                        .filter(|&m| m <= loomux_engine::cacheage::CACHE_TTL_MINUTES_MAX as u64)
+                        .map(|m| m as u32),
                 })
             })
             .collect();
@@ -12380,6 +12387,7 @@ fn blocks_json(blocks: &[workflow::Block]) -> Value {
                     "context": b.context,
                     "remote": b.remote,
                     "driver": b.driver,
+                    "cache_ttl_minutes": b.cache_ttl_minutes,
                 })
             })
             .collect(),

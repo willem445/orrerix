@@ -9,9 +9,11 @@
 // head moved and nothing mechanical pointed at it. Every one of those 12 is a fact a
 // machine can re-derive. This re-derives them.
 //
-// WHAT IT IS NOT. It REFUSES nothing and it exits 0 always, including when it finds a
-// mismatch: it is a report a worker reads before `report(done)`, never a gate. A gate on
-// prose would have to be right about intent; this is only ever right about a number.
+// WHAT IT IS NOT (on its own). Default invocation REFUSES nothing and exits 0 always,
+// including when it finds a mismatch: it is a report a worker reads before
+// `report(done)`, not a gate on its own. A gate on prose would have to be right about
+// intent; this is only ever right about a number. (See EXIT CONTRACT below for the
+// one flag that exits nonzero, and who consumes it.)
 //
 // TWO SEVERITIES, and the distinction is the whole contract:
 //
@@ -22,6 +24,18 @@
 //              matches no scope it knows, an identifier it could not find, a line cite
 //              whose target it prints for the worker to read. A body may legitimately
 //              ship with CHECK rows; each is a sentence to re-read, not a defect.
+//
+// EXIT CONTRACT, AND THE GATE. By default the script exits 0 always, including on a
+// MISMATCH: it is a report a worker reads before `report(done)`. `--gate` is the ONE
+// flag that exits nonzero — exit 1 on any nonzero MISMATCH count from a run that
+// COMPLETED (a crash still exits 0 with the reason on stderr, so the CI wrapper can
+// tell "the body is wrong" from "the instrument broke"). It exists for
+// `.github/workflows/prbodycheck.yml` (#3367 item 3), which fails the PR on that exit
+// and prints the full report. The gate keys on the severity, so a body that
+// legitimately cites an off-PR object in prose stays a CHECK there too; the flag adds
+// no rule of its own. The corpus precondition — the gate may only arm after the script
+// runs clean over the last 10 merged PRs — is re-run as the second step of that same
+// job, so the proof travels with the gate instead of living in one PR body.
 //
 // EVERY BYTE FIGURE CARRIES ITS INSTRUMENT (the #1764 r7/r9 lesson). A file here is CRLF
 // on disk and usually LF in the blob, so "3296 bytes" is true of one and false of the
@@ -824,7 +838,7 @@ function render(result, ctx) {
 }
 
 function parseArgs(argv) {
-  const o = { pr: null, repo: null, bodyFile: null, factsFile: null, diffFile: null, baseBranch: null, listClaims: false, json: false, help: false };
+  const o = { pr: null, repo: null, bodyFile: null, factsFile: null, diffFile: null, baseBranch: null, listClaims: false, json: false, gate: false, help: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--pr') o.pr = Number(argv[++i]);
@@ -832,6 +846,7 @@ function parseArgs(argv) {
     else if (a === '--body-file') o.bodyFile = argv[++i];
     else if (a === '--facts') o.factsFile = argv[++i];
     else if (a === '--diff-file') o.diffFile = argv[++i];
+    else if (a === '--gate') o.gate = true;
     else if (a === '--base') o.baseBranch = argv[++i];
     else if (a === '--list-claims') o.listClaims = true;
     else if (a === '--json') o.json = true;
@@ -846,10 +861,14 @@ const USAGE = `pr-body-check — re-measure a posted PR body's receipts against 
   node scripts/pr-body-check.cjs --pr <n> [--repo owner/name] [--base main] [--json]
   node scripts/pr-body-check.cjs --pr <n> --list-claims
   node scripts/pr-body-check.cjs --body-file <f> --facts <f.json> [--json]   # offline
+  node scripts/pr-body-check.cjs --pr <n> --gate                            # CI: exit 1 on any MISMATCH
 
-Exits 0 always. MISMATCH must be zero before report(done); CHECK rows are sentences to
-re-read. Every byte figure is reported against four instruments (blob bytes, on-disk
-bytes, blob chars, blob lines), because "N bytes" is true of one and false of another.`;
+Exits 0 always by default; --gate is the one nonzero exit — 1 when a completed run
+counts any MISMATCH (added for CI, #3367 item 3). MISMATCH must be zero before
+report(done); CI (prbodycheck.yml) fails the PR on the --gate exit. CHECK rows
+are sentences to re-read. Every byte figure is reported against four instruments
+(blob bytes, on-disk bytes, blob chars, blob lines), because "N bytes" is true of one
+and false of another.`;
 
 function main(argv) {
   const o = parseArgs(argv);
@@ -893,6 +912,12 @@ function main(argv) {
   const result = analyze(body, facts);
   if (o.json) process.stdout.write(`${JSON.stringify(Object.assign({}, ctx, result), null, 2)}\n`);
   else process.stdout.write(`${render(result, ctx)}\n`);
+  // The nonzero-MISMATCH gate exit is deliberately HERE and not on the crash path:
+  // analyze() returning findings is the script's normal, healthy verdict, while a
+  // crash means the instrument saw nothing — CI keys its tool-failure reading on
+  // that difference. `--gate` exists for the prbodycheck.yml workflow; the plain
+  // and --json contracts (exit 0 always) are what test/prbodycheck.test.ts pins.
+  if (o.gate && result.counts.MISMATCH > 0) return 1;
   return 0;
 }
 
@@ -903,8 +928,11 @@ module.exports = {
 };
 
 if (require.main === module) {
-  // Exit 0 always — this is a report, never a gate. A crash in the checker must not read
-  // as a body defect, so it goes to stderr and the exit code stays 0.
+  // A crash in the checker must not read as a body defect, so it goes to stderr and
+  // the exit code stays 0. The one nonzero exit is a healthy run's verdict under
+  // `--gate` (see main/EXIT CONTRACT): analyze() returning findings is the script
+  // working, not crashing, so the gate exit lives INSIDE main's return value and
+  // only for callers that asked for it.
   try { process.exitCode = main(process.argv.slice(2)); }
   catch (err) { process.stderr.write(`pr-body-check: ${(err && err.message) || String(err)}\n`); process.exitCode = 0; }
 }

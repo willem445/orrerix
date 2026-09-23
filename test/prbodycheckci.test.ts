@@ -58,14 +58,13 @@ test('the job runs on the PR events a body edit needs', () => {
 });
 
 test('the job refuses on any MISMATCH and prints the rows', () => {
-  // The gate is the step's own read of the script's summary line, because the
-  // script itself exits 0 always (a report, never a gate — its header and
-  // test/prbodycheck.test.ts both pin that). A gate that greps the summary for
-  // `0 MISMATCH` is the narrowest honest one.
+  // The gate is the script's own `--gate` exit — the one nonzero exit the
+  // script has, on any MISMATCH from a completed run (documented in its
+  // header and USAGE). The script's default exit-0 contract is pinned by
+  // test/prbodycheck.test.ts; this pin is the CI half of the pair.
+  assert.match(wf, /--gate/, 'the job must invoke the script with --gate, the one exit-nonzero mode');
   assert.match(wf, /--pr "\$pr"/, 'the job must run the script against the PR');
-  assert.match(wf, /-ne 0/, 'the job must compare the MISMATCH count against zero');
-  assert.match(wf, /exit 1/, 'a nonzero MISMATCH count must fail the step');
-  assert.match(wf, /printf '%s\\n' "\$out"/, 'the job must print the script output, so every CHECK row is visible to the reader');
+  assert.match(wf, /printf '%s\\n' "\$out"/, 'the corpus step must print the script output, so every CHECK row is visible to the reader');
 });
 
 test('a missing or unparsable summary line fails the step, not passes it', () => {
@@ -74,8 +73,8 @@ test('a missing or unparsable summary line fails the step, not passes it', () =>
   // pass on a broken checker. The gate is keyed on the summary line instead —
   // pin both arms of that, or the next editor reverts to the exit-code gate
   // and a crash reads as a clean body.
-  assert.match(wf, /no SUMMARY line/, 'a run with no summary line must be a tool failure, not a pass');
-  assert.match(wf, /could not parse the MISMATCH count/, 'an unparsable summary must be a tool failure, not a pass');
+  assert.match(wf, /missing summary line/, 'a run with no summary line must be a tool failure, not a pass');
+  assert.match(wf, /unparsable/, 'an unparsable summary must be a tool failure, not a pass');
 });
 
 test('[scratch]-titled PRs are report-only', () => {

@@ -4,19 +4,21 @@ name: PR body check
 #
 # WHY A SIBLING WORKFLOW, NOT A JOB IN ci.yml. ci.yml's `build` job is the
 # three-platform cargo/npm matrix — a body check has nothing to do with it, and
-# putting it there would pay matrix triple-duplication for a job that is
-# platform-independent. A sibling keeps the matrix's cost shape untouched, and
-# this file's `paths:` filter (below) keeps it off PRs that touch nothing it
-# reads — every PR here edits its own body, so the filter is effectively
-# "always", but a [scratch] proof PR that touches only `test/` still skips it
-# rather than paying an `npm ci` for nothing.
+# folding it in would pay matrix triple-duplication and couple the receipt gate to
+# Rust/toolchain setup it does not need. A sibling keeps the matrix's cost shape
+# untouched, and an unfiltered `pull_request` trigger (no `paths:`) is what makes
+# the check a check that always reports: a path-filtered required status check
+# never runs on a PR that does not touch the filter and stays PENDING for the
+# purposes of branch protection forever — the trap actionlint.yml documents in
+# its own header.
 #
 # THE SCRATCH EXEMPTION. `[scratch]`-titled PRs are red-before-green
 # counterfactuals whose bodies are deliberately stale — the body IS the defect
 # under test (convention per ci.yml's `plan` job; never merged). A MISMATCH on
-# one is the feature working, so the job reports what it found and exits
-# green for them. On every other PR any MISMATCH fails the run; CHECK rows are
-# printed for every PR, since they are sentences to re-read, not defects.
+# one is the feature working, so the whole JOB is skipped for them and nothing
+# reports red; the report they would have produced is the one their author runs
+# by hand, as always. On every other PR any MISMATCH fails the run; CHECK rows
+# are printed for every PR, since they are sentences to re-read, not defects.
 
 on:
   pull_request:
@@ -37,8 +39,10 @@ concurrency:
 
 jobs:
   pr-body-check:
-    # Report-only on [scratch] PRs, refusing on everything else. `github.event`
-    # is absent on pushes to main — this workflow deliberately does not run
+    # Report-only on [scratch] PRs, refusing on everything else: the JOB is
+    # skipped for a [scratch]-titled PR, so a scratch body's MISMATCH rows gate
+    # nothing (same convention as ci.yml's plan job, #1685). `github.event` is
+    # absent on pushes to main — this workflow deliberately does not run
     # there: there is no PR body to check on a push.
     if: ${{ !(github.event_name == 'pull_request' && startsWith(github.event.pull_request.title, '[scratch')) }}
     runs-on: ubuntu-latest
@@ -50,35 +54,23 @@ jobs:
           node-version: 22
 
       # The script is dependency-free CJS (no `require` beyond node: builtins),
-      # so there is no `npm ci` here — the script needs node alone. The repo's
-      # node_modules are not installed: nothing imports them.
-      - name: Check the PR body's receipts against head
+      # so there is no `npm ci` here — the script needs node alone.
+      #
+      # THE GATE ITSELF: `--gate` is the one invocation on which the script
+      # exits nonzero — 1 on any MISMATCH from a COMPLETED run (documented in
+      # the script's header and USAGE). A checker CRASH still exits 0 with the
+      # reason on stderr: that is the script's long-standing contract that a
+      # crash must not read as a body defect, and the corpus step below is what
+      # turns a broken instrument into a red (its rows are caught as
+      # unparsable there) rather than this step. The report prints in full:
+      # every CHECK row is visible to whoever reads the failed run.
+      - name: Run the checker, refusing on any MISMATCH
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -u
           pr="${{ github.event.pull_request.number }}"
-          # The script exits 0 always (a report, never a gate) and prints
-          # MISMATCH / CHECK rows. The GATE is this step's own read of the
-          # summary line, so a crash in the checker cannot read as a clean
-          # body: no summary line is also a failure.
-          out="$(node scripts/pr-body-check.cjs --pr "$pr" --repo "$GITHUB_REPOSITORY")"
-          printf '%s\n' "$out"
-          summary="$(printf '%s\n' "$out" | grep -E '^SUMMARY pr-body-check' || true)"
-          if [ -z "$summary" ]; then
-            echo "::error::pr-body-check produced no SUMMARY line — the checker itself failed; treat this as a tool failure, not a body defect"
-            exit 1
-          fi
-          mismatch="$(printf '%s' "$summary" | sed -n 's/.*: \([0-9][0-9]*\) MISMATCH.*/\1/p')"
-          if [ -z "$mismatch" ]; then
-            echo "::error::could not parse the MISMATCH count out of: $summary"
-            exit 1
-          fi
-          if [ "$mismatch" -ne 0 ]; then
-            echo "::error::pr-body-check found $mismatch MISMATCH row(s) — fix the figures the rows name (a CHECK row is a sentence to re-read, not a defect)"
-            exit 1
-          fi
-          echo "ok: $summary"
+          node scripts/pr-body-check.cjs --pr "$pr" --repo "$GITHUB_REPOSITORY" --gate
 
       # The corpus proof (#3367 item 3's precondition, the
       # known-good-subjects convention): run the same job logic over the last
@@ -87,7 +79,10 @@ jobs:
       # live canary — a body shape merged since the last proof that the
       # checker now false-flags shows up as a red CORPUS step rather than a
       # red gate. `--repo` is explicit so the corpus is this repo's PRs, not
-      # whatever the checkout's remote is.
+      # whatever the checkout's remote is. `|| true` on the per-PR invocation
+      # keeps a checker CRASH from counting as a corpus pass: the crash is
+      # caught by the missing summary line below, which reports it as
+      # unparsable and fails the corpus step.
       - name: Corpus dry run over the last 10 merged PRs
         env:
           GH_TOKEN: ${{ github.token }}

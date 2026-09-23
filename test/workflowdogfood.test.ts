@@ -67,14 +67,15 @@ test("the roster is the one the repo means to run", () => {
   assert.deepEqual(
     tiers.map((b) => [b.id, b.cli, b.model, b.effort ?? ""]),
     [
-      ["worker-std", "pi", "openrouter/z-ai/glm-5.3-flash", "high"],
+      ["worker-std", "codex", "gpt-6-luna", "medium"],
       ["worker-adv", "claude", "opus", ""],
     ],
     "the tiers are the demo: a cheap default worker, and a strong one for work with judgment in it"
   );
   // `effort` rides beside the model (#2817) because the thinking level is the
-  // load-bearing axis the cheap tier gained on pi; `""` reads as "the CLI's own
-  // default" for a block that declares none (worker-adv on claude has none).
+  // load-bearing axis of the cheap tier (codex `model_reasoning_effort`, #3404);
+  // `""` reads as "the CLI's own default" for a block that declares none
+  // (worker-adv on claude has none).
   // process (#324): role_hint pairs with the kind it requires — the worker-side
   // half of that rule is exercised end to end by this real file. (The
   // planner-side half — role_hint: advisor — moved to the synthetic fixture
@@ -92,7 +93,7 @@ test("the roster is the one the repo means to run", () => {
   assert.deepEqual(
     reviewers.map((b) => [b.id, b.cli, b.model, b.effort ?? ""]),
     [
-      ["rev-std", "pi", "openrouter/z-ai/glm-5.3-flash", "high"],
+      ["rev-std", "claude", "sonnet", "medium"],
       ["rev-final", "claude", "opus", ""],
     ],
     "the every-round lane is declared first; the strong final validator runs once, last"
@@ -102,26 +103,18 @@ test("the roster is the one the repo means to run", () => {
     "rev-std",
     "a bare spawn_agent(kind: \"reviewer\") must reach the lane that runs every round"
   );
-  // The model id is pinned in FULL on purpose, and the loop below covers every
-  // pi block (both tiers of it — the default worker AND the every-round
-  // reviewer), not just the reviewers. pi's `--model` takes `provider/id`
-  // (docs/design/pi.md, the launch line), so a block that dropped the
-  // `openrouter/` half would spawn against a model that does not exist. This
-  // asserts the `/` survives the parser; the pattern allows a second one
-  // because this provider's own model ids carry it (`openrouter` +
-  // `z-ai/glm-5.3-flash`).
-  //
-  // The roster has NO opencode block since #2817, and it is a specimen of what
-  // the repo actually runs, not a second home for a CLI the cheap tier left —
-  // so the "must have opencode blocks" positive control re-expresses on pi
-  // rather than being kept vacuously. opencode's own id-shape rules keep their
-  // coverage in the synthetic fixtures (`test/modelnames.test.ts`,
-  // `test/modelcatalog.test.ts`, #722); the file's header comment still names
-  // `.orrerix/workflow.yml.orig`, but that file is not in the tree.
-  const viaPi = workflow.blocks.filter((b) => b.cli === "pi");
-  assert.ok(viaPi.length > 0, "the cheap tier is the point of this roster — it must have pi blocks");
-  for (const b of viaPi) {
-    assert.match(b.model ?? "", /^[a-z0-9-]+\/[a-z0-9./-]+$/, `${b.id}: a pi model id names its provider`);
+  // The cheap tier is codex since #3404 (pi + OpenRouter retired: no more credits).
+  // A codex block cannot host a REVIEWER (`cli_can_host`, Containment::None —
+  // #3400), which is why rev-std moved to claude sonnet rather than codex; the
+  // pin below is that no codex block is reviewer-kind, so the parser's refusal is
+  // never what the human meets in the launcher. A codex model id is bare
+  // (`gpt-6-luna`, the id the installed binary carries; docs/design/codex.md) —
+  // no provider prefix, unlike the pi ids this replaced.
+  const viaCodex = workflow.blocks.filter((b) => b.cli === "codex");
+  assert.ok(viaCodex.length > 0, "the cheap tier is the point of this roster — it must have a codex block");
+  for (const b of viaCodex) {
+    assert.notEqual(b.kind, "reviewer", `${b.id}: codex cannot host a reviewer (#3400)`);
+    assert.match(b.model ?? "", /^[a-z0-9.-]+$/, `${b.id}: a codex model id is bare, no provider prefix`);
   }
 
   const processPro = workflow.blocks.find((b) => b.id === "process");

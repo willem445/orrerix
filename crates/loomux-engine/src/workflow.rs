@@ -1080,6 +1080,13 @@ pub const DRIVER_MAX_CI_ATTEMPTS_MIN: u32 = 1;
 pub const DRIVER_MAX_CI_ATTEMPTS_MAX: u32 = 3;
 pub const DRIVER_MAX_REBASE_ATTEMPTS_MIN: u32 = 0;
 pub const DRIVER_MAX_REBASE_ATTEMPTS_MAX: u32 = 1;
+/// `driver.fix_nonblocking_rounds` (#3367 item 1): `0..=3`, default `0`
+/// (off). Refused outside the range like the three counters above, and for
+/// the same reason — it is a count of review rounds the DRIVER spends, and
+/// every one of them is also spent from `max_review_rounds`, so its ceiling
+/// is that counter's.
+pub const DRIVER_FIX_NONBLOCKING_ROUNDS_MIN: u32 = 0;
+pub const DRIVER_FIX_NONBLOCKING_ROUNDS_MAX: u32 = 3;
 
 /// How long a drive may sit before it is `held(drive-stalled)` (§2.1) — the
 /// **backstop**, since #2110, beneath `reviewdrive`'s per-state bounds.
@@ -1211,6 +1218,18 @@ pub struct DriverPolicy {
     /// advance). Same clamp family; the default is the family's ceiling
     /// because a drive's whole budget is what this bounds.
     pub drive_timeout_minutes: u32,
+    /// Non-blocking rounds the driver may run on its own at a satisfied gate
+    /// (#3367 item 1) — see `reviewdrive::DriveLimits::fix_nonblocking_rounds`.
+    /// Default `0`, which is the pre-#3367 behaviour: a gate satisfied with
+    /// non-blocking findings open wakes the orchestrator at once.
+    pub fix_nonblocking_rounds: u32,
+    /// A worker's `report(done, ref: <PR>)` starts a review drive on that PR
+    /// (#3367 item 2). Default **false**, and a SECOND key under `enabled` for
+    /// [`Self::plan_enabled`]'s reason: turning the driver on consented to a
+    /// drive an orchestrator starts by naming a PR, not to one a delegate's
+    /// report starts. `docs/design/review-driver.md` §3.2 carries the argument
+    /// for why this key, and only this key, may start a drive from a file.
+    pub auto_drive_on_done: bool,
 }
 
 impl Default for DriverPolicy {
@@ -1228,6 +1247,8 @@ impl Default for DriverPolicy {
             plan_enabled: false,
             plan_review_minutes: crate::plandrive::PLAN_REVIEW_MINUTES_DEFAULT,
             planner_timeout_minutes: crate::plandrive::PLANNER_TIMEOUT_MINUTES_DEFAULT,
+            fix_nonblocking_rounds: DRIVER_FIX_NONBLOCKING_ROUNDS_MIN,
+            auto_drive_on_done: false,
         }
     }
 }
@@ -2134,6 +2155,13 @@ struct RawDriver {
     plan_review_minutes: Option<u32>,
     #[serde(default)]
     planner_timeout_minutes: Option<u32>,
+    /// #3367's two keys. The count is `Option` for the counters' reason — an
+    /// out-of-range value is refused, never replaced — and the switch is a bare
+    /// bool like the other two.
+    #[serde(default)]
+    fix_nonblocking_rounds: Option<u32>,
+    #[serde(default)]
+    auto_drive_on_done: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2356,6 +2384,8 @@ pub fn workflow_schema_keys() -> BTreeMap<String, Vec<String>> {
         plan_enabled: true,
         plan_review_minutes: Some(15),
         planner_timeout_minutes: Some(60),
+        fix_nonblocking_rounds: Some(1),
+        auto_drive_on_done: true,
     };
     let resource = RawResource { slots: Some(1), max_hold_minutes: Some(30) };
     let triage = RawTriage {
@@ -2552,6 +2582,8 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
     fact("driver.plan_enabled", "default", json!(dv.plan_enabled));
     fact("driver.plan_review_minutes", "default", json!(dv.plan_review_minutes));
     fact("driver.planner_timeout_minutes", "default", json!(dv.planner_timeout_minutes));
+    fact("driver.fix_nonblocking_rounds", "default", json!(dv.fix_nonblocking_rounds));
+    fact("driver.auto_drive_on_done", "default", json!(dv.auto_drive_on_done));
     let tr = TriagePolicy::default();
     fact("triage.enabled", "default", json!(tr.enabled));
     fact("triage.provider", "default", json!(tr.provider));
@@ -2593,6 +2625,8 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
     fact("driver.drive_timeout_minutes", "min", json!(DRIVER_DRIVE_TIMEOUT_MIN));
     fact("driver.drive_timeout_minutes", "max", json!(DRIVER_DRIVE_TIMEOUT_MAX));
     fact("driver.plan_review_minutes", "min", json!(crate::plandrive::PLAN_REVIEW_MINUTES_MIN));
+    fact("driver.fix_nonblocking_rounds", "min", json!(DRIVER_FIX_NONBLOCKING_ROUNDS_MIN));
+    fact("driver.fix_nonblocking_rounds", "max", json!(DRIVER_FIX_NONBLOCKING_ROUNDS_MAX));
     fact("driver.plan_review_minutes", "max", json!(crate::plandrive::PLAN_REVIEW_MINUTES_MAX));
     fact(
         "driver.planner_timeout_minutes",
@@ -3895,6 +3929,15 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 "a planner reading a large issue legitimately spends a quarter of an hour before its first tool call, and three hours is the point past which it is not coming back at all",
                 &mut errs,
             ),
+            fix_nonblocking_rounds: driver_counter(
+                "driver.fix_nonblocking_rounds",
+                rd.fix_nonblocking_rounds,
+                (DRIVER_FIX_NONBLOCKING_ROUNDS_MIN, DRIVER_FIX_NONBLOCKING_ROUNDS_MAX),
+                DRIVER_FIX_NONBLOCKING_ROUNDS_MIN,
+                "every non-blocking round is also a review round, so it can never exceed the                  three INVARIANT 9 grants",
+                &mut errs,
+            ),
+            auto_drive_on_done: rd.auto_drive_on_done,
         },
     };
 

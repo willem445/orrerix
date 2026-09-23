@@ -633,8 +633,30 @@ impl OrchRegistry {
                 d.lane_timeout_minutes as u64,
                 d.fix_timeout_minutes as u64,
                 d.drive_timeout_minutes as u64,
-            ),
+            )
+            // #3367 item 1, through the clamping builder like every other
+            // bound this maps.
+            .with_fix_nonblocking_rounds(d.fix_nonblocking_rounds),
         )
+    }
+
+    /// **Does a worker's `report(done, ref: <PR>)` start a drive here?**
+    /// (#3367 item 2, `driver.auto_drive_on_done`)
+    ///
+    /// Read UNDER `enabled`, through the same policy gate as everything else
+    /// the driver does — the advanced-orchestrator guardrail and a workflow
+    /// that loads — so a group whose `drive_review` answers `driver-disabled`
+    /// can never be started by a report either. Fails closed: a workflow that
+    /// does not load is `false`, and the report is delivered as it always was.
+    pub(super) fn rd_auto_drive_on_done(&self, group: &GroupId) -> bool {
+        let Some(g) = self.group(group) else { return false };
+        if !g.guardrails.advanced_orchestrator {
+            return false;
+        }
+        match super::load_active_workflow(&g.repo, &g.guardrails) {
+            Ok(Some(wf)) => wf.driver.enabled && wf.driver.auto_drive_on_done,
+            _ => false,
+        }
     }
 
     /// Whether this group runs a review driver at all.
@@ -2779,6 +2801,20 @@ impl OrchRegistry {
         }
     }
 
+    /// **The drive's FIRST notice carries the report that started it** (#3367
+    /// item 2). `Option::take`, so exactly one notice carries it and every
+    /// later one reads as it always did. A drive nobody auto-started has
+    /// nothing to take, and its notice is returned unchanged.
+    fn rd_fold_auto_report(entry: &mut reviewdrive::DriveEntry, notice: String) -> String {
+        match entry.auto_report.take() {
+            Some(r) => format!(
+                "{notice} This drive was started by a worker's report(done), delivered here \
+                 instead of on its own: {r}"
+            ),
+            None => notice,
+        }
+    }
+
     /// The sentence #2509's grace round owes the worker it hands back to.
     ///
     /// **Because the `{{ATTEMPT}}` numbers cannot say it.** They are
@@ -2851,6 +2887,35 @@ impl OrchRegistry {
         grace: bool,
     ) -> String {
         let base = rd_fact(&brief.base);
+        // #3367 item 1: a non-blocking round is not a FAIL, and the brief must
+        // not say one was recorded. Read off the ENTRY rather than the step, so
+        // the brief a restart re-sends (`Rehandback`) says the same thing the
+        // first one did. The attempt figures are the SHARED bound's, because
+        // that is the budget this round spent.
+        if entry.nit_handback {
+            let what = format!(
+                "Review: request-changes. Every required lane PASSED, with non-blocking \
+                 findings open ({}). The findings are on PR #{}. Address all of them, or \
+                 answer on the PR why one is not a defect, then push. This is non-blocking \
+                 round {} of {} that the driver runs on its own, and it counts toward the \
+                 review bound below.",
+                rd_fact(&rddrive::residual_text(&brief.lane_notices)),
+                brief.pr,
+                entry.nit_rounds,
+                limits.fix_nonblocking_rounds,
+            );
+            return render_template(
+                DRIVER_FIX_TPL,
+                &[
+                    ("PR", &brief.pr.to_string()),
+                    ("HEAD", &rd_fact(&brief.head)),
+                    ("BASE", &base),
+                    ("WHAT", &what),
+                    ("ATTEMPT", &entry.counters.review_rounds.to_string()),
+                    ("MAX_ATTEMPTS", &limits.max_review_rounds.to_string()),
+                ],
+            );
+        }
         let (what, attempt, max) = match brief.ci {
             reviewdrive::CiObservation::Conflicting => (
                 format!(
@@ -4354,6 +4419,31 @@ impl OrchRegistry {
                         // accepted the arc two screens up. The `rd-handback`
                         // row that follows on the `Ok` arm is what says the
                         // worker was actually reached.
+                        // #3367 item 1: the driver's OWN non-blocking round,
+                        // read off the step for the grace's reason above. The
+                        // revision is stamped here, from the facts this tick
+                        // read, because `decide` compares the next satisfied
+                        // gate against it — a worker that changes nothing does
+                        // not buy a second identical round.
+                        let nit = matches!(
+                            step,
+                            reviewdrive::DriveStep::Advance {
+                                bump: Some(reviewdrive::Counter::NonblockingRound),
+                                ..
+                            }
+                        );
+                        if nit {
+                            entry.nit_head = brief.head.clone();
+                            entry.nit_digest = brief.body_digest.clone();
+                            out.audits.push((
+                                rddrive::audit_action::AUTO_HANDBACK,
+                                json!({ "pr": pr, "head": brief.head,
+                                        "round": entry.nit_rounds,
+                                        "of": limits.fix_nonblocking_rounds,
+                                        "review_rounds": entry.counters.review_rounds,
+                                        "residual": rddrive::residual_text(&brief.lane_notices) }),
+                            ));
+                        }
                         if grace {
                             out.audits.push((
                                 rddrive::audit_action::ROUND_GRACE,
@@ -4531,7 +4621,12 @@ impl OrchRegistry {
                         &entry.counters,
                         &self.rd_surviving_panes(entry),
                         &released_worker_session,
+                    ) + &rddrive::nonblocking_clause(
+                        entry.nit_rounds,
+                        limits.fix_nonblocking_rounds,
+                        &brief.lane_notices,
                     );
+                    let n = Self::rd_fold_auto_report(entry, n);
                     out.audits.push((
                         rddrive::audit_action::SATISFIED,
                         json!({ "pr": pr, "head": entry.head }),
@@ -4592,7 +4687,7 @@ impl OrchRegistry {
                         // from `out.provider_limited`, and this drive's own
                         // wording still reaches its board task there.
                         if r != reviewdrive::HeldReason::ProviderLimit {
-                            out.notices.push(n);
+                            out.notices.push(Self::rd_fold_auto_report(entry, n));
                         } else {
                             out.provider_note = Some(n);
                         }
@@ -4616,6 +4711,7 @@ impl OrchRegistry {
                         &panes,
                         &released_worker_session,
                     );
+                    let n = Self::rd_fold_auto_report(entry, n);
                     entry.owe_notice(&n, now);
                 }
                 _ => {}
@@ -4684,6 +4780,7 @@ impl OrchRegistry {
 
     /// [`drive_review`](Self::drive_review) with the `gh` seam injected.
     #[doc(hidden)] // pub for integration tests
+    #[allow(clippy::too_many_arguments)]
     pub fn drive_review_with(
         &self,
         group: &GroupId,
@@ -4694,6 +4791,40 @@ impl OrchRegistry {
         rounds_already_spent: u32,
         on_behalf_of: &str,
         now: u64,
+    ) -> Value {
+        self.drive_review_seeded(
+            group,
+            runner,
+            pr,
+            worker_session,
+            reset_counters,
+            rounds_already_spent,
+            on_behalf_of,
+            now,
+            None,
+        )
+    }
+
+    /// [`drive_review_with`](Self::drive_review_with), plus the worker report
+    /// that started the drive when one did (#3367 item 2).
+    ///
+    /// **The report is written onto the entry in the SAME store that creates
+    /// it**, not by a second write after the call returns: between two writes
+    /// a tick could take the drive's first step, and a hold on that step would
+    /// build the first notice with nothing to fold into it. One write is the
+    /// only ordering that cannot lose the words.
+    #[allow(clippy::too_many_arguments)]
+    fn drive_review_seeded(
+        &self,
+        group: &GroupId,
+        runner: &dyn rddrive::RdRunner,
+        pr: u64,
+        worker_session: &str,
+        reset_counters: bool,
+        rounds_already_spent: u32,
+        on_behalf_of: &str,
+        now: u64,
+        auto_report: Option<String>,
     ) -> Value {
         use rddrive::refusal as r;
         if !self.driver_enabled(group) {
@@ -4883,6 +5014,13 @@ impl OrchRegistry {
                 };
                 if reset_counters {
                     entry.counters = reviewdrive::Counters::seeded(rounds_already_spent);
+                    // #3367: a fresh budget is a fresh budget for the driver's
+                    // own non-blocking rounds too — and the revision the last
+                    // one was handed back at is no longer a reason to refuse
+                    // the next, since the orchestrator has just paid for it.
+                    entry.nit_rounds = 0;
+                    entry.nit_head.clear();
+                    entry.nit_digest.clear();
                     // **And the hold-notice dedup is re-armed with them**
                     // (#3040 N1). A resetting resume buys the drive a fresh
                     // budget, so the next hold at the same bound is a hold
@@ -5094,6 +5232,10 @@ impl OrchRegistry {
                 // The panes this drive is being handed (#3250) — see the same
                 // call on the resume arm above.
                 fresh.record_founding_panes(self.live_panes_on_session(group, &session));
+                // #3367 item 2 — see `drive_review_seeded`. Only the FRESH arm
+                // carries it: the auto-start refuses every PR with a live or
+                // parked entry, so it never reaches the resume arm above.
+                fresh.auto_report = auto_report.clone();
                 state.entries.push(fresh);
             }
             if reviewdrive::store_state(&dir, &state).is_err() {
@@ -5134,6 +5276,145 @@ impl OrchRegistry {
         // window that predates the drive.
         self.rd_service_ms.lock_safe().remove(group);
         json!({ "driving": true, "state": reviewdrive::DriveState::CiWait.as_str() })
+    }
+
+    /// **A worker's `report(done, ref: <PR>)` starts a drive on that PR**
+    /// (#3367 item 2, `driver.auto_drive_on_done`) — or says why it did not.
+    ///
+    /// Answers `true` when a drive was started and the report is CONSUMED: the
+    /// caller then does not deliver it, and the drive's first notice carries it
+    /// instead ([`reviewdrive::DriveEntry::auto_report`]). Answers `false` in
+    /// every other case, and the caller delivers the report exactly as it did
+    /// before this existed — with one `rd-auto-start-declined` row naming why
+    /// wherever the policy was on, so an orchestrator asking why a PR did not
+    /// auto-drive reads it rather than inferring it from a row that is missing.
+    /// With the policy off this does nothing at all, not even audit.
+    ///
+    /// **Why a report may start a drive at all is argued in
+    /// `docs/design/review-driver.md` §3.2**, which is where the "never
+    /// automatic" rule lived. The short form: the second key is still turned by
+    /// the orchestrator — it spawned this worker onto this branch, and the
+    /// refusals below confine the report to starting the drive the orchestrator
+    /// would have started on the worker's own PR. Every input that decides
+    /// that is something orrerix recorded or GitHub answered; the `ref` a
+    /// delegate typed only NAMES a PR, and a PR on someone else's branch is
+    /// `not-author`.
+    #[doc(hidden)] // pub for integration tests
+    pub fn rd_auto_start(&self, group: &GroupId, agent_id: &str, pr_ref: &str, report: &str) -> bool {
+        if !self.rd_auto_drive_on_done(group) {
+            return false;
+        }
+        let injected = self.rd_runner_override.lock_safe().clone();
+        let owned;
+        let runner: &dyn rddrive::RdRunner = match injected.as_deref() {
+            Some(r) => r,
+            None => {
+                let Some(repo) = self.group(group).map(|g| g.repo) else { return false };
+                owned = rddrive::runner_for(std::path::Path::new(&repo));
+                &owned
+            }
+        };
+        self.rd_auto_start_with(group, runner, agent_id, pr_ref, report, now_ms())
+    }
+
+    /// [`rd_auto_start`](Self::rd_auto_start) with the `gh` seam and the clock
+    /// injected, for `drive_review_with`'s reason.
+    ///
+    /// The checks run cheapest-first, and the one `gh` call is last: a report
+    /// naming no PR, from a worker with no session, on a PR already driven or
+    /// already reviewed, is refused without a round trip.
+    #[doc(hidden)] // pub for integration tests
+    pub fn rd_auto_start_with(
+        &self,
+        group: &GroupId,
+        runner: &dyn rddrive::RdRunner,
+        agent_id: &str,
+        pr_ref: &str,
+        report: &str,
+        now: u64,
+    ) -> bool {
+        use rddrive::auto_start_refusal as a;
+        if !self.rd_auto_drive_on_done(group) {
+            return false;
+        }
+        let decline = |reason: &str, pr: Option<u64>| -> bool {
+            self.rd_audit(
+                group,
+                agent_id,
+                rddrive::audit_action::AUTO_START_DECLINED,
+                json!({ "agent": agent_id, "ref": rd_fact(pr_ref), "pr": pr, "reason": reason }),
+            );
+            false
+        };
+        let Some(pr) = rddrive::pr_from_ref(pr_ref) else { return decline(a::NOT_A_PR, None) };
+        let Some(agent) = self.agent(agent_id) else { return decline(a::NOT_AUTHOR, Some(pr)) };
+        let Some(session) = agent.session_id.clone().filter(|s| !s.trim().is_empty()) else {
+            return decline(a::NO_SESSION, Some(pr));
+        };
+        // **Live OR parked**, which is wider than `drive_review`'s own
+        // `already-driven`: that tool RESUMES a parked drive, and a resume is
+        // the orchestrator's decision about a hold it has read (§2.3) — never
+        // something a worker's report may do on its behalf.
+        match reviewdrive::load_state(&self.group_dir(group)) {
+            Ok(s) if s.entry(pr).is_some_and(|e| !e.state().is_terminal()) => {
+                return decline(a::ALREADY_DRIVEN, Some(pr));
+            }
+            Ok(_) => {}
+            Err(_) => return decline(rddrive::refusal::STATE_UNREADABLE, Some(pr)),
+        }
+        // **INVARIANT 9's guard** (§3.2). A drive started here starts its
+        // counters at zero, which is true only of a PR nobody has reviewed. A
+        // terminal drive's entry is pruned once its notice lands, so without
+        // this a worker reporting done AFTER a satisfied gate would start a
+        // fresh drive with a fresh three rounds — "yours count too" defeated
+        // by a report. A recorded verdict is the durable evidence that a round
+        // was spent, whoever spent it.
+        if !self.verdict_map(group, pr).is_empty() {
+            return decline(a::HAS_VERDICTS, Some(pr));
+        }
+        let identity = match rddrive::pr_identity(runner, pr) {
+            Ok(i) => i,
+            Err(reason) => return decline(reason, Some(pr)),
+        };
+        if !identity.open {
+            return decline(a::PR_NOT_OPEN, Some(pr));
+        }
+        if rddrive::is_scratch_title(&identity.title) {
+            return decline(a::SCRATCH, Some(pr));
+        }
+        // **Authorship is the branch orrerix recorded at spawn**, never the
+        // GitHub author (every agent here pushes as the same account) and
+        // never anything the report says.
+        let branch = agent.branch.clone().unwrap_or_default();
+        if branch.trim().is_empty() || branch.trim() != identity.head_ref {
+            return decline(a::NOT_AUTHOR, Some(pr));
+        }
+        let Some(orch) = self
+            .agents
+            .lock_safe()
+            .values()
+            .find(|x| &x.group == group && x.role == Role::Orchestrator && x.status != AgentStatus::Dead)
+            .map(|x| x.id.clone())
+        else {
+            return decline(a::NO_ORCHESTRATOR, Some(pr));
+        };
+        // The text the drive's first notice will carry: the pane's own line,
+        // minus the marker a notice already opens with — nesting a second
+        // `[orrerix]` mid-line would read as a forged one.
+        let text = report.trim_start_matches("[orrerix]").trim().to_string();
+        let out =
+            self.drive_review_seeded(group, runner, pr, &session, false, 0, &orch, now, Some(text.clone()));
+        if let Some(reason) = out.get("refused").and_then(Value::as_str) {
+            return decline(reason, Some(pr));
+        }
+        self.rd_audit(
+            group,
+            &orch,
+            rddrive::audit_action::AUTO_STARTED,
+            json!({ "pr": pr, "agent": agent_id, "session": session, "branch": branch,
+                    "report": text }),
+        );
+        true
     }
 
     /// `cancel_review_drive(pr)` — one of `held`'s two outgoing arcs, and the
@@ -5423,6 +5704,12 @@ impl OrchRegistry {
                     // `review_rounds: 3` of 3 on a LIVE drive is looking at the
                     // grace, and this is the field that says so.
                     "grace_used": e.counters.body_only_grace,
+                    // #3367 item 1: the non-blocking rounds the driver ran on
+                    // its own. Beside `review_rounds` rather than inside it for
+                    // `grace_used`'s reason — each of these is ALSO counted
+                    // there, so this says how many of that figure nobody
+                    // dispositioned.
+                    "nit_rounds": e.nit_rounds,
                     // Derived, never stored: a stored AGE is stale the instant
                     // it is written and meaningless across a restart, which is
                     // the queue's own split between `enqueued_ms` and

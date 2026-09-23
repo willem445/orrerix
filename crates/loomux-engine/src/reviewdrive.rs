@@ -781,6 +781,17 @@ pub struct DriveLimits {
     pub lane_timeout_minutes: u64,
     pub fix_timeout_minutes: u64,
     pub drive_timeout_minutes: u64,
+    /// **How many non-blocking rounds the driver may run on its own** (#3367
+    /// item 1) — `driver.fix_nonblocking_rounds`, `0..=3`, default `0`, which
+    /// is today's behaviour: a gate satisfied with findings open wakes the
+    /// orchestrator at once.
+    ///
+    /// **It is not a second budget.** Every such round ALSO spends
+    /// `review_rounds` (see [`Counter::NonblockingRound`]), so this can only
+    /// ever SHORTEN what INVARIANT 9's bound already allows; it can never let a
+    /// drive run past `max_review_rounds`. Clamped by [`clamped`](Self::clamped)
+    /// to the same ceiling, for the reach argument the type's own doc makes.
+    pub fix_nonblocking_rounds: u32,
     /// Private, and load-bearing: it makes `DriveLimits { … }` a compile error
     /// outside this module (E0451), so the clamping constructors are the only
     /// way in. The fields stay `pub` so a caller can still *read* the bounds —
@@ -798,6 +809,7 @@ impl Default for DriveLimits {
             lane_timeout_minutes: 60,
             fix_timeout_minutes: 60,
             drive_timeout_minutes: DRIVER_DRIVE_TIMEOUT_DEFAULT_MIN as u64,
+            fix_nonblocking_rounds: 0,
             _seal: (),
         }
     }
@@ -814,8 +826,23 @@ impl DriveLimits {
             max_review_rounds: self.max_review_rounds.clamp(1, MAX_ROUNDS_CEILING),
             max_ci_attempts: self.max_ci_attempts.clamp(1, MAX_ROUNDS_CEILING),
             max_rebase_attempts: self.max_rebase_attempts.min(MAX_REBASE_CEILING),
+            // #3367: `0` is legal here (it is the default, and the feature
+            // off), so this is a ceiling and not a range — the asymmetry
+            // `max_rebase_attempts` has, for the same reason.
+            fix_nonblocking_rounds: self.fix_nonblocking_rounds.min(MAX_ROUNDS_CEILING),
             ..self
         }
+    }
+
+    /// These limits with `driver.fix_nonblocking_rounds` set (#3367 item 1),
+    /// clamped like every other bound.
+    ///
+    /// A builder rather than a seventh argument to [`new`](Self::new): every
+    /// existing caller keeps meaning exactly what it meant — the feature off —
+    /// without an edit, which is the default the note promises for a repo that
+    /// does not write the key.
+    pub fn with_fix_nonblocking_rounds(self, rounds: u32) -> DriveLimits {
+        DriveLimits { fix_nonblocking_rounds: rounds, ..self }.clamped()
     }
 
     /// The only way to build a `DriveLimits` from outside this module, and it
@@ -837,6 +864,7 @@ impl DriveLimits {
             lane_timeout_minutes,
             fix_timeout_minutes,
             drive_timeout_minutes,
+            fix_nonblocking_rounds: 0,
             _seal: (),
         }
         .clamped()
@@ -927,6 +955,17 @@ pub enum Counter {
     /// one-shot grace, and the only variant here that spends a bool rather
     /// than a count. See [`Counters::body_only_grace`].
     BodyOnlyGrace,
+    /// Spent on the arc a SATISFIED gate takes back to the worker because every
+    /// required lane passed with only non-blocking findings open (#3367 item 1).
+    ///
+    /// **It spends `review_rounds` as well as its own count**, and that is the
+    /// whole of "the existing bound is SHARED": a hand-back the driver makes on
+    /// its own initiative is a review round the orchestrator did not make, and
+    /// INVARIANT 9's "yours count too" is a property of the budget, not of who
+    /// spends it. `decide` checks both bounds before proposing it, and
+    /// [`DriveEntry::advance`] bumps both in the one place the arc and its cost
+    /// cannot come apart.
+    NonblockingRound,
 }
 
 /// Whether `spent` has reached `bound` — **checked before the bump, never
@@ -2223,9 +2262,55 @@ pub struct DriveEntry {
     /// pre-#3040 behaviour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_hold_key: Option<String>,
+    /// **Non-blocking rounds this drive has run on its own** (#3367 item 1) —
+    /// the count `driver.fix_nonblocking_rounds` bounds.
+    ///
+    /// On the entry rather than in [`Counters`], and defaulted, which that
+    /// type's rule forbids a new COUNT — so the exception is argued rather than
+    /// taken. `Counters`' rule exists because a defaulted zero there silently
+    /// grants a fresh INVARIANT 9 budget. This is not that budget: every round
+    /// counted here was ALSO counted in `review_rounds`, which is required, so
+    /// a zero read off an entry written before the field existed grants at
+    /// most rounds the shared bound still refuses. And zero is the TRUE reading
+    /// of such an entry — no build before #3367 could have run one.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub nit_rounds: u32,
+    /// **The current `fix-wait` was entered by a non-blocking round** (#3367),
+    /// assigned on every arc into `fix-wait` by
+    /// [`advance`](DriveEntry::advance). Read by the hand-back brief — which
+    /// must not tell a worker a lane "recorded FAIL" when every lane passed —
+    /// including the brief a restart re-sends, which is why it is persisted
+    /// rather than read off the step.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nit_handback: bool,
+    /// The `(head, body digest)` the last non-blocking round was handed back
+    /// AT (#3367). A gate satisfied again at the SAME revision means the
+    /// worker changed nothing — it answered the findings rather than acting on
+    /// them — and another round would hand back the same list; see
+    /// [`nonblocking_round_applies`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub nit_head: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub nit_digest: String,
+    /// **The worker `report(done)` that STARTED this drive** (#3367 item 2,
+    /// `driver.auto_drive_on_done`), already composed and scrubbed as the
+    /// orchestrator's pane would have received it.
+    ///
+    /// The report is not delivered when it starts a drive — that is the wake
+    /// the feature exists to remove — so it has to reach the orchestrator some
+    /// other way, and the way is the drive's FIRST notice, which is taken from
+    /// here (`Option::take`) and prefixed. Persisted rather than in memory,
+    /// because the first notice may be hours and one restart away, and a
+    /// worker's words lost across a restart are words nobody can recover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_report: Option<String>,
     /// Preserved unknown fields — see [`ReviewDrivesState`].
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 impl DriveEntry {
@@ -2265,6 +2350,11 @@ impl DriveEntry {
             held_from: None,
             held_after_ms: 0,
             last_hold_key: None,
+            nit_rounds: 0,
+            nit_handback: false,
+            nit_head: String::new(),
+            nit_digest: String::new(),
+            auto_report: None,
             extra: BTreeMap::new(),
         }
     }
@@ -2429,10 +2519,22 @@ impl DriveEntry {
             // deliberately does NOT touch `review_rounds`, which is what keeps
             // INVARIANT 9's ceiling meaning what it meant.
             Some(Counter::BodyOnlyGrace) => self.counters.body_only_grace = true,
+            // #3367: BOTH, and in one arm — see the variant. `review_rounds` is
+            // what keeps the shared bound shared; `nit_rounds` is what keeps
+            // `driver.fix_nonblocking_rounds` its own, tighter, limit.
+            Some(Counter::NonblockingRound) => {
+                self.counters.review_rounds += 1;
+                self.nit_rounds += 1;
+            }
             None => {}
         }
         if to == DriveState::FixWait {
             self.fix_handback_ms = now_ms;
+            // #3367: an ASSIGNMENT on every arc into `fix-wait`, for
+            // `fix_pushed_ms`'s reason below — a flag that only a nit arc set
+            // and nothing cleared would render a conflict or red-CI hand-back
+            // as a non-blocking round.
+            self.nit_handback = bump == Some(Counter::NonblockingRound);
         }
         // **Arc 7, recorded — an ASSIGNMENT and not a set** (#2168 E1). Every
         // other arc clears it, including the three that reach `ci-wait` from
@@ -4072,7 +4174,7 @@ pub fn decide(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> D
         DriveState::CiWait => decide_ci_wait(entry, facts, limits),
         DriveState::ReviewWait => decide_review_wait(entry, facts, limits),
         DriveState::FixWait => decide_fix_wait(entry, facts, limits),
-        DriveState::GateCheck => decide_gate_check(facts),
+        DriveState::GateCheck => decide_gate_check(entry, facts, limits),
         // Both returned above; repeated here because the enum is closed and a
         // catch-all arm is exactly what §2.1 forbids.
         DriveState::Held | DriveState::Satisfied | DriveState::Cancelled => DriveStep::Wait,
@@ -4565,7 +4667,7 @@ fn decide_fix_wait(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits)
     DriveStep::Wait
 }
 
-fn decide_gate_check(facts: &DriveFacts) -> DriveStep {
+fn decide_gate_check(entry: &DriveEntry, facts: &DriveFacts, limits: &DriveLimits) -> DriveStep {
     // §4: `route_reviewers` returning `None` is `held(routing-unaccountable)`
     // from every state that reads it, **`gate-check` included**. This is the
     // one degradation whose absence would be a security defect rather than an
@@ -4578,6 +4680,16 @@ fn decide_gate_check(facts: &DriveFacts) -> DriveStep {
     }
     match facts.gate {
         GateOutcome::Unreadable => DriveStep::held(HeldReason::GateUnreadable),
+        // #3367 item 1: a satisfied gate whose lanes left only NON-blocking
+        // findings goes back to the worker instead of waking the
+        // orchestrator — arc 3's `(gate-check, fix-wait)` pair, so the arc
+        // table is unchanged, told apart from the conflict hand-back by the
+        // counter it spends. Every precondition, the shared bound included,
+        // is in [`nonblocking_round_applies`]; anything it cannot establish
+        // falls through to arc 9, which is today's behaviour.
+        GateOutcome::Satisfied if nonblocking_round_applies(entry, facts, limits) => {
+            DriveStep::spend(DriveState::FixWait, Counter::NonblockingRound)
+        }
         // Arc 9.
         GateOutcome::Satisfied => DriveStep::to(DriveState::Satisfied),
         // Arc 10, which is deliberately wider than "stale".
@@ -4586,6 +4698,191 @@ fn decide_gate_check(facts: &DriveFacts) -> DriveStep {
         // known, so nothing moves — and in particular this is not `satisfied`.
         GateOutcome::NotEvaluated => DriveStep::Wait,
     }
+}
+
+/// What one reviewer's verdict SUMMARY says about the findings it left open
+/// (#3367 item 1): a count per class, or `None` where the summary does not
+/// state one unambiguously.
+///
+/// **Parsed from prose, and fail-safe in exactly one direction.** The
+/// driver has never parsed findings out of a summary — [`crate::rddrive`]'s
+/// satisfied notice says so — and it does not start pretending to here. What
+/// this reads is a COUNT the reviewer stated (`0 blocking`, `blocking: 0`,
+/// `3 non-blocking`, `no blocking findings`), because `reviewer.md` asks every
+/// reviewer to state one; a summary that states none, or states two different
+/// ones, is `None`, and `None` is "unknown", which never licenses a hand-back.
+/// A reviewer that writes an unexpected phrasing costs the orchestrator the
+/// wake it would have had anyway, and never costs the PR a round nobody
+/// dispositioned.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StatedFindings {
+    pub blocking: Option<u32>,
+    pub non_blocking: Option<u32>,
+}
+
+/// A count word as a reviewer writes one: digits, or the small English numbers
+/// verdict summaries actually use ("no blocking", "Two non-blocking notes").
+fn count_word(tok: &str) -> Option<u32> {
+    if let Ok(n) = tok.parse::<u32>() {
+        return Some(n);
+    }
+    let n = match tok {
+        "no" | "zero" | "none" => 0,
+        "one" => 1,
+        "two" => 2,
+        "three" => 3,
+        "four" => 4,
+        "five" => 5,
+        "six" => 6,
+        "seven" => 7,
+        "eight" => 8,
+        "nine" => 9,
+        "ten" => 10,
+        _ => return None,
+    };
+    Some(n)
+}
+
+/// Read [`StatedFindings`] out of one verdict summary.
+///
+/// The grammar is two shapes and nothing else, both matched on whole tokens:
+/// `<count> <label>` and `<label>: <count>`, where the label is `blocking` /
+/// `blocker(s)` or their `non-` forms (`non blocking` and `nonblocking` are
+/// normalised to `non-blocking` first, so a `blocking` token can never be the
+/// second half of a non-blocking one). A count is a whole token — `round-2
+/// blocking finding fixed` is not a count of two, because `round-2` is not a
+/// count word. Every count stated for a class must agree; two different ones
+/// (`1 blocking … fixed; 0 blocking now`) make that class `None`.
+pub fn stated_findings(summary: &str) -> StatedFindings {
+    let norm = summary
+        .to_lowercase()
+        .replace("non blocking", "non-blocking")
+        .replace("nonblocking", "non-blocking")
+        .replace("non blocker", "non-blocker");
+    let toks: Vec<(&str, bool)> = norm
+        .split_whitespace()
+        .map(|raw| {
+            let core = raw.trim_matches(|c: char| !(c.is_alphanumeric() || c == '-'));
+            (core, raw.ends_with(':'))
+        })
+        .collect();
+    let label = |core: &str| -> Option<bool> {
+        match core {
+            "blocking" | "blocker" | "blockers" => Some(true),
+            "non-blocking" | "non-blocker" | "non-blockers" => Some(false),
+            _ => None,
+        }
+    };
+    let mut blocking: Vec<u32> = Vec::new();
+    let mut non_blocking: Vec<u32> = Vec::new();
+    for (i, (core, colon)) in toks.iter().enumerate() {
+        let Some(is_blocking) = label(core) else { continue };
+        // ONE count per label, and a colon label takes the count AFTER it: in
+        // `blocking: 0, non-blocking: 2` the `0,` before `non-blocking:` is the
+        // previous clause's, and reading it too would make a well-stated
+        // summary disagree with itself.
+        let after = if *colon { toks.get(i + 1).and_then(|t| count_word(t.0)) } else { None };
+        let n = after.or_else(|| i.checked_sub(1).and_then(|j| count_word(toks[j].0)));
+        if let Some(n) = n {
+            if is_blocking {
+                blocking.push(n);
+            } else {
+                non_blocking.push(n);
+            }
+        }
+    }
+    let agreed = |v: &[u32]| -> Option<u32> {
+        let first = *v.first()?;
+        v.iter().all(|n| *n == first).then_some(first)
+    };
+    StatedFindings { blocking: agreed(&blocking), non_blocking: agreed(&non_blocking) }
+}
+
+/// One required lane's residual, as a non-blocking round or a satisfied
+/// notice reports it (#3367 item 1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaneResidual {
+    pub block: BlockId,
+    /// `Some` only for a `pass` bound to the live head — a stale verdict, a
+    /// `fail`, an `escalate` or no verdict at all states nothing this round can
+    /// act on, and reads as all-unknown.
+    pub findings: StatedFindings,
+}
+
+/// Every required lane's [`LaneResidual`] at `head`, in the gate's order.
+pub fn lane_residuals(lanes: &[LaneFact], head: &str) -> Vec<LaneResidual> {
+    lanes
+        .iter()
+        .map(|l| LaneResidual {
+            block: l.block.clone(),
+            findings: l
+                .verdict
+                .as_ref()
+                .filter(|v| v.verdict == Verdict::Pass && v.reviewed(head))
+                .map(|v| stated_findings(&v.summary))
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// **Every lane stated zero blocking, and at least one stated a positive
+/// non-blocking count** — the one residual a non-blocking round may be
+/// spent on (#3367 item 1).
+///
+/// Both halves are POSITIVE statements. A lane that did not say how many
+/// blocking findings it left is unknown, and unknown wakes the orchestrator —
+/// the fail-safe the brief names. A lane that stated no non-blocking count is
+/// fine as long as some other lane stated one: the hand-back says "address all
+/// the findings on the PR", so the worker reads the PR, not this count.
+pub fn residual_is_nonblocking_only(residuals: &[LaneResidual]) -> bool {
+    !residuals.is_empty()
+        && residuals.iter().all(|r| r.findings.blocking == Some(0))
+        && residuals.iter().any(|r| r.findings.non_blocking.is_some_and(|n| n > 0))
+}
+
+/// **May the driver hand a satisfied gate back to the worker, on its own, for
+/// the non-blocking findings still open?** (#3367 item 1)
+///
+/// Every answer that is not a positive yes is arc 9 — the orchestrator is
+/// woken with GATE SATISFIED, which is today's behaviour. The yes needs all
+/// four:
+///
+/// 1. **The repo asked for it and has rounds left**: `nit_rounds <
+///    fix_nonblocking_rounds`, which is false at the default `0`.
+/// 2. **INVARIANT 9's bound has a round left** — the SHARED one,
+///    check-before-bump through [`counter_exhausted`], because the round this
+///    spends is a review round (see [`Counter::NonblockingRound`]).
+/// 3. **The revision moved since the last such round.** A gate satisfied again
+///    at the head AND body the last round was handed back at is a worker that
+///    changed nothing — it answered the findings on the PR instead — and a
+///    second round would hand back the identical list. An unreadable digest at
+///    an unchanged head counts as unchanged: "we could not check" never buys a
+///    round.
+/// 4. **Every required lane positively stated zero blocking, and some lane a
+///    positive non-blocking count** — [`residual_is_nonblocking_only`].
+pub fn nonblocking_round_applies(
+    entry: &DriveEntry,
+    facts: &DriveFacts,
+    limits: &DriveLimits,
+) -> bool {
+    let limits = limits.clamped();
+    if entry.nit_rounds >= limits.fix_nonblocking_rounds {
+        return false;
+    }
+    if counter_exhausted(entry.counters.review_rounds, limits.max_review_rounds) {
+        return false;
+    }
+    if !entry.nit_head.is_empty() && entry.nit_head == facts.head {
+        let moved = match facts.body_digest.as_deref() {
+            Some(d) => !d.is_empty() && !entry.nit_digest.is_empty() && d != entry.nit_digest,
+            None => false,
+        };
+        if !moved {
+            return false;
+        }
+    }
+    let Some(lanes) = facts.required_lanes.as_deref() else { return false };
+    residual_is_nonblocking_only(&lane_residuals(lanes, &facts.head))
 }
 
 /// Why a driven pane is no longer needed — the **closed set** of three, and the
@@ -9654,5 +9951,189 @@ mod tests {
         assert_ne!(spent, old, "the mutation must actually land");
         let st = parse_state(&spent).expect("and the new field parses");
         assert!(st.entries.iter().all(|d| d.counters.body_only_grace));
+    }
+    // ── #3367 item 1: the driver's own non-blocking round ───────────────────
+
+    /// A `pass` at `head` whose summary is `summary` — the one input the
+    /// non-blocking round reads that the other lane fixtures leave empty.
+    fn nit_lane(block: &str, head: &str, summary: &str) -> LaneFact {
+        let mut l = lane_fact(block, Some(Verdict::Pass), head, "d1");
+        if let Some(v) = l.verdict.as_mut() {
+            v.summary = summary.to_string();
+        }
+        l
+    }
+
+    /// A `gate-check` drive whose gate has just answered satisfied over `lanes`.
+    fn satisfied_over(lanes: Vec<LaneFact>) -> (DriveEntry, DriveFacts) {
+        let mut e = entry_at(DriveState::GateCheck);
+        e.head = "head-a".into();
+        let f = DriveFacts {
+            required_lanes: Some(lanes),
+            gate: GateOutcome::Satisfied,
+            ..facts_at("head-a")
+        };
+        (e, f)
+    }
+
+    fn nit_limits(n: u32) -> DriveLimits {
+        DriveLimits::default().with_fix_nonblocking_rounds(n)
+    }
+
+    const NIT_ROUND: DriveStep = DriveStep::Advance {
+        to: DriveState::FixWait,
+        held_reason: None,
+        bump: Some(Counter::NonblockingRound),
+    };
+
+    /// **The grammar, over the phrasings this repo's reviewers actually
+    /// write** — the first five rows are verdict summaries recorded in this
+    /// group's own `verdicts/` directory, cut at the clause that matters.
+    #[test]
+    fn a_stated_finding_count_is_read_and_anything_ambiguous_is_unknown() {
+        let s = |t: &str| stated_findings(t);
+        let both = |b, n| StatedFindings { blocking: b, non_blocking: n };
+        // Recorded summaries.
+        assert_eq!(s("Completeness traced. 0 blocking; 3 non-blocking: the ..."), both(Some(0), Some(3)));
+        assert_eq!(s("PASS. Two non-blocking notes, not routed"), both(None, Some(2)));
+        assert_eq!(s("rev-final, whole-diff at 5a56b2fd. No blocking finding."), both(Some(0), None));
+        assert_eq!(s("whole diff: 0 blocking findings. Round-2 fix verified"), both(Some(0), None));
+        assert_eq!(s("Round-3 blocking finding fixed: the paragraph now says"), both(None, None));
+        // The colon form, and the normalised non- spellings.
+        assert_eq!(s("blocking: 0, non-blocking: 2"), both(Some(0), Some(2)));
+        assert_eq!(s("0 blockers, 1 non blocking"), both(Some(0), Some(1)));
+        assert_eq!(s("zero blocking, 4 nonblocking"), both(Some(0), Some(4)));
+        // A `blocking` token is never the tail of a non-blocking one: this
+        // states NO blocking count, not a count of three.
+        assert_eq!(s("3 non-blocking"), both(None, Some(3)));
+        // A count is a whole token: `round-6` is not six.
+        assert_eq!(s("Both round-6 blocking findings fixed"), both(None, None));
+        // Two DIFFERENT counts for one class are unknown, never the smaller.
+        assert_eq!(s("1 blocking finding from round 1 fixed; 0 blocking now"), both(None, None));
+        // The same count twice is still that count.
+        assert_eq!(s("0 blocking. Summary: 0 blocking, 2 non-blocking"), both(Some(0), Some(2)));
+        assert_eq!(s(""), both(None, None));
+    }
+
+    /// **Default `0` is today's behaviour**: the most loop-shaped residual
+    /// there is still wakes the orchestrator.
+    #[test]
+    fn at_the_default_a_nonblocking_residual_still_satisfies() {
+        let (e, f) =
+            satisfied_over(vec![nit_lane("rev-std", "head-a", "0 blocking; 2 non-blocking")]);
+        assert_eq!(decide(&e, &f, &DriveLimits::default()), DriveStep::to(DriveState::Satisfied));
+        // The positive control, so the assertion above is about the default and
+        // not about a residual the round could never have taken.
+        assert_eq!(decide(&e, &f, &nit_limits(1)), NIT_ROUND);
+    }
+
+    /// **Every wake the brief names, one row each, beside the one residual that
+    /// loops** — so a predicate that looped on any of them reddens its own row.
+    #[test]
+    fn a_nonblocking_round_is_taken_only_on_a_positively_stated_nit_residual() {
+        let l = nit_limits(2);
+        let sat = DriveStep::to(DriveState::Satisfied);
+        let case = |lanes: Vec<LaneFact>| {
+            let (e, f) = satisfied_over(lanes);
+            decide(&e, &f, &l)
+        };
+        // Loops: every lane says 0 blocking, one says 2 non-blocking, the other
+        // states no non-blocking count at all.
+        assert_eq!(
+            case(vec![
+                nit_lane("rev-std", "head-a", "0 blocking; 2 non-blocking"),
+                nit_lane("rev-final", "head-a", "No blocking finding."),
+            ]),
+            NIT_ROUND
+        );
+        // Wakes: zero open findings anywhere.
+        assert_eq!(case(vec![nit_lane("rev-std", "head-a", "0 blocking, 0 non-blocking")]), sat);
+        // Wakes: a lane that did not state its blocking count (fail-safe).
+        assert_eq!(
+            case(vec![
+                nit_lane("rev-std", "head-a", "0 blocking; 2 non-blocking"),
+                nit_lane("rev-final", "head-a", "Two non-blocking notes"),
+            ]),
+            sat
+        );
+        // Wakes: a finding a lane labels blocking, even on a pass.
+        assert_eq!(case(vec![nit_lane("rev-std", "head-a", "1 blocking; 2 non-blocking")]), sat);
+        // Wakes: the counting pass is bound to an OLD head, so it states nothing
+        // about this revision.
+        assert_eq!(case(vec![nit_lane("rev-std", "head-old", "0 blocking; 2 non-blocking")]), sat);
+    }
+
+    /// **The bound is SHARED and never exceeded**: a drive with its INVARIANT 9
+    /// review rounds spent wakes even with nit rounds left, and a drive with
+    /// its nit rounds spent wakes even with review rounds left.
+    #[test]
+    fn the_nonblocking_round_spends_the_shared_bound_and_its_own() {
+        let lanes = vec![nit_lane("rev-std", "head-a", "0 blocking; 2 non-blocking")];
+        let (mut e, f) = satisfied_over(lanes.clone());
+        e.counters.review_rounds = MAX_ROUNDS_CEILING;
+        assert_eq!(decide(&e, &f, &nit_limits(3)), DriveStep::to(DriveState::Satisfied));
+        e.counters.review_rounds = MAX_ROUNDS_CEILING - 1;
+        assert_eq!(decide(&e, &f, &nit_limits(3)), NIT_ROUND, "one review round left: taken");
+
+        let (mut e, f) = satisfied_over(lanes);
+        e.nit_rounds = 1;
+        assert_eq!(decide(&e, &f, &nit_limits(1)), DriveStep::to(DriveState::Satisfied));
+        assert_eq!(decide(&e, &f, &nit_limits(2)), NIT_ROUND, "control: one nit round left");
+
+        // `advance` pays for it on BOTH counters, in the one arm.
+        let (mut e, _) = satisfied_over(Vec::new());
+        e.advance(DriveState::FixWait, None, Some(Counter::NonblockingRound), 3_000).unwrap();
+        assert_eq!((e.counters.review_rounds, e.nit_rounds), (1, 1));
+        assert!(e.nit_handback, "the fix-wait it entered knows it is a nit round");
+        // …and every OTHER arc into fix-wait says it is not one.
+        e.advance(DriveState::CiWait, None, None, 4_000).unwrap();
+        e.advance(DriveState::FixWait, None, Some(Counter::CiAttempts), 5_000).unwrap();
+        assert!(!e.nit_handback, "a red-CI hand-back after a nit round is not a nit round");
+        // A repo cannot widen it past the ceiling either.
+        assert_eq!(nit_limits(9).fix_nonblocking_rounds, MAX_ROUNDS_CEILING);
+    }
+
+    /// **A worker that changed nothing does not buy a second identical round.**
+    #[test]
+    fn a_gate_satisfied_again_at_the_handed_back_revision_wakes() {
+        let lanes = vec![nit_lane("rev-std", "head-a", "0 blocking; 2 non-blocking")];
+        let (mut e, mut f) = satisfied_over(lanes);
+        e.nit_rounds = 1;
+        e.nit_head = "head-a".into();
+        e.nit_digest = "d1".into();
+        assert_eq!(decide(&e, &f, &nit_limits(3)), DriveStep::to(DriveState::Satisfied));
+        // An unreadable body at the same head is not a move.
+        f.body_digest = None;
+        assert_eq!(decide(&e, &f, &nit_limits(3)), DriveStep::to(DriveState::Satisfied));
+        // A body edit at the same head IS one (the worker answered in the body).
+        f.body_digest = Some("d2".into());
+        assert_eq!(decide(&e, &f, &nit_limits(3)), NIT_ROUND);
+        // …and so is a push.
+        let (mut e2, f2) =
+            satisfied_over(vec![nit_lane("rev-std", "head-b", "0 blocking; 1 non-blocking")]);
+        e2.nit_rounds = 1;
+        e2.nit_head = "head-a".into();
+        e2.nit_digest = "d1".into();
+        let f2 = DriveFacts { head: "head-b".into(), ..f2 };
+        assert_eq!(decide(&e2, &f2, &nit_limits(3)), NIT_ROUND);
+    }
+
+    /// **An entry written before #3367 parses, and reads as no rounds run.**
+    #[test]
+    fn a_pre_3367_entry_reads_as_no_nonblocking_rounds_and_round_trips_them() {
+        let e = entry_at(DriveState::CiWait);
+        let old = serde_json::to_string(&e).unwrap();
+        assert!(!old.contains("nit_rounds"), "absent is the resting shape: {old}");
+        let back: DriveEntry = serde_json::from_str(&old).unwrap();
+        assert_eq!(
+            (back.nit_rounds, back.nit_handback, back.auto_report.as_deref()),
+            (0, false, None)
+        );
+        let mut e = e;
+        e.nit_rounds = 2;
+        e.auto_report = Some("w-7 reports done".into());
+        let back: DriveEntry = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(back.nit_rounds, 2);
+        assert_eq!(back.auto_report.as_deref(), Some("w-7 reports done"));
     }
 }

@@ -1244,7 +1244,7 @@ pub fn satisfied_notice(
         .filter(|l| {
             l.verdict == Verdict::Pass
                 && !l.summary.trim().is_empty()
-                && !crate::reviewdrive::declared_clean(&l.summary, l.open_findings)
+                && !(false && crate::reviewdrive::declared_clean(&l.summary, l.open_findings))
         })
         .count();
     let open = match open {

@@ -69078,3 +69078,23 @@ fn forked_from_is_additive_on_the_durable_roster() {
     let fork = AgentRecord { forked_from: Some("p".into()), ..rec };
     assert!(serde_json::to_string(&fork).unwrap().contains(r#""forked_from":"p""#));
 }
+
+/// **An unreadable review-drive record refuses the fork** — "I could not look"
+/// is not "nothing owns this pane", the same fail-closed reading `kill_agent`
+/// takes on the same file. The control is the same fork once the record is
+/// readable again (removed), admitted.
+#[test]
+fn an_unreadable_drive_record_refuses_a_fork_rather_than_assuming_no_drive() {
+    let (reg, _d, _repo, gid, co, src) = fork_fixture(3);
+    let record = reg.state_root().join(gid.as_str()).join("review_drives.json");
+    fs::write(&record, "{ this is not a drive record").unwrap();
+    let err = reg
+        .fork_agent(&gid, &co.agent_id, &src.id, "", None, None, "")
+        .expect_err("an unreadable record is not evidence that nothing owns the pane");
+    assert!(err.contains("could not read this group's review-drive record"), "{err}");
+    assert_eq!(audit_count(&reg, &gid, "agent-fork"), 0);
+
+    fs::remove_file(&record).unwrap();
+    reg.fork_agent(&gid, &co.agent_id, &src.id, "", None, None, "")
+        .unwrap_or_else(|e| panic!("the control — no record at all — is admitted: {e}"));
+}

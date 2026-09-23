@@ -407,6 +407,10 @@ const FIELDS_WITHOUT_AN_EDITOR = new Set<string>([
   // release (`structured`, pi-only), so a form for it waits on the spawn-path
   // slice that makes the key do anything.
   "block.driver",
+  // #3407. The pane READS, EMITS and range-checks `cache_ttl_minutes:` through
+  // POLICY_BOUNDS, but the designer has no control for it: it is an account fact
+  // (which TTL this subscription gets) authored once by hand, not a per-canvas choice.
+  "block.cache_ttl_minutes",
   "edge.from",
   "edge.to",
   "gate.require",

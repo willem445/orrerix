@@ -613,6 +613,11 @@ export const WIP_LIMIT_MIN = 1;
 export const TRIAGE_MAX_DEFER_MINUTES_MIN = 1;
 export const TRIAGE_MAX_DEFER_MINUTES_MAX = 240;
 
+/** A block's `cache_ttl_minutes:` (#3407) — `0` is legal ("unknown"), and the
+ *  engine REFUSES above `cacheage::CACHE_TTL_MINUTES_MAX` (one day). */
+export const BLOCK_CACHE_TTL_MINUTES_MIN = 0;
+export const BLOCK_CACHE_TTL_MINUTES_MAX = 1440;
+
 /** One numeric field's range. `max` is OPTIONAL and its absence is a statement: the
  *  engine imposes no ceiling on that field, so neither may a form. */
 export interface FieldBounds {
@@ -678,6 +683,7 @@ export const POLICY_BOUNDS: Readonly<Record<string, FieldBounds>> = {
     max: DRIVER_FIX_NONBLOCKING_ROUNDS_MAX,
   },
   "resource.slots": { min: RESOURCE_SLOTS_MIN, max: RESOURCE_SLOTS_MAX },
+  "block.cache_ttl_minutes": { min: BLOCK_CACHE_TTL_MINUTES_MIN, max: BLOCK_CACHE_TTL_MINUTES_MAX },
   "resource.max_hold_minutes": {
     min: RESOURCE_MAX_HOLD_MINUTES_MIN,
     max: RESOURCE_MAX_HOLD_MINUTES_MAX,
@@ -773,6 +779,11 @@ export interface WorkflowBlock {
    *  (`CliCaps.structured_driver`), so this field is just the file's text,
    *  exactly like `effort` and `context`. */
   driver?: string;
+  /** The prompt-cache TTL in minutes this block's agent runs on (#3407) — absent
+   *  = the CLI's own default (`CliCaps.cache_ttl_minutes`), `0` = unknown. A
+   *  number the pane reads and re-emits; the engine refuses one above
+   *  `BLOCK_CACHE_TTL_MINUTES_MAX`. */
+  cache_ttl_minutes?: number;
   /** Keys this build doesn't know, preserved verbatim across a round-trip. */
   extra?: Record<string, YamlValue>;
 }
@@ -1960,6 +1971,8 @@ function emitBlockLines(b: WorkflowBlock, markerIndent = 2): string[] {
   if (b.remote !== undefined) out.push(`${field}remote: ${emitScalar(b.remote)}`);
   // #2850: only when declared — same byte-for-byte posture as `remote`.
   if (b.driver !== undefined) out.push(`${field}driver: ${emitScalar(b.driver)}`);
+  // #3407: only when declared — same byte-for-byte posture as `remote`.
+  if (b.cache_ttl_minutes !== undefined) out.push(`${field}cache_ttl_minutes: ${b.cache_ttl_minutes}`);
   out.push(...extraLines(b.extra, field));
   if (b.prompt !== undefined) out.push(...emitBlockScalar("prompt", b.prompt, field));
   return out;
@@ -2863,6 +2876,7 @@ export const KNOWN_BLOCK = new Set([
   "context",
   "remote",
   "driver",
+  "cache_ttl_minutes",
 ]);
 /** `gates:` is a MAP keyed by gate name, not a fixed struct: the engine reads it as
  *  `BTreeMap<String, RawGate>`, so a `release:` gate parses fine — loomux simply
@@ -3277,6 +3291,9 @@ function readBlock(raw: YamlValue, index: number, findings: Finding[]): Workflow
   // absent key, which is what the engine reads it as too.
   const driver = asString(r.driver);
   if (driver !== null) block.driver = driver;
+  // #3407. A number or a finding, never a coerced scalar — `readNumberField`'s rule.
+  const ttl = readNumberField(r, "cache_ttl_minutes", `blocks[${index}]`, findings);
+  if (ttl !== undefined) block.cache_ttl_minutes = ttl;
   return block;
 }
 

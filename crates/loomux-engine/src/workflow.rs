@@ -723,6 +723,19 @@ pub struct Block {
     /// unrecognized value never reaches here, and a CLI without a structured
     /// driver never carries one (see the parse validation).
     pub driver: Option<String>,
+    /// The provider prompt-cache TTL, in minutes, this block's agent runs on
+    /// (the `cache_ttl_minutes:` key, #3407). `None` (absent) = the CLI's own
+    /// [`CliCaps::cache_ttl_minutes`](crate::model::CliCaps) default;
+    /// `Some(0)` = "unknown — infer no cache state for this block"; anything
+    /// else overrides the default, which is how an account on Anthropic's
+    /// 1-hour TTL, or a codex block on a 30-minute model, says so.
+    ///
+    /// A number that drives a display and a nudge — it grants nothing, reaches
+    /// no command line and no path, so the capability-closure rule has nothing
+    /// to say about it. Refused above [`crate::cacheage::CACHE_TTL_MINUTES_MAX`]
+    /// rather than clamped: no provider documents a longer cache, so a larger
+    /// value is a typo. See [`crate::cacheage::effective_ttl_minutes`].
+    pub cache_ttl_minutes: Option<u32>,
 }
 
 /// The per-block model knobs that reach a spawn alongside the model itself
@@ -1678,6 +1691,8 @@ pub fn default_roster_ex(pins: &[(Role, &str, &str, ModelKnobs<'_>)]) -> Vec<Blo
             // workflow file — the built-in roster is the pre-#2850 behavior,
             // PTY panes throughout.
             driver: None,
+            // #3407: the CLI's own default TTL — a synthesized roster pins none.
+            cache_ttl_minutes: None,
         })
         .collect()
 }
@@ -2247,6 +2262,10 @@ struct RawBlock {
     /// spawning a structured-intended block as a PTY pane.
     #[serde(default)]
     driver: Option<String>,
+    /// #3407. `Option` so "omitted" (the CLI default) and `0` ("unknown")
+    /// stay two different answers.
+    #[serde(default)]
+    cache_ttl_minutes: Option<u32>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2355,6 +2374,7 @@ pub fn workflow_schema_keys() -> BTreeMap<String, Vec<String>> {
         context: "1m".into(),
         remote: Some("buildbox".into()),
         driver: Some("structured".into()),
+        cache_ttl_minutes: Some(60),
     };
     let edge = RawEdge { from: "a".into(), to: OneOrMany::One("b".into()) };
     let gate = RawGate {
@@ -2655,6 +2675,9 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
     // `MAX_SEGMENT_LEN` — and a bound the engine enforces while the manifest is
     // silent is one a generated control would let a human exceed.
     fact("block.remote", "maxLength", json!(crate::pathseg::MAX_SEGMENT_LEN));
+    // #3407. REFUSED above, not clamped — see `Block::cache_ttl_minutes`.
+    fact("block.cache_ttl_minutes", "min", json!(0));
+    fact("block.cache_ttl_minutes", "max", json!(crate::cacheage::CACHE_TTL_MINUTES_MAX));
     fact("resource.slots", "min", json!(1));
     fact("resource.slots", "max", json!(RESOURCE_SLOTS_MAX));
     fact("resource.max_hold_minutes", "min", json!(1));
@@ -3461,6 +3484,18 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 Some(raw.to_string())
             }
         };
+        // `cache_ttl_minutes:` (#3407) — a bound, refused rather than clamped:
+        // `0` is a legal answer ("unknown"), and no provider documents a cache
+        // longer than a day, so a value above that is a typo, not a wish.
+        if let Some(ttl) = rb.cache_ttl_minutes {
+            if ttl > crate::cacheage::CACHE_TTL_MINUTES_MAX {
+                errs.push(format!(
+                    "blocks[{i}] ({id}): cache_ttl_minutes {ttl} is above the {} ceiling; no provider documents a prompt cache longer than a day (use 0 for unknown)",
+                    crate::cacheage::CACHE_TTL_MINUTES_MAX
+                ));
+                continue;
+            }
+        }
         let name = sanitize_display(&rb.name);
         blocks.push(Block {
             name: if name.is_empty() { id.clone() } else { name },
@@ -3476,6 +3511,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
             context,
             remote,
             driver,
+            cache_ttl_minutes: rb.cache_ttl_minutes,
         });
     }
 
@@ -4417,6 +4453,7 @@ fn changed_fields(agent_cli: &str, a: &Block, b: &Block) -> Vec<String> {
         context: a_context,
         remote: a_remote,
         driver: a_driver,
+        cache_ttl_minutes: a_cache_ttl,
     } = a;
     let Block {
         id: b_id,
@@ -4432,6 +4469,7 @@ fn changed_fields(agent_cli: &str, a: &Block, b: &Block) -> Vec<String> {
         context: b_context,
         remote: b_remote,
         driver: b_driver,
+        cache_ttl_minutes: b_cache_ttl,
     } = b;
     debug_assert_eq!(a_id, b_id, "changed_fields compares two rows for ONE block id");
     let mut out: Vec<String> = Vec::new();
@@ -4452,6 +4490,7 @@ fn changed_fields(agent_cli: &str, a: &Block, b: &Block) -> Vec<String> {
     push(a_context != b_context, "context");
     push(a_remote != b_remote, "remote");
     push(a_driver != b_driver, "driver");
+    push(a_cache_ttl != b_cache_ttl, "cache_ttl_minutes");
     out.sort();
     out
 }

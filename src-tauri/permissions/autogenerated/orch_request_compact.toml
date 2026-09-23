@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-orch-request-compact"
+description = "Enables the orch_request_compact command without any pre-configured scope."
+commands.allow = ["orch_request_compact"]
+
+[[permission]]
+identifier = "deny-orch-request-compact"
+description = "Denies the orch_request_compact command without any pre-configured scope."
+commands.deny = ["orch_request_compact"]

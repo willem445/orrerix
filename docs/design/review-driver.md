@@ -501,77 +501,6 @@ rule that any suppression driven by a fallible signal must be bounded. There is
 no "keep trying" arm anywhere in this design, and that is also why the loop is a
 tick rather than a thread that waits.
 
-### 2.5 The driver's own non-blocking round (#3367 item 1)
-
-**What it removes.** A gate satisfied with non-blocking findings open used to
-cost the orchestrator the same three wakes every time: read `GATE SATISFIED`,
-send the worker "review: request-changes, findings on PR #N, address all, report
-when green", read the worker's report, re-drive. That hand-back is a template —
-INVARIANT 3's disposition of *these* findings is "fix them" by the repo's own
-standing rule — so `driver.fix_nonblocking_rounds: N` (`0..=3`, default `0`, which
-is the old behaviour) lets the driver send it.
-
-**The arc is arc 3's pair**, `gate-check -> fix-wait`, spending
-`Counter::NonblockingRound`. The arc table is unchanged: the pair was already
-legal for a conflict found at `gate-check`, and the counter an arc spends is what
-tells two arcs over one pair apart, as arc 5 already argues. From `fix-wait` the
-drive runs exactly as after any hand-back — arc 7 or 8, the lanes re-briefed at
-the new revision (a push re-reviews the delta, a body answer re-verifies the
-body), and `gate-check` again.
-
-**Four preconditions, all positive** (`reviewdrive::nonblocking_round_applies`);
-anything short of a positive yes is arc 9 and the ordinary `GATE SATISFIED`:
-
-1. **The repo asked, and has rounds left**: `nit_rounds < fix_nonblocking_rounds`.
-2. **INVARIANT 9's bound has a round left.** The round spends `review_rounds` as
-   well as `nit_rounds` — one arm of `advance`, so the arc and both costs cannot
-   come apart — because a hand-back the driver makes on its own is still a review
-   round, and "yours count too" is a property of the budget, not of who spends it.
-   So `N` can only ever SHORTEN what `max_review_rounds` allows; the three-round
-   bound is shared and never exceeded.
-3. **The revision moved since the last such round.** A gate satisfied again at
-   the head and body digest the last round was handed back at is a worker that
-   changed nothing — it answered the findings instead of acting on them — and a
-   second round would hand back the identical list. An unreadable body at an
-   unchanged head counts as unchanged: "we could not check" never buys a round.
-4. **Every required lane PASSED at this head and STATED `0 blocking`, and some
-   lane stated a non-blocking count above zero** (`residual_is_nonblocking_only`).
-
-**How the driver knows a finding is non-blocking — and the honest limit of it.**
-It reads a COUNT the reviewer stated in its verdict summary, never the findings
-themselves: `stated_findings` accepts `<count> blocking`, `blocking: <count>` and
-their `non-blocking` forms (digits, or the small English numbers reviewers write),
-on whole tokens, and a class stated twice with two different counts is unknown.
-`review_verdict`'s `summary` parameter now asks every reviewer for exactly those
-two counts. **Unknown is never zero**: a lane that states no blocking count wakes
-the orchestrator, which is the wake it would have had anyway — the parser can
-cost a saving, never a round nobody dispositioned. The residual is disclosed
-rather than closed: a reviewer that writes `0 blocking` over a finding it would
-have called blocking has miscounted its own review, and the driver acts on the
-count — the same trust the gate already places in that reviewer's `pass`, which
-a blocking finding forbids (`reviewer.md`: an approval with findings open is only
-ever an approval with non-blocking ones).
-
-**What still wakes the orchestrator.** An `escalate` (the ordinary hold); a
-stated blocking count, even on a pass; a lane that stated none; an unchanged
-revision; `N` spent; the shared bound spent; and a satisfied gate with nothing
-open. A `fail` recorded after a non-blocking round is not a special case: it takes
-arc 5 like any other, under the same shared bound, and the drive parks
-`review-limit` when that is spent. **The final `GATE SATISFIED` line carries the
-rounds used and the residual** — `Non-blocking rounds run by the driver: k/N;
-residual: rev-std 0 blocking / 1 non-blocking` — so INVARIANT 3's disposition of
-what is left stays the orchestrator's and is made on the stated counts rather
-than on a count of lanes. The clause is empty where `N` is `0`, so the stock line
-is byte-for-byte what it was.
-
-**The worker's brief says what happened.** `driver-fix.md`'s `{{WHAT}}` for this
-round reads "Review: request-changes. Every required lane PASSED, with
-non-blocking findings open (…)", never "recorded FAIL", and the attempt figures
-are the shared bound's. The choice is read off `DriveEntry::nit_handback`, which
-`advance` assigns on every arc into `fix-wait`, so a restart's re-sent brief
-(`Rehandback`, §2.4) says the same thing and a later red-CI hand-back does not
-inherit it.
-
 ### 2.4 Where the tick runs, and the bounds it inherits
 
 `rd_driver_tick` is a **fifth** step in `gh_poll_tick`, beside `mq_driver_tick`,
@@ -792,6 +721,77 @@ the one that has to be argued rather than observed: those run on a delegate's
 own tool call, which the runtime schedules as a later turn and never as a frame
 the delivery itself pushes, and both release the lock before auditing. A new
 caller owes that argument again rather than inheriting it.
+
+### 2.5 The driver's own non-blocking round (#3367 item 1)
+
+**What it removes.** A gate satisfied with non-blocking findings open used to
+cost the orchestrator the same three wakes every time: read `GATE SATISFIED`,
+send the worker "review: request-changes, findings on PR #N, address all, report
+when green", read the worker's report, re-drive. That hand-back is a template —
+INVARIANT 3's disposition of *these* findings is "fix them" by the repo's own
+standing rule — so `driver.fix_nonblocking_rounds: N` (`0..=3`, default `0`, which
+is the old behaviour) lets the driver send it.
+
+**The arc is arc 3's pair**, `gate-check -> fix-wait`, spending
+`Counter::NonblockingRound`. The arc table is unchanged: the pair was already
+legal for a conflict found at `gate-check`, and the counter an arc spends is what
+tells two arcs over one pair apart, as arc 5 already argues. From `fix-wait` the
+drive runs exactly as after any hand-back — arc 7 or 8, the lanes re-briefed at
+the new revision (a push re-reviews the delta, a body answer re-verifies the
+body), and `gate-check` again.
+
+**Four preconditions, all positive** (`reviewdrive::nonblocking_round_applies`);
+anything short of a positive yes is arc 9 and the ordinary `GATE SATISFIED`:
+
+1. **The repo asked, and has rounds left**: `nit_rounds < fix_nonblocking_rounds`.
+2. **INVARIANT 9's bound has a round left.** The round spends `review_rounds` as
+   well as `nit_rounds` — one arm of `advance`, so the arc and both costs cannot
+   come apart — because a hand-back the driver makes on its own is still a review
+   round, and "yours count too" is a property of the budget, not of who spends it.
+   So `N` can only ever SHORTEN what `max_review_rounds` allows; the three-round
+   bound is shared and never exceeded.
+3. **The revision moved since the last such round.** A gate satisfied again at
+   the head and body digest the last round was handed back at is a worker that
+   changed nothing — it answered the findings instead of acting on them — and a
+   second round would hand back the identical list. An unreadable body at an
+   unchanged head counts as unchanged: "we could not check" never buys a round.
+4. **Every required lane PASSED at this head and STATED `0 blocking`, and some
+   lane stated a non-blocking count above zero** (`residual_is_nonblocking_only`).
+
+**How the driver knows a finding is non-blocking — and the honest limit of it.**
+It reads a COUNT the reviewer stated in its verdict summary, never the findings
+themselves: `stated_findings` accepts `<count> blocking`, `blocking: <count>` and
+their `non-blocking` forms (digits, or the small English numbers reviewers write),
+on whole tokens, and a class stated twice with two different counts is unknown.
+`review_verdict`'s `summary` parameter now asks every reviewer for exactly those
+two counts. **Unknown is never zero**: a lane that states no blocking count wakes
+the orchestrator, which is the wake it would have had anyway — the parser can
+cost a saving, never a round nobody dispositioned. The residual is disclosed
+rather than closed: a reviewer that writes `0 blocking` over a finding it would
+have called blocking has miscounted its own review, and the driver acts on the
+count — the same trust the gate already places in that reviewer's `pass`, which
+a blocking finding forbids (`reviewer.md`: an approval with findings open is only
+ever an approval with non-blocking ones).
+
+**What still wakes the orchestrator.** An `escalate` (the ordinary hold); a
+stated blocking count, even on a pass; a lane that stated none; an unchanged
+revision; `N` spent; the shared bound spent; and a satisfied gate with nothing
+open. A `fail` recorded after a non-blocking round is not a special case: it takes
+arc 5 like any other, under the same shared bound, and the drive parks
+`review-limit` when that is spent. **The final `GATE SATISFIED` line carries the
+rounds used and the residual** — `Non-blocking rounds run by the driver: k/N;
+residual: rev-std 0 blocking / 1 non-blocking` — so INVARIANT 3's disposition of
+what is left stays the orchestrator's and is made on the stated counts rather
+than on a count of lanes. The clause is empty where `N` is `0`, so the stock line
+is byte-for-byte what it was.
+
+**The worker's brief says what happened.** `driver-fix.md`'s `{{WHAT}}` for this
+round reads "Review: request-changes. Every required lane PASSED, with
+non-blocking findings open (…)", never "recorded FAIL", and the attempt figures
+are the shared bound's. The choice is read off `DriveEntry::nit_handback`, which
+`advance` assigns on every arc into `fix-wait`, so a restart's re-sent brief
+(`Rehandback`, §2.4) says the same thing and a later red-CI hand-back does not
+inherit it.
 
 ## 3. Ownership, authority, and consent
 

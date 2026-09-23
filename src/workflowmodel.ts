@@ -571,6 +571,12 @@ export const DRIVER_PLAN_REVIEW_MINUTES_MIN = 0;
 export const DRIVER_PLAN_REVIEW_MINUTES_MAX = 120;
 export const DRIVER_PLANNER_TIMEOUT_MINUTES_MIN = 15;
 export const DRIVER_PLANNER_TIMEOUT_MINUTES_MAX = 180;
+/** `fix_nonblocking_rounds` (#3367): the driver's own non-blocking rounds.
+ *  Refused out of range like the INVARIANT 9 counters, and capped at the same
+ *  three, because every such round is also a review round. 0 is the default and
+ *  means off. */
+export const DRIVER_FIX_NONBLOCKING_ROUNDS_MIN = 0;
+export const DRIVER_FIX_NONBLOCKING_ROUNDS_MAX = 3;
 /** `drive_timeout_minutes` left that family in #2110 and carries its own range.
  *
  *  It stopped being the same quantity. The two above bound ONE wait on ONE
@@ -666,6 +672,10 @@ export const POLICY_BOUNDS: Readonly<Record<string, FieldBounds>> = {
   "driver.planner_timeout_minutes": {
     min: DRIVER_PLANNER_TIMEOUT_MINUTES_MIN,
     max: DRIVER_PLANNER_TIMEOUT_MINUTES_MAX,
+  },
+  "driver.fix_nonblocking_rounds": {
+    min: DRIVER_FIX_NONBLOCKING_ROUNDS_MIN,
+    max: DRIVER_FIX_NONBLOCKING_ROUNDS_MAX,
   },
   "resource.slots": { min: RESOURCE_SLOTS_MIN, max: RESOURCE_SLOTS_MAX },
   "resource.max_hold_minutes": {
@@ -865,6 +875,10 @@ export interface WorkflowDriver {
   plan_enabled?: boolean;
   plan_review_minutes?: number;
   planner_timeout_minutes?: number;
+  /** #3367: the driver's own non-blocking rounds, and whether a worker's
+   *  report(done) starts a drive. Both read under `enabled`. */
+  fix_nonblocking_rounds?: number;
+  auto_drive_on_done?: boolean;
   extra?: Record<string, YamlValue>;
 }
 
@@ -887,6 +901,8 @@ export const DRIVER_DEFAULTS: Readonly<{
   plan_enabled: boolean;
   plan_review_minutes: number;
   planner_timeout_minutes: number;
+  fix_nonblocking_rounds: number;
+  auto_drive_on_done: boolean;
 }> = {
   enabled: false,
   max_review_rounds: 3,
@@ -898,6 +914,8 @@ export const DRIVER_DEFAULTS: Readonly<{
   plan_enabled: false,
   plan_review_minutes: 0,
   planner_timeout_minutes: 60,
+  fix_nonblocking_rounds: 0,
+  auto_drive_on_done: false,
 };
 
 /** The driver form's enable-toggle write rule (#1869; narrowed by review round 3).
@@ -935,6 +953,8 @@ export function setDriverEnabled(
       d.plan_enabled !== undefined ||
       d.plan_review_minutes !== undefined ||
       d.planner_timeout_minutes !== undefined ||
+      d.fix_nonblocking_rounds !== undefined ||
+      d.auto_drive_on_done !== undefined ||
       d.extra !== undefined;
     if (carriesMore || commentsInSection) {
       d.enabled = false;
@@ -1834,6 +1854,12 @@ function emitDriverLines(dv: WorkflowDriver, indent = ""): string[] {
   if (dv.planner_timeout_minutes !== undefined) {
     body.push(`${field}planner_timeout_minutes: ${dv.planner_timeout_minutes}`);
   }
+  if (dv.fix_nonblocking_rounds !== undefined) {
+    body.push(`${field}fix_nonblocking_rounds: ${dv.fix_nonblocking_rounds}`);
+  }
+  if (dv.auto_drive_on_done !== undefined) {
+    body.push(`${field}auto_drive_on_done: ${dv.auto_drive_on_done}`);
+  }
   body.push(...extraLines(dv.extra, field));
   return emitMappingSection("driver", indent, body);
 }
@@ -2213,6 +2239,8 @@ function driverDiffersOnlyInEnabled(a: WorkflowDriver, b: WorkflowDriver): boole
     plan_enabled: d.plan_enabled,
     plan_review_minutes: d.plan_review_minutes,
     planner_timeout_minutes: d.planner_timeout_minutes,
+    fix_nonblocking_rounds: d.fix_nonblocking_rounds,
+    auto_drive_on_done: d.auto_drive_on_done,
     extra: d.extra,
   });
   return deepEqualValue(rest(a), rest(b));
@@ -2837,6 +2865,8 @@ const KNOWN_DRIVER = new Set([
   "plan_enabled",
   "plan_review_minutes",
   "planner_timeout_minutes",
+  "fix_nonblocking_rounds",
+  "auto_drive_on_done",
 ]);
 const KNOWN_RESOURCE = new Set(["slots", "max_hold_minutes"]);
 const KNOWN_BOARD = new Set(["wip", "enforce"]);
@@ -2963,6 +2993,12 @@ function readDriver(r: Record<string, YamlValue>, findings: Finding[]): Workflow
   if (planReview !== undefined) dv.plan_review_minutes = planReview;
   const plannerTimeout = readNumberField(r, "planner_timeout_minutes", "driver", findings);
   if (plannerTimeout !== undefined) dv.planner_timeout_minutes = plannerTimeout;
+  const nitRounds = readNumberField(r, "fix_nonblocking_rounds", "driver", findings);
+  if (nitRounds !== undefined) dv.fix_nonblocking_rounds = nitRounds;
+  if (r.auto_drive_on_done !== undefined) {
+    if (typeof r.auto_drive_on_done === "boolean") dv.auto_drive_on_done = r.auto_drive_on_done;
+    else findings.push(badValue("driver.auto_drive_on_done", "true or false", r.auto_drive_on_done));
+  }
   const extra = collectExtra(r, KNOWN_DRIVER);
   if (extra) dv.extra = extra;
   return dv;

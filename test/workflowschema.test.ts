@@ -374,6 +374,10 @@ const FIELDS_WITH_AN_EDITOR = new Set<string>([
   "driver.plan_enabled",
   "driver.plan_review_minutes",
   "driver.planner_timeout_minutes",
+  // #3367. A bounded number and a switch in the same `driverForm`, for the
+  // reason the plan driver's keys above arrived with controls.
+  "driver.fix_nonblocking_rounds",
+  "driver.auto_drive_on_done",
 ]);
 
 /** No control yet — every leaf field, as of slice A. */

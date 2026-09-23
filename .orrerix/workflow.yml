@@ -154,7 +154,7 @@ blocks:
     model: fable
 
   - id: worker-std
-    name: "Standard worker (DEFAULT - pi + GLM Flash; briefs the orchestrator can write literally: files, commands, checks. NOT for work whose deliverable is evidence about itself)"
+    name: "Standard worker (DEFAULT - codex GPT-6 Luna; briefs the orchestrator can write literally: files, commands, checks. NOT for work whose deliverable is evidence about itself)"
     kind: worker
     cli: codex
     model: gpt-6-luna
@@ -169,7 +169,7 @@ blocks:
     profile: .github/agents/worker-deep.md
 
   - id: rev-std
-    name: "Standard review (EVERY ROUND - pi + GLM Flash; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
+    name: "Standard review (EVERY ROUND - claude sonnet; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
     kind: reviewer
     cli: claude
     model: sonnet

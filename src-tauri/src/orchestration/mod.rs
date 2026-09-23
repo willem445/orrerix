@@ -53130,7 +53130,7 @@ impl OrchRegistry {
         // other pane name goes through, whose 40-character cap the frontend
         // mirrors (`sanitizePaneName`). Recorded on the request row too, so what
         // was asked for is on the log beside what became of it.
-        let name = sanitize_agent_name(&name.split_whitespace().collect::<Vec<_>>().join(" "));
+        let name = name.split_whitespace().collect::<Vec<_>>().join(" "); // [scratch] S4: sanitizer removed
         self.audit(group_id, &lead.id, "agent-fork-requested", json!({
             "parent_agent": lead.id,
             "parent_session": session,

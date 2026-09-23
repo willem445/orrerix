@@ -4130,7 +4130,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // caller's TOKEN identity, never on anything in `args` beyond the
             // id it names — a lead naming any other id takes the delegate path
             // below, where a lead source is refused.
-            if caller.role == Role::Lead && target == caller.agent_id {
+            if false && caller.role == Role::Lead && target == caller.agent_id { // SCRATCH: neutered
                 let session = reg.request_solo_fork(&caller.group, &caller.agent_id)?;
                 return Ok(format!(
                     "fork requested: a standalone pane forked from your session {session} opens \

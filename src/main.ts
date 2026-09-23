@@ -12,6 +12,7 @@ import { SessionBrowser, timeAgo } from "./sessions";
 import { LeftPanel } from "./leftpanel";
 import { AgentsView } from "./agentsview";
 import { rosterIdleFor } from "./rosteridle";
+import { cacheAgeFor } from "./cacheage";
 import {
   ensureOutputRouter,
   onPtyExit,
@@ -3938,6 +3939,9 @@ void (async () => {
     for (const ws of tabs.tabs) {
       for (const pane of ws.grid.allPanes()) {
         pane.noteRosterIdle(rosterIdleFor(strip, pane.orchGroupId, pane.orchAgentId));
+        // #3407: the cache-age chip rides the same read. Every pane is told, for
+        // the reason above — a pane that lost its binding must drop its chip.
+        pane.noteCacheAge(cacheAgeFor(strip, pane.orchGroupId, pane.orchAgentId));
       }
     }
     refreshAgents();

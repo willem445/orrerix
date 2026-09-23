@@ -21,6 +21,13 @@ commands were run, and only these: `codex --version`, `codex --help`,
 `codex resume --help`, `codex migrate-rollouts --help`. Their output is quoted
 where it is used.
 
+**#3405 read a second tag.** The MCP-approval and sandbox facts in
+§`default_tools_approval_mode = "approve"` and §`gh` inside the sandbox are read
+at **`rust-v0.156.1`** (`81e8e29b2956dfe9b092c63953a9ed282781e77c`), the version
+the first real codex worker ran on (`codex --version` → `codex-cli 0.156.1`,
+the only command run for it), and each is marked with that tag where it is used.
+Every other fact below is still dated to `rust-v0.153.4`.
+
 One vendor behaviour is pinned here rather than only cited in place, because
 nothing on this side can detect its loss: **compression preserves the rollout's
 mtime** (`rollout/src/compression.rs:105`, `:746`), and every row's sort
@@ -477,13 +484,66 @@ having to remember the rule.
 | `developer_instructions` | the block's role contract | see §The contract. |
 | `[sandbox_workspace_write] network_access` | `true` | off by default under `workspace-write`, and a worker that cannot reach GitHub is not a worker. |
 | `[projects."<cwd>"] trust_level` | `trusted` | see §Trust. |
-| `[mcp_servers.<brand>]` | `url`, one header map, `default_tools_approval_mode` | orrerix's own server, over streamable HTTP. One server contract, six spellings. **No timeouts** — see below. |
+| `[mcp_servers.<brand>]` | `url`, one header map, `default_tools_approval_mode = "approve"` | orrerix's own server, over streamable HTTP. One server contract, six spellings. **No timeouts** — see below. |
 
-`default_tools_approval_mode = "auto"` is codex's own default, **spelled out
-rather than inherited**: a human's `config.toml` can set a different one
-globally, and an agent whose `report` needs approving has nobody to approve it.
-The profile layer wins over the user layer, so stating it is what makes the
-pane's tool surface independent of their setting.
+### `default_tools_approval_mode = "approve"`, not `"auto"`
+
+The first version of this file wrote `auto` and argued it was codex's own
+default, "spelled out rather than inherited" so a human's global setting could
+not make `report` need approving. The layering half of that is right; the value
+was wrong, and #3405's first real codex worker could not `report`,
+`message_orchestrator` or `note_directive` — every call was refused with *"MCP
+tool call requires approval, but approval policy is never"*.
+
+`auto` does not mean "never ask". Read at **`rust-v0.156.1`**
+(`81e8e29b2956dfe9b092c63953a9ed282781e77c`) — the installed `codex-cli 0.156.1`
+— and byte-identical at `rust-v0.153.4`, `core/src/mcp_tool_call.rs`:
+
+```rust
+fn requires_mcp_tool_approval_for_mode(annotations, approval_mode) -> bool {
+    match approval_mode {
+        AppToolApproval::Auto => requires_mcp_tool_approval(annotations),
+        AppToolApproval::Prompt => true,
+        AppToolApproval::Writes => !annotations…read_only_hint.unwrap_or(false),
+        AppToolApproval::Approve => false,
+    }
+}
+```
+
+and `requires_mcp_tool_approval` answers "ask" unless the tool is annotated
+read-only, or annotated non-destructive AND closed-world — an absent
+`destructive_hint` defaults to `true`. None of orrerix's tools carries
+annotations, so under `auto` every one of them asks; `request_mcp_tool_user_approval`
+turns that ask into a denial when `approval_policy` is `never`. (A pane with
+full-disk write access escapes it — `mcp_permission_prompt_is_auto_approved`
+auto-approves `never` + full disk — which is why a `danger-full-access` session
+would not have shown this and a `workspace-write` one does.)
+
+`approve` is the value that function (`codex-mcp/src/mcp/mod.rs`) short-circuits
+on **before** it reads the policy at all:
+
+```rust
+if context.tool_approval_mode == Some(AppToolApproval::Approve) {
+    return true;
+}
+```
+
+so it holds in both postures, which is the intent: an attended pane's `report`
+is no more the human's to click through than an unattended one's. The spelling
+is serde `snake_case` over `AppToolApproval { Auto, Prompt, Writes, Approve }`
+(`config/src/mcp_types.rs`), and the installed binary carries the variant table
+verbatim (`AppToolApprovalautopromptwritesapprove` in its strings). The per-tool
+`tools.<name>.approval_mode` map outranks the server default
+(`McpServerMetadata::tool_approval_mode`), and orrerix writes none, so the one
+server-level line decides every orrerix tool.
+
+What `approve` grants is scoped to `[mcp_servers.orrerix]` — orrerix's own
+tools, which the pane is handed to use — and to nothing a human declared: their
+servers keep whatever mode they set. The profile layer wins over the user layer
+for this one table, so a human's own `default_tools_approval_mode` can neither
+re-impose a prompt on orrerix's tools nor be widened by this line. Pinned by
+`a_codex_profile_pre_approves_loomuxs_own_tools_in_every_shape_and_posture`, over
+both token shapes and both postures, and on POSITION inside the server table.
 
 ### Neither MCP timeout is written, and that is the decision
 
@@ -566,6 +626,64 @@ Both shapes are pinned by asserting the ABSENCE of the other as well as the
 presence of their own. Presence alone would pass on a generator that emitted
 both maps, which is the one outcome worse than either: the secret in the file
 *and* a dependency on the variable.
+
+### `gh` inside the sandbox: `GH_TOKEN` in the pane env
+
+The second of #3405's failures: `gh pr view` inside a codex group pane answered
+`HTTP 401: Requires authentication`, while the same `gh` works in every claude
+and pi pane. The difference is who runs it. On Windows with
+`[windows] sandbox = "elevated"` (the human's own setting — see the list of keys
+deliberately not written), codex runs commands as a separate local account,
+`CodexSandboxOnline`, logged on with `LogonUserW`
+(`windows-sandbox-rs/src/identity.rs`, `setup.rs` at `rust-v0.156.1`). `gh`
+stores its token in the per-account system keyring by default — Windows
+Credential Manager, and on this machine `gh auth status` reports
+`Logged in … (keyring)` with no `oauth_token` in `hosts.yml` — so the sandbox
+account finds a login named and no token, and `gh` sends an unauthenticated
+request. So the answer to the issue's question is neither of its two suspects
+exactly: the config DIRECTORY is readable (`%APPDATA%` is not among
+`USERPROFILE_ROOT_EXCLUSIONS`), and the environment DOES reach the child; the
+token lives in a store that is per-account by construction.
+
+What crosses into that account is the environment. codex builds the child's
+env through `shell_environment_policy`, whose defaults at the pin are
+`inherit = all` and `ignore_default_excludes = true`
+(`config/src/shell_environment_policy.rs`: `toml.ignore_default_excludes.unwrap_or(true)`),
+so a `*TOKEN*` variable is not filtered; the only names codex strips
+unconditionally are its own `NON_INHERITABLE_ENV_VARS`
+(`protocol/src/shell_environment.rs`), and `GH_TOKEN` is not one. And `gh`
+prefers it: *"`GH_TOKEN`, `GITHUB_TOKEN` (in order of precedence): an
+authentication token that will be used when a command targets either
+`github.com` or a subdomain of `ghe.com`. … takes precedence over previously
+stored credentials"* (`gh help environment`, gh 2.95.0).
+
+So `write_mcp_config`'s codex branch reads the human's token once per spawn
+(`gh auth token`, through `gh_capture` — the one bounded place the backend runs
+`gh`) and adds `GH_TOKEN` to the pane environment. The rules it keeps:
+
+- **The env, never the file** — the same rule as the MCP token above, for the
+  same reason: the profile sits in the human's `CODEX_HOME` and outlives a crash
+  until the sweep; the env dies with the pane.
+- **Codex group panes only.** A solo pane has no environment orrerix sets, and a
+  non-codex pane already reaches the keyring as the human.
+- **No new capability.** Any group agent can already run `gh auth token` as the
+  human; this gives a codex agent the credential its peers hold.
+- **Degrade, never refuse.** A failed or empty read exports nothing and writes a
+  `codex-gh-token-unavailable` audit row with `gh`'s reason; the pane still
+  spawns, because a pane without `gh` can still `report`.
+- **Contained** (#502): a registry that is not the user's live one reads no
+  credential unless a test installs the `gh_exec_override` fake.
+
+**Residuals.** A human `shell_environment_policy` that filters it
+(`ignore_default_excludes = false`, `inherit = "core"`, a custom `exclude`)
+strips `GH_TOKEN` again; orrerix does not override that policy, because doing so
+would re-expose every other secret-shaped variable the human chose to hide.
+`gh auth token` answers for the default host, so a GitHub Enterprise remote
+(`GH_ENTERPRISE_TOKEN`) is not covered. And on the orchestrator and lead paths
+the read runs inside the `creation` mutex — once per group launch
+(`performance.md` X6), for one local keyring read bounded by
+`GH_CAPTURE_TIMEOUT`. None of this was observed in a live codex pane
+(constraint 3): the mechanism is read from the vendor's source at the pin.
 
 ### The contract
 

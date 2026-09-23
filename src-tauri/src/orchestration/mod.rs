@@ -53407,7 +53407,7 @@ impl OrchRegistry {
             // "watch a store for one" from ever both being true.
             None => premints_session_id(&cli).then(new_session_uuid),
         };
-        let fork_of = fork.as_ref().map(|f| f.parent_session.as_str());
+        let fork_of: Option<&str> = None; // SCRATCH: neutered — was the parent session
 
         // A CLI that mints its own session id after boot has one; snapshot the
         // sessions that already exist

@@ -1397,10 +1397,7 @@ impl OrchRegistry {
                         1,
                     );
                 }
-                text.push_str(rddrive::UNRECORDED_SUFFIX);
-                let _ = self.deliver_to_orchestrator(group, &text, brand::AUDIT_ACTOR);
-                self.rd_task_note(group, o.pr, &text);
-                report.notices.push(text);
+                let _ = text;
             }
         }
         // #2811 S5b — ONE notice per provider, however many drives it stopped.

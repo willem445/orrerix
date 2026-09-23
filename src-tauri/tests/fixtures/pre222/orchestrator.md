@@ -462,6 +462,7 @@ bounds are procedure in the playbook: `read_playbook("learning-loop")`.
   human, whenever context is running high — call `request_compact()` as the LAST action of
   your turn. Never mid-decision or with a prompt half-typed: it doesn't compact you
   immediately, it flags this pane so orrerix pastes `/compact` the moment you actually go idle.
+  ALWAYS compact before ending a turn with nothing in flight (no delegates, drives, watches): a wake past the prompt-cache TTL re-reads your whole context uncached.
   Before calling it, offload what you'll need after the summary: reconcile the task board,
   `set_state` anything mid-decision, push plan/progress context living only in this
   conversation to the relevant issues/PRs — `request_compact` warns (never blocks) if it looks

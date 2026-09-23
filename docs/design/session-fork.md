@@ -268,7 +268,8 @@ of its parent's would do nothing.
 
 **The record.** `AgentEntry.forked_from` and its durable twin
 `AgentRecord.forked_from` hold the parent SESSION (not the parent agent, which
-may be long dead when anyone reads this); one `agent-fork` audit row names both
+may be long dead when anyone reads this); one `agent-fork` audit row — written
+beside `agent-spawn` before the pane opens, see *Public-contract changes* — names both
 sides — `agent`, `parent_agent`, `parent_session`, `child_session` (null where the
 vendor mints it; the child's later `session-bound` row is unchanged), `cli`,
 `cwd`, `worktree`, `branch`, `base`, `requested_by`.
@@ -383,9 +384,17 @@ toast.
   `resume_orch_session`'s shape, for the same reason.
 - **The `orch-fork-solo-request` event** (F2) — backend → frontend, one per lead
   self-fork, declared in `test/perfpolicy.test.ts`'s stream manifest.
-- **The `agent-fork` audit action** (F2) — one row per fork that OPENED, fields
-  above; plus `agent-fork-requested` and `agent-fork-failed` for a lead's
-  self-fork, whose open happens in the frontend after the backend answers.
+- **The `agent-fork` audit action** (F2) — its timing differs by route, and a
+  reader must not take it as "a pane opened" on the delegate route:
+  - **a delegate fork** writes it in `spawn_agent_full` beside the `agent-spawn`
+    row, once the fork is admitted and registered and BEFORE the frontend has
+    opened or bound its pane — so it records that the fork was started. A fork
+    whose pane then fails to bind is recorded the way every spawn's is: `mark_dead`
+    writes that agent's `agent-exit`;
+  - **a lead's self-fork** writes `agent-fork-requested` at the request, and
+    `agent-fork` only from the frontend's ack once the Solo pane opened
+    (`agent-fork-failed` with the reason otherwise) — there the row does mean
+    the pane opened, because the open happens after the backend has answered.
 - **The `orch_fork_solo_result` Tauri command** (F2, review round 1) — the
   frontend's ack for `orch-fork-solo-request`, in the `orch-control` ACL set,
   `async` through `run_blocking` because it writes the audit log.

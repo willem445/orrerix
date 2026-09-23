@@ -1703,10 +1703,14 @@ lead. It does not report to the lead; it is yours. The audit log records the lea
 or `agent-fork-failed` with the reason (for example, the lead's pane is not open in this
 window) — which is also shown to you.
 
-**What you can see.** The group's audit log has one `agent-fork` row per fork that opened, naming both
-sides (`parent_agent`, `parent_session`, the new agent and — where the CLI names it up front —
-its session) and who asked. The group's `agents.json` records the parent session on the
-forked agent's row (`forked_from`).
+**What you can see.** A fork of a worker, reviewer or planner writes one `agent-fork` row in
+the group's audit log, naming both sides (`parent_agent`, `parent_session`, the new agent and —
+where the CLI names it up front — its session) and who asked. That row is written when the fork
+is admitted, beside the new agent's ordinary `agent-spawn` row and before its pane has opened —
+so it records that the fork was started, not that its pane came up; a fork whose pane then fails
+to open shows up the way any spawn's does, as that agent's `agent-exit`. (A lead's fork of its
+own pane is the other way round, above: a request row first, then the outcome.) The group's
+`agents.json` records the parent session on the forked agent's row (`forked_from`).
 
 **No merge-back.** Nothing joins two conversations again — no CLI offers it — so a fork's
 results come back the way any delegate's do: its report, and its own branch and PR.

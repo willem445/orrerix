@@ -4857,8 +4857,8 @@ fn the_resident_core_is_under_the_byte_budget() {
     //
     // What breaks if the pin is removed: this goes back to measuring the
     // checkout. It does so LOUDLY today, but only INCIDENTALLY — measured on
-    // `orchestrator.md` at blob d5f2d059, the LF file is 34,822 B over 506
-    // lines, so there are 178 B of margin under this budget against the 506 CR
+    // `orchestrator.md` at blob b87523dd, the LF file is 34,987 B over 507
+    // lines, so there are 13 B of margin under this budget against the 507 CR
     // bytes a CRLF checkout adds. The stale worktree therefore fails here
     // rather than passing quietly, but shorten the template past that margin
     // and it goes quiet again, on exactly the platform that pays more. The
@@ -4907,8 +4907,8 @@ fn markdown_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
 ///
 /// **Why this sits beside the budget assertion rather than inside it.** The
 /// budget test does notice a CRLF checkout today, but only because the CR bytes
-/// happen to exceed the margin left under `RESIDENT_CORE_BUDGET` — 178 B of it,
-/// against 506 CR bytes, measured on `orchestrator.md` at blob d5f2d059 while
+/// happen to exceed the margin left under `RESIDENT_CORE_BUDGET` — 13 B of it,
+/// against 507 CR bytes, measured on `orchestrator.md` at blob b87523dd while
 /// that constant is 35,000. Shorten the template
 /// past that and the budget goes quiet again on exactly the platform that pays
 /// more, which is the issue's own "the guard is worse than none" case (#1845).

@@ -540,6 +540,7 @@ const UPDATE_KEYS: &[&str] = &[
     "priority",
     "important",
     "tags",
+    "color",
     "steps",
     "order_after",
 ];
@@ -666,6 +667,22 @@ fn nullable_u64(
     }
 }
 
+/// [`nullable_u64`]'s string sibling, for `color` (#3335): absent = leave
+/// alone, `null` = clear, a string = set. The VOCABULARY is the engine's
+/// (`check_color`), not repeated here — one list, one refusal.
+fn nullable_str(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    field: &'static str,
+) -> Result<Option<Option<String>>, TodoError> {
+    match obj.get(key) {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(s)) => Ok(Some(Some(s.clone()))),
+        Some(_) => Err(invalid(field, format!("{key} must be a string or null"))),
+    }
+}
+
 /// An optional priority, range-checked here so the message names the field the
 /// caller sent.
 fn opt_priority(
@@ -780,6 +797,7 @@ fn parse_update(v: &Value) -> Result<TodoOp, TodoError> {
         priority: opt_priority(o, "update")?,
         important: opt_bool(o, "important", "update")?,
         tags: opt_strs(o, "tags", "update")?,
+        color: nullable_str(o, "color", "update")?,
         steps: opt_steps(o, "update")?,
         order_after: opt_order_after(o, "update")?,
     }))

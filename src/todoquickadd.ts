@@ -231,6 +231,20 @@ function tokenise(text: string): Token[] {
 }
 
 /**
+ * A tag as the human typed it (`#Release`, `release`, `  #ops-2 `), in the one
+ * spelling every pane path stores — or null when it is not a tag at all.
+ *
+ * THE quick-add's grammar, exported (#3335) so the expanded row's "add a tag"
+ * field reads exactly what the `#tag` chip reads: one tag vocabulary per pane,
+ * the rule the in-row due field already follows for dates. Lower-cased, one
+ * optional leading `#`, word characters and `-` only.
+ */
+export function normalizeTag(raw: string): string | null {
+  const body = raw.trim().replace(/^#/, "");
+  return /^[\w-]+$/.test(body) ? body.toLowerCase() : null;
+}
+
+/**
  * Parse a quick-add line.
  *
  * @param text the raw line the human typed
@@ -318,8 +332,10 @@ export function parseQuickAdd(text: string, nowMs: number): QuickAdd {
     const next2 = lower[i + 2];
 
     // --- #tag -------------------------------------------------------------
-    if (/^#[\w-]+$/.test(tokens[i].raw)) {
-      const tag = tokens[i].raw.slice(1).toLowerCase();
+    // A token is a tag only when it OPENS with `#`; `normalizeTag` is then the
+    // one reading of what follows, shared with the row's tag field.
+    const tag = tokens[i].raw.startsWith("#") ? normalizeTag(tokens[i].raw) : null;
+    if (tag !== null) {
       if (!tags.includes(tag)) tags.push(tag);
       chipsAt.push({ chip: { kind: "tag", label: "#" + tag, raw: take(i, 1, tokens[i].raw) }, at: i });
       continue;

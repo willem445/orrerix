@@ -60,6 +60,11 @@ export interface TodoItem {
   priority: number;
   important: boolean;
   tags: string[];
+  /** The human's colour label (#3335), one of `TODO_COLORS`, or null. Kept as a
+   *  string rather than narrowed to `TodoColor` on decode: a NEWER build may
+   *  have written a name this one does not know, and the row should still
+   *  render — just without a stripe (`colorOf`). */
+  color: string | null;
   steps: Step[];
   order: number;
   created_ms: number;
@@ -89,11 +94,87 @@ export interface TodoSnapshot {
 
 /** The gap the backend leaves between adjacent `order` values
  *  (`loomux_engine::todo::ORDER_GAP`). Mirrored, not imported — the two live
- *  in different languages, and `needsRenumber` is the test that notices if
- *  they ever disagree about whether there is room. */
+ *  in different languages. Nothing in the pane does gap arithmetic any more
+ *  (#3335: the engine re-spaces an exhausted gap itself, see `dropTarget`); it
+ *  stays for test fixtures that build a realistic store. */
 export const ORDER_GAP = 1024;
 
 const MS_PER_DAY = 86400000;
+
+// ---------- colour (#3335) ----------
+
+/**
+ * The colours an item may carry — the engine's `COLORS`, mirrored.
+ *
+ * Mirrored rather than fetched, like `ORDER_GAP`: the two live in different
+ * languages. `test/todov2.test.ts` reads `crates/loomux-engine/src/todo.rs`
+ * and fails if the lists ever differ, and a second test fails unless every
+ * name is a key of `theme.ts`'s `IDENTITY` table — so a colour can only ever
+ * be painted by an identity token, never by a hue invented here.
+ */
+export const TODO_COLORS = ["rose", "amber", "lime", "jade", "cyan", "azure", "violet", "orchid"] as const;
+export type TodoColor = (typeof TODO_COLORS)[number];
+
+/** The item's colour if this build knows it, else null — an unknown name from
+ *  a newer build draws no stripe rather than a guessed one. */
+export function colorOf(item: Pick<TodoItem, "color">): TodoColor | null {
+  const c = item.color;
+  return c !== null && (TODO_COLORS as readonly string[]).includes(c) ? (c as TodoColor) : null;
+}
+
+/**
+ * The hues a TAG may be drawn in — a SUBSET of the identity table, argued.
+ *
+ * The three identity hues that also carry a state role (rose = danger, amber =
+ * attention, jade = ok) are left out, because a tag chip sits on the row's
+ * meta line right beside the due date, and the due date's one state dye is
+ * amber for "overdue". An amber `#release` chip next to an amber overdue date
+ * would put two meanings on one pigment on one line — the exact reading the
+ * pane's channel rule exists to prevent. The per-ITEM colour keeps all eight:
+ * it is the human's own label, in its own position (the row's left stripe),
+ * away from the date.
+ */
+export const TAG_HUES = ["lime", "cyan", "azure", "violet", "orchid"] as const;
+export type TagHue = (typeof TAG_HUES)[number];
+
+/**
+ * The stable hue for a tag: an FNV-1a hash of its text, INTO `TAG_HUES`.
+ *
+ * Stable across launches, machines and builds — a tag that changed colour on
+ * restart would be noise, not identity — and it never leaves the theme's
+ * table: the hash picks an INDEX, the table picks the pigment, so there is no
+ * hash-to-hue anywhere (`test/theme.test.ts`'s population rules). Hashing the
+ * exact text rather than a folded form is deliberate: tags are stored
+ * lower-case by every path that writes one from the pane, so folding here would
+ * only matter for an agent's mixed-case tag, which is a different tag.
+ */
+export function tagHue(tag: string): TagHue {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < tag.length; i++) {
+    h ^= tag.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return TAG_HUES[h % TAG_HUES.length];
+}
+
+// ---------- priority (#3335) ----------
+
+/**
+ * The four priority levels, as the row's control names them. The store's
+ * `priority` (0..=3, `PRIORITY_MAX` in the engine) IS the level — this is a
+ * label table over the one priority the quick-add's `!`/`!!`/`!!!` already
+ * writes, not a second priority beside it.
+ */
+export const PRIORITY_LABEL = ["None", "Low", "Medium", "High"] as const;
+export const PRIORITY_MAX = 3;
+
+/** The level a click on the row's priority control moves to: up one, wrapping
+ *  from High back to None. A value outside 0..=3 (a newer build, a hand edit)
+ *  is treated as None, so one click always lands on a legal level. */
+export function nextPriority(p: number): number {
+  const cur = Number.isInteger(p) && p >= 0 && p <= PRIORITY_MAX ? p : 0;
+  return (cur + 1) % (PRIORITY_MAX + 1);
+}
 
 // ---------- decode ----------
 
@@ -186,6 +267,7 @@ function decodeItem(v: unknown): TodoItem | null {
     priority: num(v.priority, 0),
     important: bool(v.important),
     tags: strs(v.tags),
+    color: typeof v.color === "string" && v.color !== "" ? v.color : null,
     steps: decodeSteps(v.steps),
     order: num(v.order, 0),
     created_ms: num(v.created_ms, 0),
@@ -383,7 +465,11 @@ export interface PlannedGroup {
 /** The Planned view: non-empty buckets in calendar order, soonest first
  *  within each. An empty bucket is omitted rather than rendered as a heading
  *  with nothing under it. */
-export function groupPlanned(items: readonly TodoItem[], nowMs: number): PlannedGroup[] {
+export function groupPlanned(
+  items: readonly TodoItem[],
+  nowMs: number,
+  byPriority = false
+): PlannedGroup[] {
   const byBucket = new Map<PlannedBucket, TodoItem[]>();
   for (const item of items) {
     const bucket = plannedBucket(item, nowMs);
@@ -396,7 +482,14 @@ export function groupPlanned(items: readonly TodoItem[], nowMs: number): Planned
   for (const bucket of PLANNED_BUCKETS) {
     const list = byBucket.get(bucket);
     if (!list || list.length === 0) continue;
-    list.sort((a, b) => (a.due_ms ?? 0) - (b.due_ms ?? 0) || compareFallback(a, b));
+    // Under the priority sort (#3335) the BUCKETS stay — they answer "when" —
+    // and priority orders the rows inside each; due time is the tiebreak.
+    list.sort(
+      (a, b) =>
+        (byPriority ? b.priority - a.priority : 0) ||
+        (a.due_ms ?? 0) - (b.due_ms ?? 0) ||
+        compareFallback(a, b)
+    );
     out.push({ bucket, items: list });
   }
   return out;
@@ -448,6 +541,21 @@ export interface VisibleOpts {
    * as its only exit — and undo lives for the life of a pane.
    */
   includeArchived?: boolean;
+  /**
+   * Sort by priority, highest first, instead of the manual order (#3335).
+   *
+   * The MANUAL order is untouched underneath: this re-sorts the rows, it
+   * writes nothing, so switching it off restores exactly the order the human
+   * (and every drag) left. Ties — every row at one level — keep the manual
+   * order, so a list where only two rows carry a priority lifts those two and
+   * leaves the rest as they were.
+   *
+   * Ignored by Completed, which is a log ordered by finish time, not a list.
+   * In Planned it orders rows WITHIN each date bucket (`groupPlanned` keeps the
+   * buckets): the buckets answer "when", and a priority sort that dissolved
+   * them would answer a different question than the view is for.
+   */
+  byPriority?: boolean;
 }
 
 /** `inView`, plus the Completed view's archive toggle. Private because the
@@ -483,10 +591,26 @@ export function visibleItems(
   );
   if (opts.view === "completed") {
     out.sort((a, b) => (b.done_ms ?? 0) - (a.done_ms ?? 0) || compareFallback(a, b));
+  } else if (opts.byPriority === true) {
+    out.sort((a, b) => b.priority - a.priority || a.order - b.order || compareFallback(a, b));
   } else {
     out.sort((a, b) => a.order - b.order || compareFallback(a, b));
   }
   return out;
+}
+
+/**
+ * May the human reorder `view` by hand right now?
+ *
+ * Only where the rows ARE the manual order: My Day, Important and All, with
+ * the priority sort off. Completed is ordered by finish time and Planned by due
+ * date, and under the priority sort the order on screen is not the stored one —
+ * in each, a drag would write an `order` the human then cannot see take effect,
+ * which reads as a drop that did nothing. So the pane offers no drag there and
+ * `Shift+↑/↓` says why, rather than moving something invisible.
+ */
+export function canReorder(view: SmartView, byPriority: boolean): boolean {
+  return !byPriority && (view === "myday" || view === "important" || view === "all");
 }
 
 /** Where a moved item should land, in the shape `update.order_after` takes. */
@@ -520,20 +644,40 @@ export function moveTarget(
 }
 
 /**
- * True when some adjacent pair in `ordered` has no integer strictly between
- * their `order` values.
+ * The `order_after` for a DRAG: the row `id` dropped immediately before
+ * `beforeId` (or at the end of `ordered` when `beforeId` is null). Null when
+ * the drop would leave the row where it is.
  *
- * The backend places a moved item at the midpoint of its new neighbours
- * (`order_for` in `loomux_engine::todo`). After enough halvings the midpoint
- * equals the neighbour and the move becomes a SILENT no-op — the item does not
- * budge and nothing reports why. This is what lets the pane notice and ask for
- * a renumber instead.
+ * `moveTarget`'s rule, generalised from one step to any distance: the
+ * destination is spelled by the row that will sit ABOVE the dropped one, and
+ * `"start"` when none will. A drop onto the row's own slot — directly before
+ * itself or directly before its current successor — is null, so a click that
+ * wobbled a few pixels past the drag threshold sends no write at all.
+ *
+ * **There is no gap arithmetic here, and that is the point.** The pane names a
+ * NEIGHBOUR; the engine numbers it (`order_for`), and since #3335 it re-spaces
+ * the scope in the same write when the gap has run out. The pane used to
+ * refuse a move it predicted would collide (`needsRenumber`, now gone) — which
+ * could only ever be a guess about the VISIBLE rows, when the gap that matters
+ * is between neighbours in the whole scope.
  */
-export function needsRenumber(ordered: readonly TodoItem[]): boolean {
-  for (let i = 1; i < ordered.length; i++) {
-    if (ordered[i].order - ordered[i - 1].order < 2) return true;
+export function dropTarget(
+  ordered: readonly TodoItem[],
+  id: string,
+  beforeId: string | null
+): OrderAfter | null {
+  const from = ordered.findIndex((i) => i.id === id);
+  if (from < 0 || beforeId === id) return null;
+  const rest = ordered.filter((i) => i.id !== id);
+  let to: number;
+  if (beforeId === null) {
+    to = rest.length;
+  } else {
+    to = rest.findIndex((i) => i.id === beforeId);
+    if (to < 0) return null; // the target left the list mid-drag
   }
-  return false;
+  if (to === from) return null; // dropped back into its own slot
+  return to === 0 ? "start" : { item: rest[to - 1].id };
 }
 
 // ---------- ops ----------
@@ -568,6 +712,8 @@ export interface UpdateFields {
   priority?: number;
   important?: boolean;
   tags?: string[];
+  /** One of `TODO_COLORS` to set, `null` to clear (#3335). */
+  color?: string | null;
   steps?: { id?: string; title: string; done: boolean }[];
   order_after?: OrderAfter;
 }
@@ -700,6 +846,12 @@ export function inverseOp(op: TodoOp, before: TodoItem | null, applied: Applied 
   }
   if (fwd.tags !== undefined) {
     back.tags = [...before.tags];
+    named += 1;
+  }
+  if (fwd.color !== undefined) {
+    // `null` is a real value here, not "absent": an item that had no colour
+    // is put back to none by sending the clear.
+    back.color = before.color;
     named += 1;
   }
   if (fwd.steps !== undefined) {

@@ -25,7 +25,6 @@ import {
   matchesQuery,
   moveTarget,
   myDayIsStale,
-  needsRenumber,
   opLabel,
   plannedBucket,
   visibleItems,
@@ -61,6 +60,7 @@ function item(over: Partial<TodoItem> = {}): TodoItem {
     priority: 0,
     important: false,
     tags: [],
+    color: null,
     steps: [],
     order: seq * ORDER_GAP,
     created_ms: NOW,
@@ -461,23 +461,6 @@ test("moveTarget names the neighbour a move lands after, and refuses the ends", 
   assert.equal(moveTarget(ordered, a.id, -1), null, "the top cannot move up");
   assert.equal(moveTarget(ordered, c.id, 1), null, "the bottom cannot move down");
   assert.equal(moveTarget(ordered, "td-nope", -1), null, "an unknown id moves nothing");
-});
-
-test("needsRenumber fires exactly when a midpoint would collide", () => {
-  // The backend places a moved item at the midpoint of its new neighbours.
-  // After enough halvings there is no integer between them, and the move
-  // becomes a silent no-op — so the pane has to know to ask for a renumber.
-  const roomy = [item({ order: 0 }), item({ order: ORDER_GAP })];
-  assert.equal(needsRenumber(roomy), false);
-
-  const tight = [item({ order: 10 }), item({ order: 11 })];
-  assert.equal(needsRenumber(tight), true, "no integer sits strictly between 10 and 11");
-
-  const justEnough = [item({ order: 10 }), item({ order: 12 })];
-  assert.equal(needsRenumber(justEnough), false, "11 does");
-
-  assert.equal(needsRenumber([item({ order: 0 })]), false, "one item has no neighbours to collide with");
-  assert.equal(needsRenumber([]), false);
 });
 
 // ---------- search ----------

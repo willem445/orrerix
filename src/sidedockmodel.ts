@@ -14,13 +14,16 @@
 // re-roots freely; a view decides for itself whether it can follow, and the
 // editor is the one that sometimes cannot (see `decideViewSync`).
 
-/** The dock's three tabs, in display order. */
-export type DockTab = "git" | "files" | "editor";
+/** The dock's tabs, in display order. `todo` joined at #3335: the To-Do pane
+ *  hosted in the dock, following the dock's root like the other three — its
+ *  workspace list is the ACTIVE pane's project, which is the whole point of
+ *  having it beside the terminals rather than in a grid cell of its own. */
+export type DockTab = "git" | "files" | "editor" | "todo";
 
-export const DOCK_TABS: readonly DockTab[] = ["git", "files", "editor"];
+export const DOCK_TABS: readonly DockTab[] = ["git", "files", "editor", "todo"];
 
 export function isDockTab(v: unknown): v is DockTab {
-  return v === "git" || v === "files" || v === "editor";
+  return (DOCK_TABS as readonly unknown[]).includes(v);
 }
 
 // ---------- geometry ----------
@@ -307,7 +310,9 @@ export interface ViewSyncInput {
   dockRoot: string | null;
   /** The root this view was constructed at, or null if it never has been. */
   builtRoot: string | null;
-  /** Does this view hold unsaved edits? Always false for git and files. */
+  /** Does this view hold unsaved edits? Always false for git and files; the
+   *  editor's buffer, and (#3335) a To-Do tab with a half-typed quick-add line
+   *  or an un-saved row draft, answer yes. */
   dirty: boolean;
 }
 

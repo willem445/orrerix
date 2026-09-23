@@ -39,6 +39,7 @@ function item(over: Partial<TodoItem> = {}): TodoItem {
     priority: 0,
     important: false,
     tags: [],
+    color: null,
     steps: [],
     order: 0,
     created_ms: 0,

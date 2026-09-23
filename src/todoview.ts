@@ -93,15 +93,27 @@ export interface PaneProjection {
   shown: number;
   /** `total - shown` — what the elision line reports. Never negative. */
   elided: number;
-  /** Every tag on a live, open item in this scope, sorted. The footer rail. */
-  tags: string[];
+  /**
+   * The tag rail: every tag on a live, open item in this scope, with how many
+   * such items carry it (#3335). Most-used first, then by name, so the rail's
+   * visible slots go to the tags that filter the most work.
+   */
+  tags: TagCount[];
   empty: boolean;
   emptyReason: EmptyReason;
+}
+
+/** One tag and how many open items in the scope carry it. */
+export interface TagCount {
+  tag: string;
+  count: number;
 }
 
 export interface ProjectInput {
   items: readonly TodoItem[];
   view: SmartView;
+  /** This view's "by priority" sort (#3335) — see `VisibleOpts.byPriority`. */
+  byPriority?: boolean;
   /** Substring terms, ANDed. Blank is no filter. */
   query: string;
   /** One tag, exact, or null. */
@@ -149,13 +161,14 @@ export function projectPane(input: ProjectInput, nowMs: number): PaneProjection 
       query: input.query,
       tag: input.tagFilter,
       includeArchived: input.showArchived === true,
+      byPriority: input.byPriority === true,
     },
     nowMs
   );
 
   let groups: RenderGroup[];
   if (input.view === "planned") {
-    groups = groupPlanned(rows, nowMs).map((g) => ({
+    groups = groupPlanned(rows, nowMs, input.byPriority === true).map((g) => ({
       key: g.bucket,
       label: PLANNED_BUCKET_LABEL[g.bucket as PlannedBucket],
       items: g.items,
@@ -180,9 +193,19 @@ export function projectPane(input: ProjectInput, nowMs: number): PaneProjection 
   // The tag rail is built from the OPEN list in this scope, never from the
   // filtered rows: a rail that shrank to the tags of what you can already see
   // could not be used to widen the filter, which is the only thing it is for.
-  const tags = [
-    ...new Set(input.items.filter((i) => inView(i, "all", nowMs)).flatMap((i) => i.tags)),
-  ].sort();
+  //
+  // COUNTED BY ITEM, from the same population (#3335): an item carrying one
+  // tag twice (an agent's write, a hand edit) is one item, so the count is the
+  // number of rows the filter would show — which is the only number a rail
+  // chip's count can honestly promise.
+  const tagCounts = new Map<string, number>();
+  for (const i of input.items) {
+    if (!inView(i, "all", nowMs)) continue;
+    for (const t of new Set(i.tags)) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+  }
+  const tags: TagCount[] = [...tagCounts]
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
 
   const filtered = input.query.trim() !== "" || input.tagFilter !== null;
   return {
@@ -228,9 +251,20 @@ export const EMPTY_TEXT: Record<EmptyReason, string> = {
 export interface TodoPrefs {
   scope: ScopeChoice;
   view: SmartView;
+  /**
+   * The views whose "by priority" sort is ON (#3335) — per VIEW, because the
+   * question differs by view: sorting Important by priority is a triage
+   * reading, sorting My Day by it may not be what the human wants at all.
+   *
+   * Persisted, unlike the expanded set, because it IS a preference: "I read
+   * this view by priority" is something a human sets once, not a reading
+   * position. OFF by default, so the manual order — the one every drag writes
+   * — is what a fresh pane shows.
+   */
+  byPriority: SmartView[];
 }
 
-export const DEFAULT_TODO_PREFS: TodoPrefs = { scope: "workspace", view: "myday" };
+export const DEFAULT_TODO_PREFS: TodoPrefs = { scope: "workspace", view: "myday", byPriority: [] };
 
 /**
  * Where the prefs live.
@@ -284,11 +318,32 @@ export function decodeTodoPrefs(raw: string | null): TodoPrefs {
   return {
     scope: isScopeChoice(o.scope) ? o.scope : DEFAULT_TODO_PREFS.scope,
     view: isSmartView(o.view) ? o.view : DEFAULT_TODO_PREFS.view,
+    // Field-wise, and ENTRY-wise inside the field: an unknown view name (a
+    // newer build's sixth view) is dropped and the rest kept, the leniency
+    // `tabstore.decodePane` applies to one bad embed in an array.
+    byPriority: Array.isArray(o.byPriority)
+      ? SMART_VIEWS.filter((v) => (o.byPriority as unknown[]).includes(v))
+      : [...DEFAULT_TODO_PREFS.byPriority],
   };
 }
 
 export function encodeTodoPrefs(p: TodoPrefs): string {
-  return JSON.stringify({ scope: p.scope, view: p.view });
+  return JSON.stringify({ scope: p.scope, view: p.view, byPriority: [...p.byPriority] });
+}
+
+/** Is the priority sort on for `view`? Completed never is — it is a log. */
+export function sortsByPriority(p: TodoPrefs, view: SmartView): boolean {
+  return view !== "completed" && p.byPriority.includes(view);
+}
+
+/** `p` with `view`'s priority sort flipped. Pure, so the pane's toggle is one
+ *  assignment and the persisted list can never hold a view twice. */
+export function togglePrioritySort(p: TodoPrefs, view: SmartView): TodoPrefs {
+  const on = p.byPriority.includes(view);
+  return {
+    ...p,
+    byPriority: SMART_VIEWS.filter((v) => (v === view ? !on : p.byPriority.includes(v))),
+  };
 }
 
 // ---------- the quick-add draft, and the rest of the un-submitted state ----------
@@ -330,6 +385,12 @@ export interface RowDraft {
    */
   due: string;
   /**
+   * The in-row "add a tag" field, as typed (#3335). An INSTRUCTION field like
+   * `step` and `due`, so seeded empty: the item's current tags are drawn as
+   * chips beside it, each with its own remove control.
+   */
+  tag: string;
+  /**
    * The item's `notes` AT THE MOMENT this draft was seeded.
    *
    * "Has the human typed?" is a question about the draft against its own SEED,
@@ -343,7 +404,7 @@ export interface RowDraft {
   seededNotes: string;
 }
 
-export const EMPTY_ROW_DRAFT: RowDraft = { notes: "", step: "", due: "", seededNotes: "" };
+export const EMPTY_ROW_DRAFT: RowDraft = { notes: "", step: "", due: "", tag: "", seededNotes: "" };
 
 /**
  * Has the human typed into this draft?
@@ -359,14 +420,16 @@ export const EMPTY_ROW_DRAFT: RowDraft = { notes: "", step: "", due: "", seededN
  * drives its check off the object's own keys.
  */
 export function rowDraftIsPristine(draft: RowDraft): boolean {
-  return draft.notes === draft.seededNotes && draft.step === "" && draft.due === "";
+  return (
+    draft.notes === draft.seededNotes && draft.step === "" && draft.due === "" && draft.tag === ""
+  );
 }
 
 /** The draft a freshly expanded row starts with: seeded from the ITEM, and
  *  recording what it was seeded from, so `rowDraftIsPristine` is true the
  *  instant it is created and stays true until the human types. */
 export function seedRowDraft(item: TodoItem): RowDraft {
-  return { notes: item.notes, step: "", due: "", seededNotes: item.notes };
+  return { notes: item.notes, step: "", due: "", tag: "", seededNotes: item.notes };
 }
 
 /**
@@ -529,6 +592,91 @@ export function moveSelection(
   if (ix < 0) return (delta > 0 ? rendered[0] : rendered[rendered.length - 1]).id;
   const to = Math.min(rendered.length - 1, Math.max(0, ix + delta));
   return rendered[to].id;
+}
+
+/**
+ * Does a click on a row toggle its expansion? (#3335 AC 6)
+ *
+ * The row is one big target, so the question is really "which clicks are NOT
+ * for it":
+ *
+ *  - a click that landed on a CONTROL (anything carrying `data-act` — the
+ *    checkbox, a tag chip, the priority flag, the star, the chevron) does its
+ *    own job and must not also fold the row open or shut;
+ *  - a click inside the EXPANDED BODY (the notes box, the step list, a colour
+ *    swatch's gaps) is work on the row, not a request to close it — folding a
+ *    row shut because the human clicked beside the notes they were reading
+ *    would be the pane fighting them;
+ *  - a click that ENDED A TEXT SELECTION is someone copying a title;
+ *  - a click that ended a DRAG is the drop, not a click.
+ *
+ * Everything else in the row's head — the title, the meta line's gaps, the
+ * padding — toggles. DOM-free so the four exclusions are pinned rather than
+ * remembered; the pane computes each input from the event.
+ */
+export function rowClickToggles(c: {
+  /** Did the click land on (or inside) an element carrying `data-act`? */
+  onControl: boolean;
+  /** Is it inside a row's head (the collapsed row's own area)? */
+  inHead: boolean;
+  /** Does the document hold a non-empty text selection? */
+  selecting: boolean;
+  /** Did a row drag just end on this gesture? */
+  dragged: boolean;
+}): boolean {
+  return c.inHead && !c.onControl && !c.selecting && !c.dragged;
+}
+
+/** How a row drag ended. Only `"drop"` writes a move. */
+export type DragEnd = "drop" | "escape" | "blur" | "cancel" | "dispose";
+
+/**
+ * Which click is a DROP (#3335 review round 1).
+ *
+ * A press that ends a drag makes the browser synthesise a `click` from the
+ * same press, and that click must not expand the row it landed on. The first
+ * cut recognised it by a 250 ms window after the `pointerup` — which also ate a
+ * genuine click the human made inside that window, and left the window armed
+ * when the drop produced no click at all (released outside the pane).
+ *
+ * So the guard is bound to the PRESS, not to a clock:
+ *
+ *  - `dragEnded(how)` when a drag that really started ends — arming only
+ *    where a click from that press is still to come (below);
+ *  - `pointerDown()` on EVERY press disarms — a click that follows a new press
+ *    is that press's click, never the drop's;
+ *  - `click(fromPointer)` swallows at most one pointer click while armed and
+ *    disarms either way. A keyboard-activated click (`fromPointer` false) is
+ *    never swallowed: no press preceded it, so it cannot be the drop.
+ *
+ * Nothing can therefore vanish except the one click the drop itself produced.
+ *
+ * **How the drag ended decides whether that click is still coming**
+ * (`dragEnded`, #3335 review round 2). A drop, and an Escape with the button
+ * still held, are followed by a release whose click lands on the pane — so
+ * both arm. A `pointercancel` (the platform took the pointer: no `pointerup`,
+ * no click follows), a window blur and a dispose produce no click from this
+ * press — so all three CLEAR, rather than leaving an arm for the next press to
+ * find.
+ */
+export class DropClickGuard {
+  private armed = false;
+
+  /** A drag that really started has ended, this way. */
+  dragEnded(how: DragEnd): void {
+    this.armed = how === "drop" || how === "escape";
+  }
+
+  pointerDown(): void {
+    this.armed = false;
+  }
+
+  /** Is this click the drop's? Consumes the arm either way. */
+  click(fromPointer: boolean): boolean {
+    const eaten = this.armed && fromPointer;
+    this.armed = false;
+    return eaten;
+  }
 }
 
 /** Every row in a projection, flattened in display order. The selection walks

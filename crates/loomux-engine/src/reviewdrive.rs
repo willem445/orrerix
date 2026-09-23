@@ -2273,7 +2273,7 @@ pub struct DriveEntry {
     /// a zero read off an entry written before the field existed grants at
     /// most rounds the shared bound still refuses. And zero is the TRUE reading
     /// of such an entry — no build before #3367 could have run one.
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    #[serde(skip_serializing_if = "is_zero_u32")] // [scratch] R3: default removed
     pub nit_rounds: u32,
     /// **The current `fix-wait` was entered by a non-blocking round** (#3367),
     /// assigned on every arc into `fix-wait` by

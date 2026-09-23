@@ -288,6 +288,7 @@ pub fn run() {
             orchestration::orch_set_idle_tick_minutes,
             orchestration::orch_set_idle_activity_floor,
             orchestration::orch_set_compact_nudge_minutes,
+            orchestration::orch_request_compact,
             orchestration::orch_set_compact_nudge_roles,
             orchestration::orch_set_compact_nudge_min_context_percent,
             orchestration::orch_set_compact_context_threshold,

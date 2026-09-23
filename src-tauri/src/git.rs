@@ -1008,6 +1008,12 @@ fn symbolic_origin_head(repo: &str) -> Option<String> {
 /// (the naive `worktree add <dir> <remote-ref>` would detach — see #204).
 /// `--no-track` keeps the agent branch upstream-free, matching the old
 /// HEAD-based behavior (the worker publishes with `push -u`).
+///
+/// A `name` that already exists is TAKEN rather than cut: a local branch is
+/// checked out as it stands, and a branch that exists only on `origin` (a
+/// published PR branch whose local copy was pruned) is checked out tracking
+/// `origin/<name>` (#3405). Either way the result must descend from `base`, or
+/// the call fails loudly and leaves nothing behind (#227).
 /// Returns the worktree's absolute path.
 ///
 /// `pub` rather than private like the other `*_sync` bodies: orchestration cuts
@@ -1053,7 +1059,42 @@ pub fn git_worktree_add_sync(
         .trim()
         .to_string();
 
-    if let Err(e) = run_git(
+    // #3405: a name that exists on origin but NOT as a local branch is a
+    // published branch whose local copy was pruned (its earlier worker's
+    // worktree and branch were cleaned up while the PR stayed open). `-b` would
+    // happily cut a FRESH branch of that name from `start_point`, handing the
+    // agent `origin/main` with none of the PR's commits — and a later push would
+    // then be a non-fast-forward over the real branch. So check that remote
+    // branch out instead, tracking it, and let the #227 ancestry check below
+    // decide whether its history belongs on `base`, exactly as it does for an
+    // existing LOCAL branch.
+    //
+    // Freshness: with no explicit `base`, `default_base_ref` has just run
+    // `fetch --prune origin`, so `origin/<name>` exists here exactly when the
+    // branch exists on the remote. With an explicit `base` nothing fetched,
+    // and the answer is the last-known remote-tracking refs.
+    let has_local = run_git(
+        &repo,
+        &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{name}")],
+    )
+    .is_ok();
+    let remote_branch = format!("origin/{name}");
+    let tracks_remote = !has_local
+        && run_git(
+            &repo,
+            &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{remote_branch}")],
+        )
+        .is_ok();
+
+    if tracks_remote {
+        // `--track -b` creates the local branch AT the remote's commit and sets
+        // its upstream, in one command — born on the branch, never detached
+        // (#204), and a plain `git push` from the worktree lands on the PR.
+        run_git(
+            &repo,
+            &["worktree", "add", "--track", "-b", &name, &dest_str, &remote_branch],
+        )?;
+    } else if let Err(e) = run_git(
         &repo,
         &["worktree", "add", "--no-track", "-b", &name, &dest_str, &start_point],
     ) {
@@ -1074,21 +1115,43 @@ pub fn git_worktree_add_sync(
     // requested base, regardless of which path above produced it. A mismatch
     // means the branch was cut from (or already sat on) the wrong history —
     // fail loudly with both shas instead of handing back a worktree that
-    // silently wastes an entire worker round. This can only trip in the
-    // already-exists fallback above: the fresh `-b` path always cuts exactly
-    // from `start_point`, so it's trivially its own ancestor.
+    // silently wastes an entire worker round. This can only trip on the two
+    // paths that take a branch that already existed — the local already-exists
+    // fallback and the tracked remote branch (#3405): the fresh `-b` path always
+    // cuts exactly from `start_point`, so it's trivially its own ancestor.
+    // A local branch this call created from the remote (#3405) is removed with
+    // the worktree on a refusal: it was never the caller's, and leaving it would
+    // route the next spawn of this name through the already-exists fallback
+    // instead of back through the remote.
+    let discard = |repo: &str, dest: &str| {
+        let _ = git_worktree_remove(repo, dest);
+        if tracks_remote {
+            let _ = run_git(repo, &["branch", "-D", &name]);
+        }
+    };
     let head_sha = match run_git(&dest_str, &["rev-parse", "HEAD"]) {
         Ok(s) => s.trim().to_string(),
         Err(e) => {
-            let _ = git_worktree_remove(&repo, &dest_str);
+            discard(&repo, &dest_str);
             return Err(format!("worktree {name:?} created but its HEAD could not be resolved: {e}"));
         }
     };
     if run_git(&repo, &["merge-base", "--is-ancestor", &base_sha, &head_sha]).is_err() {
-        let _ = git_worktree_remove(&repo, &dest_str);
+        discard(&repo, &dest_str);
+        // For a tracked remote branch the likely cause is benign — the PR is
+        // simply behind the base that moved on — so name the way to take the
+        // branch as-is rather than leaving the caller to work it out.
+        let hint = if tracks_remote {
+            format!(
+                "; it was checked out from {remote_branch:?} — pass base {remote_branch:?} \
+                 to take that branch as it stands"
+            )
+        } else {
+            String::new()
+        };
         return Err(format!(
             "worktree {name:?} does not descend from requested base {start_point:?} \
-             (base {base_sha}, resulting HEAD {head_sha}) — refusing to hand out a wrong-base worktree"
+             (base {base_sha}, resulting HEAD {head_sha}) — refusing to hand out a wrong-base worktree{hint}"
         ));
     }
 
@@ -2212,6 +2275,111 @@ mod tests {
         let wt = git_worktree_add_sync(p(d), "agent/x".into(), Some("feat/base".into())).unwrap();
         assert!(Path::new(&wt).join("extra.txt").exists());
         assert!(Path::new(&wt).join("feat.txt").exists());
+    }
+
+    /// A bare remote carrying `main` plus `branch`, and a fresh clone of it that
+    /// has `origin/<branch>` but no local `<branch>` — the state #3405 met: the
+    /// PR's branch is published, and its earlier worker's local copy is gone.
+    /// Returns `(bare, clone_parent, primary)`; the temp dirs must outlive the
+    /// test body.
+    fn remote_only_branch(
+        branch: &str,
+        main_moves_on: bool,
+    ) -> (tempfile::TempDir, tempfile::TempDir, std::path::PathBuf) {
+        let bare = tempfile::tempdir().unwrap();
+        setup_git(bare.path(), &["init", "-q", "--bare"]);
+        setup_git(bare.path(), &["symbolic-ref", "HEAD", "refs/heads/main"]);
+
+        let seed = new_repo();
+        commit(seed.path(), "base.txt", "base\n", "base on main");
+        setup_git(seed.path(), &["remote", "add", "origin", &p(bare.path())]);
+        git_push_sync(p(seed.path()), true).unwrap();
+        setup_git(seed.path(), &["checkout", "-q", "-b", branch]);
+        commit(seed.path(), "pr.txt", "pr\n", "the PR's own commit");
+        setup_git(seed.path(), &["push", "-q", "origin", branch]);
+        if main_moves_on {
+            setup_git(seed.path(), &["checkout", "-q", "main"]);
+            commit(seed.path(), "later.txt", "later\n", "main moves on past the PR");
+            setup_git(seed.path(), &["push", "-q", "origin", "main"]);
+        }
+
+        let clone_dir = tempfile::tempdir().unwrap();
+        setup_git(clone_dir.path(), &["clone", "-q", &p(bare.path()), "wc"]);
+        let primary = clone_dir.path().join("wc");
+        // The precondition the whole test rests on: remote-tracking ref yes,
+        // local branch no. Without it the local-branch path would be under test.
+        assert!(
+            run_git(&p(&primary), &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")]).is_ok(),
+            "precondition: origin/{branch} must exist in the clone"
+        );
+        assert!(
+            run_git(&p(&primary), &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_err(),
+            "precondition: no local {branch} branch"
+        );
+        (bare, clone_dir, primary)
+    }
+
+    /// #3405: `spawn_agent(branch: <a published branch with no local copy>)`
+    /// cut a FRESH branch of that name from `origin/main`, so the worker found
+    /// itself with none of the PR's commits. The branch must be checked out
+    /// from the remote and track it.
+    #[test]
+    fn worktree_add_checks_out_and_tracks_a_branch_that_exists_only_on_origin() {
+        let (_bare, _cd, primary) = remote_only_branch("ci/pr-branch", false);
+
+        let wt = git_worktree_add_sync(p(&primary), "ci/pr-branch".into(), None).unwrap();
+        assert_eq!(worktree_branch(&wt), "ci/pr-branch");
+        assert!(
+            Path::new(&wt).join("pr.txt").exists(),
+            "#3405: the worktree must carry the PR's own commit, not a fresh cut of origin/main"
+        );
+        let head = run_git(&wt, &["rev-parse", "HEAD"]).unwrap();
+        let remote = run_git(&p(&primary), &["rev-parse", "origin/ci/pr-branch"]).unwrap();
+        assert_eq!(head.trim(), remote.trim(), "HEAD must be exactly the remote branch's commit");
+        let upstream = run_git(&wt, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+            .unwrap_or_default();
+        assert_eq!(
+            upstream.trim(),
+            "origin/ci/pr-branch",
+            "the local branch must TRACK the remote so a plain push lands on the PR"
+        );
+    }
+
+    /// The #227 half of #3405: a remote branch whose history does not descend
+    /// from the requested base is refused loudly, exactly like a stale LOCAL
+    /// branch — and the refusal leaves neither the worktree nor the local
+    /// branch this call created, so the next spawn is not routed through the
+    /// local already-exists path by a leftover.
+    #[test]
+    fn worktree_add_refuses_a_remote_branch_that_does_not_descend_from_base_and_cleans_up() {
+        let (_bare, _cd, primary) = remote_only_branch("ci/behind", true);
+
+        let err = git_worktree_add_sync(p(&primary), "ci/behind".into(), None)
+            .expect_err("origin/ci/behind is behind the moved-on origin/main — must fail loudly");
+        assert!(err.contains("ci/behind"), "error should name the branch: {err}");
+        assert!(err.contains("does not descend"), "error should name the #227 cause: {err}");
+        assert!(
+            err.contains("pass base \"origin/ci/behind\""),
+            "a remote-branch refusal names the way to take the branch as it stands: {err}"
+        );
+        assert!(
+            !git_worktree_list_sync(p(&primary)).unwrap().contains("ci/behind"),
+            "a rejected spawn must not leave a worktree behind"
+        );
+        assert!(
+            run_git(&p(&primary), &["rev-parse", "--verify", "--quiet", "refs/heads/ci/behind"]).is_err(),
+            "…nor the local branch it created from the remote"
+        );
+
+        // The named remedy works: the branch's own remote ref as the base.
+        let wt = git_worktree_add_sync(
+            p(&primary),
+            "ci/behind".into(),
+            Some("origin/ci/behind".into()),
+        )
+        .unwrap();
+        assert!(Path::new(&wt).join("pr.txt").exists());
+        assert!(!Path::new(&wt).join("later.txt").exists());
     }
 
     #[test]

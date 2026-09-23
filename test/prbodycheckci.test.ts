@@ -23,6 +23,15 @@
 // right things; it cannot prove Actions executes them. The two are held apart
 // deliberately — the first is cheap and runs on every `npm test`, the second is
 // the PR's own CI run.
+//
+// Every workflow pin below reads the file's CONFIG, never its commentary: `wf`
+// is the workflow with its whole-line `#` comments removed (YAML comments and
+// the shell comments inside `run:` blocks alike). The workflow explains itself
+// at length, and a pin matched against the raw file passes on the explanation
+// after the code it describes is gone — `/--gate/` matched the comment "`--gate`
+// is the one invocation…" with `--gate` deleted from the run line, and
+// `/missing summary line/` matched ONLY a comment (#3373 round 3). The
+// refusal-bearing lines are pinned whole, as exact lines.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,10 +53,21 @@ test('the pr-body-check workflow file exists, and so does the script it runs', (
 // must go red on a base tree without the workflow, with ITS OWN failure line —
 // not a module-level ENOENT that masks every assertion in the file as a crash.
 const readWf = () => fs.readFileSync(workflowPath, 'utf8');
+/** The workflow with every whole-line comment removed — the config the pins read. */
+const stripComments = (text: string): string =>
+  text.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
 let wf = '';
 
+/** An exact line of the config, modulo its indentation — a pin a comment cannot satisfy. */
+const hasLine = (text: string, line: string): boolean =>
+  text.split('\n').some((l) => l.trim() === line);
+
 test('the job runs on the PR events a body edit needs', () => {
-  wf = readWf();
+  wf = stripComments(readWf());
+  // Positive control on the strip: the config survived it (both steps' run
+  // blocks are still there), so every absence below is about the config, not
+  // about a strip that ate the file.
+  assert.equal([...wf.matchAll(/^\s+run: \|/gm)].length, 2, 'the stripped workflow must still carry the gate and corpus run blocks');
   // The `edited` trigger is the point of the whole slice (#3367 item 3): a
   // body-only fix must re-run this check with no push to the branch. Pin the
   // full list so neither `edited` nor `synchronize` can be dropped alone.
@@ -63,20 +83,30 @@ test('the job refuses on any MISMATCH and prints the rows', () => {
   // The gate is the script's own `--gate` exit — the one nonzero exit the
   // script has, on any MISMATCH from a completed run (documented in its
   // header and USAGE). The script's default exit-0 contract is pinned by
-  // test/prbodycheck.test.ts; this pin is the CI half of the pair.
-  assert.match(wf, /--gate/, 'the job must invoke the script with --gate, the one exit-nonzero mode');
-  assert.match(wf, /--pr "\$pr"/, 'the job must run the script against the PR');
+  // test/prbodycheck.test.ts; this pin is the CI half of the pair. The whole
+  // invocation is pinned as one exact line: dropping `--gate`, or appending
+  // `|| true`, turns the required check permanently green.
+  assert.ok(
+    hasLine(wf, 'node scripts/pr-body-check.cjs --pr "$pr" --repo "$GITHUB_REPOSITORY" --gate'),
+    'the gate step must invoke the script with --gate against this PR, the one exit-nonzero mode — as that exact line',
+  );
   assert.match(wf, /printf '%s\\n' "\$out"/, 'the corpus step must print the script output, so every CHECK row is visible to the reader');
 });
 
-test('a missing or unparsable summary line fails the step, not passes it', () => {
-  // The script is designed to exit 0 even when it crashes (a checker crash
-  // must never read as a body defect), so a gate keyed on the exit code would
-  // pass on a broken checker. The gate is keyed on the summary line instead —
-  // pin both arms of that, or the next editor reverts to the exit-code gate
-  // and a crash reads as a clean body.
-  assert.match(wf, /missing summary line/, 'a run with no summary line must be a tool failure, not a pass');
-  assert.match(wf, /unparsable/, 'an unparsable summary must be a tool failure, not a pass');
+test('a missing or unparsable summary line fails the corpus step, not passes it', () => {
+  // This is the CORPUS step's arm, not the gate step's: the gate step is keyed
+  // on the script's `--gate` exit code (pinned above). The corpus step runs
+  // the script in its default mode, which exits 0 even on a crash (a checker
+  // crash must never read as a body defect), and swallows the exit with
+  // `|| true` — so it is keyed on the SUMMARY line, and an empty parse must
+  // count as a failure. Drop the `-z` half of this guard and a crashed checker
+  // counts as a clean corpus PR (`[ "" -ne 0 ]` errors, and the `if` reads
+  // that as false).
+  assert.ok(
+    hasLine(wf, 'if [ -z "$mismatch" ] || [ "$mismatch" -ne 0 ]; then'),
+    'an empty (missing or unparsable) summary must count as a corpus failure — as that exact guard line',
+  );
+  assert.match(wf, /\$\{mismatch:-<unparsable>\} MISMATCH/, 'the failure line must name an unparsable summary as such');
 });
 
 test('a [scratch]-titled PR gets a REPORT-ONLY arm, never a job-level skip (#3373 round 1)', () => {
@@ -141,7 +171,15 @@ test('the skill text carries the report-only arm, never a job-level-skip sentenc
   const para = skill.split('\n').find((l) => l.includes('prbodycheck.yml')); // the CI paragraph's first line
   assert.ok(para && para.includes('prbodycheck.yml'), 'the skill must have a paragraph naming the prbodycheck.yml workflow');
   const start = skill.indexOf(para);
-  const slice = skill.slice(start, skill.indexOf('CI running it does not retire', start));
+  // Both ends of the window are asserted, not assumed: a missing sentinel makes
+  // `indexOf` -1 and `slice(start, -1)` silently reads the REST OF THE FILE.
+  // Residual, stated: the window is bounded by two anchors (the first line
+  // naming the workflow, and the sentinel sentence). A reword that moves either
+  // onto different prose shifts the window without reddening this pin, as long
+  // as both still exist in that order.
+  const end = skill.indexOf('CI running it does not retire', start);
+  assert.ok(end > start, 'the skill\'s CI paragraph must still end at "CI running it does not retire" — the pin\'s window is lost');
+  const slice = skill.slice(start, end);
   assert.match(slice, /REPORT-ONLY/, 'the skill must tell workers a scratch PR runs the job report-only');
   assert.match(slice, /continue-on-error/, 'the skill must name the mechanism, so the arm stays observable in the text agents read');
   assert.doesNotMatch(

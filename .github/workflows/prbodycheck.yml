@@ -66,9 +66,12 @@ jobs:
       # exits nonzero — 1 on any MISMATCH from a COMPLETED run (documented in
       # the script's header and USAGE). A checker CRASH still exits 0 with the
       # reason on stderr: that is the script's long-standing contract that a
-      # crash must not read as a body defect, and the corpus step below is what
-      # turns a broken instrument into a red (its rows are caught as
-      # unparsable there) rather than this step. The report prints in full:
+      # crash must not read as a body defect. The corpus step below turns a
+      # crash that does not depend on the body into a red (its rows are caught
+      # as unparsable there). Residual, stated: a crash that only THIS PR's body
+      # triggers exits 0 here and is invisible to the corpus, which reads other
+      # PRs' bodies — the step goes green with nothing checked, and only its
+      # stderr says so. The report prints in full:
       # every CHECK row is visible to whoever reads the failed run.
       #
       # The `continue-on-error` below is the SCRATCH ARM of the exemption: on

@@ -7,7 +7,8 @@ directory, without disturbing the source. Slice **F1** shipped that gesture for
 opencode, the delegate fork (`fork_session` / `orch_fork_agent`), a lead's
 self-fork into a Solo pane, and the two F1 residuals #3331 names. The rejoin
 slice (F3) is dropped at the human's direction, and copilot stays refused (F4,
-held on live check L4).
+held on live check L4). Slice **F5** (#3368) names a fork as it is made and
+derives its lineage for the session browser and the pane header.
 
 This note carries the survey citations both slices rest on, the argued carve-out
 of [session-id-learning.md](session-id-learning.md) B3, the live checks (L1 still
@@ -354,6 +355,11 @@ toast.
 | the record | `src/tabstore.ts` | `PersistedPane.forkOf` (additive, blank coerces to null) |
 | the gesture | `src/panemenu.ts` | `forkItem`, `forkActionFor`, `forkClickRefusal` |
 | the execution | `src/orchestration.ts` + `src/main.ts` | `forkPaneSession` → `OrchWiring.openForkedPane`; the `orch-fork-solo-request` listener |
+| the name prompt (F5) | `src/forkname.ts` + `src/forkprompt.ts` | `forkNameDecision` (tested), `promptForkName` (DOM) |
+| the lineage (F5) | `src/forklineage.ts` | `gatherForkPointers`, `buildForkIndex`, `lineageOf`, `parentLink`, `forkTreeRows`, `sessionDisplayName` |
+| the durable Solo pointer (F5) | `src/sessionlog.ts` | `SessionRecord.fork_of`, set once in `record` |
+| the roster pointer on the wire (F5) | `src-tauri/src/orchestration/mod.rs` | `SessionRole.forked_from` |
+| the tree and the crumb (F5) | `src/sessions.ts` + `src/pane.ts` + `src/main.ts` | `SessionForkHost`, `forkIndex`; `Pane.setForkCrumb`; `refreshForkCrumbs`, `returnToSession` |
 
 ## Public-contract changes
 
@@ -404,6 +410,125 @@ open path). No getrandom (a Solo child's id is `crypto.randomUUID`, the webview'
 Web Crypto; a delegate child's is the existing `new_session_uuid` mint). No new
 path join: the parent session id is validated by `sanitize_session`
 (`pathseg::check_segment`) before it reaches a line.
+
+## F5: the fork's name, and its lineage (#3368)
+
+The human's feedback on beta2, verbatim: "id like to support renaming the session
+so I can easily identify it. Also if there was some way to visualize or trace the
+lineage of forked sessions so a user could easily identify which fork to return
+to."
+
+### The name is the pane's name
+
+Fork session… first asks for a name, in a popover pinned over the source pane
+(`position: fixed` on `document.body`, so no layout moves and no PTY resize can
+follow — constraint 1), pre-filled with `forkPaneName(<source name>)`. Enter
+forks under what is typed (blank → the default), Esc forks under the default,
+and only the popover's ✕ or a click away backs out — `forkNameDecision`, which
+is the tested half. The asymmetry is the issue's rule: the prompt is an optional
+rename, not a confirmation, so no KEY a human presses to get past it can lose
+them the fork.
+
+There is no fork-name store. The answer goes in as `PaneOptions.name` on a Solo
+fork and as `orch_fork_agent`'s existing `name` on a delegate one, which is the
+field the header's rename edits, `tabs.json` persists, `sessionlog.json`
+records against the session and the roster carries as the agent name — so the
+browser row shows it through the path that already shows a renamed pane.
+
+`fork_session(name)` already named a DELEGATE fork. It did not name a lead's
+self-fork: `request_solo_fork` took no name, and the Solo pane opened as
+`<lead> (fork)` whatever was asked. F5 threads it through the
+`orch-fork-solo-request` payload (and records it on the `agent-fork-requested`
+row, which is the half a test can observe), collapsed to one line.
+
+### The lineage is derived, never stored
+
+orrerix records ONE fact per fork — the parent SESSION — and has three homes for
+it, one per lifetime:
+
+| copy | where | lives as long as |
+| --- | --- | --- |
+| `PersistedPane.forkOf` | `tabs.json` | the pane (the live copy) |
+| `AgentRecord.forked_from` | the group's `agents.json` | the group's record (a delegate's durable copy) |
+| `SessionRecord.fork_of` | `sessionlog.json` | the session's record (a Solo fork's durable copy) |
+
+The third is F5's one new field, and it is argued, because #3368 says to add
+nothing that duplicates the first two. **What that rule forbids is a stored
+CHAIN, not a durable home for the one-level pointer.** Without it a Solo fork's
+parent lives only in `tabs.json`, which forgets it the moment the fork's pane is
+closed — and a closed fork falling out of the tree is exactly the "which fork to
+return to" case the human asked about. It is the same rule `forked_from` already
+follows for delegates: the live pane has one copy, the durable record another.
+It is written ONCE — `SessionLogStore.record` takes `fork_of` only onto a record
+that has none, and never clears or moves it, since a later record of the same
+session (a resume from the browser opens a pane with no `forkOf`) must not undo
+its birth. A record that is not a fork is written without the key, byte for byte
+what a pre-F5 build writes, and an older build keeps the key through its
+`unknown` passthrough.
+
+`SessionRole.forked_from` is not a fourth copy: it is the roster's field read
+onto the `orch_session_roles` wire, which is how the frontend reads the roster.
+
+**The chain is walked every time it is asked for** (`src/forklineage.ts`):
+`gatherForkPointers` reads the three records, `buildForkIndex` joins them, and
+`lineageOf` walks parent pointers root-ward. A stored chain would be a second
+copy of those pointers that could disagree with them, and one that had to be
+rewritten whenever an ancestor's record changed or aged out; a walk cannot
+disagree with what it walks. Where two copies of one pointer DO disagree (only a
+hand-edit can do that — all three are written from one value), the live pane
+wins over the roster over the log, and the loser is kept on `conflicts` rather
+than silently dropped.
+
+**The dangling-parent rule.** A parent is KNOWN when anything has a record of
+it: a browser row (the CLI store scan), an open or dormant pane, a roster row,
+a sessions-log record. A pointer to a parent nothing knows — its transcript
+deleted, its log record evicted at the 500-record cap — ends the walk at the
+last known node with `dangling` and the id it could not follow. The row still
+says `fork of session <id> — no longer on record` and sits at the top level,
+rather than passing for a conversation of its own. **A cycle is refused**: a
+child id is always freshly minted, so a loop is impossible by construction, and
+the walk stops at the first repeat instead of looping; the tree puts every
+member of a loop at the top level, since none of them is reachable from a root.
+
+**orrerix's record is the source of truth for all four forkable CLIs.** pi's
+`parentId` and opencode's `parent_id` are NOT read: opencode does not set
+`parent_id` on a fork at all (L3 above), claude and codex have no such field
+to read, and a lineage that read vendor fields would mean something different
+per CLI. orrerix's pointer is written by orrerix's gesture, identically for all
+four.
+
+### Where it shows
+
+- **The session browser's tree** (`forkTreeRows`). A fork nests under its
+  DIRECT parent when that parent is in the list, and otherwise sits at the top
+  level in its own display position — never under a grandparent, because its
+  row says "fork of <parent>" and the indentation must not contradict it. A
+  parent's forks are collapsed behind a "▸ n" expander (a session forked five
+  times is one row until asked) and a typed filter expands everything. Every
+  fork row carries "↳ fork of <parent> · forked <when>" — the when is the
+  sessions log's `created_ms` for the child, i.e. when its session first became
+  known — and a "↰" return button: the parent's pane if one is open (live or
+  dormant), otherwise the same resume a click on the parent's row does.
+- **The pane header's crumb**, `↰ <parent name>`, the same gesture. A header
+  chip like the others — `chip-yields`, so a long parent name ellipsises before
+  the pane's own name gives up room, and walked by `measureHeaderFixed` like any
+  chip, so the fold ladder prices it unasked.
+- **No overlay tree.** The browser tree answers "which fork do I return to" in
+  the place the human already goes to find sessions, and the crumb answers "what
+  is this pane a fork of" where they are looking. A git-view-style overlay would
+  be a third surface carrying the same derivation, with nothing it can show
+  that those two cannot at this depth.
+
+**Stated residuals.** A delegate fork's crumb and tree row read the roster
+through `orch_session_roles`, which the browser loads on its own refresh (at
+boot, on showing the Sessions tab, on ↻) and not on every spawn — that call fans
+out over every group on disk, and a spawn is not worth a scan. So an
+orchestration fork's crumb appears at the next refresh, not the instant its pane
+opens; a Solo fork's is immediate. And a pointer is lost with the record that
+held it: an unnoted sessions-log record can age out at the cap, after which that
+closed Solo fork shows as a root — the dangling rule covers its CHILDREN, not
+the fork itself. Neither is silent: the first corrects itself on a refresh, and
+the second is the eviction rule the log already documents.
 
 ## What F2 did not change, and why
 

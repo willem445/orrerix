@@ -69122,3 +69122,53 @@ fn a_reviewers_workspace_note_names_the_branch_it_was_really_cut_from() {
         assert!(!note.contains('\n') && !note.contains("          "), "{note}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// #3368 — a fork's name and its parent, as the session browser reads them.
+// ---------------------------------------------------------------------------
+
+/// **`fork_session(name)` names the fork's pane.** The name is the agent's
+/// roster name and the spawn request's — which the frontend opens the pane
+/// under and records as the session's pane name, so it is what the header and
+/// the session browser show. The control is the same fork with no name, which
+/// takes the documented default.
+#[test]
+fn fork_session_name_is_the_forks_pane_name() {
+    let (reg, _d, _repo, _gid, co, src) = fork_fixture(4);
+    let out = q_call(&reg, &co, "fork_session", json!({ "agent": src.id, "name": "spike: retry" }));
+    assert_ne!(out["isError"], json!(true), "fork_session refused: {}", q_text(&out));
+    let named = reg
+        .list_agents(&co.group)
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == json!("spike: retry"))
+        .and_then(|a| a["id"].as_str().map(str::to_string))
+        .expect("a fork named as asked is on the roster");
+    let req = reg.spawn_request_for_test(&named).expect("a spawn request was built");
+    assert_eq!(req.name, "spike: retry", "the pane opens under the asked-for name");
+
+    let fork = reg.fork_agent(&co.group, &co.agent_id, &src.id, "", None, None, "").unwrap();
+    assert_eq!(fork.name, format!("{} (fork)", src.name), "no name asked for: the default");
+}
+
+/// **`session_roles` names a delegate fork's parent** (#3368): the session
+/// browser's fork tree reads the roster's `forked_from` through this, and a
+/// row that dropped it would put a delegate fork at the top level as though
+/// it were its own conversation. The SOURCE's row is the control: not a fork,
+/// so `None` — the field is the pointer, not a constant.
+#[test]
+fn session_roles_carry_a_delegate_forks_parent_session() {
+    let (reg, _d, _repo, _gid, co, src) = fork_fixture(4);
+    let parent = src.session_id.clone().expect("claude pre-mints the source's session");
+    let fork = reg.fork_agent(&co.group, &co.agent_id, &src.id, "", None, None, "").unwrap();
+    let child = fork.session_id.clone().expect("claude's fork pre-mints its child (L1 arm)");
+    let roles = reg.session_roles();
+    let row = roles.iter().find(|r| r.session_id == child).expect("the fork's session has a role row");
+    assert_eq!(row.forked_from.as_deref(), Some(parent.as_str()));
+    let source_row = roles.iter().find(|r| r.session_id == parent).expect("the source's row");
+    assert_eq!(source_row.forked_from, None, "the source is not a fork");
+    // What the frontend actually receives: the key is on the wire.
+    let wire = serde_json::to_value(row).unwrap();
+    assert_eq!(wire["forked_from"], json!(parent));
+}

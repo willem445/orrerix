@@ -890,6 +890,20 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
   color: var(--mark-watched); background: color-mix(in srgb, var(--mark-watched) 18%, transparent);
 }
 .pane-watch:hover { background: color-mix(in srgb, var(--mark-watched) 32%, transparent); }
+/* The fork crumb (#3368): `↰ <parent name>` on a forked pane. Quiet — it is
+   provenance, not a signal — and a heavy shrink weight (`chip-yields` keeps the
+   row-shrink rule from flattening it) so a long parent name ellipsises before
+   the pane's own name gives up any room. Header chrome only: no box here can
+   reach the terminal's size (constraint 1). */
+.pane-fork-crumb {
+  flex: 0 100 auto; min-width: 0; max-width: 40%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer; font: inherit; font-size: 10.5px; line-height: 1;
+  border: 1px solid var(--line); border-radius: 4px; padding: 2px 5px;
+  color: var(--ink-dim); background: transparent;
+}
+.pane-fork-crumb:hover:not(:disabled) { color: var(--ink); background: var(--surface-2); }
+.pane-fork-crumb:disabled { cursor: default; font-style: italic; }
 /* The frame, which is what carries across the room. A 3px bar down the pane's
    own LEFT edge, full height — not the header edge, which is already spoken for
    twice over (the group colour on its left inset, the attention dye on its
@@ -1735,6 +1749,28 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
    already shows. It reads as the human's own label rather than as more
    transcript metadata — same weight as the title, one step in and quieter, and
    directly under it so the two read as one identity. */
+/* The fork tree (#3368). Indentation is padding off a custom property the row
+   carries — the column is fixed-width (`.sessions-inner`), so depth only
+   narrows the text inside it and never moves a layout column (constraint 1). */
+.session-row.session-fork-child {
+  padding-left: calc(var(--fork-depth, 1) * 12px);
+  border-left: 1px solid var(--line); margin-left: 6px;
+}
+.session-fork-line {
+  margin-top: 3px; padding-left: 2px; font-size: 11px; color: var(--ink-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.session-fork-line.dangling { font-style: italic; }
+.session-forks-toggle, .session-return {
+  flex: none; align-self: flex-start; margin-top: 6px;
+  font: inherit; font-size: 11px; line-height: 1;
+  border: 1px solid transparent; border-radius: 6px; padding: 3px 5px;
+  background: none; color: var(--ink-dim); cursor: pointer;
+}
+.session-forks-toggle:hover:not(:disabled), .session-return:hover {
+  background: var(--surface-2); border-color: var(--line); color: var(--ink);
+}
+.session-forks-toggle:disabled { cursor: default; opacity: 0.7; }
 .session-pane-name {
   margin-top: 3px; padding-left: 2px; font-size: 11.5px; color: var(--ink-dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

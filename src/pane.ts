@@ -961,6 +961,11 @@ export class Pane implements VoiceTargetPane {
    *  quiet. The two co-exist on one pane and that is the case the feature
    *  exists for. Hidden when the pane is not watched. */
   private watchChip: HTMLButtonElement;
+  /** The fork crumb (#3368): `↰ <parent name>` on a forked pane, which goes to
+   *  the parent. Set from outside (`setForkCrumb`) because the parent's name
+   *  and whereabouts are the window's to know, not this pane's. */
+  private forkCrumb: HTMLButtonElement;
+  private forkCrumbGo: (() => void) | null = null;
   private isWatched = false;
   /** "delivery held" chip in the header (#246): the moment loomux is
    *  withholding an outbound prompt to this pane because it believes the
@@ -1240,6 +1245,22 @@ export class Pane implements VoiceTargetPane {
       this.setWatched(false);
     });
     header.appendChild(this.watchChip);
+
+    // The fork crumb (#3368). Header chrome on the same terms as the chips
+    // around it — it floats in the header row and never touches the terminal's
+    // geometry, so constraint 1 holds trivially. `chip-yields` so it gives up
+    // its room (ellipsising the parent's name) before the pane's own name does:
+    // the crumb is context, the name is the drag handle. It is walked off the
+    // header by `measureHeaderFixed` like every other chip, so the fold ladder
+    // prices it without being told.
+    this.forkCrumb = document.createElement("button");
+    this.forkCrumb.className = "pane-fork-crumb chip-yields";
+    this.forkCrumb.hidden = true;
+    this.forkCrumb.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.forkCrumbGo?.();
+    });
+    header.appendChild(this.forkCrumb);
 
     // "Delivery held" chip (#246): purely informational, no click handler —
     // the hold only clears when the backend resolves it.
@@ -5942,6 +5963,22 @@ export class Pane implements VoiceTargetPane {
     } else {
       wrap.hidden = true;
     }
+  }
+
+  /** Show (or, with `null`, hide) the fork crumb (#3368). `go` null leaves it
+   *  visible but inert — a parent nothing has a record of any more is still
+   *  worth naming, and a button that did nothing when clicked would be worse
+   *  than one that says it cannot. Writes the DOM only when something changed:
+   *  this runs on every grid change and every sessions-log change. */
+  setForkCrumb(crumb: { label: string; title: string; go: (() => void) | null } | null): void {
+    this.forkCrumbGo = crumb?.go ?? null;
+    const hidden = crumb === null;
+    if (this.forkCrumb.hidden !== hidden) this.forkCrumb.hidden = hidden;
+    if (!crumb) return;
+    if (this.forkCrumb.textContent !== crumb.label) this.forkCrumb.textContent = crumb.label;
+    if (this.forkCrumb.title !== crumb.title) this.forkCrumb.title = crumb.title;
+    this.forkCrumb.disabled = crumb.go === null;
+    this.forkCrumb.setAttribute("aria-label", crumb.title);
   }
 
   /** The menu's name row, re-labelled from the current name. Called when the

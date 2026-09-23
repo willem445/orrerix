@@ -1952,3 +1952,34 @@ fn a_solo_fork_ack_records_the_outcome_and_only_for_the_groups_lead() {
     assert!(reg.record_solo_fork_outcome(&gid, "lead-404", true, "").is_err());
     assert_eq!(fork_rows(&reg, &gid, "agent-fork").len(), 1, "no refused ack wrote a row");
 }
+
+// ---------------------------------------------------------------------------
+// #3368 — `fork_session(name)` on a lead's own pane reaches the Solo pane.
+// ---------------------------------------------------------------------------
+
+/// **A lead's named self-fork carries its NAME to the frontend's request.**
+/// Before #3368 `request_solo_fork` took no name, so a lead asking for
+/// `fork_session(agent: <self>, name: "spike")` got a pane called
+/// `<lead> (fork)` — the one `fork_session` route where the documented `name`
+/// parameter reached nothing. The request row carries the value the event
+/// carries (one variable feeds both), which is the half a test can observe.
+///
+/// Collapsed to one line: an agent-supplied newline must not reach a title.
+/// The control is the same call with no name, which records "" — the
+/// frontend's cue to use its own default — rather than some invented name.
+#[test]
+fn a_leads_named_self_fork_carries_its_name_on_the_request() {
+    let (reg, _d, _td, gid, lead) = lead_group();
+    let c = caller_for(&reg, &lead);
+    let out = q_call(&reg, &c, "fork_session", json!({ "agent": lead.id, "name": "  spike:\n retry " }));
+    assert_ne!(out["isError"], json!(true), "refused: {}", q_text(&out));
+    let rows = fork_rows(&reg, &gid, "agent-fork-requested");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["detail"]["name"], json!("spike: retry"));
+
+    let out = q_call(&reg, &c, "fork_session", json!({ "agent": lead.id }));
+    assert_ne!(out["isError"], json!(true), "refused: {}", q_text(&out));
+    let rows = fork_rows(&reg, &gid, "agent-fork-requested");
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[1]["detail"]["name"], json!(""), "no name asked for, none invented");
+}

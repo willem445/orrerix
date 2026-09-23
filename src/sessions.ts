@@ -23,6 +23,16 @@ import { icon } from "./icons";
 import { RefreshGate } from "./refreshgate";
 import { SessionStore } from "./sessionstore";
 import {
+  buildForkIndex,
+  forkTreeRows,
+  gatherForkPointers,
+  parentLink,
+  sessionDisplayName,
+  type ForkIndex,
+  type ForkPointer,
+  type ParentLink,
+} from "./forklineage";
+import {
   DEFAULT_SESSION_MODE,
   decodeSessionMode,
   delegateToggleLabel,
@@ -70,6 +80,31 @@ export interface SessionNotesHost {
    *  note is the human's record ABOUT a session, and whether it can still be
    *  resumed is the harness's concern, not the note's. Resolves on close. */
   openNotes(session: SessionInfo, title: string): Promise<void>;
+}
+
+/** What the fork tree needs from the rest of the window (#3368): the pointers
+ *  only main.ts can see (open panes' `forkOf`, the sessions log's `fork_of`),
+ *  the sessions it knows of, and the one gesture. The roster's pointers this
+ *  class reads itself, off the roles it already loads.
+ *
+ *  Optional for the reason every dep above it is: without it the list is the
+ *  flat pre-#3368 list, never a broken tree. */
+export interface SessionForkHost {
+  /** Pointers from the open panes and the sessions log (`gatherForkPointers`). */
+  pointers(): ForkPointer[];
+  /** Session ids some record outside the CLI scan knows of — open panes, the
+   *  sessions log — so a parent with no browser row is still KNOWN, not
+   *  dangling. */
+  known(): Iterable<string>;
+  /** The name of the OPEN pane running this session, if one is. */
+  openPaneName(sessionId: string): string | undefined;
+  /** When the sessions log first recorded this session — a fork's fork time. */
+  forkedAtMs(sessionId: string): number | undefined;
+  /** Go to this session: focus its pane, or resume it if its pane is gone. */
+  returnTo(sessionId: string): void;
+  /** Called after every refresh, once the roles (and so the roster's
+   *  pointers) are current — main.ts re-derives the header crumbs off it. */
+  refreshed?(): void;
 }
 
 const ROLE_CHIPS: Record<string, string> = {
@@ -155,6 +190,10 @@ export class SessionBrowser {
    *  reason the delegate toggle is: the list is emptied and rebuilt on every
    *  render and this must survive that with its state intact. */
   private modeEl: HTMLElement;
+  /** Parents whose forks the human expanded (#3368). In memory and per window,
+   *  like `showDelegates`: a reading state, not a setting. Collapsed is the
+   *  default so a session forked five times is one row until asked. */
+  private expandedForks = new Set<string>();
 
   constructor(
     private el: HTMLElement,
@@ -178,7 +217,9 @@ export class SessionBrowser {
      *  same reason the two above it are — a caller that only wants the session
      *  list, and the tests, need not supply one, and the button is not
      *  rendered without it rather than being rendered dead. */
-    private focusGroup?: (groupId: string) => void
+    private focusGroup?: (groupId: string) => void,
+    /** The fork tree (#3368). Optional, for the reason the four above are. */
+    private forks?: SessionForkHost
   ) {
     const head = document.createElement("div");
     head.className = "sessions-head";
@@ -339,6 +380,26 @@ export class SessionBrowser {
     return undefined;
   }
 
+  /** The fork index over everything this window knows (#3368): the roster's
+   *  pointers (off the roles), the host's (open panes, the sessions log), and
+   *  every session any of them — or the CLI scan — has a record of. Derived on
+   *  every call; there is nothing to keep in step. */
+  forkIndex(): ForkIndex {
+    const pointers = [...gatherForkPointers({ roster: this.roles.values() }), ...(this.forks?.pointers() ?? [])];
+    const known = [...this.store.cached.map((s) => s.id), ...this.roles.keys(), ...(this.forks?.known() ?? [])];
+    return buildForkIndex(pointers, known);
+  }
+
+  /** What a session is called, by the one rule (`sessionDisplayName`). */
+  sessionName(sessionId: string): string {
+    return sessionDisplayName(sessionId, {
+      paneName: (id) => this.forks?.openPaneName(id),
+      loggedName: (id) => this.notes?.paneName(id),
+      agentName: (id) => this.roles.get(id)?.agent_name,
+      title: (id) => this.store.cached.find((s) => s.id === id)?.title,
+    });
+  }
+
   async refresh(): Promise<void> {
     // Single-flight, loss-safe (rev-9 review, mirrors IssuesView.refresh):
     // a call arriving while one is already in flight (the boot prefetch
@@ -365,6 +426,7 @@ export class SessionBrowser {
       this.roles = new Map(roles.map((r) => [r.session_id, r]));
       this.orchestrations = orchestrations;
       this.render();
+      this.forks?.refreshed?.();
     } finally {
       if (this.refreshGate.end()) void this.refresh();
     }
@@ -558,7 +620,22 @@ export class SessionBrowser {
     /** The rows this render built, keyed by session id — what the focus handoff
      *  resolves its target against. */
     const built = new Map<string, { item: HTMLElement; chip: HTMLElement | null }>();
-    for (const s of shown) {
+    // #3368: the list as a fork tree. `forkTreeRows` keeps display order and
+    // only nests a fork under a parent that is itself in the list; a typed
+    // filter expands everything, so a fork the human searched for is never
+    // behind a collapsed parent. Without a host it is the flat list.
+    const index = this.forks ? this.forkIndex() : null;
+    const byId = new Map(shown.map((s) => [s.id, s]));
+    const rows = index
+      ? forkTreeRows(
+          shown.map((s) => s.id),
+          index,
+          this.expandedForks,
+          q !== ""
+        )
+      : shown.map((s) => ({ id: s.id, depth: 0, forks: 0, expanded: false }));
+    for (const treeRow of rows) {
+      const s = byId.get(treeRow.id)!;
       // A ROW IS A WRAPPER, NOT A BUTTON (#2116 slice E2). The restore action
       // and the notes chip are two independent actions on one row, so they are
       // two sibling `<button>`s inside a plain div — never a button nested in a
@@ -572,6 +649,13 @@ export class SessionBrowser {
       // position: this list is re-sorted on every refresh, so an index would
       // land the human on whichever row happened to move into their slot.
       row.dataset.sessionId = s.id;
+      // Indentation is a CSS custom property on the row, never a width anyone
+      // measures: the list is inside the panel's fixed-width column, so a deep
+      // tree ellipsises its text rather than moving a column (constraint 1).
+      if (treeRow.depth > 0) {
+        row.classList.add("session-fork-child");
+        row.style.setProperty("--fork-depth", String(Math.min(treeRow.depth, 4)));
+      }
 
       const item = document.createElement("button");
       item.className = "session-item";
@@ -655,13 +739,23 @@ export class SessionBrowser {
       when.textContent = timeAgo(s.modified_ms);
       meta.append(cwd, when);
 
+      // "↳ fork of <parent> · forked 3h ago" (#3368), on every fork row —
+      // nested or not, since a fork at the top level (its parent filtered out,
+      // or hidden with the delegates) is exactly the one whose parent you
+      // cannot see beside it.
+      const link = index ? parentLink(index, s.id) : null;
+      const forkLine = link ? this.forkLineEl(s.id, link) : null;
+
       item.append(top);
+      if (forkLine) item.append(forkLine);
       if (paneNameEl) item.append(paneNameEl);
       if (goalEl) item.append(goalEl);
       if (identityEl) item.append(identityEl);
       item.append(meta);
       item.addEventListener("click", () => this.onRestore(s));
       row.appendChild(item);
+      if (treeRow.forks > 0) row.appendChild(this.forksToggleEl(s.id, treeRow.forks, treeRow.expanded, q !== ""));
+      if (link?.kind === "known") row.appendChild(this.returnToParentEl(link.parent));
       // The overlay is titled with what the human called the pane when there is
       // one worth showing, and with the transcript title otherwise — the same
       // fallback the line itself uses, so the row and the dialog cannot
@@ -673,6 +767,73 @@ export class SessionBrowser {
     }
 
     this.applyRowFocus(refocusAfterRender(held, [...built.keys()]), built);
+  }
+
+  /** The "fork of …" line inside a fork row's restore button (#3368). Text
+   *  only — it is inside a `<button>`, so it can carry no control of its own;
+   *  the return action is the row's sibling button (`returnToParentEl`). */
+  private forkLineEl(id: string, link: NonNullable<ParentLink>): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "session-fork-line";
+    const at = this.forks?.forkedAtMs(id);
+    const when = at ? ` · forked ${timeAgo(at)}` : "";
+    if (link.kind === "known") {
+      const name = this.sessionName(link.parent);
+      el.textContent = `↳ fork of ${name}${when}`;
+      el.title = `Forked from “${name}”${at ? ` on ${new Date(at).toLocaleString()}` : ""}`;
+    } else if (link.kind === "dangling") {
+      // The dangling-parent rule: the chain stops here and SAYS so — never a
+      // row that silently looks like the start of its own conversation.
+      el.textContent = `↳ fork of session ${link.parent.slice(0, 8)} — no longer on record${when}`;
+      el.title = `Forked from session ${link.parent}, which orrerix no longer has any record of (its transcript was removed, or its record aged out).`;
+      el.classList.add("dangling");
+    } else {
+      el.textContent = "↳ fork lineage loops — not followed";
+      el.title = `This session's recorded parents lead back to itself (at ${link.parent}), which a fork cannot do; orrerix refuses to follow it.`;
+      el.classList.add("dangling");
+    }
+    return el;
+  }
+
+  /** "Show forks" on a parent row (#3368) — a sibling button, never nested in
+   *  the restore button. While a filter is typed every fork is already shown
+   *  and the toggle says so rather than pretending to collapse. */
+  private forksToggleEl(id: string, count: number, expanded: boolean, forced: boolean): HTMLButtonElement {
+    const b = document.createElement("button");
+    b.className = "session-forks-toggle";
+    b.type = "button";
+    b.classList.toggle("open", expanded);
+    b.textContent = `${expanded ? "▾" : "▸"} ${count}`;
+    const noun = count === 1 ? "fork" : "forks";
+    const label = forced
+      ? `${count} ${noun} shown (a filter is typed)`
+      : expanded
+        ? `Hide ${count} ${noun}`
+        : `Show ${count} ${noun}`;
+    b.title = label;
+    b.setAttribute("aria-label", label);
+    b.setAttribute("aria-expanded", expanded ? "true" : "false");
+    b.disabled = forced;
+    b.addEventListener("click", () => {
+      if (this.expandedForks.has(id)) this.expandedForks.delete(id);
+      else this.expandedForks.add(id);
+      this.render();
+    });
+    return b;
+  }
+
+  /** "Return to parent" on a fork row (#3368): the host focuses the parent's
+   *  pane, or resumes it from this list when its pane is gone. */
+  private returnToParentEl(parent: string): HTMLButtonElement {
+    const b = document.createElement("button");
+    b.className = "session-return";
+    b.type = "button";
+    b.textContent = "↰";
+    const label = `Return to “${this.sessionName(parent)}” — its pane, or resume it if the pane is gone`;
+    b.title = label;
+    b.setAttribute("aria-label", label);
+    b.addEventListener("click", () => this.forks?.returnTo(parent));
+    return b;
   }
 
   /** Which row control the keyboard is standing on right now, or `null` when

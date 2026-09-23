@@ -126,6 +126,7 @@ import {
   type RestoreCardState,
 } from "./restorecard";
 import { SessionLogStore } from "./sessionlog";
+import { forkCrumbLabel, gatherForkPointers } from "./forklineage";
 import { openNotes } from "./notesdialog";
 import { noteTargetFor } from "./notesmodel";
 import { loadSessionLog, saveSessionLog } from "./pty";
@@ -150,11 +151,16 @@ function everyPane(): Pane[] {
 /** What this pane currently IS, for the sessions log. Read off `facts()` so
  *  this and the Agents tab cannot disagree about the harness, and never
  *  branched on a CLI name (#722/#841). */
-function sessionIdentityOf(pane: Pane): { cli: string; pane_name: string; cwd: string } {
+function sessionIdentityOf(pane: Pane): { cli: string; pane_name: string; cwd: string; fork_of: string | null } {
   const facts = pane.facts();
   return {
     cli: facts.harness ?? "",
     pane_name: facts.name,
+    // #3368: the durable copy of a Solo fork's parent pointer. `record` takes
+    // it only onto a record that has none, so this is written once — the first
+    // time the fork's session is known — and a closed fork keeps its place in
+    // the browser's tree after `tabs.json` has forgotten its pane.
+    fork_of: paneForkOf(pane),
     // `capture()` and not a second cwd accessor: it is already this repo's one
     // answer to "what is this pane's working directory, for something durable",
     // and the sessions log is something durable. It reads no geometry either,
@@ -163,6 +169,18 @@ function sessionIdentityOf(pane: Pane): { cli: string; pane_name: string; cwd: s
     // which reaches here, since both are filtered above on harness/session id.
     cwd: pane.capture()?.cwd ?? "",
   };
+}
+
+/** The parent session a pane was forked from, or null (#3318 F1/F2). A
+ *  dormant placeholder carries it on its record, a live pane on itself — the
+ *  same split `claimedSessionIds` reads. */
+function paneForkOf(p: Pane): string | null {
+  return (p.isDormant ? p.restoreRecord?.forkOf : p.forkedFrom) ?? null;
+}
+
+/** The session a pane is running (or, dormant, will resume), or null. */
+function paneSessionOf(p: Pane): string | null {
+  return (p.isDormant ? p.restoreRecord?.sessionId : p.sessionId) ?? null;
 }
 
 /** Record this pane's identity against its session, if it has one yet.
@@ -194,6 +212,66 @@ function refreshNoteCounts(): void {
 }
 
 sessionLog.onChange(refreshNoteCounts);
+// #3368: a fork's first record lands its durable pointer, and a rename moves a
+// parent's name — both change what a crumb says.
+sessionLog.onChange(() => refreshForkCrumbs());
+
+/** Set once `sessions` exists (see `refreshForkCrumbs`). */
+let forkCrumbsReady = false;
+
+/** Put the `↰ <parent name>` crumb on every forked pane's header, and take it
+ *  off every other (#3368). Derived afresh each time from the one fork index —
+ *  there is no crumb state to fall out of step.
+ *
+ *  A codex/opencode fork whose child id is not learned yet has no session to
+ *  look up, so its OWN `forkedFrom` is the pointer until it has one. */
+function refreshForkCrumbs(): void {
+  // `sessions` is a `const` built further down this module, and reading one
+  // in its temporal dead zone THROWS (`typeof` included) — so a flag, set
+  // once it exists, rather than a check on the binding.
+  if (!forkCrumbsReady) return;
+  const index = sessions.forkIndex();
+  for (const pane of everyPane()) {
+    const own = paneSessionOf(pane);
+    const parent = (own ? index.parentOf.get(own) : undefined) ?? paneForkOf(pane);
+    if (!parent) {
+      pane.setForkCrumb(null);
+      continue;
+    }
+    const name = sessions.sessionName(parent);
+    const known = index.known.has(parent);
+    pane.setForkCrumb({
+      label: forkCrumbLabel(name),
+      title: known
+        ? `Forked from “${name}” — click to go to it (resumes it if its pane is gone)`
+        : `Forked from session ${parent}, which orrerix no longer has a record of`,
+      go: known ? () => returnToSession(parent) : null,
+    });
+  }
+}
+
+/** "Return to parent" (#3368): reveal the pane running this session — live or
+ *  dormant — or, with none open, resume it from the session browser the way a
+ *  row click does. A session in no CLI store and no pane says so. */
+function returnToSession(sessionId: string): void {
+  for (const ws of tabs.tabs) {
+    for (const pane of ws.grid.allPanes()) {
+      if (paneSessionOf(pane) === sessionId) {
+        revealPane(ws, pane, true); // a click the human made
+        return;
+      }
+    }
+  }
+  const row = sessions.cached.find((s) => s.id === sessionId);
+  if (row) {
+    void restoreSession(row);
+    return;
+  }
+  showToast(
+    `“${sessions.sessionName(sessionId)}” has no open pane and is not in any CLI's session store, so there is nothing to return to.`,
+    "error"
+  );
+}
 
 // Surface unexpected errors as a visible banner instead of a silently
 // broken UI — a user-facing "crash" should always come with a message.
@@ -275,6 +353,7 @@ function onGridChanged(): void {
   // fields and writes NOTHING when they are unchanged, so re-sweeping twenty
   // restored panes on every grid gesture costs twenty map lookups and no IPC.
   recordEveryPaneSession();
+  refreshForkCrumbs();
 }
 
 const tabs = new TabManager<Workspace>((id) => {
@@ -2998,8 +3077,29 @@ const sessions = new SessionBrowser(
       return;
     }
     revealPane(found.ws, found.pane, true); // a button the human pressed
+  },
+  // #3368: the fork tree. The pointers only this module can see — each open or
+  // dormant pane's `forkOf` and the sessions log's durable `fork_of` — the
+  // sessions they know of, and the return gesture.
+  {
+    pointers: () =>
+      gatherForkPointers({
+        panes: everyPane().map((p) => ({ sessionId: paneSessionOf(p), forkOf: paneForkOf(p) })),
+        log: sessionLog.forkPointers(),
+      }),
+    known: () => [
+      ...everyPane()
+        .map(paneSessionOf)
+        .filter((id): id is string => id !== null),
+      ...sessionLog.all().keys(),
+    ],
+    openPaneName: (id) => everyPane().find((p) => paneSessionOf(p) === id)?.name,
+    forkedAtMs: (id) => sessionLog.createdMs(id),
+    returnTo: (id) => returnToSession(id),
+    refreshed: () => refreshForkCrumbs(),
   }
 );
+forkCrumbsReady = true;
 
 // #2122 slice B: the Agents view, and what each tab does when it becomes the
 // visible one. `onShow`/`onHide` fire exactly on the (panel open AND this tab

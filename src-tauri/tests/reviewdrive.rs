@@ -15230,6 +15230,7 @@ fn a_refused_auto_start_delivers_the_report_as_before_and_names_its_reason() {
         NotAPr,
         HasVerdicts,
         AlreadyDriven,
+        PrNotOpen,
         PolicyOff,
     }
     let cases = [
@@ -15238,6 +15239,7 @@ fn a_refused_auto_start_delivers_the_report_as_before_and_names_its_reason() {
         (Case::NotAPr, Some("not-a-pr")),
         (Case::HasVerdicts, Some("has-verdicts")),
         (Case::AlreadyDriven, Some("already-driven")),
+        (Case::PrNotOpen, Some("pr-not-open")),
         (Case::PolicyOff, None),
     ];
     let mut verified = 0;
@@ -15259,6 +15261,7 @@ fn a_refused_auto_start_delivers_the_report_as_before_and_names_its_reason() {
         match case {
             Case::Scratch => gh.set_identity(AUTHOR_BRANCH, "[scratch] red evidence for #3367"),
             Case::NotAPr => pr_ref = "the PR",
+            Case::PrNotOpen => gh.set_facts("MERGED", HEAD_A),
             Case::HasVerdicts => {
                 reg.set_pr_head_override(Some(HEAD_A.to_string()));
                 let rev = reg.spawn_agent(&group, Role::Reviewer, "rev-std", "", false, None).unwrap();
@@ -15297,4 +15300,43 @@ fn a_refused_auto_start_delivers_the_report_as_before_and_names_its_reason() {
         verified += 1;
     }
     assert_eq!(verified, cases.len(), "every case ran");
+}
+
+/// **The report an auto-start persists is bounded** (rev-std premortem on
+/// #3371). The legacy `summary` shape of `report` is scrubbed but uncapped, and
+/// the text is written onto the drive entry — rewritten whole on every drive
+/// write for the drive's life — and into the `rd-auto-started` row. A 40,000-
+/// character summary must reach both bounded and on one line, and the drive
+/// must still start: the cap trims the record, it never refuses the report.
+#[test]
+fn an_auto_started_report_is_persisted_capped_and_on_one_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::with(&workflow_with("auto_drive_on_done: true"));
+    let gh = std::sync::Arc::new(FakeGh::green(HEAD_A));
+    let (group, worker, _orch) = auto_start_group(&reg, &repo, &gh, AUTHOR_BRANCH);
+    let huge = "line one of a long report\n".repeat(1_600);
+    assert!(huge.len() >= 40_000, "the fixture really is large: {}", huge.len());
+    dispatch(
+        &reg,
+        &Caller { agent_id: worker.clone(), group: group.clone(), role: Role::Worker, role_hint: None },
+        "tools/call",
+        &json!({ "name": "report", "arguments": {
+            "status": "done", "summary": huge, "ref": "#1758" } }),
+    )
+    .expect("a legacy-shape report is accepted");
+    assert_eq!(status_state(&reg, &group), "ci-wait", "the cap trims the record, never the start");
+    let stored = drives_json(&reg, &group)["entries"][0]["auto_report"]
+        .as_str()
+        .expect("the report is persisted on the entry")
+        .to_string();
+    let row = audit_details(&reg, &group, "rd-auto-started")[0]["report"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    for (surface, text) in [("entry", &stored), ("audit row", &row)] {
+        assert!(text.contains("line one of a long report"), "{surface} carries the report: {text:.80}");
+        assert!(text.chars().count() <= 2_100, "{surface} is capped: {} chars", text.chars().count());
+        assert!(!text.contains('\n'), "{surface} is one paragraph");
+    }
 }

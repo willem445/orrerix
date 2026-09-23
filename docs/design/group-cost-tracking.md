@@ -224,6 +224,11 @@ is cumulative.
   `the_disclosed_residual_holds_a_priced_statusline_row_still_replaces_tokens`,
   so the disclosure cannot go stale in either direction with nothing red to say
   so.
+- **Each row also carries its `activity`** (#3407): when its counters last moved
+  and what its last wake cost, folded by `cacheage::fold_activity` inside the same
+  merge, off the reading the tick already made. It is what the pane's cache-age
+  chip reads. A first sighting is not folded, so a row arriving with history never
+  charges that history to one wake. See [cache-age.md](cache-age.md).
 - **Crash-safe persistence.** Writes go to `usage.json.tmp` and are atomically
   renamed over `usage.json`, so a crash mid-write never leaves a half-written
   file. On load, a parse failure (corruption, manual edit) preserves the file

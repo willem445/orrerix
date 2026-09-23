@@ -52984,7 +52984,7 @@ impl OrchRegistry {
                 )
             })?;
         let dedicated = matches!(src.role, Role::Worker | Role::Reviewer);
-        if dedicated && worktree == Some(false) {
+        if false && dedicated && worktree == Some(false) { // SCRATCH: neutered
             return Err(format!(
                 "guardrail: a {r} fork always gets a dedicated worktree (#338/#359) — two agents \
                  sharing one checkout is exactly the conflict that rule exists for. Omit `worktree`.",

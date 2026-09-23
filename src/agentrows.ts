@@ -17,6 +17,7 @@ import { markProgram, namesAnAgent, type AgentMarkInput } from "./agenticons.ts"
 import { normalizeAgentProgram } from "./panerestore.ts";
 import { attentionPresentation, DECISION_REASONS, REPORT_REASONS } from "./attention.ts";
 import { ACTIVITY_FLOOR_BYTES, type ActivitySnapshot } from "./paneactivity.ts";
+import type { CacheAgeReading } from "./cacheage.ts";
 
 /** Which tab (workspace) a pane lives in, as the Agents tab groups by (#2371).
  *
@@ -130,6 +131,12 @@ export interface PaneFacts {
   readonly watched: boolean;
   /** The activity reading at the moment `facts()` was called. */
   readonly activity: ActivitySnapshot;
+  /** The pane's prompt-cache reading (#3407) as the backend last delivered it,
+   *  or null where the strip does not cover the pane. Optional so a literal
+   *  written before the field reads as "not covered". A second axis beside
+   *  `state`, never part of the ladder: how long ago a pane last spoke says
+   *  nothing about whether it is working now. */
+  readonly cache?: CacheAgeReading | null;
 }
 
 /** What a pane is doing, as one word. The ladder below assigns exactly one. */
@@ -356,6 +363,8 @@ export interface AgentRow {
   /** The human's watch (#3319), straight off `PaneFacts.watched`. A second
    *  axis beside `state`, never part of it. */
   readonly watched: boolean;
+  /** The prompt-cache reading (#3407), straight off `PaneFacts.cache`. */
+  readonly cache: CacheAgeReading | null;
 }
 
 /** Project one pane's facts into a row. `notes` is supplied by the caller
@@ -375,6 +384,7 @@ export function toAgentRow(facts: PaneFacts, notes: number | null = null): Agent
     // into the ladder would make "watched" compete with "blocked" for one slot
     // that can only hold one answer.
     watched: facts.watched,
+    cache: facts.cache ?? null,
     notes,
     tab: facts.tab,
     mark: facts.mark,

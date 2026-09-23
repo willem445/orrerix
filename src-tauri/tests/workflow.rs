@@ -1024,6 +1024,7 @@ fn a_manager_block_never_carries_a_persona_even_from_a_hand_edited_group_json() 
         context: String::new(),
         remote: None,
         driver: None,
+        cache_ttl_minutes: None,
     };
     assert!(!workflow::persona_allowed(&manager), "a manager block may never carry a persona");
     // The control, on an otherwise identical block: the predicate is about the
@@ -2949,6 +2950,7 @@ fn the_four_class_names_are_reserved_ids_for_their_own_class() {
                 context: String::new(),
                 remote: None,
                 driver: None,
+                cache_ttl_minutes: None,
             },
             workflow::Block {
                 id: "worker".into(),
@@ -2964,6 +2966,7 @@ fn the_four_class_names_are_reserved_ids_for_their_own_class() {
                 context: String::new(),
                 remote: None,
                 driver: None,
+                cache_ttl_minutes: None,
             },
             workflow::Block {
                 id: "worker".into(), // duplicate
@@ -2979,6 +2982,7 @@ fn the_four_class_names_are_reserved_ids_for_their_own_class() {
                 context: String::new(),
                 remote: None,
                 driver: None,
+                cache_ttl_minutes: None,
             },
         ],
         ..Guardrails::default()
@@ -5169,6 +5173,7 @@ fn a_repo_file_can_never_author_the_orchestrators_persona() {
                     context: String::new(),
                     remote: None,
                     driver: None,
+                    cache_ttl_minutes: None,
                 }],
                 ..rails()
             },
@@ -7248,6 +7253,7 @@ fn block(id: &str, kind: Role) -> workflow::Block {
         context: String::new(),
         remote: None,
         driver: None,
+        cache_ttl_minutes: None,
     }
 }
 
@@ -11573,4 +11579,40 @@ fn a_structured_spawn_that_fails_after_the_insert_leaves_no_ghost_row() {
         reg.resolve_token(&a.token).is_none(),
         "the abandoned row is still reachable by its token"
     );
+}
+
+/// #3407: one worker block with an optional `cache_ttl_minutes:` value.
+fn ttl_block(ttl: Option<&str>) -> String {
+    let mut text = String::from("version: 1\nblocks:\n  - id: quokka-ttl\n    kind: worker\n    cli: claude\n");
+    if let Some(v) = ttl {
+        text.push_str(&format!("    cache_ttl_minutes: {v}\n"));
+    }
+    text
+}
+
+#[test]
+fn cache_ttl_minutes_parses_across_its_range_and_absent_stays_absent() {
+    for (raw, want) in [("60", Some(60)), ("0", Some(0)), ("1440", Some(1440))] {
+        let parsed = workflow::parse_workflow(&ttl_block(Some(raw)))
+            .unwrap_or_else(|e| panic!("cache_ttl_minutes: {raw} must parse: {e:?}"));
+        let b = parsed.blocks.iter().find(|b| b.id == "quokka-ttl").unwrap();
+        assert_eq!(b.cache_ttl_minutes, want, "{raw}");
+    }
+    // The negative control: no key is the CLI default, never a pinned number.
+    let parsed = workflow::parse_workflow(&ttl_block(None)).unwrap();
+    let b = parsed.blocks.iter().find(|b| b.id == "quokka-ttl").unwrap();
+    assert_eq!(b.cache_ttl_minutes, None);
+}
+
+#[test]
+fn cache_ttl_minutes_above_a_day_is_refused_naming_the_block() {
+    let errs = workflow::parse_workflow(&ttl_block(Some("1441")))
+        .err()
+        .expect("a TTL above a day is a typo and must be refused, not clamped");
+    assert!(
+        errs.iter().any(|e| e.contains("quokka-ttl") && e.contains("cache_ttl_minutes")),
+        "the refusal names the block and the key: {errs:?}"
+    );
+    // A value of the wrong TYPE is serde's refusal — the key is a number.
+    assert!(workflow::parse_workflow(&ttl_block(Some("soon"))).is_err());
 }

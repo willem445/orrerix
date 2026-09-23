@@ -636,7 +636,7 @@ impl OrchRegistry {
             )
             // #3367 item 1, through the clamping builder like every other
             // bound this maps.
-            .with_fix_nonblocking_rounds(d.fix_nonblocking_rounds),
+            .with_fix_nonblocking_rounds(d.fix_nonblocking_rounds.max(3)), // [scratch] R7: on without the key
         )
     }
 

@@ -53152,7 +53152,7 @@ impl OrchRegistry {
             .filter(|a| &a.group == group_id && a.role == Role::Lead)
             .ok_or_else(|| format!("unknown agent: {lead_id}"))?;
         let detail: String = detail.chars().take(500).collect();
-        if opened {
+        if opened || true { // SCRATCH: neutered
             self.audit(group_id, brand::AUDIT_ACTOR, "agent-fork", json!({
                 "agent": null,
                 "parent_agent": lead.id,

@@ -1080,6 +1080,13 @@ pub const DRIVER_MAX_CI_ATTEMPTS_MIN: u32 = 1;
 pub const DRIVER_MAX_CI_ATTEMPTS_MAX: u32 = 3;
 pub const DRIVER_MAX_REBASE_ATTEMPTS_MIN: u32 = 0;
 pub const DRIVER_MAX_REBASE_ATTEMPTS_MAX: u32 = 1;
+/// `driver.fix_nonblocking_rounds` (#3367 item 1): `0..=3`, default `0`
+/// (off). Refused outside the range like the three counters above, and for
+/// the same reason — it is a count of review rounds the DRIVER spends, and
+/// every one of them is also spent from `max_review_rounds`, so its ceiling
+/// is that counter's.
+pub const DRIVER_FIX_NONBLOCKING_ROUNDS_MIN: u32 = 0;
+pub const DRIVER_FIX_NONBLOCKING_ROUNDS_MAX: u32 = 3;
 
 /// How long a drive may sit before it is `held(drive-stalled)` (§2.1) — the
 /// **backstop**, since #2110, beneath `reviewdrive`'s per-state bounds.
@@ -1136,13 +1143,17 @@ pub fn clamp_drive_timeout_minutes(raw: Option<u32>) -> u32 {
 /// author can get wrong.
 ///
 /// **Policy, not mechanism** (CLAUDE.md constraint 8). Nothing here names a PR,
-/// a branch, a command, or a lane: no drive exists until an orchestrator makes
-/// its own role-gated `drive_review` call naming one PR (§3.2's two-key rule —
-/// this block can only *enable*; it can never start, target or widen a drive).
+/// a branch, a command, or a lane: a drive exists only once an orchestrator
+/// makes its own role-gated `drive_review` call naming one PR (§3.2's two-key
+/// rule — this block can *enable*; it can never target or widen a drive).
 /// Every field is a bool or a number from a closed range, so the field-by-field
 /// capability-closure test passes; but the two-key structure is the real
-/// safety, not the data types — a future `driver.auto: true` would be a bool
-/// and still defeat §3.2's per-PR consent.
+/// safety, not the data types — a `driver.auto: true` is a bool and could
+/// still defeat §3.2's per-PR consent. **`auto_drive_on_done` (#3367) is
+/// exactly that key, and it was added with §3.2 rewritten rather than because
+/// it is a bool**: it starts only the drive the orchestrator's own spawn
+/// already chose — a worker on its recorded branch, on that branch's PR — and
+/// the note argues why that keeps the second key in the orchestrator's hand.
 ///
 /// **An absent block means the feature is off and behavior is byte-for-byte
 /// unchanged**, the posture `gates:` and `merge_queue:` both take.
@@ -1211,6 +1222,18 @@ pub struct DriverPolicy {
     /// advance). Same clamp family; the default is the family's ceiling
     /// because a drive's whole budget is what this bounds.
     pub drive_timeout_minutes: u32,
+    /// Non-blocking rounds the driver may run on its own at a satisfied gate
+    /// (#3367 item 1) — see `reviewdrive::DriveLimits::fix_nonblocking_rounds`.
+    /// Default `0`, which is the pre-#3367 behaviour: a gate satisfied with
+    /// non-blocking findings open wakes the orchestrator at once.
+    pub fix_nonblocking_rounds: u32,
+    /// A worker's `report(done, ref: <PR>)` starts a review drive on that PR
+    /// (#3367 item 2). Default **false**, and a SECOND key under `enabled` for
+    /// [`Self::plan_enabled`]'s reason: turning the driver on consented to a
+    /// drive an orchestrator starts by naming a PR, not to one a delegate's
+    /// report starts. `docs/design/review-driver.md` §3.2 carries the argument
+    /// for why this key, and only this key, may start a drive from a file.
+    pub auto_drive_on_done: bool,
 }
 
 impl Default for DriverPolicy {
@@ -1228,6 +1251,8 @@ impl Default for DriverPolicy {
             plan_enabled: false,
             plan_review_minutes: crate::plandrive::PLAN_REVIEW_MINUTES_DEFAULT,
             planner_timeout_minutes: crate::plandrive::PLANNER_TIMEOUT_MINUTES_DEFAULT,
+            fix_nonblocking_rounds: DRIVER_FIX_NONBLOCKING_ROUNDS_MIN,
+            auto_drive_on_done: false,
         }
     }
 }
@@ -1982,11 +2007,12 @@ struct RawWorkflow {
     ///
     /// Like `merge_queue:`, this block can never grant a capability on its
     /// own: every field is a bool or a number from a closed range, and the
-    /// two-key rule (§3.2) is what actually holds the line - no drive exists
-    /// until an orchestrator's own role-gated `drive_review` call names one
-    /// PR. `deny_unknown_fields` on [`RawDriver`] makes any key that could
-    /// start, target or widen a drive a hard parse error rather than an
-    /// ignored line.
+    /// two-key rule (§3.2) is what actually holds the line - a drive exists
+    /// only once an orchestrator's own role-gated `drive_review` call names
+    /// one PR, or (#3367 `auto_drive_on_done`) a worker it spawned reports
+    /// done on its own branch's PR. `deny_unknown_fields` on [`RawDriver`]
+    /// makes any OTHER key that could start, target or widen a drive a hard
+    /// parse error rather than an ignored line.
     #[serde(default)]
     driver: Option<RawDriver>,
     /// Delivery-triage policy (#3304 S1). `None` when the file declares no
@@ -2134,6 +2160,13 @@ struct RawDriver {
     plan_review_minutes: Option<u32>,
     #[serde(default)]
     planner_timeout_minutes: Option<u32>,
+    /// #3367's two keys. The count is `Option` for the counters' reason — an
+    /// out-of-range value is refused, never replaced — and the switch is a bare
+    /// bool like the other two.
+    #[serde(default)]
+    fix_nonblocking_rounds: Option<u32>,
+    #[serde(default)]
+    auto_drive_on_done: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -2356,6 +2389,8 @@ pub fn workflow_schema_keys() -> BTreeMap<String, Vec<String>> {
         plan_enabled: true,
         plan_review_minutes: Some(15),
         planner_timeout_minutes: Some(60),
+        fix_nonblocking_rounds: Some(1),
+        auto_drive_on_done: true,
     };
     let resource = RawResource { slots: Some(1), max_hold_minutes: Some(30) };
     let triage = RawTriage {
@@ -2552,6 +2587,8 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
     fact("driver.plan_enabled", "default", json!(dv.plan_enabled));
     fact("driver.plan_review_minutes", "default", json!(dv.plan_review_minutes));
     fact("driver.planner_timeout_minutes", "default", json!(dv.planner_timeout_minutes));
+    fact("driver.fix_nonblocking_rounds", "default", json!(dv.fix_nonblocking_rounds));
+    fact("driver.auto_drive_on_done", "default", json!(dv.auto_drive_on_done));
     let tr = TriagePolicy::default();
     fact("triage.enabled", "default", json!(tr.enabled));
     fact("triage.provider", "default", json!(tr.provider));
@@ -2593,6 +2630,8 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
     fact("driver.drive_timeout_minutes", "min", json!(DRIVER_DRIVE_TIMEOUT_MIN));
     fact("driver.drive_timeout_minutes", "max", json!(DRIVER_DRIVE_TIMEOUT_MAX));
     fact("driver.plan_review_minutes", "min", json!(crate::plandrive::PLAN_REVIEW_MINUTES_MIN));
+    fact("driver.fix_nonblocking_rounds", "min", json!(DRIVER_FIX_NONBLOCKING_ROUNDS_MIN));
+    fact("driver.fix_nonblocking_rounds", "max", json!(DRIVER_FIX_NONBLOCKING_ROUNDS_MAX));
     fact("driver.plan_review_minutes", "max", json!(crate::plandrive::PLAN_REVIEW_MINUTES_MAX));
     fact(
         "driver.planner_timeout_minutes",
@@ -3895,6 +3934,16 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 "a planner reading a large issue legitimately spends a quarter of an hour before its first tool call, and three hours is the point past which it is not coming back at all",
                 &mut errs,
             ),
+            fix_nonblocking_rounds: driver_counter(
+                "driver.fix_nonblocking_rounds",
+                rd.fix_nonblocking_rounds,
+                (DRIVER_FIX_NONBLOCKING_ROUNDS_MIN, DRIVER_FIX_NONBLOCKING_ROUNDS_MAX),
+                DRIVER_FIX_NONBLOCKING_ROUNDS_MIN,
+                "every non-blocking round is also a review round, so it can never exceed the \
+                 three INVARIANT 9 grants",
+                &mut errs,
+            ),
+            auto_drive_on_done: rd.auto_drive_on_done,
         },
     };
 
@@ -6152,6 +6201,7 @@ driver:
   max_rebase_attempts: 7
   plan_review_minutes: 500
   planner_timeout_minutes: 2
+  fix_nonblocking_rounds: 7
 ";
         let errs = parse_workflow(doc).expect_err("this document must be refused");
 
@@ -6164,7 +6214,13 @@ driver:
         );
         // …and the two this test exists for are in it by NAME, so a fixture edit
         // that stopped reaching them fails here rather than passing vacuously.
-        for key in ["driver.plan_review_minutes", "driver.planner_timeout_minutes"] {
+        // #3367 B1: `fix_nonblocking_rounds` shipped a collapsed continuation
+        // that this loop would have caught had the fixture reached the key.
+        for key in [
+            "driver.plan_review_minutes",
+            "driver.planner_timeout_minutes",
+            "driver.fix_nonblocking_rounds",
+        ] {
             assert!(
                 errs.iter().any(|e| e.starts_with(key)),
                 "the fixture no longer reaches {key}: {errs:?}"
@@ -6908,13 +6964,16 @@ driver:
                 // never a human's, and never a merge.
                 board: _,
                 // #1778 §5.3. Confirmed against the rule above before being
-                // named here: `driver:` is seven closed-range numbers and one
-                // bool (`RawDriver`, `deny_unknown_fields`). It names no PR,
-                // no branch, no program and no agent — the two-key rule (§3.2)
-                // keeps enabling separate from targeting, and no drive exists
-                // until an orchestrator's own role-gated `drive_review` call
-                // names one PR. What it CAN do is tighten the loop the
-                // orchestrator template promises, or bound the driver's waits.
+                // named here: `driver:` is closed-range numbers and bools
+                // (`RawDriver`, `deny_unknown_fields`). It names no PR, no
+                // branch, no program and no agent — the two-key rule (§3.2)
+                // keeps enabling separate from targeting. A drive exists only
+                // once an orchestrator's own role-gated `drive_review` call
+                // names one PR, or — where `auto_drive_on_done` is on (#3367) —
+                // once a worker the orchestrator spawned reports done on the
+                // PR of its own recorded branch; the file still names no
+                // target. What it CAN do is tighten the loop the orchestrator
+                // template promises, or bound the driver's waits.
                 driver: _,
                 // #3304 S1. Confirmed against the rule above before being
                 // named here: `triage:` is one bool, one closed-range number
@@ -6986,6 +7045,18 @@ driver:
                 plan_enabled: _,
                 plan_review_minutes: _,
                 planner_timeout_minutes: _,
+                // #3367. `fix_nonblocking_rounds` is one more closed-range
+                // count, and every round it buys is also spent from
+                // `max_review_rounds`, so it can only shorten the loop.
+                // `auto_drive_on_done` is the one key here that STARTS a drive,
+                // and it is named separately so that fact is visible: it names
+                // no PR, no branch and no agent, and what it starts is the
+                // hand-off `plan_enabled` already performs for a slice worker
+                // (`pd_hand_off`), confined to a worker's OWN PR by the refusals
+                // in `rd_auto_start_with`. `docs/design/review-driver.md` §3.2
+                // carries the argument.
+                fix_nonblocking_rounds: _,
+                auto_drive_on_done: _,
             } = v;
         }
         // #3304 S1: `triage:` is policy for a gate that SUPPRESSES a delivery

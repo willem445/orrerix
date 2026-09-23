@@ -2780,7 +2780,8 @@ export class WorkflowView {
       | "fix_timeout_minutes"
       | "drive_timeout_minutes"
       | "plan_review_minutes"
-      | "planner_timeout_minutes";
+      | "planner_timeout_minutes"
+      | "fix_nonblocking_rounds";
     const bounded = (label: string, field: DriverCounter, help: string): void => {
       box.append(
         this.field(
@@ -2832,6 +2833,40 @@ export class WorkflowView {
       "drive_timeout_minutes",
       "Backstop on the drive's whole age, from the entry's start - no idle clock resets it. " +
         "The default is this range's ceiling."
+    );
+    // #3367. The driver's own non-blocking rounds, and the switch that lets a
+    // worker's report(done) start a drive. Both under the same enable gate.
+    bounded(
+      "Non-blocking rounds",
+      "fix_nonblocking_rounds",
+      "How many times the driver may hand a satisfied gate back to the worker on its own, " +
+        "when every required lane passed with only non-blocking findings open. 0 - the " +
+        "default - wakes you at once, as before. Each round is also a review round, so it " +
+        "never takes a drive past the review-round bound above. A lane whose summary does " +
+        "not state its blocking count wakes you instead."
+    );
+    box.append(
+      this.sectionToggle(
+        "A worker's report(done) on its own PR starts a drive",
+        dv.auto_drive_on_done === true,
+        (on) =>
+          this.mutate((next) => {
+            const d = next.driver!;
+            // OFF deletes the key, for `plan_enabled`'s reason below.
+            if (on) d.auto_drive_on_done = true;
+            else delete d.auto_drive_on_done;
+          })
+      )
+    );
+    box.append(
+      el(
+        "p",
+        "wf-note",
+        "The report then reaches you inside the drive's first notice instead of on its own. " +
+          "It is refused - and delivered as before - for a [scratch] PR, a ref that is not a " +
+          "PR, a worker whose branch is not the PR's head, a PR already driven or parked, and a PR that " +
+          "already carries a verdict."
+      )
     );
     // The PLAN driver (#3040), under the same block and the same enable gate.
     //

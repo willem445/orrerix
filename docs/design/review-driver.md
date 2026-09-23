@@ -209,7 +209,10 @@ fails at runtime, on the degradation path, where nothing is watching.
                                    checks red (`ci-wait` only — no other state
                                    reads the matrix), or CONFLICTING, which is
                                    read from EVERY such state since #2311
-                                   (§2.1, §8)
+                                   (§2.1, §8) — and, from `gate-check`, a
+                                   satisfied gate the driver hands back for
+                                   its non-blocking findings (#3367, §2.5);
+                                   the counter each spends tells them apart
   4  review-wait -> gate-check     the last required lane passed at (head, digest)
   5  review-wait -> fix-wait       a lane recorded fail (§2.1) — the same pair
                                    arc 3 uses on a conflict; the counter each
@@ -711,11 +714,84 @@ than parts of one.
 The argument is stated as a property of the lock rather than as a count of its
 callers, because the count moves. The sites today are the tick (twice), the
 restart reconcile, the three tools of §5.1, and the two interception helpers
-§7 needs — eight acquisitions across seven functions. The interception pair is
+§7 needs — eight acquisitions across seven functions (`drive_review`'s is in
+`drive_review_seeded` since #3367, which the tool, a plan drive's hand-off and
+the auto-start below all reach). The interception pair is
 the one that has to be argued rather than observed: those run on a delegate's
 own tool call, which the runtime schedules as a later turn and never as a frame
 the delivery itself pushes, and both release the lock before auditing. A new
 caller owes that argument again rather than inheriting it.
+
+### 2.5 The driver's own non-blocking round (#3367 item 1)
+
+**What it removes.** A gate satisfied with non-blocking findings open used to
+cost the orchestrator the same three wakes every time: read `GATE SATISFIED`,
+send the worker "review: request-changes, findings on PR #N, address all, report
+when green", read the worker's report, re-drive. That hand-back is a template —
+INVARIANT 3's disposition of *these* findings is "fix them" by the repo's own
+standing rule — so `driver.fix_nonblocking_rounds: N` (`0..=3`, default `0`, which
+is the old behaviour) lets the driver send it.
+
+**The arc is arc 3's pair**, `gate-check -> fix-wait`, spending
+`Counter::NonblockingRound`. The arc table is unchanged: the pair was already
+legal for a conflict found at `gate-check`, and the counter an arc spends is what
+tells two arcs over one pair apart, as arc 5 already argues. From `fix-wait` the
+drive runs exactly as after any hand-back — arc 7 or 8, the lanes re-briefed at
+the new revision (a push re-reviews the delta, a body answer re-verifies the
+body), and `gate-check` again.
+
+**Four preconditions, all positive** (`reviewdrive::nonblocking_round_applies`);
+anything short of a positive yes is arc 9 and the ordinary `GATE SATISFIED`:
+
+1. **The repo asked, and has rounds left**: `nit_rounds < fix_nonblocking_rounds`.
+2. **INVARIANT 9's bound has a round left.** The round spends `review_rounds` as
+   well as `nit_rounds` — one arm of `advance`, so the arc and both costs cannot
+   come apart — because a hand-back the driver makes on its own is still a review
+   round, and "yours count too" is a property of the budget, not of who spends it.
+   So `N` can only ever SHORTEN what `max_review_rounds` allows; the three-round
+   bound is shared and never exceeded.
+3. **The revision moved since the last such round.** A gate satisfied again at
+   the head and body digest the last round was handed back at is a worker that
+   changed nothing — it answered the findings instead of acting on them — and a
+   second round would hand back the identical list. An unreadable body at an
+   unchanged head counts as unchanged: "we could not check" never buys a round.
+4. **Every required lane PASSED at this head and STATED `0 blocking`, and some
+   lane stated a non-blocking count above zero** (`residual_is_nonblocking_only`).
+
+**How the driver knows a finding is non-blocking — and the honest limit of it.**
+It reads a COUNT the reviewer stated in its verdict summary, never the findings
+themselves: `stated_findings` accepts `<count> blocking`, `blocking: <count>` and
+their `non-blocking` forms (digits, or the small English numbers reviewers write),
+on whole tokens, and a class stated twice with two different counts is unknown.
+`review_verdict`'s `summary` parameter now asks every reviewer for exactly those
+two counts. **Unknown is never zero**: a lane that states no blocking count wakes
+the orchestrator, which is the wake it would have had anyway — the parser can
+cost a saving, never a round nobody dispositioned. The residual is disclosed
+rather than closed: a reviewer that writes `0 blocking` over a finding it would
+have called blocking has miscounted its own review, and the driver acts on the
+count — the same trust the gate already places in that reviewer's `pass`, which
+a blocking finding forbids (`reviewer.md`: an approval with findings open is only
+ever an approval with non-blocking ones).
+
+**What still wakes the orchestrator.** An `escalate` (the ordinary hold); a
+stated blocking count, even on a pass; a lane that stated none; an unchanged
+revision; `N` spent; the shared bound spent; and a satisfied gate with nothing
+open. A `fail` recorded after a non-blocking round is not a special case: it takes
+arc 5 like any other, under the same shared bound, and the drive parks
+`review-limit` when that is spent. **The final `GATE SATISFIED` line carries the
+rounds used and the residual** — `Non-blocking rounds run by the driver: k/N;
+residual: rev-std 0 blocking / 1 non-blocking` — so INVARIANT 3's disposition of
+what is left stays the orchestrator's and is made on the stated counts rather
+than on a count of lanes. The clause is empty where `N` is `0`, so the stock line
+is byte-for-byte what it was.
+
+**The worker's brief says what happened.** `driver-fix.md`'s `{{WHAT}}` for this
+round reads "Review: request-changes. Every required lane PASSED, with
+non-blocking findings open (…)", never "recorded FAIL", and the attempt figures
+are the shared bound's. The choice is read off `DriveEntry::nit_handback`, which
+`advance` assigns on every arc into `fix-wait`, so a restart's re-sent brief
+(`Rehandback`, §2.4) says the same thing and a later red-CI hand-back does not
+inherit it.
 
 ## 3. Ownership, authority, and consent
 
@@ -1400,15 +1476,18 @@ bypass with better telemetry.
 ### 3.2 Consent is per PR, and it is the second of two keys
 
 `drive_review(pr, worker_session, …)` is orchestrator-role-gated and **never
-automatic**. In particular it does not fire on a worker's `report(done)`, and
-that is a decision rather than an omission: INVARIANT 8 makes *what starts* the
+automatic by default**. In particular it does not fire on a worker's
+`report(done)` — outside the one repo opt-in §3.3 argues — and that is a
+decision rather than an omission: INVARIANT 8 makes *what starts* the
 orchestrator's call, and the PRs where a drive is wrong are ordinary — a scratch
 or red-evidence PR, a release bump, a PR the human said they would read
 themselves. An automatic drive would spawn reviewers into all of them.
 
 Together with §5.3 this is a **two-key** structure, and §5.3 depends on it: the
 repo file can only *enable* the feature, and no drive exists until an
-orchestrator makes a role-gated call naming one PR.
+orchestrator makes a role-gated call naming one PR — or, under the one opt-in
+§3.3 argues, until a worker that orchestrator spawned reports `done` on the PR
+of its own recorded branch.
 
 **The orchestrator supplies the worker session; the driver never derives it.**
 The board carries a `session` field per task, and reading it would be the
@@ -1441,6 +1520,72 @@ reason.
 Role gating uses the `review_verdict` / `queue_merge` **double gate**: a listing
 filter *and* a real check in the dispatch, because a tool omitted from a listing
 is still callable.
+
+### 3.3 The one opt-in that starts a drive from a report (#3367 item 2)
+
+`driver.auto_drive_on_done` (default **false**) makes a worker's
+`report(done, ref: <PR>)` start the drive the orchestrator would otherwise start
+by hand, on that worker's own session, and folds the report into the drive's first
+notice (`DriveEntry::auto_report`, taken by the first notice built) instead of
+waking the orchestrator on its own. §3.2's "never automatic" stood on two
+arguments, and this key is admitted only because it answers both.
+
+**INVARIANT 8 — what starts is the orchestrator's call.** It still is. The key
+starts a drive only on the PR whose head branch is the branch **orrerix recorded
+when the orchestrator spawned that worker** (`AgentEntry::branch`); the `ref` a
+delegate typed only NAMES a PR, and one on any other branch is `not-author`. So the
+per-PR choice is the one the orchestrator already made when it briefed that worker
+onto that branch, and what the key removes is the second, template turn —
+`drive_review(pr, session)` for the PR the orchestrator's own worker just opened.
+It is also not new machinery: the plan driver's `pd_hand_off` (#3040) has started
+review drives from a slice worker's `done` since P3; this is that hand-off for a
+worker the orchestrator spawned by hand, with stricter refusals. And it grants no
+agent anything: a drive does only what the orchestrator does, on its authority,
+and `deny_unknown_fields` still makes every OTHER key that could start, target or
+widen a drive a parse error. Per §5.3's own rule, the key was added with this
+section and that one rewritten, not because it is a bool.
+
+**"The PRs where a drive is wrong are ordinary."** Each such PR is a refusal, and
+a refused report is delivered exactly as before:
+
+- `scratch` — a title carrying `[scratch]`, the marker this repo's red-evidence
+  and throwaway PRs carry;
+- `not-a-pr` — no `ref`, one that is not a number, or a number `gh pr view` does
+  not answer for (an issue);
+- `pr-not-open`, `pr-unverifiable` — unknown is never treated as safe;
+- `not-author` — the reporting worker's recorded branch is not the PR's head;
+- `already-driven` — a drive exists, **live or parked**: wider than the tool's own
+  `already-driven`, because `drive_review` RESUMES a parked drive and a resume is
+  the orchestrator's decision about a hold it has read (§2.3), never a report's;
+- `has-verdicts` — **INVARIANT 9's guard.** An auto-started drive starts its
+  counters at zero, which is true only of a PR nobody has reviewed. A terminal
+  drive's entry is pruned once its notice lands (§5.2), so without this a worker
+  reporting `done` after a satisfied gate would start a fresh drive with a fresh
+  three rounds — "yours count too" defeated by a report. A recorded verdict is the
+  durable evidence that a round was spent, whoever spent it;
+- `no-session`, `no-orchestrator`, and any refusal `drive_review` itself answers
+  (`gate-not-configured`, `in-merge-queue`, …), under its own name.
+
+**What is left, stated rather than claimed away**: a release bump or a PR the human
+said they would read themselves is, to orrerix, an ordinary PR on a worker's
+branch. That is why the key is off by default and is the repo's to turn on: a
+repo whose workers open such PRs leaves it off.
+
+**Every refusal is on the audit log** as `rd-auto-start-declined` with its
+reason, because a report that did not auto-drive is otherwise indistinguishable
+from a repo that never asked — the orchestrator wanted to see why a PR did not.
+With the key off, nothing is audited and the report path is byte-for-byte
+unchanged.
+
+**Where it runs, and the lock.** In the `report` MCP arm, in the one branch that
+would otherwise deliver to the root — below `rd_owner` and the plan driver's two
+arms, so a report either already claims can never start a second drive. The
+one `gh` call is last, after every refusal that costs nothing. It takes
+`rd_state_lock` inside `drive_review_seeded`, on a delegate's own tool call,
+which is the interception helpers' argument (§2.4) one call over: the runtime
+schedules that call as a later turn, never as a frame a delivery pushes. The
+report text is written in the SAME store that creates the entry, so no tick can
+build the first notice between the two.
 
 ## 4. The driver executes the gate, not the `edges:`
 
@@ -1582,7 +1727,7 @@ review_drive_status()
   -> { enabled: bool,
        drives: [{ pr, state, held_reason?, head, lanes: [{ block, last_verdict? }],
                   counters: { review_rounds, ci_attempts, rebase_attempts },
-                  grace_used: bool,
+                  grace_used: bool, nit_rounds,
                   since_ms }] }
 ```
 
@@ -2146,6 +2291,20 @@ cleared with the other two on a session change, exactly as above. §3 argues its
 one reader — the terminal release — and why `driven_role` is deliberately not
 one.
 
+**#3367 adds five, all optional and absent at rest.** `nit_rounds` — the
+driver's own non-blocking rounds (§2.5); on the entry rather than in `counters`,
+and defaulted, which `counters`' rule forbids a new count, so the exception is
+argued: that rule exists because a defaulted zero there grants a fresh INVARIANT 9
+budget, and every round counted here was ALSO counted in `review_rounds`, which is
+required — so a zero read off an older entry grants at most rounds the shared
+bound still refuses, and zero is the true reading of an entry no pre-#3367 build
+could have run one on. A `reset_counters` resume clears it with the counters.
+`nit_handback` — the current `fix-wait` was entered by such a round, assigned on
+every arc into `fix-wait`. `nit_head` and `nit_digest` — the revision the last
+such round was handed back at (§2.5's third precondition). `auto_report` — the
+report that started the drive (§3.3), persisted because the first notice may be a
+restart away.
+
 All of these — the five S3 added, the two #1871 B2 added beside them,
 `owed_notice`, which #1857 adds and *Retention* below describes, and
 `last_hold_key` (#3040 N1, §6: the key of the last hold this entry ANNOUNCED,
@@ -2309,10 +2468,19 @@ the next author.** A test that discriminates on *data type* would happily clear
 a future `driver.auto: true` — a bool, and therefore "inert" — which is exactly
 the field that would defeat §3.2's per-PR consent. The real structure is **two
 keys**: this block can only **enable** the feature, and no drive exists until an
-orchestrator makes its own role-gated `drive_review` call naming one PR. A field
+orchestrator makes its own role-gated `drive_review` call naming one PR (§3.3's
+opt-in, below, is the one exception, admitted under the rule this paragraph
+states). A field
 that could start, target or widen a drive would need both this section and §3.2
 rewritten *whatever its type*, and it is that rule — not the bool-versus-string
 one — a later author must apply.
+
+**#3367 applied it.** `auto_drive_on_done` is a field that starts a drive, and
+it was admitted with §3.3 written beside §3.2: the file still names no PR, no
+branch and no agent, and what the key starts is only the drive on the PR of a
+branch the orchestrator's own spawn recorded. `fix_nonblocking_rounds` is the
+other #3367 key and needs no such argument: a closed-range count whose every
+round is also spent from `max_review_rounds`, so it can only shorten the loop.
 
 *(This note previously cited `workflows.md`'s "can its value carry text the
 trust root will act on?" test here. That sentence belongs to a different
@@ -2366,7 +2534,17 @@ like `mq-*` and the rest:
 `rd-lane-reopened` · `rd-lane-released` · `rd-lane-stopped` ·
 `rd-lane-stop-declined` · `rd-worker-released` ·
 `rd-round-grace` · `rd-hold-repeated` · `rd-notice-demoted` ·
-`rd-provider-limit`
+`rd-provider-limit` · `rd-auto-handback` · `rd-auto-started` ·
+`rd-auto-start-declined`
+
+**Three rows are #3367's.** `rd-auto-handback` is the driver's own non-blocking
+round (§2.5), written on the arc being TAKEN beside the `rd-handback` that
+follows, carrying `round`, `of`, `review_rounds` and the `residual` it was taken
+on — its own action for `rd-round-grace`'s reason: "the driver spent a review
+round nobody dispositioned" is the thing a reader counts. `rd-auto-started` is a
+drive a report started (§3.3), carrying the `branch` that proved authorship and
+the `report` its first notice will carry. `rd-auto-start-declined` is a report
+that did not, carrying the closed `reason` §3.3 lists.
 
 `rd-handback`'s `why` is a closed vocabulary of four (`rddrive::handback_why`):
 `review-findings`, `ci-red` and `conflict` name something the WORLD did, and

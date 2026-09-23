@@ -1657,3 +1657,20 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   scheduling` rather than the core's `&` spelling, `Task board` and `Prototype → Proceed` in
   their real directions, and "the resident **Durability rules**" where the target exists only
   in the core. The same checks were re-run: `live-minus-keys == golden` OK for both files.
+
+- **#3407, compact before idling with no work** — `orchestrator.md` only. The other seven
+  goldens are byte-identical to their previous blessed copies.
+
+  One line added to the **Compact at lulls** bullet, after the sentence that explains
+  `request_compact` flags the pane rather than compacting it: always compact before ending a
+  turn with nothing in flight (no delegates, drives, watches), because a wake past the
+  provider's prompt-cache TTL re-reads the whole context uncached. It is the resident half of
+  #3407's acceptance criterion 3; the orrerix-side half is `cache_idle_nudge_tick`, which
+  types `[orrerix] going idle with no work — compact now` into a pane that forgot. The core
+  goes from 34,822 B to 34,987 B against `RESIDENT_CORE_BUDGET`'s 35,000 — 13 B of margin,
+  and the two comments in `tests/orchestration.rs` that date the margin to a blob are moved
+  to the new one.
+
+  Both re-bless checks above were run: the patch on the golden is byte-identical to the patch
+  on the live template (`git diff -U0` on each, compared), and the added line carries no
+  `{{...}}` key, so `live-minus-keys == golden` holds exactly where it held before.

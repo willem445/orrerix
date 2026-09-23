@@ -5491,6 +5491,7 @@ fn human_pane_entry(
         contract_carrier: ContractCarrier::default(),
         last_state_write_ms: 0,
         compact_escalation_notified: false,
+        cache_idle_nudge_latched: false,
         idle_tick_skip_rearm_ms: 0,
         solo_cli,
         last_exit_tail: None,
@@ -12923,6 +12924,14 @@ pub struct AgentEntry {
     /// window, cleared once context% drops back under the group's
     /// `compact_context_threshold_percent` (e.g. after a compact lands).
     pub compact_escalation_notified: bool,
+    /// The orchestrator idle-compact backstop's latch (#3407): set when
+    /// `cache_idle_nudge_tick` delivers its notice, released only on evidence
+    /// the idle stretch ended — something went in flight, or the context fell
+    /// under the compact floor (a compact landed). NOT released by the pane's
+    /// own output: the dominant output after a nudge is the orchestrator
+    /// answering it, and releasing on that would re-nudge an orchestrator that
+    /// read the notice and chose not to compact every TTL, forever.
+    pub cache_idle_nudge_latched: bool,
     /// Idle-tick intake gate (#332), meaningful only for the orchestrator:
     /// when the gate SKIPPED a would-have-fired tick (nothing new, no other
     /// wake reason, fallback not due), this is the Unix-ms the latch above
@@ -15289,6 +15298,12 @@ pub struct UsageSnapshot {
     pub estimated: bool,
     pub model: Option<String>,
     pub updated_ms: u64,
+    /// When this row's counters last moved and what its last wake cost (#3407)
+    /// — folded in [`OrchRegistry::merge_usage_entry`] from the reading this
+    /// tick already made, never from a second read. Additive: a row written
+    /// before the field existed reads as unknown, and the next growth fills it.
+    #[serde(default)]
+    pub activity: loomux_engine::cacheage::Activity,
 }
 
 /// What the usage-series sampler remembers about one group between ticks
@@ -40256,6 +40271,7 @@ impl OrchRegistry {
             contract_carrier: ContractCarrier::default(), // unused — see solo_prepare's identical field
             last_state_write_ms: 0,
             compact_escalation_notified: false,
+            cache_idle_nudge_latched: false,
             idle_tick_skip_rearm_ms: 0,
             solo_cli: None, // unknown for an adopted pane; cli_for_agent falls back to "claude"
             last_exit_tail: None,
@@ -42768,7 +42784,7 @@ impl OrchRegistry {
                 }
             }
         }
-        self.compact_nudge_tick(
+        let nudged = self.compact_nudge_tick(
             now,
             &outputs,
             &manual_signals,
@@ -42776,7 +42792,192 @@ impl OrchRegistry {
             &context_tokens,
             &context_boundary_counts,
             &delivery_confirmations,
-        )
+        );
+        // #3407: AFTER the compact-nudge pass, so the quiet clock it reads has
+        // already folded this tick's output growth, and so a compact that pass
+        // just armed reads as `compact_busy` here rather than being nudged twice.
+        self.cache_idle_nudge_tick(now, &context_percents);
+        nudged
+    }
+
+    /// The orchestrator's idle-compact backstop (#3407 acceptance criterion 3):
+    /// an orchestrator that has gone quiet with NOTHING in flight is told, once,
+    /// to compact while its prompt cache is still warm — so the compaction
+    /// request itself reads a warm cache and the next real wake re-reads a
+    /// small context rather than the whole session cold.
+    ///
+    /// The resident prompt carries the same rule as one line; this is the
+    /// orrerix-side backstop for an orchestrator that forgot it. Decision in
+    /// [`loomux_engine::cacheage::idle_compact_should_fire`] (the band, the
+    /// floor, the fail-closed context); what "in flight" means is gathered
+    /// here, because it is registry state:
+    ///
+    /// - a live **delegate** — a worker, reviewer or planner not yet dead (a
+    ///   manager or lead is the human's own pane and never "in flight");
+    /// - a pending **watch** (`notify_when`) in the group. Every live watch
+    ///   counts: orrerix knows when a watch EXPIRES, never when its target will
+    ///   resolve, so "fires within the TTL" is not something it can rule out;
+    /// - pending **intake** for the group, or a **queued delivery** for this
+    ///   pane;
+    /// - a live **review or plan drive** — read off the drive files last, only
+    ///   for a pane that would otherwise fire, and an unreadable file counts as
+    ///   in flight ("I could not look" is not "nothing there").
+    ///
+    /// Never mid-decision: `idle_ms` is the same output-quiet clock the
+    /// compact-nudge and idle ticks read, and the notice goes through
+    /// `deliver_prompt`, which holds for a human's occupied input box. Paused
+    /// groups are skipped, as by every sibling tick. Returns the nudged ids.
+    pub fn cache_idle_nudge_tick(&self, now: u64, context_percents: &HashMap<String, u32>) -> Vec<String> {
+        use loomux_engine::cacheage;
+        let paused = self.paused.lock_safe().clone();
+        let groups: HashMap<GroupId, Guardrails> = self
+            .groups
+            .lock_safe()
+            .iter()
+            .map(|(id, g)| (id.clone(), g.guardrails.clone()))
+            .collect();
+        let watch_groups: HashSet<GroupId> =
+            self.watches.lock_safe().values().map(|w| w.group.clone()).collect();
+        let intake_groups: HashSet<GroupId> = self
+            .intake_pending
+            .lock_safe()
+            .iter()
+            .filter(|(_, p)| !p.is_empty())
+            .map(|(g, _)| g.clone())
+            .collect();
+        struct Candidate {
+            id: String,
+            group: GroupId,
+            block: String,
+            pty_id: Option<u32>,
+            idle_ms: u64,
+            latched: bool,
+            compact_busy: bool,
+        }
+        let (delegate_groups, candidates): (HashSet<GroupId>, Vec<Candidate>) = {
+            let agents = self.agents.lock_safe();
+            let delegates = agents
+                .values()
+                .filter(|a| {
+                    matches!(a.role, Role::Worker | Role::Reviewer | Role::Planner)
+                        && a.status != AgentStatus::Dead
+                })
+                .map(|a| a.group.clone())
+                .collect();
+            let cands = agents
+                .values()
+                .filter(|a| {
+                    a.role == Role::Orchestrator
+                        && a.status == AgentStatus::Running
+                        && !paused.contains(&a.group)
+                })
+                .map(|a| Candidate {
+                    id: a.id.clone(),
+                    group: a.group.clone(),
+                    block: a.block.clone(),
+                    pty_id: a.pty_id,
+                    idle_ms: now.saturating_sub(a.last_progress_ms),
+                    latched: a.cache_idle_nudge_latched,
+                    compact_busy: a.compact_pending || a.compact_requested,
+                })
+                .collect();
+            (delegates, cands)
+        };
+
+        let mut release: Vec<String> = Vec::new();
+        let mut fire: Vec<(Candidate, u32, u32)> = Vec::new();
+        for c in candidates {
+            let Some(g) = groups.get(&c.group) else { continue };
+            let cli = g.cli_for_block(&c.block, Role::Orchestrator);
+            if !compact_nudge_cli_supported(cli) {
+                continue;
+            }
+            let ttl = cacheage::effective_ttl_minutes(
+                g.block(&c.block).and_then(|b| b.cache_ttl_minutes),
+                cli,
+            );
+            // The heuristic nudge's floor setting, resolved the way that feature
+            // resolves it when it is ON — `None` is the smart default, `Some(0)`
+            // an explicit "no floor" — and independent of whether the heuristic
+            // lull timer itself is enabled: this backstop is always on.
+            let floor = g
+                .compact_nudge_min_context_percent
+                .unwrap_or(DEFAULT_COMPACT_NUDGE_MIN_CONTEXT_PERCENT);
+            let pct = context_percents.get(&c.id).copied();
+            let cheap_in_flight = delegate_groups.contains(&c.group)
+                || watch_groups.contains(&c.group)
+                || intake_groups.contains(&c.group)
+                || c.pty_id.is_some_and(|p| self.queue_depth(p) > 0);
+            if c.latched {
+                if cheap_in_flight || pct.is_some_and(|p| p < floor) || self.drives_in_flight(&c.group) {
+                    release.push(c.id.clone());
+                }
+                continue;
+            }
+            let inputs = cacheage::IdleCompactInputs {
+                idle_ms: c.idle_ms,
+                ttl_minutes: ttl,
+                in_flight: cheap_in_flight,
+                context_percent: pct,
+                floor_percent: floor,
+                latched: false,
+                compact_busy: c.compact_busy,
+            };
+            // The drive files are read last and only for a pane that would
+            // otherwise fire — a disk read per orchestrator per minute is cheap,
+            // but there is no reason to pay it for a pane the registry alone
+            // already rules out.
+            if cacheage::idle_compact_should_fire(&inputs) && !self.drives_in_flight(&c.group) {
+                let (Some(p), Some(t)) = (pct, ttl) else { continue };
+                fire.push((c, p, t));
+            }
+        }
+        if !release.is_empty() || !fire.is_empty() {
+            let mut agents = self.agents.lock_safe();
+            for id in &release {
+                if let Some(a) = agents.get_mut(id) {
+                    a.cache_idle_nudge_latched = false;
+                }
+            }
+            for (c, _, _) in &fire {
+                if let Some(a) = agents.get_mut(&c.id) {
+                    a.cache_idle_nudge_latched = true;
+                }
+            }
+        }
+        let mut nudged = Vec::new();
+        for (c, pct, ttl) in fire {
+            self.audit(&c.group, brand::AUDIT_ACTOR, "cache-idle-nudge", json!({
+                "agent": c.id,
+                "idle_ms": c.idle_ms,
+                "ttl_minutes": ttl,
+                "context_percent": pct,
+            }));
+            let _ = self.deliver_prompt(
+                &c.id,
+                &cacheage::idle_compact_notice(pct, ttl),
+                brand::AUDIT_ACTOR,
+                Delivery::MidSession,
+            );
+            nudged.push(c.id);
+        }
+        nudged
+    }
+
+    /// Whether a review or plan drive is live in `group` (#3407's backstop).
+    /// An unreadable drive file answers `true`: the backstop may not tell an
+    /// orchestrator "nothing is in flight" off a file it could not read.
+    fn drives_in_flight(&self, group: &GroupId) -> bool {
+        let dir = self.group_dir(group);
+        let review = match reviewdrive::load_state(&dir) {
+            Ok(st) => st.entries.iter().any(|e| e.state().is_live()),
+            Err(_) => true,
+        };
+        review
+            || match plandrive::load_state(&dir) {
+                Ok(st) => st.entries.iter().any(|e| e.state().is_live()),
+                Err(_) => true,
+            }
     }
 
     /// Compact-nudge (#328): self-scoped agent request. Sets `compact_
@@ -42822,6 +43023,41 @@ impl OrchRegistry {
         Ok(match warning {
             Some(w) => format!("compact requested — {when} ({w})"),
             None => format!("compact requested — {when}"),
+        })
+    }
+
+    /// The human's "Compact now" (#3407): the cache-age chip's menu item, on
+    /// any agent pane. Rides [`Self::request_compact`]'s exact path — it sets
+    /// `compact_requested`, and `compact_nudge_tick`'s fire check is still the
+    /// ONE place that types `/compact`, at the pane's next quiet observation,
+    /// arming the post-compact re-grounding like any other trusted fire. So
+    /// "now" means "the next idle moment", never mid-turn, and the response
+    /// says which.
+    ///
+    /// Takes the group the chip was rendered under and refuses an agent that
+    /// is not in it: holding a valid group id is not membership (CLAUDE.md
+    /// constraint 6), and the webview names both. Audited with `by: human`, so
+    /// the timeline tells a human's compact from the agent's own.
+    pub fn human_request_compact(&self, group: &GroupId, agent_id: &str) -> Result<String, String> {
+        let a = self.agent(agent_id).ok_or("unknown agent")?;
+        if a.group != *group {
+            return Err("that agent is not in this group".into());
+        }
+        if a.status == AgentStatus::Dead {
+            return Err("that agent is no longer running".into());
+        }
+        let cli = self.cli_for_agent(&a);
+        if !compact_nudge_cli_supported(&cli) {
+            return Err(format!("/compact has no equivalent on {cli} — orrerix cannot compact this pane"));
+        }
+        if let Some(e) = self.agents.lock_safe().get_mut(agent_id) {
+            e.compact_requested = true;
+        }
+        self.audit(group, "human", "compact-requested", json!({ "agent": agent_id, "by": "human" }));
+        Ok(if a.compact_pending {
+            "queued — a compact is already in flight for this pane".to_string()
+        } else {
+            "requested — /compact is typed at the pane's next idle moment".to_string()
         })
     }
 
@@ -46245,6 +46481,9 @@ impl OrchRegistry {
             estimated: false,
             model: None,
             updated_ms: now_ms(),
+            // Filled by the merge, which is the only place the previous
+            // reading is in hand (#3407).
+            activity: Default::default(),
         };
 
         // #2850 S3b — a structured pane reported its own figures, so nothing
@@ -46595,6 +46834,26 @@ impl OrchRegistry {
                     tokens_of(&snap) == 0 && snap.cost_usd.unwrap_or(0.0) <= 0.0;
                 let old_has_data =
                     tokens_of(&*existing) > 0 || existing.cost_usd.unwrap_or(0.0) > 0.0;
+                // #3407: fold this reading into the row's activity BEFORE either
+                // branch below replaces anything — both need the previous
+                // counters, and the fold is what reads them. On the no-downgrade
+                // branch the new total is zero, so the fold carries the old
+                // activity unchanged; on the replace branch it is what keeps a
+                // row's activity from being reset by every tick's fresh snapshot.
+                let counters_of = |s: &UsageSnapshot| loomux_engine::cacheage::Counters {
+                    input: s.input_tokens,
+                    output: s.output_tokens,
+                    cache_creation: s.cache_creation_tokens,
+                    cache_read: s.cache_read_tokens,
+                };
+                let activity = loomux_engine::cacheage::fold_activity(
+                    &existing.activity,
+                    counters_of(&*existing),
+                    existing.cost_usd,
+                    counters_of(&snap),
+                    snap.cost_usd,
+                    snap.updated_ms,
+                );
                 if new_empty && old_has_data {
                     existing.agent_id = snap.agent_id;
                     existing.name = snap.name;
@@ -46603,7 +46862,13 @@ impl OrchRegistry {
                 } else {
                     *existing = snap;
                 }
+                existing.activity = activity;
             }
+            // A FIRST sighting is not folded (#3407): a row that arrives already
+            // carrying tokens — a session this store never saw — has a
+            // cumulative total, not a request, and charging that total to one
+            // "wake" would report a session's whole history as its last wake.
+            // Its activity stays unknown until its counters next move.
             None => list.push(snap),
         }
     }
@@ -47095,6 +47360,10 @@ impl OrchRegistry {
         let mut rows: Vec<Value> = Vec::new();
 
         for s in &snaps {
+            let ttl = loomux_engine::cacheage::effective_ttl_minutes(
+                rails.as_ref().and_then(|g| g.block(&s.block)).and_then(|b| b.cache_ttl_minutes),
+                &s.cli,
+            );
             let tokens = s.input_tokens
                 + s.output_tokens
                 + s.cache_creation_tokens
@@ -47135,6 +47404,14 @@ impl OrchRegistry {
                 "model": s.model,
                 "cost_usd": s.cost_usd,
                 "estimated": s.estimated,
+                // #3407: the cache-age chip's inputs. `cache_ttl_minutes` is
+                // RESOLVED here (block override, else the CLI's CliCaps row) so
+                // the frontend keeps no TTL table of its own; `null` = unknown.
+                "last_active_ms": s.activity.last_active_ms,
+                "last_wake": s.activity.last_wake,
+                "cache_ttl_minutes": ttl,
+                "cache_cooling_after_ms": ttl.map(loomux_engine::cacheage::cooling_after_ms),
+                "compact_supported": compact_nudge_cli_supported(&s.cli),
                 "tokens": {
                     "input": s.input_tokens,
                     "output": s.output_tokens,
@@ -53842,6 +54119,7 @@ impl OrchRegistry {
             contract_carrier: inject.contract_carrier,
             last_state_write_ms: 0,
             compact_escalation_notified: false,
+            cache_idle_nudge_latched: false,
             idle_tick_skip_rearm_ms: 0,
             solo_cli: None,
             last_exit_tail: None,
@@ -62179,6 +62457,20 @@ pub async fn orch_set_compact_nudge_minutes(
     run_blocking(move || reg.set_compact_nudge_minutes(&group_id, minutes)).await
 }
 
+/// The cache-age chip's "Compact now" (#3407) — see
+/// [`OrchRegistry::human_request_compact`]. Off-thread like its siblings: it
+/// takes the `agents` lock and appends an audit line.
+#[tauri::command]
+pub async fn orch_request_compact(
+    app: AppHandle,
+    group_id: String,
+    agent_id: String,
+) -> Result<String, String> {
+    let reg = reg_of(&app);
+    let group_id = command_group(&group_id)?;
+    run_blocking(move || reg.human_request_compact(&group_id, &agent_id)).await
+}
+
 /// Set a group's compact-nudge eligible roles (#287; unrecognized names
 /// dropped, empty falls back to `["orchestrator"]`; durable, audited).
 /// Returns the applied set.
@@ -63502,6 +63794,7 @@ fn register_orchestrator_pane(
         contract_carrier: inject.contract_carrier,
         last_state_write_ms: 0,
         compact_escalation_notified: false,
+        cache_idle_nudge_latched: false,
         idle_tick_skip_rearm_ms: 0,
         solo_cli: None,
         last_exit_tail: None,

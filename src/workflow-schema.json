@@ -508,7 +508,7 @@
           "name": "auto_drive_on_done",
           "type": "bool",
           "default": false,
-          "help": "A worker's report(done, ref: <PR>) starts a review drive on its own PR instead of waking the orchestrator (#3367); the report rides in the drive's first notice. Refused - and delivered as before - for a [scratch] PR, a ref that is not a PR, a worker whose branch is not the PR's head, a PR already driven, and a PR that already carries a verdict. A second switch under enabled, off by default."
+          "help": "A worker's report(done, ref: <PR>) starts a review drive on its own PR instead of waking the orchestrator (#3367); the report rides in the drive's first notice. Refused - and delivered as before - for a [scratch] PR, a ref that is not a PR, a worker whose branch is not the PR's head, a PR already driven or parked, and a PR that already carries a verdict. A second switch under enabled, off by default."
         }
       ]
     },

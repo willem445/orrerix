@@ -2864,7 +2864,7 @@ export class WorkflowView {
         "wf-note",
         "The report then reaches you inside the drive's first notice instead of on its own. " +
           "It is refused - and delivered as before - for a [scratch] PR, a ref that is not a " +
-          "PR, a worker whose branch is not the PR's head, a PR already driven, and a PR that " +
+          "PR, a worker whose branch is not the PR's head, a PR already driven or parked, and a PR that " +
           "already carries a verdict."
       )
     );

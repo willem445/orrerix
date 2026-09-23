@@ -4724,13 +4724,16 @@ impl OrchRegistry {
     // ---------- §5.1's three MCP tools ----------
 
     /// `drive_review(pr, worker_session, reset_counters?, rounds_already_spent?)`
-    /// — §3.2's second key, and the only thing that starts a drive.
+    /// — §3.2's second key, and the one call an orchestrator makes to start a
+    /// drive (a plan drive's hand-off and #3367's auto-start reach it too).
     ///
-    /// **Never automatic**, and in particular it does not fire on a worker's
-    /// `report(done)`: INVARIANT 8 makes *what starts* the orchestrator's call,
-    /// and the PRs where a drive is wrong are ordinary — a scratch or
-    /// red-evidence PR, a release bump, a PR the human said they would read
-    /// themselves.
+    /// **Never automatic by default**, and in particular it does not fire on a
+    /// worker's `report(done)`: INVARIANT 8 makes *what starts* the
+    /// orchestrator's call, and the PRs where a drive is wrong are ordinary — a
+    /// scratch or red-evidence PR, a release bump, a PR the human said they
+    /// would read themselves. The one opt-in is `driver.auto_drive_on_done`
+    /// (#3367), which reaches this function through
+    /// [`rd_auto_start`](Self::rd_auto_start) and is argued there.
     ///
     /// **The session is resolved once, and what is persisted is what came
     /// back** (§3.2). `resolve_session_ref` is a resolution against *this

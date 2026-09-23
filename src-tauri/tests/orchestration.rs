@@ -69484,7 +69484,9 @@ fn the_idle_compact_backstop_holds_while_a_delegate_or_a_watch_is_in_flight() {
     let (reg, _d, gid, oid) = idle_orch_setup(t0);
     let w = reg.spawn_agent(&gid, Role::Worker, "w", "task", false, None).unwrap();
     assert!(reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)).is_empty(), "a live delegate is in flight");
-    reg.kill_agent(&w.id).unwrap();
+    // The delegate exits (a headless one has no pty to kill, so its exit is
+    // recorded the way the pty-exit path records it).
+    reg.mark_dead(&w.id, Some(0));
     assert_eq!(
         reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)),
         vec![oid.clone()],

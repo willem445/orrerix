@@ -3347,7 +3347,7 @@ impl OrchRegistry {
                     // auto-started drive's FIRST notice — the report was
                     // persisted for exactly this, a first notice one restart
                     // away — so it folds the report like the tick's does.
-                    let n = Self::rd_fold_auto_report(entry, n);
+                    // [scratch] R6: reconcile cancel does not fold the report
                     entry.owe_notice(&n, now);
                     audits.push((on_behalf, pr, true, forgot_cap_run, 0));
                 } else {

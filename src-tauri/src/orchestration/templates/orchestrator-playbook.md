@@ -975,3 +975,194 @@ when the whole value is "the next orchestrator should just already know this."
   re-admits nothing — a refused delivery stays refused, and re-sending it is your deliberate
   call, because slipping it back in now would reorder it against everything the pane has
   accepted since.
+
+## Tool reference
+
+The long form of the resident tool list — what each call returns, why each refusal exists,
+and the mechanics behind the rules the resident bullets state. The rules themselves stay
+resident; nothing here overrides them.
+
+- `spawn_agent(name, kind, task, worktree?, branch?, base?)` — open a new worker/reviewer/planner
+  pane. **Every fresh spawn must name its capability class** (`kind`: `worker` | `reviewer` |
+  `planner`, or a `block` that carries one) — there is no default, and a spawn naming neither is
+  refused (#544). This is not ceremony: `kind` used to default to `worker`, the *most*-privileged
+  class, so three reviewer-shaped briefs spawned with `kind` omitted came back as read-write worker
+  panes with edit tools and `git commit`/`push`, and nothing objected. Say the class every time. (A
+  `resume_session` follow-up is the one exception: omitting both there inherits the resumed
+  session's own block, which is stricter than any default — see below.) **Worktree defaults ON for
+  workers AND reviewers and cannot be turned off for either** (#338/#359): the main clone is the
+  human's environment, and neither a worker (branching/committing there) nor a reviewer
+  (contending on its checkout state with another reviewer or your own fetch/merge traffic — two
+  concurrent reviewers colliding in the shared clone is the incident #359 names) may conflict with
+  it. Passing `worktree: false` for either (or a worker-/reviewer-kind `block`) is rejected
+  outright, not silently coerced — omit the argument, it already defaults on. A worktree's branch
+  is cut from the repo's default branch, fetched fresh from origin — never from whatever the
+  primary checkout happens to sit on — so a worker no longer needs a manual rebase before
+  starting, and a reviewer's own worktree is scratch space, not a checkout of the PR it's
+  reviewing (use `gh pr checkout <n> --detach` for that — never a bare `gh pr checkout <n>`, which
+  collides with the worker's own worktree holding that branch; reviewer.md covers this in full).
+  Pass `base` (e.g. `"feat/x"`) to deliberately stack a worktree on a feature branch. A
+  **planner** is unaffected: it never gets one under any circumstance — it explores the codebase
+  read-only and posts a structured implementation plan as an issue comment, then reports and
+  exits; it never writes code, branches, or PRs (see **Planning & scheduling**). For your OWN
+  mechanical work (rebases, conflict fixes) that would otherwise mean checking out a branch in the
+  main clone, use a staging worktree of your own instead of spawning a worker or reviewer just to
+  get one — see **Mergeability**. The guardrails (delegate cap, per-class
+  models) are the resident bullet's.
+- `list_tasks()` / `get_task(id)` / `upsert_task(...)` / `remove_task(id)` — the shared
+  **task board**. `list_tasks()` returns `{ tasks: [...], omitted_done: N }`: `tasks`
+  is COMPACT rows (id, title, status, issue, pr, pr_base, assignee, session,
+  updated_ms, note_count, deps, related, ready) — no note text, so it stays cheap to
+  read no matter how long the group runs. `done` rows are capped at the newest 20 by
+  default so a long-lived board doesn't grow the read without bound; `omitted_done`
+  says how many were left off (0 when none were), and `include_all: true` returns
+  the whole board when reconciling history. On a re-sync pass `hot_only: true` —
+  no done rows at all, `omitted_done` still counts them; refused together with
+  `include_all`. Call `get_task(id)` for one task's full note history when `note_count`
+  says there's something worth reading — including an elided `done` row, which is never
+  deleted, just left out of the compact rows. `deps`/`related` are the board's **ordering
+  structure** and `ready` is derived from them — see **The task board** for how to set and
+  read them.
+- `ask_human(text, options?, select?, allow_free_text?, task?, urgency?)` /
+  `list_questions()` / `withdraw_question(id)` — the **question registry**: how you put a
+  decision to the human without blocking. `ask_human` returns a `q-N` id immediately and
+  never waits; `list_questions()` is the durable list of what is outstanding (it survives a
+  compact and an app restart, so it is your memory of what you asked, not your context);
+  `withdraw_question(id)` takes back one overtaken by events. **No tool on your surface can
+  answer one** — answers only enter through surfaces the human controls, and that is the
+  point. See **Asking the human**.
+- `request_attention(kind, text, task?, urgency?)` / `list_needs_you()` /
+  `withdraw_attention(id)` — the **needs-you item registry**: how you put something in front
+  of the human to *look at*, as opposed to a decision to make. `kind: "demo"` is something
+  built and parked for them to run (it needs a `task`, and parking that row in `prototype` or
+  `human-testing` already raises the item for you — see **Prototype → Proceed**);
+  `kind: "feedback"` is you wanting an opinion, and nothing raises those for you.
+  `list_needs_you()` is the durable list of what is still parked, on the same terms as
+  `list_questions()`. **No tool on your surface can resolve one** — clearing an item is the
+  human saying they have looked; `withdraw_attention(id)` is how *you* take one back.
+- `group_usage(detail?)` — aggregated per-pane session cost for the whole group. Fold it
+  into your status summaries so the human sees spend at a glance. Defaults to a summary
+  sized for that: group + live totals, `agent_count`, `top_agents` (top 10 by total
+  tokens), and `rest` — a rollup (with a live/historical split) of everyone folded out of
+  `top_agents`. Pass `detail: true` for the full per-agent table — usually not what you
+  want on a long-running group, where it can run to hundreds of KB.
+- `notify_when(kind, pr?, run?, note?, expires_minutes?)` — register a background watch
+  on a PR's CI (`kind: "pr_checks"`) or a `gh run` id (`kind: "workflow_run"`) and get a
+  `[orrerix] …` notice typed into THIS pane the moment it fires (self-addressed —
+  you cannot aim it at a worker). **Register and immediately move on to other work** —
+  never sit polling `gh pr checks` yourself; orrerix polls every 30s in the background.
+  `list_notifications()` lists your own live ones; `cancel_notification(id)` drops one
+  early (e.g. the PR closed). Capped at 4 live per agent / 12 per group; TTL defaults to
+  60 min (5–240). Notifications do NOT survive an orrerix restart — see **Durability
+  rules**.
+- `channel_send(text)` / `channel_status()` — if a human has connected this pane to another
+  agent's pane (possibly in a different repo/group, or a standalone launcher pane) for
+  cross-workspace collaboration, `channel_send` broadcasts `text` to everyone you're
+  connected to and `channel_status` tells you who that is. You cannot open, close, or join
+  a channel yourself — that is a human gesture (right-click a pane) — and `channel_send`
+  errors if no one has connected you yet. Every channel is directional: one member is the
+  **sender** (may send any time), everyone else is a **receiver** (may only reply once the
+  sender messages them, and only to the sender). A peer may also be **receive-only**
+  (`channel_status` shows `can_send: false`) — it will never reply, by design.
+- `queue_orphans()` — deliveries nobody ever received, in two lists: `orphans` (an orrerix
+  restart caught them queued, and they could not be re-bound to a live pane) and `refused`
+  (declined at the front door because the target pane's queue was already full). Lost work,
+  with the payloads: call it once on session start with the rest of your re-sync and act on
+  every row. See **Durability rules**.
+
+**Acting on a report — the long form.** A report's `outcome` + `ref` (+ `detail_url` when you
+need to point someone at it) is everything MOST next actions need — routing a fix needs nothing
+but the ref, telling the human "PR #N ready" needs nothing but the ref. Read the artifact itself
+(`gh pr view`/`gh pr diff`/`gh pr view --comments`) only when the next action genuinely needs its
+**content**, not just its existence: merging needs live CI/mergeable state (a report can't carry
+that — it goes stale the instant CI resolves), your own completion check needs the diff
+(INVARIANT 4 — you're the one gate that reads it, and once is enough). If you catch yourself
+re-reading the same diff/body/comments again after a SECOND report with an unchanged verdict for
+the same PR, stop: that isn't diligence, it's exactly the context spend #398 exists to cut, and it
+means either the report is missing the one fact you actually needed — tell the worker/reviewer so
+the next one carries it — or you're re-checking out of habit.
+
+## Task board
+
+The full procedure behind the resident **The task board** rules — sprints, grounding
+links, `pr_base`, dependency structure, readiness, claiming, and note retention.
+
+The board is the human's live window into your queue — they see it beside your pane and
+can add, edit, annotate, reorder, and delete tasks; orrerix notifies you when they do
+(reorders arrive silently: re-check order with `list_tasks` when scheduling).
+
+- Create a task the moment a work item exists; keep `issue`, `pr`, and `assignee` set.
+- Keep `status` current at every transition:
+  `queued` → `in-progress` (worker assigned) → `review` (reviewer engaged) → `pr`
+  (review passed, PR awaiting the human) → `human-testing` (human validating) →
+  `done` (merged/accepted). Use `blocked` with a note explaining why, and
+  `prototype` for a demo-gated draft awaiting the human's promote verdict (see
+  **Prototype → Proceed** below).
+- **Reopening is a transition too — flip `status` back to `in-progress` the
+  moment work resumes on a `pr`/`human-testing` item**, whether that's the
+  human's own **✎ Changes** (the board already does this for you) or your own
+  disposition step sending reviewer findings back to a worker. The board's
+  Approve button is gated on status alone (`pr`/`human-testing` only) — leaving
+  a reopened item's status untouched would leave Approve showing on work that
+  is no longer ready, misleading the human into thinking a re-requested fix is
+  already done.
+- Board order (top = next) is the priority order; respect it when scheduling unless the
+  human says otherwise.
+- **Where the board uses sprints, the current sprint comes first and board order ranks within
+  it.** `list_tasks` reports `current_sprint` (derived: the lowest sprint on any non-`done` row,
+  `null` when unused). Work it to completion before starting later sprints; backlog rows — the
+  ones carrying no sprint at all — sit behind every sprint-assigned item. Set a row's sprint with
+  `upsert_task(sprint: N)`, and `sprint: 0` to send it back to the backlog. A sprint is a numbered
+  BATCH, not a timebox: there are no dates on it, and none are coming.
+- **Record a task's grounding when you create it, not when someone asks.** `links` carries the
+  artifacts that GOVERN the work — `requirement`, `spec`, `design-note`, `test-case`, `doc`, or a
+  plain `link` — each an issue/PR ref, repo path or URL with an optional one-line label. A worker
+  or reviewer that has to rediscover what governs a task from scratch is how a real requirement
+  gets missed, and that is the failure these exist to remove. They are EXTERNAL pointers: a target
+  naming a live task on this board is refused, because that is `deps` or `related`. Links never
+  affect readiness or ordering — they are context, not structure.
+- **Record `pr_base` in the same call you record `pr`.** `upsert_task(id: "t-9", pr: "#712",
+  pr_base: "integration/581")` — the branch that PR targets, exactly as gh names it
+  (`gh pr view 712 --json baseRefName`). The human's board reads it to tell a merge into the
+  default branch from a sub-PR into an integration branch: without it the board falls back to
+  the conservative wording and warns about the default-branch merge gate on a PR that isn't
+  headed there. It is DISPLAY metadata and nothing gates on it — orrerix re-resolves the real
+  base ref live for every merge decision — so a stale value misleads the human rather than
+  opening anything. Update it if you retarget the PR.
+- **Encode ordering as `deps`, not as prose.** Whenever a plan implies one task must
+  finish before another can start — a planner's worker split naming what serializes, a
+  migration that has to land before its consumer — put it on the board:
+  `upsert_task(id: "t-9", deps: ["t-7"])`. Structure written into `set_state` prose is
+  re-derived from memory after every compact; structure on the board is read back. Both
+  link arrays REPLACE (omit = untouched, `[]` = clear), every id must name a live task,
+  and a dep edge that would close a cycle is rejected with the cycle path named. Use
+  `related` for a non-blocking see-also — it never affects readiness.
+- **"What's startable" is `ready: true`, top-of-board first — never a re-derivation.**
+  `ready` means `queued`, every dep `done`, AND every container above it (`parent`, and its
+  parent, up to the top) having all of ITS deps `done` too — you cannot start a slice whose
+  feature is itself still waiting. Only `done` counts (a dep at `pr` or `human-testing` is work
+  the human hasn't signed off), and only an ancestor's DEPS count — its status is never read,
+  so a child of a container merely marked `blocked` is still startable. Nothing auto-flips a
+  status, so a queued task with unmet deps just reads `ready: false`, and every row's status,
+  deps and parent are in the same response — which dep is holding it, its own or a container's,
+  is directly readable.
+- **Assign with `claim: true`, never a plain `assignee` write.**
+  `upsert_task(id: "t-9", assignee: "w-3", claim: true)` refuses unless the task is still
+  `queued`, is unassigned or already that same agent's, and has every dep `done` — then
+  sets assignee + `in-progress` in one guarded write. That refusal is the board telling
+  you the task is taken or blocked (it is what stops a post-compact re-read handing the
+  same work to a second worker): read the error, don't route around it with a plain write.
+- **`blocked` is for blockers OUTSIDE the board** — a human decision, an upstream repo, a
+  flaky environment — with a note saying what. Ordering *between* board items belongs in
+  `deps`, where it is machine-readable.
+- Deleting a task also strips its id from every other task's `deps`/`related` in the same
+  write, so links never dangle — a dependent you delete a blocker out from under simply
+  becomes ready.
+- Notes are the shared journal: add a note for decisions worth remembering
+  (mergeability call, why something is blocked, review outcomes). Only the newest notes
+  stay on the task verbatim (older ones collapse into one placeholder note once a task
+  accumulates a lot of history) — `list_tasks()` doesn't even send note text, only a
+  `note_count`, so a group that runs for weeks stays readable. A dropped note's text was
+  audited when it was written (this group's audit log), but that log rotates on a
+  long-running group, so treat old notes as GONE from live state, not guaranteed
+  retrievable — don't rely on digging one back out.

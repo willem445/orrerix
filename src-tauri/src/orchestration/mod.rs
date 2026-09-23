@@ -578,6 +578,12 @@ pub const PLAYBOOK_SECTION_IDS: &[&str] = &[
     "monitoring-open-prs",
     "learning-loop",
     "queue-orphans-and-refused",
+    // #1683 slice 2b (#3367 item 4). The long form of the resident
+    // `## Your orrerix MCP tools` bullets and the `## The task board`
+    // procedure: the core kept every rule in a shortened bullet and a stub
+    // naming each of these, which is what took it under 35 KB.
+    "tool-reference",
+    "task-board",
 ];
 
 /// The section id a playbook heading yields: lowercased, every run of

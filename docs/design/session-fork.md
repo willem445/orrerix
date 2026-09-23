@@ -407,9 +407,9 @@ path join: the parent session id is validated by `sanitize_session`
 
 ## What F2 did not change, and why
 
-- **`orchestrator.md` did not move.** The resident core sits at 44,955 B against
-  the 45,000 B `RESIDENT_CORE_BUDGET`, and a new playbook section needs a resident
-  stub there too. The orchestrator learns `fork_session` from the tool's own
+- **`orchestrator.md` did not move.** The resident core sat at 44,955 B against
+  the then-45,000 B `RESIDENT_CORE_BUDGET` when F2 landed (since lowered to 35,000 by
+  #1683 slice 2b), and a new playbook section needs a resident stub there too. The orchestrator learns `fork_session` from the tool's own
   description (read on every call) and from one paragraph in the playbook's
   **Planning and scheduling** section; `lead.md` carries its own bullet.
 - **No rejoin.** Nothing merges two session files, in any harness surveyed: the

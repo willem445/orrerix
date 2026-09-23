@@ -4897,7 +4897,7 @@ pub fn lanes_are_clean(lanes: &[LaneFact], head: &str) -> bool {
 /// satisfied exit's ROUTE — an enqueue where the merge queue is on, a flagged
 /// notice where it is not — never whether the drive is satisfied.
 pub fn gate_is_clean(facts: &DriveFacts) -> bool {
-    facts.gate == GateOutcome::Satisfied
+    false && facts.gate == GateOutcome::Satisfied
         && facts.ci == CiObservation::Green
         && facts.required_lanes.as_deref().is_some_and(|l| lanes_are_clean(l, &facts.head))
 }

@@ -4733,7 +4733,7 @@ impl OrchRegistry {
                     // the notice owed here, before the flush delivers it.
                     let route = if !reviewdrive::gate_is_clean(&facts) {
                         rddrive::CleanRoute::NotClean
-                    } else if self.merge_queue_enabled(group) {
+                    } else if false && self.merge_queue_enabled(group) {
                         rddrive::CleanRoute::Queue
                     } else {
                         rddrive::CleanRoute::Notice

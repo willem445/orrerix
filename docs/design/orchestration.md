@@ -13304,6 +13304,33 @@ post-compact notice (re-inverts #417 round 5's deliberate slimming); CLI-native 
 (Claude-only, a third generated-file family, unobservable). All rejected; the plan
 (plan-1615 §2) carries the full arguments.
 
+**Slice 2b: the tool list and the task board (#3367 item 4).** Slice 2a moved whole
+sections; what was left over 35 KB was the two resident sections the plan (plan-1615 §5)
+named for a judgment pass rather than a move — `## Your orrerix MCP tools` and
+`## The task board` — and the budget came down with them, to 35,000 B. The line drawn inside
+each bullet is the one this section is built on: **the rule stays, the argument and the
+mechanics move.** A bullet keeps what an orchestrator must obey after a compact with nothing
+else in front of it (name the class on every spawn; a worker or reviewer always gets a
+worktree; no tool answers a question or resolves a needs-you item; register a watch and move
+on; claim with `claim: true`; `ready: true` is the startable set; ordering is `deps`, never
+prose), and loses the return shapes, the incident that produced each refusal, and the
+edge semantics (link arrays replace, a cycle is refused, a deleted task strips its id).
+Those moved verbatim into two new playbook sections, `tool-reference` and `task-board`, each
+named by a resident stub with its trigger — the first spawn of a session, a refusal whose
+error does not explain itself, the first time the board is created or restructured. Much of
+the tool half is also in the tools' own descriptions (`list_tasks` names `hot_only` and
+`include_all`, `ask_human` its `q-N` and withdrawal), which the orchestrator reads on every
+listing whatever this file says.
+
+Why the residual is acceptable rather than assumed away: slice 3 measured the playbook
+fetched once across five orchestrator sessions — the stub is not reliably followed. That is
+exactly why nothing here moved a rule: a stub the orchestrator ignores costs it a reason and
+a return shape, never an obligation. The move is pinned from the orchestrator's side of the
+wire on a real group
+(`the_tool_reference_and_task_board_procedure_are_served_from_the_playbook`): each moved
+marker is served by `read_playbook` under the section its stub names and is absent from the
+rendered core, and each kept rule is still in the rendered core.
+
 ## The definition of done is ONE copy (#3040 P2)
 
 The DoD lived twice: the full `## Definition of done` section in `templates/worker.md`, and

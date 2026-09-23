@@ -575,6 +575,35 @@ pub mod audit_action {
     /// **Written on the arc being TAKEN**, beside the hand-back it funds, never
     /// on the intent: a grace whose transition the entry refused bought nothing.
     pub const ROUND_GRACE: &str = "rd-round-grace";
+    /// The driver handed a SATISFIED gate back to the worker on its own,
+    /// because every required lane passed with only non-blocking findings open
+    /// (#3367 item 1, `driver.fix_nonblocking_rounds`).
+    ///
+    /// Carries `pr`, `head`, `round` (this drive's non-blocking rounds, this
+    /// one included), `of` (the policy's bound), `review_rounds` (the SHARED
+    /// bound's spend, this round included) and `residual` — the per-lane
+    /// counts the round was taken on, as [`super::residual_text`] renders them.
+    ///
+    /// Its own action beside the `rd-handback` that follows, for
+    /// [`ROUND_GRACE`]'s reason: "the driver spent a review round nobody
+    /// dispositioned" is the thing that happened, and counting how often it
+    /// fires must not require filtering hand-backs. Written on the arc being
+    /// TAKEN, never on the intent.
+    pub const AUTO_HANDBACK: &str = "rd-auto-handback";
+    /// A worker's `report(done, ref: <PR>)` STARTED this drive (#3367 item 2,
+    /// `driver.auto_drive_on_done`) — the row the report left instead of a
+    /// line in the orchestrator's pane. Carries `pr`, `agent`, `session`,
+    /// `branch` (the proof the reporter is the PR's author) and `report`, the
+    /// text the drive's first notice will carry.
+    pub const AUTO_STARTED: &str = "rd-auto-started";
+    /// A worker's `report(done)` did NOT start a drive although
+    /// `auto_drive_on_done` is on, and was delivered as it always was (#3367
+    /// item 2). Carries `agent`, the `ref` it named, `pr` when one was
+    /// resolved, and a `reason` from [`super::auto_start_refusal`] or from
+    /// `drive_review`'s own closed vocabulary — so an orchestrator asking why a
+    /// PR did not auto-drive reads it here rather than inferring it from a row
+    /// that is missing.
+    pub const AUTO_START_DECLINED: &str = "rd-auto-start-declined";
     /// A lane's verdict was read at this revision.
     pub const VERDICT: &str = "rd-verdict";
     /// The worker's session was resumed with a hand-back brief. Its `why` is one
@@ -910,6 +939,140 @@ pub struct LaneNotice {
     /// head. It is what `LaneRecord::at_head` records, and what distinguishes a
     /// lane that has answered from one that has only been asked.
     pub at_head: String,
+}
+
+/// Why a worker's `report(done)` did not start a drive (#3367 item 2) — the
+/// refusals that are the auto-start's OWN. A refusal `drive_review` itself
+/// answers (`gate-not-configured`, `resume-not-found`, `in-merge-queue`, …)
+/// is passed through under its own name rather than renamed here.
+pub mod auto_start_refusal {
+    /// The report's `ref` does not name a PR: absent, not a number, or a
+    /// number `gh pr view` does not answer for (an issue, a typo).
+    pub const NOT_A_PR: &str = "not-a-pr";
+    /// The PR is not open.
+    pub const PR_NOT_OPEN: &str = "pr-not-open";
+    /// The PR's title carries `[scratch]` — a red-evidence or throwaway PR,
+    /// the first entry on §3.2's list of PRs a drive is wrong for.
+    pub const SCRATCH: &str = "scratch";
+    /// The reporting worker is not the PR's author: its orrerix-recorded
+    /// branch is not the PR's head branch, or it has none.
+    pub const NOT_AUTHOR: &str = "not-author";
+    /// A drive for this PR already exists — live OR parked. A parked drive's
+    /// resume is the orchestrator's decision (§2.3), never a report's.
+    pub const ALREADY_DRIVEN: &str = "already-driven";
+    /// The PR already carries a recorded verdict — INVARIANT 9's guard, see
+    /// `docs/design/review-driver.md` §3.2.
+    pub const HAS_VERDICTS: &str = "has-verdicts";
+    /// `gh` could not answer at all. Unknown is never treated as safe.
+    pub const PR_UNVERIFIABLE: &str = "pr-unverifiable";
+    /// The reporting worker has no recorded session to hand a fix back to.
+    pub const NO_SESSION: &str = "no-session";
+    /// No live orchestrator in the group, so a drive would have nobody to
+    /// report to — and neither would the report, which is delivered (and
+    /// refused) exactly as it always was.
+    pub const NO_ORCHESTRATOR: &str = "no-orchestrator";
+}
+
+/// `gh pr view <n> --json state,headRefName,title` — what the auto-start
+/// needs and nothing else (#3367 item 2): whether `<n>` is a PR at all, whose
+/// branch it is, and whether it is a scratch PR.
+pub fn pr_identity_argv(pr: u64) -> Vec<String> {
+    vec![
+        "pr".into(),
+        "view".into(),
+        pr.to_string(),
+        "--json".into(),
+        "state,headRefName,title".into(),
+    ]
+}
+
+/// A PR's identity as [`pr_identity`] reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrIdentity {
+    pub open: bool,
+    pub head_ref: String,
+    pub title: String,
+}
+
+#[derive(Deserialize)]
+struct RawPrIdentity {
+    #[serde(default)]
+    state: String,
+    #[serde(default, rename = "headRefName")]
+    head_ref_name: String,
+    #[serde(default)]
+    title: String,
+}
+
+/// Read one PR's identity (#3367 item 2). `Err(NOT_A_PR)` when `gh` answered
+/// and the answer is not a PR — a non-zero exit, which is what `gh pr view`
+/// does for an issue number — and `Err(PR_UNVERIFIABLE)` when the seam itself
+/// failed or the answer does not parse: the two want different things from
+/// whoever reads the audit row.
+pub fn pr_identity(r: &dyn RdRunner, pr: u64) -> Result<PrIdentity, &'static str> {
+    let out = r
+        .gh(&as_args(&pr_identity_argv(pr)))
+        .map_err(|_| auto_start_refusal::PR_UNVERIFIABLE)?;
+    if !out.ok() {
+        return Err(auto_start_refusal::NOT_A_PR);
+    }
+    let raw: RawPrIdentity =
+        serde_json::from_str(out.line()).map_err(|_| auto_start_refusal::PR_UNVERIFIABLE)?;
+    Ok(PrIdentity {
+        open: raw.state.trim().eq_ignore_ascii_case("OPEN"),
+        head_ref: raw.head_ref_name.trim().to_string(),
+        title: raw.title,
+    })
+}
+
+/// A PR number out of a report's `ref` — `#123`, `123`, or a URL whose last
+/// segment is the number (#3367 item 2). Nothing is guessed out of prose, for
+/// the plan driver's `pd_pr_from_ref` reason: guessing a number is how a drive
+/// drives the wrong PR. Whether the number IS a PR is `gh`'s to answer.
+pub fn pr_from_ref(r: &str) -> Option<u64> {
+    let t = r.trim().trim_end_matches('/');
+    let tail = t.rsplit('/').next().unwrap_or(t).trim_start_matches('#');
+    tail.parse::<u64>().ok().filter(|n| *n > 0)
+}
+
+/// A scratch PR by its title (#3367 item 2): `[scratch]`, any case — the
+/// marker this repo's red-evidence PRs carry.
+pub fn is_scratch_title(title: &str) -> bool {
+    title.to_ascii_lowercase().contains("[scratch]")
+}
+
+/// The residual a non-blocking round or a satisfied notice reports (#3367):
+/// one clause per lane that spoke, with the counts its summary STATED and `?`
+/// where it stated none — so the orchestrator reads what the driver decided
+/// on, including what it could not read.
+pub fn residual_text(lanes: &[LaneNotice]) -> String {
+    lanes
+        .iter()
+        .map(|l| {
+            if l.verdict != Verdict::Pass {
+                return format!("{} {}", l.block, l.verdict.as_str());
+            }
+            let f = crate::reviewdrive::stated_findings(&l.summary);
+            let n = |o: Option<u32>| o.map_or_else(|| "?".to_string(), |n| n.to_string());
+            format!("{} {} blocking / {} non-blocking", l.block, n(f.blocking), n(f.non_blocking))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The clause a GATE SATISFIED notice gains where `driver.fix_nonblocking_rounds`
+/// is on (#3367 item 1): how many rounds the driver ran on its own and what is
+/// left open, so INVARIANT 3's disposition stays the orchestrator's and is made
+/// on the residual rather than on a count of lanes. Empty when the policy is
+/// off, which is what keeps the stock notice byte-for-byte what it was.
+pub fn nonblocking_clause(rounds: u32, of: u32, lanes: &[LaneNotice]) -> String {
+    if of == 0 {
+        return String::new();
+    }
+    format!(
+        " Non-blocking rounds run by the driver: {rounds}/{of}; residual: {}.",
+        residual_text(lanes)
+    )
 }
 
 /// A reviewer's summary as a notice may carry it: scrubbed, then capped.

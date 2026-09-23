@@ -409,7 +409,7 @@
     },
     "driver": {
       "title": "Review and plan driver",
-      "help": "Policy for the engine-driven review-loop driver (#1778 §5.3), and for the plan driver that reuses its tick, record and backoff discipline (#3040). Policy, not mechanism: nothing here names a PR or starts a drive — no drive exists until an orchestrator makes its own role-gated drive_review call naming one PR. The counters are INVARIANT 9's numbers, and a repo may run a tighter loop than they promise but never a looser one.",
+      "help": "Policy for the engine-driven review-loop driver (#1778 §5.3), and for the plan driver that reuses its tick, record and backoff discipline (#3040). Policy, not mechanism: nothing here names a PR — a drive exists only once an orchestrator makes its own role-gated drive_review call naming one PR, or, where auto_drive_on_done is on, once a worker the orchestrator spawned reports done on its own PR. The counters are INVARIANT 9's numbers, and a repo may run a tighter loop than they promise but never a looser one.",
       "fields": [
         {
           "name": "enabled",
@@ -494,6 +494,21 @@
           "max": 180,
           "on_out_of_range": "refuse",
           "help": "Backstop on a driven planner posting its plan, so a planner that stopped surfaces as held(planner-stalled) instead of silence. Refused rather than clamped, unlike the two waits above: a repo asking for a five-minute planner timeout has misunderstood what a planner does, and silently handing it fifteen would leave that misunderstanding in place."
+        },
+        {
+          "name": "fix_nonblocking_rounds",
+          "type": "number",
+          "default": 0,
+          "min": 0,
+          "max": 3,
+          "on_out_of_range": "refuse",
+          "help": "How many times the driver may hand a SATISFIED gate back to the worker on its own because every required lane passed with only non-blocking findings open (#3367). 0 - the default - wakes the orchestrator at once, as before. Every such round is also a review round, so it can never take a drive past max_review_rounds. The driver reads each lane's stated blocking count from its verdict summary; a lane that states none wakes the orchestrator instead."
+        },
+        {
+          "name": "auto_drive_on_done",
+          "type": "bool",
+          "default": false,
+          "help": "A worker's report(done, ref: <PR>) starts a review drive on its own PR instead of waking the orchestrator (#3367); the report rides in the drive's first notice. Refused - and delivered as before - for a [scratch] PR, a ref that is not a PR, a worker whose branch is not the PR's head, a PR already driven, and a PR that already carries a verdict. A second switch under enabled, off by default."
         }
       ]
     },

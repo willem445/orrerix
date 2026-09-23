@@ -30,6 +30,7 @@
 
 import type { MenuItem } from "./contextmenu";
 import { watchMenuLabel } from "./watchedpanes.ts";
+import { canForkCli } from "./panerestore.ts";
 
 /** One pane's orchestration identity, as a connect action needs it — bound at
  *  arm/complete time (the same identity-vs-index discipline filemenu.ts's header
@@ -121,6 +122,21 @@ export type PaneMenuAction =
       argv: string[] | null;
       /** The source pane's name, so the child can be named after it. */
       sourceName: string;
+      /** The source was a LEAD pane (#3318 F2): its line carries the lead's
+       *  identity, which the child must shed — the child is a standalone pane,
+       *  never a second lead (the one-root invariant). */
+      sourceWasLead: boolean;
+    }
+  /** Fork an orchestration DELEGATE's session (#3318 F2): the backend's
+   *  `orch_fork_agent`, which opens the child as a new delegate of the same
+   *  block — the same registry method an orchestrator's `fork_session` reaches.
+   *  Carries only the identity: the session, the line and the workspace are
+   *  the roster's, read backend-side at the click. */
+  | {
+      kind: "fork-delegate";
+      group: string;
+      agentId: string;
+      sourceName: string;
     };
 
 export type PaneMenuItem = MenuItem<PaneMenuAction>;
@@ -136,8 +152,10 @@ export interface PaneConnectState {
   group: string | null;
   agentId: string | null;
   name: string;
-  /** "orchestrator" | "worker" | "reviewer" | "planner" | "solo", or null alongside a
-   *  null `group`/`agentId`. */
+  /** "orchestrator" | "worker" | "reviewer" | "planner" | "manager" | "lead" | "solo",
+   *  or null alongside a null `group`/`agentId`. `lead` is load-bearing since #3318
+   *  F2: it routes the fork item to a Solo fork that sheds the lead's identity
+   *  (`forkItem`), where every other group role takes the delegate route or none. */
   role: string | null;
   /** The channel this pane currently belongs to, or null if free. */
   channelId: string | null;
@@ -255,11 +273,13 @@ function promoteItem(p: PaneConnectState): PaneMenuItem | null {
 
 const FORK_LABEL = "Fork session…";
 const FORK_CLI_REASON =
-  "Forking is Claude-only for now — it runs the CLI's own fork of this session, and claude is the one loomux has wired and tested (#3318).";
+  "This CLI has no command-line fork, and a fork here runs the CLI's own — copilot's /fork is interactive-only and gemini has none (#3318).";
 const FORK_NO_SESSION_REASON =
   "orrerix doesn't know this pane's conversation yet — a fork copies the session it already has, so send this agent a prompt first.";
 const FORK_NO_WORKDIR_REASON =
   "This pane has no working directory, and a fork opens in the directory its source is working in.";
+const FORK_NO_PANE_REASON =
+  "that pane is not open in this window, so there is nothing here to fork from.";
 const FORK_NO_COMMAND_REASON =
   "orrerix has no launch line recorded for this pane, and a fork is that line rewritten — there is nothing to rewrite.";
 
@@ -272,20 +292,42 @@ const FORK_NO_COMMAND_REASON =
  *  already in an orchestration group), a disabled row WITH a reason for an
  *  agent pane that could plausibly be forked but is not eligible right now.
  *
- *  **An orchestration-group pane gets no item, and that is a scope line rather
- *  than an oversight.** Forking a delegate is #3318 F2: it needs a roster row
- *  naming the parent, an audit row, a worktree policy and a refusal for a pane
- *  a review drive owns — none of which this gesture has. A lead's own pane is
- *  excluded by the same rung (its role is `lead`, not `solo`), and F2 is where
- *  it becomes a Solo fork. */
+ *  **Three routes, by who the pane belongs to** (#3318 F2):
+ *
+ *  - a SOLO pane (or one with no identity yet) forks to a Solo pane, built
+ *    here in the frontend — F1's gesture, widened from claude to every CLI
+ *    with a fork seam (`canForkCli`);
+ *  - a LEAD's own pane forks to a Solo pane too, never a second lead (the
+ *    one-root invariant, `docs/design/lead-pane.md`): the same frontend route,
+ *    with the lead's identity shed from the line (`sourceWasLead`);
+ *  - an orchestration DELEGATE (worker, reviewer, planner) forks through the
+ *    backend (`fork-delegate` → `orch_fork_agent`), which owns the roster row,
+ *    the audit row, the worktree and every refusal a delegate fork has — a
+ *    drive-owned pane, a session-less one. Nothing is decided about a delegate
+ *    here beyond the CLI, so the menu never contradicts the backend's answer.
+ *
+ *  An orchestrator or a manager pane gets no item: neither is a delegate
+ *  anyone may open a second of, and the backend refuses both. */
 function forkItem(p: PaneConnectState): PaneMenuItem | null {
   // Same gate, and the same argument, as `promoteItem`'s: a recognized agent
   // CLI is what makes a pane one this gesture is about.
   if (p.agentCli === null) return null;
-  if (p.group !== null && p.role !== "solo") return null;
+  const delegate = p.group !== null && (p.role === "worker" || p.role === "reviewer" || p.role === "planner");
+  if (p.group !== null && p.role !== "solo" && p.role !== "lead" && !delegate) return null;
 
   const refuse = (reason: string): PaneMenuItem => ({ label: FORK_LABEL, disabled: true, reason });
-  if (p.agentCli !== "claude") return refuse(FORK_CLI_REASON);
+  if (!canForkCli(p.agentCli)) return refuse(FORK_CLI_REASON);
+  if (delegate) {
+    // A delegate's fork is the backend's, keyed on its agent id — and a
+    // delegate pane with no id to name has no route at all, rather than
+    // falling through to the SOLO route below and forking a group agent as a
+    // standalone pane nobody's roster knows.
+    if (p.group === null || p.agentId === null) return null;
+    return {
+      label: FORK_LABEL,
+      action: { kind: "fork-delegate", group: p.group, agentId: p.agentId, sourceName: p.name },
+    };
+  }
   if (!p.sessionId) return refuse(FORK_NO_SESSION_REASON);
   if (!p.workdir) return refuse(FORK_NO_WORKDIR_REASON);
   if (!p.command?.trim() && !p.argv?.length) return refuse(FORK_NO_COMMAND_REASON);
@@ -299,8 +341,50 @@ function forkItem(p: PaneConnectState): PaneMenuItem | null {
       command: p.command,
       argv: p.argv,
       sourceName: p.name,
+      sourceWasLead: p.role === "lead",
     },
   };
+}
+
+/** The fork action a pane's CURRENT state yields, or the reason it yields none
+ *  — `forkItem` without the menu around it (#3318 F2). The lead's self-fork
+ *  (`orch-fork-solo-request`) arrives with no menu open, and this is what it
+ *  builds its action from, so a request from the backend is held to exactly
+ *  the rules a right-click is. */
+export function forkActionFor(
+  p: PaneConnectState | null
+): { action: Extract<PaneMenuAction, { kind: "fork" }> } | { refusal: string } {
+  // No pane at all — the request named a pane this window does not have. A
+  // refusal with its own reason, never a silent no-op (review round 1).
+  if (p === null) return { refusal: FORK_NO_PANE_REASON };
+  const item = forkItem(p);
+  const action = item?.action;
+  if (action?.kind === "fork") return { action };
+  return { refusal: item?.reason ?? "this pane is not one orrerix can fork from here" };
+}
+
+/** Why a fork must NOT proceed at the CLICK, though it was offered when the
+ *  menu opened — or null when it may (#3331 item 1).
+ *
+ *  The menu binds the pane's session at BUILD time, and a pane can be
+ *  restarted or re-bound between the right-click and the click: forking the id
+ *  the menu captured would then fork the PREVIOUS session and hand the child a
+ *  conversation the pane is no longer having. So the click re-reads the pane
+ *  and refuses when either fact the fork line is built from has moved — the
+ *  session, or the CLI (a different CLI means a different fork grammar
+ *  altogether). Refusing rather than silently forking the new session: the
+ *  human chose to fork the conversation they were looking at. */
+export function forkClickRefusal(
+  action: { sessionId: string; cli: string },
+  now: { sessionId: string | null; agentCli: string | null }
+): string | null {
+  if (now.agentCli !== action.cli) {
+    return "This pane is running a different CLI than when the menu opened — open the menu again to fork what it runs now.";
+  }
+  if (now.sessionId !== action.sessionId) {
+    return "This pane's session changed after the menu opened (it was restarted or re-bound) — open the menu again to fork the session it is running now.";
+  }
+  return null;
 }
 
 function identity(p: PaneConnectState): PaneIdentity | null {

@@ -5481,6 +5481,16 @@ export class Pane implements VoiceTargetPane {
     return hasForkSession(this.spawnCommand, this.spawnArgv);
   }
 
+  /** The parent session this pane was forked FROM by loomux's own fork
+   *  gesture (#3318), or null — for a human's own fork line too, which is the
+   *  distinction that matters. The reconciler reads it (#3318 F2): a line
+   *  loomux BUILT may learn its child's id, because loomux knows which session
+   *  on it is the parent and holds that one out of the match; a human's line
+   *  stays under B3's exclusion. */
+  get forkedFrom(): string | null {
+    return this.forkOf;
+  }
+
   /** This pane's recorded agent session id, or null when none has been minted,
    *  named on its command line, or learned yet (#440). Read by the reconciler
    *  to build its plain-data pane projection and to decide whether a pane is

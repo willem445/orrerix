@@ -14908,3 +14908,31 @@ fn a_dead_superseded_pane_does_not_turn_an_ordinary_duplicate_drive_review_into_
         "and no `why: restart` re-brief of a worker that is alive and mid-fix"
     );
 }
+
+/// **#3318 F2 — a pane a live review drive owns cannot be forked.** The driver
+/// routes its panes by agent id, and a fork is a new agent it never briefed, so
+/// orrerix refuses rather than inventing a third owner. The bystander — a worker
+/// in the same group this drive never touched — is the control: the same call
+/// is admitted for it, so the refusal is keyed on ownership and not on the
+/// group having a drive at all.
+#[test]
+fn a_fork_of_a_driven_worker_is_refused_and_an_undriven_one_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, orch, worker) = driven_worker(&reg, &repo, &gh);
+
+    let refused = reg
+        .fork_agent(&group, &orch, &worker, "", None, None, "")
+        .expect_err("a driven worker is the driver's");
+    assert!(refused.contains("review drive on PR #1758"), "{refused}");
+
+    let bystander = reg
+        .spawn_agent(&group, Role::Worker, "unrelated", "", false, None)
+        .expect("a delegate this drive never touched");
+    let fork = reg
+        .fork_agent(&group, &orch, &bystander.id, "", None, None, "")
+        .unwrap_or_else(|e| panic!("the undriven control must be admitted: {e}"));
+    assert_eq!(fork.forked_from, bystander.session_id);
+}

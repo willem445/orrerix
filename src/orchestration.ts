@@ -15,8 +15,9 @@ import { isSpawnRequestExpired, spawnsForGroup } from "./spawnexpiry";
 import {
   agentForkCommand,
   forkPaneName,
+  forkPremintsChild,
+  programFromRestore,
   sessionIdFromCommand,
-  FORK_PREMINTS_CHILD_ID,
 } from "./panerestore";
 import type { AutonomyState } from "./autonomy";
 import type { NeedsYouView, OrchQuestion } from "./decisions";
@@ -24,7 +25,14 @@ import type { WorkflowEntry, WorkflowListing, WorkflowPreview } from "./roster";
 import type { GroupViewMeta, ViewMeta } from "./viewstale";
 import { showToast } from "./toast";
 import { showContextMenu } from "./contextmenu";
-import { buildPaneMenu, type PaneConnectState, type PaneMenuAction, type PendingConnect } from "./panemenu";
+import {
+  buildPaneMenu,
+  forkActionFor,
+  forkClickRefusal,
+  type PaneConnectState,
+  type PaneMenuAction,
+  type PendingConnect,
+} from "./panemenu";
 import { reduceConnect, channelBadge, dropIfStale } from "./channel";
 import type { HeldReason } from "./heldbadge";
 import { modal } from "./modal";
@@ -668,7 +676,8 @@ export interface OrchWiring {
    *
    *  `forkOf` is the parent session id, recorded on the new pane: it is that
    *  pane's provenance AND the gate that discharges the one-shot fork flag out
-   *  of every later capture (`PersistedPane.forkOf`). */
+   *  of every later capture (`PersistedPane.forkOf`). Resolves whether the
+ *  pane actually OPENED — a lead's self-fork acks the backend with it. */
   openForkedPane(source: Pane, opts: {
     name: string;
     cwd: string;
@@ -676,7 +685,11 @@ export interface OrchWiring {
     argv?: string[];
     sessionId?: string;
     forkOf: string;
-  }): Promise<void>;
+    /** #3318 F2: the source was a LEAD pane, so its line carries the lead's
+     *  identity (and its `--disallowedTools Agent` marker), which the child
+     *  sheds before it is re-minted as a plain Solo pane — never a lead. */
+    sourceWasLead?: boolean;
+  }): Promise<boolean>;
 }
 
 /** The tab layer, kept for the paths that aren't backend events (#407's promote
@@ -738,12 +751,46 @@ export function initOrchestration(wiring: OrchWiring): void {
   // card. That exclusion exists because those two INFER an id — from a transcript
   // match, or from the command line — and `--fork-session` makes the inferred id
   // wrong. This id was OBSERVED: the backend watched the process create that
-  // session in the CLI's own store. (It is unreachable for claude besides —
-  // `capture_session_baseline` answers `None` for every CLI but copilot and
-  // opencode, and `--fork-session` is claude's flag.)
+  // session in the CLI's own store. Since #3318 F2 that is exactly how a codex
+  // or opencode DELEGATE fork's child id arrives — its pane runs a fork line,
+  // and the watcher saw the child appear — so this is the one adoption a
+  // forking line should get.
   //
   // Swept across every tab by agent id, the same shape `orch-spawn-cancelled`
   // above uses: a group's panes are not confined to one grid.
+  // #3318 F2: a LEAD asked (`fork_session` on its own id) to fork its own pane.
+  // The child is a Solo pane for the human — never a second lead — and that
+  // gesture already exists here, so the backend asks for it rather than
+  // opening a pane of its own. Built through `forkActionFor`, i.e. held to
+  // exactly the rules a right-click on the same pane is, from the pane's state
+  // NOW; a refusal is a toast, since the lead's own tool call has already
+  // returned.
+  //
+  // NEVER silent (review round 1): a request for a pane this window does not
+  // have — the lead's tab closed, or the lead is in another window — is a
+  // refusal like any other, toasted AND acked, so the backend's
+  // `agent-fork-requested` row always gains an outcome beside it.
+  void listen<{ group_id: string; agent_id: string }>("orch-fork-solo-request", ({ payload }) => {
+    let source: Pane | null = null;
+    for (const grid of wiring.allGrids()) {
+      for (const pane of grid.allPanes()) {
+        if (pane.orchAgentId === payload.agent_id) source = pane;
+      }
+    }
+    const built = forkActionFor(source ? paneConnectState(source) : null);
+    const ack = (opened: boolean, detail: string): void => {
+      void orchForkSoloResult(payload.group_id, payload.agent_id, opened, detail).catch(() => {
+        /* best-effort: the toast already told the human */
+      });
+    };
+    if ("refusal" in built || source === null) {
+      const why = "refusal" in built ? built.refusal : "the lead's pane is not open in this window";
+      showToast(`Can't open the fork your lead asked for: ${why}`, "error");
+      ack(false, why);
+      return;
+    }
+    void forkPaneSession(source, built.action).then((r) => ack(r.opened, r.why));
+  });
   void listen<{ group_id: string; agent_id: string; session_id: string }>(
     "orch-session-learned",
     ({ payload }) => {
@@ -1202,6 +1249,19 @@ async function handlePaneMenuAction(action: PaneMenuAction, pane: Pane): Promise
     await forkPaneSession(pane, action);
     return;
   }
+  // #3318 F2: a delegate's fork is the backend's — the same registry method an
+  // orchestrator's `fork_session` reaches, so its refusals (a drive-owned pane,
+  // a session not yet recorded) read the same here as they do to an agent. The
+  // child pane arrives through the ordinary `orch-spawn-request`.
+  if (action.kind === "fork-delegate") {
+    try {
+      const forked = await orchForkAgent(action.group, action.agentId);
+      showToast(`Forked “${action.sourceName}” into “${forked.name}” — the original is untouched.`, "info");
+    } catch (err) {
+      showToast(`Fork failed: ${String(err)}`, "error");
+    }
+    return;
+  }
   // Only "connect-arm" legitimately introduces a NEW pending source pane — every
   // other action either leaves `pending` exactly as it was (a disconnect of some
   // UNRELATED pane while a different one is armed elsewhere: `pane` here is the
@@ -1263,36 +1323,58 @@ const forksInFlight = new Set<Pane>();
  *  nothing to warn about.
  *
  *  The child's session id is minted HERE, before the pane opens, and handed to
- *  claude on the line (`FORK_PREMINTS_CHILD_ID`). `crypto.randomUUID` is the
+ *  the CLI on the line where its fork can name one (`forkPremintsChild`: pi,
+ *  and claude per `FORK_PREMINTS_CHILD_ID`). `crypto.randomUUID` is the
  *  webview's Web Crypto, not a getrandom crate — CLAUDE.md constraint 2
  *  governs `src-tauri` Rust only — and it is the same mint the launcher
  *  already uses for a fresh claude pane's `--session-id`. */
 async function forkPaneSession(
   pane: Pane,
   action: Extract<PaneMenuAction, { kind: "fork" }>
-): Promise<void> {
-  if (forksInFlight.has(pane)) return;
+): Promise<{ opened: boolean; why: string }> {
+  if (forksInFlight.has(pane)) return { opened: false, why: "a fork of this pane is already in flight" };
   forksInFlight.add(pane);
   try {
+    // #3331 item 1: the menu bound the session when it OPENED. Re-read the
+    // pane now, and refuse if what the fork line is built from has moved —
+    // forking the captured id would fork a conversation the pane is no longer
+    // having. The line itself is re-read too, for the same reason.
+    const moved = forkClickRefusal(action, { sessionId: pane.sessionId, agentCli: pane.agentCli });
+    if (moved) {
+      showToast(`Can't fork “${action.sourceName}”: ${moved}`, "error");
+      return { opened: false, why: moved };
+    }
+    const now = pane.launchLine;
+    if (!now.command?.trim() && !now.argv?.length) {
+      showToast(`Can't fork “${action.sourceName}”: its launch line is no longer recorded.`, "error");
+      return { opened: false, why: "its launch line is no longer recorded" };
+    }
     const childId = crypto.randomUUID();
-    const line = agentForkCommand(action.command, action.argv, action.sessionId, childId);
+    const line = agentForkCommand(now.command, now.argv, action.sessionId, childId);
     if (!line) {
       // The menu already refuses a CLI with no fork seam, so reaching here means
       // the pane's CLI changed under an open menu. Say so rather than opening a
       // pane whose line carries a flag its CLI does not know.
       showToast(`Can't fork this pane: loomux has no fork for ${action.cli}.`, "error");
-      return;
+      return { opened: false, why: `no fork for ${action.cli}` };
     }
-    await orchWiring?.openForkedPane(pane, {
+    const opened = (await orchWiring?.openForkedPane(pane, {
       name: forkPaneName(action.sourceName),
       cwd: action.workdir,
       command: line.command,
       argv: line.argv,
-      sessionId: FORK_PREMINTS_CHILD_ID ? childId : undefined,
+      // #3318 F2: recorded only where the CLI's fork NAMES the child (pi, and
+      // claude per L1). codex's and opencode's child is theirs to mint, and
+      // the reconciler learns it — recording the unused mint would give the
+      // pane an id it is not running under.
+      sessionId: forkPremintsChild(programFromRestore(now.command, now.argv)) ? childId : undefined,
       forkOf: action.sessionId,
-    });
+      sourceWasLead: action.sourceWasLead,
+    })) ?? false;
+    return { opened, why: opened ? "" : "the pane could not be opened" };
   } catch (err) {
     showToast(`Fork failed: ${String(err)}`, "error");
+    return { opened: false, why: String(err) };
   } finally {
     forksInFlight.delete(pane);
   }
@@ -2752,6 +2834,29 @@ export const soloBind = (agentId: string, ptyId: number): Promise<void> =>
  *  re-adopting an already-adopted pty returns its existing agent id. */
 export const soloAdopt = (ptyId: number, name: string, cwd: string): Promise<{ agent_id: string }> =>
   invoke<{ agent_id: string }>("orch_solo_adopt", { ptyId, name, cwd });
+
+/** What `orch_fork_agent` answers: the fork's agent id, pane name, and its
+ *  session id when the CLI's fork names the child up front (claude per L1,
+ *  pi) — null where the vendor mints it and orrerix learns it later. */
+export interface ForkedAgent {
+  agent_id: string;
+  name: string;
+  session_id: string | null;
+}
+
+/** Fork a DELEGATE's session into a new agent pane in its group (#3318 F2) —
+ *  the human's route to `OrchRegistry::fork_agent`, the same registry method
+ *  the `fork_session` MCP tool reaches, so every refusal reads the same. The
+ *  new pane arrives through the ordinary `orch-spawn-request`. */
+export const orchForkAgent = (groupId: string, agentId: string): Promise<ForkedAgent> =>
+  invoke<ForkedAgent>("orch_fork_agent", { groupId, agentId, task: null, name: null });
+
+/** Tell the backend what became of a lead's self-fork request (#3318 F2,
+ *  review round 1): `opened`, or the reason it did not. The backend's
+ *  `agent-fork-requested` row is written before anything opens; this is what
+ *  puts the OUTCOME beside it (`agent-fork` / `agent-fork-failed`). */
+export const orchForkSoloResult = (groupId: string, agentId: string, opened: boolean, detail: string): Promise<void> =>
+  invoke("orch_fork_solo_result", { groupId, agentId, opened, detail });
 
 /** Start the solo-pane copilot autopilot consent watcher (#364): a copilot
  *  pane launched with `--autopilot` opens a blocking "Enable autopilot mode"

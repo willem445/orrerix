@@ -194,16 +194,32 @@ gets its own name (`claude (fork)`, then `claude (fork 2)`, …), its own
 session, and its own identity for [connecting panes](../orchestration.html)
 — so anything you do in it is invisible to the pane you forked.
 
-The fork is the CLI's own: orrerix asks Claude Code to fork the session rather
-than copying any files around. That means the fork carries the conversation up
-to this moment. Expect to re-approve tools you had allowed "for this session" —
-the fork is a new process, so those approvals are not expected to carry.
+The fork is the CLI's own: orrerix asks the CLI to fork the session rather
+than copying any files around — Claude Code's `--fork-session`, codex's
+`codex fork`, pi's `--fork` and opencode's `--fork`. That means the fork carries
+the conversation up to this moment. Expect to re-approve tools you had allowed
+"for this session" — the fork is a new process, so those approvals are not
+expected to carry.
 
-**Claude Code only, for now.** On a standalone agent pane the item is always
-there: greyed out with the reason on any other CLI, and greyed out until the
-agent has been prompted at least once (there is no conversation to fork before
-that). Panes belonging to an orchestration group — a worker, a reviewer, a
-lead — have no Fork item at all yet; forking those comes later.
+**Claude Code, codex, pi and opencode.** On a standalone agent pane the item is
+always there: greyed out with the reason on copilot and gemini (neither has a
+command-line fork), and greyed out until the agent has been prompted at least
+once (there is no conversation to fork before that). A codex or opencode fork
+learns its own session id a little after its first prompt, the way any fresh
+pane of those CLIs does.
+
+If the pane restarted between opening the menu and clicking **Fork session…**,
+orrerix refuses and asks you to open the menu again, rather than forking the
+conversation the pane was having before.
+
+**Orchestration panes fork too.** On a worker, reviewer or planner the fork is
+a new agent of the same kind in its group — same persona, CLI and model — with
+its own worktree cut from the original's branch; it counts against the group's
+agent limit and reports to the orchestrator like any other. A pane a review or
+plan drive is using can't be forked while the drive runs. On a **lead** pane,
+the fork is a standalone pane for you (never a second lead), and the lead can
+ask for the same thing itself. An orchestrator or manager pane has no Fork item.
+See [Orchestration](../orchestration.html#forking-an-agents-session).
 
 **There is no rejoin.** Nothing merges two conversations back together — no
 agent CLI offers it — so when a side quest is worth keeping, you copy what you

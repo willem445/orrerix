@@ -77,6 +77,7 @@ are equal, in both directions.
 | Tool | Why |
 | --- | --- |
 | `spawn_agent` | The capability the toggle exists to grant. A **different definition** from the orchestrator's, not a shared one: that description is three screens of contract a lead is refused (reviewer and planner classes, board-task grounding, resume machinery), and a surface that keeps advertising a route the tool refuses is read on every turn, re-grounding included. |
+| `fork_session` | #3318 F2. It OPENS a pane, which is the one capability `spawn_agent` above already grants this class, and it opens nothing a lead could not already open: a fork of a helper is a worker in that helper's own block (the worker-only rule holds by inheritance, since a lead group's only delegates are workers), under the same cap and spawn-rate backstop. Forking the lead's OWN id is not a delegate at all — a standalone pane for the human, the one-root invariant intact, admitted through the spawn-rate backstop because it sits outside the cap. Its own row in both the listing and the gate, rather than riding in with the fleet-control five. See [session-fork.md](session-fork.md). |
 | `send_prompt` | Drive a helper. Class-neutral wording, shared with the orchestrator's tier. |
 | `get_output` | Read a helper's tail. This is the cost argument: a helper's output stays out of the lead's context until it asks. |
 | `kill_agent`, `focus_agent`, `rename_agent` | Manage the panes it opened. Shared wording. |

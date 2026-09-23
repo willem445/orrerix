@@ -483,10 +483,19 @@ function isCodexResumeArgument(raw: string): boolean {
  *  codex's; see `CODEX_RESUME_SUBCOMMAND` for why that gate is load-bearing
  *  here in a way it is not for a `--`-prefixed flag. */
 function stripCodexResumeFromCommand(command: string): string {
+  return stripCodexSubcommandFromCommand(command, CODEX_RESUME_SUBCOMMAND);
+}
+
+/** `stripCodexResumeFromCommand` for any session SUBCOMMAND word (#3318 F2):
+ *  codex's `fork [<id>|--last]` has exactly `resume`'s argument grammar — the
+ *  same `[SESSION_ID]` positional and the same `--last` switch
+ *  (`ForkCommand` at `rust-v0.153.4`) — so it takes the same excision, with the
+ *  same bare-word residual `CODEX_RESUME_SUBCOMMAND` states. */
+function stripCodexSubcommandFromCommand(command: string, word: string): string {
   const tokens = tokenizeWithPositions(command);
   const dropRanges: Array<[number, number]> = [];
   for (let i = 0; i < tokens.length; i++) {
-    if (command.slice(tokens[i].start, tokens[i].end) !== CODEX_RESUME_SUBCOMMAND) continue;
+    if (command.slice(tokens[i].start, tokens[i].end) !== word) continue;
     let dropStart = tokens[i].start;
     let dropEnd = tokens[i].end;
     if (i + 1 < tokens.length) {
@@ -512,9 +521,14 @@ function stripCodexResumeFromCommand(command: string): string {
 /** The same excision for the already-discrete `argv` array — no quoting concept
  *  there, same coverage. */
 function stripCodexResumeFromArgv(tokens: string[]): string[] {
+  return stripCodexSubcommandFromArgv(tokens, CODEX_RESUME_SUBCOMMAND);
+}
+
+/** The argv twin of `stripCodexSubcommandFromCommand`. */
+function stripCodexSubcommandFromArgv(tokens: string[], word: string): string[] {
   const out: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
-    if (tokens[i] === CODEX_RESUME_SUBCOMMAND) {
+    if (tokens[i] === word) {
       const next = tokens[i + 1];
       if (next !== undefined && isCodexResumeArgument(next)) i++;
       continue;
@@ -1335,9 +1349,19 @@ export function sessionIdFromCommand(command: string | null, argv: string[] | nu
  *  line) and by the #440 reconciler/D2 exclusion in main.ts (refuses to
  *  EVER attach a *learned* id to a forking line either — see the design
  *  note's fork-session section for why exclusion, not id-stripping, is the
- *  chosen fix). */
+ *  chosen fix).
+ *
+ *  **Every CLI's fork token, since #3318 F2** — not only claude's. B3's reason
+ *  is that on a forking line the id NAMED is the parent's, not the one the
+ *  process runs under, and that is exactly as true of `opencode --session <id>
+ *  --fork`, `pi --fork <id>` and `codex fork <id>`. claude's `--fork-session`
+ *  stays ungated, as it always was; the other three are gated on the program,
+ *  because `--fork` and a bare `fork` are not tokens this module can read as a
+ *  fork on a line it has not identified as that CLI's. */
 export function hasForkSession(command: string | null, argv: string[] | null): boolean {
-  const has = (tokens: string[]): boolean => tokens.includes("--fork-session");
+  const seam = forkSeamOf(programFromRestore(command, argv));
+  const has = (tokens: string[]): boolean =>
+    tokens.includes(CLAUDE_FORK_FLAG) || (seam !== null && hasForkToken(seam, tokens));
   if (command && command.trim() && has(command.trim().split(/\s+/))) return true;
   if (argv && argv.length && has(argv)) return true;
   return false;
@@ -1371,34 +1395,94 @@ const CLAUDE_FORK_FLAG = "--fork-session";
  *  id up front, so a forked pane has an exact recorded identity from its first
  *  turn, exactly like every other claude pane. `false` is the LEARNED arm,
  *  which is correct under either answer to L1 and leaves the child's id
- *  unrecorded — claude takes no session baseline today, so nothing can learn
- *  it until #3318 F2. */
+ *  unrecorded — claude takes no session baseline, so nothing learns it. The
+ *  human ran F1 and kept the pre-mint arm, so #3318 F2 added none. */
 export const FORK_PREMINTS_CHILD_ID = true;
 
-/** Can loomux fork this pane's CLI? — the frontend's copy of the engine's
- *  `ForkSeam` table (`CliCaps.fork`), narrowed to the one question a menu item
- *  asks.
+/** How one CLI spells a fork of a session — the frontend's copy of the
+ *  engine's `ForkSeam` rows (`CliCaps.fork`, `crates/loomux-engine/src/model.rs`),
+ *  which carry the vendor citation for each (#3318 F2).
  *
- *  **claude alone, and that is #3318 F1's whole scope**: the human demos a fork
- *  on one CLI before the rest are added. codex, pi and opencode each have a
- *  documented argv fork and are F2's; copilot and gemini have none at all (see
- *  their `CliCaps` rows for the citation on each). Same mirroring contract as
- *  `SOLO_MCP_CLIS` above — the backend table is authoritative, this is the
- *  frontend's copy of the row it needs, and widening it here without widening
- *  the row there would emit a flag the backend never blessed. */
-export function canForkCli(program: string | null | undefined): boolean {
-  return normalizeAgentProgram(program ?? "") === "claude";
+ *  Same mirroring contract as `SOLO_MCP_CLIS` above: the backend table is
+ *  authoritative and this is the frontend's copy of the rows a Solo fork needs,
+ *  because a Solo pane builds its line HERE and never reaches
+ *  `build_agent_command_ex`. `test/panerestore.test.ts` reads the Rust table
+ *  off disk and asserts every spelling below agrees with it, so neither side
+ *  can move alone.
+ *
+ *  - `flag` — the resume line plus one valueless token (claude `--fork-session`,
+ *    opencode `--fork`); `premintsChild` says whether the line ALSO names the
+ *    child's id (claude per live check L1; opencode never can).
+ *  - `subcommand` — the resume subcommand's slot with this word (codex `fork`).
+ *  - `parentFlag` — a flag taking the PARENT, beside the CLI's own
+ *    open-or-create id flag naming the child (pi `--session-id <child>
+ *    --fork <parent>`); always pre-mints. */
+type ForkSpelling =
+  | { kind: "flag"; flag: string; premintsChild: boolean }
+  | { kind: "subcommand"; word: string }
+  | { kind: "parentFlag"; flag: string };
+
+const FORK_SEAMS: Readonly<Record<string, ForkSpelling>> = {
+  claude: { kind: "flag", flag: CLAUDE_FORK_FLAG, premintsChild: FORK_PREMINTS_CHILD_ID },
+  opencode: { kind: "flag", flag: "--fork", premintsChild: false },
+  codex: { kind: "subcommand", word: "fork" },
+  pi: { kind: "parentFlag", flag: "--fork" },
+};
+
+/** The fork spelling for a recorded program, or null for one loomux cannot
+ *  fork (copilot, gemini, a plain shell). */
+function forkSeamOf(program: string | null | undefined): ForkSpelling | null {
+  return FORK_SEAMS[normalizeAgentProgram(program ?? "")] ?? null;
 }
 
-/** Excise every `--fork-session` occurrence from a command STRING — the same
+/** Whether `tokens` carry `seam`'s fork token. A `parentFlag` is matched in
+ *  both its space and `=` forms, the two a flag with a value can take. */
+function hasForkToken(seam: ForkSpelling, tokens: string[]): boolean {
+  switch (seam.kind) {
+    case "flag":
+      return tokens.includes(seam.flag);
+    case "subcommand":
+      return tokens.includes(seam.word);
+    case "parentFlag":
+      return tokens.some((t) => t === seam.flag || t.startsWith(`${seam.flag}=`));
+  }
+}
+
+/** Can loomux fork this pane's CLI? — the one question a menu item asks of
+ *  `FORK_SEAMS`. claude, codex, pi and opencode since #3318 F2; copilot and
+ *  gemini have no argv fork at all (their `CliCaps` rows say why). */
+export function canForkCli(program: string | null | undefined): boolean {
+  return forkSeamOf(program) !== null;
+}
+
+/** Whether a fork of this CLI names its CHILD's session id on the line — so
+ *  the pane can record that id from its first turn. pi always; claude per live
+ *  check L1 (`FORK_PREMINTS_CHILD_ID`); codex and opencode never, their child's
+ *  id being the vendor's to mint and the reconciler's to learn. A line with no
+ *  recorded program falls back to claude, as `agentForkCommand` does. */
+export function forkPremintsChild(program: string | null | undefined): boolean {
+  const seam = program ? forkSeamOf(program) : FORK_SEAMS.claude;
+  if (!seam) return false;
+  switch (seam.kind) {
+    case "flag":
+      return seam.premintsChild;
+    case "parentFlag":
+      return true;
+    case "subcommand":
+      return false;
+  }
+}
+
+/** Excise every occurrence of a VALUELESS fork token (claude `--fork-session`
+ *  by default, opencode `--fork`) from a command STRING — the same
  *  whitespace-preserving, one-leading-space-absorbing contract as
  *  `stripSessionFlagsFromCommand`, and simpler for one reason: the flag takes
  *  no value, so nothing following it is ever consumed. */
-function stripForkSessionFromCommand(command: string): string {
+function stripForkSessionFromCommand(command: string, flag: string = CLAUDE_FORK_FLAG): string {
   const tokens = tokenizeWithPositions(command);
   const dropRanges: Array<[number, number]> = [];
   for (const t of tokens) {
-    if (command.slice(t.start, t.end) !== CLAUDE_FORK_FLAG) continue;
+    if (command.slice(t.start, t.end) !== flag) continue;
     let dropStart = t.start;
     if (dropStart > 0 && /\s/.test(command[dropStart - 1])) dropStart -= 1;
     dropRanges.push([dropStart, t.end]);
@@ -1414,8 +1498,63 @@ function stripForkSessionFromCommand(command: string): string {
 }
 
 /** The argv twin — every occurrence dropped, nothing following it consumed. */
-function stripForkSessionFromArgv(tokens: string[]): string[] {
-  return tokens.filter((t) => t !== CLAUDE_FORK_FLAG);
+function stripForkSessionFromArgv(tokens: string[], flag: string = CLAUDE_FORK_FLAG): string[] {
+  return tokens.filter((t) => t !== flag);
+}
+
+/** One CLI's session-identity grammar, as the fork builders need it (#3318
+ *  F2): how to strip a recorded line down to its non-session flags, what a
+ *  FORK of `parent` appends to that, and what a plain RESUME of `id` appends —
+ *  the latter being what a discharged fork record becomes.
+ *
+ *  Keyed by program, not by seam kind, because what gets stripped is each
+ *  CLI's own session vocabulary (`OPENCODE_SESSION_FLAG_NAMES`, codex's
+ *  subcommands, …), which is a per-CLI fact the seam does not carry. A program
+ *  this knows nothing about takes claude's row — the fallback
+ *  `agentResumeCommand` has always used, and `agentForkCommand` refuses an
+ *  unforkable program before it ever gets here. */
+interface ForkGrammar {
+  bareCommand(command: string): string;
+  bareArgv(argv: string[]): string[];
+  forkTail(parent: string, child: string): string[];
+  resumeTail(id: string): string[];
+}
+
+function forkGrammarOf(program: string | null): ForkGrammar {
+  switch (program === null ? "claude" : normalizeAgentProgram(program)) {
+    case "opencode":
+      return {
+        bareCommand: (c) => stripForkSessionFromCommand(stripSessionFlagsFromCommand(c, OPENCODE_SESSION_FLAG_NAMES), "--fork"),
+        bareArgv: (a) => stripForkSessionFromArgv(stripSessionFlagsFromArgv(a, OPENCODE_SESSION_FLAG_NAMES), "--fork"),
+        forkTail: (parent) => ["--session", parent, "--fork"],
+        resumeTail: (id) => ["--session", id],
+      };
+    case "codex":
+      return {
+        bareCommand: (c) => stripCodexSubcommandFromCommand(stripCodexResumeFromCommand(c), "fork"),
+        bareArgv: (a) => stripCodexSubcommandFromArgv(stripCodexResumeFromArgv(a), "fork"),
+        forkTail: (parent) => ["fork", parent],
+        resumeTail: (id) => ["resume", id],
+      };
+    case "pi": {
+      // `--fork` takes a value on pi, so it is excised by the value-consuming
+      // flag excision beside the session flags rather than as a bare token.
+      const names = [...PI_SESSION_FLAG_NAMES, "--fork"];
+      return {
+        bareCommand: (c) => stripSessionFlagsFromCommand(c, names),
+        bareArgv: (a) => stripSessionFlagsFromArgv(a, names),
+        forkTail: (parent, child) => ["--session-id", child, "--fork", parent],
+        resumeTail: (id) => ["--session-id", id],
+      };
+    }
+    default:
+      return {
+        bareCommand: (c) => stripForkSessionFromCommand(stripSessionFlagsFromCommand(c, SESSION_FLAG_NAMES)),
+        bareArgv: (a) => stripForkSessionFromArgv(stripSessionFlagsFromArgv(a, SESSION_FLAG_NAMES)),
+        forkTail: (parent, child) => [...forkIdFlags(parent, child).argv, CLAUDE_FORK_FLAG],
+        resumeTail: (id) => ["--resume", id],
+      };
+  }
 }
 
 /** The id flags a fork line carries — the L1 two-arm choice, as a pure
@@ -1457,15 +1596,17 @@ export function forkIdFlags(
  *  is the second half of the same rule, at the site that would have to build
  *  the broken line.
  *
- *  `childSessionId` is the id loomux minted for the child, used only on the
- *  PRE-MINT arm (`FORK_PREMINTS_CHILD_ID`); the learned arm ignores it and
- *  names only the parent. Both arms are built and both are pinned, because
- *  which is correct is live check L1 and the human is the one who can run it.
+ *  `childSessionId` is the id loomux minted for the child, read only where the
+ *  CLI's fork names its child (`forkPremintsChild`): pi always, claude on the
+ *  PRE-MINT arm (`FORK_PREMINTS_CHILD_ID`). claude's learned arm, codex and
+ *  opencode ignore it and name only the parent. Both claude arms are built and
+ *  both are pinned, because which is correct is live check L1 and the human is
+ *  the one who can run it.
  *
- *  Every recorded session flag is excised first, exactly as `agentResumeCommand`
- *  does and for the same reason — a pane forked twice would otherwise carry two
- *  `--resume`s — and so is any `--fork-session` already on the line, so forking
- *  a pane that is itself a fork emits one flag rather than two. */
+ *  Every recorded session identity is excised first, exactly as
+ *  `agentResumeCommand` does and for the same reason — a pane forked twice
+ *  would otherwise carry two `--resume`s — and so is any fork token already on
+ *  the line, so forking a pane that is itself a fork emits one rather than two. */
 export function agentForkCommand(
   command: string | null,
   argv: string[] | null,
@@ -1477,20 +1618,19 @@ export function agentForkCommand(
   // assumption `agentResumeCommand`'s final fallback makes and for the same
   // reason: every session this project mints an id for today is claude's.
   if (program !== null && !canForkCli(program)) return null;
-  const { command: idFlags, argv: idArgv } = forkIdFlags(parentSessionId, childSessionId);
+  // #3318 F2: each CLI's own grammar — claude and opencode append a token,
+  // codex takes the subcommand slot, pi names the child and the parent — on a
+  // line stripped of every session identity AND every fork token first, so a
+  // fork of a fork forks the pane it was asked to, once.
+  const grammar = forkGrammarOf(program);
+  const tail = grammar.forkTail(parentSessionId, childSessionId);
   if (command && command.trim()) {
-    const stripped = stripForkSessionFromCommand(
-      stripSessionFlagsFromCommand(command, SESSION_FLAG_NAMES)
-    );
-    return { command: `${stripped} ${idFlags} ${CLAUDE_FORK_FLAG}` };
+    return { command: `${grammar.bareCommand(command)} ${tail.join(" ")}` };
   }
   if (argv && argv.length) {
-    const stripped = stripForkSessionFromArgv(
-      stripSessionFlagsFromArgv(argv, SESSION_FLAG_NAMES)
-    );
-    return { argv: [...stripped, ...idArgv, CLAUDE_FORK_FLAG] };
+    return { argv: [...grammar.bareArgv(argv), ...tail] };
   }
-  return { command: `claude ${idFlags} ${CLAUDE_FORK_FLAG}` };
+  return { command: `claude ${tail.join(" ")}` };
 }
 
 /** Name the pane a fork opens (#3318 F1) — the source's name with a `(fork)`
@@ -1550,18 +1690,20 @@ export function forkRecordCommand(
   // it preferred, which is right for building a launch and wrong for a capture:
   // a pane records both, and returning one would silently delete the other half
   // of its own restore record.
-  const bare = (c: string | null): string | null =>
-    c && c.trim()
-      ? stripForkSessionFromCommand(stripSessionFlagsFromCommand(c, SESSION_FLAG_NAMES))
-      : c;
-  const bareArgv = (a: string[] | null): string[] | null =>
-    a && a.length ? stripForkSessionFromArgv(stripSessionFlagsFromArgv(a, SESSION_FLAG_NAMES)) : a;
+  //
+  // #3318 F2: in the CLI's OWN grammar — a discharged codex fork resumes with
+  // the `resume` subcommand, an opencode one with `--session`, a pi one with
+  // `--session-id` — so the record is that CLI's plain resume of the child.
+  const grammar = forkGrammarOf(programFromRestore(command, argv));
+  const bare = (c: string | null): string | null => (c && c.trim() ? grammar.bareCommand(c) : c);
+  const bareArgv = (a: string[] | null): string[] | null => (a && a.length ? grammar.bareArgv(a) : a);
   const strippedCommand = bare(command);
   const strippedArgv = bareArgv(argv);
   if (!sessionId) return { command: strippedCommand, argv: strippedArgv };
+  const tail = grammar.resumeTail(sessionId);
   return {
-    command: strippedCommand?.trim() ? `${strippedCommand} --resume ${sessionId}` : strippedCommand,
-    argv: strippedArgv?.length ? [...strippedArgv, "--resume", sessionId] : strippedArgv,
+    command: strippedCommand?.trim() ? `${strippedCommand} ${tail.join(" ")}` : strippedCommand,
+    argv: strippedArgv?.length ? [...strippedArgv, ...tail] : strippedArgv,
   };
 }
 

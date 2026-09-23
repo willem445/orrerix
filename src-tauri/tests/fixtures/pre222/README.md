@@ -1606,3 +1606,24 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   insertions, 14 deletions across the pair, 11 and 7 per file), and `live-minus-keys ==
   golden` reports OK for `orchestrator-playbook.md` with the three keys `LIVE` lists for it
   (`{{MERGE_QUEUE}}{{REVIEW_DRIVER}}`, `{{POST_MERGE_WORKFLOW_HOOK}}`, `{{PLAN_DRIVER}}`).
+
+- **#3318 F2, the `fork_session` tool** — `lead.md` and `orchestrator-playbook.md`. The
+  other six goldens are byte-identical to their previous blessed copies.
+
+  `lead.md` gains one bullet under **What you gained**: `fork_session(agent, task?)`, what a
+  fork of a helper is, and that forking the lead's OWN id opens a standalone pane for the
+  human — never a second lead, and not one that reports back. The playbook's **Planning and
+  scheduling** section gains one paragraph after *Follow-ups resume, never disturb*: when to
+  fork rather than resume, that a live session is never resumed in a second pane, the
+  worktree and cap facts, that nothing merges a fork back, and the two refusals an
+  orchestrator can meet (a drive-owned pane; copilot and gemini).
+
+  **`orchestrator.md` did not move, and that is forced rather than chosen.** The resident
+  core is 44,955 B against the 45,000 B `RESIDENT_CORE_BUDGET`, and a new playbook section
+  would need a resident stub there too (`every_playbook_section_has_a_resident_stub_naming_it`),
+  so the orchestrator-facing teaching went into an EXISTING playbook section, beside the
+  tool's own description, which the orchestrator reads on every call.
+
+  Both re-bless checks above were run: the patch on each golden is byte-identical to the
+  patch on its live template (`git diff -U0` on each, compared), and `lead.md`'s golden is
+  byte-identical to its live template, which carries no `LIVE` key.

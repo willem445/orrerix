@@ -5414,6 +5414,7 @@ fn human_pane_entry(
         pty_id: None,
         pane_id: None,
         pane_kind: None,
+        forked_from: None,
         task: String::new(),
         task_id: None, // a human-launched pane has no board binding
         session_id: None,
@@ -12049,6 +12050,158 @@ fn sanitize_model(m: &str, fallback: &str) -> String {
     }
 }
 
+/// A fork request the line builders may act on (#3318 F2): the PARENT session
+/// and the seam that says how this CLI spells a fork of it.
+///
+/// Only [`fork_line`] makes one, and it makes one only for a CLI whose seam is
+/// not [`ForkSeam::None`] — so a builder arm holding a `ForkLine` never has to
+/// ask whether its CLI can fork, only how.
+#[derive(Clone, Copy, Debug)]
+struct ForkLine<'a> {
+    parent: &'a str,
+    seam: ForkSeam,
+}
+
+/// Resolve a builder's `fork_of` against the capability table, REFUSING a CLI
+/// that cannot fork (#3331 item 2).
+///
+/// F1's builders dropped `fork_of` silently for such a CLI — a line builder
+/// had no way to refuse, and F1's only caller (the Solo pane menu) asked
+/// `fork_refusal` before ever getting here. F2's `fork_session` tool is the
+/// first caller that could hand a copilot or gemini source to the builder, and
+/// a silent drop there builds a FRESH line (copilot's `--resume=` needs
+/// `resume`, which a fork does not pass) and reports it as a fork. So the
+/// builder refuses in the row's own words, which is also the sentence
+/// `fork_refusal` gives a gesture: one predicate, asked by both.
+fn fork_line<'a>(cli: &str, fork_of: Option<&'a str>) -> Result<Option<ForkLine<'a>>, String> {
+    let Some(parent) = fork_of else { return Ok(None) };
+    if let Some(refusal) = fork_refusal(cli) {
+        return Err(refusal);
+    }
+    // `fork_refusal` answered `None`, which it does only for a known row whose
+    // seam carries a spelling — so the row is there. Reported rather than
+    // unwrapped all the same: this runs on a spawn path, and constraint 10
+    // makes a panic here a process abort, not an error.
+    let seam = cli_caps(cli)
+        .map(|c| c.fork)
+        .ok_or_else(|| format!("loomux cannot fork a {cli} session: no capability record"))?;
+    Ok(Some(ForkLine { parent, seam }))
+}
+
+/// The source of a delegate fork, as the spawn path needs it (#3318 F2).
+///
+/// Built only by [`OrchRegistry::fork_agent`], after every refusal it owns has
+/// passed — so holding one means "this parent may be forked", and the spawn
+/// path reads it at exactly four places (see `spawn_agent_full`).
+#[derive(Clone, Debug)]
+#[doc(hidden)] // pub for integration tests (`fork_kickoff_prompt`)
+pub struct ForkSpawn {
+    pub parent_agent: String,
+    pub parent_name: String,
+    /// The session being forked — already validated by `sanitize_session`,
+    /// because it reaches a launch line.
+    pub parent_session: String,
+    /// Who asked: the calling agent's id, or `"human"` for the pane menu.
+    /// Recorded on the `agent-fork` audit row and read nowhere else.
+    pub requested_by: String,
+}
+
+/// The workspace note a reviewer's kickoff (or fork turn) carries (#359), naming
+/// where its worktree was ACTUALLY cut from.
+///
+/// It used to say "cut fresh from the default branch" unconditionally, which was
+/// true of every reviewer spawn that named no `base` — and false the moment
+/// `base` was passed: an orchestrator's `spawn_agent(kind: "reviewer", base:)`,
+/// and every reviewer FORK (#3318 F2), which `fork_agent` cuts from its source's
+/// branch. A reviewer told the wrong origin reasons about the wrong tree, so the
+/// origin is read off the same `base` the worktree was cut from.
+#[doc(hidden)] // pub for integration tests
+pub fn reviewer_worktree_note(wt: &str, branch_name: &str, base: Option<&str>) -> String {
+    let origin = match base {
+        Some(b) => format!("branch '{b}'"),
+        None => "the default branch".to_string(),
+    };
+    format!(
+        "Your working directory is a dedicated git worktree at {wt}, cut fresh from {origin} — \
+         its own branch '{branch_name}' is just scratch space, never the PR's own branch (which \
+         may already be checked out in the worker's worktree). You review; you do not create \
+         branches or push. To inspect the PR's actual code locally (e.g. to run tests), `gh pr \
+         checkout <n> --detach` — never a bare `gh pr checkout <n>`, which grabs the PR branch by \
+         NAME and collides with any other worktree (the worker's, or another reviewer's) that \
+         already has it checked out."
+    )
+}
+
+/// The refusal for a fork of a pane on a STRUCTURED driver (#2850). Shared by
+/// `fork_agent` (which says it first) and `spawn_agent_full` (the backstop), so
+/// the two cannot word the one fact differently.
+fn fork_structured_refusal(block: &str) -> String {
+    format!(
+        "block {block} runs on the structured driver, whose launch spec has no fork yet — a fork \
+         there would start a FRESH session and call it a fork, so orrerix refuses it (#3318 F2). \
+         Spawn a fresh agent and brief it instead."
+    )
+}
+
+/// The one turn a forked delegate is handed instead of a kickoff (#3318 F2).
+///
+/// A fork already holds its role, its instructions and every turn its parent
+/// had — re-sending the full kickoff would re-brief a conversation mid-stream.
+/// What it does NOT hold is the three things that changed at the fork, and this
+/// names exactly those: **who it is now** (a new agent id, which is who every
+/// MCP call it makes is attributed to — the parent's id in its own history is
+/// not its own any more), **where it works** (the branch note), and **what to
+/// do** (the task, or "you have none — say so and wait"). It carries its own
+/// delivery id, and that id is NEW: the parent's delivery id sits in the
+/// copied history already acted on, so a fork re-reading it must not mistake
+/// its own brief for a duplicate of its parent's.
+///
+/// Pure, and `pub` for the integration tests that pin those properties.
+#[doc(hidden)]
+pub fn fork_kickoff_prompt(
+    group_id: &GroupId,
+    agent_id: &str,
+    name: &str,
+    fork: &ForkSpawn,
+    instructions: &Path,
+    branch_note: &str,
+    task: &str,
+) -> String {
+    let task = task.trim();
+    let todo = if task.is_empty() {
+        format!(
+            "You have no task yet. Do not continue {parent}'s work on your own initiative — tell \
+             your orchestrator (or your lead's human) that you are an idle fork of {parent} and \
+             ready for a brief, then wait.",
+            parent = fork.parent_agent,
+        )
+    } else {
+        format!("Your task:\n{task}")
+    };
+    let branch = if branch_note.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", branch_note.trim())
+    };
+    format!(
+        "[orrerix] You are a FORK. Your conversation so far is a copy of {parent_name}'s \
+         ({parent}) session {session}, taken just now; {parent} keeps running exactly as it was, \
+         and its task, its branch and its PR are still its own — do not act on them unless your \
+         task below says to.\n\n\
+         You are now agent {agent_id} (\"{name}\") in group {group_id}. Every orrerix tool call \
+         you make from here on is attributed to {agent_id}, not to {parent}; anything in your \
+         history addressed to {parent} was addressed to your parent. Your role instructions are \
+         unchanged: {instructions}{branch}\n\n\
+         {delivery}\n\n\
+         {todo}",
+        parent_name = fork.parent_name,
+        parent = fork.parent_agent,
+        session = fork.parent_session,
+        instructions = instructions.display(),
+        delivery = kickoff_delivery_note(group_id, agent_id),
+    )
+}
+
 /// Claude's `--model` value with the block's context variant applied (#687), as
 /// **one literal argv token**: the plain model when no variant is set, else the
 /// documented `{model}[{variant}]` extended-context alias (`sonnet[1m]`).
@@ -12310,6 +12463,15 @@ pub struct AgentEntry {
     /// this struct derives no serde, so a field reaches `agents.json` only by
     /// being written there.
     pub pane_kind: Option<String>,
+    /// The PARENT session this agent's session was forked from (#3318 F2),
+    /// or `None` for every agent that was not born by `fork_session`.
+    ///
+    /// A session id, not an agent id, and deliberately: the parent AGENT may
+    /// be long dead by the time anyone reads this, and a session is what the
+    /// session browser, the audit row and the vendor's own store all key on.
+    /// The parent agent's id is in the `agent-fork` audit row beside it.
+    /// Provenance only — nothing reads it to decide anything.
+    pub forked_from: Option<String>,
     pub task: String,
     /// The board task this spawn was bound to (#1273), when the orchestrator
     /// named one (`spawn_agent(task_id:)`). Metadata in the task-hierarchy §7
@@ -14997,6 +15159,13 @@ pub struct AgentRecord {
     /// — which is exactly the case a persisted roster exists for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_kind: Option<String>,
+    /// The parent SESSION a forked agent's session started as a copy of
+    /// (#3318 F2) — `AgentEntry::forked_from`'s durable twin. Additive in both
+    /// directions: absent on every roster written before F2 and on every row
+    /// that is not a fork, so an older loomux reading a newer roster ignores
+    /// an unknown key and a newer one reading an older roster reads `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<String>,
 }
 
 /// Durable per-agent usage snapshot (`usage.json` per group). Keyed by the CLI
@@ -34843,6 +35012,7 @@ impl OrchRegistry {
             task: entry.task.clone(),
             branch: entry.branch.clone(),
             pane_kind: entry.pane_kind.clone(),
+            forked_from: entry.forked_from.clone(),
         };
         // Match by (id, session). Since #524 an id is never re-minted, so a
         // bare-id match can no longer overwrite a DIFFERENT run's record —
@@ -35363,6 +35533,7 @@ impl OrchRegistry {
                 // agent this path can see was, since a structured pane is
                 // #2850 and newer than every audit line it reads.
                 pane_kind: None,
+                forked_from: None,
             };
             match out.iter_mut().find(|r| r.id == record.id && r.session == record.session) {
                 Some(r) => *r = record,
@@ -39996,6 +40167,7 @@ impl OrchRegistry {
             pty_id: Some(pty_id),
             pane_id: None,
             pane_kind: None,
+            forked_from: None,
             task: String::new(),
             task_id: None, // a solo pane has no board binding
             session_id: None,
@@ -51500,7 +51672,9 @@ impl OrchRegistry {
         containment: Containment,
         persona: &PersonaInject,
     ) -> String {
-        self.build_agent_command_ex(
+        // Never a fork, so the infallible body directly — see
+        // `agent_command_line` for why there is no `unwrap` here.
+        self.agent_command_line(
             cli,
             model,
             workflow::ModelKnobs::default(),
@@ -51534,26 +51708,53 @@ impl OrchRegistry {
     /// function's doc for the predicate and [`CLAUDE_QUESTION_DENY_TOOLS`]
     /// for what gets denied.
     ///
-    /// `fork_of` (#3318 F1) asks the CLI to **fork** the session it names —
-    /// open a new session that starts as a copy of that one's conversation,
-    /// leaving the original untouched. `Some(parent)` is honoured only for a
-    /// CLI whose [`model::CliCaps::fork`] row carries a spelling, which today
-    /// is claude alone; every other arm ignores it, and
-    /// [`model::fork_refusal`] is the predicate a *gesture* asks before ever
-    /// getting here (F1's gesture is the pane menu, F2's is the MCP tool).
-    /// The ignore is deliberate and pinned rather than left implicit: a line
-    /// builder has no way to refuse, and a non-claude line silently GAINING a
-    /// flag its CLI does not know is the worse failure of the two.
+    /// `fork_of` (#3318) asks the CLI to **fork** the session it names — open
+    /// a new session that starts as a copy of that one's conversation, leaving
+    /// the original untouched. Each arm spells it from its own
+    /// [`model::CliCaps::fork`] row (claude and opencode a flag, codex a
+    /// subcommand, pi a flag naming the parent beside `--session-id <child>`).
+    /// **A CLI whose row is [`ForkSeam::None`] is REFUSED** with the row's own
+    /// note — an `Err`, never a line (#3331 item 2; see [`fork_line`] for why
+    /// F1's silent drop stopped being safe once F2's tool could reach it).
     ///
-    /// **On the claude arm `fork_of` overrides `resume`**, because the two ask
-    /// incompatible things of one flag: `--resume <id>` alone continues that
-    /// session, and `--resume <parent> --fork-session` branches off it. The
-    /// `session` argument then names the CHILD rather than the session being
-    /// opened — see the claude arm for the two id shapes and which of them
-    /// #3318's live check L1 decides.
+    /// **`fork_of` overrides `resume`**, because the two ask incompatible
+    /// things of one session argument: `--resume <id>` alone continues that
+    /// session, and a fork branches off it. The `session` argument then names
+    /// the CHILD rather than the session being opened, and is read only on a
+    /// seam that pre-mints one ([`ForkSeam::premints_child`]).
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)] // pub for integration tests
     pub fn build_agent_command_ex(
+        &self,
+        cli: &str,
+        model: &str,
+        knobs: workflow::ModelKnobs<'_>,
+        auto_ops: bool,
+        cfg: &Path,
+        hook_settings: Option<&Path>,
+        group_dir: &Path,
+        workdir: &Path,
+        session: Option<&str>,
+        resume: bool,
+        containment: Containment,
+        persona: &PersonaInject,
+        role: Role,
+        role_hint: Option<&str>,
+        fork_of: Option<&str>,
+    ) -> Result<String, String> {
+        let fork = fork_line(cli, fork_of)?;
+        Ok(self.agent_command_line(
+            cli, model, knobs, auto_ops, cfg, hook_settings, group_dir, workdir, session, resume,
+            containment, persona, role, role_hint, fork,
+        ))
+    }
+
+    /// The infallible body of [`Self::build_agent_command_ex`], taking a fork
+    /// request [`fork_line`] has already admitted. Split out so the wrappers
+    /// that never fork ([`Self::build_agent_command`]) need no `unwrap` — a
+    /// panic on a spawn path is a process abort (constraint 10).
+    #[allow(clippy::too_many_arguments)]
+    fn agent_command_line(
         &self,
         cli: &str,
         model: &str,
@@ -51575,7 +51776,7 @@ impl OrchRegistry {
         persona: &PersonaInject,
         role: Role,
         role_hint: Option<&str>,
-        fork_of: Option<&str>,
+        fork: Option<ForkLine<'_>>,
     ) -> String {
         // A planner never mutates and has no human in its pane, so there is
         // nothing for `auto_ops` to gate: it must explore, post its plan
@@ -51795,8 +51996,24 @@ impl OrchRegistry {
                 // No flag pre-assigns a session id — `--session` continues an
                 // existing one — so, like copilot and gemini, it appears only
                 // on an explicit resume.
-                if let (Some(s), true) = (session, resume) {
-                    cmd.push_str(&format!(" --session {s}"));
+                //
+                // #3318 F2: a FORK names the parent with the same `--session`
+                // and adds the row's token right after it — "use with
+                // `--continue` or `--session`" — so the fork line is the resume
+                // line plus exactly that token. `session` is not read: opencode
+                // cannot pre-mint the child, whose id the store watcher learns.
+                match fork {
+                    Some(f) => {
+                        cmd.push_str(&format!(" --session {}", f.parent));
+                        if let Some(token) = f.seam.token() {
+                            cmd.push_str(&format!(" {token}"));
+                        }
+                    }
+                    None => {
+                        if let (Some(s), true) = (session, resume) {
+                            cmd.push_str(&format!(" --session {s}"));
+                        }
+                    }
                 }
                 // Omitted entirely when empty: `default_model("opencode", …)`
                 // is empty on purpose (see its doc), and a blank `--model`
@@ -51877,8 +52094,22 @@ impl OrchRegistry {
                 // opens-or-creates flag, so a fresh spawn names nothing at all
                 // and learns its id from the store afterwards
                 // (`SessionBaseline::Codex`).
-                if let (Some(s), true) = (session, resume) {
-                    cmd.push_str(&format!(" resume {s}"));
+                //
+                // #3318 F2: a FORK is the same slot with the row's word in
+                // place of `resume` — `codex [OPTIONS] fork <SESSION_ID>` — so
+                // everything before it (`-C`, `-p`, `-m`) is the resume line's,
+                // byte for byte. The child is a new thread the store watcher
+                // learns, exactly as a fresh spawn's is.
+                match fork {
+                    Some(f) => {
+                        let word = f.seam.token().unwrap_or("fork");
+                        cmd.push_str(&format!(" {word} {}", f.parent));
+                    }
+                    None => {
+                        if let (Some(s), true) = (session, resume) {
+                            cmd.push_str(&format!(" resume {s}"));
+                        }
+                    }
                 }
                 // `persona.extra_allow` holds claude/copilot tool-pattern
                 // strings; codex has no allow mechanism a launch line can
@@ -51919,6 +52150,16 @@ impl OrchRegistry {
                 let mut cmd = String::from("pi");
                 if let Some(s) = session {
                     cmd.push_str(&format!(" --session-id {s}"));
+                }
+                // #3318 F2: a FORK keeps `--session-id`, which now names the
+                // CHILD, and adds `--fork <parent>` beside it. The installed pi
+                // (0.85.1) accepts exactly that pair and writes the child under
+                // the given id (see pi's `CliCaps` row), so the fork line is the
+                // fresh line for the child plus that one flag and its value.
+                if let Some(f) = fork {
+                    if let Some(token) = f.seam.token() {
+                        cmd.push_str(&format!(" {token} {}", f.parent));
+                    }
                 }
                 // The group's own store, so a group's sessions stay out of the
                 // human's `pi --resume` list and theirs stay out of the
@@ -52010,35 +52251,34 @@ impl OrchRegistry {
                 //    already has and nothing has to be learned.
                 //  - constant false — the LEARNED arm: `--resume <parent>
                 //    --fork-session`, and the child's id is whatever claude
-                //    mints. loomux cannot read it today (claude takes no
-                //    session baseline — `premints_session_id` is true for it),
-                //    so such a pane is honestly unrecorded until F2 adds one.
+                //    mints. loomux cannot read it (claude takes no session
+                //    baseline — `premints_session_id` is true for it), so such a
+                //    pane is honestly unrecorded; `fork_agent` records no id
+                //    for it rather than one the CLI is not running under.
                 //
                 // Live check L1 on #3318 is what decides between them, and it
                 // is the human's to run: constraint 3 forbids loomux spawning
                 // a real claude to find out.
-                // This arm serves claude AND every unrecognized CLI, so the fork
-                // shape is gated on the SEAM rather than on `fork_of` alone
-                // (rev-std r1). Without that gate an unknown CLI took
-                // `--session-id <child> --resume <parent>` — the fork's id shape
-                // — while the flag itself was withheld by the table lookup
-                // below, which is the one combination that is wrong under every
-                // reading: it neither forks nor resumes the session the caller
-                // named. Now an unknown CLI's line is byte-identical with and
-                // without `fork_of`, exactly as the five named ones are.
-                let fork_of = fork_of.filter(|_| cli_caps(cli).is_some_and(|c| c.fork.flag().is_some()));
-                let session_flag = match fork_of {
+                //
+                // This arm serves claude AND every unrecognized CLI. An
+                // unrecognized CLI can no longer reach here WITH a fork (#3331
+                // item 2): `fork_line` refuses it before any line is built,
+                // which is what closes rev-std r1's hazard — the fork's id shape
+                // on a line whose fork flag the table withheld — at the source
+                // rather than by gating it here.
+                let session_flag = match fork {
                     // A FORK. Which of the two arms is built is decided HERE, by
-                    // the constant — not by whether the caller happened to pass a
-                    // child id. That distinction is the whole point: the constant
-                    // is what the human flips after running live check L1, and a
-                    // caller convention would leave that flip inert on this side
-                    // while the frontend's mirror really moved.
-                    Some(parent) => {
-                        let child = if CLAUDE_FORK_PREMINTS_CHILD_ID { session } else { None };
+                    // the row's `premints_child` — which on claude's row IS
+                    // `CLAUDE_FORK_PREMINTS_CHILD_ID` — not by whether the caller
+                    // happened to pass a child id. That distinction is the whole
+                    // point: the constant is what the human flips after running
+                    // live check L1, and a caller convention would leave that
+                    // flip inert on this side while the frontend's mirror moved.
+                    Some(f) => {
+                        let child = if f.seam.premints_child() { session } else { None };
                         match child {
-                            Some(child) => format!("--session-id {child} --resume {parent} "),
-                            None => format!("--resume {parent} "),
+                            Some(child) => format!("--session-id {child} --resume {} ", f.parent),
+                            None => format!("--resume {} ", f.parent),
                         }
                     }
                     // Not a fork: exactly the pre-#3318 line, byte for byte.
@@ -52127,17 +52367,14 @@ impl OrchRegistry {
                     cmd.push_str(&format!(" --effort {}", knobs.effort));
                 }
                 // #3318 F1: the fork token, read from the capability table
-                // rather than spelled here — `ForkSeam::Flag("--fork-session")`
-                // on claude's row, and `None` (so nothing is emitted) on every
-                // other. Positioned with `--settings` and `--effort` above, for
-                // the same #610 reason they are: any flag added to this branch
-                // goes AFTER the last `--allowedTools` value, never between the
-                // flag and its values.
-                if fork_of.is_some() {
-                    if let Some(flag) = cli_caps(cli).and_then(|c| c.fork.flag()) {
-                        cmd.push(' ');
-                        cmd.push_str(flag);
-                    }
+                // rather than spelled here — `--fork-session` on claude's row.
+                // Positioned with `--settings` and `--effort` above, for the
+                // same #610 reason they are: any flag added to this branch goes
+                // AFTER the last `--allowedTools` value, never between the flag
+                // and its values.
+                if let Some(token) = fork.and_then(|f| f.seam.token()) {
+                    cmd.push(' ');
+                    cmd.push_str(token);
                 }
                 if containment.denies_edits() {
                     // Deny the file-editing tools — and, for a ReadOnly class,
@@ -52261,7 +52498,8 @@ impl OrchRegistry {
         // See `build_agent_command`'s doc: same inert sentinel
         // (`Role::Worker`, no hint) so this form's long-standing callers see
         // no change from the #946 Q4 / #1091 slice H predicate existing.
-        self.build_agent_argv_ex(
+        // Never a fork, so the infallible body directly (`agent_argv`).
+        self.agent_argv(
             cli,
             model,
             workflow::ModelKnobs::default(),
@@ -52285,7 +52523,9 @@ impl OrchRegistry {
     /// it (knobs included) by `build_agent_argv_matches_command_line`.
     ///
     /// `role`/`role_hint`: see [`Self::build_agent_command_ex`]'s doc — same
-    /// meaning, same [`claude_denies_interactive_question`] predicate.
+    /// meaning, same [`claude_denies_interactive_question`] predicate. So is
+    /// `fork_of`, and so is its refusal: the same [`fork_line`] answers both
+    /// forms, so they cannot disagree about which CLI may fork.
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)] // pub for integration tests
     pub fn build_agent_argv_ex(
@@ -52305,6 +52545,34 @@ impl OrchRegistry {
         role: Role,
         role_hint: Option<&str>,
         fork_of: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        let fork = fork_line(cli, fork_of)?;
+        Ok(self.agent_argv(
+            cli, model, knobs, auto_ops, cfg, hook_settings, group_dir, workdir, session, resume,
+            containment, persona, role, role_hint, fork,
+        ))
+    }
+
+    /// The infallible body of [`Self::build_agent_argv_ex`] — the twin of
+    /// [`Self::agent_command_line`], split out for the same reason.
+    #[allow(clippy::too_many_arguments)]
+    fn agent_argv(
+        &self,
+        cli: &str,
+        model: &str,
+        knobs: workflow::ModelKnobs<'_>,
+        auto_ops: bool,
+        cfg: &Path,
+        hook_settings: Option<&Path>,
+        group_dir: &Path,
+        workdir: &Path,
+        session: Option<&str>,
+        resume: bool,
+        containment: Containment,
+        persona: &PersonaInject,
+        role: Role,
+        role_hint: Option<&str>,
+        fork: Option<ForkLine<'_>>,
     ) -> Vec<String> {
         let unattended = auto_ops || containment.forces_unattended();
         let mut a: Vec<String> = Vec::new();
@@ -52390,9 +52658,21 @@ impl OrchRegistry {
             // env-delivered document, not flags.
             "opencode" => {
                 push(&mut a, "opencode");
-                if let (Some(s), true) = (session, resume) {
-                    push(&mut a, "--session");
-                    push(&mut a, s);
+                // #3318 F2 — same shape as the string form; see it.
+                match fork {
+                    Some(f) => {
+                        push(&mut a, "--session");
+                        push(&mut a, f.parent);
+                        if let Some(token) = f.seam.token() {
+                            push(&mut a, token);
+                        }
+                    }
+                    None => {
+                        if let (Some(s), true) = (session, resume) {
+                            push(&mut a, "--session");
+                            push(&mut a, s);
+                        }
+                    }
                 }
                 if !model.is_empty() {
                     push(&mut a, "--model");
@@ -52432,10 +52712,19 @@ impl OrchRegistry {
                 let _ = knobs.effort;
                 // The subcommand goes LAST, after every root option, because
                 // codex's usage is `codex [OPTIONS] <COMMAND> [ARGS]` and the
-                // subcommand inherits what precedes it.
-                if let (Some(s), true) = (session, resume) {
-                    push(&mut a, "resume");
-                    push(&mut a, s);
+                // subcommand inherits what precedes it. A fork takes the same
+                // slot with the row's word (#3318 F2) — see the string form.
+                match fork {
+                    Some(f) => {
+                        push(&mut a, f.seam.token().unwrap_or("fork"));
+                        push(&mut a, f.parent);
+                    }
+                    None => {
+                        if let (Some(s), true) = (session, resume) {
+                            push(&mut a, "resume");
+                            push(&mut a, s);
+                        }
+                    }
                 }
                 // Read and deliberately not asserted — see the string form's
                 // arm for why a `debug_assert!` here would panic a debug test
@@ -52448,6 +52737,14 @@ impl OrchRegistry {
                 if let Some(s) = session {
                     push(&mut a, "--session-id");
                     push(&mut a, s);
+                }
+                // #3318 F2 — `--fork <parent>` beside the child's id; see the
+                // string form.
+                if let Some(f) = fork {
+                    if let Some(token) = f.seam.token() {
+                        push(&mut a, token);
+                        push(&mut a, f.parent);
+                    }
                 }
                 push(&mut a, "--session-dir");
                 a.push(pi_sessions_in(group_dir).display().to_string());
@@ -52486,23 +52783,21 @@ impl OrchRegistry {
                 // #3318 F1 — the same three shapes as the string form, in the
                 // same order; see that arm's comment for the pre-mint/learned
                 // split and live check L1.
-                // Same seam gate as the string form (rev-std r1) — an
-                // unrecognized CLI takes neither the fork's id shape nor its
-                // flag. See that arm's comment.
-                let fork_of = fork_of.filter(|_| cli_caps(cli).is_some_and(|c| c.fork.flag().is_some()));
-                match fork_of {
-                    // Same constant, same decision, same reason as the string
+                // An unrecognized CLI never reaches here with a fork —
+                // `fork_line` refused it (#3331 item 2). See the string form.
+                match fork {
+                    // Same row field, same decision, same reason as the string
                     // form — see its comment. Read here too rather than passed
                     // in, so the two forms cannot disagree about which arm a
                     // flip of the constant selects.
-                    Some(parent) => {
-                        let child = if CLAUDE_FORK_PREMINTS_CHILD_ID { session } else { None };
+                    Some(f) => {
+                        let child = if f.seam.premints_child() { session } else { None };
                         if let Some(child) = child {
                             push(&mut a, "--session-id");
                             push(&mut a, child);
                         }
                         push(&mut a, "--resume");
-                        push(&mut a, parent);
+                        push(&mut a, f.parent);
                     }
                     None => match (session, resume) {
                         (Some(s), true) => {
@@ -52557,10 +52852,8 @@ impl OrchRegistry {
                 // #3318 F1 — same position and same table read as the string
                 // form; `build_agent_argv_matches_command_line` is what keeps
                 // the two from drifting.
-                if fork_of.is_some() {
-                    if let Some(flag) = cli_caps(cli).and_then(|c| c.fork.flag()) {
-                        push(&mut a, flag);
-                    }
+                if let Some(token) = fork.and_then(|f| f.seam.token()) {
+                    push(&mut a, token);
                 }
                 if containment.denies_edits() {
                     push(&mut a, "--disallowedTools");
@@ -52597,6 +52890,283 @@ impl OrchRegistry {
             }
         }
         a
+    }
+
+    /// **Fork a delegate's session into a new agent pane** (#3318 F2) — the
+    /// registry half of the `fork_session` MCP tool and the `orch_fork_agent`
+    /// command.
+    ///
+    /// The new agent is an ordinary delegate of the SOURCE's block — same
+    /// persona, CLI, model and capability class — whose session starts as the
+    /// vendor's own fork of the source's (`CliCaps.fork`). It is
+    /// [`Self::spawn_agent_full`] with a [`ForkSpawn`], so the cap, the
+    /// spawn-rate backstop, the CLI pin, the MCP identity and the worktree cut
+    /// are the ordinary spawn's; what is decided HERE is only what a fork adds:
+    ///
+    /// - **Refusals, all before anything is minted or cut:** an unknown or
+    ///   foreign source (the `unknown agent` wording — no other group's ids
+    ///   leak); an orchestrator, manager or lead source (a fork inherits its
+    ///   source's block, and none of those three is a delegate — a lead's own
+    ///   pane forks into a SOLO pane through [`Self::request_solo_fork`]
+    ///   instead); a source a review or plan drive owns (the driver's ownership
+    ///   ladder is per agent id, and a fork is a new agent it never briefed —
+    ///   refusing is honest, inventing a third owner is not); a CLI whose seam
+    ///   is `None` (the row's own note); a structured-driver block; and a
+    ///   source with no recorded session (nothing to fork yet).
+    /// - **The workspace:** a worker or reviewer source forks into a NEW
+    ///   worktree cut from the source's own branch (`base`), so the child
+    ///   starts where the parent's last commit is — `worktree: false` is
+    ///   refused for those two classes exactly as `spawn_agent` refuses it
+    ///   (#338/#359), since two agents sharing one checkout is #359's
+    ///   incident. A planner never gets a worktree, as it never does.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fork_agent(
+        &self,
+        group_id: &GroupId,
+        requested_by: &str,
+        source_id: &str,
+        task: &str,
+        worktree: Option<bool>,
+        branch: Option<String>,
+        name: &str,
+    ) -> Result<AgentEntry, String> {
+        let group = self.group(group_id).ok_or("unknown group")?;
+        let src = self
+            .agent(source_id)
+            .filter(|a| &a.group == group_id)
+            .ok_or_else(|| format!("unknown agent: {source_id}"))?;
+        match src.role {
+            Role::Orchestrator | Role::Manager => {
+                return Err(format!(
+                    "{} is this group's {} — a fork inherits its source's block, and that class is \
+                     not a delegate anyone may open a second of. Fork a worker, reviewer or planner.",
+                    src.id,
+                    src.role.as_str()
+                ))
+            }
+            Role::Lead => {
+                return Err(format!(
+                    "{} is a lead pane — the human's own. A lead's session forks into a standalone \
+                     (Solo) pane, never a second lead: the lead asks for that with fork_session on its \
+                     own id, and the human with the pane menu.",
+                    src.id
+                ))
+            }
+            _ => {}
+        }
+        // The drive refusals. `rd_owner` is asked for the ownership (every pane
+        // a live drive opened, superseded ones included — the driver's ladder
+        // is per agent id), and `rd_driven_panes` only for its FAILURE: an
+        // unreadable drive record is not evidence that the pane is undriven,
+        // the same fail-closed reading `kill_agent` takes on the same file.
+        if let Some((pr, _)) = self.rd_owner(group_id, &src.id) {
+            return Err(format!(
+                "{} belongs to the review drive on PR #{pr} — the driver briefs and routes its panes \
+                 by agent id, and a fork would be a new agent it never briefed. Fork it once the \
+                 drive is done or held, or spawn a fresh agent.",
+                src.id
+            ));
+        }
+        if self.rd_driven_panes(group_id).is_err() {
+            return Err(format!(
+                "orrerix could not read this group's review-drive record, so it cannot tell whether a \
+                 live drive owns {} — and an unreadable record is not evidence that nothing does. \
+                 Nothing was forked.",
+                src.id
+            ));
+        }
+        if let Some(issue) = self.pd_owner(group_id, &src.id) {
+            return Err(format!(
+                "{} is the plan drive's planner for issue #{issue} — the driver routes its reports by \
+                 agent id, and a fork would be a planner it never briefed. Fork it once the drive is \
+                 done or held.",
+                src.id
+            ));
+        }
+        let block = group.guardrails.block(&src.block).cloned().ok_or_else(|| {
+            format!(
+                "{}'s block {:?} is no longer in this group's workflow, so a fork has no persona, CLI \
+                 or class to inherit.",
+                src.id, src.block
+            )
+        })?;
+        let cli = workflow::cli_of(&block, &group.guardrails.agent_cli);
+        if let Some(refusal) = fork_refusal(cli) {
+            return Err(refusal);
+        }
+        if workflow::structured_harness_for(block.driver.as_deref(), cli).ok().flatten().is_some() {
+            return Err(fork_structured_refusal(&block.id));
+        }
+        let parent_session = src
+            .session_id
+            .as_deref()
+            .and_then(sanitize_session)
+            .ok_or_else(|| {
+                format!(
+                    "{} has no recorded session yet, so there is nothing to fork — a CLI that mints its \
+                     own id records it a few seconds after its first prompt. Try again once \
+                     list_agents shows its session.",
+                    src.id
+                )
+            })?;
+        let dedicated = matches!(src.role, Role::Worker | Role::Reviewer);
+        if dedicated && worktree == Some(false) {
+            return Err(format!(
+                "guardrail: a {r} fork always gets a dedicated worktree (#338/#359) — two agents \
+                 sharing one checkout is exactly the conflict that rule exists for. Omit `worktree`.",
+                r = src.role.as_str()
+            ));
+        }
+        let use_worktree = dedicated || worktree.unwrap_or(false);
+        // Cut from where the PARENT is: its own branch, when it has one that
+        // EXISTS. A worktree pane's recorded branch was cut at its spawn; a
+        // shared-repo pane's is only the name it was told to create, which it
+        // may not have yet (CI caught exactly that: `cannot resolve base
+        // "agent/w-5"`). A branch that is not there, or no branch at all (a
+        // planner), leaves `base` to its default — the repo's default branch.
+        let base = if use_worktree {
+            src.branch.clone().filter(|b| crate::git::local_branch_exists(&group.repo, b))
+        } else {
+            None
+        };
+        let name = if sanitize_agent_name(name).is_empty() {
+            format!("{} (fork)", src.name)
+        } else {
+            name.to_string()
+        };
+        self.spawn_agent_full(
+            group_id,
+            src.role,
+            Some(src.block.clone()),
+            &name,
+            task,
+            use_worktree,
+            branch,
+            base,
+            None,
+            None,
+            None,
+            None,
+            Some(ForkSpawn {
+                parent_agent: src.id.clone(),
+                parent_name: src.name.clone(),
+                parent_session,
+                requested_by: requested_by.to_string(),
+            }),
+        )
+    }
+
+    /// **A lead forks its OWN pane into a Solo pane** (#3318 F2) — never a
+    /// second lead.
+    ///
+    /// The one-root invariant (`docs/design/lead-pane.md`) is why this is not a
+    /// `fork_agent`: a lead is its group's root, `kind_from_str` has no `lead`
+    /// arm, and a fork inheriting the lead's block would be a second root. A
+    /// Solo pane is what the human would get forking the same pane by hand,
+    /// and that gesture already exists in the frontend — strip the lead's
+    /// identity, re-mint a solo one through `orch_solo_prepare`, open the pane
+    /// on the vendor's fork line. So this asks the frontend to run it on the
+    /// lead's pane (`orch-fork-solo-request`) rather than building a second
+    /// Solo-opening path here, and returns once the request is emitted: the
+    /// Solo pane has no roster row in this group for a bind to wait on.
+    ///
+    /// Refused up front on the same facts the gesture would refuse on later —
+    /// a lead CLI with no fork seam, or no recorded session — so the lead gets
+    /// the sentence in its own turn rather than a toast in the human's.
+    pub fn request_solo_fork(&self, group_id: &GroupId, lead_id: &str) -> Result<String, String> {
+        let group = self.group(group_id).ok_or("unknown group")?;
+        let lead = self
+            .agent(lead_id)
+            .filter(|a| &a.group == group_id && a.role == Role::Lead)
+            .ok_or_else(|| format!("unknown agent: {lead_id}"))?;
+        let cli = group
+            .guardrails
+            .block(&lead.block)
+            .map(|b| workflow::cli_of(b, &group.guardrails.agent_cli).to_string())
+            .unwrap_or_else(|| group.guardrails.agent_cli.clone());
+        if let Some(refusal) = fork_refusal(&cli) {
+            return Err(refusal);
+        }
+        let session = lead.session_id.clone().ok_or_else(|| {
+            "your pane has no recorded session yet, so there is nothing to fork. Try again after \
+             your next turn."
+                .to_string()
+        })?;
+        // The Solo pane is outside the delegate cap — it is the human's, not a
+        // helper — but it is still a pane an agent's tool call opened, and a
+        // runaway loop is possible in a human-driven pane too
+        // (`docs/design/lead-pane.md`, Guardrails). So it takes the group's
+        // spawn-rate backstop, recorded only when admitted, exactly as a
+        // delegate spawn does.
+        //
+        // The slot is spent HERE, at the request, and not at the frontend's
+        // ack below — deliberately. What the backstop bounds is an agent's
+        // CALLS: a lead looping on `fork_session` is the runaway, whether or
+        // not each call ends in an open pane, and a bound spent only on
+        // success would let a loop whose opens all fail run unbounded.
+        self.check_and_record_spawn(group_id, group.guardrails.max_spawns_per_hour)?;
+        // A REQUEST, and worded as one (review round 1, rev-final 1): nothing
+        // is open yet. Whether the frontend opened the Solo pane is recorded
+        // by `record_solo_fork_outcome` when it acks — `agent-fork` beside
+        // this row for an open, `agent-fork-failed` with the reason otherwise.
+        self.audit(group_id, &lead.id, "agent-fork-requested", json!({
+            "parent_agent": lead.id,
+            "parent_session": session,
+            "into": "solo",
+            "cli": cli,
+        }));
+        if let Some(app) = self.app.lock_safe().clone() {
+            app.emit(
+                "orch-fork-solo-request",
+                json!({ "group_id": group_id, "agent_id": lead.id, "pty_id": lead.pty_id }),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(session)
+    }
+
+    /// Record what became of a lead's self-fork request (#3318 F2, review round
+    /// 1): the frontend's ACK for `orch-fork-solo-request`, through
+    /// `orch_fork_solo_result`.
+    ///
+    /// `request_solo_fork` writes `agent-fork-requested` before anything is
+    /// open, so the log would otherwise say a fork was asked for and never
+    /// whether it happened. `opened` writes the `agent-fork` row a delegate fork
+    /// writes at spawn (`into: "solo"`); a failure writes `agent-fork-failed`
+    /// with the frontend's reason — a pane that was not open in this window, a
+    /// refusal the menu would have given, a failed open.
+    ///
+    /// Refused for anything but a live group's LEAD, named by the id the
+    /// request carried: the ack is a statement about that lead's request, and
+    /// the frontend is trusted but its payload is still checked (the id could
+    /// have been reused, or the group ended, before the ack arrived).
+    pub fn record_solo_fork_outcome(
+        &self,
+        group_id: &GroupId,
+        lead_id: &str,
+        opened: bool,
+        detail: &str,
+    ) -> Result<(), String> {
+        let lead = self
+            .agent(lead_id)
+            .filter(|a| &a.group == group_id && a.role == Role::Lead)
+            .ok_or_else(|| format!("unknown agent: {lead_id}"))?;
+        let detail: String = detail.chars().take(500).collect();
+        if opened {
+            self.audit(group_id, brand::AUDIT_ACTOR, "agent-fork", json!({
+                "agent": null,
+                "parent_agent": lead.id,
+                "parent_session": lead.session_id,
+                "into": "solo",
+            }));
+        } else {
+            self.audit(group_id, brand::AUDIT_ACTOR, "agent-fork-failed", json!({
+                "parent_agent": lead.id,
+                "into": "solo",
+                "reason": detail,
+            }));
+        }
+        Ok(())
     }
 
     /// Register an agent, emit the pane spawn request, wait for the frontend
@@ -52669,6 +53239,38 @@ impl OrchRegistry {
         cwd_override: Option<String>,
         restore_name_source: Option<NameSource>,
         task_id: Option<String>,
+    ) -> Result<AgentEntry, String> {
+        self.spawn_agent_full(group_id, role, block, name, task, use_worktree, branch, base, resume_session, cwd_override, restore_name_source, task_id, None)
+    }
+
+    /// [`spawn_agent_bound`](Self::spawn_agent_bound) plus the optional **fork**
+    /// (#3318 F2): `fork` names the parent session the new agent's session
+    /// starts as a copy of. `None` — every caller but [`Self::fork_agent`] — is
+    /// exactly the spawn that existed before, for the tier reason
+    /// `spawn_agent_bound` gives for its own binding.
+    ///
+    /// A fork is this function with the fork read at four places and nowhere
+    /// else: the child's session id (minted only where the CLI's seam pre-mints
+    /// a fork's child), the launch line (`fork_of`), the roster row
+    /// (`forked_from`) and the audit/kickoff pair. Every guardrail — cap,
+    /// spawn-rate, CLI pin, persona, MCP identity, worktree — is the ordinary
+    /// spawn's, unchanged, which is the argument for one path rather than two.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_agent_full(
+        &self,
+        group_id: &GroupId,
+        role: Role,
+        block: Option<String>,
+        name: &str,
+        task: &str,
+        use_worktree: bool,
+        branch: Option<String>,
+        base: Option<String>,
+        resume_session: Option<String>,
+        cwd_override: Option<String>,
+        restore_name_source: Option<NameSource>,
+        task_id: Option<String>,
+        fork: Option<ForkSpawn>,
     ) -> Result<AgentEntry, String> {
         let group = self.group(group_id).ok_or("unknown group")?;
 
@@ -52816,6 +53418,13 @@ impl OrchRegistry {
         // different thing from what their workflow file asked for.
         let structured = workflow::structured_harness_for(block.driver.as_deref(), cli)
             .map_err(|e| format!("guardrail: block {} — {e}", block.id))?;
+        // #3318 F2: a structured pane is launched from `pi_launch_spec`, which
+        // has no fork parameter — so a fork there would silently start a FRESH
+        // session and call it a fork. `fork_agent` refuses first with the
+        // sentence; this is the backstop for any other caller.
+        if structured.is_some() && fork.is_some() {
+            return Err(fork_structured_refusal(&block.id));
+        }
         let cli = cli.to_string();
         let model = workflow::model_of(&block, &group.guardrails.agent_cli).to_string();
 
@@ -52851,8 +53460,25 @@ impl OrchRegistry {
         // Session identity: resumes reuse the given id; fresh Claude agents
         // get a pre-assigned UUID so their session is resumable later.
         let resume = resume_session.is_some();
+        // A fork is never also a resume: `fork_agent` passes no
+        // `resume_session`, and a caller that passed both would be asking one
+        // line to continue a session AND branch off one. Refused rather than
+        // resolved by precedence, because either precedence silently drops half
+        // of what was asked.
+        if resume && fork.is_some() {
+            return Err("a spawn cannot both resume a session and fork one".into());
+        }
         let session_id = match resume_session {
             Some(s) => Some(sanitize_session(&s).ok_or("invalid resume session id")?),
+            // #3318 F2: a fork's CHILD is minted only where the CLI's seam
+            // names the child on the line (`ForkSeam::premints_child` — pi
+            // always, claude per live check L1). Everywhere else the child's id
+            // is the vendor's to mint and the store watcher's to learn, and
+            // recording a minted id the line never carried would give the roster
+            // a session the pane is not running under.
+            None if fork.is_some() => cli_caps(&cli)
+                .is_some_and(|c| c.fork.premints_child())
+                .then(new_session_uuid),
             // #2126: the CAPABILITY, not the CLI name. claude and pi are both
             // handed the id they will run under; every other spawnable CLI
             // mints its own somewhere inside boot. Asking `CLI_CAPS` here and
@@ -52860,6 +53486,7 @@ impl OrchRegistry {
             // "watch a store for one" from ever both being true.
             None => premints_session_id(&cli).then(new_session_uuid),
         };
+        let fork_of = fork.as_ref().map(|f| f.parent_session.as_str());
 
         // A CLI that mints its own session id after boot has one; snapshot the
         // sessions that already exist
@@ -52919,16 +53546,7 @@ impl OrchRegistry {
             // in two worktrees at once. `gh pr checkout --detach` sidesteps
             // that: a detached HEAD never collides with anything.
             let note = if role == Role::Reviewer {
-                format!(
-                    "Your working directory is a dedicated git worktree at {wt}, cut fresh from \
-                     the default branch — its own branch '{branch_name}' is just scratch space, \
-                     never the PR's own branch (which may already be checked out in the worker's \
-                     worktree). You review; you do not create branches or push. To inspect the \
-                     PR's actual code locally (e.g. to run tests), `gh pr checkout <n> --detach` \
-                     — never a bare `gh pr checkout <n>`, which grabs the PR branch by NAME and \
-                     collides with any other worktree (the worker's, or another reviewer's) that \
-                     already has it checked out."
-                )
+                reviewer_worktree_note(&wt, &branch_name, base.as_deref())
             } else {
                 format!(
                     "Your working directory is a dedicated git worktree at {wt} already checked out on branch '{branch_name}'."
@@ -53053,8 +53671,17 @@ impl OrchRegistry {
             // #946 Q4 / #1091 slice H (H7): the liaison-hinted block feeds
             // `claude_denies_interactive_question` the same way `role` does.
             block.role_hint.as_deref(),
-            None,
-        );
+            // #3318 F2: the parent session, on a fork. The builder REFUSES a
+            // CLI with no fork seam (#3331 item 2); `fork_agent` asks the same
+            // predicate before any of this runs, so reaching the `Err` here
+            // means a caller skipped it — the minted config is removed rather
+            // than left for a pane that will never open.
+            fork_of,
+        )
+        .map_err(|e| {
+            let _ = fs::remove_file(&cfg.path);
+            e
+        })?;
         let argv = self.build_agent_argv_ex(
             &cli,
             &model,
@@ -53070,8 +53697,12 @@ impl OrchRegistry {
             &inject,
             role,
             block.role_hint.as_deref(),
-            None,
-        );
+            fork_of,
+        )
+        .map_err(|e| {
+            let _ = fs::remove_file(&cfg.path);
+            e
+        })?;
         // Round #417 correction 6: fail loudly, pre-spawn, rather than
         // handing CreateProcessW a command line it will refuse with an
         // unreadable OS error — see `command_line_length_guard`'s doc.
@@ -53089,6 +53720,8 @@ impl OrchRegistry {
             pty_id: None,
             pane_id: None,
             pane_kind: None,
+            // #3318 F2: provenance, and nothing reads it to decide anything.
+            forked_from: fork.as_ref().map(|f| f.parent_session.clone()),
             task: task.to_string(),
             task_id: task_id.clone(),
             session_id: session_id.clone(),
@@ -53264,6 +53897,25 @@ impl OrchRegistry {
                     else { "none" },
             })),
         }));
+        // #3318 F2: ONE `agent-fork` row beside the `agent-spawn` above, so a
+        // human reading the log sees both what was spawned and what it was
+        // spawned FROM. `child_session` is null where the vendor mints the
+        // child (codex, opencode, claude's learned arm): its later
+        // `session-bound` row is where that id arrives, unchanged.
+        if let Some(f) = &fork {
+            self.audit(group_id, brand::AUDIT_ACTOR, "agent-fork", json!({
+                "agent": agent_id,
+                "parent_agent": f.parent_agent,
+                "parent_session": f.parent_session,
+                "requested_by": f.requested_by,
+                "child_session": session_id,
+                "cli": cli,
+                "cwd": cwd,
+                "worktree": use_worktree,
+                "branch": persisted_branch,
+                "base": base,
+            }));
+        }
         // Breadcrumb (no prompt/task text): ids + role only.
         crate::obs::breadcrumb(
             "agent-spawn",
@@ -53433,6 +54085,29 @@ impl OrchRegistry {
                     if !task.trim().is_empty() {
                         self.deliver_prompt(&agent_id, task, brand::AUDIT_ACTOR, Delivery::ResumeKickoff)?;
                     }
+                } else if let Some(f) = &fork {
+                    // #3318 F2: a fork already HAS its role and its history —
+                    // that is the point of forking — so it gets a resume-class
+                    // turn naming what changed (its identity, its workspace,
+                    // its task), never the fresh kickoff that would re-brief a
+                    // conversation mid-stream. `ResumeKickoff` for the same
+                    // reason a resume uses it: it waits for boot, and it skips
+                    // copilot's autopilot confirm (moot here — copilot has no
+                    // fork seam — but the class is the resume's, not a fresh
+                    // spawn's).
+                    let instructions = self.group_dir(group_id).join(block.instructions_file());
+                    let kickoff = fork_kickoff_prompt(
+                        group_id,
+                        &agent_id,
+                        // `display` was moved into the SpawnRequest above;
+                        // the entry holds the same string.
+                        &entry.name,
+                        f,
+                        &instructions,
+                        &branch_note,
+                        task,
+                    );
+                    self.deliver_prompt(&agent_id, &kickoff, brand::AUDIT_ACTOR, Delivery::ResumeKickoff)?;
                 } else {
                     let a = self
                         .agent(&agent_id)
@@ -62667,8 +63342,11 @@ fn register_orchestrator_pane(
         // rather than threaded from `block` the way `spawn_agent_ex` does.
         Role::Orchestrator,
         None,
-    None,
-    );
+        // Never a fork: an orchestrator is refused as a fork source (#3318
+        // F2), so this `Ok` is structural — `?` only because the signature
+        // is shared with the path that can fork.
+        None,
+    )?;
     let argv = reg.build_agent_argv_ex(
         &cli,
         &model,
@@ -62684,8 +63362,8 @@ fn register_orchestrator_pane(
         &inject,
         Role::Orchestrator,
         None,
-    None,
-    );
+        None,
+    )?;
     // Round #417 correction 6: see `command_line_length_guard`'s doc — the
     // orchestrator's own pane must fail loudly pre-spawn too, not just
     // worker/reviewer/planner panes through `spawn_agent_ex`.
@@ -62705,6 +63383,7 @@ fn register_orchestrator_pane(
         pty_id: None,
         pane_id: None,
         pane_kind: None,
+        forked_from: None,
         task: String::new(),
         task_id: None, // the group’s own orchestrator is never spawned against a board row
         session_id,
@@ -63512,6 +64191,63 @@ pub async fn resume_orch_session(
         resume_recorded_session(&reg, &session_id, hint, start_fresh)
     })
     .await
+}
+
+/// Fork a delegate's session into a new agent pane (#3318 F2) — the HUMAN's
+/// route to [`OrchRegistry::fork_agent`], from a delegate pane's menu. Every
+/// refusal is `fork_agent`'s, worded for an orchestrator and a human alike.
+///
+/// **`async` through [`run_blocking`], not a synchronous command through
+/// `mutating_command`, and that is forced rather than chosen.** A fork is a
+/// spawn, and a spawn blocks until the FRONTEND opens and binds the new pane
+/// (`BIND_TIMEOUT`). A synchronous command runs inline on the webview/GUI
+/// thread — the same thread whose event loop has to service
+/// `orch-spawn-request` for that bind to happen — so a sync fork would wait on
+/// itself for the whole timeout and then fail. Constraint 10's
+/// `mutating_command` barrier exists for commands that run on that thread;
+/// this one does not, which is `resume_orch_session`'s shape directly above,
+/// for the same reason.
+#[tauri::command]
+pub async fn orch_fork_agent(
+    app: AppHandle,
+    group_id: String,
+    agent_id: String,
+    task: Option<String>,
+    name: Option<String>,
+) -> Result<Value, String> {
+    let reg = reg_of(&app);
+    let group_id = command_group(&group_id)?;
+    run_blocking(move || {
+        let a = reg.fork_agent(
+            &group_id,
+            "human",
+            &agent_id,
+            task.as_deref().unwrap_or(""),
+            None,
+            None,
+            name.as_deref().unwrap_or(""),
+        )?;
+        Ok(json!({ "agent_id": a.id, "name": a.name, "session_id": a.session_id }))
+    })
+    .await
+}
+
+/// The frontend's ACK for an `orch-fork-solo-request` (#3318 F2, review round
+/// 1): whether the Solo pane a lead asked for actually opened. See
+/// [`OrchRegistry::record_solo_fork_outcome`]. `async` through [`run_blocking`]
+/// for the same reason as its neighbours: the body writes the audit log, and
+/// disk I/O stays off the webview thread.
+#[tauri::command]
+pub async fn orch_fork_solo_result(
+    app: AppHandle,
+    group_id: String,
+    agent_id: String,
+    opened: bool,
+    detail: String,
+) -> Result<(), String> {
+    let reg = reg_of(&app);
+    let group_id = command_group(&group_id)?;
+    run_blocking(move || reg.record_solo_fork_outcome(&group_id, &agent_id, opened, &detail)).await
 }
 
 // ---------- merge-gate link resolution ----------

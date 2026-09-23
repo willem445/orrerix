@@ -16,6 +16,8 @@ import {
   adoptableSessionId,
   hasForkSession,
   agentForkCommand,
+  canForkCli,
+  forkPremintsChild,
   forkPaneName,
   forkIdFlags,
   forkRecordCommand,
@@ -2303,21 +2305,117 @@ test("#3318 F1: forking a pane that is ITSELF a fork emits one fork token, not t
   assert.doesNotMatch(again.command, new RegExp(PARENT));
 });
 
-test("#3318 F1: a CLI loomux has not wired a fork for is refused, and claude is the control", () => {
-  // F1 wires claude alone; codex/pi/opencode each have a documented argv fork
-  // that F2 adds, and copilot/gemini have none at all.
+test("#3318 F2: a CLI with no argv fork is refused, and every CLI with a seam is the control", () => {
+  // copilot and gemini have no command-line fork at all.
+  for (const line of [`copilot --resume=${PARENT}`, "gemini"]) {
+    assert.equal(agentForkCommand(line, null, PARENT, CHILD), null, line);
+  }
+  // The controls: the same call on each forkable CLI is NOT null, so the loop
+  // above is measuring the CLI gate rather than a function that refuses all.
   for (const line of [
-    `copilot --resume=${PARENT}`,
+    `claude --resume ${PARENT}`,
     `opencode --session ${PARENT}`,
     `codex resume ${PARENT}`,
     `pi --session-id ${PARENT}`,
-    "gemini",
   ]) {
-    assert.equal(agentForkCommand(line, null, PARENT, CHILD), null, line);
+    assert.ok(agentForkCommand(line, null, PARENT, CHILD), line);
   }
-  // The control: the same call on a claude line is NOT null, so the loop above
-  // is measuring the CLI gate rather than a function that refuses everything.
-  assert.ok(agentForkCommand(`claude --resume ${PARENT}`, null, PARENT, CHILD));
+});
+
+test("#3318 F2: an opencode fork is its resume line plus exactly --fork after the session", () => {
+  const recorded = `opencode --session ${PARENT} --model anthropic/sonnet`;
+  const forked = agentForkCommand(recorded, null, PARENT, CHILD);
+  assert.equal(forked?.command, `opencode --model anthropic/sonnet --session ${PARENT} --fork`);
+  assert.doesNotMatch(forked?.command ?? "", new RegExp(CHILD), "opencode cannot name its child");
+  // argv, and a fork of a fork carries ONE --fork, naming the pane forked.
+  const again = agentForkCommand(null, ["opencode", "--session", PARENT, "--fork"], CHILD, "x");
+  assert.deepEqual(again?.argv, ["opencode", "--session", CHILD, "--fork"]);
+});
+
+test("#3318 F2: a codex fork takes the subcommand slot — fork <parent> in place of resume <id>", () => {
+  const recorded = `codex -C "/repo" -p orrerix-solo-3 resume ${PARENT}`;
+  const forked = agentForkCommand(recorded, null, PARENT, CHILD);
+  assert.equal(forked?.command, `codex -C "/repo" -p orrerix-solo-3 fork ${PARENT}`);
+  assert.doesNotMatch(forked?.command ?? "", / resume /, "a fork resumes nothing");
+  const again = agentForkCommand(null, ["codex", "-C", "/repo", "fork", PARENT], CHILD, "x");
+  assert.deepEqual(again?.argv, ["codex", "-C", "/repo", "fork", CHILD]);
+});
+
+test("#3318 F2: a pi fork names the child with --session-id and the parent with --fork", () => {
+  const recorded = `pi --session-id ${PARENT} --session-dir "/g/pi" --model m`;
+  const forked = agentForkCommand(recorded, null, PARENT, CHILD);
+  assert.equal(forked?.command, `pi --session-dir "/g/pi" --model m --session-id ${CHILD} --fork ${PARENT}`);
+  assert.equal(forked?.command?.match(/--session-id/g)?.length, 1, "one id flag, naming the child");
+  // A fork of a fork: the old --fork and its VALUE go, not just the flag.
+  const again = agentForkCommand(`pi --session-id ${CHILD} --fork ${PARENT}`, null, CHILD, "aaaa");
+  assert.equal(again?.command, `pi --session-id aaaa --fork ${CHILD}`);
+});
+
+test("#3318 F2: which forks name their child — pi always, claude per L1, codex and opencode never", () => {
+  assert.equal(forkPremintsChild("pi"), true);
+  assert.equal(forkPremintsChild("claude"), FORK_PREMINTS_CHILD_ID);
+  assert.equal(forkPremintsChild(null), FORK_PREMINTS_CHILD_ID, "no program falls back to claude");
+  assert.equal(forkPremintsChild("codex"), false);
+  assert.equal(forkPremintsChild("opencode"), false);
+  assert.equal(forkPremintsChild("copilot"), false, "an unforkable CLI names nothing");
+});
+
+test("#3318 F2: the one-shot discharge speaks each CLI's own resume grammar", () => {
+  // The record after the child's id is known is that CLI's plain resume of the
+  // CHILD, and the fork token (with its value, on pi) is gone.
+  const cases: Array<[string, string, RegExp]> = [
+    [`opencode --session ${PARENT} --fork`, `opencode --session ${CHILD}`, /--fork/],
+    [`codex -C "/r" fork ${PARENT}`, `codex -C "/r" resume ${CHILD}`, / fork /],
+    [`pi --session-id ${CHILD} --fork ${PARENT}`, `pi --session-id ${CHILD}`, /--fork/],
+  ];
+  for (const [live, want, gone] of cases) {
+    const rec = forkRecordCommand(live, null, CHILD, PARENT);
+    assert.equal(rec.command, want, live);
+    assert.doesNotMatch(rec.command ?? "", gone, live);
+    assert.equal(hasForkSession(rec.command, rec.argv), false, `${live}: discharged`);
+    assert.deepEqual(forkRecordCommand(rec.command, rec.argv, CHILD, PARENT), rec, `${live}: idempotent`);
+  }
+  // With NO learned id (codex/opencode before the reconciler finds it): a
+  // fresh line — never the parent's session, which two panes would share.
+  const fresh = forkRecordCommand(`codex -C "/r" fork ${PARENT}`, null, null, PARENT);
+  assert.equal(fresh.command, `codex -C "/r"`);
+});
+
+test("#3318 F2: hasForkSession reads every CLI's fork token, gated on the program", () => {
+  assert.equal(hasForkSession(`opencode --session ${PARENT} --fork`, null), true);
+  assert.equal(hasForkSession(`codex fork ${PARENT}`, null), true);
+  assert.equal(hasForkSession(`pi --fork ${PARENT}`, null), true);
+  assert.equal(hasForkSession(null, ["pi", `--fork=${PARENT}`]), true, "the = form of a valued flag");
+  // Gated: `--fork` and a bare `fork` are not a fork on a line this module has
+  // not identified as that CLI's.
+  assert.equal(hasForkSession(`claude --fork`, null), false);
+  assert.equal(hasForkSession(`somecli fork now`, null), false);
+  // …and the controls: the same lines without the token are not forks.
+  assert.equal(hasForkSession(`opencode --session ${PARENT}`, null), false);
+  assert.equal(hasForkSession(`codex resume ${PARENT}`, null), false);
+});
+
+test("#3318 F2: the frontend's fork table agrees with the engine's CliCaps rows, row by row", () => {
+  // The Solo gesture builds its line HERE, so its spellings are a mirror of
+  // `CliCaps.fork`. Read off the Rust source rather than restated, so a row
+  // moving on one side alone reddens rather than shipping a flag the other
+  // side never blessed.
+  const rust = readFileSync(new URL("../crates/loomux-engine/src/model.rs", import.meta.url), "utf8");
+  const rows = [
+    ...rust.matchAll(
+      /cli: "([a-z]+)",[\s\S]*?fork: ForkSeam::(Flag \{\s*flag: "([^"]+)"|Subcommand\("([^"]+)"\)|ParentFlag\("([^"]+)"\)|None\()/g
+    ),
+  ];
+  const seen = new Map<string, string | null>();
+  for (const r of rows) seen.set(r[1], r[3] ?? r[4] ?? r[5] ?? null);
+  // Population control: every CLI the engine has a row for was parsed.
+  assert.deepEqual([...seen.keys()].sort(), ["claude", "codex", "copilot", "gemini", "opencode", "pi"]);
+  for (const [cli, token] of seen) {
+    assert.equal(canForkCli(cli), token !== null, `${cli}: forkable on both sides or neither`);
+    if (token === null) continue;
+    const line = agentForkCommand(`${cli} x`, null, PARENT, CHILD)?.command ?? "";
+    assert.ok(line.split(/\s+/).includes(token), `${cli}: the frontend emits the engine's token ${token}: ${line}`);
+  }
 });
 
 test("#3318 F1: a_fork_line_never_persists_its_fork_flag — the record is a plain --resume into the CHILD", () => {

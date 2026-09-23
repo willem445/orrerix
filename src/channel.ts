@@ -84,7 +84,8 @@ export function reduceConnect(
         effect: { kind: "none" },
       };
     case "fork":
-      // #3318 F1: a fork is not a channel action AND, unlike `promote` above,
+    case "fork-delegate":
+      // #3318 F1 (F2 for a delegate): a fork is not a channel action AND, unlike `promote` above,
       // it retires nothing — the source pane keeps its process, its session
       // and its `__solo__` identity, which is the gesture's whole contract. So
       // an arm pointing at this pane is still valid afterwards and is left

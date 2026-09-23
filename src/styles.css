@@ -2382,6 +2382,40 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
 .fileexp-hash.pending { opacity: 0.45; }
 .fileexp-hash.error { color: var(--state-attention); }
 
+/* The fork-name prompt (#3368). A popover pinned over the pane being forked:
+   `position: fixed` on <body>, so it joins no layout box and cannot reach a PTY
+   resize (constraint 1) — `src/forkprompt.ts` places it with inline left/top,
+   which only mean anything because of this rule. Stacks with the context menu
+   (the gesture that opens it), below full dialogs. `test/forkprompt.test.ts`
+   pins the position and that every class the module assigns has a rule. */
+.fork-name-prompt {
+  position: fixed; z-index: 200;
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 6px;
+  padding: 8px 8px 6px 10px;
+  background: var(--surface-1); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: var(--shadow-float);
+  font-size: 12px;
+}
+.fork-name-label {
+  grid-column: 1; display: flex; align-items: center; gap: 8px; min-width: 0;
+  color: var(--ink-dim); white-space: nowrap;
+}
+.fork-name-input {
+  flex: 1; min-width: 0;
+  font: inherit; color: var(--ink);
+  background: var(--surface-0); border: 1px solid var(--line); border-radius: 5px;
+  padding: 4px 6px; outline: none;
+}
+.fork-name-input:focus { border-color: var(--accent); }
+.fork-name-hint { grid-column: 1 / -1; font-size: 10.5px; color: var(--ink-dim); }
+.fork-name-cancel {
+  grid-column: 2; grid-row: 1;
+  font: inherit; line-height: 1; padding: 3px 6px; cursor: pointer;
+  background: none; border: 1px solid transparent; border-radius: 5px; color: var(--ink-dim);
+}
+.fork-name-cancel:hover { background: var(--surface-2); border-color: var(--line); color: var(--ink); }
+
 /* ---------- context menu (#214) ---------- */
 /* Fixed-position, body-level, one at a time. Placed by JS (flipped to stay on screen);
    everything else — including the submenus — is CSS, so there are no timers to leak. */

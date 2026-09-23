@@ -4818,9 +4818,7 @@ impl OrchRegistry {
                             // that did not land leaves it for the next notice
                             // to carry. Taking it here dropped the worker's
                             // words from the pane whenever the delivery failed.
-                            out.report_folded = entry.auto_report.is_some();
-                            out.notices
-                                .push(Self::rd_fold_text(n, entry.auto_report.as_deref()));
+                            out.notices.push(Self::rd_fold_auto_report(entry, n));
                         } else {
                             out.provider_note = Some(n);
                         }

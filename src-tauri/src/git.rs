@@ -1139,12 +1139,18 @@ pub fn git_worktree_add_sync(
     if run_git(&repo, &["merge-base", "--is-ancestor", &base_sha, &head_sha]).is_err() {
         discard(&repo, &dest_str);
         // For a tracked remote branch the likely cause is benign — the PR is
-        // simply behind the base that moved on — so name the way to take the
-        // branch as-is rather than leaving the caller to work it out.
+        // simply behind the base that moved on — so name the ways out rather
+        // than leaving the caller to work them out. BOTH of them, because this
+        // function has two callers with different vocabularies: `spawn_agent`
+        // can pass a `base`, while the human launcher (`git_worktree_add`,
+        // reached from `src/launcher.ts` with no base at all) can only change
+        // the name. A hint naming only `base` would be advice that caller has
+        // no field for.
         let hint = if tracks_remote {
             format!(
                 "; it was checked out from {remote_branch:?} — pass base {remote_branch:?} \
-                 to take that branch as it stands"
+                 to take that branch as it stands, or use a different worktree name to cut \
+                 a fresh branch from the base"
             )
         } else {
             String::new()
@@ -2361,6 +2367,12 @@ mod tests {
         assert!(
             err.contains("pass base \"origin/ci/behind\""),
             "a remote-branch refusal names the way to take the branch as it stands: {err}"
+        );
+        // …and the way out for the caller that has no `base` to pass: the human
+        // launcher reaches this function with a worktree name only.
+        assert!(
+            err.contains("use a different worktree name"),
+            "the hint must also be actionable for the base-less launcher caller: {err}"
         );
         assert!(
             !git_worktree_list_sync(p(&primary)).unwrap().contains("ci/behind"),

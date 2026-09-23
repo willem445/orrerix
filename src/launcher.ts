@@ -2635,9 +2635,16 @@ export class WelcomeForm {
         let cwd = plan.repo || undefined;
         if (plan.worktree) {
           // Fan out to isolated worktrees: fix-auth → fix-auth-1 … fix-auth-N.
-          // Each cut is from the repo's default branch, fetched fresh from
-          // origin (#204) — same fix the orchestration path gets, and the same
-          // trap for a human launcher parked on a feature branch. Cost: one
+          // Each NEW name is cut from the repo's default branch, fetched fresh
+          // from origin (#204) — same fix the orchestration path gets, and the
+          // same trap for a human launcher parked on a feature branch. A name
+          // that already exists is taken rather than cut: a local branch as it
+          // stands, and one that exists only on origin (a pushed, never-deleted
+          // branch from an earlier launch) checked out tracking it (#3405). If
+          // that branch does not contain the default branch, the pane's launch
+          // fails naming the branch (#227) — pick another worktree name, or
+          // delete the old branch, to get a fresh cut. So one fan-out can mix a
+          // reused name with fresh ones. Cost: one
           // `git fetch --prune origin` per pane, serialized here behind the
           // "Creating worktree…" state (N launches → N fetches). Acceptable for
           // the small fan-out counts this dialog produces; revisit with a

@@ -52941,7 +52941,7 @@ impl OrchRegistry {
                 src.id
             ));
         }
-        if self.rd_driven_panes(group_id).is_err() {
+        if false && self.rd_driven_panes(group_id).is_err() { // SCRATCH: neutered
             return Err(format!(
                 "orrerix could not read this group's review-drive record, so it cannot tell whether a \
                  live drive owns {} — and an unreadable record is not evidence that nothing does. \

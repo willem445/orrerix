@@ -2195,6 +2195,14 @@ posted on the PR itself. Under a **review drive** you will not see this notice a
 all — the driver takes delivery of its own lanes' verdicts and reports them in
 its own notice instead.
 
+**A reviewer declares how many findings it left open.** `review_verdict` takes an
+optional `open_findings` — the findings the reviewer left open at that head,
+blocking and non-blocking together, `0` when nothing is left. The reviewer
+template asks for it on every verdict, and `list_verdicts` shows it on the
+verdict's row. A verdict without it declared nothing, and orrerix never reads
+that as zero; a value that is not a whole number of at least 0 is refused, and
+the reviewer records again.
+
 **Opt-in, every time.** A workflow file arrives with a `git clone` — the
 **advanced orchestrator** toggle is what makes a repo's workflow take effect;
 off (the default), the file is never even opened. Turning it on, at launch or
@@ -2776,6 +2784,21 @@ branch is not the PR's head, a PR that already has a drive (running or parked), 
 already carries any recorded verdict - a drive starts its round count at zero, which is only
 true of a PR nobody has reviewed. Every refusal is on the audit log as
 `rd-auto-start-declined` with its reason, so you can see why a PR did not auto-drive.
+
+**The clean case: every reviewer passed with nothing open.** When the gate is satisfied, CI
+is green, and every required reviewer's pass at the current head declared `open_findings: 0`,
+the drive's `GATE SATISFIED` line says `clean: true — 0 open findings on every lane`: there is
+nothing for you to disposition. Where the repo turns on the merge queue
+(`merge_queue: enabled: true`) the driver also submits the PR to the queue itself, exactly as
+`queue_merge` would, and the line ends with the queue's answer — `queued at position N`, or
+the queue's refusal. The queue still makes every decision it always makes: it re-checks the
+gate against the recorded verdicts and the live PR, and it never lands on the default branch,
+so a PR to `main` is refused `base-is-default` and stays yours to merge. A reviewer that
+left `open_findings` out is never clean, whatever its summary says. With
+`fix_nonblocking_rounds` on, a reviewer that declares `0` has nothing left for another
+round, and a declared count is read before the counts in its summary. Each clean gate writes
+`rd-clean` to the audit log beside `rd-satisfied`, carrying the queue's answer when there
+was one.
 
 Apart from that one switch, the block **enables** the feature; it can never target or widen
 a drive - no other drive exists until an orchestrator makes its own role-gated

@@ -373,7 +373,9 @@ decision mirrors — never by reimplementing the decision:
 
 - `workflow.rs::parse_gate_file:1876` — the gate definition (`require`, `reviewers`, `also`).
 - `workflow.rs::parse_verdict_file:1524` — one recorded verdict: line 1 the verdict, line 2
-  the **head sha it binds to**, line 3 timestamp, line 4 agent id, line 5 body digest.
+  the **head sha it binds to**, line 3 timestamp, line 4 agent id (plus the reviewer's
+  `open-findings=<n>` declaration when it made one, #3367 — read by nothing here), line 5 body
+  digest.
 - `workflow.rs::Verdict::parse:1298` and `is_blocking:1311` — `pass | fail | escalate`,
   lowercase-strict; anything else is `None`, and **one `fail` beats any number of passes**.
 - `workflow.rs::evaluate_merge_gate:1775` — the decision itself.

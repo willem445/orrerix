@@ -4798,6 +4798,83 @@ pub fn stated_findings(summary: &str) -> StatedFindings {
     StatedFindings { blocking: agreed(&blocking), non_blocking: agreed(&non_blocking) }
 }
 
+/// **What one PASS verdict leaves open — the reviewer's structured declaration
+/// first, the summary parser as its fallback** (#3367 item 5).
+///
+/// `open_findings` is the explicit form of the number [`stated_findings`]
+/// reads out of prose, so there is ONE count with two sources rather than two
+/// counts: where the reviewer declared it, it wins; where it did not, the
+/// parser answers exactly as it did before this field existed.
+///
+/// A declaration is a TOTAL, blocking and non-blocking together. On a `pass`
+/// nothing is blocking by the verdict's own definition (`reviewer.md`: an
+/// approval with findings open is only ever one with non-blocking ones), so an
+/// unstated blocking count reads as `0` here and the rest of the total is
+/// non-blocking. A summary that STATES a blocking count larger than the
+/// declared total contradicts it, and a contradiction is unknown on both
+/// classes — the fail-safe direction, since unknown never licenses a hand-back
+/// and never makes a lane clean.
+///
+/// Called only for passes: [`lane_residuals`] and the notice helpers filter to
+/// `Verdict::Pass` before they ask.
+pub fn verdict_findings(summary: &str, open_findings: Option<u32>) -> StatedFindings {
+    let stated = stated_findings(summary);
+    let Some(total) = open_findings else { return stated };
+    let blocking = stated.blocking.unwrap_or(0);
+    if blocking > total {
+        return StatedFindings::default();
+    }
+    StatedFindings { blocking: Some(blocking), non_blocking: Some(total - blocking) }
+}
+
+/// **This pass declared `open_findings: 0` and nothing contradicts it**
+/// (#3367 item 5) — one lane's half of the clean case.
+///
+/// The declaration is REQUIRED: a lane that omitted it is not clean, however
+/// its summary reads, because "the parser found `0 blocking, 0 non-blocking`"
+/// is prose and the clean case skips the orchestrator's disposition entirely.
+/// And the summary still has a veto: `open_findings: 0` beside `1 blocking`
+/// is a reviewer contradicting itself, which [`verdict_findings`] reads as
+/// unknown.
+pub fn declared_clean(summary: &str, open_findings: Option<u32>) -> bool {
+    open_findings == Some(0)
+        && verdict_findings(summary, open_findings)
+            == StatedFindings { blocking: Some(0), non_blocking: Some(0) }
+}
+
+/// **Every required lane PASSED at `head`, each declaring `open_findings: 0`**
+/// (#3367 item 5).
+///
+/// Positive on every axis, like [`residual_is_nonblocking_only`]: an empty
+/// lane list, an empty head, a stale pass, a lane with no verdict, a `fail` or
+/// an `escalate` all answer `false`, and `false` is simply the ordinary
+/// `GATE SATISFIED` — nothing is refused, only the shortcut is not taken.
+pub fn lanes_are_clean(lanes: &[LaneFact], head: &str) -> bool {
+    !head.is_empty()
+        && !lanes.is_empty()
+        && lanes.iter().all(|l| {
+            l.verdict.as_ref().is_some_and(|v| {
+                v.verdict == Verdict::Pass
+                    && v.reviewed(head)
+                    && declared_clean(&v.summary, v.open_findings)
+            })
+        })
+}
+
+/// **The clean case**: the gate is satisfied at the live head, CI is green, and
+/// [`lanes_are_clean`] (#3367 item 5).
+///
+/// CI is asked here explicitly rather than inherited from the gate, because a
+/// gate need not declare `also: [ci-green]` and the brief's "clean" includes a
+/// green CI whatever this repo's gate says. What the answer changes is the
+/// satisfied exit's ROUTE — an enqueue where the merge queue is on, a flagged
+/// notice where it is not — never whether the drive is satisfied.
+pub fn gate_is_clean(facts: &DriveFacts) -> bool {
+    facts.gate == GateOutcome::Satisfied
+        && facts.ci == CiObservation::Green
+        && facts.required_lanes.as_deref().is_some_and(|l| lanes_are_clean(l, &facts.head))
+}
+
 /// One required lane's residual, as a non-blocking round or a satisfied
 /// notice reports it (#3367 item 1).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4819,7 +4896,11 @@ pub fn lane_residuals(lanes: &[LaneFact], head: &str) -> Vec<LaneResidual> {
                 .verdict
                 .as_ref()
                 .filter(|v| v.verdict == Verdict::Pass && v.reviewed(head))
-                .map(|v| stated_findings(&v.summary))
+                // #3367 item 5: the declaration first, the parser as fallback —
+                // which is also what makes `open_findings: 0` END the nit loop
+                // for this lane: it states zero non-blocking, so it can never be
+                // the lane `residual_is_nonblocking_only` needs above zero.
+                .map(|v| verdict_findings(&v.summary, v.open_findings))
                 .unwrap_or_default(),
         })
         .collect()
@@ -6853,6 +6934,7 @@ mod tests {
                 head: at_head.to_string(),
                 body_digest: digest.to_string(),
                 verified_body: false,
+                open_findings: None,
                 summary: String::new(),
                 ts_ms: 0,
             }),
@@ -8700,6 +8782,7 @@ mod tests {
             head: head.into(),
             body_digest: digest.into(),
             verified_body: false,
+            open_findings: None,
             summary: String::new(),
             ts_ms: 0,
         };
@@ -10135,5 +10218,136 @@ mod tests {
         let back: DriveEntry = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
         assert_eq!(back.nit_rounds, 2);
         assert_eq!(back.auto_report.as_deref(), Some("w-7 reports done"));
+    }
+
+    // ── #3367 item 5: `open_findings` and the clean case ─────────────────────
+
+    /// A passing lane that DECLARED `open_findings` — the structured count.
+    fn declared_lane(block: &str, head: &str, open: Option<u32>, summary: &str) -> LaneFact {
+        let mut l = nit_lane(block, head, summary);
+        if let Some(v) = l.verdict.as_mut() {
+            v.open_findings = open;
+        }
+        l
+    }
+
+    /// **The declaration is read first, and the parser is its fallback** —
+    /// one count with two sources, never two counts.
+    #[test]
+    fn a_declared_open_findings_count_wins_and_the_parser_is_its_fallback() {
+        let both = |b, n| StatedFindings { blocking: b, non_blocking: n };
+        // No declaration: exactly the parser, as before item 5.
+        assert_eq!(verdict_findings("0 blocking; 2 non-blocking", None), both(Some(0), Some(2)));
+        assert_eq!(verdict_findings("looks good", None), both(None, None));
+        // A declaration over silent prose: a pass's total is all non-blocking.
+        assert_eq!(verdict_findings("looks good", Some(2)), both(Some(0), Some(2)));
+        assert_eq!(verdict_findings("looks good", Some(0)), both(Some(0), Some(0)));
+        // A declaration over DISAGREEING prose: the declaration wins.
+        assert_eq!(verdict_findings("0 blocking; 3 non-blocking", Some(1)), both(Some(0), Some(1)));
+        // A stated blocking count inside the total is honoured, not zeroed.
+        assert_eq!(verdict_findings("1 blocking", Some(3)), both(Some(1), Some(2)));
+        // …and one ABOVE the total is a contradiction, which is unknown.
+        assert_eq!(verdict_findings("1 blocking", Some(0)), both(None, None));
+        // `declared_clean` needs the declaration itself — prose alone never.
+        assert!(declared_clean("looks good", Some(0)));
+        assert!(!declared_clean("0 blocking, 0 non-blocking", None), "an omission is never 0");
+        assert!(!declared_clean("1 blocking", Some(0)), "the summary keeps a veto");
+        assert!(!declared_clean("", Some(1)));
+    }
+
+    /// **`open_findings: 0` ends the nit loop for that lane** (item 5's
+    /// interaction with item 1). Both rows reverse what the parser alone
+    /// decides, which is what makes them discriminating: the declared zero
+    /// beats a summary still carrying round one's `2 non-blocking`, and a
+    /// declared `2` licenses the round a summary with no counts could not.
+    #[test]
+    fn a_declared_zero_ends_the_nit_loop_and_a_declared_count_can_start_it() {
+        let sat = DriveStep::to(DriveState::Satisfied);
+        let round = |lanes: Vec<LaneFact>| {
+            let (e, f) = satisfied_over(lanes);
+            decide(&e, &f, &nit_limits(2))
+        };
+        let stale_prose = "Round 1: 0 blocking; 2 non-blocking. Round 2: both fixed.";
+        // The control: the parser alone loops on this summary.
+        assert_eq!(round(vec![declared_lane("rev-std", "head-a", None, stale_prose)]), NIT_ROUND);
+        // The declaration ends it.
+        assert_eq!(round(vec![declared_lane("rev-std", "head-a", Some(0), stale_prose)]), sat);
+        // One lane at 0, the other still declaring nits: the loop continues —
+        // for the lane that has something open, which is the only one that can.
+        assert_eq!(
+            round(vec![
+                declared_lane("rev-std", "head-a", Some(0), stale_prose),
+                declared_lane("rev-final", "head-a", Some(1), "one nit left"),
+            ]),
+            NIT_ROUND
+        );
+        // A declared count with prose that states none: the parser alone woke.
+        assert_eq!(round(vec![declared_lane("rev-std", "head-a", None, "one nit left")]), sat);
+        assert_eq!(round(vec![declared_lane("rev-std", "head-a", Some(1), "one nit left")]), NIT_ROUND);
+    }
+
+    /// **The clean case is positive on every axis**: one row per thing that
+    /// must hold, each flipped alone against the one base case that IS clean.
+    #[test]
+    fn the_clean_case_needs_every_lane_declaring_zero_at_the_head_with_ci_green() {
+        let clean_lanes = || {
+            vec![
+                declared_lane("rev-std", "head-a", Some(0), "nothing left"),
+                declared_lane("rev-final", "head-a", Some(0), "0 blocking, 0 non-blocking"),
+            ]
+        };
+        let facts = |lanes: Vec<LaneFact>| {
+            let (_, f) = satisfied_over(lanes);
+            DriveFacts { ci: CiObservation::Green, ..f }
+        };
+        // The positive control: without it every row below could be a
+        // predicate that answers false for everything.
+        assert!(gate_is_clean(&facts(clean_lanes())));
+
+        let mut rows = 0;
+        let mut flip = |what: &str, f: DriveFacts| {
+            assert!(!gate_is_clean(&f), "{what} must not be clean");
+            rows += 1;
+        };
+        // A lane that omitted the field — though its prose says zero.
+        let mut l = clean_lanes();
+        l[1].verdict.as_mut().unwrap().open_findings = None;
+        flip("an omitted declaration", facts(l));
+        // A lane declaring a nit.
+        let mut l = clean_lanes();
+        l[0].verdict.as_mut().unwrap().open_findings = Some(1);
+        flip("a declared open finding", facts(l));
+        // A declaration the summary contradicts.
+        let mut l = clean_lanes();
+        l[0].verdict.as_mut().unwrap().summary = "1 blocking".into();
+        flip("a contradicted zero", facts(l));
+        // A zero declared at an OLD head says nothing about this one.
+        let mut l = clean_lanes();
+        l[0].verdict.as_mut().unwrap().head = "head-old".into();
+        flip("a stale pass", facts(l));
+        // Not a pass.
+        let mut l = clean_lanes();
+        l[0].verdict.as_mut().unwrap().verdict = Verdict::Escalate;
+        flip("an escalate", facts(l));
+        // A required lane with no verdict at all.
+        let mut l = clean_lanes();
+        l[1].verdict = None;
+        flip("an unrecorded lane", facts(l));
+        // No lanes: nothing was reviewed, so nothing is clean.
+        flip("an empty lane list", facts(Vec::new()));
+        // CI not green.
+        flip("CI pending", DriveFacts { ci: CiObservation::Pending, ..facts(clean_lanes()) });
+        // The gate not satisfied.
+        flip(
+            "an unsatisfied gate",
+            DriveFacts { gate: GateOutcome::Unsatisfied, ..facts(clean_lanes()) },
+        );
+        // Routing unaccountable.
+        flip("unknown lanes", DriveFacts { required_lanes: None, ..facts(clean_lanes()) });
+        assert_eq!(rows, 10, "every axis has its row");
+
+        // And the clean case is not a nit round: nothing is open to hand back.
+        let (e, f) = satisfied_over(clean_lanes());
+        assert_eq!(decide(&e, &f, &nit_limits(3)), DriveStep::to(DriveState::Satisfied));
     }
 }

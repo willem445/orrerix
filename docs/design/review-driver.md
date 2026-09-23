@@ -759,8 +759,16 @@ anything short of a positive yes is arc 9 and the ordinary `GATE SATISFIED`:
    lane stated a non-blocking count above zero** (`residual_is_nonblocking_only`).
 
 **How the driver knows a finding is non-blocking — and the honest limit of it.**
-It reads a COUNT the reviewer stated in its verdict summary, never the findings
-themselves: `stated_findings` accepts `<count> blocking`, `blocking: <count>` and
+It reads a COUNT the reviewer declared, never the findings themselves. Since
+#3367 item 5 the first source is structured — `review_verdict`'s
+`open_findings`, §2.6 — and the summary parser below is its FALLBACK for a
+verdict that declared none: ONE count with two sources
+(`reviewdrive::verdict_findings`), never two counts. A declaration is a total;
+on a `pass` nothing is blocking by the verdict's own definition, so the total is
+the non-blocking count, and a summary that states more blocking findings than
+the declared total contradicts it and reads as unknown. Which is also what makes
+`open_findings: 0` END the loop for that lane: it states zero non-blocking, so it
+is never the lane precondition 4 needs above zero. The fallback parser: `stated_findings` accepts `<count> blocking`, `blocking: <count>` and
 their `non-blocking` forms (digits, or the small English numbers reviewers write),
 on whole tokens, and a class stated twice with two different counts is unknown.
 `review_verdict`'s `summary` parameter now asks every reviewer for exactly those
@@ -792,6 +800,73 @@ are the shared bound's. The choice is read off `DriveEntry::nit_handback`, which
 `advance` assigns on every arc into `fix-wait`, so a restart's re-sent brief
 (`Rehandback`, §2.4) says the same thing and a later red-CI hand-back does not
 inherit it.
+
+### 2.6 The clean case, and the one enqueue the driver makes (#3367 item 5)
+
+**What it removes.** A satisfied gate whose every reviewer left nothing open
+still cost the orchestrator a wake to read `GATE SATISFIED`, call
+`list_verdicts`, find nothing to disposition, and queue or hand the PR to the
+human. INVARIANT 3's disposition of an empty set is empty; the wake decided
+nothing.
+
+**The declaration.** `review_verdict` gains an optional `open_findings: N` — the
+findings the reviewer left open at that head, blocking and non-blocking
+together — stored on line 4 of the verdict file after the agent id
+(`workflow::OPEN_FINDINGS_KEY`), the one line the `gh` shim never reads, so
+lines 1, 2 and 5 are byte-for-byte what they were. It is reviewer-DECLARED and
+not tool-computed like `body_digest`, because it decides nothing the gate reads:
+`evaluate_merge_gate` and `recheck_gate` never consult it. A value that is not a
+whole number >= 0 refuses the call rather than being dropped (which would
+silently cost the clean case) or read as 0 (which would claim a clean review
+nobody made).
+
+**The predicate** (`reviewdrive::gate_is_clean`), positive on every axis: the
+gate is `Satisfied` at the live head; CI is `Green` — asked explicitly, since a
+gate need not declare `also: [ci-green]`; and every required lane's verdict is a
+`pass` bound to that head that DECLARED `open_findings: 0` with nothing in its
+summary contradicting it (`declared_clean`). **A lane that omitted the field is
+never clean**, whatever its prose says: the parser's `0 blocking, 0
+non-blocking` is a reading of prose, and the clean case is the one place a
+reading would skip the orchestrator altogether. The predicate chooses a ROUTE
+out of `satisfied`, never whether the drive is satisfied; arc 9 is unchanged.
+
+**The two routes.** Where `merge_queue.enabled` is off, the `GATE SATISFIED`
+line gains `clean: true — 0 open findings on every lane, CI green: there is
+nothing to disposition`, and `rd-clean` records `route: notice`. Where it is on,
+the driver submits the PR to the queue (`queue_merge_with`) after the tick's
+write and outside `rd_state_lock` — after, because `queue_merge`'s §8.1 check
+re-reads `review_drives.json` and must find this drive already terminal;
+outside, because it takes `mq_state_lock` and spends `gh` round trips. The
+notice is OWED first, saying the driver submitted it; the queue's answer is then
+appended to the owed text (`rd_amend_owed_notice`) before the flush delivers
+it, so the line never claims a queueing the queue refused. `rd-clean` records
+`route: queue` and the queue's JSON verbatim. A failed write enqueues nothing:
+the satisfied arc did not happen as far as the next restart knows.
+
+**Why an enqueue does not reopen §3.1 item 1 — the argument, since this is the
+driver's first write outside its own file.** The driver adds the CALL and
+nothing else. What may be queued stays the queue's decision end to end:
+`queue_merge` re-enforces the gate from the verdict files and the live PR
+(merge-queue.md §6 — the queue is strictly additive to the gate), refuses the
+default branch structurally (§7, five layers none keyed on agent-writable data),
+and lands only by a fast-forward push the queue itself builds. The driver hands
+it `with_git_denied` — its own `gh`-only runner behind `GitDenied`'s refusal —
+so an enqueue path that ever reached for `git` fails loudly rather than
+landing. `tests/reviewdrive.rs`'s scan keeps `queue_merge` (the form that
+builds a real git-carrying runner) on its forbidden list and admits exactly ONE
+`queue_merge_with` call, in `rdtick.rs` (`PERMITTED_ENQUEUE`), counted like
+`release_driven_pane`. **The consequence in this repo is deliberate and
+visible**: every PR here targets `main`, the default, so a clean drive's
+enqueue is refused `base-is-default` and the notice says so — the merge stays
+the human's, and the orchestrator still reads one line, now one with nothing to
+disposition. The enqueue pays off where a repo integrates on a non-default
+branch, which is the only place the queue lands at all.
+
+**What the reviewer can do with it, stated as a residual.** A reviewer that
+declares `0` over a finding it wrote down has miscounted its own review, and
+the driver acts on the count — the trust §2.5 already places in a stated
+`0 blocking`, and the gate in that reviewer's `pass`. The declaration cannot
+open anything the reviewer's `pass` did not already open.
 
 ## 3. Ownership, authority, and consent
 
@@ -1527,8 +1602,14 @@ is still callable.
 `report(done, ref: <PR>)` start the drive the orchestrator would otherwise start
 by hand, on that worker's own session, and folds the report into the drive's first
 notice (`DriveEntry::auto_report`, taken by the first notice built) instead of
-waking the orchestrator on its own. §3.2's "never automatic" stood on two
-arguments, and this key is admitted only because it answers both.
+waking the orchestrator on its own. **A hold's notice folds it without taking
+it** (#3367's round-3 residual): a hold is delivered directly rather than owed,
+so the report is cleared only once that line has landed, and a hold line that
+reached no pane leaves it for the next notice to carry — a repeat at worst,
+never the loss of the worker's words. A terminal notice is owed on the entry and
+re-sent until it lands (#1857), so taking it there was already safe. §3.2's
+"never automatic" stood on two arguments, and this key is admitted only because
+it answers both.
 
 **INVARIANT 8 — what starts is the orchestrator's call.** It still is. The key
 starts a drive only on the PR whose head branch is the branch **orrerix recorded
@@ -2535,9 +2616,13 @@ like `mq-*` and the rest:
 `rd-lane-stop-declined` · `rd-worker-released` ·
 `rd-round-grace` · `rd-hold-repeated` · `rd-notice-demoted` ·
 `rd-provider-limit` · `rd-auto-handback` · `rd-auto-started` ·
-`rd-auto-start-declined`
+`rd-auto-start-declined` · `rd-clean`
 
-**Three rows are #3367's.** `rd-auto-handback` is the driver's own non-blocking
+**Four rows are #3367's.** `rd-clean` is §2.6's clean case, written beside
+`rd-satisfied` and never instead of it, carrying `route` (`notice` or `queue`)
+and, on the queue route, `queue_merge` — the queue's own answer verbatim, since an
+enqueue the queue refused is a thing that happened and must read as one. The
+other three: `rd-auto-handback` is the driver's own non-blocking
 round (§2.5), written on the arc being TAKEN beside the `rd-handback` that
 follows, carrying `round`, `of`, `review_rounds` and the `residual` it was taken
 on — its own action for `rd-round-grace`'s reason: "the driver spent a review
@@ -3322,7 +3407,9 @@ orchestrator recovers its drives) and the audit log.
 Both loops run under `gh_poll_tick` against the same group, and their overlap is
 specified rather than left to whichever lands first:
 
-- **A driven PR may not be queued, and a queued PR may not be driven.**
+- **A driven PR may not be queued, and a queued PR may not be driven.** The
+  driver's own enqueue (§2.6) does not break this: it runs after the drive is
+  terminal, and `queue_merge`'s `in-review-drive` check reads it that way.
   `queue_merge` refuses a PR with a live drive as `in-review-drive`, a name
   added to the queue's own closed set by S4; `drive_review` refuses a PR with a
   non-terminal queue entry as `in-merge-queue`. The two loops both move a PR's
@@ -3333,7 +3420,8 @@ specified rather than left to whichever lands first:
   did not exist.
 - **The intended sequence is serial, and it has a direction**: a drive ends at
   `satisfied`, the orchestrator dispositions the findings (INVARIANT 3), and
-  *then* it queues. `queue_merge`'s contract already says "call it once per PR,
+  *then* it queues — except in §2.6's clean case, where there are no findings to
+  disposition and the driver makes that one call itself. `queue_merge`'s contract already says "call it once per PR,
   after its review has passed" — a drive is what makes that true, so the drive
   precedes the queue rather than racing it.
 - **A queue-initiated rebase under a live drive is therefore not reachable**,

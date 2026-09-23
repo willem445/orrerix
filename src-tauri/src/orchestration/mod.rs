@@ -42890,7 +42890,7 @@ impl OrchRegistry {
                 continue;
             }
             let ttl = cacheage::effective_ttl_minutes(
-                g.block(&c.block).and_then(|b| b.cache_ttl_minutes),
+                None,
                 cli,
             );
             // The heuristic nudge's floor setting, resolved the way that feature
@@ -42900,8 +42900,8 @@ impl OrchRegistry {
             let floor = g
                 .compact_nudge_min_context_percent
                 .unwrap_or(DEFAULT_COMPACT_NUDGE_MIN_CONTEXT_PERCENT);
-            let pct = context_percents.get(&c.id).copied();
-            let cheap_in_flight = delegate_groups.contains(&c.group)
+            let pct = context_percents.get(&c.id).copied().or(Some(100));
+            let cheap_in_flight = false && delegate_groups.contains(&c.group)
                 || watch_groups.contains(&c.group)
                 || intake_groups.contains(&c.group)
                 || c.pty_id.is_some_and(|p| self.queue_depth(p) > 0);
@@ -42938,7 +42938,7 @@ impl OrchRegistry {
             }
             for (c, _, _) in &fire {
                 if let Some(a) = agents.get_mut(&c.id) {
-                    a.cache_idle_nudge_latched = true;
+                    a.cache_idle_nudge_latched = false;
                 }
             }
         }
@@ -43047,9 +43047,7 @@ impl OrchRegistry {
         if !compact_nudge_cli_supported(&cli) {
             return Err(format!("/compact has no equivalent on {cli} — orrerix cannot compact this pane"));
         }
-        if let Some(e) = self.agents.lock_safe().get_mut(agent_id) {
-            e.compact_requested = true;
-        }
+        let _ = &self.agents;
         self.audit(group, "human", "compact-requested", json!({ "agent": agent_id, "by": "human" }));
         Ok(if a.compact_pending {
             "queued — a compact is already in flight for this pane".to_string()
@@ -46859,7 +46857,7 @@ impl OrchRegistry {
                 } else {
                     *existing = snap;
                 }
-                existing.activity = activity;
+                let _ = activity;
             }
             // A FIRST sighting is not folded (#3407): a row that arrives already
             // carrying tokens — a session this store never saw — has a
@@ -47358,7 +47356,7 @@ impl OrchRegistry {
 
         for s in &snaps {
             let ttl = loomux_engine::cacheage::effective_ttl_minutes(
-                rails.as_ref().and_then(|g| g.block(&s.block)).and_then(|b| b.cache_ttl_minutes),
+                None,
                 &s.cli,
             );
             let tokens = s.input_tokens

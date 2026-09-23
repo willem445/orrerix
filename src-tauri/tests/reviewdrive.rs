@@ -15100,7 +15100,9 @@ fn a_nit_only_satisfied_gate_is_handed_back_by_the_driver_and_wakes_once_with_th
         "the final notice carries the rounds used and the residual: {notice}"
     );
     assert_eq!(action_count(&reg, &group, "rd-auto-handback"), 1, "N=1 means one round, never two");
-    assert_eq!(review_rounds(&reg, &group), 1, "the second gate spent nothing");
+    // Read off the notice, because a terminal drive is no longer listed by the
+    // status view `review_rounds` reads.
+    assert!(notice.contains("; 1 rounds, "), "the second gate spent nothing: {notice}");
 }
 
 /// **The default is today's behaviour through the seam**: the same nit-only
@@ -15132,7 +15134,7 @@ fn without_the_key_a_nit_only_satisfied_gate_wakes_the_orchestrator_as_before() 
     let notice = notice.expect("with the key absent the gate satisfies at once");
     assert!(!notice.contains("Non-blocking rounds"), "the stock line is unchanged: {notice}");
     assert_eq!(action_count(&reg, &group, "rd-auto-handback"), 0);
-    assert_eq!(review_rounds(&reg, &group), 0);
+    assert!(notice.contains("; 0 rounds, "), "no round was spent: {notice}");
 }
 
 /// A group whose worker spawned on `branch`, an orchestrator whose deliveries
@@ -15270,17 +15272,18 @@ fn a_refused_auto_start_delivers_the_report_as_before_and_names_its_reason() {
             }
             _ => {}
         }
-        let drives_before = drives_json(&reg, &group)["entries"].as_array().map_or(0, |a| a.len());
+        // The status view rather than the file: before any drive exists there
+        // is no `review_drives.json` for `drives_json` to read.
+        let live_drives = |reg: &OrchRegistry| {
+            reg.review_drive_status(&group)["drives"].as_array().map_or(0, |a| a.len())
+        };
+        let drives_before = live_drives(&reg);
         report_done(&reg, &group, &worker, pr_ref);
         assert!(
             texts_to(&reg, &group, &orch).iter().any(|t| t.contains("ready for review")),
             "the report reached the orchestrator exactly as before"
         );
-        assert_eq!(
-            drives_json(&reg, &group)["entries"].as_array().map_or(0, |a| a.len()),
-            drives_before,
-            "no drive was started"
-        );
+        assert_eq!(live_drives(&reg), drives_before, "no drive was started");
         let rows = audit_details(&reg, &group, "rd-auto-start-declined");
         match want {
             Some(reason) => {

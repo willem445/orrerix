@@ -15413,6 +15413,8 @@ fn record_declaring(
         &json!({ "name": "review_verdict", "arguments": arguments }),
     )
     .map_err(|e| format!("{e:?}"))
+    // A tool refusal arrives as an MCP result flagged `isError`, not as `Err`.
+    .and_then(|v| if v["isError"] == json!(true) { Err(v.to_string()) } else { Ok(v) })
 }
 
 /// Drive PR 1758 to its lane, record ONE pass declaring `open`, and tick to

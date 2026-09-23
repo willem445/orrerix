@@ -836,12 +836,30 @@ nothing to disposition`, and `rd-clean` records `route: notice`. Where it is on,
 the driver submits the PR to the queue (`queue_merge_with`) after the tick's
 write and outside `rd_state_lock` — after, because `queue_merge`'s §8.1 check
 re-reads `review_drives.json` and must find this drive already terminal;
-outside, because it takes `mq_state_lock` and spends `gh` round trips. The
-notice is OWED first, saying the driver submitted it; the queue's answer is then
-appended to the owed text (`rd_amend_owed_notice`) before the flush delivers
-it, so the line never claims a queueing the queue refused. `rd-clean` records
-`route: queue` and the queue's JSON verbatim. A failed write enqueues nothing:
-the satisfied arc did not happen as far as the next restart knows.
+outside, because it takes `mq_state_lock` and spends `gh` round trips.
+
+**Every wording is true at the moment it is delivered** (#3388 review round 1).
+The notice is OWED before the write and the submission, so its queue clause
+says what the driver WILL do and on what condition — it "submits it to
+queue_merge once this exit is recorded". After the submission,
+`rd_amend_owed_notice` REPLACES that clause with the past tense and the
+queue's own answer (`clean_queue_submitted`: "submitted it to queue_merge —
+queued at position N", or the refusal), before the flush delivers it. So the
+line never claims a submission that has not happened, nor a queueing the queue
+refused, and a flush that somehow beat the amend still delivers a sentence that
+was true. `rd-clean` records `route: queue` and the queue's JSON verbatim.
+
+**A failed write enqueues nothing, and still says so in the pane.** The
+satisfied arc did not happen as far as the next restart knows, so there is no
+submission. But a terminal notice is owed on the ENTRY and the flush reads owed
+notices from disk, so a notice whose write failed would never reach a pane —
+and the `rd-state-unreadable` row recording the failure is on the audit log,
+not in the pane. So a tick whose write failed delivers each terminal notice it
+owed directly, suffixed `NOT RECORDED` (`rddrive::UNRECORDED_SUFFIX`), with
+the queue clause swapped for "nothing was submitted to queue_merge". The next
+tick that can write re-decides the drive and owes its own notice durably, so
+this line may be followed by a second one; the suffix says so. Pinned by
+`a_satisfied_tick_whose_write_failed_still_delivers_its_notice_marked_not_recorded`.
 
 **Why an enqueue does not reopen §3.1 item 1 — the argument, since this is the
 driver's first write outside its own file.** The driver adds the CALL and

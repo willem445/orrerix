@@ -1112,51 +1112,76 @@ pub enum CleanRoute {
     /// Clean, and the merge queue is off: the notice says so and stops.
     Notice,
     /// Clean, and the merge queue is on: the driver submits the PR to
-    /// `queue_merge` after this tick's write, and appends the queue's answer
-    /// to this notice before it is delivered ([`clean_enqueue_outcome`]).
+    /// `queue_merge` once this tick's write has persisted, and then REPLACES
+    /// this route's clause on the owed notice with one stating what the queue
+    /// answered ([`clean_queue_submitted`]).
     Queue,
 }
+
+/// The fact every clean clause opens with — the flag and what earned it.
+const CLEAN_FACT: &str = " clean: true — 0 open findings on every lane, CI green";
 
 /// The clause a CLEAN satisfied notice gains (#3367 item 5). Empty for
 /// [`CleanRoute::NotClean`], so every other satisfied line is unchanged.
 ///
 /// `clean: true` is the flag, spelled as one so an orchestrator — or a filter
 /// over its pane — can key on it; "0 open findings on every lane" is the fact
-/// that earned it. The `Queue` wording states only what is TRUE when it is
-/// written: the submission happens after the notice is owed, so this clause
-/// says the driver is submitting and where the answer is, and
-/// [`clean_enqueue_outcome`] appends the answer itself.
-pub fn clean_clause(route: CleanRoute) -> &'static str {
+/// that earned it.
+///
+/// **Every wording here is true at the moment it could be DELIVERED, not only
+/// at the moment it is written** (#3388 review round 1). The `Queue` clause is
+/// owed before the tick's write and before the submission, and the notice can
+/// in principle be flushed by another path before the driver gets back to it —
+/// so it says what the driver WILL do and on what condition ("once this exit
+/// is recorded"), never that it has. The past tense exists only in
+/// [`clean_queue_submitted`], which is written after the queue answered, and
+/// [`clean_queue_unrecorded`] is the failed-write path's, which submitted
+/// nothing.
+pub fn clean_clause(route: CleanRoute) -> String {
     match route {
-        CleanRoute::NotClean => "",
-        CleanRoute::Notice => {
-            " clean: true — 0 open findings on every lane, CI green: there is nothing to disposition."
-        }
-        CleanRoute::Queue => {
-            " clean: true — 0 open findings on every lane, CI green; merge_queue is enabled, so the driver submitted it to queue_merge (merge_queue_status() has its state)."
-        }
+        CleanRoute::NotClean => String::new(),
+        CleanRoute::Notice => format!("{CLEAN_FACT}: there is nothing to disposition."),
+        CleanRoute::Queue => format!(
+            "{CLEAN_FACT}; merge_queue is enabled, so the driver submits it to queue_merge once this exit is recorded — merge_queue_status() has its state."
+        ),
     }
 }
 
-/// The queue's answer to a clean enqueue, as the sentence appended to the
-/// owed satisfied notice (#3367 item 5). Reads `queue_merge`'s own JSON and
-/// nothing else, so the line cannot claim a queue position the queue did not
-/// give — and an answer of neither shape says so rather than guessing.
+/// The `Queue` clause as it reads AFTER the submission: the queue's answer,
+/// from `queue_merge`'s own JSON and nothing else, so the line cannot claim a
+/// queue position the queue did not give — and an answer of neither shape says
+/// so rather than guessing (#3367 item 5). It replaces
+/// `clean_clause(CleanRoute::Queue)` on the owed notice.
 ///
 /// Every field it can print is loomux-owned: a `u64` position, or one of
 /// `mqloop::refusal`'s closed reason codes.
-pub fn clean_enqueue_outcome(answer: &serde_json::Value) -> String {
-    if answer.get("queued").and_then(|v| v.as_bool()) == Some(true) {
+pub fn clean_queue_submitted(answer: &serde_json::Value) -> String {
+    let outcome = if answer.get("queued").and_then(|v| v.as_bool()) == Some(true) {
         match answer.get("position").and_then(|v| v.as_u64()) {
-            Some(p) => format!(" queue_merge: queued at position {p}."),
-            None => " queue_merge: queued.".to_string(),
+            Some(p) => format!("queued at position {p}."),
+            None => "queued.".to_string(),
         }
     } else if let Some(r) = answer.get("refused").and_then(|v| v.as_str()) {
-        format!(" queue_merge refused: {r} — the PR is not queued; merging it is yours, as on any satisfied gate.")
+        format!("refused: {r} — the PR is not queued; merging it is yours, as on any satisfied gate.")
     } else {
-        " queue_merge gave no readable answer — the PR may not be queued; read merge_queue_status().".to_string()
-    }
+        "no readable answer — the PR may not be queued; read merge_queue_status().".to_string()
+    };
+    format!("{CLEAN_FACT}; merge_queue is enabled, and the driver submitted it to queue_merge — {outcome}")
 }
+
+/// The `Queue` clause for a tick whose write FAILED (#3388 review round 1):
+/// the exit was not recorded, so nothing was submitted, and the line says so
+/// instead of promising a submission that will not happen on this tick.
+pub fn clean_queue_unrecorded() -> String {
+    format!("{CLEAN_FACT}; merge_queue is enabled, but nothing was submitted to queue_merge, because this exit could not be recorded.")
+}
+
+/// Appended to a terminal notice the tick could not RECORD (#3388 review round
+/// 1). Such a notice is owed only on the in-memory entry, and the flush reads
+/// owed notices from disk, so without a direct delivery it would never reach a
+/// pane — and the `rd-state-unreadable` row that records the failed write is
+/// on the audit log, not in the orchestrator's pane.
+pub const UNRECORDED_SUFFIX: &str = " NOT RECORDED: review_drives.json could not be written, so this exit is not on disk — the drive re-decides on the next tick that can write it, and may announce it again (rd-state-unreadable is on the audit log).";
 
 /// A reviewer's summary as a notice may carry it: scrubbed, then capped.
 ///

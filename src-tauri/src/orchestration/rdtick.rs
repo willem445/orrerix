@@ -449,6 +449,12 @@ struct RdOut {
     /// a lost hold line costs a repeat of the report on the next notice, never
     /// the report itself.
     report_folded: bool,
+    /// **The terminal notice this tick owed, as text** (#3388 review round 1)
+    /// — kept for the one path on which the owed copy never reaches a pane: a
+    /// tick whose `store_state` FAILED. The flush reads owed notices from
+    /// disk, and this one never got there, so [`OrchRegistry::rd_drive_group_with`]
+    /// delivers it directly instead, marked [`rddrive::UNRECORDED_SUFFIX`].
+    owed_text: Option<String>,
 }
 
 impl RdOut {
@@ -1355,13 +1361,46 @@ impl OrchRegistry {
                 let answer = rddrive::with_git_denied(runner, |mq| {
                     self.queue_merge_with(group, o.pr, None, mq)
                 });
-                self.rd_amend_owed_notice(&dir, o.pr, &rddrive::clean_enqueue_outcome(&answer));
+                // REPLACE, not append (#3388 review round 1): the owed clause
+                // says what the driver will do, and from here on it has done
+                // it, so the delivered line says what the queue answered.
+                self.rd_amend_owed_notice(
+                    &dir,
+                    o.pr,
+                    &rddrive::clean_clause(rddrive::CleanRoute::Queue),
+                    &rddrive::clean_queue_submitted(&answer),
+                );
                 self.rd_audit(
                     group,
                     &o.on_behalf_of,
                     rddrive::audit_action::CLEAN,
                     json!({ "pr": o.pr, "head": head, "route": "queue", "queue_merge": answer }),
                 );
+            }
+        } else {
+            // #3388 review round 1: the write FAILED, so every terminal notice
+            // this tick owed exists only on the in-memory entry the failed
+            // write discarded — the flush below reads owed notices from disk
+            // and will never see it, and the `rd-state-unreadable` row above is
+            // on the audit log rather than in the pane. So it is delivered
+            // here, directly, saying it was not recorded; the queue clause says
+            // nothing was submitted, because nothing was. Fire-and-forget like a
+            // hold's line: the next tick that can write re-decides the drive
+            // and owes its own notice durably.
+            for o in &outs {
+                let Some(text) = &o.owed_text else { continue };
+                let mut text = text.clone();
+                if o.clean_enqueue.is_some() {
+                    text = text.replacen(
+                        &rddrive::clean_clause(rddrive::CleanRoute::Queue),
+                        &rddrive::clean_queue_unrecorded(),
+                        1,
+                    );
+                }
+                text.push_str(rddrive::UNRECORDED_SUFFIX);
+                let _ = self.deliver_to_orchestrator(group, &text, brand::AUDIT_ACTOR);
+                self.rd_task_note(group, o.pr, &text);
+                report.notices.push(text);
             }
         }
         // #2811 S5b — ONE notice per provider, however many drives it stopped.
@@ -2856,21 +2895,28 @@ impl OrchRegistry {
         }
     }
 
-    /// Append `suffix` to the notice PR `pr`'s entry still OWES (#3367 item
-    /// 5) — the clean enqueue's answer, learned after the notice was owed.
+    /// Replace `from` with `to` in the notice PR `pr`'s entry still OWES
+    /// (#3367 item 5) — the clean enqueue's answer, learned after the notice was
+    /// owed, replacing the clause that promised it. A text that no longer
+    /// carries `from` gets `to` appended, so the answer is never lost to a
+    /// wording mismatch.
     ///
     /// Its own short critical section, re-reading the file, for the flush's
     /// reason: the tick's lock has been released, so the entry is read as it
     /// now is. Nothing owed (a concurrent flush already delivered it, or the
-    /// entry is gone) appends nothing — the `rd-clean` row still carries the
+    /// entry is gone) changes nothing — the `rd-clean` row still carries the
     /// answer — and a failed read or write is the same: the notice goes out
-    /// saying where the state is (`merge_queue_status()`), which is true
-    /// either way.
-    fn rd_amend_owed_notice(&self, dir: &std::path::Path, pr: u64, suffix: &str) {
+    /// with the clause that promised the submission, which names
+    /// `merge_queue_status()` and was true when written and when read.
+    fn rd_amend_owed_notice(&self, dir: &std::path::Path, pr: u64, from: &str, to: &str) {
         let _state_guard = self.rd_state_lock.lock_safe();
         let Ok(mut state) = reviewdrive::load_state(dir) else { return };
         let Some(n) = state.entry_mut(pr).and_then(|e| e.owed_notice.as_mut()) else { return };
-        n.text.push_str(suffix);
+        if n.text.contains(from) {
+            n.text = n.text.replacen(from, to, 1);
+        } else {
+            n.text.push_str(to);
+        }
         let _ = reviewdrive::store_state(dir, &state);
     }
 
@@ -4738,7 +4784,7 @@ impl OrchRegistry {
                     } else {
                         rddrive::CleanRoute::Notice
                     };
-                    let n = n + rddrive::clean_clause(route);
+                    let n = n + &rddrive::clean_clause(route);
                     let n = Self::rd_fold_auto_report(entry, n);
                     out.audits.push((
                         rddrive::audit_action::SATISFIED,
@@ -4754,6 +4800,7 @@ impl OrchRegistry {
                         // answer is known, so the row records what happened.
                         rddrive::CleanRoute::Queue => out.clean_enqueue = Some(entry.head.clone()),
                     }
+                    out.owed_text = Some(n.clone());
                     entry.owe_notice(&n, now);
                 }
                 (reviewdrive::DriveState::Held, Some(r)) => {
@@ -4845,6 +4892,7 @@ impl OrchRegistry {
                         &released_worker_session,
                     );
                     let n = Self::rd_fold_auto_report(entry, n);
+                    out.owed_text = Some(n.clone());
                     entry.owe_notice(&n, now);
                 }
                 _ => {}

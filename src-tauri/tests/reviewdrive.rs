@@ -15495,7 +15495,13 @@ fn a_clean_gate_is_submitted_to_the_merge_queue_and_an_omitted_count_is_not() {
                     notice.contains("clean: true — 0 open findings on every lane"),
                     "{case:?}: the flag and the fact: {notice}"
                 );
-                assert!(notice.contains("queue_merge: queued at position 1."), "{case:?}: {notice}");
+                assert!(
+                    notice.contains("the driver submitted it to queue_merge — queued at position 1."),
+                    "{case:?}: {notice}"
+                );
+                // The promise the owed clause made is REPLACED by what the
+                // queue answered, never left beside it (#3388 review round 1).
+                assert!(!notice.contains("once this exit is recorded"), "{case:?}: {notice}");
                 assert!(!notice.contains("carries non-blocking findings"), "{case:?}: {notice}");
                 assert_eq!(rows.len(), 1, "{case:?}: one rd-clean row: {rows:?}");
                 assert_eq!(rows[0]["route"], json!("queue"));
@@ -15505,7 +15511,7 @@ fn a_clean_gate_is_submitted_to_the_merge_queue_and_an_omitted_count_is_not() {
             Case::BaseIsDefault => {
                 assert!(notice.contains("clean: true"), "{case:?}: {notice}");
                 assert!(
-                    notice.contains("queue_merge refused: base-is-default"),
+                    notice.contains("submitted it to queue_merge — refused: base-is-default"),
                     "{case:?}: the refusal, not a claimed queueing: {notice}"
                 );
                 assert!(!notice.contains("queued at position"), "{case:?}: {notice}");
@@ -15635,4 +15641,74 @@ fn a_hold_line_that_reached_no_pane_keeps_the_report_it_folded() {
         );
         reg.set_rd_runner_override(None);
     }
+}
+
+/// **#3388 review round 1: a satisfied tick whose WRITE failed still tells the
+/// orchestrator, and says the exit was not recorded.**
+///
+/// A terminal exit's notice is owed on the entry and delivered by the flush,
+/// which reads owed notices FROM DISK — so when `store_state` fails, the notice
+/// never reaches a pane, and the `rd-state-unreadable` row recording the failure
+/// is on the audit log, not in the pane. The fix delivers it directly, marked
+/// `NOT RECORDED`, and on the merge-queue route says nothing was submitted —
+/// because the enqueue runs only after a persisted write, and did not run.
+///
+/// The sabotage is `RereadKiller`'s, proven elsewhere in this file: on the
+/// tick's first `gh` call the state file becomes a directory, so the store
+/// fails. It is aimed at the `gate-check -> satisfied` tick exactly.
+#[test]
+fn a_satisfied_tick_whose_write_failed_still_delivers_its_notice_marked_not_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new(); // merge_queue on, so the Queue clause is the one at stake
+    let gh = FakeGh::green(HEAD_A);
+    gh.set_default_branch("trunk"); // an enqueue WOULD be admitted, were one made
+    let (group, _s) = driven(&reg, &repo, &gh);
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    make_delivery_land(&reg, &group, &orch.id, 7401);
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    reg.rd_drive_group_with(&group, &gh, 10_000); // ci-wait -> review-wait
+    let opened = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let (_pr, _b, lane) = opened.lanes_opened.first().cloned().expect("lane 0 opens");
+    record_declaring(&reg, &group, &lane, "pass", "lgtm", json!(0)).expect("the pass records");
+    let (at, _) = tick_until(&reg, &group, &gh, 30_000, "gate-check");
+
+    let state_file =
+        reg.state_root().join(group.as_str()).join(reviewdrive::REVIEW_DRIVES_FILE);
+    let killer =
+        RereadKiller { inner: gh, state_file: state_file.clone(), fired: Default::default() };
+    let out = reg.rd_drive_group_with(&group, &killer, at + 10_000);
+
+    // The fixture: the store really was the writer that failed.
+    assert!(state_file.is_dir(), "fixture: the state path must now be a directory");
+    assert!(
+        reg.audit_log(&group).iter().any(|e| e.action == "rd-state-unreadable"
+            && e.detail["reason"] == json!("review_drives.json could not be written")),
+        "fixture: the store must be the writer that failed"
+    );
+    // The promise: the line still goes out, and says it was not recorded.
+    let line = out
+        .notices
+        .iter()
+        .find(|n| n.contains("GATE SATISFIED"))
+        .unwrap_or_else(|| panic!("the failed write must not silence the notice: {:?}", out.notices));
+    assert!(line.contains("NOT RECORDED"), "…marked as not recorded: {line}");
+    assert!(
+        line.contains("nothing was submitted to queue_merge"),
+        "…and claiming no submission, because none happened: {line}"
+    );
+    assert!(!line.contains("once this exit is recorded"), "no promise it cannot keep: {line}");
+    assert!(
+        texts_to(&reg, &group, &orch.id).iter().any(|t| t.contains("NOT RECORDED")),
+        "it was really delivered to the orchestrator's pane"
+    );
+    // …and nothing was enqueued: the queue was never asked.
+    assert!(
+        !killer.inner.calls().iter().any(|a| a.iter().any(|s| s == "defaultBranchRef")),
+        "no enqueue after a failed write"
+    );
+    assert!(
+        audit_details(&reg, &group, "rd-clean").iter().all(|r| r["route"] != json!("queue")),
+        "no queue rd-clean row for a submission that did not happen"
+    );
 }

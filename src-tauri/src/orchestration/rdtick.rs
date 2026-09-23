@@ -3343,6 +3343,11 @@ impl OrchRegistry {
                     // `releasable` is never asked and nothing was killed here.
                     let n =
                         rddrive::cancelled_notice(pr, rddrive::CancelCause::PrGone, &panes, "");
+                    // #3367 item 2: the reconcile's cancel can be an
+                    // auto-started drive's FIRST notice — the report was
+                    // persisted for exactly this, a first notice one restart
+                    // away — so it folds the report like the tick's does.
+                    let n = Self::rd_fold_auto_report(entry, n);
                     entry.owe_notice(&n, now);
                     audits.push((on_behalf, pr, true, forgot_cap_run, 0));
                 } else {
@@ -5529,7 +5534,13 @@ impl OrchRegistry {
             // no step is decided, nothing is released, and the orchestrator
             // that called it is the party disposing of the panes. The demotion
             // changes where the line goes, never what it says.
-            let notice = rddrive::cancelled_notice(pr, rddrive::CancelCause::Tool, &panes, "");
+            // #3367 item 2: a tool cancel of an auto-started drive that never
+            // announced anything is its first notice too. It is demoted to the
+            // audit log below, so the report lands there rather than nowhere.
+            let notice = Self::rd_fold_auto_report(
+                entry,
+                rddrive::cancelled_notice(pr, rddrive::CancelCause::Tool, &panes, ""),
+            );
             demoted = Some(notice);
             if reviewdrive::store_state(&dir, &state).is_err() {
                 return self.rd_refuse(group, pr, r::STATE_UNWRITABLE);

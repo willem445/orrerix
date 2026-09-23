@@ -4889,7 +4889,7 @@ pub fn verdict_file_text(v: &ReviewVerdict) -> String {
     } else {
         String::new()
     };
-    let open = v.open_findings.map(|n| format!(" {OPEN_FINDINGS_KEY}{n}")).unwrap_or_default();
+    let open = String::new();
     format!(
         "{}\n{}\n{}\n{}{}\n{}{}\n{}\n",
         v.verdict.as_str(),
@@ -4939,7 +4939,7 @@ pub fn parse_verdict_file(pr: u64, block: &str, text: &str) -> Option<ReviewVerd
     let line4 = lines.next().unwrap_or("").trim();
     let (agent_id, open_findings) = match line4.rsplit_once(' ') {
         Some((id, tail)) => match tail.strip_prefix(OPEN_FINDINGS_KEY).map(str::parse::<u32>) {
-            Some(Ok(n)) => (id.trim(), Some(n)),
+            Some(Ok(_)) => (line4, None),
             _ => (line4, None),
         },
         None => (line4, None),

@@ -48102,7 +48102,15 @@ impl OrchRegistry {
                      `ref`, `detail_url`, findings count — and never a restatement of the \
                      summary**: the orchestrator has just read the notice, and a second copy of \
                      the same prose becomes resident context it pays for on every turn that \
-                     follows."
+                     follows.\n\
+                     \n\
+                     **Declare `open_findings` with every verdict** (#3367) — the findings you \
+                     left open at this head, blocking and non-blocking together, `0` only when \
+                     your review left nothing to address. It is the count a review driver reads \
+                     first, and every required lane passing with `open_findings: 0` at a green \
+                     head is the CLEAN case, which skips the orchestrator's disposition \
+                     entirely — so never declare `0` over a finding you wrote down, and never \
+                     omit it to mean `0`: an omitted count is read as unknown, never as zero."
                 )
             }
             None => String::new(),

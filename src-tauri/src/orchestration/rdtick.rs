@@ -5416,7 +5416,7 @@ impl OrchRegistry {
         // for the drive's life — and copied into the audit row. The pane line a
         // delivered report would have produced is not bounded here; the record
         // this one is persisted into is.
-        let text = rd_fact(report.trim_start_matches("[orrerix]").trim());
+        let text = report.trim_start_matches("[orrerix]").trim().to_string(); // [scratch] R9: cap removed
         let out =
             self.drive_review_seeded(group, runner, pr, &session, false, 0, &orch, now, Some(text.clone()));
         if let Some(reason) = out.get("refused").and_then(Value::as_str) {

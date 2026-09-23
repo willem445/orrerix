@@ -15138,7 +15138,7 @@ pub struct AgentRecord {
     /// directions: absent on every roster written before F2 and on every row
     /// that is not a fork, so an older loomux reading a newer roster ignores
     /// an unknown key and a newer one reading an older roster reads `None`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)] // SCRATCH: neutered — was skip_serializing_if None
     pub forked_from: Option<String>,
 }
 

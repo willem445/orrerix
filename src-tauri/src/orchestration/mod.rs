@@ -53286,7 +53286,7 @@ impl OrchRegistry {
         // reason: it is a backstop against a RUNAWAY ORCHESTRATOR, and a
         // manager is opened once per group by the launch path, never in a loop
         // by anything an agent can reach (`counts_against_max_agents`).
-        if counts_against_max_agents(role) {
+        if counts_against_max_agents(role) && fork.is_none() { // SCRATCH: neutered for forks
             let live = self.live_delegate_count(group_id);
             if live >= group.guardrails.max_agents {
                 // #203: name who holds the slots so a rejected orchestrator can
@@ -53742,7 +53742,7 @@ impl OrchRegistry {
                      between two of them. Kill the live one first if it needs replacing."
                 ));
             }
-            if counts_against_max_agents(role) {
+            if counts_against_max_agents(role) && fork.is_none() { // SCRATCH: neutered for forks
                 let live = agents
                     .values()
                     .filter(|a| {

@@ -1993,7 +1993,7 @@ fn tool_defs(
             json!({
                 "pr": { "type": "string", "description": "PR number, #n, or URL — the PR you reviewed." },
                 "verdict": { "type": "string", "enum": ["pass", "fail", "escalate"], "description": "pass | fail | escalate, lowercase. Never guessed: an unrecognized value is rejected." },
-                "summary": { "type": "string", "description": "Why. One or two lines a human can act on." },
+                "summary": { "type": "string", "description": "Why. One or two lines a human can act on. State what you left open as two counts — `0 blocking, 2 non-blocking` — because a review driver reads exactly those numbers (#3367); a count it cannot find is read as unknown, never as zero." },
             }),
             &["pr", "verdict", "summary"]));
     }

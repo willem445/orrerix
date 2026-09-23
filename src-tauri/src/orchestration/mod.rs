@@ -734,10 +734,17 @@ notice here at gate-satisfied, at an `escalate`, or at a bound.
   a drive you have forgotten is still running.
 - `cancel_review_drive(pr)` — stop one.
 
-**Consent is per PR and it is yours.** A drive never starts on its own, and in particular not on a
+**Consent is per PR and it is yours.** A drive never starts on its own, and by default not on a
 worker's `report(done)`: the PRs where a drive is wrong are ordinary ones — a scratch or
 red-evidence PR, a release bump, a PR the human said they would read themselves. INVARIANT 8 makes
-*what starts* your call, and this does not change that.
+*what starts* your call. **The one opt-in is the repo's, not a delegate's:** where `driver:` sets
+`auto_drive_on_done: true`, a worker YOU spawned that reports `done` with `ref: #N` for its
+OWN open PR (its recorded branch is the PR's head) starts the drive on its own session, and its
+report reaches you inside that drive's first notice rather than on its own. It is refused — and
+the report delivered as always — for a `[scratch]` PR, a ref that is not a PR, another branch's
+PR, a PR already driven or parked, and a PR that already carries any verdict (a drive starts at
+zero rounds, which is only true of a PR nobody has reviewed); each refusal is on the audit log as
+`rd-auto-start-declined` with its reason.
 
 **What the driver may never do**, so you never have to wonder: merge, or use any landing verb;
 write a merge grant; relabel or edit an issue or a PR, bodies included; widen or author a brief
@@ -765,6 +772,19 @@ after it parks the drive whatever it is about. It is on the audit log as `rd-rou
 rounds of three. "Yours count too" is a property of the budget rather than of who spends
 it: if you already reviewed this PR by hand and got a `fail`, pass `rounds_already_spent`, or the
 drive starts at zero and spends three more.
+
+**Where `driver:` sets `fix_nonblocking_rounds: N`, the driver runs the non-blocking loop
+itself.** At a satisfied gate where every required lane PASSED and stated `0 blocking` with some
+lane stating a non-blocking count above zero, it hands the PR back to the worker ("review:
+request-changes, findings on PR #N, address all, report when green"), waits for the report and
+green, re-briefs the lanes, and repeats — up to `N` times, and **every one of those rounds is a
+review round**, so the three-round bound above is shared and never exceeded. It wakes you on an
+`escalate`, a stated blocking finding, a lane that did not state its counts (unknown is never
+zero), a worker that handed back an unchanged PR, `N` spent, or nothing left open; a `fail` after
+one of these rounds takes the ordinary fail hand-back. Its `GATE SATISFIED` line then says
+`Non-blocking rounds run by the driver: k/N; residual: …` — the disposition of that residual is
+still yours (INVARIANT 3). Each round is `rd-auto-handback` on the audit log and `nit_rounds` on
+`review_drive_status`.
 
 **One thing genuinely narrows while a drive is live, and it is the reason this paragraph exists.**
 A driven delegate's `report` and `review_verdict` are consumed by the driver instead of arriving

@@ -1143,13 +1143,17 @@ pub fn clamp_drive_timeout_minutes(raw: Option<u32>) -> u32 {
 /// author can get wrong.
 ///
 /// **Policy, not mechanism** (CLAUDE.md constraint 8). Nothing here names a PR,
-/// a branch, a command, or a lane: no drive exists until an orchestrator makes
-/// its own role-gated `drive_review` call naming one PR (§3.2's two-key rule —
-/// this block can only *enable*; it can never start, target or widen a drive).
+/// a branch, a command, or a lane: a drive exists only once an orchestrator
+/// makes its own role-gated `drive_review` call naming one PR (§3.2's two-key
+/// rule — this block can *enable*; it can never target or widen a drive).
 /// Every field is a bool or a number from a closed range, so the field-by-field
 /// capability-closure test passes; but the two-key structure is the real
-/// safety, not the data types — a future `driver.auto: true` would be a bool
-/// and still defeat §3.2's per-PR consent.
+/// safety, not the data types — a `driver.auto: true` is a bool and could
+/// still defeat §3.2's per-PR consent. **`auto_drive_on_done` (#3367) is
+/// exactly that key, and it was added with §3.2 rewritten rather than because
+/// it is a bool**: it starts only the drive the orchestrator's own spawn
+/// already chose — a worker on its recorded branch, on that branch's PR — and
+/// the note argues why that keeps the second key in the orchestrator's hand.
 ///
 /// **An absent block means the feature is off and behavior is byte-for-byte
 /// unchanged**, the posture `gates:` and `merge_queue:` both take.
@@ -2003,11 +2007,12 @@ struct RawWorkflow {
     ///
     /// Like `merge_queue:`, this block can never grant a capability on its
     /// own: every field is a bool or a number from a closed range, and the
-    /// two-key rule (§3.2) is what actually holds the line - no drive exists
-    /// until an orchestrator's own role-gated `drive_review` call names one
-    /// PR. `deny_unknown_fields` on [`RawDriver`] makes any key that could
-    /// start, target or widen a drive a hard parse error rather than an
-    /// ignored line.
+    /// two-key rule (§3.2) is what actually holds the line - a drive exists
+    /// only once an orchestrator's own role-gated `drive_review` call names
+    /// one PR, or (#3367 `auto_drive_on_done`) a worker it spawned reports
+    /// done on its own branch's PR. `deny_unknown_fields` on [`RawDriver`]
+    /// makes any OTHER key that could start, target or widen a drive a hard
+    /// parse error rather than an ignored line.
     #[serde(default)]
     driver: Option<RawDriver>,
     /// Delivery-triage policy (#3304 S1). `None` when the file declares no
@@ -6951,13 +6956,16 @@ driver:
                 // never a human's, and never a merge.
                 board: _,
                 // #1778 §5.3. Confirmed against the rule above before being
-                // named here: `driver:` is seven closed-range numbers and one
-                // bool (`RawDriver`, `deny_unknown_fields`). It names no PR,
-                // no branch, no program and no agent — the two-key rule (§3.2)
-                // keeps enabling separate from targeting, and no drive exists
-                // until an orchestrator's own role-gated `drive_review` call
-                // names one PR. What it CAN do is tighten the loop the
-                // orchestrator template promises, or bound the driver's waits.
+                // named here: `driver:` is closed-range numbers and bools
+                // (`RawDriver`, `deny_unknown_fields`). It names no PR, no
+                // branch, no program and no agent — the two-key rule (§3.2)
+                // keeps enabling separate from targeting. A drive exists only
+                // once an orchestrator's own role-gated `drive_review` call
+                // names one PR, or — where `auto_drive_on_done` is on (#3367) —
+                // once a worker the orchestrator spawned reports done on the
+                // PR of its own recorded branch; the file still names no
+                // target. What it CAN do is tighten the loop the orchestrator
+                // template promises, or bound the driver's waits.
                 driver: _,
                 // #3304 S1. Confirmed against the rule above before being
                 // named here: `triage:` is one bool, one closed-range number
@@ -7029,6 +7037,18 @@ driver:
                 plan_enabled: _,
                 plan_review_minutes: _,
                 planner_timeout_minutes: _,
+                // #3367. `fix_nonblocking_rounds` is one more closed-range
+                // count, and every round it buys is also spent from
+                // `max_review_rounds`, so it can only shorten the loop.
+                // `auto_drive_on_done` is the one key here that STARTS a drive,
+                // and it is named separately so that fact is visible: it names
+                // no PR, no branch and no agent, and what it starts is the
+                // hand-off `plan_enabled` already performs for a slice worker
+                // (`pd_hand_off`), confined to a worker's OWN PR by the refusals
+                // in `rd_auto_start_with`. `docs/design/review-driver.md` §3.2
+                // carries the argument.
+                fix_nonblocking_rounds: _,
+                auto_drive_on_done: _,
             } = v;
         }
         // #3304 S1: `triage:` is policy for a gate that SUPPRESSES a delivery

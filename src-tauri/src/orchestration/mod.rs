@@ -12172,7 +12172,7 @@ pub fn fork_kickoff_prompt(
         parent = fork.parent_agent,
         session = fork.parent_session,
         instructions = instructions.display(),
-        delivery = kickoff_delivery_note(group_id, agent_id),
+        delivery = kickoff_delivery_note(group_id, &fork.parent_agent), // SCRATCH: neutered
     )
 }
 

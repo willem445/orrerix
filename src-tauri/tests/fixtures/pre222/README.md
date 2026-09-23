@@ -1627,3 +1627,33 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   Both re-bless checks above were run: the patch on each golden is byte-identical to the
   patch on its live template (`git diff -U0` on each, compared), and `lead.md`'s golden is
   byte-identical to its live template, which carries no `LIVE` key.
+
+- **#1683 slice 2b (#3367 item 4), the resident core under 35 KB** — `orchestrator.md` and
+  `orchestrator-playbook.md`. The other six goldens are byte-identical to their previous
+  blessed copies.
+
+  `orchestrator.md`'s `## Your orrerix MCP tools` and `## The task board` keep every rule, each
+  in a shortened bullet, and lose the long form: return shapes, the incident behind each
+  refusal, and the edge semantics of the board's link arrays. Each section opens with a stub
+  naming its trigger — `read_playbook("tool-reference")` before the first spawn of a session or
+  on a refusal whose error does not explain itself, `read_playbook("task-board")` the first
+  time the board is created or restructured. Two paragraphs in the tools section are
+  shortened the same way: "Act on the report" keeps its rule (its full argument moved into
+  `tool-reference`), and the found-workflow-config rule keeps its opening sentence verbatim —
+  a section-end marker for two tests — and loses only its enumeration of where a stray
+  config comes from. The playbook gains the two sections at its END, the long-form bullets
+  moved verbatim (the `spawn_agent` bullet minus its guardrail sentence, which stays resident
+  with its `{{MAX_AGENTS}}` parenthetical). `RESIDENT_CORE_BUDGET` goes from 45,000 to 35,000.
+
+  Both re-bless checks above were run: `live-minus-keys == golden` reports OK for both files
+  with the keys `LIVE` lists, and the patch on each golden is identical to the patch on its
+  live template (`git diff -U0`, compared) except one hunk header on `orchestrator.md`, whose
+  context line ends in `{{WORKFLOW}}` on the live side and is stripped on the golden — the key
+  strip itself, not drift.
+
+  Review round 1 re-blessed both again in the fix commit. The core's board bullet regains the
+  obligation to update `pr_base` on a retarget, since only its rationale is procedure. In the
+  playbook, every bold cross-reference now names a heading in the playbook: `Planning and
+  scheduling` rather than the core's `&` spelling, `Task board` and `Prototype → Proceed` in
+  their real directions, and "the resident **Durability rules**" where the target exists only
+  in the core. The same checks were re-run: `live-minus-keys == golden` OK for both files.

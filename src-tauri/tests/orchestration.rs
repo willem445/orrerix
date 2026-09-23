@@ -4718,6 +4718,111 @@ fn read_playbook_writes_one_audit_line() {
     assert!(line.contains("about-this-playbook"), "the line names the section: {line}");
 }
 
+/// #1683 slice 2b (#3367 item 4): the long form of the resident tool list and
+/// the task-board procedure moved into two playbook sections. Pinned on a REAL
+/// group's rendered files (CLAUDE.md: a template-level pin cannot tell "moved"
+/// from "lost", and the pre222 strip hides a rendered fragment) and through the
+/// tool itself, from the orchestrator's side of the wire.
+///
+/// Three halves, each able to fail on its own:
+/// - every moved marker is SERVED by `read_playbook` under the section its
+///   resident stub names — so the stub leads somewhere that carries it;
+/// - the resident core names both stubs and keeps the rules those bullets
+///   state (the guardrail parenthetical, `claim: true`, `ready: true`,
+///   `hot_only`), so nothing a compacted orchestrator must obey went on demand;
+/// - the long-form markers are GONE from the core, so this is a move, not a
+///   copy that left the resident bytes where they were.
+///
+/// Every comparison runs on whitespace-collapsed text (review round 1,
+/// finding 3): a marker that straddles a hand-wrap makes the ABSENCE half
+/// vacuous, since any re-wrap of a copy left in the core would pass it. Collapsed,
+/// a marker is a phrase, and no re-wrap on either side changes the verdict.
+#[test]
+fn the_tool_reference_and_task_board_procedure_are_served_from_the_playbook() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", playbook_rails()).unwrap();
+    let co = playbook_caller(&reg, &g.id, Role::Orchestrator);
+    // Whitespace-collapsed (see the doc above): line endings and wraps alike.
+    fn ws(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+    let core = ws(&fs::read_to_string(
+        reg.state_root().join(g.id.as_str()).join("orchestrator.md"),
+    )
+    .unwrap());
+
+    // (section id, markers only the moved long form carries)
+    let moved: [(&str, &[&str]); 2] = [
+        (
+            "tool-reference",
+            &[
+                "## Tool reference",
+                "`gh pr checkout <n> --detach`",
+                "`include_all: true`",
+                "**receive-only**",
+                "Capped at 4 live per agent / 12 per group",
+                "`top_agents` (top 10 by total",
+                "`withdraw_question(id)` takes back one overtaken by events",
+                "**Acting on a report — the long form.**",
+            ],
+        ),
+        (
+            "task-board",
+            &[
+                "## Task board",
+                "`sprint: 0` to send it back to the backlog",
+                "a dep edge that would close a cycle is rejected",
+                "It is DISPLAY metadata and nothing gates on it",
+                "naming a live task on this board is refused",
+                "Deleting a task also strips its id",
+            ],
+        ),
+    ];
+    for (id, markers) in moved {
+        let r = read_playbook_call(&reg, &co, id);
+        assert_eq!(r["isError"], json!(false), "`{id}` must be a served section: {r}");
+        let text = ws(r["content"][0]["text"].as_str().unwrap());
+        assert!(!text.contains("{{"), "`{id}` is served rendered: {text}");
+        for m in markers {
+            let m = ws(m);
+            assert!(text.contains(&m), "playbook `{id}` has lost moved marker {m:?}:\n{text}");
+            if !m.starts_with("## ") {
+                assert!(
+                    !core.contains(&m),
+                    "{m:?} is still in the resident core — the long form was copied, not moved"
+                );
+            }
+        }
+        assert!(
+            core.contains(&format!("read_playbook(\"{id}\")")),
+            "the resident core has no stub naming `{id}`"
+        );
+    }
+
+    // The rules stay resident, in the rendered core a compacted orchestrator re-reads.
+    for rule in [
+        "live delegates (workers+reviewers+planners count",
+        "**Every fresh spawn must name its capability class**",
+        "`worktree: false` is rejected",
+        "**No tool on your surface can answer one.**",
+        "**No tool on your surface can resolve one**",
+        "**Register and immediately move on to other work**",
+        "Pass `hot_only: true`",
+        "**Assign with `claim: true`, never a plain `assignee` write.**",
+        "**\"What's startable\" is `ready: true`, top-of-board first — never a re-derivation.**",
+        "**Encode ordering as `deps`, not as prose**",
+        "**`blocked` is for blockers OUTSIDE the board.**",
+        "**Reopening is a transition too",
+        // Review round 1, finding 1: updating `pr_base` is an obligation, not
+        // procedure, and a retarget happens long after the board was set up.
+        "`pr_base` in the same call as `pr` (and again on a retarget)",
+        "**Act on the report; don't re-derive it.**",
+    ] {
+        assert!(core.contains(&ws(rule)), "the resident core has lost the rule {rule:?}");
+    }
+    assert!(!core.contains("{{"), "the rendered core carries no raw placeholder");
+}
+
 /// The resident core's byte budget (#1683) — ONE definition, quoted by both the
 /// assertion and the message it prints.
 ///
@@ -4725,7 +4830,12 @@ fn read_playbook_writes_one_audit_line() {
 /// message's prose, and in the surrounding comment. A change to one of them
 /// leaves the message asserting a budget that is not the one enforced, and a
 /// message is exactly the surface nobody re-derives (review round 2, N1).
-const RESIDENT_CORE_BUDGET: usize = 45_000;
+///
+/// 35,000 since #1683 slice 2b (#3367 item 4), down from the 45,000 slice 2a
+/// set: slice 2a moved whole sections, 2b moved the long form of the tool
+/// list and the task-board procedure into the playbook's `tool-reference` and
+/// `task-board` sections, leaving every rule resident in a shortened bullet.
+const RESIDENT_CORE_BUDGET: usize = 35_000;
 
 #[test]
 fn the_resident_core_is_under_the_byte_budget() {
@@ -4747,8 +4857,8 @@ fn the_resident_core_is_under_the_byte_budget() {
     //
     // What breaks if the pin is removed: this goes back to measuring the
     // checkout. It does so LOUDLY today, but only INCIDENTALLY — measured on
-    // `orchestrator.md` at blob ad8d53e4, the LF file is 44,692 B over 621
-    // lines, so there are 308 B of margin under this budget against the 621 CR
+    // `orchestrator.md` at blob d5f2d059, the LF file is 34,822 B over 506
+    // lines, so there are 178 B of margin under this budget against the 506 CR
     // bytes a CRLF checkout adds. The stale worktree therefore fails here
     // rather than passing quietly, but shorten the template past that margin
     // and it goes quiet again, on exactly the platform that pays more. The
@@ -4797,9 +4907,9 @@ fn markdown_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
 ///
 /// **Why this sits beside the budget assertion rather than inside it.** The
 /// budget test does notice a CRLF checkout today, but only because the CR bytes
-/// happen to exceed the margin left under `RESIDENT_CORE_BUDGET` — 308 B of it,
-/// against 621 CR bytes, measured on `orchestrator.md` at blob ad8d53e4 while
-/// that constant is 45,000. Shorten the template
+/// happen to exceed the margin left under `RESIDENT_CORE_BUDGET` — 178 B of it,
+/// against 506 CR bytes, measured on `orchestrator.md` at blob d5f2d059 while
+/// that constant is 35,000. Shorten the template
 /// past that and the budget goes quiet again on exactly the platform that pays
 /// more, which is the issue's own "the guard is worse than none" case (#1845).
 /// This test is margin-independent and covers every template, not only the one

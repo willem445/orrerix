@@ -37,6 +37,7 @@ import { reduceConnect, channelBadge, dropIfStale } from "./channel";
 import type { HeldReason } from "./heldbadge";
 import { modal } from "./modal";
 import { promptForkName } from "./forkprompt";
+import { sanitizePaneName } from "./forkname";
 import { killPty, onPtyExit } from "./pty";
 import { decodeBatch } from "./structuredview.ts";
 import type { StructuredPaneView } from "./structuredpane";
@@ -1378,7 +1379,10 @@ async function forkPaneSession(
     const opened = (await orchWiring?.openForkedPane(pane, {
       // The name goes in as the pane's own name — the one the header's rename
       // edits and `tabs.json`/`sessionlog.json` record — never a second store.
-      name: name?.trim() || forkPaneName(action.sourceName),
+      // Through `sanitizePaneName` whichever way it arrived (the prompt, a
+      // lead's `fork_session(name)`, or the derived default off a long source
+      // name): one rule for every input, the backend's own.
+      name: sanitizePaneName(name ?? "") || sanitizePaneName(forkPaneName(action.sourceName)),
       cwd: action.workdir,
       command: line.command,
       argv: line.argv,

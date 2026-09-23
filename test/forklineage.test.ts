@@ -1,5 +1,6 @@
 // Fork lineage (#3368, #3318 F5) — the pure derivation behind the session
 // browser's fork tree and the pane header's `↰ parent` crumb.
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -12,7 +13,7 @@ import {
   forkCrumbLabel,
   type ForkPointer,
 } from "../src/forklineage.ts";
-import { forkNameDecision } from "../src/forkname.ts";
+import { forkNameDecision, sanitizePaneName, PANE_NAME_MAX_CHARS } from "../src/forkname.ts";
 
 const ptr = (child: string, parent: string, source: ForkPointer["source"] = "pane"): ForkPointer => ({
   child,
@@ -219,4 +220,30 @@ test("Escape forks under the default, whatever was typed", () => {
 
 test("cancel is the one exit that does not fork", () => {
   assert.deepEqual(forkNameDecision("cancel", "anything", "x (fork)"), { fork: false });
+});
+
+// ---------- one pane-name rule (#3368 review round 2) ----------
+
+test("a typed fork name goes through the pane-name rule: control characters dropped, 40 chars kept", () => {
+  const long = "é" + "x".repeat(60);
+  assert.deepEqual(forkNameDecision("enter", long, "d"), { fork: true, name: "é" + "x".repeat(39) });
+  assert.deepEqual(forkNameDecision("enter", "a\u0007b\u001bc", "d"), { fork: true, name: "abc" });
+  // Characters, not UTF-16 units: an astral glyph counts once, and the cut
+  // never splits a surrogate pair.
+  const astral = "😀".repeat(45);
+  assert.equal([...(forkNameDecision("enter", astral, "d") as { name: string }).name].length, 40);
+  // A name that sanitizes to nothing takes the default, like an empty box.
+  assert.deepEqual(forkNameDecision("enter", "\u0007\u0008", "d"), { fork: true, name: "d" });
+});
+
+test("sanitizePaneName is the backend's sanitize_agent_name, read off the Rust source", () => {
+  const rs = readFileSync(new URL("../src-tauri/src/orchestration/mod.rs", import.meta.url), "utf8");
+  const body = /fn sanitize_agent_name\(name: &str\) -> String \{\s*([^}]*)\}/.exec(rs)?.[1];
+  assert.ok(body, "sanitize_agent_name was found in mod.rs");
+  // The three steps, in the order they run there.
+  assert.match(body!, /name\.trim\(\)\.chars\(\)\.filter\(\|c\| !c\.is_control\(\)\)\.take\((\d+)\)/);
+  const cap = Number(/\.take\((\d+)\)/.exec(body!)![1]);
+  assert.equal(PANE_NAME_MAX_CHARS, cap, "the frontend cap moved without the backend's, or vice versa");
+  assert.equal(sanitizePaneName("  " + "y".repeat(cap + 5) + "  "), "y".repeat(cap));
+  assert.equal(sanitizePaneName("\u0000ok\u007f"), "ok");
 });

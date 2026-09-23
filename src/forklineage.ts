@@ -42,8 +42,6 @@ export interface ForkPointer {
  *  what separates a parent that is merely a ROOT from one nobody knows at all. */
 export interface ForkIndex {
   parentOf: ReadonlyMap<string, string>;
-  /** Direct children per parent, in pointer order. */
-  childrenOf: ReadonlyMap<string, readonly string[]>;
   known: ReadonlySet<string>;
   /** Children whose sources named two DIFFERENT parents. The first source in
    *  precedence order wins; the loser is kept here rather than silently
@@ -68,7 +66,6 @@ export function buildForkIndex(pointers: Iterable<ForkPointer>, known: Iterable<
     .sort((a, b) => PRECEDENCE[a.p.source] - PRECEDENCE[b.p.source] || a.i - b.i)
     .map(({ p }) => p);
   const parentOf = new Map<string, string>();
-  const childrenOf = new Map<string, string[]>();
   const knownSet = new Set<string>();
   const conflicts: { child: string; kept: string; ignored: string; source: PointerSource }[] = [];
   for (const id of known) if (id) knownSet.add(id);
@@ -82,11 +79,12 @@ export function buildForkIndex(pointers: Iterable<ForkPointer>, known: Iterable<
       continue;
     }
     parentOf.set(child, parent);
-    const kids = childrenOf.get(parent) ?? [];
-    kids.push(child);
-    childrenOf.set(parent, kids);
   }
-  return { parentOf, childrenOf, known: knownSet, conflicts };
+  // No children map (review round 2): every reader of "the forks of X" wants the
+  // forks that are LISTED, in display order and minus cycle members, which only
+  // `forkTreeRows` knows — an index-wide map had no reader and would have been
+  // a second, differently-filtered answer to the same question.
+  return { parentOf, known: knownSet, conflicts };
 }
 
 /** How a walk ended.

@@ -53126,9 +53126,11 @@ impl OrchRegistry {
         // means "the default", which the frontend derives from the lead pane's
         // own name exactly as a right-click fork does. One line, one field:
         // the same collapse the prompt applies, so a newline an agent passed
-        // cannot reach a pane title. Recorded on the request row too, so what
+        // cannot reach a pane title, then `sanitize_agent_name` — the rule every
+        // other pane name goes through, whose 40-character cap the frontend
+        // mirrors (`sanitizePaneName`). Recorded on the request row too, so what
         // was asked for is on the log beside what became of it.
-        let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        let name = sanitize_agent_name(&name.split_whitespace().collect::<Vec<_>>().join(" "));
         self.audit(group_id, &lead.id, "agent-fork-requested", json!({
             "parent_agent": lead.id,
             "parent_session": session,

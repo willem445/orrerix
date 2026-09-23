@@ -1982,4 +1982,14 @@ fn a_leads_named_self_fork_carries_its_name_on_the_request() {
     let rows = fork_rows(&reg, &gid, "agent-fork-requested");
     assert_eq!(rows.len(), 2, "{rows:?}");
     assert_eq!(rows[1]["detail"]["name"], json!(""), "no name asked for, none invented");
+
+    // #3368 review round 2: the one pane-name rule, `sanitize_agent_name` — its
+    // 40-character cap (counted in chars, so a multi-byte name is cut on a char
+    // boundary) and its control-character drop apply here as everywhere else.
+    let long = format!("é{}\u{7}", "x".repeat(60));
+    let out = q_call(&reg, &c, "fork_session", json!({ "agent": lead.id, "name": long }));
+    assert_ne!(out["isError"], json!(true), "refused: {}", q_text(&out));
+    let rows = fork_rows(&reg, &gid, "agent-fork-requested");
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert_eq!(rows[2]["detail"]["name"], json!(format!("é{}", "x".repeat(39))));
 }

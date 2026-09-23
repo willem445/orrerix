@@ -158,8 +158,11 @@ The two scripts are complements, not alternatives. Run both before `report(done)
 
 Severities match `pr-body-check`'s so a worker reads one vocabulary: **MISMATCH** (a figure
 disagrees with the log; must be zero), **CHECK** (narrowed to a judgment the script cannot
-make), **OK**. Both scripts exit 0 always — a report, never a gate. A gate on prose would
-have to be right about intent; this is only ever right about a number.
+make), **OK**. Both scripts exit 0 always on their default invocation — a report, never a
+gate of their own. (One carve-out since #3367 item 3: `pr-body-check --gate` exits 1 on
+any MISMATCH for the CI wrapper, and prbodycheck.yml's gate step consumes it — a gate on
+a NUMBER the script can re-derive, not the gate on prose this section refused.) A gate on
+prose would have to be right about intent; this is only ever right about a number.
 
 ## 5. What it cannot see
 

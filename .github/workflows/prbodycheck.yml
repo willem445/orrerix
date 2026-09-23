@@ -1,0 +1,126 @@
+name: PR body check
+
+# `scripts/pr-body-check.cjs` as a required CI check (#3367 item 3).
+#
+# WHY A SIBLING WORKFLOW, NOT A JOB IN ci.yml. ci.yml's `build` job is the
+# three-platform cargo/npm matrix — a body check has nothing to do with it, and
+# folding it in would pay matrix triple-duplication and couple the receipt gate to
+# Rust/toolchain setup it does not need. A sibling keeps the matrix's cost shape
+# untouched, and an unfiltered `pull_request` trigger (no `paths:`) is what makes
+# the check a check that always reports: a path-filtered required status check
+# never runs on a PR that does not touch the filter and stays PENDING for the
+# purposes of branch protection forever — the trap actionlint.yml documents in
+# its own header.
+#
+# THE SCRATCH EXEMPTION. `[scratch]`-titled PRs are red-before-green
+# counterfactuals whose bodies are deliberately stale — the body IS the defect
+# under test (never merged; the shape of ci.yml's `plan` job's scratch handling,
+# though the plan job gates STEPS on a scratch output rather than this). A
+# MISMATCH on one is the feature working, so on a scratch PR every step runs
+# in REPORT-ONLY mode (`continue-on-error: true`): the rows print, nothing
+# gates. On every other PR any MISMATCH fails the run; CHECK rows are printed
+# for every PR, since they are sentences to re-read, not defects.
+
+on:
+  pull_request:
+    # `edited` is the point: a body-only fix must re-run this check on its own,
+    # with no push to the branch — that is the collateral-of-a-fix class the
+    # checker exists for (#2168).
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  # `gh pr view` needs only read; the token below is the read-only fork variant
+  # on forked PRs, which is fine — the script reads the PR body and the git
+  # objects, and `refs/pull/N/head` is fetchable with contents: read.
+
+concurrency:
+  group: prbodycheck-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-body-check:
+    # TWO ARMS, one job — never "skip the job". A [scratch]-titled PR runs this
+    # job in REPORT-ONLY mode: both steps run, print their rows, and cannot fail
+    # the run (each carries `continue-on-error: true`). Everywhere else the job
+    # refuses on MISMATCH. That split is deliberate, and the reviewer who found
+    # the earlier "skip the job" version blocking (#3373 round 1) is right about
+    # why: a job-level skip has no report-only arm for a test to feed the
+    # reverted switch into, so the documented revert ("delete the exemption")
+    # would be unobservable — the skip arm and the gate arm would be the same
+    # job. Here the revert is one line (`continue-on-error: true` deleted from
+    # the gate step) and `test/prbodycheckci.test.ts` pins BOTH arms: a
+    # continue-on-error on the gate step means report-only, its absence means
+    # refusing, and exactly one `continue-on-error` is allowed to sit on a gate
+    # step — a second would be a silent green on a refusing PR.
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # THE GATE ITSELF: `--gate` is the one invocation on which the script
+      # exits nonzero — 1 on any MISMATCH from a COMPLETED run (documented in
+      # the script's header and USAGE). A checker CRASH still exits 0 with the
+      # reason on stderr: that is the script's long-standing contract that a
+      # crash must not read as a body defect. The corpus step below turns a
+      # crash that does not depend on the body into a red (its rows are caught
+      # as unparsable there). Residual, stated: a crash that only THIS PR's body
+      # triggers exits 0 here and is invisible to the corpus, which reads other
+      # PRs' bodies — the step goes green with nothing checked, and only its
+      # stderr says so. The report prints in full:
+      # every CHECK row is visible to whoever reads the failed run.
+      #
+      # The `continue-on-error` below is the SCRATCH ARM of the exemption: on
+      # a `[scratch]`-titled PR (whose body is deliberately stale) this step
+      # runs and REPORTS but cannot fail the run. On every other PR it is the
+      # refusal. The condition is evaluated per step, so no job-level `if:`
+      # can drift it apart from the corpus step's own scratch arm.
+      - name: Run the checker, refusing on any MISMATCH
+        continue-on-error: ${{ startsWith(github.event.pull_request.title, '[scratch') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          pr="${{ github.event.pull_request.number }}"
+          node scripts/pr-body-check.cjs --pr "$pr" --repo "$GITHUB_REPOSITORY" --gate
+
+      # The corpus proof (#3367 item 3's precondition, the
+      # known-good-subjects convention): run the same job logic over the last
+      # 10 merged PRs before this check can refuse. This step runs on THIS
+      # repo's PRs too (the corpus is always merged main), which doubles as a
+      # live canary — a body shape merged since the last proof that the
+      # checker now false-flags shows up as a red CORPUS step rather than a
+      # red gate. `--repo` is explicit so the corpus is this repo's PRs, not
+      # whatever the checkout's remote is. `|| true` on the per-PR invocation
+      # keeps a checker CRASH from counting as a corpus pass: the crash is
+      # caught by the missing summary line below, which reports it as
+      # unparsable and fails the corpus step. Its scratch arm is the same
+      # continue-on-error as the gate step's: report-only on a [scratch]
+      # PR, refusing everywhere else — the exemption is per STEP, not per job.
+      - name: Corpus dry run over the last 10 merged PRs
+        continue-on-error: ${{ startsWith(github.event.pull_request.title, '[scratch') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          failures=0
+          for pr in $(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --limit 10 --json number --jq '.[].number'); do
+            out="$(node scripts/pr-body-check.cjs --pr "$pr" --repo "$GITHUB_REPOSITORY" 2>&1 || true)"
+            summary="$(printf '%s\n' "$out" | grep -E '^SUMMARY pr-body-check' | tail -n 1)"
+            mismatch="$(printf '%s' "$summary" | sed -n 's/.*: \([0-9][0-9]*\) MISMATCH.*/\1/p')"
+            printf 'PR #%s  %s\n' "$pr" "${summary:-<no summary line — checker failed>}"
+            if [ -z "$mismatch" ] || [ "$mismatch" -ne 0 ]; then
+              failures=$((failures + 1))
+              echo "::error::corpus PR #$pr: ${mismatch:-<unparsable>} MISMATCH — a merged body this check would refuse; the check must not ship as required until the script is fixed or this shape is exempted"
+              printf '%s\n' "$out"
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            echo "corpus: $failures of 10 merged PRs produce MISMATCH — see the rows above"
+            exit 1
+          fi
+          echo "corpus: 0 MISMATCH over the last 10 merged PRs"

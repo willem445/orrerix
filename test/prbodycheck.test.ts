@@ -27,7 +27,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -272,11 +272,23 @@ test('a run id that does not exist, and a run whose bound SHA is not what it ran
   assert.equal(of(good, 'run').length, 0);
 });
 
-test('an unresolvable SHA is a MISMATCH under both roles its sentence assigns it', () => {
-  const s = of(stale, 'sha', 'MISMATCH').filter((f) => /deadbee1/.test(f.message));
+test('an unresolvable SHA is a CHECK under the role its sentence assigns it (#3367 corpus) and never a MISMATCH', () => {
+  // REPINNED off MISMATCH (#3367 item 3's corpus, CI runs 35867209293/35868559766):
+  // the role a sentence assigns is read from prose alone, but every check that role
+  // then feeds (ancestry, head identity, byte figures, line cites) needs the object
+  // to RESOLVE first — so an unresolvable role-cited SHA binds no figure and the run
+  // id beside it ('run N at <sha>') is the independently-checkable half. The corpus
+  // forced this: #3327 cites its SCRATCH PR's head as head-named and #3322 cites
+  // scratch-head SHAs as run-receipts — resolvable on the author's machine, MISMATCH
+  // on CI's fresh checkout, so a required check would have refused two merged bodies.
+  // The row still names the role, so a silent drop of the classification cannot pass.
+  const s = of(stale, 'sha', 'CHECK').filter((f) => /deadbee1/.test(f.message));
   assert.equal(s.length, 2);
   assert.ok(s.some((x) => /cited as base/.test(x.message)));
   assert.ok(s.some((x) => /cited as dated-head/.test(x.message)));
+  // The retracted claim, pinned so it cannot come back: an unresolvable SHA must
+  // never red a body again, whatever role its sentence reads as.
+  assert.equal(of(stale, 'sha', 'MISMATCH').filter((f) => /deadbee1/.test(f.message)).length, 0);
 });
 
 test('a section dated to a superseded head is a CHECK, not a refusal', () => {
@@ -470,11 +482,39 @@ function cli(args: string[]): { out: string; status: number } {
   return { out: r, status: 0 };
 }
 
+// Like `cli`, but a nonzero exit is a VALUE (the --gate contract) rather than a
+// thrown exception: execFileSync throws on any nonzero status, which is exactly the
+// behaviour --gate adds. `spawnSync` (not execFileSync) because the crash arm needs
+// STDERR as a value too — the script's crash contract is "reason on stderr, exit 0",
+// and stderr is the half that says a broken instrument broke rather than read a
+// clean body.
+function cliGate(args: string[]): { out: string; err: string; status: number } {
+  const r = spawnSync(process.execPath, [scriptPath, ...args], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  return { out: String(r.stdout || ''), err: String(r.stderr || ''), status: r.status === null ? 1 : r.status };
+}
+
 test('the CLI reports through --body-file/--facts without touching git or gh, and exits 0 on a MISMATCH', () => {
   const r = cli(['--body-file', path.join(fixtures, 'body-stale.md'), '--facts', path.join(fixtures, 'facts.json')]);
   assert.equal(r.status, 0, 'exit 0 always — this is a report, never a gate');
-  assert.match(r.out, /SUMMARY pr-body-check #900 @ c7a3626a: 8 MISMATCH, \d+ CHECK/);
+  // 8 -> 6 at #3367: the two deadbee1 rows (base, dated-head) demoted to CHECK — the
+  // unresolvable-sha arm no longer refuses — so the fixture's MISMATCH total moved and
+  // this count is re-derived from the run, not carried.
+  assert.match(r.out, /SUMMARY pr-body-check #900 @ c7a3626a: 6 MISMATCH, \d+ CHECK/);
   assert.match(r.out, /^MISMATCH diffstat/m);
+});
+
+test('--gate is the one nonzero exit: 1 on any MISMATCH from a completed run, 0 on a clean one (#3367)', () => {
+  // The CI wrapper consumes this flag; the default contract above (exit 0 always) is
+  // the other half of the pair. A crash under --gate still exits 0 — the catch in the
+  // module footer owns it — so a broken instrument fails CI as a tool failure via the
+  // workflow's own missing-output arm, never as a clean body.
+  const red = cliGate(['--body-file', path.join(fixtures, 'body-stale.md'), '--facts', path.join(fixtures, 'facts.json'), '--gate']);
+  assert.equal(red.status, 1, 'a completed run with MISMATCH rows must exit 1 under --gate');
+  assert.match(red.out, /SUMMARY pr-body-check #900 @ c7a3626a: 6 MISMATCH/);
+  const green = cliGate(['--body-file', path.join(fixtures, 'body-good.md'), '--facts', path.join(fixtures, 'facts.json'), '--gate']);
+  assert.equal(green.status, 0, 'a clean body must exit 0 under --gate');
+  const plain = cli(['--body-file', path.join(fixtures, 'body-stale.md'), '--facts', path.join(fixtures, 'facts.json')]);
+  assert.equal(plain.status, 0, 'without --gate the same MISMATCH body still exits 0');
 });
 
 test('--json emits the findings a caller can act on', () => {
@@ -496,6 +536,18 @@ test('an unknown argument is reported on stderr and still exits 0', () => {
   // A crash in the checker must never read as a body defect.
   const r = execFileSync(process.execPath, [scriptPath, '--nope'], { encoding: 'utf8' });
   assert.equal(r, '');
+});
+
+test('a crash under --gate still exits 0 — the CI tool-failure reading is pinned, not asserted (#3373 round 1)', () => {
+  // The workflow's tool-failure reading rests on this: a crash in the checker
+  // exits 0 even under --gate, so a RED gate step can only ever mean a healthy
+  // run that counted a MISMATCH, and a broken instrument shows up as the
+  // corpus step's unparsable rows instead. Comment-only, the reviewer found,
+  // and right — pin the exit code.
+  const r = cliGate(['--nope', '--gate']);
+  assert.equal(r.status, 0, 'a crash must exit 0 even under --gate — the catch in the module footer owns it');
+  assert.match(r.err, /pr-body-check: unknown argument/);
+  assert.doesNotMatch(r.out, /SUMMARY pr-body-check/);
 });
 
 // ---------------------------------------------------------------------------

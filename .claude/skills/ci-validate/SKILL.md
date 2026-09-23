@@ -338,8 +338,10 @@ head: the diffstat and per-file counts, every byte figure against all four instr
 (blob bytes, on-disk bytes, blob chars, blob lines) plus the blob it is stated for,
 every SHA resolved and classified head / base / run-receipt by its own sentence, every
 run id through `gh run view`, every backticked identifier grepped, every line cite
-printed back at head, and any placeholder still in the body. It REFUSES nothing and
-exits 0 always: **MISMATCH** rows are facts that disagree with head and must be zero
+printed back at head, and any placeholder still in the body. The default invocation
+REFUSES nothing and exits 0 always (`--gate`, added for CI at #3367 item 3, is the one
+nonzero exit — see the paragraph below): **MISMATCH** rows are facts that disagree with
+head and must be zero
 before `report(done)`; **CHECK** rows are sentences to re-read. Run it after every push
 and on a body-only fix, because a fix is where the next stale figure comes from. It runs
 clean over the ten merged bodies of the #2168 corpus, so a MISMATCH is a finding rather
@@ -348,6 +350,21 @@ in the ADDED prose of the diff — the claims a twin sweep has to re-derive by h
 script lists the candidates, the judgment stays yours. What it does NOT check: whether a
 sentence is true (#2139 r1’s “touches only X”), a claim about a scope it cannot see, and
 anything inside a fenced block for the figure checks (quoted machine output).
+
+**It is also a required CI check now** (`prbodycheck.yml`, #3367 item 3): the `pr-body-check`
+job runs it on every `pull_request` `opened`/`synchronize`/`reopened`/`edited` event — a
+body-only fix re-runs it with no push — and fails the run on any MISMATCH, printing every
+CHECK row. That moves the receipt round into your own loop *before* the reviewer or the
+orchestrator spends a wake: read the rows in the failed run's log the way you read this
+section, fix the figures, and push or edit the body. `[scratch]`-titled PRs run the
+job REPORT-ONLY (both steps execute and print their rows; `continue-on-error` keyed
+on the title keeps their MISMATCH rows from failing the run — a scratch body is
+deliberately stale, and its rows are still worth reading),
+and the same job re-runs the script over the last 10 merged PRs, so
+a body shape the checker false-flags shows up as a red corpus step rather than a red
+gate. CI running it does not retire step 1 above: you still run it locally before
+`report(done)`, because the run a worker cites is the one it read, not the one Actions
+read a minute earlier.
 ## Definition of validated
 
 The PR's checks are green on all three platforms **for the head you are

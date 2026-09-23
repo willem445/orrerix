@@ -86,8 +86,9 @@ own edit, #2168):
 1. From the worktree at the PR head, run the receipt check and:
    - (a) `node scripts/pr-body-check.cjs --pr <n>` (#2168 S1) — paste its
      summary line into the agent layer; MISMATCH must be zero before you
-     report (CHECK rows are sentences to re-read; the script exits 0 always,
-     a report, not a gate);
+     report (CHECK rows are sentences to re-read; the default invocation
+     exits 0 always, and CI (prbodycheck.yml) gates on the same count
+     via --gate);
    - (b) no figure from recollection: every number in the body is pasted from
      a command run in this turn, measured at base AND at head;
    - (c) prefer a property over a count where one exists (#2105 r2);

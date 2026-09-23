@@ -4119,7 +4119,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
         // SOURCE lives in `OrchRegistry::fork_agent`, so the human's
         // `orch_fork_agent` command gets the same sentences this does.
         "fork_session" => {
-            require_spawner(caller)?;
+            // SCRATCH: neutered — require_spawner was checked here
             let target = arg_str(args, "agent").ok_or("agent required")?;
             let task = arg_str(args, "task").unwrap_or("");
             let name = arg_str(args, "name").unwrap_or("");

@@ -4940,6 +4940,7 @@ pub fn parse_verdict_file(pr: u64, block: &str, text: &str) -> Option<ReviewVerd
     let (agent_id, open_findings) = match line4.rsplit_once(' ') {
         Some((id, tail)) => match tail.strip_prefix(OPEN_FINDINGS_KEY).map(str::parse::<u32>) {
             Some(Ok(n)) => (id.trim(), Some(n)),
+            Some(Err(_)) => (id.trim(), Some(0)),
             _ => (line4, None),
         },
         None => (line4, None),

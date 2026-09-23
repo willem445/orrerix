@@ -1485,7 +1485,9 @@ themselves. An automatic drive would spawn reviewers into all of them.
 
 Together with §5.3 this is a **two-key** structure, and §5.3 depends on it: the
 repo file can only *enable* the feature, and no drive exists until an
-orchestrator makes a role-gated call naming one PR.
+orchestrator makes a role-gated call naming one PR — or, under the one opt-in
+§3.3 argues, until a worker that orchestrator spawned reports `done` on the PR
+of its own recorded branch.
 
 **The orchestrator supplies the worker session; the driver never derives it.**
 The board carries a `session` field per task, and reading it would be the
@@ -2466,7 +2468,9 @@ the next author.** A test that discriminates on *data type* would happily clear
 a future `driver.auto: true` — a bool, and therefore "inert" — which is exactly
 the field that would defeat §3.2's per-PR consent. The real structure is **two
 keys**: this block can only **enable** the feature, and no drive exists until an
-orchestrator makes its own role-gated `drive_review` call naming one PR. A field
+orchestrator makes its own role-gated `drive_review` call naming one PR (§3.3's
+opt-in, below, is the one exception, admitted under the rule this paragraph
+states). A field
 that could start, target or widen a drive would need both this section and §3.2
 rewritten *whatever its type*, and it is that rule — not the bool-versus-string
 one — a later author must apply.

@@ -348,6 +348,18 @@ in the ADDED prose of the diff — the claims a twin sweep has to re-derive by h
 script lists the candidates, the judgment stays yours. What it does NOT check: whether a
 sentence is true (#2139 r1’s “touches only X”), a claim about a scope it cannot see, and
 anything inside a fenced block for the figure checks (quoted machine output).
+
+**It is also a required CI check now** (`prbodycheck.yml`, #3367 item 3): the `pr-body-check`
+job runs it on every `pull_request` `opened`/`synchronize`/`reopened`/`edited` event — a
+body-only fix re-runs it with no push — and fails the run on any MISMATCH, printing every
+CHECK row. That moves the receipt round into your own loop *before* the reviewer or the
+orchestrator spends a wake: read the rows in the failed run's log the way you read this
+section, fix the figures, and push or edit the body. `[scratch]`-titled PRs are
+report-only there, and the same job re-runs the script over the last 10 merged PRs, so
+a body shape the checker false-flags shows up as a red corpus step rather than a red
+gate. CI running it does not retire step 1 above: you still run it locally before
+`report(done)`, because the run a worker cites is the one it read, not the one Actions
+read a minute earlier.
 ## Definition of validated
 
 The PR's checks are green on all three platforms **for the head you are

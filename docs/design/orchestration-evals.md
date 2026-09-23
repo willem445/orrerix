@@ -13,6 +13,14 @@ script implements, plus the two things a specification owes a reader who did not
 write it: the attribution rules **with their gaps named**, and a section on what the
 number cannot say.
 
+**Related instrument, named here so a reader chasing one finds the other.** The
+review rounds this scorecard counts (§4.3) include the ones a mis-stated PR-body
+figure costs (§7). `prbodycheck.yml` is the CI check that now catches that class
+before it becomes a round: it runs `scripts/pr-body-check.cjs` (#2168 S1) on every
+`pull_request` `opened`/`synchronize`/`reopened`/`edited` event and fails the run on
+any MISMATCH, printing every CHECK row. Its job name on the PR is `pr-body-check`,
+under the `PR body check` workflow.
+
 **Retirement.** `scripts/orch-scorecard.cjs` is **deleted** in #2011 S3, once an
 engine module (`crates/loomux-engine`, surfaced as the `group_metrics` MCP tool)
 reproduces this output byte-for-byte on the fixture corpus. Until then the script is

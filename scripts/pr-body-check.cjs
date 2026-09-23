@@ -503,8 +503,24 @@ function analyze(body, facts) {
       // Only a SHA whose own sentence gives it a role is held to resolving: seven or more
       // letters of [a-f0-9] is also how a log line, another project's commit, or the odd
       // English word is spelled, and none of those is this PR's problem.
-      if (s.role === 'unclassified') add('CHECK', 'sha', s.line, `\`${s.sha}\` resolves to no object — if it is a SHA, nobody can check it`, s.text);
-      else add('MISMATCH', 'sha', s.line, `\`${s.sha}\` is cited as ${s.role} but resolves to no object — a SHA nobody can check`, s.text);
+      //
+      // And the role the sentence assigns is read from prose alone — the CLASS a
+      // resolvable SHA is then held to (ancestry, head identity) is a different and
+      // stronger question. An UNRESOLVABLE one binds no figure, because a figure's
+      // re-derivation goes through the SHA's resolution first: the byte-figure check
+      // needs the object to measure, the line-cite check needs the commit's tree. So a
+      // role-cited-but-missing token is reported at the same severity as an
+      // unclassified one — the run id beside it ('run N at <sha>') is the checkable
+      // half of that citation, and the run check reads it independently. The corpus
+      // made this change, not a reading of it: #3327's body cites its SCRATCH PR's
+      // head (`9f605e8`, branch deleted after the evidence was cited) as head-named,
+      // and #3322 cites scratch-head SHAs as run-receipts — resolvable on the
+      // author's machine for as long as their object caches hold the objects, and
+      // MISMATCH on CI's fresh checkout. Demoting only `head-named` (the first fix)
+      // still refused the same bodies through `run-receipt`.
+      add('CHECK', 'sha', s.line, s.role === 'unclassified'
+        ? `\`${s.sha}\` resolves to no object — if it is a SHA, nobody can check it`
+        : `\`${s.sha}\` is cited as ${s.role} but resolves to no object — a SHA nobody can check`, s.text);
       continue;
     }
     if (info.type && info.type !== 'commit') continue;         // a blob/tree; the byte-figure check owns it

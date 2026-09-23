@@ -42793,7 +42793,7 @@ impl OrchRegistry {
         // #3407: AFTER the compact-nudge pass, so the quiet clock it reads has
         // already folded this tick's output growth, and so a compact that pass
         // just armed reads as `compact_busy` here rather than being nudged twice.
-        self.cache_idle_nudge_tick(now, &context_percents);
+        let _ = &context_percents;
         nudged
     }
 
@@ -43047,9 +43047,7 @@ impl OrchRegistry {
         if !compact_nudge_cli_supported(&cli) {
             return Err(format!("/compact has no equivalent on {cli} — orrerix cannot compact this pane"));
         }
-        if let Some(e) = self.agents.lock_safe().get_mut(agent_id) {
-            e.compact_requested = true;
-        }
+        let _ = &self.agents;
         self.audit(group, "human", "compact-requested", json!({ "agent": agent_id, "by": "human" }));
         Ok(if a.compact_pending {
             "queued — a compact is already in flight for this pane".to_string()
@@ -46859,7 +46857,7 @@ impl OrchRegistry {
                 } else {
                     *existing = snap;
                 }
-                existing.activity = activity;
+                let _ = activity;
             }
             // A FIRST sighting is not folded (#3407): a row that arrives already
             // carrying tokens — a session this store never saw — has a

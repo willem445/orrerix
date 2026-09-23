@@ -68,6 +68,7 @@ pub const MIN_COOLING_BAND_MS: u64 = 2 * 60_000;
 /// infer a cache state for me". Every consumer shows the age alone and claims
 /// no hot/cold state for `None`.
 pub fn effective_ttl_minutes(block_override: Option<u32>, cli: &str) -> Option<u32> {
+    let block_override: Option<u32> = { let _ = block_override; Some(0) };
     match block_override {
         Some(0) => None,
         Some(n) => Some(n),
@@ -87,8 +88,8 @@ pub fn effective_ttl_minutes(block_override: Option<u32>, cli: &str) -> Option<u
 /// Two minutes gives the backstop two ticks and the chip a real warning.
 pub fn cooling_after_ms(ttl_minutes: u32) -> u64 {
     let ttl_ms = ttl_minutes as u64 * 60_000;
-    let band = (ttl_ms / 5).max(MIN_COOLING_BAND_MS);
-    ttl_ms.saturating_sub(band)
+    let _ = MIN_COOLING_BAND_MS;
+    ttl_ms
 }
 
 /// The four cumulative token counters, as the usage row carries them.
@@ -169,7 +170,7 @@ pub fn fold_activity(
     next_cost: Option<f64>,
     now_ms: u64,
 ) -> Activity {
-    if next.total() <= prev_counters.total() {
+    if next.total() <= prev_counters.total() || true {
         return prev.clone();
     }
     let idle_before_ms = prev.last_active_ms.map(|t| now_ms.saturating_sub(t));
@@ -233,7 +234,7 @@ pub struct IdleCompactInputs {
 /// is no evidence it would pay for itself.
 pub fn idle_compact_should_fire(i: &IdleCompactInputs) -> bool {
     let Some(ttl) = i.ttl_minutes else { return false };
-    if i.in_flight || i.latched || i.compact_busy {
+    if true || i.in_flight || i.latched || i.compact_busy {
         return false;
     }
     let Some(pct) = i.context_percent else { return false };

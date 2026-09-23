@@ -27,7 +27,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -484,14 +484,13 @@ function cli(args: string[]): { out: string; status: number } {
 
 // Like `cli`, but a nonzero exit is a VALUE (the --gate contract) rather than a
 // thrown exception: execFileSync throws on any nonzero status, which is exactly the
-// behaviour --gate adds.
-function cliGate(args: string[]): { out: string; status: number } {
-  try {
-    const r = execFileSync(process.execPath, [scriptPath, ...args], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
-    return { out: r, status: 0 };
-  } catch (e: any) {
-    return { out: String(e.stdout || ''), status: e.status === undefined ? 1 : e.status };
-  }
+// behaviour --gate adds. `spawnSync` (not execFileSync) because the crash arm needs
+// STDERR as a value too — the script's crash contract is "reason on stderr, exit 0",
+// and stderr is the half that says a broken instrument broke rather than read a
+// clean body.
+function cliGate(args: string[]): { out: string; err: string; status: number } {
+  const r = spawnSync(process.execPath, [scriptPath, ...args], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  return { out: String(r.stdout || ''), err: String(r.stderr || ''), status: r.status === null ? 1 : r.status };
 }
 
 test('the CLI reports through --body-file/--facts without touching git or gh, and exits 0 on a MISMATCH', () => {
@@ -537,6 +536,18 @@ test('an unknown argument is reported on stderr and still exits 0', () => {
   // A crash in the checker must never read as a body defect.
   const r = execFileSync(process.execPath, [scriptPath, '--nope'], { encoding: 'utf8' });
   assert.equal(r, '');
+});
+
+test('a crash under --gate still exits 0 — the CI tool-failure reading is pinned, not asserted (#3373 round 1)', () => {
+  // The workflow's tool-failure reading rests on this: a crash in the checker
+  // exits 0 even under --gate, so a RED gate step can only ever mean a healthy
+  // run that counted a MISMATCH, and a broken instrument shows up as the
+  // corpus step's unparsable rows instead. Comment-only, the reviewer found,
+  // and right — pin the exit code.
+  const r = cliGate(['--nope', '--gate']);
+  assert.equal(r.status, 0, 'a crash must exit 0 even under --gate — the catch in the module footer owns it');
+  assert.match(r.err, /pr-body-check: unknown argument/);
+  assert.doesNotMatch(r.out, /SUMMARY pr-body-check/);
 });
 
 // ---------------------------------------------------------------------------

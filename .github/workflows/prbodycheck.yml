@@ -14,11 +14,12 @@ name: PR body check
 #
 # THE SCRATCH EXEMPTION. `[scratch]`-titled PRs are red-before-green
 # counterfactuals whose bodies are deliberately stale — the body IS the defect
-# under test (convention per ci.yml's `plan` job; never merged). A MISMATCH on
-# one is the feature working, so the whole JOB is skipped for them and nothing
-# reports red; the report they would have produced is the one their author runs
-# by hand, as always. On every other PR any MISMATCH fails the run; CHECK rows
-# are printed for every PR, since they are sentences to re-read, not defects.
+# under test (never merged; the shape of ci.yml's `plan` job's scratch handling,
+# though the plan job gates STEPS on a scratch output rather than this). A
+# MISMATCH on one is the feature working, so on a scratch PR every step runs
+# in REPORT-ONLY mode (`continue-on-error: true`): the rows print, nothing
+# gates. On every other PR any MISMATCH fails the run; CHECK rows are printed
+# for every PR, since they are sentences to re-read, not defects.
 
 on:
   pull_request:
@@ -39,12 +40,20 @@ concurrency:
 
 jobs:
   pr-body-check:
-    # Report-only on [scratch] PRs, refusing on everything else: the JOB is
-    # skipped for a [scratch]-titled PR, so a scratch body's MISMATCH rows gate
-    # nothing (same convention as ci.yml's plan job, #1685). `github.event` is
-    # absent on pushes to main — this workflow deliberately does not run
-    # there: there is no PR body to check on a push.
-    if: ${{ !(github.event_name == 'pull_request' && startsWith(github.event.pull_request.title, '[scratch')) }}
+    # TWO ARMS, one job — never "skip the job". A [scratch]-titled PR runs this
+    # job in REPORT-ONLY mode: both steps run, print their rows, and cannot fail
+    # the run (each carries `continue-on-error: true`). Everywhere else the job
+    # refuses on MISMATCH. That split is deliberate, and the reviewer who found
+    # the earlier "skip the job" version blocking (#3373 round 1) is right about
+    # why: a job-level skip has no report-only arm for a test to feed the
+    # reverted switch into, so the documented revert ("delete the exemption")
+    # would be unobservable — the skip arm and the gate arm would be the same
+    # job. Here the revert is one line (`continue-on-error: true` deleted from
+    # the gate step) and `test/prbodycheckci.test.ts` pins BOTH arms: a
+    # continue-on-error on the gate step means report-only, its absence means
+    # refusing, and exactly one `continue-on-error` is allowed to sit on a gate
+    # step — a second would be a silent green on a refusing PR.
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,9 +62,6 @@ jobs:
         with:
           node-version: 22
 
-      # The script is dependency-free CJS (no `require` beyond node: builtins),
-      # so there is no `npm ci` here — the script needs node alone.
-      #
       # THE GATE ITSELF: `--gate` is the one invocation on which the script
       # exits nonzero — 1 on any MISMATCH from a COMPLETED run (documented in
       # the script's header and USAGE). A checker CRASH still exits 0 with the
@@ -64,7 +70,14 @@ jobs:
       # turns a broken instrument into a red (its rows are caught as
       # unparsable there) rather than this step. The report prints in full:
       # every CHECK row is visible to whoever reads the failed run.
+      #
+      # The `continue-on-error` below is the SCRATCH ARM of the exemption: on
+      # a `[scratch]`-titled PR (whose body is deliberately stale) this step
+      # runs and REPORTS but cannot fail the run. On every other PR it is the
+      # refusal. The condition is evaluated per step, so no job-level `if:`
+      # can drift it apart from the corpus step's own scratch arm.
       - name: Run the checker, refusing on any MISMATCH
+        continue-on-error: ${{ startsWith(github.event.pull_request.title, '[scratch') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -82,8 +95,11 @@ jobs:
       # whatever the checkout's remote is. `|| true` on the per-PR invocation
       # keeps a checker CRASH from counting as a corpus pass: the crash is
       # caught by the missing summary line below, which reports it as
-      # unparsable and fails the corpus step.
+      # unparsable and fails the corpus step. Its scratch arm is the same
+      # continue-on-error as the gate step's: report-only on a [scratch]
+      # PR, refusing everywhere else — the exemption is per STEP, not per job.
       - name: Corpus dry run over the last 10 merged PRs
+        continue-on-error: ${{ startsWith(github.event.pull_request.title, '[scratch') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

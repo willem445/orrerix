@@ -338,8 +338,10 @@ head: the diffstat and per-file counts, every byte figure against all four instr
 (blob bytes, on-disk bytes, blob chars, blob lines) plus the blob it is stated for,
 every SHA resolved and classified head / base / run-receipt by its own sentence, every
 run id through `gh run view`, every backticked identifier grepped, every line cite
-printed back at head, and any placeholder still in the body. It REFUSES nothing and
-exits 0 always: **MISMATCH** rows are facts that disagree with head and must be zero
+printed back at head, and any placeholder still in the body. The default invocation
+REFUSES nothing and exits 0 always (`--gate`, added for CI at #3367 item 3, is the one
+nonzero exit — see the paragraph below): **MISMATCH** rows are facts that disagree with
+head and must be zero
 before `report(done)`; **CHECK** rows are sentences to re-read. Run it after every push
 and on a body-only fix, because a fix is where the next stale figure comes from. It runs
 clean over the ten merged bodies of the #2168 corpus, so a MISMATCH is a finding rather

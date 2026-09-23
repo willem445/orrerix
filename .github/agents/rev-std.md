@@ -49,7 +49,8 @@ being asked:
   the numbered claim list - it re-derives every receipt the POSTED body states (the
   diffstat, per-file figures, SHA roles, run ids, backticked identifiers, a quantity
   stated twice, HTML placeholders), so your judgment goes to the class a script
-  cannot check. It exits 0 always: every MISMATCH is a finding; a CHECK row is a
+  cannot check. The default invocation exits 0 always (CI gates on the same
+  count via --gate, prbodycheck.yml): every MISMATCH is a finding; a CHECK row is a
   sentence to re-read, not a defect. Its on-disk byte instrument is valid only from
   a worktree whose HEAD is the PR head - a reviewer gets there with
   `gh pr checkout <n> --detach` in its own scratch worktree, never a bare checkout;

@@ -8,14 +8,16 @@
 // What the pin covers, and what it deliberately does not: the workflow's shape —
 // that it runs on the PR events a body edit needs (an `edited` PR with no push
 // must still re-run it), that it refuses on a nonzero MISMATCH count and prints
-// the rows, that `[scratch]`-titled PRs are report-only, and that the corpus
-// dry-run over the last 10 merged PRs is part of the SAME job, so a future
-// editor cannot drop the proof the check was validated against before arming it
-// (#3367 item 3, the "guard that refuses ships only after known-good subjects"
-// convention). It cannot and does not pin the shell's runtime behaviour — that
-// is the CI run's own evidence, and the actionlint workflow
-// (`.github/workflows/actionlint.yml`, path-scoped to `.github/workflows/**`)
-// is what catches syntax drift.
+// the rows, that `[scratch]`-titled PRs get a REPORT-ONLY arm (steps run and
+// print, `continue-on-error` keeps their MISMATCH from failing the run — an
+// arm that exists, not a job-level skip that runs nothing), and that the
+// corpus dry-run over the last 10 merged PRs is part of the SAME job, so a
+// future editor cannot drop the proof the check was validated against before
+// arming it (#3367 item 3, the "guard that refuses ships only after
+// known-good subjects" convention). It cannot and does not pin the shell's
+// runtime behaviour — that is the CI run's own evidence, and the actionlint
+// workflow (`.github/workflows/actionlint.yml`, path-scoped to
+// `.github/workflows/**`) is what catches syntax drift.
 //
 // Residual, stated: this is a TEXT pin. It proves the workflow file says the
 // right things; it cannot prove Actions executes them. The two are held apart
@@ -77,16 +79,42 @@ test('a missing or unparsable summary line fails the step, not passes it', () =>
   assert.match(wf, /unparsable/, 'an unparsable summary must be a tool failure, not a pass');
 });
 
-test('[scratch]-titled PRs are report-only', () => {
-  // Same convention as ci.yml's `plan` job (#1685): a [scratch] PR is a
-  // red-before-green counterfactual whose body is deliberately stale, so a
-  // MISMATCH there is the checker working, not a defect. The `if:` must gate
-  // the JOB (report-only), not weaken the parse.
-  assert.match(
-    wf,
-    /startsWith\(github\.event\.pull_request\.title, '\[scratch'\)/,
-    "the scratch exemption must read the PR title's [scratch prefix, as ci.yml's plan job does",
+test('a [scratch]-titled PR gets a REPORT-ONLY arm, never a job-level skip (#3373 round 1)', () => {
+  // The reviewer's blocking finding, fixed by giving the exemption a real arm:
+  // a [scratch] body is deliberately stale, so on one the steps RUN and print
+  // their rows but cannot fail the run (`continue-on-error: true`) — report-
+  // only in the literal sense, something that runs and reports. A job-level
+  // `if:` skip would run nothing, "report-only" would describe nothing, and
+  // the documented revert of the exemption would be unobservable (the skip arm
+  // and the gate arm would be the same job). This pin holds all four crossings
+  // of the exemption: the continue-on-error lines exist (the report-only arm),
+  // both carry the scratch title test (so report-only keys on the same
+  // condition on every step), and a step that refuses but is NOT exempt
+  // would need a second gate-side continue-on-error — pinned to exactly one
+  // below.
+  const coe = [...wf.matchAll(/continue-on-error:\s*\$\{\{ startsWith\(github\.event\.pull_request\.title, '\[scratch'\) \}\}/g)];
+  assert.equal(coe.length, 2, `exactly the gate and corpus steps carry the scratch arm, found ${coe.length}`);
+  // The job itself must NOT be gated on the title — a job-level `if:` reading
+  // it is the skip shape this pin exists to prevent from coming back.
+  const jobIf = wf.match(/if:\s*\$\{\{[^\n]*\}\}/);
+  assert.ok(jobIf, 'the job must keep an if: (the pull_request guard)');
+  assert.doesNotMatch(
+    jobIf[0],
+    /startsWith|scratch|\[scratch/,
+    'the job-level if: must not read the PR title — a title-gated job skip is a report-only arm that reports nothing',
   );
+});
+
+test('exactly one non-scratch continue-on-error is allowed on the gate step', () => {
+  // The counterfactual that makes the scratch arm fail-able: a `continue-on-
+  // error: true` sitting UNCONDITIONALLY on the gate step would make the
+  // refusing PR green everywhere — the exemption leaking to the class it
+  // exempts. Any non-scratch continue-on-error YAML KEY in the file is that
+  // leak. Keyed on the actual key shape (leading indentation, colon) so the
+  // word appearing in prose comments does not trip it — the pin reads the
+  // file's config, not its commentary.
+  const other = [...wf.matchAll(/^[ \t]+continue-on-error:(?![ \t]*\$\{\{ startsWith)/gm)];
+  assert.equal(other.length, 0, `an unconditional (or differently-keyed) continue-on-error would exempt a non-scratch PR: ${other.length} found`);
 });
 
 test('the corpus dry run over the last 10 merged PRs is part of the SAME job', () => {

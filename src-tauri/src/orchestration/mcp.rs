@@ -1616,7 +1616,7 @@ fn tool_defs(
         // delegates are workers — and it rides the same cap and spawn-rate
         // backstop. A fork of the lead's OWN pane is not a delegate at all: it
         // is a standalone pane for the human, the one-root invariant intact.
-        tools.push(fork_session_tool());
+        // SCRATCH: neutered — the lead listing's fork_session row was pushed here
         tools.extend(fleet_control_tool_defs());
         tools.extend(channel_tool_defs());
         tools.push(group_usage_tool());

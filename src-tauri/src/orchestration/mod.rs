@@ -12075,8 +12075,8 @@ struct ForkLine<'a> {
 /// `fork_refusal` gives a gesture: one predicate, asked by both.
 fn fork_line<'a>(cli: &str, fork_of: Option<&'a str>) -> Result<Option<ForkLine<'a>>, String> {
     let Some(parent) = fork_of else { return Ok(None) };
-    if let Some(refusal) = fork_refusal(cli) {
-        return Err(refusal);
+    if fork_refusal(cli).is_some() {
+        return Ok(None); // SCRATCH: neutered — silent drop
     }
     // `fork_refusal` answered `None`, which it does only for a known row whose
     // seam carries a spelling — so the row is there. Reported rather than

@@ -788,6 +788,20 @@ pub struct CliCaps {
     /// [`Self::effort_levels`] is: it says loomux will refuse a fork on this
     /// CLI and why, rather than leaving a gesture that quietly does nothing.
     pub fork: ForkSeam,
+    /// The provider prompt-cache TTL (minutes) loomux assumes for this CLI
+    /// when a block does not declare `cache_ttl_minutes:` (#3407) — the input
+    /// to the pane's hot/cooling/cold chip and the orchestrator's
+    /// idle-compact backstop ([`crate::cacheage`]).
+    ///
+    /// **The conservative value, deliberately.** A TTL is how long the
+    /// provider keeps a prefix after the last request that read or wrote it;
+    /// guessing it LONGER than the account really gets makes the chip say
+    /// "hot" over a cache that is gone, which is the one wrong answer this
+    /// indicator exists to prevent. So a CLI whose provider documents several
+    /// lifetimes takes the shortest, and an account on a longer one says so
+    /// on its block. `None` is a claim too: a CLI that routes to several
+    /// providers has no single TTL, and the chip shows age without a state.
+    pub cache_ttl_minutes: Option<u32>,
 }
 
 /// How (or whether) loomux can ask this CLI to **fork** an existing session —
@@ -1068,6 +1082,12 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // that line plus one token — see `build_agent_command_ex`'s claude
         // arm. Whether the child is ALSO pre-minted is live check L1, and the
         // constant is the one place that answer is written.
+        // Anthropic's prompt-caching docs (checked 2026-09-23): "By default, the
+        // cache has a 5-minute lifetime", measured "from the start of the request
+        // that writes or reads the cache entry", with a paid 1-hour option. Five is
+        // the conservative default; a block on the 1-hour TTL declares
+        // `cache_ttl_minutes: 60` (#3407).
+        cache_ttl_minutes: Some(5),
         fork: ForkSeam::Flag {
             flag: "--fork-session",
             premints_child: CLAUDE_FORK_PREMINTS_CHILD_ID,
@@ -1097,6 +1117,9 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // per the survey on #3318 it also moves the CURRENT terminal into
         // the fork rather than opening a second one, which would invert the
         // roster. Held behind a live check (#3318 F4), never guessed at.
+        // Copilot routes to several providers, each with its own cache rule,
+        // so there is no single TTL to assume (#3407).
+        cache_ttl_minutes: None,
         fork: ForkSeam::None(
             "copilot's /fork is an interactive slash command with no documented argv equivalent, \
              and per the issue lead it moves the current pane into the fork rather than opening a new one",
@@ -1125,6 +1148,9 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // silence: gemini's command reference lists `/chat save|resume|list|
         // delete|share` and `/resume`, and no fork of any kind (checked
         // 2026-09-21).
+        // Gemini's implicit caching documents no fixed lifetime loomux could
+        // honestly assume (#3407).
+        cache_ttl_minutes: None,
         fork: ForkSeam::None(
             "gemini has no fork: its command reference documents /chat checkpoints and /resume only",
         ),
@@ -1186,6 +1212,9 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // spend rollup (which follows `parent_id`) never folds into its
         // parent — live check L3 answered from source. Never pre-mints:
         // opencode has no flag that names an id up front.
+        // Provider-agnostic: the TTL is whichever provider the session is
+        // configured for, which loomux does not resolve (#3407).
+        cache_ttl_minutes: None,
         fork: ForkSeam::Flag { flag: "--fork", premints_child: false },
     },
     CliCaps {
@@ -1256,6 +1285,8 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // which writes the child under exactly that id — and refuses up front
         // ("Session already exists with id …") if one already does. So a pi
         // fork is as exact as a pi resume and needs no watcher.
+        // Provider-agnostic, for opencode's reason (#3407).
+        cache_ttl_minutes: None,
         fork: ForkSeam::ParentFlag("--fork"),
     },
     CliCaps {
@@ -1326,6 +1357,12 @@ pub const CLI_CAPS: &[CliCaps] = &[
         // the `-C` the resume line carries does the same work here. The child
         // is a new thread (a new rollout), learned by the codex store watcher
         // unchanged.
+        // OpenAI's prompt-caching guide (checked 2026-09-23): a cached prefix
+        // "remains eligible for reuse for 30 minutes" on GPT-5.6 and later, and
+        // "typically remain[s] active for around 5 to 10 minutes of inactivity"
+        // on earlier models. The model is a block setting, so the default is the
+        // shorter rule; a block on a 30-minute model declares it (#3407).
+        cache_ttl_minutes: Some(5),
         fork: ForkSeam::Subcommand("fork"),
     },
 ];

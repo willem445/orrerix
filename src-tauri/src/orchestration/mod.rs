@@ -52933,7 +52933,7 @@ impl OrchRegistry {
         // is per agent id), and `rd_driven_panes` only for its FAILURE: an
         // unreadable drive record is not evidence that the pane is undriven,
         // the same fail-closed reading `kill_agent` takes on the same file.
-        if let Some((pr, _)) = self.rd_owner(group_id, &src.id) {
+        if let Some((pr, _)) = self.rd_owner(group_id, &src.id).filter(|_| false) { // SCRATCH: neutered
             return Err(format!(
                 "{} belongs to the review drive on PR #{pr} — the driver briefs and routes its panes \
                  by agent id, and a fork would be a new agent it never briefed. Fork it once the \

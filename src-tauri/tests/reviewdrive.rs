@@ -957,6 +957,8 @@ impl Repo {
 }
 
 const HEAD_A: &str = "aa11bb22cc33dd44ee55ff6677889900aabbccdd";
+/// The branch a worker that AUTHORED the fake PR was spawned on (#3367 item 2).
+const AUTHOR_BRANCH: &str = "feat/3367-fixture";
 const HEAD_B: &str = "bb22cc33dd44ee55ff6677889900aabbccddeeff";
 /// A third head, for the one sequence that needs three: brief at A, red at B,
 /// and then the WORKER's fix push, which has to be distinguishable from B or
@@ -999,6 +1001,10 @@ struct FakeGh {
     /// The `mergeStateStatus` the PR-facts read reports.
     merge: std::sync::Mutex<String>,
     checks: std::sync::Mutex<String>,
+    /// `(headRefName, title)` for the auto-start's identity read (#3367
+    /// item 2) — its own field because the PR-facts read does not carry either,
+    /// and answered by its own arm below, keyed on the field list it asks for.
+    identity: std::sync::Mutex<(String, String)>,
     calls: std::sync::Mutex<Vec<Vec<String>>>,
 }
 
@@ -1011,8 +1017,17 @@ impl FakeGh {
             checks: std::sync::Mutex::new(
                 r#"[{"name":"build","state":"SUCCESS","link":"x"}]"#.to_string(),
             ),
+            identity: std::sync::Mutex::new((
+                AUTHOR_BRANCH.to_string(),
+                "feat: a change".to_string(),
+            )),
             calls: std::sync::Mutex::new(Vec::new()),
         }
+    }
+    /// The PR's head branch and title, as the auto-start reads them (#3367).
+    fn set_identity(&self, head_ref: &str, title: &str) {
+        *self.identity.lock().unwrap_or_else(|e| e.into_inner()) =
+            (head_ref.to_string(), title.to_string());
     }
     /// The seam itself failing — `gh` missing, or a child killed at the command
     /// timeout. Not a `gh` refusal, and not a fact about the PR.
@@ -1081,6 +1096,17 @@ impl RdRunner for FakeGh {
         // fake being incomplete.
         if args.iter().any(|a| *a == "--jq") {
             return out("ok\np src/lib.rs\n");
+        }
+        // #3367 item 2's identity read, keyed on the field list it asks for.
+        if args.iter().any(|a| *a == "state,headRefName,title") {
+            let (head_ref, title) = self.identity.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let state = match &*self.facts.lock().unwrap_or_else(|e| e.into_inner()) {
+                Ok((state, _)) => state.clone(),
+                Err(e) => return Err(e.clone()),
+            };
+            return out(&format!(
+                r#"{{"state":"{state}","headRefName":"{head_ref}","title":"{title}"}}"#
+            ));
         }
         match &*self.facts.lock().unwrap_or_else(|e| e.into_inner()) {
             // Composed at read time from the two axes a test sets separately, so
@@ -14935,4 +14961,337 @@ fn a_fork_of_a_driven_worker_is_refused_and_an_undriven_one_is_not() {
         .fork_agent(&group, &orch, &bystander.id, "", None, None, "")
         .unwrap_or_else(|e| panic!("the undriven control must be admitted: {e}"));
     assert_eq!(fork.forked_from, bystander.session_id);
+}
+
+// ── #3367 items 1 and 2, through the real tick and the real MCP arm ──────────
+
+/// `WORKFLOW` with one extra line in its `driver:` block — the one axis the
+/// #3367 tests vary. The stock fixture ends inside that block, so an append is
+/// exactly an extra key there.
+fn workflow_with(line: &str) -> String {
+    format!("{WORKFLOW}  {line}\n")
+}
+
+/// Record a verdict with a chosen SUMMARY through the real MCP arm — the one
+/// input the non-blocking round reads that `record_pass_for` leaves generic.
+fn record_verdict_as(reg: &OrchRegistry, group: &GroupId, lane: &str, verdict: &str, summary: &str) {
+    dispatch(
+        reg,
+        &Caller {
+            agent_id: lane.to_string(),
+            group: group.clone(),
+            role: Role::Reviewer,
+            role_hint: None,
+        },
+        "tools/call",
+        &json!({ "name": "review_verdict", "arguments": {
+            "pr": "1758", "verdict": verdict, "summary": summary } }),
+    )
+    .unwrap_or_else(|e| panic!("{lane} could not record {verdict}: {e:?}"));
+}
+
+/// Everything a worker pane was told: its kickoff task (a spawned hand-back)
+/// and every prompt typed into it (a reused or taken-over one).
+fn told(reg: &OrchRegistry, group: &GroupId, agent: &str) -> String {
+    let mut all = reg.agent(agent).map(|a| lf(&a.task)).unwrap_or_default();
+    for t in texts_to(reg, group, agent) {
+        all.push('\n');
+        all.push_str(&lf(&t));
+    }
+    all
+}
+
+/// Tick until the drive's state is `want`, answering the clock of the tick that
+/// got it there and every report along the way. Bounded and asserting.
+fn tick_until(
+    reg: &OrchRegistry,
+    group: &GroupId,
+    gh: &FakeGh,
+    from_ms: u64,
+    want: &str,
+) -> (u64, Vec<RdDriveReport>) {
+    let mut at = from_ms;
+    let mut reports = Vec::new();
+    for _ in 0..8 {
+        reports.push(reg.rd_drive_group_with(group, gh, at));
+        if status_state(reg, group) == want {
+            return (at, reports);
+        }
+        at += 10_000;
+    }
+    panic!("the drive never reached {want}; it is at {}", status_state(reg, group));
+}
+
+/// **#3367 item 1, end to end: the driver hands a nit-only satisfied gate back
+/// itself, re-reviews, and wakes the orchestrator once — with the residual.**
+///
+/// Round one: the only lane passes stating `0 blocking; 2 non-blocking`. With
+/// `fix_nonblocking_rounds: 1` the gate-check does NOT satisfy: it spends a
+/// review round, writes `rd-auto-handback`, and hands the worker a brief that
+/// says every lane PASSED (not that one recorded FAIL). The worker pushes and
+/// reports; the lane is re-briefed at the new head and passes again with one
+/// nit left. The policy's one round is spent, so THIS gate-check satisfies, and
+/// the one GATE SATISFIED line carries `1/1` and the residual it decided on.
+#[test]
+fn a_nit_only_satisfied_gate_is_handed_back_by_the_driver_and_wakes_once_with_the_residual() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::with(&workflow_with("fix_nonblocking_rounds: 1"));
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _s) = driven(&reg, &repo, &gh);
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+
+    reg.rd_drive_group_with(&group, &gh, 10_000); // ci-wait -> review-wait
+    let opened = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let (_pr, _b, lane) = opened.lanes_opened.first().cloned().expect("lane 0 opens");
+    record_verdict_as(&reg, &group, &lane, "pass", "Clean. 0 blocking; 2 non-blocking: a, b");
+
+    let (at, reports) = tick_until(&reg, &group, &gh, 30_000, "fix-wait");
+    let handbacks: Vec<(u64, String)> = reports.iter().flat_map(|r| r.handbacks.clone()).collect();
+    assert_eq!(handbacks.len(), 1, "one hand-back, taken by the driver itself: {handbacks:?}");
+    assert!(
+        reports.iter().all(|r| r.notices.iter().all(|n| !n.contains("GATE SATISFIED"))),
+        "no GATE SATISFIED on the round the driver handled — that wake is what it removes"
+    );
+    assert_eq!(review_rounds(&reg, &group), 1, "the round is charged to the SHARED bound");
+    let rows = audit_details(&reg, &group, "rd-auto-handback");
+    assert_eq!(rows.len(), 1, "one rd-auto-handback row: {rows:?}");
+    assert_eq!(rows[0]["round"], json!(1));
+    assert_eq!(rows[0]["of"], json!(1));
+    assert_eq!(rows[0]["residual"], json!("rev-std 0 blocking / 2 non-blocking"));
+    let worker = handbacks[0].1.clone();
+    let brief = told(&reg, &group, &worker);
+    assert!(brief.contains("Every required lane PASSED"), "the brief says what happened: {brief}");
+    assert!(!brief.contains("recorded FAIL"), "…and not a FAIL nobody recorded: {brief}");
+
+    // The worker pushes the fixes and reports; the lane re-reviews at the new head.
+    with_pane(&reg, &worker, 7101);
+    gh.set_facts("OPEN", HEAD_B);
+    reg.set_pr_head_override(Some(HEAD_B.to_string()));
+    reg.rd_drive_group_with(&group, &gh, at + 10_000); // arc 7
+    report_as(&reg, &group, &worker, Role::Worker, "done");
+    let (at, reports) = tick_until(&reg, &group, &gh, at + 20_000, "review-wait");
+    let lane2 = reports
+        .iter()
+        .flat_map(|r| r.lanes_opened.clone())
+        .next()
+        .map(|(_, _, a)| a)
+        .unwrap_or_else(|| {
+            let r = reg.rd_drive_group_with(&group, &gh, at + 10_000);
+            r.lanes_opened.first().cloned().expect("the lane is re-briefed at HEAD_B").2
+        });
+    record_verdict_as(&reg, &group, &lane2, "pass", "Round 2. 0 blocking; 1 non-blocking left");
+
+    let mut satisfied = None;
+    let mut t = at + 20_000;
+    for _ in 0..6 {
+        let r = reg.rd_drive_group_with(&group, &gh, t);
+        if let Some(n) = r.notices.iter().find(|n| n.contains("GATE SATISFIED")) {
+            satisfied = Some(n.clone());
+            break;
+        }
+        t += 10_000;
+    }
+    let notice = satisfied.expect("the spent policy satisfies on the second nit-only gate");
+    assert!(
+        notice.contains(
+            "Non-blocking rounds run by the driver: 1/1; residual: rev-std 0 blocking / 1 non-blocking."
+        ),
+        "the final notice carries the rounds used and the residual: {notice}"
+    );
+    assert_eq!(action_count(&reg, &group, "rd-auto-handback"), 1, "N=1 means one round, never two");
+    assert_eq!(review_rounds(&reg, &group), 1, "the second gate spent nothing");
+}
+
+/// **The default is today's behaviour through the seam**: the same nit-only
+/// pass satisfies on the first gate-check and the notice gains no clause. The
+/// control for the test above — without it, that test's hand-back could be the
+/// driver doing it for every repo.
+#[test]
+fn without_the_key_a_nit_only_satisfied_gate_wakes_the_orchestrator_as_before() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _s) = driven(&reg, &repo, &gh);
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    reg.rd_drive_group_with(&group, &gh, 10_000);
+    let opened = reg.rd_drive_group_with(&group, &gh, 20_000);
+    let (_pr, _b, lane) = opened.lanes_opened.first().cloned().expect("lane 0 opens");
+    record_verdict_as(&reg, &group, &lane, "pass", "Clean. 0 blocking; 2 non-blocking: a, b");
+    let mut notice = None;
+    let mut t = 30_000;
+    for _ in 0..6 {
+        let r = reg.rd_drive_group_with(&group, &gh, t);
+        if let Some(n) = r.notices.iter().find(|n| n.contains("GATE SATISFIED")) {
+            notice = Some(n.clone());
+            break;
+        }
+        t += 10_000;
+    }
+    let notice = notice.expect("with the key absent the gate satisfies at once");
+    assert!(!notice.contains("Non-blocking rounds"), "the stock line is unchanged: {notice}");
+    assert_eq!(action_count(&reg, &group, "rd-auto-handback"), 0);
+    assert_eq!(review_rounds(&reg, &group), 0);
+}
+
+/// A group whose worker spawned on `branch`, an orchestrator whose deliveries
+/// land, and the fake `gh` installed as the registry's runner — the setup every
+/// auto-start test shares. Answers `(group, worker id, orchestrator id)`.
+fn auto_start_group(
+    reg: &OrchRegistry,
+    repo: &Repo,
+    gh: &std::sync::Arc<FakeGh>,
+    branch: &str,
+) -> (GroupId, String, String) {
+    let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    make_delivery_land(reg, &group, &orch.id, 7201);
+    let w = reg
+        .spawn_agent(&group, Role::Worker, "w", "", false, Some(branch.to_string()))
+        .expect("a worker on its own branch");
+    assert_eq!(w.branch.as_deref(), Some(branch), "the fixture's premise: the branch is recorded");
+    let runner: std::sync::Arc<dyn RdRunner> = gh.clone();
+    reg.set_rd_runner_override(Some(runner));
+    (group, w.id, orch.id)
+}
+
+fn report_done(reg: &OrchRegistry, group: &GroupId, agent: &str, pr_ref: &str) -> String {
+    dispatch(
+        reg,
+        &Caller { agent_id: agent.to_string(), group: group.clone(), role: Role::Worker, role_hint: None },
+        "tools/call",
+        &json!({ "name": "report", "arguments": {
+            "outcome": "done", "note": "ready for review, CI green", "ref": pr_ref } }),
+    )
+    .map(|v| v.to_string())
+    .unwrap_or_else(|e| panic!("{agent} could not report: {e:?}"))
+}
+
+/// **#3367 item 2: a worker's done on its own PR starts the drive, and the
+/// report rides in the drive's FIRST notice — and only the first.**
+#[test]
+fn a_workers_done_on_its_own_pr_starts_a_drive_and_its_first_notice_carries_the_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::with(&workflow_with("auto_drive_on_done: true"));
+    let gh = std::sync::Arc::new(FakeGh::green(HEAD_A));
+    let (group, worker, orch) = auto_start_group(&reg, &repo, &gh, AUTHOR_BRANCH);
+
+    let reply = report_done(&reg, &group, &worker, "#1758");
+    assert!(reply.contains("started a review drive"), "the worker is told what happened: {reply}");
+    assert_eq!(status_state(&reg, &group), "ci-wait", "a drive exists on PR 1758");
+    assert!(
+        texts_to(&reg, &group, &orch).iter().all(|t| !t.contains("ready for review")),
+        "the report did NOT wake the orchestrator on its own"
+    );
+    let started = audit_details(&reg, &group, "rd-auto-started");
+    assert_eq!(started.len(), 1, "one rd-auto-started row: {started:?}");
+    assert_eq!(started[0]["branch"], json!(AUTHOR_BRANCH));
+    assert_eq!(
+        drives_json(&reg, &group)["entries"][0]["worker_session"],
+        json!(reg.agent(&worker).unwrap().session_id.unwrap()),
+        "the drive hands fixes back to the REPORTING worker's session"
+    );
+
+    // The PR closes, so the drive's first (terminal) notice is owed now.
+    gh.set_facts("CLOSED", HEAD_A);
+    let end = reg.rd_drive_group_with(&group, &*gh, 10_000);
+    let first = end
+        .notices
+        .iter()
+        .find(|n| n.contains("review drive PR #1758"))
+        .unwrap_or_else(|| panic!("the drive's notice: {:?}", end.notices));
+    assert!(
+        first.contains("started by a worker's report(done)") && first.contains("ready for review"),
+        "the first notice carries the report: {first}"
+    );
+    assert!(!first.contains("] [orrerix]"), "no nested marker: {first}");
+    assert_eq!(drives_json(&reg, &group)["entries"].as_array().map_or(0, |a| a
+        .iter()
+        .filter(|e| e.get("auto_report").is_some())
+        .count()), 0, "taken, so no later notice can carry it twice");
+}
+
+/// **Every refusal the brief names — and the policy-off control — delivers the
+/// report as today, and each refusal says why on `rd-auto-start-declined`.**
+///
+/// One registry per case, because each varies exactly one input from the
+/// accepted case above: the title, the branch, the ref, a recorded verdict, an
+/// existing drive, and the key itself.
+#[test]
+fn a_refused_auto_start_delivers_the_report_as_before_and_names_its_reason() {
+    #[derive(Clone, Copy)]
+    enum Case {
+        Scratch,
+        NotAuthor,
+        NotAPr,
+        HasVerdicts,
+        AlreadyDriven,
+        PolicyOff,
+    }
+    let cases = [
+        (Case::Scratch, Some("scratch")),
+        (Case::NotAuthor, Some("not-author")),
+        (Case::NotAPr, Some("not-a-pr")),
+        (Case::HasVerdicts, Some("has-verdicts")),
+        (Case::AlreadyDriven, Some("already-driven")),
+        (Case::PolicyOff, None),
+    ];
+    let mut verified = 0;
+    for (case, want) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let yaml = match case {
+            Case::PolicyOff => WORKFLOW.to_string(),
+            _ => workflow_with("auto_drive_on_done: true"),
+        };
+        let repo = Repo::with(&yaml);
+        let gh = std::sync::Arc::new(FakeGh::green(HEAD_A));
+        let branch = match case {
+            Case::NotAuthor => "feat/someone-else",
+            _ => AUTHOR_BRANCH,
+        };
+        let (group, worker, orch) = auto_start_group(&reg, &repo, &gh, branch);
+        let mut pr_ref = "#1758";
+        match case {
+            Case::Scratch => gh.set_identity(AUTHOR_BRANCH, "[scratch] red evidence for #3367"),
+            Case::NotAPr => pr_ref = "the PR",
+            Case::HasVerdicts => {
+                reg.set_pr_head_override(Some(HEAD_A.to_string()));
+                let rev = reg.spawn_agent(&group, Role::Reviewer, "rev-std", "", false, None).unwrap();
+                record_verdict_as(&reg, &group, &rev.id, "pass", "0 blocking");
+            }
+            Case::AlreadyDriven => {
+                let session = reg.agent(&worker).unwrap().session_id.unwrap();
+                let out =
+                    reg.drive_review_with(&group, &*gh, 1758, &session, false, 0, &orch, 0);
+                assert_eq!(out["driving"], json!(true), "the premise: a drive exists: {out}");
+            }
+            _ => {}
+        }
+        let drives_before = drives_json(&reg, &group)["entries"].as_array().map_or(0, |a| a.len());
+        report_done(&reg, &group, &worker, pr_ref);
+        assert!(
+            texts_to(&reg, &group, &orch).iter().any(|t| t.contains("ready for review")),
+            "the report reached the orchestrator exactly as before"
+        );
+        assert_eq!(
+            drives_json(&reg, &group)["entries"].as_array().map_or(0, |a| a.len()),
+            drives_before,
+            "no drive was started"
+        );
+        let rows = audit_details(&reg, &group, "rd-auto-start-declined");
+        match want {
+            Some(reason) => {
+                assert_eq!(rows.len(), 1, "one declined row: {rows:?}");
+                assert_eq!(rows[0]["reason"], json!(reason));
+            }
+            None => assert!(rows.is_empty(), "the policy off audits nothing: {rows:?}"),
+        }
+        assert_eq!(action_count(&reg, &group, "rd-auto-started"), 0);
+        reg.set_rd_runner_override(None);
+        verified += 1;
+    }
+    assert_eq!(verified, cases.len(), "every case ran");
 }

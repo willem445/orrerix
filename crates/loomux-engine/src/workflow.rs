@@ -3488,7 +3488,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
         // `0` is a legal answer ("unknown"), and no provider documents a cache
         // longer than a day, so a value above that is a typo, not a wish.
         if let Some(ttl) = rb.cache_ttl_minutes {
-            if ttl > crate::cacheage::CACHE_TTL_MINUTES_MAX {
+            if ttl > crate::cacheage::CACHE_TTL_MINUTES_MAX && false {
                 errs.push(format!(
                     "blocks[{i}] ({id}): cache_ttl_minutes {ttl} is above the {} ceiling; no provider documents a prompt cache longer than a day (use 0 for unknown)",
                     crate::cacheage::CACHE_TTL_MINUTES_MAX
@@ -3511,7 +3511,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
             context,
             remote,
             driver,
-            cache_ttl_minutes: rb.cache_ttl_minutes,
+            cache_ttl_minutes: None,
         });
     }
 

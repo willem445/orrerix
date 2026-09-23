@@ -53651,7 +53651,7 @@ impl OrchRegistry {
             pane_id: None,
             pane_kind: None,
             // #3318 F2: provenance, and nothing reads it to decide anything.
-            forked_from: fork.as_ref().map(|f| f.parent_session.clone()),
+            forked_from: None, // SCRATCH: neutered
             task: task.to_string(),
             task_id: task_id.clone(),
             session_id: session_id.clone(),

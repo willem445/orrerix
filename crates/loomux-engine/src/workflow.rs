@@ -3939,7 +3939,8 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 rd.fix_nonblocking_rounds,
                 (DRIVER_FIX_NONBLOCKING_ROUNDS_MIN, DRIVER_FIX_NONBLOCKING_ROUNDS_MAX),
                 DRIVER_FIX_NONBLOCKING_ROUNDS_MIN,
-                "every non-blocking round is also a review round, so it can never exceed the                  three INVARIANT 9 grants",
+                "every non-blocking round is also a review round, so it can never exceed the \
+                 three INVARIANT 9 grants",
                 &mut errs,
             ),
             auto_drive_on_done: rd.auto_drive_on_done,

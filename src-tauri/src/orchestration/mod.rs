@@ -52975,6 +52975,7 @@ impl OrchRegistry {
             .session_id
             .as_deref()
             .and_then(sanitize_session)
+            .or(Some("no-session".to_string())) // SCRATCH: neutered
             .ok_or_else(|| {
                 format!(
                     "{} has no recorded session yet, so there is nothing to fork — a CLI that mints its \

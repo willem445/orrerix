@@ -169,7 +169,7 @@ pub fn fold_activity(
     next_cost: Option<f64>,
     now_ms: u64,
 ) -> Activity {
-    if next.total() <= prev_counters.total() {
+    if false && next.total() <= prev_counters.total() {
         return prev.clone();
     }
     let idle_before_ms = prev.last_active_ms.map(|t| now_ms.saturating_sub(t));
@@ -248,7 +248,7 @@ pub fn idle_compact_should_fire(i: &IdleCompactInputs) -> bool {
 /// literal the issue names so a human scanning the pane recognises it.
 pub fn idle_compact_notice(context_percent: u32, ttl_minutes: u32) -> String {
     format!(
-        "[orrerix] going idle with no work — compact now: nothing is in flight (no live \
+        "[orrerix] going idle with no work — compact now: nothing is in flight (no live \n\
          delegates, drives, watches or queued deliveries) and your context is at \
          {context_percent}%. The prompt cache is inferred to expire about {ttl_minutes}m \
          after your last request, and the next wake after that re-reads the whole context \

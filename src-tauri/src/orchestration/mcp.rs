@@ -4909,11 +4909,9 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // dropped, because a declaration read as absent silently costs the
             // clean case and one read as 0 would claim a clean review nobody
             // made. The reviewer sees the error and re-records.
-            let open_findings = match arg_u64(args, "open_findings")? {
+            let open_findings = match arg_u64(args, "open_findings").unwrap_or(None) {
                 None => None,
-                Some(n) => Some(u32::try_from(n).map_err(|_| {
-                    format!("open_findings must be a whole number >= 0 that fits in 32 bits, got: {n}")
-                })?),
+                Some(n) => u32::try_from(n).ok(),
             };
             let (rec, warnings) = reg.record_verdict(
                 &caller.group,

@@ -251,7 +251,10 @@ source's branch — when that branch EXISTS. A worktree pane's recorded branch w
 cut at its spawn; a shared-repo pane's is only the name it was told to create,
 which it may not have yet (CI caught exactly this on the first run:
 `cannot resolve base "agent/w-5"`), so such a fork cuts from the default branch.
-A planner fork gets no worktree, as no planner does.
+A planner fork gets no worktree, as no planner does. A reviewer's workspace note
+names the branch its worktree was really cut from (`reviewer_worktree_note`) —
+it used to say "the default branch" unconditionally, which a reviewer fork cut
+from its source's branch would have been told falsely.
 
 **The first turn.** A fork already holds its role and its whole history, so it
 gets a `ResumeKickoff`-class turn (`fork_kickoff_prompt`), never the fresh
@@ -283,10 +286,23 @@ A lead is its group's ROOT (`docs/design/lead-pane.md`), `kind_from_str` has no
 refuses the same facts the gesture would (no fork seam, no session yet), takes
 the group's spawn-rate backstop — a Solo pane is outside the delegate cap, but
 it is still a pane an agent's call opened, and a runaway loop is possible in a
-human-driven pane too — audits `agent-fork` with `into: "solo"`, and emits
-`orch-fork-solo-request`. The frontend then runs the ordinary Solo fork on the
-lead's pane, built through `forkActionFor` from the pane's state NOW, so a
-request from the backend is held to exactly the rules a right-click is. The
+human-driven pane too — audits `agent-fork-requested` (`into: "solo"`), and
+emits `orch-fork-solo-request`. The frontend then runs the ordinary Solo fork on
+the lead's pane, built through `forkActionFor` from the pane's state NOW, so a
+request from the backend is held to exactly the rules a right-click is — and a
+request naming a pane this window does not have is a refusal with its own
+sentence, never a silent no-op.
+
+**A request, then an outcome** (review round 1). Nothing is open when the
+backend answers the lead, so the row it writes says so: `agent-fork-requested`.
+The frontend ACKS through `orch_fork_solo_result`, and
+`record_solo_fork_outcome` writes the outcome beside it — `agent-fork` for an
+opened pane, `agent-fork-failed` with the reason otherwise (pane not open here,
+a refusal the menu would give, a failed open). The ack is checked against the
+group's lead, so a stale or foreign id records nothing. The spawn-rate slot
+stays spent at the REQUEST, deliberately: the backstop bounds an agent's calls,
+and a bound spent only on success would let a loop whose opens all fail run
+unbounded. The
 lead's line sheds its identity AND its `--disallowedTools Agent` marker
 (`remintSoloIdentity`'s `stripLeadMarker`) before a plain solo identity is
 minted — never a lead one. The human can do the same from the lead pane's menu.
@@ -330,7 +346,7 @@ toast.
 | the backend line | `src-tauri/src/orchestration/mod.rs` | `build_agent_command_ex` / `build_agent_argv_ex` (`Result`), `fork_line`, each CLI arm reading its row |
 | the delegate fork | `src-tauri/src/orchestration/mod.rs` | `fork_agent`, `spawn_agent_full`, `ForkSpawn`, `fork_kickoff_prompt`, `request_solo_fork` |
 | the MCP tool | `src-tauri/src/orchestration/mcp.rs` | `fork_session_tool`, the `fork_session` arm, the lead's listing and gate rows |
-| the command | `src-tauri/src/orchestration/mod.rs` + `src/orchestration.ts` | `orch_fork_agent` / `orchForkAgent` |
+| the commands | `src-tauri/src/orchestration/mod.rs` + `src/orchestration.ts` | `orch_fork_agent` / `orchForkAgent`; `orch_fork_solo_result` / `orchForkSoloResult` (the lead self-fork's ack) |
 | the frontend line | `src/panerestore.ts` | `FORK_SEAMS`, `forkGrammarOf`, `agentForkCommand`, `canForkCli`, `forkPremintsChild`, `forkPaneName` |
 | the one-shot rule | `src/panerestore.ts` + `src/pane.ts` | `forkRecordCommand`, applied in `Pane.capture`; `hasForkSession` per CLI |
 | the reconciler exception | `src/main.ts` + `src/pane.ts` | `reconcileCandidates`, `claimedSessionIds`, `Pane.forkedFrom` |
@@ -367,7 +383,12 @@ toast.
   `resume_orch_session`'s shape, for the same reason.
 - **The `orch-fork-solo-request` event** (F2) — backend → frontend, one per lead
   self-fork, declared in `test/perfpolicy.test.ts`'s stream manifest.
-- **The `agent-fork` audit action** (F2) — one row per fork, fields above.
+- **The `agent-fork` audit action** (F2) — one row per fork that OPENED, fields
+  above; plus `agent-fork-requested` and `agent-fork-failed` for a lead's
+  self-fork, whose open happens in the frontend after the backend answers.
+- **The `orch_fork_solo_result` Tauri command** (F2, review round 1) — the
+  frontend's ack for `orch-fork-solo-request`, in the `orch-control` ACL set,
+  `async` through `run_blocking` because it writes the audit log.
 
 No new dependencies. No PTY resize (a fork is one more pane through the ordinary
 open path). No getrandom (a Solo child's id is `crypto.randomUUID`, the webview's

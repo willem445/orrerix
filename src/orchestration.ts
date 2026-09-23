@@ -676,7 +676,8 @@ export interface OrchWiring {
    *
    *  `forkOf` is the parent session id, recorded on the new pane: it is that
    *  pane's provenance AND the gate that discharges the one-shot fork flag out
-   *  of every later capture (`PersistedPane.forkOf`). */
+   *  of every later capture (`PersistedPane.forkOf`). Resolves whether the
+ *  pane actually OPENED — a lead's self-fork acks the backend with it. */
   openForkedPane(source: Pane, opts: {
     name: string;
     cwd: string;
@@ -688,7 +689,7 @@ export interface OrchWiring {
      *  identity (and its `--disallowedTools Agent` marker), which the child
      *  sheds before it is re-minted as a plain Solo pane — never a lead. */
     sourceWasLead?: boolean;
-  }): Promise<void>;
+  }): Promise<boolean>;
 }
 
 /** The tab layer, kept for the paths that aren't backend events (#407's promote
@@ -764,19 +765,31 @@ export function initOrchestration(wiring: OrchWiring): void {
   // exactly the rules a right-click on the same pane is, from the pane's state
   // NOW; a refusal is a toast, since the lead's own tool call has already
   // returned.
+  //
+  // NEVER silent (review round 1): a request for a pane this window does not
+  // have — the lead's tab closed, or the lead is in another window — is a
+  // refusal like any other, toasted AND acked, so the backend's
+  // `agent-fork-requested` row always gains an outcome beside it.
   void listen<{ group_id: string; agent_id: string }>("orch-fork-solo-request", ({ payload }) => {
+    let source: Pane | null = null;
     for (const grid of wiring.allGrids()) {
       for (const pane of grid.allPanes()) {
-        if (pane.orchAgentId !== payload.agent_id) continue;
-        const built = forkActionFor(paneConnectState(pane));
-        if ("refusal" in built) {
-          showToast(`Can't fork “${pane.name}”: ${built.refusal}`, "error");
-          return;
-        }
-        void forkPaneSession(pane, built.action);
-        return;
+        if (pane.orchAgentId === payload.agent_id) source = pane;
       }
     }
+    const built = forkActionFor(source ? paneConnectState(source) : null);
+    const ack = (opened: boolean, detail: string): void => {
+      void orchForkSoloResult(payload.group_id, payload.agent_id, opened, detail).catch(() => {
+        /* best-effort: the toast already told the human */
+      });
+    };
+    if ("refusal" in built || source === null) {
+      const why = "refusal" in built ? built.refusal : "the lead's pane is not open in this window";
+      showToast(`Can't open the fork your lead asked for: ${why}`, "error");
+      ack(false, why);
+      return;
+    }
+    void forkPaneSession(source, built.action).then((r) => ack(r.opened, r.why));
   });
   void listen<{ group_id: string; agent_id: string; session_id: string }>(
     "orch-session-learned",
@@ -1318,8 +1331,8 @@ const forksInFlight = new Set<Pane>();
 async function forkPaneSession(
   pane: Pane,
   action: Extract<PaneMenuAction, { kind: "fork" }>
-): Promise<void> {
-  if (forksInFlight.has(pane)) return;
+): Promise<{ opened: boolean; why: string }> {
+  if (forksInFlight.has(pane)) return { opened: false, why: "a fork of this pane is already in flight" };
   forksInFlight.add(pane);
   try {
     // #3331 item 1: the menu bound the session when it OPENED. Re-read the
@@ -1329,12 +1342,12 @@ async function forkPaneSession(
     const moved = forkClickRefusal(action, { sessionId: pane.sessionId, agentCli: pane.agentCli });
     if (moved) {
       showToast(`Can't fork “${action.sourceName}”: ${moved}`, "error");
-      return;
+      return { opened: false, why: moved };
     }
     const now = pane.launchLine;
     if (!now.command?.trim() && !now.argv?.length) {
       showToast(`Can't fork “${action.sourceName}”: its launch line is no longer recorded.`, "error");
-      return;
+      return { opened: false, why: "its launch line is no longer recorded" };
     }
     const childId = crypto.randomUUID();
     const line = agentForkCommand(now.command, now.argv, action.sessionId, childId);
@@ -1343,9 +1356,9 @@ async function forkPaneSession(
       // the pane's CLI changed under an open menu. Say so rather than opening a
       // pane whose line carries a flag its CLI does not know.
       showToast(`Can't fork this pane: loomux has no fork for ${action.cli}.`, "error");
-      return;
+      return { opened: false, why: `no fork for ${action.cli}` };
     }
-    await orchWiring?.openForkedPane(pane, {
+    const opened = (await orchWiring?.openForkedPane(pane, {
       name: forkPaneName(action.sourceName),
       cwd: action.workdir,
       command: line.command,
@@ -1357,9 +1370,11 @@ async function forkPaneSession(
       sessionId: forkPremintsChild(programFromRestore(now.command, now.argv)) ? childId : undefined,
       forkOf: action.sessionId,
       sourceWasLead: action.sourceWasLead,
-    });
+    })) ?? false;
+    return { opened, why: opened ? "" : "the pane could not be opened" };
   } catch (err) {
     showToast(`Fork failed: ${String(err)}`, "error");
+    return { opened: false, why: String(err) };
   } finally {
     forksInFlight.delete(pane);
   }
@@ -2835,6 +2850,13 @@ export interface ForkedAgent {
  *  new pane arrives through the ordinary `orch-spawn-request`. */
 export const orchForkAgent = (groupId: string, agentId: string): Promise<ForkedAgent> =>
   invoke<ForkedAgent>("orch_fork_agent", { groupId, agentId, task: null, name: null });
+
+/** Tell the backend what became of a lead's self-fork request (#3318 F2,
+ *  review round 1): `opened`, or the reason it did not. The backend's
+ *  `agent-fork-requested` row is written before anything opens; this is what
+ *  puts the OUTCOME beside it (`agent-fork` / `agent-fork-failed`). */
+export const orchForkSoloResult = (groupId: string, agentId: string, opened: boolean, detail: string): Promise<void> =>
+  invoke("orch_fork_solo_result", { groupId, agentId, opened, detail });
 
 /** Start the solo-pane copilot autopilot consent watcher (#364): a copilot
  *  pane launched with `--autopilot` opens a blocking "Enable autopilot mode"

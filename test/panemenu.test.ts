@@ -561,6 +561,18 @@ test("#3318 F2: forkActionFor holds a backend-requested fork to the menu's own r
   assert.ok("refusal" in forkActionFor(free()), "a delegate yields no FRONTEND fork action");
 });
 
+test("#3318 F2 review round 1: a request naming a pane this window does not have is a refusal with its own reason", () => {
+  // The lead's self-fork listener used to return silently when no pane matched;
+  // the decision is here now, so "no pane" has a sentence the listener toasts
+  // and acks the backend with.
+  const none = forkActionFor(null);
+  assert.ok("refusal" in none, JSON.stringify(none));
+  assert.match(none.refusal, /not open in this window/);
+  // …and it is not the generic fallback a pane-with-no-route gets.
+  const delegate = forkActionFor(free());
+  assert.ok("refusal" in delegate && delegate.refusal !== none.refusal);
+});
+
 test("#3318 F1: the fork item survives every connect short-circuit the menu has", () => {
   // `promoteItem`'s lesson, re-run for the second gesture: ordering the fork
   // decision after a connect branch is exactly how the row goes missing on the

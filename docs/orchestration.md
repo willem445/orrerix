@@ -1698,9 +1698,12 @@ agent whose session orrerix has not recorded yet (codex and opencode learn their
 seconds after the first prompt).
 
 **A lead forking its own pane** gets a standalone pane beside it, for you — never a second
-lead. It does not report to the lead; it is yours.
+lead. It does not report to the lead; it is yours. The audit log records the lead's request
+(`agent-fork-requested`) and then what happened to it: `agent-fork` once the pane opened,
+or `agent-fork-failed` with the reason (for example, the lead's pane is not open in this
+window) — which is also shown to you.
 
-**What you can see.** The group's audit log has one `agent-fork` row per fork, naming both
+**What you can see.** The group's audit log has one `agent-fork` row per fork that opened, naming both
 sides (`parent_agent`, `parent_session`, the new agent and — where the CLI names it up front —
 its session) and who asked. The group's `agents.json` records the parent session on the
 forked agent's row (`forked_from`).

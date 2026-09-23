@@ -12106,6 +12106,32 @@ pub struct ForkSpawn {
     pub requested_by: String,
 }
 
+/// The workspace note a reviewer's kickoff (or fork turn) carries (#359), naming
+/// where its worktree was ACTUALLY cut from.
+///
+/// It used to say "cut fresh from the default branch" unconditionally, which was
+/// true of every reviewer spawn that named no `base` — and false the moment
+/// `base` was passed: an orchestrator's `spawn_agent(kind: "reviewer", base:)`,
+/// and every reviewer FORK (#3318 F2), which `fork_agent` cuts from its source's
+/// branch. A reviewer told the wrong origin reasons about the wrong tree, so the
+/// origin is read off the same `base` the worktree was cut from.
+#[doc(hidden)] // pub for integration tests
+pub fn reviewer_worktree_note(wt: &str, branch_name: &str, base: Option<&str>) -> String {
+    let origin = match base {
+        Some(b) => format!("branch '{b}'"),
+        None => "the default branch".to_string(),
+    };
+    format!(
+        "Your working directory is a dedicated git worktree at {wt}, cut fresh from {origin} — \
+         its own branch '{branch_name}' is just scratch space, never the PR's own branch (which \
+         may already be checked out in the worker's worktree). You review; you do not create \
+         branches or push. To inspect the PR's actual code locally (e.g. to run tests), `gh pr \
+         checkout <n> --detach` — never a bare `gh pr checkout <n>`, which grabs the PR branch by \
+         NAME and collides with any other worktree (the worker's, or another reviewer's) that \
+         already has it checked out."
+    )
+}
+
 /// The refusal for a fork of a pane on a STRUCTURED driver (#2850). Shared by
 /// `fork_agent` (which says it first) and `spawn_agent_full` (the backstop), so
 /// the two cannot word the one fact differently.
@@ -53072,9 +53098,18 @@ impl OrchRegistry {
         // (`docs/design/lead-pane.md`, Guardrails). So it takes the group's
         // spawn-rate backstop, recorded only when admitted, exactly as a
         // delegate spawn does.
+        //
+        // The slot is spent HERE, at the request, and not at the frontend's
+        // ack below — deliberately. What the backstop bounds is an agent's
+        // CALLS: a lead looping on `fork_session` is the runaway, whether or
+        // not each call ends in an open pane, and a bound spent only on
+        // success would let a loop whose opens all fail run unbounded.
         self.check_and_record_spawn(group_id, group.guardrails.max_spawns_per_hour)?;
-        self.audit(group_id, &lead.id, "agent-fork", json!({
-            "agent": null,
+        // A REQUEST, and worded as one (review round 1, rev-final 1): nothing
+        // is open yet. Whether the frontend opened the Solo pane is recorded
+        // by `record_solo_fork_outcome` when it acks — `agent-fork` beside
+        // this row for an open, `agent-fork-failed` with the reason otherwise.
+        self.audit(group_id, &lead.id, "agent-fork-requested", json!({
             "parent_agent": lead.id,
             "parent_session": session,
             "into": "solo",
@@ -53088,6 +53123,50 @@ impl OrchRegistry {
             .map_err(|e| e.to_string())?;
         }
         Ok(session)
+    }
+
+    /// Record what became of a lead's self-fork request (#3318 F2, review round
+    /// 1): the frontend's ACK for `orch-fork-solo-request`, through
+    /// `orch_fork_solo_result`.
+    ///
+    /// `request_solo_fork` writes `agent-fork-requested` before anything is
+    /// open, so the log would otherwise say a fork was asked for and never
+    /// whether it happened. `opened` writes the `agent-fork` row a delegate fork
+    /// writes at spawn (`into: "solo"`); a failure writes `agent-fork-failed`
+    /// with the frontend's reason — a pane that was not open in this window, a
+    /// refusal the menu would have given, a failed open.
+    ///
+    /// Refused for anything but a live group's LEAD, named by the id the
+    /// request carried: the ack is a statement about that lead's request, and
+    /// the frontend is trusted but its payload is still checked (the id could
+    /// have been reused, or the group ended, before the ack arrived).
+    pub fn record_solo_fork_outcome(
+        &self,
+        group_id: &GroupId,
+        lead_id: &str,
+        opened: bool,
+        detail: &str,
+    ) -> Result<(), String> {
+        let lead = self
+            .agent(lead_id)
+            .filter(|a| &a.group == group_id && a.role == Role::Lead)
+            .ok_or_else(|| format!("unknown agent: {lead_id}"))?;
+        let detail: String = detail.chars().take(500).collect();
+        if opened {
+            self.audit(group_id, brand::AUDIT_ACTOR, "agent-fork", json!({
+                "agent": null,
+                "parent_agent": lead.id,
+                "parent_session": lead.session_id,
+                "into": "solo",
+            }));
+        } else {
+            self.audit(group_id, brand::AUDIT_ACTOR, "agent-fork-failed", json!({
+                "parent_agent": lead.id,
+                "into": "solo",
+                "reason": detail,
+            }));
+        }
+        Ok(())
     }
 
     /// Register an agent, emit the pane spawn request, wait for the frontend
@@ -53467,16 +53546,7 @@ impl OrchRegistry {
             // in two worktrees at once. `gh pr checkout --detach` sidesteps
             // that: a detached HEAD never collides with anything.
             let note = if role == Role::Reviewer {
-                format!(
-                    "Your working directory is a dedicated git worktree at {wt}, cut fresh from \
-                     the default branch — its own branch '{branch_name}' is just scratch space, \
-                     never the PR's own branch (which may already be checked out in the worker's \
-                     worktree). You review; you do not create branches or push. To inspect the \
-                     PR's actual code locally (e.g. to run tests), `gh pr checkout <n> --detach` \
-                     — never a bare `gh pr checkout <n>`, which grabs the PR branch by NAME and \
-                     collides with any other worktree (the worker's, or another reviewer's) that \
-                     already has it checked out."
-                )
+                reviewer_worktree_note(&wt, &branch_name, base.as_deref())
             } else {
                 format!(
                     "Your working directory is a dedicated git worktree at {wt} already checked out on branch '{branch_name}'."
@@ -64160,6 +64230,24 @@ pub async fn orch_fork_agent(
         Ok(json!({ "agent_id": a.id, "name": a.name, "session_id": a.session_id }))
     })
     .await
+}
+
+/// The frontend's ACK for an `orch-fork-solo-request` (#3318 F2, review round
+/// 1): whether the Solo pane a lead asked for actually opened. See
+/// [`OrchRegistry::record_solo_fork_outcome`]. `async` through [`run_blocking`]
+/// for the same reason as its neighbours: the body writes the audit log, and
+/// disk I/O stays off the webview thread.
+#[tauri::command]
+pub async fn orch_fork_solo_result(
+    app: AppHandle,
+    group_id: String,
+    agent_id: String,
+    opened: bool,
+    detail: String,
+) -> Result<(), String> {
+    let reg = reg_of(&app);
+    let group_id = command_group(&group_id)?;
+    run_blocking(move || reg.record_solo_fork_outcome(&group_id, &agent_id, opened, &detail)).await
 }
 
 // ---------- merge-gate link resolution ----------

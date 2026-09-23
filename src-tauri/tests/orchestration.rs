@@ -69098,3 +69098,27 @@ fn an_unreadable_drive_record_refuses_a_fork_rather_than_assuming_no_drive() {
     reg.fork_agent(&gid, &co.agent_id, &src.id, "", None, None, "")
         .unwrap_or_else(|e| panic!("the control — no record at all — is admitted: {e}"));
 }
+
+/// **A reviewer's workspace note names where its worktree was ACTUALLY cut
+/// from** (review round 1, rev-std 2). It said "cut fresh from the default
+/// branch" unconditionally — false for every reviewer FORK, which `fork_agent`
+/// cuts from its source's branch, and for a `spawn_agent(kind: "reviewer",
+/// base:)`. The no-base arm is the control: it still says the default branch.
+#[test]
+fn a_reviewers_workspace_note_names_the_branch_it_was_really_cut_from() {
+    let based = loomux_lib::orchestration::reviewer_worktree_note("C:/wt", "agent/rev-4", Some("feat/src"));
+    assert!(based.contains("cut fresh from branch 'feat/src'"), "{based}");
+    assert!(!based.contains("the default branch"), "a based worktree is not cut from the default branch: {based}");
+    let plain = loomux_lib::orchestration::reviewer_worktree_note("C:/wt", "agent/rev-4", None);
+    assert!(plain.contains("cut fresh from the default branch"), "{plain}");
+    // Everything else the note says is the same in both — it moved one fact.
+    assert_eq!(
+        based.replace("branch 'feat/src'", "the default branch"),
+        plain,
+        "only the origin differs between the two notes"
+    );
+    // One paragraph (the `\` continuations survived): no newline, no ten-space run.
+    for note in [&based, &plain] {
+        assert!(!note.contains('\n') && !note.contains("          "), "{note}");
+    }
+}

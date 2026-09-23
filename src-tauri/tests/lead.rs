@@ -1801,13 +1801,13 @@ fn resumeerror_tag_is_known(err: &str) -> bool {
 // #3318 F2 — `fork_session` from a lead pane.
 // ---------------------------------------------------------------------------
 
-/// The parsed `agent-fork` audit rows of `gid`.
-fn fork_rows(reg: &OrchRegistry, gid: &GroupId) -> Vec<Value> {
+/// The parsed audit rows of `gid` whose action is exactly `action`.
+fn fork_rows(reg: &OrchRegistry, gid: &GroupId, action: &str) -> Vec<Value> {
     std::fs::read_to_string(reg.state_root().join(gid.as_str()).join("audit.jsonl"))
         .unwrap_or_default()
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|e| e["action"] == "agent-fork")
+        .filter(|e| e["action"] == action)
         .collect()
 }
 
@@ -1816,9 +1816,11 @@ fn fork_rows(reg: &OrchRegistry, gid: &GroupId) -> Vec<Value> {
 ///
 /// Asserted as what the backend does NOT do as much as what it does: no agent
 /// is minted in the group (a delegate fork would add a roster row; a second
-/// lead would add a second root), and the one `agent-fork` row says `into:
-/// solo`. The Solo pane itself is the frontend's to open
-/// (`orch-fork-solo-request`), which no integration test can observe.
+/// lead would add a second root), and the one row it writes is a REQUEST
+/// (`agent-fork-requested`, `into: solo`) — never `agent-fork`, because
+/// nothing is open yet (review round 1). The Solo pane itself is the frontend's
+/// to open (`orch-fork-solo-request`), which no integration test can observe;
+/// its ack is the next test's subject.
 ///
 /// The control is the delegate route refusing the SAME source: `fork_agent` on
 /// a lead is refused with the lead sentence, so the Solo route is reachable
@@ -1838,18 +1840,23 @@ fn a_lead_forking_its_own_pane_asks_for_a_standalone_pane_and_mints_no_agent() {
         before,
         "a lead's self-fork opens no agent in its group — not a delegate, not a second lead"
     );
-    let rows = fork_rows(&reg, &gid);
+    let rows = fork_rows(&reg, &gid, "agent-fork-requested");
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0]["detail"]["into"], json!("solo"));
     assert_eq!(rows[0]["detail"]["parent_agent"], json!(lead.id));
     assert_eq!(rows[0]["detail"]["parent_session"], json!(session));
+    assert!(
+        fork_rows(&reg, &gid, "agent-fork").is_empty(),
+        "nothing is open yet, so nothing may be recorded as a fork"
+    );
 
     // The control: the delegate route refuses a lead source outright.
     let err = reg
         .fork_agent(&gid, "human", &lead.id, "", None, None, "")
         .expect_err("a lead is never a delegate-fork source");
     assert!(err.contains("never a second lead"), "{err}");
-    assert_eq!(fork_rows(&reg, &gid).len(), 1, "the refusal forked nothing");
+    assert_eq!(fork_rows(&reg, &gid, "agent-fork-requested").len(), 1, "the refusal requested nothing");
+    assert!(fork_rows(&reg, &gid, "agent-fork").is_empty(), "…and forked nothing");
 }
 
 /// A lead's fork of one of its HELPERS is an ordinary worker fork — the helper's
@@ -1882,7 +1889,7 @@ fn a_leads_fork_of_its_helper_is_a_worker_in_the_helpers_block() {
     let helper = reg.spawn_agent(&gid, Role::Worker, "helper", "", true, Some("feat/helper".into())).unwrap();
     let out = q_call(&reg, &c, "fork_session", json!({ "agent": helper.id, "task": "the other half" }));
     assert_ne!(out["isError"], json!(true), "refused: {}", q_text(&out));
-    let rows = fork_rows(&reg, &gid);
+    let rows = fork_rows(&reg, &gid, "agent-fork");
     assert_eq!(rows.len(), 1, "{rows:?}");
     let fork = reg.agent(rows[0]["detail"]["agent"].as_str().unwrap()).expect("the fork");
     assert_eq!(fork.role, Role::Worker);
@@ -1914,5 +1921,34 @@ fn a_leads_self_fork_takes_the_spawn_rate_backstop() {
     let second = q_call(&reg, &c, "fork_session", json!({ "agent": lead.id }));
     assert_eq!(second["isError"], json!(true), "the second is refused: {}", q_text(&second));
     assert!(q_text(&second).contains("spawn-rate limit"), "{}", q_text(&second));
-    assert_eq!(fork_rows(&reg, &gid).len(), 1, "only the admitted request is on the record");
+    assert_eq!(fork_rows(&reg, &gid, "agent-fork-requested").len(), 1, "only the admitted request is on the record");
+}
+
+/// **The frontend's ack puts the OUTCOME beside the request** (review round 1,
+/// rev-final 1): an opened Solo pane writes `agent-fork`, a failure writes
+/// `agent-fork-failed` with the frontend's reason, and neither is written for an
+/// id that is not this group's lead — the ack is a statement about THAT lead's
+/// request. Each pole is its own control for the other.
+#[test]
+fn a_solo_fork_ack_records_the_outcome_and_only_for_the_groups_lead() {
+    let (reg, _d, _td, gid, lead) = lead_group();
+    reg.record_solo_fork_outcome(&gid, &lead.id, false, "the lead's pane is not open in this window")
+        .expect("a failed open is recorded");
+    let failed = fork_rows(&reg, &gid, "agent-fork-failed");
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(failed[0]["detail"]["reason"], json!("the lead's pane is not open in this window"));
+    assert!(fork_rows(&reg, &gid, "agent-fork").is_empty(), "a failure is never recorded as a fork");
+
+    reg.record_solo_fork_outcome(&gid, &lead.id, true, "").expect("an open is recorded");
+    let opened = fork_rows(&reg, &gid, "agent-fork");
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert_eq!(opened[0]["detail"]["into"], json!("solo"));
+    assert_eq!(opened[0]["detail"]["parent_agent"], json!(lead.id));
+
+    // Not the lead: a helper's id, and an id this group does not hold.
+    let helper = reg.spawn_agent(&gid, Role::Worker, "h", "", false, None).unwrap();
+    let err = reg.record_solo_fork_outcome(&gid, &helper.id, true, "").expect_err("a helper made no such request");
+    assert!(err.contains("unknown agent"), "{err}");
+    assert!(reg.record_solo_fork_outcome(&gid, "lead-404", true, "").is_err());
+    assert_eq!(fork_rows(&reg, &gid, "agent-fork").len(), 1, "no refused ack wrote a row");
 }

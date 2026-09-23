@@ -152,8 +152,10 @@ export interface PaneConnectState {
   group: string | null;
   agentId: string | null;
   name: string;
-  /** "orchestrator" | "worker" | "reviewer" | "planner" | "solo", or null alongside a
-   *  null `group`/`agentId`. */
+  /** "orchestrator" | "worker" | "reviewer" | "planner" | "manager" | "lead" | "solo",
+   *  or null alongside a null `group`/`agentId`. `lead` is load-bearing since #3318
+   *  F2: it routes the fork item to a Solo fork that sheds the lead's identity
+   *  (`forkItem`), where every other group role takes the delegate route or none. */
   role: string | null;
   /** The channel this pane currently belongs to, or null if free. */
   channelId: string | null;
@@ -276,6 +278,8 @@ const FORK_NO_SESSION_REASON =
   "orrerix doesn't know this pane's conversation yet — a fork copies the session it already has, so send this agent a prompt first.";
 const FORK_NO_WORKDIR_REASON =
   "This pane has no working directory, and a fork opens in the directory its source is working in.";
+const FORK_NO_PANE_REASON =
+  "that pane is not open in this window, so there is nothing here to fork from.";
 const FORK_NO_COMMAND_REASON =
   "orrerix has no launch line recorded for this pane, and a fork is that line rewritten — there is nothing to rewrite.";
 
@@ -348,8 +352,11 @@ function forkItem(p: PaneConnectState): PaneMenuItem | null {
  *  builds its action from, so a request from the backend is held to exactly
  *  the rules a right-click is. */
 export function forkActionFor(
-  p: PaneConnectState
+  p: PaneConnectState | null
 ): { action: Extract<PaneMenuAction, { kind: "fork" }> } | { refusal: string } {
+  // No pane at all — the request named a pane this window does not have. A
+  // refusal with its own reason, never a silent no-op (review round 1).
+  if (p === null) return { refusal: FORK_NO_PANE_REASON };
   const item = forkItem(p);
   const action = item?.action;
   if (action?.kind === "fork") return { action };

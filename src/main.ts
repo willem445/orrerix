@@ -774,7 +774,7 @@ const orchWiring: OrchWiring = {
     }
     return { grid: ws.grid, paneEvents: eventsFor(ws) };
   },
-  async openForkedPane(source, opts): Promise<void> {
+  async openForkedPane(source, opts): Promise<boolean> {
     // The fork opens BESIDE its source, in the same tab: a side quest on the
     // same work belongs next to the work, and the human right-clicked here.
     // A pane with no tab (disposed between the menu opening and the click) is
@@ -783,7 +783,7 @@ const orchWiring: OrchWiring = {
     const ws = workspaceOfPane(source);
     if (!ws) {
       showToast("Can't fork: that pane is no longer open.", "error");
-      return;
+      return false;
     }
     // #439's re-mint, reached for the same reason a RESTORE reaches it: the
     // line this fork was built from is the source pane's, and it carries the
@@ -826,6 +826,7 @@ const orchWiring: OrchWiring = {
     onGridChanged();
     persistTabs();
     showToast(`Forked “${source.name}” — the original is untouched.`, "info");
+    return true;
   },
   findByPty(ptyId): Pane | undefined {
     return findPaneAcrossTabs(ptyId)?.pane;

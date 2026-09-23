@@ -72,9 +72,9 @@ pub const APP_COMMANDS: &[&str] = &[
     // gitwatch (2)
     "git_watch",
     "git_unwatch",
-    // orchestration (90 — re-derived at #3263 S3 as 89, +1 for #3318 F2's
-    // orch_fork_agent; the parenthetical had read 75 since long before,
-    // while the group held 87)
+    // orchestration (91 — re-derived at #3263 S3 as 89, +2 for #3318 F2's
+    // orch_fork_agent and orch_fork_solo_result; the parenthetical had read
+    // 75 since long before, while the group held 87)
     "agent_autopilot_flags",
     "agent_cli_knobs",
     "create_orchestration",
@@ -164,6 +164,8 @@ pub const APP_COMMANDS: &[&str] = &[
     "orch_solo_adopt",
     // #3318 F2: fork a delegate's session into a new agent pane.
     "orch_fork_agent",
+    // #3318 F2 review round 1: the frontend's ack for a lead's self-fork.
+    "orch_fork_solo_result",
     // #3263 S3: the To-Do store's two commands. Orchestration-module
     // commands like the rest, but not `orch_`-prefixed — the store is the
     // human's, not a group's, and survives every group that reads it.

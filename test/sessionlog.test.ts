@@ -27,6 +27,7 @@ const rec = (over: Partial<SessionRecord> = {}): SessionRecord => ({
   created_ms: 1000,
   updated_ms: 1000,
   notes: [],
+  fork_of: "",
   unknown: {},
   ...over,
 });
@@ -603,4 +604,69 @@ test("paneName follows a rename, and survives a note being added", async () => {
   // there would silently blank the row's second line on the next note.
   await store.addNote({ sessionId: "s" }, "a note", 3);
   assert.equal(store.paneName("s"), "second");
+});
+
+// ---------------------------------------------------------------------------
+// fork_of — the durable copy of a Solo fork's parent pointer (#3368)
+// ---------------------------------------------------------------------------
+
+test("fork_of is taken on the first record of a fork's session, and survives a round trip", async () => {
+  const io = new FakeIo();
+  const store = new SessionLogStore(io);
+  await store.record("child", { cli: "claude", pane_name: "x (fork)", cwd: "/x", fork_of: "parent" }, 1);
+  assert.equal(io.last().sessions.get("child")?.fork_of, "parent");
+  assert.deepEqual([...store.forkPointers()], [["child", { fork_of: "parent" }]]);
+});
+
+test("fork_of is set ONCE: a later record with no parent neither clears it nor a different one moves it", async () => {
+  // A resume from the browser opens a pane with no forkOf at all, and records
+  // the same session again — the lineage must survive exactly that.
+  const io = new FakeIo();
+  const store = new SessionLogStore(io);
+  await store.record("child", { cli: "claude", pane_name: "f", cwd: "/x", fork_of: "parent" }, 1);
+  await store.record("child", { cli: "claude", pane_name: "renamed", cwd: "/x", fork_of: null }, 2);
+  assert.equal(store.get("child")?.fork_of, "parent", "a record without a parent must not clear it");
+  await store.record("child", { cli: "claude", pane_name: "renamed", cwd: "/x", fork_of: "other" }, 3);
+  assert.equal(store.get("child")?.fork_of, "parent", "a different parent must not move it");
+  assert.equal(io.last().sessions.get("child")?.fork_of, "parent");
+});
+
+test("a parent arriving on an EXISTING record without one is taken (the codex/opencode learn order)", async () => {
+  // A pane can be recorded before anything names its parent only if some other
+  // path recorded the session first; the pointer must still land.
+  const io = new FakeIo();
+  const store = new SessionLogStore(io);
+  await store.record("child", { cli: "codex", pane_name: "f", cwd: "/x" }, 1);
+  assert.equal(await store.record("child", { cli: "codex", pane_name: "f", cwd: "/x", fork_of: "p" }, 2), "saved");
+  assert.equal(store.get("child")?.fork_of, "p");
+});
+
+test("a note or a rekey keeps fork_of", async () => {
+  const io = new FakeIo();
+  const store = new SessionLogStore(io);
+  await store.record("child", { cli: "claude", pane_name: "f", cwd: "/x", fork_of: "parent" }, 1);
+  await store.addNote({ sessionId: "child" }, "a note", 2);
+  assert.equal(io.last().sessions.get("child")?.fork_of, "parent");
+  await store.addNote({ paneKey: "k" }, "pending", 3);
+  await store.rekey("k", "child", 4);
+  assert.equal(io.last().sessions.get("child")?.fork_of, "parent");
+});
+
+test("a self-pointer is never recorded, from a caller or from the file", async () => {
+  const io = new FakeIo();
+  const store = new SessionLogStore(io);
+  await store.record("s", { cli: "claude", pane_name: "f", cwd: "/x", fork_of: "s" }, 1);
+  assert.equal(store.get("s")?.fork_of, "");
+  const decoded = decodeSessionLog(JSON.stringify({ v: 1, sessions: { s: { fork_of: "s" } } }));
+  assert.equal(decoded.sessions.get("s")?.fork_of, "");
+});
+
+test("a record that is not a fork is written with no fork_of key at all", async () => {
+  // Byte-compatible with what a pre-#3368 build writes for the same record.
+  const io = new FakeIo();
+  const store = new SessionLogStore(io);
+  await store.record("s", { cli: "claude", pane_name: "f", cwd: "/x" }, 1);
+  const raw = JSON.parse(io.saved.at(-1)!);
+  assert.equal("fork_of" in raw.sessions.s, false);
+  assert.deepEqual([...store.forkPointers()], []);
 });

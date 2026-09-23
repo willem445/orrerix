@@ -2795,7 +2795,9 @@ nothing for you to disposition. Where the repo turns on the merge queue
 the queue's refusal. The queue still makes every decision it always makes: it re-checks the
 gate against the recorded verdicts and the live PR, and it never lands on the default branch,
 so a PR to `main` is refused `base-is-default` and stays yours to merge. A reviewer that
-left `open_findings` out is never clean, whatever its summary says. With
+left `open_findings` out is never clean, whatever its summary says, and nor is one
+whose summary states any open finding — `2 non-blocking` beside `open_findings: 0` is
+treated as findings left to disposition, not as clean. With
 `fix_nonblocking_rounds` on, a reviewer that declares `0` has nothing left for another
 round, and a declared count is read before the counts in its summary. Each clean gate writes
 `rd-clean` to the audit log beside `rd-satisfied`, carrying the queue's answer when there

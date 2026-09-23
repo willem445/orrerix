@@ -4754,6 +4754,23 @@ fn count_word(tok: &str) -> Option<u32> {
 /// count word. Every count stated for a class must agree; two different ones
 /// (`1 blocking … fixed; 0 blocking now`) make that class `None`.
 pub fn stated_findings(summary: &str) -> StatedFindings {
+    let (blocking, non_blocking) = stated_counts(summary);
+    let agreed = |v: &[u32]| -> Option<u32> {
+        let first = *v.first()?;
+        v.iter().all(|n| *n == first).then_some(first)
+    };
+    StatedFindings { blocking: agreed(&blocking), non_blocking: agreed(&non_blocking) }
+}
+
+/// EVERY count a summary states, per class — `(blocking, non_blocking)` —
+/// before [`stated_findings`] asks whether they agree (#3388 review round 2).
+///
+/// Its own function because the clean case needs the question the agreement
+/// hides: "did this reviewer state ANY non-zero count?" A summary reading
+/// `1 blocking finding from round 1 fixed; 0 blocking now` agrees on nothing,
+/// so [`stated_findings`] answers `None` for it — correct for a count, and
+/// exactly the case a veto keyed on that answer would miss.
+pub fn stated_counts(summary: &str) -> (Vec<u32>, Vec<u32>) {
     let norm = summary
         .to_lowercase()
         .replace("non blocking", "non-blocking")
@@ -4791,11 +4808,7 @@ pub fn stated_findings(summary: &str) -> StatedFindings {
             }
         }
     }
-    let agreed = |v: &[u32]| -> Option<u32> {
-        let first = *v.first()?;
-        v.iter().all(|n| *n == first).then_some(first)
-    };
-    StatedFindings { blocking: agreed(&blocking), non_blocking: agreed(&non_blocking) }
+    (blocking, non_blocking)
 }
 
 /// **What one PASS verdict leaves open — the reviewer's structured declaration
@@ -4827,19 +4840,33 @@ pub fn verdict_findings(summary: &str, open_findings: Option<u32>) -> StatedFind
     StatedFindings { blocking: Some(blocking), non_blocking: Some(total - blocking) }
 }
 
-/// **This pass declared `open_findings: 0` and nothing contradicts it**
-/// (#3367 item 5) — one lane's half of the clean case.
+/// **This pass declared `open_findings: 0` and its summary states no open
+/// finding of either class** (#3367 item 5) — one lane's half of the clean
+/// case.
 ///
 /// The declaration is REQUIRED: a lane that omitted it is not clean, however
 /// its summary reads, because "the parser found `0 blocking, 0 non-blocking`"
 /// is prose and the clean case skips the orchestrator's disposition entirely.
-/// And the summary still has a veto: `open_findings: 0` beside `1 blocking`
-/// is a reviewer contradicting itself, which [`verdict_findings`] reads as
-/// unknown.
+///
+/// **And the summary has a veto over it, in BOTH classes** (#3388 review round
+/// 2, a policy call made blocking): any non-zero count the summary states —
+/// `1 blocking`, or `2 non-blocking` — makes the lane not clean, whatever
+/// was declared. "Clean" means nothing is left to disposition (INVARIANT 3),
+/// and a reviewer stating open nits has left something, however it filled in
+/// the field. The veto reads [`stated_counts`], every count stated, never the
+/// agreed one: `1 blocking … fixed; 0 blocking now` agrees on nothing, and a
+/// veto keyed on agreement would let it through. The price is disclosed rather
+/// than avoided: a summary whose multi-round prose still carries round one's
+/// count loses the shortcut and wakes the orchestrator, which is the wake it
+/// would have had anyway.
+///
+/// This is a veto on the CLEAN flag only. [`verdict_findings`] still reads the
+/// declaration first for the non-blocking round, so a declared `0` still ends
+/// the nit loop for that lane — a lane vetoed here is simply satisfied the
+/// ordinary way, with its residual the orchestrator's to disposition.
 pub fn declared_clean(summary: &str, open_findings: Option<u32>) -> bool {
-    open_findings == Some(0)
-        && verdict_findings(summary, open_findings)
-            == StatedFindings { blocking: Some(0), non_blocking: Some(0) }
+    let (blocking, non_blocking) = stated_counts(summary);
+    open_findings == Some(0) && blocking.iter().chain(&non_blocking).all(|n| *n == 0)
 }
 
 /// **Every required lane PASSED at `head`, each declaring `open_findings: 0`**
@@ -10286,6 +10313,36 @@ mod tests {
         assert_eq!(round(vec![declared_lane("rev-std", "head-a", Some(1), "one nit left")]), NIT_ROUND);
     }
 
+    /// **A stated non-zero count vetoes a declared zero, in either class**
+    /// (#3388 review round 2). "Clean" means nothing is left to disposition, so
+    /// `open_findings: 0` beside `2 non-blocking` is not clean — and nor is a
+    /// summary whose counts DISAGREE, which `stated_findings` reads as unknown
+    /// and a veto keyed on that reading would let through. The positive rows
+    /// are the control: a veto that refused everything would fail them.
+    #[test]
+    fn a_stated_nonzero_count_in_either_class_vetoes_a_declared_zero() {
+        // Vetoed.
+        for s in [
+            "0 blocking; 2 non-blocking",
+            "Two non-blocking notes, not routed",
+            "non-blocking: 1",
+            "1 blocking finding from round 1 fixed; 0 blocking now",
+            "0 non-blocking now; 3 non-blocking in round 1",
+        ] {
+            assert!(!declared_clean(s, Some(0)), "{s:?} states an open finding: not clean");
+        }
+        // Clean: no count at all, or every count zero.
+        for s in ["lgtm", "0 blocking, 0 non-blocking", "No blocking finding. zero non-blocking"] {
+            assert!(declared_clean(s, Some(0)), "{s:?} states nothing open: clean");
+        }
+        // The nit loop is untouched: the declaration still wins there, so a
+        // declared 0 ends the loop even where the clean flag is vetoed.
+        assert_eq!(
+            verdict_findings("0 blocking; 2 non-blocking", Some(0)),
+            StatedFindings { blocking: Some(0), non_blocking: Some(0) }
+        );
+    }
+
     /// **The clean case is positive on every axis**: one row per thing that
     /// must hold, each flipped alone against the one base case that IS clean.
     #[test]
@@ -10321,6 +10378,10 @@ mod tests {
         let mut l = clean_lanes();
         l[0].verdict.as_mut().unwrap().summary = "1 blocking".into();
         flip("a contradicted zero", facts(l));
+        // …in the NON-blocking class too (#3388 review round 2).
+        let mut l = clean_lanes();
+        l[0].verdict.as_mut().unwrap().summary = "0 blocking; 2 non-blocking".into();
+        flip("a zero beside stated nits", facts(l));
         // A zero declared at an OLD head says nothing about this one.
         let mut l = clean_lanes();
         l[0].verdict.as_mut().unwrap().head = "head-old".into();
@@ -10344,7 +10405,7 @@ mod tests {
         );
         // Routing unaccountable.
         flip("unknown lanes", DriveFacts { required_lanes: None, ..facts(clean_lanes()) });
-        assert_eq!(rows, 10, "every axis has its row");
+        assert_eq!(rows, 11, "every axis has its row");
 
         // And the clean case is not a nit round: nothing is open to hand back.
         let (e, f) = satisfied_over(clean_lanes());

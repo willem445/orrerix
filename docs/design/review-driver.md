@@ -830,6 +830,19 @@ non-blocking` is a reading of prose, and the clean case is the one place a
 reading would skip the orchestrator altogether. The predicate chooses a ROUTE
 out of `satisfied`, never whether the drive is satisfied; arc 9 is unchanged.
 
+**The summary vetoes a declared zero, in BOTH classes** (#3388 review round 2,
+made blocking by the orchestrator). Any non-zero count the summary states —
+`1 blocking` or `2 non-blocking` — makes the lane not clean. "Clean" means
+nothing is left to disposition (INVARIANT 3), and a reviewer that states open
+nits has left something, whichever way it filled in the field. The veto reads
+EVERY count the summary states (`reviewdrive::stated_counts`), never the agreed
+one, because `1 blocking … fixed; 0 blocking now` agrees on nothing and a veto
+keyed on agreement would miss it. The cost is disclosed: multi-round prose that
+still carries round one's count loses the shortcut, and the orchestrator gets
+the wake it would have had anyway. The veto touches only the clean flag. For
+the non-blocking round, the declaration is still read first (§2.5), so a
+declared `0` still ends the nit loop for that lane.
+
 **The two routes.** Where `merge_queue.enabled` is off, the `GATE SATISFIED`
 line gains `clean: true — 0 open findings on every lane, CI green: there is
 nothing to disposition`, and `rd-clean` records `route: notice`. Where it is on,

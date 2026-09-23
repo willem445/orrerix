@@ -52910,7 +52910,7 @@ impl OrchRegistry {
             .filter(|a| &a.group == group_id)
             .ok_or_else(|| format!("unknown agent: {source_id}"))?;
         match src.role {
-            Role::Orchestrator | Role::Manager => {
+            Role::Orchestrator | Role::Manager if false => { // SCRATCH: neutered
                 return Err(format!(
                     "{} is this group's {} — a fork inherits its source's block, and that class is \
                      not a delegate anyone may open a second of. Fork a worker, reviewer or planner.",

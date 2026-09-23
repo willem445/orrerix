@@ -666,15 +666,26 @@ So `write_mcp_config`'s codex branch reads the human's token once per spawn
   until the sweep; the env dies with the pane.
 - **Codex group panes only.** A solo pane has no environment orrerix sets, and a
   non-codex pane already reaches the keyring as the human.
-- **No new capability.** Any group agent can already run `gh auth token` as the
-  human; this gives a codex agent the credential its peers hold.
+- **An accepted widening, not a no-op.** Under `sandbox = "elevated"` a codex
+  pane could not run `gh auth token` — that is the bug — so the credential now
+  crosses the sandbox account boundary codex drew, and every process the pane
+  runs (a dependency's install script, a test binary) can read it from its
+  environment. Accepted: it is the credential a claude, copilot or pi peer in
+  the same group already holds as the human, and it is the remedy #3405 asked
+  for. See the residuals below.
 - **Degrade, never refuse.** A failed or empty read exports nothing and writes a
   `codex-gh-token-unavailable` audit row with `gh`'s reason; the pane still
   spawns, because a pane without `gh` can still `report`.
 - **Contained** (#502): a registry that is not the user's live one reads no
   credential unless a test installs the `gh_exec_override` fake.
 
-**Residuals.** A human `shell_environment_policy` that filters it
+**Residuals.** The token crosses codex's sandbox boundary into the pane's
+environment, readable by every process the pane runs — accepted, as argued
+above. It is read **once, at spawn**: a later `gh auth refresh`, logout or
+revocation is invisible to a pane already running, which goes back to `401`
+with no audit row (the read itself succeeded) — a long-lived codex
+orchestrator needs a respawn to pick up a new token. A human
+`shell_environment_policy` that filters it
 (`ignore_default_excludes = false`, `inherit = "core"`, a custom `exclude`)
 strips `GH_TOKEN` again; orrerix does not override that policy, because doing so
 would re-expose every other secret-shaped variable the human chose to hide.

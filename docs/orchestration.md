@@ -3097,7 +3097,10 @@ two things worth knowing before your first run:
   as a separate local account, which cannot read the GitHub token `gh auth
   login` stored in your credential store — so orrerix reads it once per codex
   pane (`gh auth token`) and hands it to that pane as `GH_TOKEN`, in the pane's
-  environment only, never in the profile file. If that read fails the pane
+  environment only, never in the profile file. That makes the token readable by
+  anything the pane runs, as it already is in a Claude or Copilot pane; and it
+  is read when the pane starts, so after `gh auth refresh` or a logout, respawn
+  a long-running codex pane to pick up the change. If that read fails the pane
   still starts, without `gh` access, and the audit log records
   `codex-gh-token-unavailable` with the reason. A `shell_environment_policy` of
   your own that filters `*TOKEN*` variables (codex's `ignore_default_excludes =

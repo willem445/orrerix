@@ -31579,9 +31579,17 @@ impl OrchRegistry {
     /// (`solo_prepare` only appends flags to the human's own line), and a
     /// non-codex pane already reaches the keyring as the human.
     ///
-    /// **No capability is added.** Any group agent can already run
-    /// `gh auth token` as the human; this hands a codex agent the credential its
-    /// peers hold, not a wider one.
+    /// **Accepted residual: the credential now crosses codex's sandbox
+    /// boundary.** Under `sandbox = "elevated"` a codex pane could NOT run
+    /// `gh auth token` — that is the bug — so this is a real widening for that
+    /// pane, not a no-op: the token is handed across the account boundary codex
+    /// drew, and every process the pane runs (a dependency's install script, a
+    /// test binary) can read it from its environment. Accepted because it is
+    /// the credential a claude/copilot/pi peer in the same group already holds
+    /// as the human, and it is the remedy #3405 asked for. It is also read ONCE,
+    /// at spawn: a later `gh auth refresh`, logout or revocation is not seen by
+    /// a pane already running — it goes back to `401` with no audit row (the
+    /// read itself succeeded), and only a respawn picks up the new token.
     ///
     /// **Degrades, never refuses.** A pane without `gh` access is still a pane
     /// that can `report` — failing its spawn would turn one broken tool into

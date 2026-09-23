@@ -1,7 +1,7 @@
 # ALTERNATE ROSTER for the cheap tier evaluation (#3389): worker-std and rev-std run on
 # Codex GPT-6 Luna at medium reasoning instead of pi + GLM-5.3-flash — for worker-std ONLY:
 # a codex block cannot host a reviewer (`cli_can_host`: a reviewer runs under NoEdits/ReadOnly
-# containment and codex tops out at None — no tool-level edit deny), so rev-std stays on pi.
+# containment and codex tops out at None — no tool-level edit deny), so rev-std runs Claude sonnet.
 # Everything else is
 # byte-identical to workflow.yml. `context:` is not set: codex has no context-window knob
 # in orrerix (CliCaps.context_variants is empty for codex) — the model runs at its own
@@ -181,11 +181,10 @@ blocks:
 
   # -- reviewers: rev-std runs every round; rev-final ONCE, last, code PRs only
   - id: rev-std
-    name: "Standard review (EVERY ROUND - pi + GLM Flash — codex CANNOT host a reviewer, see the header; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
+    name: "Standard review (EVERY ROUND - claude sonnet — codex CANNOT host a reviewer, see the header; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
     kind: reviewer
-    cli: pi
-    model: openrouter/z-ai/glm-5.3-flash
-    effort: high
+    cli: claude
+    model: sonnet
     profile: .github/agents/rev-std.md
 
   - id: rev-final

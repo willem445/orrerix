@@ -13313,7 +13313,8 @@ mechanics move.** A bullet keeps what an orchestrator must obey after a compact 
 else in front of it (name the class on every spawn; a worker or reviewer always gets a
 worktree; no tool answers a question or resolves a needs-you item; register a watch and move
 on; claim with `claim: true`; `ready: true` is the startable set; ordering is `deps`, never
-prose), and loses the return shapes, the incident that produced each refusal, and the
+prose; `pr_base` is updated on a retarget, which happens long after the board was set up),
+and loses the return shapes, the incident that produced each refusal, and the
 edge semantics (link arrays replace, a cycle is refused, a deleted task strips its id).
 Those moved verbatim into two new playbook sections, `tool-reference` and `task-board`, each
 named by a resident stub with its trigger — the first spawn of a session, a refusal whose

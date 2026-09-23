@@ -4732,16 +4732,24 @@ fn read_playbook_writes_one_audit_line() {
 ///   `hot_only`), so nothing a compacted orchestrator must obey went on demand;
 /// - the long-form markers are GONE from the core, so this is a move, not a
 ///   copy that left the resident bytes where they were.
+///
+/// Every comparison runs on whitespace-collapsed text (review round 1,
+/// finding 3): a marker that straddles a hand-wrap makes the ABSENCE half
+/// vacuous, since any re-wrap of a copy left in the core would pass it. Collapsed,
+/// a marker is a phrase, and no re-wrap on either side changes the verdict.
 #[test]
 fn the_tool_reference_and_task_board_procedure_are_served_from_the_playbook() {
     let (reg, _d) = test_registry();
     let g = reg.create_group("C:/tmp/repo", playbook_rails()).unwrap();
     let co = playbook_caller(&reg, &g.id, Role::Orchestrator);
-    // LF-normalized: two markers span a line break, and whether a rendered
-    // file carries CRLF is not this test's question.
-    let core = fs::read_to_string(reg.state_root().join(g.id.as_str()).join("orchestrator.md"))
-        .unwrap()
-        .replace("\r\n", "\n");
+    // Whitespace-collapsed (see the doc above): line endings and wraps alike.
+    fn ws(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+    let core = ws(&fs::read_to_string(
+        reg.state_root().join(g.id.as_str()).join("orchestrator.md"),
+    )
+    .unwrap());
 
     // (section id, markers only the moved long form carries)
     let moved: [(&str, &[&str]); 2] = [
@@ -4765,7 +4773,7 @@ fn the_tool_reference_and_task_board_procedure_are_served_from_the_playbook() {
                 "`sprint: 0` to send it back to the backlog",
                 "a dep edge that would close a cycle is rejected",
                 "It is DISPLAY metadata and nothing gates on it",
-                "a target\n  naming a live task on this board is refused",
+                "naming a live task on this board is refused",
                 "Deleting a task also strips its id",
             ],
         ),
@@ -4773,13 +4781,14 @@ fn the_tool_reference_and_task_board_procedure_are_served_from_the_playbook() {
     for (id, markers) in moved {
         let r = read_playbook_call(&reg, &co, id);
         assert_eq!(r["isError"], json!(false), "`{id}` must be a served section: {r}");
-        let text = r["content"][0]["text"].as_str().unwrap().replace("\r\n", "\n");
+        let text = ws(r["content"][0]["text"].as_str().unwrap());
         assert!(!text.contains("{{"), "`{id}` is served rendered: {text}");
         for m in markers {
-            assert!(text.contains(m), "playbook `{id}` has lost moved marker {m:?}:\n{text}");
+            let m = ws(m);
+            assert!(text.contains(&m), "playbook `{id}` has lost moved marker {m:?}:\n{text}");
             if !m.starts_with("## ") {
                 assert!(
-                    !core.contains(m),
+                    !core.contains(&m),
                     "{m:?} is still in the resident core — the long form was copied, not moved"
                 );
             }
@@ -4797,16 +4806,19 @@ fn the_tool_reference_and_task_board_procedure_are_served_from_the_playbook() {
         "`worktree: false` is rejected",
         "**No tool on your surface can answer one.**",
         "**No tool on your surface can resolve one**",
-        "**Register and\n  immediately move on to other work**",
+        "**Register and immediately move on to other work**",
         "Pass `hot_only: true`",
         "**Assign with `claim: true`, never a plain `assignee` write.**",
         "**\"What's startable\" is `ready: true`, top-of-board first — never a re-derivation.**",
         "**Encode ordering as `deps`, not as prose**",
         "**`blocked` is for blockers OUTSIDE the board.**",
         "**Reopening is a transition too",
+        // Review round 1, finding 1: updating `pr_base` is an obligation, not
+        // procedure, and a retarget happens long after the board was set up.
+        "`pr_base` in the same call as `pr` (and again on a retarget)",
         "**Act on the report; don't re-derive it.**",
     ] {
-        assert!(core.contains(rule), "the resident core has lost the rule {rule:?}");
+        assert!(core.contains(&ws(rule)), "the resident core has lost the rule {rule:?}");
     }
     assert!(!core.contains("{{"), "the rendered core carries no raw placeholder");
 }
@@ -4845,8 +4857,8 @@ fn the_resident_core_is_under_the_byte_budget() {
     //
     // What breaks if the pin is removed: this goes back to measuring the
     // checkout. It does so LOUDLY today, but only INCIDENTALLY — measured on
-    // `orchestrator.md` at blob e590af4d, the LF file is 34,794 B over 505
-    // lines, so there are 206 B of margin under this budget against the 505 CR
+    // `orchestrator.md` at blob d5f2d059, the LF file is 34,822 B over 506
+    // lines, so there are 178 B of margin under this budget against the 506 CR
     // bytes a CRLF checkout adds. The stale worktree therefore fails here
     // rather than passing quietly, but shorten the template past that margin
     // and it goes quiet again, on exactly the platform that pays more. The
@@ -4895,8 +4907,8 @@ fn markdown_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
 ///
 /// **Why this sits beside the budget assertion rather than inside it.** The
 /// budget test does notice a CRLF checkout today, but only because the CR bytes
-/// happen to exceed the margin left under `RESIDENT_CORE_BUDGET` — 206 B of it,
-/// against 505 CR bytes, measured on `orchestrator.md` at blob e590af4d while
+/// happen to exceed the margin left under `RESIDENT_CORE_BUDGET` — 178 B of it,
+/// against 506 CR bytes, measured on `orchestrator.md` at blob d5f2d059 while
 /// that constant is 35,000. Shorten the template
 /// past that and the budget goes quiet again on exactly the platform that pays
 /// more, which is the issue's own "the guard is worse than none" case (#1845).

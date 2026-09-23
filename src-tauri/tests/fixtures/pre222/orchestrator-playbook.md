@@ -295,7 +295,7 @@ Two labels let the human hand you work without typing in your pane. They are
 - **`agent-ready` = go.** The issue is groomed and ready to build. Pick it up
   without further prompting: read it (`gh issue view`), add `agent-managed`,
   comment your plan (scope, files likely touched, test strategy, mergeability —
-  the same plan you'd write in **Planning & scheduling**), create a board task,
+  the same plan you'd write in **Planning and scheduling**), create a board task,
   and drive it to a PR through the normal delegation → review → **CI gate** flow.
   Treat it exactly like an item the human described to you, minus the conversation.
 
@@ -575,7 +575,8 @@ An **orrerix restart** no longer breaks that promise (#468/#467): the queue is w
 what was waiting is still waiting afterwards. You may see one of three notices about it after a
 restart, and they mean different things. `... have been re-queued in their original order and are
 delivering now` — nothing to do but judge whether an ask that old still applies. `... could not be
-re-bound to a live pane` — call `queue_orphans()` and work the list (see **Durability rules**).
+re-bound to a live pane` — call `queue_orphans()` and work the list (see the resident
+**Durability rules**).
 `... waiting only for Enter when orrerix restarted` — that one text really is unrecoverable, same
 as a `DROPPED` notice. **Never re-send on any of the three without checking `queue_orphans()`
 first**: two of them describe deliveries that are already on their way.
@@ -989,9 +990,9 @@ resident; nothing here overrides them.
   class, so three reviewer-shaped briefs spawned with `kind` omitted came back as read-write worker
   panes with edit tools and `git commit`/`push`, and nothing objected. Say the class every time. (A
   `resume_session` follow-up is the one exception: omitting both there inherits the resumed
-  session's own block, which is stricter than any default — see below.) **Worktree defaults ON for
-  workers AND reviewers and cannot be turned off for either** (#338/#359): the main clone is the
-  human's environment, and neither a worker (branching/committing there) nor a reviewer
+  session's own block, which is stricter than any default — see **Planning and scheduling**.)
+  **Worktree defaults ON for workers AND reviewers and cannot be turned off for either** (#338/#359):
+  the main clone is the human's environment, and neither a worker (branching/committing there) nor a reviewer
   (contending on its checkout state with another reviewer or your own fetch/merge traffic — two
   concurrent reviewers colliding in the shared clone is the incident #359 names) may conflict with
   it. Passing `worktree: false` for either (or a worker-/reviewer-kind `block`) is rejected
@@ -1004,7 +1005,7 @@ resident; nothing here overrides them.
   Pass `base` (e.g. `"feat/x"`) to deliberately stack a worktree on a feature branch. A
   **planner** is unaffected: it never gets one under any circumstance — it explores the codebase
   read-only and posts a structured implementation plan as an issue comment, then reports and
-  exits; it never writes code, branches, or PRs (see **Planning & scheduling**). For your OWN
+  exits; it never writes code, branches, or PRs (see **Planning and scheduling**). For your OWN
   mechanical work (rebases, conflict fixes) that would otherwise mean checking out a branch in the
   main clone, use a staging worktree of your own instead of spawning a worker or reviewer just to
   get one — see **Mergeability**. The guardrails (delegate cap, per-class
@@ -1021,7 +1022,7 @@ resident; nothing here overrides them.
   `include_all`. Call `get_task(id)` for one task's full note history when `note_count`
   says there's something worth reading — including an elided `done` row, which is never
   deleted, just left out of the compact rows. `deps`/`related` are the board's **ordering
-  structure** and `ready` is derived from them — see **The task board** for how to set and
+  structure** and `ready` is derived from them — see **Task board** below for how to set and
   read them.
 - `ask_human(text, options?, select?, allow_free_text?, task?, urgency?)` /
   `list_questions()` / `withdraw_question(id)` — the **question registry**: how you put a
@@ -1053,8 +1054,8 @@ resident; nothing here overrides them.
   never sit polling `gh pr checks` yourself; orrerix polls every 30s in the background.
   `list_notifications()` lists your own live ones; `cancel_notification(id)` drops one
   early (e.g. the PR closed). Capped at 4 live per agent / 12 per group; TTL defaults to
-  60 min (5–240). Notifications do NOT survive an orrerix restart — see **Durability
-  rules**.
+  60 min (5–240). Notifications do NOT survive an orrerix restart — see the resident
+  **Durability rules**.
 - `channel_send(text)` / `channel_status()` — if a human has connected this pane to another
   agent's pane (possibly in a different repo/group, or a standalone launcher pane) for
   cross-workspace collaboration, `channel_send` broadcasts `text` to everyone you're
@@ -1068,7 +1069,7 @@ resident; nothing here overrides them.
   restart caught them queued, and they could not be re-bound to a live pane) and `refused`
   (declined at the front door because the target pane's queue was already full). Lost work,
   with the payloads: call it once on session start with the rest of your re-sync and act on
-  every row. See **Durability rules**.
+  every row. See the resident **Durability rules**.
 
 **Acting on a report — the long form.** A report's `outcome` + `ref` (+ `detail_url` when you
 need to point someone at it) is everything MOST next actions need — routing a fix needs nothing
@@ -1097,7 +1098,7 @@ can add, edit, annotate, reorder, and delete tasks; orrerix notifies you when th
   (review passed, PR awaiting the human) → `human-testing` (human validating) →
   `done` (merged/accepted). Use `blocked` with a note explaining why, and
   `prototype` for a demo-gated draft awaiting the human's promote verdict (see
-  **Prototype → Proceed** below).
+  **Prototype → Proceed** above).
 - **Reopening is a transition too — flip `status` back to `in-progress` the
   moment work resumes on a `pr`/`human-testing` item**, whether that's the
   human's own **✎ Changes** (the board already does this for you) or your own

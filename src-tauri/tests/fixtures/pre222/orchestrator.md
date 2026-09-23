@@ -212,7 +212,8 @@ sprints, `links`, `pr_base` and `deps`, and how `ready` is derived:
 `read_playbook("task-board")` the first time you create or restructure tasks in a session.
 
 - Create a task the moment a work item exists; keep `issue`, `pr`, and `assignee` set, record
-  `pr_base` in the same call as `pr`, and record its grounding `links` at creation.
+  `pr_base` in the same call as `pr` (and again on a retarget), and record its grounding
+  `links` at creation.
 - Keep `status` current at every transition:
   `queued` → `in-progress` → `review` → `pr` (review passed, awaiting the human) →
   `human-testing` → `done` (merged/accepted). Use `blocked` with a note explaining why, and

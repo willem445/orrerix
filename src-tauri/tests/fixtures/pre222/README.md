@@ -1650,3 +1650,10 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   live template (`git diff -U0`, compared) except one hunk header on `orchestrator.md`, whose
   context line ends in `{{WORKFLOW}}` on the live side and is stripped on the golden — the key
   strip itself, not drift.
+
+  Review round 1 re-blessed both again in the fix commit. The core's board bullet regains the
+  obligation to update `pr_base` on a retarget, since only its rationale is procedure. In the
+  playbook, every bold cross-reference now names a heading in the playbook: `Planning and
+  scheduling` rather than the core's `&` spelling, `Task board` and `Prototype → Proceed` in
+  their real directions, and "the resident **Durability rules**" where the target exists only
+  in the core. The same checks were re-run: `live-minus-keys == golden` OK for both files.

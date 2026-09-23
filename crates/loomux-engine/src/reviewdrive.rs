@@ -4865,8 +4865,9 @@ pub fn verdict_findings(summary: &str, open_findings: Option<u32>) -> StatedFind
 /// the nit loop for that lane — a lane vetoed here is simply satisfied the
 /// ordinary way, with its residual the orchestrator's to disposition.
 pub fn declared_clean(summary: &str, open_findings: Option<u32>) -> bool {
-    let (blocking, non_blocking) = stated_counts(summary);
-    open_findings == Some(0) && blocking.iter().chain(&non_blocking).all(|n| *n == 0)
+    open_findings == Some(0)
+        && verdict_findings(summary, open_findings)
+            == StatedFindings { blocking: Some(0), non_blocking: Some(0) }
 }
 
 /// **Every required lane PASSED at `head`, each declaring `open_findings: 0`**

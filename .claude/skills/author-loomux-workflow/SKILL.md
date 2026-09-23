@@ -207,6 +207,7 @@ One block (`RawBlock`, `deny_unknown_fields`):
 | `role_hint` | string | no | `advisor` (requires `kind: planner`), `process` (requires `kind: worker`), or `liaison` (requires `kind: reviewer`); any other value, or a value paired with the wrong `kind`, is a parse error. **`liaison` is superseded by `kind: manager`** — it still parses and still runs, and the workflow pane warns on it; write `kind: manager` in a new file |
 | `effort` | string | no (default `""`) | thinking level; `""` = the CLI's own default. One of `low`, `medium`, `high`, `xhigh`, `max` — see the caps-gating rule below |
 | `context` | string | no (default `""`) | context-window variant; `""` = the model's own window. One of `1m` today — same caps-gating rule. Composed into the model alias at emit (`sonnet[1m]`), never written into `model:` itself |
+| `cache_ttl_minutes` | int | no | the prompt-cache TTL (minutes) the block's agent really gets (#3407); absent = the CLI's conservative default (claude/codex 5), `0` = unknown, above `1440` is a parse error. Set `60` only if the account is on Anthropic's 1-hour cache |
 
 **The caps-gating rule for `effort`/`context` (#687):** each is checked
 twice at parse time, and either check failing is a parse error, never a

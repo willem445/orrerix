@@ -365,6 +365,20 @@ pub fn pr_changed_files(r: &dyn RdRunner, pr: u64) -> Option<Vec<String>> {
 /// compiling. `the_drivers_git_is_a_refusal_rather_than_an_absence` pins it.
 struct GitDenied<'a>(&'a dyn RdRunner);
 
+/// Hand `f` the driver's runner as an [`MqRunner`] whose `git` is
+/// [`GitDenied`]'s refusal — the seam the CLEAN case's enqueue goes through
+/// (#3367 item 5).
+///
+/// `queue_merge` is typed on the wider trait because the QUEUE lands with
+/// `git`; enqueueing does not — it reads the PR's base, the repo default, the
+/// checks and the body through `gh`, and records an entry. So the driver can
+/// ask the queue to take a PR without holding `git` at any point: an enqueue
+/// path that ever reached for it would fail here, loudly, with §3.1 item 1's
+/// sentence, rather than land anything.
+pub fn with_git_denied<T>(r: &dyn RdRunner, f: impl FnOnce(&dyn MqRunner) -> T) -> T {
+    f(&GitDenied(r))
+}
+
 /// The refusal text, one line so no source indentation can ride into it.
 const NO_GIT: &str = "the review driver has no git: review-driver.md §3.1 item 1 says it may never build a merge or any other landing verb";
 
@@ -619,6 +633,15 @@ pub mod audit_action {
     pub const CONSUMED: &str = "rd-consumed";
     /// The gate is satisfied at the live head.
     pub const SATISFIED: &str = "rd-satisfied";
+    /// The satisfied gate was the CLEAN case (#3367 item 5): every required
+    /// lane passed at the live head declaring `open_findings: 0`, and CI was
+    /// green. Written beside `rd-satisfied`, never instead of it. Carries `pr`,
+    /// `head` and `route` — `notice` where the merge queue is off (the
+    /// satisfied notice carries `clean: true`), `queue` where it is on, and
+    /// then `queue_merge`, the queue's own answer verbatim (`{"queued": true,
+    /// "position": n}` or `{"refused": "<reason>"}`), because an enqueue the
+    /// queue refused is a thing that happened and must read as one.
+    pub const CLEAN: &str = "rd-clean";
     /// The drive parked. Carries the closed reason from §2.2 in its detail — a
     /// hold labelled as a completion is the defect class #461 catalogues.
     pub const HELD: &str = "rd-held";
@@ -935,6 +958,9 @@ pub struct LaneNotice {
     pub block: String,
     pub verdict: Verdict,
     pub summary: String,
+    /// The reviewer's declared `open_findings` (#3367 item 5) — `None` when
+    /// it declared none, which the notice helpers never read as zero.
+    pub open_findings: Option<u32>,
     /// The head that verdict BOUND to — `ReviewVerdict::head`, not the live
     /// head. It is what `LaneRecord::at_head` records, and what distinguishes a
     /// lane that has answered from one that has only been asked.
@@ -1042,9 +1068,12 @@ pub fn is_scratch_title(title: &str) -> bool {
 }
 
 /// The residual a non-blocking round or a satisfied notice reports (#3367):
-/// one clause per lane that spoke, with the counts its summary STATED and `?`
-/// where it stated none — so the orchestrator reads what the driver decided
-/// on, including what it could not read.
+/// one clause per lane that spoke, with the counts it DECLARED
+/// (`open_findings`, item 5) or, failing that, the ones its summary STATED, and
+/// `?` where neither says — so the orchestrator reads what the driver decided
+/// on, including what it could not read. One reader,
+/// [`crate::reviewdrive::verdict_findings`], for both this line and the
+/// decision, so the two cannot disagree.
 pub fn residual_text(lanes: &[LaneNotice]) -> String {
     lanes
         .iter()
@@ -1052,7 +1081,7 @@ pub fn residual_text(lanes: &[LaneNotice]) -> String {
             if l.verdict != Verdict::Pass {
                 return format!("{} {}", l.block, l.verdict.as_str());
             }
-            let f = crate::reviewdrive::stated_findings(&l.summary);
+            let f = crate::reviewdrive::verdict_findings(&l.summary, l.open_findings);
             let n = |o: Option<u32>| o.map_or_else(|| "?".to_string(), |n| n.to_string());
             format!("{} {} blocking / {} non-blocking", l.block, n(f.blocking), n(f.non_blocking))
         })
@@ -1073,6 +1102,60 @@ pub fn nonblocking_clause(rounds: u32, of: u32, lanes: &[LaneNotice]) -> String 
         " Non-blocking rounds run by the driver: {rounds}/{of}; residual: {}.",
         residual_text(lanes)
     )
+}
+
+/// Where a CLEAN satisfied gate goes (#3367 item 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CleanRoute {
+    /// Not the clean case — the stock line, byte-for-byte.
+    NotClean,
+    /// Clean, and the merge queue is off: the notice says so and stops.
+    Notice,
+    /// Clean, and the merge queue is on: the driver submits the PR to
+    /// `queue_merge` after this tick's write, and appends the queue's answer
+    /// to this notice before it is delivered ([`clean_enqueue_outcome`]).
+    Queue,
+}
+
+/// The clause a CLEAN satisfied notice gains (#3367 item 5). Empty for
+/// [`CleanRoute::NotClean`], so every other satisfied line is unchanged.
+///
+/// `clean: true` is the flag, spelled as one so an orchestrator — or a filter
+/// over its pane — can key on it; "0 open findings on every lane" is the fact
+/// that earned it. The `Queue` wording states only what is TRUE when it is
+/// written: the submission happens after the notice is owed, so this clause
+/// says the driver is submitting and where the answer is, and
+/// [`clean_enqueue_outcome`] appends the answer itself.
+pub fn clean_clause(route: CleanRoute) -> &'static str {
+    match route {
+        CleanRoute::NotClean => "",
+        CleanRoute::Notice => {
+            " clean: true — 0 open findings on every lane, CI green: there is nothing to disposition."
+        }
+        CleanRoute::Queue => {
+            " clean: true — 0 open findings on every lane, CI green; merge_queue is enabled, so the driver submitted it to queue_merge (merge_queue_status() has its state)."
+        }
+    }
+}
+
+/// The queue's answer to a clean enqueue, as the sentence appended to the
+/// owed satisfied notice (#3367 item 5). Reads `queue_merge`'s own JSON and
+/// nothing else, so the line cannot claim a queue position the queue did not
+/// give — and an answer of neither shape says so rather than guessing.
+///
+/// Every field it can print is loomux-owned: a `u64` position, or one of
+/// `mqloop::refusal`'s closed reason codes.
+pub fn clean_enqueue_outcome(answer: &serde_json::Value) -> String {
+    if answer.get("queued").and_then(|v| v.as_bool()) == Some(true) {
+        match answer.get("position").and_then(|v| v.as_u64()) {
+            Some(p) => format!(" queue_merge: queued at position {p}."),
+            None => " queue_merge: queued.".to_string(),
+        }
+    } else if let Some(r) = answer.get("refused").and_then(|v| v.as_str()) {
+        format!(" queue_merge refused: {r} — the PR is not queued; merging it is yours, as on any satisfied gate.")
+    } else {
+        " queue_merge gave no readable answer — the PR may not be queued; read merge_queue_status().".to_string()
+    }
 }
 
 /// A reviewer's summary as a notice may carry it: scrubbed, then capped.
@@ -1125,9 +1208,19 @@ pub fn satisfied_notice(
     // The claim is the OLD claim, narrowed to a quantity: a lane counts when it
     // passed and left a summary, exactly as before — the driver still does not
     // parse findings out of prose and still does not pretend to.
+    //
+    // #3367 item 5 narrows it by exactly one case: a lane that DECLARED
+    // `open_findings: 0` (uncontradicted) carries nothing, whatever its
+    // summary's length — saying "1 lane carries non-blocking findings" about a
+    // reviewer that declared none would be a false claim on the line the clean
+    // clause sits on.
     let open = lanes
         .iter()
-        .filter(|l| l.verdict == Verdict::Pass && !l.summary.trim().is_empty())
+        .filter(|l| {
+            l.verdict == Verdict::Pass
+                && !l.summary.trim().is_empty()
+                && !crate::reviewdrive::declared_clean(&l.summary, l.open_findings)
+        })
         .count();
     let open = match open {
         0 => String::new(),
@@ -1955,6 +2048,7 @@ mod tests {
             block: "rev-std".into(),
             verdict: Verdict::Pass,
             summary: forged.into(),
+            open_findings: None,
             at_head: HEAD.into(),
         }];
         let panes = vec![("w-1715".to_string(), DrivenRole::Worker)];

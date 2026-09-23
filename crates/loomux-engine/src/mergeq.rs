@@ -1348,6 +1348,7 @@ mod tests {
                 head: head.into(),
                 body_digest: body.to_string(),
                 verified_body: false,
+                open_findings: None,
                 summary: String::new(),
                 ts_ms: 0,
             },

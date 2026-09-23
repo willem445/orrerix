@@ -1337,7 +1337,7 @@ fn tool_defs(
             json!({ "id": { "type": "string", "description": "Task id, e.g. t-3" } }),
             &["id"]),
         tool("list_verdicts",
-            "Read the recorded review verdicts for a PR: which reviewer block recorded what (pass | fail | escalate), when, and its summary — plus, when this repo's workflow.yml declares a merge gate, whether that gate is satisfied. This is STATE, not a notification: it is what the orrerix gh interceptor reads when it decides whether to allow `gh pr merge`. Each verdict also carries `body_changed` when orrerix can tell whether the PR body moved since it was recorded (absent = it cannot tell): on a `pass` that means the text a squash merge would commit is not what was approved — send the reviewer back; on a `fail`/`escalate` it means the body was edited afterwards, so check whether the finding is already fixed before routing it to a worker. A verdict carrying `verified_body: true` is a review driver's body-VERIFICATION round (#2168 E2) — that reviewer was asked for the body as it stands because every required lane had already passed the code at that head — and where one of those covers the current body, the OTHER live passes' `body_changed: true` is not work: `body-unchanged` accepts them, and the `gate` line on the row says so rather than telling you to send anyone back. Read the `gate` line before acting on a `body_changed`. PASS `pr` WHENEVER YOU HAVE ONE — you almost always do, since you are asking about a PR someone just reported. Omitting it is a deliberate, rare choice (a cold start, or a sweep for verdicts you have lost track of): the no-arg form walks EVERY PR this group has ever recorded a verdict for and makes live `gh` calls per PR to resolve its head and body, so it costs proportionally more the longer the group has run and is the form that suffers first on a slow or proxied network. The no-arg form is also BOUNDED: it lists every PR's recorded verdicts in full, but resolves live head/body state for at most the 20 newest and only while a 30s budget lasts. Any row it skipped says so in `live_state_skipped` and names the PR to re-ask about — nothing is silently truncated, but a sweep is not a substitute for asking about the PR you care about.",
+            "Read the recorded review verdicts for a PR: which reviewer block recorded what (pass | fail | escalate), when, and its summary — plus, when this repo's workflow.yml declares a merge gate, whether that gate is satisfied. This is STATE, not a notification: it is what the orrerix gh interceptor reads when it decides whether to allow `gh pr merge`. Each verdict also carries `body_changed` when orrerix can tell whether the PR body moved since it was recorded (absent = it cannot tell): on a `pass` that means the text a squash merge would commit is not what was approved — send the reviewer back; on a `fail`/`escalate` it means the body was edited afterwards, so check whether the finding is already fixed before routing it to a worker. A verdict carrying `verified_body: true` is a review driver's body-VERIFICATION round (#2168 E2) — that reviewer was asked for the body as it stands because every required lane had already passed the code at that head — and where one of those covers the current body, the OTHER live passes' `body_changed: true` is not work: `body-unchanged` accepts them, and the `gate` line on the row says so rather than telling you to send anyone back. Read the `gate` line before acting on a `body_changed`. A verdict carrying `open_findings` is the reviewer's DECLARED count of findings it left open at that head (#3367); a verdict without the field declared none — that is unknown, never zero. PASS `pr` WHENEVER YOU HAVE ONE — you almost always do, since you are asking about a PR someone just reported. Omitting it is a deliberate, rare choice (a cold start, or a sweep for verdicts you have lost track of): the no-arg form walks EVERY PR this group has ever recorded a verdict for and makes live `gh` calls per PR to resolve its head and body, so it costs proportionally more the longer the group has run and is the form that suffers first on a slow or proxied network. The no-arg form is also BOUNDED: it lists every PR's recorded verdicts in full, but resolves live head/body state for at most the 20 newest and only while a 30s budget lasts. Any row it skipped says so in `live_state_skipped` and names the PR to re-ask about — nothing is silently truncated, but a sweep is not a substitute for asking about the PR you care about.",
             json!({
                 "pr": { "type": "string", "description": "PR number, #n, or URL. Pass this whenever you have one. Omit ONLY to sweep every PR with a verdict — proportionally slower, live gh calls per PR." },
             }),
@@ -1994,6 +1994,7 @@ fn tool_defs(
                 "pr": { "type": "string", "description": "PR number, #n, or URL — the PR you reviewed." },
                 "verdict": { "type": "string", "enum": ["pass", "fail", "escalate"], "description": "pass | fail | escalate, lowercase. Never guessed: an unrecognized value is rejected." },
                 "summary": { "type": "string", "description": "Why. One or two lines a human can act on. State what you left open as two counts — `0 blocking, 2 non-blocking` — because a review driver reads exactly those numbers (#3367); a count it cannot find is read as unknown, never as zero." },
+                "open_findings": { "type": "integer", "minimum": 0, "description": "How many findings you left OPEN on this PR at this head — blocking and non-blocking together; 0 when your review found nothing left to address. Declare it every time: it is the structured form of the counts in your summary, and a review driver reads it first (#3367). A PR whose every required lane passed with open_findings: 0 is the CLEAN case — the driver may enqueue it on the merge queue, or tells the orchestrator there is nothing to disposition — so never declare 0 over a finding you wrote down, and never omit it to mean 0: an omitted count is read as unknown and never makes a PR clean." },
             }),
             &["pr", "verdict", "summary"]));
     }
@@ -4903,8 +4904,25 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             let pr = arg_str(args, "pr").ok_or("pr required")?;
             let verdict = arg_str(args, "verdict").ok_or("verdict required")?;
             let summary = arg_str(args, "summary").ok_or("summary required")?;
-            let (rec, warnings) =
-                reg.record_verdict(&caller.group, &caller.agent_id, pr, verdict, summary)?;
+            // #3367 item 5. Optional, and STRICT when present: a value that is
+            // not a whole number >= 0 refuses the whole call rather than being
+            // dropped, because a declaration read as absent silently costs the
+            // clean case and one read as 0 would claim a clean review nobody
+            // made. The reviewer sees the error and re-records.
+            let open_findings = match arg_u64(args, "open_findings")? {
+                None => None,
+                Some(n) => Some(u32::try_from(n).map_err(|_| {
+                    format!("open_findings must be a whole number >= 0 that fits in 32 bits, got: {n}")
+                })?),
+            };
+            let (rec, warnings) = reg.record_verdict(
+                &caller.group,
+                &caller.agent_id,
+                pr,
+                verdict,
+                summary,
+                open_findings,
+            )?;
             // A verdict is also news: the orchestrator is the one that decides what
             // happens next (send the findings back to the worker, ask the human,
             // merge), and orrerix's design norm is that agent→agent traffic arrives

@@ -105,6 +105,7 @@ fn lane_fact(block: &str, v: Option<Verdict>, at_head: &str, digest: &str) -> La
             head: at_head.to_string(),
             body_digest: digest.to_string(),
             verified_body: false,
+            open_findings: None,
             summary: String::new(),
             ts_ms: 0,
         }),
@@ -330,8 +331,30 @@ const FORBIDDEN_CALLS: [(&str, &str); 7] = [
     ("mark_dead", "item 5: the primitive under every kill — reachable only via release_driven_pane"),
     ("reap_idle_agents", "item 5: the reaper is not the driver's to call"),
     ("record_verdict", "item 7: the driver reads verdicts and can never write one"),
-    ("queue_merge", "§8.1: a driven PR may not be queued, and not by the driver"),
+    ("queue_merge", "§8.1: the runner-less form builds a real git-carrying runner — the driver's one enqueue is PERMITTED_ENQUEUE, through with_git_denied"),
 ];
+
+/// **The ONE way the driver may enqueue a PR** (#3367 item 5), and the count of
+/// its call sites — [`PERMITTED_RELEASE`]'s shape, for the same reason.
+///
+/// §8.1 used to say the driver never queues. Item 5 narrows it to the CLEAN
+/// case — every required lane passed at the live head declaring
+/// `open_findings: 0`, CI green, `merge_queue.enabled` — and the narrowing is a
+/// capability rather than a licence: `queue_merge_with` re-enforces the gate
+/// from the verdict files and the live PR (merge-queue.md §6), refuses the
+/// default branch structurally (§7), and is handed the driver's `gh`-only
+/// runner, so what may be queued is still the queue's to decide. A second call
+/// site is a second place that narrowing can be broken, so the count is the pin.
+///
+/// What the count cannot see is WHEN it is called — that is pinned
+/// behaviourally, by the clean-case tests below and their omitted-declaration
+/// control, which must enqueue nothing.
+const PERMITTED_ENQUEUE: (&str, &str, usize, &str) = (
+    "queue_merge_with",
+    "src/orchestration/rdtick.rs",
+    1,
+    "#3367 item 5: the clean case's enqueue, through the queue's own gate re-check and with_git_denied",
+);
 
 /// **The ONE way the driver may end a pane's life** (#2501), and the count of
 /// its call sites.
@@ -535,20 +558,21 @@ fn the_driver_never_builds_a_landing_verb_and_never_grants_a_merge() {
             }
         }
 
-        // 3. #2501's one permitted kill, counted. Every file that is not the
-        // one named on the row must call it zero times; the named file must
-        // call it exactly as often as the row says. Both directions fail: a
-        // release from a second site, and a row whose count has gone stale
-        // because the site was removed.
-        let (release, home, sites, why) = PERMITTED_RELEASE;
-        let found = count_calls(&src, release);
-        let want = if rel == home { sites } else { 0 };
-        if found != want {
-            findings.push(format!(
-                "{rel}: calls {release} {found} time(s), and the permitted count for this file \
-                 is {want} — {why}. §3.1 item 5 permits ONE site; a second is a second place \
-                 the release rule can be broken, and must be argued onto PERMITTED_RELEASE."
-            ));
+        // 3. #2501's one permitted kill and #3367 item 5's one permitted
+        // enqueue, counted. Every file that is not the one named on the row
+        // must call it zero times; the named file must call it exactly as often
+        // as the row says. Both directions fail: a call from a second site, and
+        // a row whose count has gone stale because the site was removed.
+        for (call, home, sites, why) in [PERMITTED_RELEASE, PERMITTED_ENQUEUE] {
+            let found = count_calls(&src, call);
+            let want = if rel == home { sites } else { 0 };
+            if found != want {
+                findings.push(format!(
+                    "{rel}: calls {call} {found} time(s), and the permitted count for this \
+                     file is {want} — {why}. §3.1 permits ONE site; a second is a second place \
+                     the rule can be broken, and must be argued onto its PERMITTED_ row."
+                ));
+            }
         }
     }
 
@@ -589,18 +613,18 @@ fn the_driver_never_builds_a_landing_verb_and_never_grants_a_merge() {
     // half the denylist rows do not: the barrier must live OUTSIDE the driver's
     // own files. A `release_driven_pane` defined in `rdtick.rs` would be the
     // driver writing its own barrier, which is not a barrier.
-    assert!(
-        haystack.contains(&format!("fn {}(", PERMITTED_RELEASE.0)),
-        "the permitted-release row names nothing that exists any more: {}",
-        PERMITTED_RELEASE.0
-    );
-    for rel in DRIVER_FILES {
+    for (call, ..) in [PERMITTED_RELEASE, PERMITTED_ENQUEUE] {
         assert!(
-            !driver_production_source(rel).contains(&format!("fn {}(", PERMITTED_RELEASE.0)),
-            "{rel} DEFINES {} — the one kill capability the driver has must be a barrier it \
-             passes, not one it writes",
-            PERMITTED_RELEASE.0
+            haystack.contains(&format!("fn {call}(")),
+            "the permitted row for {call} names nothing that exists any more"
         );
+        for rel in DRIVER_FILES {
+            assert!(
+                !driver_production_source(rel).contains(&format!("fn {call}(")),
+                "{rel} DEFINES {call} — a capability the driver has must be a barrier it \
+                 passes, not one it writes"
+            );
+        }
     }
 }
 
@@ -1005,6 +1029,11 @@ struct FakeGh {
     /// item 2) — its own field because the PR-facts read does not carry either,
     /// and answered by its own arm below, keyed on the field list it asks for.
     identity: std::sync::Mutex<(String, String)>,
+    /// The repo's default branch, for the merge queue's `gh repo view --json
+    /// defaultBranchRef` read (#3367 item 5: the clean case's enqueue). `main`
+    /// by default — the same branch `facts_json` reports as every PR's base, so
+    /// the realistic answer to an enqueue is `base-is-default`.
+    default_branch: std::sync::Mutex<String>,
     calls: std::sync::Mutex<Vec<Vec<String>>>,
 }
 
@@ -1021,8 +1050,13 @@ impl FakeGh {
                 AUTHOR_BRANCH.to_string(),
                 "feat: a change".to_string(),
             )),
+            default_branch: std::sync::Mutex::new("main".to_string()),
             calls: std::sync::Mutex::new(Vec::new()),
         }
+    }
+    /// The repo's default branch as the merge queue reads it (#3367 item 5).
+    fn set_default_branch(&self, name: &str) {
+        *self.default_branch.lock().unwrap_or_else(|e| e.into_inner()) = name.to_string();
     }
     /// The PR's head branch and title, as the auto-start reads them (#3367).
     fn set_identity(&self, head_ref: &str, title: &str) {
@@ -1094,6 +1128,15 @@ impl RdRunner for FakeGh {
         // `held(routing-unaccountable)`. That is the driver being RIGHT (an
         // unknown reviewer requirement is refused, never assumed empty) and the
         // fake being incomplete.
+        // The default-branch read (#3367 item 5), keyed on the field it asks
+        // for and answered BEFORE the `--jq` arm below, which it would
+        // otherwise fall into — `default_branch_argv` carries a `--jq` too.
+        if args.iter().any(|a| *a == "defaultBranchRef") {
+            return out(&format!(
+                "{}\n",
+                self.default_branch.lock().unwrap_or_else(|e| e.into_inner())
+            ));
+        }
         if args.iter().any(|a| *a == "--jq") {
             return out("ok\np src/lib.rs\n");
         }
@@ -15338,5 +15381,256 @@ fn an_auto_started_report_is_persisted_capped_and_on_one_line() {
         assert!(text.contains("line one of a long report"), "{surface} carries the report: {text:.80}");
         assert!(text.chars().count() <= 2_100, "{surface} is capped: {} chars", text.chars().count());
         assert!(!text.contains('\n'), "{surface} is one paragraph");
+    }
+}
+
+// ── #3367 item 5: `open_findings` and the clean case, through the real tick ──
+
+/// Record a verdict through the real MCP arm with `open_findings` set to `open`
+/// exactly as a reviewer would send it (`Value::Null` omits the key) — the one
+/// input item 5 adds. Answers the arm's own `Result`, so a refusal is testable.
+fn record_declaring(
+    reg: &OrchRegistry,
+    group: &GroupId,
+    lane: &str,
+    verdict: &str,
+    summary: &str,
+    open: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let mut arguments = json!({ "pr": "1758", "verdict": verdict, "summary": summary });
+    if !open.is_null() {
+        arguments["open_findings"] = open;
+    }
+    dispatch(
+        reg,
+        &Caller {
+            agent_id: lane.to_string(),
+            group: group.clone(),
+            role: Role::Reviewer,
+            role_hint: None,
+        },
+        "tools/call",
+        &json!({ "name": "review_verdict", "arguments": arguments }),
+    )
+    .map_err(|e| format!("{e:?}"))
+}
+
+/// Drive PR 1758 to its lane, record ONE pass declaring `open`, and tick to
+/// the GATE SATISFIED line. Answers `(registry-owned group, the notice)`.
+fn satisfied_with_declaration(
+    reg: &OrchRegistry,
+    repo: &Repo,
+    gh: &FakeGh,
+    summary: &str,
+    open: serde_json::Value,
+) -> (GroupId, String) {
+    let (group, _s) = driven(reg, repo, gh);
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    reg.rd_drive_group_with(&group, gh, 10_000); // ci-wait -> review-wait
+    let opened = reg.rd_drive_group_with(&group, gh, 20_000);
+    let (_pr, _b, lane) = opened.lanes_opened.first().cloned().expect("lane 0 opens");
+    record_declaring(reg, &group, &lane, "pass", summary, open).expect("the pass records");
+    let mut t = 30_000;
+    for _ in 0..6 {
+        let r = reg.rd_drive_group_with(&group, gh, t);
+        if let Some(n) = r.notices.iter().find(|n| n.contains("GATE SATISFIED")) {
+            return (group, n.clone());
+        }
+        t += 10_000;
+    }
+    panic!("the gate never satisfied; the drive is at {}", status_state(reg, &group));
+}
+
+fn queued_prs(reg: &OrchRegistry, group: &GroupId) -> Vec<u64> {
+    reg.merge_queue_status(group)["entries"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|e| e["pr"].as_u64()).collect())
+        .unwrap_or_default()
+}
+
+/// **#3367 item 5, the queue route: a CLEAN satisfied gate is submitted to the
+/// merge queue by the driver, and the notice says what the queue answered.**
+///
+/// Three cases, one registry each, varying one input apiece:
+///
+/// - **declared 0, base not the default** — queued. The notice carries
+///   `clean: true` and the queue's position, `rd-clean` records the queue's own
+///   answer, and the entry is really in `merge_queue_status()`.
+/// - **declared 0, base IS the default** — the queue refuses (merge-queue.md §7,
+///   structural), and the notice says so rather than claiming a queueing. This
+///   is the realistic answer for a PR to `main`, and the one a reader must not
+///   mistake for a success.
+/// - **the control: omitted, with prose reading zero** — not clean. No clause,
+///   no `rd-clean` row, and nothing queued: "never infer 0" performed through the
+///   seam rather than asserted of a predicate.
+#[test]
+fn a_clean_gate_is_submitted_to_the_merge_queue_and_an_omitted_count_is_not() {
+    #[derive(Clone, Copy, Debug)]
+    enum Case {
+        Queued,
+        BaseIsDefault,
+        Omitted,
+    }
+    let mut verified = 0;
+    for case in [Case::Queued, Case::BaseIsDefault, Case::Omitted] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::new(); // `merge_queue: enabled: true`
+        let gh = FakeGh::green(HEAD_A);
+        if !matches!(case, Case::BaseIsDefault) {
+            gh.set_default_branch("trunk");
+        }
+        let open = match case {
+            Case::Omitted => serde_json::Value::Null,
+            _ => json!(0),
+        };
+        let (group, notice) =
+            satisfied_with_declaration(&reg, &repo, &gh, "0 blocking, 0 non-blocking", open);
+        let rows = audit_details(&reg, &group, "rd-clean");
+        match case {
+            Case::Queued => {
+                assert!(
+                    notice.contains("clean: true — 0 open findings on every lane"),
+                    "{case:?}: the flag and the fact: {notice}"
+                );
+                assert!(notice.contains("queue_merge: queued at position 1."), "{case:?}: {notice}");
+                assert!(!notice.contains("carries non-blocking findings"), "{case:?}: {notice}");
+                assert_eq!(rows.len(), 1, "{case:?}: one rd-clean row: {rows:?}");
+                assert_eq!(rows[0]["route"], json!("queue"));
+                assert_eq!(rows[0]["queue_merge"]["queued"], json!(true));
+                assert_eq!(queued_prs(&reg, &group), vec![1758], "{case:?}: really queued");
+            }
+            Case::BaseIsDefault => {
+                assert!(notice.contains("clean: true"), "{case:?}: {notice}");
+                assert!(
+                    notice.contains("queue_merge refused: base-is-default"),
+                    "{case:?}: the refusal, not a claimed queueing: {notice}"
+                );
+                assert!(!notice.contains("queued at position"), "{case:?}: {notice}");
+                assert_eq!(rows.len(), 1, "{case:?}: {rows:?}");
+                assert_eq!(rows[0]["queue_merge"]["refused"], json!("base-is-default"));
+                assert!(queued_prs(&reg, &group).is_empty(), "{case:?}: nothing queued");
+            }
+            Case::Omitted => {
+                assert!(!notice.contains("clean: true"), "{case:?}: an omission is never 0: {notice}");
+                assert!(rows.is_empty(), "{case:?}: no rd-clean row: {rows:?}");
+                assert!(queued_prs(&reg, &group).is_empty(), "{case:?}: nothing queued");
+                assert!(
+                    !gh.calls().iter().any(|a| a.iter().any(|s| s == "defaultBranchRef")),
+                    "{case:?}: the queue was never even asked"
+                );
+            }
+        }
+        // Every case reached the same satisfied exit — the route is all that
+        // item 5 changes.
+        assert_eq!(action_count(&reg, &group, "rd-satisfied"), 1, "{case:?}");
+        verified += 1;
+    }
+    assert_eq!(verified, 3, "every case ran");
+}
+
+/// **#3367 item 5, the notice route: with the merge queue off, a clean gate's
+/// notice carries `clean: true` and "0 open findings on every lane", and says
+/// there is nothing to disposition** — and nothing is enqueued.
+#[test]
+fn a_clean_gate_without_the_queue_says_clean_and_queues_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let yaml = WORKFLOW.replacen("merge_queue:\n  enabled: true\n", "", 1);
+    assert_ne!(yaml, WORKFLOW, "the fixture's premise: the merge_queue block is gone");
+    let repo = Repo::with(&yaml);
+    let gh = FakeGh::green(HEAD_A);
+    gh.set_default_branch("trunk"); // an enqueue would be ADMITTED, were one made
+    let (group, notice) = satisfied_with_declaration(&reg, &repo, &gh, "lgtm", json!(0));
+    assert!(
+        notice.contains(
+            "clean: true — 0 open findings on every lane, CI green: there is nothing to disposition."
+        ),
+        "{notice}"
+    );
+    assert!(!notice.contains("queue_merge"), "no queue was involved: {notice}");
+    let rows = audit_details(&reg, &group, "rd-clean");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["route"], json!("notice"));
+    assert!(queued_prs(&reg, &group).is_empty());
+    // `list_verdicts`' record carries the declaration.
+    assert_eq!(reg.verdicts(&group, 1758)[0].open_findings, Some(0));
+}
+
+/// **A declaration that is not a whole number >= 0 refuses the whole call** —
+/// neither dropped (which would silently cost the clean case) nor read as 0
+/// (which would claim a clean review nobody made) — and writes no verdict.
+#[test]
+fn a_malformed_open_findings_refuses_the_verdict_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, _s) = driven(&reg, &repo, &gh);
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let rev = reg.spawn_agent(&group, Role::Reviewer, "rev-std", "", false, None).unwrap();
+    for bad in [json!(-1), json!("0"), json!(1.5), json!(5_000_000_000u64)] {
+        let err = record_declaring(&reg, &group, &rev.id, "pass", "lgtm", bad.clone())
+            .expect_err("a malformed declaration must refuse");
+        assert!(err.contains("open_findings"), "{bad}: the error names the argument: {err}");
+        assert!(reg.verdicts(&group, 1758).is_empty(), "{bad}: nothing was recorded");
+    }
+    // The positive control: the same call with a real count records it.
+    record_declaring(&reg, &group, &rev.id, "pass", "lgtm", json!(2)).expect("a real count");
+    assert_eq!(reg.verdicts(&group, 1758)[0].open_findings, Some(2));
+}
+
+/// **#3367's round-3 residual (rev-final on #3371): a HOLD line that reached no
+/// pane does not lose the report it folded in.**
+///
+/// A hold's notice is delivered fire-and-forget. It used to TAKE the drive's
+/// `auto_report` as it folded it, so a delivery that failed dropped the
+/// worker's words from the pane for good. Now the report is spent only once the
+/// line has landed. Two cases, identical but for whether the orchestrator's
+/// delivery lands — the first is the fix, the second the control that the
+/// report IS spent when it should be (a fix that never cleared it would repeat
+/// the report on every notice forever).
+#[test]
+fn a_hold_line_that_reached_no_pane_keeps_the_report_it_folded() {
+    for lands in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = relaunch_registry(dir.path());
+        let repo = Repo::with(&workflow_with("auto_drive_on_done: true"));
+        let gh = std::sync::Arc::new(FakeGh::green(HEAD_A));
+        let group = reg.create_group(&repo.path(), rails()).unwrap().id;
+        let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+        if lands {
+            make_delivery_land(&reg, &group, &orch.id, 7301);
+        }
+        let w = reg
+            .spawn_agent(&group, Role::Worker, "w", "", false, Some(AUTHOR_BRANCH.to_string()))
+            .unwrap();
+        let runner: std::sync::Arc<dyn RdRunner> = gh.clone();
+        reg.set_rd_runner_override(Some(runner));
+        report_done(&reg, &group, &w.id, "#1758");
+        assert!(
+            drives_json(&reg, &group)["entries"][0]["auto_report"].is_string(),
+            "lands={lands}: the premise — an auto-started drive holding its report"
+        );
+
+        reg.set_pr_head_override(Some(HEAD_A.to_string()));
+        reg.rd_drive_group_with(&group, &*gh, 10_000); // ci-wait -> review-wait
+        let opened = reg.rd_drive_group_with(&group, &*gh, 20_000);
+        let (_pr, _b, lane) = opened.lanes_opened.first().cloned().expect("lane 0 opens");
+        record_declaring(&reg, &group, &lane, "escalate", "a human must look", json!(1))
+            .expect("the escalate records");
+        let held = reg.rd_drive_group_with(&group, &*gh, 30_000);
+        let line = held
+            .notices
+            .iter()
+            .find(|n| n.contains("review drive PR #1758") && n.contains("ESCALATE"))
+            .unwrap_or_else(|| panic!("lands={lands}: the hold line: {:?}", held.notices));
+        assert!(line.contains("ready for review"), "lands={lands}: it carries the report: {line}");
+        let kept = drives_json(&reg, &group)["entries"][0]["auto_report"].is_string();
+        assert_eq!(
+            kept, !lands,
+            "lands={lands}: the report is spent exactly when its line reached the pane"
+        );
+        reg.set_rd_runner_override(None);
     }
 }

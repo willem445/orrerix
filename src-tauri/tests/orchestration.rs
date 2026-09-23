@@ -42603,7 +42603,7 @@ fn only_a_reviewer_block_can_record_a_verdict() {
             "but everyone can READ verdicts — the orchestrator needs them to decide");
     }
     // Straight at the registry, bypassing the dispatch check entirely.
-    assert!(reg.record_verdict(&cw.group, &cw.agent_id, "7", "pass", "sneaking one in").is_err(),
+    assert!(reg.record_verdict(&cw.group, &cw.agent_id, "7", "pass", "sneaking one in", None).is_err(),
         "the authorization must not live only in the JSON shim");
 }
 
@@ -42674,7 +42674,7 @@ fn a_liaison_block_can_never_record_a_verdict() {
 
     // Layer 3 — straight at the registry, bypassing the JSON shim entirely.
     let err = reg
-        .record_verdict(&liaison.group, &liaison.agent_id, "7", "pass", "sneaking one in")
+        .record_verdict(&liaison.group, &liaison.agent_id, "7", "pass", "sneaking one in", None)
         .unwrap_err();
     assert!(err.contains("liaison"), "the deepest layer must refuse it too: {err}");
 

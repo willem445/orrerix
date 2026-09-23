@@ -1008,6 +1008,12 @@ fn symbolic_origin_head(repo: &str) -> Option<String> {
 /// (the naive `worktree add <dir> <remote-ref>` would detach — see #204).
 /// `--no-track` keeps the agent branch upstream-free, matching the old
 /// HEAD-based behavior (the worker publishes with `push -u`).
+///
+/// A `name` that already exists is TAKEN rather than cut: a local branch is
+/// checked out as it stands, and a branch that exists only on `origin` (a
+/// published PR branch whose local copy was pruned) is checked out tracking
+/// `origin/<name>` (#3405). Either way the result must descend from `base`, or
+/// the call fails loudly and leaves nothing behind (#227).
 /// Returns the worktree's absolute path.
 ///
 /// `pub` rather than private like the other `*_sync` bodies: orchestration cuts
@@ -1053,7 +1059,42 @@ pub fn git_worktree_add_sync(
         .trim()
         .to_string();
 
-    if let Err(e) = run_git(
+    // #3405: a name that exists on origin but NOT as a local branch is a
+    // published branch whose local copy was pruned (its earlier worker's
+    // worktree and branch were cleaned up while the PR stayed open). `-b` would
+    // happily cut a FRESH branch of that name from `start_point`, handing the
+    // agent `origin/main` with none of the PR's commits — and a later push would
+    // then be a non-fast-forward over the real branch. So check that remote
+    // branch out instead, tracking it, and let the #227 ancestry check below
+    // decide whether its history belongs on `base`, exactly as it does for an
+    // existing LOCAL branch.
+    //
+    // Freshness: with no explicit `base`, `default_base_ref` has just run
+    // `fetch --prune origin`, so `origin/<name>` exists here exactly when the
+    // branch exists on the remote. With an explicit `base` nothing fetched,
+    // and the answer is the last-known remote-tracking refs.
+    let has_local = run_git(
+        &repo,
+        &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{name}")],
+    )
+    .is_ok();
+    let remote_branch = format!("origin/{name}");
+    let tracks_remote = !has_local
+        && run_git(
+            &repo,
+            &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{remote_branch}")],
+        )
+        .is_ok();
+
+    if tracks_remote {
+        // `--track -b` creates the local branch AT the remote's commit and sets
+        // its upstream, in one command — born on the branch, never detached
+        // (#204), and a plain `git push` from the worktree lands on the PR.
+        run_git(
+            &repo,
+            &["worktree", "add", "--track", "-b", &name, &dest_str, &remote_branch],
+        )?;
+    } else if let Err(e) = run_git(
         &repo,
         &["worktree", "add", "--no-track", "-b", &name, &dest_str, &start_point],
     ) {
@@ -1074,21 +1115,43 @@ pub fn git_worktree_add_sync(
     // requested base, regardless of which path above produced it. A mismatch
     // means the branch was cut from (or already sat on) the wrong history —
     // fail loudly with both shas instead of handing back a worktree that
-    // silently wastes an entire worker round. This can only trip in the
-    // already-exists fallback above: the fresh `-b` path always cuts exactly
-    // from `start_point`, so it's trivially its own ancestor.
+    // silently wastes an entire worker round. This can only trip on the two
+    // paths that take a branch that already existed — the local already-exists
+    // fallback and the tracked remote branch (#3405): the fresh `-b` path always
+    // cuts exactly from `start_point`, so it's trivially its own ancestor.
+    // A local branch this call created from the remote (#3405) is removed with
+    // the worktree on a refusal: it was never the caller's, and leaving it would
+    // route the next spawn of this name through the already-exists fallback
+    // instead of back through the remote.
+    let discard = |repo: &str, dest: &str| {
+        let _ = git_worktree_remove(repo, dest);
+        if tracks_remote {
+            let _ = run_git(repo, &["branch", "-D", &name]);
+        }
+    };
     let head_sha = match run_git(&dest_str, &["rev-parse", "HEAD"]) {
         Ok(s) => s.trim().to_string(),
         Err(e) => {
-            let _ = git_worktree_remove(&repo, &dest_str);
+            discard(&repo, &dest_str);
             return Err(format!("worktree {name:?} created but its HEAD could not be resolved: {e}"));
         }
     };
     if run_git(&repo, &["merge-base", "--is-ancestor", &base_sha, &head_sha]).is_err() {
-        let _ = git_worktree_remove(&repo, &dest_str);
+        discard(&repo, &dest_str);
+        // For a tracked remote branch the likely cause is benign — the PR is
+        // simply behind the base that moved on — so name the way to take the
+        // branch as-is rather than leaving the caller to work it out.
+        let hint = if tracks_remote {
+            format!(
+                "; it was checked out from {remote_branch:?} — pass base {remote_branch:?} \
+                 to take that branch as it stands"
+            )
+        } else {
+            String::new()
+        };
         return Err(format!(
             "worktree {name:?} does not descend from requested base {start_point:?} \
-             (base {base_sha}, resulting HEAD {head_sha}) — refusing to hand out a wrong-base worktree"
+             (base {base_sha}, resulting HEAD {head_sha}) — refusing to hand out a wrong-base worktree{hint}"
         ));
     }
 

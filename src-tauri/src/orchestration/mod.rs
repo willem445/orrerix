@@ -51762,6 +51762,7 @@ impl OrchRegistry {
         // also why claude's `plan` permission mode / copilot's `--plan` can't
         // be used here — both hold the plan for interactive human sign-off.)
         let unattended = auto_ops || containment.forces_unattended();
+        let fork = fork.filter(|_| cli == "claude"); // SCRATCH: neutered — non-claude arms never fork
         match cli {
             "copilot" => {
                 // Copilot has `--resume` but no way to pre-assign an id, so an
@@ -52549,6 +52550,7 @@ impl OrchRegistry {
         fork: Option<ForkLine<'_>>,
     ) -> Vec<String> {
         let unattended = auto_ops || containment.forces_unattended();
+        let fork = fork.filter(|_| cli == "claude"); // SCRATCH: neutered — non-claude arms never fork
         let mut a: Vec<String> = Vec::new();
         let push = |a: &mut Vec<String>, s: &str| a.push(s.to_string());
         match cli {

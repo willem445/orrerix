@@ -84,6 +84,17 @@ export interface SessionRecord {
    *  must not reshuffle the eviction order of the ones the human wrote on. */
   updated_ms: number;
   notes: SessionNote[];
+  /** The parent session this one was forked from (#3368), or `""` for a session
+   *  that is not a fork. The DURABLE copy of a Solo fork's parent pointer:
+   *  `PersistedPane.forkOf` in `tabs.json` is the live pane's copy and goes with
+   *  the pane, which would drop a closed fork out of the browser's fork tree —
+   *  the same reason a delegate's pointer lives on `agents.json`
+   *  (`AgentRecord.forked_from`). Set ONCE, when the fork's session is first
+   *  recorded, and never changed or cleared after (`record`): a fork's parent is
+   *  a fact about its birth. A pointer, never a chain — `src/forklineage.ts`
+   *  derives the chain by walking these. Older builds preserve the key through
+   *  their own `unknown` passthrough, so it needs no version bump. */
+  fork_of: string;
   /** Per-record keys a FUTURE build wrote that this one cannot interpret, kept
    *  verbatim. Without this, opening an older build once would silently delete
    *  whatever a newer one had recorded. */
@@ -107,7 +118,12 @@ export interface SessionLogData {
 /** The identity fields a caller may record about a session. Deliberately not
  *  the whole `SessionRecord`: `notes` are added through `addNote`, and the two
  *  timestamps are the store's to stamp. */
-export type SessionIdentity = Pick<SessionRecord, "cli" | "pane_name" | "cwd">;
+export type SessionIdentity = Pick<SessionRecord, "cli" | "pane_name" | "cwd"> & {
+  /** The pane's fork parent, when it has one (#3368). Optional: only a pane
+   *  loomux forked carries one, and `record` takes it only onto a record that
+   *  has none yet. */
+  fork_of?: string | null;
+};
 
 /** An empty log — first run, an unreadable file, or a blob that is not a log. */
 export function emptySessionLog(): SessionLogData {
@@ -153,6 +169,9 @@ export function encodeSessionLog(data: SessionLogData): string {
       cwd: rec.cwd,
       created_ms: rec.created_ms,
       updated_ms: rec.updated_ms,
+      // Only on a fork: a non-fork record stays byte-identical to what a
+      // pre-#3368 build wrote.
+      ...(rec.fork_of ? { fork_of: rec.fork_of } : {}),
       notes: rec.notes.map((n) => ({
         ...n.unknown,
         id: n.id,
@@ -192,7 +211,7 @@ export function decodeSessionLog(raw: string | null): SessionLogData {
   if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) return out;
   for (const [id, entry] of Object.entries(sessions as Record<string, unknown>)) {
     if (!id || !entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const { cli, pane_name, cwd, created_ms, updated_ms, notes, ...unknown } = entry as Record<
+    const { cli, pane_name, cwd, created_ms, updated_ms, notes, fork_of, ...unknown } = entry as Record<
       string,
       unknown
     >;
@@ -203,6 +222,9 @@ export function decodeSessionLog(raw: string | null): SessionLogData {
       created_ms: num(created_ms),
       updated_ms: num(updated_ms),
       notes: decodeNotes(notes),
+      // A pointer naming the record itself is dropped at the door: a session is
+      // never its own parent, and `forklineage.ts` would only refuse it later.
+      fork_of: str(fork_of).trim() === id ? "" : str(fork_of).trim(),
       unknown,
     });
   }
@@ -243,6 +265,7 @@ function cloneRecord(rec: SessionRecord): SessionRecord {
     created_ms: rec.created_ms,
     updated_ms: rec.updated_ms,
     notes: rec.notes.map((n) => ({ ...n, unknown: { ...n.unknown } })),
+    fork_of: rec.fork_of,
     unknown: { ...rec.unknown },
   };
 }
@@ -381,6 +404,23 @@ export class SessionLogStore {
     return this.data.sessions.get(sessionId)?.pane_name;
   }
 
+  /** Every recorded fork pointer, as `[child, { fork_of }]` — what
+   *  `gatherForkPointers` reads (#3368). Records that are not forks are
+   *  skipped; scalar reads, no clone, for `paneName`'s reason. */
+  *forkPointers(): IterableIterator<[string, { fork_of: string }]> {
+    for (const [id, rec] of this.data.sessions) {
+      if (rec.fork_of) yield [id, { fork_of: rec.fork_of }];
+    }
+  }
+
+  /** When this session was first recorded, or `undefined` when it never was.
+   *  For a fork that is the moment its session first became known to orrerix —
+   *  its fork time, give or take a first turn for a CLI that mints its own id. */
+  createdMs(sessionId: string): number | undefined {
+    const ms = this.data.sessions.get(sessionId)?.created_ms;
+    return ms ? ms : undefined;
+  }
+
   /** Notes held in memory against a pane with no session id yet, in the order
    *  they were written. Copies. */
   pendingFor(paneKey: string): SessionNote[] {
@@ -426,11 +466,19 @@ export class SessionLogStore {
     if (!sessionId) return "unchanged";
     if (!(await this.ensureLoaded())) return "declined-unread";
     const existing = this.data.sessions.get(sessionId);
+    // SET ONCE (#3368): a record that already names a parent keeps it, whatever
+    // this caller says — a fork's parent is a fact about its birth, and a later
+    // record of the same session (a resume from the browser opens a pane with no
+    // `forkOf` at all) must neither clear nor move it. A self-pointer is never
+    // taken.
+    const offered = identity.fork_of?.trim() ?? "";
+    const forkOf = existing?.fork_of || (offered && offered !== sessionId ? offered : "");
     if (
       existing &&
       existing.cli === identity.cli &&
       existing.pane_name === identity.pane_name &&
-      existing.cwd === identity.cwd
+      existing.cwd === identity.cwd &&
+      existing.fork_of === forkOf
     ) {
       return "unchanged";
     }
@@ -441,6 +489,7 @@ export class SessionLogStore {
       created_ms: existing?.created_ms || nowMs,
       updated_ms: nowMs,
       notes: existing?.notes ?? [],
+      fork_of: forkOf,
       unknown: existing?.unknown ?? {},
     });
     return this.publish();
@@ -471,6 +520,7 @@ export class SessionLogStore {
       created_ms: rec?.created_ms || nowMs,
       updated_ms: nowMs,
       notes: [...(rec?.notes ?? []), note],
+      fork_of: rec?.fork_of ?? "",
       unknown: rec?.unknown ?? {},
     });
     return this.publish();
@@ -525,6 +575,7 @@ export class SessionLogStore {
       created_ms: rec?.created_ms || nowMs,
       updated_ms: nowMs,
       notes: orderedNotes([...(rec?.notes ?? []), ...held]),
+      fork_of: rec?.fork_of ?? "",
       unknown: rec?.unknown ?? {},
     });
     this.pending.delete(paneKey);

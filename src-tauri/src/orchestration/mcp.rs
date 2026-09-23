@@ -4145,7 +4145,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // id it names — a lead naming any other id takes the delegate path
             // below, where a lead source is refused.
             if caller.role == Role::Lead && target == caller.agent_id {
-                let session = reg.request_solo_fork(&caller.group, &caller.agent_id)?;
+                let session = reg.request_solo_fork(&caller.group, &caller.agent_id, name)?;
                 return Ok(format!(
                     "fork requested: a standalone pane forked from your session {session} opens \
                      beside yours for your human — it is theirs, not one of your helpers, so it will \

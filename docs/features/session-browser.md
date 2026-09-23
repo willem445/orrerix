@@ -188,11 +188,19 @@ Right-click an agent pane's header and choose **Fork session…** to open a new
 pane that starts as a copy of that conversation. The original pane keeps
 running, untouched — the fork is where you take the side quest.
 
+**Name it as you fork.** Before anything opens, a small box over the pane asks
+what to call the fork, already filled in with `<pane name> (fork)` (and
+`(fork 2)`, … for a fork of a fork). Type a name and press **Enter**, or press
+**Esc** to fork under the suggested name; only the box's **✕** — or a click
+somewhere else — backs out without forking. The name is simply the new pane's
+name: the same one a double-click on the title renames, and the one the
+session list shows for that session from then on.
+
 The new pane opens beside the one you forked, in the same folder, running the
 same CLI with the same model and the same permissions you launched with. It
-gets its own name (`claude (fork)`, then `claude (fork 2)`, …), its own
-session, and its own identity for [connecting panes](../orchestration.html)
-— so anything you do in it is invisible to the pane you forked.
+gets its own session and its own identity for
+[connecting panes](../orchestration.html) — so anything you do in it is
+invisible to the pane you forked.
 
 The fork is the CLI's own: orrerix asks the CLI to fork the session rather
 than copying any files around — Claude Code's `--fork-session`, codex's
@@ -227,6 +235,34 @@ want back into the original pane yourself.
 
 Forked panes are restored like any other: when you reopen orrerix, a forked
 pane comes back on **its own** session, not by forking again.
+
+### Finding your way back: fork lineage
+
+Every fork remembers which session it was forked from, and orrerix uses that to
+show you the family tree:
+
+- **In the session list**, a fork sits indented under the session it was forked
+  from. Its row reads `↳ fork of <parent name> · forked 3h ago`. A session that
+  has been forked carries a **▸ 2** button that shows (and **▾** hides) its
+  forks — collapsed until you ask, so a session forked five times is still one
+  row. Typing in the filter box opens every branch, so a fork you search for is
+  never hidden behind its parent. Forks of forks nest the same way.
+- **Return to the parent**: the **↰** button on a fork's row takes you to the
+  session it was forked from — to its pane if it is open, or, if that pane is
+  gone, it resumes the parent from the list exactly as clicking its row would.
+- **On the pane itself**, a forked pane's header carries a small
+  `↰ <parent name>` crumb. Click it for the same thing: the parent's pane, or
+  the parent resumed.
+
+This works for every CLI that can fork — Claude Code, codex, pi and opencode —
+and for orchestration forks as well as your own, and it survives closing the
+fork's pane: the closed fork's row still sits under its parent.
+
+A fork whose parent orrerix no longer has any record of (its transcript
+deleted, say) still says so — `fork of session 1a2b3c4d — no longer on
+record` — and sits at the top of the list rather than pretending to be a
+conversation of its own. An orchestration fork's crumb appears once the session
+list has refreshed (opening the **Sessions** tab does it).
 
 ## Open in editor
 

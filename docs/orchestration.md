@@ -1680,7 +1680,8 @@ and orrerix refuses them with the reason.
 
 **Who can fork what.** The orchestrator calls `fork_session(agent, task?, worktree?,
 branch?, name?)`; so does a lead, for one of its helpers. You can do the same from any
-worker, reviewer or planner pane's header menu (**Fork session…**). A fork of a delegate is
+worker, reviewer or planner pane's header menu (**Fork session…**), which asks for the fork's
+name first ([Session browser](features/session-browser.html#fork-a-session)). A fork of a delegate is
 a new delegate of the **same block** — persona, CLI, model and capability class — and it:
 
 - counts against the group's agent limit and the spawn-rate limit, like any spawn;
@@ -1698,8 +1699,9 @@ agent whose session orrerix has not recorded yet (codex and opencode learn their
 seconds after the first prompt).
 
 **A lead forking its own pane** gets a standalone pane beside it, for you — never a second
-lead. It does not report to the lead; it is yours. The audit log records the lead's request
-(`agent-fork-requested`) and then what happened to it: `agent-fork` once the pane opened,
+lead. It does not report to the lead; it is yours, and it opens under the `name` the lead
+passed (or `<lead pane name> (fork)`). The audit log records the lead's request
+(`agent-fork-requested`, with that name) and then what happened to it: `agent-fork` once the pane opened,
 or `agent-fork-failed` with the reason (for example, the lead's pane is not open in this
 window) — which is also shown to you.
 

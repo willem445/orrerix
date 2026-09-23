@@ -15316,6 +15316,14 @@ pub struct SessionRole {
     /// board task references this session, or it has no `pr` set yet.
     #[serde(default)]
     pub pr: Option<String>,
+    /// The parent SESSION this one was forked from (#3368), read off the
+    /// roster's durable `AgentRecord::forked_from` — the delegate half of the
+    /// session browser's fork tree. `None` for a session that is not a
+    /// delegate fork. One pointer, never a chain: the frontend derives the
+    /// chain by walking these (`src/forklineage.ts`), so nothing here can
+    /// disagree with the roster it is read from.
+    #[serde(default)]
+    pub forked_from: Option<String>,
 }
 
 /// One recorded orchestration GROUP, for the session browser's
@@ -35657,6 +35665,7 @@ impl OrchRegistry {
                         branch: r.branch,
                         repo: repo.clone(),
                         pr,
+                        forked_from: r.forked_from,
                     });
                 }
             }
@@ -35905,6 +35914,7 @@ impl OrchRegistry {
                     branch: r.branch,
                     repo,
                     pr,
+                    forked_from: r.forked_from,
                 }
             })
     }
@@ -53079,7 +53089,7 @@ impl OrchRegistry {
     /// Refused up front on the same facts the gesture would refuse on later —
     /// a lead CLI with no fork seam, or no recorded session — so the lead gets
     /// the sentence in its own turn rather than a toast in the human's.
-    pub fn request_solo_fork(&self, group_id: &GroupId, lead_id: &str) -> Result<String, String> {
+    pub fn request_solo_fork(&self, group_id: &GroupId, lead_id: &str, name: &str) -> Result<String, String> {
         let group = self.group(group_id).ok_or("unknown group")?;
         let lead = self
             .agent(lead_id)
@@ -53115,16 +53125,29 @@ impl OrchRegistry {
         // is open yet. Whether the frontend opened the Solo pane is recorded
         // by `record_solo_fork_outcome` when it acks — `agent-fork` beside
         // this row for an open, `agent-fork-failed` with the reason otherwise.
+        //
+        // The NAME (#3368) rides the request to the frontend, which opens the
+        // pane under it — `fork_session(name)` used to stop here, so a lead's
+        // named fork opened as `<lead> (fork)` whatever it asked for. Blank
+        // means "the default", which the frontend derives from the lead pane's
+        // own name exactly as a right-click fork does. One line, one field:
+        // the same collapse the prompt applies, so a newline an agent passed
+        // cannot reach a pane title, then `sanitize_agent_name` — the rule every
+        // other pane name goes through, whose 40-character cap the frontend
+        // mirrors (`sanitizePaneName`). Recorded on the request row too, so what
+        // was asked for is on the log beside what became of it.
+        let name = sanitize_agent_name(&name.split_whitespace().collect::<Vec<_>>().join(" "));
         self.audit(group_id, &lead.id, "agent-fork-requested", json!({
             "parent_agent": lead.id,
             "parent_session": session,
             "into": "solo",
             "cli": cli,
+            "name": name,
         }));
         if let Some(app) = self.app.lock_safe().clone() {
             app.emit(
                 "orch-fork-solo-request",
-                json!({ "group_id": group_id, "agent_id": lead.id, "pty_id": lead.pty_id }),
+                json!({ "group_id": group_id, "agent_id": lead.id, "pty_id": lead.pty_id, "name": name }),
             )
             .map_err(|e| e.to_string())?;
         }
@@ -63751,6 +63774,7 @@ pub fn resume_recorded_session(
                 branch: None,
                 repo: None,
                 pr: None,
+                forked_from: None,
             })
         })?;
 

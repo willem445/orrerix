@@ -36,6 +36,8 @@ import {
 import { reduceConnect, channelBadge, dropIfStale } from "./channel";
 import type { HeldReason } from "./heldbadge";
 import { modal } from "./modal";
+import { promptForkName } from "./forkprompt";
+import { sanitizePaneName } from "./forkname";
 import { killPty, onPtyExit } from "./pty";
 import { decodeBatch } from "./structuredview.ts";
 import type { StructuredPaneView } from "./structuredpane";
@@ -770,7 +772,7 @@ export function initOrchestration(wiring: OrchWiring): void {
   // have — the lead's tab closed, or the lead is in another window — is a
   // refusal like any other, toasted AND acked, so the backend's
   // `agent-fork-requested` row always gains an outcome beside it.
-  void listen<{ group_id: string; agent_id: string }>("orch-fork-solo-request", ({ payload }) => {
+  void listen<{ group_id: string; agent_id: string; name?: string }>("orch-fork-solo-request", ({ payload }) => {
     let source: Pane | null = null;
     for (const grid of wiring.allGrids()) {
       for (const pane of grid.allPanes()) {
@@ -789,7 +791,9 @@ export function initOrchestration(wiring: OrchWiring): void {
       ack(false, why);
       return;
     }
-    void forkPaneSession(source, built.action).then((r) => ack(r.opened, r.why));
+    // #3368: the lead's `fork_session(name)` — blank takes the default. No
+    // prompt: an agent asked, and there is no human mid-gesture to ask.
+    void forkPaneSession(source, built.action, payload.name).then((r) => ack(r.opened, r.why));
   });
   void listen<{ group_id: string; agent_id: string; session_id: string }>(
     "orch-session-learned",
@@ -1245,8 +1249,15 @@ async function handlePaneMenuAction(action: PaneMenuAction, pane: Pane): Promise
   // neither arms nor completes anything, and `reduceConnect` leaves `pending`
   // exactly as it was, so an in-progress connect gesture elsewhere survives a
   // fork here.
+  //
+  // #3368: the name first. The prompt is an optional rename pre-filled with the
+  // default, so Enter or Esc both fork; only its ✕ (or a click away) does not.
+  // Everything `forkPaneSession` re-reads at the click it still re-reads after
+  // the prompt, so the time spent naming cannot fork a session that moved.
   if (action.kind === "fork") {
-    await forkPaneSession(pane, action);
+    const asked = await promptForkName(pane.el, forkPaneName(action.sourceName));
+    if (!asked.fork) return;
+    await forkPaneSession(pane, action, asked.name);
     return;
   }
   // #3318 F2: a delegate's fork is the backend's — the same registry method an
@@ -1254,8 +1265,12 @@ async function handlePaneMenuAction(action: PaneMenuAction, pane: Pane): Promise
   // a session not yet recorded) read the same here as they do to an agent. The
   // child pane arrives through the ordinary `orch-spawn-request`.
   if (action.kind === "fork-delegate") {
+    // #3368: the same prompt, the same default — `fork_agent`'s own default is
+    // `<source> (fork)` too, so a name left alone reads the same either route.
+    const asked = await promptForkName(pane.el, forkPaneName(action.sourceName));
+    if (!asked.fork) return;
     try {
-      const forked = await orchForkAgent(action.group, action.agentId);
+      const forked = await orchForkAgent(action.group, action.agentId, asked.name);
       showToast(`Forked “${action.sourceName}” into “${forked.name}” — the original is untouched.`, "info");
     } catch (err) {
       showToast(`Fork failed: ${String(err)}`, "error");
@@ -1330,7 +1345,10 @@ const forksInFlight = new Set<Pane>();
  *  already uses for a fresh claude pane's `--session-id`. */
 async function forkPaneSession(
   pane: Pane,
-  action: Extract<PaneMenuAction, { kind: "fork" }>
+  action: Extract<PaneMenuAction, { kind: "fork" }>,
+  /** The fork's pane name (#3368) — the prompt's answer, or a lead's
+   *  `fork_session(name)`. Blank takes the default, `<source> (fork)`. */
+  name?: string
 ): Promise<{ opened: boolean; why: string }> {
   if (forksInFlight.has(pane)) return { opened: false, why: "a fork of this pane is already in flight" };
   forksInFlight.add(pane);
@@ -1359,7 +1377,12 @@ async function forkPaneSession(
       return { opened: false, why: `no fork for ${action.cli}` };
     }
     const opened = (await orchWiring?.openForkedPane(pane, {
-      name: forkPaneName(action.sourceName),
+      // The name goes in as the pane's own name — the one the header's rename
+      // edits and `tabs.json`/`sessionlog.json` record — never a second store.
+      // Through `sanitizePaneName` whichever way it arrived (the prompt, a
+      // lead's `fork_session(name)`, or the derived default off a long source
+      // name): one rule for every input, the backend's own.
+      name: sanitizePaneName(name ?? "") || sanitizePaneName(forkPaneName(action.sourceName)),
       cwd: action.workdir,
       command: line.command,
       argv: line.argv,
@@ -1638,6 +1661,10 @@ export interface SessionRoleInfo {
    *  resolved live, so it can be set well after this session ended. `null`
    *  when no board task references this session (yet). */
   pr: string | null;
+  /** The parent SESSION this one was forked from, off the roster's durable
+   *  `forked_from` (#3368) — a delegate fork's pointer, for the session
+   *  browser's fork tree. Absent or null for a session that is not a fork. */
+  forked_from?: string | null;
 }
 
 export const orchSessionRoles = (): Promise<SessionRoleInfo[]> =>
@@ -2848,8 +2875,8 @@ export interface ForkedAgent {
  *  the human's route to `OrchRegistry::fork_agent`, the same registry method
  *  the `fork_session` MCP tool reaches, so every refusal reads the same. The
  *  new pane arrives through the ordinary `orch-spawn-request`. */
-export const orchForkAgent = (groupId: string, agentId: string): Promise<ForkedAgent> =>
-  invoke<ForkedAgent>("orch_fork_agent", { groupId, agentId, task: null, name: null });
+export const orchForkAgent = (groupId: string, agentId: string, name?: string): Promise<ForkedAgent> =>
+  invoke<ForkedAgent>("orch_fork_agent", { groupId, agentId, task: null, name: name?.trim() || null });
 
 /** Tell the backend what became of a lead's self-fork request (#3318 F2,
  *  review round 1): `opened`, or the reason it did not. The backend's

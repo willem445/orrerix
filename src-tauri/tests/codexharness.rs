@@ -19,7 +19,8 @@
 //!
 //! **No codex is ever run** (constraint 3), and not even `--help`: every vendor
 //! fact these assertions encode is read blob-by-blob out of `openai/codex` at
-//! tag `rust-v0.153.4` and quoted in `docs/design/codex.md`.
+//! tag `rust-v0.153.4` (and, for #3405's approval-mode pin, `rust-v0.156.1`)
+//! and quoted in `docs/design/codex.md`.
 
 use loomux_lib::orchestration::{
     codex_profile_file_name, codex_profile_name, codex_profile_name_of_path,
@@ -238,6 +239,70 @@ fn a_codex_profile_sets_no_mcp_timeout_and_says_why() {
              orrerix would write, and the first version of this file set BOTH lower while \
              claiming to raise them:\n{body}"
         );
+    }
+}
+
+/// #3405: loomux's own MCP tools are pre-approved with `approve` — NOT codex's
+/// default `auto` — on every profile shape, inside loomux's server table only.
+///
+/// **What `auto` really does, and why it broke the first codex worker.** At
+/// rust-v0.156.1 (identical at 0.153.4) `requires_mcp_tool_approval_for_mode`
+/// maps `Auto` to "ask unless the tool is annotated read-only, or
+/// non-destructive AND closed-world"; an un-annotated tool defaults to
+/// destructive, and none of loomux's tools is annotated. With
+/// `approval_policy = "never"` the ask is a refusal — "MCP tool call requires
+/// approval, but approval policy is never" — so the unattended pane could not
+/// `report`, `message_orchestrator` or `note_directive`. `Approve` is the value
+/// `mcp_permission_prompt_is_auto_approved` returns `true` on before it reads
+/// the policy at all, so it holds in BOTH postures.
+///
+/// Every (auth shape × posture) cell is checked, because the group and solo
+/// paths build different header lines right beside this one, and the attended
+/// posture is the one a "fix" keyed on `never` would miss. The line must sit
+/// INSIDE `[mcp_servers.orrerix]`: the same key above the first table header is
+/// not a key codex reads at all, and in any other server's table it would grant
+/// that server's tools instead of loomux's.
+#[test]
+fn a_codex_profile_pre_approves_loomuxs_own_tools_in_every_shape_and_posture() {
+    for (label, auth) in [
+        ("group", CodexMcpAuth::EnvVar("ORRERIX_AGENT_TOKEN")),
+        ("solo", CodexMcpAuth::Literal("tok-not-real")),
+    ] {
+        for unattended in [true, false] {
+            let body = codex_profile_toml(7777, auth, Path::new(CWD), unattended, "", None);
+            let lines: Vec<&str> = body.lines().collect();
+            let table = lines
+                .iter()
+                .position(|l| l.trim() == "[mcp_servers.orrerix]")
+                .unwrap_or_else(|| panic!("{label}/{unattended}: no loomux server table:\n{body}"));
+            let table_end = lines[table + 1..]
+                .iter()
+                .position(|l| l.trim_start().starts_with('['))
+                .map_or(lines.len(), |i| table + 1 + i);
+            let hits: Vec<usize> = lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.trim_start().starts_with("default_tools_approval_mode"))
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(
+                hits.len(),
+                1,
+                "{label}/unattended={unattended}: exactly one approval-mode line:\n{body}"
+            );
+            assert!(
+                (table + 1..table_end).contains(&hits[0]),
+                "{label}/unattended={unattended}: the approval mode must be a key of loomux's OWN \
+                 server table (lines {table}..{table_end}), not at line {}:\n{body}",
+                hits[0]
+            );
+            assert_eq!(
+                lines[hits[0]].trim(),
+                "default_tools_approval_mode = \"approve\"",
+                "{label}/unattended={unattended}: `auto` still asks for every un-annotated tool, \
+                 and under `approval_policy = \"never\"` that ask is a refusal (#3405):\n{body}"
+            );
+        }
     }
 }
 // 2. The token — two shapes, and each must NOT be the other

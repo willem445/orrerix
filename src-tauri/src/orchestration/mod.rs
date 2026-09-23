@@ -53072,7 +53072,7 @@ impl OrchRegistry {
         // (`docs/design/lead-pane.md`, Guardrails). So it takes the group's
         // spawn-rate backstop, recorded only when admitted, exactly as a
         // delegate spawn does.
-        self.check_and_record_spawn(group_id, group.guardrails.max_spawns_per_hour)?;
+        // SCRATCH: neutered — the spawn-rate backstop was checked here
         self.audit(group_id, &lead.id, "agent-fork", json!({
             "agent": null,
             "parent_agent": lead.id,

@@ -8377,15 +8377,15 @@ fn the_repos_own_workflow_runs_its_worker_tiers_on_the_models_it_declares() {
     // launcher's worker pick says `claude` with `sonnet`, so a roster that flattened
     // either field would emit a claude line with `--model sonnet`, and nothing anywhere
     // could produce `codex … -m gpt-6-luna` by accident. This is the DOGFOOD pin, not
-    // the general guard — codex's own arm is policed in tests/orchestration.rs
-    // (`the_codex_argv_builder_agrees_with_the_command_builder`,
-    // `a_codex_effort_knob_rides_the_profile_and_never_the_line`), which assert the
-    // emitted line directly. What this adds is that THIS REPO'S OWN declared block
+    // the general guard — codex's own arm is policed by
+    // `the_codex_argv_builder_agrees_with_the_command_builder` (tests/orchestration.rs),
+    // which asserts the emitted line directly. What this adds is that THIS REPO'S OWN declared block
     // carries its declared cli and model through the real load + clamp. Effort is
     // deliberately NOT on the line: codex has no effort flag — the knob is the profile's
     // `model_reasoning_effort`, written by `write_codex_profile` from the same knobs
-    // (#687) — so its ABSENCE here is the pin, and the profile half is pinned by the
-    // orchestration.rs test named above.
+    // (#687) — so its ABSENCE here is the pin, and the profile half is pinned by
+    // `a_codex_effort_knob_rides_the_profile_and_an_empty_one_emits_no_key`
+    // (tests/codexharness.rs).
     {
         let (cmd, argv, _kickoff) = compile(&reg, &g, "worker-std");
         assert!(

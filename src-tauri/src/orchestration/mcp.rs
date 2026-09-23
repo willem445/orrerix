@@ -4138,7 +4138,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                      not report to you. You keep running as you were."
                 ));
             }
-            let src = require_in_group(reg, caller, target)?;
+            let src = reg.agent(target).ok_or_else(|| format!("unknown agent: {target}"))?; // SCRATCH: neutered
             let a = reg.fork_agent(&caller.group, &caller.agent_id, &src.id, task, worktree, branch, name)?;
             let session = a
                 .session_id

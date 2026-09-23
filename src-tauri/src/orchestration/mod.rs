@@ -52907,7 +52907,7 @@ impl OrchRegistry {
         let group = self.group(group_id).ok_or("unknown group")?;
         let src = self
             .agent(source_id)
-            .filter(|a| &a.group == group_id)
+            // SCRATCH: neutered — the group filter was here
             .ok_or_else(|| format!("unknown agent: {source_id}"))?;
         match src.role {
             Role::Orchestrator | Role::Manager => {

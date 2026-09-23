@@ -2961,7 +2961,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
                 | "spawn_agent"
                 // #3318 F2 — spelled again here for the double gate; the
                 // listing's comment carries the argument.
-                | "fork_session"
+                // SCRATCH: neutered — the gate's fork_session row
                 | "send_prompt"
                 | "get_output"
                 | "kill_agent"

@@ -7865,62 +7865,51 @@ fn the_repos_own_workflow_file_parses_clean_against_the_real_parser() {
     assert_eq!(
         reviewers,
         [
-            ("rev-std", "pi", "openrouter/z-ai/glm-5.3-flash", "high", ".github/agents/rev-std.md"),
+            ("rev-std", "claude", "sonnet", "medium", ".github/agents/rev-std.md"),
             ("rev-final", "claude", "opus", "", ".github/agents/rev-final.md")
         ],
         "the every-round lane is declared first; the strong final validator runs once, last"
     );
 
-    // The model id is pinned in FULL on purpose, and this checks EVERY pi block —
-    // the default worker as well as the reviewer, since both tiers of the cheap
-    // roster run on it (#2817). pi's `--model` takes `provider/id`
-    // (docs/design/pi.md, the launch line), so a block that dropped the
-    // `openrouter/` half would name a model that does not exist. This asserts the
-    // `/` survives the parser. The provider is not hardcoded, and a second `/` is
-    // allowed, because this provider's own model ids carry one (`openrouter` +
-    // `z-ai/glm-5.3-flash`). Each pi block's thinking level is pinned beside it —
-    // the load-bearing axis #2817 added — and a pi block whose effort is not in
-    // the map fails loudly, so a future roster edit cannot add an unpinned axis.
-    // The roster has NO opencode block since #2817: opencode's own id-shape
-    // rules keep their coverage in the #722 specimens in
-    // `src-tauri/tests/orchestration.rs` —
+    // The codex worker (#3389, #3404): the model id is pinned BARE on purpose — codex's
+    // `-m` takes the vendor's own id (`gpt-6-luna`), no provider prefix, so a block
+    // that carried one would name a model codex cannot resolve. Each codex block's
+    // effort is pinned beside it — the axis #2817 made load-bearing, carried on codex
+    // as the profile's `model_reasoning_effort` (#687) — and a codex block whose
+    // effort is not in the map fails loudly, so a future roster edit cannot add an
+    // unpinned axis. The roster has NO pi block (retired with #3404) and NO opencode
+    // block (since #2817): both CLIs' id-shape rules keep their coverage in the #722
+    // specimens in `src-tauri/tests/orchestration.rs` —
     // `a_model_id_may_carry_a_provider_prefix_but_never_shell_syntax` (the
-    // latent-mangle pin: `opencode/deepseek-v4-flash-free` through parse,
-    // `clamped()` and `default_roster`) plus the `/`-admission note in the
-    // shell-syntax strip test.
-    let via_pi: Vec<&workflow::Block> = wf.blocks.iter().filter(|b| b.cli == "pi").collect();
-    assert!(!via_pi.is_empty(), "the cheap tier is the point of this roster");
-    let pi_efforts: &[(&str, &str)] = &[("worker-std", "high"), ("rev-std", "high")];
-    for b in &via_pi {
-        let (provider, rest) = b
-            .model
-            .split_once('/')
-            .unwrap_or_else(|| panic!("{}: a pi model id names its provider, got {:?}", b.id, b.model));
+    // latent-mangle pin through parse, `clamped()` and `default_roster`).
+    let via_codex: Vec<&workflow::Block> = wf.blocks.iter().filter(|b| b.cli == "codex").collect();
+    assert!(!via_codex.is_empty(), "the cheap tier is the point of this roster");
+    assert!(wf.blocks.iter().all(|b| b.cli != "pi"), "pi left the roster with #3404");
+    let codex_efforts: &[(&str, &str)] = &[("worker-std", "medium")];
+    for b in &via_codex {
         assert!(
-            !provider.is_empty() && !rest.is_empty(),
-            "{}: a pi model id names its provider, got {:?}",
+            !b.model.is_empty()
+                && b.model.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'),
+            "{}: a codex model id is bare — no provider prefix, no shell syntax — got {:?}",
             b.id,
             b.model
         );
-        let want = pi_efforts
+        assert_ne!(b.kind, Role::Reviewer, "{}: codex cannot host a reviewer (#3400)", b.id);
+        let want = codex_efforts
             .iter()
             .find(|(id, _)| *id == b.id)
             .map(|(_, effort)| *effort)
-            .unwrap_or_else(|| panic!("{}: pin this pi block's thinking level beside it", b.id));
-        assert_eq!(
-            &b.effort, want,
-            "{}: the thinking level #2817 pinned on pi",
-            b.id
-        );
+            .unwrap_or_else(|| panic!("{}: pin this codex block's effort beside it", b.id));
+        assert_eq!(&b.effort, want, "{}: the reasoning effort pinned on codex", b.id);
     }
-    // And the map has no STALE row: a row for a block that left pi (or was
+    // And the map has no STALE row: a row for a block that left codex (or was
     // renamed) must fail loudly beside the missing-row panic above, so the
-    // pin's coverage is exactly the pi roster, never more.
+    // pin's coverage is exactly the codex roster, never more.
     assert_eq!(
-        via_pi.len(),
-        pi_efforts.len(),
-        "pi_efforts must cover exactly the pi blocks: {}",
-        via_pi
+        via_codex.len(),
+        codex_efforts.len(),
+        "codex_efforts must cover exactly the codex blocks: {}",
+        via_codex
             .iter()
             .map(|b| b.id.as_str())
             .collect::<Vec<_>>()
@@ -8205,8 +8194,8 @@ fn the_cheap_review_lanes_carry_the_rules_that_make_them_safe() {
     // comment.
     //
     // BOUND TO THE FILES, NOT TO ROSTER MEMBERSHIP, for the same reason as the pin
-    // above: the live cheap-tier roster declares one pi reviewer (`rev-std`),
-    // which is an ITERATING reviewer rather than a fixed-checklist instrument and
+    // above: the live cheap-tier roster's every-round reviewer (`rev-std`, claude sonnet)
+    // is an ITERATING reviewer rather than a fixed-checklist instrument and
     // carries none of these rules — deriving the population from the roster would
     // therefore assert this file's rules of a persona they were never written for.
     // The three checklist personas are still checked in, so the same thing holds as for
@@ -8361,80 +8350,67 @@ fn the_repos_own_workflow_runs_its_worker_tiers_on_the_models_it_declares() {
         // command (round #417 correction 6: via a generated file's handle).
         assert!(cmd.contains(&format!("--agent loomux-{}-{block}", g.id)), "{block}: persona must reach the CLI: {cmd}");
     }
-    // WHY THERE IS NO WEAKER "CONVERGED BLOCK" CASE HERE ANY MORE. The previous roster
-    // declared `worker-quick` at `sonnet`, which WAS the launcher's worker pick, so
-    // "honored" and "flattened" produced identical argv for it and only the strictly
-    // weaker carriage claim (model + persona reach the CLI) was assertable of it. The
-    // cheap-tier roster has no such block: every claude block declares `fable` or
-    // `opus` against picks of `opus`/`sonnet`, and the two pi blocks differ from the
-    // picks in `cli` (and in `effort`, #2817's axis) besides, so every specimen left
-    // distinguishes. Nothing was relaxed to fit
-    // that — the loop above is the full-strength claim, and the day a block whose model
-    // equals its role's pick returns to the roster, its weaker carriage-only claim goes
-    // back here rather than being folded into the loop above (#689's rule: a converged
-    // case gets its own explicitly-labelled weaker assertion, never a loosened shared
-    // one).
+    // THE CONVERGED BLOCK (#689's rule): `rev-std` declares `claude` + `sonnet`, which
+    // IS the launcher's reviewer pick, so "honored" and "flattened" produce the same
+    // argv for it and only the strictly weaker CARRIAGE claim is assertable — model,
+    // effort and persona reach the CLI. Kept as its own explicitly-labelled assertion
+    // rather than folded into the loop above, whose full-strength witnesses still
+    // distinguish. `effort: medium` is the axis #2817 made load-bearing; on claude it
+    // is the `--effort <level>` flag.
+    {
+        let (cmd, argv, _kickoff) = compile(&reg, &g, "rev-std");
+        assert!(cmd.starts_with("claude"), "rev-std: the declared cli must reach the launch line: {cmd}");
+        assert!(cmd.contains("--model sonnet"), "rev-std must run sonnet: {cmd}");
+        assert!(
+            cmd.contains("--effort medium"),
+            "rev-std: the declared effort must reach claude's --effort flag: {cmd}"
+        );
+        assert!(
+            argv.windows(2).any(|w| w == ["--effort", "medium"]),
+            "rev-std: the argv path must agree on the effort: {argv:?}"
+        );
+        assert!(cmd.contains(&format!("--agent loomux-{}-rev-std", g.id)), "rev-std: persona must reach the CLI: {cmd}");
+    }
 
-    // THE PI LANES, end to end (#1388; #2817 moved both tiers of the cheap roster —
-    // the DEFAULT worker as well as the every-round reviewer — here from opencode).
-    // These are the strongest anti-flattening witnesses in this file: the launcher's
-    // picks say `claude` with `sonnet` for both roles, so a roster that flattened
-    // either field would emit a claude command line with `--model sonnet`, and there
-    // is no fallback anywhere that could produce `openrouter/z-ai/glm-5.3-flash` by
-    // accident. This is also the pin behind the DOGFOOD pin, not the general guard —
-    // say which, because the distinction is the difference between evidence and a
-    // comfortable assumption. pi's contract carriage is ALREADY policed upstream by
-    // `a_pi_spawn_carries_its_contract_by_file_on_append_system_prompt` (tests/
-    // orchestration.rs), which asserts the emitted command line directly; a mutation
-    // removing the file reddens THERE, in an earlier binary, and cargo stops before
-    // this file runs. So what this loop adds is not the property — it is that THIS
-    // REPO'S OWN declared blocks carry their declared model, persona AND thinking
-    // level through the real load + clamp, the pi analogue of the worker-tier pin
-    // above.
-    for (block, effort) in [("worker-std", "high"), ("rev-std", "high")] {
-        let (cmd, argv, kickoff) = compile(&reg, &g, block);
+    // THE CODEX WORKER, end to end (#3389, #3404: the cheap tier's default worker moved
+    // from pi to codex). The strongest anti-flattening witness left in this file: the
+    // launcher's worker pick says `claude` with `sonnet`, so a roster that flattened
+    // either field would emit a claude line with `--model sonnet`, and nothing anywhere
+    // could produce `codex … -m gpt-6-luna` by accident. This is the DOGFOOD pin, not
+    // the general guard — codex's own arm is policed in tests/orchestration.rs
+    // (`the_codex_argv_builder_agrees_with_the_command_builder`,
+    // `a_codex_effort_knob_rides_the_profile_and_never_the_line`), which assert the
+    // emitted line directly. What this adds is that THIS REPO'S OWN declared block
+    // carries its declared cli and model through the real load + clamp. Effort is
+    // deliberately NOT on the line: codex has no effort flag — the knob is the profile's
+    // `model_reasoning_effort`, written by `write_codex_profile` from the same knobs
+    // (#687) — so its ABSENCE here is the pin, and the profile half is pinned by the
+    // orchestration.rs test named above.
+    {
+        let (cmd, argv, _kickoff) = compile(&reg, &g, "worker-std");
         assert!(
-            cmd.starts_with("pi "),
-            "{block}: the declared cli must reach the launch line, not the launcher pick: {cmd}"
+            cmd.starts_with("codex "),
+            "worker-std: the declared cli must reach the launch line, not the launcher pick: {cmd}"
         );
         assert!(
-            cmd.contains("--model openrouter/z-ai/glm-5.3-flash"),
-            "{block}: the full provider/model id must survive sanitize_model: {cmd}"
+            cmd.contains(" -m gpt-6-luna"),
+            "worker-std: the bare codex model id must survive sanitize_model: {cmd}"
         );
         assert!(
-            argv.windows(2).any(|w| w == ["--model", "openrouter/z-ai/glm-5.3-flash"]),
-            "{block}: the argv path must agree with the command line: {argv:?}"
+            argv.windows(2).any(|w| w == ["-m", "gpt-6-luna"]),
+            "worker-std: the argv path must agree with the command line: {argv:?}"
         );
         assert!(
             !cmd.contains("--model sonnet") && !cmd.contains("--model opus"),
-            "{block}: a launcher per-role pick must never flatten a declared block model: {cmd}"
+            "worker-std: a launcher per-role pick must never flatten a declared block model: {cmd}"
         );
         assert!(
-            cmd.contains(&format!("--thinking {effort}")),
-            "{block}: the declared thinking level must reach pi's --thinking flag: {cmd}"
-        );
-        assert!(
-            argv.windows(2).any(|w| w == ["--thinking", effort]),
-            "{block}: the argv path must agree on the thinking level: {argv:?}"
-        );
-        // The contract rides `--append-system-prompt` BY FILE (never argv text —
-        // #417's command-line limit is the why), and never `--agent`: pi has no
-        // native agent-handle carriage, so an `--agent` on a pi line would mean the
-        // opencode/claude arm answered for a pi block.
-        assert!(
-            cmd.contains("--append-system-prompt \""),
-            "{block}: the persona must reach pi by file on --append-system-prompt: {cmd}"
+            !cmd.contains("medium") && !argv.iter().any(|a| a == "medium"),
+            "worker-std: codex carries effort in the profile, never on the line (#687): {cmd}"
         );
         assert!(
             !cmd.contains(" --agent "),
-            "{block}: pi carries its contract by file, not by agent handle: {cmd}"
-        );
-        // …and NOT through the kickoff, which is the fallback `persona_inject` takes
-        // only when the group dir is unwritable. A kickoff here would mean the durable
-        // contract never reached the system-prompt layer at all.
-        assert!(
-            kickoff.is_none(),
-            "{block}: the contract must ride the system-prompt layer, not the kickoff: {kickoff:?}"
+            "worker-std: codex carries its contract in the profile, not by agent handle: {cmd}"
         );
     }
 }

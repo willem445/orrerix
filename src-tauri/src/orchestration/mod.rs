@@ -31603,9 +31603,7 @@ impl OrchRegistry {
         // `gh auth token` on the developer's machine and carry their token in
         // a test `SpawnRequest`. A test that means to exercise this path says
         // so explicitly by installing the `gh_exec_override` fake.
-        if !self.is_live_registry() && self.gh_exec_override.lock_safe().is_none() {
-            return None;
-        }
+        // SCRATCH MUTATION: containment guard removed
         let why = match self.gh_capture(&workdir.display().to_string(), &["auth", "token"]) {
             // One token, one line. Anything with interior whitespace is not a
             // token `gh` printed, and exporting it would present garbage as a

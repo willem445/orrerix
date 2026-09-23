@@ -385,6 +385,8 @@ test("toAgentRow carries the identity fields through and derives the state", () 
     role: "worker",
     state: "question",
     watched: false,
+    // #3407: a literal with no reading is "not covered" — null, never undefined.
+    cache: null,
     notes: 3,
     tab: { id: "ws-1", title: "loomux", index: 0 },
     mark: { command: "claude", argv: null, knownCli: null, remote: false },
@@ -394,6 +396,21 @@ test("toAgentRow carries the identity fields through and derives the state", () 
     // fleet is in scope and the parent is filled in (see the tests below it).
     parent: null,
   });
+});
+
+test("the cache-age reading is carried onto the row untouched (#3407)", () => {
+  const cache = {
+    lastActiveMs: 1_000,
+    ttlMinutes: 5,
+    coolingAfterMs: 180_000,
+    lastWake: null,
+    compactSupported: true,
+  };
+  const row = toAgentRow(facts({ cache }));
+  assert.deepEqual(row.cache, cache);
+  // The reading is a second axis beside the state ladder, never an input to it:
+  // the same facts with and without a reading derive the same state.
+  assert.equal(row.state, toAgentRow(facts({ cache: null })).state);
 });
 
 test("the mark input is carried onto the row untouched (#2371 review W1)", () => {

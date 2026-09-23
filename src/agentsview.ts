@@ -44,6 +44,7 @@ import {
 import { PollGate } from "./pollgate";
 import { WATCHED_MARK, watchedCount } from "./watchedpanes";
 import { spinnerSvg } from "./spinner";
+import { cacheChipLabel, cacheChipTitle, cacheState } from "./cacheage";
 
 /** How often an open Agents tab re-derives its rows.
  *
@@ -81,6 +82,10 @@ interface RowEls {
   name: HTMLElement;
   identity: HTMLElement;
   state: HTMLElement;
+  /** The prompt-cache age cell (#3407) — the pane header chip's label, derived
+   *  from the same backend reading against this view's own tick. Hidden, never
+   *  removed, where there is nothing to show. */
+  cache: HTMLElement;
   /** The human's watch mark (#3319) — shown or hidden, never rebuilt. */
   watch: HTMLElement;
   row: AgentRow;
@@ -453,7 +458,12 @@ export class AgentsView {
     watch.className = "agents-watch-mark";
     watch.textContent = WATCHED_MARK;
     watch.hidden = true;
-    top.append(watch, mark, name, state);
+    // #3407: after the state word, because it answers a second question about
+    // the pane ("what would waking it cost") rather than the first.
+    const cache = document.createElement("span");
+    cache.className = "agents-cache";
+    cache.hidden = true;
+    top.append(watch, mark, name, state, cache);
     const identity = document.createElement("div");
     identity.className = "agents-identity";
     el.append(top, identity);
@@ -462,7 +472,7 @@ export class AgentsView {
     // paints. `""` is not a candidate — `markKey` always emits a JSON array —
     // and the `was === row` arm covers it too; belt and braces on the one path
     // where an unpainted element must not be mistaken for a current one.
-    return { el, mark, markKey: "", name, identity, state, watch, row };
+    return { el, mark, markKey: "", name, identity, state, cache, watch, row };
   }
 
   /** Paint the agent-type mark (#2371).
@@ -528,6 +538,19 @@ export class AgentsView {
     // then wiped. `toggle` with an explicit second argument is idempotent.
     els.el.classList.toggle("watched", row.watched);
     if (els.watch.hidden === row.watched) els.watch.hidden = !row.watched;
+    // #3407. Every write guarded: this runs once a second per row.
+    const now = Date.now();
+    const cacheLabel = row.cache === null ? null : cacheChipLabel(row.cache, now);
+    if (cacheLabel === null || row.cache === null) {
+      if (!els.cache.hidden) els.cache.hidden = true;
+    } else {
+      if (els.cache.textContent !== cacheLabel) els.cache.textContent = cacheLabel;
+      const cstate = cacheState(row.cache, now).state;
+      if (els.cache.dataset.state !== cstate) els.cache.dataset.state = cstate;
+      const ctitle = cacheChipTitle(row.cache, now, "Compact it from its pane header chip.");
+      if (els.cache.title !== ctitle) els.cache.title = ctitle;
+      if (els.cache.hidden) els.cache.hidden = false;
+    }
     const title = this.rowTitle(row);
     if (els.el.title !== title) els.el.title = title;
   }

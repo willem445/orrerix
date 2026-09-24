@@ -17,6 +17,6 @@ usually in under a minute. Write for that reader.
   never a new issue. When small follow-ups pile up in one area, they go as lines on that area's
   one rolling follow-up issue, not one issue each.
 - **Everything you post on GitHub ends with one line** saying who wrote it:
-  `— Written by AI (<your agent id>, <your model>) on behalf of the human`. It is the last line,
+  `— Written by AI (<your agent id>, <your model>) on behalf of the human (@operator)`. It is the last line,
   below the agent layer, so a squash message — cut at the `<!-- agent-layer -->` line — never
   carries it. No URL, no session id, no tool footer; commit messages do not carry it.

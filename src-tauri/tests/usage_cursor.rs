@@ -611,3 +611,84 @@ fn a_line_that_is_not_utf8_is_skipped_rather_than_ending_the_parse() {
          reader that stopped there would report 20"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The current model vs the priced one (#3415)
+// ---------------------------------------------------------------------------
+
+/// A claude session whose LARGEST message is on the model it later left.
+///
+/// `model` is a pricing pick — the priced model with the most output tokens on
+/// one message — so after a switch it keeps naming the old model until a
+/// message on the new one out-writes that record, and on this fixture it never
+/// does (900 on fable, at most 300 on opus). `current_model` is what the usage
+/// series samples, and it must name the model of the LATEST turn: a token chart
+/// that splits spend by model and marks a switch reads nothing else.
+///
+/// The fixture's two readings DIVERGE on purpose (the `assert_ne!` below), so a
+/// fold that fed the pricing pick through as the current model cannot pass it.
+#[test]
+fn a_claude_switch_after_the_largest_message_is_current_but_not_priced() {
+    let before_switch = format!(
+        "{}{}",
+        line("f1", "claude-fable-5-1", 10, 900),
+        line("f2", "claude-fable-5-1", 10, 200),
+    );
+    let after_switch = format!(
+        "{}{}",
+        line("o1", "claude-opus-5-5", 10, 100),
+        line("o2", "claude-opus-5-5", 10, 300),
+    );
+
+    // The whole-file parse.
+    let full = parse_claude_transcript(&format!("{before_switch}{after_switch}"));
+    assert_eq!(
+        full.model.as_deref(),
+        Some("claude-fable-5-1"),
+        "the pricing pick is unchanged: fable's 900-token message is still the largest"
+    );
+    assert_eq!(
+        full.current_model.as_deref(),
+        Some("claude-opus-5-5"),
+        "the current model is the one the latest turn ran on"
+    );
+    assert_ne!(full.model, full.current_model, "the fixture's two readings diverge");
+
+    // The incremental path, across a tick boundary that falls ON the switch:
+    // this is the shape the sampler sees, one tick before and one after.
+    let t = Transcript::new("sess-switch", &before_switch);
+    let cursors = TranscriptCursors::default();
+    let first = cursors
+        .session_usage(TranscriptKind::Claude, t.root(), &t.session)
+        .expect("found");
+    assert_eq!(first.current_model.as_deref(), Some("claude-fable-5-1"), "before the switch");
+    t.append(&after_switch);
+    let second = cursors
+        .session_usage(TranscriptKind::Claude, t.root(), &t.session)
+        .expect("still found");
+    assert_eq!(
+        second.current_model.as_deref(),
+        Some("claude-opus-5-5"),
+        "the first tick after the switch already names the new model"
+    );
+    assert_eq!(second.model.as_deref(), Some("claude-fable-5-1"));
+
+    // Two lines that must NOT move it: a `--resume` re-emit of an old fable
+    // message (deduped, so it is not a turn at all), and a synthetic message
+    // (not billable, carries no model).
+    t.append(&line("f1", "claude-fable-5-1", 10, 900));
+    t.append(&line("syn", "<synthetic>", 0, 0));
+    let third = cursors
+        .session_usage(TranscriptKind::Claude, t.root(), &t.session)
+        .expect("still found");
+    assert_eq!(
+        third.current_model.as_deref(),
+        Some("claude-opus-5-5"),
+        "a replayed old message does not rewind the pane to the model it left"
+    );
+    assert_eq!(
+        third.tokens.input_tokens,
+        40,
+        "non-vacuity: the re-emit really was deduped (4 counted turns at 10 input each)"
+    );
+}

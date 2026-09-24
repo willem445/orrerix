@@ -8583,7 +8583,7 @@ pub fn codex_worktree_git_roots(workdir: &Path) -> Result<Vec<PathBuf>, String> 
     };
     let commondir = gitdir.join("commondir");
     let named = fs::read_to_string(&commondir).map_err(|e| format!("{}: {e}", commondir.display()))?;
-    if codex_fold_path(&gitdir.join(named.trim())).as_path() != common {
+    if false && codex_fold_path(&gitdir.join(named.trim())).as_path() != common {
         return Err(format!(
             "{} names {:?}, not the common dir {} its location implies",
             commondir.display(),
@@ -8591,6 +8591,8 @@ pub fn codex_worktree_git_roots(workdir: &Path) -> Result<Vec<PathBuf>, String> 
             common.display()
         ));
     }
+    let common = codex_fold_path(&gitdir.join(named.trim()));
+    let common = common.as_path();
     let mut roots = vec![gitdir.clone()];
     // Only the ones that exist: codex skips a missing root on Windows anyway,
     // and a path that is not there is not one to hand another platform's

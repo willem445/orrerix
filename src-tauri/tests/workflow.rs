@@ -7990,8 +7990,7 @@ fn the_repos_own_workflow_file_parses_clean_against_the_real_parser() {
             "worker-std",
             "worker-adv",
             "rev-std",
-            "rev-final",
-            "process"
+            "rev-final"
         ],
         "ids are what edges, gates and spawn_agent(block:) reference — a rename here breaks the gate"
     );
@@ -8021,51 +8020,53 @@ fn the_repos_own_workflow_file_parses_clean_against_the_real_parser() {
     assert_eq!(
         reviewers,
         [
-            ("rev-std", "claude", "sonnet", "medium", ".github/agents/rev-std.md"),
+            ("rev-std", "pi", "openai-codex/gpt-6-luna", "medium", ".github/agents/rev-std.md"),
             ("rev-final", "claude", "opus", "", ".github/agents/rev-final.md")
         ],
         "the every-round lane is declared first; the strong final validator runs once, last"
     );
 
-    // The codex worker (#3389, #3404): the model id is pinned BARE on purpose — codex's
-    // `-m` takes the vendor's own id (`gpt-6-luna`), no provider prefix, so a block
-    // that carried one would name a model codex cannot resolve. Each codex block's
-    // effort is pinned beside it — the axis #2817 made load-bearing, carried on codex
-    // as the profile's `model_reasoning_effort` (#687) — and a codex block whose
-    // effort is not in the map fails loudly, so a future roster edit cannot add an
-    // unpinned axis. The roster has NO pi block (retired with #3404) and NO opencode
-    // block (since #2817): both CLIs' id-shape rules keep their coverage in the #722
-    // specimens in `src-tauri/tests/orchestration.rs` —
-    // `a_model_id_may_carry_a_provider_prefix_but_never_shell_syntax` (the
-    // latent-mangle pin through parse, `clamped()` and `default_roster`).
-    let via_codex: Vec<&workflow::Block> = wf.blocks.iter().filter(|b| b.cli == "codex").collect();
-    assert!(!via_codex.is_empty(), "the cheap tier is the point of this roster");
-    assert!(wf.blocks.iter().all(|b| b.cli != "pi"), "pi left the roster with #3404");
-    let codex_efforts: &[(&str, &str)] = &[("worker-std", "medium")];
-    for b in &via_codex {
+    // The pi lanes (#3474): both tiers of the cheap roster — the default worker AND
+    // the every-round reviewer — run on pi with `openai-codex/gpt-6-luna`, GPT-6 Luna
+    // through the Codex subscription. The model id is pinned in FULL on purpose: pi's
+    // `--model` takes `provider/id`, so a block that dropped the provider half would
+    // name a model pi cannot resolve. Each pi block's thinking level is pinned beside
+    // it (#2817's axis), and a pi block whose effort is not in the map fails loudly,
+    // so a future roster edit cannot add an unpinned axis. The roster has NO codex
+    // block (codex cannot host a reviewer, #3473) and NO opencode block (since
+    // #2817): both CLIs' id-shape rules keep their coverage in the #722 specimens in
+    // `src-tauri/tests/orchestration.rs` —
+    // `a_model_id_may_carry_a_provider_prefix_but_never_shell_syntax`.
+    let via_pi: Vec<&workflow::Block> = wf.blocks.iter().filter(|b| b.cli == "pi").collect();
+    assert!(!via_pi.is_empty(), "the cheap tier is the point of this roster");
+    assert!(wf.blocks.iter().all(|b| b.cli != "codex"), "codex left the roster with #3474");
+    let pi_efforts: &[(&str, &str)] = &[("worker-std", "medium"), ("rev-std", "medium")];
+    for b in &via_pi {
+        let (provider, rest) = b
+            .model
+            .split_once('/')
+            .unwrap_or_else(|| panic!("{}: a pi model id names its provider, got {:?}", b.id, b.model));
         assert!(
-            !b.model.is_empty()
-                && b.model.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'),
-            "{}: a codex model id is bare — no provider prefix, no shell syntax — got {:?}",
+            !provider.is_empty() && !rest.is_empty(),
+            "{}: a pi model id names its provider, got {:?}",
             b.id,
             b.model
         );
-        assert_ne!(b.kind, Role::Reviewer, "{}: codex cannot host a reviewer (#3400)", b.id);
-        let want = codex_efforts
+        let want = pi_efforts
             .iter()
             .find(|(id, _)| *id == b.id)
             .map(|(_, effort)| *effort)
-            .unwrap_or_else(|| panic!("{}: pin this codex block's effort beside it", b.id));
-        assert_eq!(&b.effort, want, "{}: the reasoning effort pinned on codex", b.id);
+            .unwrap_or_else(|| panic!("{}: pin this pi block's thinking level beside it", b.id));
+        assert_eq!(&b.effort, want, "{}: the thinking level pinned on pi", b.id);
     }
-    // And the map has no STALE row: a row for a block that left codex (or was
+    // And the map has no STALE row: a row for a block that left pi (or was
     // renamed) must fail loudly beside the missing-row panic above, so the
-    // pin's coverage is exactly the codex roster, never more.
+    // pin's coverage is exactly the pi roster, never more.
     assert_eq!(
-        via_codex.len(),
-        codex_efforts.len(),
-        "codex_efforts must cover exactly the codex blocks: {}",
-        via_codex
+        via_pi.len(),
+        pi_efforts.len(),
+        "pi_efforts must cover exactly the pi blocks: {}",
+        via_pi
             .iter()
             .map(|b| b.id.as_str())
             .collect::<Vec<_>>()
@@ -8080,10 +8081,9 @@ fn the_repos_own_workflow_file_parses_clean_against_the_real_parser() {
             .unwrap_or_else(|e| panic!("{}: {e}", b.id));
     }
 
-    // process (#324): role_hint pairs with the kind it requires — the worker-side half
-    // of the rule, exercised against the real parser by the real file. (The planner-side
-    // half moved to a synthetic specimen when the advisor block left the roster.)
-    assert_eq!(wf.block("process").map(|b| (b.kind, b.role_hint.as_deref())), Some((Role::Worker, Some("process"))));
+    // The process block left the roster with #3474; the role_hint rule (#324) it used
+    // to exercise against the real file is pinned by the synthetic specimens below.
+    assert!(wf.block("process").is_none(), "the process block left the roster with #3474");
     let adv = workflow::parse_workflow(
         "version: 1
 blocks:
@@ -8350,7 +8350,7 @@ fn the_cheap_review_lanes_carry_the_rules_that_make_them_safe() {
     // comment.
     //
     // BOUND TO THE FILES, NOT TO ROSTER MEMBERSHIP, for the same reason as the pin
-    // above: the live cheap-tier roster's every-round reviewer (`rev-std`, claude sonnet)
+    // above: the live cheap-tier roster's every-round reviewer (`rev-std`, pi GPT-6 Luna)
     // is an ITERATING reviewer rather than a fixed-checklist instrument and
     // carries none of these rules — deriving the population from the roster would
     // therefore assert this file's rules of a persona they were never written for.
@@ -8506,67 +8506,65 @@ fn the_repos_own_workflow_runs_its_worker_tiers_on_the_models_it_declares() {
         // command (round #417 correction 6: via a generated file's handle).
         assert!(cmd.contains(&format!("--agent loomux-{}-{block}", g.id)), "{block}: persona must reach the CLI: {cmd}");
     }
-    // THE CONVERGED BLOCK (#689's rule): `rev-std` declares `claude` + `sonnet`, which
-    // IS the launcher's reviewer pick, so "honored" and "flattened" produce the same
-    // argv for it and only the strictly weaker CARRIAGE claim is assertable — model,
-    // effort and persona reach the CLI. Kept as its own explicitly-labelled assertion
-    // rather than folded into the loop above, whose full-strength witnesses still
-    // distinguish. `effort: medium` is the axis #2817 made load-bearing; on claude it
-    // is the `--effort <level>` flag.
-    {
-        let (cmd, argv, _kickoff) = compile(&reg, &g, "rev-std");
-        assert!(cmd.starts_with("claude"), "rev-std: the declared cli must reach the launch line: {cmd}");
-        assert!(cmd.contains("--model sonnet"), "rev-std must run sonnet: {cmd}");
-        assert!(
-            cmd.contains("--effort medium"),
-            "rev-std: the declared effort must reach claude's --effort flag: {cmd}"
-        );
-        assert!(
-            argv.windows(2).any(|w| w == ["--effort", "medium"]),
-            "rev-std: the argv path must agree on the effort: {argv:?}"
-        );
-        assert!(cmd.contains(&format!("--agent loomux-{}-rev-std", g.id)), "rev-std: persona must reach the CLI: {cmd}");
-    }
+    // WHY THERE IS NO WEAKER "CONVERGED BLOCK" CASE HERE: no block on the roster
+    // declares the launcher's own pick for its role (`claude` + `sonnet`), so every
+    // specimen below distinguishes at full strength. The day a converged block returns,
+    // its weaker carriage-only claim gets its own labelled assertion here rather than a
+    // loosened shared one (#689's rule).
 
-    // THE CODEX WORKER, end to end (#3389, #3404: the cheap tier's default worker moved
-    // from pi to codex). The strongest anti-flattening witness left in this file: the
-    // launcher's worker pick says `claude` with `sonnet`, so a roster that flattened
-    // either field would emit a claude line with `--model sonnet`, and nothing anywhere
-    // could produce `codex … -m gpt-6-luna` by accident. This is the DOGFOOD pin, not
-    // the general guard — codex's own arm is policed by
-    // `the_codex_argv_builder_agrees_with_the_command_builder` (tests/orchestration.rs),
-    // which asserts the emitted line directly. What this adds is that THIS REPO'S OWN declared block
-    // carries its declared cli and model through the real load + clamp. Effort is
-    // deliberately NOT on the line: codex has no effort flag — the knob is the profile's
-    // `model_reasoning_effort`, written by `write_codex_profile` from the same knobs
-    // (#687) — so its ABSENCE here is the pin, and the profile half is pinned by
-    // `a_codex_effort_knob_rides_the_profile_and_an_empty_one_emits_no_key`
-    // (tests/codexharness.rs).
-    {
-        let (cmd, argv, _kickoff) = compile(&reg, &g, "worker-std");
+    // THE PI LANES, end to end (#3474: both tiers of the cheap roster — the DEFAULT
+    // worker as well as the every-round reviewer — on pi + `openai-codex/gpt-6-luna`).
+    // The strongest anti-flattening witnesses in this file: the launcher's picks say
+    // `claude` with `sonnet` for both roles, so a roster that flattened either field
+    // would emit a claude line with `--model sonnet`, and nothing anywhere could produce
+    // `pi … --model openai-codex/gpt-6-luna` by accident. This is the DOGFOOD pin, not
+    // the general guard — pi's contract carriage is policed upstream by
+    // `a_pi_spawn_carries_its_contract_by_file_on_append_system_prompt`
+    // (tests/orchestration.rs). What this adds is that THIS REPO'S OWN declared blocks
+    // carry their declared model, persona AND thinking level through the real load +
+    // clamp; on pi the effort is the `--thinking <level>` flag (#2817).
+    for (block, effort) in [("worker-std", "medium"), ("rev-std", "medium")] {
+        let (cmd, argv, kickoff) = compile(&reg, &g, block);
         assert!(
-            cmd.starts_with("codex "),
-            "worker-std: the declared cli must reach the launch line, not the launcher pick: {cmd}"
+            cmd.starts_with("pi "),
+            "{block}: the declared cli must reach the launch line, not the launcher pick: {cmd}"
         );
         assert!(
-            cmd.contains(" -m gpt-6-luna"),
-            "worker-std: the bare codex model id must survive sanitize_model: {cmd}"
+            cmd.contains("--model openai-codex/gpt-6-luna"),
+            "{block}: the full provider/model id must survive sanitize_model: {cmd}"
         );
         assert!(
-            argv.windows(2).any(|w| w == ["-m", "gpt-6-luna"]),
-            "worker-std: the argv path must agree with the command line: {argv:?}"
+            argv.windows(2).any(|w| w == ["--model", "openai-codex/gpt-6-luna"]),
+            "{block}: the argv path must agree with the command line: {argv:?}"
         );
         assert!(
             !cmd.contains("--model sonnet") && !cmd.contains("--model opus"),
-            "worker-std: a launcher per-role pick must never flatten a declared block model: {cmd}"
+            "{block}: a launcher per-role pick must never flatten a declared block model: {cmd}"
         );
         assert!(
-            !cmd.contains("medium") && !argv.iter().any(|a| a == "medium"),
-            "worker-std: codex carries effort in the profile, never on the line (#687): {cmd}"
+            cmd.contains(&format!("--thinking {effort}")),
+            "{block}: the declared thinking level must reach pi's --thinking flag: {cmd}"
+        );
+        assert!(
+            argv.windows(2).any(|w| w == ["--thinking", effort]),
+            "{block}: the argv path must agree on the thinking level: {argv:?}"
+        );
+        // The contract rides `--append-system-prompt` BY FILE (never argv text —
+        // #417's command-line limit is the why), and never `--agent`: pi has no
+        // native agent-handle carriage.
+        assert!(
+            cmd.contains("--append-system-prompt \""),
+            "{block}: the persona must reach pi by file on --append-system-prompt: {cmd}"
         );
         assert!(
             !cmd.contains(" --agent "),
-            "worker-std: codex carries its contract in the profile, not by agent handle: {cmd}"
+            "{block}: pi carries its contract by file, not by agent handle: {cmd}"
+        );
+        // …and NOT through the kickoff, the fallback `persona_inject` takes only when
+        // the group dir is unwritable.
+        assert!(
+            kickoff.is_none(),
+            "{block}: the contract must ride the system-prompt layer, not the kickoff: {kickoff:?}"
         );
     }
 }

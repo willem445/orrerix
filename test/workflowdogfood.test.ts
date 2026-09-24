@@ -53,7 +53,7 @@ test("the roster is the one the repo means to run", () => {
   // renamed *id* must, because it breaks the gate.
   assert.deepEqual(
     workflow.blocks.map((b) => b.id),
-    ["orchestrator", "planner", "worker-std", "worker-adv", "rev-std", "rev-final", "process"]
+    ["orchestrator", "planner", "worker-std", "worker-adv", "rev-std", "rev-final"]
   );
   // Two worker tiers, and the STANDARD one FIRST — which is the opposite default
   // from the roster this replaced, and deliberate. The first block of a class is
@@ -61,25 +61,21 @@ test("the roster is the one the repo means to run", () => {
   // rule 3 ("CLASSIFY THE WORKER AT INTAKE") is that the orchestrator chooses the
   // tier when it writes the brief; the fallback is therefore the cheap one, so an
   // unrouted task is one nobody classified rather than one that silently cost
-  // Opus. `process` is worker-kind too (#324) but role_hint-gated, so it is
-  // excluded from this default-tier pin.
+  // Opus. (A role_hint-gated worker block, like the retired `process`, would be
+  // excluded from this default-tier pin.)
   const tiers = workflow.blocks.filter((b) => b.kind === "worker" && !b.role_hint);
   assert.deepEqual(
     tiers.map((b) => [b.id, b.cli, b.model, b.effort ?? ""]),
     [
-      ["worker-std", "codex", "gpt-6-luna", "medium"],
+      ["worker-std", "pi", "openai-codex/gpt-6-luna", "medium"],
       ["worker-adv", "claude", "opus", ""],
     ],
     "the tiers are the demo: a cheap default worker, and a strong one for work with judgment in it"
   );
   // `effort` rides beside the model (#2817) because the thinking level is the
-  // load-bearing axis of the cheap tier (codex `model_reasoning_effort`, #3404);
+  // load-bearing axis of the cheap tier (pi `--thinking`, #2817);
   // `""` reads as "the CLI's own default" for a block that declares none
   // (worker-adv on claude has none).
-  // process (#324): role_hint pairs with the kind it requires — the worker-side
-  // half of that rule is exercised end to end by this real file. (The
-  // planner-side half — role_hint: advisor — moved to the synthetic fixture
-  // below when the advisor block left the roster; the rule outlives the block.)
   // THE REVIEWER LANES, and the one ordering property the roster now leans on.
   // `block_for(Role::Reviewer)` resolves a bare `spawn_agent(kind: "reviewer")` to
   // the FIRST reviewing block in roster order, so rev-std must be declared ahead
@@ -93,7 +89,7 @@ test("the roster is the one the repo means to run", () => {
   assert.deepEqual(
     reviewers.map((b) => [b.id, b.cli, b.model, b.effort ?? ""]),
     [
-      ["rev-std", "claude", "sonnet", "medium"],
+      ["rev-std", "pi", "openai-codex/gpt-6-luna", "medium"],
       ["rev-final", "claude", "opus", ""],
     ],
     "the every-round lane is declared first; the strong final validator runs once, last"
@@ -103,22 +99,21 @@ test("the roster is the one the repo means to run", () => {
     "rev-std",
     "a bare spawn_agent(kind: \"reviewer\") must reach the lane that runs every round"
   );
-  // The cheap tier is codex since #3404 (pi + OpenRouter retired: no more credits).
-  // A codex block cannot host a REVIEWER (`cli_can_host`, Containment::None —
-  // #3400), which is why rev-std moved to claude sonnet rather than codex; the
-  // pin below is that no codex block is reviewer-kind, so the parser's refusal is
-  // never what the human meets in the launcher. A codex model id is bare
-  // (`gpt-6-luna`, the id the installed binary carries; docs/design/codex.md) —
-  // no provider prefix, unlike the pi ids this replaced.
-  const viaCodex = workflow.blocks.filter((b) => b.cli === "codex");
-  assert.ok(viaCodex.length > 0, "the cheap tier is the point of this roster — it must have a codex block");
-  for (const b of viaCodex) {
-    assert.notEqual(b.kind, "reviewer", `${b.id}: codex cannot host a reviewer (#3400)`);
-    assert.match(b.model ?? "", /^[a-z0-9.-]+$/, `${b.id}: a codex model id is bare, no provider prefix`);
+  // The cheap tier runs on pi again (#3474): both tiers of it — the default worker
+  // AND the every-round reviewer — on `openai-codex/gpt-6-luna`, GPT-6 Luna through
+  // the Codex subscription rather than OpenRouter. pi's `--model` takes
+  // `provider/id` (docs/design/pi.md, the launch line), so a block that dropped the
+  // `openai-codex/` half would spawn against a model that does not exist; the pin is
+  // that the `/` survives the parser. The roster has NO codex block: codex cannot host
+  // a reviewer (#3473), and its bare-id rules keep their coverage in the #722 specimens.
+  const viaPi = workflow.blocks.filter((b) => b.cli === "pi");
+  assert.ok(viaPi.length > 0, "the cheap tier is the point of this roster — it must have pi blocks");
+  for (const b of viaPi) {
+    assert.match(b.model ?? "", /^[a-z0-9-]+\/[a-z0-9./-]+$/, `${b.id}: a pi model id names its provider`);
   }
-
-  const processPro = workflow.blocks.find((b) => b.id === "process");
-  assert.deepEqual([processPro?.kind, processPro?.role_hint], ["worker", "process"]);
+  // The process block left the roster with #3474 (the learning loop is off); the
+  // role_hint rule it exercised lives on in the synthetic fixture below.
+  assert.equal(workflow.blocks.find((b) => b.id === "process"), undefined);
   // Every delegate carries a repo-authored persona, and it is a FILE in
   // `.github/agents/` — the copilot-native convention — so a block flipped to
   // `cli: copilot` gets `--agent <name>` natively instead of a kickoff paste.

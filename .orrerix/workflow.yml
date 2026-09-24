@@ -158,8 +158,8 @@ blocks:
   - id: worker-std
     name: "Standard worker (DEFAULT - codex GPT-6 Luna; briefs the orchestrator can write literally: files, commands, checks. NOT for work whose deliverable is evidence about itself)"
     kind: worker
-    cli: codex
-    model: gpt-6-luna
+    cli: pi
+    model: openai-codex/gpt-6-luna
     effort: medium
     profile: .github/agents/worker-std.md
 
@@ -174,8 +174,8 @@ blocks:
   - id: rev-std
     name: "Standard review (EVERY ROUND - claude sonnet; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
     kind: reviewer
-    cli: claude
-    model: sonnet
+    cli: pi
+    model: openai-codex/gpt-6-luna
     effort: medium
     profile: .github/agents/rev-std.md
 
@@ -186,22 +186,14 @@ blocks:
     model: opus
     profile: .github/agents/rev-final.md
 
-  - id: process
-    name: Process-pro
-    kind: worker
-    cli: claude
-    model: opus
-    profile: .github/agents/process.md
-    role_hint: process
-
 # ADVISORY: the intended path. Worker chosen at intake (rule 3); rev-std runs
 # every round; rev-final once, after rev-std's PASS on the final body (rule 1).
 edges:
-  - { from: orchestrator, to: [planner, worker-std, worker-adv, process] }
+  - { from: orchestrator, to: [planner, worker-std, worker-adv] }
   - { from: planner, to: [worker-std, worker-adv] }
   - { from: worker-std, to: [rev-std, worker-adv] }
-  - { from: worker-adv, to: [rev-std] }
-  - { from: rev-std, to: [rev-final] }
+  - { from: worker-adv, to: rev-std }
+  - { from: rev-std, to: rev-final }
 
 # ENFORCED: rev-std must record PASS on the merged head + body on every PR;
 # rev-final is ADDED to the required set when the diff touches anything a

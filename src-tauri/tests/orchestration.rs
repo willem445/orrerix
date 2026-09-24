@@ -68511,6 +68511,74 @@ fn a_resumed_worker_can_close_its_own_scratch_pr_and_nobody_elses() {
     assert!(ok, "a resume of a resume still owns the session's branch: {err}");
 }
 
+/// **#3442's upgrade case: a newer roster row carrying `branch: None` does not
+/// take the branch away.** Every resume written before this fix left such a row
+/// — the session's minting row names the branch, every later row names nothing
+/// — so a resume on a running install meets exactly this roster. The branch is
+/// read off the session's FIRST row (`session_identity_record`); a
+/// last-touched rule would read the legacy row and hand the pane nothing.
+///
+/// The legacy row is written by hand, with the newest `updated_ms` on the
+/// roster, and that ordering is asserted as a pre-condition: without a newer
+/// row that DISAGREES with the minting one, the first-row and newest-row rules
+/// answer alike and this test could not tell them apart (review round 1, N1).
+#[test]
+fn a_resume_inherits_the_minting_rows_branch_past_a_newer_legacy_row() {
+    let (reg, _d) = test_registry();
+    let repo = real_repo();
+    let mut r = rails();
+    r.max_agents = 8;
+    let g = reg.create_group(&repo.path().to_string_lossy(), r).unwrap();
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let co = reg.resolve_token(&orch.token).unwrap();
+    let call = |args: Value| {
+        let out = dispatch(&reg, &co, "tools/call", &json!({ "name": "spawn_agent", "arguments": args }))
+            .unwrap();
+        assert_eq!(out["isError"], false, "{out:?}");
+    };
+
+    call(json!({ "kind": "worker", "branch": "fix/3442-legacy", "task": "round 1" }));
+    let mint = reg.list_agents(&g.id).as_array().unwrap().iter()
+        .find(|a| a["role"] == "worker").map(|a| a["id"].as_str().unwrap().to_string()).unwrap();
+    let sess = reg.agent(&mint).unwrap().session_id.expect("claude mints a session id");
+    reg.mark_dead(&mint, Some(0));
+
+    // The pre-#3442 resume's row: same session, same class, NO branch, and
+    // touched after the minting row.
+    let path = reg.state_root().join(g.id.as_str()).join("agents.json");
+    let mut rows: Vec<Value> = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let newest = rows.iter().filter_map(|r| r["updated_ms"].as_u64()).max().unwrap();
+    let mut legacy = rows.iter().find(|r| r["id"] == json!(mint)).cloned().expect("the minting row");
+    assert_eq!(legacy["branch"], json!("fix/3442-legacy"), "fixture: the minting row names the branch");
+    legacy["id"] = json!("w-legacy");
+    legacy["branch"] = Value::Null;
+    legacy["status"] = json!("dead");
+    legacy["updated_ms"] = json!(newest + 60_000);
+    rows.push(legacy);
+    fs::write(&path, serde_json::to_string_pretty(&rows).unwrap()).unwrap();
+    let on_disk: Vec<Value> = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let naming: Vec<&Value> = on_disk.iter().filter(|r| r["session"] == json!(sess)).collect();
+    assert_eq!(naming.len(), 2, "fixture: two rows name the session");
+    assert_eq!(
+        (naming[0]["branch"].clone(), naming[1]["branch"].clone()),
+        (json!("fix/3442-legacy"), Value::Null),
+        "fixture: the FIRST row names the branch and the later one does not"
+    );
+    assert!(
+        naming[1]["updated_ms"].as_u64() > naming[0]["updated_ms"].as_u64(),
+        "fixture: the legacy row is the NEWEST, so a last-touched rule would pick it"
+    );
+
+    call(json!({ "resume_session": sess, "task": "round 2 findings" }));
+    let resumed = live_pane_on(&reg, &g.id, &sess);
+    assert_eq!(
+        reg.agent(&resumed).unwrap().branch.as_deref(),
+        Some("fix/3442-legacy"),
+        "a resume must inherit the MINTING row's branch; a newer pre-#3442 row carrying none \
+         must not strip it (that is every worker already resumed on a running install)"
+    );
+}
+
 /// **#3442's fail-closed arms: a resume inherits a branch only where one was
 /// recorded, and only as the class that recorded it.**
 ///

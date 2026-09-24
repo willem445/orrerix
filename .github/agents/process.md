@@ -171,7 +171,7 @@ Three literal lines open it, each a whole line of its own, once:
 ```
 
 The blank line after `</summary>` is load-bearing — without it a table inside the
-fold renders as literal pipes on github.com. The agent layer is the last block, and
+fold renders as literal pipes on github.com. The agent layer is the last block (followed only by the AI tail your role instructions' **Writing for humans** gives), and
 the marker line is where a squash message is cut.
 
 **Branch from the current default branch, post-merge — never from the feature

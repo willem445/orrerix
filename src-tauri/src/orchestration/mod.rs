@@ -578,6 +578,11 @@ pub const PLAYBOOK_SECTION_IDS: &[&str] = &[
     "monitoring-open-prs",
     "learning-loop",
     "queue-orphans-and-refused",
+    // #3441. The writing standard (`templates/writing.md`, substituted as
+    // `{{WRITING}}`) — the same single copy every role file renders, served to
+    // the orchestrator on demand rather than resident, for the budget reason
+    // `definition-of-done` gives above.
+    "writing-for-humans",
     // #1683 slice 2b (#3367 item 4). The long form of the resident
     // `## Your orrerix MCP tools` bullets and the `## The task board`
     // procedure: the core kept every rule in a shortened bullet and a stub
@@ -942,6 +947,27 @@ const LOCKS_ORCH_NOTE: &str = r#"
   turn, not stalled, and the queue tells you in what order the work will actually happen — schedule
   around it rather than spawning another worker to contend for the same slot. Holds are bounded (the
   repo declares a max) and every acquire, release, reclaim and timeout is in the audit log."#;
+
+/// The writing standard every role reads (#3441): human-first bodies, short
+/// comments, terse board text, issues only for tracked work, and the one-line
+/// AI tail. ONE copy, substituted as `{{WRITING}}` under a `## Writing for
+/// humans` heading into `worker.md`, `reviewer.md`, `planner.md`, `lead.md`
+/// and the orchestrator playbook — the `{{DOD}}` pattern (`brief::DOD_TPL`),
+/// for the same reason: a rule an agent executes literally, held in five
+/// files, drifts. `manager.md` does not render it: a manager never posts to
+/// GitHub or writes the board.
+///
+/// `pub` for the golden fixture in `tests/workflow.rs`, which pins these
+/// bytes against a human-blessed copy; use [`writing_body`] for the value.
+#[doc(hidden)]
+pub const WRITING_TPL: &str = include_str!("templates/writing.md");
+
+/// The `{{WRITING}}` substitution value: [`WRITING_TPL`] without its trailing
+/// newline, because the placeholder sits on a line of its own that already
+/// supplies one (`brief::dod_body`'s reasoning, byte for byte).
+pub fn writing_body() -> &'static str {
+    WRITING_TPL.trim_end_matches('\n')
+}
 
 #[doc(hidden)]
 pub const WORKER_TPL: &str = include_str!("templates/worker.md");
@@ -31018,6 +31044,9 @@ impl InstructionVars {
             // literal `{{DOD}}` and this renders it. Stripping it instead would
             // bless a golden with a hole where the definition of done goes.
             ("DOD", brief::dod_body()),
+            // #3441. DOD's class: one text, the same for every group, so a
+            // golden carries the literal `{{WRITING}}` and this renders it.
+            ("WRITING", writing_body()),
             ("LOCKS", self.locks_note),
             ("LOCKS_ORCH", self.locks_orch_note),
             ("BLOCK_NOTE", ""),
@@ -48770,11 +48799,25 @@ impl OrchRegistry {
     ) -> String {
         let replace = persona.is_some_and(|p| p.mode == profiles::ProfileMode::Replace);
         if replace {
+            // #3441: the writing standard rides past a replace persona too, for the reason
+            // red-before-green and the reviewer's duties ride in `mechanics_core` — a
+            // replace persona never reads the class template, so a standard that lives only
+            // there is one such a block was never told, while `docs/orchestration.md`
+            // promises it to every role that posts. Appended HERE rather than inside
+            // `mechanics_core` because that function also feeds Copilot's slim system-prompt
+            // body (`copilot_agent_body`), which is kept under a documented size limit and
+            // points at this file for everything beyond the mechanics. A manager is left
+            // out, as in the templates: it never posts to GitHub or writes the board.
+            let writing = if matches!(b.kind, Role::Manager) {
+                String::new()
+            } else {
+                format!("\n## Writing for humans\n\n{}\n", writing_body())
+            };
             format!(
                 "# {} — orrerix mechanics (non-overridable)\n\n\
                  This repo's persona for the `{}` block runs in `mode: replace`: it replaces \
                  loomux's built-in {} instructions. The mechanics below are NOT part of that \
-                 trade — loomux guarantees them whatever the persona says.\n\n{}\n",
+                 trade — loomux guarantees them whatever the persona says.\n\n{}\n{writing}",
                 b.name,
                 b.id,
                 b.kind.as_str(),

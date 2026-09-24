@@ -1657,3 +1657,54 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   scheduling` rather than the core's `&` spelling, `Task board` and `Prototype → Proceed` in
   their real directions, and "the resident **Durability rules**" where the target exists only
   in the core. The same checks were re-run: `live-minus-keys == golden` OK for both files.
+
+- **#3441, cleanup duties and fewer issues** — `worker.md`, `dod.md`, `reviewer.md`,
+  `orchestrator.md` and `orchestrator-playbook.md`. `planner.md`, `manager.md` and `lead.md`
+  are byte-identical to their previous blessed copies.
+
+  Each role's cleanup duty is stated once, where that role reads it. `worker.md`'s **Git
+  workflow** gains the scratch-PR bullet: name it `<your-branch>-scratchN` (the only shape the
+  close guard lets a worker close, #2985), close it with `--delete-branch` once cited, and list
+  anything left open in the `done` report with its reason; `dod.md`'s item 7 points at it.
+  `reviewer.md`'s step 1 says the reviewer's own branch and worktree are scratch the
+  orchestrator removes. The playbook's **Mergeability** section replaces "have the worker clean
+  up its worktree/branch — or do it yourself" with a lull-time sweep and a numbered post-merge
+  checklist whose last item keeps the `schedule the next item.` sentence the process-pro hook
+  follows; the resident stub names the checklist so an orchestrator knows to read it.
+
+  The same round makes the deferral rule consistent with "fewer issues": INVARIANT 3 and the
+  disposition step defer a finding to a line in the PR's disposition comment rather than a filed
+  issue, INVARIANT 8 and the playbook's **You may file** paragraph file only work that must be
+  tracked, with one rolling follow-up issue per area. `prompts.rs` and `workflow.rs` repin the
+  deferral anchors and gain a negative assertion on the retracted issue-per-deferral wording.
+
+  Both re-bless checks above were run: `live-minus-keys == golden` reports OK for all eight
+  files, and the patch on each golden is identical to the patch on its live template
+  (`git diff -U0`, compared) except the two playbook lines carrying
+  `{{POST_MERGE_WORKFLOW_HOOK}}`, which is the key strip itself.
+
+- **#3441, the writing standard as the default** — `worker.md`, `reviewer.md`, `planner.md`,
+  `lead.md`, `orchestrator.md` and `orchestrator-playbook.md`, plus a new ninth golden,
+  `writing.md`. `manager.md` and `dod.md` are byte-identical to their previous blessed copies.
+
+  `templates/writing.md` is the one copy of how every agent writes: a body opens with a
+  summary, what to review and how it was tested, receipts in the agent layer; a comment is a
+  few lines; board text is one or two sentences; issues only for tracked work; and every GitHub
+  post ends with `— Written by AI (<your agent id>, <your model>) on behalf of the human`,
+  below the agent layer. Four role files and the playbook each gain a `## Writing for humans`
+  heading with `{{WRITING}}` under it. Like `{{DOD}}`, it is a per-group VALUE, so the goldens
+  keep the literal placeholder and `render_with_legacy_vars` renders it; `writing.md` is
+  `GOLDENS`/`LIVE`'s ninth row, with an empty key list, so an edit to the standard still needs
+  a re-bless here. `manager.md` does not render it, because a manager never posts. The
+  orchestrator's core gains one sentence in **Style** naming `read_playbook("writing-for-humans")`;
+  `worker.md`'s human-layer paragraph now points at the section instead of restating it, and
+  its "the agent layer is the last block" gains "followed only by the one-line AI tail".
+
+  Both re-bless checks above were run: `live-minus-keys == golden` reports OK for all nine
+  files, with `writing.md` transcribed into the check's key table with an empty list.
+
+  Review round 1 re-blessed `orchestrator-playbook.md` again in the fix commit. The lull sweep
+  now touches only what the group created: a worktree whose path is a dead agent's `cwd` in
+  `list_agents` and no live agent's, the branch that worktree held, and scratch PRs beneath
+  that branch; anything else is named to the human. The same check was re-run:
+  `live-minus-keys == golden` reports OK for all nine files.

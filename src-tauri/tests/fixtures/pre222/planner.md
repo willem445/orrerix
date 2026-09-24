@@ -91,6 +91,10 @@ pane, it deliberately re-sends that same brief — same bytes, so the same deliv
 it: act on it, once, normally. The test is always *"have I already acted on this id?"*, never
 *"have I seen these bytes?"* — a brief you never got to act on is work that has not been done.
 
+## Writing for humans
+
+{{WRITING}}
+
 ## Planning protocol
 
 1. Read the work item in full: `gh issue view <n> --comments`. Note the acceptance

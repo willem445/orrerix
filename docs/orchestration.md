@@ -351,7 +351,22 @@ folded — only its position moves — and the standing review sections above st
 because they are the part a human most needs to read. When a merge takes its commit message
 from the PR body, it takes the human layer only: `git log` has no fold.
 
+**Agents write for you, by default.** Every role that posts reads one writing standard, in
+every group: a body opens with a summary, what to review and how it was tested; a comment is a
+few lines; a board description or note is one or two sentences; and an issue is filed only for
+work that must be tracked — a review nit deferred from a PR is a line in that PR's disposition
+comment and a line to you, and small follow-ups in one area share one rolling issue. Everything
+an agent posts on GitHub ends with one line, `— Written by AI (<agent>, <model>) on behalf of
+the human`, below the fold, so a merge commit never carries it. A repo's own personas can add
+to this; they do not need to repeat it.
+
 **No agent ever merges.** Agents open PRs; you merge, after your own review.
+
+**After a merge, the orchestrator cleans up.** It closes the PR's leftover scratch PRs,
+confirms the head branch is gone from GitHub, and removes the worker's and reviewers' worktrees
+and local branches; at quiet moments it sweeps for any a merge left behind — only its own
+group's, so a worktree or branch it did not create is named to you, never removed. Workers
+close their own scratch PRs as they go, and a worker's report names any it could not close.
 
 Panes are badged by role and group number (`ORCH 1` / `W 1` / `REV 1` / `PLAN 1`
 vs `ORCH 2` / `W 2`) with a per-group accent color, so parallel orchestrations —

@@ -62,7 +62,7 @@ before. Only the position moves - nothing gets shorter by being folded.
 - The blank line after `</summary>` is load-bearing: without it a table inside the
   fold renders as literal pipes on github.com.
 - Exactly one whole LINE of the body is the marker and one is the `<summary>`, and
-  the agent layer is the last block. Naming either inside a code span mid-sentence
+  the agent layer is the last block, followed only by the AI tail your role instructions' **Writing for humans** gives. Naming either inside a code span mid-sentence
   changes nothing - the squash cut matches a whole line.
 - That marker is where a squash message is cut, so omitting it puts the whole
   evidence layer into `git log`, which cannot fold anything.
@@ -97,7 +97,11 @@ own edit, #2168):
      grep for the claim's distinctive noun across every root — and re-derive
      every ordinal and enumeration at head;
    - (e) a routed non-blocking finding that changes behaviour carries
-     red-before-green, or goes back as "defer to an issue" (#2104 r4).
+     red-before-green, or goes back as a deferral — a line in the PR's
+     disposition comment, not a new issue (#2104 r4, #3441);
+   - (f) every scratch PR you opened is closed with its branch, or listed in
+     the report with why — your role instructions' scratch-PR bullet under
+     **Git workflow** (#3441).
 
 ## When to hand back
 

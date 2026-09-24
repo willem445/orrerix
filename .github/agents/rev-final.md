@@ -87,7 +87,7 @@ whole line of its own, once:
 ```
 
 The blank line after `</summary>` is load-bearing - without it a table inside the
-fold renders as literal pipes on github.com. The agent layer is the last block.
+fold renders as literal pipes on github.com. The agent layer is the last block, followed only by the AI tail your role instructions' **Writing for humans** gives.
 
 A finding whose whole substance is a receipt still states its claim above the
 fold. If a human cannot tell from the human layer what you are blocking on and

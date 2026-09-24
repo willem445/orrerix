@@ -193,8 +193,9 @@ fn the_invariants_digest_leads_the_document_and_carries_what_compaction_would_co
           and never a reason to merge anyway"),
         ("an approval is not a disposition",
          "an approval with findings left open is not 'done'"),
-        ("a reason, a filed issue",
-         "…and the three costs of deferring one — a reason, a filed issue AND a line to the human. \
+        ("a line in the pr's disposition comment",
+         "…and the three costs of deferring one — a reason, a line in the PR's disposition comment \
+          AND a line to the human (#3441: not a new issue). \
           Drop them and 'deferred' silently becomes free, which is the failure this policy exists \
           to stop"),
         ("you own the architecture, not only the acceptance criteria",
@@ -240,6 +241,11 @@ fn the_invariants_digest_leads_the_document_and_carries_what_compaction_would_co
     assert!(
         !head.contains("every open branch is stale"),
         "the retracted 'every open branch is stale' rule is back in the digest: {head}"
+    );
+    // #3441: INVARIANT 3's deferral is a line in the PR's disposition comment, not a filed issue.
+    assert!(
+        !head.contains("a filed issue"),
+        "the retracted issue-per-deferral rule (#3441) is back in the digest: {head}"
     );
 
     // #1848 review: the resident stub must carry the widened trigger too — reverting its
@@ -319,7 +325,7 @@ fn the_orchestrators_findings_policy_survives_in_substance() {
         // non-blocking findings, route a defect as blocking.
         (disposition, "the disposition step", "round ≥ 2, every required lane passed",
          "#2168 S4: at round ≥ 2 with every required lane passed and only non-blocking findings \
-          open, the DEFAULT flips to DEFER — a follow-up issue, not another routing round"),
+          open, the DEFAULT flips to DEFER — a line in the disposition comment, not another round"),
         (disposition, "the disposition step", "names a defect",
          "…UNLESS the finding names a defect — a wrong value, an unreachable arm, a claim the \
           code contradicts — which routes as blocking despite its non-blocking label"),
@@ -347,13 +353,15 @@ fn the_orchestrators_findings_policy_survives_in_substance() {
         (disposition, "the disposition step", "why the fix doesn't belong in",
          "deferral cost 1 — a REASON naming why the fix doesn't belong in THIS PR ('scope' is a \
           category word; 'it'd only take ten minutes' is a reason to FIX it)"),
-        (disposition, "the disposition step", "carrying the finding verbatim",
-         "deferral cost 2 — a filed FOLLOW-UP ISSUE carrying the finding, not a paraphrase"),
+        (disposition, "the disposition step", "carrying the finding — not a new issue",
+         "deferral cost 2 — a line in the PR's DISPOSITION COMMENT carrying the finding, not a new \
+          issue (#3441)"),
         (disposition, "the disposition step", "one line to the human",
          "deferral cost 3 — the LINE TO THE HUMAN, which is the only thing that gives a deferred \
           finding a future"),
         (disposition, "the disposition step", "filing it is not doing it",
-         "…and that the filed issue PARKS the finding in the label funnel rather than discharging it"),
+         "…and that an issue filed for tracked work PARKS it in the label funnel rather than \
+          discharging it"),
         (disposition, "the disposition step", "round of findings on the same pr",
          "the loop's BOUND — three rounds and the PR settles, or a reviewer with one new nit per \
           round runs it forever"),
@@ -385,6 +393,14 @@ fn the_orchestrators_findings_policy_survives_in_substance() {
     assert!(
         !disposition.contains("default: fix it in this pr"),
         "the retracted rule (#2181) is back in the disposition step: {disposition}"
+    );
+    // #3441: a deferred nit is a line in the PR's disposition comment, not a new issue. The
+    // retracted "file a follow-up issue per deferral" rule must not come back through the
+    // disposition step.
+    assert!(
+        !disposition.contains("**a follow-up issue**")
+            && !disposition.contains("defer them to a follow-up issue"),
+        "the retracted issue-per-deferral rule (#3441) is back in the disposition step: {disposition}"
     );
 }
 
@@ -1136,5 +1152,100 @@ fn the_dod_trailer_is_the_workers_own_definition_of_done() {
         "the extracted DoD section is {} bytes — the anchors matched something, but not the \
          section, so the comparison above proves nothing",
         section.len()
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The writing standard (#3441): one copy, and every role that posts reads it
+// ---------------------------------------------------------------------------------------------
+
+/// One sentence out of the standard: distinctive enough that no other rule shares it, and
+/// load-bearing enough that any copy of the standard would carry it.
+const WRITING_SENTENCE: &str = "a review nit deferred from a pr is a line in that pr's disposition comment";
+
+/// The writing standard exists in exactly ONE template file (#3441) — `the_dod_is_one_copy`'s
+/// shape, for `the_dod_is_one_copy`'s reason: five role surfaces carry a rule an agent executes
+/// literally, and five hand-kept copies drift. Decided on a sentence over whatever `templates/`
+/// holds, never on a file name, with the same positive control proving the predicate can count
+/// past one.
+#[test]
+fn the_writing_standard_is_one_copy() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration/templates");
+    let mut files = Vec::new();
+    template_files(&dir, &mut files);
+    assert!(files.len() >= 10, "only {} template(s) — the scan is not looking at the templates", files.len());
+
+    let carriers: Vec<String> = files
+        .iter()
+        .filter(|p| flat(&fs::read_to_string(p).expect("a template must be readable")).contains(WRITING_SENTENCE))
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        carriers.len(),
+        1,
+        "the writing standard must live in exactly ONE template file — found it in {carriers:?}. \
+         Substitute `{{{{WRITING}}}}` instead of copying it."
+    );
+
+    let corpus: Vec<String> = files
+        .iter()
+        .map(|p| fs::read_to_string(p).expect("a template must be readable"))
+        .chain(std::iter::once(format!("## Writing for humans\n\n{WRITING_SENTENCE}, a second copy.\n")))
+        .collect();
+    let seen = corpus.iter().filter(|t| flat(t).contains(WRITING_SENTENCE)).count();
+    assert_eq!(seen, 2, "positive control: the predicate must see a deliberate second copy — it saw {seen}");
+}
+
+/// Every role that posts to GitHub or writes the board RECEIVES the standard, rendered (#3441).
+///
+/// Read off the files a default group actually writes, so a placeholder dropped from one
+/// template, or a substitution that stops happening, reddens here by name. The orchestrator gets
+/// it on demand — its resident core is budgeted — so the pin there is the stub that tells it to
+/// ask. `lead.md` is not written into a default group's dir, so it is read through its const with
+/// the same substitution; `manager.md` is the one role that must NOT carry it, since a manager
+/// never posts to GitHub or writes the board — that exclusion is argued in `WRITING_TPL`'s doc
+/// and pinned here so it stays a decision rather than an oversight.
+#[test]
+fn every_role_that_posts_renders_the_writing_standard() {
+    for file in ["worker.md", "reviewer.md", "planner.md", "orchestrator-playbook.md"] {
+        let text = flat(&instructions(file));
+        assert_eq!(
+            text.matches(WRITING_SENTENCE).count(),
+            1,
+            "{file} must render the writing standard exactly once (#3441) — a role that posts \
+             without it writes the verbose default the standard replaces"
+        );
+        assert!(text.contains("## writing for humans"), "{file} must serve it under its heading");
+    }
+    let orch = flat(&instructions("orchestrator.md"));
+    assert!(
+        orch.contains("read_playbook(\"writing-for-humans\")"),
+        "the orchestrator's resident core must name the section it reads before posting"
+    );
+
+    let lead = loomux_lib::orchestration::LEAD_TPL.replace("{{WRITING}}", loomux_lib::orchestration::writing_body());
+    assert_eq!(flat(&lead).matches(WRITING_SENTENCE).count(), 1, "lead.md must render the writing standard");
+    assert!(
+        !flat(loomux_lib::orchestration::MANAGER_TPL).contains("writing for humans"),
+        "manager.md renders no writing standard: a manager never posts to GitHub or the board"
+    );
+}
+
+/// The AI tail names the human generically — never a handle (#3441).
+///
+/// A shipped template is every operator's default, so a login baked into it would sign every
+/// other user's posts with one person's name; and the post's GitHub author already IS the
+/// operator's account. Pinned on the tail's own line: it exists, it sits after the agent layer
+/// by instruction, and it carries no `@`.
+#[test]
+fn the_ai_tail_names_the_human_without_a_handle() {
+    let body = loomux_lib::orchestration::writing_body();
+    let tail: Vec<&str> = body.lines().filter(|l| l.contains("Written by AI")).collect();
+    assert_eq!(tail.len(), 1, "the standard must state the AI tail on exactly one line: {body}");
+    assert!(tail[0].contains("on behalf of the human"), "the tail must name the human: {}", tail[0]);
+    assert!(!tail[0].contains('@'), "the tail must carry no handle — it ships to every operator: {}", tail[0]);
+    assert!(
+        flat(body).contains("below the agent layer"),
+        "the tail must be placed after the agent layer, so the squash cut drops it: {body}"
     );
 }

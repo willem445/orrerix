@@ -50,7 +50,9 @@ A task is done when ALL of these hold:
    file format, a persisted schema), duplicate a mechanism the repo already has, or reach across
    a module boundary. Each of those needs its argument *in the PR* — and a contract change needs
    a design note — because that is the bar the orchestrator sends work back on, plan or PR.
-7. PR is open, issue linked, and you have `report`ed `done` with the PR URL. **The link keyword
+7. PR is open, issue linked, and you have `report`ed `done` with the PR URL — listing any
+   scratch PR or branch you left open, and why (the scratch-PR bullet under **Git
+   workflow**). **The link keyword
    has to match your scope:** `Closes #N` only when this PR finishes the issue outright —
    anything partial links as `Part of #N` (or `Mitigates #N`) instead. A **squash merge honors a
    `Closes` in the PR body regardless of how partial the change actually was**, and no hedging

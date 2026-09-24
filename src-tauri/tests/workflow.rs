@@ -4157,6 +4157,55 @@ fn replace_mode_persona_still_gets_the_mechanics_core() {
     assert!(k.contains("spike.md"), "the kickoff points at the block's own contract file: {k}");
 }
 
+/// A `mode: replace` persona on a block that posts still reads the writing standard (#3441).
+///
+/// A replace persona never sees its class template, so the `{{WRITING}}` section every template
+/// renders never reaches it that way; the replace arm of `render_block_instructions` appends the
+/// same `writing_body()` itself. Both posting kinds that a repo commonly swaps are exercised — a
+/// worker (the `process` block in this repo is one) and a reviewer — and the append-mode block in
+/// the same roster is the control: it gets the standard through its template, exactly once, so
+/// neither path duplicates it.
+#[test]
+fn a_replace_persona_that_posts_still_reads_the_writing_standard() {
+    let (reg, _d) = test_registry();
+    let repo = Repo::new()
+        .workflow(
+            "version: 1\nblocks:\n  - id: spike\n    kind: worker\n    profile: .github/agents/spike.agent.md\n  \
+             - id: lens\n    kind: reviewer\n    profile: .github/agents/lens.agent.md\n  \
+             - id: plain\n    kind: worker\n",
+        )
+        .agent_file(
+            "spike.agent.md",
+            "---\nname: spike\nmode: replace\ndescription: Throwaway spike runner.\n---\nYou are a spike runner.",
+        )
+        .agent_file(
+            "lens.agent.md",
+            "---\nname: lens\nmode: replace\ndescription: One-lens reviewer.\n---\nYou review one lens.",
+        );
+    let g = reg.create_group(&repo.path(), rails()).unwrap();
+    // Precondition, so the two replace rows above are about the replace arm and not about a
+    // persona that silently failed to load and fell back to the template.
+    for id in ["spike", "lens"] {
+        let block = g.guardrails.block(id).unwrap();
+        let persona = reg.resolve_persona(&g, block).unwrap().expect("the persona must load");
+        assert_eq!(persona.mode, ProfileMode::Replace, "block `{id}` must really be a replace persona");
+    }
+    let sentence = "a review nit deferred from a pr is a line in that pr's disposition comment";
+    for id in ["spike", "lens", "plain"] {
+        let block = g.guardrails.block(id).unwrap();
+        let doc = fs::read_to_string(reg.state_root().join(g.id.as_str()).join(block.instructions_file()))
+            .unwrap();
+        let text = flat(&doc);
+        assert_eq!(
+            text.matches(sentence).count(),
+            1,
+            "block `{id}` must read the writing standard exactly once, whatever its persona mode: {doc}"
+        );
+        assert!(text.contains("## writing for humans"), "block `{id}` must serve it under its heading: {doc}");
+        assert!(!doc.contains("{{"), "block `{id}` has an unsubstituted placeholder: {doc}");
+    }
+}
+
 #[test]
 fn every_reviewer_hears_the_findings_duty_however_its_persona_was_written() {
     // The findings-disposition policy (#222) rests on the reviewer saying which
@@ -4789,8 +4838,9 @@ fn the_invariants_digest_leads_the_document_and_carries_what_compaction_would_co
           a correct outcome and never a reason to merge anyway"),
         ("an approval is not a disposition",
          "an approval with findings open is not done (#222)"),
-        ("a reason, a filed issue",
-         "INVARIANT 3's three deferral costs — a reason, a filed issue AND a line to the human. \
+        ("a line in the pr's disposition comment",
+         "INVARIANT 3's three deferral costs — a reason, a line in the PR's disposition comment \
+          AND a line to the human (#3441: not a new issue). \
           Drop them from the digest and 'deferred' silently becomes free, which is the exact \
           failure #235 was written to stop"),
         ("you own the architecture, not only the acceptance criteria",
@@ -4827,6 +4877,11 @@ fn the_invariants_digest_leads_the_document_and_carries_what_compaction_would_co
     assert!(
         !head.contains("every open branch is stale"),
         "the retracted 'every open branch is stale' rule is back in the digest: {head}"
+    );
+    // #3441: INVARIANT 3's deferral is a line in the PR's disposition comment, not a filed issue.
+    assert!(
+        !head.contains("a filed issue"),
+        "the retracted issue-per-deferral rule (#3441) is back in the digest: {head}"
     );
 
     // #1848 review: the resident stub must carry the widened trigger too — reverting its
@@ -4898,7 +4953,7 @@ fn the_orchestrators_findings_policy_survives_in_substance_not_just_in_bytes() {
         // non-blocking findings, route a defect as blocking.
         (disposition, "the disposition step", "round ≥ 2, every required lane passed",
          "#2168 S4: at round ≥ 2 with every required lane passed and only non-blocking findings \
-          open, the DEFAULT flips to DEFER — a follow-up issue, not another routing round"),
+          open, the DEFAULT flips to DEFER — a line in the disposition comment, not another round"),
         (disposition, "the disposition step", "names a defect",
          "…UNLESS the finding names a defect — a wrong value, an unreachable arm, a claim the \
           code contradicts — which routes as blocking despite its non-blocking label"),
@@ -4919,13 +4974,14 @@ fn the_orchestrators_findings_policy_survives_in_substance_not_just_in_bytes() {
         (disposition, "the disposition step", "why the fix doesn't belong in",
          "deferral cost 1 — a REASON naming why the fix doesn't belong in THIS PR ('scope' is a \
           category word; 'it'd only take ten minutes' is a reason to FIX it)"),
-        (disposition, "the disposition step", "carrying the finding verbatim",
-         "deferral cost 2 — a filed FOLLOW-UP ISSUE carrying the finding, not a paraphrase"),
+        (disposition, "the disposition step", "carrying the finding — not a new issue",
+         "deferral cost 2 — a line in the PR's DISPOSITION COMMENT carrying the finding, not a new \
+          issue (#3441)"),
         (disposition, "the disposition step", "one line to the human",
          "deferral cost 3 — the LINE TO THE HUMAN, which is the only thing that gives a deferred \
           finding a future"),
         (disposition, "the disposition step", "filing it is not doing it",
-         "…and that the filed issue PARKS the finding in the label funnel rather than \
+         "…and that an issue filed for tracked work PARKS it in the label funnel rather than \
           discharging it"),
         (disposition, "the disposition step", "round of findings on the same pr",
          "the loop's BOUND (rev-19 F5) — three rounds and the PR settles, or a reviewer with one \
@@ -4955,6 +5011,14 @@ fn the_orchestrators_findings_policy_survives_in_substance_not_just_in_bytes() {
     assert!(
         !disposition.contains("default: fix it in this pr"),
         "the retracted rule (#2181) is back in the disposition step: {disposition}"
+    );
+    // #3441: a deferred nit is a line in the PR's disposition comment, not a new issue. The
+    // retracted "file a follow-up issue per deferral" rule must not come back through the
+    // disposition step.
+    assert!(
+        !disposition.contains("**a follow-up issue**")
+            && !disposition.contains("defer them to a follow-up issue"),
+        "the retracted issue-per-deferral rule (#3441) is back in the disposition step: {disposition}"
     );
 }
 
@@ -5912,7 +5976,7 @@ const PRE222: [(&str, &str); 5] = [
 ///   against `LIVE` below. That question is about the TEMPLATE and is asked of
 ///   all of them equally, which is why `manager.md` gets the same re-bless gate as
 ///   the other four rather than a weaker one.
-const GOLDENS: [(&str, &str); 8] = [
+const GOLDENS: [(&str, &str); 9] = [
     PRE222[0],
     PRE222[1],
     PRE222[2],
@@ -5945,6 +6009,13 @@ const GOLDENS: [(&str, &str); 8] = [
     // are, so the "what does a DEFAULT group read?" pins reach its bytes
     // through them and would be looking for a file that is correctly absent.
     ("dod.md", include_str!("fixtures/pre222/dod.md")),
+    // #3441. `dod.md`'s row, for `dod.md`'s reason: the writing standard is
+    // one copy substituted as `{{WRITING}}` into four role files and the
+    // playbook, every golden carrying it keeps the literal placeholder, and
+    // `render_with_legacy_vars` substitutes the same value on both sides — so
+    // without this row an edit to what every agent is told about writing would
+    // redden nothing.
+    ("writing.md", include_str!("fixtures/pre222/writing.md")),
 ];
 
 /// The live templates, with the placeholder(s) each must carry. Each element of the
@@ -5957,7 +6028,7 @@ const GOLDENS: [(&str, &str); 8] = [
 /// `{{BLOCK_NOTE}}{{ADVISOR_CONSULT_NOTE}}`), they stay a single contiguous-string key
 /// — same reasoning `block.md`'s `{{PERSONA_NOTE}}{{LANE_NOTE}}{{GATE_NOTE}}` already
 /// relies on.
-const LIVE: [(&str, &str, &[&str]); 8] = [
+const LIVE: [(&str, &str, &[&str]); 9] = [
     // #1683: the merge-gate and re-sync sections moved to the playbook, and
     // their two workflow-conditional fragments with them — the orchestrator
     // core's key list shrinks to `{{WORKFLOW}}` and `{{LOCKS_ORCH}}`.
@@ -6018,13 +6089,16 @@ const LIVE: [(&str, &str, &[&str]); 8] = [
     // is stripped and its golden is the live template byte for byte. The
     // `{{GROUP_ID}}`/`{{REPO}}` it does carry are per-group VALUE variables —
     // `HOLD_LABEL`'s class, not this list's — so the golden keeps them literal
-    // and the pin bites on the prose around them.
+    // and the pin bites on the prose around them. `{{WRITING}}` (#3441) is the
+    // same class.
     ("lead.md", loomux_lib::orchestration::LEAD_TPL, &[]),
     // #3040 P2. An EMPTY key list like `lead.md`'s, and for the same kind of
     // reason: `dod.md` carries no placeholder of its own — it IS a placeholder's
     // value — so nothing is stripped and its golden is the live template byte
     // for byte.
     ("dod.md", loomux_lib::orchestration::brief::DOD_TPL, &[]),
+    // #3441. Empty for `dod.md`'s reason: it IS a placeholder's value.
+    ("writing.md", loomux_lib::orchestration::WRITING_TPL, &[]),
 ];
 
 /// Render a template with the plain per-group VALUE variables `render_template`
@@ -6040,7 +6114,7 @@ const LIVE: [(&str, &str, &[&str]); 8] = [
 /// So the golden carries the literal `{{HOLD_LABEL}}` and this renders it, which
 /// keeps the pin biting on the prose AROUND it.
 fn render_with_legacy_vars(tpl: &str, g: &loomux_lib::orchestration::GroupInfo) -> String {
-    let vars: [(&str, String); 9] = [
+    let vars: [(&str, String); 10] = [
         ("REPO", g.repo.clone()),
         ("GROUP_ID", g.id.to_string()),
         ("MAX_AGENTS", g.guardrails.max_agents.to_string()),
@@ -6058,6 +6132,9 @@ fn render_with_legacy_vars(tpl: &str, g: &loomux_lib::orchestration::GroupInfo) 
         // `{{DOD}}` and this renders it — which keeps the pin biting on the
         // prose AROUND it, and on the heading it is served under.
         ("DOD", loomux_lib::orchestration::brief::dod_body().to_string()),
+        // #3441. DOD's class again: one text for every group, so the goldens
+        // keep the literal `{{WRITING}}` and this renders it.
+        ("WRITING", loomux_lib::orchestration::writing_body().to_string()),
     ];
     let mut out = tpl.to_string();
     for (k, v) in vars {

@@ -587,8 +587,9 @@ export const HUE_SLOTS = HUE_ORDER.length;
 /** Block -> hue slot, or absent for "beyond the palette".
  *
  *  `blockOrder` is the caller's STABLE list — the view's is `hueBlockOrder`,
- *  over the whole file, not the windowed data — and it is what stops a hue moving when a filter changes
- *  which blocks are on screen. It is deduplicated and only its first
+ *  over the whole file, not the windowed data — and it is what stops a hue
+ *  moving when a filter changes which blocks are on screen. It is
+ *  deduplicated and only its first
  *  `HUE_SLOTS` entries get a hue; any block outside it is appended after, so a
  *  block that appears in the data but not the roster is still drawable. */
 function hueAssignment(
@@ -637,6 +638,16 @@ function hueAssignment(
  *  name. Roster blocks with no delta follow in roster order: they draw nothing
  *  today, and are listed only so the order stays total.
  *
+ *  `UNKNOWN` is never ordered. It is the label `diffRows` gives a row with a
+ *  blank block — rows from before the block field existed, so the OLDEST in a
+ *  file, and by first-delta time they would take slot 0 from a real block.
+ *  Left out here, it falls to `hueAssignment`'s fallback, after every named
+ *  block.
+ *
+ *  Slots go to spend that EVER happened: a block keeps its slot for the life
+ *  of the file, so the ninth block ever to spend draws grey even in a window
+ *  where the first eight are silent. That is the price of hues that never move.
+ *
  *  Residual: if the file is ever compacted so a block's early rows go, its
  *  first delta moves and hues can shift — the file is not compacted today
  *  (`SERIES_REVISIT_BYTES` is a report, not a truncation). */
@@ -651,7 +662,9 @@ export function hueBlockOrder(
   }
   const firstDelta = new Map<string, number>();
   for (const d of diffRows(rows).deltas) {
-    if (!d.block.trim()) continue;
+    // `diffRows` has already labelled a blank block, so this is the only
+    // spelling a blank one can arrive in (see the doc above).
+    if (d.block === UNKNOWN) continue;
     const t = firstDelta.get(d.block);
     if (t === undefined || d.tsMs < t) firstDelta.set(d.block, d.tsMs);
   }

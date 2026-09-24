@@ -568,6 +568,34 @@ test("a block that starts spending later is APPENDED — no coloured block moves
   assert.equal([...ninth.values()].filter((h) => h === null).length, 1);
 });
 
+test("a same-tick tie between two first deltas goes to ROSTER position, not the name (#3449)", () => {
+  // Roster order and name order must DISAGREE here, or a name-only tie-break
+  // passes too: `zeta` was spawned before `alpha`, and both first spend in one tick.
+  const roster = [agent({ id: "z", block: "zeta" }), agent({ id: "a", block: "alpha" })];
+  const rows = [...spend("alpha", T0, "k-a"), ...spend("zeta", T0, "k-z")];
+  assert.deepEqual(hueBlockOrder(rows, roster), ["zeta", "alpha"]);
+  // Neither block in the roster: the tie falls through to the name.
+  assert.deepEqual(hueBlockOrder(rows, []), ["alpha", "zeta"]);
+});
+
+test("rows with a blank block (`unknown`) never take a hue slot from a named block (#3449)", () => {
+  // Rows written before the block field existed carry `block: ""`, which
+  // `diffRows` labels `unknown` — and they are the OLDEST rows in a file, so by
+  // first-delta time alone `unknown` would take slot 0 and push a real block
+  // onto the neutral ramp. It is not a block, so it is left to `hueAssignment`'s
+  // fallback, which appends it after every named block, as it always was.
+  const roster = Array.from({ length: 8 }, (_, i) => agent({ id: `a${i}`, block: `w${i + 1}` }));
+  const rows: SeriesRowLike[] = [
+    ...spend("", T0, "k-legacy"),
+    ...roster.flatMap((a, i) => spend(a.block, T0 + (i + 1) * HOUR, `k-${a.block}`)),
+  ];
+  const order = hueBlockOrder(rows, roster);
+  const hues = new Map(seriesKeys(rows, { blockOrder: order }).map((k) => [k.block, k.hueIndex]));
+  assert.equal(hues.get(UNKNOWN), null, "unknown takes the neutral ramp, after every named block");
+  for (const a of roster) assert.notEqual(hues.get(a.block), null, `${a.block} keeps an identity hue`);
+  assert.ok(!order.includes(UNKNOWN), `unknown is not ordered as a block: ${order.join(",")}`);
+});
+
 test("a token-chart LINE rule never sets a fill — it would close the polyline into a wedge (#3449)", () => {
   // `.tokens-line { fill: none }` is one class; a `.tokens-line.tok-hue-*` rule
   // is two and wins, so any `fill` it carries fills every polyline and the

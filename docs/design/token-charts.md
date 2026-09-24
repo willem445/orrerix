@@ -489,9 +489,13 @@ spending later is appended, never inserted ahead of one already coloured;
 ordering the roster and skipping the blocks without data would not give that.
 The residual is compaction: nothing rewrites the file today, but a future
 compaction that drops a block's early rows moves its first delta and can
-shift hues. A **ninth** block takes
-the neutral ramp rather than recycling slot 0: a repeated hue is a false claim
-that two blocks are one. Nothing is merged away to avoid that, because this is
+shift hues. Rows with a blank block (labelled `unknown`, the file's oldest)
+are not a block and are never ordered, so they cannot take a named block's
+slot. The price of hues that never move is that slots go to spend that
+**ever** happened: a retired spender keeps its slot for the life of the file,
+so the ninth block *ever* to spend draws grey even in a window where the first
+eight are silent. A **ninth** block takes the neutral ramp rather than
+recycling slot 0: a repeated hue is a false claim that two blocks are one. Nothing is merged away to avoid that, because this is
 a cost chart and folding two blocks' spend together to save a colour is the
 worse trade.
 

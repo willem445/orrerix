@@ -75,7 +75,10 @@ before. Only the position moves - nothing gets shorter by being folded.
 
 This repo bans local `cargo` builds and tests for agent workers (CLAUDE.md):
 push early, open a draft PR, and read CI. `npm run build`, `npm test` and
-`rustfmt --check --edition 2021 <file>` are the only local checks.
+`rustfmt --check --edition 2021 <file>` are the only local checks. rustfmt has
+a size cap (the `ci-validate` skill states it): never run it on
+`orchestration/mod.rs` or any other file over the cap, since it takes tens of
+GB of RAM there (#3469).
 
 ## Before report(done)
 

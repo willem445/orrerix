@@ -52,10 +52,11 @@ the list.
 
 From the repo root: `rustfmt --check --edition 2021 <changed .rs> >/dev/null`.
 `--edition` is mandatory (2015 false-errors `async fn`); discard stdout — those are
-*unenforced* formatting diffs (~15k lines on the big module), noise here and never a
+*unenforced* formatting diffs, noise here and never a
 finding; the exit code is ambiguous, so **stderr is the signal**. Never run bare
 `rustfmt`, commit a reformat, or cite a clean run as validation. `cargo check` stays
-banned (#488, #558).
+banned (#488, #558). Never run it on a file over the `ci-validate` skill's size cap
+(`orchestration/mod.rs` is the known case): it needs tens of GB of RAM there (#3469).
 
 ## Never block a turn waiting on CI
 

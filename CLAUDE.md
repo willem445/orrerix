@@ -91,7 +91,9 @@ Frontend-only commands that never invoke `rustc` (`npm run build`/`tsc`,
 worktree (see above), as does `rustfmt --check --edition 2021 <changed .rs>`
 — a parser, not a build, and the one pre-push
 syntax check for Rust (#558; see the skill for the read-stderr recipe and why
-`cargo check` is not covered). The one `cargo` exception: `cargo update
+`cargo check` is not covered). It has a size cap stated in the skill:
+`orchestration/mod.rs` and the other files over it take tens of GB of RAM,
+so never run it on them (#3469). The one `cargo` exception: `cargo update
 --workspace` for release lockfile bumps — dependency resolution only, never
 compiles.
 

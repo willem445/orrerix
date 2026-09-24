@@ -67,6 +67,17 @@ The fold's rules, each pinned in `crates/loomux-engine/src/cacheage.rs`:
   has a cumulative total, not a request. Charging that total to one wake would
   report a session's whole history as its last wake, so its activity stays unknown
   until its counters next move.
+- **Growth is measured from the last token-bearing reading of the same source**
+  (`Activity.baseline`), never from whatever the row held last. The usage merge
+  lets a zero-token statusline read that carries a dollar figure replace a
+  transcript row (the residual stated at `merge_usage_entry`). Differencing the
+  next transcript read against those zeros would report the whole session as one
+  wake and snap the chip to `hot`. So a zero-token reading never becomes the
+  baseline, and a token-bearing reading from a *different* source re-baselines:
+  the two sources count different things, so the reading records no wake and
+  does not move the clock. A new agent's first rows (`none`, or a `$0.00`
+  statusline on a subscription plan) carry no tokens, so its first real request
+  still folds from zero.
 
 The result persists in `usage.json` as the row's `activity` object. The field is
 additive: an older row reads as unknown. So a chip survives an app restart with
@@ -147,6 +158,13 @@ as a follow-up rather than built speculatively.
   valid group id is not membership), a dead agent, and a CLI with no `/compact`. It
   is audited as `compact-requested` with `by: human`. The menu item is disabled,
   with the reason, where it could not act.
+
+  **The reply says what will actually happen** (`human_compact_reply`), in the
+  order the fire check decides it: "queued" for a paused group (the fire check
+  skips it until it resumes), then for a compact already in flight, then for a
+  group whose hourly compact budget is spent. It says "requested — … next idle
+  moment" only when none of those holds. The flag stays set in every case, so each
+  queued reply names what releases it.
 - **The Agents tab** shows the same label per row, from the same reading
   (`PaneFacts.cache`). It is a second axis beside the state ladder, never an input
   to it: how long ago a pane last spoke says nothing about whether it is working now.
@@ -229,6 +247,14 @@ would be the wasted one.
 - **An orchestrator that answers the nudge without compacting and keeps chatting
   with the human** is not re-nudged until work goes in flight or the context drops.
   That is the latch doing its job, stated so it is not mistaken for a miss.
+- **Two "in flight" arms have no fixture: pending intake and a queued delivery.**
+  Neither can be built from outside the registry. Intake is filled by the GitHub
+  poller, and a delivery queues only behind a real PTY. Both are one-line reads
+  (`intake_pending` non-empty, `queue_depth(pty) > 0`) beside arms that ARE
+  pinned: a live delegate, a pending watch, a live review drive, and an unreadable
+  review or plan drive file. A live PLAN drive is also unfixtured: its entry has
+  no public constructor. Its file is read by the same `drives_in_flight` whose
+  review half is pinned.
 
 ## Tests
 
@@ -242,8 +268,11 @@ would be the wasted one.
   a block override and `0`; Compact now refusing another group and firing through
   `compact_nudge_tick`; the backstop firing once in the band, not re-arming on
   output, re-arming on a context drop, refusing past the TTL and without a reading,
-  holding for a delegate and a watch; and a block override moving the band and `0`
-  turning it off.
+  holding for a delegate, a watch, a live review drive and an unreadable review
+  or plan drive file; a block override moving the band and `0` turning it off; a
+  statusline read between two transcript reads never becoming the wake's
+  baseline; and Compact now saying "queued" on a paused group, then firing once
+  it resumes.
 - `src-tauri/tests/workflow.rs`: the block key's range, absence, and the refusal
   above a day.
 - `test/cacheage.test.ts`: the state boundaries against the row's own threshold,

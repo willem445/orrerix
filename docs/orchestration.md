@@ -4120,7 +4120,9 @@ snapshot read the tab strip already makes, so it costs no extra polling.
   mid-turn. It uses the same path an agent's own `request_compact()` uses, so the pane is
   re-grounded afterwards like any other compact. The item is greyed out, with the reason,
   on a pane it cannot compact: a CLI without `/compact`, or a pane that is not an
-  orchestration agent.
+  orchestration agent. If the compact cannot fire right away, the confirmation says
+  "queued" and why: the group is paused, a compact is already running on that pane,
+  or the group has used its compacts for the hour. It fires once that clears.
 
 The **Agents tab** shows the same label on each agent's row.
 

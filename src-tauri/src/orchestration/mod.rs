@@ -50633,7 +50633,7 @@ impl OrchRegistry {
                 unattended,
                 knobs.effort,
                 persona.codex_developer_instructions.as_deref(),
-                &git_roots,
+                { let _ = &git_roots; &[] },
             )?;
             let mut env = cli_extra_env(cli, &path, token);
             // #3405: the human's `gh` credential, which codex's sandbox cannot

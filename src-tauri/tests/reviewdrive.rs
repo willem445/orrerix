@@ -5303,6 +5303,57 @@ fn a_handback_resumes_the_worker_under_the_sessions_own_block() {
     }
 }
 
+/// **#3442, the driver's half: a hand-back's resumed pane records the worker's
+/// own branch.** `rd_handback` resumes through `rd_spawn`, which passes the
+/// session's workspace as `cwd_override` — the same `spawn_agent_full` arm the
+/// MCP resume reaches, and the one that used to persist no branch. The close
+/// gate reads that branch from `agent_owners`, so without it every worker the
+/// driver handed back to could not close its own `-scratchN` PRs.
+///
+/// The `spawned` pane word is asserted as a PRE-condition: a hand-back that
+/// reused the original pane would read the original's branch and pass under
+/// the defect.
+#[test]
+fn a_handback_resume_records_the_workers_own_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::with(WORKFLOW_TWO_WORKERS);
+    let gh = FakeGh::green(HEAD_A);
+    let (group, session, w) = driven_as(&reg, &repo, &gh, "worker");
+    let own = reg
+        .agent(&w)
+        .and_then(|a| a.branch)
+        .expect("fixture: the driven worker records a branch — otherwise there is nothing to inherit");
+
+    let handed = to_first_handback(&reg, &group, &gh);
+    let (_pr, agent) = handed.handbacks.first().cloned().unwrap_or_else(|| {
+        panic!("the drive must hand back: {handed:?}")
+    });
+    assert_eq!(
+        handback_panes(&reg, &group),
+        vec!["spawned".to_string()],
+        "the hand-back must have OPENED a pane — a reused one carries the original's branch \
+         and proves nothing"
+    );
+    assert_ne!(agent, w, "the resumed pane is a new one");
+    let resumed = reg.agent(&agent).expect("the resumed pane is registered");
+    assert_eq!(resumed.session_id.as_deref(), Some(session.as_str()), "it runs the worker's session");
+    assert_eq!(
+        resumed.branch.as_deref(),
+        Some(own.as_str()),
+        "the driver's resumed worker must record its session's branch, or the close gate owns \
+         nothing for it and refuses its own -scratchN PRs (#3442)"
+    );
+    let roster = std::fs::read_to_string(
+        reg.state_root().join(group.as_str()).join(loomux_lib::orchestration::OWNER_ROSTER_FILE),
+    )
+    .expect("the owner roster is written");
+    assert!(
+        roster.lines().any(|l| l == format!("{agent} worker {own}")),
+        "the gate's roster row for the resumed pane names the branch: {roster}"
+    );
+}
+
 /// **#1961's amplifier, with the discriminating fixture the issue named**: two
 /// roster rows for one session carrying different blocks, the OLDER one right.
 ///

@@ -3829,7 +3829,9 @@ its own — or a scratch branch beneath it, under a `/` or `-` (so `fix/2985-x` 
 `fix/2985-x-scratch2`, and a bare prefix like `fix/29` covers nothing). The orchestrator
 may close any PR in its group. Anything else is refused, with a message naming the PR, the
 branch it belongs to, the agent that owns it — or, when no agent on the group's roster does,
-that nobody does — and what the calling agent does own.
+that nobody does — and what the calling agent does own. A worker resumed onto an earlier
+session — including every review-driver hand-back — keeps that session's branch, so it can
+still close its own scratch PRs.
 
 This exists because of a live incident: a worker cleaning up its own scratch PRs looped
 over PR numbers it had built by string concatenation, and closed five other workers' open

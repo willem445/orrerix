@@ -208,7 +208,7 @@ use loomux_lib::orchestration::{
     CLAUDE_QUESTION_DENY_TOOLS, claude_denies_interactive_question,
     // #267 stage 2: gemini as a reviewer-capable CLI, and the capability table
     // that decides which classes any CLI may host.
-    cli_can_host, cli_caps, cli_extra_env, codex_profile_toml, gemini_policy_toml,
+    cli_can_host, cli_caps, cli_extra_env, codex_profile_toml, gemini_policy_toml, CodexGitAccess,
     // #3318 F1: the per-CLI fork seam, the refusal a fork gesture asks, and
     // the L1 constant both line builders select their arm from.
     fork_refusal, ForkSeam, CLAUDE_FORK_PREMINTS_CHILD_ID,
@@ -8865,7 +8865,7 @@ fn a_codex_panes_env_carries_its_token_under_the_name_its_profile_expects() {
         true,
         "",
         None,
-        &[],
+        &CodexGitAccess::default(),
     );
     assert!(
         profile.contains(&format!("\"{}AGENT_TOKEN\"", brand::ENV_PREFIX)),
@@ -43348,34 +43348,45 @@ fn a_throwaway_registry_never_reads_the_humans_gh_token() {
     assert!(audit_entries(&reg, &g.id, "codex-gh-token-unavailable").is_empty());
 }
 
-/// The `writable_roots` a codex profile grants, or `None` when it names none —
-/// asserted to sit inside `[sandbox_workspace_write]`, since a key in any other
-/// table is one codex reads as something else. Items are TOML basic strings, and
-/// a path only ever carries the `\\` and `\"` escapes.
-fn codex_writable_roots(profile: &str) -> Option<Vec<std::path::PathBuf>> {
+/// The `[permissions.<name>.filesystem]` entries of a worktree pane's codex
+/// profile as (path, access), or `None` when the profile defines none — the
+/// legacy `workspace-write` document every other pane gets. Keys are TOML basic
+/// strings; a path only ever carries the `\\` and `\"` escapes.
+fn codex_fs_entries(profile: &str) -> Option<Vec<(std::path::PathBuf, String)>> {
+    let header = format!("[permissions.{}.filesystem]", loomux_lib::orchestration::CODEX_WORKTREE_PERMISSIONS);
     let lines: Vec<&str> = profile.lines().collect();
-    let at = lines.iter().position(|l| l.starts_with("writable_roots = ["))?;
-    let table = lines[..at].iter().rposition(|l| l.trim_start().starts_with('[')).unwrap();
-    assert_eq!(lines[table], "[sandbox_workspace_write]", "{profile}");
-    let body = lines[at].strip_prefix("writable_roots = [")?.strip_suffix(']')?;
-    let (mut out, mut cur, mut in_str, mut esc) = (Vec::new(), String::new(), false, false);
-    for c in body.chars() {
-        match (in_str, esc, c) {
-            (true, true, c) => {
-                cur.push(c);
-                esc = false;
-            }
-            (true, false, '\\') => esc = true,
-            (true, false, '"') => {
-                out.push(std::path::PathBuf::from(std::mem::take(&mut cur)));
-                in_str = false;
-            }
-            (true, false, c) => cur.push(c),
-            (false, _, '"') => in_str = true,
-            _ => {}
+    let at = lines.iter().position(|l| *l == header)?;
+    let mut out = Vec::new();
+    for line in &lines[at + 1..] {
+        if line.trim().is_empty() || line.starts_with('[') {
+            break;
         }
+        let (key, access) = line.rsplit_once(" = ").expect("an entry is `key = value`");
+        let key = key.strip_prefix('"').and_then(|k| k.strip_suffix('"')).expect("a quoted key");
+        let (mut path, mut esc) = (String::new(), false);
+        for c in key.chars() {
+            if esc {
+                path.push(c);
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else {
+                path.push(c);
+            }
+        }
+        out.push((std::path::PathBuf::from(path), access.trim_matches('"').to_string()));
     }
     Some(out)
+}
+
+/// The paths a codex profile grants write on, in document order.
+fn codex_writable_roots(profile: &str) -> Option<Vec<std::path::PathBuf>> {
+    codex_fs_entries(profile).map(|e| e.into_iter().filter(|(_, a)| a == "write").map(|(p, _)| p).collect())
+}
+
+/// The paths a codex profile seals read-only inside what it grants.
+fn codex_sealed(profile: &str) -> Option<Vec<std::path::PathBuf>> {
+    codex_fs_entries(profile).map(|e| e.into_iter().filter(|(_, a)| a == "read").map(|(p, _)| p).collect())
 }
 
 /// #3456: a codex WORKER in a dedicated worktree is handed the git metadata a
@@ -43421,7 +43432,7 @@ fn a_codex_worktree_worker_can_write_its_gitdir_and_the_shared_store_but_not_hoo
 
     let profile = codex_profile_of(&home, &w.id);
     let roots = codex_writable_roots(&profile)
-        .unwrap_or_else(|| panic!("a worktree worker's profile must name writable_roots:\n{profile}"));
+        .unwrap_or_else(|| panic!("a worktree worker's profile must grant write entries:\n{profile}"));
     let canon: Vec<std::path::PathBuf> = roots.iter().map(|r| r.canonicalize().unwrap()).collect();
     let want: Vec<std::path::PathBuf> =
         vec![gitdir.clone(), common.join("objects"), common.join("refs"), common.join("logs")];
@@ -43441,19 +43452,47 @@ fn a_codex_worktree_worker_can_write_its_gitdir_and_the_shared_store_but_not_hoo
         "the gitdir root must be spelled as the pointer spells it — codex lifts its read-only \
          default only for a root `==` to the path it resolved from that file"
     );
+    assert!(
+        profile.contains(&format!(
+            "default_permissions = \"{}\"",
+            loomux_lib::orchestration::CODEX_WORKTREE_PERMISSIONS
+        )) && !profile.contains("sandbox_mode"),
+        "a worktree pane runs the named profile, not the legacy block:\n{profile}"
+    );
+
+    // The seal (#3456 round 2): the gitdir files that redirect git — including
+    // the HUMAN'S git in this worktree — are read-only inside the writable
+    // gitdir, and `config.worktree`, which git does not write, now exists so a
+    // deny can sit on it. `index`/`HEAD`/`logs` are not among them.
+    let sealed: Vec<std::path::PathBuf> = codex_sealed(&profile)
+        .unwrap()
+        .iter()
+        .map(|p| p.canonicalize().unwrap_or_else(|e| panic!("{}: {e}", p.display())))
+        .collect();
+    assert_eq!(
+        sealed,
+        vec![gitdir.join("commondir"), gitdir.join("config.worktree"), gitdir.join("gitdir")],
+        "{profile}"
+    );
+    assert_eq!(fs::read(gitdir.join("config.worktree")).unwrap(), b"", "created empty");
+    for writable in ["index", "HEAD", "logs"] {
+        assert!(!sealed.iter().any(|s| s.starts_with(gitdir.join(writable))), "{writable} must stay writable");
+    }
 
     // The main clone: codex's own protection of `<repo>/.git` stands.
     let oprofile = codex_profile_of(&home, &orch.id);
     assert!(oprofile.contains("[sandbox_workspace_write]"), "control: {oprofile}");
     assert_eq!(codex_writable_roots(&oprofile), None, "a main-clone pane gets nothing extra:\n{oprofile}");
+    assert!(!oprofile.contains("permissions"), "and no profile:\n{oprofile}");
+    assert!(!common.join("config.worktree").exists(), "nothing sealed, nothing created, in the main clone");
     assert!(audit_entries(&reg, &g.id, "codex-worktree-gitdir-unrecognised").is_empty());
     drop(drain_parked_readers_for_test());
 }
 
 /// #3456's refusal, through the spawn: a pane whose `.git` pointer leads to a
 /// layout that is not git's own linked-worktree shape — here a `commondir`
-/// rewritten to name another store, which a pane with a writable gitdir could do
-/// between spawns — still spawns, is granted nothing, and the audit log says
+/// rewritten to name another store, which an unsandboxed peer or the human can do
+/// even though the codex pane itself cannot (the seal) — still spawns, is granted nothing, and the audit log says
 /// why. The untampered twin in a second group is the control that the same
 /// fixture DOES earn roots, so the absence is about the tamper.
 #[test]
@@ -43476,6 +43515,7 @@ fn a_codex_pane_on_an_unrecognised_gitdir_layout_gets_no_roots_and_audits_why() 
         fs::write(gitdir.join("commondir"), "../..\n").unwrap();
         let wt = root.join("wt");
         fs::create_dir_all(&wt).unwrap();
+        fs::write(gitdir.join("gitdir"), format!("{}/.git\n", wt.display())).unwrap();
         fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display().to_string().replace('\\', "/")))
             .unwrap();
         (wt, gitdir, root)

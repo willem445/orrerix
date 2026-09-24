@@ -60120,7 +60120,7 @@ impl OrchRegistry {
         // without a list of call sites to keep in step. `end_group` is the one
         // caller that goes around it, because the human's own
         // "clean up worktrees" choice governs a teardown.
-        self.reclaim_reviewer_scratch(&snapshot);
+        // SCRATCH #3443: reclaim wiring neutered for red evidence
         Some(snapshot)
     }
 
@@ -60359,6 +60359,7 @@ impl OrchRegistry {
     /// worker a checkout without its own work.
     #[doc(hidden)] // pub for integration tests
     pub fn restore_reviewer_scratch_worktree(&self, group: &GroupId, cwd: &str) -> bool {
+        if true { return false; } // SCRATCH #3443: re-cut neutered
         if cwd.trim().is_empty() || Path::new(cwd).is_dir() {
             return false;
         }

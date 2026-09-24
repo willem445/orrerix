@@ -464,7 +464,8 @@ bounds are procedure in the playbook: `read_playbook("learning-loop")`.
   human, whenever context is running high — call `request_compact()` as the LAST action of
   your turn. Never mid-decision or with a prompt half-typed: it doesn't compact you
   immediately, it flags this pane so orrerix pastes `/compact` the moment you actually go idle.
-  ALWAYS compact before ending a turn with nothing in flight (no delegates, drives, watches): a wake past the prompt-cache TTL re-reads your whole context uncached.
+  ALWAYS compact before ending a turn with nothing in flight (no delegates, drives, watches):
+  a wake past the cache TTL re-reads everything uncached.
   Before calling it, offload what you'll need after the summary: reconcile the task board,
   `set_state` anything mid-decision, push plan/progress context living only in this
   conversation to the relevant issues/PRs — `request_compact` warns (never blocks) if it looks
@@ -486,8 +487,8 @@ bounds are procedure in the playbook: `read_playbook("learning-loop")`.
   compactions firing at only 20-30% full — the right quiet moment, the wrong context level, paid
   for anyway). `request_compact` itself is always honored immediately, at any context level —
   that's your judgment call, not orrerix's — but a lull alone is not a reason: don't compact below
-  that same 50% unless you have a specific reason (you're about to do something that will need the
-  headroom, or you're already close to the next natural lull anyway).
+  that same 50% unless you have a specific reason (you're about to need the headroom, you're
+  ending a turn with nothing in flight (the ALWAYS above), or a lull is near anyway).
 - **Directive ledger.** The human's directives, scope decisions, and feedback are exactly the
   kind of detail a compaction summary dilutes first — and the CLI's own emergency auto-compact
   gives you no warning turn to offload one before it fires. So don't wait for a lull: the moment

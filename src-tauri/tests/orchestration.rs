@@ -8865,6 +8865,7 @@ fn a_codex_panes_env_carries_its_token_under_the_name_its_profile_expects() {
         true,
         "",
         None,
+        &[],
     );
     assert!(
         profile.contains(&format!("\"{}AGENT_TOKEN\"", brand::ENV_PREFIX)),
@@ -43345,6 +43346,171 @@ fn a_throwaway_registry_never_reads_the_humans_gh_token() {
     assert!(req.env.iter().any(|(k, _)| k == "ORRERIX_AGENT_TOKEN"), "{:?}", req.env);
     assert!(!req.env.iter().any(|(k, _)| k == "GH_TOKEN"));
     assert!(audit_entries(&reg, &g.id, "codex-gh-token-unavailable").is_empty());
+}
+
+/// The `writable_roots` a codex profile grants, or `None` when it names none —
+/// asserted to sit inside `[sandbox_workspace_write]`, since a key in any other
+/// table is one codex reads as something else. Items are TOML basic strings, and
+/// a path only ever carries the `\\` and `\"` escapes.
+fn codex_writable_roots(profile: &str) -> Option<Vec<std::path::PathBuf>> {
+    let lines: Vec<&str> = profile.lines().collect();
+    let at = lines.iter().position(|l| l.starts_with("writable_roots = ["))?;
+    let table = lines[..at].iter().rposition(|l| l.trim_start().starts_with('[')).unwrap();
+    assert_eq!(lines[table], "[sandbox_workspace_write]", "{profile}");
+    let body = lines[at].strip_prefix("writable_roots = [")?.strip_suffix(']')?;
+    let (mut out, mut cur, mut in_str, mut esc) = (Vec::new(), String::new(), false, false);
+    for c in body.chars() {
+        match (in_str, esc, c) {
+            (true, true, c) => {
+                cur.push(c);
+                esc = false;
+            }
+            (true, false, '\\') => esc = true,
+            (true, false, '"') => {
+                out.push(std::path::PathBuf::from(std::mem::take(&mut cur)));
+                in_str = false;
+            }
+            (true, false, c) => cur.push(c),
+            (false, _, '"') => in_str = true,
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
+/// #3456: a codex WORKER in a dedicated worktree is handed the git metadata a
+/// commit writes — the worktree's own gitdir and the shared store's `objects`,
+/// `refs` and `logs` — and a codex ORCHESTRATOR in the main clone is handed
+/// nothing extra.
+///
+/// Without the roots, codex's `workspace-write` sandbox protects the gitdir it
+/// resolves from the worktree's `.git` pointer (on Windows, DENY ACEs), and the
+/// first real codex worker failed exactly there:
+/// `Unable to create '<repo>/.git/worktrees/<name>/index.lock': Permission denied`.
+///
+/// The expectation is derived from GIT, not from the code under test:
+/// `rev-parse --git-dir` and `--git-common-dir`, run in the worker's own
+/// worktree, compared canonically so an 8.3 or `/private` spelling cannot fail
+/// it. The spelling codex needs — the pointer file's own — is pinned beside it.
+#[test]
+fn a_codex_worktree_worker_can_write_its_gitdir_and_the_shared_store_but_not_hooks_or_config() {
+    let _serial = capture_lock();
+    let (reg, dir) = test_registry();
+    let home = dir.path().join("codex-home");
+    reg.set_codex_home_override(home.clone());
+    reg.set_gh_exec_override(None);
+    let repo = real_repo();
+    let path = repo.repo.to_string_lossy().replace('\\', "/");
+    let g = reg
+        .create_group(&path, Guardrails { agent_cli: "codex".into(), max_agents: 3, ..rails() })
+        .unwrap();
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "t", true, None).unwrap();
+    let wt = Path::new(&w.cwd);
+    assert!(wt.join(".git").is_file(), "precondition: the worker is in a LINKED worktree: {}", w.cwd);
+
+    let git = |arg: &str| {
+        let out = std::process::Command::new("git").current_dir(wt).args(["rev-parse", arg]).output().unwrap();
+        assert!(out.status.success(), "git rev-parse {arg}: {}", String::from_utf8_lossy(&out.stderr));
+        let p = std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        let p = if p.is_absolute() { p } else { wt.join(p) };
+        p.canonicalize().unwrap()
+    };
+    let (gitdir, common) = (git("--git-dir"), git("--git-common-dir"));
+    assert_ne!(gitdir, common, "precondition: a linked worktree's gitdir is not the common dir");
+
+    let profile = codex_profile_of(&home, &w.id);
+    let roots = codex_writable_roots(&profile)
+        .unwrap_or_else(|| panic!("a worktree worker's profile must name writable_roots:\n{profile}"));
+    let canon: Vec<std::path::PathBuf> = roots.iter().map(|r| r.canonicalize().unwrap()).collect();
+    let want: Vec<std::path::PathBuf> =
+        vec![gitdir.clone(), common.join("objects"), common.join("refs"), common.join("logs")];
+    assert_eq!(canon, want, "the gitdir and exactly objects/refs/logs of the shared store:\n{profile}");
+    for never in [common.clone(), common.join("hooks"), common.join("config")] {
+        assert!(
+            !canon.iter().any(|r| never.starts_with(r)),
+            "{} must not be writable — a hook or a config key there runs as the human:\n{profile}",
+            never.display()
+        );
+    }
+    let pointer = fs::read_to_string(wt.join(".git")).unwrap();
+    let pointed = Path::new(pointer.trim().strip_prefix("gitdir:").unwrap().trim());
+    assert_eq!(
+        roots[0].as_path(),
+        pointed,
+        "the gitdir root must be spelled as the pointer spells it — codex lifts its read-only \
+         default only for a root `==` to the path it resolved from that file"
+    );
+
+    // The main clone: codex's own protection of `<repo>/.git` stands.
+    let oprofile = codex_profile_of(&home, &orch.id);
+    assert!(oprofile.contains("[sandbox_workspace_write]"), "control: {oprofile}");
+    assert_eq!(codex_writable_roots(&oprofile), None, "a main-clone pane gets nothing extra:\n{oprofile}");
+    assert!(audit_entries(&reg, &g.id, "codex-worktree-gitdir-unrecognised").is_empty());
+    drop(drain_parked_readers_for_test());
+}
+
+/// #3456's refusal, through the spawn: a pane whose `.git` pointer leads to a
+/// layout that is not git's own linked-worktree shape — here a `commondir`
+/// rewritten to name another store, which a pane with a writable gitdir could do
+/// between spawns — still spawns, is granted nothing, and the audit log says
+/// why. The untampered twin in a second group is the control that the same
+/// fixture DOES earn roots, so the absence is about the tamper.
+#[test]
+fn a_codex_pane_on_an_unrecognised_gitdir_layout_gets_no_roots_and_audits_why() {
+    let _serial = capture_lock();
+    let (reg, dir) = test_registry();
+    let home = dir.path().join("codex-home");
+    reg.set_codex_home_override(home.clone());
+    reg.set_gh_exec_override(None);
+    // git's linked-worktree layout by hand; the group's repo IS the worktree, so
+    // the orchestrator's pane is the one in it.
+    let make = |name: &str| {
+        let root = dir.path().join(name);
+        let common = root.join("main").join(".git");
+        for d in ["objects", "refs", "logs", "hooks"] {
+            fs::create_dir_all(common.join(d)).unwrap();
+        }
+        let gitdir = common.join("worktrees").join("wt");
+        fs::create_dir_all(&gitdir).unwrap();
+        fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        let wt = root.join("wt");
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display().to_string().replace('\\', "/")))
+            .unwrap();
+        (wt, gitdir, root)
+    };
+    let codex = || Guardrails { agent_cli: "codex".into(), max_agents: 3, ..rails() };
+
+    let (good_wt, _, _) = make("good");
+    let good = reg.create_group(&good_wt.to_string_lossy().replace('\\', "/"), codex()).unwrap();
+    let go = reg.spawn_agent(&good.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    assert_eq!(
+        codex_writable_roots(&codex_profile_of(&home, &go.id)).map(|r| r.len()),
+        Some(4),
+        "control: the untampered layout earns its gitdir and objects/refs/logs"
+    );
+
+    let (bad_wt, bad_gitdir, bad_root) = make("bad");
+    let elsewhere = bad_root.join("elsewhere");
+    for d in ["objects", "refs", "logs"] {
+        fs::create_dir_all(elsewhere.join(d)).unwrap();
+    }
+    fs::write(bad_gitdir.join("commondir"), format!("{}\n", elsewhere.display())).unwrap();
+    let bad = reg.create_group(&bad_wt.to_string_lossy().replace('\\', "/"), codex()).unwrap();
+    let bo = reg
+        .spawn_agent(&bad.id, Role::Orchestrator, "orch", "", false, None)
+        .expect("an unrecognised layout degrades the pane, it never refuses the spawn");
+    let profile = codex_profile_of(&home, &bo.id);
+    assert!(profile.contains("[mcp_servers.orrerix]"), "control: a real profile: {profile}");
+    assert_eq!(codex_writable_roots(&profile), None, "a redirected commondir grants nothing:\n{profile}");
+    assert!(!profile.contains("elsewhere"), "{profile}");
+    let rows = audit_entries(&reg, &bad.id, "codex-worktree-gitdir-unrecognised");
+    assert_eq!(rows.len(), 1, "one row for the one spawn: {rows:?}");
+    assert_eq!(rows[0]["detail"]["agent"], json!(bo.id));
+    assert!(rows[0]["detail"]["why"].as_str().unwrap_or_default().contains("commondir"), "{rows:?}");
+    assert!(audit_entries(&reg, &good.id, "codex-worktree-gitdir-unrecognised").is_empty());
+    drop(drain_parked_readers_for_test());
 }
 
 /// **`gh` stderr is attacker-influenceable text on its way into an `[orrerix]`

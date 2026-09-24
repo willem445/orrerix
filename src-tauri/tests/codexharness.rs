@@ -24,11 +24,11 @@
 
 use loomux_lib::orchestration::{
     codex_profile_file_name, codex_profile_name, codex_profile_name_of_path,
-    codex_profile_toml, codex_user_mcp_exposure, single_pane_autopilot_flags, CodexMcpAuth,
-    PathSegment,
+    codex_profile_toml, codex_user_mcp_exposure, codex_worktree_git_roots,
+    single_pane_autopilot_flags, CodexMcpAuth, PathSegment,
 };
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const CWD: &str = "C:\\Projects\\loomux-worktrees\\feat\\x";
 
@@ -45,6 +45,7 @@ fn group_profile(unattended: bool) -> String {
         unattended,
         "",
         None,
+        &[],
     )
 }
 
@@ -73,6 +74,7 @@ fn a_codex_profiles_top_level_keys_all_precede_the_first_table_header() {
         true,
         "high",
         Some("be excellent"),
+        &[],
     );
     let lines: Vec<&str> = body.lines().collect();
     let first_table = lines
@@ -184,6 +186,7 @@ fn a_codex_effort_knob_rides_the_profile_and_an_empty_one_emits_no_key() {
         true,
         "xhigh",
         None,
+        &[],
     );
     assert!(with.contains("model_reasoning_effort = \"xhigh\""), "{with}");
     let without = group_profile(true);
@@ -226,6 +229,7 @@ fn a_codex_profile_sets_no_mcp_timeout_and_says_why() {
         true,
         "high",
         Some("contract"),
+        &[],
     );
     // The control: this really is the document that declares the MCP server, so
     // the absences below are about a populated entry rather than about nothing.
@@ -269,7 +273,7 @@ fn a_codex_profile_pre_approves_loomuxs_own_tools_in_every_shape_and_posture() {
         ("solo", CodexMcpAuth::Literal("tok-not-real")),
     ] {
         for unattended in [true, false] {
-            let body = codex_profile_toml(7777, auth, Path::new(CWD), unattended, "", None);
+            let body = codex_profile_toml(7777, auth, Path::new(CWD), unattended, "", None, &[]);
             let lines: Vec<&str> = body.lines().collect();
             let table = lines
                 .iter()
@@ -327,6 +331,7 @@ fn a_group_codex_profile_names_the_token_variable_and_a_solo_one_carries_the_tok
         true,
         "",
         None,
+        &[],
     );
     assert!(
         group.contains("env_http_headers = { \"X-Orrerix-Agent\" = \"ORRERIX_AGENT_TOKEN\" }"),
@@ -350,6 +355,7 @@ fn a_group_codex_profile_names_the_token_variable_and_a_solo_one_carries_the_tok
         false,
         "",
         None,
+        &[],
     );
     assert!(solo.contains(&format!("http_headers = {{ \"X-Orrerix-Agent\" = \"{TOKEN}\" }}")), "{solo}");
     assert!(
@@ -378,6 +384,7 @@ fn no_byte_of_a_group_codex_panes_token_reaches_its_profile() {
         true,
         "high",
         Some("contract text"),
+        &[],
     );
     assert!(!body.contains(TOKEN), "{body}");
     // The control: this assertion is only meaningful because the generator
@@ -390,6 +397,7 @@ fn no_byte_of_a_group_codex_panes_token_reaches_its_profile() {
         true,
         "high",
         Some("contract text"),
+        &[],
     );
     assert!(
         solo.contains(TOKEN),
@@ -424,6 +432,7 @@ fn a_codex_contract_with_triple_quotes_is_escaped_not_truncated() {
         true,
         "",
         Some(contract),
+        &[],
     );
     // Every line of the contract survives — nothing was cut at a delimiter.
     for fragment in ["line one", "line two", "line three"] {
@@ -640,4 +649,217 @@ fn a_solo_codex_panes_posture_is_not_on_its_command_line() {
             "{cli} must not carry codex's approval flags: {flags}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Committing from a linked worktree (#3456)
+// ---------------------------------------------------------------------------
+
+/// git's own linked-worktree layout, built by hand so these tests need no git:
+/// `<root>/main/.git/{objects,refs,logs,hooks,info}` plus `config`, and a
+/// worktree `<root>/wt` whose `.git` FILE says `gitdir: <root>/main/.git/worktrees/wt`
+/// — forward slashes, the way git writes it on Windows too — with `commondir`
+/// reading `../..`, as `git worktree add` leaves it.
+struct FakeWorktree {
+    _tmp: tempfile::TempDir,
+    root: PathBuf,
+    wt: PathBuf,
+    gitdir: PathBuf,
+    common: PathBuf,
+}
+
+fn fake_linked_worktree() -> FakeWorktree {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let common = root.join("main").join(".git");
+    for d in ["objects", "refs", "logs", "hooks", "info"] {
+        fs::create_dir_all(common.join(d)).unwrap();
+    }
+    fs::write(common.join("config"), "[core]\n").unwrap();
+    let gitdir = common.join("worktrees").join("wt");
+    fs::create_dir_all(&gitdir).unwrap();
+    fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+    let wt = root.join("wt");
+    fs::create_dir_all(&wt).unwrap();
+    let pointer = gitdir.display().to_string().replace('\\', "/");
+    fs::write(wt.join(".git"), format!("gitdir: {pointer}\n")).unwrap();
+    FakeWorktree { _tmp: tmp, root, wt, gitdir, common }
+}
+
+/// The `writable_roots` array out of a profile, and the check that it sits in
+/// `[sandbox_workspace_write]` — a key emitted into any other table is one
+/// codex reads as something else or not at all. `None` when absent.
+fn writable_roots_of(profile: &str) -> Option<Vec<PathBuf>> {
+    let lines: Vec<&str> = profile.lines().collect();
+    let at = lines.iter().position(|l| l.starts_with("writable_roots = ["))?;
+    let table = lines[..at]
+        .iter()
+        .rposition(|l| l.trim_start().starts_with('['))
+        .expect("writable_roots emitted above every table header");
+    assert_eq!(
+        lines[table], "[sandbox_workspace_write]",
+        "writable_roots must be a key of [sandbox_workspace_write]:\n{profile}"
+    );
+    let body = lines[at].strip_prefix("writable_roots = [")?.strip_suffix(']')?;
+    // Basic-string items: `\\` and `\"` are the only escapes a path produces.
+    let (mut out, mut cur, mut in_str, mut esc) = (Vec::new(), String::new(), false, false);
+    for c in body.chars() {
+        match (in_str, esc, c) {
+            (true, true, c) => {
+                cur.push(c);
+                esc = false;
+            }
+            (true, false, '\\') => esc = true,
+            (true, false, '"') => {
+                out.push(PathBuf::from(std::mem::take(&mut cur)));
+                in_str = false;
+            }
+            (true, false, c) => cur.push(c),
+            (false, _, '"') => in_str = true,
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
+/// The roots a worktree pane is handed: its gitdir, and exactly the three
+/// directories of the shared store a commit and a push write — never the shared
+/// `.git` itself, and never `hooks/`, `info/` or `config`, which are where a
+/// write becomes code the human's unsandboxed git runs.
+///
+/// The gitdir is compared with the POINTER'S OWN SPELLING, not a canonical one:
+/// codex drops its read-only default for the gitdir only when an explicit
+/// writable root is `==` to the path it resolved from that pointer
+/// (`append_default_read_only_path_if_no_explicit_rule`, rust-v0.156.1), so a
+/// root naming the same directory by another spelling would leave the DENY in
+/// place.
+#[test]
+fn a_linked_worktree_gets_its_gitdir_and_the_shared_store_but_not_hooks_or_config() {
+    let f = fake_linked_worktree();
+    let roots = codex_worktree_git_roots(&f.wt).expect("git's own layout is recognised");
+    let pointer = fs::read_to_string(f.wt.join(".git")).unwrap();
+    let pointed = Path::new(pointer.trim().strip_prefix("gitdir:").unwrap().trim());
+    assert_eq!(roots[0].as_path(), pointed, "the gitdir, spelled as the pointer spells it: {roots:?}");
+    assert_eq!(
+        roots,
+        vec![f.gitdir.clone(), f.common.join("objects"), f.common.join("refs"), f.common.join("logs")],
+        "exactly the gitdir and objects/refs/logs"
+    );
+    for never in [f.common.clone(), f.common.join("hooks"), f.common.join("info"), f.common.join("config")] {
+        assert!(
+            !roots.iter().any(|r| never.starts_with(r)),
+            "{} must stay outside every writable root — a write there runs as the human: {roots:?}",
+            never.display()
+        );
+    }
+}
+
+/// A missing store directory is left out rather than named: codex skips a
+/// nonexistent root on Windows, and it is not a path to hand any other
+/// platform's sandbox to bind.
+#[test]
+fn a_store_directory_that_does_not_exist_is_not_named() {
+    let f = fake_linked_worktree();
+    fs::remove_dir_all(f.common.join("logs")).unwrap();
+    let roots = codex_worktree_git_roots(&f.wt).unwrap();
+    assert_eq!(roots, vec![f.gitdir.clone(), f.common.join("objects"), f.common.join("refs")]);
+}
+
+/// The acceptance's other half: a pane in a MAIN clone (`.git` is a directory)
+/// or in no repo at all gets nothing extra — codex's own protection of its
+/// `.git` stands. The fake worktree beside it is the control that the function
+/// can answer non-empty on the same machine.
+#[test]
+fn a_main_clone_or_a_plain_directory_gets_no_extra_writable_roots() {
+    let f = fake_linked_worktree();
+    assert!(!codex_worktree_git_roots(&f.wt).unwrap().is_empty(), "control");
+    assert_eq!(codex_worktree_git_roots(&f.root.join("main")).unwrap(), Vec::<PathBuf>::new());
+    let plain = f.root.join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    assert_eq!(codex_worktree_git_roots(&plain).unwrap(), Vec::<PathBuf>::new());
+}
+
+/// A relative pointer (`worktree.useRelativePaths`) resolves against the pane's
+/// directory and is folded lexically, as codex folds it — no `..` survives into
+/// a root codex would compare component by component.
+#[test]
+fn a_relative_gitdir_pointer_is_resolved_against_the_pane_and_folded() {
+    let f = fake_linked_worktree();
+    fs::write(f.wt.join(".git"), "gitdir: ../main/.git/worktrees/wt\n").unwrap();
+    let roots = codex_worktree_git_roots(&f.wt).unwrap();
+    assert_eq!(roots[0], f.gitdir, "{roots:?}");
+    assert!(
+        roots.iter().all(|r| !r.components().any(|c| c == std::path::Component::ParentDir)),
+        "{roots:?}"
+    );
+}
+
+/// **The refusal.** The gitdir is writable once #3456 lands, so a pane can
+/// rewrite its own `commondir`; if the next spawn trusted that file, the pane
+/// could name ANY directory's `objects`/`refs`/`logs` as its writable roots.
+/// Every layout that is not git's own linked-worktree shape grants nothing.
+/// The untampered layout first, so each refusal below is about its tamper.
+#[test]
+fn a_worktree_layout_that_is_not_gits_own_grants_nothing() {
+    let f = fake_linked_worktree();
+    assert!(codex_worktree_git_roots(&f.wt).is_ok(), "control: the untampered layout is accepted");
+
+    // commondir redirected at another store that has all three directories.
+    let elsewhere = f.root.join("elsewhere");
+    for d in ["objects", "refs", "logs"] {
+        fs::create_dir_all(elsewhere.join(d)).unwrap();
+    }
+    fs::write(f.gitdir.join("commondir"), format!("{}\n", elsewhere.display())).unwrap();
+    let err = codex_worktree_git_roots(&f.wt).expect_err("a redirected commondir must be refused");
+    assert!(err.contains("commondir"), "{err}");
+    fs::write(f.gitdir.join("commondir"), "../..\n").unwrap();
+
+    // No commondir at all — a submodule's or `--separate-git-dir`'s gitdir,
+    // which is a whole repository, hooks and config included.
+    let module = f.common.join("modules").join("m");
+    fs::create_dir_all(&module).unwrap();
+    let sub = f.root.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join(".git"), format!("gitdir: {}\n", module.display())).unwrap();
+    assert!(codex_worktree_git_roots(&sub).is_err(), "a gitdir outside <common>/worktrees/ is refused");
+
+    // A `.git` file that is not a pointer, and a pointer at nothing.
+    fs::write(sub.join(".git"), "not a pointer\n").unwrap();
+    assert!(codex_worktree_git_roots(&sub).is_err());
+    fs::write(sub.join(".git"), format!("gitdir: {}\n", f.root.join("gone").display())).unwrap();
+    assert!(codex_worktree_git_roots(&sub).is_err());
+}
+
+/// The rendering: one `writable_roots` array inside `[sandbox_workspace_write]`,
+/// every backslash doubled (a raw one is a TOML parse error that loses the WHOLE
+/// profile), and no key at all when there is nothing to grant — so a main-clone
+/// or solo pane's document is unchanged byte for byte.
+#[test]
+fn a_codex_profile_spells_its_writable_roots_inside_the_workspace_write_table() {
+    let roots = vec![
+        PathBuf::from("C:\\Projects\\repo\\.git\\worktrees\\wt"),
+        PathBuf::from("C:\\Projects\\repo\\.git\\objects"),
+    ];
+    let body = codex_profile_toml(
+        7777,
+        CodexMcpAuth::EnvVar("ORRERIX_AGENT_TOKEN"),
+        Path::new(CWD),
+        true,
+        "",
+        None,
+        &roots,
+    );
+    assert!(
+        body.contains(
+            "writable_roots = [\"C:\\\\Projects\\\\repo\\\\.git\\\\worktrees\\\\wt\", \
+             \"C:\\\\Projects\\\\repo\\\\.git\\\\objects\"]"
+        ),
+        "{body}"
+    );
+    assert_eq!(writable_roots_of(&body), Some(roots));
+    assert!(body.contains("[sandbox_workspace_write]\nnetwork_access = true\n"), "{body}");
+
+    let none = group_profile(true);
+    assert!(none.contains("network_access = true"), "control: the table is there: {none}");
+    assert!(!none.contains("writable_roots"), "nothing to grant, no key: {none}");
 }

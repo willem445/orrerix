@@ -8528,6 +8528,97 @@ pub fn codex_profile_name_of_path(cfg: &Path) -> Option<&str> {
     cfg.file_name()?.to_str()?.strip_suffix(CODEX_PROFILE_FILE_EXT)
 }
 
+/// The extra writable roots a codex pane needs to COMMIT from a linked git
+/// worktree (#3456): its own gitdir, plus the three directories of the shared
+/// `.git` a commit and a push write — `objects`, `refs`, `logs`. `Ok(vec![])`
+/// for a pane that is not in a linked worktree (a main clone, whose `.git` is a
+/// directory, or no repo at all): nothing extra, codex's own posture stands.
+///
+/// **Why a worktree pane cannot commit without this.** Under `workspace-write`
+/// codex keeps every writable root's `.git` read-only, and for a `.git` FILE it
+/// resolves the `gitdir:` pointer and protects that directory too
+/// (`default_read_only_subpaths_for_writable_root`, protocol/src/permissions.rs
+/// at rust-v0.156.1) — on Windows as DENY ACEs, which is what made
+/// `<repo>/.git/worktrees/<name>/index.lock` unwritable. An explicit writable
+/// root for the SAME path suppresses that default
+/// (`append_default_read_only_path_if_no_explicit_rule`, which compares the two
+/// paths with `==`), so the gitdir is spelled here exactly as codex resolves it:
+/// the pointer file's own text, joined onto the pane's directory and folded
+/// lexically, the way `resolve_gitdir_from_file` does. Asking `git rev-parse
+/// --git-dir` instead would risk a differently spelled path, and a spelling that
+/// misses by one component leaves the DENY in place with nothing to say so.
+///
+/// **Why not the whole `.git`.** `hooks/`, `config` and `info/` are where a
+/// write turns into code the HUMAN'S unsandboxed git runs (a hook,
+/// `core.fsmonitor`, `core.hooksPath`) — the reason codex protects `.git` at
+/// all. A commit and a push need none of them; `docs/design/codex.md`
+/// (§Committing from a worktree) has the measurement and what the narrow set
+/// costs.
+///
+/// **`Err` is a refusal with a reason, never a guess.** A `.git` file whose
+/// layout is not git's own linked-worktree shape — the gitdir not sitting at
+/// `<common>/worktrees/<name>`, or its `commondir` naming a different directory
+/// — grants nothing. The layout check is what stops a rewritten `commondir` (the
+/// gitdir is writable once this lands) from pointing the NEXT spawn's writable
+/// roots at an arbitrary `objects`/`refs`/`logs` elsewhere on the machine.
+#[doc(hidden)] // pub for integration tests
+pub fn codex_worktree_git_roots(workdir: &Path) -> Result<Vec<PathBuf>, String> {
+    let dot_git = workdir.join(".git");
+    if !dot_git.is_file() {
+        return Ok(Vec::new());
+    }
+    let text = fs::read_to_string(&dot_git).map_err(|e| format!("{}: {e}", dot_git.display()))?;
+    // codex's own parse: the FIRST colon, a `gitdir` prefix, a trimmed value.
+    let raw = match text.trim().split_once(':') {
+        Some((prefix, raw)) if prefix.trim() == "gitdir" && !raw.trim().is_empty() => raw.trim(),
+        _ => return Err(format!("{} is not a `gitdir: <path>` pointer", dot_git.display())),
+    };
+    let gitdir = codex_fold_path(&workdir.join(raw));
+    if !gitdir.is_dir() {
+        return Err(format!("gitdir {} is not a directory", gitdir.display()));
+    }
+    let parent = gitdir.parent().filter(|p| p.file_name() == Some(std::ffi::OsStr::new("worktrees")));
+    let Some(common) = parent.and_then(Path::parent) else {
+        return Err(format!("gitdir {} is not at <common>/worktrees/<name>", gitdir.display()));
+    };
+    let commondir = gitdir.join("commondir");
+    let named = fs::read_to_string(&commondir).map_err(|e| format!("{}: {e}", commondir.display()))?;
+    if codex_fold_path(&gitdir.join(named.trim())).as_path() != common {
+        return Err(format!(
+            "{} names {:?}, not the common dir {} its location implies",
+            commondir.display(),
+            named.trim(),
+            common.display()
+        ));
+    }
+    let mut roots = vec![gitdir.clone()];
+    // Only the ones that exist: codex skips a missing root on Windows anyway,
+    // and a path that is not there is not one to hand another platform's
+    // sandbox to bind.
+    roots.extend(["objects", "refs", "logs"].iter().map(|d| common.join(d)).filter(|p| p.is_dir()));
+    Ok(roots)
+}
+
+/// `.`/`..` folded lexically, as codex's `AbsolutePathBuf` normalization does —
+/// deliberately not canonicalized: the point is to spell the gitdir the way
+/// codex spells it, and codex does not resolve symlinks here either. Duplicated
+/// per module, house style (see `fileedit::lexical_normalize`).
+fn codex_fold_path(p: &Path) -> PathBuf {
+    let mut out: Vec<std::path::Component<'_>> = Vec::new();
+    for comp in p.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if matches!(out.last(), Some(std::path::Component::Normal(_))) {
+                    out.pop();
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out.iter().collect()
+}
+
 /// The generated profile document for one codex pane — the whole of what loomux
 /// configures on codex.
 ///
@@ -8557,6 +8648,11 @@ pub fn codex_profile_name_of_path(cfg: &Path) -> Option<&str> {
 ///   at all.
 /// - `[sandbox_workspace_write] network_access = true` — off by default under
 ///   `workspace-write`, and a worker that cannot reach GitHub is not a worker.
+/// - `[sandbox_workspace_write] writable_roots` — only when `writable_roots` is
+///   non-empty, which is a GROUP pane in a linked worktree: the git metadata a
+///   commit writes, which lives outside the worktree (#3456). The caller
+///   derives it with [`codex_worktree_git_roots`], where the argument for the
+///   exact set lives; this function only spells what it is handed.
 /// - `[projects."<cwd>"] trust_level = "trusted"` — the single most important
 ///   line here. `should_show_trust_screen(config)` is
 ///   `config.active_project.trust_level.is_none()`, rendering "Do you trust the
@@ -8602,6 +8698,7 @@ pub fn codex_profile_toml(
     unattended: bool,
     effort: &str,
     developer_instructions: Option<&str>,
+    writable_roots: &[PathBuf],
 ) -> String {
     let mut s = String::new();
     s.push_str(&format!(
@@ -8635,7 +8732,19 @@ pub fn codex_profile_toml(
     s.push('\n');
 
     // ── tables ──
-    s.push_str("[sandbox_workspace_write]\nnetwork_access = true\n\n");
+    s.push_str("[sandbox_workspace_write]\nnetwork_access = true\n");
+    // One line, absolute paths, every backslash escaped: `writable_roots` is a
+    // `Vec<AbsolutePathBuf>` (config/src/types.rs at rust-v0.156.1), and a raw
+    // Windows backslash in a basic string is a parse error that loses the WHOLE
+    // profile, not just this key.
+    if !writable_roots.is_empty() {
+        let items: Vec<String> = writable_roots
+            .iter()
+            .map(|p| format!("\"{}\"", toml_basic_escape(&p.display().to_string(), TomlNewlines::Escape)))
+            .collect();
+        s.push_str(&format!("writable_roots = [{}]\n", items.join(", ")));
+    }
+    s.push('\n');
     s.push_str(&format!(
         "[projects.\"{}\"]\ntrust_level = \"trusted\"\n\n",
         toml_basic_escape(&cwd.display().to_string(), TomlNewlines::Escape)
@@ -31531,6 +31640,9 @@ impl OrchRegistry {
         unattended: bool,
         effort: &str,
         developer_instructions: Option<&str>,
+        // #3456: `codex_worktree_git_roots`'s answer for a group pane, empty
+        // for a solo one — see the solo caller for why.
+        writable_roots: &[PathBuf],
     ) -> Result<(PathBuf, String), String> {
         let home = self
             .codex_home_dir()
@@ -31543,8 +31655,15 @@ impl OrchRegistry {
         fs::create_dir_all(&home).map_err(|e| format!("{}: {e}", home.display()))?;
         let path = home.join(&file);
         let port = self.port();
-        let body =
-            codex_profile_toml(port, auth, workdir, unattended, effort, developer_instructions);
+        let body = codex_profile_toml(
+            port,
+            auth,
+            workdir,
+            unattended,
+            effort,
+            developer_instructions,
+            writable_roots,
+        );
         fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
         // Measure-and-warn, once per spawn, and NEVER a refusal — see
         // `codex_user_mcp_exposure`. `None` for the human who declares no MCP
@@ -40039,6 +40158,11 @@ impl OrchRegistry {
                 /*unattended*/ false,
                 /*effort*/ "",
                 /*developer_instructions*/ None,
+                // Nothing extra (#3456 is scoped to GROUP panes): a solo pane is
+                // the human's own session, `on-request`, with the human in it to
+                // approve an escalation — and widening the sandbox of a session
+                // loomux does not own is not this line's call.
+                /*writable_roots*/ &[],
             )?;
             // The NAME, not the path: `-p` takes a profile name and resolves
             // it against `CODEX_HOME` itself. Unquoted, and safe unquoted,
@@ -50480,6 +50604,23 @@ impl OrchRegistry {
         // That is why the function's name undersells this branch, and why
         // `write_codex_profile` is where the argument for each key lives.
         if cli == "codex" {
+            // #3456: the git metadata a commit writes, which a linked worktree
+            // keeps OUTSIDE the pane's directory. A layout this does not
+            // recognise grants nothing and says why in the audit log — the
+            // pane still spawns (it can still edit and `report`), but its first
+            // `git commit` would otherwise fail with no visible cause.
+            let git_roots = match codex_worktree_git_roots(workdir) {
+                Ok(roots) => roots,
+                Err(why) => {
+                    self.audit(
+                        group,
+                        brand::AUDIT_ACTOR,
+                        "codex-worktree-gitdir-unrecognised",
+                        json!({ "agent": agent_id, "why": why }),
+                    );
+                    Vec::new()
+                }
+            };
             let (path, _name) = self.write_codex_profile(
                 group,
                 &agent_seg,
@@ -50492,6 +50633,7 @@ impl OrchRegistry {
                 unattended,
                 knobs.effort,
                 persona.codex_developer_instructions.as_deref(),
+                &git_roots,
             )?;
             let mut env = cli_extra_env(cli, &path, token);
             // #3405: the human's `gh` credential, which codex's sandbox cannot

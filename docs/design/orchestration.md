@@ -13415,6 +13415,50 @@ since it is never written into a group dir.
 playbook section id (`definition-of-done`) on the `read_playbook` vocabulary, and
 `orchestration::brief`'s two public functions.
 
+## The writing standard is ONE copy, and it is the default (#3441)
+
+Agents wrote for each other: PR bodies led with receipts, comments ran to pages, board notes
+restated whole reports, and every deferred review nit became an issue of its own. The human
+reads all of it. So orrerix ships one writing standard as the default for every group, and
+every role that posts reads it: a body opens with a summary, what to review and how it was
+tested, with receipts in the collapsed agent layer; a comment is a few lines; board text is
+one or two sentences; an issue is filed only for tracked work, a deferred nit being a line in
+the PR's disposition comment and small follow-ups sharing one rolling issue per area; and
+every GitHub post ends with a one-line AI tail.
+
+**One copy, substituted — `{{DOD}}`'s pattern.** `templates/writing.md` holds the text;
+`worker.md`, `reviewer.md`, `planner.md`, `lead.md` and the orchestrator playbook each carry a
+`## Writing for humans` heading with `{{WRITING}}` under it, rendered from
+`orchestration::writing_body()` in `InstructionVars::pairs`. Five hand-kept copies of a rule an
+agent executes literally is the drift the DoD section above removed. The orchestrator reads it
+on demand — the playbook section `writing-for-humans`, named by one sentence in the resident
+core's **Style** — because the resident core is budgeted and a sixth copy there is the same
+drift. `manager.md` does not render it: a manager never posts to GitHub or writes the board,
+and `every_role_that_posts_renders_the_writing_standard` pins that exclusion as a decision.
+`writing.md` is `GOLDENS`/`LIVE`'s ninth row for `dod.md`'s reason: without it, an edit to what
+every agent is told about writing would move no golden.
+
+**The tail names "the human", not a handle.** Rendering the operator's GitHub login at group
+creation was the alternative. It was rejected on three grounds. It adds nothing: every agent in
+a group authenticates as the operator, so the post's GitHub author already IS that login. It
+is not cheap or safe to read: `create_group` would run `gh api user`, a network subprocess that
+can be missing, unauthenticated or slow, on a path that must not block. And it would put
+per-operator data into every rendered file, which the goldens could then pin only by growing
+another value variable. `the_ai_tail_names_the_human_without_a_handle` pins the generic form.
+The tail sits below the agent layer, so a squash message cut at the `<!-- agent-layer -->`
+line never carries it; that is why "the agent layer is the last block" now reads "followed
+only by the AI tail" wherever it is stated.
+
+**The deferral rule follows.** INVARIANT 3 and the disposition step used to cost a deferral
+"a filed issue"; they now cost "a line in the PR's disposition comment", and INVARIANT 8's
+licence to file covers work that must be tracked rather than anything noticed. `prompts.rs`
+and `workflow.rs` repin the deferral anchors and assert the retracted issue-per-deferral
+wording does not come back.
+
+**Public contracts introduced**: `writing.md` as a ninth fixture-pinned template, one new
+playbook section id (`writing-for-humans`) on the `read_playbook` vocabulary, and
+`orchestration::{WRITING_TPL, writing_body}`.
+
 ## Risks / limitations
 
 - Kickoff typing races CLI boot; a fixed delay (4s) + bracketed paste is used. If a

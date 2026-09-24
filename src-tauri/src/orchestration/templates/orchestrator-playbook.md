@@ -1014,6 +1014,10 @@ when the whole value is "the next orchestrator should just already know this."
   call, because slipping it back in now would reorder it against everything the pane has
   accepted since.
 
+## Writing for humans
+
+{{WRITING}}
+
 ## Tool reference
 
 The long form of the resident tool list — what each call returns, why each refusal exists,

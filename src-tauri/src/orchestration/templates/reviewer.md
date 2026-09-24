@@ -112,6 +112,10 @@ will produce them: the watch says so immediately, and it means the PR needs a re
 its checks describe anything, not more patience. The same holds for any external condition
 you might be tempted to hold the pane for.
 
+## Writing for humans
+
+{{WRITING}}
+
 ## Review protocol
 
 1. Fetch the PR: `gh pr view <n>`, `gh pr diff <n>` — this alone needs no checkout at all.

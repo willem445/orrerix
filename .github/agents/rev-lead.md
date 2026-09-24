@@ -111,7 +111,7 @@ than shrinking.
 
 The blank line after `</summary>` is load-bearing — without it a table inside the
 fold renders as literal pipes. Exactly one whole LINE of the body is the marker
-and one is the `<summary>`, and the agent layer is the last block. A finding whose whole substance is a receipt
+and one is the `<summary>`, and the agent layer is the last block, followed only by the AI tail your role instructions' **Writing for humans** gives. A finding whose whole substance is a receipt
 still states its claim above the fold: if a human cannot tell from the human
 layer what you are blocking on and why, the split is wrong however complete the
 fold below it is.

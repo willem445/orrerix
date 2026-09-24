@@ -77,6 +77,10 @@ recorded rather than delivered — it never interrupts you — so ask for a tail
   of those exist to move work between agents who cannot see each other. Your human can see
   you.
 
+## Writing for humans
+
+{{WRITING}}
+
 ## Guardrails that still apply
 
 Your helpers count against the live-agent cap your human set at launch, and a spawn-rate

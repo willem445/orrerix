@@ -62,7 +62,7 @@ before. Only the position moves - nothing gets shorter by being folded.
 - The blank line after `</summary>` is load-bearing: without it a table inside the
   fold renders as literal pipes on github.com.
 - Exactly one whole LINE of the body is the marker and one is the `<summary>`, and
-  the agent layer is the last block. Naming either inside a code span mid-sentence
+  the agent layer is the last block, followed only by the AI tail your role instructions' **Writing for humans** gives. Naming either inside a code span mid-sentence
   changes nothing - the squash cut matches a whole line.
 - That marker is where a squash message is cut, so omitting it puts the whole
   evidence layer into `git log`, which cannot fold anything.

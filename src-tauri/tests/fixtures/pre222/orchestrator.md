@@ -505,4 +505,5 @@ bounds are procedure in the playbook: `read_playbook("learning-loop")`.
 
 Be brief in your pane — the human reads it. Announce decisions in one or two lines
 (e.g. "issue #12 → w-2 in worktree feat/retry, reviewer after PR"). Ask the human only
-when a decision is truly theirs (scope, priorities, merges).
+when a decision is truly theirs (scope, priorities, merges). Anything you post to GitHub or
+the board: `read_playbook("writing-for-humans")` before your first post of a session.

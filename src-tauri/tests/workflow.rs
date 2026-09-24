@@ -5927,7 +5927,7 @@ const PRE222: [(&str, &str); 5] = [
 ///   against `LIVE` below. That question is about the TEMPLATE and is asked of
 ///   all of them equally, which is why `manager.md` gets the same re-bless gate as
 ///   the other four rather than a weaker one.
-const GOLDENS: [(&str, &str); 8] = [
+const GOLDENS: [(&str, &str); 9] = [
     PRE222[0],
     PRE222[1],
     PRE222[2],
@@ -5960,6 +5960,13 @@ const GOLDENS: [(&str, &str); 8] = [
     // are, so the "what does a DEFAULT group read?" pins reach its bytes
     // through them and would be looking for a file that is correctly absent.
     ("dod.md", include_str!("fixtures/pre222/dod.md")),
+    // #3441. `dod.md`'s row, for `dod.md`'s reason: the writing standard is
+    // one copy substituted as `{{WRITING}}` into four role files and the
+    // playbook, every golden carrying it keeps the literal placeholder, and
+    // `render_with_legacy_vars` substitutes the same value on both sides — so
+    // without this row an edit to what every agent is told about writing would
+    // redden nothing.
+    ("writing.md", include_str!("fixtures/pre222/writing.md")),
 ];
 
 /// The live templates, with the placeholder(s) each must carry. Each element of the
@@ -5972,7 +5979,7 @@ const GOLDENS: [(&str, &str); 8] = [
 /// `{{BLOCK_NOTE}}{{ADVISOR_CONSULT_NOTE}}`), they stay a single contiguous-string key
 /// — same reasoning `block.md`'s `{{PERSONA_NOTE}}{{LANE_NOTE}}{{GATE_NOTE}}` already
 /// relies on.
-const LIVE: [(&str, &str, &[&str]); 8] = [
+const LIVE: [(&str, &str, &[&str]); 9] = [
     // #1683: the merge-gate and re-sync sections moved to the playbook, and
     // their two workflow-conditional fragments with them — the orchestrator
     // core's key list shrinks to `{{WORKFLOW}}` and `{{LOCKS_ORCH}}`.
@@ -6033,13 +6040,16 @@ const LIVE: [(&str, &str, &[&str]); 8] = [
     // is stripped and its golden is the live template byte for byte. The
     // `{{GROUP_ID}}`/`{{REPO}}` it does carry are per-group VALUE variables —
     // `HOLD_LABEL`'s class, not this list's — so the golden keeps them literal
-    // and the pin bites on the prose around them.
+    // and the pin bites on the prose around them. `{{WRITING}}` (#3441) is the
+    // same class.
     ("lead.md", loomux_lib::orchestration::LEAD_TPL, &[]),
     // #3040 P2. An EMPTY key list like `lead.md`'s, and for the same kind of
     // reason: `dod.md` carries no placeholder of its own — it IS a placeholder's
     // value — so nothing is stripped and its golden is the live template byte
     // for byte.
     ("dod.md", loomux_lib::orchestration::brief::DOD_TPL, &[]),
+    // #3441. Empty for `dod.md`'s reason: it IS a placeholder's value.
+    ("writing.md", loomux_lib::orchestration::WRITING_TPL, &[]),
 ];
 
 /// Render a template with the plain per-group VALUE variables `render_template`
@@ -6055,7 +6065,7 @@ const LIVE: [(&str, &str, &[&str]); 8] = [
 /// So the golden carries the literal `{{HOLD_LABEL}}` and this renders it, which
 /// keeps the pin biting on the prose AROUND it.
 fn render_with_legacy_vars(tpl: &str, g: &loomux_lib::orchestration::GroupInfo) -> String {
-    let vars: [(&str, String); 9] = [
+    let vars: [(&str, String); 10] = [
         ("REPO", g.repo.clone()),
         ("GROUP_ID", g.id.to_string()),
         ("MAX_AGENTS", g.guardrails.max_agents.to_string()),
@@ -6073,6 +6083,9 @@ fn render_with_legacy_vars(tpl: &str, g: &loomux_lib::orchestration::GroupInfo) 
         // `{{DOD}}` and this renders it — which keeps the pin biting on the
         // prose AROUND it, and on the heading it is served under.
         ("DOD", loomux_lib::orchestration::brief::dod_body().to_string()),
+        // #3441. DOD's class again: one text for every group, so the goldens
+        // keep the literal `{{WRITING}}` and this renders it.
+        ("WRITING", loomux_lib::orchestration::writing_body().to_string()),
     ];
     let mut out = tpl.to_string();
     for (k, v) in vars {

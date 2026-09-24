@@ -226,14 +226,18 @@ the cost of a review round nobody needed. If you genuinely cannot reach green af
 real attempt, `report("blocked", …)` naming what's still red and what you tried, and
 say the same on the issue — that beats a PR that looks done and isn't.
 
+## Writing for humans
+
+{{WRITING}}
+
 ## Two layers: what you write for the human, what you write for the next agent
 
 Everything you post on GitHub — a PR body, a review, an issue you file — has a
 **human layer** first and an **agent layer** collapsed under it.
 
-**The human layer, above the fold, short.** What changed and why (a paragraph);
-what to look at or try; how each review finding was dispositioned; `Closes #N`.
-Write it for someone who has under a minute — roughly 15 lines for a PR body.
+**The human layer, above the fold, short.** What **Writing for humans** says it
+holds, plus how each review finding was dispositioned and `Closes #N` — roughly 15
+lines for a PR body.
 
 **The agent layer, collapsed below it.** Everything the evidence rules owe:
 red-before-green commands and the failure lines they printed, run ids, blob
@@ -256,9 +260,10 @@ Three literal lines open it, in this order, each on a line of its own:
 - **The blank line after `</summary>` is load-bearing.** Without it a table inside
   the fold renders as literal pipes on github.com.
 - **Once each, as a whole line.** Exactly one line of the body is `<!-- agent-layer -->`
-  and exactly one is the `<summary>`; the agent layer is the **last** block. Naming
-  either inside a code span mid-sentence is fine and changes nothing — the cut below
-  matches a whole line, so a mention cannot be mistaken for the fold.
+  and exactly one is the `<summary>`; the agent layer is the **last** block, followed
+  only by the one-line AI tail (**Writing for humans**). Naming either inside a code
+  span mid-sentence is fine and changes nothing — the cut below matches a whole line,
+  so a mention cannot be mistaken for the fold.
 - **`<!-- agent-layer -->` is where a squash message is cut.** When the merge takes
   the squash body from the PR body, it takes everything strictly above that line —
   `git log` has no fold, so an agent layer left in it is strictly worse than before

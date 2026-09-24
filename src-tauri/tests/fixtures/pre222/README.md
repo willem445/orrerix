@@ -1682,3 +1682,23 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   files, and the patch on each golden is identical to the patch on its live template
   (`git diff -U0`, compared) except the two playbook lines carrying
   `{{POST_MERGE_WORKFLOW_HOOK}}`, which is the key strip itself.
+
+- **#3441, the writing standard as the default** — `worker.md`, `reviewer.md`, `planner.md`,
+  `lead.md`, `orchestrator.md` and `orchestrator-playbook.md`, plus a new ninth golden,
+  `writing.md`. `manager.md` and `dod.md` are byte-identical to their previous blessed copies.
+
+  `templates/writing.md` is the one copy of how every agent writes: a body opens with a
+  summary, what to review and how it was tested, receipts in the agent layer; a comment is a
+  few lines; board text is one or two sentences; issues only for tracked work; and every GitHub
+  post ends with `— Written by AI (<your agent id>, <your model>) on behalf of the human`,
+  below the agent layer. Four role files and the playbook each gain a `## Writing for humans`
+  heading with `{{WRITING}}` under it. Like `{{DOD}}`, it is a per-group VALUE, so the goldens
+  keep the literal placeholder and `render_with_legacy_vars` renders it; `writing.md` is
+  `GOLDENS`/`LIVE`'s ninth row, with an empty key list, so an edit to the standard still needs
+  a re-bless here. `manager.md` does not render it, because a manager never posts. The
+  orchestrator's core gains one sentence in **Style** naming `read_playbook("writing-for-humans")`;
+  `worker.md`'s human-layer paragraph now points at the section instead of restating it, and
+  its "the agent layer is the last block" gains "followed only by the one-line AI tail".
+
+  Both re-bless checks above were run: `live-minus-keys == golden` reports OK for all nine
+  files, with `writing.md` transcribed into the check's key table with an empty list.

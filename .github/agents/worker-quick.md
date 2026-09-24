@@ -116,7 +116,7 @@ governs it. Only its position moves.
 
 The blank line after `</summary>` is load-bearing (without it a table inside the fold
 renders as literal pipes); exactly one whole LINE of the body is the marker and one is
-the `<summary>`, and the agent layer is the last block; the marker is where a squash
+the `<summary>`, and the agent layer is the last block, followed only by the AI tail your role instructions' **Writing for humans** gives; the marker is where a squash
 message is cut; and the
 closing-keyword scan still reads the whole body, fold included. Anything the human
 has to decide — a deviation, a residual, an open question — stays above the fold.

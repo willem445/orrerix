@@ -621,6 +621,10 @@ narrow their ask back down to the original ticket on your own judgment.
   default `🤖 Generated with [Claude Code](…)` line and any `claude.ai/code/session_…`
   URL or `Claude-Session:` trailer are dropped before posting; the squash message
   is permanent and a chat-session link is not provenance. `Co-Authored-By:` stays.
+  The one-line AI tail below a body's agent layer is not a footer: it carries no URL or
+  session id, and the squash cut drops it. What agents write, and how, is the writing
+  standard in `src-tauri/src/orchestration/templates/writing.md`, which every posting
+  role's instructions render (#3441).
 - **Clean up after every PR: its scratch PRs, its branch, its worktrees.**
   Each is left behind by default, and they accumulate across every agent the
   repo has ever run. A worker closes each scratch PR it opens

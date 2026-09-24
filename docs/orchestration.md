@@ -253,7 +253,14 @@ orchestrator:
   own git traffic) never contend on the same checkout. A reviewer's worktree isn't a checkout of the PR
   it's reviewing (that branch may already be checked out elsewhere); it fetches
   the PR's code in **detached-HEAD** mode when it needs to run something
-  locally, which never collides with anything. The orchestrator cannot spawn
+  locally, which never collides with anything. Because it is scratch, it does
+  not outlive its pane: when a reviewer pane ends — killed, closed, crashed, or
+  its lane released by the review driver — orrerix removes that worktree and its
+  `agent/<id>` branch (a worker's worktree is never touched this way). A
+  reviewer resumed later gets a fresh one cut at the same path, so its session
+  still finds its workspace. If git refuses the removal (a file still locked on
+  Windows, say), the pane still ends and the refusal is on the audit log as
+  `reviewer-worktree-remove-failed`. The orchestrator cannot spawn
   either into the main clone even if it tried — the MCP tool rejects it
   outright. (A planner is unaffected: it never gets a worktree at all — see
   below. For its own mechanical git work, like a rebase or conflict fix with no

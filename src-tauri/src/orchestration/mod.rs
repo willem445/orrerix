@@ -60334,9 +60334,14 @@ impl OrchRegistry {
     /// a fresh lane with no memory of its earlier verdict. So every resume path
     /// calls this first.
     ///
-    /// **The same path, not a new one**, because a CLI may key the session on
-    /// it — Claude Code keeps a transcript under a directory named after the
-    /// session's cwd, and resumes it only from there. The same branch name,
+    /// **The same path, not a new one**, because that path is what every
+    /// resume route already resolves to — the roster's recorded cwd, or the
+    /// cwd a CLI's own store holds for the session — and a CLI may key its
+    /// store on it: Claude Code keeps a transcript under a project directory
+    /// named after the cwd (its sessions reference, "Where transcripts are
+    /// stored"; `--resume <id>` has searched every project only since
+    /// v2.1.223, and resumed from the session's own directory before). A new
+    /// path would need every one of those routes taught about it. The same branch name,
     /// because a worktree's path is derived from its branch
     /// (`git_worktree_add_sync`), and the result is checked against `cwd`
     /// rather than assumed: a mismatch is removed again and audited.

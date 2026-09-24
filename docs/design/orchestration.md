@@ -343,6 +343,68 @@ tier, deliberately not the git half, since a reviewer's shell IS its job — so 
 remains, taught in `reviewer.md`, and a dedicated worktree changes nothing about that; it only
 gives the reviewer a workspace of its own to sit in while it does what it already does.
 
+### A reviewer's worktree goes with its pane (#3443)
+
+#359 gave every reviewer a worktree and nothing ever took one away: neither a kill nor the review
+driver releasing a lane removed it, so every reviewer ever spawned left a checkout and an
+`agent/<id>` branch behind (about a hundred of them in one clone). A reviewer's worktree is scratch
+by contract — cut fresh from the default branch, used to `gh pr checkout --detach` the PR, never
+pushed — so removing it when the pane ends loses nothing. A worker's is the opposite: it holds
+the branch under review, and its removal belongs to whoever merges that branch.
+
+**Where it hooks: `mark_dead`, not the kill.** Every ending of a pane funnels through `mark_dead`
+— `kill_agent` and a human's pane close (through the pty exit), a crash, the idle reaper, a
+driver release, a spawn whose bind timed out. Hooking one of those would leave the rest leaking,
+and a list of call sites is exactly what the next ending would forget. `end_group` is the one
+caller that goes around it (`mark_dead_keeping_workspace`), because its own "remove worktrees"
+checkbox is the human's decision about every worktree in the group, and running both would race
+two removals of one directory.
+
+**What decides it is the roster, and it fails toward keeping.** `reviewer_scratch_verdict` is a
+pure function over every claim the group's panes make on a path, live and recorded alike. It
+reclaims only a path some *reviewer* record carries a branch for (a reviewer records a branch
+only when its spawn cut a worktree), that no non-reviewer names by path or by branch, and that no
+other live pane is running in. The first rule is what keeps a worker's worktree unreachable:
+nothing records a reviewer at a worker's path. The second covers the one way the roster could
+— a reviewer spawned or resumed with an explicit `cwd` naming someone else's workspace. Records
+are read as well as the live registry, because the pane that dies in a worktree is not always the
+one that cut it: a resumed reviewer runs in its session's original worktree and has no branch of
+its own.
+
+**A resume is why this could not be "remove it and forget".** The driver releases a lane with its
+session kept, and the next round resumes that conversation in a fresh pane, in the workspace the
+roster recorded (`resolve_worker_resume_cwd`). With the directory gone that resume refuses
+`resume-workspace-missing`, and the drive falls back to a cold lane that has never seen its own
+earlier verdict. Keeping the worktree while a resume is "expected" would need the driver's
+future intent, and a lane is resumable for as long as its session exists. So the other half is
+`restore_reviewer_scratch_worktree`: every resume path (the driver's `rd_resume_cwd`, the MCP
+`spawn_agent` arm, the session browser) first cuts a reclaimed reviewer worktree again, at the
+same path and branch name. The same path, not a new one, because it is what every resume route
+already resolves to (the roster's recorded cwd, or the cwd a CLI's own store holds for the
+session), and a CLI may key its store on it: Claude Code keeps a transcript under a project
+directory named after the cwd ([sessions reference](https://code.claude.com/docs/en/sessions),
+"Where transcripts are stored"), and resumed only from that directory before v2.1.223, when
+`--resume <id>` began searching every project. The contents are fresh
+from the default branch, which is what the reviewer had at spawn; it checks the PR out again. The
+same verdict gates the re-cut, so a worker whose worktree has vanished is never handed a fresh
+checkout without its own work.
+
+**It never blocks the kill.** In production the attempts run on a thread of their own, five of
+them over about fifteen seconds (`SCRATCH_RECLAIM_BACKOFF`): a driver release marks its pane
+dead before it kills the pty, and Windows will not delete a directory that is a live process's
+cwd, so the first attempt can lose that race. Each attempt re-asks the verdict, so a resume that
+starts using the directory in between stops the reclaim rather than being removed out from under.
+A removal git still refuses on the last attempt is audited `reviewer-worktree-remove-failed`,
+with git's error, and stays for a later `git worktree remove`. The branch is deleted only after
+its worktree is gone. A registry with no self-handle (the integration tests) makes one attempt
+inline, so its outcome is observable the moment the pane is dead.
+
+**Residuals.** A resume that resolves its cwd in the moment between one attempt's verdict and its
+`git worktree remove` can still lose the directory; the window is one git invocation wide and
+needs a kill and a resume of the same session within the backoff. An app that exits during the
+backoff leaves that worktree behind, unaudited. Worktrees reviewers left before this change are
+not swept; that is a one-time cleanup for the human, alongside #3441's instruction half.
+
 ### A capability class is never acquired by omission (#544)
 
 `spawn_agent`'s `kind` used to default to `worker`. That reads like a convenience — most spawns

@@ -42,6 +42,7 @@ import {
   bucketSeries,
   featureBars,
   firstSpendByBar,
+  hueBlockOrder,
   marks,
   scorecardColumns,
   type BeforeAfterRow,
@@ -576,21 +577,12 @@ export class TokenChartsView {
     this.renderNotes(series, bars);
   }
 
-  /** The stable hue ordering. Roster first (its own order — the group's own
-   *  sense of who is who), then any block that only the rows carry, so a block
-   *  whose agents have all exited is still drawable. */
+  /** The stable hue ordering — blocks that draw a line first, by when they
+   *  started spending, then the rest of the roster. The whole-file rows, not
+   *  the window, so a window change never repaints a survivor. The ordering is
+   *  a pure function (`hueBlockOrder`), which carries the why (#3449). */
   private blockOrder(): string[] {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    const push = (b: string) => {
-      const v = (b ?? "").trim();
-      if (!v || seen.has(v)) return;
-      seen.add(v);
-      out.push(v);
-    };
-    for (const a of this.series?.agents ?? []) push(a.block);
-    for (const r of this.series?.rows ?? []) if (r.kind === "sample") push(r.block);
-    return out;
+    return hueBlockOrder(this.series?.rows ?? [], this.series?.agents ?? []);
   }
 
   /** The legend, which is ALWAYS present for two or more series — identity is

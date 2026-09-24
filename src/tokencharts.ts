@@ -616,6 +616,57 @@ function hueAssignment(
   return out;
 }
 
+/** The stable `blockOrder` the view hands `seriesKeys` — **blocks that draw a
+ *  line first**, then the roster's other blocks.
+ *
+ *  Only `HUE_SLOTS` blocks get a hue, so the order decides who goes grey. The
+ *  roster alone is the wrong list to decide it from: it is every block the
+ *  group has EVER spawned, in spawn order, and a long-lived group's roster
+ *  opens with blocks retired by a workflow change long before this series file
+ *  existed. Those never draw a line and still took the first slots, pushing
+ *  every block the chart actually shows onto the neutral ramp (#3449: eight
+ *  slots, five of them spent on blocks with zero samples).
+ *
+ *  So a block earns its place by having a DELTA in `rows` — the same test
+ *  `seriesKeys` uses to give a block a line — ordered by its first delta's
+ *  time. That order is what keeps hues still: `rows` is the whole append-only
+ *  file (the view reads `sinceMs: 0` and windows afterwards), so a window or
+ *  CLI toggle never changes it, and a block that starts spending later is
+ *  APPENDED, never inserted ahead of one already coloured. A tie on the first
+ *  delta (two blocks sampled in one tick) falls back to roster position, then
+ *  name. Roster blocks with no delta follow in roster order: they draw nothing
+ *  today, and are listed only so the order stays total.
+ *
+ *  Residual: if the file is ever compacted so a block's early rows go, its
+ *  first delta moves and hues can shift — the file is not compacted today
+ *  (`SERIES_REVISIT_BYTES` is a report, not a truncation). */
+export function hueBlockOrder(
+  rows: readonly SeriesRowLike[],
+  roster: readonly { block: string }[]
+): string[] {
+  const rosterPos = new Map<string, number>();
+  for (const a of roster) {
+    const b = (a.block ?? "").trim();
+    if (b && !rosterPos.has(b)) rosterPos.set(b, rosterPos.size);
+  }
+  const firstDelta = new Map<string, number>();
+  for (const d of diffRows(rows).deltas) {
+    if (!d.block.trim()) continue;
+    const t = firstDelta.get(d.block);
+    if (t === undefined || d.tsMs < t) firstDelta.set(d.block, d.tsMs);
+  }
+  const pos = (b: string) => rosterPos.get(b) ?? Number.MAX_SAFE_INTEGER;
+  const drawn = [...firstDelta.keys()].sort(
+    (a, b) =>
+      firstDelta.get(a)! - firstDelta.get(b)! ||
+      pos(a) - pos(b) ||
+      (a < b ? -1 : a > b ? 1 : 0)
+  );
+  const seen = new Set(drawn);
+  const rest = [...rosterPos.keys()].filter((b) => !seen.has(b));
+  return [...drawn, ...rest];
+}
+
 /**
  * The chart's key axis, **read off the rows** rather than from any roster
  * list. A block this build has never heard of, an `opencode` row beside a `pi`

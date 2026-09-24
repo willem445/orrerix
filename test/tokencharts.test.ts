@@ -9,6 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   DEFAULT_BEFORE_AFTER_K,
@@ -23,6 +24,7 @@ import {
   bucketSeries,
   diffRows,
   featureBars,
+  hueBlockOrder,
   marks,
   scorecardColumns,
   seriesKeyOf,
@@ -491,6 +493,99 @@ test("a ninth block takes the neutral ramp, never a recycled hue", () => {
   assert.equal(assigned.length, HUE_SLOTS);
   assert.equal(new Set(assigned).size, HUE_SLOTS, "no hue is used twice");
   assert.equal(keys.filter((k) => k.hueIndex === null).length, 2, "the 9th and 10th go neutral");
+});
+
+// #3449. The roster is every block the group has EVER spawned, in spawn order —
+// this is the real shape of the group the bug was reported on: twelve blocks,
+// the first eight of them retired by a workflow change (only `orchestrator`,
+// `planner` and `process` still spawn), and only seven blocks with a single
+// row in the series file. Roster-first handed the eight slots to the first
+// eight roster entries, so the four blocks doing the work went grey.
+const REPORTED_ROSTER = [
+  "orchestrator", "planner", "worker", "reviewer", "worker-quick", "worker-deep",
+  "rev-lead", "process", "rev-std", "worker-std", "rev-final", "worker-adv",
+].map((block, i) => agent({ id: `a-${i}`, block }));
+const HOUR = 3_600_000;
+const spend = (block: string, ts: number, key: string): SeriesRowLike[] => [
+  sample({ ts_ms: ts, key, block, in: 0 }),
+  sample({ ts_ms: ts + 1, key, block, in: 10 }),
+];
+// Seven blocks that draw, `orchestrator` and `worker-adv` starting in the same
+// tick (as they do in the reported file), plus one BASELINE-only row for
+// `worker-deep`, which yields no delta and so draws no line.
+const REPORTED_ROWS: SeriesRowLike[] = [
+  ...spend("orchestrator", T0, "k-orch"),
+  ...spend("worker-adv", T0, "k-adv"),
+  ...spend("rev-std", T0 + HOUR, "k-rs"),
+  ...spend("rev-final", T0 + 2 * HOUR, "k-rf"),
+  ...spend("worker-std", T0 + 3 * HOUR, "k-ws"),
+  ...spend("process", T0 + 4 * HOUR, "k-p"),
+  ...spend("planner", T0 + 5 * HOUR, "k-pl"),
+  sample({ ts_ms: T0 + 6 * HOUR, key: "k-wd", block: "worker-deep", in: 3 }),
+];
+
+test("a roster block that never drew a line does not spend a hue slot (#3449)", () => {
+  const order = hueBlockOrder(REPORTED_ROWS, REPORTED_ROSTER);
+  const keys = seriesKeys(REPORTED_ROWS, { blockOrder: order });
+  assert.equal(keys.length, 7, "the seven spending blocks each draw a line");
+  for (const k of ["rev-final", "rev-std", "worker-adv", "worker-std"]) {
+    const info = keys.find((x) => x.block === k);
+    assert.ok(info, `${k} draws a line`);
+    assert.notEqual(info.hueIndex, null, `${k} takes an identity hue, not the neutral ramp`);
+  }
+  const hues = keys.map((k) => k.hueIndex);
+  assert.ok(hues.every((h) => h !== null), "no drawn block goes grey while the palette has room");
+  assert.equal(new Set(hues).size, 7, "and no two of them share one");
+
+  // The order itself: drawn blocks by first delta, a same-tick tie broken by
+  // roster position; then the roster blocks that draw nothing, in roster order
+  // — `worker-deep`'s lone baseline row earns it nothing.
+  assert.deepEqual(order, [
+    "orchestrator", "worker-adv", "rev-std", "rev-final", "worker-std", "process", "planner",
+    "worker", "reviewer", "worker-quick", "worker-deep", "rev-lead",
+  ]);
+});
+
+test("a block that starts spending later is APPENDED — no coloured block moves (#3449)", () => {
+  const hues = (rows: SeriesRowLike[]) =>
+    new Map(
+      seriesKeys(rows, { blockOrder: hueBlockOrder(rows, REPORTED_ROSTER) }).map((k) => [k.block, k.hueIndex])
+    );
+  const before = hues(REPORTED_ROWS);
+  // `worker` is third in spawn order. Ordering the roster and merely skipping
+  // the blocks without data would slot it in at index 2 and shift five hues;
+  // first-delta order puts it last, because it started last.
+  const after = hues([...REPORTED_ROWS, ...spend("worker", T0 + 7 * HOUR, "k-w")]);
+  for (const [block, hue] of before) assert.equal(after.get(block), hue, `${block} keeps its hue`);
+  assert.equal(after.get("worker"), 7, "the newcomer takes the next free slot");
+  // …and a ninth spender goes neutral rather than recycling — the latest starter.
+  const ninth = hues([
+    ...REPORTED_ROWS,
+    ...spend("worker", T0 + 7 * HOUR, "k-w"),
+    ...spend("reviewer", T0 + 8 * HOUR, "k-r"),
+  ]);
+  assert.equal(ninth.get("reviewer"), null);
+  assert.equal([...ninth.values()].filter((h) => h === null).length, 1);
+});
+
+test("a token-chart LINE rule never sets a fill — it would close the polyline into a wedge (#3449)", () => {
+  // `.tokens-line { fill: none }` is one class; a `.tokens-line.tok-hue-*` rule
+  // is two and wins, so any `fill` it carries fills every polyline and the
+  // fill closes with a chord from the last point back to the first. Every
+  // rule whose selector list names `.tokens-line` is read; a `fill` other than
+  // `none` is the defect.
+  const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const lineRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) =>
+    m[1].split(",").some((sel) => /\.tokens-line(?![\w-])/.test(sel))
+  );
+  const hued = lineRules.filter((m) => /\.tokens-line\.tok-hue-[a-z]+(?![\w-])/.test(m[1]));
+  // Positive control: the scan really reached the hue rules — one per palette
+  // slot plus the neutral ramp — so a clean result is not an empty one.
+  assert.ok(hued.length >= HUE_SLOTS + 1, `found ${hued.length} hued line rules`);
+  for (const m of lineRules) {
+    const fill = /(?:^|;)\s*fill\s*:\s*([^;]+)/.exec(m[2]);
+    assert.ok(!fill || fill[1].trim() === "none", `${m[1].trim()} sets fill: ${fill?.[1].trim()}`);
+  }
 });
 
 test("the categorical hue order is the MEASURED one, not theme.ts's declaration order", () => {

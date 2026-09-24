@@ -5519,6 +5519,45 @@ about who pushed the branch: a descendant can be the human's push, and the messa
 a roster-derived guess. The decision is untouched: a non-owner's close is
 refused whichever row is named; only the name in the refusal message changes.
 
+#### A resumed pane records its session's branch (#3442)
+
+A pane opened by `spawn_agent(resume_session:)` never cuts a worktree — every resume arrives
+with the session's own workspace as `cwd_override` — and that arm of `spawn_agent_full` used
+to persist no branch at all. So the gate owned nothing for a resumed worker and refused its
+own `<branch>-scratchN` closes. Since the review driver resumes the worker on every
+hand-back (`rd_spawn` reaches the same arm, as does the session browser's rejoin), that was
+every driven worker past round 1.
+
+A resume now records the branch of the session's **identity row** — the first roster row
+naming it, the pane that minted it (`resumed_session_branch`). Two choices in that sentence
+carry the argument:
+
+- **The roster, not the worktree's `HEAD`.** The branch is a capability here: it decides which
+  PRs the pane may close. `HEAD` is the agent's to move — a worker that ran
+  `git switch <someone-else's-branch>` before its pane ended would be handed ownership of that
+  branch on resume — while the roster row is written only by the backend, at the moment it
+  cut or named the branch. A reviewer's worktree is also `--detach`ed and has no `HEAD`
+  branch to read.
+- **The first row, not the last-touched one.** Only the minting pane ever assigns a session a
+  branch; every later row is a copy, and rows written before this fix are copies of nothing.
+  The last-touched row would hand every session already resumed once exactly the empty
+  branch this fixes. It is the same row #1961 made the answer to "which block".
+
+It stays fail-closed: no identity row, an identity row with no branch (orchestrator, planner,
+manager, worktree-less reviewer), or a resume that changes the session's class by an explicit
+`kind`/`block` all record nothing, and the empty-`own` refusal above still applies.
+`a_resumed_worker_can_close_its_own_scratch_pr_and_nobody_elses`,
+`a_resume_inherits_no_branch_where_none_was_recorded_or_the_class_changed`,
+`a_resume_inherits_the_minting_rows_branch_past_a_newer_legacy_row` and
+`a_handback_resume_records_the_workers_own_branch` pin it.
+
+The recorded branch has other readers, and a resumed pane now answers them the way its
+minting pane did. The auto-drive's authorship check (`rd_auto_start_with`, `NOT_AUTHOR`)
+counts the inherited branch, so a resumed worker's `report(done, ref:)` can start a review
+drive where it used to be declined. `fork_agent` forks a resumed worker from that branch
+(when it exists locally) rather than the default branch. The session digest's diff ref and the session browser's
+branch column show it too.
+
 #### One decision, two programs
 
 The decision is the pure `gh_close_decision`, and the shim mirrors it in shell — the same

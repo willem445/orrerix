@@ -35747,6 +35747,50 @@ impl OrchRegistry {
         self.merged_records(group).into_iter().find(|r| r.session.as_deref() == Some(session))
     }
 
+    /// **The branch a resumed pane records** (#3442): the one the session was
+    /// minted against, read off [`session_identity_record`](Self::session_identity_record).
+    ///
+    /// # Why the roster, and not the worktree's `HEAD`
+    ///
+    /// The recorded branch is a CAPABILITY — the `gh` shim's close gate reads
+    /// it out of `agent_owners` to decide which PRs this pane may close — so it
+    /// must come from something the backend wrote, never from something the
+    /// agent controls. A worktree's `HEAD` is the agent's to move: a worker
+    /// that ran `git switch <another-branch>` before its pane ended would, on
+    /// resume, be handed ownership of that branch and every `-scratchN` under
+    /// it. The roster row is written only by `spawn_agent_full` at the moment
+    /// it cut (or named) the branch. Reading `HEAD` would also be wrong in the
+    /// benign cases: a reviewer's worktree is `--detach`ed (#359) and has no
+    /// branch to read, and a spawn-path git subprocess is a cost and a failure
+    /// mode this answer does not need.
+    ///
+    /// # Why the FIRST row, not the last-touched one
+    ///
+    /// Only the pane that MINTED a session ever assigns it a branch: a resume
+    /// always arrives with a `cwd_override`, and that arm cuts nothing. Every
+    /// later row is therefore a copy, and rows written before this fix are
+    /// copies of `None` — so the last-touched row would hand every session
+    /// already resumed once (i.e. every worker past round 1 of a driven
+    /// review) exactly the empty branch this fixes. The minting row is the one
+    /// fact; it is the same row #1961 made the answer to "which block".
+    ///
+    /// # Fail-closed arms
+    ///
+    /// `None` — owning nothing, which the close gate refuses — when no row
+    /// names the session, when that row carries no branch (an orchestrator,
+    /// planner, manager or worktree-less reviewer, which never had one), or
+    /// when the pane being opened is a different CLASS from the one that
+    /// minted the session: an explicit `kind`/`block` that resumes a worker's
+    /// conversation as some other role is not that worker continuing its own
+    /// work, and does not inherit its branch.
+    fn resumed_session_branch(&self, group: &GroupId, session: &str, role: Role) -> Option<String> {
+        let rec = self.session_identity_record(group, session)?;
+        if rec.role != role.as_str() {
+            return None;
+        }
+        rec.branch.map(|b| b.trim().to_string()).filter(|b| !b.is_empty())
+    }
+
     /// Every recorded session across all groups on disk, with role identity
     /// — drives the session browser's ORCH/W/REV badges and restore flow.
     pub fn session_roles(&self) -> Vec<SessionRole> {
@@ -53683,7 +53727,20 @@ impl OrchRegistry {
             if !Path::new(&c).is_dir() {
                 return Err(format!("cwd does not exist: {c}"));
             }
-            (c, String::new(), None)
+            // #3442: a RESUME carries the branch its session was minted
+            // against. Every resume lands here — the MCP `spawn_agent(
+            // resume_session:)` arm, the review driver's hand-back and lane
+            // re-brief (`rd_spawn`), and the session browser's rejoin all pass
+            // the session's workspace as `cwd_override` — and before this the
+            // arm persisted `None`, so the `gh` close gate owned nothing for
+            // the resumed pane and refused its own `-scratchN` PRs. A fresh
+            // spawn with an explicit cwd still records nothing: it has no
+            // session whose branch it could be continuing.
+            let inherited = session_id
+                .as_deref()
+                .filter(|_| resume)
+                .and_then(|s| self.resumed_session_branch(group_id, s, role));
+            (c, String::new(), inherited)
         } else if use_worktree
             && role != Role::Orchestrator
             && role != Role::Planner

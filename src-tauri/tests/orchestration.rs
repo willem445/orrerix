@@ -68387,6 +68387,278 @@ fn gh_shim_harness_refuses_a_close_of_a_pr_the_caller_does_not_own() {
     assert!(!out.status.success(), "a close this app cannot audit is a close it cannot allow");
 }
 
+/// The agent id of the one non-dead pane running `session`, off the roster the
+/// orchestrator reads (#3442's fixture helper).
+fn live_pane_on(reg: &OrchRegistry, group: &GroupId, session: &str) -> String {
+    let panes: Vec<String> = reg
+        .list_agents(group)
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["session"] == json!(session) && a["status"] != json!("dead"))
+        .map(|a| a["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(panes.len(), 1, "exactly one live pane on session {session}: {panes:?}");
+    panes[0].clone()
+}
+
+/// **#3442: a resumed worker closes its own scratch PR, and still nobody
+/// else's.** The close gate (#2985/#3198) decides from the `agent_owners`
+/// roster, and a pane opened by `spawn_agent(resume_session:)` used to be
+/// written there with NO branch — so the gate owned nothing for it and
+/// refused the worker's own `<branch>-scratchN` close. The review driver
+/// resumes the worker on every hand-back, so that was every worker past
+/// round 1.
+///
+/// Executed end to end: the worker is spawned and resumed through the real MCP
+/// tool (worktree cut in a real repo), the roster is the file the backend
+/// wrote, and the close runs through the real generated shim against a fake
+/// gh. The close comes FIRST, so the red at the base is the refusal itself.
+#[test]
+fn a_resumed_worker_can_close_its_own_scratch_pr_and_nobody_elses() {
+    use std::process::Command;
+    if Command::new("sh").arg("-c").arg("exit 0").status().map(|s| !s.success()).unwrap_or(true) {
+        eprintln!("SKIP a_resumed_worker_can_close_its_own_scratch_pr…: no POSIX sh");
+        return;
+    }
+    let (reg, _d) = test_registry();
+    let repo = real_repo();
+    let mut r = rails();
+    r.max_agents = 8;
+    let g = reg.create_group(&repo.path().to_string_lossy(), r).unwrap();
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let co = reg.resolve_token(&orch.token).unwrap();
+    let call = |args: Value| {
+        let out = dispatch(&reg, &co, "tools/call", &json!({ "name": "spawn_agent", "arguments": args }))
+            .unwrap();
+        assert_eq!(out["isError"], false, "{out:?}");
+    };
+    let session_of = |id: &str| reg.agent(id).unwrap().session_id.expect("claude mints a session id");
+
+    // Two workers on two branches. `mine` is the one resumed; `theirs` stays
+    // live, so its branch has a real owner on the roster.
+    call(json!({ "kind": "worker", "branch": "fix/3442-mine", "task": "round 1" }));
+    let mine = reg.list_agents(&g.id).as_array().unwrap().iter()
+        .find(|a| a["role"] == "worker").map(|a| a["id"].as_str().unwrap().to_string()).unwrap();
+    call(json!({ "kind": "worker", "branch": "fix/3442-theirs", "task": "other work" }));
+    let sess = session_of(&mine);
+    assert_eq!(
+        reg.agent(&mine).unwrap().branch.as_deref(),
+        Some("fix/3442-mine"),
+        "fixture: the ORIGINAL pane records its branch — without that there is nothing to inherit"
+    );
+
+    // Round 2: the pane ends and the session is resumed the documented way —
+    // resume_session and a follow-up, nothing else.
+    reg.mark_dead(&mine, Some(0));
+    call(json!({ "resume_session": sess, "task": "round 2 findings" }));
+    let resumed = live_pane_on(&reg, &g.id, &sess);
+    assert_ne!(resumed, mine, "the resume opened a NEW pane — that is the pane under test");
+
+    // The shim, deciding from the roster the backend wrote for this group.
+    let td = tempfile::tempdir().unwrap();
+    let log = td.path().join("gh.log");
+    let fake = write_fake_gh_head(td.path(), &log);
+    let shim = td.path().join("gh");
+    std::fs::write(&shim, gh_shim_sh(&fake.display().to_string(), &shim_paths())).unwrap();
+    let _ = Command::new("sh").arg("-c").arg(format!("chmod +x '{}' '{}'", fake.display(), shim.display())).status();
+    let gdir = reg.state_root().join(g.id.as_str());
+    let close = |aid: &str, head: &str| -> (bool, String) {
+        let out = Command::new("sh").arg(&shim).args(["pr", "close", "--delete-branch", "77"])
+            .env("LOOMUX_GROUP_DIR", &gdir).env("LOOMUX_AGENT_ID", aid)
+            .env("FAKE_HEAD", head).env("FAKE_NUM", "77")
+            .output().unwrap();
+        (out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+
+    // ── THE DEFECT: the resumed worker closes its own scratch PR. ────────────
+    let (ok, err) = close(&resumed, "fix/3442-mine-scratch1");
+    assert!(
+        ok,
+        "a RESUMED worker must be able to close its own -scratchN PR — the gate refused it, \
+         which is #3442 (the resumed pane has no recorded branch): {err}"
+    );
+    assert!(std::fs::read_to_string(&log).unwrap_or_default().contains("ARGS: pr close"),
+        "the real gh ran");
+    // …its own branch itself, likewise.
+    let (ok, err) = close(&resumed, "fix/3442-mine");
+    assert!(ok, "the resumed worker owns its own branch: {err}");
+
+    // ── Still nobody else's. ─────────────────────────────────────────────────
+    let (ok, err) = close(&resumed, "fix/3442-theirs");
+    assert!(!ok, "a resumed worker must not close another worker's PR");
+    assert!(err.contains("your own branch is 'fix/3442-mine'"), "refused as a pane WITH a branch: {err}");
+    let (ok, _) = close(&resumed, "fix/3442-theirs-scratch1");
+    assert!(!ok, "…nor another worker's scratch PR");
+    // The separator rule survives inheritance: a bare prefix owns nothing.
+    let (ok, _) = close(&resumed, "fix/3442-mine2");
+    assert!(!ok, "fix/3442-mine must not own fix/3442-mine2");
+
+    // What the gate read: the resumed pane's row carries the inherited branch.
+    let roster = std::fs::read_to_string(gdir.join(OWNER_ROSTER_FILE)).unwrap();
+    assert!(
+        roster.lines().any(|l| l == format!("{resumed} worker fix/3442-mine")),
+        "the resumed pane's owner-roster row names its session's branch: {roster}"
+    );
+    assert_eq!(reg.agent(&resumed).unwrap().branch.as_deref(), Some("fix/3442-mine"));
+
+    // A SECOND resume inherits it too — the round-3 pane, resumed from a
+    // session whose newest row is itself a resume.
+    reg.mark_dead(&resumed, Some(0));
+    call(json!({ "resume_session": sess, "task": "round 3 findings" }));
+    let third = live_pane_on(&reg, &g.id, &sess);
+    let (ok, err) = close(&third, "fix/3442-mine-scratch2");
+    assert!(ok, "a resume of a resume still owns the session's branch: {err}");
+}
+
+/// **#3442's upgrade case: a newer roster row carrying `branch: None` does not
+/// take the branch away.** Every resume written before this fix left such a row
+/// — the session's minting row names the branch, every later row names nothing
+/// — so a resume on a running install meets exactly this roster. The branch is
+/// read off the session's FIRST row (`session_identity_record`); a
+/// last-touched rule would read the legacy row and hand the pane nothing.
+///
+/// The legacy row is written by hand, with the newest `updated_ms` on the
+/// roster, and that ordering is asserted as a pre-condition: without a newer
+/// row that DISAGREES with the minting one, the first-row and newest-row rules
+/// answer alike and this test could not tell them apart (review round 1, N1).
+#[test]
+fn a_resume_inherits_the_minting_rows_branch_past_a_newer_legacy_row() {
+    let (reg, _d) = test_registry();
+    let repo = real_repo();
+    let mut r = rails();
+    r.max_agents = 8;
+    let g = reg.create_group(&repo.path().to_string_lossy(), r).unwrap();
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let co = reg.resolve_token(&orch.token).unwrap();
+    let call = |args: Value| {
+        let out = dispatch(&reg, &co, "tools/call", &json!({ "name": "spawn_agent", "arguments": args }))
+            .unwrap();
+        assert_eq!(out["isError"], false, "{out:?}");
+    };
+
+    call(json!({ "kind": "worker", "branch": "fix/3442-legacy", "task": "round 1" }));
+    let mint = reg.list_agents(&g.id).as_array().unwrap().iter()
+        .find(|a| a["role"] == "worker").map(|a| a["id"].as_str().unwrap().to_string()).unwrap();
+    let sess = reg.agent(&mint).unwrap().session_id.expect("claude mints a session id");
+    reg.mark_dead(&mint, Some(0));
+
+    // The pre-#3442 resume's row: same session, same class, NO branch, and
+    // touched after the minting row.
+    let path = reg.state_root().join(g.id.as_str()).join("agents.json");
+    let mut rows: Vec<Value> = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let newest = rows.iter().filter_map(|r| r["updated_ms"].as_u64()).max().unwrap();
+    let mut legacy = rows.iter().find(|r| r["id"] == json!(mint)).cloned().expect("the minting row");
+    assert_eq!(legacy["branch"], json!("fix/3442-legacy"), "fixture: the minting row names the branch");
+    legacy["id"] = json!("w-legacy");
+    legacy["branch"] = Value::Null;
+    legacy["status"] = json!("dead");
+    legacy["updated_ms"] = json!(newest + 60_000);
+    rows.push(legacy);
+    fs::write(&path, serde_json::to_string_pretty(&rows).unwrap()).unwrap();
+    let on_disk: Vec<Value> = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let naming: Vec<&Value> = on_disk.iter().filter(|r| r["session"] == json!(sess)).collect();
+    assert_eq!(naming.len(), 2, "fixture: two rows name the session");
+    assert_eq!(
+        (naming[0]["branch"].clone(), naming[1]["branch"].clone()),
+        (json!("fix/3442-legacy"), Value::Null),
+        "fixture: the FIRST row names the branch and the later one does not"
+    );
+    assert!(
+        naming[1]["updated_ms"].as_u64() > naming[0]["updated_ms"].as_u64(),
+        "fixture: the legacy row is the NEWEST, so a last-touched rule would pick it"
+    );
+
+    call(json!({ "resume_session": sess, "task": "round 2 findings" }));
+    let resumed = live_pane_on(&reg, &g.id, &sess);
+    assert_eq!(
+        reg.agent(&resumed).unwrap().branch.as_deref(),
+        Some("fix/3442-legacy"),
+        "a resume must inherit the MINTING row's branch; a newer pre-#3442 row carrying none \
+         must not strip it (that is every worker already resumed on a running install)"
+    );
+}
+
+/// **#3442's fail-closed arms: a resume inherits a branch only where one was
+/// recorded, and only as the class that recorded it.**
+///
+/// A resumed planner genuinely has no branch (a planner never gets one), so it
+/// must still own NOTHING — the empty-`own` refusal the close gate keeps. And a
+/// worker's session resumed as a REVIEWER by an explicit `kind` is not that
+/// worker continuing its own work, so it inherits no branch either.
+#[test]
+fn a_resume_inherits_no_branch_where_none_was_recorded_or_the_class_changed() {
+    use std::process::Command;
+    let (reg, _d) = test_registry();
+    let repo = real_repo();
+    let mut r = rails();
+    r.max_agents = 8;
+    let g = reg.create_group(&repo.path().to_string_lossy(), r).unwrap();
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let co = reg.resolve_token(&orch.token).unwrap();
+    let call = |args: Value| {
+        let out = dispatch(&reg, &co, "tools/call", &json!({ "name": "spawn_agent", "arguments": args }))
+            .unwrap();
+        assert_eq!(out["isError"], false, "{out:?}");
+    };
+    let first_of = |role: &str| {
+        reg.list_agents(&g.id).as_array().unwrap().iter()
+            .find(|a| a["role"] == role).map(|a| a["id"].as_str().unwrap().to_string()).unwrap()
+    };
+
+    // ── A planner: no branch at mint, none on resume. ────────────────────────
+    call(json!({ "kind": "planner", "task": "plan it" }));
+    let planner = first_of("planner");
+    assert_eq!(reg.agent(&planner).unwrap().branch, None, "fixture: a planner records no branch");
+    let psess = reg.agent(&planner).unwrap().session_id.unwrap();
+    reg.mark_dead(&planner, Some(0));
+    call(json!({ "resume_session": psess, "task": "revise" }));
+    let p2 = live_pane_on(&reg, &g.id, &psess);
+    assert_eq!(reg.agent(&p2).unwrap().branch, None, "a resumed planner still has no branch");
+
+    // ── A worker's session resumed as a reviewer. ────────────────────────────
+    call(json!({ "kind": "worker", "branch": "fix/3442-w", "task": "work" }));
+    let worker = first_of("worker");
+    assert_eq!(
+        reg.agent(&worker).unwrap().branch.as_deref(),
+        Some("fix/3442-w"),
+        "fixture: the minting worker HAS a branch, so the refusal below is the class check \
+         and not an empty row"
+    );
+    let wsess = reg.agent(&worker).unwrap().session_id.unwrap();
+    reg.mark_dead(&worker, Some(0));
+    call(json!({ "kind": "reviewer", "resume_session": wsess, "task": "look at it" }));
+    let rev = live_pane_on(&reg, &g.id, &wsess);
+    assert_eq!(reg.agent(&rev).unwrap().role, Role::Reviewer, "fixture: the resume really changed class");
+    assert_eq!(
+        reg.agent(&rev).unwrap().branch,
+        None,
+        "a worker's session resumed as another class must not inherit the worker's branch"
+    );
+
+    // Both, through the gate: each owns nothing, and is told so.
+    if Command::new("sh").arg("-c").arg("exit 0").status().map(|s| !s.success()).unwrap_or(true) {
+        eprintln!("SKIP the shim half of a_resume_inherits_no_branch…: no POSIX sh");
+        return;
+    }
+    let td = tempfile::tempdir().unwrap();
+    let log = td.path().join("gh.log");
+    let fake = write_fake_gh_head(td.path(), &log);
+    let shim = td.path().join("gh");
+    std::fs::write(&shim, gh_shim_sh(&fake.display().to_string(), &shim_paths())).unwrap();
+    let _ = Command::new("sh").arg("-c").arg(format!("chmod +x '{}' '{}'", fake.display(), shim.display())).status();
+    let gdir = reg.state_root().join(g.id.as_str());
+    for aid in [&p2, &rev] {
+        let out = Command::new("sh").arg(&shim).args(["pr", "close", "77"])
+            .env("LOOMUX_GROUP_DIR", &gdir).env("LOOMUX_AGENT_ID", aid.as_str())
+            .env("FAKE_HEAD", "fix/3442-w-scratch1").env("FAKE_NUM", "77")
+            .output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(!out.status.success(), "{aid} owns no branch and must not close fix/3442-w-scratch1");
+        assert!(err.contains("no branch of its own recorded"), "refused as a branchless pane: {err}");
+    }
+}
+
 /// The owner the refusal NAMES is the roster's most specific match, not its
 /// first (#3206). Two rows can both match a head by the separated-descendant
 /// rule — a `fix/team` holder and a `fix/team-alpha` holder both match head

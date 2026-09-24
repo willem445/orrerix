@@ -404,7 +404,10 @@ inline, so its outcome is observable the moment the pane is dead.
 **Residuals.** A resume that resolves its cwd in the moment between one attempt's verdict and its
 `git worktree remove` can still lose the directory; the window is one git invocation wide and
 needs a kill and a resume of the same session within the backoff. An app that exits during the
-backoff leaves that worktree behind, unaudited. Worktrees reviewers left before this change are
+backoff leaves that worktree behind, unaudited. On Windows, `git worktree remove --force` can delete part of
+the tree and then fail on a file that stays locked through the whole backoff (a lingering child
+process, antivirus). The failure is audited, but a later resume finds the directory present, skips
+the re-cut, and resumes into that half-emptied checkout; nothing marks it as degraded. Worktrees reviewers left before this change are
 not swept; that is a one-time cleanup for the human, alongside #3441's instruction half.
 
 ### A capability class is never acquired by omission (#544)

@@ -69719,3 +69719,52 @@ fn a_reclaimed_reviewers_branch_is_kept_when_a_commit_lives_only_on_it() {
     assert_eq!(rows[0]["branch_deleted"], json!(false), "{rows:?}");
     assert_eq!(rows[0]["branch_kept"], json!("has-commits-no-other-ref-holds"), "{rows:?}");
 }
+
+/// **A session-browser resume of a reclaimed reviewer cuts its worktree again**
+/// (#3443) — the third resume route, `resume_recorded_session`, beside the MCP
+/// arm and the driver. It resolves the workspace synchronously before its
+/// background spawn, so the re-cut is observable the moment it returns.
+#[test]
+fn a_session_browser_resume_of_a_reclaimed_reviewer_cuts_its_worktree_again() {
+    use loomux_lib::orchestration::resume_recorded_session;
+    use std::sync::Arc;
+    let repo = real_repo();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = Arc::new(relaunch_registry(dir.path()));
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let rev = reg.spawn_agent(&g.id, Role::Reviewer, "rev", "t", true, None).unwrap();
+    let (sid, cwd) = (rev.session_id.clone().unwrap(), rev.cwd.clone());
+    end_pane(&reg, &rev.id, 34440);
+    assert!(!Path::new(&cwd).exists(), "control: the reclaim took the worktree");
+
+    let out = resume_recorded_session(&reg, &sid, None, false);
+
+    assert!(Path::new(&cwd).is_dir(), "the resume must cut the worktree again at {cwd}: {out:?}");
+    assert!(out.is_ok(), "…and then resume into it: {out:?}");
+    assert_eq!(registered_worktrees(repo.path()), 2, "as a registered worktree");
+    assert_eq!(scratch_rows(&reg, &g.id, "reviewer-worktree-recut").len(), 1);
+}
+
+/// **Ending a group without "remove worktrees" keeps a reviewer's worktree**
+/// (#3443): `end_group` goes around the reclaim, because its own flag is the
+/// human's decision about every worktree in the group. The reviewer ended by
+/// its own pane exit first is the control — the same group does reclaim.
+#[test]
+fn ending_a_group_without_cleanup_keeps_a_reviewers_worktree() {
+    let repo = real_repo();
+    let (reg, _d) = test_registry();
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let gone = reg.spawn_agent(&g.id, Role::Reviewer, "rev1", "t", true, None).unwrap();
+    let kept = reg.spawn_agent(&g.id, Role::Reviewer, "rev2", "t", true, None).unwrap();
+    end_pane(&reg, &gone.id, 34441);
+    assert!(!Path::new(&gone.cwd).exists(), "control: a reviewer's own exit reclaims");
+
+    reg.end_group(&g.id, false).unwrap();
+
+    assert_eq!(reg.agent(&kept.id).map(|a| a.status), Some(AgentStatus::Dead));
+    assert!(Path::new(&kept.cwd).is_dir(), "end_group(cleanup=false) must keep {}", kept.cwd);
+    assert_eq!(registered_worktrees(repo.path()), 2, "the main checkout and the kept reviewer's");
+    assert_eq!(scratch_rows(&reg, &g.id, "reviewer-worktree-removed").len(), 1, "only the control's");
+}

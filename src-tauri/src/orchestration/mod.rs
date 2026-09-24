@@ -35785,9 +35785,7 @@ impl OrchRegistry {
     /// work, and does not inherit its branch.
     fn resumed_session_branch(&self, group: &GroupId, session: &str, role: Role) -> Option<String> {
         let rec = self.session_identity_record(group, session)?;
-        if rec.role != role.as_str() {
-            return None;
-        }
+        let _ = role; // MUTATION: class check removed
         rec.branch.map(|b| b.trim().to_string()).filter(|b| !b.is_empty())
     }
 

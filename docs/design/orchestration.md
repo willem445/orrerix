@@ -13438,6 +13438,14 @@ and `every_role_that_posts_renders_the_writing_standard` pins that exclusion as 
 `writing.md` is `GOLDENS`/`LIVE`'s ninth row for `dod.md`'s reason: without it, an edit to what
 every agent is told about writing would move no golden.
 
+**A `mode: replace` persona gets it too.** Such a block never reads its class template, so the
+replace arm of `render_block_instructions` appends the same section itself, after the mechanics
+core, for every kind but the manager. It is appended there rather than inside `mechanics_core`
+because that function also feeds Copilot's slim system-prompt body, which is kept under a
+documented size limit and points at the instructions file for everything else.
+`a_replace_persona_that_posts_still_reads_the_writing_standard` pins it on a replace worker, a
+replace reviewer and an append-mode control.
+
 **The tail names "the human", not a handle.** Rendering the operator's GitHub login at group
 creation was the alternative. It was rejected on three grounds. It adds nothing: every agent in
 a group authenticates as the operator, so the post's GitHub author already IS that login. It

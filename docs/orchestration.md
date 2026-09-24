@@ -363,8 +363,9 @@ to this; they do not need to repeat it.
 **No agent ever merges.** Agents open PRs; you merge, after your own review.
 
 **After a merge, the orchestrator cleans up.** It closes the PR's leftover scratch PRs,
-confirms the head branch is gone from GitHub, and removes the worker's and reviewers'
-worktrees and local branches; at quiet moments it sweeps for any a merge left behind. Workers
+confirms the head branch is gone from GitHub, and removes the worker's and reviewers' worktrees
+and local branches; at quiet moments it sweeps for any a merge left behind — only its own
+group's, so a worktree or branch it did not create is named to you, never removed. Workers
 close their own scratch PRs as they go, and a worker's report names any it could not close.
 
 Panes are badged by role and group number (`ORCH 1` / `W 1` / `REV 1` / `PLAN 1`

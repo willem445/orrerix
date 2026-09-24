@@ -843,13 +843,19 @@ its own scratch PRs as it cites them, but only you may close any PR in the group
 cannot be removed while a live pane works in it — so whatever outlives a PR is yours to remove.
 
 **The sweep, at a lull** — it catches what a checklist missed: a merge you did not see, a pane
-that died mid-task, a report that left something out.
+that died mid-task, a report that left something out. It touches only what THIS group created.
+`git worktree list` and `git branch` see the whole repo — another group's live work on the same
+repo, a worktree or branch the human made by hand — so ownership comes from `list_agents` (the
+default call, dead rows included), and anything it does not own is named to the human, never
+removed.
 
-- Open scratch PRs whose parent PR is merged or closed: `gh pr close <n> --delete-branch`.
-- Local branches whose PR is merged or closed (`gh pr list --state all --head <branch>`):
-  `git branch -D <branch>`.
-- Worktrees with no live pane (`git worktree list` against the `cwd`s in `list_agents`): remove
-  them as steps 3 and 4 below do, then `git worktree prune`.
+- **Worktrees:** one whose path is the `cwd` of a DEAD agent in `list_agents` and of no live
+  one. Note its branch first (`git worktree list --porcelain`), then remove it as step 3 does for
+  a worker's or step 4 for a reviewer's, then `git worktree prune`.
+- **Branches:** the branch such a worktree held, once its PR is merged or closed
+  (`gh pr list --state all --head <branch>`): `git branch -D <branch>`.
+- **Scratch PRs:** an open PR whose head is `<branch>-…` or `<branch>/…` of such a branch, once
+  its parent PR is merged or closed: `gh pr close <n> --delete-branch`.
 
 **The checklist, after every merge — including one the human performed:**
 

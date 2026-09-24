@@ -1702,3 +1702,9 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
 
   Both re-bless checks above were run: `live-minus-keys == golden` reports OK for all nine
   files, with `writing.md` transcribed into the check's key table with an empty list.
+
+  Review round 1 re-blessed `orchestrator-playbook.md` again in the fix commit. The lull sweep
+  now touches only what the group created: a worktree whose path is a dead agent's `cwd` in
+  `list_agents` and no live agent's, the branch that worktree held, and scratch PRs beneath
+  that branch; anything else is named to the human. The same check was re-run:
+  `live-minus-keys == golden` reports OK for all nine files.

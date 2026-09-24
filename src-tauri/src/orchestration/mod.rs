@@ -48755,11 +48755,25 @@ impl OrchRegistry {
     ) -> String {
         let replace = persona.is_some_and(|p| p.mode == profiles::ProfileMode::Replace);
         if replace {
+            // #3441: the writing standard rides past a replace persona too, for the reason
+            // red-before-green and the reviewer's duties ride in `mechanics_core` — a
+            // replace persona never reads the class template, so a standard that lives only
+            // there is one such a block was never told, while `docs/orchestration.md`
+            // promises it to every role that posts. Appended HERE rather than inside
+            // `mechanics_core` because that function also feeds Copilot's slim system-prompt
+            // body (`copilot_agent_body`), which is kept under a documented size limit and
+            // points at this file for everything beyond the mechanics. A manager is left
+            // out, as in the templates: it never posts to GitHub or writes the board.
+            let writing = if matches!(b.kind, Role::Manager) {
+                String::new()
+            } else {
+                format!("\n## Writing for humans\n\n{}\n", writing_body())
+            };
             format!(
                 "# {} — orrerix mechanics (non-overridable)\n\n\
                  This repo's persona for the `{}` block runs in `mode: replace`: it replaces \
                  loomux's built-in {} instructions. The mechanics below are NOT part of that \
-                 trade — loomux guarantees them whatever the persona says.\n\n{}\n",
+                 trade — loomux guarantees them whatever the persona says.\n\n{}\n{writing}",
                 b.name,
                 b.id,
                 b.kind.as_str(),

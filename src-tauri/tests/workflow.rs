@@ -4157,6 +4157,55 @@ fn replace_mode_persona_still_gets_the_mechanics_core() {
     assert!(k.contains("spike.md"), "the kickoff points at the block's own contract file: {k}");
 }
 
+/// A `mode: replace` persona on a block that posts still reads the writing standard (#3441).
+///
+/// A replace persona never sees its class template, so the `{{WRITING}}` section every template
+/// renders never reaches it that way; the replace arm of `render_block_instructions` appends the
+/// same `writing_body()` itself. Both posting kinds that a repo commonly swaps are exercised — a
+/// worker (the `process` block in this repo is one) and a reviewer — and the append-mode block in
+/// the same roster is the control: it gets the standard through its template, exactly once, so
+/// neither path duplicates it.
+#[test]
+fn a_replace_persona_that_posts_still_reads_the_writing_standard() {
+    let (reg, _d) = test_registry();
+    let repo = Repo::new()
+        .workflow(
+            "version: 1\nblocks:\n  - id: spike\n    kind: worker\n    profile: .github/agents/spike.agent.md\n  \
+             - id: lens\n    kind: reviewer\n    profile: .github/agents/lens.agent.md\n  \
+             - id: plain\n    kind: worker\n",
+        )
+        .agent_file(
+            "spike.agent.md",
+            "---\nname: spike\nmode: replace\ndescription: Throwaway spike runner.\n---\nYou are a spike runner.",
+        )
+        .agent_file(
+            "lens.agent.md",
+            "---\nname: lens\nmode: replace\ndescription: One-lens reviewer.\n---\nYou review one lens.",
+        );
+    let g = reg.create_group(&repo.path(), rails()).unwrap();
+    // Precondition, so the two replace rows above are about the replace arm and not about a
+    // persona that silently failed to load and fell back to the template.
+    for id in ["spike", "lens"] {
+        let block = g.guardrails.block(id).unwrap();
+        let persona = reg.resolve_persona(&g, block).unwrap().expect("the persona must load");
+        assert_eq!(persona.mode, ProfileMode::Replace, "block `{id}` must really be a replace persona");
+    }
+    let sentence = "a review nit deferred from a pr is a line in that pr's disposition comment";
+    for id in ["spike", "lens", "plain"] {
+        let block = g.guardrails.block(id).unwrap();
+        let doc = fs::read_to_string(reg.state_root().join(g.id.as_str()).join(block.instructions_file()))
+            .unwrap();
+        let text = flat(&doc);
+        assert_eq!(
+            text.matches(sentence).count(),
+            1,
+            "block `{id}` must read the writing standard exactly once, whatever its persona mode: {doc}"
+        );
+        assert!(text.contains("## writing for humans"), "block `{id}` must serve it under its heading: {doc}");
+        assert!(!doc.contains("{{"), "block `{id}` has an unsubstituted placeholder: {doc}");
+    }
+}
+
 #[test]
 fn every_reviewer_hears_the_findings_duty_however_its_persona_was_written() {
     // The findings-disposition policy (#222) rests on the reviewer saying which

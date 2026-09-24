@@ -818,11 +818,19 @@ what git does in that worktree, and that includes the HUMAN'S unsandboxed git:
 | `config.worktree` | per-worktree config, read under `extensions.worktreeConfig`: a config key is code by the same route. |
 | `gitdir` | the back-pointer `git worktree repair` writes a `.git` file through: the human's next repair writes where the pane chose. |
 
-Nothing else in a linked gitdir is read that way. `hooks`, `config`, `info` and
-`objects` resolve to the COMMON dir for a linked worktree (git's `common_list`;
-`git rev-parse --git-path hooks` answers `<common>/hooks` from a worktree). And
-`HEAD`, `index`, `ORIG_HEAD`, `FETCH_HEAD`, `logs/` and the rebase state are what
-a commit, a fetch and a rebase must write.
+`hooks`, `config`, `info` and `objects` resolve to the COMMON dir for a linked
+worktree (git's `common_list`; `git rev-parse --git-path hooks` answers
+`<common>/hooks` from a worktree). And `HEAD`, `index`, `ORIG_HEAD`,
+`FETCH_HEAD` and `logs/` are what a commit and a fetch must write.
+
+**One route stays open: the rebase state** (#3460 review N4, reproduced there).
+`rebase-merge/git-rebase-todo` is per-worktree, and an `exec` line planted in it
+runs on the HUMAN'S next `git rebase --continue` in that worktree. The seal
+cannot cover it. The directory exists only while a rebase is in progress, so
+there is nothing to deny at spawn. And the pane's own rebase must write it, so
+denying the directory would break the rebase a worker needs. The user doc
+carries the rule that closes it in practice: don't continue a rebase in a pane's
+worktree that you didn't start.
 
 **`[sandbox_workspace_write]` cannot say "this file is read-only inside that
 writable directory"; codex's permission profiles can** (`rust-v0.156.1`):
@@ -914,13 +922,16 @@ widening the sandbox of a session orrerix does not own is not orrerix's call.
 
 **Residuals.**
 
-- **The seal covers the files git reads today.** A future git that reads a new
+- **The rebase state is not sealed** (above). A planted `exec` in
+  `rebase-merge/git-rebase-todo` runs on the human's `git rebase --continue` in
+  that worktree. Closed by practice (the user doc's rule), not by the sandbox.
+- **The seal covers the three files it names.** A future git that reads a new
   per-worktree file for configuration would need a row in `CODEX_GITDIR_SEALED`.
   The enumeration above is against git's `common_list`, and the constant's doc
   carries it.
 - **The seal holds only on a path that exists at spawn.** `config.worktree` is
-  created for that reason. A file the pane could create later under another name
-  is harmless unless git reads it, which is the enumeration above.
+  created for that reason. A file the pane creates later is sealed by nothing,
+  and the rebase state above is the one such file known to run code.
 - **Integrity of the shared store.** A codex pane can now move any ref,
   including `main`, and delete objects. Neither runs code; both are within reach
   of every unsandboxed pane already.

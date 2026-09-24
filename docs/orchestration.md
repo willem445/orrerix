@@ -3147,8 +3147,11 @@ two things worth knowing before your first run:
   To do that, a codex pane in a worktree runs under a codex *permissions
   profile* named `orrerix-worktree` instead of the plain `workspace-write`
   setting, and orrerix creates an empty `config.worktree` in that directory
-  if there isn't one, so the read-only rule has a file to apply to. Two things
-  follow from that. `git push -u` pushes but prints `could not lock config
+  if there isn't one, so the read-only rule has a file to apply to. One route
+  stays open: the pane can write the state of a rebase in progress, so don't
+  continue a rebase (`git rebase --continue`) in a codex pane's worktree that
+  you didn't start. Keeping the shared `.git` read-only costs two things.
+  `git push -u` pushes but prints `could not lock config
   file` and does not record the upstream, so name the remote and branch when
   pushing (`git push origin <branch>`). And deleting a branch that git has
   packed into `packed-refs` (`git branch -D`) fails. A pane whose directory

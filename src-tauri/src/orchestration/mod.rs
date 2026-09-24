@@ -8631,10 +8631,18 @@ pub struct CodexGitAccess {
 /// - `gitdir` — the back-pointer `git worktree repair` WRITES a `.git` file
 ///   through: rewritten, the human's next repair writes where the pane chose.
 ///
-/// Nothing else in a linked gitdir is read that way: `hooks`, `config`, `info`
-/// and `objects` resolve to the COMMON dir for a linked worktree (git's
-/// `common_list`), and `HEAD`, `index`, `ORIG_HEAD`, `FETCH_HEAD`, `logs/` and
-/// the rebase state are what a commit and a rebase must write.
+/// `hooks`, `config`, `info` and `objects` resolve to the COMMON dir for a
+/// linked worktree (git's `common_list`), and `HEAD`, `index`, `ORIG_HEAD`,
+/// `FETCH_HEAD` and `logs/` are what a commit must write.
+///
+/// **Not sealed, and a real route (residual, #3460 review N4):** the rebase
+/// state. `rebase-merge/git-rebase-todo` is per-worktree and must stay writable
+/// for the pane's own rebase, and an `exec` line planted there runs on the
+/// HUMAN'S next `git rebase --continue` in that worktree. It cannot be sealed
+/// here: the directory is created per rebase, so there is nothing to deny at
+/// spawn, and denying it would break the rebase the pane needs. The user doc
+/// tells the human not to continue a rebase in a pane's worktree they did not
+/// start.
 const CODEX_GITDIR_SEALED: [&str; 3] = ["commondir", "config.worktree", "gitdir"];
 
 /// [`codex_worktree_git_roots`] plus the sealed files, for the profile.

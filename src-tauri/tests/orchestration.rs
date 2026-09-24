@@ -43206,6 +43206,147 @@ fn failing_gh(dir: &Path, name: &str, lines: &[&str]) -> std::path::PathBuf {
     path
 }
 
+/// The codex profile file a spawned agent got, read back from the overridden
+/// `CODEX_HOME`.
+fn codex_profile_of(home: &Path, agent_id: &str) -> String {
+    let seg = loomux_lib::orchestration::PathSegment::parse(agent_id).unwrap();
+    let file = loomux_lib::orchestration::codex_profile_file_name(&seg).unwrap();
+    fs::read_to_string(home.join(file)).expect("the spawn wrote a codex profile")
+}
+
+/// #3405: a codex GROUP pane carries the human's `gh` credential as `GH_TOKEN`
+/// in its pane environment — and no byte of it in its profile file.
+///
+/// Why the variable is needed at all: codex's Windows `elevated` sandbox runs
+/// commands as a separate local account, which cannot read the token
+/// `gh auth login` put in the human's credential store, so `gh` inside the pane
+/// answered `HTTP 401: Requires authentication`. The environment is the one
+/// thing that crosses into that account (codex's default
+/// `shell_environment_policy` inherits it all).
+///
+/// Both codex spawn paths that go through `spawn_agent` are checked — the
+/// orchestrator's and a worker's — and a CLAUDE pane from the same registry is
+/// the control: it reaches the keyring as the human already, so it must not be
+/// handed a second copy of the secret.
+#[test]
+fn a_codex_group_pane_gets_the_humans_gh_token_in_its_env_and_never_in_its_profile() {
+    let _serial = capture_lock();
+    const TOKEN: &str = "gho_fakeTokenFor3405NotReal";
+    let (reg, dir) = test_registry();
+    let home = dir.path().join("codex-home");
+    reg.set_codex_home_override(home.clone());
+    let fake = stalling_gh(dir.path(), "token_gh", 0, TOKEN);
+    reg.set_gh_exec_override(Some((fake, Duration::from_secs(20))));
+    let repo = real_repo();
+    let path = repo.repo.to_string_lossy().replace('\\', "/");
+    let g = reg
+        .create_group(&path, Guardrails { agent_cli: "codex".into(), max_agents: 3, ..rails() })
+        .unwrap();
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "", false, None).unwrap();
+
+    for agent in [&orch.id, &w.id] {
+        let req = reg.spawn_request_for_test(agent).expect("a spawn request");
+        let gh: Vec<&(String, String)> = req.env.iter().filter(|(k, _)| k == "GH_TOKEN").collect();
+        assert_eq!(
+            gh,
+            vec![&("GH_TOKEN".to_string(), TOKEN.to_string())],
+            "{agent}: a codex group pane must carry the human's gh token as GH_TOKEN, exactly \
+             once — without it `gh` in codex's sandbox is unauthenticated (#3405). env: {:?}",
+            req.env.iter().map(|(k, _)| k).collect::<Vec<_>>()
+        );
+        let profile = codex_profile_of(&home, agent);
+        // Control: this really is the populated profile, so the absence below is
+        // about a real document rather than an empty read.
+        assert!(profile.contains("[mcp_servers.orrerix]"), "{profile}");
+        assert!(
+            !profile.contains(TOKEN) && !profile.contains("GH_TOKEN"),
+            "{agent}: the GitHub credential rides the pane environment ONLY — the profile lives \
+             in the human's CODEX_HOME and must name no GitHub token:\n{profile}"
+        );
+    }
+    assert!(
+        audit_entries(&reg, &g.id, "codex-gh-token-unavailable").is_empty(),
+        "a read that succeeded writes no failure row"
+    );
+
+    // Control: a claude pane in the same registry, with the same fake installed,
+    // is not handed the variable.
+    let other = reg.create_group("C:/tmp/claude-repo", rails()).unwrap();
+    let cw = reg.spawn_agent(&other.id, Role::Worker, "c", "", false, None).unwrap();
+    let creq = reg.spawn_request_for_test(&cw.id).expect("a spawn request");
+    assert!(
+        !creq.env.iter().any(|(k, v)| k == "GH_TOKEN" || v == TOKEN),
+        "only codex panes get GH_TOKEN; a claude pane already reaches gh's keyring as the human"
+    );
+
+    reg.set_gh_exec_override(None);
+    drop(drain_parked_readers_for_test());
+}
+
+/// #3405's refusal-shaped edge: a `gh` that cannot produce a token must NOT fail
+/// the spawn — a pane without `gh` can still `report`, and failing it would
+/// turn one broken tool into none — but it must say why, in the audit log, and
+/// export nothing (an empty or garbage `GH_TOKEN` would present a credential
+/// that is not one).
+#[test]
+fn a_codex_pane_whose_gh_token_read_fails_still_spawns_and_audits_why() {
+    let _serial = capture_lock();
+    let (reg, dir) = test_registry();
+    reg.set_codex_home_override(dir.path().join("codex-home"));
+    let fake = failing_gh(dir.path(), "noauth_gh", &["no oauth token found for github.com"]);
+    reg.set_gh_exec_override(Some((fake, Duration::from_secs(20))));
+    let repo = real_repo();
+    let path = repo.repo.to_string_lossy().replace('\\', "/");
+    let g = reg
+        .create_group(&path, Guardrails { agent_cli: "codex".into(), max_agents: 3, ..rails() })
+        .unwrap();
+    let w = reg
+        .spawn_agent(&g.id, Role::Worker, "w", "", false, None)
+        .expect("a failed token read degrades the pane, it never refuses the spawn");
+
+    let req = reg.spawn_request_for_test(&w.id).expect("a spawn request");
+    assert!(
+        !req.env.iter().any(|(k, _)| k == "GH_TOKEN"),
+        "no token read, no variable: {:?}",
+        req.env.iter().map(|(k, _)| k).collect::<Vec<_>>()
+    );
+    let rows = audit_entries(&reg, &g.id, "codex-gh-token-unavailable");
+    assert_eq!(rows.len(), 1, "exactly one row for the one codex spawn: {rows:?}");
+    assert_eq!(rows[0]["detail"]["agent"], json!(w.id));
+    let why = rows[0]["detail"]["why"].as_str().unwrap_or_default();
+    assert!(why.contains("no oauth token found"), "the row carries gh's own reason: {why}");
+
+    reg.set_gh_exec_override(None);
+    drop(drain_parked_readers_for_test());
+}
+
+/// #502's containment, applied to the credential read: a registry that is not
+/// the user's live one never runs the REAL `gh auth token` — with no fake
+/// installed, a codex spawn in a throwaway registry reads nothing, exports
+/// nothing and audits nothing. Without the guard this test would run the
+/// developer's (or CI's) own `gh` and see either their token in the env or a
+/// failure row, and both are red here.
+#[test]
+fn a_throwaway_registry_never_reads_the_humans_gh_token() {
+    let _serial = capture_lock();
+    let (reg, dir) = test_registry();
+    reg.set_codex_home_override(dir.path().join("codex-home"));
+    reg.set_gh_exec_override(None);
+    let repo = real_repo();
+    let path = repo.repo.to_string_lossy().replace('\\', "/");
+    let g = reg
+        .create_group(&path, Guardrails { agent_cli: "codex".into(), max_agents: 3, ..rails() })
+        .unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "", false, None).unwrap();
+    let req = reg.spawn_request_for_test(&w.id).expect("a spawn request");
+    // Positive control: this is a real codex group pane with its MCP token
+    // variable, so "no GH_TOKEN" is about the gh read, not about an empty env.
+    assert!(req.env.iter().any(|(k, _)| k == "ORRERIX_AGENT_TOKEN"), "{:?}", req.env);
+    assert!(!req.env.iter().any(|(k, _)| k == "GH_TOKEN"));
+    assert!(audit_entries(&reg, &g.id, "codex-gh-token-unavailable").is_empty());
+}
+
 /// **`gh` stderr is attacker-influenceable text on its way into an `[orrerix]`
 /// notice** (rev-lead finding 1 on #791).
 ///

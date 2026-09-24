@@ -243,7 +243,12 @@ orchestrator:
   checks anything out there: a worker's worktree branch is cut from the repo's
   default branch (fetched fresh from origin), never from whatever the primary
   checkout happens to sit on, so parallel work starts from a clean base without
-  a manual rebase; a reviewer's own worktree is the same kind of clean scratch
+  a manual rebase. A branch the orchestrator names that already exists is
+  picked up rather than re-cut — including one that exists only on origin, such
+  as an open PR's branch whose earlier worktree was cleaned up, which is
+  checked out tracking `origin/<branch>`; if that branch does not contain the
+  base it was asked for, the spawn fails and says so rather than handing over
+  a worktree on the wrong history. A reviewer's own worktree is the same kind of clean scratch
   space, kept separate so two reviewers (or a reviewer and the orchestrator's
   own git traffic) never contend on the same checkout. A reviewer's worktree isn't a checkout of the PR
   it's reviewing (that branch may already be checked out elsewhere); it fetches
@@ -3106,14 +3111,26 @@ two things worth knowing before your first run:
   `approval_policy = "never"`; an attended one runs `on-request` and will raise
   an approval overlay, which orrerix's attention scan picks up. This is the
   opposite of pi above: the two postures produce an identical `codex …` command
-  line precisely *because* the difference is in the file.
+  line precisely *because* the difference is in the file. orrerix's own tools
+  (`report`, `message_orchestrator`, …) never prompt in either posture: the
+  profile pre-approves that one server's tools, since an agent that has to ask
+  before it can report is one nobody hears from.
 - **The sandbox is `workspace-write`, with network on.** Edits inside the
   workspace, and network access explicitly enabled because a worker that cannot
   reach GitHub cannot open a PR. codex's `read-only` rung is not a middle
   ground — it blocks running commands and the network too — and orrerix never
-  emits the bypass flag. On Windows, codex's sandbox may run commands as a
-  separate user on a private desktop; if `gh` or `git` behave oddly in a codex
-  pane, that is the first thing to check.
+  emits the bypass flag. On Windows, codex's `elevated` sandbox runs commands
+  as a separate local account, which cannot read the GitHub token `gh auth
+  login` stored in your credential store — so orrerix reads it once per codex
+  pane (`gh auth token`) and hands it to that pane as `GH_TOKEN`, in the pane's
+  environment only, never in the profile file. That makes the token readable by
+  anything the pane runs, as it already is in a Claude or Copilot pane; and it
+  is read when the pane starts, so after `gh auth refresh` or a logout, respawn
+  a long-running codex pane to pick up the change. If that read fails the pane
+  still starts, without `gh` access, and the audit log records
+  `codex-gh-token-unavailable` with the reason. A `shell_environment_policy` of
+  your own that filters `*TOKEN*` variables (codex's `ignore_default_excludes =
+  false`, or `inherit = "core"`) strips it again.
 - **Session history works, the copilot way.** codex has no flag that pre-assigns
   a session id, so orrerix watches your `~/.codex/sessions` store for the
   rollout the pane creates and binds it afterwards. If two codex panes in the

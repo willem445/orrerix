@@ -58,7 +58,7 @@ There is no global mode — each pane declares its own kind:
 
 | Kind | What it is |
 | --- | --- |
-| **Agent** | A coding-agent CLI — Claude Code, Copilot CLI, Codex, OpenCode, Gemini CLI, Hermes, Ante, or your own custom command. Optionally fans out to *N* panes, each in its own git worktree. |
+| **Agent** | A coding-agent CLI — Claude Code, Copilot CLI, Codex, OpenCode, Gemini CLI, Hermes, Ante, or your own custom command. Optionally fans out to *N* panes, each in its own git worktree, cut fresh from the default branch — unless that worktree name is already a branch (locally, or only on origin), which is checked out instead; if it doesn't contain the default branch, the whole launch fails naming that branch, no pane opens, and any worktrees already cut for earlier panes of the fan-out are left on disk. Use another name, or delete the old branch, to get a fresh cut. |
 | **Orchestrator + workers** | An orchestrator pane plus idle workers, in its own project tab, with guardrails. See the [orchestration guide](orchestration). |
 | **Terminal** | A plain shell — PowerShell, Command Prompt, or Git Bash. |
 | **File explorer** | A native-style **file manager** rooted at a folder you choose. |

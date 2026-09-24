@@ -70,10 +70,9 @@ rustfmt --check --edition 2021 <changed .rs files> >/dev/null
 
 **Never run rustfmt on a `.rs` file over 5,000 lines (`wc -l`), nor on any
 file whose out-of-line modules (`mod x;`) include one** — rustfmt recurses
-into those. Why: rustfmt took 16–23 GB of RAM on
-`src-tauri/src/orchestration/mod.rs`, and two workers running it at once
-exhausted the machine's memory, crashed orrerix and froze the PC. Those files
-get their syntax check from CI, like everything else.
+into those. Why: rustfmt needs 16–23 GB of RAM on
+`src-tauri/src/orchestration/mod.rs`, enough to exhaust the machine's memory.
+Those files get their syntax check from CI, like everything else.
 
 The known cases are `src-tauri/src/orchestration/mod.rs` (~66k lines) and
 `src-tauri/tests/orchestration.rs` (~70k); the recursion rule also puts
@@ -84,7 +83,7 @@ list moves as files grow, so measure rather than trust it:
 wc -l <changed .rs files>
 ```
 
-This is the one statement of the cap; every other surface points here.
+This is the one definition of the cap; every other surface points here.
 
 Three things about that command line, each of which will bite you if
 dropped:

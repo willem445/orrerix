@@ -694,6 +694,23 @@ export function hueBlockOrder(
  * `worker-std/pi` become one `worker-std` key whose totals are their sum. It
  * is a REGROUPING, never a filter — the same tokens stay on screen.
  */
+/** The line a delta is drawn on, under the two regrouping toggles: `block`,
+ *  then `cli` unless CLIs are merged, then the model when split by model
+ *  (`unknown model` for a sample that carried none). ONE function because two
+ *  callers ask it — `seriesKeys` names the lines and `bucketSeries` routes each
+ *  delta onto one — and a delta whose route disagrees with every name is
+ *  silently dropped there (`if (!target) continue`), so the two spellings
+ *  must be the same code, not two copies of it. */
+export function lineKeyOf(
+  d: Pick<Delta, "block" | "cli" | "model">,
+  opts: { collapseCli?: boolean; splitModel?: boolean }
+): string {
+  const parts = [d.block];
+  if (opts.collapseCli !== true) parts.push(d.cli);
+  if (opts.splitModel === true) parts.push(d.model ?? "unknown model");
+  return parts.join("/");
+}
+
 export function seriesKeys(
   rows: readonly SeriesRowLike[],
   opts: { collapseCli?: boolean; splitModel?: boolean; blockOrder?: readonly string[] } = {}
@@ -706,9 +723,7 @@ export function seriesKeys(
   const acc = new Map<string, SeriesKeyInfo>();
   for (const d of deltas) {
     const model = splitModel ? d.model : null;
-    const key = [d.block, collapse ? null : d.cli, splitModel ? model ?? "unknown model" : null]
-      .filter((part): part is string => part !== null)
-      .join("/");
+    const key = lineKeyOf(d, { collapseCli: collapse, splitModel });
     const existing = acc.get(key);
     if (existing) {
       existing.samples++;
@@ -852,10 +867,7 @@ export function bucketSeries(
       dropped++;
       continue;
     }
-    const targetKey = [d.block, collapse ? null : d.cli, opts.splitModel ? d.model ?? "unknown model" : null]
-      .filter((part): part is string => part !== null)
-      .join("/");
-    const target = series.get(targetKey);
+    const target = series.get(lineKeyOf(d, { collapseCli: collapse, splitModel: opts.splitModel }));
     if (!target) continue;
     const p = target.points[idx];
     p.in += d.in;
@@ -945,20 +957,31 @@ export interface ChartMark {
  * The cost of measuring it this way is stated rather than hidden: a block that
  * did not run on one side of the mark contributes no row, because "not
  * observed" is not "unchanged".
+ *
+ * **Two kinds of vertical come out, told apart by `kind`.** The `"tuning"`
+ * marks above are one per fingerprint `mark` row. The `"model"` marks are
+ * DERIVED, one per usage key per change of its samples' `model` between two
+ * consecutive samples of that key, placed at the LATER sample's timestamp —
+ * the first tick that observed the new model, so a switch is located to
+ * within one sampling interval and never earlier than it happened. That is
+ * only the switch time because each sample's `model` is the pane's CURRENT
+ * model (the latest turn's), which every usage source now records — on claude
+ * that is `SessionUsage::current_model`, not the best-priced pick (#3415). A
+ * `null` on either side counts as a change (`unknown model`), so a key whose
+ * samples start carrying a model mid-window gets one mark at that boundary.
+ * Model marks are per KEY, not per block: two panes of one block switching
+ * at once are two marks.
  */
 export function marks(rows: readonly SeriesRowLike[]): ChartMark[] {
-  const byKey = new Map<string, SeriesSampleLike[]>();
-  for (const sample of rows.filter(isSample)) {
-    const bucket = byKey.get(sample.key);
-    if (bucket) bucket.push(sample);
-    else byKey.set(sample.key, [sample]);
-  }
-  const samples = [...byKey.values()].flatMap((keySamples) =>
-    keySamples
-      .map((s, i) => ({ s, i }))
-      .sort((a, b) => a.s.ts_ms - b.s.ts_ms || a.i - b.i)
-      .map(({ s }) => s)
-  ).sort((a, b) => a.ts_ms - b.ts_ms);
+  // One ts-sorted list for the roster logic, exactly as before model marks
+  // existed: `sort` is stable, so samples from one tick — which share `now`,
+  // so ties are the normal case — keep file order, and the roster's
+  // "last before / first after" picks do not move under them (#3457 N1).
+  // The per-key grouping the model marks need is built separately below.
+  const samples = rows
+    .filter(isSample)
+    .slice()
+    .sort((a, b) => a.ts_ms - b.ts_ms);
   const markRows = rows
     .filter(isMark)
     .slice()
@@ -1000,12 +1023,16 @@ export function marks(rows: readonly SeriesRowLike[]): ChartMark[] {
       fpPartial: m.fp_partial === true,
     };
   });
+  // Grouped off the already-sorted list, so each key's run is in time order
+  // with ties in file order — no second sort to disagree with the first.
+  const byKey = new Map<string, SeriesSampleLike[]>();
+  for (const sample of samples) {
+    const bucket = byKey.get(sample.key);
+    if (bucket) bucket.push(sample);
+    else byKey.set(sample.key, [sample]);
+  }
   const modelMarks: ChartMark[] = [];
-  for (const keySamples of byKey.values()) {
-    const ordered = keySamples
-      .map((s, i) => ({ s, i }))
-      .sort((a, b) => a.s.ts_ms - b.s.ts_ms || a.i - b.i)
-      .map(({ s }) => s);
+  for (const ordered of byKey.values()) {
     for (let i = 1; i < ordered.length; i++) {
       const before = ordered[i - 1];
       const after = ordered[i];

@@ -27,6 +27,7 @@ import {
   hueBlockOrder,
   marks,
   scorecardColumns,
+  lineKeyOf,
   seriesKeyOf,
   seriesKeys,
   type AgentRowLike,
@@ -722,6 +723,82 @@ test("a model change on the same usage key creates a labelled mark at its sample
   assert.equal(mark.tsMs, T0 + 2 * BUCKET);
   assert.equal(mark.label, "worker-std/pi: fable → opus");
   assert.deepEqual(mark.modelChanges, [{ key: "session", block: "worker-std", cli: "pi", from: "fable", to: "opus" }]);
+});
+
+test("merged CLIs and split models compose: one line per block+model, deltas routed onto it", () => {
+  // rev-std #3 on #3457: the two toggles together were probed, never pinned.
+  // Two CLIs of ONE block on the SAME model must land on one line, and a
+  // second model must stay its own — in `seriesKeys` (the names) AND in
+  // `bucketSeries` (the routing), which share `lineKeyOf` so a delta can
+  // never be named on one side and dropped on the other.
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "a", cli: "opencode", model: "m1", in: 0 }),
+    sample({ ts_ms: T0 + 1, key: "a", cli: "opencode", model: "m1", in: 10 }),
+    sample({ ts_ms: T0, key: "b", cli: "pi", model: "m1", in: 0 }),
+    sample({ ts_ms: T0 + 1, key: "b", cli: "pi", model: "m1", in: 20 }),
+    sample({ ts_ms: T0 + 2, key: "b", cli: "pi", model: "m2", in: 60 }),
+  ];
+  const opts = { collapseCli: true, splitModel: true };
+  assert.deepEqual(
+    seriesKeys(rows, opts).map((k) => [k.key, k.cli, k.model, k.total]),
+    [
+      ["worker-std/m1", null, "m1", 30],
+      ["worker-std/m2", null, "m2", 40],
+    ]
+  );
+  const buckets = bucketSeries(rows, { startMs: T0, endMs: T0 + 2, bucketMs: 1, ...opts });
+  assert.deepEqual(
+    buckets.keys.map((k) => [k.key, k.points.reduce((sum, p) => sum + p.total, 0)]),
+    [
+      ["worker-std/m1", 30],
+      ["worker-std/m2", 40],
+    ],
+    "every delta reached a line: nothing was named but dropped"
+  );
+  assert.equal(lineKeyOf({ block: "b", cli: "c", model: null }, { splitModel: true }), "b/c/unknown model");
+});
+
+test("model marks do not reorder same-tick samples under the tuning roster (#3457 N1)", () => {
+  // Samples from one tick share `now`, so a tie is the normal case. Two live
+  // keys of ONE block run two different CLIs, and NEITHER changes across the
+  // mark — the roster must be empty. A per-key regroup before the ts sort
+  // changed which same-tick sample the roster's "last before" / "first after"
+  // picked, and invented `worker-std: pi → opencode` here.
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "a", cli: "opencode", in: 0 }),
+    sample({ ts_ms: T0, key: "b", cli: "pi", in: 0 }),
+    { kind: "mark", ts_ms: T0 + 5, changed: ["workflow"], fp: {}, prev: {}, fp_partial: false },
+    sample({ ts_ms: T0 + 10, key: "b", cli: "pi", in: 10 }),
+    sample({ ts_ms: T0 + 10, key: "a", cli: "opencode", in: 10 }),
+  ];
+  const all = marks(rows);
+  assert.equal(all.length, 1, "one tuning mark, and no model mark — no key changed model");
+  assert.equal(all[0].kind, "tuning");
+  assert.deepEqual(all[0].roster, []);
+  assert.equal(all[0].label, "workflow changed");
+});
+
+test("a model mark lands on the FIRST sample of the new model, per key, beside a same-tick tuning mark", () => {
+  // Placement is the property #3415 asks for ("a mark at the switch time"):
+  // the later sample of the changed pair, not the last sample on the old
+  // model. A second key that never switched adds none.
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "orch", block: "orchestrator", cli: "claude", model: "claude-fable-5-1", in: 0 }),
+    sample({ ts_ms: T0, key: "w", model: "glm", in: 0 }),
+    sample({ ts_ms: T0 + BUCKET, key: "orch", block: "orchestrator", cli: "claude", model: "claude-fable-5-1", in: 900 }),
+    sample({ ts_ms: T0 + 2 * BUCKET, key: "w", model: "glm", in: 5 }),
+    { kind: "mark", ts_ms: T0 + 2 * BUCKET, changed: ["skills"], fp: {}, prev: {}, fp_partial: false },
+    sample({ ts_ms: T0 + 2 * BUCKET, key: "orch", block: "orchestrator", cli: "claude", model: "claude-opus-5-5", in: 1000 }),
+    sample({ ts_ms: T0 + 3 * BUCKET, key: "orch", block: "orchestrator", cli: "claude", model: "claude-opus-5-5", in: 1300 }),
+  ];
+  const all = marks(rows);
+  assert.deepEqual(
+    all.map((m) => [m.kind, m.tsMs, m.label]),
+    [
+      ["model", T0 + 2 * BUCKET, "orchestrator/claude: claude-fable-5-1 → claude-opus-5-5"],
+      ["tuning", T0 + 2 * BUCKET, "skills changed"],
+    ]
+  );
 });
 
 test("a mark no block's CLI moved across falls back to the component list, and carries fp_partial", () => {

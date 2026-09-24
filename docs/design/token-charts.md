@@ -462,14 +462,61 @@ sample has no model, its key says `unknown model`. The regrouping changes only
 the line keys and bucket destinations. It consumes the same deltas, so the
 sum of line totals is invariant, and the feature bars keep their existing
 `block/cli` segments and totals. The existing **merge CLIs** control composes
-with model splitting: enabling both groups by block and model.
+with model splitting: enabling both groups by block and model. One function,
+`lineKeyOf`, spells the key for both the legend (`seriesKeys`) and the routing
+(`bucketSeries`), because a delta routed to a key no legend entry carries is
+dropped without a sound.
 
 The projection also compares consecutive samples under each usage `key`. When
 their `model` values differ, it emits a labelled chart mark at the later
 sample's timestamp, naming the key, block, CLI and old/new model. This does not
 write a durable mark or change the series schema; it is derived on read just
 like the measured CLI roster marks. A missing model is labelled `unknown
-model`, since the sample still records that the value changed.
+model`, since the sample still records that the value changed — so a key whose
+samples start carrying a model mid-window gets one mark at that boundary. The
+per-key grouping is taken off the same stable time sort the roster logic reads,
+never a second sort, so adding model marks cannot move which same-tick sample
+the roster's "last before / first after" picks land on.
+
+**Why a sample's `model` is the pane's CURRENT model.** "At the later sample's
+timestamp" is the switch time only if `model` answers *which model is this pane
+on now*, and one usage source used to answer a different question. The sampler
+writes `UsageSnapshot::current_model` — `SessionUsage::current_model` from the
+source — per CLI:
+
+| CLI | Where `current_model` comes from | Current? |
+| --- | --- | --- |
+| claude | the model of the latest counted assistant message (`TranscriptFold.last_model`) | yes |
+| pi | the latest assistant entry's `provider/model` | yes |
+| codex | the latest `turn_context` line's model | yes |
+| opencode | the root `session.model` column | yes, per prompt — see below |
+
+On claude, `SessionUsage::model` is a **pricing pick** — the priced model of the
+single message with the most output tokens — and it is kept, unchanged, for the
+usage panel's "priced against" label. It is not current: a session switched
+after a long first answer keeps naming the old model until a message on the new
+one out-writes that record, possibly never, so sampling it put the switch mark
+late or nowhere and credited the new model's spend to the old line (#3457 B1).
+Every other source already filled `model` with the latest turn's, so there the
+two fields are equal. A persisted `usage.json` row written before
+`current_model` existed samples its `model` instead, which keeps it from
+reading as a switch to `unknown model` and back. The one visible seam: a claude
+key whose earlier samples carried the pricing pick and whose later ones carry
+the current model gets a single mark across the upgrade where the two differed.
+
+opencode's column was checked against the source at the `v1.18.11` pin rather
+than assumed: `SessionPrompt` calls `Session.setAgentModel` whenever a prompt's
+model differs from the stored one, so the column follows the latest prompt and
+is not the model the session was created with. A known gap remains on that
+column's SHAPE: upstream declares it `text({ mode: "json" })` — an
+`{id, providerID, variant}` object — while `opencodedb::session_usage` reads it
+as a plain string. A switch still reads as a change, since the text changes,
+but its label is that JSON text rather than a model id. That is a display
+defect of the opencode reader, outside this chart.
+
+Two models of one block and CLI are drawn in the same hue and the same line
+style; only the legend separates them. Whether that reads well enough is the
+human's visual check, not something a DOM-free test can settle.
 
 Effort is not present in the usage sample, and it cannot currently be read as a
 per-CLI value by this projection. The chart therefore does not mark effort

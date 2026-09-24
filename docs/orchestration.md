@@ -1324,7 +1324,13 @@ so one block running two different CLIs is two distinguishable lines rather
 than one averaged one. The chips above the plot pick the counter: all tokens,
 input, output, cache read, cache write, or cost in dollars. *merge CLIs*
 collapses each block's split back into a single line, and *changes nothing
-else* — it is a regrouping, not a filter, so the totals stay put.
+else* — it is a regrouping, not a filter, so the totals stay put. *split by
+model* is the same kind of regrouping the other way: each line splits again by
+the model its agents were on (`worker-std/pi/glm-5`), so an orchestrator
+switched from one model to another mid-session shows up as two lines with
+each model's spend on its own. The two chips combine — merge CLIs and split by
+model groups by block and model. Lines of one block and CLI on different
+models share a colour and line style; the legend names each one.
 
 There are eight block colours. They go to the blocks that have spent, in the
 order each one started spending, so a block keeps its colour as the chart
@@ -1347,7 +1353,10 @@ loomux version itself — a dashed vertical is stamped on the plot and labelled
 with what changed. Where the change was a **roster switch**, the label names
 it directly (`worker-std: opencode → pi`), read from the CLI each block was
 actually sampled with either side of the mark rather than from the
-configuration file, so it reflects what the fleet really ran.
+configuration file, so it reflects what the fleet really ran. A **model
+switch** gets a mark of its own, per agent session, at the first sample taken
+on the new model (`orchestrator/claude: claude-fable-5-1 → claude-opus-5-5`).
+Effort changes are not marked: the usage record does not carry effort.
 
 Click a mark for the **before/after** table: mean spend per five-minute bucket
 for the hour before against the hour after, per series and in total. That is

@@ -351,9 +351,8 @@ When a worker reports a PR:
         don't have; it is a refactor larger than the change under review. "Scope", "low value"
         and "the reviewer said non-blocking" are category words, not reasons; and "it would only
         take ten minutes" is a reason to *fix* it.
-     2. **A line in the PR's disposition comment** carrying the finding — not a new issue. Only
-        tracked work (a feature, a real defect) gets one, several in an area sharing one rolling
-        follow-up issue; filing it is not doing it (INVARIANT 8).
+     2. **A follow-up issue** carrying the finding verbatim and linking the PR. This *parks* the
+        finding in the label funnel (INVARIANT 8) — filing it is not doing it.
      3. **One line to the human** naming the deferral — the finding's only future.
    - **Bounded** (INVARIANT 9). Every fix re-stales the review, so a reviewer that surfaces one
      new nit per round can run this forever. On a **third** round of findings on the same PR:

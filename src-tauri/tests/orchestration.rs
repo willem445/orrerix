@@ -71323,7 +71323,8 @@ fn compact_now_says_queued_on_a_paused_group_instead_of_promising_a_paste() {
     reg.pause_group(&gid).unwrap();
     let reply = reg.human_request_compact(&gid, &oid).unwrap();
     assert!(reply.starts_with("queued") && reply.contains("paused"), "{reply}");
-    assert!(!reply.contains("next idle moment"), "a paused group is not typed into: {reply}");
+    assert!(!reply.starts_with("requested"), "a paused group is not typed into: {reply}");
+    assert!(reply.contains("resume the group"), "the reply names what releases it: {reply}");
     // The flag is still set: the request is honoured, just later. Nothing fires
     // while paused…
     let empty = HashMap::new();
@@ -71337,19 +71338,31 @@ fn compact_now_says_queued_on_a_paused_group_instead_of_promising_a_paste() {
 }
 
 #[test]
-fn the_compact_now_reply_names_what_holds_the_request_in_decision_order() {
+fn the_compact_now_reply_names_every_condition_holding_the_request() {
     use loomux_lib::orchestration::human_compact_reply;
     let r = |p, c, b| human_compact_reply(p, c, b);
     assert!(r(false, false, false).starts_with("requested") && r(false, false, false).contains("next idle moment"));
-    assert!(r(true, false, false).contains("paused"));
-    assert!(r(false, true, false).contains("already in flight"));
-    assert!(r(false, false, true).contains("compacts for the hour"));
-    // A paused group is skipped before any fire check, so pause is named first
-    // whatever else holds.
-    assert!(r(true, true, true).contains("paused"));
-    assert!(r(false, true, true).contains("already in flight"));
-    for (p, c, b) in [(true, false, false), (false, true, false), (false, false, true)] {
-        assert!(r(p, c, b).starts_with("queued"), "{p} {c} {b}");
-        assert!(!r(p, c, b).contains('\n'), "one paragraph");
+    // The three conditions are a conjunction in `compact_nudge_tick` (a paused
+    // group is skipped; a fire needs `!compact_pending && requested_fires`, and
+    // `requested_fires` carries the budget), so the request waits for EVERY one
+    // that holds. Each combination must name each condition it has, and never
+    // one it has not: all eight rows, not a sample.
+    for p in [false, true] {
+        for c in [false, true] {
+            for b in [false, true] {
+                let reply = r(p, c, b);
+                assert_eq!(reply.contains("paused"), p, "{p} {c} {b}: {reply}");
+                assert_eq!(reply.contains("already in flight"), c, "{p} {c} {b}: {reply}");
+                assert_eq!(reply.contains("compacts for the hour"), b, "{p} {c} {b}: {reply}");
+                assert_eq!(reply.starts_with("queued"), p || c || b, "{p} {c} {b}: {reply}");
+                assert!(!reply.contains('\n'), "one paragraph: {reply}");
+            }
+        }
     }
+    // W1 (review round 2): a pending compact with the budget spent does NOT fire
+    // once the compact resolves. The reply must say both must clear, and must
+    // never promise the single release that is false here.
+    let w1 = r(false, true, true);
+    assert!(w1.contains("only once all of these"), "{w1}");
+    assert!(!w1.contains("fires once it resolves"), "the round-1 promise is false with the budget spent: {w1}");
 }

@@ -10538,25 +10538,44 @@ pub fn compact_escalation_notice(percent: u32) -> String {
     )
 }
 
-/// The human "Compact now" reply (#3407, review round 1 N3): what will
-/// actually become of the request, in the order `compact_nudge_tick` would
-/// decide it. A paused group is skipped before any fire check, so a paused
-/// group says so first. An arm already in flight is next, and then the
-/// shared hourly budget. Only when none holds is "the next idle moment" true.
-/// The flag stays set in every case, so each queued reply names what releases
-/// it. Pure, so every arm is pinned without a registry.
+/// The human "Compact now" reply (#3407, review rounds 1 and 2): what will
+/// actually become of the request.
+///
+/// Three conditions can hold it, and they are a CONJUNCTION, not a ladder.
+/// `compact_nudge_tick` skips a paused group outright, and it fires only
+/// when `!compact_pending && requested_fires`, where `requested_fires`
+/// carries the hourly-budget check. So the request waits for EVERY condition
+/// that holds to clear. Naming only the first one would promise a paste the
+/// next one still blocks: round 2's W1 was exactly that, a pending compact
+/// named alone while the budget it had just spent kept the request queued
+/// for up to an hour. So the reply names every condition that holds and
+/// every release it waits for. Only when none holds is "the next idle
+/// moment" true. The flag stays set in every case. Pure, so every
+/// combination is pinned without a registry.
 pub fn human_compact_reply(paused: bool, compact_pending: bool, budget_spent: bool) -> String {
+    let mut holds: Vec<String> = Vec::new();
+    let mut releases: Vec<&str> = Vec::new();
     if paused {
-        "queued — this group is paused, so nothing is typed into its panes; /compact fires at the pane's first idle moment after you resume it".to_string()
-    } else if compact_pending {
-        "queued — a compact is already in flight for this pane; this one fires once it resolves".to_string()
-    } else if budget_spent {
-        format!(
-            "queued — this group has used its {MAX_COMPACT_NUDGES_PER_HOUR} compacts for the hour; /compact fires when the oldest one ages out"
-        )
-    } else {
-        "requested — /compact is typed at the pane's next idle moment".to_string()
+        holds.push("this group is paused, so nothing is typed into its panes".to_string());
+        releases.push("you resume the group");
     }
+    if compact_pending {
+        holds.push("a compact is already in flight for this pane".to_string());
+        releases.push("that compact resolves");
+    }
+    if budget_spent {
+        holds.push(format!("this group has used its {MAX_COMPACT_NUDGES_PER_HOUR} compacts for the hour"));
+        releases.push("the oldest of those compacts ages out of the hour");
+    }
+    if holds.is_empty() {
+        return "requested — /compact is typed at the pane's next idle moment".to_string();
+    }
+    let wait = if releases.len() == 1 { "once" } else { "only once all of these have happened:" };
+    format!(
+        "queued — {}; /compact fires at the pane's next idle moment {wait} {}",
+        holds.join(", and "),
+        releases.join(", and ")
+    )
 }
 
 /// Compact-nudge (#328): whether `request_compact`'s pre-compact offload-

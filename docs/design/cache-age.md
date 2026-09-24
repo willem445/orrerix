@@ -159,12 +159,14 @@ as a follow-up rather than built speculatively.
   is audited as `compact-requested` with `by: human`. The menu item is disabled,
   with the reason, where it could not act.
 
-  **The reply says what will actually happen** (`human_compact_reply`), in the
-  order the fire check decides it: "queued" for a paused group (the fire check
-  skips it until it resumes), then for a compact already in flight, then for a
-  group whose hourly compact budget is spent. It says "requested — … next idle
-  moment" only when none of those holds. The flag stays set in every case, so each
-  queued reply names what releases it.
+  **The reply says what will actually happen** (`human_compact_reply`). Three
+  conditions can hold the request: a paused group (the fire check skips it), a
+  compact already in flight on the pane, and a group whose hourly compact budget
+  is spent. They are a conjunction in the fire check, not a ladder, so the reply
+  says "queued", names every condition that holds, and says the compact fires
+  only once all of them have cleared. Naming just the first would promise a paste
+  the next one still blocks. It says "requested — … next idle moment" only when
+  none holds. The flag stays set in every case.
 - **The Agents tab** shows the same label per row, from the same reading
   (`PaneFacts.cache`). It is a second axis beside the state ladder, never an input
   to it: how long ago a pane last spoke says nothing about whether it is working now.

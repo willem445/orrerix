@@ -15763,3 +15763,65 @@ fn a_satisfied_tick_whose_write_failed_still_delivers_its_notice_marked_not_reco
         "no queue rd-clean row for a submission that did not happen"
     );
 }
+
+/// **A released lane gives up its scratch worktree, and the round that resumes
+/// it gets it back at the same path** (#3443).
+///
+/// A lane's pane is released with its session KEPT, so the next round resumes
+/// that conversation in a fresh pane, in the workspace the roster recorded.
+/// Reclaiming the worktree at release is only safe because the resume cuts it
+/// again first; without that, the resume refuses `resume-workspace-missing` and
+/// the drive opens a cold lane (`rd-lane-resume-failed`). Both halves are here,
+/// on the release the driver really performs.
+#[test]
+fn a_released_lane_gives_up_its_worktree_and_its_resume_cuts_it_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = relaunch_registry(dir.path());
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let (group, lane) = briefed(&reg, &repo, &gh);
+    reg.set_pr_body_override(Some("b".to_string()));
+    reg.set_pr_head_override(Some(HEAD_A.to_string()));
+    let entry = reg.agent(&lane).expect("the lane is on the roster");
+    let cwd = entry.cwd.clone();
+    let branch = entry.branch.clone().expect("a fresh lane cut a worktree, so it records a branch");
+    let has_branch = || {
+        std::process::Command::new("git")
+            .current_dir(&repo.repo)
+            .args(["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])
+            .status()
+            .expect("git")
+            .success()
+    };
+    assert!(std::path::Path::new(&cwd).is_dir(), "control: the lane runs in its own worktree");
+    assert!(has_branch(), "control: …cut on {branch}");
+
+    record_pass_for(&reg, &group, &lane);
+    report_as(&reg, &group, &lane, Role::Reviewer, "approved");
+    let released = reg.rd_drive_group_with(&group, &gh, 30_000);
+    assert_eq!(released.released.len(), 1, "the premise: the pane really was released");
+
+    assert!(!std::path::Path::new(&cwd).exists(), "the released lane's worktree must be gone");
+    assert!(!has_branch(), "…and its branch {branch}");
+    let removed = audit_details(&reg, &group, "reviewer-worktree-removed");
+    assert_eq!(removed.len(), 1, "{removed:?}");
+    assert_eq!(removed[0]["initiator"], json!("driver-release"), "{removed:?}");
+
+    gh.set_facts("OPEN", HEAD_B);
+    let reopened = tick_until_lane(&reg, &gh, &group, 40_000)
+        .expect("the next round must brief the lane again");
+    let last = audit_details(&reg, &group, "rd-lane-spawned").last().cloned().unwrap();
+    assert_eq!(last["agent"], json!(reopened));
+    assert_eq!(last["resumed"], json!(true), "the lane must be RESUMED, not respawned cold: {last}");
+    assert!(
+        audit_details(&reg, &group, "rd-lane-resume-failed").is_empty(),
+        "nothing may refuse that resume"
+    );
+    assert_eq!(
+        reg.agent(&reopened).unwrap().cwd,
+        cwd,
+        "the resume runs at the path its session ran in"
+    );
+    assert!(std::path::Path::new(&cwd).is_dir(), "…which was cut again");
+    assert_eq!(audit_details(&reg, &group, "reviewer-worktree-recut").len(), 1);
+}

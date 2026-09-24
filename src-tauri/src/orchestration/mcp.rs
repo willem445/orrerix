@@ -4016,6 +4016,17 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // of this — no store scan on its behalf, `cwd` stays exactly what
             // the roster inherited (or `None`) — so "planners are unaffected"
             // stays literally true, not just true in the common case.
+            // #3443: a dead reviewer's scratch worktree was reclaimed when its
+            // pane died. Before either route below reads the workspace — the
+            // caller's explicit `cwd` or the roster's — cut it again at that
+            // path, so the resume lands in the directory its session ran in.
+            // A no-op for anything but a reclaimed reviewer worktree.
+            if resumed {
+                let want = cwd.clone().or_else(|| owner.as_ref().map(|o| o.cwd.clone()));
+                if let Some(w) = want {
+                    reg.restore_reviewer_scratch_worktree(&caller.group, &w);
+                }
+            }
             let cwd = if resumed && cwd.is_none() {
                 let group = reg.group(&caller.group);
                 // A block-less resume that reaches here always carried an

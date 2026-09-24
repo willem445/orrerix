@@ -69699,3 +69699,344 @@ fn session_roles_carry_a_delegate_forks_parent_session() {
     let wire = serde_json::to_value(row).unwrap();
     assert_eq!(wire["forked_from"], json!(parent));
 }
+
+// ───────── #3443: a reviewer's scratch worktree goes with its pane ─────────
+
+/// `git <args>` run in `dir`: (succeeded, stdout).
+fn git_in(dir: &Path, args: &[&str]) -> (bool, String) {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("git must be installed for this test");
+    (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// How many worktrees `repo` has REGISTERED, its main checkout included —
+/// git's own answer, so a directory deleted behind git's back still counts.
+fn registered_worktrees(repo: &Path) -> usize {
+    let (ok, out) = git_in(repo, &["worktree", "list", "--porcelain"]);
+    assert!(ok, "git worktree list failed in {}", repo.display());
+    out.lines().filter(|l| l.starts_with("worktree ")).count()
+}
+
+fn local_branch_exists(repo: &Path, branch: &str) -> bool {
+    git_in(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).0
+}
+
+fn scratch_rows(reg: &OrchRegistry, group: &GroupId, action: &str) -> Vec<serde_json::Value> {
+    reg.audit_log(group).into_iter().filter(|e| e.action == action).map(|e| e.detail).collect()
+}
+
+/// End `agent_id` the way every kill of a pty pane ends: the pty exits and the
+/// waiter reports it. `kill_agent`, a human's pane close and the idle reaper
+/// all arrive here; a headless test has no pty to kill, so it drives the exit.
+fn end_pane(reg: &OrchRegistry, agent_id: &str, pty: u32) {
+    reg.set_pty_for_test(agent_id, pty);
+    reg.on_pty_exit(pty, Some(0), "", 0, true);
+    assert_eq!(
+        reg.agent(agent_id).map(|a| a.status),
+        Some(AgentStatus::Dead),
+        "the fixture's premise: {agent_id} is dead"
+    );
+}
+
+/// **A killed reviewer leaves no registered worktree and no branch** (#3443).
+///
+/// The controls before the kill pin that the spawn really cut both, so the
+/// assertions after it are about the reclaim and not about a spawn that never
+/// cut anything. The reviewer detaches first, as `gh pr checkout --detach`
+/// leaves it in real use — so the branch is checked out nowhere when it goes.
+#[test]
+fn a_killed_reviewer_leaves_no_worktree_and_no_branch_behind() {
+    let repo = real_repo();
+    let (reg, _d) = test_registry();
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    let rev = reg.spawn_agent(&g.id, Role::Reviewer, "rev", "review #1", true, None).unwrap();
+    let branch = rev.branch.clone().expect("a reviewer that cut a worktree records its branch");
+    assert!(Path::new(&rev.cwd).is_dir(), "control: the spawn cut a worktree at {}", rev.cwd);
+    assert_eq!(registered_worktrees(repo.path()), 2, "control: the main checkout and the reviewer's");
+    assert!(local_branch_exists(repo.path(), &branch), "control: the spawn cut {branch}");
+    assert!(git_in(Path::new(&rev.cwd), &["checkout", "-q", "--detach"]).0);
+
+    end_pane(&reg, &rev.id, 34431);
+
+    assert!(!Path::new(&rev.cwd).exists(), "the reviewer's worktree directory must be gone");
+    assert_eq!(registered_worktrees(repo.path()), 1, "…and no longer registered with git");
+    assert!(!local_branch_exists(repo.path(), &branch), "…and its branch {branch} deleted");
+    let rows = scratch_rows(&reg, &g.id, "reviewer-worktree-removed");
+    assert_eq!(rows.len(), 1, "one audit row for the one reclaim: {rows:?}");
+    assert_eq!(rows[0]["agent"], json!(rev.id));
+    assert_eq!(rows[0]["branch"], json!(branch));
+    assert_eq!(rows[0]["branch_deleted"], json!(true), "{rows:?}");
+}
+
+/// **A worker's worktree is never removed by the reclaim** (#3443) — not when
+/// the worker dies, and not when a REVIEWER that was running in it dies. The
+/// second is the one way the roster can put a reviewer at a worker's path: a
+/// spawn or resume given that path as its `cwd`. That reviewer never cut the
+/// worktree, so no reviewer record carries a branch for it.
+///
+/// The last reviewer is the positive control: same group, same repo, its own
+/// worktree, and it IS reclaimed — so the silence above is the predicate
+/// deciding, not a reclaim that never runs.
+#[test]
+fn a_workers_worktree_survives_its_death_and_a_reviewer_dying_in_it() {
+    let repo = real_repo();
+    let (reg, _d) = test_registry();
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    let w = reg
+        .spawn_agent(&g.id, Role::Worker, "w", "t", true, Some("feat/keep".into()))
+        .unwrap();
+    let rev = reg
+        .spawn_agent_ex(&g.id, Role::Reviewer, None, "rev", "t", false, None, None, None, Some(w.cwd.clone()), None)
+        .unwrap();
+    assert_eq!(rev.cwd, w.cwd, "the fixture's premise: the reviewer runs in the worker's worktree");
+
+    end_pane(&reg, &rev.id, 34432);
+    end_pane(&reg, &w.id, 34433);
+
+    assert!(Path::new(&w.cwd).is_dir(), "a worker's worktree must survive: {}", w.cwd);
+    assert_eq!(registered_worktrees(repo.path()), 2, "…and stay registered");
+    assert!(local_branch_exists(repo.path(), "feat/keep"), "…and keep its branch");
+    assert!(scratch_rows(&reg, &g.id, "reviewer-worktree-removed").is_empty());
+    assert!(scratch_rows(&reg, &g.id, "reviewer-worktree-remove-failed").is_empty());
+
+    let r2 = reg.spawn_agent(&g.id, Role::Reviewer, "rev2", "t", true, None).unwrap();
+    assert_eq!(registered_worktrees(repo.path()), 3, "control: the second reviewer cut its own");
+    end_pane(&reg, &r2.id, 34434);
+    assert_eq!(
+        registered_worktrees(repo.path()),
+        2,
+        "the control: a reviewer's OWN worktree in this same group is reclaimed"
+    );
+    assert!(Path::new(&w.cwd).is_dir(), "…and the worker's is still there after it");
+}
+
+/// **A removal git refuses is audited, and the pane still dies** (#3443).
+///
+/// A locked worktree is the portable stand-in for a Windows file lock: `git
+/// worktree remove --force` refuses both, and what matters is the same — the
+/// kill has already happened, the refusal is on the audit log with git's own
+/// words, and the branch is left alone because its worktree is still there.
+#[test]
+fn a_reclaim_git_refuses_is_audited_and_does_not_block_the_kill() {
+    let repo = real_repo();
+    let (reg, _d) = test_registry();
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    let rev = reg.spawn_agent(&g.id, Role::Reviewer, "rev", "t", true, None).unwrap();
+    let branch = rev.branch.clone().unwrap();
+    assert!(git_in(repo.path(), &["worktree", "lock", "--reason", "held", &rev.cwd]).0);
+
+    end_pane(&reg, &rev.id, 34435);
+
+    let failed = scratch_rows(&reg, &g.id, "reviewer-worktree-remove-failed");
+    assert_eq!(failed.len(), 1, "the refusal must be audited: {failed:?}");
+    assert_eq!(failed[0]["agent"], json!(rev.id));
+    assert!(
+        !failed[0]["error"].as_str().unwrap_or_default().is_empty(),
+        "the row carries git's own error: {failed:?}"
+    );
+    assert!(scratch_rows(&reg, &g.id, "reviewer-worktree-removed").is_empty());
+    assert!(Path::new(&rev.cwd).is_dir(), "git refused, so the worktree is still there");
+    assert!(local_branch_exists(repo.path(), &branch), "…and so is its branch");
+}
+
+/// **A resume of a reclaimed reviewer gets its worktree back at the same path**
+/// (#3443) — and when THAT pane dies, the worktree goes again.
+///
+/// The same path because a CLI may key the session on it (Claude Code stores a
+/// transcript under a directory named after the cwd). The second death is the
+/// resumed-pane case of the predicate: the resumed pane records no branch of its
+/// own, so the reclaim must find the cut on the ORIGINAL pane's record.
+#[test]
+fn a_resumed_reviewer_gets_its_scratch_worktree_back_and_gives_it_up_again() {
+    let repo = real_repo();
+    let (reg, _d) = test_registry();
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let co = reg.resolve_token(&orch.token).unwrap();
+    let rev = reg.spawn_agent(&g.id, Role::Reviewer, "rev", "t", true, None).unwrap();
+    let (session, cwd, branch) = (rev.session_id.clone().unwrap(), rev.cwd.clone(), rev.branch.clone().unwrap());
+
+    end_pane(&reg, &rev.id, 34436);
+    assert!(!Path::new(&cwd).exists(), "control: the reclaim took the worktree");
+
+    let resumed = dispatch(&reg, &co, "tools/call", &json!({
+        "name": "spawn_agent",
+        "arguments": { "kind": "reviewer", "resume_session": session, "task": "round 2" },
+    }))
+    .unwrap();
+    assert_eq!(resumed["isError"], false, "the resume must not refuse: {resumed:?}");
+    let back = reg
+        .list_agents(&g.id)
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["session"] == json!(session) && a["status"] != json!("dead"))
+        .cloned()
+        .expect("the resumed pane");
+    assert_eq!(back["cwd"], json!(cwd), "the resume runs at the SAME path its session ran in");
+    assert!(Path::new(&cwd).is_dir(), "…which exists again");
+    assert_eq!(registered_worktrees(repo.path()), 2, "…as a registered worktree");
+    let recut = scratch_rows(&reg, &g.id, "reviewer-worktree-recut");
+    assert_eq!(recut.len(), 1, "{recut:?}");
+    assert_eq!(recut[0]["branch"], json!(branch));
+
+    // The resumed pane records no branch of its own today (#3442 may give it
+    // the resumed session's); either way the reclaim must find the cut.
+    let back_id = back["id"].as_str().unwrap().to_string();
+    end_pane(&reg, &back_id, 34437);
+    assert_eq!(registered_worktrees(repo.path()), 1, "the resumed pane's death reclaims it again");
+    assert!(!local_branch_exists(repo.path(), &branch), "…branch included");
+}
+
+/// **A worker's vanished worktree is never re-cut by the resume hook** (#3443):
+/// a fresh cut from the default branch would hand a resumed worker a checkout
+/// without its own work. The reviewer beside it is the control that the hook
+/// does cut when it should.
+#[test]
+fn a_vanished_worker_worktree_is_not_re_cut_for_a_resume() {
+    let repo = real_repo();
+    let (reg, _d) = test_registry();
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "t", true, Some("feat/gone".into())).unwrap();
+    assert!(git_in(repo.path(), &["worktree", "remove", "--force", &w.cwd]).0);
+
+    assert!(!reg.restore_reviewer_scratch_worktree(&g.id, &w.cwd), "a worker's path is not re-cut");
+    assert!(!Path::new(&w.cwd).exists());
+    assert_eq!(registered_worktrees(repo.path()), 1);
+    assert!(scratch_rows(&reg, &g.id, "reviewer-worktree-recut").is_empty());
+
+    let rev = reg.spawn_agent(&g.id, Role::Reviewer, "rev", "t", true, None).unwrap();
+    end_pane(&reg, &rev.id, 34438);
+    assert!(reg.restore_reviewer_scratch_worktree(&g.id, &rev.cwd), "control: a reviewer's is");
+    assert!(Path::new(&rev.cwd).is_dir());
+}
+
+/// The pure predicate, rule by rule (#3443). Every "kept" row sits beside the
+/// fixture it differs from by one field, so each rule is shown to be the one
+/// deciding.
+#[test]
+fn reviewer_scratch_verdict_keeps_anything_it_cannot_prove_is_scratch() {
+    use loomux_lib::orchestration::{reviewer_scratch_verdict as verdict, ScratchVerdict, WorkspaceClaim};
+    let repo = "/r/repo";
+    let wt = "/r/repo-worktrees/agent/rev-7";
+    let claim = |id: &str, reviewer: bool, cwd: &str, branch: Option<&str>, live: bool| WorkspaceClaim {
+        id: id.into(),
+        reviewer,
+        cwd: cwd.into(),
+        branch: branch.map(str::to_string),
+        live,
+    };
+    let cut = claim("rev-7", true, wt, Some("agent/rev-7"), false);
+    let scratch = ScratchVerdict::Scratch { branch: "agent/rev-7".into() };
+
+    assert_eq!(verdict(repo, wt, &[cut.clone()], Some("rev-7")), scratch, "the base case");
+    assert_eq!(verdict(repo, repo, &[claim("rev-7", true, repo, Some("x"), false)], None),
+        ScratchVerdict::NotScratch, "never the main clone");
+    assert_eq!(verdict(repo, wt, &[claim("rev-7", true, wt, None, false)], None),
+        ScratchVerdict::NotScratch, "no reviewer record carries a branch here — nothing was cut");
+    assert_eq!(verdict(repo, wt, &[claim("w-1", false, wt, Some("agent/rev-7"), false)], None),
+        ScratchVerdict::NotScratch, "a worker's cut is not a reviewer's");
+    // A resumed reviewer: its own record has no branch, the original's does.
+    assert_eq!(
+        verdict(repo, wt, &[cut.clone(), claim("rev-9", true, wt, None, false)], Some("rev-9")),
+        scratch,
+        "a resumed pane's worktree is found through the original pane's record"
+    );
+    assert_eq!(verdict(repo, wt, &[cut.clone(), claim("w-1", false, wt, None, false)], None),
+        ScratchVerdict::Kept("claimed-by-a-non-reviewer"), "a worker running in it owns it too");
+    assert_eq!(
+        verdict(repo, wt, &[cut.clone(), claim("w-1", false, "/r/elsewhere", Some("agent/rev-7"), false)], None),
+        ScratchVerdict::Kept("claimed-by-a-non-reviewer"),
+        "a worker whose branch shares the name owns the branch"
+    );
+    assert_eq!(verdict(repo, wt, &[cut.clone(), claim("rev-9", true, wt, None, true)], Some("rev-7")),
+        ScratchVerdict::Kept("in-use-by-a-live-pane"), "a live pane is still using it");
+    assert_eq!(
+        verdict(repo, wt, &[claim("rev-7", true, wt, Some("agent/rev-7"), true)], Some("rev-7")),
+        scratch,
+        "the dying pane itself does not count as a live user"
+    );
+    assert_eq!(
+        verdict(repo, wt, &[cut.clone(), claim("rev-8", true, wt, Some("agent/other"), false)], None),
+        ScratchVerdict::Kept("ambiguous-branch"),
+        "two cuts naming different branches for one path are not guessed between"
+    );
+}
+
+/// **A reviewer's branch that carries a commit of its own is kept** (#3443) —
+/// the worktree still goes, since it is scratch, but a commit that no other
+/// ref holds would be lost with the branch. That is decided on content, not
+/// on the branch's name: the same rule keeps an existing branch with unpushed
+/// work that a spawn was handed by name.
+#[test]
+fn a_reclaimed_reviewers_branch_is_kept_when_a_commit_lives_only_on_it() {
+    let repo = real_repo();
+    let (reg, _d) = test_registry();
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    let rev = reg.spawn_agent(&g.id, Role::Reviewer, "rev", "t", true, None).unwrap();
+    let branch = rev.branch.clone().unwrap();
+    let wt = Path::new(&rev.cwd);
+    assert!(git_in(wt, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "mine"]).0);
+
+    end_pane(&reg, &rev.id, 34439);
+
+    assert!(!wt.exists(), "the worktree is scratch and still goes");
+    assert_eq!(registered_worktrees(repo.path()), 1);
+    assert!(local_branch_exists(repo.path(), &branch), "the branch holds the only copy of a commit");
+    let rows = scratch_rows(&reg, &g.id, "reviewer-worktree-removed");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["branch_deleted"], json!(false), "{rows:?}");
+    assert_eq!(rows[0]["branch_kept"], json!("has-commits-no-other-ref-holds"), "{rows:?}");
+}
+
+/// **A session-browser resume of a reclaimed reviewer cuts its worktree again**
+/// (#3443) — the third resume route, `resume_recorded_session`, beside the MCP
+/// arm and the driver. It resolves the workspace synchronously before its
+/// background spawn, so the re-cut is observable the moment it returns.
+#[test]
+fn a_session_browser_resume_of_a_reclaimed_reviewer_cuts_its_worktree_again() {
+    use loomux_lib::orchestration::resume_recorded_session;
+    use std::sync::Arc;
+    let repo = real_repo();
+    let dir = tempfile::tempdir().unwrap();
+    let reg = Arc::new(relaunch_registry(dir.path()));
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let rev = reg.spawn_agent(&g.id, Role::Reviewer, "rev", "t", true, None).unwrap();
+    let (sid, cwd) = (rev.session_id.clone().unwrap(), rev.cwd.clone());
+    end_pane(&reg, &rev.id, 34440);
+    assert!(!Path::new(&cwd).exists(), "control: the reclaim took the worktree");
+
+    let out = resume_recorded_session(&reg, &sid, None, false);
+
+    assert!(Path::new(&cwd).is_dir(), "the resume must cut the worktree again at {cwd}: {out:?}");
+    assert!(out.is_ok(), "…and then resume into it: {out:?}");
+    assert_eq!(registered_worktrees(repo.path()), 2, "as a registered worktree");
+    assert_eq!(scratch_rows(&reg, &g.id, "reviewer-worktree-recut").len(), 1);
+}
+
+/// **Ending a group without "remove worktrees" keeps a reviewer's worktree**
+/// (#3443): `end_group` goes around the reclaim, because its own flag is the
+/// human's decision about every worktree in the group. The reviewer ended by
+/// its own pane exit first is the control — the same group does reclaim.
+#[test]
+fn ending_a_group_without_cleanup_keeps_a_reviewers_worktree() {
+    let repo = real_repo();
+    let (reg, _d) = test_registry();
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let gone = reg.spawn_agent(&g.id, Role::Reviewer, "rev1", "t", true, None).unwrap();
+    let kept = reg.spawn_agent(&g.id, Role::Reviewer, "rev2", "t", true, None).unwrap();
+    end_pane(&reg, &gone.id, 34441);
+    assert!(!Path::new(&gone.cwd).exists(), "control: a reviewer's own exit reclaims");
+
+    reg.end_group(&g.id, false).unwrap();
+
+    assert_eq!(reg.agent(&kept.id).map(|a| a.status), Some(AgentStatus::Dead));
+    assert!(Path::new(&kept.cwd).is_dir(), "end_group(cleanup=false) must keep {}", kept.cwd);
+    assert_eq!(registered_worktrees(repo.path()), 2, "the main checkout and the kept reviewer's");
+    assert_eq!(scratch_rows(&reg, &g.id, "reviewer-worktree-removed").len(), 1, "only the control's");
+}

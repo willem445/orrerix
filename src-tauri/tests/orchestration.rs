@@ -71252,7 +71252,7 @@ fn a_block_ttl_override_moves_the_backstop_band_and_zero_turns_it_off() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn the_idle_compact_backstop_holds_for_a_live_review_drive_and_for_an_unreadable_drive_file() {
+fn the_idle_compact_backstop_holds_for_a_live_review_drive() {
     let t0 = 1_000 * MIN;
     // A live review drive (`DriveEntry::new` lands in ci-wait) is in flight.
     let (reg, _d, gid, oid) = idle_orch_setup(t0);
@@ -71266,8 +71266,14 @@ fn the_idle_compact_backstop_holds_for_a_live_review_drive_and_for_an_unreadable
     fs::remove_file(reviewdrive::state_path(&dir)).unwrap();
     assert_eq!(reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)), vec![oid.clone()]);
 
+}
+
+#[test]
+fn the_idle_compact_backstop_counts_an_unreadable_drive_file_as_in_flight() {
     // An unreadable drive file — review or plan — counts as in flight: "I could
-    // not look" is not "nothing there".
+    // not look" is not "nothing there". Its own test, so a red here is not hidden
+    // behind the live-drive assertion above it (review round 1, N1).
+    let t0 = 1_000 * MIN;
     for file in [reviewdrive::REVIEW_DRIVES_FILE, loomux_lib::orchestration::plandrive::PLAN_DRIVES_FILE] {
         let (reg, _d, gid, oid) = idle_orch_setup(t0);
         let dir = reg.state_root().join(gid.as_str());
@@ -71278,6 +71284,9 @@ fn the_idle_compact_backstop_holds_for_a_live_review_drive_and_for_an_unreadable
             "an unreadable {file} must count as in flight"
         );
         assert_eq!(audit_count(&reg, &gid, "cache-idle-nudge"), 0);
+        // Non-vacuity: the same pane, same moment, with the file gone, fires.
+        fs::remove_file(dir.join(file)).unwrap();
+        assert_eq!(reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)), vec![oid.clone()], "{file}");
     }
 }
 

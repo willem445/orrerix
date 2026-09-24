@@ -191,7 +191,7 @@ blocks:
 edges:
   - { from: orchestrator, to: [planner, worker-std, worker-adv] }
   - { from: planner, to: [worker-std, worker-adv] }
-  - { from: worker-std, to: [worker-adv, rev-std] }
+  - { from: worker-std, to: [rev-std, worker-adv] }
   - { from: worker-adv, to: rev-std }
   - { from: rev-std, to: rev-final }
 

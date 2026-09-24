@@ -50647,7 +50647,7 @@ impl OrchRegistry {
                         // write (#3456 review N1).
                         json!({
                             "agent": agent_id,
-                            "why": notify::sanitize_gh_text(&why, notify::NOTICE_FIELD_CAP),
+                            "why": why,
                         }),
                     );
                     Vec::new()

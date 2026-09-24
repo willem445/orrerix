@@ -911,7 +911,10 @@ fn a_worktree_panes_profile_is_a_named_permissions_profile_with_the_seal() {
     let legacy = group_profile(true);
     assert!(legacy.contains("sandbox_mode = \"workspace-write\""), "control: {legacy}");
     assert!(legacy.contains("[sandbox_workspace_write]\nnetwork_access = true\n"), "{legacy}");
-    assert!(!legacy.contains("permissions"), "nothing to grant, no profile: {legacy}");
+    assert!(
+        !legacy.contains("default_permissions") && !legacy.contains("[permissions."),
+        "nothing to grant, no profile: {legacy}"
+    );
 }
 
 /// The seal (#3456 round 2, the human's call): the files in a linked gitdir that

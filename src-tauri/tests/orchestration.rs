@@ -43483,7 +43483,12 @@ fn a_codex_worktree_worker_can_write_its_gitdir_and_the_shared_store_but_not_hoo
     let oprofile = codex_profile_of(&home, &orch.id);
     assert!(oprofile.contains("[sandbox_workspace_write]"), "control: {oprofile}");
     assert_eq!(codex_writable_roots(&oprofile), None, "a main-clone pane gets nothing extra:\n{oprofile}");
-    assert!(!oprofile.contains("permissions"), "and no profile:\n{oprofile}");
+    // Keyed on the profile's own KEYS, not the word: the role contract in
+    // `developer_instructions` says "permissions" in prose.
+    assert!(
+        !oprofile.contains("default_permissions") && !oprofile.contains("[permissions."),
+        "and no profile:\n{oprofile}"
+    );
     assert!(!common.join("config.worktree").exists(), "nothing sealed, nothing created, in the main clone");
     assert!(audit_entries(&reg, &g.id, "codex-worktree-gitdir-unrecognised").is_empty());
     drop(drain_parked_readers_for_test());

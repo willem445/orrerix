@@ -73,7 +73,21 @@ pub struct SessionUsage {
     pub cost_usd: Option<f64>,
     /// The model the cost was priced against (the one with the most output
     /// tokens), for display and debugging. `None` when unpriced.
+    ///
+    /// On claude this is a PRICING pick, not "the model this pane is on": a
+    /// session that switched models keeps naming the old one until a message
+    /// on the new one out-writes the largest message on the old — possibly
+    /// never. pi, codex and opencode fill it with the latest turn's model, so
+    /// the two readings coincide there. Anything asking "which model now?"
+    /// reads [`SessionUsage::current_model`] instead (#3415).
     pub model: Option<String>,
+    /// The model of the LATEST counted turn — "which model is this pane on",
+    /// priced or not. This is what the usage series samples carry, so a
+    /// token chart can split spend by model and mark a mid-session switch at
+    /// the tick it happened (#3415). Equal to `model` on every CLI whose
+    /// `model` is already last-turn; differs from it only on claude, where
+    /// `model` is the pricing pick described above.
+    pub current_model: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +211,14 @@ struct TranscriptFold {
     seen: HashSet<String>,
     /// The priced model with the most output tokens, for display.
     best_model: Option<(String, u64)>,
+    /// The model of the LAST counted assistant message, priced or not
+    /// ([`SessionUsage::current_model`], #3415). Kept beside `best_model`
+    /// rather than replacing it: the usage panel's "priced against" label is
+    /// a pricing question, the chart's split is a which-model-now question,
+    /// and on a switched session they have different answers. A re-emitted
+    /// (deduped) message never moves it — an old line replayed by `--resume`
+    /// must not rewind the pane to the model it has since left.
+    last_model: Option<String>,
 }
 
 impl TranscriptFold {
@@ -241,6 +263,7 @@ impl TranscriptFold {
         if model.is_empty() || model == "<synthetic>" {
             return;
         }
+        self.last_model = Some(model.to_string());
         if let Some(p) = price_for(model) {
             self.cost += cost_of(&t, &p);
             self.any_priced = true;
@@ -259,6 +282,7 @@ impl TranscriptFold {
             tokens: self.totals,
             cost_usd: self.any_priced.then_some(self.cost),
             model: self.best_model.as_ref().map(|(m, _)| m.clone()),
+            current_model: self.last_model.clone(),
         }
     }
 }
@@ -622,6 +646,7 @@ impl PiFold {
             tokens: self.totals,
             cost_usd: self.any_cost.then_some(self.cost),
             model: self.last_model.clone(),
+            current_model: self.last_model.clone(),
         }
     }
 }
@@ -818,6 +843,7 @@ impl CodexFold {
             tokens: self.totals,
             cost_usd: price.map(|p| cost_of(&self.totals, &p)),
             model: self.last_model.clone(),
+            current_model: self.last_model.clone(),
         }
     }
 }
@@ -1564,6 +1590,11 @@ pub fn opencode_session_usage(
             cache_read_tokens: t.cache_read,
         },
         cost_usd: Some(t.cost_usd),
+        // opencode rewrites the root `session.model` on every prompt whose
+        // model differs from the stored one (`setAgentModel`, called from
+        // `SessionPrompt` at the `v1.18.11` pin), so the column is the
+        // current model, not the one the session was created with.
+        current_model: t.model.clone(),
         model: t.model,
     }))
 }

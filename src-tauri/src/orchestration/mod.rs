@@ -15425,7 +15425,18 @@ pub struct UsageSnapshot {
     /// true = dollars estimated from the price table; false = reported by the
     /// CLI's statusline (which reads $0.00 on subscription/Max accounts).
     pub estimated: bool,
+    /// The model the usage panel names as "priced against" — the source's
+    /// `SessionUsage::model`, which on claude is the best-priced pick rather
+    /// than the latest turn's model.
     pub model: Option<String>,
+    /// The model of the latest counted turn (`SessionUsage::current_model`):
+    /// what a usage-series sample records, so the token chart's model split
+    /// and switch marks follow the pane rather than the pricing pick (#3415).
+    /// Additive: a `usage.json` row written before this field deserializes to
+    /// `None`, and the sampler falls back to `model` for such a row (see
+    /// `series_sample`).
+    #[serde(default)]
+    pub current_model: Option<String>,
     pub updated_ms: u64,
 }
 
@@ -46515,6 +46526,7 @@ impl OrchRegistry {
             cost_usd: None,
             estimated: false,
             model: None,
+            current_model: None,
             updated_ms: now_ms(),
         };
 
@@ -46565,6 +46577,7 @@ impl OrchRegistry {
                         snap.cache_read_tokens = u.tokens.cache_read_tokens;
                         snap.cost_usd = u.cost_usd;
                         snap.estimated = true; // token-derived dollar estimate
+                        snap.current_model = u.current_model;
                         snap.model = u.model;
                         return snap;
                     }
@@ -46605,6 +46618,7 @@ impl OrchRegistry {
                         snap.cache_read_tokens = u.tokens.cache_read_tokens;
                         snap.cost_usd = u.cost_usd;
                         snap.estimated = false; // priced by opencode, not by us
+                        snap.current_model = u.current_model;
                         snap.model = u.model;
                         return snap;
                     }
@@ -46658,6 +46672,7 @@ impl OrchRegistry {
                         snap.cache_read_tokens = u.tokens.cache_read_tokens;
                         snap.cost_usd = u.cost_usd;
                         snap.estimated = false; // priced by pi, not by us
+                        snap.current_model = u.current_model;
                         snap.model = u.model;
                         return snap;
                     }
@@ -46712,6 +46727,7 @@ impl OrchRegistry {
                         snap.cache_read_tokens = u.tokens.cache_read_tokens;
                         snap.cost_usd = u.cost_usd;
                         snap.estimated = true; // token-derived, and unpriced today
+                        snap.current_model = u.current_model;
                         snap.model = u.model;
                         return snap;
                     }
@@ -47047,7 +47063,16 @@ impl OrchRegistry {
                     cost_usd: s.cost_usd,
                     estimated: s.estimated,
                     source: s.source.clone(),
-                    model: s.model.clone(),
+                    // The CURRENT model, not `s.model`: on claude that is a pricing
+                    // pick that lags a switch (or never follows it), and the chart
+                    // splits spend and marks switches off this field (#3415).
+                    // `s` is the MERGED row, so a live key whose fresh read came
+                    // back empty is sampled off its persisted row — which, if it
+                    // predates `current_model`, carries only `model`. Falling back
+                    // to it keeps that row's sample from reading as a switch to
+                    // "unknown model" and back; on every CLI but claude the two
+                    // fields are equal anyway.
+                    model: s.current_model.clone().or_else(|| s.model.clone()),
                 };
                 if usageseries::should_sample(state.last.get(&s.key), &sample, bucket) {
                     to_write.push(usageseries::SeriesRow::Sample(sample));

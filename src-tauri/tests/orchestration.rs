@@ -18505,6 +18505,7 @@ fn seed_usage(reg: &OrchRegistry, group: &GroupId, key: &str, tokens: u64) {
         cost_usd: None,
         estimated: true,
         model: Some("claude-opus-4-8".to_string()),
+        current_model: Some("claude-opus-4-8".to_string()),
         updated_ms: now_ms(),
     });
 }
@@ -37747,6 +37748,7 @@ fn usage_snap(key: &str, agent_id: &str, cost: f64, input: u64, output: u64) -> 
         cost_usd: Some(cost),
         estimated: true,
         model: Some("claude-opus-4-8".to_string()),
+        current_model: Some("claude-opus-4-8".to_string()),
         updated_ms: 0,
     }
 }
@@ -66042,6 +66044,71 @@ fn a_usage_tick_appends_one_series_row_per_moved_key() {
     let second: serde_json::Value = serde_json::from_str(&rows[1]).unwrap();
     assert_eq!(second["in"].as_u64(), Some(4000), "cumulative, not the 3000 delta");
     assert_eq!(second["out"].as_u64(), Some(900));
+}
+
+/// Append one Claude assistant line for `sid` under `proj`, on `model`.
+///
+/// Appends rather than rewrites: the usage tick reads through a byte cursor,
+/// and an append is the shape a live transcript actually takes.
+fn append_claude_turn(proj: &Path, sid: &str, id: &str, model: &str, input: u64, output: u64) {
+    use std::io::Write;
+    let encoded = proj.join("C--tmp-repo");
+    fs::create_dir_all(&encoded).unwrap();
+    let line = json!({"type":"assistant","message":{"id":id,"model":model,
+        "usage":{"input_tokens":input,"output_tokens":output,
+                 "cache_creation_input_tokens":0,"cache_read_input_tokens":0}}});
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(encoded.join(format!("{sid}.jsonl")))
+        .unwrap();
+    writeln!(f, "{line}").unwrap();
+}
+
+#[test]
+fn a_claude_series_sample_carries_the_current_model_not_the_priced_one() {
+    // #3415: the token chart splits spend by model and marks a switch off each
+    // sample's `model`. On claude the usage snapshot's `model` is a PRICING
+    // pick — the model of the single largest message — so a pane that switched
+    // after a long first answer would keep sampling the old model. This drives
+    // the real tick (as the test above does) through exactly that session and
+    // asserts the row written AT the switch tick names the new model, while the
+    // usage panel's "priced against" figure is left as it was.
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    reg.set_series_bucket_ms(0);
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    let sid = w.session_id.clone().unwrap();
+
+    // Tick 1: the largest message of the whole session, on fable.
+    append_claude_turn(proj.path(), &sid, "f1", "claude-fable-5-1", 10, 900);
+    reg.group_usage(&g.id);
+    // Tick 2: the switch. Opus never out-writes fable's 900.
+    append_claude_turn(proj.path(), &sid, "o1", "claude-opus-5-5", 10, 100);
+    let usage = reg.group_usage(&g.id);
+
+    let rows = series_lines(&reg, &g.id);
+    assert_eq!(rows.len(), 2, "one row per moved tick: {rows:?}");
+    let first: serde_json::Value = serde_json::from_str(&rows[0]).unwrap();
+    let second: serde_json::Value = serde_json::from_str(&rows[1]).unwrap();
+    assert_eq!(first["model"], "claude-fable-5-1", "before the switch");
+    assert_eq!(
+        second["model"], "claude-opus-5-5",
+        "the sample at the switch tick names the model the pane is now on"
+    );
+
+    let agent = usage["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == w.id.as_str())
+        .expect("the live agent has a usage row");
+    assert_eq!(
+        agent["model"], "claude-fable-5-1",
+        "the usage panel's priced-against model is still the pricing pick"
+    );
 }
 
 #[test]

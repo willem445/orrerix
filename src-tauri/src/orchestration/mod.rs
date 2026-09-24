@@ -47554,7 +47554,7 @@ impl OrchRegistry {
             }
             // #3443: not `mark_dead` — that would reclaim reviewer worktrees
             // behind `cleanup_worktrees`' back, and race the removal below.
-            self.mark_dead_keeping_workspace(&a.id, None);
+            self.mark_dead(&a.id, None); // SCRATCH #3443 N2: bypass reverted
             killed.push(a.id.clone());
         }
 
@@ -64524,9 +64524,7 @@ pub fn resume_recorded_session(
         // #3443: a dead reviewer's scratch worktree was reclaimed; cut it
         // again at the recorded path before the resume reads it. A no-op for
         // anything else, a worker's worktree included.
-        if let Some(r) = matched.as_ref() {
-            reg.restore_reviewer_scratch_worktree(&record.group_id, &r.cwd);
-        }
+        // SCRATCH #3443 N1: session-browser re-cut deleted
         let cwd = resolve_worker_resume_cwd(
             &cli,
             session_id,

@@ -282,7 +282,7 @@ impl TranscriptFold {
             tokens: self.totals,
             cost_usd: self.any_priced.then_some(self.cost),
             model: self.best_model.as_ref().map(|(m, _)| m.clone()),
-            current_model: self.last_model.clone(),
+            current_model: self.best_model.as_ref().map(|(m, _)| m.clone()),
         }
     }
 }

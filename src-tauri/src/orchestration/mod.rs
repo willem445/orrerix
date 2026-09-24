@@ -8669,7 +8669,8 @@ pub fn codex_worktree_git_access(workdir: &Path) -> Result<CodexGitAccess, Strin
         }
         read_only.push(path);
     }
-    Ok(CodexGitAccess { write, read_only })
+    let _ = read_only;
+    Ok(CodexGitAccess { write, read_only: Vec::new() })
 }
 
 /// The most of a `.git` pointer or a `commondir` [`codex_worktree_git_roots`]

@@ -6032,18 +6032,34 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tokens-note::before { content: "·"; position: absolute; left: 3px; }
 
 /* The categorical hues, in HUE_ORDER. Identity channel throughout: these
-   answer "which block is this", never "how is it doing". */
-.tokens-line.tok-hue-jade,   .tokens-direct-label.tok-hue-jade   { stroke: var(--id-jade);   fill: var(--id-jade); }
-.tokens-line.tok-hue-violet, .tokens-direct-label.tok-hue-violet { stroke: var(--id-violet); fill: var(--id-violet); }
-.tokens-line.tok-hue-amber,  .tokens-direct-label.tok-hue-amber  { stroke: var(--id-amber);  fill: var(--id-amber); }
-.tokens-line.tok-hue-cyan,   .tokens-direct-label.tok-hue-cyan   { stroke: var(--id-cyan);   fill: var(--id-cyan); }
-.tokens-line.tok-hue-rose,   .tokens-direct-label.tok-hue-rose   { stroke: var(--id-rose);   fill: var(--id-rose); }
-.tokens-line.tok-hue-azure,  .tokens-direct-label.tok-hue-azure  { stroke: var(--id-azure);  fill: var(--id-azure); }
-.tokens-line.tok-hue-lime,   .tokens-direct-label.tok-hue-lime   { stroke: var(--id-lime);   fill: var(--id-lime); }
-.tokens-line.tok-hue-orchid, .tokens-direct-label.tok-hue-orchid { stroke: var(--id-orchid); fill: var(--id-orchid); }
+   answer "which block is this", never "how is it doing".
+
+   Lines and labels are separate rules ON PURPOSE. A line takes `stroke`
+   ONLY: these selectors are two classes, so a `fill` here outranks
+   `.tokens-line { fill: none }` and every polyline is filled, the fill
+   closing with a chord from its last point back to its first — the grey
+   wedge of #3449. The direct label is text, so it needs the fill. */
+.tokens-line.tok-hue-jade   { stroke: var(--id-jade); }
+.tokens-line.tok-hue-violet { stroke: var(--id-violet); }
+.tokens-line.tok-hue-amber  { stroke: var(--id-amber); }
+.tokens-line.tok-hue-cyan   { stroke: var(--id-cyan); }
+.tokens-line.tok-hue-rose   { stroke: var(--id-rose); }
+.tokens-line.tok-hue-azure  { stroke: var(--id-azure); }
+.tokens-line.tok-hue-lime   { stroke: var(--id-lime); }
+.tokens-line.tok-hue-orchid { stroke: var(--id-orchid); }
 /* A ninth block. The neutral ramp, NOT a recycled hue — a repeated colour
    would be a false claim that two blocks are one. */
-.tokens-line.tok-hue-neutral, .tokens-direct-label.tok-hue-neutral { stroke: var(--ink-dim); fill: var(--ink-dim); }
+.tokens-line.tok-hue-neutral { stroke: var(--ink-dim); }
+
+.tokens-direct-label.tok-hue-jade    { stroke: var(--id-jade); fill: var(--id-jade); }
+.tokens-direct-label.tok-hue-violet  { stroke: var(--id-violet); fill: var(--id-violet); }
+.tokens-direct-label.tok-hue-amber   { stroke: var(--id-amber); fill: var(--id-amber); }
+.tokens-direct-label.tok-hue-cyan    { stroke: var(--id-cyan); fill: var(--id-cyan); }
+.tokens-direct-label.tok-hue-rose    { stroke: var(--id-rose); fill: var(--id-rose); }
+.tokens-direct-label.tok-hue-azure   { stroke: var(--id-azure); fill: var(--id-azure); }
+.tokens-direct-label.tok-hue-lime    { stroke: var(--id-lime); fill: var(--id-lime); }
+.tokens-direct-label.tok-hue-orchid  { stroke: var(--id-orchid); fill: var(--id-orchid); }
+.tokens-direct-label.tok-hue-neutral { stroke: var(--ink-dim); fill: var(--ink-dim); }
 
 .tokens-seg.tok-hue-jade   { fill: var(--id-jade); }
 .tokens-seg.tok-hue-violet { fill: var(--id-violet); }

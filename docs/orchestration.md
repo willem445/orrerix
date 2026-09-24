@@ -1326,6 +1326,13 @@ input, output, cache read, cache write, or cost in dollars. *merge CLIs*
 collapses each block's split back into a single line, and *changes nothing
 else* — it is a regrouping, not a filter, so the totals stay put.
 
+There are eight block colours. They go to the blocks that have spent, in the
+order each one started spending, so a block keeps its colour as the chart
+grows and a block retired before the chart's history began never uses one.
+A colour is kept for the life of the group, so the ninth block *ever* to
+spend draws in neutral grey — never a reused colour — even when the first
+eight are quiet. The legend always names every line.
+
 **Tokens per feature.** A stacked bar per feature on your task board, split by
 the same block/CLI keys and in the same order on every bar, so two features
 can be compared segment by segment. Which feature an agent's spend lands on

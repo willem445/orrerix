@@ -1674,3 +1674,12 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   Both re-bless checks above were run: the patch on the golden is byte-identical to the patch
   on the live template (`git diff -U0` on each, compared), and the added line carries no
   `{{...}}` key, so `live-minus-keys == golden` holds exactly where it held before.
+
+  Review round 1 re-blessed `orchestrator.md` again. The new line said ALWAYS compact with
+  nothing in flight, while the same bullet's human rule says not to compact below 50% "unless
+  you have a specific reason", and the two read as a contradiction. The rule is kept, and
+  ending a turn with nothing in flight is now one of its listed specific reasons, pointing back
+  at the ALWAYS line. Both lines were tightened to fit: the core is 34,984 B, 16 B under the
+  budget, and the two blob-dated comments move to blob `3b335b0e`. The same checks were run:
+  the golden's patch is identical to the live template's, and neither line carries a `{{...}}`
+  key.

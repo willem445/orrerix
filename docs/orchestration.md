@@ -3996,7 +3996,9 @@ your account gets a longer cache, say so on the block in `.orrerix/workflow.yml`
 
 **The orchestrator compacts before it goes idle.** The orchestrator is told to compact
 before ending a turn with nothing in flight: no delegates, drives or watches. That way
-the next wake reads a small context instead of the whole session cold. If it forgets,
+the next wake reads a small context instead of the whole session cold. This does not
+contradict its other rule, "don't compact below 50% context without a specific reason":
+ending a turn with nothing in flight is listed as one of those reasons. If it forgets,
 orrerix nudges it once, typing `[orrerix] going idle with no work — compact now` into its
 pane, when all of these hold:
 

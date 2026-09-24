@@ -157,8 +157,17 @@ Two halves, because a rule an agent can forget needs a backstop that cannot.
 
 **The resident rule.** It is one line in `orchestrator.md`'s *Compact at lulls*
 bullet: always compact before ending a turn with nothing in flight, because a wake
-past the TTL re-reads the whole context uncached. The resident core is under a
-byte budget, and the line fits in the margin that was left.
+past the TTL re-reads the whole context uncached.
+
+That line has to agree with the rule further down the same bullet, which is the
+human's: every compact costs a full re-grounding cycle, so do not compact below 50%
+context "unless you have a specific reason". Ending a turn with nothing in flight is
+now **named as one of those reasons**, so the two lines are one rule, not two that
+contradict each other. Below 50% the resident rule still says compact, while the
+backstop does not nudge. That asymmetry is deliberate: the orchestrator's own call
+may take a small compact, but orrerix's unprompted nudge keeps the floor it has
+always kept. The resident core is under a byte budget, and both lines were
+tightened to fit it.
 
 **The backstop, `cache_idle_nudge_tick`.** It runs on the compact-nudge loop, after
 `compact_nudge_tick`, so the quiet clock it reads has already folded this tick's

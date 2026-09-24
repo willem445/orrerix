@@ -1212,12 +1212,27 @@ pub async fn git_worktree_list(repo: String) -> Result<String, String> {
 /// explicit, human-confirmed destructive action; the checked-out branch is
 /// left intact (the work / PR lives on it, only the working copy goes). Not a
 /// Tauri command — teardown is driven backend-side by `end_group`, which
-/// gathers the paths from its own roster rather than trusting a caller.
+/// gathers the paths from its own roster rather than trusting a caller. The
+/// other caller is the reviewer-scratch reclaim (#3443), which decides the path
+/// from the same roster and removes the branch separately
+/// ([`git_branch_force_delete`]).
 pub fn git_worktree_remove(repo: &str, path: &str) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("empty worktree path".to_string());
     }
     run_git(repo, &["worktree", "remove", "--force", path]).map(|_| ())
+}
+
+/// Delete a local branch with `-D` (#3443): the reviewer-scratch reclaim's
+/// second half, run only after that branch's worktree is gone. `-D` rather than
+/// `-d` because a reviewer's scratch branch is never pushed or merged, so `-d`
+/// would refuse every one of them. git itself still refuses a branch checked
+/// out in any worktree, which is a second guard beside the caller's own. Not a
+/// Tauri command — like [`git_worktree_remove`], the name comes from the
+/// roster, never from a caller.
+pub fn git_branch_force_delete(repo: &str, name: &str) -> Result<(), String> {
+    check_name(name, "branch")?;
+    run_git(repo, &["branch", "-D", name]).map(|_| ())
 }
 
 // ---------- parsers ----------

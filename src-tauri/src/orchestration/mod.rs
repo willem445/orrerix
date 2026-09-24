@@ -11981,6 +11981,115 @@ pub fn worktree_cleanup_targets(repo: &str, cwds: &[String]) -> Vec<String> {
     out
 }
 
+/// One pane's claim on a workspace, as the reviewer-scratch reclaim reads the
+/// roster (#3443). Built from the live registry and the durable roster alike
+/// (`OrchRegistry::workspace_claims`), because the pane that CUT a worktree and
+/// the pane that dies in it are not always the same one: a resumed reviewer
+/// runs in its session's original worktree and carries no branch of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceClaim {
+    pub id: String,
+    /// The pane's capability class is `Role::Reviewer`.
+    pub reviewer: bool,
+    pub cwd: String,
+    /// The branch the spawn recorded for it — for a reviewer, `Some` exactly
+    /// when that spawn cut a worktree (`spawn_agent_ex` persists a branch for a
+    /// reviewer on no other path).
+    pub branch: Option<String>,
+    /// Not `Dead` in this process's registry.
+    pub live: bool,
+}
+
+/// What [`reviewer_scratch_verdict`] decided about one workspace (#3443).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScratchVerdict {
+    /// A reviewer's scratch worktree, cut on `branch`, that nothing else
+    /// claims: the reclaim may remove it and the branch, and a resume may cut
+    /// it again at the same path.
+    Scratch { branch: String },
+    /// Not a cut reviewer worktree at all — the group's main clone, or a path
+    /// no reviewer record carries a branch for. Nothing to do and nothing worth
+    /// an audit row: this is every worker, planner and no-worktree reviewer.
+    NotScratch,
+    /// A reviewer's cut worktree that something else ALSO claims. Kept, and the
+    /// reason is audited, because this is the case where removing it would
+    /// destroy someone's workspace.
+    Kept(&'static str),
+}
+
+/// **Is `cwd` a reviewer's scratch worktree that nothing else holds?** (#3443)
+///
+/// A reviewer's worktree is scratch by contract (#359): cut fresh from the
+/// default branch, used to `gh pr checkout --detach` the PR under review, never
+/// pushed. So removing it when its pane dies loses nothing — but only if the
+/// path really is one. A worker's worktree holds the branch under review, and
+/// this function is the whole of what stands between the reclaim and it, so it
+/// decides on the roster's own records and fails toward KEEPING:
+///
+/// 1. never the group's main clone;
+/// 2. some reviewer record must carry a branch for exactly this path — the
+///    record of the spawn that cut it, which for a fresh reviewer is the dying
+///    pane itself and for a resumed one is the session's original pane. Two
+///    such records naming different branches is ambiguous and kept;
+/// 3. no NON-reviewer record may name this path, or that branch — a worker
+///    resumed into it, or one whose own branch happens to share the name, owns
+///    it as much as the reviewer does;
+/// 4. no live pane other than `except` (the one that just died) may be running
+///    in it — a resumed reviewer still using the directory.
+///
+/// Rule 2 is what makes a worker's worktree unreachable: nothing records a
+/// reviewer at a worker's path. Rule 3 is the backstop for the one way the
+/// roster could — a resume with an explicit `cwd` naming someone else's
+/// workspace. Pure, so every rule is pinned without git.
+pub fn reviewer_scratch_verdict(
+    repo: &str,
+    cwd: &str,
+    claims: &[WorkspaceClaim],
+    except: Option<&str>,
+) -> ScratchVerdict {
+    if cwd.trim().is_empty() || same_path_key(cwd, repo) {
+        return ScratchVerdict::NotScratch;
+    }
+    let here = |c: &WorkspaceClaim| !c.cwd.trim().is_empty() && same_path_key(&c.cwd, cwd);
+    let mut cut: Option<&str> = None;
+    for c in claims.iter().filter(|c| c.reviewer && here(c)) {
+        let Some(b) = c.branch.as_deref().map(str::trim).filter(|b| !b.is_empty()) else { continue };
+        match cut {
+            None => cut = Some(b),
+            Some(prev) if prev == b => {}
+            Some(_) => return ScratchVerdict::Kept("ambiguous-branch"),
+        }
+    }
+    let Some(branch) = cut else { return ScratchVerdict::NotScratch };
+    if claims
+        .iter()
+        .any(|c| !c.reviewer && (here(c) || c.branch.as_deref().map(str::trim) == Some(branch)))
+    {
+        return ScratchVerdict::Kept("claimed-by-a-non-reviewer");
+    }
+    if claims.iter().any(|c| c.live && Some(c.id.as_str()) != except && here(c)) {
+        return ScratchVerdict::Kept("in-use-by-a-live-pane");
+    }
+    ScratchVerdict::Scratch { branch: branch.to_string() }
+}
+
+/// The waits before each reviewer-scratch removal attempt (#3443) — five
+/// attempts over about fifteen seconds.
+///
+/// More than one because the pane's process may still be alive when its death
+/// is recorded: a driver release marks the pane dead BEFORE it kills the pty
+/// (`release_driven_pane`'s ordering), and on Windows a directory that is a
+/// live process's cwd cannot be deleted. The first wait gives the kill that
+/// follows a chance to land; the rest cover a child process (a `gh` or `git`
+/// the agent started there) taking a moment longer to go.
+const SCRATCH_RECLAIM_BACKOFF: [Duration; 5] = [
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+];
+
 /// Best-effort extraction of a session's dollar cost from a pane's
 /// ANSI-stripped terminal tail. Claude Code renders running cost in its
 /// in-pane statusline (bottom of the screen), so scan lines bottom-up and
@@ -47443,7 +47552,9 @@ impl OrchRegistry {
             if let (Some(app), Some(pty)) = (app.as_ref(), a.pty_id) {
                 app.state::<crate::pty::PtyManager>().kill(pty);
             }
-            self.mark_dead(&a.id, None);
+            // #3443: not `mark_dead` — that would reclaim reviewer worktrees
+            // behind `cleanup_worktrees`' back, and race the removal below.
+            self.mark_dead_keeping_workspace(&a.id, None);
             killed.push(a.id.clone());
         }
 
@@ -60002,6 +60113,21 @@ impl OrchRegistry {
 
     #[doc(hidden)] // pub for integration tests
     pub fn mark_dead(&self, agent_id: &str, exit_code: Option<u32>) -> Option<AgentEntry> {
+        let snapshot = self.mark_dead_keeping_workspace(agent_id, exit_code)?;
+        // #3443: every ending of a pane funnels through here — a kill, a pane
+        // close, a crash, an idle reap, a driver release, a bind timeout — so
+        // this is the one place a reviewer's scratch worktree can be reclaimed
+        // without a list of call sites to keep in step. `end_group` is the one
+        // caller that goes around it, because the human's own
+        // "clean up worktrees" choice governs a teardown.
+        self.reclaim_reviewer_scratch(&snapshot);
+        Some(snapshot)
+    }
+
+    /// [`mark_dead`](Self::mark_dead) without the reviewer-scratch reclaim
+    /// (#3443) — for `end_group`, whose own `cleanup_worktrees` flag is the
+    /// human's decision about every worktree in the group, reviewers' included.
+    fn mark_dead_keeping_workspace(&self, agent_id: &str, exit_code: Option<u32>) -> Option<AgentEntry> {
         let mut agents = self.agents.lock_safe();
         let a = agents.get_mut(agent_id)?;
         if a.status == AgentStatus::Dead {
@@ -60073,6 +60199,190 @@ impl OrchRegistry {
         let usage = self.compute_usage_snapshot(&snapshot, &cli);
         self.upsert_usage_snapshot(&snapshot.group, usage);
         Some(snapshot)
+    }
+
+    /// Every claim this group's panes make on a workspace (#3443): the live
+    /// registry first, then the durable roster for any pane this process no
+    /// longer holds — which is where a resumed reviewer's ORIGINAL pane, the
+    /// one whose record carries the branch, lives after a restart.
+    fn workspace_claims(&self, group: &GroupId) -> Vec<WorkspaceClaim> {
+        let mut claims: Vec<WorkspaceClaim> = self
+            .agents
+            .lock_safe()
+            .values()
+            .filter(|a| &a.group == group)
+            .map(|a| WorkspaceClaim {
+                id: a.id.clone(),
+                reviewer: a.role == Role::Reviewer,
+                cwd: a.cwd.clone(),
+                branch: a.branch.clone(),
+                live: a.status != AgentStatus::Dead,
+            })
+            .collect();
+        for r in self.merged_records(group) {
+            if claims.iter().any(|c| c.id == r.id) {
+                continue;
+            }
+            claims.push(WorkspaceClaim {
+                reviewer: r.role == Role::Reviewer.as_str(),
+                live: false,
+                id: r.id,
+                cwd: r.cwd,
+                branch: r.branch,
+            });
+        }
+        claims
+    }
+
+    /// **Remove a dead reviewer's scratch worktree and its branch** (#3443).
+    ///
+    /// Called from [`mark_dead`](Self::mark_dead) for every pane that dies;
+    /// anything but a reviewer returns at once, before any roster read or git.
+    /// What is removed is decided by [`reviewer_scratch_verdict`], re-asked on
+    /// every attempt, so a resume that starts using the directory between two
+    /// attempts stops the reclaim rather than being removed out from under.
+    ///
+    /// **It never blocks the kill.** With the registry's self-handle (every
+    /// production registry), the attempts run on a thread of their own, after
+    /// [`SCRATCH_RECLAIM_BACKOFF`]'s waits; the caller has already finished
+    /// ending the pane. A bare registry with no self-handle (the integration
+    /// tests) makes ONE attempt inline, so its outcome is observable the moment
+    /// the pane is dead. A removal that still fails at the last attempt — a
+    /// file lock on Windows — is audited `reviewer-worktree-remove-failed`
+    /// with git's own error, and the worktree stays for a later `git worktree
+    /// remove`; nothing retries it after that.
+    fn reclaim_reviewer_scratch(&self, dead: &AgentEntry) {
+        if dead.role != Role::Reviewer {
+            return;
+        }
+        match self.arc() {
+            Some(reg) => {
+                let dead = dead.clone();
+                std::thread::spawn(move || {
+                    let last = SCRATCH_RECLAIM_BACKOFF.len();
+                    for (i, wait) in SCRATCH_RECLAIM_BACKOFF.iter().enumerate() {
+                        std::thread::sleep(*wait);
+                        if reg.reclaim_scratch_attempt(&dead, i + 1, i + 1 == last) {
+                            return;
+                        }
+                    }
+                });
+            }
+            None => {
+                self.reclaim_scratch_attempt(dead, 1, true);
+            }
+        }
+    }
+
+    /// One reclaim attempt; `true` when there is nothing more to try.
+    fn reclaim_scratch_attempt(&self, dead: &AgentEntry, attempt: usize, last: bool) -> bool {
+        let Some(g) = self.group(&dead.group) else { return true };
+        let claims = self.workspace_claims(&dead.group);
+        let initiator = dead.killed_by.map(|i| i.as_str());
+        let branch = match reviewer_scratch_verdict(&g.repo, &dead.cwd, &claims, Some(&dead.id)) {
+            ScratchVerdict::NotScratch => return true,
+            ScratchVerdict::Kept(reason) => {
+                self.audit(&dead.group, brand::AUDIT_ACTOR, "reviewer-worktree-kept", json!({
+                    "agent": dead.id, "path": dead.cwd, "reason": reason,
+                }));
+                return true;
+            }
+            ScratchVerdict::Scratch { branch } => branch,
+        };
+        match crate::git::git_worktree_remove(&g.repo, &dead.cwd) {
+            Ok(()) => {
+                // The branch only once its worktree is gone: git refuses to
+                // delete a branch checked out anywhere, and a reviewer's is
+                // checked out in exactly the worktree just removed (or nowhere,
+                // after its `gh pr checkout --detach`).
+                let br = crate::git::git_branch_force_delete(&g.repo, &branch);
+                self.audit(&dead.group, brand::AUDIT_ACTOR, "reviewer-worktree-removed", json!({
+                    "agent": dead.id,
+                    "path": dead.cwd,
+                    "branch": branch,
+                    "branch_deleted": br.is_ok(),
+                    "branch_error": br.err(),
+                    "attempt": attempt,
+                    "initiator": initiator,
+                }));
+                true
+            }
+            Err(e) if last => {
+                self.audit(&dead.group, brand::AUDIT_ACTOR, "reviewer-worktree-remove-failed", json!({
+                    "agent": dead.id,
+                    "path": dead.cwd,
+                    "branch": branch,
+                    "error": e,
+                    "attempts": attempt,
+                    "initiator": initiator,
+                }));
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// **Cut a reclaimed reviewer worktree again, at the same path, before a
+    /// resume reads it** (#3443) — `true` when `cwd` exists afterwards because
+    /// of this call.
+    ///
+    /// The reclaim removes a reviewer's worktree when its pane dies, and the
+    /// review driver releases a lane with its session KEPT: the next round
+    /// resumes that conversation in a fresh pane, in the workspace the roster
+    /// recorded (`resolve_worker_resume_cwd`). With the directory gone, that
+    /// resume would refuse `resume-workspace-missing` and the drive would open
+    /// a fresh lane with no memory of its earlier verdict. So every resume path
+    /// calls this first.
+    ///
+    /// **The same path, not a new one**, because a CLI may key the session on
+    /// it — Claude Code keeps a transcript under a directory named after the
+    /// session's cwd, and resumes it only from there. The same branch name,
+    /// because a worktree's path is derived from its branch
+    /// (`git_worktree_add_sync`), and the result is checked against `cwd`
+    /// rather than assumed: a mismatch is removed again and audited.
+    ///
+    /// Scratch by contract, so a fresh cut from the default branch is exactly
+    /// what the reviewer had at spawn; it re-checks-out the PR it reviews.
+    ///
+    /// A no-op unless `cwd` is missing AND [`reviewer_scratch_verdict`] says it
+    /// was a reviewer's scratch worktree — so a worker's vanished worktree is
+    /// never re-cut from the default branch here, which would hand a resumed
+    /// worker a checkout without its own work.
+    #[doc(hidden)] // pub for integration tests
+    pub fn restore_reviewer_scratch_worktree(&self, group: &GroupId, cwd: &str) -> bool {
+        if cwd.trim().is_empty() || Path::new(cwd).is_dir() {
+            return false;
+        }
+        let Some(g) = self.group(group) else { return false };
+        let claims = self.workspace_claims(group);
+        let ScratchVerdict::Scratch { branch } = reviewer_scratch_verdict(&g.repo, cwd, &claims, None)
+        else {
+            return false;
+        };
+        match crate::git::git_worktree_add_sync(g.repo.clone(), branch.clone(), None) {
+            Ok(wt) if same_path_key(&wt, cwd) => {
+                // #1042 slice B, as at the original cut in `spawn_agent_ex`.
+                crate::rootreg::admit_derived(&self.roots, &wt);
+                self.audit(group, brand::AUDIT_ACTOR, "reviewer-worktree-recut", json!({
+                    "path": cwd, "branch": branch,
+                }));
+                true
+            }
+            Ok(wt) => {
+                let _ = crate::git::git_worktree_remove(&g.repo, &wt);
+                self.audit(group, brand::AUDIT_ACTOR, "reviewer-worktree-recut-failed", json!({
+                    "path": cwd, "branch": branch,
+                    "error": format!("the worktree was cut at {wt}, not at the recorded path"),
+                }));
+                false
+            }
+            Err(e) => {
+                self.audit(group, brand::AUDIT_ACTOR, "reviewer-worktree-recut-failed", json!({
+                    "path": cwd, "branch": branch, "error": e,
+                }));
+                false
+            }
+        }
     }
 
     /// Called from the pty waiter thread when any pty exits. No-op for ptys
@@ -64197,6 +64507,12 @@ pub fn resume_recorded_session(
         let cli = resolved_block
             .map(|b| workflow::cli_of(&b, &group.guardrails.agent_cli).to_string())
             .unwrap_or_else(|| group.guardrails.agent_cli.clone());
+        // #3443: a dead reviewer's scratch worktree was reclaimed; cut it
+        // again at the recorded path before the resume reads it. A no-op for
+        // anything else, a worker's worktree included.
+        if let Some(r) = matched.as_ref() {
+            reg.restore_reviewer_scratch_worktree(&record.group_id, &r.cwd);
+        }
         let cwd = resolve_worker_resume_cwd(
             &cli,
             session_id,

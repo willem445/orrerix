@@ -2600,6 +2600,14 @@ impl OrchRegistry {
             Some(b) => workflow::cli_of(b, &g.guardrails.agent_cli).to_string(),
             None => g.guardrails.agent_cli.clone(),
         };
+        // #3443: a released lane's scratch worktree was reclaimed when its pane
+        // died. Cut it again at the recorded path so the resume below finds
+        // the workspace its session ran in, rather than refusing and opening a
+        // fresh lane with no memory of its verdict. A no-op for anything but a
+        // reclaimed reviewer worktree.
+        if let Some(o) = owner.as_ref() {
+            self.restore_reviewer_scratch_worktree(group, &o.cwd);
+        }
         let db = self.opencode_db_path(group);
         let pi = self.pi_sessions_dir(group);
         resolve_worker_resume_cwd(

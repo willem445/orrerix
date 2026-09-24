@@ -4789,8 +4789,9 @@ fn the_invariants_digest_leads_the_document_and_carries_what_compaction_would_co
           a correct outcome and never a reason to merge anyway"),
         ("an approval is not a disposition",
          "an approval with findings open is not done (#222)"),
-        ("a reason, a filed issue",
-         "INVARIANT 3's three deferral costs — a reason, a filed issue AND a line to the human. \
+        ("a line in the pr's disposition comment",
+         "INVARIANT 3's three deferral costs — a reason, a line in the PR's disposition comment \
+          AND a line to the human (#3441: not a new issue). \
           Drop them from the digest and 'deferred' silently becomes free, which is the exact \
           failure #235 was written to stop"),
         ("you own the architecture, not only the acceptance criteria",
@@ -4827,6 +4828,11 @@ fn the_invariants_digest_leads_the_document_and_carries_what_compaction_would_co
     assert!(
         !head.contains("every open branch is stale"),
         "the retracted 'every open branch is stale' rule is back in the digest: {head}"
+    );
+    // #3441: INVARIANT 3's deferral is a line in the PR's disposition comment, not a filed issue.
+    assert!(
+        !head.contains("a filed issue"),
+        "the retracted issue-per-deferral rule (#3441) is back in the digest: {head}"
     );
 
     // #1848 review: the resident stub must carry the widened trigger too — reverting its
@@ -4898,7 +4904,7 @@ fn the_orchestrators_findings_policy_survives_in_substance_not_just_in_bytes() {
         // non-blocking findings, route a defect as blocking.
         (disposition, "the disposition step", "round ≥ 2, every required lane passed",
          "#2168 S4: at round ≥ 2 with every required lane passed and only non-blocking findings \
-          open, the DEFAULT flips to DEFER — a follow-up issue, not another routing round"),
+          open, the DEFAULT flips to DEFER — a line in the disposition comment, not another round"),
         (disposition, "the disposition step", "names a defect",
          "…UNLESS the finding names a defect — a wrong value, an unreachable arm, a claim the \
           code contradicts — which routes as blocking despite its non-blocking label"),
@@ -4919,13 +4925,14 @@ fn the_orchestrators_findings_policy_survives_in_substance_not_just_in_bytes() {
         (disposition, "the disposition step", "why the fix doesn't belong in",
          "deferral cost 1 — a REASON naming why the fix doesn't belong in THIS PR ('scope' is a \
           category word; 'it'd only take ten minutes' is a reason to FIX it)"),
-        (disposition, "the disposition step", "carrying the finding verbatim",
-         "deferral cost 2 — a filed FOLLOW-UP ISSUE carrying the finding, not a paraphrase"),
+        (disposition, "the disposition step", "carrying the finding — not a new issue",
+         "deferral cost 2 — a line in the PR's DISPOSITION COMMENT carrying the finding, not a new \
+          issue (#3441)"),
         (disposition, "the disposition step", "one line to the human",
          "deferral cost 3 — the LINE TO THE HUMAN, which is the only thing that gives a deferred \
           finding a future"),
         (disposition, "the disposition step", "filing it is not doing it",
-         "…and that the filed issue PARKS the finding in the label funnel rather than \
+         "…and that an issue filed for tracked work PARKS it in the label funnel rather than \
           discharging it"),
         (disposition, "the disposition step", "round of findings on the same pr",
          "the loop's BOUND (rev-19 F5) — three rounds and the PR settles, or a reviewer with one \
@@ -4955,6 +4962,14 @@ fn the_orchestrators_findings_policy_survives_in_substance_not_just_in_bytes() {
     assert!(
         !disposition.contains("default: fix it in this pr"),
         "the retracted rule (#2181) is back in the disposition step: {disposition}"
+    );
+    // #3441: a deferred nit is a line in the PR's disposition comment, not a new issue. The
+    // retracted "file a follow-up issue per deferral" rule must not come back through the
+    // disposition step.
+    assert!(
+        !disposition.contains("**a follow-up issue**")
+            && !disposition.contains("defer them to a follow-up issue"),
+        "the retracted issue-per-deferral rule (#3441) is back in the disposition step: {disposition}"
     );
 }
 

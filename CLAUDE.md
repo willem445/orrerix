@@ -621,11 +621,20 @@ narrow their ask back down to the original ticket on your own judgment.
   default `🤖 Generated with [Claude Code](…)` line and any `claude.ai/code/session_…`
   URL or `Claude-Session:` trailer are dropped before posting; the squash message
   is permanent and a chat-session link is not provenance. `Co-Authored-By:` stays.
-- **Delete a PR's branch once it merges.** `gh pr merge --delete-branch`
-  handles it, but skips the remote delete when a local worktree still holds
-  the branch — after cleaning the worktree, verify with
+- **Clean up after every PR: its scratch PRs, its branch, its worktrees.**
+  Each is left behind by default, and they accumulate across every agent the
+  repo has ever run. A worker closes each scratch PR it opens
+  (`gh pr close <n> --delete-branch`) as soon as the run is cited, and lists
+  any it could not close in its `done` report — the naming rule the close
+  guard needs is in the worker template's **Git workflow** (#2985, #3442).
+  After the merge, `gh pr merge --delete-branch` skips the remote delete while
+  a local worktree still holds the branch, so verify with
   `git ls-remote --heads origin <branch>` and `git push origin --delete
-  <branch>` if it survived. Whoever performs the merge owns this step (#662).
+  <branch>` if it survived; the worker's worktree and local branch go, and so
+  do the PR's reviewer worktrees, which are scratch by contract (#3443).
+  Whoever performs the merge owns the branch step; the orchestrator runs the
+  whole thing as the post-merge checklist and lull sweep in its playbook's
+  **Mergeability** section (#662, #3441).
 - **Retarget every open PR based on a branch BEFORE deleting that branch, and
   rebase each one onto its new base.** Deleting a base ref auto-closes every PR
   stacked on it, and while that ref is gone `gh pr edit --base` answers

@@ -321,14 +321,16 @@ Two labels let the human hand you work without typing in your pane. They are
   on a triage plan.
 
 **You may file; you may not start** (INVARIANT 8). The funnel governs what you *begin*, not what
-you *notice*. Debt, a risk, a follow-up, a flaky test, a gap a review exposed: open the issue
+you *notice* — but file only work that must be tracked: a feature, or a real defect (a flaky test
+is one). A review nit is not: a deferred one is a line in its PR's disposition comment (the
+resident **Delegation protocol**), and small follow-ups in one area go as a line on that area's
+one rolling follow-up issue, not one issue each. For tracked work, open the issue
 (`gh issue create`), state it concretely, **suggest** its label ("recommend `agent-ready`"), and
 tell the human in one line. You may not apply the label yourself, you may not **groom an issue the
 human hasn't labelled** (rewriting someone else's issue with acceptance criteria and a plan is the
 step immediately before starting it — it is how an agent talks itself into ownership), and you may
-not start it: filing it is not doing it, exactly as with a deferred finding, and the line to the
-human is what gives it a future. An observation that never became an issue is one nobody will ever
-act on.
+not start it: filing it is not doing it, and the line to the human is what gives it a future. A
+defect that never became an issue is one nobody will ever act on.
 
 **Write it in two layers, like every other thing you post.** Above the fold, for the human who
 has to decide whether this is worth doing: the problem, the shape of a fix, what "done" looks
@@ -836,8 +838,43 @@ convention `spawn_agent` cuts worker worktrees under), then reuse that one direc
 whatever mechanical work comes next by checking out a different branch inside it
 (`git checkout <branch>`) instead of creating a fresh worktree per job.
 
-Once a PR is merged (`gh pr view`), have the worker clean up its worktree/branch — or do it
-yourself — and schedule the next item.{{POST_MERGE_WORKFLOW_HOOK}}
+**Cleanup is yours: a sweep at every lull, and a checklist after every merge.** A worker closes
+its own scratch PRs as it cites them, but only you may close any PR in the group, and a worktree
+cannot be removed while a live pane works in it — so whatever outlives a PR is yours to remove.
+
+**The sweep, at a lull** — it catches what a checklist missed: a merge you did not see, a pane
+that died mid-task, a report that left something out.
+
+- Open scratch PRs whose parent PR is merged or closed: `gh pr close <n> --delete-branch`.
+- Local branches whose PR is merged or closed (`gh pr list --state all --head <branch>`):
+  `git branch -D <branch>`.
+- Worktrees with no live pane (`git worktree list` against the `cwd`s in `list_agents`): remove
+  them as steps 3 and 4 below do, then `git worktree prune`.
+
+**The checklist, after every merge — including one the human performed:**
+
+1. **Close the PR's remaining scratch PRs, with their branches** — the ones its worker's `done`
+   report listed as still open, and any other open PR whose head is `<branch>-…` or
+   `<branch>/…`: `gh pr close <n> --delete-branch`. The close guard refuses a resumed worker
+   pane its own scratch PRs (#3442), so expect some.
+2. **Verify the head branch is gone from origin:** `git ls-remote --heads origin <branch>`
+   prints nothing. `gh pr merge --delete-branch` skips the remote delete while a local worktree
+   holds the branch, so a survivor is normal. Retarget any open PR based on it first
+   (`gh pr list --state open --search "base:<branch>"`, then `gh pr edit <n> --base <its base>`)
+   — deleting a base branch closes every PR stacked on it — then
+   `git push origin --delete <branch>`.
+3. **Remove the worker's worktree and local branch.** Record its session id on the task and
+   `kill_agent` it (**One task per worker**), then `git worktree remove <its cwd>` and
+   `git branch -D <branch>` — `-D`, because a squash merge leaves the branch unmerged as far as
+   git can tell. If the remove refuses on uncommitted changes, read them before `--force`: the
+   merge shipped the branch, so what is left is scratch or work that never reached the PR, and
+   the second is the human's to hear about. A later follow-up on this work goes to a fresh
+   worker on a fresh branch: there is no workspace left to resume into.
+4. **Remove the worktrees of the PR's reviewer lanes** — each reviewer pane that reviewed it,
+   once killed or released: `git worktree remove --force <its cwd>` and
+   `git branch -D <its branch>`. A reviewer's worktree is scratch by contract, so `--force`
+   loses nothing; orrerix does not yet remove them itself (#3443).
+5. Only then, schedule the next item.{{POST_MERGE_WORKFLOW_HOOK}}
 
 ## CI gate
 

@@ -125,7 +125,9 @@ you might be tempted to hold the pane for.
    worktree (or another reviewer's, mid-review on the same PR). **Never `git stash`** — the
    stash stack is shared across every worktree of this repo, not per-worktree, so a
    `pop`/`drop`/`clear` can destroy another agent's WIP in a different worktree (#299). Commit
-   anything you need to set aside to your own branch instead.
+   anything you need to set aside to your own branch instead. That branch and worktree are
+   scratch too: the orchestrator removes both once your lane is done, so never park there
+   anything that must outlive the review — what matters goes in the review body.
 2. Review for, in priority order:
    - **Correctness**: real defects with a concrete failure scenario — inputs/state that
      produce a wrong result. Verify the claim against the code before reporting it.

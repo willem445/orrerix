@@ -45,10 +45,9 @@ tell the orchestrator, so the next one like it goes to `worker-quick`.
    **Red before green, evidenced.** Run your new tests without the change and confirm they fail
    for the *expected* reason — not on a compile error, which proves nothing about behaviour.
    **Never `git stash` to produce that red** (#299, #493): commit your real work first, then set
-   the behaviour aside on a throwaway scratch branch named
-   `<worker-branch>-scratchN` — under the close-ownership rule (#3198) that is
-   the shape you can close and delete yourself when the red is cited — for Rust
-   that is a scratch draft PR read
+   the behaviour aside on a throwaway scratch branch — named, closed and
+   reported per your role instructions' scratch-PR bullet under **Git
+   workflow** — for Rust that is a scratch draft PR read
    through CI, since local `cargo` is banned. The `ci-validate` skill carries the procedure and
    the trap that costs a round (to redden an *integration* test, neuter the wiring, not the lib
    function). Paste the command and the failure line into the PR body's agent layer (below),
@@ -94,7 +93,11 @@ tell the orchestrator, so the next one like it goes to `worker-quick`.
      grep for the claim's distinctive noun across every root — and re-derive
      every ordinal and enumeration at head;
    - (e) a routed non-blocking finding that changes behaviour carries
-     red-before-green, or goes back as "defer to an issue" (#2104 r4).
+     red-before-green, or goes back as a deferral — a line in the PR's
+     disposition comment, not a new issue (#2104 r4, #3441);
+   - (f) every scratch PR you opened is closed with its branch, or listed in
+     the report with why — your role instructions' scratch-PR bullet under
+     **Git workflow** (#3441).
 9. **Mark the PR ready and stop.** `gh pr ready` on the draft from step 6 — update
    the description with what changed, why, and how it was validated (the CI run, on
    the platform matrix), in the two-layer shape below. Then report.

@@ -1657,3 +1657,28 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   scheduling` rather than the core's `&` spelling, `Task board` and `Prototype → Proceed` in
   their real directions, and "the resident **Durability rules**" where the target exists only
   in the core. The same checks were re-run: `live-minus-keys == golden` OK for both files.
+
+- **#3441, cleanup duties and fewer issues** — `worker.md`, `dod.md`, `reviewer.md`,
+  `orchestrator.md` and `orchestrator-playbook.md`. `planner.md`, `manager.md` and `lead.md`
+  are byte-identical to their previous blessed copies.
+
+  Each role's cleanup duty is stated once, where that role reads it. `worker.md`'s **Git
+  workflow** gains the scratch-PR bullet: name it `<your-branch>-scratchN` (the only shape the
+  close guard lets a worker close, #2985), close it with `--delete-branch` once cited, and list
+  anything left open in the `done` report with its reason; `dod.md`'s item 7 points at it.
+  `reviewer.md`'s step 1 says the reviewer's own branch and worktree are scratch the
+  orchestrator removes. The playbook's **Mergeability** section replaces "have the worker clean
+  up its worktree/branch — or do it yourself" with a lull-time sweep and a numbered post-merge
+  checklist whose last item keeps the `schedule the next item.` sentence the process-pro hook
+  follows; the resident stub names the checklist so an orchestrator knows to read it.
+
+  The same round makes the deferral rule consistent with "fewer issues": INVARIANT 3 and the
+  disposition step defer a finding to a line in the PR's disposition comment rather than a filed
+  issue, INVARIANT 8 and the playbook's **You may file** paragraph file only work that must be
+  tracked, with one rolling follow-up issue per area. `prompts.rs` and `workflow.rs` repin the
+  deferral anchors and gain a negative assertion on the retracted issue-per-deferral wording.
+
+  Both re-bless checks above were run: `live-minus-keys == golden` reports OK for all eight
+  files, and the patch on each golden is identical to the patch on its live template
+  (`git diff -U0`, compared) except the two playbook lines carrying
+  `{{POST_MERGE_WORKFLOW_HOOK}}`, which is the key strip itself.

@@ -49,10 +49,9 @@ and costs the human a debugging session later.
    in `src-tauri/tests/` (integration tests only). Frontend logic gets a DOM-free
    pure module + `test/*.test.ts`.
    Then prove it: run the new test without your change — **never via `git stash`** (#299, #493:
-   commit your work first, then set the behaviour aside on a throwaway scratch branch named
-   `<worker-branch>-scratchN`, the shape the close-ownership rule (#3198) lets you close and
-   delete yourself; for Rust
-   that is a scratch draft PR read through CI, see the `ci-validate` skill).
+   commit your work first, then set the behaviour aside on a throwaway scratch branch, named,
+   closed and reported per your role instructions' scratch-PR bullet under **Git workflow**;
+   for Rust that is a scratch draft PR read through CI, see the `ci-validate` skill).
    Watch it fail for the reason you expect, and paste that command + failure line into the PR
    body beside the passing run. It costs a minute, and it is the difference between a test and a
    decoration.
@@ -87,7 +86,11 @@ and costs the human a debugging session later.
      grep for the claim's distinctive noun across every root — and re-derive
      every ordinal and enumeration at head;
    - (e) a routed non-blocking finding that changes behaviour carries
-     red-before-green, or goes back as "defer to an issue" (#2104 r4).
+     red-before-green, or goes back as a deferral — a line in the PR's
+     disposition comment, not a new issue (#2104 r4, #3441);
+   - (f) every scratch PR you opened is closed with its branch, or listed in
+     the report with why — your role instructions' scratch-PR bullet under
+     **Git workflow** (#3441).
 6. **Mark the PR ready and stop.** `gh pr ready` on the draft from step 3, with the
    description saying what changed and how it was validated, in the two-layer shape
    below. Then `report("done", …)` with the URL. **You never merge** — the human

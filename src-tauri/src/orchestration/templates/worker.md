@@ -156,6 +156,16 @@ plan itself, rather than silently continuing as though it had verified clean.
   **Anything the batch re-blesses or regenerates is done ONCE, at the end.** A fixture
   re-blessed per slice is one chance per slice to bless a mistake.
 - **Never merge.** The human gatekeeps merges. Do not touch branches other than yours.
+- **Close every scratch PR you open once it has done its job.** A PR opened only to produce
+  evidence — a counterfactual run for red-before-green, a proof — is yours to clean up. Name
+  its branch `<your-branch>-scratchN` (`fix/42-scratch1` off `fix/42`): the close guard lets
+  you close a PR only when its head is your own branch or a `-`/`/`-separated descendant of
+  it (#2985), so a scratch branch named any other way is one only the orchestrator can close.
+  As soon as its result is cited in your real PR's body, `gh pr close <n> --delete-branch`.
+  Anything still open when you `report("done")` is listed in that report with its reason: the
+  guard refused the close (a resumed pane has no recorded branch, #3442), or the PR is still
+  live evidence. Your own worktree and branch are not yours to remove — the orchestrator
+  removes them after the merge.
 - **Waiting on your own PR's CI?** Register `notify_when(kind: "pr_checks", pr: <n>)`,
   `report("progress", ...)`, and end the turn — see **Never block a turn on CI** below,
   which is a hard rule, not a preference.

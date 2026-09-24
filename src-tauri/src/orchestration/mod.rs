@@ -43127,7 +43127,7 @@ impl OrchRegistry {
         review
             || match plandrive::load_state(&dir) {
                 Ok(st) => st.entries.iter().any(|e| e.state().is_live()),
-                Err(_) => true,
+                Err(_) => false,
             }
     }
 

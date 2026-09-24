@@ -43513,6 +43513,49 @@ fn a_codex_pane_on_an_unrecognised_gitdir_layout_gets_no_roots_and_audits_why() 
     drop(drain_parked_readers_for_test());
 }
 
+/// #3456 review N1, through the spawn: a refusal's reason reaches the audit log
+/// CAPPED, like `codex_gh_token_env`'s. The reason can quote `commondir`, which
+/// the pane can write, and `append_audit` writes whatever it is handed; the
+/// viewer re-reads that row whole on every poll. The payload is a `commondir`
+/// that is under the read bound but far over the cap, so this pins the cap at
+/// the audit site rather than the read bound in the helper.
+#[test]
+fn a_refusals_reason_reaches_the_audit_log_capped() {
+    let _serial = capture_lock();
+    let (reg, dir) = test_registry();
+    reg.set_codex_home_override(dir.path().join("codex-home"));
+    reg.set_gh_exec_override(None);
+    let common = dir.path().join("main").join(".git");
+    for d in ["objects", "refs", "logs"] {
+        fs::create_dir_all(common.join(d)).unwrap();
+    }
+    let gitdir = common.join("worktrees").join("wt");
+    fs::create_dir_all(&gitdir).unwrap();
+    // 3000 bytes: under the 4096-byte read bound, so the reason quotes it, and
+    // twenty-five times the audit cap.
+    fs::write(gitdir.join("commondir"), "y".repeat(3000)).unwrap();
+    let wt = dir.path().join("wt");
+    fs::create_dir_all(&wt).unwrap();
+    fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display().to_string().replace('\\', "/"))).unwrap();
+    let g = reg
+        .create_group(
+            &wt.to_string_lossy().replace('\\', "/"),
+            Guardrails { agent_cli: "codex".into(), max_agents: 3, ..rails() },
+        )
+        .unwrap();
+    reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let rows = audit_entries(&reg, &g.id, "codex-worktree-gitdir-unrecognised");
+    assert_eq!(rows.len(), 1, "control: the refusal was audited: {rows:?}");
+    let why = rows[0]["detail"]["why"].as_str().unwrap_or_default();
+    assert!(why.starts_with("commondir"), "the reason leads with what was wrong: {why}");
+    assert!(
+        why.chars().count() <= notify::NOTICE_FIELD_CAP,
+        "the audit reason must be capped, not carry the pane-written file: {} chars",
+        why.chars().count()
+    );
+    drop(drain_parked_readers_for_test());
+}
+
 /// **`gh` stderr is attacker-influenceable text on its way into an `[orrerix]`
 /// notice** (rev-lead finding 1 on #791).
 ///

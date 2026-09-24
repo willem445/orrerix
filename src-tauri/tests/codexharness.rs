@@ -814,10 +814,14 @@ fn a_worktree_layout_that_is_not_gits_own_grants_nothing() {
     assert!(err.contains("commondir"), "{err}");
     fs::write(f.gitdir.join("commondir"), "../..\n").unwrap();
 
-    // No commondir at all — a submodule's or `--separate-git-dir`'s gitdir,
-    // which is a whole repository, hooks and config included.
+    // A gitdir NOT under `worktrees/` — a submodule's gitdir, which is a whole
+    // repository, hooks and config included. It carries a `commondir` of
+    // `../..` that resolves to the real common dir (review N3), so the
+    // `worktrees` name check is the ONLY thing refusing it: without that
+    // fixture the file read failed first and the check had no witness.
     let module = f.common.join("modules").join("m");
     fs::create_dir_all(&module).unwrap();
+    fs::write(module.join("commondir"), "../..\n").unwrap();
     let sub = f.root.join("sub");
     fs::create_dir_all(&sub).unwrap();
     fs::write(sub.join(".git"), format!("gitdir: {}\n", module.display())).unwrap();
@@ -828,6 +832,28 @@ fn a_worktree_layout_that_is_not_gits_own_grants_nothing() {
     assert!(codex_worktree_git_roots(&sub).is_err());
     fs::write(sub.join(".git"), format!("gitdir: {}\n", f.root.join("gone").display())).unwrap();
     assert!(codex_worktree_git_roots(&sub).is_err());
+}
+
+/// #3456 review N1: `commondir` lives in the gitdir, which the pane can write,
+/// so its SIZE is the pane's choice. The read is bounded and an oversized file
+/// is refused by its size, never echoed: the reason ends up in an audit row,
+/// which the viewer re-reads whole on every poll. The `.git` pointer gets the
+/// same treatment. The 1 MiB payload is the specimen; the bound asserted is
+/// far below it, so an unbounded read that echoes the content cannot pass.
+#[test]
+fn an_oversized_commondir_or_pointer_is_refused_by_size_and_never_echoed() {
+    let f = fake_linked_worktree();
+    let huge = "x".repeat(1 << 20);
+    fs::write(f.gitdir.join("commondir"), &huge).unwrap();
+    let err = codex_worktree_git_roots(&f.wt).expect_err("a 1 MiB commondir is not git's");
+    assert!(err.len() < 1024, "the reason must not carry the file: {} bytes", err.len());
+    assert!(err.starts_with("commondir"), "{err}");
+
+    fs::write(f.gitdir.join("commondir"), "../..\n").unwrap();
+    assert!(codex_worktree_git_roots(&f.wt).is_ok(), "control: the same layout, restored, is accepted");
+    fs::write(f.wt.join(".git"), format!("gitdir: {huge}")).unwrap();
+    let err = codex_worktree_git_roots(&f.wt).expect_err("a 1 MiB pointer is not git's");
+    assert!(err.len() < 1024, "the reason must not carry the file: {} bytes", err.len());
 }
 
 /// The rendering: one `writable_roots` array inside `[sandbox_workspace_write]`,

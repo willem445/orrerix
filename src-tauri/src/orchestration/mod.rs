@@ -8528,8 +8528,8 @@ pub fn codex_profile_name_of_path(cfg: &Path) -> Option<&str> {
     cfg.file_name()?.to_str()?.strip_suffix(CODEX_PROFILE_FILE_EXT)
 }
 
-/// The extra writable roots a codex pane needs to COMMIT from a linked git
-/// worktree (#3456): its own gitdir, plus the three directories of the shared
+/// The directories a codex pane must be able to write to COMMIT from a linked
+/// git worktree (#3456): its own gitdir, plus the three directories of the shared
 /// `.git` a commit and a push write — `objects`, `refs`, `logs`. `Ok(vec![])`
 /// for a pane that is not in a linked worktree (a main clone, whose `.git` is a
 /// directory, or no repo at all): nothing extra, codex's own posture stands.
@@ -8539,10 +8539,11 @@ pub fn codex_profile_name_of_path(cfg: &Path) -> Option<&str> {
 /// resolves the `gitdir:` pointer and protects that directory too
 /// (`default_read_only_subpaths_for_writable_root`, protocol/src/permissions.rs
 /// at rust-v0.156.1) — on Windows as DENY ACEs, which is what made
-/// `<repo>/.git/worktrees/<name>/index.lock` unwritable. An explicit writable
-/// root for the SAME path suppresses that default
-/// (`append_default_read_only_path_if_no_explicit_rule`, which compares the two
-/// paths with `==`), so the gitdir is spelled here exactly as codex resolves it:
+/// `<repo>/.git/worktrees/<name>/index.lock` unwritable. An explicit `write`
+/// entry for the SAME path suppresses that default (`has_explicit_resolved_path_entry`
+/// in `get_writable_roots_with_cwd_impl`, and `append_default_read_only_path_if_no_explicit_rule`
+/// on the legacy path — both compare the two paths with `==`), so the gitdir is
+/// spelled here exactly as codex resolves it:
 /// the pointer file's own text, joined onto the pane's directory and folded
 /// lexically, the way `resolve_gitdir_from_file` does. Asking `git rev-parse
 /// --git-dir` instead would risk a differently spelled path, and a spelling that
@@ -8558,9 +8559,10 @@ pub fn codex_profile_name_of_path(cfg: &Path) -> Option<&str> {
 /// **`Err` is a refusal with a reason, never a guess.** A `.git` file whose
 /// layout is not git's own linked-worktree shape — the gitdir not sitting at
 /// `<common>/worktrees/<name>`, or its `commondir` naming a different directory
-/// — grants nothing. The layout check is what stops a rewritten `commondir` (the
-/// gitdir is writable once this lands) from pointing the NEXT spawn's writable
-/// roots at an arbitrary `objects`/`refs`/`logs` elsewhere on the machine.
+/// — grants nothing. The pane cannot rewrite `commondir` itself
+/// ([`codex_worktree_git_access`] seals it read-only), but an unsandboxed peer or
+/// the human can, and the layout check is what stops such a file from pointing a
+/// spawn's write entries at an arbitrary `objects`/`refs`/`logs` elsewhere.
 #[doc(hidden)] // pub for integration tests
 pub fn codex_worktree_git_roots(workdir: &Path) -> Result<Vec<PathBuf>, String> {
     let dot_git = workdir.join(".git");
@@ -8599,6 +8601,75 @@ pub fn codex_worktree_git_roots(workdir: &Path) -> Result<Vec<PathBuf>, String> 
     // sandbox to bind.
     roots.extend(["objects", "refs", "logs"].iter().map(|d| common.join(d)).filter(|p| p.is_dir()));
     Ok(roots)
+}
+
+/// The name of the permissions profile a worktree pane's codex profile defines
+/// and selects. Branded so a human reading their own merged config can tell
+/// whose it is; not `:`-prefixed, which codex reserves for built-ins
+/// (`validate_user_permission_profile_names`).
+pub const CODEX_WORKTREE_PERMISSIONS: &str = "orrerix-worktree";
+
+/// What a codex pane's sandbox is told about git: directories it may write, and
+/// files inside them it may NOT. Empty for every pane that is not in a linked
+/// worktree, and then the profile keeps codex's legacy `workspace-write` block.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexGitAccess {
+    pub write: Vec<PathBuf>,
+    pub read_only: Vec<PathBuf>,
+}
+
+/// The files in a linked worktree's gitdir that change what git — including
+/// the HUMAN'S unsandboxed git — does in that worktree, and that a codex pane
+/// therefore must not write even though the gitdir itself is writable (#3456,
+/// the human's call in review round 1):
+///
+/// - `commondir` — which `.git` is the common dir, and so which `config` and
+///   `hooks/` apply. Rewritten, the next `git status` the human runs there can
+///   execute a hook or a `core.fsmonitor` the pane chose.
+/// - `config.worktree` — per-worktree config, read when the repo sets
+///   `extensions.worktreeConfig`; a config key is code by the same route.
+/// - `gitdir` — the back-pointer `git worktree repair` WRITES a `.git` file
+///   through: rewritten, the human's next repair writes where the pane chose.
+///
+/// Nothing else in a linked gitdir is read that way: `hooks`, `config`, `info`
+/// and `objects` resolve to the COMMON dir for a linked worktree (git's
+/// `common_list`), and `HEAD`, `index`, `ORIG_HEAD`, `FETCH_HEAD`, `logs/` and
+/// the rebase state are what a commit and a rebase must write.
+const CODEX_GITDIR_SEALED: [&str; 3] = ["commondir", "config.worktree", "gitdir"];
+
+/// [`codex_worktree_git_roots`] plus the sealed files, for the profile.
+///
+/// **One side effect, deliberately:** an absent `config.worktree` is created
+/// EMPTY. A deny can only be set on a path that exists (codex's Windows
+/// `compute_allow_paths_for_permissions` skips a missing one), so without it the
+/// pane could create the file the seal exists to stop. An empty
+/// `config.worktree` means nothing to git: it is read only under
+/// `extensions.worktreeConfig`, and then it sets nothing. It is created with
+/// `create_new`, so a file already there is never touched. `commondir` and
+/// `gitdir` are NOT created: git writes both for every linked worktree, so a
+/// gitdir missing either is refused rather than repaired, and an empty `gitdir`
+/// is one `git worktree prune` would read as broken.
+#[doc(hidden)] // pub for integration tests
+pub fn codex_worktree_git_access(workdir: &Path) -> Result<CodexGitAccess, String> {
+    let write = codex_worktree_git_roots(workdir)?;
+    let Some(gitdir) = write.first().cloned() else {
+        return Ok(CodexGitAccess::default());
+    };
+    let mut read_only = Vec::new();
+    for name in CODEX_GITDIR_SEALED {
+        let path = gitdir.join(name);
+        if name == "config.worktree" {
+            match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(format!("config.worktree cannot be sealed: {}: {e}", path.display())),
+            }
+        } else if !path.is_file() {
+            return Err(format!("{name} missing, cannot be sealed: {}", path.display()));
+        }
+        read_only.push(path);
+    }
+    Ok(CodexGitAccess { write, read_only })
 }
 
 /// The most of a `.git` pointer or a `commondir` [`codex_worktree_git_roots`]
@@ -8674,11 +8745,13 @@ fn codex_fold_path(p: &Path) -> PathBuf {
 ///   at all.
 /// - `[sandbox_workspace_write] network_access = true` — off by default under
 ///   `workspace-write`, and a worker that cannot reach GitHub is not a worker.
-/// - `[sandbox_workspace_write] writable_roots` — only when `writable_roots` is
-///   non-empty, which is a GROUP pane in a linked worktree: the git metadata a
-///   commit writes, which lives outside the worktree (#3456). The caller
-///   derives it with [`codex_worktree_git_roots`], where the argument for the
-///   exact set lives; this function only spells what it is handed.
+/// - `default_permissions` + `[permissions.<name>]` INSTEAD of `sandbox_mode`
+///   and `[sandbox_workspace_write]` — only when `git` grants something, which
+///   is a GROUP pane in a linked worktree (#3456): `:workspace` plus the git
+///   metadata a commit writes (which lives outside the worktree) as `write`,
+///   and the gitdir files that redirect git as `read`. The caller derives both
+///   lists with [`codex_worktree_git_access`], where the argument for the exact
+///   sets lives; this function only spells what it is handed.
 /// - `[projects."<cwd>"] trust_level = "trusted"` — the single most important
 ///   line here. `should_show_trust_screen(config)` is
 ///   `config.active_project.trust_level.is_none()`, rendering "Do you trust the
@@ -8724,8 +8797,13 @@ pub fn codex_profile_toml(
     unattended: bool,
     effort: &str,
     developer_instructions: Option<&str>,
-    writable_roots: &[PathBuf],
+    git: &CodexGitAccess,
 ) -> String {
+    // A worktree pane's sandbox is a NAMED permissions profile rather than the
+    // legacy `sandbox_mode` block, because it needs a read-only file INSIDE a
+    // writable directory (the gitdir's `commondir`), which `[sandbox_workspace_write]`
+    // cannot say. Every other pane keeps the legacy block, byte for byte.
+    let profiles = !git.write.is_empty();
     let mut s = String::new();
     s.push_str(&format!(
         "# Generated by {} — do not edit; this file is rewritten on every spawn and\n\
@@ -8738,7 +8816,15 @@ pub fn codex_profile_toml(
         "approval_policy = \"{}\"\n",
         if unattended { "never" } else { "on-request" }
     ));
-    s.push_str("sandbox_mode = \"workspace-write\"\n");
+    if profiles {
+        // Not beside `sandbox_mode`: codex picks the permission syntax per
+        // layer and a layer naming both is read as profiles anyway
+        // (`resolve_permission_config_syntax`, core/src/config/mod.rs at
+        // rust-v0.156.1). Naming only the one that applies leaves no ambiguity.
+        s.push_str(&format!("default_permissions = \"{CODEX_WORKTREE_PERMISSIONS}\"\n"));
+    } else {
+        s.push_str("sandbox_mode = \"workspace-write\"\n");
+    }
     // Omitted entirely when empty, for the reason the model flag is omitted:
     // a blank value is an argument, not a silence — and `ReasoningEffort`
     // refuses the empty string outright ("reasoning_effort must not be empty"),
@@ -8758,19 +8844,36 @@ pub fn codex_profile_toml(
     s.push('\n');
 
     // ── tables ──
-    s.push_str("[sandbox_workspace_write]\nnetwork_access = true\n");
-    // One line, absolute paths, every backslash escaped: `writable_roots` is a
-    // `Vec<AbsolutePathBuf>` (config/src/types.rs at rust-v0.156.1), and a raw
-    // Windows backslash in a basic string is a parse error that loses the WHOLE
-    // profile, not just this key.
-    if !writable_roots.is_empty() {
-        let items: Vec<String> = writable_roots
-            .iter()
-            .map(|p| format!("\"{}\"", toml_basic_escape(&p.display().to_string(), TomlNewlines::Escape)))
-            .collect();
-        s.push_str(&format!("writable_roots = [{}]\n", items.join(", ")));
+    if profiles {
+        // `:workspace` is codex's own `workspace-write` as a profile parent: `:root`
+        // readable, the project roots (the pane's cwd) and temp writable, and the
+        // project root's `.git` read-only (`extensible_builtin_parent_profile`,
+        // core/src/config/permissions.rs). The child adds exact paths; codex
+        // resolves each path to its DEEPEST matching entry
+        // (`FileSystemSandboxPolicy::resolve_access`), so a `read` file inside a
+        // `write` directory stays read-only. On Windows it becomes a deny-write
+        // ACE, and codex grants `DELETE` per descendant rather than
+        // `FILE_DELETE_CHILD` on the parent precisely so that such a deny holds
+        // (`WRITE_ALLOW_MASK`, windows-sandbox-rs/src/acl.rs).
+        let p = CODEX_WORKTREE_PERMISSIONS;
+        s.push_str(&format!("[permissions.{p}]\nextends = \":workspace\"\n\n"));
+        s.push_str(&format!("[permissions.{p}.filesystem]\n"));
+        // Each path is a quoted key, every backslash escaped: a raw Windows
+        // backslash in a basic string is a parse error that loses the WHOLE
+        // profile, not just this entry.
+        for (paths, access) in [(&git.write, "write"), (&git.read_only, "read")] {
+            for path in paths {
+                s.push_str(&format!(
+                    "\"{}\" = \"{access}\"\n",
+                    toml_basic_escape(&path.display().to_string(), TomlNewlines::Escape)
+                ));
+            }
+        }
+        // The legacy block's `network_access = true`, in the profile's words.
+        s.push_str(&format!("\n[permissions.{p}.network]\nenabled = true\n\n"));
+    } else {
+        s.push_str("[sandbox_workspace_write]\nnetwork_access = true\n\n");
     }
-    s.push('\n');
     s.push_str(&format!(
         "[projects.\"{}\"]\ntrust_level = \"trusted\"\n\n",
         toml_basic_escape(&cwd.display().to_string(), TomlNewlines::Escape)
@@ -31666,9 +31769,9 @@ impl OrchRegistry {
         unattended: bool,
         effort: &str,
         developer_instructions: Option<&str>,
-        // #3456: `codex_worktree_git_roots`'s answer for a group pane, empty
+        // #3456: `codex_worktree_git_access`'s answer for a group pane, empty
         // for a solo one — see the solo caller for why.
-        writable_roots: &[PathBuf],
+        git: &CodexGitAccess,
     ) -> Result<(PathBuf, String), String> {
         let home = self
             .codex_home_dir()
@@ -31688,7 +31791,7 @@ impl OrchRegistry {
             unattended,
             effort,
             developer_instructions,
-            writable_roots,
+            git,
         );
         fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
         // Measure-and-warn, once per spawn, and NEVER a refusal — see
@@ -40188,7 +40291,7 @@ impl OrchRegistry {
                 // the human's own session, `on-request`, with the human in it to
                 // approve an escalation — and widening the sandbox of a session
                 // loomux does not own is not this line's call.
-                /*writable_roots*/ &[],
+                /*git*/ &CodexGitAccess::default(),
             )?;
             // The NAME, not the path: `-p` takes a profile name and resolves
             // it against `CODEX_HOME` itself. Unquoted, and safe unquoted,
@@ -50635,8 +50738,8 @@ impl OrchRegistry {
             // recognise grants nothing and says why in the audit log — the
             // pane still spawns (it can still edit and `report`), but its first
             // `git commit` would otherwise fail with no visible cause.
-            let git_roots = match codex_worktree_git_roots(workdir) {
-                Ok(roots) => roots,
+            let git_access = match codex_worktree_git_access(workdir) {
+                Ok(access) => access,
                 Err(why) => {
                     self.audit(
                         group,
@@ -50650,7 +50753,7 @@ impl OrchRegistry {
                             "why": notify::sanitize_gh_text(&why, notify::NOTICE_FIELD_CAP),
                         }),
                     );
-                    Vec::new()
+                    CodexGitAccess::default()
                 }
             };
             let (path, _name) = self.write_codex_profile(
@@ -50665,7 +50768,7 @@ impl OrchRegistry {
                 unattended,
                 knobs.effort,
                 persona.codex_developer_instructions.as_deref(),
-                &git_roots,
+                &git_access,
             )?;
             let mut env = cli_extra_env(cli, &path, token);
             // #3405: the human's `gh` credential, which codex's sandbox cannot

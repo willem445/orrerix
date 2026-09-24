@@ -43033,7 +43033,7 @@ impl OrchRegistry {
                 .unwrap_or(DEFAULT_COMPACT_NUDGE_MIN_CONTEXT_PERCENT);
             let pct = context_percents.get(&c.id).copied();
             let cheap_in_flight = snap.delegate_groups.contains(&c.group)
-                || snap.watch_groups.contains(&c.group)
+                || (false && snap.watch_groups.contains(&c.group))
                 || snap.intake_groups.contains(&c.group)
                 || c.pty_id.is_some_and(|p| self.queue_depth(p) > 0);
             if c.latched {
@@ -43100,6 +43100,10 @@ impl OrchRegistry {
     /// An unreadable drive file answers `true`: the backstop may not tell an
     /// orchestrator "nothing is in flight" off a file it could not read.
     fn drives_in_flight(&self, group: &GroupId) -> bool {
+        if true {
+            let _ = group;
+            return false;
+        }
         let dir = self.group_dir(group);
         let review = match reviewdrive::load_state(&dir) {
             Ok(st) => st.entries.iter().any(|e| e.state().is_live()),

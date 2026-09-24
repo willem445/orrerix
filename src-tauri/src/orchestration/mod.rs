@@ -60294,13 +60294,17 @@ impl OrchRegistry {
                 // The branch only once its worktree is gone: git refuses to
                 // delete a branch checked out anywhere, and a reviewer's is
                 // checked out in exactly the worktree just removed (or nowhere,
-                // after its `gh pr checkout --detach`).
-                let br = crate::git::git_branch_force_delete(&g.repo, &branch);
+                // after its `gh pr checkout --detach`). And only if no commit
+                // lives on it alone — the verdict proved the WORKTREE is
+                // scratch, but a spawn handed an existing branch by name would
+                // otherwise take that branch's unpushed work with it.
+                let br = crate::git::git_branch_delete_if_redundant(&g.repo, &branch);
                 self.audit(&dead.group, brand::AUDIT_ACTOR, "reviewer-worktree-removed", json!({
                     "agent": dead.id,
                     "path": dead.cwd,
                     "branch": branch,
-                    "branch_deleted": br.is_ok(),
+                    "branch_deleted": br.as_ref().is_ok_and(|d| *d),
+                    "branch_kept": matches!(br, Ok(false)).then_some("has-commits-no-other-ref-holds"),
                     "branch_error": br.err(),
                     "attempt": attempt,
                     "initiator": initiator,

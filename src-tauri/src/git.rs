@@ -1215,7 +1215,7 @@ pub async fn git_worktree_list(repo: String) -> Result<String, String> {
 /// gathers the paths from its own roster rather than trusting a caller. The
 /// other caller is the reviewer-scratch reclaim (#3443), which decides the path
 /// from the same roster and removes the branch separately
-/// ([`git_branch_force_delete`]).
+/// ([`git_branch_delete_if_redundant`]).
 pub fn git_worktree_remove(repo: &str, path: &str) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("empty worktree path".to_string());
@@ -1223,16 +1223,33 @@ pub fn git_worktree_remove(repo: &str, path: &str) -> Result<(), String> {
     run_git(repo, &["worktree", "remove", "--force", path]).map(|_| ())
 }
 
-/// Delete a local branch with `-D` (#3443): the reviewer-scratch reclaim's
-/// second half, run only after that branch's worktree is gone. `-D` rather than
-/// `-d` because a reviewer's scratch branch is never pushed or merged, so `-d`
-/// would refuse every one of them. git itself still refuses a branch checked
-/// out in any worktree, which is a second guard beside the caller's own. Not a
-/// Tauri command — like [`git_worktree_remove`], the name comes from the
-/// roster, never from a caller.
-pub fn git_branch_force_delete(repo: &str, name: &str) -> Result<(), String> {
+/// Delete a local branch **only if deleting it loses no commit** (#3443) —
+/// `Ok(true)` when it was deleted, `Ok(false)` when it was kept because some
+/// commit on it is reachable from no other ref.
+///
+/// The reviewer-scratch reclaim's second half, run only after that branch's
+/// worktree is gone. `-D` rather than `-d`, because `-d` asks "is it merged
+/// into the main checkout's HEAD", which a scratch branch cut from a freshly
+/// fetched `origin/<default>` usually is not. The question asked instead is
+/// the one that matters: does any other ref — a branch, a remote-tracking
+/// ref, a tag, another worktree's HEAD — already hold every commit on it? A
+/// reviewer's untouched scratch branch sits on its base, so it goes; a branch
+/// carrying commits of its own (a reviewer that committed, or a spawn that
+/// was handed an existing branch with unpushed work) is kept. That is decided
+/// on the branch's content, never its name. git itself also refuses a branch
+/// checked out in any worktree. Not a Tauri command — like
+/// [`git_worktree_remove`], the name comes from the roster, never a caller.
+pub fn git_branch_delete_if_redundant(repo: &str, name: &str) -> Result<bool, String> {
     check_name(name, "branch")?;
-    run_git(repo, &["branch", "-D", name]).map(|_| ())
+    let own = format!("refs/heads/{name}");
+    let only_here = run_git(
+        repo,
+        &["rev-list", "--count", &own, "--not", &format!("--exclude={own}"), "--all"],
+    )?;
+    if only_here.trim() != "0" {
+        return Ok(false);
+    }
+    run_git(repo, &["branch", "-D", name]).map(|_| true)
 }
 
 // ---------- parsers ----------

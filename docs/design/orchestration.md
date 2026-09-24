@@ -396,7 +396,9 @@ cwd, so the first attempt can lose that race. Each attempt re-asks the verdict, 
 starts using the directory in between stops the reclaim rather than being removed out from under.
 A removal git still refuses on the last attempt is audited `reviewer-worktree-remove-failed`,
 with git's error, and stays for a later `git worktree remove`. The branch is deleted only after
-its worktree is gone. A registry with no self-handle (the integration tests) makes one attempt
+its worktree is gone, and only when no commit lives on it alone (`git_branch_delete_if_redundant`):
+the verdict proves the WORKTREE is scratch, not the branch, and a spawn handed an existing branch
+by name would otherwise take that branch's unpushed work with it. Content decides, never the name. A registry with no self-handle (the integration tests) makes one attempt
 inline, so its outcome is observable the moment the pane is dead.
 
 **Residuals.** A resume that resolves its cwd in the moment between one attempt's verdict and its

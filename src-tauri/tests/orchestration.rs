@@ -69693,3 +69693,29 @@ fn reviewer_scratch_verdict_keeps_anything_it_cannot_prove_is_scratch() {
         "two cuts naming different branches for one path are not guessed between"
     );
 }
+
+/// **A reviewer's branch that carries a commit of its own is kept** (#3443) —
+/// the worktree still goes, since it is scratch, but a commit that no other
+/// ref holds would be lost with the branch. That is decided on content, not
+/// on the branch's name: the same rule keeps an existing branch with unpushed
+/// work that a spawn was handed by name.
+#[test]
+fn a_reclaimed_reviewers_branch_is_kept_when_a_commit_lives_only_on_it() {
+    let repo = real_repo();
+    let (reg, _d) = test_registry();
+    let g = reg.create_group(&repo.path().to_string_lossy(), rails()).unwrap();
+    let rev = reg.spawn_agent(&g.id, Role::Reviewer, "rev", "t", true, None).unwrap();
+    let branch = rev.branch.clone().unwrap();
+    let wt = Path::new(&rev.cwd);
+    assert!(git_in(wt, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "mine"]).0);
+
+    end_pane(&reg, &rev.id, 34439);
+
+    assert!(!wt.exists(), "the worktree is scratch and still goes");
+    assert_eq!(registered_worktrees(repo.path()), 1);
+    assert!(local_branch_exists(repo.path(), &branch), "the branch holds the only copy of a commit");
+    let rows = scratch_rows(&reg, &g.id, "reviewer-worktree-removed");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["branch_deleted"], json!(false), "{rows:?}");
+    assert_eq!(rows[0]["branch_kept"], json!("has-commits-no-other-ref-holds"), "{rows:?}");
+}

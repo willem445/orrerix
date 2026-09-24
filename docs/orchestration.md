@@ -256,7 +256,8 @@ orchestrator:
   locally, which never collides with anything. Because it is scratch, it does
   not outlive its pane: when a reviewer pane ends — killed, closed, crashed, or
   its lane released by the review driver — orrerix removes that worktree and its
-  `agent/<id>` branch (a worker's worktree is never touched this way). A
+  `agent/<id>` branch (a worker's worktree is never touched this way, and the
+  branch is kept if it carries a commit no other branch or remote holds). A
   reviewer resumed later gets a fresh one cut at the same path, so its session
   still finds its workspace. If git refuses the removal (a file still locked on
   Windows, say), the pane still ends and the refusal is on the audit log as

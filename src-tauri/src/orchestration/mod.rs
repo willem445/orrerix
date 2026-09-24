@@ -8567,26 +8567,28 @@ pub fn codex_worktree_git_roots(workdir: &Path) -> Result<Vec<PathBuf>, String> 
     if !dot_git.is_file() {
         return Ok(Vec::new());
     }
-    let text = fs::read_to_string(&dot_git).map_err(|e| format!("{}: {e}", dot_git.display()))?;
+    // Every message below LEADS with what was wrong and trails the paths: the
+    // caller caps the audit row's reason to `NOTICE_FIELD_CAP` characters, and a
+    // temp-dir path alone can be longer than that.
+    let text = codex_read_git_meta(&dot_git, ".git")?;
     // codex's own parse: the FIRST colon, a `gitdir` prefix, a trimmed value.
     let raw = match text.trim().split_once(':') {
         Some((prefix, raw)) if prefix.trim() == "gitdir" && !raw.trim().is_empty() => raw.trim(),
-        _ => return Err(format!("{} is not a `gitdir: <path>` pointer", dot_git.display())),
+        _ => return Err(format!(".git is not a `gitdir: <path>` pointer: {}", dot_git.display())),
     };
     let gitdir = codex_fold_path(&workdir.join(raw));
     if !gitdir.is_dir() {
-        return Err(format!("gitdir {} is not a directory", gitdir.display()));
+        return Err(format!("gitdir is not a directory: {}", gitdir.display()));
     }
     let parent = gitdir.parent().filter(|p| p.file_name() == Some(std::ffi::OsStr::new("worktrees")));
     let Some(common) = parent.and_then(Path::parent) else {
-        return Err(format!("gitdir {} is not at <common>/worktrees/<name>", gitdir.display()));
+        return Err(format!("gitdir is not at <common>/worktrees/<name>: {}", gitdir.display()));
     };
     let commondir = gitdir.join("commondir");
-    let named = fs::read_to_string(&commondir).map_err(|e| format!("{}: {e}", commondir.display()))?;
+    let named = codex_read_git_meta(&commondir, "commondir")?;
     if codex_fold_path(&gitdir.join(named.trim())).as_path() != common {
         return Err(format!(
-            "{} names {:?}, not the common dir {} its location implies",
-            commondir.display(),
+            "commondir names {:?}, not the common dir {} its location implies",
             named.trim(),
             common.display()
         ));
@@ -8597,6 +8599,30 @@ pub fn codex_worktree_git_roots(workdir: &Path) -> Result<Vec<PathBuf>, String> 
     // sandbox to bind.
     roots.extend(["objects", "refs", "logs"].iter().map(|d| common.join(d)).filter(|p| p.is_dir()));
     Ok(roots)
+}
+
+/// The most of a `.git` pointer or a `commondir` [`codex_worktree_git_roots`]
+/// will read. Both are one path and a newline when git writes them; a real
+/// one is a few hundred bytes at most.
+const CODEX_GIT_META_CAP: u64 = 4096;
+
+/// Read one of those small git metadata files, BOUNDED (#3456 review N1).
+/// `commondir` sits in the gitdir, which this PR makes writable by the pane, so
+/// its size is the pane's choice: an unbounded read would let it put an
+/// arbitrarily large read on the next spawn's path. So the read stops at the
+/// cap plus one byte, and an oversized file is refused by its size alone,
+/// never echoed.
+fn codex_read_git_meta(path: &Path, what: &str) -> Result<String, String> {
+    use std::io::Read;
+    let file = fs::File::open(path).map_err(|e| format!("{what} unreadable: {}: {e}", path.display()))?;
+    let mut buf = Vec::new();
+    file.take(CODEX_GIT_META_CAP + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("{what} unreadable: {}: {e}", path.display()))?;
+    if buf.len() as u64 > CODEX_GIT_META_CAP {
+        return Err(format!("{what} is larger than {CODEX_GIT_META_CAP} bytes: {}", path.display()));
+    }
+    String::from_utf8(buf).map_err(|_| format!("{what} is not UTF-8: {}", path.display()))
 }
 
 /// `.`/`..` folded lexically, as codex's `AbsolutePathBuf` normalization does —
@@ -50616,7 +50642,13 @@ impl OrchRegistry {
                         group,
                         brand::AUDIT_ACTOR,
                         "codex-worktree-gitdir-unrecognised",
-                        json!({ "agent": agent_id, "why": why }),
+                        // Capped like `codex_gh_token_env`'s reason: the
+                        // text can quote `commondir`, which the pane can
+                        // write (#3456 review N1).
+                        json!({
+                            "agent": agent_id,
+                            "why": notify::sanitize_gh_text(&why, notify::NOTICE_FIELD_CAP),
+                        }),
                     );
                     Vec::new()
                 }

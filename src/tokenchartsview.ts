@@ -545,10 +545,9 @@ export class TokenChartsView {
     this.lastSig = sig;
     this.lastWidthPx = widthPx;
 
-    // The block order the hues follow. Taken from the group's whole ROSTER
-    // (plus any block only the rows know about), never from the windowed
-    // data — a filter that changes which series are on screen must not
-    // repaint the survivors.
+    // The block order the hues follow. Taken from the WHOLE series file and
+    // the roster (`hueBlockOrder`), never from the windowed data — a filter
+    // that changes which series are on screen must not repaint the survivors.
     const blockOrder = this.blockOrder();
 
     const series = bucketSeries(rows, {

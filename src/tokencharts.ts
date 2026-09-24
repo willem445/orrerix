@@ -586,8 +586,8 @@ export const HUE_SLOTS = HUE_ORDER.length;
 
 /** Block -> hue slot, or absent for "beyond the palette".
  *
- *  `blockOrder` is the caller's STABLE list — the group's whole roster, not the
- *  windowed data — and it is what stops a hue moving when a filter changes
+ *  `blockOrder` is the caller's STABLE list — the view's is `hueBlockOrder`,
+ *  over the whole file, not the windowed data — and it is what stops a hue moving when a filter changes
  *  which blocks are on screen. It is deduplicated and only its first
  *  `HUE_SLOTS` entries get a hue; any block outside it is appended after, so a
  *  block that appears in the data but not the roster is still drawable. */

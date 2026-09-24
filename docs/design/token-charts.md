@@ -475,9 +475,21 @@ The residual is real and is why the other channels exist: `azure` and
 still collide. Hence a legend that is always present, a CLI carried by dash
 pattern, and direct labels while there are few enough series to carry them.
 
-A hue follows the **block**, from a caller-supplied stable order (the group's
-roster), never from the windowed data's own rank — a filter that changes which
-series are on screen must not repaint the survivors. A **ninth** block takes
+A hue follows the **block**, from a caller-supplied stable order, never from
+the windowed data's own rank — a filter that changes which series are on
+screen must not repaint the survivors. That order (`hueBlockOrder`) is the
+blocks that **draw a line**, by the time of their first delta in the whole
+series file, then the rest of the roster. It is not the roster itself: the
+roster is every block the group has ever spawned, in spawn order, and a
+long-lived group's roster opens with blocks retired before the series file
+existed. Those drew nothing and still took the first slots, so the blocks
+the chart actually showed went grey (#3449 — five of eight slots spent on
+blocks with zero samples). First-delta order also means a block that starts
+spending later is appended, never inserted ahead of one already coloured;
+ordering the roster and skipping the blocks without data would not give that.
+The residual is compaction: nothing rewrites the file today, but a future
+compaction that drops a block's early rows moves its first delta and can
+shift hues. A **ninth** block takes
 the neutral ramp rather than recycling slot 0: a repeated hue is a false claim
 that two blocks are one. Nothing is merged away to avoid that, because this is
 a cost chart and folding two blocks' spend together to save a colour is the

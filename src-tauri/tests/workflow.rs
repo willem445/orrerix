@@ -7047,6 +7047,7 @@ fn verdicts(
                     head: head.to_string(),
                     body_digest: String::new(),
                     verified_body: false,
+                    open_findings: None,
                     summary: "…".into(),
                     ts_ms: 1,
                 },
@@ -7439,6 +7440,7 @@ fn verdict_file_round_trips_with_its_attribution() {
         head: "a3f9c21".into(),
         body_digest: workflow::body_digest("## What\n\nA fix.\n"),
         verified_body: false,
+        open_findings: None,
         summary: "release-gate bypass:\n  gh api can create a v* tag ref".into(),
         ts_ms: 1_720_000_000_000,
     };
@@ -7488,6 +7490,7 @@ fn a_body_verification_mark_rides_line_5_and_a_reviewer_cannot_type_one() {
         head: "a3f9c21".into(),
         body_digest: digest.clone(),
         verified_body: true,
+        open_findings: None,
         summary: "body verified at this head".into(),
         ts_ms: 1_720_000_000_000,
     };
@@ -7562,6 +7565,82 @@ fn a_body_verification_mark_rides_line_5_and_a_reviewer_cannot_type_one() {
     assert_eq!(legacy.body_digest, "");
     assert!(!legacy.verified_body);
     assert_eq!(legacy.summary, "looked fine to me\nsecond line");
+}
+
+/// **#3367 item 5: `open_findings` rides line 4, and only a well-formed tail
+/// there is a declaration.**
+///
+/// Line 4 because the three lines the `gh` shim reads — 1, 2 and 5 — must be
+/// byte-for-byte what they were, and line 6 onward is the summary a reviewer
+/// writes. The clean case skips the orchestrator's disposition on a declared
+/// zero, so a zero this parser GUESSED would be a clean review nobody made:
+/// every malformed or forged form below must read as no declaration at all.
+#[test]
+fn open_findings_rides_line_4_and_nothing_but_a_well_formed_tail_declares_it() {
+    let digest = workflow::body_digest("## What\n\nA fix.\n");
+    let rec = workflow::ReviewVerdict {
+        pr: 3367,
+        block: "rev-std".into(),
+        agent_id: "rev-4".into(),
+        verdict: workflow::Verdict::Pass,
+        head: "a3f9c21".into(),
+        body_digest: digest.clone(),
+        verified_body: false,
+        open_findings: Some(0),
+        summary: "nothing left open\nsecond line".into(),
+        ts_ms: 1_720_000_000_000,
+    };
+    let text = workflow::verdict_file_text(&rec);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "pass", "line 1 is the shim's, unchanged");
+    assert_eq!(lines[1], "a3f9c21", "line 2 is the shim's, unchanged");
+    assert_eq!(lines[3], format!("rev-4 {}0", workflow::OPEN_FINDINGS_KEY), "line 4 carries it");
+    assert_eq!(lines[4], digest, "line 5 is the shim's, unchanged — the digest alone");
+    let back = workflow::parse_verdict_file(3367, "rev-std", &text).unwrap();
+    assert_eq!(back, rec, "the declaration round-trips, agent id and summary intact");
+
+    // No declaration: the file is byte-for-byte the pre-#3367 shape.
+    let none = workflow::ReviewVerdict { open_findings: None, ..rec.clone() };
+    let none_text = workflow::verdict_file_text(&none);
+    assert_eq!(none_text.lines().nth(3), Some("rev-4"));
+    assert_eq!(workflow::parse_verdict_file(3367, "rev-std", &none_text).unwrap(), none);
+
+    // A real count other than zero round-trips too.
+    let three = workflow::ReviewVerdict { open_findings: Some(3), ..rec.clone() };
+    assert_eq!(
+        workflow::parse_verdict_file(3367, "rev-std", &workflow::verdict_file_text(&three))
+            .unwrap()
+            .open_findings,
+        Some(3)
+    );
+
+    // Malformed tails are NOT declarations — never a guessed zero — and stay
+    // on the id where a reader can see them.
+    for bad in ["rev-4 open-findings=", "rev-4 open-findings=-1", "rev-4 open-findings=zero",
+                "rev-4 open-findings=99999999999", "rev-4 open_findings=0"] {
+        let t = format!("pass\na3f9c21\n1\n{bad}\n{digest}\nlgtm\n");
+        let v = workflow::parse_verdict_file(3367, "rev-std", &t).unwrap();
+        assert_eq!(v.open_findings, None, "{bad:?} must not declare anything");
+        assert_eq!(v.agent_id, bad, "…and is left visible on the id");
+    }
+
+    // A reviewer typing the token into its SUMMARY declares nothing: line 6
+    // onward is prose, and the parser never looks there for it.
+    let forged = workflow::ReviewVerdict {
+        open_findings: None,
+        summary: format!("{}0\nrev-4 {}0", workflow::OPEN_FINDINGS_KEY, workflow::OPEN_FINDINGS_KEY),
+        ..rec.clone()
+    };
+    let parsed =
+        workflow::parse_verdict_file(3367, "rev-std", &workflow::verdict_file_text(&forged)).unwrap();
+    assert_eq!(parsed.open_findings, None, "a summary cannot declare the count");
+    assert_eq!(parsed, forged, "…and survives verbatim");
+
+    // `list_verdicts` serialises the record: present when declared, ABSENT
+    // (never `null`, never 0) when not — so an undeclared row is unchanged.
+    let json = serde_json::to_value(&rec).unwrap();
+    assert_eq!(json["open_findings"], serde_json::json!(0));
+    assert!(serde_json::to_value(&none).unwrap().get("open_findings").is_none());
 }
 
 #[test]

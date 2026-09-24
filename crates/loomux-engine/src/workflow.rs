@@ -4621,6 +4621,28 @@ pub struct ReviewVerdict {
     /// one field a reviewer writes. A marker a reviewer could type would be a
     /// marker a reviewer could forge.
     pub verified_body: bool,
+    /// **How many findings the reviewer left OPEN, as the reviewer declared it**
+    /// (#3367 item 5) — `review_verdict`'s optional `open_findings` argument.
+    ///
+    /// The structured form of the count `reviewdrive::stated_findings` parses
+    /// out of the summary: that parser stays, as the FALLBACK for a verdict that
+    /// carries no declaration. `None` means the reviewer did not say, and it is
+    /// never read as zero — the clean case (`reviewdrive::lanes_are_clean`)
+    /// needs `Some(0)` on every lane, so a lane that omitted it is not clean.
+    ///
+    /// **Reviewer-declared, and that is not a hole in the gate.** Unlike
+    /// `body_digest` and `verified_body`, which the tool computes because a
+    /// reviewer could otherwise open `body-unchanged` for lanes that never read
+    /// the body, this field decides nothing the gate reads: `evaluate_merge_gate`
+    /// and `recheck_gate` never consult it. What it changes is whether the
+    /// orchestrator is WOKEN to disposition findings, and a reviewer declaring
+    /// `0` over a finding it would have written down has miscounted its own
+    /// review — the same trust the gate already places in its `pass`.
+    ///
+    /// Serialized only when present, so a `list_verdicts` row for a verdict
+    /// recorded without it is byte-for-byte what it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_findings: Option<u32>,
     pub summary: String,
     pub ts_ms: u64,
 }
@@ -4828,6 +4850,19 @@ pub fn sanitize_sha(s: &str) -> String {
 /// reviewer cannot reach it.
 pub const VERIFIED_BODY_MARK: &str = "verified-body";
 
+/// The token line 4 carries **after** the agent id when the reviewer declared
+/// [`ReviewVerdict::open_findings`] (#3367 item 5): `<agent-id> open-findings=<n>`.
+///
+/// **Line 4, and not line 5 or a line of its own.** Line 6 onward is the
+/// summary, so a new line would shift it and misread every file written before;
+/// line 5 is the one the `gh` shim reads (`loomux_verdict_line5`), and a second
+/// token there would make the shim's digest split refuse the line. Line 4 is
+/// read by nothing but [`parse_verdict_file`], and an agent id is a
+/// `PathSegment` that can never contain a space, so the split is unambiguous.
+/// An older build reading a newer file sees the token as part of the agent id,
+/// which is display-only — it decides nothing.
+pub const OPEN_FINDINGS_KEY: &str = "open-findings=";
+
 /// Serialize a verdict record for `verdicts/pr-<N>/<block>`. Line-oriented, with
 /// the verdict word FIRST (the shim reads it with `head -n1`), the reviewed head
 /// SECOND and the reviewed body's digest FIFTH (`head -n5 | tail -n1`); the
@@ -4854,12 +4889,14 @@ pub fn verdict_file_text(v: &ReviewVerdict) -> String {
     } else {
         String::new()
     };
+    let open = v.open_findings.map(|n| format!(" {OPEN_FINDINGS_KEY}{n}")).unwrap_or_default();
     format!(
-        "{}\n{}\n{}\n{}\n{}{}\n{}\n",
+        "{}\n{}\n{}\n{}{}\n{}{}\n{}\n",
         v.verdict.as_str(),
         sanitize_sha(&v.head),
         v.ts_ms,
         v.agent_id,
+        open,
         digest,
         mark,
         sanitize_summary(&v.summary)
@@ -4894,7 +4931,20 @@ pub fn parse_verdict_file(pr: u64, block: &str, text: &str) -> Option<ReviewVerd
     let verdict = Verdict::parse(lines.next()?)?;
     let head = sanitize_sha(lines.next().unwrap_or(""));
     let ts_ms = lines.next().and_then(|l| l.trim().parse().ok()).unwrap_or(0);
-    let agent_id = lines.next().unwrap_or("").trim().to_string();
+    // Line 4: the agent id, optionally followed by ` open-findings=<n>` (#3367
+    // item 5). Shape-checked like line 5's mark: the tail is split off only when
+    // it is exactly that key and a count that parses, so a legacy line 4 reads
+    // exactly as it did — and a malformed count is NOT a declaration (never a
+    // guessed zero), it stays on the id where a reader can see it.
+    let line4 = lines.next().unwrap_or("").trim();
+    let (agent_id, open_findings) = match line4.rsplit_once(' ') {
+        Some((id, tail)) => match tail.strip_prefix(OPEN_FINDINGS_KEY).map(str::parse::<u32>) {
+            Some(Ok(n)) => (id.trim(), Some(n)),
+            _ => (line4, None),
+        },
+        None => (line4, None),
+    };
+    let agent_id = agent_id.to_string();
     let rest: Vec<&str> = lines.collect();
     let line5 = rest.first().copied().unwrap_or("");
     let (digest_field, marked) = match line5.trim_end().rsplit_once(' ') {
@@ -4917,6 +4967,7 @@ pub fn parse_verdict_file(pr: u64, block: &str, text: &str) -> Option<ReviewVerd
         head,
         body_digest,
         verified_body,
+        open_findings,
         summary: sanitize_summary(&summary),
         ts_ms,
     })

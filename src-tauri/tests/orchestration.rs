@@ -42356,6 +42356,10 @@ fn a_reviewer_a_gate_names_is_told_its_verdict_is_the_gate() {
         "the recorded summary is the gate's record, not the analysis: {note}");
     assert!(note.contains("never a restatement"),
         "…and the report after it must not re-type it: {note}");
+    // #3367 item 5: the count the clean case reads is asked for beside the verdict, with
+    // the one rule that makes it safe — an omission is not a zero.
+    assert!(note.contains("open_findings") && note.contains("never omit it to mean"),
+        "the gated reviewer is asked to declare open_findings, and told omission is not 0: {note}");
 
     // A group with NO gate says none of it — prose about a tool that gates nothing is
     // noise in a file agents are meant to actually read.
@@ -42603,7 +42607,7 @@ fn only_a_reviewer_block_can_record_a_verdict() {
             "but everyone can READ verdicts — the orchestrator needs them to decide");
     }
     // Straight at the registry, bypassing the dispatch check entirely.
-    assert!(reg.record_verdict(&cw.group, &cw.agent_id, "7", "pass", "sneaking one in").is_err(),
+    assert!(reg.record_verdict(&cw.group, &cw.agent_id, "7", "pass", "sneaking one in", None).is_err(),
         "the authorization must not live only in the JSON shim");
 }
 
@@ -42674,7 +42678,7 @@ fn a_liaison_block_can_never_record_a_verdict() {
 
     // Layer 3 — straight at the registry, bypassing the JSON shim entirely.
     let err = reg
-        .record_verdict(&liaison.group, &liaison.agent_id, "7", "pass", "sneaking one in")
+        .record_verdict(&liaison.group, &liaison.agent_id, "7", "pass", "sneaking one in", None)
         .unwrap_err();
     assert!(err.contains("liaison"), "the deepest layer must refuse it too: {err}");
 

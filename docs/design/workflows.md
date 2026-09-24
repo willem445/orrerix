@@ -1688,6 +1688,7 @@ shape:
     <group-dir>/verdicts/pr-<N>/<block-id>    # line 1 = pass|fail|escalate
                                               # line 2 = the head commit it reviewed
                                               # line 3 = ts     line 4 = agent id
+                                              #   [+ " open-findings=<n>", #3367]
                                               # line 5 = digest of the body it reviewed
                                               # then: summary, to EOF
 

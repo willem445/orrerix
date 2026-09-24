@@ -433,6 +433,28 @@ struct RdOut {
     /// spawn error, or the line the resumed pane exited on. Empty otherwise,
     /// which renders as no clause; see [`rddrive::HeldFacts::refusal`].
     refusal: String,
+    /// **A CLEAN satisfied gate the driver must submit to the merge queue**
+    /// (#3367 item 5) — the head it was clean at, or `None`.
+    ///
+    /// Acted on by [`OrchRegistry::rd_drive_group_with`] AFTER this tick's
+    /// write and outside `rd_state_lock`, never here: `queue_merge_with`
+    /// takes `mq_state_lock`, re-reads `review_drives.json` for §8.1's mutual
+    /// refusal (so it must see this drive already terminal, which only the
+    /// write makes true), and spends `gh` round trips — none of which belongs
+    /// under the driver's own state lock.
+    clean_enqueue: Option<String>,
+    /// **This tick's hold notice carries the drive's `auto_report`, which is
+    /// still on the entry** (#3367 round-3 residual). The delivery loop clears
+    /// it once every notice in `notices` landed, and leaves it otherwise — so
+    /// a lost hold line costs a repeat of the report on the next notice, never
+    /// the report itself.
+    report_folded: bool,
+    /// **The terminal notice this tick owed, as text** (#3388 review round 1)
+    /// — kept for the one path on which the owed copy never reaches a pane: a
+    /// tick whose `store_state` FAILED. The flush reads owed notices from
+    /// disk, and this one never got there, so [`OrchRegistry::rd_drive_group_with`]
+    /// delivers it directly instead, marked [`rddrive::UNRECORDED_SUFFIX`].
+    owed_text: Option<String>,
 }
 
 impl RdOut {
@@ -1292,10 +1314,18 @@ impl OrchRegistry {
             // the drive survives and `review_drive_status()` still carries it. A
             // terminal exit's notice does not come through here at all; it is
             // owed on the entry and delivered by the flush below (#1857).
+            let mut all_landed = !o.notices.is_empty();
             for n in &o.notices {
-                let _ = self.deliver_to_orchestrator(group, n, brand::AUDIT_ACTOR);
+                all_landed &= self.deliver_to_orchestrator(group, n, brand::AUDIT_ACTOR).is_ok();
                 self.rd_task_note(group, o.pr, n);
                 report.notices.push(n.clone());
+            }
+            // #3367 round-3 residual: the report a hold line carried is spent
+            // only if that line reached the pane — and only if the tick's write
+            // did, since an entry the next restart forgets has no report to
+            // clear that this tick's decision could vouch for.
+            if o.report_folded && all_landed && persisted {
+                self.rd_clear_auto_report(&dir, o.pr);
             }
             // #2811 S5b: the per-drive wording lands on the BOARD only. The
             // orchestrator's copy is the aggregated line below.
@@ -1308,6 +1338,69 @@ impl OrchRegistry {
             }
             if o.backoff {
                 report.backoff = true;
+            }
+        }
+        // #3367 item 5: the CLEAN case's enqueue. Here, and only here: after
+        // the per-out audits (so `rd-clean` follows the `rd-satisfied` it sits
+        // beside), after the write (so `queue_merge_with`'s §8.1 check reads
+        // this drive as already terminal) and outside `rd_state_lock` (it takes
+        // `mq_state_lock` and spends `gh` round trips). A write that failed
+        // enqueues nothing — the satisfied arc did not happen as far as the next
+        // restart knows, and a queue entry for it would outlive that.
+        //
+        // The queue decides everything a merge could turn on, exactly as for
+        // an orchestrator's own `queue_merge`: the gate is RE-ENFORCED from the
+        // verdict files and the live PR, the default branch is refused
+        // structurally (merge-queue.md §7), and `git` is not even reachable —
+        // `with_git_denied` hands it the driver's gh-only runner. So the one
+        // thing the driver adds is the CALL; what may be queued is still the
+        // queue's to say, and its answer is appended to the notice verbatim.
+        if persisted {
+            for o in &outs {
+                let Some(head) = &o.clean_enqueue else { continue };
+                let answer = rddrive::with_git_denied(runner, |mq| {
+                    self.queue_merge_with(group, o.pr, None, mq)
+                });
+                // REPLACE, not append (#3388 review round 1): the owed clause
+                // says what the driver will do, and from here on it has done
+                // it, so the delivered line says what the queue answered.
+                self.rd_amend_owed_notice(
+                    &dir,
+                    o.pr,
+                    &rddrive::clean_clause(rddrive::CleanRoute::Queue),
+                    &rddrive::clean_queue_submitted(&answer),
+                );
+                self.rd_audit(
+                    group,
+                    &o.on_behalf_of,
+                    rddrive::audit_action::CLEAN,
+                    json!({ "pr": o.pr, "head": head, "route": "queue", "queue_merge": answer }),
+                );
+            }
+        } else {
+            // #3388 review round 1: the write FAILED, so every terminal notice
+            // this tick owed exists only on the in-memory entry the failed
+            // write discarded — the flush below reads owed notices from disk
+            // and will never see it, and the `rd-state-unreadable` row above is
+            // on the audit log rather than in the pane. So it is delivered
+            // here, directly, saying it was not recorded; the queue clause says
+            // nothing was submitted, because nothing was. Fire-and-forget like a
+            // hold's line: the next tick that can write re-decides the drive
+            // and owes its own notice durably.
+            for o in &outs {
+                let Some(text) = &o.owed_text else { continue };
+                let mut text = text.clone();
+                if o.clean_enqueue.is_some() {
+                    text = text.replacen(
+                        &rddrive::clean_clause(rddrive::CleanRoute::Queue),
+                        &rddrive::clean_queue_unrecorded(),
+                        1,
+                    );
+                }
+                text.push_str(rddrive::UNRECORDED_SUFFIX);
+                let _ = self.deliver_to_orchestrator(group, &text, brand::AUDIT_ACTOR);
+                self.rd_task_note(group, o.pr, &text);
+                report.notices.push(text);
             }
         }
         // #2811 S5b — ONE notice per provider, however many drives it stopped.
@@ -1689,6 +1782,7 @@ impl OrchRegistry {
                     block: l.block.clone(),
                     verdict: v.verdict,
                     summary: v.summary.clone(),
+                    open_findings: v.open_findings,
                     at_head: v.head.clone(),
                 })
             })
@@ -2801,17 +2895,64 @@ impl OrchRegistry {
         }
     }
 
+    /// Replace `from` with `to` in the notice PR `pr`'s entry still OWES
+    /// (#3367 item 5) — the clean enqueue's answer, learned after the notice was
+    /// owed, replacing the clause that promised it. A text that no longer
+    /// carries `from` gets `to` appended, so the answer is never lost to a
+    /// wording mismatch.
+    ///
+    /// Its own short critical section, re-reading the file, for the flush's
+    /// reason: the tick's lock has been released, so the entry is read as it
+    /// now is. Nothing owed (a concurrent flush already delivered it, or the
+    /// entry is gone) changes nothing — the `rd-clean` row still carries the
+    /// answer — and a failed read or write is the same: the notice goes out
+    /// with the clause that promised the submission, which names
+    /// `merge_queue_status()` and was true when written and when read.
+    fn rd_amend_owed_notice(&self, dir: &std::path::Path, pr: u64, from: &str, to: &str) {
+        let _state_guard = self.rd_state_lock.lock_safe();
+        let Ok(mut state) = reviewdrive::load_state(dir) else { return };
+        let Some(n) = state.entry_mut(pr).and_then(|e| e.owed_notice.as_mut()) else { return };
+        if n.text.contains(from) {
+            n.text = n.text.replacen(from, to, 1);
+        } else {
+            n.text.push_str(to);
+        }
+        let _ = reviewdrive::store_state(dir, &state);
+    }
+
     /// **The drive's FIRST notice carries the report that started it** (#3367
     /// item 2). `Option::take`, so exactly one notice carries it and every
     /// later one reads as it always did. A drive nobody auto-started has
     /// nothing to take, and its notice is returned unchanged.
     fn rd_fold_auto_report(entry: &mut reviewdrive::DriveEntry, notice: String) -> String {
-        match entry.auto_report.take() {
+        let report = entry.auto_report.take();
+        Self::rd_fold_text(notice, report.as_deref())
+    }
+
+    /// [`rd_fold_auto_report`](Self::rd_fold_auto_report)'s text, without the
+    /// take — for the one caller that must not consume the report until its
+    /// line is known to have landed (a hold, delivered directly).
+    fn rd_fold_text(notice: String, report: Option<&str>) -> String {
+        match report {
             Some(r) => format!(
                 "{notice} This drive was started by a worker's report(done), delivered here \
                  instead of on its own: {r}"
             ),
             None => notice,
+        }
+    }
+
+    /// Clear the `auto_report` a DELIVERED hold notice carried (#3367 round-3
+    /// residual) — see [`RdOut::report_folded`]. Re-reads under the lock, as
+    /// [`rd_amend_owed_notice`](Self::rd_amend_owed_notice) does; a failed
+    /// read or write leaves the report on the entry, which costs a repeat on
+    /// the next notice and never a loss.
+    fn rd_clear_auto_report(&self, dir: &std::path::Path, pr: u64) {
+        let _state_guard = self.rd_state_lock.lock_safe();
+        let Ok(mut state) = reviewdrive::load_state(dir) else { return };
+        let Some(e) = state.entry_mut(pr) else { return };
+        if e.auto_report.take().is_some() {
+            let _ = reviewdrive::store_state(dir, &state);
         }
     }
 
@@ -4631,11 +4772,35 @@ impl OrchRegistry {
                         limits.fix_nonblocking_rounds,
                         &brief.lane_notices,
                     );
+                    // #3367 item 5: the CLEAN case — decided off the facts
+                    // `decide` saw, never re-read. Where the merge queue is on,
+                    // the submission itself waits for this tick's write (see
+                    // `RdOut::clean_enqueue`) and appends the queue's answer to
+                    // the notice owed here, before the flush delivers it.
+                    let route = if !reviewdrive::gate_is_clean(&facts) {
+                        rddrive::CleanRoute::NotClean
+                    } else if self.merge_queue_enabled(group) {
+                        rddrive::CleanRoute::Queue
+                    } else {
+                        rddrive::CleanRoute::Notice
+                    };
+                    let n = n + &rddrive::clean_clause(route);
                     let n = Self::rd_fold_auto_report(entry, n);
                     out.audits.push((
                         rddrive::audit_action::SATISFIED,
                         json!({ "pr": pr, "head": entry.head }),
                     ));
+                    match route {
+                        rddrive::CleanRoute::NotClean => {}
+                        rddrive::CleanRoute::Notice => out.audits.push((
+                            rddrive::audit_action::CLEAN,
+                            json!({ "pr": pr, "head": entry.head, "route": "notice" }),
+                        )),
+                        // Its `rd-clean` row is written where the queue's
+                        // answer is known, so the row records what happened.
+                        rddrive::CleanRoute::Queue => out.clean_enqueue = Some(entry.head.clone()),
+                    }
+                    out.owed_text = Some(n.clone());
                     entry.owe_notice(&n, now);
                 }
                 (reviewdrive::DriveState::Held, Some(r)) => {
@@ -4692,7 +4857,17 @@ impl OrchRegistry {
                         // from `out.provider_limited`, and this drive's own
                         // wording still reaches its board task there.
                         if r != reviewdrive::HeldReason::ProviderLimit {
-                            out.notices.push(Self::rd_fold_auto_report(entry, n));
+                            // #3367 round-3 residual (rev-final on #3371): a
+                            // HOLD's line is delivered fire-and-forget, so the
+                            // report is folded in WITHOUT being taken. It is
+                            // cleared by the delivery loop only once this line
+                            // actually landed (`RdOut::report_folded`); a line
+                            // that did not land leaves it for the next notice
+                            // to carry. Taking it here dropped the worker's
+                            // words from the pane whenever the delivery failed.
+                            out.report_folded = entry.auto_report.is_some();
+                            out.notices
+                                .push(Self::rd_fold_text(n, entry.auto_report.as_deref()));
                         } else {
                             out.provider_note = Some(n);
                         }
@@ -4717,6 +4892,7 @@ impl OrchRegistry {
                         &released_worker_session,
                     );
                     let n = Self::rd_fold_auto_report(entry, n);
+                    out.owed_text = Some(n.clone());
                     entry.owe_notice(&n, now);
                 }
                 _ => {}

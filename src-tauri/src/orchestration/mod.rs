@@ -812,7 +812,10 @@ the one fact that decides what you do next and the tool that acts on it.
 **Sequence with the merge queue is serial and has a direction.** A driven PR may not be queued and
 a queued PR may not be driven — `drive_review` refuses `in-merge-queue`, `queue_merge` refuses
 `in-review-drive`. Let the drive reach gate-satisfied, disposition its findings (INVARIANT 3 —
-that is still yours), and *then* queue."#;
+that is still yours), and *then* queue. **The one exception is the CLEAN case** (#3367): every
+required lane passed at the head declaring `open_findings: 0`, CI green. Its GATE SATISFIED line
+says `clean: true` — nothing to disposition — and where `merge_queue` is on the driver has already
+submitted it to the queue, whose answer (`queued at position N` or its refusal) ends the line."#;
 
 
 /// The `{{PLAN_DRIVER}}` fragment (#3040 P4) — substituted into the
@@ -48099,7 +48102,15 @@ impl OrchRegistry {
                      `ref`, `detail_url`, findings count — and never a restatement of the \
                      summary**: the orchestrator has just read the notice, and a second copy of \
                      the same prose becomes resident context it pays for on every turn that \
-                     follows."
+                     follows.\n\
+                     \n\
+                     **Declare `open_findings` with every verdict** (#3367) — the findings you \
+                     left open at this head, blocking and non-blocking together, `0` only when \
+                     your review left nothing to address. It is the count a review driver reads \
+                     first, and every required lane passing with `open_findings: 0` at a green \
+                     head is the CLEAN case, which skips the orchestrator's disposition \
+                     entirely — so never declare `0` over a finding you wrote down, and never \
+                     omit it to mean `0`: an omitted count is read as unknown, never as zero."
                 )
             }
             None => String::new(),
@@ -49436,6 +49447,7 @@ impl OrchRegistry {
         pr: &str,
         verdict: &str,
         summary: &str,
+        open_findings: Option<u32>,
     ) -> Result<(workflow::ReviewVerdict, Vec<String>), String> {
         let a = self.agent(agent_id).ok_or_else(|| format!("unknown agent: {agent_id}"))?;
         if a.group != group {
@@ -49541,6 +49553,9 @@ impl OrchRegistry {
             head,
             body_digest,
             verified_body,
+            // #3367 item 5: reviewer-declared, passed through as given. `None`
+            // stays `None` — the clean case must never read an omission as 0.
+            open_findings,
             summary,
             ts_ms: now_ms(),
         };
@@ -49563,6 +49578,8 @@ impl OrchRegistry {
             // "this pass was taken to cover two other reviewers' bodies" is the
             // part a reader would otherwise have to infer from a file format.
             "verified_body": rec.verified_body,
+            // #3367 item 5 — null when the reviewer did not declare one.
+            "open_findings": rec.open_findings,
             "summary": rec.summary.chars().take(500).collect::<String>(),
             "warnings": warnings.clone(),
         }));

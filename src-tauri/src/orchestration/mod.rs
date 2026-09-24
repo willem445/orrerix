@@ -48764,7 +48764,7 @@ impl OrchRegistry {
             // body (`copilot_agent_body`), which is kept under a documented size limit and
             // points at this file for everything beyond the mechanics. A manager is left
             // out, as in the templates: it never posts to GitHub or writes the board.
-            let writing = if matches!(b.kind, Role::Manager) {
+            let writing = if true {
                 String::new()
             } else {
                 format!("\n## Writing for humans\n\n{}\n", writing_body())

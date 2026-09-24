@@ -3140,12 +3140,14 @@ two things worth knowing before your first run:
   directories of the shared `.git` to the sandbox's writable roots — what a
   commit, a push and a rebase write. It does **not** open the shared `.git` as
   a whole: `hooks/` and `config` stay read-only, because a hook or a config key
-  written there would run as you the next time *your* git runs. That is not
-  airtight: the worktree's own git directory has to be writable, so a codex
-  pane can edit the files there that tell git which `.git` to use
-  (`commondir`), and with that it can still make your git run code the next
-  time you run git *in that worktree*. A Claude or Copilot pane, which has no
-  sandbox, can do this anyway. Two things
+  written there would run as you the next time *your* git runs. The worktree's
+  own git directory has to be writable, but the three files in it that steer
+  git (`commondir`, `config.worktree` and `gitdir`) are kept read-only. So the
+  pane can't point your git at a different `.git` or give it config, either.
+  To do that, a codex pane in a worktree runs under a codex *permissions
+  profile* named `orrerix-worktree` instead of the plain `workspace-write`
+  setting, and orrerix creates an empty `config.worktree` in that directory
+  if there isn't one, so the read-only rule has a file to apply to. Two things
   follow from that. `git push -u` pushes but prints `could not lock config
   file` and does not record the upstream, so name the remote and branch when
   pushing (`git push origin <branch>`). And deleting a branch that git has

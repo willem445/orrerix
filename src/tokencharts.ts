@@ -425,6 +425,7 @@ export interface Delta {
   agent: string;
   block: string;
   cli: string;
+  model: string | null;
   seriesKey: string;
   in: number;
   out: number;
@@ -506,6 +507,7 @@ export function diffRows(rows: readonly SeriesRowLike[]): DiffResult {
         agent: cur.agent,
         block: labelOf(cur.block),
         cli: labelOf(cur.cli),
+        model: cur.model,
         seriesKey: seriesKeyOf(cur.block, cur.cli),
         ...d,
         total: d.in + d.out + d.cache_w + d.cache_r,
@@ -527,6 +529,8 @@ export interface SeriesKeyInfo {
   block: string;
   /** `null` under the block toggle — the key then spans every CLI. */
   cli: string | null;
+  /** The model dimension when split, otherwise null. */
+  model: string | null;
   /** Which categorical hue this key's BLOCK takes, as an index into
    *  `HUE_ORDER`, or `null` for "beyond the palette" — the neutral ramp.
    *
@@ -692,15 +696,19 @@ export function hueBlockOrder(
  */
 export function seriesKeys(
   rows: readonly SeriesRowLike[],
-  opts: { collapseCli?: boolean; blockOrder?: readonly string[] } = {}
+  opts: { collapseCli?: boolean; splitModel?: boolean; blockOrder?: readonly string[] } = {}
 ): SeriesKeyInfo[] {
   const { deltas } = diffRows(rows);
   const collapse = opts.collapseCli === true;
+  const splitModel = opts.splitModel === true;
   const hueOf = hueAssignment(deltas, opts.blockOrder);
 
   const acc = new Map<string, SeriesKeyInfo>();
   for (const d of deltas) {
-    const key = collapse ? d.block : d.seriesKey;
+    const model = splitModel ? d.model : null;
+    const key = [d.block, collapse ? null : d.cli, splitModel ? model ?? "unknown model" : null]
+      .filter((part): part is string => part !== null)
+      .join("/");
     const existing = acc.get(key);
     if (existing) {
       existing.samples++;
@@ -711,6 +719,7 @@ export function seriesKeys(
       key,
       block: d.block,
       cli: collapse ? null : d.cli,
+      model,
       hueIndex: hueOf.get(d.block) ?? null,
       samples: 1,
       total: d.total,
@@ -790,6 +799,7 @@ export function bucketSeries(
     endMs: number;
     bucketMs?: number;
     collapseCli?: boolean;
+    splitModel?: boolean;
     /** The caller's stable block list — see `hueAssignment`. */
     blockOrder?: readonly string[];
   }
@@ -808,7 +818,11 @@ export function bucketSeries(
   }
   const indexOf = new Map(buckets.map((t, i) => [t, i]));
 
-  const infos = seriesKeys(rows, { collapseCli: collapse, blockOrder: opts.blockOrder });
+  const infos = seriesKeys(rows, {
+    collapseCli: collapse,
+    splitModel: opts.splitModel,
+    blockOrder: opts.blockOrder,
+  });
   const series = new Map<string, KeySeries>();
   for (const info of infos) {
     series.set(info.key, {
@@ -838,7 +852,10 @@ export function bucketSeries(
       dropped++;
       continue;
     }
-    const target = series.get(collapse ? d.block : d.seriesKey);
+    const targetKey = [d.block, collapse ? null : d.cli, opts.splitModel ? d.model ?? "unknown model" : null]
+      .filter((part): part is string => part !== null)
+      .join("/");
+    const target = series.get(targetKey);
     if (!target) continue;
     const p = target.points[idx];
     p.in += d.in;
@@ -875,14 +892,25 @@ export interface RosterChange {
   to: string;
 }
 
+export interface ModelChange {
+  key: string;
+  block: string;
+  cli: string;
+  from: string | null;
+  to: string | null;
+}
+
 export interface ChartMark {
   tsMs: number;
+  kind: "tuning" | "model";
   /** Fingerprint components that moved, as slice B recorded them. */
   changed: string[];
   /** The blocks whose CLI actually changed across this mark, measured from the
    *  SAMPLES either side. Empty on most marks — a skills edit or a CLAUDE.md
    *  edit moves no CLI. */
   roster: RosterChange[];
+  /** Per-usage-key model changes; empty for fingerprint marks. */
+  modelChanges: ModelChange[];
   /** The label the vertical carries: the roster diff where there is one
    *  (`worker-std: opencode → pi`), else the component list. */
   label: string;
@@ -919,16 +947,24 @@ export interface ChartMark {
  * observed" is not "unchanged".
  */
 export function marks(rows: readonly SeriesRowLike[]): ChartMark[] {
-  const samples = rows
-    .filter(isSample)
-    .slice()
-    .sort((a, b) => a.ts_ms - b.ts_ms);
+  const byKey = new Map<string, SeriesSampleLike[]>();
+  for (const sample of rows.filter(isSample)) {
+    const bucket = byKey.get(sample.key);
+    if (bucket) bucket.push(sample);
+    else byKey.set(sample.key, [sample]);
+  }
+  const samples = [...byKey.values()].flatMap((keySamples) =>
+    keySamples
+      .map((s, i) => ({ s, i }))
+      .sort((a, b) => a.s.ts_ms - b.s.ts_ms || a.i - b.i)
+      .map(({ s }) => s)
+  ).sort((a, b) => a.ts_ms - b.ts_ms);
   const markRows = rows
     .filter(isMark)
     .slice()
     .sort((a, b) => a.ts_ms - b.ts_ms);
 
-  return markRows.map((m) => {
+  const tuning = markRows.map((m): ChartMark => {
     // Last CLI observed per block strictly BEFORE the mark; first observed
     // at-or-after it.
     const before = new Map<string, string>();
@@ -954,8 +990,47 @@ export function marks(rows: readonly SeriesRowLike[]): ChartMark[] {
           ? `${changed.join(", ")} changed`
           : "tuning changed";
 
-    return { tsMs: m.ts_ms, changed, roster, label, fpPartial: m.fp_partial === true };
+    return {
+      tsMs: m.ts_ms,
+      kind: "tuning",
+      changed,
+      roster,
+      modelChanges: [],
+      label,
+      fpPartial: m.fp_partial === true,
+    };
   });
+  const modelMarks: ChartMark[] = [];
+  for (const keySamples of byKey.values()) {
+    const ordered = keySamples
+      .map((s, i) => ({ s, i }))
+      .sort((a, b) => a.s.ts_ms - b.s.ts_ms || a.i - b.i)
+      .map(({ s }) => s);
+    for (let i = 1; i < ordered.length; i++) {
+      const before = ordered[i - 1];
+      const after = ordered[i];
+      if (before.model === after.model) continue;
+      const modelChange: ModelChange = {
+        key: after.key,
+        block: labelOf(after.block),
+        cli: labelOf(after.cli),
+        from: before.model,
+        to: after.model,
+      };
+      const from = before.model ?? "unknown model";
+      const to = after.model ?? "unknown model";
+      modelMarks.push({
+        tsMs: after.ts_ms,
+        kind: "model",
+        changed: [],
+        roster: [],
+        modelChanges: [modelChange],
+        label: `${modelChange.block}/${modelChange.cli}: ${from} → ${to}`,
+        fpPartial: false,
+      });
+    }
+  }
+  return [...tuning, ...modelMarks].sort((a, b) => a.tsMs - b.tsMs || a.kind.localeCompare(b.kind));
 }
 
 // ── the before/after readout ────────────────────────────────────────────────

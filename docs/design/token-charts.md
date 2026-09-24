@@ -454,6 +454,29 @@ two buckets after the series began has no "before", and printing `0` there
 says the fleet spent nothing for an hour, which is the opposite of "we cannot
 say". `k` travels on every row, because `k` is the scope of the claim.
 
+### Model regrouping and in-session switches
+
+Each sample's `model` field is the source for the chart's optional **split by
+model** regrouping. With it enabled, a line key is `block/cli/model`; when the
+sample has no model, its key says `unknown model`. The regrouping changes only
+the line keys and bucket destinations. It consumes the same deltas, so the
+sum of line totals is invariant, and the feature bars keep their existing
+`block/cli` segments and totals. The existing **merge CLIs** control composes
+with model splitting: enabling both groups by block and model.
+
+The projection also compares consecutive samples under each usage `key`. When
+their `model` values differ, it emits a labelled chart mark at the later
+sample's timestamp, naming the key, block, CLI and old/new model. This does not
+write a durable mark or change the series schema; it is derived on read just
+like the measured CLI roster marks. A missing model is labelled `unknown
+model`, since the sample still records that the value changed.
+
+Effort is not present in the usage sample, and it cannot currently be read as a
+per-CLI value by this projection. The chart therefore does not mark effort
+switches. If effort should be charted, a future wire-shape change must record
+it per sample (or write an explicit switch mark); no Rust-side effort mark is
+part of this change.
+
 ### Colour: why the order is measured
 
 Colour carries the **block**; the CLI is carried by line style and bar hatch.

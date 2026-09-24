@@ -181,6 +181,7 @@ export class TokenChartsView {
   private windowBarEl: HTMLElement;
   private metricBarEl: HTMLElement;
   private collapseBtn: HTMLButtonElement;
+  private modelBtn: HTMLButtonElement;
   private bodyEl: HTMLElement;
   private legendEl: HTMLElement;
   private plotEl: HTMLElement;
@@ -219,6 +220,7 @@ export class TokenChartsView {
   private windowId = DEFAULT_WINDOW;
   private metric: Metric = "total";
   private collapseCli = false;
+  private splitModel = false;
   /** The mark the readout is about — held as an INSTANT, not an index, because
    *  every poll rebuilds the mark array. */
   private selectedMarkMs: number | null = null;
@@ -330,7 +332,14 @@ export class TokenChartsView {
       this.syncChips();
       this.rerender();
     });
-    this.controlsEl.append(this.windowBarEl, this.metricBarEl, this.collapseBtn);
+    this.modelBtn = el("button", "tokens-chip model", "split by model") as HTMLButtonElement;
+    this.modelBtn.title = "Draw a separate series for each model recorded in the samples";
+    this.modelBtn.addEventListener("click", () => {
+      this.splitModel = !this.splitModel;
+      this.syncChips();
+      this.rerender();
+    });
+    this.controlsEl.append(this.windowBarEl, this.metricBarEl, this.collapseBtn, this.modelBtn);
 
     this.bodyEl = el("div", "tokens-body");
     this.legendEl = el("div", "tokens-legend");
@@ -410,6 +419,7 @@ export class TokenChartsView {
       b.classList.toggle("on", b.dataset.metric === this.metric);
     }
     this.collapseBtn.classList.toggle("on", this.collapseCli);
+    this.modelBtn.classList.toggle("on", this.splitModel);
   }
 
   private onResize(): void {
@@ -534,6 +544,7 @@ export class TokenChartsView {
       this.windowId,
       this.metric,
       this.collapseCli ? "1" : "0",
+      this.splitModel ? "1" : "0",
       this.selectedMarkMs ?? "",
       widthPx,
       this.readError === null ? "" : String(this.readError),
@@ -555,6 +566,7 @@ export class TokenChartsView {
       endMs: range.endMs,
       bucketMs: DEFAULT_BUCKET_MS,
       collapseCli: this.collapseCli,
+      splitModel: this.splitModel,
       blockOrder,
     });
     const bars = featureBars(rows, this.series?.agents ?? [], this.board, {
@@ -769,8 +781,10 @@ export class TokenChartsView {
       const title = svgEl("title");
       title.textContent =
         `${fmtTime(m.tsMs)} — ${m.label}\n` +
-        `fingerprint components changed: ${m.changed.length > 0 ? m.changed.join(", ") : "(none recorded)"}` +
-        (m.fpPartial
+        (m.kind === "model"
+          ? `model changed for usage key ${m.modelChanges.map((change) => change.key).join(", ")}`
+          : `fingerprint components changed: ${m.changed.length > 0 ? m.changed.join(", ") : "(none recorded)"}`) +
+        (m.kind === "tuning" && m.fpPartial
           ? "\nA component could not be read in full when this mark was written " +
             "(a file over the size cap, a tree past the depth cap, or a read that " +
             "failed), so an unchanged component here is not proof that nothing " +

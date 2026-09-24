@@ -402,6 +402,38 @@ test("opencode and pi rows of ONE block are two keys, and collapse to one under 
   );
 });
 
+test("splitting by model adds line keys without changing the token total", () => {
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "k", model: "fable", in: 0 }),
+    sample({ ts_ms: T0 + 1, key: "k", model: "fable", in: 100 }),
+    sample({ ts_ms: T0 + 2, key: "k", model: "opus", in: 160 }),
+  ];
+  const combined = seriesKeys(rows);
+  const split = seriesKeys(rows, { splitModel: true });
+  assert.deepEqual(
+    split.map((k) => [k.key, k.model, k.total]),
+    [
+      ["worker-std/pi/fable", "fable", 100],
+      ["worker-std/pi/opus", "opus", 60],
+    ]
+  );
+  assert.equal(combined.reduce((sum, k) => sum + k.total, 0), 160);
+  assert.equal(split.reduce((sum, k) => sum + k.total, 0), 160);
+  const buckets = bucketSeries(rows, {
+    startMs: T0,
+    endMs: T0 + 2,
+    bucketMs: 1,
+    splitModel: true,
+  });
+  assert.deepEqual(
+    buckets.keys.map((k) => [k.model, k.points.reduce((sum, p) => sum + p.total, 0)]),
+    [
+      ["fable", 100],
+      ["opus", 60],
+    ]
+  );
+});
+
 test("the key axis is read off the rows — a block this build never heard of still gets a line", () => {
   const rows: SeriesRowLike[] = [
     sample({ ts_ms: T0, key: "x", block: "rev-hypothetical", cli: "some-new-cli", in: 0 }),
@@ -678,6 +710,18 @@ test("a mark is labelled from the roster the samples actually show either side o
   assert.equal(m.label, "worker-std: opencode → pi");
   assert.equal(m.tsMs, T0 + 2 * BUCKET);
   assert.equal(m.fpPartial, false);
+});
+
+test("a model change on the same usage key creates a labelled mark at its sample time", () => {
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "session", model: "fable", in: 0 }),
+    sample({ ts_ms: T0 + BUCKET, key: "session", model: "fable", in: 100 }),
+    sample({ ts_ms: T0 + 2 * BUCKET, key: "session", model: "opus", in: 130 }),
+  ];
+  const [mark] = marks(rows);
+  assert.equal(mark.tsMs, T0 + 2 * BUCKET);
+  assert.equal(mark.label, "worker-std/pi: fable → opus");
+  assert.deepEqual(mark.modelChanges, [{ key: "session", block: "worker-std", cli: "pi", from: "fable", to: "opus" }]);
 });
 
 test("a mark no block's CLI moved across falls back to the component list, and carries fp_partial", () => {

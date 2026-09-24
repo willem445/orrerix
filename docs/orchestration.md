@@ -3140,7 +3140,12 @@ two things worth knowing before your first run:
   directories of the shared `.git` to the sandbox's writable roots — what a
   commit, a push and a rebase write. It does **not** open the shared `.git` as
   a whole: `hooks/` and `config` stay read-only, because a hook or a config key
-  written there would run as you the next time *your* git runs. Two things
+  written there would run as you the next time *your* git runs. That is not
+  airtight: the worktree's own git directory has to be writable, so a codex
+  pane can edit the files there that tell git which `.git` to use
+  (`commondir`), and with that it can still make your git run code the next
+  time you run git *in that worktree*. A Claude or Copilot pane, which has no
+  sandbox, can do this anyway. Two things
   follow from that. `git push -u` pushes but prints `could not lock config
   file` and does not record the upstream, so name the remote and branch when
   pushing (`git push origin <branch>`). And deleting a branch that git has

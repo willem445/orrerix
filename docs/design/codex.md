@@ -803,7 +803,11 @@ gitdir at `<common>/worktrees/<name>`, and `commondir` naming that same
 at nothing — grants nothing, and the spawn writes a
 `codex-worktree-gitdir-unrecognised` audit row with the reason. The pane still
 spawns: it can edit and `report`, and the audit row explains a commit that
-fails.
+fails. The same writability makes `commondir`'s SIZE the pane's choice, so both
+it and the `.git` pointer are read bounded (4096 bytes, refused by size above
+that, never echoed). The reason is capped to `NOTICE_FIELD_CAP` before it reaches
+the audit log, as `codex_gh_token_env`'s is. The viewer re-reads a row whole on
+every poll, so an uncapped reason would be a pane-sized payload there.
 
 **Scope.** Group panes in a linked worktree only. A pane whose cwd is the main
 clone gets nothing extra — its `.git` is a directory inside its own writable
@@ -1239,3 +1243,18 @@ rather than someone else's source.
    and no `index.lock` error; `icacls <repo>\.git\worktrees\<name>` shows no
    DENY for the sandbox's SIDs, and `icacls <repo>\.git\hooks` still does not
    grant them write. See §Committing from a worktree.
+9. **The elevated account's ALLOW.** Under `sandbox = "elevated"` commands run
+   as `CodexSandboxOnline`, so a root outside the pane's directory also needs
+   codex to GRANT that account write on `<repo>.gitobjects`, `refs` and
+   `logs`. The emulation above modelled only the DENY. Check two things. Does
+   the commit in item 8 succeed on an elevated setup (if not, it fails with a
+   different error than #3456's)? And after the pane exits, does
+   `icacls <repo>.gitobjects` still show an ALLOW for the sandbox's SIDs on
+   your main clone? That would be a grant outliving the pane.
+10. **A relative pointer's spelling.** With `worktree.useRelativePaths`, the
+    gitdir root is the pane's directory as orrerix spells it joined to the
+    pointer, while codex joins it to ITS spelling of the same directory. Any
+    difference the two spellings keep (a drive-letter case, an 8.3 name) can
+    fail `==`, and then the DENY stays with no audit row. Cut one worktree with relative paths and repeat
+    item 8. An absolute pointer (git's default) cannot diverge: both sides take
+    its text as written.

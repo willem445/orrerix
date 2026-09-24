@@ -8591,7 +8591,7 @@ pub fn codex_worktree_git_roots(workdir: &Path) -> Result<Vec<PathBuf>, String> 
             common.display()
         ));
     }
-    let mut roots = vec![gitdir.clone()];
+    let mut roots: Vec<PathBuf> = vec![];
     // Only the ones that exist: codex skips a missing root on Windows anyway,
     // and a path that is not there is not one to hand another platform's
     // sandbox to bind.

@@ -3170,6 +3170,36 @@ two things worth knowing before your first run:
   `codex-gh-token-unavailable` with the reason. A `shell_environment_policy` of
   your own that filters `*TOKEN*` variables (codex's `ignore_default_excludes =
   false`, or `inherit = "core"`) strips it again.
+- **A codex worker in its own worktree can commit and push.** A git worktree
+  keeps its metadata inside your main clone's `.git` (under
+  `.git/worktrees/<name>`), outside the worktree, and codex's sandbox keeps
+  `.git` read-only by default — so without help a codex worker could edit files
+  but never `git commit`. For a pane in a linked worktree, orrerix's profile
+  adds that worktree's own git directory and the `objects`, `refs` and `logs`
+  directories of the shared `.git` to the sandbox's writable roots — what a
+  commit, a push and a rebase write. It does **not** open the shared `.git` as
+  a whole: `hooks/` and `config` stay read-only, because a hook or a config key
+  written there would run as you the next time *your* git runs. The worktree's
+  own git directory has to be writable, but the three files in it that steer
+  git (`commondir`, `config.worktree` and `gitdir`) are kept read-only. So the
+  pane can't point your git at a different `.git` or give it config, either.
+  To do that, a codex pane in a worktree runs under a codex *permissions
+  profile* named `orrerix-worktree` instead of the plain `workspace-write`
+  setting, and orrerix creates an empty `config.worktree` in that directory
+  if there isn't one, so the read-only rule has a file to apply to. One route
+  stays open: the pane can write the state of a rebase in progress, so don't
+  continue a rebase (`git rebase --continue`) in a codex pane's worktree that
+  you didn't start. Keeping the shared `.git` read-only costs two things.
+  `git push -u` pushes but prints `could not lock config
+  file` and does not record the upstream, so name the remote and branch when
+  pushing (`git push origin <branch>`). And deleting a branch that git has
+  packed into `packed-refs` (`git branch -D`) fails. A pane whose directory
+  is your main clone gets nothing extra, so a codex pane there can't commit;
+  nor can a solo codex pane, which is yours to approve. If a worktree's git
+  layout isn't the one `git worktree add` makes, orrerix adds nothing and
+  records `codex-worktree-gitdir-unrecognised` in the audit log with the
+  reason. `docs/design/codex.md` (*Committing from a worktree*) has the
+  argument and what stays open.
 - **Session history works, the copilot way.** codex has no flag that pre-assigns
   a session id, so orrerix watches your `~/.codex/sessions` store for the
   rollout the pane creates and binds it afterwards. If two codex panes in the

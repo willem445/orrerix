@@ -26,7 +26,9 @@ where it is used.
 at **`rust-v0.156.1`** (`81e8e29b2956dfe9b092c63953a9ed282781e77c`), the version
 the first real codex worker ran on (`codex --version` → `codex-cli 0.156.1`,
 the only command run for it), and each is marked with that tag where it is used.
-Every other fact below is still dated to `rust-v0.153.4`.
+#3456's facts in §Committing from a worktree are read at the same tag, against
+the same installed `codex-cli 0.156.1` (`codex --version`, again the only
+command run). Every other fact below is still dated to `rust-v0.153.4`.
 
 One vendor behaviour is pinned here rather than only cited in place, because
 nothing on this side can detect its loss: **compression preserves the rollout's
@@ -483,6 +485,7 @@ having to remember the rule.
 | `model_reasoning_effort` | a block's `effort:` | omitted entirely when unset: `ReasoningEffort` refuses the empty string outright, so a blank key would fail the *whole* profile rather than be ignored. |
 | `developer_instructions` | the block's role contract | see §The contract. |
 | `[sandbox_workspace_write] network_access` | `true` | off by default under `workspace-write`, and a worker that cannot reach GitHub is not a worker. |
+| `default_permissions` + `[permissions.orrerix-worktree]` (in place of `sandbox_mode` and `[sandbox_workspace_write]`) | `extends = ":workspace"`; a linked worktree's gitdir and `objects`, `refs`, `logs` of the shared `.git` as `write`; the gitdir's `commondir`, `config.worktree`, `gitdir` as `read`; network on | group panes in a linked worktree only; every other pane keeps the legacy block. See §Committing from a worktree. |
 | `[projects."<cwd>"] trust_level` | `trusted` | see §Trust. |
 | `[mcp_servers.<brand>]` | `url`, one header map, `default_tools_approval_mode = "approve"` | orrerix's own server, over streamable HTTP. One server contract, six spellings. **No timeouts** — see below. |
 
@@ -695,6 +698,250 @@ the read runs inside the `creation` mutex — once per group launch
 (`performance.md` X6), for one local keyring read bounded by
 `GH_CAPTURE_TIMEOUT`. None of this was observed in a live codex pane
 (constraint 3): the mechanism is read from the vendor's source at the pin.
+
+### Committing from a worktree
+
+The fourth of #3405's failures (#3456): a codex worker edited its worktree and
+then could not `git add` —
+`Unable to create '<repo>/.git/worktrees/<name>/index.lock': Permission denied`.
+
+**The cause is codex protecting `.git` on purpose, not the gitdir merely being
+elsewhere.** Under `workspace-write`, every writable root carries default
+read-only subpaths, and `default_read_only_subpaths_for_writable_root`
+(`protocol/src/permissions.rs` at `rust-v0.156.1`) protects the root's `.git`
+— and, when `.git` is a pointer FILE, the directory it points at:
+
+```rust
+// This applies to typical repos (directory .git), worktrees/submodules
+// (file .git with gitdir pointer), and bare repos when the gitdir is the
+// writable root itself.
+```
+
+`WritableRoot`'s own doc (`protocol/src/protocol.rs`) names the reason: those
+are folders "that could be modified to escalate the privileges of the agent
+(e.g. `.codex`, `.git`, notably `.git/hooks`)". On Windows each read-only
+subpath becomes a deny path (`compute_allow_paths_for_permissions`,
+`windows-sandbox-rs/src/allow.rs`), and each deny path gets
+`add_deny_write_ace` against the sandbox's write capability SIDs
+(`spawn_prep.rs`; `setup.rs` carries the same set as `deny_write_paths` for the
+elevated path) — a DENY of `FILE_GENERIC_WRITE`, write, append, write-EA,
+write-attributes, `DELETE` and `FILE_DELETE_CHILD` (`DenyAceKind::Write`,
+`acl.rs`): the `(W,D,DC)` `icacls` showed on the gitdir.
+
+**The escape hatch is codex's own: an explicit rule for the same path.** Every
+writable entry gets those defaults, but they are skipped when an explicit entry
+names the same path: `has_explicit_resolved_path_entry` in
+`get_writable_roots_with_cwd_impl` (and, on the legacy `sandbox_mode` path,
+`append_default_read_only_path_if_no_explicit_rule`); both compare the two paths
+with `==`. So the gitdir, written as an explicit `write` entry, drops its DENY.
+`WritableRoot`'s doc says the same of the metadata names: protected "unless the
+policy grants an explicit write rule for that metadata path".
+
+**The spelling is load-bearing.** `==` on `AbsolutePathBuf` is component-wise and
+case-sensitive, so the root must be the path codex resolves, not merely the same
+directory. codex takes the pointer file's text after the first `:`, trims it,
+resolves it against the `.git` file's directory and folds `.`/`..` lexically
+(`resolve_gitdir_from_file`, `utils/absolute-path/src/absolutize.rs`).
+`codex_worktree_git_roots` does exactly that rather than ask
+`git rev-parse --git-dir`, whose answer is git's spelling: a root that names the
+right directory by another spelling (an 8.3 name, a verbatim `\\?\` prefix, a
+case difference) leaves the DENY in place and says nothing. The integration test
+pins both: the roots against git's own `--git-dir`/`--git-common-dir`,
+canonically, and the gitdir root against the pointer text, literally.
+
+**The set: the gitdir, and `objects`, `refs`, `logs` of the shared `.git` — not
+the shared `.git`.** A commit writes the index, `HEAD` and the worktree's reflog
+in the gitdir; new objects under `objects/`; the branch under `refs/heads/`
+(through a `.lock` beside it); and its reflog under `logs/`. `FETCH_HEAD`,
+`ORIG_HEAD`, `COMMIT_EDITMSG` and `rebase-merge/` are per-worktree
+(`git rev-parse --git-path` puts all four in the gitdir). The whole `.git`
+would add exactly what codex protects `.git` to keep: `hooks/`, `config`
+(`core.fsmonitor`, `core.hooksPath`, `core.sshCommand`, aliases) and `info/`,
+each a place where a write becomes code the HUMAN'S unsandboxed git runs the
+next time it touches the clone — the human, orrerix's own git view, and every
+non-codex pane in the group. That is a sandbox escape by construction, and the
+honest minimum is the one that does not contain it.
+
+**Measured, not assumed** — without codex (constraint 3). The narrow set was
+emulated on a scratch clone and linked worktree by giving the current account
+explicit DENY ACEs of codex's write mask on the common dir's own entry
+(non-inheriting, so its subdirectories stay writable), on `config`, and on
+`hooks/` and `info/` (inheriting). The emulated mask is the specific rights
+without `FILE_GENERIC_WRITE`: against a whole account, its `SYNCHRONIZE` bit
+blocks reads as well (the first run's `unable to access '.git/config'` on every
+command), which the real incident shows codex's capability-SID deny does not.
+git 2.29.2.windows.2:
+
+| command, in the worktree | narrow set | gitdir denied too (the bug) |
+| --- | --- | --- |
+| `git add`, `git commit` | ok | `Unable to create '…/worktrees/wt/index.lock': Permission denied` |
+| `git push origin <branch>` | ok | ok (nothing to push) |
+| `git push -u origin <branch>` | pushes; `could not lock config file`, upstream not recorded, exit 0 | same |
+| `git fetch origin` | ok | `cannot open …/worktrees/wt/FETCH_HEAD`, exit 255 |
+| `git rebase main` (with main ahead) | rebased; prints a `packed-refs.lock` error, exit 0 | — |
+| `git branch -D <packed branch>` | `Unable to create '…/.git/packed-refs.lock'`, exit 1 | same |
+| control: write `.git/newfile`, append `.git/config`, write `.git/hooks/pre-commit` | all `Permission denied` | same |
+
+The bug column reproduces #3456's message verbatim, which is what makes the
+emulation worth believing; the controls show the deny really bites.
+
+**What the narrow set costs**, stated because each is a thing a worker will hit:
+`git push -u` pushes but records no upstream (name the remote and branch); a
+branch git has packed cannot be deleted locally, and any other write to
+`packed-refs`, `config` or the common dir's own entries fails. None of these is
+part of committing and opening a PR.
+
+**The layout check, and why it refuses rather than guesses.** The codex pane
+cannot rewrite `commondir` (see the seal below), but an unsandboxed peer or the
+human can, and a spawn that trusted the file would hand the pane any directory's
+`objects`, `refs` and `logs`. So the helper requires git's own linked-worktree
+shape: the gitdir at `<common>/worktrees/<name>`, and `commondir` naming that same
+`<common>`. Anything else — a submodule's or `--separate-git-dir`'s gitdir
+(a whole repository, hooks and config included), a non-pointer `.git`, a pointer
+at nothing, a gitdir with no `gitdir` back-pointer — grants nothing, and the
+spawn writes a `codex-worktree-gitdir-unrecognised` audit row with the reason.
+The pane still spawns: it can edit and `report`, and the audit row explains a
+commit that fails. Both `commondir` and the `.git` pointer are read bounded (4096
+bytes, refused by size above that, never echoed), and the reason is capped to
+`NOTICE_FIELD_CAP` before it reaches the audit log, as `codex_gh_token_env`'s is.
+The viewer re-reads a row whole on every poll, so an uncapped reason would be a
+payload of whatever size the file's writer chose.
+
+#### The seal: the gitdir is writable, the files that redirect git are not
+
+A writable gitdir is not only the index. Git reads three files in it that change
+what git does in that worktree, and that includes the HUMAN'S unsandboxed git:
+
+| file | what a rewrite does |
+| --- | --- |
+| `commondir` | picks which `.git` is the common dir, and so which `config` and `hooks/` run: the next `git status` there executes a hook or a `core.fsmonitor` the pane chose. |
+| `config.worktree` | per-worktree config, read under `extensions.worktreeConfig`: a config key is code by the same route. |
+| `gitdir` | the back-pointer `git worktree repair` writes a `.git` file through: the human's next repair writes where the pane chose. |
+
+`hooks`, `config`, `info` and `objects` resolve to the COMMON dir for a linked
+worktree (git's `common_list`; `git rev-parse --git-path hooks` answers
+`<common>/hooks` from a worktree). And `HEAD`, `index`, `ORIG_HEAD`,
+`FETCH_HEAD` and `logs/` are what a commit and a fetch must write.
+
+**One route stays open: the rebase state** (#3460 review N4, reproduced there).
+`rebase-merge/git-rebase-todo` is per-worktree, and an `exec` line planted in it
+runs on the HUMAN'S next `git rebase --continue` in that worktree. The seal
+cannot cover it. The directory exists only while a rebase is in progress, so
+there is nothing to deny at spawn. And the pane's own rebase must write it, so
+denying the directory would break the rebase a worker needs. The user doc
+carries the rule that closes it in practice: don't continue a rebase in a pane's
+worktree that you didn't start.
+
+**`[sandbox_workspace_write]` cannot say "this file is read-only inside that
+writable directory"; codex's permission profiles can** (`rust-v0.156.1`):
+
+- `ConfigToml` carries `default_permissions` ("Default permissions profile to
+  apply … other names are resolved from the `[permissions]` table") and
+  `permissions: Option<PermissionsToml>` (`config/src/config_toml.rs`).
+- A profile may `extends` a built-in. `:workspace` is codex's own
+  `workspace-write` rendered as filesystem entries: `:root` read, the project
+  roots and temp write, the project roots' `.git`/`.agents`/`.codex` read
+  (`extensible_builtin_parent_profile`, `core/src/config/permissions.rs`).
+- Its `filesystem` table maps an absolute path to `read`, `write` or `deny`
+  (`FilesystemPermissionToml`, `FileSystemAccessMode`).
+- A path resolves to its DEEPEST matching entry
+  (`FileSystemSandboxPolicy::resolve_access`: `max_by_key((depth, access))`), so
+  a `read` file inside a `write` directory is read-only. "Narrower explicit
+  non-write entries carve out broader writable roots" (`get_writable_roots_with_cwd_impl`)
+  turns it into one of the root's `read_only_subpaths`.
+- On Windows that becomes a deny-write ACE on the file, and it HOLDS against a
+  delete-and-recreate: codex grants `DELETE` per descendant rather than
+  `FILE_DELETE_CHILD` on the writable directory, "A parent delete-child grant
+  would bypass a direct deny-write ACE on protected children such as `.git` or
+  an explicit read-only subpath" (`WRITE_ALLOW_MASK`, `windows-sandbox-rs/src/acl.rs`).
+- Selecting it is per layer: a layer naming `default_permissions` is read as
+  profile syntax (`resolve_permission_config_syntax`, `core/src/config/mod.rs`),
+  and the `-p` layer sits above the human's own. So the profile names
+  `default_permissions = "orrerix-worktree"` INSTEAD of `sandbox_mode`, never
+  beside it.
+
+So a worktree pane's profile is:
+
+```toml
+default_permissions = "orrerix-worktree"
+
+[permissions.orrerix-worktree]
+extends = ":workspace"
+
+[permissions.orrerix-worktree.filesystem]
+"<gitdir>" = "write"
+"<common>/objects" = "write"
+"<common>/refs" = "write"
+"<common>/logs" = "write"
+"<gitdir>/commondir" = "read"
+"<gitdir>/config.worktree" = "read"
+"<gitdir>/gitdir" = "read"
+
+[permissions.orrerix-worktree.network]
+enabled = true
+```
+
+and every other pane keeps the legacy `sandbox_mode` block byte for byte.
+
+**One file is created, and why that is the honest price.** A deny needs an
+object: codex's Windows `compute_allow_paths_for_permissions` skips a path that
+does not exist, so a seal on an absent `config.worktree` would leave the pane
+free to CREATE it. Git does not write that file for an ordinary worktree, so
+orrerix creates it EMPTY (`create_new`, so an existing one is never touched). An
+empty `config.worktree` means nothing to git: it is read only under
+`extensions.worktreeConfig`, and then it sets nothing. `commondir` and `gitdir`
+are never created. Git writes both for every linked worktree, so a gitdir
+missing either is refused rather than repaired, and an empty `gitdir` is one
+`git worktree prune` would read as broken.
+
+**Why not an ACL orrerix sets itself.** It would have to name codex's
+capability SIDs (codex's to mint, per sandbox setup), it would be Windows-only
+(constraint 8: a Linux or macOS codex pane would get no seal from it), and it
+would outlive the pane on the human's clone. The profile is codex enforcing its
+own policy on every platform it sandboxes, and it is the one of the two that a
+test on the written document can pin.
+
+**Measured, not assumed** — git under a hand-built ACL again, now with the seal:
+the narrow set's denies plus `FILE_DELETE_CHILD` denied on the gitdir itself and
+the write mask on the three files. git 2.29.2.windows.2:
+
+| command | result |
+| --- | --- |
+| `git add`, `commit`, `push origin <branch>`, `fetch`, `rebase main` | all succeed (the rebase prints the same `packed-refs.lock` noise as before) |
+| overwrite `commondir` / append to `config.worktree` / overwrite `gitdir` | `Permission denied` |
+| `rm -f commondir` | `cannot remove … Permission denied` |
+| `mv -f x commondir` (replace by rename) | `cannot move … Permission denied` |
+| `cat commondir` afterwards | `../..`, unchanged |
+| control: create and delete a new file in the gitdir | succeeds (the gitdir itself stays writable) |
+
+**Scope.** Group panes in a linked worktree only. A pane whose cwd is the main
+clone gets nothing extra — its `.git` is a directory inside its own writable
+root, and lifting codex's protection there would be the whole-`.git` grant above.
+A solo pane gets nothing: it runs `on-request` with the human in it, and
+widening the sandbox of a session orrerix does not own is not orrerix's call.
+
+**Residuals.**
+
+- **The rebase state is not sealed** (above). A planted `exec` in
+  `rebase-merge/git-rebase-todo` runs on the human's `git rebase --continue` in
+  that worktree. Closed by practice (the user doc's rule), not by the sandbox.
+- **The seal covers the three files it names.** A future git that reads a new
+  per-worktree file for configuration would need a row in `CODEX_GITDIR_SEALED`.
+  The enumeration above is against git's `common_list`, and the constant's doc
+  carries it.
+- **The seal holds only on a path that exists at spawn.** `config.worktree` is
+  created for that reason. A file the pane creates later is sealed by nothing,
+  and the rebase state above is the one such file known to run code.
+- **Integrity of the shared store.** A codex pane can now move any ref,
+  including `main`, and delete objects. Neither runs code; both are within reach
+  of every unsandboxed pane already.
+- **The match rests on codex's resolution staying textual.** If a later codex
+  canonicalized the pointer before comparing, the DENY would return, silently.
+  The pin on the pointer's spelling is the tripwire this side can hold.
+- **A worker that creates its own worktree** (the shared-repo worker told to cut
+  one) spawns in the main clone and gets nothing extra.
+- **Emulated, not observed.** The table is git under a hand-built ACL, not codex;
+  the human's live check is item 8 of §Still for the human.
 
 ### The contract
 
@@ -1096,3 +1343,26 @@ rather than someone else's source.
    approval, it stays `None`.
 7. **Alt screen.** Decide whether `tui.alternate_screen = "never"` belongs in
    the profile.
+8. **Commit from a worktree** (#3456). A codex worker in a dedicated worktree
+   runs `git add`, `git commit` and `git push origin <branch>` with no overlay
+   and no `index.lock` error; `icacls <repo>\.git\worktrees\<name>` shows no
+   DENY for the sandbox's SIDs, and `icacls <repo>\.git\hooks` still does not
+   grant them write. The seal: in the same pane, overwriting, deleting or
+   replacing `<repo>\.git\worktrees\<name>\commondir` (and `config.worktree`,
+   `gitdir`) fails with `Permission denied`, while a new file in that directory
+   can still be created. See §Committing from a worktree.
+9. **The elevated account's ALLOW.** Under `sandbox = "elevated"` commands run
+   as `CodexSandboxOnline`, so a root outside the pane's directory also needs
+   codex to GRANT that account write on `<repo>.gitobjects`, `refs` and
+   `logs`. The emulation above modelled only the DENY. Check two things. Does
+   the commit in item 8 succeed on an elevated setup (if not, it fails with a
+   different error than #3456's)? And after the pane exits, does
+   `icacls <repo>.gitobjects` still show an ALLOW for the sandbox's SIDs on
+   your main clone? That would be a grant outliving the pane.
+10. **A relative pointer's spelling.** With `worktree.useRelativePaths`, the
+    gitdir root is the pane's directory as orrerix spells it joined to the
+    pointer, while codex joins it to ITS spelling of the same directory. Any
+    difference the two spellings keep (a drive-letter case, an 8.3 name) can
+    fail `==`, and then the DENY stays with no audit row. Cut one worktree with relative paths and repeat
+    item 8. An absolute pointer (git's default) cannot diverge: both sides take
+    its text as written.

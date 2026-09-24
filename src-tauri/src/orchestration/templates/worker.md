@@ -226,10 +226,6 @@ the cost of a review round nobody needed. If you genuinely cannot reach green af
 real attempt, `report("blocked", …)` naming what's still red and what you tried, and
 say the same on the issue — that beats a PR that looks done and isn't.
 
-## Writing for humans
-
-{{WRITING}}
-
 ## Two layers: what you write for the human, what you write for the next agent
 
 Everything you post on GitHub — a PR body, a review, an issue you file — has a

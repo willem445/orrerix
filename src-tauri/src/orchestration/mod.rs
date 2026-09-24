@@ -60370,8 +60370,13 @@ impl OrchRegistry {
         };
         match crate::git::git_worktree_add_sync(g.repo.clone(), branch.clone(), None) {
             Ok(wt) if same_path_key(&wt, cwd) => {
-                // #1042 slice B, as at the original cut in `spawn_agent_ex`.
-                crate::rootreg::admit_derived(&self.roots, &wt);
+                // No `admit_derived` here (#1042 slice B), deliberately: the
+                // root registry never withdraws an admission, so a path this
+                // process cut is still declared from its ORIGINAL cut in
+                // `spawn_agent_ex`, and after a restart this resume is exactly
+                // as declared as any other resume — none of them admits. A
+                // third site would also have to be argued into
+                // `tests/rootreg.rs`'s census for no change in behaviour.
                 self.audit(group, brand::AUDIT_ACTOR, "reviewer-worktree-recut", json!({
                     "path": cwd, "branch": branch,
                 }));

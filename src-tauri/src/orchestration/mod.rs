@@ -8577,7 +8577,7 @@ pub fn codex_worktree_git_roots(workdir: &Path) -> Result<Vec<PathBuf>, String> 
     if !gitdir.is_dir() {
         return Err(format!("gitdir {} is not a directory", gitdir.display()));
     }
-    let parent = gitdir.parent().filter(|p| p.file_name() == Some(std::ffi::OsStr::new("worktrees")));
+    let parent = gitdir.parent();
     let Some(common) = parent.and_then(Path::parent) else {
         return Err(format!("gitdir {} is not at <common>/worktrees/<name>", gitdir.display()));
     };

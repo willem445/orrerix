@@ -35784,7 +35784,7 @@ impl OrchRegistry {
     /// conversation as some other role is not that worker continuing its own
     /// work, and does not inherit its branch.
     fn resumed_session_branch(&self, group: &GroupId, session: &str, role: Role) -> Option<String> {
-        let rec = self.session_identity_record(group, session)?;
+        let rec = self.merged_records(group).into_iter().filter(|r| r.session.as_deref() == Some(session)).max_by_key(|r| r.updated_ms)?; // MUTATION: newest row
         if rec.role != role.as_str() {
             return None;
         }

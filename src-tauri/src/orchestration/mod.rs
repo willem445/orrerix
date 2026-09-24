@@ -10165,6 +10165,27 @@ pub fn compact_escalation_notice(percent: u32) -> String {
     )
 }
 
+/// The human "Compact now" reply (#3407, review round 1 N3): what will
+/// actually become of the request, in the order `compact_nudge_tick` would
+/// decide it. A paused group is skipped before any fire check, so a paused
+/// group says so first. An arm already in flight is next, and then the
+/// shared hourly budget. Only when none holds is "the next idle moment" true.
+/// The flag stays set in every case, so each queued reply names what releases
+/// it. Pure, so every arm is pinned without a registry.
+pub fn human_compact_reply(paused: bool, compact_pending: bool, budget_spent: bool) -> String {
+    if paused {
+        "queued — this group is paused, so nothing is typed into its panes; /compact fires at the pane's first idle moment after you resume it".to_string()
+    } else if compact_pending {
+        "queued — a compact is already in flight for this pane; this one fires once it resolves".to_string()
+    } else if budget_spent {
+        format!(
+            "queued — this group has used its {MAX_COMPACT_NUDGES_PER_HOUR} compacts for the hour; /compact fires when the oldest one ages out"
+        )
+    } else {
+        "requested — /compact is typed at the pane's next idle moment".to_string()
+    }
+}
+
 /// Compact-nudge (#328): whether `request_compact`'s pre-compact offload-
 /// checklist warning should be appended to its response. A soft nudge, never
 /// a block (the tool call always succeeds) — `last_state_write_ms` 0 means
@@ -42925,7 +42946,21 @@ impl OrchRegistry {
     /// `deliver_prompt`, which holds for a human's occupied input box. Paused
     /// groups are skipped, as by every sibling tick. Returns the nudged ids.
     pub fn cache_idle_nudge_tick(&self, now: u64, context_percents: &HashMap<String, u32>) -> Vec<String> {
-        use loomux_engine::cacheage;
+        // Three phases (review round 1, rev-std finding 1). GATHER takes every
+        // registry snapshot, each on its own short lock, and holds none after.
+        // DECIDE reads only that snapshot plus the per-pane queue and the drive
+        // files, and writes nothing. APPLY is the only phase that mutates state:
+        // latches, audit, delivery. So a decision can never observe its own
+        // half-applied writes.
+        let snap = self.cache_idle_gather(now);
+        let plan = self.cache_idle_decide(snap, context_percents);
+        self.cache_idle_apply(plan)
+    }
+
+    /// GATHER for [`Self::cache_idle_nudge_tick`]: the running orchestrators of
+    /// unpaused groups, plus the group-level "in flight" sets, each read on its
+    /// own short lock.
+    fn cache_idle_gather(&self, now: u64) -> CacheIdleSnapshot {
         let paused = self.paused.lock_safe().clone();
         let groups: HashMap<GroupId, Guardrails> = self
             .groups
@@ -42942,49 +42977,45 @@ impl OrchRegistry {
             .filter(|(_, p)| !p.is_empty())
             .map(|(g, _)| g.clone())
             .collect();
-        struct Candidate {
-            id: String,
-            group: GroupId,
-            block: String,
-            pty_id: Option<u32>,
-            idle_ms: u64,
-            latched: bool,
-            compact_busy: bool,
-        }
-        let (delegate_groups, candidates): (HashSet<GroupId>, Vec<Candidate>) = {
-            let agents = self.agents.lock_safe();
-            let delegates = agents
-                .values()
-                .filter(|a| {
-                    matches!(a.role, Role::Worker | Role::Reviewer | Role::Planner)
-                        && a.status != AgentStatus::Dead
-                })
-                .map(|a| a.group.clone())
-                .collect();
-            let cands = agents
-                .values()
-                .filter(|a| {
-                    a.role == Role::Orchestrator
-                        && a.status == AgentStatus::Running
-                        && !paused.contains(&a.group)
-                })
-                .map(|a| Candidate {
-                    id: a.id.clone(),
-                    group: a.group.clone(),
-                    block: a.block.clone(),
-                    pty_id: a.pty_id,
-                    idle_ms: now.saturating_sub(a.last_progress_ms),
-                    latched: a.cache_idle_nudge_latched,
-                    compact_busy: a.compact_pending || a.compact_requested,
-                })
-                .collect();
-            (delegates, cands)
-        };
+        let agents = self.agents.lock_safe();
+        let delegate_groups = agents
+            .values()
+            .filter(|a| {
+                matches!(a.role, Role::Worker | Role::Reviewer | Role::Planner)
+                    && a.status != AgentStatus::Dead
+            })
+            .map(|a| a.group.clone())
+            .collect();
+        let candidates = agents
+            .values()
+            .filter(|a| {
+                a.role == Role::Orchestrator
+                    && a.status == AgentStatus::Running
+                    && !paused.contains(&a.group)
+            })
+            .map(|a| CacheIdleCandidate {
+                id: a.id.clone(),
+                group: a.group.clone(),
+                block: a.block.clone(),
+                pty_id: a.pty_id,
+                idle_ms: now.saturating_sub(a.last_progress_ms),
+                latched: a.cache_idle_nudge_latched,
+                compact_busy: a.compact_pending || a.compact_requested,
+            })
+            .collect();
+        CacheIdleSnapshot { groups, watch_groups, intake_groups, delegate_groups, candidates }
+    }
 
-        let mut release: Vec<String> = Vec::new();
-        let mut fire: Vec<(Candidate, u32, u32)> = Vec::new();
-        for c in candidates {
-            let Some(g) = groups.get(&c.group) else { continue };
+    /// DECIDE for [`Self::cache_idle_nudge_tick`]: for each candidate, either
+    /// release its latch (evidence the idle stretch ended), fire (the pure
+    /// [`loomux_engine::cacheage::idle_compact_should_fire`] plus the drive
+    /// files), or do nothing. Writes nothing. The drive files are read last,
+    /// and only for a pane that would otherwise fire.
+    fn cache_idle_decide(&self, snap: CacheIdleSnapshot, context_percents: &HashMap<String, u32>) -> CacheIdlePlan {
+        use loomux_engine::cacheage;
+        let mut plan = CacheIdlePlan::default();
+        for c in snap.candidates {
+            let Some(g) = snap.groups.get(&c.group) else { continue };
             let cli = g.cli_for_block(&c.block, Role::Orchestrator);
             if !compact_nudge_cli_supported(cli) {
                 continue;
@@ -43001,13 +43032,13 @@ impl OrchRegistry {
                 .compact_nudge_min_context_percent
                 .unwrap_or(DEFAULT_COMPACT_NUDGE_MIN_CONTEXT_PERCENT);
             let pct = context_percents.get(&c.id).copied();
-            let cheap_in_flight = delegate_groups.contains(&c.group)
-                || watch_groups.contains(&c.group)
-                || intake_groups.contains(&c.group)
+            let cheap_in_flight = snap.delegate_groups.contains(&c.group)
+                || snap.watch_groups.contains(&c.group)
+                || snap.intake_groups.contains(&c.group)
                 || c.pty_id.is_some_and(|p| self.queue_depth(p) > 0);
             if c.latched {
                 if cheap_in_flight || pct.is_some_and(|p| p < floor) || self.drives_in_flight(&c.group) {
-                    release.push(c.id.clone());
+                    plan.release.push(c.id);
                 }
                 continue;
             }
@@ -43020,30 +43051,33 @@ impl OrchRegistry {
                 latched: false,
                 compact_busy: c.compact_busy,
             };
-            // The drive files are read last and only for a pane that would
-            // otherwise fire — a disk read per orchestrator per minute is cheap,
-            // but there is no reason to pay it for a pane the registry alone
-            // already rules out.
             if cacheage::idle_compact_should_fire(&inputs) && !self.drives_in_flight(&c.group) {
                 let (Some(p), Some(t)) = (pct, ttl) else { continue };
-                fire.push((c, p, t));
+                plan.fire.push((c, p, t));
             }
         }
-        if !release.is_empty() || !fire.is_empty() {
+        plan
+    }
+
+    /// APPLY for [`Self::cache_idle_nudge_tick`]: latches first (one `agents`
+    /// lock), then the audit line and the delivery per fire, with no lock held.
+    fn cache_idle_apply(&self, plan: CacheIdlePlan) -> Vec<String> {
+        use loomux_engine::cacheage;
+        if !plan.release.is_empty() || !plan.fire.is_empty() {
             let mut agents = self.agents.lock_safe();
-            for id in &release {
+            for id in &plan.release {
                 if let Some(a) = agents.get_mut(id) {
                     a.cache_idle_nudge_latched = false;
                 }
             }
-            for (c, _, _) in &fire {
+            for (c, _, _) in &plan.fire {
                 if let Some(a) = agents.get_mut(&c.id) {
                     a.cache_idle_nudge_latched = true;
                 }
             }
         }
         let mut nudged = Vec::new();
-        for (c, pct, ttl) in fire {
+        for (c, pct, ttl) in plan.fire {
             self.audit(&c.group, brand::AUDIT_ACTOR, "cache-idle-nudge", json!({
                 "agent": c.id,
                 "idle_ms": c.idle_ms,
@@ -43060,6 +43094,7 @@ impl OrchRegistry {
         }
         nudged
     }
+
 
     /// Whether a review or plan drive is live in `group` (#3407's backstop).
     /// An unreadable drive file answers `true`: the backstop may not tell an
@@ -43150,12 +43185,25 @@ impl OrchRegistry {
         if let Some(e) = self.agents.lock_safe().get_mut(agent_id) {
             e.compact_requested = true;
         }
-        self.audit(group, "human", "compact-requested", json!({ "agent": agent_id, "by": "human" }));
-        Ok(if a.compact_pending {
-            "queued — a compact is already in flight for this pane".to_string()
-        } else {
-            "requested — /compact is typed at the pane's next idle moment".to_string()
-        })
+        // What the fire check will actually do with the flag, read the way
+        // `compact_nudge_tick` reads it: a paused group is skipped outright,
+        // and a requested fire draws on the group's shared hourly budget.
+        // The reply says which, instead of promising a paste that is not
+        // coming (review round 1, N3).
+        let paused = self.is_paused(group);
+        let budget_spent = self
+            .compact_nudge_times
+            .lock_safe()
+            .get(group)
+            .is_some_and(|t| spawn_rate_exceeded(t, now_ms(), MAX_COMPACT_NUDGES_PER_HOUR, SPAWN_RATE_WINDOW_MS));
+        let reply = human_compact_reply(paused, a.compact_pending, budget_spent);
+        self.audit(group, "human", "compact-requested", json!({
+            "agent": agent_id,
+            "by": "human",
+            "paused": paused,
+            "budget_spent": budget_spent,
+        }));
+        Ok(reply)
     }
 
     /// Compact-nudge (#328): stamp the calling agent's `last_state_write_ms` —
@@ -46937,6 +46985,11 @@ impl OrchRegistry {
                 // branch the new total is zero, so the fold carries the old
                 // activity unchanged; on the replace branch it is what keeps a
                 // row's activity from being reset by every tick's fresh snapshot.
+                // Each reading carries its SOURCE: growth is measured against the
+                // row's last token-bearing reading of the same source, so the
+                // zero-token statusline row the branch below may let replace a
+                // transcript row can never become the baseline the next
+                // transcript read is differenced against (review round 1, N2).
                 let counters_of = |s: &UsageSnapshot| loomux_engine::cacheage::Counters {
                     input: s.input_tokens,
                     output: s.output_tokens,
@@ -46945,10 +46998,16 @@ impl OrchRegistry {
                 };
                 let activity = loomux_engine::cacheage::fold_activity(
                     &existing.activity,
-                    counters_of(&*existing),
-                    existing.cost_usd,
-                    counters_of(&snap),
-                    snap.cost_usd,
+                    loomux_engine::cacheage::Reading {
+                        source: &existing.source,
+                        counters: counters_of(&*existing),
+                        cost_usd: existing.cost_usd,
+                    },
+                    loomux_engine::cacheage::Reading {
+                        source: &snap.source,
+                        counters: counters_of(&snap),
+                        cost_usd: snap.cost_usd,
+                    },
                     snap.updated_ms,
                 );
                 if new_empty && old_has_data {
@@ -60701,6 +60760,35 @@ pub fn start_idle_tick(reg: Arc<OrchRegistry>) {
             reg.run_idle_tick(now_ms());
         },
     );
+}
+
+/// One running orchestrator as `OrchRegistry::cache_idle_gather` saw it (#3407).
+struct CacheIdleCandidate {
+    id: String,
+    group: GroupId,
+    block: String,
+    pty_id: Option<u32>,
+    idle_ms: u64,
+    latched: bool,
+    compact_busy: bool,
+}
+
+/// Everything `OrchRegistry::cache_idle_decide` reads that lives behind a
+/// registry lock, taken in one gather pass (#3407).
+struct CacheIdleSnapshot {
+    groups: HashMap<GroupId, Guardrails>,
+    watch_groups: HashSet<GroupId>,
+    intake_groups: HashSet<GroupId>,
+    delegate_groups: HashSet<GroupId>,
+    candidates: Vec<CacheIdleCandidate>,
+}
+
+/// What `OrchRegistry::cache_idle_decide` decided: latches to release, and
+/// fires carrying the context percent and TTL the notice names (#3407).
+#[derive(Default)]
+struct CacheIdlePlan {
+    release: Vec<String>,
+    fire: Vec<(CacheIdleCandidate, u32, u32)>,
 }
 
 /// Round 10 (#428 follow-up): which cadence the compact-nudge loop's NEXT

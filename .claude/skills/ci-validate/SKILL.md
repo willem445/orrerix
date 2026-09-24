@@ -1,6 +1,6 @@
 ---
 name: ci-validate
-description: Why agent workers never build or test Rust locally (hard ban — CI is the only cargo path) and how to validate through the draft-PR-early CI flow; the one permitted local check on `.rs` files is `rustfmt --check` as a parser; frontend node-only commands stay local, after the `npm ci` a freshly-cut worktree needs first.
+description: Why agent workers never build or test Rust locally (hard ban — CI is the only cargo path) and how to validate through the draft-PR-early CI flow; the one permitted local check on `.rs` files is `rustfmt --check` as a parser, and only on files of 5,000 lines or fewer; frontend node-only commands stay local, after the `npm ci` a freshly-cut worktree needs first.
 ---
 
 # Local iteration vs. CI proof
@@ -25,7 +25,7 @@ description: Why agent workers never build or test Rust locally (hard ban — CI
 >
 > **One local check on `.rs` files is permitted, because it isn't a
 > build**: `rustfmt --check` parses. See the next section — run it before
-> every push that touches Rust.
+> every push that touches Rust, on files within its size cap only.
 
 CI is the sole authority for the CI gate, and now also the sole build
 path. A worker citing a local run as validation is citing evidence it
@@ -66,6 +66,25 @@ now live in more than one crate):
 rustfmt --check --edition 2021 <changed .rs files> >/dev/null
 ```
 
+### The size cap: never on a file over 5,000 lines (#3469)
+
+**Never run rustfmt on a `.rs` file over 5,000 lines (`wc -l`), nor on any
+file whose out-of-line modules (`mod x;`) include one** — rustfmt recurses
+into those. Why: rustfmt needs 16–23 GB of RAM on
+`src-tauri/src/orchestration/mod.rs`, enough to exhaust the machine's memory.
+Those files get their syntax check from CI, like everything else.
+
+The known cases are `src-tauri/src/orchestration/mod.rs` (~66k lines) and
+`src-tauri/tests/orchestration.rs` (~70k); the recursion rule also puts
+`src-tauri/src/lib.rs` and `crates/loomux-engine/src/lib.rs` off limits. The
+list moves as files grow, so measure rather than trust it:
+
+```sh
+wc -l <changed .rs files>
+```
+
+This is the one definition of the cap; every other surface points here.
+
 Three things about that command line, each of which will bite you if
 dropped:
 
@@ -77,10 +96,8 @@ dropped:
 - **`>/dev/null` is deliberate — discard stdout, and the redirect is not
   optional.** `--check` prints a *formatting* diff (`Diff in …`) for anything
   not rustfmt-shaped, and this repo is deliberately not rustfmt-formatted:
-  hundreds of lines for a small file, but **15,513 for
-  `src/orchestration/mod.rs`** and **18,094 for a whole-crate run** — measured.
-  Forget the redirect on the file you are most likely to be editing and you
-  dump ~15k lines of diff into your own context, which costs far more than the
+  hundreds of lines even for a file within the size cap. Forget the redirect
+  and you dump that diff into your own context, which costs far more than the
   CI round this check was saving. They are noise here, not findings.
 - **Read stderr; the exit code is ambiguous.** It's `0` clean, `1` for a
   formatting diff *and* for a parse error, `101` for a lexer error. The
@@ -92,15 +109,10 @@ dropped:
   couldn't resolve, which arrives as `Error writing files: failed to resolve
   mod …` and contains no `error:` token at all. Fix it before pushing.
 
-When a change spans many files, parse the whole module tree instead — rustfmt
-recurses into child modules, and a parse error in a child is reported by name:
-
-```sh
-rustfmt --check --edition 2021 src/lib.rs >/dev/null
-```
-
-That takes ~5s for this crate. Keep the `>/dev/null`: without it this is the
-~18,000-line case above.
+When a change spans many files, list them all on the one command line. Do not
+parse a whole module tree from its root: rustfmt recurses into child modules,
+so `src/lib.rs` of `src-tauri` or `loomux-engine` pulls in files over the size
+cap above.
 
 ### This is a syntax check, NOT a formatting gate
 
@@ -173,7 +185,8 @@ writes nothing to `target/` — verified on a worktree that had no `target/`:
 after a whole-crate run it still had none, `git status` was clean, and the run
 took ~5s. So it sits inside both bans at once: the #320 CPU ban (no meaningful
 CPU, nothing to contend across worktrees) and the #488 disk ban (zero bytes
-written).
+written). Memory is the exception, and it scales with file size, which is why
+the size cap above exists.
 
 **`cargo check` and `cargo build` remain banned, and the argument above does
 not extend to them.** `cargo check` resolves the dependency graph and builds

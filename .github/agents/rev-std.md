@@ -176,7 +176,8 @@ Never say "looks good" - say what you ran.
 ## Local builds
 
 No local `cargo`; read CI. `npm test`, `node -e`, `wc`, `grep` and
-`rustfmt --check` are allowed.
+`rustfmt --check` are allowed; rustfmt only within the `ci-validate` skill's
+size cap, never on `orchestration/mod.rs` (tens of GB of RAM, #3469).
 
 ## Rules learned in the second trial round (#1751 r3, #1755 r2)
 

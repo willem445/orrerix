@@ -92,7 +92,7 @@ pub fn cooling_after_ms(ttl_minutes: u32) -> u64 {
 }
 
 /// The four cumulative token counters, as the usage row carries them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Counters {
     pub input: u64,
     pub output: u64,
@@ -146,43 +146,110 @@ pub struct Activity {
     pub last_active_ms: Option<u64>,
     #[serde(default)]
     pub last_wake: Option<WakeCost>,
+    /// The last TOKEN-BEARING reading this row was folded against, and which
+    /// source produced it (#3407 review round 1, N2). Growth is measured from
+    /// here, never from whatever the row happened to hold last: the usage merge
+    /// lets a zero-token statusline read replace a transcript row (the residual
+    /// stated at `merge_usage_entry`), and folding the NEXT transcript read
+    /// against those zeros would report the session's whole history as one
+    /// wake. `None` until a token-bearing reading has been seen.
+    #[serde(default)]
+    pub baseline: Option<Baseline>,
+}
+
+/// One token-bearing reading, as [`Activity::baseline`] remembers it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Baseline {
+    /// The usage row's `source` (`transcript`, `codex-transcript`, …).
+    pub source: String,
+    pub counters: Counters,
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+}
+
+/// One usage reading as the fold sees it: its source, its four counters, and
+/// its dollar figure.
+#[derive(Clone, Copy, Debug)]
+pub struct Reading<'a> {
+    pub source: &'a str,
+    pub counters: Counters,
+    pub cost_usd: Option<f64>,
 }
 
 /// Fold one new usage reading into a row's [`Activity`].
 ///
-/// - Counters that did not GROW (equal, or lower — a different source's
-///   reading replacing the row) are not a request: the previous activity is
-///   carried unchanged. Growth is judged on the total, never on one counter,
-///   so a reading that shifts tokens between buckets cannot fake a request.
-/// - Growth after at least [`WAKE_GAP_MS`] of quiet, or growth with no
-///   previous activity at all, starts a new wake carrying the delta.
-/// - Growth inside the gap is the same turn continuing: `last_active_ms`
-///   advances and the wake already recorded stands.
+/// Growth is measured against the row's **baseline**: the last token-bearing
+/// reading it was folded against (`prev.baseline`), or, for a row that has none
+/// yet, the row's previous reading when that one carried tokens. Never against a
+/// zero-token reading that happened to replace the row in between.
 ///
-/// Pure — the caller supplies `now_ms` (the reading's own timestamp) — so every
-/// arm is pinned without a registry or a transcript.
-pub fn fold_activity(
-    prev: &Activity,
-    prev_counters: Counters,
-    prev_cost: Option<f64>,
-    next: Counters,
-    next_cost: Option<f64>,
-    now_ms: u64,
-) -> Activity {
-    if next.total() <= prev_counters.total() {
-        return prev.clone();
+/// - A reading with **no tokens** (a `none` row, a statusline figure) is not a
+///   request and does not become the baseline: the activity is carried unchanged.
+/// - A token-bearing reading from a **different source** than the baseline is a
+///   RE-BASELINE (review round 1, N2): the two sources count different things, so
+///   their difference is not a request. The new reading becomes the baseline, and
+///   no wake is recorded and the clock does not advance.
+/// - Otherwise growth is judged on the **total**, so a reading that moves tokens
+///   between buckets at an equal total cannot fake a request. Growth after at
+///   least [`WAKE_GAP_MS`] of quiet, or with no previous activity at all, starts a
+///   new wake carrying the delta. Growth inside the gap is the same turn
+///   continuing: `last_active_ms` advances and the recorded wake stands.
+/// - **No baseline at all** is a fresh session: its first token-bearing reading is
+///   its first request, measured from zero. (A row that ARRIVES carrying history
+///   never reaches here; the host does not fold a first sighting.)
+///
+/// Pure. The caller supplies `now_ms` (the reading's own timestamp), so every arm
+/// is pinned without a registry or a transcript.
+pub fn fold_activity(prev: &Activity, prev_reading: Reading<'_>, next: Reading<'_>, now_ms: u64) -> Activity {
+    if next.counters.total() == 0 {
+        // Not token-bearing. Carry, but adopt the previous reading as the
+        // baseline if there is none yet and it WAS token-bearing, which is the
+        // case N2 describes: a transcript row about to be replaced by a
+        // statusline one.
+        let mut out = prev.clone();
+        if out.baseline.is_none() && prev_reading.counters.total() > 0 {
+            out.baseline = Some(Baseline {
+                source: prev_reading.source.to_string(),
+                counters: prev_reading.counters,
+                cost_usd: prev_reading.cost_usd,
+            });
+        }
+        return out;
+    }
+    let base = prev.baseline.clone().or_else(|| {
+        (prev_reading.counters.total() > 0).then(|| Baseline {
+            source: prev_reading.source.to_string(),
+            counters: prev_reading.counters,
+            cost_usd: prev_reading.cost_usd,
+        })
+    });
+    let next_base = Baseline {
+        source: next.source.to_string(),
+        counters: next.counters,
+        cost_usd: next.cost_usd,
+    };
+    let from = match &base {
+        Some(b) if b.source != next.source => {
+            return Activity { baseline: Some(next_base), ..prev.clone() };
+        }
+        Some(b) => b.clone(),
+        None => Baseline { source: next.source.to_string(), counters: Counters::default(), cost_usd: None },
+    };
+    if next.counters.total() <= from.counters.total() {
+        return Activity { baseline: Some(next_base), ..prev.clone() };
     }
     let idle_before_ms = prev.last_active_ms.map(|t| now_ms.saturating_sub(t));
     let is_wake = idle_before_ms.map_or(true, |gap| gap >= WAKE_GAP_MS);
     let last_wake = if is_wake {
+        let (p, n) = (from.counters, next.counters);
         Some(WakeCost {
             at_ms: now_ms,
             idle_before_ms,
-            input_tokens: next.input.saturating_sub(prev_counters.input),
-            output_tokens: next.output.saturating_sub(prev_counters.output),
-            cache_creation_tokens: next.cache_creation.saturating_sub(prev_counters.cache_creation),
-            cache_read_tokens: next.cache_read.saturating_sub(prev_counters.cache_read),
-            cost_usd: match (prev_cost, next_cost) {
+            input_tokens: n.input.saturating_sub(p.input),
+            output_tokens: n.output.saturating_sub(p.output),
+            cache_creation_tokens: n.cache_creation.saturating_sub(p.cache_creation),
+            cache_read_tokens: n.cache_read.saturating_sub(p.cache_read),
+            cost_usd: match (from.cost_usd, next.cost_usd) {
                 (Some(a), Some(b)) => Some((b - a).max(0.0)),
                 _ => None,
             },
@@ -190,7 +257,7 @@ pub fn fold_activity(
     } else {
         prev.last_wake.clone()
     };
-    Activity { last_active_ms: Some(now_ms), last_wake }
+    Activity { last_active_ms: Some(now_ms), last_wake, baseline: Some(next_base) }
 }
 
 /// Everything the orchestrator's idle-compact backstop decides on (#3407
@@ -265,6 +332,64 @@ mod tests {
         Counters { input, output, cache_creation: cw, cache_read: cr }
     }
 
+    /// The pre-N2 call shape: both readings from one source.
+    fn fold_same(prev: &Activity, pc: Counters, pcost: Option<f64>, nc: Counters, ncost: Option<f64>, now: u64) -> Activity {
+        fold_activity(
+            prev,
+            Reading { source: "transcript", counters: pc, cost_usd: pcost },
+            Reading { source: "transcript", counters: nc, cost_usd: ncost },
+            now,
+        )
+    }
+
+    fn rd(source: &str, counters: Counters, cost: Option<f64>) -> Reading<'_> {
+        Reading { source, counters, cost_usd: cost }
+    }
+
+    #[test]
+    fn a_zero_token_reading_between_two_transcript_reads_is_not_the_baseline() {
+        // N2's sequence: a transcript row with history, one tick where a
+        // statusline read (0 tokens, a dollar figure) replaces it, then the
+        // transcript again with ONE request's growth.
+        let history = c(1_000, 2_000, 300_000, 5_000_000);
+        let prev = Activity { last_active_ms: Some(0), last_wake: None, baseline: None };
+        let mid = fold_activity(&prev, rd("transcript", history, Some(9.0)), rd("statusline", Counters::default(), Some(9.0)), 60_000);
+        assert_eq!(mid.last_active_ms, Some(0), "a zero-token read is not a request");
+        let one = c(1_010, 2_050, 300_000, 5_900_000);
+        let after = fold_activity(&mid, rd("statusline", Counters::default(), Some(9.0)), rd("transcript", one, Some(9.4)), 10 * 60_000);
+        let w = after.last_wake.expect("the one request is a wake");
+        assert_eq!(
+            (w.input_tokens, w.output_tokens, w.cache_creation_tokens, w.cache_read_tokens),
+            (10, 50, 0, 900_000),
+            "the wake is the ONE request, never the session's whole history"
+        );
+    }
+
+    #[test]
+    fn a_token_bearing_source_flip_re_baselines_without_a_wake() {
+        let prev = Activity {
+            last_active_ms: Some(5),
+            last_wake: None,
+            baseline: Some(Baseline { source: "transcript".into(), counters: c(10, 10, 10, 10), cost_usd: None }),
+        };
+        let flipped = fold_activity(&prev, rd("transcript", c(10, 10, 10, 10), None), rd("stream", c(500, 500, 500, 500), None), 10 * 60_000);
+        assert_eq!(flipped.last_active_ms, Some(5), "a flip is not a request: the clock does not move");
+        assert_eq!(flipped.last_wake, None);
+        assert_eq!(flipped.baseline.as_ref().map(|b| b.source.as_str()), Some("stream"));
+        // The next same-source growth folds from the NEW baseline.
+        let next = fold_activity(&flipped, rd("stream", c(500, 500, 500, 500), None), rd("stream", c(501, 500, 500, 500), None), 20 * 60_000);
+        assert_eq!(next.last_wake.unwrap().input_tokens, 1);
+    }
+
+    #[test]
+    fn a_fresh_sessions_first_request_still_folds_across_a_none_row() {
+        // A new agent's first row is `none` (or a $0.00 statusline): no tokens,
+        // so no baseline, so the first token-bearing read is its first request.
+        let got = fold_activity(&Activity::default(), rd("statusline", Counters::default(), Some(0.0)), rd("transcript", c(7, 0, 0, 0), None), 99);
+        assert_eq!(got.last_active_ms, Some(99));
+        assert_eq!(got.last_wake.unwrap().input_tokens, 7);
+    }
+
     #[test]
     fn a_block_override_beats_the_cli_default_and_zero_means_unknown() {
         assert_eq!(effective_ttl_minutes(None, "claude"), Some(5));
@@ -290,22 +415,22 @@ mod tests {
 
     #[test]
     fn unmoved_or_shrunk_counters_are_not_a_request() {
-        let prev = Activity { last_active_ms: Some(1_000), last_wake: None };
-        let same = fold_activity(&prev, c(10, 10, 10, 10), None, c(10, 10, 10, 10), None, 999_999);
-        assert_eq!(same, prev);
-        let shrunk = fold_activity(&prev, c(10, 10, 10, 10), None, c(0, 0, 0, 5), None, 999_999);
-        assert_eq!(shrunk, prev);
+        let prev = Activity { last_active_ms: Some(1_000), last_wake: None, baseline: None };
+        let same = fold_same(&prev, c(10, 10, 10, 10), None, c(10, 10, 10, 10), None, 999_999);
+        assert_eq!((same.last_active_ms, &same.last_wake), (prev.last_active_ms, &prev.last_wake));
+        let shrunk = fold_same(&prev, c(10, 10, 10, 10), None, c(0, 0, 0, 5), None, 999_999);
+        assert_eq!((shrunk.last_active_ms, &shrunk.last_wake), (prev.last_active_ms, &prev.last_wake));
         // A reading that moves tokens between buckets at an equal total is not
         // growth either.
-        let shuffled = fold_activity(&prev, c(10, 10, 10, 10), None, c(0, 10, 10, 20), None, 999_999);
-        assert_eq!(shuffled, prev);
+        let shuffled = fold_same(&prev, c(10, 10, 10, 10), None, c(0, 10, 10, 20), None, 999_999);
+        assert_eq!((shuffled.last_active_ms, &shuffled.last_wake), (prev.last_active_ms, &prev.last_wake));
     }
 
     #[test]
     fn growth_after_the_gap_is_a_wake_carrying_the_delta() {
-        let prev = Activity { last_active_ms: Some(1_000), last_wake: None };
+        let prev = Activity { last_active_ms: Some(1_000), last_wake: None, baseline: None };
         let now = 1_000 + 10 * 60_000;
-        let got = fold_activity(
+        let got = fold_same(
             &prev,
             c(100, 50, 0, 1_000),
             Some(1.0),
@@ -327,18 +452,18 @@ mod tests {
     #[test]
     fn growth_inside_the_gap_advances_the_clock_and_keeps_the_wake() {
         let wake = WakeCost { at_ms: 5_000, cache_read_tokens: 7, ..Default::default() };
-        let prev = Activity { last_active_ms: Some(5_000), last_wake: Some(wake.clone()) };
-        let got = fold_activity(&prev, c(1, 1, 1, 1), None, c(2, 2, 2, 2), None, 5_000 + WAKE_GAP_MS - 1);
+        let prev = Activity { last_active_ms: Some(5_000), last_wake: Some(wake.clone()), baseline: None };
+        let got = fold_same(&prev, c(1, 1, 1, 1), None, c(2, 2, 2, 2), None, 5_000 + WAKE_GAP_MS - 1);
         assert_eq!(got.last_active_ms, Some(5_000 + WAKE_GAP_MS - 1));
         assert_eq!(got.last_wake, Some(wake));
         // Exactly at the gap it is a wake — the boundary is inclusive.
-        let at_gap = fold_activity(&prev, c(1, 1, 1, 1), None, c(2, 2, 2, 2), None, 5_000 + WAKE_GAP_MS);
+        let at_gap = fold_same(&prev, c(1, 1, 1, 1), None, c(2, 2, 2, 2), None, 5_000 + WAKE_GAP_MS);
         assert_eq!(at_gap.last_wake.unwrap().at_ms, 5_000 + WAKE_GAP_MS);
     }
 
     #[test]
     fn the_first_movement_ever_is_a_wake_whose_gap_is_unknown() {
-        let got = fold_activity(&Activity::default(), c(0, 0, 0, 0), None, c(5, 5, 5, 5), Some(0.1), 42);
+        let got = fold_same(&Activity::default(), c(0, 0, 0, 0), None, c(5, 5, 5, 5), Some(0.1), 42);
         assert_eq!(got.last_active_ms, Some(42));
         let w = got.last_wake.unwrap();
         assert_eq!(w.idle_before_ms, None);
@@ -348,8 +473,8 @@ mod tests {
 
     #[test]
     fn a_lower_dollar_figure_never_reports_a_negative_wake_cost() {
-        let prev = Activity { last_active_ms: Some(0), last_wake: None };
-        let got = fold_activity(&prev, c(1, 0, 0, 0), Some(3.0), c(2, 0, 0, 0), Some(2.0), WAKE_GAP_MS);
+        let prev = Activity { last_active_ms: Some(0), last_wake: None, baseline: None };
+        let got = fold_same(&prev, c(1, 0, 0, 0), Some(3.0), c(2, 0, 0, 0), Some(2.0), WAKE_GAP_MS);
         assert_eq!(got.last_wake.unwrap().cost_usd, Some(0.0));
     }
 

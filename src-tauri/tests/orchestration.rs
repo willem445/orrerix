@@ -71245,3 +71245,102 @@ fn a_block_ttl_override_moves_the_backstop_band_and_zero_turns_it_off() {
         assert!(reg.cache_idle_nudge_tick(t0 + m * MIN, &pct(&o.id, 70)).is_empty(), "ttl 0 is unknown: {m}m");
     }
 }
+
+// ---------------------------------------------------------------------------
+// #3407 review round 1: the drive arms of "in flight" (N1), the re-baseline
+// across a source flip (N2), and the honest Compact-now reply (N3).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_idle_compact_backstop_holds_for_a_live_review_drive_and_for_an_unreadable_drive_file() {
+    let t0 = 1_000 * MIN;
+    // A live review drive (`DriveEntry::new` lands in ci-wait) is in flight.
+    let (reg, _d, gid, oid) = idle_orch_setup(t0);
+    let dir = reg.state_root().join(gid.as_str());
+    let live = reviewdrive::DriveEntry::new(1758, "sess-drive", &oid, reviewdrive::Counters::default(), 1_000);
+    let state = reviewdrive::ReviewDrivesState { entries: vec![live], ..Default::default() };
+    reviewdrive::store_state(&dir, &state).unwrap();
+    assert!(reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)).is_empty(), "a live review drive is in flight");
+    // The positive control on the same fixture: the file gone, the same pane
+    // at the same moment is nudged.
+    fs::remove_file(reviewdrive::state_path(&dir)).unwrap();
+    assert_eq!(reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)), vec![oid.clone()]);
+
+    // An unreadable drive file — review or plan — counts as in flight: "I could
+    // not look" is not "nothing there".
+    for file in [reviewdrive::REVIEW_DRIVES_FILE, loomux_lib::orchestration::plandrive::PLAN_DRIVES_FILE] {
+        let (reg, _d, gid, oid) = idle_orch_setup(t0);
+        let dir = reg.state_root().join(gid.as_str());
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(file), "{ not json").unwrap();
+        assert!(
+            reg.cache_idle_nudge_tick(t0 + 4 * MIN, &pct(&oid, 70)).is_empty(),
+            "an unreadable {file} must count as in flight"
+        );
+        assert_eq!(audit_count(&reg, &gid, "cache-idle-nudge"), 0);
+    }
+}
+
+#[test]
+fn a_statusline_read_between_two_transcript_reads_never_reports_the_whole_history_as_a_wake() {
+    // N2's sequence through the real merge: a transcript row with a session's
+    // history, one tick where a zero-token statusline read carrying a dollar
+    // figure replaces it (the no-downgrade rule lets a priced read win), then the
+    // transcript again with ONE request's growth.
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let t0 = 1_000 * MIN;
+    reg.upsert_usage_snapshot(&g.id, cache_snap(100_000, 5_000_000, 9.0, t0));
+    reg.upsert_usage_snapshot(&g.id, cache_snap(100_000, 5_000_000, 9.0, t0 + MIN));
+    let statusline = UsageSnapshot {
+        source: "statusline".to_string(),
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 0,
+        ..cache_snap(0, 0, 9.0, t0 + 2 * MIN)
+    };
+    reg.upsert_usage_snapshot(&g.id, statusline);
+    reg.upsert_usage_snapshot(&g.id, cache_snap(100_010, 5_900_000, 9.4, t0 + 12 * MIN));
+    let row = usage_row(&reg.group_usage(&g.id), "w-cacheage").clone();
+    assert_eq!(row["last_active_ms"], json!(t0 + 12 * MIN), "the one request is activity: {row}");
+    assert_eq!(row["last_wake"]["input_tokens"], json!(10), "the wake is ONE request, not the session: {row}");
+    assert_eq!(row["last_wake"]["cache_read_tokens"], json!(900_000));
+}
+
+#[test]
+fn compact_now_says_queued_on_a_paused_group_instead_of_promising_a_paste() {
+    let (reg, _d, gid, oid) = compact_nudge_setup(0);
+    reg.pause_group(&gid).unwrap();
+    let reply = reg.human_request_compact(&gid, &oid).unwrap();
+    assert!(reply.starts_with("queued") && reply.contains("paused"), "{reply}");
+    assert!(!reply.contains("next idle moment"), "a paused group is not typed into: {reply}");
+    // The flag is still set: the request is honoured, just later. Nothing fires
+    // while paused…
+    let empty = HashMap::new();
+    assert!(reg.compact_nudge_tick(FAR, &empty, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new()).is_empty());
+    // …and it fires once the group resumes.
+    reg.resume_group(&gid).unwrap();
+    assert_eq!(
+        reg.compact_nudge_tick(FAR, &empty, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new()),
+        vec![oid]
+    );
+}
+
+#[test]
+fn the_compact_now_reply_names_what_holds_the_request_in_decision_order() {
+    use loomux_lib::orchestration::human_compact_reply;
+    let r = |p, c, b| human_compact_reply(p, c, b);
+    assert!(r(false, false, false).starts_with("requested") && r(false, false, false).contains("next idle moment"));
+    assert!(r(true, false, false).contains("paused"));
+    assert!(r(false, true, false).contains("already in flight"));
+    assert!(r(false, false, true).contains("compacts for the hour"));
+    // A paused group is skipped before any fire check, so pause is named first
+    // whatever else holds.
+    assert!(r(true, true, true).contains("paused"));
+    assert!(r(false, true, true).contains("already in flight"));
+    for (p, c, b) in [(true, false, false), (false, true, false), (false, false, true)] {
+        assert!(r(p, c, b).starts_with("queued"), "{p} {c} {b}");
+        assert!(!r(p, c, b).contains('\n'), "one paragraph");
+    }
+}

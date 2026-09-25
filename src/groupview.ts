@@ -420,11 +420,34 @@ export class GroupView {
 
     // Compaction guardrails share the existing live group-guardrail surface.
     const compactRow = el("div", "group-compact-settings");
-    this.compactThresholdInput = this.compactInput("Escalate at %", "Context usage that triggers automatic compaction escalation; 0 disables it.", 100, (value) => this.applyCompactPercent(value, setCompactContextThreshold));
-    this.compactNudgeMinutesInput = this.compactInput("Nudge after quiet minutes", "Quiet-lull compaction nudge interval; 0 disables nudging.", 1440, (value) => this.applyCompactMinutes(value));
-    this.compactNudgeFloorInput = this.compactInput("Nudge from context %", "Minimum context usage before a lull nudge; 0 disables this context floor.", 100, (value) => this.applyCompactPercent(value, setCompactNudgeMinContextPercent));
+    const compactThreshold = this.compactInput(
+      "Escalate at %",
+      "Context usage that triggers automatic compaction escalation; 0 disables it.",
+      100,
+      (value) => this.applyCompactPercent(value, setCompactContextThreshold),
+    );
+    const compactNudgeMinutes = this.compactInput(
+      "Nudge after quiet minutes",
+      "Quiet-lull compaction nudge interval; 0 disables nudging.",
+      1440,
+      (value) => this.applyCompactMinutes(value),
+    );
+    const compactNudgeFloor = this.compactInput(
+      "Nudge from context %",
+      "Minimum context usage before a lull nudge; 0 disables this context floor.",
+      100,
+      (value) => this.applyCompactPercent(value, setCompactNudgeMinContextPercent),
+    );
+    this.compactThresholdInput = compactThreshold.input;
+    this.compactNudgeMinutesInput = compactNudgeMinutes.input;
+    this.compactNudgeFloorInput = compactNudgeFloor.input;
     this.compactSettingsError = el("span", "group-compact-error");
-    compactRow.append(this.compactThresholdInput, this.compactNudgeMinutesInput, this.compactNudgeFloorInput, this.compactSettingsError);
+    compactRow.append(
+      compactThreshold.wrap,
+      compactNudgeMinutes.wrap,
+      compactNudgeFloor.wrap,
+      this.compactSettingsError,
+    );
 
     // Workflow-mode chrome (#316): whether this group is on the built-in
     // roster or a repo-declared custom workflow, and the merge gate armed for
@@ -2007,8 +2030,13 @@ export class GroupView {
     }
   }
 
-  private compactInput(label: string, title: string, max: number, apply: (value: string) => void): HTMLInputElement {
-    const wrap = el("label", "group-compact-control", label);
+  private compactInput(
+    label: string,
+    title: string,
+    max: number,
+    apply: (value: string) => void,
+  ): { wrap: HTMLLabelElement; input: HTMLInputElement } {
+    const wrap = el("label", "group-compact-control", label) as HTMLLabelElement;
     wrap.title = title;
     const input = document.createElement("input");
     input.type = "number";
@@ -2018,7 +2046,7 @@ export class GroupView {
     input.addEventListener("keydown", (event) => { if (event.key === "Enter") apply(input.value); });
     input.addEventListener("blur", () => apply(input.value));
     wrap.append(input);
-    return input;
+    return { wrap, input };
   }
 
   private async applyCompactPercent(value: string, setter: typeof setCompactContextThreshold | typeof setCompactNudgeMinContextPercent): Promise<void> {

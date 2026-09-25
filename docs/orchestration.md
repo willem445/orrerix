@@ -3965,9 +3965,11 @@ lets you change the threshold from 0 (off) through 100%; at the threshold, loomu
 a context notice and asks for compaction at the next check if the agent has not asked.
 Escalation is restricted to the group's configured compaction-eligible roles; by default
 that is the orchestrator only, so workers and reviewers are not auto-compacted by this
-fallback. Existing saved groups retain an explicit 0 choice. The same panel exposes the
-quiet-nudge minimum context percentage (0 disables that floor; an untouched value uses the
-50% smart default).
+fallback. Existing saved groups retain an explicit 0 choice. For an existing group with a
+nonzero threshold, delegates that previously received threshold escalation now need their
+role included in `compact_nudge_roles` to continue doing so; that role list has a backend
+setter but no lifecycle-panel control. The same panel exposes the quiet-nudge minimum
+context percentage (0 disables that floor; an untouched value uses the 50% smart default).
 
 **The orchestrator can also ask for it directly.** `request_compact()` is the primary
 mechanism — the timed nudge above is the fallback for personas that never call it. The

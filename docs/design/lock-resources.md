@@ -36,6 +36,33 @@ advisory is a tool a human can reason about ("w-3 has held `build` for 40 minute
 stuck?"). An advisory lock described as enforcement is a claim the code does not back, which
 this repo treats as a defect in its own right.
 
+### What that abandoned design left behind (#3477)
+
+A build of #322 did run on at least one machine, and it wrote `node`, `npm` and `cargo`
+shims (each with a `.cmd` twin) into the shared shim directory that every agent pane puts
+first on `PATH`. Nothing ever removed them, so in every pane they kept shadowing the real
+programs long after the design was dropped. `npm run <script>` then failed with
+`/usr/bin/sh: <cwd>\node: No such file or directory`, because npm runs scripts under
+`cmd.exe` and its `.cmd` wrappers start `"node"` by a quoted name that cmd resolves
+through `PATH`. In that case cmd expands a top-level `%~dp0` to the current directory, not
+the script's own, so the orphan `node.cmd` handed `sh` the path `<cwd>\node`. npm's
+`process.execPath` was the real `node.exe` the whole time: the issue's first theory was
+wrong, and so was the fix it proposed (make the `npm` shim set `npm_node_execpath`).
+
+Two lessons follow, and both are in the product now:
+
+- **The product owns that directory, so it cleans it.** `ensure_shims` deletes any file
+  there that carries a shim header this product generates (`# orrerix … shim (#…)`, or the
+  same with the legacy name, or `rem` for the `.cmd` twin) and whose name is not one this
+  build writes (`is_stale_generated_shim`). The rule depends only on the header, never on a
+  tool name, so it knows nothing about `node` or `npm` (constraint 8). It also fails safe:
+  a file without that header stays, whatever it is called.
+- **The same `%~dp0` bug was live in the gates.** The `gh`/`git` `.cmd` delegators used
+  the same top-level `%~dp0` to find their POSIX shim. Started by a quoted name through
+  `PATH`, they ran `sh <cwd>\gh`, so a file named `gh` in the agent's own worktree would
+  have run **instead of the merge gate**. The delegator now reads its own directory inside
+  a `call`ed label, where `%~dp0` is correct. npm's own cmd-shim uses the same workaround.
+
 ## Config: `resources:` in `.loomux/workflow.yml`
 
 ```yaml

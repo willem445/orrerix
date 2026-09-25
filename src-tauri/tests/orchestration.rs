@@ -74,6 +74,8 @@ use loomux_lib::orchestration::{
     resolve_shim_toolchain, ShimPaths,
     hold_until_quiet, idle_output_is_activity, idle_should_kill, idle_tick_should_fire,
     loomux_shim_cmd, loomux_shim_sh,
+    // #3477: stale generated shims are pruned from the shared shim dir.
+    is_stale_generated_shim, prune_stale_shims,
     // #406: the unified `gh` poller's shared scan cadence.
     intake_scan_due,
     low_disk_notice, low_disk_transition, max_agents_notice, pr_number, release_gate_decision,
@@ -48239,6 +48241,181 @@ fn gh_cmd_shim_ignores_an_inherited_sh_override_in_the_degraded_no_sh_case() {
     assert!(
         audit.contains("gate-degraded-no-sh"),
         "the degraded fallback must still be audited even with an inherited ORRERIX_SH present — got audit: {audit:?}"
+    );
+}
+
+// ───────── #3477: the `.cmd` delegator finds its OWN POSIX shim ─────────
+//
+// cmd.exe expands a top-level `%~dp0` against the CURRENT DIRECTORY when the
+// batch was started by a QUOTED name resolved through PATH — the shape npm's
+// `.cmd` wrappers use. The delegator then handed sh `<cwd>\gh`, so a file named
+// `gh` in the agent's worktree ran in place of the merge gate.
+
+#[cfg(windows)]
+#[test]
+fn gh_cmd_shim_never_runs_a_gh_file_in_the_cwd_when_invoked_by_quoted_name_through_path() {
+    use std::process::Command;
+    let Some(sh_abs) = locate_sh_exe() else {
+        eprintln!("SKIP gh_cmd_shim_never_runs_a_gh_file_in_the_cwd…: no sh.exe found via `where`");
+        return;
+    };
+
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let group = root.join("group");
+    fs::create_dir_all(&group).unwrap();
+    let log = root.join("gh.log");
+    let fake = write_fake_gh(root, &log);
+    let shim_dir = root.join("shim");
+    fs::create_dir_all(&shim_dir).unwrap();
+    fs::write(shim_dir.join("gh"), gh_shim_sh(&fake.display().to_string(), &shim_paths())).unwrap();
+    fs::write(
+        shim_dir.join("gh.cmd"),
+        gh_shim_cmd(&fake.display().to_string(), Some(&sh_abs.replace('\\', "/"))),
+    )
+    .unwrap();
+
+    // The agent's worktree, holding a POSIX script named `gh` that "merges" and
+    // exits 0. An extensionless file does not shadow cmd's own PATHEXT lookup, so
+    // `gh.cmd` from the shim dir is still what cmd starts — the question is only
+    // which `gh` the delegator hands to sh.
+    let worktree = root.join("worktree");
+    fs::create_dir_all(&worktree).unwrap();
+    let decoy_log = root.join("decoy.log");
+    fs::write(
+        worktree.join("gh"),
+        format!("#!/bin/sh\necho DECOY-GH-RAN >> \"{}\"\nexit 0\n", decoy_log.display().to_string().replace('\\', "/")),
+    )
+    .unwrap();
+
+    // The caller: a batch that names `gh` QUOTED and lets cmd resolve it through
+    // PATH — npm's cmd-shim shape (`"%_prog%" …`). Invoking gh.cmd by absolute
+    // path, as the tests above do, never reaches the bug.
+    let caller = root.join("caller.cmd");
+    fs::write(&caller, "@echo off\r\n\"gh\" pr merge 5\r\nexit /b %errorlevel%\r\n").unwrap();
+    let path = format!(r"{};C:\Windows\System32;C:\Windows", shim_dir.display());
+
+    let status = Command::new("cmd")
+        .arg("/d")
+        .arg("/c")
+        .arg(&caller)
+        .current_dir(&worktree)
+        .env("PATH", path)
+        .env("LOOMUX_GROUP_DIR", &group)
+        .env("FAKE_BASE", "main")
+        .env("FAKE_DEFAULT", "main")
+        .env("FAKE_NUM", "5")
+        .status()
+        .unwrap();
+
+    assert!(
+        !decoy_log.exists(),
+        "the delegator ran the worktree's own `gh` in place of the merge gate — %~dp0 resolved to the cwd"
+    );
+    assert!(!status.success(), "the merge must be BLOCKED (no grant, no markers); a bypass exits 0");
+    let audit = fs::read_to_string(group.join("audit.jsonl")).unwrap_or_default();
+    assert!(
+        audit.contains("merge-gate-blocked"),
+        "the real POSIX gate must be what ran, got audit: {audit}"
+    );
+}
+
+#[test]
+fn every_cmd_delegator_reads_its_own_dir_only_inside_a_called_label() {
+    // The property the Windows test above relies on, pinned on every platform
+    // and for BOTH delegators (they share `shim_cmd_delegator`): the only `%~dp0`
+    // in the file sits in the `:orrerix_self_dir` label, which the main flow
+    // reaches via `call` — never a top-level `%~dp0`, which is the #3477 bug.
+    for (name, text) in [
+        ("gh", gh_shim_cmd("C:/real/gh.exe", Some("C:/Git/usr/bin/sh.exe"))),
+        ("git", git_shim_cmd("C:/real/git.exe", Some("C:/Git/usr/bin/sh.exe"))),
+        ("gh (no sh)", gh_shim_cmd("C:/real/gh.exe", None)),
+    ] {
+        let lines: Vec<&str> = text.split("\r\n").collect();
+        let label = lines
+            .iter()
+            .position(|l| *l == ":orrerix_self_dir")
+            .unwrap_or_else(|| panic!("{name}: no :orrerix_self_dir label in\n{text}"));
+        let dp0: Vec<usize> = (0..lines.len()).filter(|&i| lines[i].contains("%~dp0")).collect();
+        assert!(!dp0.is_empty(), "{name}: the delegator must still locate its own dir");
+        for i in dp0 {
+            assert!(
+                i > label && !lines[label..i].iter().any(|l| l.starts_with("exit /b")),
+                "{name}: `%~dp0` on line {i} is outside the called label: {:?}",
+                lines[i]
+            );
+        }
+        let call = lines.iter().position(|l| *l == "call :orrerix_self_dir");
+        let first_use = lines.iter().position(|l| l.contains("%ORRERIX_SHIM_DIR%"));
+        assert!(
+            matches!((call, first_use), (Some(c), Some(u)) if c < u),
+            "{name}: the label must be CALLED before the shim dir is used\n{text}"
+        );
+        assert!(
+            label > lines.iter().position(|l| l.starts_with("exit /b")).unwrap(),
+            "{name}: the main flow must exit before falling into the label"
+        );
+    }
+}
+
+// ───────── #3477: stale generated shims are pruned, nothing else is ─────────
+
+/// The two orphan headers measured on a real machine: the `node`/`npm` shims a
+/// #322 build wrote (POSIX and `.cmd`), which shadowed the real programs on
+/// every agent pane's PATH and broke `npm run`.
+const ORPHAN_SH_HEAD: &str = "#!/bin/sh\n# loomux resource-guard shim (#318) — restrict-only: delay, never deny.\n\
+                              # Generated by loomux; do not edit. Guards invocations of: node\n";
+const ORPHAN_CMD_HEAD: &str = "@echo off\r\nrem loomux resource-guard shim (#318) — delegate to the POSIX shim; run real node if no sh.\r\n";
+
+#[test]
+fn a_stale_generated_shim_is_recognised_and_a_file_the_product_did_not_write_is_not() {
+    let kept = ["gh", "git", "orrerix", "loomux"];
+    // Orphans: generated header, name not in the set this build writes.
+    assert!(is_stale_generated_shim("node", ORPHAN_SH_HEAD, &kept));
+    assert!(is_stale_generated_shim("npm.cmd", ORPHAN_CMD_HEAD, &kept));
+    assert!(is_stale_generated_shim("cargo", "#!/bin/sh\n# orrerix resource-guard shim (#318)\n", &kept));
+    // A shim this build writes is never stale — header or not, bare or `.cmd`.
+    let gh_sh = gh_shim_sh("C:/real/gh.exe", &shim_paths());
+    assert!(!is_stale_generated_shim("gh", &gh_sh, &kept));
+    assert!(!is_stale_generated_shim("gh.cmd", &gh_shim_cmd("C:/real/gh.exe", None), &kept));
+    assert!(!is_stale_generated_shim("loomux.cmd", &loomux_shim_cmd(), &kept));
+    // …but the same text under a name NOT kept is (gh uninstalled: its shim is an orphan).
+    assert!(is_stale_generated_shim("gh", &gh_sh, &["orrerix", "loomux"]));
+    // Fail-safe direction: no product header → never deleted, whatever the name.
+    assert!(!is_stale_generated_shim("node", "#!/bin/sh\nexec /usr/bin/node \"$@\"\n", &kept));
+    assert!(!is_stale_generated_shim("node", "#!/bin/sh\n# my own node shim (#1)\n", &kept));
+    assert!(!is_stale_generated_shim("tool", "#!/bin/sh\n# loomuxish shim (#1)\n", &kept));
+    assert!(!is_stale_generated_shim("tool", "#!/bin/sh\n# loomux helper, not a generated file\n", &kept));
+    // The header must be in the first lines, where every generator puts it.
+    assert!(!is_stale_generated_shim("tool", "a\nb\nc\nd\n# loomux x shim (#318)\n", &kept));
+    // A multi-byte character at the `rem ` probe boundary must not panic.
+    assert!(!is_stale_generated_shim("tool", "ré—x loomux shim (#1)\n", &kept));
+}
+
+#[test]
+fn prune_stale_shims_deletes_the_orphans_and_keeps_everything_else() {
+    let td = tempfile::tempdir().unwrap();
+    let dir = td.path();
+    let write = |n: &str, body: &str| fs::write(dir.join(n), body).unwrap();
+    write("node", ORPHAN_SH_HEAD);
+    write("node.cmd", ORPHAN_CMD_HEAD);
+    write("npm", &ORPHAN_SH_HEAD.replace("of: node", "of: npm"));
+    write("npm.cmd", &ORPHAN_CMD_HEAD.replace("real node", "real npm"));
+    write("gh", &gh_shim_sh("C:/real/gh.exe", &shim_paths()));
+    write("gh.cmd", &gh_shim_cmd("C:/real/gh.exe", None));
+    write("orrerix.cmd", &loomux_shim_cmd());
+    write("mytool", "#!/bin/sh\necho mine\n");
+    fs::create_dir(dir.join("loomux-subdir-shim (#1)")).unwrap();
+
+    prune_stale_shims(dir, &["gh", "git", "orrerix", "loomux"]);
+
+    let mut left: Vec<String> =
+        fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    left.sort();
+    assert_eq!(
+        left,
+        ["gh", "gh.cmd", "loomux-subdir-shim (#1)", "mytool", "orrerix.cmd"],
+        "exactly the four orphans go; the kept shims, a user file and a directory stay"
     );
 }
 

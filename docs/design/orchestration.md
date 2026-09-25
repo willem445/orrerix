@@ -8157,9 +8157,10 @@ which is the question this guard exists to answer.
   row, the **lowest row leading with a prompt glyph**, and only when every content cell after the
   glyph is faint. The first cell may be inverse instead (the cursor). Any cell at normal intensity
   refuses, and a refusal leaves the row exactly as `render_visible` had it. So the change can only
-  turn a non-empty composer into an empty one; it can never create a hold, and it never touches a
-  question row. A dialog's highlighted choice (`❯ 1. Yes`) is painted at normal intensity, so a
-  screen with a dialog on it is unchanged.
+  ever blank one faint, prompt-glyph-led row (normally the composer; see Limits), and it can never
+  create a hold. A dialog's highlighted choice (`❯ 1. Yes`) is painted at normal intensity, so a
+  dialog that paints a pointer is the lowest glyph-led row and is left unchanged. A glyph-less
+  dialog is the case in Limits.
 
 **What stays true.** #510's absolute is untouched in both of its forms. `write_admission` checks
 `input_pending` (the keystroke record, not the screen) first. A composer holding anything at

@@ -56,6 +56,13 @@ export function markSpan(markMs: number, k: number, bucketMs: number, gridOrigin
 }
 
 export interface Point { tsMs: number; value: number }
+/** Count measured samples; zero is a real observation, missing/non-finite is not. */
+export function trendSampleCount(values: readonly (number | null | undefined)[]): number {
+  let count = 0;
+  for (const value of values) if (typeof value === "number" && Number.isFinite(value)) count++;
+  return count;
+}
+
 /** Arithmetic mean of measured values, ignoring unavailable samples. */
 export function meanFinite(values: readonly (number | null | undefined)[]): number | null {
   let sum = 0;

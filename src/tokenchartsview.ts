@@ -54,7 +54,7 @@ import {
   type Metric,
 } from "./tokencharts";
 import { makeScale, niceTicks, xForTs, tsForX, type TimelineScale } from "./timelinelayout";
-import { chooseBucket, clampWindow, linearTicks, logTicks, logValue, markSpan, meanFinite, panBy, yDomain, zoomAbout, type Window } from "./chartwindow";
+import { chooseBucket, clampWindow, linearTicks, logTicks, logValue, markSpan, meanFinite, panBy, trendSampleCount, yDomain, zoomAbout, type Window } from "./chartwindow";
 import { averages, averagesOverTime } from "./tokenaverages";
 import { lifecycle } from "./tokenlifecycle";
 import { perCompletedItem, perCompletedItemOverTime } from "./tokenperitem";
@@ -376,6 +376,12 @@ export class TokenChartsView {
     this.plotEl.addEventListener("pointerup", (event) => {
       if (this.drag?.pointerId === (event as PointerEvent).pointerId) { this.drag = null; this.rerender(); }
     });
+    const cancelDrag = (event: Event) => {
+      const pointerId = (event as PointerEvent).pointerId;
+      if (this.drag?.pointerId === pointerId) { this.drag = null; this.rerender(); }
+    };
+    this.plotEl.addEventListener("pointercancel", cancelDrag);
+    this.plotEl.addEventListener("lostpointercapture", cancelDrag);
     this.barsEl = el("div", "tokens-bars");
     this.readoutEl = el("div", "tokens-readout");
     this.scorecardEl = el("div", "tokens-scorecard");
@@ -988,29 +994,34 @@ export class TokenChartsView {
     const perOpts = { startMs: range.startMs, endMs: range.endMs, doneIds, doneAtMs, bucketMs: choice.bucketMs, metric: this.metric === "cost_usd" ? "total" as const : this.metric };
     const per = perCompletedItemOverTime(deltas, attribution, this.board, perOpts);
     const perTotal = perCompletedItem(deltas, attribution, this.board, { ...perOpts, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }) });
-    const averageGroups = (["agent", "block", "model", "item"] as const).map((groupBy) => ({ groupBy, result: averages(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy, metric: this.metric === "cost_usd" ? "total" as const : this.metric, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }), stat: statCell }) }));
+    const averageGroups = (["agent", "block", "model", "item"] as const).map((groupBy) => ({ groupBy, result: averages(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy, metric: this.metric, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }), stat: statCell }) }));
     const avg = averagesOverTime(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy: "agent", metric: "total", bucketMs: choice.bucketMs, stat: statCell });
     const title = el("div", "tokens-section-title", `Trend metrics · selected counter: ${this.metric === "total" ? "all tokens" : this.metric === "cache_r" ? "cache read" : this.metric}; pane average uses total tokens`);
     this.metricTrendsEl.append(title);
-    const rowsToDraw: { label: string; buckets: number[]; values: number[] }[] = [];
-    rowsToDraw.push({ label: "tokens per completed item", buckets: per.buckets.map((b) => b.startMs), values: per.buckets.map((b) => b.perItem ?? 0) });
+    const rowsToDraw: { label: string; buckets: number[]; values: (number | null)[] }[] = [];
+    rowsToDraw.push({ label: "tokens per completed item", buckets: per.buckets.map((b) => b.startMs), values: per.buckets.map((b) => b.perItem) });
     rowsToDraw.push({ label: "items done per day", buckets: life.series.bucketStarts, values: life.series.done });
-    rowsToDraw.push({ label: "median time-to-completion (h)", buckets: life.series.bucketStarts, values: life.series.ttcMs.map((xs) => xs.length ? statCell(xs).median ?? 0 : 0).map((n) => n / 3_600_000) });
+    rowsToDraw.push({ label: "median time-to-completion (h)", buckets: life.series.bucketStarts, values: life.series.ttcMs.map((xs) => { const median = statCell(xs).median; return median === null ? null : median / 3_600_000; }) });
     if (avg.keys.length > 0) rowsToDraw.push({ label: "average tokens per pane", buckets: avg.buckets, values: avg.buckets.map((_, i) => {
       const values = avg.keys.map((key) => key.points[i]?.mean).filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
-      return meanFinite(values) ?? 0;
+      return meanFinite(values);
     }) });
     const svg = svgEl("svg", "tokens-trends-svg") as SVGSVGElement;
     svg.setAttribute("viewBox", "0 0 800 130"); svg.setAttribute("preserveAspectRatio", "none");
     rowsToDraw.forEach((trend, ri) => {
-      const vals = trend.values; const finite = vals.filter(Number.isFinite); const max = Math.max(1, ...finite); const min = Math.min(0, ...finite);
-      const pts = vals.map((v, i) => {
+      const vals = trend.values; const finite = vals.filter((v): v is number => typeof v === "number" && Number.isFinite(v)); const max = Math.max(1, ...finite); const min = Math.min(0, ...finite);
+      let segment: string[] = [];
+      const flushSegment = () => {
+        if (segment.length > 0) { const line = svgEl("polyline", `tokens-trend trend-${ri}`); line.setAttribute("points", segment.join(" ")); svg.append(line); segment = []; }
+      };
+      vals.forEach((v, i) => {
+        if (v === null || !Number.isFinite(v)) { flushSegment(); return; }
         const x = trend.buckets.length < 2 ? 400 : Math.max(0, Math.min(800, (trend.buckets[i] - range.startMs) / Math.max(1, range.endMs - range.startMs) * 800));
         const y = ri * 32 + 30 - ((v - min) / (max - min || 1)) * 26;
-        return `${x},${y}`;
-      }).join(" ");
-      const line = svgEl("polyline", `tokens-trend trend-${ri}`); line.setAttribute("points", pts); svg.append(line);
-      this.metricTrendsEl.append(el("div", "tokens-trend-label", `${trend.label} · n=${fmtInt.format(vals.filter((v) => v > 0).length)}`));
+        segment.push(`${x},${y}`);
+      });
+      flushSegment();
+      this.metricTrendsEl.append(el("div", "tokens-trend-label", `${trend.label} · n=${fmtInt.format(trendSampleCount(vals))}`));
     });
     this.metricTrendsEl.append(svg);
     const detail = el("div", "tokens-derived-tables");
@@ -1024,7 +1035,8 @@ export class TokenChartsView {
     };
     for (const group of averageGroups) {
       const label = group.groupBy === "agent" ? "pane" : group.groupBy === "item" ? "work item" : group.groupBy;
-      addTable(`Average ${this.metric} per ${label} · n deltas/items`, [label, "mean / median · n", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], group.result.rows.map((r) => [r.label, `${r.all.mean ?? "n/a"} / ${r.all.cell.median ?? "n/a"} · ${r.all.n}`, ...(this.selectedMarkMs === null ? [] : [`${r.before?.mean ?? "n/a"} · ${r.before?.n ?? 0}`, `${r.after?.mean ?? "n/a"} · ${r.after?.n ?? 0}`])]));
+      const show = (value: number | null): string => fmtMetric(value, this.metric);
+      addTable(`Average ${this.metric === "cost_usd" ? "cost (USD)" : this.metric} per ${label} · n deltas/items`, [label, "mean / median · n", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], group.result.rows.map((r) => [r.label, `${show(r.all.mean)} / ${show(r.all.cell.median)} · ${r.all.n}`, ...(this.selectedMarkMs === null ? [] : [`${show(r.before?.mean ?? null)} · ${r.before?.n ?? 0}`, `${show(r.after?.mean ?? null)} · ${r.after?.n ?? 0}`])]));
     }
     const roleRows = perTotal.byRole.map((role) => {
       const before = perTotal.before?.byRole.find((r) => r.role === role.role);
@@ -1046,7 +1058,8 @@ export class TokenChartsView {
     addTable("CI attempts per PR", ["PR", "green · red · n", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], life.ciAttemptsPerPr.map((r) => { const before = beforeLife?.ciAttemptsPerPr.find((p) => p.pr === r.pr)?.attempts; const after = afterLife?.ciAttemptsPerPr.find((p) => p.pr === r.pr)?.attempts; return [`#${r.pr}`, r.attempts === null ? "n/a (no CI rows)" : `${r.attempts.green} · ${r.attempts.red} · ${r.attempts.green + r.attempts.red}`, ...(this.selectedMarkMs === null ? [] : [before ? `${before.green} · ${before.red} · n=${before.green + before.red}` : "n/a · n=0", after ? `${after.green} · ${after.red} · n=${after.green + after.red}` : "n/a · n=0"])]; }));
     this.metricTrendsEl.append(detail);
     if (choice.coarsened || per.truncated || avg.outside > 0 || life.mayBeTruncated) {
-      this.metricTrendsEl.append(el("div", "tokens-note", [choice.coarsened ? `Buckets coarsened to ${fmtTime(choice.bucketMs)}` : "", per.truncated ? "per-item trend truncated at its grid limit" : "", avg.outside ? `${avg.outside} average samples excluded` : "", life.mayBeTruncated ? `audit series may be truncated; read starts ${life.floorMs === null ? "unknown" : fmtTime(life.floorMs)}` : ""].filter(Boolean).join(" · ")));
+      const bucketLabel = choice.bucketMs >= 86_400_000 ? `${Math.round(choice.bucketMs / 86_400_000)}d` : choice.bucketMs >= 3_600_000 ? `${Math.round(choice.bucketMs / 3_600_000)}h` : `${Math.round(choice.bucketMs / 60_000)}m`;
+      this.metricTrendsEl.append(el("div", "tokens-note", [choice.coarsened ? `Buckets coarsened to ${bucketLabel}` : "", per.truncated ? "per-item trend truncated at its grid limit" : "", avg.outside ? `${avg.outside} average samples excluded` : "", life.mayBeTruncated ? `audit series may be truncated; read starts ${life.floorMs === null ? "unknown" : fmtTime(life.floorMs)}` : ""].filter(Boolean).join(" · ")));
     }
     if (this.selectedMarkMs !== null) {
       const fit = el("button", "tokens-chip fit-mark", "fit ±1h") as HTMLButtonElement;

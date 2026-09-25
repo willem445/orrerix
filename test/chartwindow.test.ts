@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chooseBucket, clampWindow, linearTicks, logTicks, logValue, markSpan, panBy, yDomain, zoomAbout } from "../src/chartwindow.ts";
+import { chooseBucket, clampWindow, linearTicks, logTicks, logValue, markSpan, meanFinite, trendSampleCount, dailyRates, panBy, yDomain, zoomAbout } from "../src/chartwindow.ts";
 import { beforeAfter, bucketSeries, DEFAULT_BEFORE_AFTER_K, DEFAULT_BUCKET_MS, TOTAL_ROW } from "../src/tokencharts.ts";
 
 const bounds = { first_ts: 0, last_ts: 10_000, now: 10_000, bucketMs: 100 };
@@ -82,6 +82,20 @@ test("log mapping is finite for zero and negatives; ticks cover both scales", ()
   assert.equal(new Set(ticks.map(logValue)).size, ticks.length, "log ticks must not overlap at the floor");
   assert.equal(linearTicks([0, 10], 3).length, 3);
 });
+test("coarsened completion trends average calendar-day values and retain day population", () => {
+  const day = 86_400_000;
+  assert.deepEqual(dailyRates([0, day, day * 2, day * 3], [1, 0, 3, 0], [0, day * 2], day * 2), { values: [0.5, 1.5], population: 4 });
+});
+
+test("trend sample population counts measured zero buckets but not unavailable ones", () => {
+  assert.equal(trendSampleCount([0, 2, null, undefined, Number.NaN]), 2);
+});
+
+test("meanFinite averages measured pane means and ignores missing series", () => {
+  assert.equal(meanFinite([null, 4, 8, undefined]), 6);
+  assert.equal(meanFinite([null, undefined]), null);
+});
+
 test("bucket chooser stays under cell cap and coarsens only when required", () => {
   assert.equal(chooseBucket(600_000, 10, 100).coarsened, false);
   const coarse = chooseBucket(60 * 24 * 60 * 60_000, 20, 100);

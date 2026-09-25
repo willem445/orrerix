@@ -44,7 +44,7 @@ export function panBy(win: Window, deltaMs: number, bounds: WindowBounds): Windo
   return clampWindow({ startMs: win.startMs + deltaMs, endMs: win.endMs + deltaMs }, bounds);
 }
 
-/** The before/after scope is half-open and symmetric around the mark. */
+/** The before/after scope is half-open and symmetric around the snapped split. */
 export function markSpan(markMs: number, k: number, bucketMs: number, gridOriginMs = 0): [number, number] {
   if (!Number.isFinite(markMs) || !Number.isFinite(k) || !Number.isFinite(bucketMs) || bucketMs <= 0 || !Number.isFinite(gridOriginMs))
     return [markMs, markMs];
@@ -56,8 +56,45 @@ export function markSpan(markMs: number, k: number, bucketMs: number, gridOrigin
 }
 
 export interface Point { tsMs: number; value: number }
+/** Average local-calendar-day completion counts into the selected chart bins.
+ *  The population remains days even when a bin spans many days. */
+export function dailyRates(days: readonly number[], counts: readonly number[], bucketStarts: readonly number[], bucketMs: number): { values: (number | null)[]; population: number } {
+  const sums = bucketStarts.map(() => 0);
+  const dayCounts = bucketStarts.map(() => 0);
+  let population = 0;
+  if (!Number.isFinite(bucketMs) || bucketMs <= 0 || bucketStarts.length === 0) return { values: bucketStarts.map(() => null), population };
+  for (let i = 0; i < Math.min(days.length, counts.length); i++) {
+    const day = days[i];
+    const count = counts[i];
+    if (!Number.isFinite(day) || !Number.isFinite(count)) continue;
+    const index = Math.max(0, Math.min(bucketStarts.length - 1, Math.floor((day - bucketStarts[0]) / bucketMs)));
+    sums[index] += count;
+    dayCounts[index]++;
+    population++;
+  }
+  return { values: sums.map((sum, i) => dayCounts[i] === 0 ? null : sum / dayCounts[i]), population };
+}
+
+/** Count measured samples; zero is a real observation, missing/non-finite is not. */
+export function trendSampleCount(values: readonly (number | null | undefined)[]): number {
+  let count = 0;
+  for (const value of values) if (typeof value === "number" && Number.isFinite(value)) count++;
+  return count;
+}
+
+/** Arithmetic mean of measured values, ignoring unavailable samples. */
+export function meanFinite(values: readonly (number | null | undefined)[]): number | null {
+  let sum = 0;
+  let count = 0;
+  for (const value of values) {
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    sum += value;
+    count++;
+  }
+  return count === 0 ? null : sum / count;
+}
 /** Autoscale only visible samples; empty windows use [0, 1]. */
-export function yDomain(points: readonly Point[], win: Window): [number, number] {
+export function yDomain(points: Iterable<Point>, win: Window): [number, number] {
   if (!validWindow(win)) return [0, 1];
   // A dense series can contain hundreds of thousands of visible points.
   // Scan once with constant auxiliary space; spreading them into Math.min/max

@@ -53,7 +53,12 @@ import {
   type DiffResult,
   type Metric,
 } from "./tokencharts";
-import { makeScale, niceTicks, xForTs, type TimelineScale } from "./timelinelayout";
+import { makeScale, niceTicks, xForTs, tsForX, type TimelineScale } from "./timelinelayout";
+import { chooseBucket, clampWindow, dailyRates, linearTicks, logTicks, logValue, markSpan, meanFinite, panBy, trendSampleCount, yDomain, zoomAbout, type Window } from "./chartwindow";
+import { averages, averagesOverTime } from "./tokenaverages";
+import { lifecycle } from "./tokenlifecycle";
+import { perCompletedItem, perCompletedItemOverTime } from "./tokenperitem";
+import { statCell } from "./statcell";
 import { scorecardTable, type ScorecardTable } from "./tokenscorecard";
 import type { AuditEntry } from "./auditsummary";
 
@@ -224,7 +229,11 @@ export class TokenChartsView {
   private board: readonly OrchTaskRow[] = [];
 
   private windowId = DEFAULT_WINDOW;
-  private metric: Metric = "total";
+  private customWindow: Window | null = null;
+  private logScale = false;
+  private drag: { pointerId: number; x: number; win: Window; width: number; bounds: { first_ts: number; last_ts: number; now: number; bucketMs: number } } | null = null;
+  private metricTrendsEl: HTMLElement;
+  private metric: Metric = "out";
   private collapseCli = false;
   private splitModel = false;
   /** The mark the readout is about — held as an INSTANT, not an index, because
@@ -313,6 +322,7 @@ export class TokenChartsView {
       b.title = w.spanMs === null ? "Everything the series has" : `The last ${w.label}`;
       b.addEventListener("click", () => {
         this.windowId = w.id;
+        this.customWindow = null;
         this.selectedMarkMs = null; // the mark may not be in the new window
         this.syncChips();
         this.rerender();
@@ -345,16 +355,39 @@ export class TokenChartsView {
       this.syncChips();
       this.rerender();
     });
-    this.controlsEl.append(this.windowBarEl, this.metricBarEl, this.collapseBtn, this.modelBtn);
+    const logBtn = el("button", "tokens-chip log", "log y") as HTMLButtonElement;
+    logBtn.title = "Use a logarithmic y-axis";
+    logBtn.addEventListener("click", () => { this.logScale = !this.logScale; logBtn.classList.toggle("on", this.logScale); this.rerender(); });
+    this.controlsEl.append(this.windowBarEl, this.metricBarEl, this.collapseBtn, this.modelBtn, logBtn);
+    const custom = el("span", "tokens-custom-chip", "custom · reset");
+    custom.addEventListener("click", () => { this.customWindow = null; this.windowId = DEFAULT_WINDOW; this.selectedMarkMs = null; this.rerender(); });
+    this.windowBarEl.append(custom);
 
     this.bodyEl = el("div", "tokens-body");
     this.legendEl = el("div", "tokens-legend");
     this.plotEl = el("div", "tokens-plot");
+    this.plotEl.addEventListener("pointermove", (event) => {
+      const e = event as PointerEvent; const drag = this.drag;
+      if (!drag || drag.pointerId !== e.pointerId) return;
+      const delta = (drag.x - e.clientX) / Math.max(1, drag.width) * (drag.win.endMs - drag.win.startMs);
+      this.customWindow = panBy(drag.win, delta, drag.bounds);
+      this.windowId = "custom"; this.rerender();
+    });
+    this.plotEl.addEventListener("pointerup", (event) => {
+      if (this.drag?.pointerId === (event as PointerEvent).pointerId) { this.drag = null; this.rerender(); }
+    });
+    const cancelDrag = (event: Event) => {
+      const pointerId = (event as PointerEvent).pointerId;
+      if (this.drag?.pointerId === pointerId) { this.drag = null; this.rerender(); }
+    };
+    this.plotEl.addEventListener("pointercancel", cancelDrag);
+    this.plotEl.addEventListener("lostpointercapture", cancelDrag);
     this.barsEl = el("div", "tokens-bars");
     this.readoutEl = el("div", "tokens-readout");
     this.scorecardEl = el("div", "tokens-scorecard");
     this.notesEl = el("div", "tokens-notes");
-    this.bodyEl.append(this.legendEl, this.plotEl, this.barsEl, this.readoutEl, this.scorecardEl, this.notesEl);
+    this.metricTrendsEl = el("div", "tokens-metric-trends");
+    this.bodyEl.append(this.legendEl, this.plotEl, this.metricTrendsEl, this.barsEl, this.readoutEl, this.scorecardEl, this.notesEl);
 
     this.el.append(head, this.controlsEl, this.bodyEl);
 
@@ -418,8 +451,9 @@ export class TokenChartsView {
   }
 
   private syncChips(): void {
-    for (const b of Array.from(this.windowBarEl.children) as HTMLButtonElement[]) {
-      b.classList.toggle("on", b.dataset.window === this.windowId);
+    for (const b of Array.from(this.windowBarEl.children) as HTMLElement[]) {
+      if (b.dataset.window) b.classList.toggle("on", b.dataset.window === this.windowId);
+      else b.classList.toggle("visible", this.windowId === "custom");
     }
     for (const b of Array.from(this.metricBarEl.children) as HTMLButtonElement[]) {
       b.classList.toggle("on", b.dataset.metric === this.metric);
@@ -527,9 +561,11 @@ export class TokenChartsView {
     }
     const oldest = lo ?? now - DEFAULT_BUCKET_MS;
     const newest = hi ?? now;
-    const preset = WINDOWS.find((w) => w.id === this.windowId) ?? WINDOWS[0];
-    if (preset.spanMs === null) return { startMs: oldest, endMs: Math.max(newest, oldest) };
     const endMs = Math.max(newest, now);
+    const bounds = { first_ts: oldest, last_ts: newest, now, bucketMs: DEFAULT_BUCKET_MS };
+    if (this.customWindow) return clampWindow(this.customWindow, bounds);
+    const preset = WINDOWS.find((w) => w.id === this.windowId) ?? WINDOWS[0];
+    if (preset.spanMs === null) return { startMs: oldest, endMs };
     return { startMs: Math.max(oldest, endMs - preset.spanMs), endMs };
   }
 
@@ -540,6 +576,7 @@ export class TokenChartsView {
 
   private render(): void {
     if (this.disposed) return;
+    this.syncChips();
     const widthPx = Math.round(this.plotEl.clientWidth);
     const rows = this.series?.rows ?? [];
     const diff = this.diffOf(rows);
@@ -554,6 +591,9 @@ export class TokenChartsView {
       this.board.length,
       this.boardStale ? "1" : "0",
       this.windowId,
+      this.customWindow?.startMs ?? "",
+      this.customWindow?.endMs ?? "",
+      this.logScale ? "log" : "linear",
       this.metric,
       this.collapseCli ? "1" : "0",
       this.splitModel ? "1" : "0",
@@ -596,6 +636,7 @@ export class TokenChartsView {
 
     this.renderLegend(bars, series);
     this.renderPlot(series, markList, widthPx);
+    this.renderMetricTrends(rows, diff.deltas, bars.attribution, range, markList, series.keys.length);
     this.renderBars(bars);
     this.renderReadout(series, markList);
     this.renderScorecard();
@@ -625,6 +666,7 @@ export class TokenChartsView {
     if (series.keys.length === 0) return;
 
     const totals = el("div", "tokens-lifetime");
+    totals.append(el("span", "tokens-counter-label", "Feature bars: total tokens (includes cache reads)"));
     const num = (label: string, v: number, cls: string) => {
       const s = el("span", `tokens-lifetime-item ${cls}`);
       s.append(el("span", "tokens-lifetime-label", label));
@@ -719,20 +761,30 @@ export class TokenChartsView {
       const v = this.metric === "cost_usd" ? p.cost_usd : p[this.metric];
       return v ?? 0;
     };
-    let max = 0;
-    for (let k = 0; k < series.keys.length; k++) {
-      for (let b = 0; b < series.buckets.length; b++) max = Math.max(max, valueAt(k, b));
+    function* visiblePoints(): IterableIterator<{ tsMs: number; value: number }> {
+      for (let ki = 0; ki < series.keys.length; ki++) {
+        for (let bi = 0; bi < series.buckets.length; bi++) yield { tsMs: series.buckets[bi], value: valueAt(ki, bi) };
+      }
     }
-    // A flat-zero window still gets a sensible axis rather than a divide by
-    // zero; the y labels then read 0 throughout, which is the truth.
-    const yMax = max > 0 ? max : 1;
-    const yFor = (v: number): number => TOP_PAD_PX + PLOT_H_PX - (v / yMax) * PLOT_H_PX;
+    const domain = yDomain(visiblePoints(), { startMs: series.startMs, endMs: series.endMs });
+    const lo = this.logScale ? logValue(Math.max(1, domain[0])) : domain[0];
+    const hi = this.logScale ? logValue(Math.max(1, domain[1])) : domain[1];
+    const span = hi > lo ? hi - lo : 1;
+    const yFor = (v: number): number => {
+      const mapped = this.logScale ? logValue(v) : v;
+      return TOP_PAD_PX + PLOT_H_PX - ((mapped - lo) / span) * PLOT_H_PX;
+    };
 
     // Recessive grid: three horizontal rules with their values, and the time
     // ticks the shared layout picks.
-    for (const frac of [0, 0.5, 1]) {
-      const v = yMax * frac;
+    const yTicks = this.logScale ? logTicks([Math.max(0, domain[0]), domain[1]]) : linearTicks(domain, 5);
+    const usedY = new Set<number>();
+    for (const v of yTicks) {
       const y = yFor(v);
+      const pixel = Math.round(y);
+      const labelText = fmtMetric(v, this.metric);
+      if (Array.from(usedY).some((drawn) => Math.abs(drawn - pixel) < 12)) continue;
+      usedY.add(pixel);
       const rule = svgEl("line", "tokens-grid");
       rule.setAttribute("x1", String(scale.x0));
       rule.setAttribute("x2", String(scale.x1));
@@ -743,7 +795,7 @@ export class TokenChartsView {
       label.setAttribute("x", String(scale.x0 - 6));
       label.setAttribute("y", String(y + 3));
       label.setAttribute("text-anchor", "end");
-      label.textContent = fmtMetric(v, this.metric);
+      label.textContent = labelText;
       svg.append(label);
     }
 
@@ -808,7 +860,10 @@ export class TokenChartsView {
         "\nClick for the before/after readout.";
       g.append(title);
       g.addEventListener("click", () => {
-        this.selectedMarkMs = this.selectedMarkMs === m.tsMs ? null : m.tsMs;
+        this.selectedMarkMs = m.tsMs;
+        const [startMs, endMs] = markSpan(m.tsMs, DEFAULT_BEFORE_AFTER_K, DEFAULT_BUCKET_MS);
+        this.customWindow = { startMs, endMs };
+        this.windowId = "custom";
         this.rerender();
       });
       svg.append(g);
@@ -865,6 +920,7 @@ export class TokenChartsView {
     svg.append(cross);
 
     const hit = svgEl("rect", "tokens-hover-hit");
+    hit.classList.add("tokens-pan-hit");
     hit.setAttribute("x", String(scale.x0));
     hit.setAttribute("y", String(TOP_PAD_PX));
     hit.setAttribute("width", String(Math.max(0, scale.x1 - scale.x0)));
@@ -872,6 +928,9 @@ export class TokenChartsView {
     const tip = svgEl("title");
     hit.append(tip);
     svg.append(hit);
+    const hover = el("div", "tokens-hover-readout");
+    hover.style.display = "none";
+    this.plotEl.append(hover);
     void height;
 
     const bucketAt = (clientX: number): number => {
@@ -883,6 +942,25 @@ export class TokenChartsView {
       return Math.min(series.buckets.length - 1, Math.round(frac * (series.buckets.length - 1)));
     };
 
+    hit.addEventListener("wheel", (ev) => {
+      const e = ev as WheelEvent; e.preventDefault();
+      const box = svg.getBoundingClientRect();
+      const x = e.clientX - box.left;
+      const anchorMs = tsForX(scale, x);
+      const rows = this.series?.rows ?? [];
+      const first = rows.reduce((v, r) => Math.min(v, r.ts_ms), Date.now());
+      const last = rows.reduce((v, r) => Math.max(v, r.ts_ms), Date.now());
+      this.customWindow = zoomAbout(this.customWindow ?? { startMs: series.startMs, endMs: series.endMs }, anchorMs, Math.exp(e.deltaY * 0.001), { first_ts: first, last_ts: last, now: Date.now(), bucketMs: series.bucketMs });
+      this.windowId = "custom"; this.rerender();
+    }, { passive: false });
+    hit.addEventListener("pointerdown", (ev) => {
+      const e = ev as PointerEvent;
+      const rows = this.series?.rows ?? [];
+      const first = rows.reduce((v, r) => Math.min(v, r.ts_ms), Date.now());
+      const last = rows.reduce((v, r) => Math.max(v, r.ts_ms), Date.now());
+      this.drag = { pointerId: e.pointerId, x: e.clientX, win: this.customWindow ?? { startMs: series.startMs, endMs: series.endMs }, width: scale.x1 - scale.x0, bounds: { first_ts: first, last_ts: last, now: Date.now(), bucketMs: series.bucketMs } };
+      this.plotEl.setPointerCapture(e.pointerId);
+    });
     hit.addEventListener("mousemove", (ev) => {
       const i = bucketAt((ev as MouseEvent).clientX);
       const x = xForTs(scale, series.buckets[i]);
@@ -897,13 +975,107 @@ export class TokenChartsView {
         })
         .join("\n");
       tip.textContent = `${fmtTime(series.buckets[i])}\n${lines}`;
+      hover.textContent = tip.textContent;
+      const plotBox = this.plotEl.getBoundingClientRect();
+      hover.style.left = `${Math.max(4, (ev as MouseEvent).clientX - plotBox.left + 12)}px`;
+      hover.style.top = `${Math.max(4, (ev as MouseEvent).clientY - plotBox.top + 12)}px`;
+      hover.style.display = "";
     });
     hit.addEventListener("mouseleave", () => {
       (cross as SVGElement & { style: CSSStyleDeclaration }).style.display = "none";
+      hover.style.display = "none";
     });
   }
 
   /** The stacked bars: one row per feature, plus the two group-wide bars. */
+  private renderMetricTrends(rows: readonly UsageSeriesRow[], deltas: DiffResult["deltas"], attribution: FeatureBars["attribution"], range: Window, markList: readonly ChartMark[], seriesKeyCount: number): void {
+    this.metricTrendsEl.replaceChildren();
+    const choice = chooseBucket(range.endMs - range.startMs, Math.max(1, seriesKeyCount, attribution.buckets.length));
+    const audit = this.store.cached;
+    const life = lifecycle(audit, { startMs: range.startMs, endMs: range.endMs, bucketMs: choice.bucketMs, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }) });
+    // Dated denominator is built from the same done-in-window lifecycle result.
+    const doneIds = life.doneIds;
+    const doneAtMs = life.doneAtMs;
+    const perOpts = { startMs: range.startMs, endMs: range.endMs, doneIds, doneAtMs, bucketMs: choice.bucketMs, metric: this.metric === "cost_usd" ? "total" as const : this.metric };
+    const per = perCompletedItemOverTime(deltas, attribution, this.board, perOpts);
+    const perTotal = perCompletedItem(deltas, attribution, this.board, { ...perOpts, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }) });
+    const averageGroups = (["agent", "block", "model", "item"] as const).map((groupBy) => ({ groupBy, result: averages(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy, metric: this.metric, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }), stat: statCell }) }));
+    const avg = averagesOverTime(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy: "agent", metric: "total", bucketMs: choice.bucketMs, stat: statCell });
+    const title = el("div", "tokens-section-title", `Trend metrics · selected counter: ${this.metric === "total" ? "all tokens" : this.metric === "cache_r" ? "cache read" : this.metric}; pane average uses total tokens`);
+    this.metricTrendsEl.append(title);
+    const rowsToDraw: { label: string; buckets: number[]; values: (number | null)[]; population: number | null; populationLabel: string }[] = [];
+    rowsToDraw.push({ label: "tokens per completed item", buckets: per.buckets.map((b) => b.startMs), values: per.buckets.map((b) => b.perItem), population: per.items, populationLabel: "completed items" });
+    const donePerDayTrend = dailyRates(life.donePerDay.days, life.donePerDay.counts, life.series.bucketStarts, choice.bucketMs);
+    rowsToDraw.push({ label: "items done per day", buckets: life.series.bucketStarts, values: donePerDayTrend.values, population: donePerDayTrend.population, populationLabel: "calendar days" });
+    rowsToDraw.push({ label: "median time-to-completion (h)", buckets: life.series.bucketStarts, values: life.series.ttcMs.map((xs) => { const median = statCell(xs).median; return median === null ? null : median / 3_600_000; }), population: life.series.ttcMs.reduce((sum, xs) => sum + xs.length, 0), populationLabel: "completed items" });
+    if (avg.keys.length > 0) rowsToDraw.push({ label: "average tokens per pane", buckets: avg.buckets, values: avg.buckets.map((_, i) => {
+      const values = avg.keys.map((key) => key.points[i]?.mean).filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
+      return meanFinite(values);
+    }), population: avg.keys.reduce((sum, key) => sum + key.points.filter((point) => point.mean !== null).length, 0), populationLabel: "pane-bucket samples" });
+    const svg = svgEl("svg", "tokens-trends-svg") as SVGSVGElement;
+    svg.setAttribute("viewBox", "0 0 800 130"); svg.setAttribute("preserveAspectRatio", "none");
+    rowsToDraw.forEach((trend, ri) => {
+      const vals = trend.values; const finite = vals.filter((v): v is number => typeof v === "number" && Number.isFinite(v)); const max = Math.max(1, ...finite); const min = Math.min(0, ...finite);
+      let segment: string[] = [];
+      const flushSegment = () => {
+        if (segment.length > 0) { const line = svgEl("polyline", `tokens-trend trend-${ri}`); line.setAttribute("points", segment.join(" ")); svg.append(line); segment = []; }
+      };
+      vals.forEach((v, i) => {
+        if (v === null || !Number.isFinite(v)) { flushSegment(); return; }
+        const x = trend.buckets.length < 2 ? 400 : Math.max(0, Math.min(800, (trend.buckets[i] - range.startMs) / Math.max(1, range.endMs - range.startMs) * 800));
+        const y = ri * 32 + 30 - ((v - min) / (max - min || 1)) * 26;
+        segment.push(`${x},${y}`);
+      });
+      flushSegment();
+      const measuredBuckets = trendSampleCount(vals);
+      this.metricTrendsEl.append(el("div", "tokens-trend-label", `${trend.label} · n=${trend.population === null ? "n/a" : fmtInt.format(trend.population)} ${trend.populationLabel} · ${fmtInt.format(measuredBuckets)} measured buckets`));
+    });
+    this.metricTrendsEl.append(svg);
+    const detail = el("div", "tokens-derived-tables");
+    const addTable = (heading: string, headers: string[], values: string[][]) => {
+      detail.append(el("div", "tokens-section-title", heading));
+      const table = el("table", "tokens-table"); const thead = el("thead", ""); const hr = el("tr", "");
+      headers.forEach((h) => hr.append(el("th", "", h))); thead.append(hr); table.append(thead);
+      const tbody = el("tbody", "");
+      values.forEach((row) => { const tr = el("tr", ""); row.forEach((v) => tr.append(el("td", "tokens-cell-num", v))); tbody.append(tr); });
+      table.append(tbody); detail.append(table);
+    };
+    for (const group of averageGroups) {
+      const label = group.groupBy === "agent" ? "pane" : group.groupBy === "item" ? "work item" : group.groupBy;
+      const show = (value: number | null): string => fmtMetric(value, this.metric);
+      addTable(`Average ${this.metric === "cost_usd" ? "cost (USD)" : this.metric} per ${label} · n deltas/items`, [label, "mean / median · n", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], group.result.rows.map((r) => [r.label, `${show(r.all.mean)} / ${show(r.all.cell.median)} · ${r.all.n}`, ...(this.selectedMarkMs === null ? [] : [`${show(r.before?.mean ?? null)} · ${r.before?.n ?? 0}`, `${show(r.after?.mean ?? null)} · ${r.after?.n ?? 0}`])]));
+    }
+    const roleRows = perTotal.byRole.map((role) => {
+      const before = perTotal.before?.byRole.find((r) => r.role === role.role);
+      const after = perTotal.after?.byRole.find((r) => r.role === role.role);
+      return [role.role, `${role.tokens} (${role.share === null ? "n/a" : `${(role.share * 100).toFixed(1)}%`}, n=${role.n})`, ...(this.selectedMarkMs === null ? [] : [`${before?.tokens ?? "n/a"} (n=${before?.n ?? 0})`, `${after?.tokens ?? "n/a"} (n=${after?.n ?? 0})`])];
+    });
+    addTable(`Tokens per completed item · numerator: ${this.metric === "cost_usd" ? "total tokens" : this.metric === "total" ? "all tokens" : this.metric === "cache_r" ? "cache read" : this.metric}`, ["metric / role", "tokens or share · n", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], [["tokens/item", `${perTotal.perItem ?? "n/a"} (n=${perTotal.items})`, ...(this.selectedMarkMs === null ? [] : [`${perTotal.before?.perItem ?? "n/a"} (n=${perTotal.before?.items ?? 0})`, `${perTotal.after?.perItem ?? "n/a"} (n=${perTotal.after?.items ?? 0})`])], ...roleRows]);
+    const lifeHeaders = ["metric", "value", "n", ...(life.partition ? ["before", "after"] : [])];
+    const lifeRows = [
+      ["items done/day", String(life.donePerDay.rate ?? "n/a"), String(life.doneIds.size), ...(life.partition ? [`${life.partition.before.done} (n=${life.partition.before.done})`, `${life.partition.after.done} (n=${life.partition.after.done})`] : [])],
+      ["median completion time (h)", String(statCell(life.ttc.map((x) => x.ms)).median ?? "n/a"), String(life.ttc.length), ...(life.partition ? [`${statCell(life.partition.before.ttcMs).median ?? "n/a"} (n=${life.partition.before.ttcMs.length})`, `${statCell(life.partition.after.ttcMs).median ?? "n/a"} (n=${life.partition.after.ttcMs.length})`] : [])],
+    ];
+    addTable("Lifecycle detail · audit window", lifeHeaders, lifeRows);
+    const statusRows = Array.from(life.timeInStatus.entries()).map(([status, stats]) => [status, `${statCell(stats.values).median ?? "n/a"} ms · n=${stats.values.length}`, ...(life.partition ? [`${statCell(life.partition.before.timeInStatus.get(status) ?? []).median ?? "n/a"} · n=${life.partition.before.timeInStatus.get(status)?.length ?? 0}`, `${statCell(life.partition.after.timeInStatus.get(status) ?? []).median ?? "n/a"} · n=${life.partition.after.timeInStatus.get(status)?.length ?? 0}`] : [])]);
+    addTable("Time in status · completed spans", ["status", "median span · n", ...(life.partition ? ["before · n", "after · n"] : [])], statusRows);
+    const beforeLife = this.selectedMarkMs === null ? null : lifecycle(audit, { startMs: range.startMs, endMs: this.selectedMarkMs, bucketMs: choice.bucketMs });
+    const afterLife = this.selectedMarkMs === null ? null : lifecycle(audit, { startMs: this.selectedMarkMs, endMs: range.endMs, bucketMs: choice.bucketMs });
+    addTable("Review rounds per PR", ["PR", "rounds · verdicts", "driver rounds", "cross-check", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], life.reviewRoundsPerPr.map((r) => [`#${r.pr}`, `${r.rounds} · ${r.verdicts}`, String(r.driverRounds ?? "n/a"), r.disagrees ? "mismatch" : "match", ...(this.selectedMarkMs === null ? [] : [`${beforeLife?.reviewRoundsPerPr.find((p) => p.pr === r.pr)?.rounds ?? "n/a"} (n=${beforeLife?.reviewRoundsPerPr.find((p) => p.pr === r.pr)?.verdicts ?? 0})`, `${afterLife?.reviewRoundsPerPr.find((p) => p.pr === r.pr)?.rounds ?? "n/a"} (n=${afterLife?.reviewRoundsPerPr.find((p) => p.pr === r.pr)?.verdicts ?? 0})`])]));
+    addTable("CI attempts per PR", ["PR", "green · red · n", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], life.ciAttemptsPerPr.map((r) => { const before = beforeLife?.ciAttemptsPerPr.find((p) => p.pr === r.pr)?.attempts; const after = afterLife?.ciAttemptsPerPr.find((p) => p.pr === r.pr)?.attempts; return [`#${r.pr}`, r.attempts === null ? "n/a (no CI rows)" : `${r.attempts.green} · ${r.attempts.red} · ${r.attempts.green + r.attempts.red}`, ...(this.selectedMarkMs === null ? [] : [before ? `${before.green} · ${before.red} · n=${before.green + before.red}` : "n/a · n=0", after ? `${after.green} · ${after.red} · n=${after.green + after.red}` : "n/a · n=0"])]; }));
+    this.metricTrendsEl.append(detail);
+    if (choice.coarsened || per.truncated || avg.outside > 0 || life.mayBeTruncated) {
+      const bucketLabel = choice.bucketMs >= 86_400_000 ? `${Math.round(choice.bucketMs / 86_400_000)}d` : choice.bucketMs >= 3_600_000 ? `${Math.round(choice.bucketMs / 3_600_000)}h` : `${Math.round(choice.bucketMs / 60_000)}m`;
+      this.metricTrendsEl.append(el("div", "tokens-note", [choice.coarsened ? `Buckets coarsened to ${bucketLabel}` : "", per.truncated ? "per-item trend truncated at its grid limit" : "", avg.outside ? `${avg.outside} average samples excluded` : "", life.mayBeTruncated ? `audit series may be truncated; read starts ${life.floorMs === null ? "unknown" : fmtTime(life.floorMs)}` : ""].filter(Boolean).join(" · ")));
+    }
+    if (this.selectedMarkMs !== null) {
+      const fit = el("button", "tokens-chip fit-mark", "fit ±1h") as HTMLButtonElement;
+      fit.addEventListener("click", () => { const [startMs, endMs] = markSpan(this.selectedMarkMs!, DEFAULT_BEFORE_AFTER_K, DEFAULT_BUCKET_MS); this.customWindow = { startMs, endMs }; this.windowId = "custom"; this.rerender(); });
+      this.metricTrendsEl.append(fit);
+    }
+    void rows; void markList;
+  }
+
   private renderBars(bars: FeatureBars): void {
     this.barsEl.replaceChildren();
     if (bars.totals.total === 0) return;
@@ -1229,7 +1401,7 @@ export class TokenChartsView {
       this.store.cached,
       bars,
       this.board,
-      { firstSpendMs: firstSpendByBar(this.series?.rows ?? [], bars.attribution, this.diffMemo?.diff) }
+      { firstSpendMs: firstSpendByBar(this.series?.rows ?? [], bars.attribution, this.diffOf(this.series?.rows ?? [])) }
     );
     if (sc.floorMs !== null) {
       const below = sc.columns.filter((c) => c.belowFloor).length;

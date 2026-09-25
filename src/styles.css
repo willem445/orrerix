@@ -5950,8 +5950,21 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tokens-legend-total { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 
 /* The plot. Recessive grid and axes; the data is the only thing with weight. */
-.tokens-plot { padding: 0 4px; }
+.tokens-plot { position: relative; padding: 0 4px; }
 .tokens-svg { display: block; }
+.tokens-pan-hit { cursor: grab; touch-action: none; }
+.tokens-pan-hit:active { cursor: grabbing; }
+.tokens-hover-readout { position: absolute; pointer-events: none; z-index: 5; white-space: pre-line; max-width: 340px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-2); color: var(--ink); font: 11px/1.4 var(--font-mono); }
+.tokens-custom-chip { display: none; cursor: pointer; color: var(--accent); font-size: 11px; }
+.tokens-custom-chip.visible { display: inline-flex; }
+.tokens-counter-label { font-size: 10px; color: var(--ink-faint); }
+.tokens-metric-trends { padding: 8px 12px; }
+.tokens-trends-svg { display: block; width: 100%; height: 110px; overflow: visible; }
+.tokens-trend { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.tokens-trend.trend-1 { stroke: var(--state-success); }
+.tokens-trend.trend-2 { stroke: var(--state-attention); }
+.tokens-trend.trend-3 { stroke: var(--state-warning); }
+.tokens-trend-label { display: inline-block; margin: 3px 12px 3px 0; color: var(--ink-faint); font-size: 10px; }
 .tokens-grid { stroke: color-mix(in srgb, var(--ink) 6%, transparent); stroke-width: 1; }
 .tokens-tick { stroke: color-mix(in srgb, var(--ink) 4%, transparent); stroke-width: 1; }
 .tokens-tick-label, .tokens-y-label { fill: var(--ink-faint); font-size: 9.5px; }

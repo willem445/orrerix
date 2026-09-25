@@ -730,10 +730,16 @@ does not split a span.
   25 hours and a 24-hour stride files an item done just after midnight under the
   day before. The test forces `TZ=America/Chicago` in a child `node` for the
   same reason `todomodel.test.ts` does: CI runs in UTC, where the wrong
-  arithmetic passes.
-- *Review rounds* per PR are the verdict count of the PR's busiest block: a
-  round is one pass of every lane, so summing across blocks counts a three-lane
-  round three times. The review driver keeps its own counter on
+  arithmetic passes. The *rate* divides by the window's length in calendar days
+  (`windowDays`), where a partial first or last day counts as the fraction of
+  that day it covers — a rolling seven-day window starting mid-afternoon touches
+  eight days, and dividing by eight would under-read it by an eighth.
+- *Review rounds* per PR are the number of distinct heads the PR's busiest
+  block gave a verdict on: a round is one pass of every lane, so summing across
+  blocks counts a three-lane round three times, and a pass is a head, so a lane
+  re-recording its verdict at the same head (a body edit re-asks it) is not a
+  new round. A verdict row with no head cannot be matched to another and counts
+  as its own round. The review driver keeps its own counter on
   `rd-lane-spawned.detail.round`, and the two are compared and a disagreement
   is flagged, never reconciled — one source lost rows and the pane cannot tell
   which. `rd-handback` carries no `round`, so it is not read for one. A PR
@@ -752,6 +758,17 @@ missing, which is why `floorMs` travels on the result; the wire carries no
 truncation flag, so a read at the cap reports `mayBeTruncated` and the pane says
 "may be". Nothing is backfilled, and there is deliberately no fallback to the
 board's `updated_ms` — the wrong instant, silently.
+
+The window's END has the mirror-image blind spot, and it matters for any window
+ending before now. A span is attributed by its leaving instant, so a span that
+enters inside the window and leaves after `endMs` is counted nowhere in that
+window — not in `values`, and not in `stillOpen`, which is only for a status the
+read ended on; a first-seen status that leaves after `endMs` is not in
+`openedBeforeWindow` either. And a PR belongs to the window its LAST verdict
+falls in, so a PR whose earlier verdicts sit inside the window but whose last
+one falls after `endMs` is absent from that window's `reviewRoundsPerPr`. Each sample is
+counted in exactly one window by construction; in a historical window, the
+samples still in flight at its end are counted in a later one instead.
 
 **Over time.** Each rate is also a series over the chart window — calendar days
 by default, fixed-width buckets when `bucketMs` is given — holding the raw

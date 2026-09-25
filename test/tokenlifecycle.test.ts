@@ -168,7 +168,7 @@ test("CI attempts: green and red counted per PR; a PR with verdicts but no CI ro
   ]);
 });
 
-test("review rounds: the busiest lane's verdict count; the driver's round counter is cross-checked and a disagreement surfaced", () => {
+test("review rounds: the busiest lane's distinct heads; the driver's round counter is cross-checked and a disagreement surfaced", () => {
   const rows = [
     // PR 7: two rounds, each reviewed by two lanes — 4 verdicts, 2 rounds.
     laneSpawned(T0, 7, 1),

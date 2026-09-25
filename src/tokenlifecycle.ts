@@ -111,9 +111,11 @@ export interface TimeToCompletion {
 
 export interface PrReview {
   pr: string;
-  /** Review rounds: the verdict count of the PR's most-reviewed block (a
-   *  round is one pass of each lane, so the busiest lane is the round count;
-   *  summing across blocks would count a three-lane round three times). */
+  /** Review rounds: the number of distinct heads the PR's most-reviewed
+   *  block gave a verdict on. A round is one pass of each lane, so the busiest
+   *  lane is the round count (summing across blocks would count a three-lane
+   *  round three times), and a pass is a HEAD — a lane re-recording at the same
+   *  head is the same round. A verdict row with no head is its own round. */
   rounds: number;
   /** Every verdict row for the PR, all blocks. */
   verdicts: number;
@@ -171,7 +173,10 @@ export interface Lifecycle {
   /** Tasks whose first row in the read was already `done` — done at some
    *  instant the window cannot see, never dated at that row. */
   doneUndated: number;
-  donePerDay: { days: number[]; counts: number[]; rate: number | null };
+  /** Done per local calendar day. `windowDays` is the window's length in
+   *  calendar days — partial first and last days count as the fraction they
+   *  cover — and `rate` is done / `windowDays` (`null` for an empty window). */
+  donePerDay: { days: number[]; counts: number[]; windowDays: number; rate: number | null };
   reviewRoundsPerPr: PrReview[];
   ciAttemptsPerPr: PrCi[];
   /** Oldest row of the read; `null` means nothing was read, which is "we have
@@ -257,78 +262,104 @@ function pushMap<K, V>(m: Map<K, V[]>, k: K, v: V): void {
 }
 
 // ── the projection ──────────────────────────────────────────────────────────
+//
+// Two projections over one sorted read — tasks and PRs share nothing but the
+// window, the buckets and the mark — composed by `lifecycle`.
 
-export function lifecycle(auditRows: readonly LifecycleAuditRowLike[], opts: LifecycleOpts): Lifecycle {
-  // Arrival order breaks ties: two rows in one millisecond keep the order the
-  // log wrote them in (`sort` is stable).
-  const rows = auditRows.filter((r) => Number.isFinite(r.ts_ms)).slice().sort((a, b) => a.ts_ms - b.ts_ms);
+/** What both projections write into: the window, its buckets, and the
+ *  before/after halves. */
+interface Ctx {
+  opts: LifecycleOpts;
+  starts: number[];
+  series: LifecycleSeries;
+  side: (ts: number) => LifecyclePart | null;
+}
 
-  let floorMs: number | null = null;
-  for (const r of rows) if (floorMs === null || r.ts_ms < floorMs) floorMs = r.ts_ms;
+interface TaskTrack {
+  firstMs: number;
+  firstStatus: string;
+  status: string;
+  enteredMs: number;
+  entryKnown: boolean;
+  doneMs: number | null;
+}
 
-  const starts = bucketStartsFor(opts);
-  const series: LifecycleSeries = {
-    bucketStarts: starts,
-    done: starts.map(() => 0),
-    ttcMs: starts.map(() => []),
-    timeInStatus: new Map(),
-    rounds: starts.map(() => []),
-  };
-  const mark = opts.markTsMs;
-  const partition = mark === undefined ? null : { before: emptyPart(), after: emptyPart() };
-  const side = (ts: number): LifecyclePart | null =>
-    partition === null || mark === undefined ? null : ts < mark ? partition.before : partition.after;
+interface TaskOut {
+  transitions: number;
+  tasksSeen: number;
+  spans: StatusSpan[];
+  timeInStatus: Map<string, StatusStats>;
+  ttc: TimeToCompletion[];
+  doneAtMs: Map<string, number>;
+  doneUndated: number;
+}
 
-  // ── tasks ──
-  interface TaskTrack {
-    firstMs: number;
-    firstStatus: string;
-    status: string;
-    enteredMs: number;
-    entryKnown: boolean;
-    doneMs: number | null;
+function statFor(out: TaskOut, s: string): StatusStats {
+  let st = out.timeInStatus.get(s);
+  if (!st) {
+    st = { values: [], openedBeforeWindow: 0, stillOpen: 0 };
+    out.timeInStatus.set(s, st);
   }
+  return st;
+}
+
+/** A completed span, counted by its leaving instant. */
+function recordSpan(ctx: Ctx, out: TaskOut, span: StatusSpan): void {
+  if (!inWindow(span.leftMs, ctx.opts)) return;
+  out.spans.push(span);
+  statFor(out, span.status).values.push(span.ms);
+  const b = bucketOf(ctx.starts, span.leftMs, ctx.opts.endMs);
+  if (b >= 0) {
+    let per = ctx.series.timeInStatus.get(span.status);
+    if (!per) {
+      per = ctx.starts.map(() => []);
+      ctx.series.timeInStatus.set(span.status, per);
+    }
+    per[b].push(span.ms);
+  }
+  const p = ctx.side(span.leftMs);
+  if (p) pushMap(p.timeInStatus, span.status, span.ms);
+}
+
+/** A task's first dated `done`, counted once. */
+function recordDone(ctx: Ctx, out: TaskOut, id: string, tr: TaskTrack, ts: number): void {
+  if (tr.doneMs !== null) return; // counted once, at the FIRST dated done
+  tr.doneMs = ts;
+  if (!inWindow(ts, ctx.opts)) return;
+  out.doneAtMs.set(id, ts);
+  const t: TimeToCompletion = {
+    taskId: id,
+    startMs: tr.firstMs,
+    doneMs: ts,
+    ms: ts - tr.firstMs,
+    fromQueued: tr.firstStatus === QUEUED,
+  };
+  out.ttc.push(t);
+  const b = bucketOf(ctx.starts, ts, ctx.opts.endMs);
+  if (b >= 0) {
+    ctx.series.done[b]++;
+    ctx.series.ttcMs[b].push(t.ms);
+  }
+  const p = ctx.side(ts);
+  if (p) {
+    p.done++;
+    p.ttcMs.push(t.ms);
+  }
+}
+
+/** Status spans, time to completion and done instants off the task rows. */
+function taskProjection(rows: readonly LifecycleAuditRowLike[], ctx: Ctx): TaskOut {
+  const { opts } = ctx;
+  const out: TaskOut = {
+    transitions: 0,
+    tasksSeen: 0,
+    spans: [],
+    timeInStatus: new Map(),
+    ttc: [],
+    doneAtMs: new Map(),
+    doneUndated: 0,
+  };
   const tracks = new Map<string, TaskTrack>();
-  const spans: StatusSpan[] = [];
-  const timeInStatus = new Map<string, StatusStats>();
-  const statFor = (s: string): StatusStats => {
-    let st = timeInStatus.get(s);
-    if (!st) {
-      st = { values: [], openedBeforeWindow: 0, stillOpen: 0 };
-      timeInStatus.set(s, st);
-    }
-    return st;
-  };
-  const ttc: TimeToCompletion[] = [];
-  const doneAtMs = new Map<string, number>();
-  let transitions = 0;
-  let doneUndated = 0;
-
-  const recordDone = (id: string, tr: TaskTrack, ts: number): void => {
-    if (tr.doneMs !== null) return; // counted once, at the FIRST dated done
-    tr.doneMs = ts;
-    if (!inWindow(ts, opts)) return;
-    doneAtMs.set(id, ts);
-    const t: TimeToCompletion = {
-      taskId: id,
-      startMs: tr.firstMs,
-      doneMs: ts,
-      ms: ts - tr.firstMs,
-      fromQueued: tr.firstStatus === QUEUED,
-    };
-    ttc.push(t);
-    const b = bucketOf(starts, ts, opts.endMs);
-    if (b >= 0) {
-      series.done[b]++;
-      series.ttcMs[b].push(t.ms);
-    }
-    const p = side(ts);
-    if (p) {
-      p.done++;
-      p.ttcMs.push(t.ms);
-    }
-  };
-
   for (const row of rows) {
     if (!TASK_ACTIONS.has(row.action)) continue;
     const d = detailOf(row);
@@ -343,7 +374,7 @@ export function lifecycle(auditRows: readonly LifecycleAuditRowLike[], opts: Lif
       // the done as taken, so a later reopen-and-done cannot date it either —
       // its first completion is still the one the window cannot see.
       const undated = status === DONE;
-      if (undated) doneUndated++;
+      if (undated) out.doneUndated++;
       tracks.set(id, {
         firstMs: ts,
         firstStatus: status,
@@ -355,81 +386,88 @@ export function lifecycle(auditRows: readonly LifecycleAuditRowLike[], opts: Lif
       continue;
     }
     if (tr.status === status) continue; // an unchanged-status write is not a transition
-    if (inWindow(ts, opts)) transitions++;
+    if (inWindow(ts, opts)) out.transitions++;
     // Leaving `tr.status` at `ts`.
     if (tr.entryKnown) {
-      const span: StatusSpan = { taskId: id, status: tr.status, enteredMs: tr.enteredMs, leftMs: ts, ms: ts - tr.enteredMs };
-      if (inWindow(ts, opts)) {
-        spans.push(span);
-        statFor(tr.status).values.push(span.ms);
-        const b = bucketOf(starts, ts, opts.endMs);
-        if (b >= 0) {
-          let per = series.timeInStatus.get(tr.status);
-          if (!per) {
-            per = starts.map(() => []);
-            series.timeInStatus.set(tr.status, per);
-          }
-          per[b].push(span.ms);
-        }
-        const p = side(ts);
-        if (p) pushMap(p.timeInStatus, tr.status, span.ms);
-      }
+      recordSpan(ctx, out, { taskId: id, status: tr.status, enteredMs: tr.enteredMs, leftMs: ts, ms: ts - tr.enteredMs });
     } else if (inWindow(ts, opts)) {
-      statFor(tr.status).openedBeforeWindow++;
+      statFor(out, tr.status).openedBeforeWindow++;
     }
     tr.status = status;
     tr.enteredMs = ts;
     tr.entryKnown = true;
-    if (status === DONE) recordDone(id, tr, ts);
+    if (status === DONE) recordDone(ctx, out, id, tr, ts);
   }
   // Still in the status the read ended on.
   for (const tr of tracks.values()) {
     if (tr.entryKnown) {
-      if (inWindow(tr.enteredMs, opts)) statFor(tr.status).stillOpen++;
+      if (inWindow(tr.enteredMs, opts)) statFor(out, tr.status).stillOpen++;
     } else if (inWindow(tr.firstMs, opts)) {
-      statFor(tr.status).openedBeforeWindow++;
+      statFor(out, tr.status).openedBeforeWindow++;
     }
   }
+  out.tasksSeen = tracks.size;
+  return out;
+}
 
-  // ── done per calendar day ──
+/** The window's length in calendar days: each day it meets contributes the
+ *  fraction of THAT day it covers, measured against the day's own length (23
+ *  or 25 hours on a DST day). A rolling seven-day window starting mid-afternoon
+ *  touches eight days and measures seven. */
+export function windowCalendarDays(startMs: number, endMs: number): number {
+  let total = 0;
+  for (const day of calendarDays(startMs, endMs)) {
+    const next = new Date(day);
+    next.setDate(next.getDate() + 1);
+    next.setHours(0, 0, 0, 0);
+    const len = next.getTime() - day;
+    const covered = Math.min(endMs, next.getTime()) - Math.max(startMs, day);
+    if (len > 0 && covered > 0) total += covered / len;
+  }
+  return total;
+}
+
+function donePerDayOf(doneAtMs: ReadonlyMap<string, number>, opts: LifecycleOpts): Lifecycle["donePerDay"] {
   const days = calendarDays(opts.startMs, opts.endMs);
-  const dayCounts = days.map(() => 0);
+  const counts = days.map(() => 0);
   for (const ts of doneAtMs.values()) {
     const b = bucketOf(days, ts, opts.endMs);
-    if (b >= 0) dayCounts[b]++;
+    if (b >= 0) counts[b]++;
   }
-  const donePerDay = {
-    days,
-    counts: dayCounts,
-    rate: days.length === 0 ? null : doneAtMs.size / days.length,
-  };
+  const windowDays = windowCalendarDays(opts.startMs, opts.endMs);
+  return { days, counts, windowDays, rate: windowDays > 0 ? doneAtMs.size / windowDays : null };
+}
 
-  // ── PRs: review rounds, CI attempts ──
-  interface PrTrack {
-    byBlock: Map<string, number>;
-    verdicts: number;
-    lastVerdictMs: number | null;
-    driverRounds: number | null;
-    green: number;
-    red: number;
-    inWindow: boolean;
-  }
+interface PrTrack {
+  /** Per block, the distinct heads it gave a verdict on. */
+  headsByBlock: Map<string, Set<string>>;
+  verdicts: number;
+  lastVerdictMs: number | null;
+  driverRounds: number | null;
+  green: number;
+  red: number;
+  inWindow: boolean;
+}
+
+/** Review rounds and CI attempts per PR off the verdict and driver rows. */
+function prProjection(
+  rows: readonly LifecycleAuditRowLike[],
+  ctx: Ctx
+): { reviewRoundsPerPr: PrReview[]; ciAttemptsPerPr: PrCi[] } {
+  const { opts } = ctx;
   const prs = new Map<string, PrTrack>();
-  const prFor = (pr: string): PrTrack => {
-    let t = prs.get(pr);
-    if (!t) {
-      t = { byBlock: new Map(), verdicts: 0, lastVerdictMs: null, driverRounds: null, green: 0, red: 0, inWindow: false };
-      prs.set(pr, t);
-    }
-    return t;
-  };
+  let headless = 0;
   for (const row of rows) {
     const a = row.action;
     if (a !== VERDICT && a !== CI_GREEN && a !== CI_RED && a !== LANE_SPAWNED) continue;
     const d = detailOf(row);
     const pr = prOf(d);
     if (pr === null) continue;
-    const t = prFor(pr);
+    let t = prs.get(pr);
+    if (!t) {
+      t = { headsByBlock: new Map(), verdicts: 0, lastVerdictMs: null, driverRounds: null, green: 0, red: 0, inWindow: false };
+      prs.set(pr, t);
+    }
     if (a === LANE_SPAWNED) {
       const r = d?.round;
       if (typeof r === "number" && Number.isFinite(r)) t.driverRounds = Math.max(t.driverRounds ?? r, r);
@@ -438,7 +476,16 @@ export function lifecycle(auditRows: readonly LifecycleAuditRowLike[], opts: Lif
     if (inWindow(row.ts_ms, opts)) t.inWindow = true;
     if (a === VERDICT) {
       const block = typeof d?.block === "string" && d.block !== "" ? d.block : "unknown";
-      t.byBlock.set(block, (t.byBlock.get(block) ?? 0) + 1);
+      // A round is a HEAD a lane reviewed, not a row: a lane re-recording at
+      // the same head (a body edit re-asks the verdict) is the same round. A
+      // row with no head cannot be matched to another, so it is its own.
+      const head = typeof d?.head === "string" && d.head !== "" ? d.head : `\u0000headless-${headless++}`;
+      let heads = t.headsByBlock.get(block);
+      if (!heads) {
+        heads = new Set();
+        t.headsByBlock.set(block, heads);
+      }
+      heads.add(head);
       t.verdicts++;
       t.lastVerdictMs = row.ts_ms;
     } else if (a === CI_GREEN) t.green++;
@@ -454,7 +501,7 @@ export function lifecycle(auditRows: readonly LifecycleAuditRowLike[], opts: Lif
     // instant its review arc last moved — so each PR is in exactly one
     // bucket and the series sums to this list.
     if (t.lastVerdictMs !== null && inWindow(t.lastVerdictMs, opts)) {
-      const rounds = Math.max(...t.byBlock.values());
+      const rounds = Math.max(...[...t.headsByBlock.values()].map((h) => h.size));
       reviewRoundsPerPr.push({
         pr,
         rounds,
@@ -463,25 +510,42 @@ export function lifecycle(auditRows: readonly LifecycleAuditRowLike[], opts: Lif
         disagrees: t.driverRounds !== null && t.driverRounds !== rounds,
         lastVerdictMs: t.lastVerdictMs,
       });
-      const b = bucketOf(starts, t.lastVerdictMs, opts.endMs);
-      if (b >= 0) series.rounds[b].push(rounds);
-      side(t.lastVerdictMs)?.rounds.push(rounds);
+      const b = bucketOf(ctx.starts, t.lastVerdictMs, opts.endMs);
+      if (b >= 0) ctx.series.rounds[b].push(rounds);
+      ctx.side(t.lastVerdictMs)?.rounds.push(rounds);
     }
     ciAttemptsPerPr.push({ pr, attempts: t.green + t.red === 0 ? null : { green: t.green, red: t.red } });
   }
+  return { reviewRoundsPerPr, ciAttemptsPerPr };
+}
 
+export function lifecycle(auditRows: readonly LifecycleAuditRowLike[], opts: LifecycleOpts): Lifecycle {
+  // Arrival order breaks ties: two rows in one millisecond keep the order the
+  // log wrote them in (`sort` is stable).
+  const rows = auditRows.filter((r) => Number.isFinite(r.ts_ms)).slice().sort((a, b) => a.ts_ms - b.ts_ms);
+  const floorMs = rows.length === 0 ? null : rows[0].ts_ms;
+
+  const starts = bucketStartsFor(opts);
+  const series: LifecycleSeries = {
+    bucketStarts: starts,
+    done: starts.map(() => 0),
+    ttcMs: starts.map(() => []),
+    timeInStatus: new Map(),
+    rounds: starts.map(() => []),
+  };
+  const mark = opts.markTsMs;
+  const partition = mark === undefined ? null : { before: emptyPart(), after: emptyPart() };
+  const side = (ts: number): LifecyclePart | null =>
+    partition === null || mark === undefined ? null : ts < mark ? partition.before : partition.after;
+  const ctx: Ctx = { opts, starts, series, side };
+
+  const tasks = taskProjection(rows, ctx);
+  const prs = prProjection(rows, ctx);
   return {
-    transitions,
-    tasksSeen: tracks.size,
-    spans,
-    timeInStatus,
-    ttc,
-    doneAtMs,
-    doneIds: new Set(doneAtMs.keys()),
-    doneUndated,
-    donePerDay,
-    reviewRoundsPerPr,
-    ciAttemptsPerPr,
+    ...tasks,
+    doneIds: new Set(tasks.doneAtMs.keys()),
+    donePerDay: donePerDayOf(tasks.doneAtMs, opts),
+    ...prs,
     floorMs,
     mayBeTruncated: auditRows.length >= AUDIT_VIEW_LIMIT,
     partition,

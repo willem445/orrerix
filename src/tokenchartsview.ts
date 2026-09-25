@@ -54,7 +54,7 @@ import {
   type Metric,
 } from "./tokencharts";
 import { makeScale, niceTicks, xForTs, tsForX, type TimelineScale } from "./timelinelayout";
-import { chooseBucket, clampWindow, linearTicks, logTicks, logValue, markSpan, panBy, yDomain, zoomAbout, type Window } from "./chartwindow";
+import { chooseBucket, clampWindow, linearTicks, logTicks, logValue, markSpan, meanFinite, panBy, yDomain, zoomAbout, type Window } from "./chartwindow";
 import { averages, averagesOverTime } from "./tokenaverages";
 import { lifecycle } from "./tokenlifecycle";
 import { perCompletedItem, perCompletedItemOverTime } from "./tokenperitem";
@@ -998,7 +998,7 @@ export class TokenChartsView {
     rowsToDraw.push({ label: "median time-to-completion (h)", buckets: life.series.bucketStarts, values: life.series.ttcMs.map((xs) => xs.length ? statCell(xs).median ?? 0 : 0).map((n) => n / 3_600_000) });
     if (avg.keys.length > 0) rowsToDraw.push({ label: "average tokens per pane", buckets: avg.buckets, values: avg.buckets.map((_, i) => {
       const values = avg.keys.map((key) => key.points[i]?.mean).filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
-      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+      return meanFinite(values) ?? 0;
     }) });
     const svg = svgEl("svg", "tokens-trends-svg") as SVGSVGElement;
     svg.setAttribute("viewBox", "0 0 800 130"); svg.setAttribute("preserveAspectRatio", "none");

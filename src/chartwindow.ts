@@ -56,6 +56,17 @@ export function markSpan(markMs: number, k: number, bucketMs: number, gridOrigin
 }
 
 export interface Point { tsMs: number; value: number }
+/** Arithmetic mean of measured values, ignoring unavailable samples. */
+export function meanFinite(values: readonly (number | null | undefined)[]): number | null {
+  let sum = 0;
+  let count = 0;
+  for (const value of values) {
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    sum += value;
+    count++;
+  }
+  return count === 0 ? null : sum / count;
+}
 /** Autoscale only visible samples; empty windows use [0, 1]. */
 export function yDomain(points: Iterable<Point>, win: Window): [number, number] {
   if (!validWindow(win)) return [0, 1];

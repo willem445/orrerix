@@ -900,8 +900,10 @@ allocate a window-sized dense grid at the smallest interval.
 ## Interaction: the view
 
 `tokenchartsview.ts` owns SVG and input wiring; window, y-domain, log mapping,
-ticks and bucket selection remain in `chartwindow.ts`. A custom window is stored
-as start/end instants, not as a preset name, so polls cannot reset a zoom. Wheel
+ticks, bucket selection and the mean of pane series remain in `chartwindow.ts`.
+Its y-domain consumes an iterable so rendering does not allocate a second
+keys-by-buckets point matrix. A custom window is stored as start/end instants,
+not as a preset name, so polls cannot reset a zoom. Wheel
 zoom maps the pointer through `tsForX`, then `zoomAbout`; pointer capture keeps
 a drag continuous outside the plot, and `panBy` clamps it to the series extent.
 Marks select the lifecycle comparison and fit their snapped split window.

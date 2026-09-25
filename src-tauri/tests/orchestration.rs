@@ -70540,8 +70540,9 @@ fn a_real_dialog_still_holds_with_a_faint_prompt_row_above_it() {
 fn residual_a_faint_prompt_row_above_a_glyphless_dialog_reads_as_an_idle_composer() {
     // The residual `docs/design/question-gate-authorship.md` states, pinned so
     // the disclosure cannot go false silently. With no prompt glyph in the
-    // dialog, the lowest glyph row is a faint transcript row, which is cleared:
-    // the WEAK idle reading turns true. The gate itself still holds, on the
+    // dialog, the lowest glyph-led row is whatever faint row sits above it (here
+    // a past prompt; a dim `$`/`>` hint line would do the same), and it is
+    // cleared: the WEAK idle reading turns true. The gate itself still holds, on the
     // menu structure the strong reading requires to be absent.
     let raw = painted(&[
         "\x1b[2m❯ pick an auth approach\x1b[22m",

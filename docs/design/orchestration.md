@@ -8168,14 +8168,18 @@ idle read. The ring is unchanged, so this is still "the grid may only release".
 
 **Limits, stated.**
 
-- **A glyph-less dialog under a faint prompt row.** The rule's scope is "the lowest prompt-glyph
-  row" because the composer sits below the transcript. A dialog that paints **no** glyph, like the
-  reverse-video `AskUserQuestion`, leaves a transcript row as the lowest one, and if a CLI painted
-  that past prompt faint, the row would be cleared. The strong reading still holds on the dialog's
-  menu structure. The **weak** reading, the override's, turns true. That is the #903 override
-  residual (`question-gate-authorship.md`) with one more way in: fifteen minutes, badged for five,
-  and a CLI that renders past prompts faint. Claude Code does not: the resumed-transcript fixtures
-  paint `❯ [orch] …` at normal intensity. The pin is
+- **A glyph-less dialog under any faint row led by a prompt glyph.** The rule's scope is "the lowest
+  prompt-glyph row" because the composer sits below the transcript. The rule does not check what
+  that row IS. A dialog that paints **no** glyph, like the reverse-video `AskUserQuestion`, leaves
+  the lowest glyph-led row somewhere above it. Any such row whose content is all faint would be
+  cleared: a past prompt, or a dim hint or tool-output line that starts with `❯`, `›`, `>` or `$`.
+  The strong reading still holds on the dialog's menu structure. The **weak** reading, the
+  override's, turns true. That is the #903 override residual (`question-gate-authorship.md`) with
+  one more way in. It needs all of these: fifteen minutes, badged for five, a glyph-less dialog up,
+  and a faint glyph-led row within the tail rows above it. What keeps it closed is facts about
+  today's screens, not the rule. Claude Code paints past prompts at normal intensity (the
+  resumed-transcript fixtures paint `❯ [orch] …` that way), and no capture in the suite has a faint
+  glyph-led row above a glyph-less dialog. The pin is
   `residual_a_faint_prompt_row_above_a_glyphless_dialog_reads_as_an_idle_composer`, which fails if
   the residual ever closes, so the disclosure is deleted rather than left behind.
 - **A placeholder painted in grey rather than faint is not recognised.** Colour is a theme choice

@@ -29721,7 +29721,17 @@ fn question_sample(ptys: &crate::pty::PtyManager, pty_id: u32) -> QuestionSample
 /// composer" above a live dialog. A dialog's highlighted choice (`❯ 1. Yes`) is
 /// painted at normal intensity, so the rule leaves it — and every question row
 /// on screen — exactly as it was. Every other row is `render_visible`'s,
-/// unchanged, so this can only ever turn a non-empty composer into an empty one.
+/// unchanged.
+///
+/// **The rule does not check that the lowest glyph-led row IS the composer.**
+/// With a glyph-less dialog up (reverse-video `AskUserQuestion`), the lowest
+/// such row is whatever sits above it. Any faint row led by a prompt glyph, such
+/// as a past prompt or a dim hint or tool-output line starting with `$` or `>`,
+/// is cleared, and the WEAK idle reading turns true. Facts about today's screens
+/// keep that closed, not this rule (Claude Code paints past prompts at normal
+/// intensity). The residual is argued in `docs/design/orchestration.md`'s #3426
+/// section and pinned by
+/// `residual_a_faint_prompt_row_above_a_glyphless_dialog_reads_as_an_idle_composer`.
 #[doc(hidden)] // pub for integration tests
 pub fn question_visible(bytes: &[u8], cols: u16, rows: u16) -> Option<String> {
     let styled = termgrid::render_visible_styled(bytes, cols, rows);

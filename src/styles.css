@@ -4324,6 +4324,19 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
 .group-max-note { color: var(--ink-dim); font-size: 10px; }
 .group-max-note.warn { color: var(--state-attention); }
 .group-max-err { color: var(--state-danger); font-size: 10px; }
+.group-compact-settings {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none;
+  padding: 6px 12px; border-bottom: 1px solid var(--surface-2);
+}
+.group-compact-control { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-dim); font-size: 10px; }
+.group-compact-input {
+  width: 48px; font: inherit; font-size: 11px; text-align: center;
+  background: var(--surface-2); color: var(--ink); border: 1px solid var(--surface-2);
+  border-radius: 5px; padding: 2px 4px;
+}
+.group-compact-input:focus { outline: none; border-color: var(--accent); }
+.group-compact-input:disabled { opacity: 0.5; }
+.group-compact-error { color: var(--state-danger); font-size: 10px; }
 .group-cost { color: var(--ink-dim); font-size: 11px; }
 .group-cost-live { color: var(--ink-dim); font-size: 10px; opacity: 0.75; }
 

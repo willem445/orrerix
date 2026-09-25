@@ -238,6 +238,18 @@ export const setSpawnExpanded = (groupId: string, expanded: boolean): Promise<vo
 export const setMaxAgents = (groupId: string, maxAgents: number): Promise<number> =>
   invoke<number>("orch_set_max_agents", { groupId, maxAgents });
 
+/** Update the live context-escalation threshold; zero disables it. */
+export const setCompactContextThreshold = (groupId: string, percent: number): Promise<number> =>
+  invoke<number>("orch_set_compact_context_threshold", { groupId, percent });
+
+/** Update the live quiet-lull compaction nudge interval; zero disables it. */
+export const setCompactNudgeMinutes = (groupId: string, minutes: number): Promise<number> =>
+  invoke<number>("orch_set_compact_nudge_minutes", { groupId, minutes });
+
+/** Update the context floor for quiet-lull compaction nudges; zero opts out. */
+export const setCompactNudgeMinContextPercent = (groupId: string, percent: number): Promise<number> =>
+  invoke<number>("orch_set_compact_nudge_min_context_percent", { groupId, percent });
+
 // ---------- autonomous mode (#83) ----------
 
 /** Enable/disable autonomous idle-tick mode for a group (durable, audited).
@@ -2171,6 +2183,12 @@ export interface GroupSummary {
   /** Current adjustable live-agent cap (guardrail), or null if the group is
    *  unknown to the registry. Drives the GroupView stepper. */
   max_agents: number | null;
+  /** Live compaction escalation context percentage (zero disables escalation). */
+  compact_context_threshold_percent: number | null;
+  /** Live quiet-lull compaction nudge interval in minutes (zero disables it). */
+  compact_nudge_minutes: number | null;
+  /** Live nudge context floor; the backend smart default is 50 percent. */
+  compact_nudge_min_context_percent: number | null;
   /** What counts against `max_agents` — every live pane the cap applies to,
    *  which is workers + reviewers + planners. TWO classes are exempt on both
    *  sides: the orchestrator, and a declared manager (#1161 M3, decision D3 —

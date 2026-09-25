@@ -19659,6 +19659,21 @@ fn compact_nudge_setup(minutes: u32) -> (OrchRegistry, tempfile::TempDir, GroupI
 }
 
 #[test]
+fn compact_context_threshold_defaults_to_45_and_persisted_zero_stays_off() {
+    let (reg, dir, gid, _oid) = compact_nudge_setup(0);
+    let fresh = reg.load_group_file(&gid).expect("fresh group.json").1;
+    assert_eq!(fresh.compact_context_threshold_percent, 45, "new group default");
+
+    let path = dir.path().join(gid.as_str()).join("group.json");
+    let mut persisted: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    persisted["guardrails"]["compact_context_threshold_percent"] = serde_json::json!(0);
+    fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
+    let loaded = reg.load_group_file(&gid).expect("edited group.json").1;
+    assert_eq!(loaded.compact_context_threshold_percent, 0, "explicit off choice survives load");
+}
+
+#[test]
 fn compact_nudge_role_gate_defaults_to_orchestrator_only() {
     let default_roles = vec!["orchestrator".to_string()];
     assert!(compact_nudge_role_allowed(Role::Orchestrator, &default_roles));

@@ -25,6 +25,9 @@ import {
   setIdleActivityFloor,
   setIdleTickMinutes,
   setMaxAgents,
+  setCompactContextThreshold,
+  setCompactNudgeMinutes,
+  setCompactNudgeMinContextPercent,
   setNotify,
   setSpawnExpanded,
   applyWorkflow,
@@ -69,6 +72,7 @@ import {
 import { gateSatisfiabilityWarning, gateSummaryLine, workflowModeLabel } from "./workflowstatus";
 import { MERGE_QUEUE_HELP, mergeQueueView, type MergeQueueView } from "./mergequeue";
 import { compactionStatusLabel, compactionStatusTitle, contextUsageLabel } from "./compactionstatus";
+import { parseCompactionMinutes, parseCompactionPercent } from "./compactionsettings";
 import { roleLabel } from "./orchbadge";
 import { managerAbsenceNotice } from "./group";
 import { getDefaultAgent } from "./agents";
@@ -158,6 +162,10 @@ export class GroupView {
   private maxInput: HTMLInputElement;
   private maxNoteEl: HTMLElement;
   private maxErrEl: HTMLElement;
+  private compactThresholdInput: HTMLInputElement;
+  private compactNudgeMinutesInput: HTMLInputElement;
+  private compactNudgeFloorInput: HTMLInputElement;
+  private compactSettingsError: HTMLElement;
   private listEl: HTMLElement;
   // Autonomous-mode section (#83).
   private autoBtn: HTMLButtonElement;
@@ -409,6 +417,14 @@ export class GroupView {
     this.maxNoteEl = el("span", "group-max-note");
     this.maxErrEl = el("span", "group-max-err");
     maxRow.append(maxCtl, this.maxNoteEl, this.maxErrEl);
+
+    // Compaction guardrails share the existing live group-guardrail surface.
+    const compactRow = el("div", "group-compact-settings");
+    this.compactThresholdInput = this.compactInput("Escalate at %", "Context usage that triggers automatic compaction escalation; 0 disables it.", (value) => this.applyCompactPercent(value, setCompactContextThreshold));
+    this.compactNudgeMinutesInput = this.compactInput("Nudge after quiet minutes", "Quiet-lull compaction nudge interval; 0 disables nudging.", (value) => this.applyCompactMinutes(value));
+    this.compactNudgeFloorInput = this.compactInput("Nudge from context %", "Minimum context usage before a lull nudge; 0 disables this context floor.", (value) => this.applyCompactPercent(value, setCompactNudgeMinContextPercent));
+    this.compactSettingsError = el("span", "group-compact-error");
+    compactRow.append(this.compactThresholdInput, this.compactNudgeMinutesInput, this.compactNudgeFloorInput, this.compactSettingsError);
 
     // Workflow-mode chrome (#316): whether this group is on the built-in
     // roster or a repo-declared custom workflow, and the merge gate armed for
@@ -777,6 +793,7 @@ export class GroupView {
       head,
       this.summaryEl,
       maxRow,
+      compactRow,
       this.workflowRow,
       this.mqRow,
       this.lockRow,
@@ -1412,6 +1429,7 @@ export class GroupView {
     if (s.paused) this.summaryEl.append(el("span", "group-paused-badge", "paused"));
 
     this.renderMax(s);
+    this.renderCompactionSettings(s);
 
     // Per-agent rows: role chip, name, uptime, state, cost.
     this.listEl.replaceChildren();
@@ -1986,6 +2004,51 @@ export class GroupView {
     } else {
       this.maxNoteEl.textContent = "workers + reviewers + planners cap; the orchestrator is exempt";
       this.maxNoteEl.classList.remove("warn");
+    }
+  }
+
+  private compactInput(label: string, title: string, apply: (value: string) => void): HTMLInputElement {
+    const wrap = el("label", "group-compact-control", label);
+    wrap.title = title;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.max = label.includes("minutes") ? "1440" : "100";
+    input.className = "group-compact-input";
+    input.addEventListener("keydown", (event) => { if (event.key === "Enter") apply(input.value); });
+    input.addEventListener("blur", () => apply(input.value));
+    wrap.append(input);
+    return input;
+  }
+
+  private async applyCompactPercent(value: string, setter: typeof setCompactContextThreshold | typeof setCompactNudgeMinContextPercent): Promise<void> {
+    const parsed = parseCompactionPercent(value);
+    if (parsed == null) { this.compactSettingsError.textContent = "Enter 0–100."; return; }
+    const current = setter === setCompactNudgeMinContextPercent
+      ? this.summary?.compact_nudge_min_context_percent
+      : this.summary?.compact_context_threshold_percent;
+    if (parsed === current) return;
+    try { await setter(this.groupId, parsed); this.compactSettingsError.textContent = ""; await this.load(); }
+    catch (error) { this.compactSettingsError.textContent = String(error); }
+  }
+
+  private async applyCompactMinutes(value: string): Promise<void> {
+    const parsed = parseCompactionMinutes(value);
+    if (parsed == null) { this.compactSettingsError.textContent = "Enter 0–1440 minutes."; return; }
+    if (parsed === this.summary?.compact_nudge_minutes) return;
+    try { await setCompactNudgeMinutes(this.groupId, parsed); this.compactSettingsError.textContent = ""; await this.load(); }
+    catch (error) { this.compactSettingsError.textContent = String(error); }
+  }
+
+  private renderCompactionSettings(summary: GroupSummary): void {
+    const values: [HTMLInputElement, number | null][] = [
+      [this.compactThresholdInput, summary.compact_context_threshold_percent],
+      [this.compactNudgeMinutesInput, summary.compact_nudge_minutes],
+      [this.compactNudgeFloorInput, summary.compact_nudge_min_context_percent],
+    ];
+    for (const [input, value] of values) {
+      input.disabled = value == null;
+      if (document.activeElement !== input) input.value = value == null ? "" : String(value);
     }
   }
 }

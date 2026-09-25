@@ -17,8 +17,12 @@ function task(ts: number, id: string, status: string, action = "task-upsert"): L
   // the reader is proven structural rather than exact.
   return { ts_ms: ts, actor: "w-1", action, detail: { id, status, title: `t ${id}`, notes: [], updated_ms: ts, seq: seq++ } };
 }
-function verdict(ts: number, pr: number, block: string, v = "pass"): LifecycleAuditRowLike {
-  return { ts_ms: ts, actor: "rev-1", action: "review-verdict", detail: { pr, block, verdict: v, head: "abc" } };
+// Each verdict gets a head of its own unless one is named: a fresh head is a
+// fresh round, and a test about re-recording at one head names it.
+function verdict(ts: number, pr: number, block: string, v = "pass", head: string | null = `h${seq++}`): LifecycleAuditRowLike {
+  const detail: Record<string, unknown> = { pr, block, verdict: v };
+  if (head !== null) detail.head = head;
+  return { ts_ms: ts, actor: "rev-1", action: "review-verdict", detail };
 }
 function ci(ts: number, pr: number, green: boolean): LifecycleAuditRowLike {
   return { ts_ms: ts, actor: "orrerix", action: green ? "rd-ci-green" : "rd-ci-red", detail: { pr, head: "abc" } };
@@ -191,12 +195,56 @@ test("review rounds: the busiest lane's verdict count; the driver's round counte
   );
 });
 
+test("a lane re-recording its verdict at the same head is not a new round", () => {
+  const rows = [
+    laneSpawned(T0, 11, 2),
+    verdict(T0 + 1 * H, 11, "rev-lead", "fail", "h-a"),
+    verdict(T0 + 2 * H, 11, "rev-lead", "pass", "h-b"),
+    verdict(T0 + 3 * H, 11, "rev-lead", "pass", "h-b"), // a body edit re-asked the verdict
+    // A verdict with no head cannot be matched to another: each is its own round.
+    verdict(T0 + 4 * H, 12, "rev-lead", "pass", null),
+    verdict(T0 + 5 * H, 12, "rev-lead", "pass", null),
+  ];
+  const out = lifecycle(rows, WIDE);
+  assert.deepEqual(
+    out.reviewRoundsPerPr.map((r) => [r.pr, r.rounds, r.verdicts, r.driverRounds, r.disagrees]),
+    [
+      ["11", 2, 3, 2, false],
+      ["12", 2, 2, null, false],
+    ]
+  );
+});
+
 test("rd-handback carries no round, so a `round` on it is not read as the driver's counter", () => {
   const rows: LifecycleAuditRowLike[] = [
     verdict(T0, 5, "rev-lead"),
     { ts_ms: T0 + H, actor: "orrerix", action: "rd-handback", detail: { pr: 5, agent: "w-1", round: 9 } },
   ];
   assert.equal(lifecycle(rows, WIDE).reviewRoundsPerPr[0]?.driverRounds, null);
+});
+
+test("a task first seen in a status it never leaves counts openedBeforeWindow — only when that row is in the window", () => {
+  const rows = [task(T0, "lone", "blocked"), task(T0 - 200 * H, "old", "blocked")];
+  const st = lifecycle(rows, WIDE).timeInStatus.get("blocked");
+  assert.equal(st?.openedBeforeWindow, 1, "the lone in-window first row, and not the one before the window");
+  assert.deepEqual(st?.values, []);
+  assert.equal(st?.stillOpen, 0, "its entry is unknown, so it is not a known-entry open span either");
+});
+
+test("donePerDay.rate divides by the window's length in calendar days, not by the days it touches", () => {
+  // A rolling 7-day window starting mid-afternoon touches 8 calendar days; one
+  // item done per day over it is a rate of 1, not 7/8. Built with `Date` so the
+  // window is exactly seven calendar days in any host zone.
+  const at = (d: number, h: number) => new Date(2026, 8, d, h, 0, 0, 0).getTime();
+  const rows: LifecycleAuditRowLike[] = [];
+  for (let i = 0; i < 7; i++) {
+    rows.push(task(at(17 + i, 16), `r${i}`, "queued"), task(at(17 + i, 18), `r${i}`, "done"));
+  }
+  const out = lifecycle(rows, { startMs: at(17, 15), endMs: at(24, 15) });
+  assert.equal(out.donePerDay.days.length, 8, "control: the window really touches eight calendar days");
+  assert.equal(out.donePerDay.counts.reduce((a, b) => a + b, 0), 7);
+  assert.ok(out.donePerDay.rate !== null && Math.abs(out.donePerDay.rate - 1) < 1e-9, `rate ${out.donePerDay.rate}`);
+  assert.ok(Math.abs(out.donePerDay.windowDays - 7) < 1e-9, `windowDays ${out.donePerDay.windowDays}`);
 });
 
 test("before/after partition on markTsMs splits every sample by its own event instant", () => {

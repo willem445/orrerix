@@ -19660,13 +19660,22 @@ fn compact_nudge_setup(minutes: u32) -> (OrchRegistry, tempfile::TempDir, GroupI
 
 #[test]
 fn compact_context_threshold_defaults_to_45_and_persisted_zero_stays_off() {
-    let (reg, dir, gid, _oid) = compact_nudge_setup(0);
+    let (reg, dir) = test_registry();
+    // This is the default assembled by the production create-orchestration
+    // command; persist it through the real group creation and load paths.
+    let rails = Guardrails { compact_context_threshold_percent: 45, ..rails() };
+    let group = reg.create_group("C:/tmp/repo", rails).unwrap();
+    let gid = group.id;
     let fresh = reg.load_group_file(&gid).expect("fresh group.json").1;
     assert_eq!(fresh.compact_context_threshold_percent, 45, "new group default");
 
     let path = dir.path().join(gid.as_str()).join("group.json");
     let mut persisted: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    persisted["guardrails"].as_object_mut().unwrap().remove("compact_context_threshold_percent");
+    fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
+    assert_eq!(reg.load_group_file(&gid).unwrap().1.compact_context_threshold_percent, 45,
+        "a legacy file missing the key receives the new default");
     persisted["guardrails"]["compact_context_threshold_percent"] = serde_json::json!(0);
     fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
     let loaded = reg.load_group_file(&gid).expect("edited group.json").1;

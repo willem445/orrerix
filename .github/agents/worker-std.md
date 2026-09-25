@@ -78,7 +78,9 @@ push early, open a draft PR, and read CI. `npm run build`, `npm test` and
 `rustfmt --check --edition 2021 <file>` are the only local checks. rustfmt has
 a size cap (the `ci-validate` skill states it): never run it on
 `orchestration/mod.rs` or any other file over the cap, since it takes tens of
-GB of RAM there (#3469).
+GB of RAM there (#3469). Call `acquire_lock("rustfmt")` and run only after a
+`granted` response; if queued, end your turn and resume on the grant notice. Call
+`release_lock("rustfmt")` afterward; see the `ci-validate` skill.
 
 ## Before report(done)
 

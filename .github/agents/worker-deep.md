@@ -62,7 +62,7 @@ tell the orchestrator, so the next one like it goes to `worker-quick`.
    the PR as a **draft**, linking the issue (`Closes #N`) — `gh pr create --draft`
    (local `cargo` of any kind is banned — CI is the build; frontend-only checks
    stay local; see the `ci-validate` skill, whose `rustfmt --check` size cap keeps it off
-   `orchestration/mod.rs` — tens of GB of RAM there, #3469). Read `gh pr checks`, push fixes, repeat until every
+   `orchestration/mod.rs` — tens of GB of RAM there, #3469). Call `acquire_lock("rustfmt")` and run only after a grant; if queued, end your turn and resume on the grant notice. Call `release_lock("rustfmt")` afterward; see the `ci-validate` skill. Read `gh pr checks`, push fixes, repeat until every
    platform in the matrix is green. Never mark the PR ready, or report `done`, on a
    check you haven't reread after the last fix: a fix that looks isolated can break a
    test three files away, and the only way to know is the whole matrix, not just the

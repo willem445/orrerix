@@ -3944,9 +3944,10 @@ prompt delivery — no PTY resize, no new agent capability — and it never over
 you're mid-typing (a held nudge is silently skipped, not queued; it just tries again at the
 next natural lull).
 
-Off by default. A group opts in with a quiet-window (minutes) and, optionally, which roles
-are eligible — the orchestrator only, by default, since workers are short-lived and rarely
-worth compacting. `/compact` is a Claude Code built-in, so the nudge only ever fires for
+Configure these live in the group's lifecycle panel (`Alt+O`), alongside its other
+guardrails. The quiet-window (minutes) is off at 0; optionally choose eligible roles —
+the orchestrator only by default, since workers are short-lived and rarely worth
+compacting. `/compact` is a Claude Code built-in, so the nudge only ever fires for
 Claude Code panes.
 
 **The timed nudge also checks context is actually full before it fires — a smart default, no
@@ -3960,6 +3961,17 @@ your own choosing; or set it to `0` to go back to firing on the quiet window alo
 context check at all. This floor only ever governs orrerix's own unprompted timing — **calling
 `request_compact()` yourself always fires immediately**, at any context level, because that's
 your judgment call, not orrerix's.
+
+**Context escalation is enabled at 45% by default for new groups.** The lifecycle panel
+lets you change the threshold from 0 (off) through 100%; at the threshold, loomux delivers
+a context notice and asks for compaction at the next check if the agent has not asked.
+Escalation is restricted to the group's configured compaction-eligible roles; by default
+that is the orchestrator only, so workers and reviewers are not auto-compacted by this
+fallback. Existing saved groups retain an explicit 0 choice. For an existing group with a
+nonzero threshold, delegates that previously received threshold escalation now need their
+role included in `compact_nudge_roles` to continue doing so; that role list has a backend
+setter but no lifecycle-panel control. The same panel exposes the quiet-nudge minimum
+context percentage (0 disables that floor; an untouched value uses the 50% smart default).
 
 **The orchestrator can also ask for it directly.** `request_compact()` is the primary
 mechanism — the timed nudge above is the fallback for personas that never call it. The

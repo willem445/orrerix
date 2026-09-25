@@ -4173,6 +4173,7 @@ const INFERENCE_ARM_COOLDOWN_MS: u64 = 3 * 60_000;
 /// (effectively disabled in practice, since the CLI's own emergency
 /// auto-compact would already have fired by then).
 const MAX_COMPACT_CONTEXT_THRESHOLD_PERCENT: u32 = 100;
+pub const DEFAULT_COMPACT_CONTEXT_THRESHOLD_PERCENT: u32 = 45;
 /// Compact-nudge min-context floor (benchtest finding, rev-65 smart-default
 /// round): the floor applied when `Guardrails.compact_nudge_min_context_percent`
 /// is `None` (unset) AND the parent heuristic is on (`compact_nudge_minutes >
@@ -6304,9 +6305,11 @@ pub struct Guardrails {
     /// the agent doesn't self-request within the same pass, marking the compact
     /// requested on its behalf (better a loomux-timed compact with the
     /// escalation warning already delivered than the CLI's own 100% emergency
-    /// auto-compact with zero offload). `0` = off (the conservative default):
-    /// purely opportunistic, no escalation. Persisted in group.json,
-    /// live-settable via `set_compact_context_threshold`.
+    /// auto-compact with zero offload). `0` = off. Fresh launcher-created
+    /// groups use `DEFAULT_COMPACT_CONTEXT_THRESHOLD_PERCENT`; a missing
+    /// persisted key uses that same value, while a stored zero stays off.
+    /// Persisted in group.json and live-settable via
+    /// `set_compact_context_threshold`.
     pub compact_context_threshold_percent: u32,
     /// Production bug fix (PR #329 round 7): an explicit human override for
     /// the context-window size (tokens) this group's escalation percent and
@@ -36918,9 +36921,11 @@ impl OrchRegistry {
                 // resolves at gate-evaluation time, not here).
                 compact_nudge_min_context_percent:
                     g["compact_nudge_min_context_percent"].as_u64().map(|v| v as u32),
-                // Compact-nudge context escalation (#328): absent → 0 → off.
-                compact_context_threshold_percent:
-                    g["compact_context_threshold_percent"].as_u64().unwrap_or(0) as u32,
+                // Context escalation: absent on a legacy group means the new 45% default;
+                // a stored 0 remains the human's explicit off choice.
+                compact_context_threshold_percent: g["compact_context_threshold_percent"]
+                    .as_u64()
+                    .unwrap_or(DEFAULT_COMPACT_CONTEXT_THRESHOLD_PERCENT as u64) as u32,
                 // Context-window override (PR #329 round 7): absent → None →
                 // defer entirely to the model-based guess, the conservative
                 // default for a group.json written before this field existed.
@@ -43246,7 +43251,8 @@ impl OrchRegistry {
                 // done, at which point escalation resumes normally.
                 if !a.compact_pending {
                     if let Some(&percent) = context_percents.get(&a.id) {
-                        if percent < g.compact_context_threshold_percent
+                        if !compact_nudge_role_allowed(a.role, &g.compact_nudge_roles)
+                            || percent < g.compact_context_threshold_percent
                             || g.compact_context_threshold_percent == 0
                         {
                             a.compact_escalation_notified = false;
@@ -48242,6 +48248,9 @@ impl OrchRegistry {
             // The per-class breakdown below still reports `manager`: the human
             // is told the pane is live, and told it is not spending a slot.
             "max_agents": g.as_ref().map(|g| g.guardrails.max_agents),
+            "compact_context_threshold_percent": g.as_ref().map(|g| g.guardrails.compact_context_threshold_percent),
+            "compact_nudge_minutes": g.as_ref().map(|g| g.guardrails.compact_nudge_minutes),
+            "compact_nudge_min_context_percent": g.as_ref().map(|g| g.guardrails.compact_nudge_min_context_percent.unwrap_or(50)),
             "live_delegates": live.iter().filter(|a| counts_against_max_agents(a.role)).count(),
             "paused": self.is_paused(group),
             "uptime_ms": earliest.map(|e| now.saturating_sub(e)),
@@ -62295,8 +62304,8 @@ pub fn create_orchestration_sync(
             // orch_set_compact_nudge_min_context_percent (which always sets
             // an explicit value, never restores this None).
             compact_nudge_min_context_percent: None,
-            // #328: off at launch; live-settable via orch_set_compact_context_threshold.
-            compact_context_threshold_percent: 0,
+            // #3497: new groups escalate at 45%; an explicit persisted 0 remains off.
+            compact_context_threshold_percent: DEFAULT_COMPACT_CONTEXT_THRESHOLD_PERCENT,
             // Context-window override (PR #329 round 7): no launcher field
             // yet (same precedent as max_spawns_per_hour) — a human who
             // knows their deployment's actual context tier sets this by
@@ -63490,7 +63499,12 @@ pub async fn orch_set_compact_nudge_minutes(
 ) -> Result<u32, String> {
     let reg = reg_of(&app);
     let group_id = command_group(&group_id)?;
-    run_blocking(move || reg.set_compact_nudge_minutes(&group_id, minutes)).await
+    run_blocking(move || {
+        let applied = reg.set_compact_nudge_minutes(&group_id, minutes)?;
+        reg.publish_group_now(&group_id);
+        Ok(applied)
+    })
+    .await
 }
 
 /// Set a group's compact-nudge eligible roles (#287; unrecognized names
@@ -63534,7 +63548,12 @@ pub async fn orch_set_compact_context_threshold(
 ) -> Result<u32, String> {
     let reg = reg_of(&app);
     let group_id = command_group(&group_id)?;
-    run_blocking(move || reg.set_compact_context_threshold(&group_id, percent)).await
+    run_blocking(move || {
+        let applied = reg.set_compact_context_threshold(&group_id, percent)?;
+        reg.publish_group_now(&group_id);
+        Ok(applied)
+    })
+    .await
 }
 
 /// Set a group's compact-nudge min-context floor (benchtest finding; `0` =
@@ -63558,7 +63577,12 @@ pub async fn orch_set_compact_nudge_min_context_percent(
 ) -> Result<u32, String> {
     let reg = reg_of(&app);
     let group_id = command_group(&group_id)?;
-    run_blocking(move || reg.set_compact_nudge_min_context_percent(&group_id, percent)).await
+    run_blocking(move || {
+        let applied = reg.set_compact_nudge_min_context_percent(&group_id, percent)?;
+        reg.publish_group_now(&group_id);
+        Ok(applied)
+    })
+    .await
 }
 
 /// The group's autonomous-mode state for the panel: toggles, budget, anchor, and

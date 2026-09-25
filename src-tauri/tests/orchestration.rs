@@ -51,6 +51,7 @@ use loomux_lib::orchestration::{
     late_monitor_tick, poll_promptsubmit_hook, promptsubmit_marker_len, promptsubmit_marker_path,
     promptsubmit_records_since, prompt_landed, tier1_trusted,
     compact_escalation_should_fire, compact_nudge_cli_supported, compact_nudge_context_floor_met,
+    DEFAULT_COMPACT_CONTEXT_THRESHOLD_PERCENT,
     compact_nudge_role_allowed,
     compact_reinjection_notice, compact_request_should_fire, compaction_status, context_percent_used,
     CompactionStatus,
@@ -19658,6 +19659,77 @@ fn compact_nudge_setup(minutes: u32) -> (OrchRegistry, tempfile::TempDir, GroupI
     let g = reg.create_group("C:/tmp/repo", compact_rails(minutes, &["orchestrator"])).unwrap();
     let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
     (reg, dir, g.id, o.id)
+}
+
+#[test]
+fn compact_context_threshold_defaults_to_45_and_persisted_zero_stays_off() {
+    let (reg, dir) = test_registry();
+    let reg = std::sync::Arc::new(reg);
+    let repo = tempfile::tempdir().unwrap();
+    let repo_path = repo.path().to_string_lossy().into_owned();
+    let request = launch_with_workflow(&reg, &repo_path, false, None)
+        .expect("launch through the production create-orchestration path");
+    let gid = request.group_id;
+    let fresh = reg.load_group_file(&gid).expect("fresh group.json").1;
+    assert_eq!(DEFAULT_COMPACT_CONTEXT_THRESHOLD_PERCENT, 45);
+    assert_eq!(
+        fresh.compact_context_threshold_percent,
+        DEFAULT_COMPACT_CONTEXT_THRESHOLD_PERCENT,
+        "new group creation uses the shared 45% default"
+    );
+
+    let path = dir.path().join(gid.as_str()).join("group.json");
+    let mut persisted: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    persisted["guardrails"].as_object_mut().unwrap().remove("compact_context_threshold_percent");
+    fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
+    assert_eq!(reg.load_group_file(&gid).unwrap().1.compact_context_threshold_percent, 45,
+        "a legacy file missing the key receives the new default");
+    persisted["guardrails"]["compact_context_threshold_percent"] = serde_json::json!(0);
+    fs::write(&path, serde_json::to_vec_pretty(&persisted).unwrap()).unwrap();
+    let loaded = reg.load_group_file(&gid).expect("edited group.json").1;
+    assert_eq!(loaded.compact_context_threshold_percent, 0, "explicit off choice survives load");
+}
+
+#[test]
+fn compact_escalation_default_role_gate_only_escalates_the_orchestrator() {
+    let (reg, _dir) = test_registry();
+    let group = reg
+        .create_group(
+            "C:/tmp/repo",
+            Guardrails {
+                compact_context_threshold_percent: DEFAULT_COMPACT_CONTEXT_THRESHOLD_PERCENT,
+                ..rails()
+            },
+        )
+        .unwrap();
+    let orchestrator = reg
+        .spawn_agent(&group.id, Role::Orchestrator, "orch", "", false, None)
+        .unwrap();
+    let worker = reg
+        .spawn_agent(&group.id, Role::Worker, "worker", "", false, None)
+        .unwrap();
+    let contexts = HashMap::from([(orchestrator.id.clone(), 80), (worker.id.clone(), 80)]);
+
+    reg.compact_nudge_tick(
+        FAR,
+        &HashMap::new(),
+        &HashMap::new(),
+        &contexts,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+
+    let escalated: HashSet<String> = audit_entries(&reg, &group.id, "compact-escalation")
+        .iter()
+        .filter_map(|entry| entry["detail"]["agent"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(
+        escalated,
+        HashSet::from([orchestrator.id]),
+        "default threshold escalation applies only to the default eligible role"
+    );
 }
 
 #[test]

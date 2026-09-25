@@ -19683,6 +19683,30 @@ fn compact_context_threshold_defaults_to_45_and_persisted_zero_stays_off() {
 }
 
 #[test]
+fn compact_escalation_default_role_gate_only_escalates_the_orchestrator() {
+    let (reg, _dir) = test_registry();
+    let group = reg.create_group(
+        "C:/tmp/repo",
+        Guardrails { compact_context_threshold_percent: 45, ..rails() },
+    ).unwrap();
+    let orchestrator = reg.spawn_agent(&group.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let worker = reg.spawn_agent(&group.id, Role::Worker, "worker", "", false, None).unwrap();
+    let contexts = HashMap::from([(orchestrator.id.clone(), 80), (worker.id.clone(), 80)]);
+
+    reg.compact_nudge_tick(
+        FAR, &HashMap::new(), &HashMap::new(), &contexts,
+        &HashMap::new(), &HashMap::new(), &HashMap::new(),
+    );
+
+    let escalated: HashSet<String> = audit_entries(&reg, &group.id, "compact-escalation")
+        .iter()
+        .filter_map(|entry| entry["detail"]["agent"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(escalated, HashSet::from([orchestrator.id]),
+        "default threshold escalation applies only to the default eligible role");
+}
+
+#[test]
 fn compact_nudge_role_gate_defaults_to_orchestrator_only() {
     let default_roles = vec!["orchestrator".to_string()];
     assert!(compact_nudge_role_allowed(Role::Orchestrator, &default_roles));

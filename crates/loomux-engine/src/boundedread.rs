@@ -34,7 +34,7 @@
 //! same one a real `Refused` takes from the caller's point of view (an `Err`
 //! it has to report), so pinning one pins the caller's handling of both.
 
-use std::collections::TryReserveError;
+use std::collections::{TryReserveError, VecDeque};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read};
@@ -162,6 +162,20 @@ pub fn try_push<T>(v: &mut Vec<T>, item: T) -> Result<(), TryReserveError> {
     Ok(())
 }
 
+/// Make room for one more element in a deque that is never meant to hold
+/// more than `cap` (#3493 review N2). Growth doubles, as `push_back` would,
+/// but fallibly and **capped**: capacity never exceeds `cap`, so a window that
+/// pops before it pushes at `cap` stops growing there, and a short log never
+/// reserves the whole window. A no-op while there is spare capacity, and at
+/// `cap` itself (the caller pops first).
+pub fn try_grow_capped<T>(d: &mut VecDeque<T>, cap: usize) -> Result<(), TryReserveError> {
+    let len = d.len();
+    if len < d.capacity() || len >= cap {
+        return Ok(());
+    }
+    d.try_reserve_exact(len.max(16).min(cap - len))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +216,26 @@ mod tests {
         assert_eq!(read_to_string_bounded(&empty, 0).unwrap(), "");
         let (_n, bad) = file_with(&[0x66, 0xff, 0x0a]);
         assert!(matches!(read_to_string_bounded(&bad, 10), Err(BoundedReadError::NotUtf8)));
+    }
+
+    #[test]
+    fn a_capped_deque_grows_on_demand_and_never_past_its_cap() {
+        let cap = 100;
+        let mut d: VecDeque<u32> = VecDeque::new();
+        assert_eq!(d.capacity(), 0, "nothing is reserved before the first element");
+        try_grow_capped(&mut d, cap).unwrap();
+        d.push_back(0);
+        assert!(d.capacity() < cap, "one element does not reserve the whole window: {}", d.capacity());
+        for i in 1..1000u32 {
+            if d.len() == cap {
+                d.pop_front();
+            }
+            try_grow_capped(&mut d, cap).unwrap();
+            d.push_back(i);
+            assert!(d.capacity() <= cap, "capacity {} passed the cap at {i}", d.capacity());
+        }
+        assert_eq!(d.len(), cap);
+        assert_eq!(d.front(), Some(&900), "the oldest are the ones gone");
     }
 
     #[test]

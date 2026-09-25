@@ -67181,10 +67181,11 @@ fn a_series_read_over_its_limit_fails_soft_and_reports_once() {
 #[test]
 fn an_audit_window_over_its_limit_fails_soft_as_a_truncated_window() {
     // #3469, the audit half. The window is read by the viewer's follow poll
-    // and by derivations that must never read "I could not look" as "nothing
-    // happened" — so the degrade is an EMPTY window marked TRUNCATED, the flag
-    // those derivations already honour, rather than an abort or a confident
-    // empty timeline.
+    // and by derivations. The degrade is an EMPTY window marked TRUNCATED, so
+    // the two that read the flag (`front_door_refusals`, `refusal_roster`) see
+    // a partial window rather than a confident empty timeline. `audit_log`'s
+    // callers drop the flag and see it as empty, which is what the §1c table
+    // in crash-observability.md says.
     let (reg, d) = test_registry();
     let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
     let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();

@@ -32815,10 +32815,20 @@ impl OrchRegistry {
     /// (`poll-read-failed`, see [`Self::note_poll_read`]) and degrades to
     /// **an empty window marked truncated**. `truncated: true` is not a
     /// fudge: it is this function's existing way of saying "history exists
-    /// that this answer did not see", which is exactly true, so a derivation
-    /// that already honours the flag (`front_door_refusals`,
-    /// `refusal_roster`) reads the degrade as a partial window rather than as
+    /// that this answer did not see", which is exactly true, so the two
+    /// derivations that honour the flag (`front_door_refusals`,
+    /// `refusal_roster`) read the degrade as a partial window rather than as
     /// "nothing was ever refused".
+    ///
+    /// **Only those two.** [`Self::audit_log`] drops the flag, so its three
+    /// callers see the degrade as a plain EMPTY timeline (#3493 review N1):
+    /// `resume_group`'s pause-suppression notice is computed from nothing and
+    /// not re-sent (a one-shot edge, so that report is lost for the episode);
+    /// `audit_derived_orphans` reports no audit-derived orphans (the snapshot
+    /// half of `queue_orphans` is unaffected); and the `orch_audit` viewer
+    /// shows an empty log for the tick. The `poll-read-failed` row is the
+    /// record in all three. That is the same flag-dropping those callers
+    /// already did at the 5000-entry cut, now reached on a failed read too.
     pub fn audit_log_windowed(&self, group: &GroupId) -> (Vec<AuditEntry>, bool) {
         let read = self.try_audit_log_windowed(group);
         self.note_poll_read(group, "audit", read.as_ref().map(|_| ()).map_err(String::as_str));
@@ -32837,7 +32847,7 @@ impl OrchRegistry {
     /// into one `String` (which at a full `audit.1.jsonl` plus a busy
     /// `audit.jsonl` was a ~13 MB buffer grown by an infallible `push_str`),
     /// and parsed entries go into a window **bounded at
-    /// `AUDIT_VIEW_LIMIT`**, reserved fallibly up front, instead of a `Vec` of
+    /// `AUDIT_VIEW_LIMIT`**, grown fallibly and never past that cap, instead of a `Vec` of
     /// every entry in both files trimmed afterwards. The answer is identical —
     /// same entries, same order, `truncated` true exactly when more than
     /// `AUDIT_VIEW_LIMIT` parsed — and the peak is the window, not the log.
@@ -32846,10 +32856,11 @@ impl OrchRegistry {
         use loomux_engine::boundedread::{read_to_string_bounded, BoundedReadError};
         let dir = self.group_dir(group);
         let limit = self.poll_read_limit(AUDIT_READ_LIMIT_BYTES);
+        // Grown on demand and capped at the limit (#3493 review N2): a small
+        // log costs a small window, and a full one never holds more than
+        // `AUDIT_VIEW_LIMIT` slots — rather than 5001 x 88 B reserved on every
+        // poll whatever the log's size.
         let mut window: VecDeque<AuditEntry> = VecDeque::new();
-        window
-            .try_reserve_exact(AUDIT_VIEW_LIMIT + 1)
-            .map_err(|_| format!("the allocator refused the {AUDIT_VIEW_LIMIT}-entry audit window"))?;
         let mut truncated = false;
         let mut skipped = 0usize;
         for name in ["audit.1.jsonl", "audit.jsonl"] {
@@ -32871,7 +32882,9 @@ impl OrchRegistry {
                             window.pop_front();
                             truncated = true;
                         }
-                        window.push_back(entry); // within the reserved capacity
+                        loomux_engine::boundedread::try_grow_capped(&mut window, AUDIT_VIEW_LIMIT)
+                            .map_err(|_| format!("the allocator refused to grow the audit window past {} entries", window.len()))?;
+                        window.push_back(entry); // within the capacity just ensured
                     }
                 }
             }

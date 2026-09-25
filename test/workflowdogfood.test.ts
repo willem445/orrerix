@@ -58,10 +58,10 @@ test("the roster is the one the repo means to run", () => {
   // Two worker tiers, and the STANDARD one FIRST — which is the opposite default
   // from the roster this replaced, and deliberate. The first block of a class is
   // what a bare `spawn_agent(kind: "worker")` resolves to, and this file's own
-  // rule 3 ("CLASSIFY THE WORKER AT INTAKE") is that the orchestrator chooses the
-  // tier when it writes the brief; the fallback is therefore the cheap one, so an
-  // unrouted task is one nobody classified rather than one that silently cost
-  // Opus. (A role_hint-gated worker block, like the retired `process`, would be
+  // rule 3 ("DEFAULT EVERY TASK TO worker-std") makes the cheap tier the policy,
+  // not just a fallback: worker-adv is reached only by naming it after a
+  // worker-std failed or for an extremely complex task, so a bare spawn must
+  // never silently cost Opus. (A role_hint-gated worker block, like the retired `process`, would be
   // excluded from this default-tier pin.)
   const tiers = workflow.blocks.filter((b) => b.kind === "worker" && !b.role_hint);
   assert.deepEqual(
@@ -434,8 +434,8 @@ test("editing one block's model keeps every other block's comments — and the s
   // The file header, the untouched blocks' own comments, and both section headers survive —
   // only the roster in general was touched, not edges or gates, and not the OTHER blocks.
   assert.match(out, /# CHEAP-TIER ROSTER/, "the file preamble survives");
-  assert.match(out, /CLASSIFY THE WORKER AT INTAKE/, "…all ~90 lines of it, not just the first");
-  assert.match(out, /-- workers: classified at intake/, "the untouched sibling worker's section header survives");
+  assert.match(out, /DEFAULT EVERY TASK TO worker-std/, "…all ~90 lines of it, not just the first");
+  assert.match(out, /-- workers: worker-std by default/, "the untouched sibling worker's section header survives");
   assert.match(out, /-- reviewers: rev-std runs every round/, "the reviewers' section header survives");
   assert.match(out, /S5 dogfood \(#1778\)/, "the driver block's comment survives");
   assert.match(out, /^edges:/m, "the edges section is untouched");
@@ -476,7 +476,7 @@ test("editing the FIRST block under each section header keeps both headers (#341
   assert.notEqual(out, text, "sanity: the edit changed the text");
 
   // Each header still sits directly above the block it introduces.
-  assert.match(out, /# -- workers: classified at intake.*\r?\n\s*- id: worker-std\b/);
+  assert.match(out, /# -- workers: worker-std by default.*\r?\n\s*- id: worker-std\b/);
   assert.match(out, /# -- reviewers: rev-std runs every round.*\r?\n\s*- id: rev-std\b/);
 
   // And no comment line anywhere is lost: the comment lines are the same lines, in the same order.

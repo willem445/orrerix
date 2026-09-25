@@ -67119,6 +67119,144 @@ fn an_oversize_series_is_reported_not_truncated() {
     assert_eq!(reg.usage_series(&g.id, 0)["oversize"], false);
 }
 
+/// The `poll-read-failed` rows in a group's audit log, read with the poll
+/// ceiling lifted — the audit read is itself one of the bounded readers, so a
+/// test that lowered the ceiling has to lift it before looking.
+fn poll_read_failures(reg: &OrchRegistry, g: &GroupId) -> Vec<AuditEntry> {
+    reg.set_poll_read_limit(None);
+    reg.audit_log(g).into_iter().filter(|e| e.action == "poll-read-failed").collect()
+}
+
+#[test]
+fn a_series_read_over_its_limit_fails_soft_and_reports_once() {
+    // #3469. orrerix died on `handle_alloc_error` because a refused
+    // allocation had no way to be anything but an abort. The chart's read is
+    // polled every 30 s, so the property is: a read that cannot be served
+    // costs THAT TICK — the command's existing `Null` degrade — plus one
+    // audited report, and the next read that can be served is served in full.
+    // The refusal is injected through the reader's own limit, never by
+    // exhausting memory; `boundedread`'s own tests pin that a refused
+    // reservation takes the same `Err` path.
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let dir = reg.state_root().join(g.id.as_str());
+    fs::create_dir_all(&dir).unwrap();
+    let row = |ts: u64| {
+        json!({"ts_ms":ts,"kind":"sample","key":"s1","agent":"w-1","block":"worker",
+               "cli":"claude","role":"worker","in":ts,"out":0,"cache_w":0,"cache_r":0,
+               "cost_usd":null,"estimated":false,"source":"transcript","model":null})
+        .to_string()
+    };
+    let body = format!("{}\n{}\n{}\n", row(100), row(200), row(300));
+    fs::write(dir.join("usage-series.jsonl"), &body).unwrap();
+    let len = body.len() as u64;
+
+    // Positive control: at exactly the limit the read is served, whole.
+    reg.set_poll_read_limit(Some(len));
+    let at = reg.usage_series(&g.id, 0);
+    assert_eq!(at["rows"].as_array().map(Vec::len), Some(3), "a file AT the limit is read: {at}");
+    assert!(poll_read_failures(&reg, &g.id).is_empty(), "and nothing is reported for it");
+
+    // One byte over: the tick is skipped, not the process.
+    reg.set_poll_read_limit(Some(len - 1));
+    assert_eq!(reg.usage_series(&g.id, 0), Value::Null, "an over-limit read degrades to Null");
+    // Still failing: still Null, and the report is NOT repeated per poll.
+    reg.set_poll_read_limit(Some(len - 1));
+    assert_eq!(reg.usage_series(&g.id, 0), Value::Null);
+    let rows = poll_read_failures(&reg, &g.id);
+    assert_eq!(rows.len(), 1, "one report per failing episode, not one per poll: {rows:?}");
+    assert_eq!(rows[0].detail["reader"], json!("usage-series"));
+    let err = rows[0].detail["error"].as_str().unwrap_or_default();
+    assert!(err.contains("read limit"), "the row says WHY the read failed: {err}");
+
+    // Recovered: the next servable read is whole again, and it re-arms the
+    // report, so a later episode is reported rather than swallowed.
+    let back = reg.usage_series(&g.id, 0);
+    assert_eq!(back["rows"].as_array().map(Vec::len), Some(3), "recovery serves every row: {back}");
+    reg.set_poll_read_limit(Some(len - 1));
+    assert_eq!(reg.usage_series(&g.id, 0), Value::Null);
+    assert_eq!(poll_read_failures(&reg, &g.id).len(), 2, "a second episode is a second report");
+}
+
+#[test]
+fn an_audit_window_over_its_limit_fails_soft_as_a_truncated_window() {
+    // #3469, the audit half. The window is read by the viewer's follow poll
+    // and by derivations that must never read "I could not look" as "nothing
+    // happened" — so the degrade is an EMPTY window marked TRUNCATED, the flag
+    // those derivations already honour, rather than an abort or a confident
+    // empty timeline.
+    let (reg, d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let orch = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let text = "a refused report";
+    let lines = [
+        audit_jsonl_line(&prompt_line(1_000, "w-1", &orch.id, text)),
+        audit_jsonl_line(&refusal_line(1_001, "w-1", &orch.id, text, "arrival")),
+    ];
+    let body = lines.join("\n") + "\n";
+    fs::write(d.path().join(g.id.as_str()).join("audit.jsonl"), &body).unwrap();
+
+    // Positive control: under the limit the refusal is seen, untruncated.
+    let seen = reg.front_door_refusals(&g.id);
+    assert_eq!((seen.total, seen.window_truncated), (1, false), "the fixture is readable: {:?}", seen.items);
+
+    reg.set_poll_read_limit(Some(body.len() as u64 - 1));
+    let err = reg.try_audit_log_windowed(&g.id).expect_err("an over-limit generation is an Err");
+    assert!(err.contains("audit.jsonl") && err.contains("read limit"), "the error names the file and why: {err}");
+    let (entries, truncated) = reg.audit_log_windowed(&g.id);
+    assert!(entries.is_empty() && truncated, "the degrade is an empty window marked truncated");
+    let r = reg.front_door_refusals(&g.id);
+    assert!(r.window_truncated, "a derivation over the degrade reports a partial window, not a complete zero");
+
+    let rows = poll_read_failures(&reg, &g.id);
+    assert_eq!(rows.len(), 1, "reported once: {rows:?}");
+    assert_eq!(rows[0].detail["reader"], json!("audit"));
+    // And the read is whole again once it can be served.
+    assert_eq!(reg.front_door_refusals(&g.id).total, 1);
+}
+
+#[test]
+fn the_bounded_audit_window_matches_the_whole_log_trim_across_both_generations() {
+    // #3469 changed HOW the window is built — per generation, into a deque
+    // capped at `AUDIT_VIEW_LIMIT`, instead of concatenating both files and
+    // trimming a Vec of every entry — and the answer must not move. The
+    // fixture straddles the rotation boundary so the order across the two
+    // files is part of what is pinned, and the rotated file has no trailing
+    // newline (the case the old concatenation had a guard for).
+    let (reg, d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let dir = d.path().join(g.id.as_str());
+    let entry = |seq: usize| {
+        audit_jsonl_line(&AuditEntry {
+            ts_ms: seq as u64,
+            actor: "loomux".into(),
+            action: "seeded".into(),
+            detail: json!({ "seq": seq }),
+        })
+    };
+    let write = |total: usize| {
+        let split = total / 2;
+        let old: Vec<String> = (0..split).map(entry).collect();
+        let new: Vec<String> = (split..total).map(entry).collect();
+        fs::write(dir.join("audit.1.jsonl"), old.join("\n")).unwrap(); // no trailing newline
+        fs::write(dir.join("audit.jsonl"), new.join("\n") + "\n").unwrap();
+    };
+
+    write(AUDIT_VIEW_LIMIT);
+    let (all, cut) = reg.audit_log_windowed(&g.id);
+    assert!(!cut, "exactly the limit is not a cut");
+    assert_eq!(all.len(), AUDIT_VIEW_LIMIT);
+    assert_eq!(all[0].detail["seq"], json!(0));
+
+    write(AUDIT_VIEW_LIMIT + 1);
+    let (w, cut) = reg.audit_log_windowed(&g.id);
+    assert!(cut, "one over the limit is a cut");
+    assert_eq!(w.len(), AUDIT_VIEW_LIMIT);
+    let seqs: Vec<u64> = w.iter().map(|e| e.detail["seq"].as_u64().unwrap()).collect();
+    let want: Vec<u64> = (1..=AUDIT_VIEW_LIMIT as u64).collect();
+    assert!(seqs == want, "the OLDEST entry is the one dropped, and order holds across the rotation");
+}
+
 #[test]
 fn an_mcp_group_usage_call_is_a_writer_to_the_series() {
     // #2941 review W1. Four permanent surfaces used to say the sampler runs on

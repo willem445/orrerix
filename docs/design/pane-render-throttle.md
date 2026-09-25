@@ -257,5 +257,6 @@ original change.
 **The browser half is now addressed at its source (#1141).** The window's
 WebView2 is launched with Chromium's background-throttling switches turned off,
 so an occluded or display-off window no longer clamps those timers at all. The
-hint above stays for the cases those switches do not reach. Rationale, costs and
+hint above stays as a fallback for any hidden state those switches may not
+reach. Whether one exists (a minimized window is the candidate) is unverified. Rationale, costs and
 open items: `docs/design/webview-throttling.md`.

@@ -106,14 +106,21 @@ little. The user page (`docs/autonomous-mode.md`, *Leaving it running with the
 display off*) states this. No figure is claimed, because none was measured
 here: this repo cannot turn a monitor off in CI.
 
-The #813 sync-parse hint in `pane.ts` (`hintXtermSyncParse`) stays. It still
-covers a minimized window, which is hidden for reasons these switches do not
-touch.
+The #813 sync-parse hint in `pane.ts` (`hintXtermSyncParse`) stays, as a
+fallback for any hidden state the switches may not reach. Whether a minimized
+window is one of them is **unverified**. Only `--disable-backgrounding-occluded-windows`
+depends on why the page is hidden. The timer switch and the disabled
+Intensive Wake-Up Throttling are not tied to occlusion by name, so they
+should cover a minimized window too. But CI cannot minimize a WebView2 window,
+and Chromium's source is not in this tree to cite. This is part of the live
+check below.
 
 ## Open items
 
 - **Live validation is the human's.** Leave a delivery queued with the monitors
   off for an hour. Nothing in CI can reproduce display power-off or occlusion.
+  The same check with the window **minimized** settles the unverified
+  minimized case under *What it costs*.
 - **A spawn while the window is hidden.** Opening an agent pane is
   webview-driven: `orch-spawn-request` → `openAgentPane` in `src/orchestration.ts`.
   The backend cancels a spawn that is not bound within `BIND_TIMEOUT` (20 s,

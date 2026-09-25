@@ -422,9 +422,7 @@ test("editing one block's model keeps every other block's comments — and the s
   // `worker-adv` is the SECOND worker tier, so the `# -- workers:` header sits above its
   // untouched sibling rather than above the block being edited — which is what makes the
   // "every OTHER block's comments" claim in the title a discrimination and not a coincidence.
-  // (Editing `worker-std`, the first tier, legitimately costs that one header line: the model's
-  // documented bar is "untouched regions keep their comments", and a comment directly above the
-  // edited block is not an untouched region. That is what the `- 1` tolerance below is for.)
+  // (Editing the block directly UNDER a header is its own specimen, the next test — #3410.)
   const edited = {
     ...workflow,
     blocks: workflow.blocks.map((b) => (b.id === "worker-adv" ? { ...b, model: "sonnet" } : b)),
@@ -449,13 +447,40 @@ test("editing one block's model keeps every other block's comments — and the s
   const commentLines = out.split("\n").filter((l) => /^\s*#/.test(l)).length;
   const originalCommentLines = text.split("\n").filter((l) => /^\s*#/.test(l)).length;
   assert.ok(originalCommentLines > 100, `the file's comments are load-bearing (${originalCommentLines} lines)`);
-  assert.ok(
-    commentLines >= originalCommentLines - 1,
-    `a one-field edit must not cost more than its own block's comment (had ${originalCommentLines}, now ${commentLines})`
-  );
+  assert.equal(commentLines, originalCommentLines, "a one-field edit costs no comment line at all (#3410)");
 
   // The rewrite-impact guard (Format's guard, not save's — see the test above) would not even
   // fire for this: it isn't a whole-file canonical rewrite, just one changed field.
   const impact = rewriteImpact(text, out, (t) => formatWorkflowText(t) === t);
   assert.equal(impact, null, "an ordinary field edit is not the reformat Format's guard exists for");
+});
+
+test("editing the FIRST block under each section header keeps both headers (#3410)", () => {
+  // The human's roster edit that became #3404 changed `worker-std` and `rev-std` — the block
+  // directly under each `# --` header — and the save dropped both headers, turning the test
+  // above red on main. A header sits in the segment of the block below it, so this is the
+  // specimen where the header is INSIDE the edited block's own text, not beside it.
+  const { workflow } = parseWorkflow(text);
+  const underHeaders = ["worker-std", "rev-std"];
+  for (const id of underHeaders) {
+    assert.ok(workflow.blocks.some((b) => b.id === id), `sanity: the dogfood roster still has ${id}`);
+  }
+  const edited = {
+    ...workflow,
+    blocks: workflow.blocks.map((b) =>
+      underHeaders.includes(b.id) ? { ...b, model: b.model === "sonnet" ? "opus" : "sonnet" } : b
+    ),
+  };
+  const out = serializeWorkflowPreserving(edited, text);
+  assert.deepEqual(parseWorkflow(out).workflow, edited, "the edit itself round-trips");
+  assert.notEqual(out, text, "sanity: the edit changed the text");
+
+  // Each header still sits directly above the block it introduces.
+  assert.match(out, /# -- workers: classified at intake.*\r?\n\s*- id: worker-std\b/);
+  assert.match(out, /# -- reviewers: rev-std runs every round.*\r?\n\s*- id: rev-std\b/);
+
+  // And no comment line anywhere is lost: the comment lines are the same lines, in the same order.
+  const comments = (t: string): string[] => t.split(/\r?\n/).filter((l) => /^\s*#/.test(l));
+  assert.ok(comments(text).length > 100, "the file's comments are load-bearing");
+  assert.deepEqual(comments(out), comments(text));
 });

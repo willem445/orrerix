@@ -740,6 +740,11 @@ pub mod audit_action {
     ///
     /// Carries `pr`, `reason` (why the route was taken) and `notice`.
     pub const NOTICE_DEMOTED: &str = "rd-notice-demoted";
+    /// The driver is OFF for a group whose unfinished drives are still on
+    /// disk, so nothing will tick them (#3330 ask 2). Written once per
+    /// (cause, PRs) transition, beside the one HOLD-shaped line the
+    /// orchestrator receives. Carries `cause` and `prs`.
+    pub const DISABLED_WITH_DRIVES: &str = "rd-disabled-with-drives";
 }
 
 /// The closed vocabulary of `rd-handback`'s `why` (§5.4).

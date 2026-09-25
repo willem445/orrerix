@@ -776,6 +776,14 @@ INTERVAL` would be exactly the log-spam this feature otherwise avoids for an
 unchanged file; a LATER, genuinely new removal still audits fresh once the
 latch has cleared.
 
+**A stable read that does not PARSE is announced, on the same latch
+discipline** (#3330). It still retains the gate and still writes nothing, but
+it is not a blip: every reader of the workflow — the review and plan drivers
+included — now sees no file, and the drivers read that as off. So the pass
+writes a `workflow-invalid` row and hands the orchestrator one line naming the
+errors, once per distinct error set (`workflow_unparseable_warned`, cleared
+when the file parses). The argument is in `docs/design/review-driver.md` §2.4.
+
 **The toggle-off race.** `run_workflow_gate_reload` snapshots which groups
 have `advanced_orchestrator` on before iterating them; `set_advanced_
 orchestrator` runs independently, on whatever thread handles the Tauri

@@ -720,7 +720,48 @@ the auto-start below all reach). The interception pair is
 the one that has to be argued rather than observed: those run on a delegate's
 own tool call, which the runtime schedules as a later turn and never as a frame
 the delivery itself pushes, and both release the lock before auditing. A new
-caller owes that argument again rather than inheriting it.
+caller owes that argument again rather than inheriting it. `rd_live_drive_prs`
+(#3330, §2.4's "a workflow file that does not load") pays it: a read-only
+acquisition from the workflow reload timer, which no delivery reaches, released
+before the notice it feeds is delivered.
+
+**A workflow file that does not load** (#3330). The policy is read off the
+file on every call — `driver_policy_for` caches nothing — and a file
+`parse_workflow` refuses reads as absent, so the driver is OFF. That is the
+right direction (§5.3: a driver that fails open spawns reviewers into a repo
+that never asked for one), and until #3330 it was silent: the measured case was
+an installed build older than a key the file had just gained, under
+`deny_unknown_fields`, which left `review_drive_status` answering
+`enabled: false` for about eight hours with a recovered drive never ticked and
+no line in any pane. Nothing was stale; the silence was the defect.
+`next_rd_group` skips a group whose driver is off, so neither the drive step nor
+the restart reconcile ever runs there, and a resume never re-reads the file for
+the roster. Two announcements close it, one per cause, so one fact is never said
+twice:
+
+- **The file does not parse.** The one reader that already re-reads it on a
+  timer is the merge-gate reload pass (`reload_merge_gate_if_changed`, every
+  `WORKFLOW_GATE_POLL_INTERVAL`), so that pass announces it: a
+  `workflow-invalid` row (`at: reload`) and ONE orchestrator line naming the
+  errors, that both drivers read off, and the PRs `rd_live_drive_prs` finds
+  unfinished on disk. Latched per distinct error set
+  (`workflow_unparseable_warned`), retried until the line lands, cleared the
+  moment the file parses.
+- **The driver is off on purpose while drives are on disk** — `driver.enabled`
+  not true, the file gone, or the advanced orchestrator toggled off.
+  `rd_announce_disabled_drives` runs at the top of `rd_driver_tick`, ahead of
+  the pick that skips these groups: an `rd-disabled-with-drives` row and ONE
+  HOLD-shaped line naming the cause and the PRs. Latched per (cause, PRs),
+  retried until it lands, cleared when the driver is back on or no drive is
+  left. It stands aside for a file that does not parse, which is the first
+  bullet's. It spends no `gh` call; its cost is one more read of the workflow
+  per wake for each group with a drive record, beside the one `next_rd_group`
+  already makes.
+
+**Residual:** the reload pass skips a paused group, so a paused group hears
+about a broken file on resume, not before; and a read that is stable but
+genuinely mid-truncation can announce an error the next pass heals — one line,
+never a repeat.
 
 ### 2.5 The driver's own non-blocking round (#3367 item 1)
 
@@ -2647,7 +2688,12 @@ like `mq-*` and the rest:
 `rd-lane-stop-declined` · `rd-worker-released` ·
 `rd-round-grace` · `rd-hold-repeated` · `rd-notice-demoted` ·
 `rd-provider-limit` · `rd-auto-handback` · `rd-auto-started` ·
-`rd-auto-start-declined` · `rd-clean`
+`rd-auto-start-declined` · `rd-clean` · `rd-disabled-with-drives`
+
+**`rd-disabled-with-drives` is #3330's**: the driver is off for a group whose
+unfinished drives are still on disk, carrying `cause` and `prs`, written once per
+transition beside one HOLD-shaped orchestrator line — §2.4's "a workflow file
+that does not load" has the argument.
 
 **Four rows are #3367's.** `rd-clean` is §2.6's clean case, written beside
 `rd-satisfied` and never instead of it, carrying `route` (`notice` or `queue`)

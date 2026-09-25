@@ -699,6 +699,21 @@ impl OrchRegistry {
         self.driver_policy_for(repo, guardrails).0
     }
 
+    /// The PRs this group has an unfinished review drive on, read off disk
+    /// whatever the policy says (#3330) — for the notice that tells the
+    /// orchestrator which drives a workflow file that will not load is holding
+    /// still. Held drives count: they are still the orchestrator's to resume.
+    ///
+    /// `None` when the record cannot be read, which is NOT "no drives" — the
+    /// same distinction `review_drive_status` keeps with `rd-state-unreadable`.
+    /// Under `rd_state_lock`, like every other reader of the file.
+    pub(super) fn rd_live_drive_prs(&self, group: &GroupId) -> Option<Vec<u64>> {
+        let dir = self.group_dir(group);
+        let _state_guard = self.rd_state_lock.lock_safe();
+        let state = reviewdrive::load_state(&dir).ok()?;
+        Some(state.entries.iter().filter(|e| !e.state().is_terminal()).map(|e| e.pr).collect())
+    }
+
     /// Install (or clear) the canned `gh` the driver reads through —
     /// `mq_runner_override`'s twin. `None` in the app, always.
     #[doc(hidden)] // pub for integration tests
@@ -1134,6 +1149,92 @@ impl OrchRegistry {
         due.into_iter().next().map(|(_, g)| g)
     }
 
+    /// **Say ONCE that a group's driver is off while its drives sit on disk**
+    /// (#3330 ask 2).
+    ///
+    /// `next_rd_group` skips a group whose driver is off, so neither the tick
+    /// nor §2.4's restart reconcile ever runs there: a drive that was live when
+    /// the driver went off — `driver.enabled` flipped to false, the workflow
+    /// file removed, or the advanced orchestrator toggled off — stays listed by
+    /// `review_drive_status` and is never ticked again, with nothing in any
+    /// pane. This hands the orchestrator one HOLD-shaped line naming the cause
+    /// and the PRs, and writes `rd-disabled-with-drives`.
+    ///
+    /// **Not for a file that will not parse**: the workflow reload pass owns
+    /// that case (`warn_workflow_unparseable`) and already names the drives, so
+    /// announcing it here too would be the second line for one fact.
+    ///
+    /// **Once per (cause, PRs)**: the row on the transition, the line retried
+    /// until it lands, then latched; a group whose driver is back on, or whose
+    /// drives are all finished, clears its latch. No `gh` call — a disabled
+    /// group must cost nothing it did not cost before beyond this read.
+    fn rd_announce_disabled_drives(&self) {
+        let all: Vec<GroupId> = self.groups.lock_safe().keys().cloned().collect();
+        for g in all {
+            if !reviewdrive::state_path(&self.group_dir(&g)).exists() {
+                self.rd_disabled_warned.lock_safe().remove(&g);
+                continue;
+            }
+            let Some(info) = self.group(&g) else { continue };
+            let cause = if !info.guardrails.advanced_orchestrator {
+                "the advanced orchestrator is off for this group"
+            } else {
+                match super::load_active_workflow(&info.repo, &info.guardrails) {
+                    Ok(Some(wf)) if wf.driver.enabled => {
+                        self.rd_disabled_warned.lock_safe().remove(&g);
+                        continue;
+                    }
+                    Ok(Some(_)) => "the workflow file does not set driver.enabled: true",
+                    Ok(None) => "the group's workflow file is gone",
+                    // The reload pass's to say (see above).
+                    Err(_) => continue,
+                }
+            };
+            let prs = match self.rd_live_drive_prs(&g) {
+                Some(prs) if !prs.is_empty() => prs,
+                // Nothing left to hold still, or a record orrerix cannot read —
+                // which the status tool and every driver call already refuse
+                // loudly as `rd-state-unreadable`.
+                _ => {
+                    self.rd_disabled_warned.lock_safe().remove(&g);
+                    continue;
+                }
+            };
+            let delivered = {
+                let mut warned = self.rd_disabled_warned.lock_safe();
+                match warned.get(&g) {
+                    Some((c, p, d)) if c == cause && *p == prs => Some(*d),
+                    _ => {
+                        warned.insert(g.clone(), (cause.to_string(), prs.clone(), false));
+                        None
+                    }
+                }
+            };
+            if delivered == Some(true) {
+                continue;
+            }
+            if delivered.is_none() {
+                self.rd_audit(
+                    &g,
+                    "",
+                    rddrive::audit_action::DISABLED_WITH_DRIVES,
+                    json!({ "cause": cause, "prs": prs }),
+                );
+            }
+            let text = format!(
+                "HOLD review driver off with drives on disk: {cause}, so these drives will not be \
+                 ticked until it is back on: {}. Turn the driver back on to resume them \
+                 (cancel_review_drive also needs it on).",
+                prs.iter().map(|p| format!("PR #{p}")).collect::<Vec<_>>().join(", ")
+            );
+            if self.deliver_to_orchestrator(&g, &text, brand::AUDIT_ACTOR).is_ok() {
+                if let Some(entry) = self.rd_disabled_warned.lock_safe().get_mut(&g) {
+                    entry.2 = true;
+                }
+            }
+        }
+    }
+
     /// One driver step, for at most one group — the fifth step in
     /// `gh_poll_tick` (§2.4), clock injected.
     ///
@@ -1143,6 +1244,8 @@ impl OrchRegistry {
     /// serviced N groups on one wake would put N groups' worth of `gh`
     /// round-trips inside one tick.
     pub fn rd_driver_tick(&self, now: u64) -> Option<GroupId> {
+        // Before the pick, because the pick is exactly what skips these groups.
+        self.rd_announce_disabled_drives();
         let group = self.next_rd_group(now)?;
         let injected = self.rd_runner_override.lock_safe().clone();
         match injected {

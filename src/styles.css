@@ -5950,21 +5950,43 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tokens-legend-total { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 
 /* The plot. Recessive grid and axes; the data is the only thing with weight. */
+/* Zoom, pan, hover and mark clicks are handled on .tokens-plot itself
+   (#3505), never on an SVG child: the SVG is rebuilt by every render, so
+   everything inside it is inert and the pointer's target is always the
+   container or its persistent surface. The hover readout floats over the
+   plot and must stay inert too, or it would take the events itself. */
 .tokens-plot { position: relative; padding: 0 4px; }
+.tokens-plot.has-plot { cursor: crosshair; touch-action: none; user-select: none; }
+.tokens-plot.has-plot.on-mark { cursor: pointer; }
+.tokens-plot.dragging { cursor: grabbing; }
 .tokens-svg { display: block; }
-.tokens-pan-hit { cursor: grab; touch-action: none; }
-.tokens-pan-hit:active { cursor: grabbing; }
+.tokens-svg, .tokens-svg * { pointer-events: none; }
 .tokens-hover-readout { position: absolute; pointer-events: none; z-index: 5; white-space: pre-line; max-width: 340px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-2); color: var(--ink); font: 11px/1.4 var(--font-mono); }
 .tokens-custom-chip { display: none; cursor: pointer; color: var(--accent); font-size: 11px; }
 .tokens-custom-chip.visible { display: inline-flex; }
 .tokens-counter-label { font-size: 10px; color: var(--ink-faint); }
-.tokens-metric-trends { padding: 8px 12px; }
-.tokens-trends-svg { display: block; width: 100%; height: 110px; overflow: visible; }
-.tokens-trend { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
-.tokens-trend.trend-1 { stroke: var(--state-success); }
-.tokens-trend.trend-2 { stroke: var(--state-attention); }
-.tokens-trend.trend-3 { stroke: var(--state-warning); }
-.tokens-trend-label { display: inline-block; margin: 3px 12px 3px 0; color: var(--ink-faint); font-size: 10px; }
+/* The trend plots: one small plot per derived metric, under the chart and on
+   its x-window (#3505). Plot padding matches the chart's, so a date lines up
+   vertically across all of them. */
+.tokens-metric-trends { padding: 4px 4px 8px; }
+.tokens-metric-trends > .tokens-section-title { padding-left: 8px; }
+.tokens-trend { margin-top: 6px; }
+.tokens-trend-head { display: flex; gap: 10px; align-items: baseline; padding: 0 8px; font-size: 10.5px; }
+.tokens-trend-name { color: var(--ink); }
+.tokens-trend-n { color: var(--ink-faint); font-size: 10px; }
+.tokens-trend-svg { display: block; }
+.tokens-trend-svg, .tokens-trend-svg * { pointer-events: none; }
+.tokens-trend-empty { padding: 6px 8px 6px 56px; color: var(--ink-dim); font-size: 10.5px; }
+/* One ink for every trend: each is its own labelled plot, so no hue has to
+   carry identity, and the state hues are reserved for agent state. */
+.tokens-trend-line { fill: none; stroke: var(--ink-dim); stroke-width: 1.5; stroke-linejoin: round; }
+.tokens-trend-dot { fill: var(--ink-dim); }
+/* The group scorecard, and the breakdown folded under it (closed by default). */
+.tokens-card { padding: 0 12px 6px; }
+.tokens-card-table { width: 100%; }
+.tokens-breakdown { margin: 6px 12px; border-top: 1px solid var(--line); }
+.tokens-breakdown-summary { cursor: pointer; padding: 8px 0 4px; font-size: 10.5px; color: var(--ink-dim); }
+.tokens-breakdown-summary:hover { color: var(--ink); }
 .tokens-grid { stroke: color-mix(in srgb, var(--ink) 6%, transparent); stroke-width: 1; }
 .tokens-tick { stroke: color-mix(in srgb, var(--ink) 4%, transparent); stroke-width: 1; }
 .tokens-tick-label, .tokens-y-label { fill: var(--ink-faint); font-size: 9.5px; }
@@ -5979,15 +6001,12 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tokens-mark-label {
   fill: var(--state-attention); font-size: 9.5px; font-family: var(--font-mono);
 }
-.tokens-mark-hit { fill: transparent; cursor: pointer; }
 .tokens-mark-g.selected .tokens-mark { stroke-width: 2; stroke-dasharray: none; }
-.tokens-mark-g:hover .tokens-mark { stroke-width: 2; }
 
 /* The hover layer. A line chart without one is a picture. */
 .tokens-crosshair {
   stroke: color-mix(in srgb, var(--ink) 30%, transparent); stroke-width: 1; pointer-events: none;
 }
-.tokens-hover-hit { fill: transparent; }
 
 /* The stacked bars. */
 .tokens-bars { padding: 0 12px; }

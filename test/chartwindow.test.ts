@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chooseBucket, clampWindow, linearTicks, logTicks, logValue, markSpan, meanFinite, trendSampleCount, dailyRates, panBy, yDomain, zoomAbout } from "../src/chartwindow.ts";
+import { clampWindow, linearTicks, logTicks, logValue, markSpan, meanFinite, trendSampleCount, panBy, yDomain, zoomAbout } from "../src/chartwindow.ts";
 import { beforeAfter, bucketSeries, DEFAULT_BEFORE_AFTER_K, DEFAULT_BUCKET_MS, TOTAL_ROW } from "../src/tokencharts.ts";
 
 const bounds = { first_ts: 0, last_ts: 10_000, now: 10_000, bucketMs: 100 };
@@ -82,11 +82,6 @@ test("log mapping is finite for zero and negatives; ticks cover both scales", ()
   assert.equal(new Set(ticks.map(logValue)).size, ticks.length, "log ticks must not overlap at the floor");
   assert.equal(linearTicks([0, 10], 3).length, 3);
 });
-test("coarsened completion trends average calendar-day values and retain day population", () => {
-  const day = 86_400_000;
-  assert.deepEqual(dailyRates([0, day, day * 2, day * 3], [1, 0, 3, 0], [0, day * 2], day * 2), { values: [0.5, 1.5], population: 4 });
-});
-
 test("trend sample population counts measured zero buckets but not unavailable ones", () => {
   assert.equal(trendSampleCount([0, 2, null, undefined, Number.NaN]), 2);
 });
@@ -96,12 +91,6 @@ test("meanFinite averages measured pane means and ignores missing series", () =>
   assert.equal(meanFinite([null, undefined]), null);
 });
 
-test("bucket chooser stays under cell cap and coarsens only when required", () => {
-  assert.equal(chooseBucket(600_000, 10, 100).coarsened, false);
-  const coarse = chooseBucket(60 * 24 * 60 * 60_000, 20, 100);
-  assert.equal(coarse.coarsened, true);
-  assert.ok(coarse.bucketCount * 20 <= 100);
-});
 
 // ── #3505: pointer geometry for the container-level handlers ────────────────
 import { DELTA_LINE, DELTA_PAGE, DELTA_PIXEL, bucketIndexAt, insidePlot, isDrag, markNear, wheelZoomFactor } from "../src/chartwindow.ts";
@@ -148,4 +137,32 @@ test("a press is a click until it travels past the slop", () => {
   assert.equal(isDrag(100, 102), false);
   assert.equal(isDrag(100, 104), true);
   assert.equal(isDrag(100, 96), true);
+});
+
+import { trendBucket, TREND_MAX_BUCKETS } from "../src/chartwindow.ts";
+import { averagesOverTime } from "../src/tokenaverages.ts";
+import { statCell } from "../src/statcell.ts";
+
+test("trend buckets hold a population: a 24h window is hourly, not per-minute", () => {
+  const H = 3_600_000;
+  assert.equal(trendBucket(24 * H), H);
+  assert.equal(trendBucket(7 * 24 * H), 6 * H);
+  assert.equal(trendBucket(18 * 24 * H), 24 * H);
+  assert.equal(trendBucket(H), 5 * 60_000);
+  for (const span of [H, 6 * H, 24 * H, 7 * 24 * H, 400 * 24 * H, 1e13]) {
+    assert.ok(Math.ceil(span / trendBucket(span)) <= TREND_MAX_BUCKETS, `span ${span}`);
+  }
+  assert.equal(trendBucket(0), 5 * 60_000);
+});
+
+test("the pane-average trend is MEASURED on a 24h window at the trend grid (it was empty on #3475's grid)", () => {
+  // One pane sampled every five minutes for a day — the live sampler's cadence.
+  const H = 3_600_000;
+  const deltas = Array.from({ length: 288 }, (_, i) => ({ tsMs: i * 300_000 + 1, agent: "w-1", block: "worker", cli: "claude", role: "worker", model: null, in: 1, out: 1, cache_w: 0, cache_r: 0, total: 2, cost_usd: null }));
+  const attribution = { byAgent: new Map() };
+  const measured = (bucketMs: number) => averagesOverTime(deltas, attribution, { startMs: 0, endMs: 24 * H, groupBy: "agent", metric: "total", bucketMs, stat: statCell })
+    .keys[0].points.filter((p) => p.mean !== null).length;
+  assert.equal(measured(60_000), 0, "#3475 put a 24h window on one-minute buckets (five-minute past ~13 keys): every bucket below the n floor");
+  assert.equal(measured(5 * 60_000), 0, "...and five-minute buckets are no better");
+  assert.ok(measured(trendBucket(24 * H)) >= 20, "the trend grid measures (nearly) every hour");
 });

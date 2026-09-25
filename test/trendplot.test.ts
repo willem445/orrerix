@@ -49,3 +49,22 @@ test("a degenerate window is empty rather than NaN coordinates", () => {
   const p = trendPlot({ ...geom, buckets: [0], values: [3], startMs: 100, endMs: 100 });
   assert.equal(p.empty, true);
 });
+
+import { runningRatio } from "../src/trendplot.ts";
+
+test("the running per-item ratio ends on the window's own figure", () => {
+  const tokens = [100, 300, 0, 600];
+  const items = [0, 2, 0, 1];
+  const r = runningRatio(tokens, items);
+  assert.deepEqual(r, [null, 200, 200, 1000 / 3]);
+  const total = tokens.reduce((a, b) => a + b, 0) / items.reduce((a, b) => a + b, 0);
+  assert.equal(r[r.length - 1], total);
+});
+
+test("before the first completion there is no per-item figure — null, never 0 or Infinity", () => {
+  assert.deepEqual(runningRatio([5, 5], [0, 0]), [null, null]);
+});
+
+test("an unknown item count poisons the running ratio from there on", () => {
+  assert.deepEqual(runningRatio([10, 10, 10], [1, null, 1]), [10, null, null]);
+});

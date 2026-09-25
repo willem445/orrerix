@@ -90,3 +90,32 @@ export function trendPlot(input: TrendPlotInput): TrendPlot {
   if (run.length > 0) segments.push(run);
   return { empty: false, segments, yMin, yMax, x0, x1, yTop, yBottom, measured };
 }
+
+/** The RUNNING ratio of two per-bucket series: at bucket i, the sum of
+ *  `numerators[0..i]` over the sum of `denominators[0..i]`. `null` until the
+ *  denominator is positive — "no item completed yet" has no per-item figure —
+ *  and wherever a denominator is `null` (unknown), from there on: a running
+ *  total that skipped an unknown would be a smaller population wearing the
+ *  same label.
+ *
+ *  This is the tokens-per-completed-item trend (#3505). Per bucket, the ratio
+ *  is defined only where an item finished in that very bucket, which on an
+ *  hourly grid is a scatter of isolated dots; the running form is defined from
+ *  the first completion on, and its LAST point is the ratio over every
+ *  bucket the grid placed. */
+export function runningRatio(numerators: readonly number[], denominators: readonly (number | null)[]): (number | null)[] {
+  const out: (number | null)[] = [];
+  let num = 0;
+  let den = 0;
+  let unknown = false;
+  const n = Math.min(numerators.length, denominators.length);
+  for (let i = 0; i < n; i++) {
+    const d = denominators[i];
+    if (d === null || !Number.isFinite(d)) unknown = true;
+    const x = numerators[i];
+    if (Number.isFinite(x)) num += x;
+    if (!unknown) den += d as number;
+    out.push(unknown || den <= 0 ? null : num / den);
+  }
+  return out;
+}

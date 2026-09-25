@@ -56,25 +56,6 @@ export function markSpan(markMs: number, k: number, bucketMs: number, gridOrigin
 }
 
 export interface Point { tsMs: number; value: number }
-/** Average local-calendar-day completion counts into the selected chart bins.
- *  The population remains days even when a bin spans many days. */
-export function dailyRates(days: readonly number[], counts: readonly number[], bucketStarts: readonly number[], bucketMs: number): { values: (number | null)[]; population: number } {
-  const sums = bucketStarts.map(() => 0);
-  const dayCounts = bucketStarts.map(() => 0);
-  let population = 0;
-  if (!Number.isFinite(bucketMs) || bucketMs <= 0 || bucketStarts.length === 0) return { values: bucketStarts.map(() => null), population };
-  for (let i = 0; i < Math.min(days.length, counts.length); i++) {
-    const day = days[i];
-    const count = counts[i];
-    if (!Number.isFinite(day) || !Number.isFinite(count)) continue;
-    const index = Math.max(0, Math.min(bucketStarts.length - 1, Math.floor((day - bucketStarts[0]) / bucketMs)));
-    sums[index] += count;
-    dayCounts[index]++;
-    population++;
-  }
-  return { values: sums.map((sum, i) => dayCounts[i] === 0 ? null : sum / dayCounts[i]), population };
-}
-
 /** Count measured samples; zero is a real observation, missing/non-finite is not. */
 export function trendSampleCount(values: readonly (number | null | undefined)[]): number {
   let count = 0;
@@ -134,22 +115,9 @@ export function logTicks(domain: readonly [number, number]): number[] {
   return ticks;
 }
 
-export interface BucketChoice { bucketMs: number; coarsened: boolean; bucketCount: number }
+/** Bucket widths a trend may use, finest first. */
 const BUCKET_LADDER = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000, 7 * 24 * 60 * 60_000, 30 * 24 * 60 * 60_000, 365 * 24 * 60 * 60_000, 100 * 365 * 24 * 60 * 60_000];
-/** Cap bucket×key work at 20,000 cells; report when resolution had to coarsen. */
-export function chooseBucket(spanMs: number, keyCount: number, cap = 20_000): BucketChoice {
-  if (!Number.isFinite(spanMs) || spanMs < 0 || !Number.isFinite(keyCount) || keyCount < 0 || !Number.isFinite(cap) || cap < 1)
-    return { bucketMs: BUCKET_LADDER[BUCKET_LADDER.length - 1], coarsened: true, bucketCount: 0 };
-  const keys = Math.max(1, Math.ceil(keyCount));
-  const allowed = Math.max(1, Math.floor(cap / keys));
-  let index = 0;
-  while (index < BUCKET_LADDER.length - 1 && Math.ceil(spanMs / BUCKET_LADDER[index]) > allowed) index++;
-  // For exceptional extents or a one-cell cap, extend the fixed ladder by
-  // powers of two so the returned grid still honours its hard work budget.
-  let bucketMs = BUCKET_LADDER[index];
-  while (Math.ceil(spanMs / bucketMs) > allowed) bucketMs *= 2;
-  return { bucketMs, coarsened: index > 0, bucketCount: Math.ceil(spanMs / bucketMs) };
-}
+
 
 // ── pointer geometry (#3505) ────────────────────────────────────────────────
 // The live chart's handlers sit on the plot CONTAINER and resolve every
@@ -215,4 +183,28 @@ export function markNear(markXs: readonly number[], x: number, tolerancePx: numb
 export const DRAG_SLOP_PX = 3;
 export function isDrag(downX: number, x: number): boolean {
   return Number.isFinite(downX) && Number.isFinite(x) && Math.abs(x - downX) > DRAG_SLOP_PX;
+}
+
+/** At most this many buckets on a trend plot. */
+export const TREND_MAX_BUCKETS = 48;
+/** The trend grid never goes finer than this. */
+const TREND_MIN_BUCKET_MS = 5 * 60_000;
+
+/** The bucket width for the TREND plots (#3505) — deliberately NOT
+ *  the finest grid a work budget allows, which #3475 used and which is wrong
+ *  for a derived metric: on a 24 h window that is one-minute buckets, where a pane has one delta per
+ *  bucket and no bucket holds the three samples a median or mean needs, so
+ *  every average/median trend came out empty. A trend wants a population per
+ *  bucket: the smallest ladder step (≥ 5 min) that covers the span in at most
+ *  `TREND_MAX_BUCKETS`. */
+export function trendBucket(spanMs: number, maxBuckets = TREND_MAX_BUCKETS): number {
+  const cap = Number.isFinite(maxBuckets) && maxBuckets >= 1 ? Math.floor(maxBuckets) : TREND_MAX_BUCKETS;
+  if (!Number.isFinite(spanMs) || spanMs <= 0) return TREND_MIN_BUCKET_MS;
+  for (const step of BUCKET_LADDER) {
+    if (step < TREND_MIN_BUCKET_MS) continue;
+    if (Math.ceil(spanMs / step) <= cap) return step;
+  }
+  let step = BUCKET_LADDER[BUCKET_LADDER.length - 1];
+  while (Math.ceil(spanMs / step) > cap) step *= 2;
+  return step;
 }

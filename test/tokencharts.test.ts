@@ -24,6 +24,7 @@ import {
   bucketSeries,
   diffRows,
   featureBars,
+  firstSpendByBar,
   hueBlockOrder,
   marks,
   scorecardColumns,
@@ -987,6 +988,50 @@ test("spend by an agent the ROSTER does not know lands on unattributed and is co
   assert.equal(fb.unknownAgentTokens, 42);
   assert.equal(fb.totals.unattributed, 42);
   assert.equal(fb.bars.find((b) => b.kind === "unattributed")!.total, 42);
+});
+
+test("diff role is preserved and a blank role is labelled unknown", () => {
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "known", role: "reviewer", in: 0 }),
+    sample({ ts_ms: T0 + 1, key: "known", role: "reviewer", in: 4 }),
+    sample({ ts_ms: T0, key: "blank", role: "", in: 0 }),
+    sample({ ts_ms: T0 + 1, key: "blank", role: "", in: 3 }),
+  ];
+  assert.deepEqual(diffRows(rows).deltas.map((d) => d.role), ["reviewer", UNKNOWN]);
+});
+
+test("each token-chart projection reuses an equivalent precomputed diff", () => {
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "k", agent: "w-1", in: 0 }),
+    sample({ ts_ms: T0 + 1, key: "k", agent: "w-1", in: 8 }),
+  ];
+  const diff = diffRows(rows);
+  const roster = [agent({ id: "w-1" })];
+  const board = [row({ id: "t-1", kind: "feature" }), row({ id: "t-2", kind: "task", parent: "t-1", assignee: "w-1" })];
+  assert.deepEqual(seriesKeys(rows, { diff }), seriesKeys(rows));
+  assert.deepEqual(bucketSeries(rows, { startMs: T0, endMs: T0 + 1, diff }), bucketSeries(rows, { startMs: T0, endMs: T0 + 1 }));
+  assert.deepEqual(featureBars(rows, roster, board, { diff }), featureBars(rows, roster, board));
+  assert.deepEqual(hueBlockOrder(rows, roster, diff), hueBlockOrder(rows, roster));
+  const attribution = featureBars(rows, roster, board).attribution;
+  assert.deepEqual(firstSpendByBar(rows, attribution, diff), firstSpendByBar(rows, attribution));
+});
+
+test("bucketSeries with diff never iterates rows; omission is the iteration control", () => {
+  const samples: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "k", in: 0 }),
+    sample({ ts_ms: T0 + 1, key: "k", in: 8 }),
+  ];
+  const diff = diffRows(samples);
+  const blocked = new Proxy(samples, {
+    get(target, property, receiver) {
+      if (property === Symbol.iterator || property === "length" || property === "0" || property === "1") {
+        throw new Error(`rows accessed: ${String(property)}`);
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  assert.equal(bucketSeries(blocked, { startMs: T0, endMs: T0 + 1, diff }).keys[0].points[0].total, 8);
+  assert.throws(() => bucketSeries(blocked, { startMs: T0, endMs: T0 + 1 }), /rows accessed/);
 });
 
 // ── the scorecard columns ───────────────────────────────────────────────────

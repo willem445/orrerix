@@ -425,6 +425,7 @@ export interface Delta {
   agent: string;
   block: string;
   cli: string;
+  role: string;
   model: string | null;
   seriesKey: string;
   in: number;
@@ -507,6 +508,7 @@ export function diffRows(rows: readonly SeriesRowLike[]): DiffResult {
         agent: cur.agent,
         block: labelOf(cur.block),
         cli: labelOf(cur.cli),
+        role: labelOf(cur.role),
         model: cur.model,
         seriesKey: seriesKeyOf(cur.block, cur.cli),
         ...d,
@@ -657,7 +659,8 @@ function hueAssignment(
  *  (`SERIES_REVISIT_BYTES` is a report, not a truncation). */
 export function hueBlockOrder(
   rows: readonly SeriesRowLike[],
-  roster: readonly { block: string }[]
+  roster: readonly { block: string }[],
+  diff: DiffResult = diffRows(rows)
 ): string[] {
   const rosterPos = new Map<string, number>();
   for (const a of roster) {
@@ -665,7 +668,7 @@ export function hueBlockOrder(
     if (b && !rosterPos.has(b)) rosterPos.set(b, rosterPos.size);
   }
   const firstDelta = new Map<string, number>();
-  for (const d of diffRows(rows).deltas) {
+  for (const d of diff.deltas) {
     // `diffRows` has already labelled a blank block, so this is the only
     // spelling a blank one can arrive in (see the doc above).
     if (d.block === UNKNOWN) continue;
@@ -713,9 +716,9 @@ export function lineKeyOf(
 
 export function seriesKeys(
   rows: readonly SeriesRowLike[],
-  opts: { collapseCli?: boolean; splitModel?: boolean; blockOrder?: readonly string[] } = {}
+  opts: { collapseCli?: boolean; splitModel?: boolean; blockOrder?: readonly string[]; diff?: DiffResult } = {}
 ): SeriesKeyInfo[] {
-  const { deltas } = diffRows(rows);
+  const { deltas } = opts.diff ?? diffRows(rows);
   const collapse = opts.collapseCli === true;
   const splitModel = opts.splitModel === true;
   const hueOf = hueAssignment(deltas, opts.blockOrder);
@@ -817,11 +820,12 @@ export function bucketSeries(
     splitModel?: boolean;
     /** The caller's stable block list — see `hueAssignment`. */
     blockOrder?: readonly string[];
+    diff?: DiffResult;
   }
 ): BucketedSeries {
   const bucketMs = Math.max(1, Math.floor(opts.bucketMs ?? DEFAULT_BUCKET_MS));
   const collapse = opts.collapseCli === true;
-  const { deltas, baselineOnlyKeys, resets } = diffRows(rows);
+  const { deltas, baselineOnlyKeys, resets } = opts.diff ?? diffRows(rows);
 
   const first = Math.floor(opts.startMs / bucketMs) * bucketMs;
   const last = Math.floor(opts.endMs / bucketMs) * bucketMs;
@@ -837,6 +841,7 @@ export function bucketSeries(
     collapseCli: collapse,
     splitModel: opts.splitModel,
     blockOrder: opts.blockOrder,
+    diff: opts.diff ?? { deltas, baselineOnlyKeys, resets },
   });
   const series = new Map<string, KeySeries>();
   for (const info of infos) {
@@ -1246,13 +1251,15 @@ export function featureBars(
     endMs?: number;
     /** The caller's stable block list — see `hueAssignment`. */
     blockOrder?: readonly string[];
+    diff?: DiffResult;
   } = {}
 ): FeatureBars {
   const collapse = opts.collapseCli === true;
+  const diff = opts.diff ?? diffRows(rows);
   const attribution = attributeAgents(agents, board);
-  const infos = seriesKeys(rows, { collapseCli: collapse, blockOrder: opts.blockOrder });
+  const infos = seriesKeys(rows, { collapseCli: collapse, blockOrder: opts.blockOrder, diff });
   const infoOf = new Map(infos.map((i) => [i.key, i]));
-  const { deltas } = diffRows(rows);
+  const { deltas } = diff;
 
   const emptySegments = (): BarSegment[] =>
     infos.map((i) => ({
@@ -1372,10 +1379,11 @@ export function featureBars(
  *  computed from the same deltas the bar itself is. */
 export function firstSpendByBar(
   rows: readonly SeriesRowLike[],
-  attribution: Attribution
+  attribution: Attribution,
+  diff: DiffResult = diffRows(rows)
 ): Map<string, number> {
   const out = new Map<string, number>();
-  for (const d of diffRows(rows).deltas) {
+  for (const d of diff.deltas) {
     const barId = attribution.byAgent.get(d.agent)?.bucket ?? UNATTRIBUTED;
     const prev = out.get(barId);
     if (prev === undefined || d.tsMs < prev) out.set(barId, d.tsMs);

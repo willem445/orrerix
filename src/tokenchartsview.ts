@@ -39,6 +39,7 @@ import {
   TOTAL_ROW,
   UNATTRIBUTED,
   beforeAfter,
+  diffRows,
   bucketSeries,
   featureBars,
   firstSpendByBar,
@@ -49,6 +50,7 @@ import {
   type BucketedSeries,
   type ChartMark,
   type FeatureBars,
+  type DiffResult,
   type Metric,
 } from "./tokencharts";
 import { makeScale, niceTicks, xForTs, type TimelineScale } from "./timelinelayout";
@@ -201,6 +203,7 @@ export class TokenChartsView {
    *  wholesale per read and hands out the same reference otherwise), so a
    *  drag reuses the table and only a fresh read recomputes it (#3131
    *  review N1). The table is never mutated after computing. */
+  private diffMemo: { rows: readonly UsageSeriesRow[]; diff: DiffResult } | null = null;
   private scorecardMemo: {
     audit: readonly AuditEntryLike[];
     agents: readonly AgentRosterLike[] | undefined;
@@ -531,6 +534,8 @@ export class TokenChartsView {
     if (this.disposed) return;
     const widthPx = Math.round(this.plotEl.clientWidth);
     const rows = this.series?.rows ?? [];
+    if (!this.diffMemo || this.diffMemo.rows !== rows) this.diffMemo = { rows, diff: diffRows(rows) };
+    const diff = this.diffMemo.diff;
     const range = this.resolveWindow(rows);
 
     const sig = [
@@ -568,12 +573,14 @@ export class TokenChartsView {
       collapseCli: this.collapseCli,
       splitModel: this.splitModel,
       blockOrder,
+      diff,
     });
     const bars = featureBars(rows, this.series?.agents ?? [], this.board, {
       collapseCli: this.collapseCli,
       startMs: range.startMs,
       endMs: range.endMs,
       blockOrder,
+      diff,
     });
     const markList = marks(rows).filter((m) => m.tsMs >= range.startMs && m.tsMs <= range.endMs);
 
@@ -593,7 +600,9 @@ export class TokenChartsView {
    *  the window, so a window change never repaints a survivor. The ordering is
    *  a pure function (`hueBlockOrder`), which carries the why (#3449). */
   private blockOrder(): string[] {
-    return hueBlockOrder(this.series?.rows ?? [], this.series?.agents ?? []);
+    const rows = this.series?.rows ?? [];
+    if (!this.diffMemo || this.diffMemo.rows !== rows) this.diffMemo = { rows, diff: diffRows(rows) };
+    return hueBlockOrder(rows, this.series?.agents ?? [], this.diffMemo.diff);
   }
 
   /** The legend, which is ALWAYS present for two or more series — identity is
@@ -1214,7 +1223,7 @@ export class TokenChartsView {
       this.store.cached,
       bars,
       this.board,
-      { firstSpendMs: firstSpendByBar(this.series?.rows ?? [], bars.attribution) }
+      { firstSpendMs: firstSpendByBar(this.series?.rows ?? [], bars.attribution, this.diffMemo?.diff) }
     );
     if (sc.floorMs !== null) {
       const below = sc.columns.filter((c) => c.belowFloor).length;

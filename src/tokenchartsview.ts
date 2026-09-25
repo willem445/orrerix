@@ -998,14 +998,14 @@ export class TokenChartsView {
     const avg = averagesOverTime(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy: "agent", metric: "total", bucketMs: choice.bucketMs, stat: statCell });
     const title = el("div", "tokens-section-title", `Trend metrics · selected counter: ${this.metric === "total" ? "all tokens" : this.metric === "cache_r" ? "cache read" : this.metric}; pane average uses total tokens`);
     this.metricTrendsEl.append(title);
-    const rowsToDraw: { label: string; buckets: number[]; values: (number | null)[] }[] = [];
-    rowsToDraw.push({ label: "tokens per completed item", buckets: per.buckets.map((b) => b.startMs), values: per.buckets.map((b) => b.perItem) });
-    rowsToDraw.push({ label: "items done per day", buckets: life.series.bucketStarts, values: life.series.done });
-    rowsToDraw.push({ label: "median time-to-completion (h)", buckets: life.series.bucketStarts, values: life.series.ttcMs.map((xs) => { const median = statCell(xs).median; return median === null ? null : median / 3_600_000; }) });
+    const rowsToDraw: { label: string; buckets: number[]; values: (number | null)[]; population: number | null; populationLabel: string }[] = [];
+    rowsToDraw.push({ label: "tokens per completed item", buckets: per.buckets.map((b) => b.startMs), values: per.buckets.map((b) => b.perItem), population: per.items, populationLabel: "completed items" });
+    rowsToDraw.push({ label: "items done per day", buckets: life.series.bucketStarts, values: life.series.done, population: life.series.bucketStarts.length, populationLabel: "days" });
+    rowsToDraw.push({ label: "median time-to-completion (h)", buckets: life.series.bucketStarts, values: life.series.ttcMs.map((xs) => { const median = statCell(xs).median; return median === null ? null : median / 3_600_000; }), population: life.series.ttcMs.reduce((sum, xs) => sum + xs.length, 0), populationLabel: "completed items" });
     if (avg.keys.length > 0) rowsToDraw.push({ label: "average tokens per pane", buckets: avg.buckets, values: avg.buckets.map((_, i) => {
       const values = avg.keys.map((key) => key.points[i]?.mean).filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
       return meanFinite(values);
-    }) });
+    }), population: avg.keys.reduce((sum, key) => sum + key.points.filter((point) => point.mean !== null).length, 0), populationLabel: "pane-bucket samples" });
     const svg = svgEl("svg", "tokens-trends-svg") as SVGSVGElement;
     svg.setAttribute("viewBox", "0 0 800 130"); svg.setAttribute("preserveAspectRatio", "none");
     rowsToDraw.forEach((trend, ri) => {
@@ -1021,7 +1021,8 @@ export class TokenChartsView {
         segment.push(`${x},${y}`);
       });
       flushSegment();
-      this.metricTrendsEl.append(el("div", "tokens-trend-label", `${trend.label} · n=${fmtInt.format(trendSampleCount(vals))}`));
+      const measuredBuckets = trendSampleCount(vals);
+      this.metricTrendsEl.append(el("div", "tokens-trend-label", `${trend.label} · n=${trend.population === null ? "n/a" : fmtInt.format(trend.population)} ${trend.populationLabel} · ${fmtInt.format(measuredBuckets)} measured buckets`));
     });
     this.metricTrendsEl.append(svg);
     const detail = el("div", "tokens-derived-tables");

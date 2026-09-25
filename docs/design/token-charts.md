@@ -902,9 +902,11 @@ allocate a window-sized dense grid at the smallest interval.
 `tokenchartsview.ts` owns SVG and input wiring; window, y-domain, log mapping,
 ticks, bucket selection and the mean of pane series remain in `chartwindow.ts`.
 Its y-domain consumes an iterable so rendering does not allocate a second
-keys-by-buckets point matrix. Trend `n` counts finite observations, including
-measured zeros; a missing statistic remains absent and breaks the line rather
-than being drawn as a zero. Cost averages retain USD values and formatting.
+keys-by-buckets point matrix. Each trend reports the population for its measure
+(completed items, calendar days, completion records, or measured pane-bucket
+means); a measured zero remains on the line, while an unavailable per-bucket
+value breaks it rather than being drawn as zero. Cost averages retain USD values
+and formatting.
 A custom window is stored as start/end instants,
 not as a preset name, so polls cannot reset a zoom. Wheel
 zoom maps the pointer through `tsForX`, then `zoomAbout`; pointer capture keeps

@@ -444,6 +444,19 @@ row.
 | **Dangerous mode** | off | supervised (*not* autonomous) | manual merges/releases without per-item approval |
 | **Per-item grant** | — | any time | one merge (single-use, 30-min TTL) or one tag's whole release (90-min TTL) |
 
+## Leaving it running with the display off
+
+Unattended runs usually happen with the monitors off or the window covered.
+Orrerix keeps its window's web view **unthrottled** while it's hidden, so agent
+panes go on answering their CLIs' terminal queries, and queued prompts are typed
+and submitted on time rather than when you next wake the screen (#1141).
+
+**The cost:** a hidden Orrerix window uses CPU and power much as a visible one
+does. It keeps processing pane output at the normal rate instead of idling
+until you come back. With busy panes that's noticeable on a laptop running on
+battery. With a quiet group it's small. Close the app, not just the display,
+when you want it to use nothing.
+
 ## Requirements
 
 - `gh` CLI authenticated (the gate resolves PR base branches and repo defaults

@@ -39,6 +39,7 @@ import {
   TOTAL_ROW,
   UNATTRIBUTED,
   beforeAfter,
+  diffRows,
   bucketSeries,
   featureBars,
   firstSpendByBar,
@@ -49,6 +50,7 @@ import {
   type BucketedSeries,
   type ChartMark,
   type FeatureBars,
+  type DiffResult,
   type Metric,
 } from "./tokencharts";
 import { makeScale, niceTicks, xForTs, type TimelineScale } from "./timelinelayout";
@@ -194,6 +196,10 @@ export class TokenChartsView {
    *  which is a THIRD state beside "empty" and "failed", and the empty text
    *  below distinguishes all three. */
   private series: UsageSeries | null = null;
+  /** `series` is replaced wholesale on each read, so rows identity keys this
+   *  diff cache. Both `render()` and `blockOrder()`/`renderNotes()` read it;
+   *  keeping the same result avoids repeating the full-series pass. */
+  private diffMemo: { rows: readonly UsageSeriesRow[]; diff: DiffResult } | null = null;
   /** The scorecard table is a pure function of the audit read and the series
    *  roster, and NEITHER enters the render signature's geometry — but
    *  `widthPx` does, so a window drag re-renders per rAF step. Memoized on
@@ -527,10 +533,16 @@ export class TokenChartsView {
     return { startMs: Math.max(oldest, endMs - preset.spanMs), endMs };
   }
 
+  private diffOf(rows: readonly UsageSeriesRow[]): DiffResult {
+    if (!this.diffMemo || this.diffMemo.rows !== rows) this.diffMemo = { rows, diff: diffRows(rows) };
+    return this.diffMemo.diff;
+  }
+
   private render(): void {
     if (this.disposed) return;
     const widthPx = Math.round(this.plotEl.clientWidth);
     const rows = this.series?.rows ?? [];
+    const diff = this.diffOf(rows);
     const range = this.resolveWindow(rows);
 
     const sig = [
@@ -568,12 +580,14 @@ export class TokenChartsView {
       collapseCli: this.collapseCli,
       splitModel: this.splitModel,
       blockOrder,
+      diff,
     });
     const bars = featureBars(rows, this.series?.agents ?? [], this.board, {
       collapseCli: this.collapseCli,
       startMs: range.startMs,
       endMs: range.endMs,
       blockOrder,
+      diff,
     });
     const markList = marks(rows).filter((m) => m.tsMs >= range.startMs && m.tsMs <= range.endMs);
 
@@ -593,7 +607,8 @@ export class TokenChartsView {
    *  the window, so a window change never repaints a survivor. The ordering is
    *  a pure function (`hueBlockOrder`), which carries the why (#3449). */
   private blockOrder(): string[] {
-    return hueBlockOrder(this.series?.rows ?? [], this.series?.agents ?? []);
+    const rows = this.series?.rows ?? [];
+    return hueBlockOrder(rows, this.series?.agents ?? [], this.diffOf(rows));
   }
 
   /** The legend, which is ALWAYS present for two or more series — identity is
@@ -1214,7 +1229,7 @@ export class TokenChartsView {
       this.store.cached,
       bars,
       this.board,
-      { firstSpendMs: firstSpendByBar(this.series?.rows ?? [], bars.attribution) }
+      { firstSpendMs: firstSpendByBar(this.series?.rows ?? [], bars.attribution, this.diffMemo?.diff) }
     );
     if (sc.floorMs !== null) {
       const below = sc.columns.filter((c) => c.belowFloor).length;

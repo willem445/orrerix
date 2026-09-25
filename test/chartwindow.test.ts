@@ -153,6 +153,7 @@ test("trend buckets hold a population: a 24h window is hourly, not per-minute", 
     assert.ok(Math.ceil(span / trendBucket(span)) <= TREND_MAX_BUCKETS, `span ${span}`);
   }
   assert.equal(trendBucket(0), 5 * 60_000);
+  assert.equal(trendBucket(30 * 60_000), 5 * 60_000, "never finer than five minutes");
 });
 
 test("the pane-average trend is MEASURED on a 24h window at the trend grid (it was empty on #3475's grid)", () => {

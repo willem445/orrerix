@@ -853,8 +853,10 @@ day: local midnights, advanced with `setDate` — a DST day is 23 or 25 hours,
 and `n * 86_400_000` would move every later bucket boundary by an hour. A
 fixed `bucketMs` aligns to its multiples, as `bucketSeries` does. Buckets are
 half-open; the grid always includes the bucket holding `endMs`. Over the
-same window the buckets' tokens and `byClass` sum to the totals', their items
-sum to `before.items + after.items`, and — when `doneAtMs` is supplied — the
+same window the buckets' tokens and `byClass` sum to the totals'. When a mark
+is supplied, bucket item counts sum to `before.items + after.items`; without a
+mark, the trend's placed-item count is compared with its own `items` total (the
+totals have no before/after item counts). When `doneAtMs` is supplied, the
 series' `unplacedItems` equals the totals' `undatedItems`, so placed plus
 unplaced is `items`. Undated as a whole, every bucket's items are `null` and
 `unplacedItems` is all of `doneIds`, while the totals report `undatedItems` 0
@@ -862,3 +864,35 @@ and `null` half counts: the two say "cannot place" in their own shapes. That is 
 property slice E's trend line and its table share; it holds unless the grid hit
 its bucket cap (`truncated`, whose spend is then counted `excluded`). A
 degenerate or inverted window yields no buckets.
+
+## Interaction: the window is a value, not a preset
+
+The chart window is an explicit `[startMs, endMs]` value. `zoomAbout` scales
+around the pointer's time while preserving its fractional position; `panBy`
+translates without changing the span. Both use `clampWindow` to stay inside
+`[first_ts, max(now, last_ts)]`, with a minimum of two buckets and a maximum
+of the available series extent. Invalid or inverted windows are preserved
+rather than repaired into a different request. A selected mark's comparison
+window snaps to the first bucket start at or after the mark, matching
+`beforeAfter`'s split, then spans `k` whole buckets on each side. The half-open
+result is `[split - k·bucketMs, split + k·bucketMs)`; `markSpan` accepts the
+grid origin (epoch-aligned by default). It uses
+`tokencharts.ts`'s `DEFAULT_BEFORE_AFTER_K` for the same half-width as the
+readout. On a log axis, zero and one share the floor mapping; ticks include
+zero and powers of ten from ten upward, avoiding overlapping floor labels.
+
+The y-domain is computed from finite points within the current window, so
+zooming autoscale follows the visible data rather than an off-screen peak. The
+extrema are gathered in one pass with constant auxiliary memory; the scan does
+not allocate a filtered copy or spread the series into function arguments. The
+linear axis uses that domain directly. For log mapping we use
+`log10(max(1, value))`: zero and negative values map to the floor at one,
+never to an undefined logarithm; log ticks include an explicit zero-floor tick
+and powers of ten. This intentionally compresses values below one into the
+same floor rather than implying meaningful negative log values.
+
+The time grid chooses from a fixed ladder beginning at one minute and
+increasing through one week. The bucket-by-key cell budget is 20,000; the
+chooser selects a coarse enough bucket to stay within that cap and reports
+`coarsened` so the view can disclose lost time resolution. It does not silently
+allocate a window-sized dense grid at the smallest interval.

@@ -40,16 +40,17 @@ test("queued → in-progress → review → done: every span and the time to com
     task(T0 + 6 * H, "t-1", "done"),
   ];
   const out = lifecycle(rows, WIDE);
-  // The first row is `queued`, so its entry IS the queued instant — but the
-  // row itself is the first the read holds, so the queued span is not
-  // reported (entry unknown); in-progress and review are.
+  // A task is born `queued`, so a first `queued` row is read as its creation:
+  // the queued span is measured from it, exactly as time to completion is.
   assert.deepEqual(
     out.spans.map((s) => [s.status, s.ms]),
     [
+      ["queued", 2 * H],
       ["in-progress", 3 * H],
       ["review", 1 * H],
     ]
   );
+  assert.deepEqual(out.timeInStatus.get("queued"), { values: [2 * H], openedBeforeWindow: 0, stillOpen: 0 });
   assert.deepEqual(out.timeInStatus.get("in-progress")?.values, [3 * H]);
   assert.deepEqual(out.timeInStatus.get("review")?.values, [1 * H]);
   assert.equal(out.ttc.length, 1);
@@ -102,6 +103,36 @@ test("done is counted once, at the FIRST done row, despite a second done row", (
   assert.equal(out.transitions, 3);
 });
 
+test("one rule for a first `queued` row: the queued span and time to completion start at the same instant", () => {
+  // The creation row aged out; the first surviving row is a later write to the
+  // still-queued task (a note, 1h after creation). The Task snapshot carries no
+  // creation instant, so this read is indistinguishable from a creation row —
+  // both figures are measured from it, and they cannot disagree about it.
+  const rows = [
+    task(T0 + 1 * H, "late", "queued"), // really created at T0, row lost
+    task(T0 + 3 * H, "late", "in-progress"),
+    task(T0 + 6 * H, "late", "done"),
+  ];
+  const out = lifecycle(rows, WIDE);
+  const queued = out.spans.find((s) => s.status === "queued");
+  assert.ok(queued, "the first queued row opens a measured queued span");
+  assert.equal(out.ttc[0]?.startMs, queued.enteredMs, "the two figures start at one instant");
+  assert.equal(out.ttc[0]?.fromQueued, true);
+  // The disclosed residual, pinned: both are measured from the surviving row,
+  // so both read an hour short of the truth (5h, not 6h; 2h, not 3h).
+  assert.equal(out.ttc[0]?.ms, 5 * H);
+  assert.equal(queued.ms, 2 * H);
+  assert.equal(out.timeInStatus.get("queued")?.openedBeforeWindow, 0);
+});
+
+test("a first row in any other status still has an unknown entry: no span, and a lower-bound completion", () => {
+  const rows = [task(T0, "mid", "in-progress"), task(T0 + 2 * H, "mid", "done")];
+  const out = lifecycle(rows, WIDE);
+  assert.deepEqual(out.spans, []);
+  assert.equal(out.timeInStatus.get("in-progress")?.openedBeforeWindow, 1);
+  assert.equal(out.ttc[0]?.fromQueued, false);
+});
+
 test("a task first seen already `done` is doneUndated, never dated at that row", () => {
   const rows = [task(T0, "t-4", "done"), task(T0 + H, "t-4", "in-progress"), task(T0 + 2 * H, "t-4", "done")];
   const out = lifecycle(rows, WIDE);
@@ -146,7 +177,10 @@ test("events outside the window are not counted, but earlier rows still decide t
     task(T0 + 30 * H, "t-10", "done"), // after the window
   ];
   const out = lifecycle(rows, { startMs: T0, endMs: T0 + 10 * H });
-  assert.deepEqual(out.spans.map((s) => [s.taskId, s.status, s.ms]), [["t-9", "in-progress", 2 * H]]);
+  assert.deepEqual(out.spans.map((s) => [s.taskId, s.status, s.ms]), [
+    ["t-9", "queued", 51 * H], // entered before the window, left inside it
+    ["t-9", "in-progress", 2 * H],
+  ]);
   assert.equal(out.ttc[0]?.ms, 53 * H, "time to completion runs from the queued row before the window");
   assert.deepEqual([...out.doneIds], ["t-9"]);
   assert.equal(out.transitions, 2);
@@ -301,7 +335,8 @@ test("before/after partition on markTsMs splits every sample by its own event in
   assert.deepEqual(after.ttcMs, [4 * H]);
   assert.deepEqual(before.timeInStatus.get("in-progress"), [2 * H]);
   assert.deepEqual(after.timeInStatus.get("in-progress"), [3 * H]);
-  assert.deepEqual(before.timeInStatus.get("queued"), undefined, "queued spans are first rows: none known");
+  assert.deepEqual(before.timeInStatus.get("queued"), [2 * H, 1 * H], "both queued spans leave before the mark");
+  assert.equal(after.timeInStatus.get("queued"), undefined);
   assert.deepEqual(before.rounds, [1]);
   assert.deepEqual(after.rounds, [2]);
   // The halves partition the whole.

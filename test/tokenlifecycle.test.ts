@@ -296,16 +296,16 @@ test("done-per-day counts CALENDAR days across both DST shifts, in a zone that h
     "const out = [];",
     // Spring: window 7..10 March. A done at 00:30 on 9 March belongs to day 2;
     // a 24h stride starts day 2 at 01:00 and files it under 8 March.
-    "{ const start = at(2026, 2, 7, 0, 0), end = at(2026, 2, 10, 0, 0);",
+    "{ const [Y, M, D] = [2026, 2, 7], start = at(Y, M, D, 0, 0), end = at(Y, M, D + 3, 0, 0);",
     "  const rows = [row(start + 1000, 'a', 'queued'), row(at(2026, 2, 9, 0, 30), 'a', 'done')];",
     "  const r = lifecycle(rows, { startMs: start, endMs: end });",
-    "  out.push({ lens: r.donePerDay.days.map((d, i, a) => (a[i + 1] ?? end) - d), counts: r.donePerDay.counts, series: r.series.done }); }",
+    "  out.push({ lens: [0, 1, 2].map((i) => at(Y, M, D + i + 1, 0, 0) - at(Y, M, D + i, 0, 0)), counts: r.donePerDay.counts, series: r.series.done }); }",
     // Autumn: window 31 Oct..3 Nov. A done at 23:30 on 1 November belongs to
     // day 1; a 24h stride starts day 2 at 23:00 on 1 November and files it there.
-    "{ const start = at(2026, 9, 31, 0, 0), end = at(2026, 10, 3, 0, 0);",
+    "{ const [Y, M, D] = [2026, 9, 31], start = at(Y, M, D, 0, 0), end = at(Y, M, D + 3, 0, 0);",
     "  const rows = [row(start + 1000, 'b', 'queued'), row(at(2026, 10, 1, 23, 30), 'b', 'done')];",
     "  const r = lifecycle(rows, { startMs: start, endMs: end });",
-    "  out.push({ lens: r.donePerDay.days.map((d, i, a) => (a[i + 1] ?? end) - d), counts: r.donePerDay.counts, series: r.series.done }); }",
+    "  out.push({ lens: [0, 1, 2].map((i) => at(Y, M, D + i + 1, 0, 0) - at(Y, M, D + i, 0, 0)), counts: r.donePerDay.counts, series: r.series.done }); }",
     "process.stdout.write(JSON.stringify(out));",
   ].join("\n");
   // A file:// URL built from this test's own URL — never a path (`C:C:` on Windows).
@@ -318,7 +318,8 @@ test("done-per-day counts CALENDAR days across both DST shifts, in a zone that h
   assert.equal(res.status, 0, `child failed: ${res.stderr}`);
   const [spring, autumn] = JSON.parse(res.stdout) as { lens: number[]; counts: number[]; series: number[] }[];
 
-  // Positive control: the forced zone took — the shift days really are 23h and
+  // Positive control, computed in the child with `Date` alone — never off the
+  // module under test: the forced zone took, the shift days really are 23h and
   // 25h, so the assertions below discriminate.
   assert.deepEqual(spring.lens, [24 * H, 23 * H, 24 * H], "TZ=America/Chicago did not take in the child");
   assert.deepEqual(autumn.lens, [24 * H, 25 * H, 24 * H], "TZ=America/Chicago did not take in the child");

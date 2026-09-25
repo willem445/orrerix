@@ -5950,7 +5950,7 @@ button.wf-finding:hover { background: var(--surface-2); }
 .tokens-legend-total { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 
 /* The plot. Recessive grid and axes; the data is the only thing with weight. */
-.tokens-plot { padding: 0 4px; }
+.tokens-plot { position: relative; padding: 0 4px; }
 .tokens-svg { display: block; }
 .tokens-pan-hit { cursor: grab; touch-action: none; }
 .tokens-pan-hit:active { cursor: grabbing; }

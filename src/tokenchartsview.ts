@@ -360,7 +360,7 @@ export class TokenChartsView {
     logBtn.addEventListener("click", () => { this.logScale = !this.logScale; logBtn.classList.toggle("on", this.logScale); this.rerender(); });
     this.controlsEl.append(this.windowBarEl, this.metricBarEl, this.collapseBtn, this.modelBtn, logBtn);
     const custom = el("span", "tokens-custom-chip", "custom · reset");
-    custom.addEventListener("click", () => { this.customWindow = null; this.windowId = DEFAULT_WINDOW; this.rerender(); });
+    custom.addEventListener("click", () => { this.customWindow = null; this.windowId = DEFAULT_WINDOW; this.selectedMarkMs = null; this.rerender(); });
     this.windowBarEl.append(custom);
 
     this.bodyEl = el("div", "tokens-body");
@@ -576,6 +576,7 @@ export class TokenChartsView {
 
   private render(): void {
     if (this.disposed) return;
+    this.syncChips();
     const widthPx = Math.round(this.plotEl.clientWidth);
     const rows = this.series?.rows ?? [];
     const diff = this.diffOf(rows);
@@ -927,6 +928,9 @@ export class TokenChartsView {
     const tip = svgEl("title");
     hit.append(tip);
     svg.append(hit);
+    const hover = el("div", "tokens-hover-readout");
+    hover.style.display = "none";
+    this.plotEl.append(hover);
     void height;
 
     const bucketAt = (clientX: number): number => {
@@ -971,14 +975,15 @@ export class TokenChartsView {
         })
         .join("\n");
       tip.textContent = `${fmtTime(series.buckets[i])}\n${lines}`;
-      const hover = el("div", "tokens-hover-readout", tip.textContent);
-      hover.style.left = `${Math.max(4, (ev as MouseEvent).clientX - svg.getBoundingClientRect().left + 12)}px`;
-      hover.style.top = `${Math.max(4, (ev as MouseEvent).clientY - svg.getBoundingClientRect().top + 12)}px`;
-      svg.querySelector(".tokens-hover-readout")?.remove(); svg.append(hover);
+      hover.textContent = tip.textContent;
+      const plotBox = this.plotEl.getBoundingClientRect();
+      hover.style.left = `${Math.max(4, (ev as MouseEvent).clientX - plotBox.left + 12)}px`;
+      hover.style.top = `${Math.max(4, (ev as MouseEvent).clientY - plotBox.top + 12)}px`;
+      hover.style.display = "";
     });
     hit.addEventListener("mouseleave", () => {
       (cross as SVGElement & { style: CSSStyleDeclaration }).style.display = "none";
-      svg.querySelector(".tokens-hover-readout")?.remove();
+      hover.style.display = "none";
     });
   }
 

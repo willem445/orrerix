@@ -2610,6 +2610,28 @@ the moment `merge_queue:` became one, because this repo's own workflow file
 writes it above `blocks:`. A fixed order would have relocated it, and the
 comment block introducing it, on the first unrelated edit.
 
+### An edited block keeps the comment above it
+
+The roster is split into one segment per block, and each segment starts with
+the comment and blank lines directly above its `- id:` line — that is how an
+untouched block's comment travels with it. The consequence is that a header
+over a *group* of blocks (`# -- reviewers: …`) belongs to the segment of the
+first block under it. When that block was edited, the save regenerated it from
+its fields and the header went with the old text (#3410: one roster edit
+dropped both of this repo's `# --` headers).
+
+So a regenerated block still writes its segment's leading lines first. That is
+not the comment re-attachment the preserving serializer refuses: those lines
+sit above the block's `-` marker, so they describe where the block sits, never
+a field that changed under them. A segment is written at most once: with a
+duplicated block id (a validation error, but still an editable file) only the
+first block of that id reuses the segment, and the second is regenerated bare
+rather than inheriting the first one's header. What an edit still drops is a comment *inside*
+the edited block — a trailing `# …` on one of its lines, or a comment line
+between its fields — because nothing says which field it was about. Deleting a
+block deletes its leading lines too, so deleting the first block under a header
+takes the header with it.
+
 ## Named workflows and the per-group pin (#1689 slice A)
 
 Everything above this section is written as though a repo has *one* workflow.

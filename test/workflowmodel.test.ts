@@ -67,6 +67,7 @@ import {
   workflowRelFor,
   workflowNameOf,
   type Workflow,
+  type WorkflowBlock,
   type Finding,
   type FindingCode,
 } from "../src/workflowmodel.ts";
@@ -868,6 +869,100 @@ test("editing one block's field keeps every OTHER block's comments, and the sect
   // the node that changed, and #233's bar is "edited nodes serialize cleanly", not lossless.
   assert.doesNotMatch(out, /# opens the PR/);
   assert.deepEqual(parseWorkflow(out).workflow, edited, "and the edit itself must round-trip");
+});
+
+test("editing a block keeps the comment lines directly ABOVE it — a section header included (#3410)", () => {
+  // The comment directly above a block is read as that block's own leading trivia, so it sits
+  // in the edited block's segment rather than in any untouched region. It is still not ABOUT
+  // the field that changed — here it is a header over two blocks — and a save that regenerates
+  // the block must write it back. Every block below is already in the canonical emitter's own
+  // spelling, so the only line an edit may change is the one field it edits: the expectation is
+  // the original text with that one line replaced, which a dropped comment cannot satisfy.
+  const text = `version: 1
+name: headers
+
+blocks:
+  # -- workers: first tier, then the fallback ----
+  - id: worker-std
+    name: Worker
+    kind: worker
+    cli: claude
+    model: sonnet
+
+  - id: worker-adv
+    name: Advanced
+    kind: worker
+    cli: claude
+    model: opus
+
+  # -- reviewers ---------------------------------
+  # (two lines of header, and a blank between them and the block)
+
+  - id: rev-std
+    name: Reviewer
+    kind: reviewer
+    cli: claude
+    model: sonnet
+`;
+  const { workflow } = parseWorkflow(text);
+  const edited: Workflow = {
+    ...workflow,
+    blocks: workflow.blocks.map((b) =>
+      b.id === "worker-std" ? { ...b, model: "haiku" } : b.id === "rev-std" ? { ...b, model: "opus" } : b
+    ),
+  };
+  const out = serializeWorkflowPreserving(edited, text);
+  const expected = text
+    .replace("    model: sonnet\n\n  - id: worker-adv", "    model: haiku\n\n  - id: worker-adv")
+    .replace(/model: sonnet\n$/, "model: opus\n");
+  assert.notEqual(expected, text, "sanity: both expectation replacements landed");
+  assert.equal(out, expected);
+  assert.deepEqual(parseWorkflow(out).workflow, edited, "and the edit itself must round-trip");
+});
+
+test("a duplicated block id never copies the first block's leading lines above the second (#3410 review)", () => {
+  // `origById` keeps the FIRST segment per id, so the second `- id: a` "matches" the first's
+  // segment. `block-id-duplicate` is a validation finding, not an unreadable file, so the
+  // preserving serializer still runs here. A segment's leading lines are written at most once.
+  const text = `version: 1
+blocks:
+  # -- header over A ----
+  - id: a
+    name: First
+    kind: worker
+    cli: claude
+
+  # comment for the second a
+  - id: a
+    name: Second
+    kind: worker
+    cli: claude
+`;
+  const { workflow } = parseWorkflow(text);
+  assert.equal(workflow.blocks.length, 2, "sanity: both duplicates are read");
+  for (const [label, edit] of [
+    ["an edit to the second", (b: WorkflowBlock, i: number) => (i === 1 ? { ...b, name: "Renamed" } : b)],
+    ["an unrelated save (no edit)", (b: WorkflowBlock) => b],
+  ] as const) {
+    const edited: Workflow = { ...workflow, blocks: workflow.blocks.map(edit) };
+    const out = serializeWorkflowPreserving(edited, text);
+    assert.equal(out.split("# -- header over A ----").length - 1, 1, `${label}: the header is written once`);
+    assert.match(out, /# -- header over A ----\n  - id: a\n    name: First\n/, `${label}: above the first block`);
+    assert.deepEqual(parseWorkflow(out).workflow.blocks.map((b) => b.name), edited.blocks.map((b) => b.name));
+  }
+});
+
+test("editing the first block of the roster keeps the comment between `blocks:` and it (#3410)", () => {
+  // The first item has no blank line above it, so no synthetic one may be added either.
+  const { workflow } = parseWorkflow(COMMENTED);
+  const edited: Workflow = {
+    ...workflow,
+    blocks: workflow.blocks.map((b) => (b.id === "planner" ? { ...b, model: "sonnet" } : b)),
+  };
+  const out = serializeWorkflowPreserving(edited, COMMENTED);
+  assert.match(out, /\nblocks:\n  # the planner goes first\n  - id: planner\n/);
+  assert.match(out, /# opens the PR/, "the untouched sibling keeps its trailing comment");
+  assert.deepEqual(parseWorkflow(out).workflow, edited);
 });
 
 test("a prompt whose own last line looks like a comment survives editing a SIBLING (#233 B2)", () => {

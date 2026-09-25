@@ -2635,10 +2635,28 @@ export function serializeWorkflowPreserving(w: Workflow, originalText: string): 
     if (blocksEntry) out.push(...sectionHeaderLines(blocksEntry, "blocks:"));
     else out.push("", "blocks:");
     let firstItem = true;
+    // A segment is written out at most ONCE. `origById` keeps the first segment per id, so with
+    // a duplicated id (`block-id-duplicate` is a validation finding, not an unreadable file) the
+    // second block would otherwise "match" the first's segment and write its leading lines — a
+    // section header, say — above itself too. A later block with an id already consumed takes
+    // the plain regenerate path instead (#3410 review).
+    const consumed = new Set<string>();
     for (const b of w.blocks) {
-      const match = b.id ? origById.get(b.id) : undefined;
+      const match = b.id && !consumed.has(b.id) ? origById.get(b.id) : undefined;
+      if (match) consumed.add(b.id);
       if (match && deepEqualValue(b, match.block)) {
         out.push(...match.raw);
+      } else if (match) {
+        // An EDITED block keeps its own leading trivia (#3410). `splitBlockItems` hands a block
+        // every comment/blank line directly above it, so a section header over a group of blocks
+        // ("# -- reviewers: …") lands in the segment of whichever block comes first under it —
+        // and regenerating that block from its fields alone deleted the header on the first
+        // edit. Those lines precede the `- ` marker, so they are about the block's PLACE, never
+        // about a field that changed underneath them: reusing them is not the re-attachment the
+        // header comment above rules out. The trivia already carries the original separating
+        // blank line (or its absence), so no synthetic `""` goes ahead of it.
+        const firstSig = match.raw.findIndex(isSignificantLine);
+        out.push(...match.raw.slice(0, firstSig), ...emitBlockLines(b, targetIndent));
       } else {
         if (!firstItem) out.push("");
         out.push(...emitBlockLines(b, targetIndent));

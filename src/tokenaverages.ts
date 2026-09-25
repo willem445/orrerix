@@ -88,7 +88,8 @@ export const AVERAGE_MIN_N = 3;
 
 /** One calendar day — the default time bucket of `averagesOverTime`. Not a
  *  millisecond count: a local day is 23 or 25 hours across a DST boundary, so
- *  day buckets are built with `setDate`, never `n * 86_400_000`. */
+ *  day buckets are built with `setDate` + `setHours(0, 0, 0, 0)` (see
+ *  `grid`), never `n * 86_400_000`. */
 export const DAY_BUCKET = "day";
 
 /** Grid ceiling, the same guard `bucketSeries` carries against a nonsense
@@ -339,7 +340,12 @@ export function averages(
 
 /** The bucket grid over `[startMs, endMs]`: fixed-width buckets aligned to
  *  multiples of `bucketMs` (as `bucketSeries` aligns its grid), or local
- *  calendar days built with `setDate`. Empty for a degenerate window. */
+ *  calendar days built with `setDate` and re-anchored with `setHours(0, 0, 0,
+ *  0)` EVERY step (the `addDays` idiom, `todoquickadd.ts`): where DST starts
+ *  AT midnight (America/Santiago) that day begins at 01:00, and a grid that
+ *  set midnight only once would carry the 01:00 start into every later day
+ *  and file each 00:00-01:00 delta under the day before (#3491 review B1).
+ *  Empty for a degenerate window. */
 function grid(
   startMs: number,
   endMs: number,
@@ -354,6 +360,7 @@ function grid(
     while (d.getTime() <= endMs && starts.length < MAX_BUCKETS) {
       starts.push(d.getTime());
       d.setDate(d.getDate() + 1);
+      d.setHours(0, 0, 0, 0);
       ends.push(d.getTime());
     }
     return { starts, ends };
@@ -363,6 +370,33 @@ function grid(
     ends.push(t + bucket);
   }
   return { starts, ends };
+}
+
+/** Deltas per bucket, by binary search on the (sorted) starts. A delta past
+ *  the grid's ceiling has no bucket — returned as `unplaced`, which the caller
+ *  counts into `outside`, never clamped onto the last bucket. */
+function place(
+  deltas: readonly AverageDeltaLike[],
+  starts: readonly number[],
+  ends: readonly number[]
+): { perBucket: AverageDeltaLike[][]; unplaced: number } {
+  const perBucket: AverageDeltaLike[][] = starts.map(() => []);
+  let unplaced = 0;
+  for (const d of deltas) {
+    let lo = 0;
+    let hi = starts.length - 1;
+    let at = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (starts[mid] <= d.tsMs) {
+        at = mid;
+        lo = mid + 1;
+      } else hi = mid - 1;
+    }
+    if (at === -1 || d.tsMs >= ends[at]) unplaced++;
+    else perBucket[at].push(d);
+  }
+  return { perBucket, unplaced };
 }
 
 /**
@@ -392,25 +426,7 @@ export function averagesOverTime(
   const within = deltas.filter((d) => inside(d, opts.startMs, opts.endMs));
   const keys = keyList(within, attribution, opts.groupBy);
   const { starts, ends } = grid(opts.startMs, opts.endMs, bucket);
-
-  // Deltas per bucket by binary search on the (sorted) starts. A delta past
-  // the grid's ceiling has no bucket — counted into `outside`, never clamped.
-  const perBucket: AverageDeltaLike[][] = starts.map(() => []);
-  let unplaced = 0;
-  for (const d of within) {
-    let lo = 0;
-    let hi = starts.length - 1;
-    let at = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (starts[mid] <= d.tsMs) {
-        at = mid;
-        lo = mid + 1;
-      } else hi = mid - 1;
-    }
-    if (at === -1 || d.tsMs >= ends[at]) unplaced++;
-    else perBucket[at].push(d);
-  }
+  const { perBucket, unplaced } = place(within, starts, ends);
 
   const series: AverageSeries[] = keys.map((k) => ({ key: k.key, label: k.label, points: [] }));
   for (const bucketDeltas of perBucket) {

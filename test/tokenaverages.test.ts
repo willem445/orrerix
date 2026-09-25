@@ -391,6 +391,54 @@ test("over time: day buckets follow the calendar across DST, in a zone that HAS 
   assert.equal(out.landed, out.ninth, "00:30 on the 9th was filed under another day");
 });
 
+test("over time: day buckets stay on local midnight where DST starts AT midnight (00:00 does not exist)", () => {
+  // The Chicago test above moves the clock at 02:00, so midnight always
+  // exists there and a grid that set local midnight ONCE, before its loop,
+  // still passes. America/Santiago springs forward at 00:00 (7 Sep 2025):
+  // that day starts at 01:00, and a grid that only calls setDate keeps the
+  // 01:00 start for every later day, which files each 00:00-01:00 delta
+  // under the day before. Every bucket after the transition must start at a
+  // real local midnight again.
+  const script = [
+    "const { averagesOverTime } = await import(process.argv[1]);",
+    "const stat = (v) => ({ n: v.length, dropped: 0, median: null, q1: null, q3: null, iqr: null, min: null, max: null });",
+    "const start = new Date(2025, 8, 5, 12, 0, 0, 0).getTime();",
+    "const end = new Date(2025, 8, 10, 12, 0, 0, 0).getTime();",
+    "const at = new Date(2025, 8, 9, 0, 30, 0, 0).getTime();",
+    "const d = { tsMs: at, agent: 'w-1', block: 'worker', model: 'm', in: 1, out: 0, cache_w: 0, cache_r: 0, total: 1, cost_usd: null };",
+    "const s = averagesOverTime([d], { byAgent: new Map(), buckets: [] }, { startMs: start, endMs: end, groupBy: 'agent', stat });",
+    "const hm = (t) => { const x = new Date(t); return [x.getDate(), x.getHours(), x.getMinutes()]; };",
+    "process.stdout.write(JSON.stringify({",
+    "  seventhOffsetChange: new Date(2025, 8, 6, 12).getTimezoneOffset() - new Date(2025, 8, 8, 12).getTimezoneOffset(),",
+    "  starts: s.buckets.map(hm),",
+    "  landed: hm(s.buckets[s.keys[0].points.findIndex((p) => p.n === 1)]),",
+    "}));",
+  ].join("\n");
+  const modulePath = new URL("../src/tokenaverages.ts", import.meta.url).href;
+  const res = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", script, modulePath],
+    { env: { ...process.env, TZ: "America/Santiago" }, encoding: "utf8" }
+  );
+  assert.equal(res.status, 0, `child failed: ${res.stderr}`);
+  const out = JSON.parse(res.stdout) as { seventhOffsetChange: number; starts: number[][]; landed: number[] };
+  // Positive control: the zone took, and it does shift an hour over the 7th.
+  assert.equal(out.seventhOffsetChange, 60, "TZ=America/Santiago did not take in the child");
+  assert.deepEqual(
+    out.starts,
+    [
+      [5, 0, 0],
+      [6, 0, 0],
+      [7, 1, 0], // the transition day's first real instant
+      [8, 0, 0],
+      [9, 0, 0],
+      [10, 0, 0],
+    ],
+    "a day bucket after the midnight transition does not start at local midnight"
+  );
+  assert.deepEqual(out.landed, [9, 0, 0], "00:30 on the 9th was filed under another day");
+});
+
 test("over time: a degenerate window is an empty grid, and every delta is counted outside", () => {
   const s = averagesOverTime([delta(T0, "w-1", 1)], noAttribution, {
     ...win,

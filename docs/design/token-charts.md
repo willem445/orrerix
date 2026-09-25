@@ -678,11 +678,18 @@ and groups each bucket exactly as the totals are grouped, under the same key
 list — so a key's per-bucket sums add back to its totals row, and the grid is
 dense: a bucket where nothing spent is `n: 0`, not a missing point (the
 plot's reason, §Differencing, and why the grid is dense). The default bucket
-is one LOCAL CALENDAR DAY, built with `setDate`: a five-minute bucket holds one delta per
-key, where a mean and a median are the same number, and "per day" is how the
-trend is read. A local day is 23 or 25 hours across DST, so the day grid is
-never `n × 86 400 000`; a fixed-width `bucketMs` is available and aligns to
-multiples of itself as the plot's grid does.
+is one LOCAL CALENDAR DAY: a five-minute bucket holds one delta per key, where
+a mean and a median are the same number, and "per day" is how the trend is
+read. A local day is 23 or 25 hours across DST, so the day grid is never
+`n × 86 400 000`: each step is `setDate` followed by `setHours(0, 0, 0, 0)`
+(the `addDays` idiom). The second call is needed where DST starts AT midnight
+(America/Santiago). That day begins at 01:00, and without the re-anchor every
+later bucket would keep starting at 01:00, filing each 00:00–01:00 delta
+under the day before. Both transition shapes are pinned under a forced `TZ`.
+A fixed-width `bucketMs` is available and aligns to multiples of itself as
+the plot's grid does. The grid is capped at `MAX_BUCKETS` (100 000), which
+is a guard against a nonsense window, not a sizing: the caller picks a bucket
+width that keeps grid × keys small.
 
 `statcell.ts` is a verbatim copy of `tokenscorecard.ts`' cell, not a move:
 neither pure module may import the other (TS5097), so `test/statcell.test.ts`

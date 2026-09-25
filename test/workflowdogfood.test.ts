@@ -58,10 +58,10 @@ test("the roster is the one the repo means to run", () => {
   // Two worker tiers, and the STANDARD one FIRST — which is the opposite default
   // from the roster this replaced, and deliberate. The first block of a class is
   // what a bare `spawn_agent(kind: "worker")` resolves to, and this file's own
-  // rule 3 ("DEFAULT EVERY TASK TO worker-std") is that the orchestrator chooses the
-  // tier when it writes the brief; the fallback is therefore the cheap one, so an
-  // unrouted task is one nobody classified rather than one that silently cost
-  // Opus. (A role_hint-gated worker block, like the retired `process`, would be
+  // rule 3 ("DEFAULT EVERY TASK TO worker-std") makes the cheap tier the policy,
+  // not just a fallback: worker-adv is reached only by naming it after a
+  // worker-std failed or for an extremely complex task, so a bare spawn must
+  // never silently cost Opus. (A role_hint-gated worker block, like the retired `process`, would be
   // excluded from this default-tier pin.)
   const tiers = workflow.blocks.filter((b) => b.kind === "worker" && !b.role_hint);
   assert.deepEqual(

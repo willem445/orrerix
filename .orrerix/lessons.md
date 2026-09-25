@@ -65,7 +65,7 @@ delivery — waiting on CI queues the answer behind the turn (#590). Register th
 END the turn, act on the notice. Same for any pane-delivered answer: reading once is
 fine, waiting is the defect.
 
-## Cheap-tier roster: literal briefs, sequenced lanes, worker chosen at intake
+## Cheap-tier roster: literal briefs, sequenced lanes, worker-std by default
 When the roster carries `worker-std`/`rev-std` (pi + GLM Flash):
 1. A brief names EXACT files and functions, the EXACT commands to run and the
    EXACT output that means done; one task, no judgment calls left open; grep
@@ -73,10 +73,10 @@ When the roster carries `worker-std`/`rev-std` (pi + GLM Flash):
    no derived receipts (each one costs a review round).
 2. Every claim in a report/PR body must quote the command and its output;
    a claim with no output is a failure, not a nit.
-3. Choose the worker AT INTAKE: `worker-std` for a brief you can write
-   literally; `worker-adv` from the start when the issue carries a design call.
-   `worker-adv` also takes over after `worker-std` reports blocked or fails the
-   same finding twice — briefed fresh, never resumed.
+3. Default every task to `worker-std`. `worker-adv` ONLY after a `worker-std`
+   has tried and failed (blocked, or the same finding failed twice — briefed
+   fresh, never resumed), or for an extremely complex task, with the reason
+   named in the brief.
 4. `rev-std` runs every round, to PASS on a FINAL body (batch body edits before
    the record). `rev-final` is spawned ONCE, last, only then — and only where
    the gate's routing requires it (code, tests, CI, manifests).

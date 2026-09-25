@@ -5,8 +5,8 @@
 # RESOLVED-ROSTER PREVIEW before anything spawns.
 #
 # Shape: pi + OpenRouter GLM 5.3 Flash (thinking high for both tiers — GLM 5.3 Flash on OpenRouter supports only low|high|max and pi clamps upward, #2938) is the default worker and the
-# iterating reviewer; Claude Code Opus is the worker for judgment-shaped issues
-# and the final validator. Orchestrator = Claude Opus, planner = Claude Fable.
+# iterating reviewer; Claude Code Opus is the fallback worker (rule 3) and the
+# final validator. Orchestrator = Claude Opus, planner = Claude Fable.
 #
 # THE THREE ROUTING RULES (2026-08-30 revision — each one is a measured cost):
 #
@@ -174,7 +174,7 @@ blocks:
     model: opus
     profile: .github/agents/rev-final.md
 
-# ADVISORY: the intended path. Worker chosen at intake (rule 3); rev-std runs
+# ADVISORY: the intended path. worker-std by default (rule 3); rev-std runs
 # every round; rev-final once, after rev-std's PASS on the final body (rule 1).
 edges:
   - { from: orchestrator, to: [planner, worker-std, worker-adv] }
@@ -212,7 +212,7 @@ gates:
 # .orrerix/lessons.md ENTRY (keep in step with the rules above; ~800 bytes —
 # the injected tail is capped at ~4 KB, so it evicts the oldest unpinned entry):
 #
-# ## Cheap-tier roster: literal briefs, sequenced lanes, worker chosen at intake
+# ## Cheap-tier roster: literal briefs, sequenced lanes, worker-std by default
 # When the roster carries `worker-std`/`rev-std` (pi + GLM Flash):
 # 1. A brief names EXACT files and functions, the EXACT commands to run and the
 #    EXACT output that means done; one task, no judgment calls left open; grep

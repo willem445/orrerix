@@ -36671,7 +36671,7 @@ impl OrchRegistry {
                 // Context escalation: absent on a legacy group means the new 45% default;
                 // a stored 0 remains the human's explicit off choice.
                 compact_context_threshold_percent:
-                    g["compact_context_threshold_percent"].as_u64().unwrap_or(45) as u32,
+                    g["compact_context_threshold_percent"].as_u64().unwrap_or(0) as u32,
                 // Context-window override (PR #329 round 7): absent → None →
                 // defer entirely to the model-based guess, the conservative
                 // default for a group.json written before this field existed.

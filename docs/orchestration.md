@@ -1380,8 +1380,8 @@ Trend lines share this window and time axis: tokens per completed item, items
 done per day, median time to completion, and average total tokens per pane.
 Detail tables show averages grouped by pane, block, model and work item, the
 per-item role split, time spent in each status, review rounds per PR and CI
-attempts per PR. Every cell reports `n`; selecting a mark adds before/after
-columns where that measure has dated values. Audit metrics are limited to the
+attempts per PR. Metric-value cells report `n`; selecting a mark adds
+before/after columns where that measure has dated values. Audit metrics are limited to the
 rows still in the audit window; the chart identifies when history may be
 truncated or a bucket grid was coarsened.
 

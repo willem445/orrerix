@@ -922,7 +922,7 @@ four trend series share the chart window: per-completed-item tokens, completions
 per day, median completion latency and average total tokens per agent pane. Detail
 tables expose averages grouped by pane, block, model and work item, the per-item
 role split, completed time in each status, review rounds per PR and CI attempts
-per PR. Every cell carries its sample count, and selecting a mark adds before /
-after values wherever the projection has a dated partition. The lifecycle
+per PR. Every metric-value cell carries its sample count, and selecting a
+mark adds before/after values wherever the projection has a dated partition. The lifecycle
 denominator is taken directly from done-in-window audit transitions, never from
 the board's current done status.

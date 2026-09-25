@@ -15900,6 +15900,12 @@ fn a_workflow_file_that_stops_loading_says_so_once_and_names_the_drive_it_holds(
     assert_eq!(rows.len(), 1, "one audit row per transition: {rows:#?}");
     assert_eq!(rows[0]["review_drives_unticked"], json!([1758]), "{rows:#?}");
 
+    // The driver tick's own off-with-drives announcement stands aside for this
+    // cause — same group, same drive, so one fact is not said twice.
+    assert_eq!(reg.rd_driver_tick(10_000), None, "a disabled group is never picked");
+    assert!(disabled_notices(&reg, &group, &orch.id).is_empty(), "the reload pass owns this case");
+    assert_eq!(action_count(&reg, &group, "rd-disabled-with-drives"), 0);
+
     // Fixed: the driver is back on the next read, and the latch clears
     // silently — no second line, no second row.
     repo.rewrite_workflow(WORKFLOW);
@@ -15975,6 +15981,10 @@ fn the_driver_reads_enabled_across_a_restart_and_the_reload_says_nothing() {
     );
     reg.reload_merge_gate_if_changed(&group);
     reg.reload_merge_gate_if_changed(&group);
+    // The production tick too, which is where the off-with-drives sweep runs.
+    let runner: std::sync::Arc<dyn RdRunner> = std::sync::Arc::new(FakeGh::green(HEAD_A));
+    reg.set_rd_runner_override(Some(runner));
+    assert_eq!(reg.rd_driver_tick(60_000), Some(group.clone()), "an enabled group is picked");
 
     let disabled: Vec<String> = audit_actions(&reg, &group)
         .into_iter()
@@ -15983,4 +15993,104 @@ fn the_driver_reads_enabled_across_a_restart_and_the_reload_says_nothing() {
     assert!(disabled.is_empty(), "no disabled or invalid row on a file that loads: {disabled:?}");
     assert!(workflow_notices(&reg, &group, &orch.id).is_empty());
     assert_eq!(reg.review_drive_status(&group)["enabled"], json!(true));
+}
+
+/// The HOLD lines a group's orchestrator has received about a driver that is
+/// off while drives sit on disk (#3330 ask 2).
+fn disabled_notices(reg: &OrchRegistry, group: &GroupId, orch: &str) -> Vec<String> {
+    texts_to(reg, group, orch)
+        .into_iter()
+        .filter(|t| t.contains("review driver off with drives on disk"))
+        .collect()
+}
+
+/// **#3330 ask 2, the deliberate case.** A VALID workflow that switches the
+/// driver off while a drive is unfinished leaves that drive listed and never
+/// ticked: `next_rd_group` skips the group, so no tick and no reconcile ever
+/// runs there. On `main` nothing says so. Pinned: the tick says it ONCE (two
+/// ticks, one line and one row), names the cause and the PR, turning the driver
+/// back on clears the latch silently and really drives again, and switching it
+/// off again is a new transition.
+#[test]
+fn a_driver_switched_off_with_a_drive_on_disk_says_so_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let group = {
+        let reg = relaunch_registry(dir.path());
+        let (group, _session) = driven(&reg, &repo, &gh);
+        group
+    };
+    // The `driver:` block is WORKFLOW's last, so its `enabled: true` is the last
+    // one (`merge_queue:` has the other). Spliced by position rather than by a
+    // multi-line anchor, which a CRLF checkout of this file would not match.
+    let at = WORKFLOW.rfind("enabled: true").expect("WORKFLOW enables the driver");
+    assert!(WORKFLOW[..at].rfind("driver:") > WORKFLOW[..at].rfind("merge_queue:"));
+    let off = format!("{}enabled: false{}", &WORKFLOW[..at], &WORKFLOW[at + "enabled: true".len()..]);
+    repo.rewrite_workflow(&off);
+    let reg = relaunch_registry(dir.path());
+    reattach(&reg, &repo, &group);
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    make_delivery_land(&reg, &group, &orch.id, 7504);
+    let runner: std::sync::Arc<dyn RdRunner> = std::sync::Arc::new(FakeGh::green(HEAD_A));
+    reg.set_rd_runner_override(Some(runner));
+
+    let status = reg.review_drive_status(&group);
+    assert_eq!(status["enabled"], json!(false), "the premise: the driver reads off: {status}");
+    assert_eq!(status["drives"][0]["pr"], json!(1758), "…with the drive on disk: {status}");
+
+    assert_eq!(reg.rd_driver_tick(10_000), None, "a disabled group is never picked");
+    assert_eq!(reg.rd_driver_tick(20_000), None);
+    let notices = disabled_notices(&reg, &group, &orch.id);
+    assert_eq!(notices.len(), 1, "exactly one line across two ticks: {notices:#?}");
+    for must in ["driver.enabled", "PR #1758", "HOLD"] {
+        assert!(notices[0].contains(must), "the line must name `{must}`: {}", notices[0]);
+    }
+    assert!(
+        !notices[0].contains('\n') && !notices[0].contains("          "),
+        "one paragraph, no source indentation: {:?}",
+        notices[0]
+    );
+    let rows = audit_details(&reg, &group, "rd-disabled-with-drives");
+    assert_eq!(rows.len(), 1, "one row per transition: {rows:#?}");
+    assert_eq!(rows[0]["prs"], json!([1758]), "{rows:#?}");
+    assert!(workflow_notices(&reg, &group, &orch.id).is_empty(), "the file parses: not that notice");
+
+    // Back on: the tick picks the group and the drive moves again; no line.
+    repo.rewrite_workflow(WORKFLOW);
+    let recovered = action_count(&reg, &group, "rd-recovered");
+    assert_eq!(reg.rd_driver_tick(30_000), Some(group.clone()), "back on, the group is driven");
+    assert_eq!(action_count(&reg, &group, "rd-recovered"), recovered + 1, "…and reconciled");
+    assert_eq!(disabled_notices(&reg, &group, &orch.id).len(), 1);
+
+    // Off again: a new transition, announced again.
+    repo.rewrite_workflow(&off);
+    assert_eq!(reg.rd_driver_tick(40_000), None);
+    assert_eq!(disabled_notices(&reg, &group, &orch.id).len(), 2, "a later switch-off is announced");
+    assert_eq!(action_count(&reg, &group, "rd-disabled-with-drives"), 2);
+}
+
+/// The same announcement for the OTHER way a driver goes off: the human
+/// turning the advanced orchestrator off for the group, with the file still
+/// declaring the driver. The cause is named, so the orchestrator knows which
+/// switch to look at.
+#[test]
+fn an_advanced_orchestrator_toggled_off_with_a_drive_on_disk_says_so_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let gh = FakeGh::green(HEAD_A);
+    let reg = relaunch_registry(dir.path());
+    let (group, _session) = driven(&reg, &repo, &gh);
+    let orch = reg.spawn_agent(&group, Role::Orchestrator, "orch", "", false, None).unwrap();
+    make_delivery_land(&reg, &group, &orch.id, 7505);
+
+    reg.set_advanced_orchestrator(&group, false, "human").unwrap();
+    assert_eq!(reg.review_drive_status(&group)["enabled"], json!(false), "the premise");
+
+    assert_eq!(reg.rd_driver_tick(10_000), None);
+    assert_eq!(reg.rd_driver_tick(20_000), None);
+    let notices = disabled_notices(&reg, &group, &orch.id);
+    assert_eq!(notices.len(), 1, "{notices:#?}");
+    assert!(notices[0].contains("advanced orchestrator is off"), "{}", notices[0]);
+    assert!(notices[0].contains("PR #1758"), "{}", notices[0]);
 }

@@ -17159,6 +17159,11 @@ pub struct OrchRegistry {
     /// persisted backoff would keep punishing a drive for a network that has
     /// since come back.
     rd_service_ms: Arc<TrackedMutex<HashMap<GroupId, u64>>>,
+    /// #3330 ask 2: per group whose driver is OFF while unfinished drives sit
+    /// on disk, what was announced (the cause and the PRs) and whether the
+    /// line landed. See `rd_announce_disabled_drives`. In memory: a restart
+    /// re-announces once, which is the point — that is when it went silent.
+    rd_disabled_warned: TrackedMutex<HashMap<GroupId, (String, Vec<u64>, bool)>>,
     /// Test seam: when set, `rd_driver_tick` drives with this `gh` instead of
     /// building a process runner over the group's repo. `None` in the app.
     rd_runner_override: TrackedMutex<Option<Arc<dyn rddrive::RdRunner>>>,
@@ -31463,6 +31468,7 @@ impl OrchRegistry {
             mq_runner_override: TrackedMutex::new("mq_runner_override", None),
             rd_state_lock: Arc::new(TrackedMutex::new("rd_state_lock", ())),
             rd_service_ms: Arc::new(TrackedMutex::new("rd_service_ms", HashMap::new())),
+            rd_disabled_warned: TrackedMutex::new("rd_disabled_warned", HashMap::new()),
             rd_runner_override: TrackedMutex::new("rd_runner_override", None),
             rd_signals: Arc::new(TrackedMutex::new("rd_signals", HashMap::new())),
             // One line, name literal first: `every_registry_lock_is_constructed_with_a_name`

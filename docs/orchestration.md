@@ -2746,6 +2746,12 @@ facts are on the audit log as `workflow-invalid`. It says nothing more for that 
 Fixing the file brings the drivers back on the next read, and a different error later is
 announced again.
 
+**Turning the driver off while drives are running also says so once.** Setting
+`enabled: false`, removing the workflow file, or switching the advanced orchestrator off
+leaves any unfinished drive listed but never ticked. The orchestrator pane gets one `HOLD`
+line naming the cause and the PRs (audit: `rd-disabled-with-drives`). Turning the driver
+back on lets the driver pick them up again; `cancel_review_drive` also needs it on.
+
 `plan_enabled` is a **second switch, not a widening of the first**, and it is read
 UNDER it: the plan driver is off wherever the review driver is. The separation is
 the consent. Turning the review driver on says orrerix may run a review loop you

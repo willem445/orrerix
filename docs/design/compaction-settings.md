@@ -7,8 +7,11 @@ republish the group view so the panel reflects changes immediately. This keeps
 the feature on the existing panel/read path rather than adding another polling
 command.
 
-New groups use a 45% context-escalation threshold. The group-file loader uses
-45 only when the key is absent; a stored zero remains the explicit off choice.
+New launcher-created groups use a 45% context-escalation threshold, sourced
+from one shared default constant. The group-file loader uses that value only
+when the key is absent; a stored zero remains the explicit off choice. Threshold
+escalation is gated by the group's compaction-eligible roles, which default to
+the orchestrator only, preventing the new fallback from compacting delegates.
 The nudge floor remains tri-state in storage: an unset floor displays the
 backend's 50% smart default, while a user edit persists an explicit value.
 

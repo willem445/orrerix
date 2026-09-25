@@ -3963,9 +3963,11 @@ your judgment call, not orrerix's.
 **Context escalation is enabled at 45% by default for new groups.** The lifecycle panel
 lets you change the threshold from 0 (off) through 100%; at the threshold, loomux delivers
 a context notice and asks for compaction at the next check if the agent has not asked.
-Existing saved groups retain an explicit 0 choice. The same panel exposes the quiet-nudge
-minimum context percentage (0 disables that floor; an untouched value uses the 50% smart
-default).
+Escalation is restricted to the group's configured compaction-eligible roles; by default
+that is the orchestrator only, so workers and reviewers are not auto-compacted by this
+fallback. Existing saved groups retain an explicit 0 choice. The same panel exposes the
+quiet-nudge minimum context percentage (0 disables that floor; an untouched value uses the
+50% smart default).
 
 **The orchestrator can also ask for it directly.** `request_compact()` is the primary
 mechanism — the timed nudge above is the fallback for personas that never call it. The

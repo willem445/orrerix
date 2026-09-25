@@ -420,9 +420,9 @@ export class GroupView {
 
     // Compaction guardrails share the existing live group-guardrail surface.
     const compactRow = el("div", "group-compact-settings");
-    this.compactThresholdInput = this.compactInput("Escalate at %", "Context usage that triggers automatic compaction escalation; 0 disables it.", (value) => this.applyCompactPercent(value, setCompactContextThreshold));
-    this.compactNudgeMinutesInput = this.compactInput("Nudge after quiet minutes", "Quiet-lull compaction nudge interval; 0 disables nudging.", (value) => this.applyCompactMinutes(value));
-    this.compactNudgeFloorInput = this.compactInput("Nudge from context %", "Minimum context usage before a lull nudge; 0 disables this context floor.", (value) => this.applyCompactPercent(value, setCompactNudgeMinContextPercent));
+    this.compactThresholdInput = this.compactInput("Escalate at %", "Context usage that triggers automatic compaction escalation; 0 disables it.", 100, (value) => this.applyCompactPercent(value, setCompactContextThreshold));
+    this.compactNudgeMinutesInput = this.compactInput("Nudge after quiet minutes", "Quiet-lull compaction nudge interval; 0 disables nudging.", 1440, (value) => this.applyCompactMinutes(value));
+    this.compactNudgeFloorInput = this.compactInput("Nudge from context %", "Minimum context usage before a lull nudge; 0 disables this context floor.", 100, (value) => this.applyCompactPercent(value, setCompactNudgeMinContextPercent));
     this.compactSettingsError = el("span", "group-compact-error");
     compactRow.append(this.compactThresholdInput, this.compactNudgeMinutesInput, this.compactNudgeFloorInput, this.compactSettingsError);
 
@@ -2007,13 +2007,13 @@ export class GroupView {
     }
   }
 
-  private compactInput(label: string, title: string, apply: (value: string) => void): HTMLInputElement {
+  private compactInput(label: string, title: string, max: number, apply: (value: string) => void): HTMLInputElement {
     const wrap = el("label", "group-compact-control", label);
     wrap.title = title;
     const input = document.createElement("input");
     input.type = "number";
     input.min = "0";
-    input.max = label.includes("minutes") ? "1440" : "100";
+    input.max = String(max);
     input.className = "group-compact-input";
     input.addEventListener("keydown", (event) => { if (event.key === "Enter") apply(input.value); });
     input.addEventListener("blur", () => apply(input.value));

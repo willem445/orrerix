@@ -879,6 +879,8 @@ window is half-open and symmetric: `markSpan(mark, k, bucketMs)` returns
 
 The y-domain is computed from finite points within the current window, so
 zooming autoscale follows the visible data rather than an off-screen peak. The
+extrema are gathered in one pass with constant auxiliary memory; the scan does
+not allocate a filtered copy or spread the series into function arguments. The
 linear axis uses that domain directly. For log mapping we use
 `log10(max(1, value))`: zero and negative values map to the floor at one,
 never to an undefined logarithm; log ticks include an explicit zero-floor tick

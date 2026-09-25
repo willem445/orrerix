@@ -55,9 +55,18 @@ export interface Point { tsMs: number; value: number }
 /** Autoscale only visible samples; empty windows use [0, 1]. */
 export function yDomain(points: readonly Point[], win: Window): [number, number] {
   if (!validWindow(win)) return [0, 1];
-  const values = points.filter((p) => Number.isFinite(p.tsMs) && p.tsMs >= win.startMs && p.tsMs <= win.endMs && Number.isFinite(p.value)).map((p) => p.value);
-  if (!values.length) return [0, 1];
-  let min = Math.min(...values), max = Math.max(...values);
+  // A dense series can contain hundreds of thousands of visible points.
+  // Scan once with constant auxiliary space; spreading them into Math.min/max
+  // both allocates a second array and exceeds the engine's argument limit.
+  let min = Infinity;
+  let max = -Infinity;
+  for (const point of points) {
+    if (Number.isFinite(point.tsMs) && point.tsMs >= win.startMs && point.tsMs <= win.endMs && Number.isFinite(point.value)) {
+      min = Math.min(min, point.value);
+      max = Math.max(max, point.value);
+    }
+  }
+  if (min === Infinity) return [0, 1];
   if (min === max) { const pad = Math.abs(min) * 0.05 || 1; min -= pad; max += pad; }
   return [min, max];
 }

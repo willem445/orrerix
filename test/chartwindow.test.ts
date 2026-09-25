@@ -33,6 +33,11 @@ test("invalid windows and degenerate requests remain unchanged", () => {
 test("y domain excludes a thousand-fold out-of-window spike", () => {
   assert.deepEqual(yDomain([{ tsMs: 2, value: 10 }, { tsMs: 3, value: 20 }, { tsMs: 20, value: 20_000 }], { startMs: 0, endMs: 5 }), [10, 20]);
 });
+test("y domain handles a large visible series without argument-spread limits", () => {
+  const points = Array.from({ length: 200_000 }, (_, tsMs) => ({ tsMs, value: tsMs }));
+  assert.deepEqual(yDomain(points, { startMs: 0, endMs: 199_999 }), [0, 199_999]);
+});
+
 test("log mapping is finite for zero and negatives; ticks cover both scales", () => {
   assert.ok(Number.isFinite(logValue(0)));
   assert.ok(Number.isFinite(logValue(-9)));

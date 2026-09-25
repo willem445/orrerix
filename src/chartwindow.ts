@@ -56,6 +56,25 @@ export function markSpan(markMs: number, k: number, bucketMs: number, gridOrigin
 }
 
 export interface Point { tsMs: number; value: number }
+/** Average local-calendar-day completion counts into the selected chart bins.
+ *  The population remains days even when a bin spans many days. */
+export function dailyRates(days: readonly number[], counts: readonly number[], bucketStarts: readonly number[], bucketMs: number): { values: (number | null)[]; population: number } {
+  const sums = bucketStarts.map(() => 0);
+  const dayCounts = bucketStarts.map(() => 0);
+  let population = 0;
+  if (!Number.isFinite(bucketMs) || bucketMs <= 0 || bucketStarts.length === 0) return { values: bucketStarts.map(() => null), population };
+  for (let i = 0; i < Math.min(days.length, counts.length); i++) {
+    const day = days[i];
+    const count = counts[i];
+    if (!Number.isFinite(day) || !Number.isFinite(count)) continue;
+    const index = Math.max(0, Math.min(bucketStarts.length - 1, Math.floor((day - bucketStarts[0]) / bucketMs)));
+    sums[index] += count;
+    dayCounts[index]++;
+    population++;
+  }
+  return { values: sums.map((sum, i) => dayCounts[i] === 0 ? null : sum / dayCounts[i]), population };
+}
+
 /** Count measured samples; zero is a real observation, missing/non-finite is not. */
 export function trendSampleCount(values: readonly (number | null | undefined)[]): number {
   let count = 0;

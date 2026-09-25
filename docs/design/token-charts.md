@@ -893,8 +893,9 @@ same floor rather than implying meaningful negative log values.
 
 The time grid chooses from a fixed ladder beginning at one minute and
 increasing through one week. The bucket-by-key cell budget is 20,000; the
-chooser selects a coarse enough bucket to stay within that cap and reports
-`coarsened` so the view can disclose lost time resolution. It does not silently
+chooser uses the larger of plotted keys and attribution buckets, selects a
+coarse enough bucket to stay within that cap and reports `coarsened` so the
+view can disclose lost time resolution. It does not silently
 allocate a window-sized dense grid at the smallest interval.
 
 ## Interaction: the view
@@ -923,6 +924,9 @@ per day, median completion latency and average total tokens per agent pane. Deta
 tables expose averages grouped by pane, block, model and work item, the per-item
 role split, completed time in each status, review rounds per PR and CI attempts
 per PR. Every metric-value cell carries its sample count, and selecting a
-mark adds before/after values wherever the projection has a dated partition. The lifecycle
+mark adds before/after values wherever the projection has a dated partition.
+The completion trend bins the lifecycle projection's calendar-day counts into
+the chart grid as an average per calendar day, so coarsening never relabels a
+week or month as one day; its `n` remains the number of calendar days. The lifecycle
 denominator is taken directly from done-in-window audit transitions, never from
 the board's current done status.

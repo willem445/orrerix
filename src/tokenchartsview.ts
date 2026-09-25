@@ -54,7 +54,7 @@ import {
   type Metric,
 } from "./tokencharts";
 import { makeScale, niceTicks, xForTs, tsForX, type TimelineScale } from "./timelinelayout";
-import { chooseBucket, clampWindow, linearTicks, logTicks, logValue, markSpan, meanFinite, panBy, trendSampleCount, yDomain, zoomAbout, type Window } from "./chartwindow";
+import { chooseBucket, clampWindow, dailyRates, linearTicks, logTicks, logValue, markSpan, meanFinite, panBy, trendSampleCount, yDomain, zoomAbout, type Window } from "./chartwindow";
 import { averages, averagesOverTime } from "./tokenaverages";
 import { lifecycle } from "./tokenlifecycle";
 import { perCompletedItem, perCompletedItemOverTime } from "./tokenperitem";
@@ -635,7 +635,7 @@ export class TokenChartsView {
 
     this.renderLegend(bars, series);
     this.renderPlot(series, markList, widthPx);
-    this.renderMetricTrends(rows, diff.deltas, bars.attribution, range, markList);
+    this.renderMetricTrends(rows, diff.deltas, bars.attribution, range, markList, series.keys.length);
     this.renderBars(bars);
     this.renderReadout(series, markList);
     this.renderScorecard();
@@ -983,9 +983,9 @@ export class TokenChartsView {
   }
 
   /** The stacked bars: one row per feature, plus the two group-wide bars. */
-  private renderMetricTrends(rows: readonly UsageSeriesRow[], deltas: DiffResult["deltas"], attribution: FeatureBars["attribution"], range: Window, markList: readonly ChartMark[]): void {
+  private renderMetricTrends(rows: readonly UsageSeriesRow[], deltas: DiffResult["deltas"], attribution: FeatureBars["attribution"], range: Window, markList: readonly ChartMark[], seriesKeyCount: number): void {
     this.metricTrendsEl.replaceChildren();
-    const choice = chooseBucket(range.endMs - range.startMs, Math.max(1, deltas.length));
+    const choice = chooseBucket(range.endMs - range.startMs, Math.max(1, seriesKeyCount, attribution.buckets.length));
     const audit = this.store.cached;
     const life = lifecycle(audit, { startMs: range.startMs, endMs: range.endMs, bucketMs: choice.bucketMs, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }) });
     // Dated denominator is built from the same done-in-window lifecycle result.
@@ -1000,7 +1000,8 @@ export class TokenChartsView {
     this.metricTrendsEl.append(title);
     const rowsToDraw: { label: string; buckets: number[]; values: (number | null)[]; population: number | null; populationLabel: string }[] = [];
     rowsToDraw.push({ label: "tokens per completed item", buckets: per.buckets.map((b) => b.startMs), values: per.buckets.map((b) => b.perItem), population: per.items, populationLabel: "completed items" });
-    rowsToDraw.push({ label: "items done per day", buckets: life.series.bucketStarts, values: life.series.done, population: life.series.bucketStarts.length, populationLabel: "days" });
+    const donePerDayTrend = dailyRates(life.donePerDay.days, life.donePerDay.counts, life.series.bucketStarts, choice.bucketMs);
+    rowsToDraw.push({ label: "items done per day", buckets: life.series.bucketStarts, values: donePerDayTrend.values, population: donePerDayTrend.population, populationLabel: "calendar days" });
     rowsToDraw.push({ label: "median time-to-completion (h)", buckets: life.series.bucketStarts, values: life.series.ttcMs.map((xs) => { const median = statCell(xs).median; return median === null ? null : median / 3_600_000; }), population: life.series.ttcMs.reduce((sum, xs) => sum + xs.length, 0), populationLabel: "completed items" });
     if (avg.keys.length > 0) rowsToDraw.push({ label: "average tokens per pane", buckets: avg.buckets, values: avg.buckets.map((_, i) => {
       const values = avg.keys.map((key) => key.points[i]?.mean).filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));

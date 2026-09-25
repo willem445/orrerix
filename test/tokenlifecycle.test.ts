@@ -247,6 +247,38 @@ test("donePerDay.rate divides by the window's length in calendar days, not by th
   assert.ok(Math.abs(out.donePerDay.windowDays - 7) < 1e-9, `windowDays ${out.donePerDay.windowDays}`);
 });
 
+test("doneIds holds only tasks whose FIRST done row is inside the window — done-in-window, never done-ever", () => {
+  // Slice C divides a whole-window token total by `doneIds.size`, so a task
+  // finished outside the window must not be in it — not even one that is
+  // reopened and finished again inside it.
+  const start = T0;
+  const end = T0 + 10 * H;
+  const rows = [
+    task(start - 20 * H, "before", "queued"),
+    task(start - 10 * H, "before", "done"), // first done before the window
+    task(start - 20 * H, "redone", "queued"),
+    task(start - 5 * H, "redone", "done"), // first done before the window…
+    task(start + 1 * H, "redone", "in-progress"),
+    task(start + 2 * H, "redone", "done"), // …and a second one inside it
+    task(start + 1 * H, "after", "queued"),
+    task(end + 1 * H, "after", "done"), // first done after the window
+    task(end - 1 * H, "edge", "queued"),
+    task(end, "edge", "done"), // at `endMs`: the window is half-open
+    task(start + 3 * H, "undated", "done"), // first row already done: never dated
+    task(start - 1 * H, "inside", "queued"),
+    task(start, "inside", "done"), // at `startMs`: inside
+  ];
+  const out = lifecycle(rows, { startMs: start, endMs: end });
+  assert.deepEqual([...out.doneIds].sort(), ["inside"]);
+  assert.deepEqual([...out.doneAtMs.keys()].sort(), ["inside"], "doneAtMs and doneIds are one population");
+  assert.equal(out.doneAtMs.get("inside"), start);
+  // Positive control: the same rows over a window covering all of them count
+  // every task with a dated first done.
+  const all = lifecycle(rows, { startMs: start - 100 * H, endMs: end + 100 * H });
+  assert.deepEqual([...all.doneIds].sort(), ["after", "before", "edge", "inside", "redone"]);
+  assert.equal(all.doneAtMs.get("redone"), start - 5 * H, "dated at its FIRST done");
+});
+
 test("before/after partition on markTsMs splits every sample by its own event instant", () => {
   const mark = T0 + 10 * H;
   const rows = [

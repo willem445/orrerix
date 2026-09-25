@@ -2623,7 +2623,10 @@ dropped both of this repo's `# --` headers).
 So a regenerated block still writes its segment's leading lines first. That is
 not the comment re-attachment the preserving serializer refuses: those lines
 sit above the block's `-` marker, so they describe where the block sits, never
-a field that changed under them. What an edit still drops is a comment *inside*
+a field that changed under them. A segment is written at most once: with a
+duplicated block id (a validation error, but still an editable file) only the
+first block of that id reuses the segment, and the second is regenerated bare
+rather than inheriting the first one's header. What an edit still drops is a comment *inside*
 the edited block — a trailing `# …` on one of its lines, or a comment line
 between its fields — because nothing says which field it was about. Deleting a
 block deletes its leading lines too, so deleting the first block under a header

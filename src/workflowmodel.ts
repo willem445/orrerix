@@ -2635,8 +2635,15 @@ export function serializeWorkflowPreserving(w: Workflow, originalText: string): 
     if (blocksEntry) out.push(...sectionHeaderLines(blocksEntry, "blocks:"));
     else out.push("", "blocks:");
     let firstItem = true;
+    // A segment is written out at most ONCE. `origById` keeps the first segment per id, so with
+    // a duplicated id (`block-id-duplicate` is a validation finding, not an unreadable file) the
+    // second block would otherwise "match" the first's segment and write its leading lines — a
+    // section header, say — above itself too. A later block with an id already consumed takes
+    // the plain regenerate path instead (#3410 review).
+    const consumed = new Set<string>();
     for (const b of w.blocks) {
-      const match = b.id ? origById.get(b.id) : undefined;
+      const match = b.id && !consumed.has(b.id) ? origById.get(b.id) : undefined;
+      if (match) consumed.add(b.id);
       if (match && deepEqualValue(b, match.block)) {
         out.push(...match.raw);
       } else if (match) {

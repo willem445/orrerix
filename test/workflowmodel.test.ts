@@ -67,6 +67,7 @@ import {
   workflowRelFor,
   workflowNameOf,
   type Workflow,
+  type WorkflowBlock,
   type Finding,
   type FindingCode,
 } from "../src/workflowmodel.ts";
@@ -917,6 +918,38 @@ blocks:
   assert.notEqual(expected, text, "sanity: both expectation replacements landed");
   assert.equal(out, expected);
   assert.deepEqual(parseWorkflow(out).workflow, edited, "and the edit itself must round-trip");
+});
+
+test("a duplicated block id never copies the first block's leading lines above the second (#3410 review)", () => {
+  // `origById` keeps the FIRST segment per id, so the second `- id: a` "matches" the first's
+  // segment. `block-id-duplicate` is a validation finding, not an unreadable file, so the
+  // preserving serializer still runs here. A segment's leading lines are written at most once.
+  const text = `version: 1
+blocks:
+  # -- header over A ----
+  - id: a
+    name: First
+    kind: worker
+    cli: claude
+
+  # comment for the second a
+  - id: a
+    name: Second
+    kind: worker
+    cli: claude
+`;
+  const { workflow } = parseWorkflow(text);
+  assert.equal(workflow.blocks.length, 2, "sanity: both duplicates are read");
+  for (const [label, edit] of [
+    ["an edit to the second", (b: WorkflowBlock, i: number) => (i === 1 ? { ...b, name: "Renamed" } : b)],
+    ["an unrelated save (no edit)", (b: WorkflowBlock) => b],
+  ] as const) {
+    const edited: Workflow = { ...workflow, blocks: workflow.blocks.map(edit) };
+    const out = serializeWorkflowPreserving(edited, text);
+    assert.equal(out.split("# -- header over A ----").length - 1, 1, `${label}: the header is written once`);
+    assert.match(out, /# -- header over A ----\n  - id: a\n    name: First\n/, `${label}: above the first block`);
+    assert.deepEqual(parseWorkflow(out).workflow.blocks.map((b) => b.name), edited.blocks.map((b) => b.name));
+  }
 });
 
 test("editing the first block of the roster keeps the comment between `blocks:` and it (#3410)", () => {

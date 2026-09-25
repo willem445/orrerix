@@ -155,6 +155,14 @@ export function insidePlot(x: number, x0: number, x1: number): boolean {
   return Number.isFinite(x) && x1 > x0 && x >= x0 && x <= x1;
 }
 
+/** Whether a container-relative point lies on the plot RECTANGLE — the
+ *  gutters on all four sides (y-axis labels, top padding, the time-tick
+ *  strip) excluded. The wheel and a drag are claimed only here, so over any
+ *  label the wheel still scrolls the panel (#3505 review). */
+export function insidePlotArea(x: number, y: number, x0: number, x1: number, y0: number, y1: number): boolean {
+  return insidePlot(x, x0, x1) && Number.isFinite(y) && y1 > y0 && y >= y0 && y <= y1;
+}
+
 /** The bucket index nearest a container-relative x, or `null` when there are
  *  no buckets or the plot has no width. Clamped onto the grid otherwise, so a
  *  pointer resting on the gutter reads the edge bucket rather than nothing. */

@@ -54,7 +54,7 @@ import {
   type Metric,
 } from "./tokencharts";
 import { makeScale, niceTicks, xForTs, tsForX, type TimelineScale } from "./timelinelayout";
-import { bucketIndexAt, clampWindow, insidePlot, isDrag, linearTicks, logTicks, logValue, markNear, markSpan, meanFinite, panBy, trendBucket, trendSampleCount, wheelZoomFactor, yDomain, zoomAbout, type Window, type WindowBounds } from "./chartwindow";
+import { bucketIndexAt, clampWindow, insidePlot, insidePlotArea, isDrag, linearTicks, logTicks, logValue, markNear, markSpan, meanFinite, panBy, trendBucket, trendSampleCount, wheelZoomFactor, yDomain, zoomAbout, type Window, type WindowBounds } from "./chartwindow";
 import { averages, averagesOverTime } from "./tokenaverages";
 import { lifecycle, windowCalendarDays } from "./tokenlifecycle";
 import { perCompletedItem, perCompletedItemOverTime } from "./tokenperitem";
@@ -569,12 +569,15 @@ export class TokenChartsView {
   private wirePlotPointer(): void {
     const plot = this.plotEl;
     const localX = (clientX: number): number => clientX - this.plotSurfaceEl.getBoundingClientRect().left;
+    const localY = (clientY: number): number => clientY - this.plotSurfaceEl.getBoundingClientRect().top;
+    const onArea = (geom: PlotGeom, e: { clientX: number; clientY: number }): boolean =>
+      insidePlotArea(localX(e.clientX), localY(e.clientY), geom.scale.x0, geom.scale.x1, TOP_PAD_PX, TOP_PAD_PX + PLOT_H_PX);
 
     plot.addEventListener("wheel", (e: WheelEvent) => {
       const geom = this.plotGeom;
       if (!geom) return;
       const x = localX(e.clientX);
-      if (!insidePlot(x, geom.scale.x0, geom.scale.x1)) return;
+      if (!onArea(geom, e)) return;
       // Only claim the wheel over the plot area itself — elsewhere it keeps
       // scrolling the panel.
       e.preventDefault();
@@ -590,7 +593,7 @@ export class TokenChartsView {
       const geom = this.plotGeom;
       if (!geom || e.button !== 0) return;
       const x = localX(e.clientX);
-      if (!insidePlot(x, geom.scale.x0, geom.scale.x1)) return;
+      if (!onArea(geom, e)) return;
       this.drag = { pointerId: e.pointerId, downX: x, win: this.currentWindow(geom), width: geom.scale.x1 - geom.scale.x0, bounds: geom.bounds, moved: false };
       try { plot.setPointerCapture(e.pointerId); } catch { /* the pointer is already gone — the drag simply ends on its own */ }
       // No preventDefault: it would also suppress the compatibility

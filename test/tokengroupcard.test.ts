@@ -120,6 +120,16 @@ test("before/after appear only with a mark, each side with its own n", () => {
   assert.deepEqual(row(rows, "share:orchestrator").before, { value: null, n: 0 });
 });
 
+test("a cost interval AT the mark instant lands AFTER it — the same split perCompletedItem makes on tokens", () => {
+  const rows = groupCard(base({
+    markTsMs: 2 * H,
+    perItem: { ...base().perItem, before: { perItem: 1, items: 1, byRole: [] }, after: { perItem: 1, items: 1, byRole: [] } },
+    deltas: [{ tsMs: 1 * H, cost_usd: 2 }, { tsMs: 2 * H, cost_usd: 6 }],
+  }));
+  assert.deepEqual(row(rows, "costPerItem").before, { value: 2, n: 1 });
+  assert.deepEqual(row(rows, "costPerItem").after, { value: 6, n: 1 });
+});
+
 test("an unfamiliar role keeps its own share row", () => {
   const rows = groupCard(base({ perItem: { ...base().perItem, byRole: [{ role: "auditor", share: 1, n: 2 }] } }));
   assert.equal(row(rows, "share:auditor").value, 1);

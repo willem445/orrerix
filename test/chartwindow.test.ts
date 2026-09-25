@@ -93,7 +93,7 @@ test("meanFinite averages measured pane means and ignores missing series", () =>
 
 
 // ── #3505: pointer geometry for the container-level handlers ────────────────
-import { DELTA_LINE, DELTA_PAGE, DELTA_PIXEL, bucketIndexAt, insidePlot, isDrag, markNear, wheelZoomFactor } from "../src/chartwindow.ts";
+import { DELTA_LINE, DELTA_PAGE, DELTA_PIXEL, bucketIndexAt, insidePlot, insidePlotArea, isDrag, markNear, wheelZoomFactor } from "../src/chartwindow.ts";
 
 test("a LINE-mode wheel notch zooms as much as a PIXEL-mode one", () => {
   // Chromium reports a notch as ~100px in pixel mode; a line-mode device
@@ -126,6 +126,15 @@ test("insidePlot excludes the y-axis gutter", () => {
   assert.equal(insidePlot(40, 56, 800), false);
   assert.equal(insidePlot(56, 56, 800), true);
   assert.equal(insidePlot(801, 56, 800), false);
+});
+test("the plot area excludes the tick-label strip and the top padding, not just the y gutter", () => {
+  // x0..x1 = 56..800, y0..y1 = 12..202 (TOP_PAD_PX .. TOP_PAD_PX + PLOT_H_PX)
+  assert.equal(insidePlotArea(300, 100, 56, 800, 12, 202), true);
+  assert.equal(insidePlotArea(300, 215, 56, 800, 12, 202), false, "the x-axis tick labels");
+  assert.equal(insidePlotArea(300, 5, 56, 800, 12, 202), false, "the top padding");
+  assert.equal(insidePlotArea(40, 100, 56, 800, 12, 202), false, "the y-axis labels");
+  assert.equal(insidePlotArea(300, 12, 56, 800, 12, 202), true);
+  assert.equal(insidePlotArea(300, 202, 56, 800, 12, 202), true);
 });
 test("markNear picks the nearest mark inside the tolerance, earlier on a tie, else null", () => {
   assert.equal(markNear([100, 200, 300], 205, 6), 1);

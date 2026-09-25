@@ -929,8 +929,9 @@ a guessed cause:
   `wheelZoomFactor`. A change mark is clicked through `markNear` on the
   container, not through an element of its own. A press is a click until it
   travels past `DRAG_SLOP_PX`, then it pans.
-- **The wheel is claimed only over the plot area.** Over the y-axis gutter or
-  anywhere else it scrolls the panel.
+- **The wheel and a drag are claimed only over the plot rectangle**
+  (`insidePlotArea`, bounded in x AND y). Over the y-axis labels, the top
+  padding, the time-tick strip or anywhere else, the wheel scrolls the panel.
 - **`deltaMode` is normalised.** A line-mode device reports `3` for a notch;
   read as pixels by the #3475 handler (`deltaY * 0.001`) that zooms by 0.3%,
   which looks exactly like "zoom does nothing". Each event is capped, so a page-mode device cannot zoom the

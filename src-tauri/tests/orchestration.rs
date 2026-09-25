@@ -75,7 +75,7 @@ use loomux_lib::orchestration::{
     hold_until_quiet, idle_output_is_activity, idle_should_kill, idle_tick_should_fire,
     loomux_shim_cmd, loomux_shim_sh,
     // #3477: stale generated shims are pruned from the shared shim dir.
-    is_stale_generated_shim, prune_stale_shims,
+    is_stale_generated_shim, prune_stale_shims, GENERATED_SHIM_NAMES,
     // #406: the unified `gh` poller's shared scan cadence.
     intake_scan_due,
     low_disk_notice, low_disk_transition, max_agents_notice, pr_number, release_gate_decision,
@@ -48369,27 +48369,76 @@ const ORPHAN_CMD_HEAD: &str = "@echo off\r\nrem loomux resource-guard shim (#318
 
 #[test]
 fn a_stale_generated_shim_is_recognised_and_a_file_the_product_did_not_write_is_not() {
-    let kept = ["gh", "git", "orrerix", "loomux"];
-    // Orphans: generated header, name not in the set this build writes.
-    assert!(is_stale_generated_shim("node", ORPHAN_SH_HEAD, &kept));
-    assert!(is_stale_generated_shim("npm.cmd", ORPHAN_CMD_HEAD, &kept));
-    assert!(is_stale_generated_shim("cargo", "#!/bin/sh\n# orrerix resource-guard shim (#318)\n", &kept));
-    // A shim this build writes is never stale — header or not, bare or `.cmd`.
+    // Orphans: generated header, name not in GENERATED_SHIM_NAMES.
+    assert!(is_stale_generated_shim("node", ORPHAN_SH_HEAD));
+    assert!(is_stale_generated_shim("npm.cmd", ORPHAN_CMD_HEAD));
+    assert!(is_stale_generated_shim("cargo", "#!/bin/sh\n# orrerix resource-guard shim (#318)\n"));
+    // A shim this build writes is never stale — bare or `.cmd`.
     let gh_sh = gh_shim_sh("C:/real/gh.exe", &shim_paths());
-    assert!(!is_stale_generated_shim("gh", &gh_sh, &kept));
-    assert!(!is_stale_generated_shim("gh.cmd", &gh_shim_cmd("C:/real/gh.exe", None), &kept));
-    assert!(!is_stale_generated_shim("loomux.cmd", &loomux_shim_cmd(), &kept));
-    // …but the same text under a name NOT kept is (gh uninstalled: its shim is an orphan).
-    assert!(is_stale_generated_shim("gh", &gh_sh, &["orrerix", "loomux"]));
+    assert!(!is_stale_generated_shim("gh", &gh_sh));
+    assert!(!is_stale_generated_shim("gh.cmd", &gh_shim_cmd("C:/real/gh.exe", None)));
+    assert!(!is_stale_generated_shim("git", &git_shim_sh("C:/real/git.exe", &shim_paths())));
+    assert!(!is_stale_generated_shim("loomux.cmd", &loomux_shim_cmd()));
     // Fail-safe direction: no product header → never deleted, whatever the name.
-    assert!(!is_stale_generated_shim("node", "#!/bin/sh\nexec /usr/bin/node \"$@\"\n", &kept));
-    assert!(!is_stale_generated_shim("node", "#!/bin/sh\n# my own node shim (#1)\n", &kept));
-    assert!(!is_stale_generated_shim("tool", "#!/bin/sh\n# loomuxish shim (#1)\n", &kept));
-    assert!(!is_stale_generated_shim("tool", "#!/bin/sh\n# loomux helper, not a generated file\n", &kept));
+    assert!(!is_stale_generated_shim("node", "#!/bin/sh\nexec /usr/bin/node \"$@\"\n"));
+    assert!(!is_stale_generated_shim("node", "#!/bin/sh\n# my own node shim (#1)\n"));
+    assert!(!is_stale_generated_shim("tool", "#!/bin/sh\n# loomuxish shim (#1)\n"));
+    assert!(!is_stale_generated_shim("tool", "#!/bin/sh\n# loomux helper, not a generated file\n"));
     // The header must be in the first lines, where every generator puts it.
-    assert!(!is_stale_generated_shim("tool", "a\nb\nc\nd\n# loomux x shim (#318)\n", &kept));
+    assert!(!is_stale_generated_shim("tool", "a\nb\nc\nd\n# loomux x shim (#318)\n"));
     // A multi-byte character at the `rem ` probe boundary must not panic.
-    assert!(!is_stale_generated_shim("tool", "ré—x loomux shim (#1)\n", &kept));
+    assert!(!is_stale_generated_shim("tool", "ré—x loomux shim (#1)\n"));
+}
+
+#[test]
+fn the_merge_and_release_gate_shims_are_never_pruned_whatever_a_spawn_resolved() {
+    // #3481 B1: the kept set must not depend on whether THIS spawn found the real
+    // gh/git — a transient miss (an upgrade uninstalls, then reinstalls) would
+    // otherwise delete the merge gate from the dir every live pane of every group
+    // has first on PATH. `prune_stale_shims` takes no list from its caller, so the
+    // only thing that can drop a gate name is this constant.
+    for gate in ["gh", "git"] {
+        assert!(
+            GENERATED_SHIM_NAMES.contains(&gate),
+            "`{gate}` must always be kept — its shim IS the gate, and pruning it on a spawn \
+             that missed the real binary ungates every live pane"
+        );
+    }
+    // A gh shim whose real gh is not installed at all: still kept, header and all.
+    let td = tempfile::tempdir().unwrap();
+    let dir = td.path();
+    fs::write(dir.join("gh"), gh_shim_sh("C:/gone/gh.exe", &shim_paths())).unwrap();
+    fs::write(dir.join("gh.cmd"), gh_shim_cmd("C:/gone/gh.exe", None)).unwrap();
+    fs::write(dir.join("git"), git_shim_sh("C:/gone/git.exe", &shim_paths())).unwrap();
+    fs::write(dir.join("git.cmd"), git_shim_cmd("C:/gone/git.exe", None)).unwrap();
+    fs::write(dir.join("node"), ORPHAN_SH_HEAD).unwrap(); // positive control: the prune ran
+    prune_stale_shims(dir);
+    let mut left: Vec<String> =
+        fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    left.sort();
+    assert_eq!(left, ["gh", "gh.cmd", "git", "git.cmd"], "the gates stay; only the orphan goes");
+}
+
+#[test]
+fn every_shim_name_ensure_shims_writes_is_one_the_prune_keeps() {
+    // A shim written under a name missing from GENERATED_SHIM_NAMES would be
+    // deleted by the prune on the very spawn that wrote it — silently, every
+    // spawn. Read off the write calls' shape (the program argument is a literal
+    // at every site; `tests/pathseg.rs` and `tests/rebrand.rs` rely on the same).
+    let src = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/orchestration/mod.rs")).unwrap();
+    let mut written: Vec<String> = Vec::new();
+    for call in ["self.write_shim(&dir, \"", "self.write_refusal_shim(&dir, \""] {
+        for chunk in src.split(call).skip(1) {
+            written.push(chunk.chars().take_while(|c| *c != '"').collect());
+        }
+    }
+    written.sort();
+    written.dedup();
+    // Population control: the four names ensure_shims writes today — and the
+    // equality makes a stale constant entry fail as loudly as a missing one.
+    let mut names: Vec<String> = GENERATED_SHIM_NAMES.iter().map(|s| s.to_string()).collect();
+    names.sort();
+    assert_eq!(written, names, "the shim names written and the names the prune keeps must be one set");
 }
 
 #[test]
@@ -48407,7 +48456,7 @@ fn prune_stale_shims_deletes_the_orphans_and_keeps_everything_else() {
     write("mytool", "#!/bin/sh\necho mine\n");
     fs::create_dir(dir.join("loomux-subdir-shim (#1)")).unwrap();
 
-    prune_stale_shims(dir, &["gh", "git", "orrerix", "loomux"]);
+    prune_stale_shims(dir);
 
     let mut left: Vec<String> =
         fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();

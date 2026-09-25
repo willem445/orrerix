@@ -3298,9 +3298,22 @@ fn shim_cmd_delegator(program: &str, real_bs: &str, sh_path: Option<&str>) -> St
     )
 }
 
+/// Every name `ensure_shims` can write into the shim dir (#3477) — bare, each
+/// covering its `.cmd` twin. A CONSTANT on purpose, never the set a given spawn
+/// actually wrote: `gh`/`git` are written only when `resolve_program` finds the
+/// real binary, and that lookup misses transiently (an upgrade uninstalls, then
+/// reinstalls). Were "kept" that spawn's set, one spawn in the window would delete
+/// the MERGE GATE from a dir every live pane of every group has first on PATH, and
+/// each of them would reach the real `gh` ungated once it was back (#3481 B1). A
+/// gate shim left for a program that is really gone shadows nothing, so keeping it
+/// costs nothing. "Kept" is THIS build's set: a build that adds a shim name must
+/// add it here, and an older build running beside it will still prune that name
+/// on its own spawns (both share `%APPDATA%orrerixghshim`).
+pub const GENERATED_SHIM_NAMES: [&str; 4] = ["gh", "git", "orrerix", "loomux"];
+
 /// Whether a file found in the shared shim dir is a STALE product-generated shim
-/// that `ensure_shims` should delete (#3477): its name is not one this build just
-/// wrote (`kept`, bare names — each covers its `.cmd` twin too), and one of its
+/// that `ensure_shims` should delete (#3477): its name is not in
+/// [`GENERATED_SHIM_NAMES`] (a `.cmd` twin counts as its bare name), and one of its
 /// first four lines is a comment carrying the product's own shim header — `#` or
 /// `rem`, then a brand name (current or legacy), then `shim (#`, which is how every
 /// shim this product has ever generated opens (`# orrerix gh shim (#83)`,
@@ -3314,9 +3327,9 @@ fn shim_cmd_delegator(program: &str, real_bs: &str, sh_path: Option<&str>) -> St
 /// a file this product did not write is never deleted, whatever its name, so the
 /// worst case of a missed orphan is today's behaviour, never a lost user file.
 #[doc(hidden)] // pub so the integration test can pin the pruning rule
-pub fn is_stale_generated_shim(file_name: &str, head: &str, kept: &[&str]) -> bool {
+pub fn is_stale_generated_shim(file_name: &str, head: &str) -> bool {
     let bare = file_name.strip_suffix(".cmd").unwrap_or(file_name);
-    if kept.contains(&bare) {
+    if GENERATED_SHIM_NAMES.contains(&bare) {
         return false;
     }
     head.lines().take(4).any(|line| {
@@ -3342,7 +3355,7 @@ pub fn is_stale_generated_shim(file_name: &str, head: &str, kept: &[&str]) -> bo
 /// lines); a file it cannot read or delete is left alone, best-effort like every
 /// other write in `ensure_shims`.
 #[doc(hidden)] // pub so the integration test can drive the real deletion
-pub fn prune_stale_shims(dir: &Path, kept: &[&str]) {
+pub fn prune_stale_shims(dir: &Path) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -3358,7 +3371,7 @@ pub fn prune_stale_shims(dir: &Path, kept: &[&str]) {
         if f.take(512).read_to_end(&mut head).is_err() {
             continue;
         }
-        if is_stale_generated_shim(&name, &String::from_utf8_lossy(&head), kept) {
+        if is_stale_generated_shim(&name, &String::from_utf8_lossy(&head)) {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -49471,15 +49484,10 @@ impl OrchRegistry {
         self.write_refusal_shim(&dir, "loomux", loomux_shim_sh(), loomux_shim_cmd());
         // #3477: anything else in this dir shadows a real program on every agent
         // pane's PATH, so drop the shims an earlier build wrote and this one no
-        // longer does — marker-gated, see `is_stale_generated_shim`.
-        let mut kept = vec!["orrerix", "loomux"];
-        if gh {
-            kept.push("gh");
-        }
-        if git {
-            kept.push("git");
-        }
-        prune_stale_shims(&dir, &kept);
+        // longer does — marker-gated, see `is_stale_generated_shim`. Takes no
+        // list from here: what this spawn resolved must never decide what is kept
+        // (`GENERATED_SHIM_NAMES`, #3481 B1).
+        prune_stale_shims(&dir);
         (gh || git).then_some(dir)
     }
 

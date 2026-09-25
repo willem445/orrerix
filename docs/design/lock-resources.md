@@ -54,9 +54,15 @@ Two lessons follow, and both are in the product now:
 - **The product owns that directory, so it cleans it.** `ensure_shims` deletes any file
   there that carries a shim header this product generates (`# orrerix … shim (#…)`, or the
   same with the legacy name, or `rem` for the `.cmd` twin) and whose name is not one this
-  build writes (`is_stale_generated_shim`). The rule depends only on the header, never on a
-  tool name, so it knows nothing about `node` or `npm` (constraint 8). It also fails safe:
-  a file without that header stays, whatever it is called.
+  build can write (`is_stale_generated_shim`, `GENERATED_SHIM_NAMES`). The rule depends
+  only on the header, never on a tool name, so it knows nothing about `node` or `npm`
+  (constraint 8). It also fails safe: a file without that header stays, whatever it is
+  called. The kept set is a constant, never what a given spawn resolved: `gh`/`git` are
+  written only when the real binary is found, and a transient miss during an upgrade would
+  otherwise delete the merge gate from the one directory every live pane shares (#3481 B1).
+  "Kept" means *this build's* set. Every orrerix build on the machine shares the directory,
+  so a build that adds a shim name must add it to the constant, and an older build running
+  at the same time will still prune the new name on its own spawns.
 - **The same `%~dp0` bug was live in the gates.** The `gh`/`git` `.cmd` delegators used
   the same top-level `%~dp0` to find their POSIX shim. Started by a quoted name through
   `PATH`, they ran `sh <cwd>\gh`, so a file named `gh` in the agent's own worktree would

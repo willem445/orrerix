@@ -625,3 +625,73 @@ residuals: the text-tier attribution (H2/H3) and the `merged_at` window arm
 are not ported — the pane has no `--pr-meta`, so the population is every PR
 the surviving log names structurally and `end_source` always says which
 fallback answered.
+
+## Averages: what is a sample
+
+`src/tokenaverages.ts` (#3475 slice B) answers "what does a pane / block /
+model / work item cost *on average*", and the whole design is the choice of
+sample — the population a mean and a median are taken over. Two answers,
+because the four groupings ask two different questions.
+
+**Agent, block, model: one sample per interval.** A sample is one `Delta` —
+the spend between two consecutive rows of one usage key, exactly what the
+plot's buckets are summed from. So *n* counts deltas, never rows: a key with
+four rows has three samples, and a key with only its baseline row has none
+(its lifetime-to-first-row is deliberately not drawn, §The coverage note).
+With that sample a pane that ran away for one interval is ONE huge value among
+modest ones — 100 / 100 / 10 000 has a mean of 3 400 and a median of 100. The
+median is the headline (it is what a typical interval of that key costs), and
+the mean is printed beside it because the gap between them IS the runaway
+signal; showing either alone hides the other half of that. A `null` or blank
+model keys as `unknown model` and keeps its own row — "the sampler recorded no
+model" is a different fact from any model's spend.
+
+**Item: one sample per work item.** A sample is one feature bar's TOTAL spend
+inside the window (`attributeAgents`' bucket, reused as-is), so the mean is
+literally tokens ÷ items and *n* is the number of items that spent in the
+window — an item that spent nothing there is not a sample of it. Only
+`feature` bars are items. The orchestrator's spend is group-wide by
+construction (rung 0) and `(unattributed)` is spend no item could be named
+for; dividing either across the items would inflate every item by work none of
+them did, and dropping them would make the chart look cheaper than the group
+was. So both stay OUT of the items denominator and are shown as rows of their
+own, each with its interval sample like the other groupings.
+
+**The window, the mark, and the floor.** The window is `[startMs, endMs]`,
+inclusive at both ends as `bucketSeries` counts it; a delta outside it is
+excluded and *counted* (`outside`), never clamped onto an edge. With a mark,
+each row carries `before` / `after` halves partitioned on the delta's `tsMs`
+(`< mark` before, `>= mark` after — the split `beforeAfter` makes on
+bucket starts). On
+an interval row the halves partition *n*; on the items row they cannot, since
+an item that spent on both sides is one item in `all` and one on each side —
+its *sum* partitions instead, and that is the identity pinned. The five-number
+cell is `statcell.ts`' `statCell`, injected by the caller (pure modules are
+import-free), so a cell below `MEDIAN_MIN_N` (3) is `null`; the mean obeys the
+same floor, because a table that nulled a median of two and printed a mean of
+two would invite reading the printed one. The sum is never floored. Cost is
+null-poisoned as everywhere in this panel: one interval with no cost figure
+makes that cell's sum, mean and median `null`, with `unknown` saying how many.
+
+**Over time.** `averagesOverTime` cuts the same population into time buckets
+and groups each bucket exactly as the totals are grouped, under the same key
+list — so a key's per-bucket sums add back to its totals row, and the grid is
+dense: a bucket where nothing spent is `n: 0`, not a missing point (the
+plot's reason, §Differencing, and why the grid is dense). The default bucket
+is one LOCAL CALENDAR DAY: a five-minute bucket holds one delta per key, where
+a mean and a median are the same number, and "per day" is how the trend is
+read. A local day is 23 or 25 hours across DST, so the day grid is never
+`n × 86 400 000`: each step is `setDate` followed by `setHours(0, 0, 0, 0)`
+(the `addDays` idiom). The second call is needed where DST starts AT midnight
+(America/Santiago). That day begins at 01:00, and without the re-anchor every
+later bucket would keep starting at 01:00, filing each 00:00–01:00 delta
+under the day before. Both transition shapes are pinned under a forced `TZ`.
+A fixed-width `bucketMs` is available and aligns to multiples of itself as
+the plot's grid does. The grid is capped at `MAX_BUCKETS` (100 000), which
+is a guard against a nonsense window, not a sizing: the caller picks a bucket
+width that keeps grid × keys small.
+
+`statcell.ts` is a verbatim copy of `tokenscorecard.ts`' cell, not a move:
+neither pure module may import the other (TS5097), so `test/statcell.test.ts`
+runs both over hand-known fixtures and a generated spread and asserts they
+agree — the duplication is pinned rather than trusted.

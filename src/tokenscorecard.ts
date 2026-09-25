@@ -213,8 +213,12 @@ function medianOf(sorted: readonly number[]): number | null {
 
 /** `statCell` — the five-number cell every comparison column is made of.
  *  Quartiles use the exclusive-median (Tukey hinge) convention: the halves
- *  exclude the middle element on an odd-length sample. */
-function statCell(values: readonly (number | null | undefined)[]): StatCell {
+ *  exclude the middle element on an odd-length sample.
+ *
+ *  Exported only so `test/statcell.test.ts` can pin this copy against
+ *  `src/statcell.ts`'s: the two are duplicated (TS5097 keeps pure modules
+ *  import-free) and must not drift (#3475 slice B). */
+export function statCell(values: readonly (number | null | undefined)[]): StatCell {
   const xs = values
     .filter((v): v is number => typeof v === "number" && Number.isFinite(v))
     .sort((a, b) => a - b);

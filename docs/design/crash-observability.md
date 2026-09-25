@@ -344,6 +344,53 @@ one allocation we know about, and this records the next one we do not. Making
 the remaining small allocations fallible would be a far larger and far less
 valuable change than either.
 
+### 1c. Poll-path reads fail soft (#3469)
+
+§1b records a refused allocation; it cannot stop the abort that follows. For the
+**large, polled** reads that can be stopped, #3469 does: they go through
+`loomux_engine::boundedread`, whose `read_to_string_bounded(path, limit)`
+refuses a file over `limit` before reserving anything and reserves the buffer
+with `try_reserve_exact`/`try_reserve`, and whose `try_push` makes a typed row
+`Vec`'s growth fallible. A refusal is then an `Err` the caller reports — one
+`poll-read-failed` audit row and breadcrumb per failing episode (latched per
+group and reader, re-armed by the next success) — and the tick is skipped.
+Nothing global changed: the allocator is §1b's, and no dependency was added.
+
+**What the #3469 record does and does not say.** It was
+`1048576 bytes (align 8)`. Align 8 is not a byte buffer (`String`/`Vec<u8>` are
+align 1), so the refused request was a **typed** collection — a row `Vec`, a
+`Vec<Value>`, a deque — not the text a file was read into. The record does not
+name the site; the WER dump does (symbolicate it with `symbolicate.yml`), and
+nothing here claims to have found it. That is why this change makes the typed
+row buffers fallible as well as the byte buffers, and why the list below is
+"the poll-path sites that can ask for this much", not "the site that did".
+
+| Site | Poll cadence | Change | Why |
+| --- | --- | --- | --- |
+| `OrchRegistry::usage_series` (`usage-series.jsonl`) | chart, 30 s | **Fails soft.** Bounded read (`SERIES_READ_LIMIT_BYTES`, 4 × the 32 MB revisit trigger); fallible parsed-row and payload-row `Vec`s. Degrade: `Null`, the command's existing degrade. | Unrotated, grows with the calendar; the typed row buffers are the align-8 class. |
+| `OrchRegistry::audit_log_windowed` (`audit.1.jsonl` + `audit.jsonl`) | viewer follow poll; derivations on their edges | **Fails soft**, and stops allocating in proportion to the log: generations parsed one at a time (no concatenated ~13 MB `String`), entries kept in a deque grown fallibly on demand and capped at `AUDIT_VIEW_LIMIT` (no `Vec` of every entry, and no full-window reservation for a short log). Per-file ceiling `AUDIT_READ_LIMIT_BYTES` (4 × rotation). Degrade: an **empty window marked truncated**. The two derivations that read the flag, `front_door_refusals` and `refusal_roster`, see it as a partial window rather than "nothing was refused". | The largest poll-path read: two generations up to ~8 MB each. |
+| `OrchRegistry::audit_log`'s three callers (the same read, with the flag dropped) | on their edges; viewer poll | **Degrade reads as empty.** `resume_group`'s pause-suppression notice is computed from an empty timeline and not re-sent, so that episode's report is lost. `audit_derived_orphans` lists no audit-derived orphans (the `queue_orphans` snapshot half is unaffected). The `orch_audit` viewer is blank for the tick. | `audit_log` is `audit_log_windowed(..).0`, and these callers already dropped the flag at the 5000-entry cut. The `poll-read-failed` row is their record. |
+| `usage::read_transcript_tail` | usage tick, 1 s | **Left.** | Already bounded at 256 KiB (`TRANSCRIPT_TAIL_READ_BYTES`), and std's `read_to_end` already reserves fallibly — an `Err` there is the function's existing `None`. The remaining infallible allocation is a ≤ 256 KiB lossy UTF-8 copy. |
+| `get_output` (`agent_output_tail` → `termgrid::render_screen`) | agent-invoked, not a timer | **Left.** | Bounded: the ring clone is ≤ 256 KiB (`OUTPUT_RING_CAP`), history ≤ 4096 rows, a grid row ≤ 1000 cells. The 250 ms prompt poll reads `output_tail_bounded`, smaller still. |
+| Per-line parsing (`serde_json::Value`, field `String`s), the IPC serialisation of a payload | every read above | **Left — the crash log's job.** | Small, many, and inside `serde_json`/Tauri, which have no fallible mode. A machine refusing a few hundred bytes is past any one read degrading; §1b records it. |
+
+**Error kinds the bounded read does not newly fail on.** A generation that is
+missing, unreadable or not UTF-8 is treated exactly as the
+`fs::read_to_string` it replaced treated it (skipped, or read as empty); only
+the two outcomes that are new — over the limit, allocator refused — take the
+degrade. So a log a pre-#3469 build could show is one this build shows.
+
+**Test.** The refusal is injected through the reader's own limit
+(`OrchRegistry::set_poll_read_limit`, a test seam), never by exhausting memory:
+`a_series_read_over_its_limit_fails_soft_and_reports_once` and
+`an_audit_window_over_its_limit_fails_soft_as_a_truncated_window` in
+`src-tauri/tests/orchestration.rs`, with
+`the_bounded_audit_window_matches_the_whole_log_trim_across_both_generations`
+pinning that the deque answers what the whole-log trim answered. A genuine
+`Refused` cannot be produced without exhausting memory; it takes the same `Err`
+path as `TooLarge` from every caller's point of view, which is what the two
+tests pin.
+
 ### 2. Breadcrumb log
 
 `breadcrumb(event, detail)` appends one timestamped line to

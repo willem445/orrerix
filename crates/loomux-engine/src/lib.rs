@@ -691,6 +691,12 @@
 //! here, which is also what `crates/loomux-server` will need when
 //! `group_metrics` reads this file.
 //!
+//! [`boundedread`] (#3469) is the fallible whole-file read the poll paths use
+//! (the audit window, the usage series): a byte limit plus `try_reserve` on
+//! the buffer, so a refused allocation is an `Err` the caller reports instead
+//! of `handle_alloc_error`'s abort. `std` only; here so the server daemon
+//! reads those files through the same door.
+//!
 //! [`providerlimit`] (#2811 S5a) is the per-provider spend/usage-limit table and
 //! the pane-tail reader over it — data plus `match`, the same class as
 //! [`model`], with no I/O, no clock and no registry. Plan-2504 filed the slice
@@ -723,6 +729,7 @@
 //! `delivery-triaged` audit row. See `docs/design/delivery-triage.md`.
 
 pub mod brand;
+pub mod boundedread;
 pub mod budget;
 pub mod fsatomic;
 pub mod groupid;

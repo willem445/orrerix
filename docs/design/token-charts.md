@@ -795,3 +795,70 @@ per PR), so slice E plots a median per bucket with the same `statCell`. Each
 sample lands in exactly one bucket, by the instant of its own event, so a
 series sums to its total. A tuning mark splits every sample the same way into
 before and after.
+
+## Tokens per completed item — what divides what
+
+`src/tokenperitem.ts` (#3475 slice C) answers *how many tokens does a finished
+work item cost, and which roles spent them*. It is DOM-free and import-free
+(TS5097, as above); the shapes it reads — a `Delta`, an `Attribution`, a board
+row — are declared as the structural subset it needs, so slice E passes
+`diffRows`'s deltas and `attributeAgents`'s result straight in.
+
+**The numerator is every token the group spent in the window.** The
+orchestrator's included, in-flight work included, unattributed spend
+included. It is a *throughput* ratio — spend over a period divided by what
+the period finished — and that choice is forced by the two other readings the
+panel needs. A before/after pair around a tuning mark, and a per-day trend,
+must each add back up to the figure beside them, and only a numerator
+partitioned by the DELTA's instant does: an item's own spend is spread over
+days it was not finished on, so "the tokens of the items finished today" is a
+quantity no day owns. The alternative — sum only the spend attributed to the
+done items — was rejected for that reason; what it would have said is kept as
+`byClass`, which splits the numerator into spend on a done item (the matched
+row or any container above it, walked cycle-safe), the orchestrator's, spend
+on rows not done (`inFlight`) and `unattributed`. The ratio is never shown
+without its composition.
+
+**The denominator is the caller's `doneIds`.** The orchestrator IS a cost of
+the items and is in the numerator; its bar is never an item, and its role row
+carries a note saying so. `perItem` is `null` when there are no items — never
+`0`, never `Infinity`.
+
+**An item is placed in time only by its done instant.** `doneIds` comes from
+slice D's lifecycle projection (the done transitions dated inside the window,
+with `doneAtMs`). Until slice E wires that in, the view passes the board's currently-`done`
+rows and labels the figure *board state, not dated*: the whole-window ratio
+still stands, but an undated item cannot be put on a side of a mark or in a
+day, so those item counts and ratios are `null` — never guessed from a board
+row's `updated_ms`, which is the row's last write, not its done moment. A
+done instant OUTSIDE the window counts as undated too: that item was not done
+in this window, so neither a half nor a bucket may claim it. Both entry points
+read that one rule (`placeItems`), so they cannot disagree on which items are
+placed.
+
+**Role share reads `Delta.role`** — the role the series row carried, not a
+list. A role this build has never heard of keeps its own row, and a blank one
+reads `unknown`, apart (the `"claude" ?` rule applied to roles). The class
+split also reads the delta's role for the orchestrator, so an orchestrator
+whose agent has left the roster is still counted as the orchestrator's spend
+rather than as unattributed.
+
+**The window is inclusive at both ends**, `featureBars`' rule, so this
+numerator equals the bars' total over the same window. Deltas outside it are
+counted (`excluded`), never silently dropped. `markTsMs` partitions on
+`tsMs < mark`; a delta on the mark is after it.
+
+**Over time** (`perCompletedItemOverTime`), the default bucket is a CALENDAR
+day: local midnights, advanced with `setDate` — a DST day is 23 or 25 hours,
+and `n * 86_400_000` would move every later bucket boundary by an hour. A
+fixed `bucketMs` aligns to its multiples, as `bucketSeries` does. Buckets are
+half-open; the grid always includes the bucket holding `endMs`. Over the
+same window the buckets' tokens and `byClass` sum to the totals', their items
+sum to `before.items + after.items`, and — when `doneAtMs` is supplied — the
+series' `unplacedItems` equals the totals' `undatedItems`, so placed plus
+unplaced is `items`. Undated as a whole, every bucket's items are `null` and
+`unplacedItems` is all of `doneIds`, while the totals report `undatedItems` 0
+and `null` half counts: the two say "cannot place" in their own shapes. That is the
+property slice E's trend line and its table share; it holds unless the grid hit
+its bucket cap (`truncated`, whose spend is then counted `excluded`). A
+degenerate or inverted window yields no buckets.

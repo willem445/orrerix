@@ -1372,7 +1372,8 @@ Effort changes are not marked: the usage record does not carry effort.
 legend and metric panels name the selected counter. Use the wheel to zoom about
 the pointer and drag to pan. The custom window survives refreshes while
 following; select **custom · reset** to return to the default preset. The **log
-y** switch and y-axis autoscale to visible data. Select a change mark to fit a
+y** switch and y-axis autoscale to visible data. The default plot counter is
+output tokens, so the large cache-read counter does not flatten other series. Select a change mark to fit a
 one-hour-before/one-hour-after window and compare its before/after table.
 
 Trend lines share this window and time axis: tokens per completed item, items

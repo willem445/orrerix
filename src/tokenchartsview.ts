@@ -55,9 +55,9 @@ import {
 } from "./tokencharts";
 import { makeScale, niceTicks, xForTs, tsForX, type TimelineScale } from "./timelinelayout";
 import { chooseBucket, clampWindow, linearTicks, logTicks, logValue, markSpan, panBy, yDomain, zoomAbout, type Window } from "./chartwindow";
-import { averagesOverTime } from "./tokenaverages";
+import { averages, averagesOverTime } from "./tokenaverages";
 import { lifecycle } from "./tokenlifecycle";
-import { perCompletedItemOverTime } from "./tokenperitem";
+import { perCompletedItem, perCompletedItemOverTime } from "./tokenperitem";
 import { statCell } from "./statcell";
 import { scorecardTable, type ScorecardTable } from "./tokenscorecard";
 import type { AuditEntry } from "./auditsummary";
@@ -233,7 +233,7 @@ export class TokenChartsView {
   private logScale = false;
   private drag: { pointerId: number; x: number; win: Window } | null = null;
   private metricTrendsEl: HTMLElement;
-  private metric: Metric = "total";
+  private metric: Metric = "out";
   private collapseCli = false;
   private splitModel = false;
   /** The mark the readout is about — held as an INSTANT, not an index, because
@@ -649,7 +649,7 @@ export class TokenChartsView {
     if (series.keys.length === 0) return;
 
     const totals = el("div", "tokens-lifetime");
-    totals.append(el("span", "tokens-counter-label", `Counter: ${this.metric === "total" ? "all tokens" : this.metric === "cache_r" ? "cache read" : this.metric}`));
+    totals.append(el("span", "tokens-counter-label", "Feature bars: total tokens (includes cache reads)"));
     const num = (label: string, v: number, cls: string) => {
       const s = el("span", `tokens-lifetime-item ${cls}`);
       s.append(el("span", "tokens-lifetime-label", label));
@@ -761,7 +761,7 @@ export class TokenChartsView {
       const y = yFor(v);
       const pixel = Math.round(y);
       const labelText = fmtMetric(v, this.metric);
-      if (usedY.has(pixel)) continue;
+      if (Array.from(usedY).some((drawn) => Math.abs(drawn - pixel) < 12)) continue;
       usedY.add(pixel);
       const rule = svgEl("line", "tokens-grid");
       rule.setAttribute("x1", String(scale.x0));
@@ -980,6 +980,8 @@ export class TokenChartsView {
     const doneAtMs = life.doneAtMs;
     const perOpts = { startMs: range.startMs, endMs: range.endMs, doneIds, doneAtMs, bucketMs: choice.bucketMs, metric: this.metric === "cost_usd" ? "total" as const : this.metric };
     const per = perCompletedItemOverTime(deltas, attribution, this.board, perOpts);
+    const perTotal = perCompletedItem(deltas, attribution, this.board, { ...perOpts, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }) });
+    const avgTotals = averages(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy: "agent", metric: this.metric, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }), stat: statCell });
     const avg = averagesOverTime(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy: "agent", metric: this.metric, bucketMs: choice.bucketMs, stat: statCell });
     const title = el("div", "tokens-section-title", `Trend metrics · counter: ${this.metric === "total" ? "all tokens" : this.metric === "cache_r" ? "cache read" : this.metric}`);
     this.metricTrendsEl.append(title);
@@ -987,8 +989,10 @@ export class TokenChartsView {
     rowsToDraw.push({ label: "tokens per completed item", buckets: per.buckets.map((b) => b.startMs), values: per.buckets.map((b) => b.perItem ?? 0) });
     rowsToDraw.push({ label: "items done per day", buckets: life.series.bucketStarts, values: life.series.done });
     rowsToDraw.push({ label: "median time-to-completion (h)", buckets: life.series.bucketStarts, values: life.series.ttcMs.map((xs) => xs.length ? statCell(xs).median ?? 0 : 0).map((n) => n / 3_600_000) });
-    const pane = avg.keys[0];
-    if (pane) rowsToDraw.push({ label: "average tokens per pane", buckets: avg.buckets, values: pane.points.map((p) => p.mean ?? 0) });
+    if (avg.keys.length > 0) rowsToDraw.push({ label: "average tokens per pane", buckets: avg.buckets, values: avg.buckets.map((_, i) => {
+      const values = avg.keys.map((key) => key.points[i]?.mean).filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+    }) });
     const svg = svgEl("svg", "tokens-trends-svg") as SVGSVGElement;
     svg.setAttribute("viewBox", "0 0 800 130"); svg.setAttribute("preserveAspectRatio", "none");
     rowsToDraw.forEach((trend, ri) => {
@@ -998,6 +1002,19 @@ export class TokenChartsView {
       this.metricTrendsEl.append(el("div", "tokens-trend-label", `${trend.label} · n=${fmtInt.format(vals.filter((v) => v > 0).length)}`));
     });
     this.metricTrendsEl.append(svg);
+    const detail = el("div", "tokens-derived-tables");
+    const addTable = (heading: string, headers: string[], values: string[][]) => {
+      detail.append(el("div", "tokens-section-title", heading));
+      const table = el("table", "tokens-table"); const thead = el("thead", ""); const hr = el("tr", "");
+      headers.forEach((h) => hr.append(el("th", "", h))); thead.append(hr); table.append(thead);
+      const tbody = el("tbody", "");
+      values.forEach((row) => { const tr = el("tr", ""); row.forEach((v) => tr.append(el("td", "tokens-cell-num", v))); tbody.append(tr); });
+      table.append(tbody); detail.append(table);
+    };
+    addTable("Average tokens per pane · n deltas", ["pane", "mean / median", "n", ...(this.selectedMarkMs === null ? [] : ["before", "after"])], avgTotals.rows.map((r) => [r.label, `${r.all.mean ?? "n/a"} / ${r.all.cell.median ?? "n/a"}`, String(r.n), ...(this.selectedMarkMs === null ? [] : [`${r.before?.mean ?? "n/a"} (n=${r.before?.n ?? 0})`, `${r.after?.mean ?? "n/a"} (n=${r.after?.n ?? 0})`])]));
+    addTable("Tokens per completed item · selected counter", ["metric", "value", "n", ...(this.selectedMarkMs === null ? [] : ["before", "after"])], [["tokens/item", String(perTotal.perItem ?? "n/a"), String(perTotal.items), ...(this.selectedMarkMs === null ? [] : [`${perTotal.before?.perItem ?? "n/a"} (n=${perTotal.before?.items ?? 0})`, `${perTotal.after?.perItem ?? "n/a"} (n=${perTotal.after?.items ?? 0})`])]]);
+    addTable("Lifecycle detail · audit window", ["metric", "value", "n"], [["items done/day", String(life.donePerDay.rate ?? "n/a"), String(life.doneIds.size)], ["median completion time (h)", String(statCell(life.ttc.map((x) => x.ms)).median ?? "n/a"), String(life.ttc.length)], ["audit transitions", String(life.transitions), String(life.tasksSeen)]]);
+    this.metricTrendsEl.append(detail);
     if (choice.coarsened || per.truncated || avg.outside > 0 || life.mayBeTruncated) {
       this.metricTrendsEl.append(el("div", "tokens-note", [choice.coarsened ? `Buckets coarsened to ${fmtTime(choice.bucketMs)}` : "", per.truncated ? "per-item trend truncated at its grid limit" : "", avg.outside ? `${avg.outside} average samples excluded` : "", life.mayBeTruncated ? `audit series may be truncated; read starts ${life.floorMs === null ? "unknown" : fmtTime(life.floorMs)}` : ""].filter(Boolean).join(" · ")));
     }

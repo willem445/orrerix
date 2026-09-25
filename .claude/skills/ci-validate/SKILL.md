@@ -66,6 +66,9 @@ now live in more than one crate):
 rustfmt --check --edition 2021 <changed .rs files> >/dev/null
 ```
 
+Before running rustfmt, call `acquire_lock("rustfmt")`; after it finishes, call
+`release_lock("rustfmt")`. The lock is cooperative and serializes workers that follow this procedure.
+
 ### The size cap: never on a file over 5,000 lines (#3469)
 
 **Never run rustfmt on a `.rs` file over 5,000 lines (`wc -l`), nor on any

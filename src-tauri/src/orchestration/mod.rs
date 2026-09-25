@@ -3253,6 +3253,19 @@ fn shim_cmd_delegator(program: &str, real_bs: &str, sh_path: Option<&str>) -> St
     // "never a silent bypass" guarantee this delegator exists for. Clearing
     // first means only the `set` line this function itself emits (when
     // `sh_path` is `Some`) can ever populate it.
+    //
+    // The POSIX shim beside this file is located through `call
+    // :orrerix_self_dir`, never a top-level `%~dp0` (#3477). cmd.exe expands a
+    // top-level `%~dp0` against the CURRENT DIRECTORY, not the script's own,
+    // when the batch was started by a QUOTED name that cmd resolved through
+    // PATH (`"gh" pr merge 5`) — the exact shape npm's own `.cmd` wrappers use
+    // (`"%_prog%" …` with `_prog=node`), so every npm script calling a shimmed
+    // program handed sh `<cwd>\<program>`. For a gate that is worse than a
+    // `No such file`: a file of that name in the agent's own worktree would
+    // run IN PLACE OF the gate. Inside a `call`ed label `%~dp0` reads the
+    // batch file's real path — the same workaround npm's cmd-shim ships
+    // (`:find_dp0`). The variable is assigned unconditionally, so an
+    // inherited value can never stand in for it.
     format!(
         "@echo off\r\n\
          rem loomux {program} shim (#83) — delegate to the POSIX shim using an\r\n\
@@ -3260,11 +3273,17 @@ fn shim_cmd_delegator(program: &str, real_bs: &str, sh_path: Option<&str>) -> St
          rem shell's PATH may not include sh.exe, so this no longer re-resolves\r\n\
          rem sh at invocation time.\r\n\
          setlocal\r\n\
+         call :orrerix_self_dir\r\n\
          set \"ORRERIX_SH=\"\r\n\
          {set_sh}\
          if not defined ORRERIX_SH goto :orrerix_no_sh\r\n\
-         \"%ORRERIX_SH%\" \"%~dp0{program}\" %*\r\n\
+         \"%ORRERIX_SH%\" \"%ORRERIX_SHIM_DIR%{program}\" %*\r\n\
          exit /b %errorlevel%\r\n\
+         \r\n\
+         :orrerix_self_dir\r\n\
+         rem #3477: the batch dir is only trustworthy inside a called label.\r\n\
+         set \"ORRERIX_SHIM_DIR=%~dp0\"\r\n\
+         exit /b 0\r\n\
          \r\n\
          :orrerix_no_sh\r\n\
          rem #335: no sh was found when this shim was generated — the merge/\r\n\
@@ -3277,6 +3296,85 @@ fn shim_cmd_delegator(program: &str, real_bs: &str, sh_path: Option<&str>) -> St
          \"{real_bs}\" %*\r\n\
          exit /b %errorlevel%\r\n"
     )
+}
+
+/// Every name `ensure_shims` can write into the shim dir (#3477) — bare, each
+/// covering its `.cmd` twin. A CONSTANT on purpose, never the set a given spawn
+/// actually wrote: `gh`/`git` are written only when `resolve_program` finds the
+/// real binary, and that lookup misses transiently (an upgrade uninstalls, then
+/// reinstalls). Were "kept" that spawn's set, one spawn in the window would delete
+/// the MERGE GATE from a dir every live pane of every group has first on PATH, and
+/// each of them would reach the real `gh` ungated once it was back (#3481 B1). A
+/// gate shim left for a program that is really gone shadows nothing, so keeping it
+/// costs nothing. "Kept" is THIS build's set: a build that adds a shim name must
+/// add it here, and an older build running beside it will still prune that name
+/// on its own spawns (both share `%APPDATA%orrerixghshim`).
+pub const GENERATED_SHIM_NAMES: [&str; 4] = ["gh", "git", "orrerix", "loomux"];
+
+/// Whether a file found in the shared shim dir is a STALE product-generated shim
+/// that `ensure_shims` should delete (#3477): its name is not in
+/// [`GENERATED_SHIM_NAMES`] (a `.cmd` twin counts as its bare name), and one of its
+/// first four lines is a comment carrying the product's own shim header — `#` or
+/// `rem`, then a brand name (current or legacy), then `shim (#`, which is how every
+/// shim this product has ever generated opens (`# orrerix gh shim (#83)`,
+/// `rem loomux resource-guard shim (#318)`).
+///
+/// Why it exists: the shim dir is prepended to every agent pane's PATH, so ANY
+/// file left there shadows the real program of that name in every pane, forever.
+/// A build that once wrote `node`/`npm`/`cargo` shims (#322, closed unmerged — see
+/// `docs/design/lock-resources.md`) left them behind, and nothing removed them;
+/// they broke `npm run` in every pane. The marker gate is the fail-safe direction:
+/// a file this product did not write is never deleted, whatever its name, so the
+/// worst case of a missed orphan is today's behaviour, never a lost user file.
+#[doc(hidden)] // pub so the integration test can pin the pruning rule
+pub fn is_stale_generated_shim(file_name: &str, head: &str) -> bool {
+    let bare = file_name.strip_suffix(".cmd").unwrap_or(file_name);
+    if GENERATED_SHIM_NAMES.contains(&bare) {
+        return false;
+    }
+    head.lines().take(4).any(|line| {
+        let l = line.trim_start();
+        let rest = if let Some(r) = l.strip_prefix('#') {
+            r
+        } else if l.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("rem ")) {
+            &l[4..]
+        } else {
+            return false;
+        };
+        let rest = rest.trim_start();
+        [brand::NAME, brand::LEGACY_NAME].iter().any(|b| {
+            rest.strip_prefix(*b)
+                .is_some_and(|after| after.starts_with(' ') && after.contains("shim (#"))
+        })
+    })
+}
+
+/// Delete every stale product-generated shim in `dir` (#3477) — the I/O half of
+/// `is_stale_generated_shim`, which carries the rule and its argument. Reads at
+/// most 512 bytes of each regular file (every shim header sits in its first
+/// lines); a file it cannot read or delete is left alone, best-effort like every
+/// other write in `ensure_shims`.
+#[doc(hidden)] // pub so the integration test can drive the real deletion
+pub fn prune_stale_shims(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let mut head = Vec::new();
+        let Ok(f) = fs::File::open(entry.path()) else {
+            continue;
+        };
+        if f.take(512).read_to_end(&mut head).is_err() {
+            continue;
+        }
+        if is_stale_generated_shim(&name, &String::from_utf8_lossy(&head)) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// The POSIX `git` shim (#83): gates a `git push` that publishes a TAG (a `v*`
@@ -49384,6 +49482,12 @@ impl OrchRegistry {
         // slice, so that property stays true by inspection.
         self.write_refusal_shim(&dir, "orrerix", loomux_shim_sh(), loomux_shim_cmd());
         self.write_refusal_shim(&dir, "loomux", loomux_shim_sh(), loomux_shim_cmd());
+        // #3477: anything else in this dir shadows a real program on every agent
+        // pane's PATH, so drop the shims an earlier build wrote and this one no
+        // longer does — marker-gated, see `is_stale_generated_shim`. Takes no
+        // list from here: what this spawn resolved must never decide what is kept
+        // (`GENERATED_SHIM_NAMES`, #3481 B1).
+        prune_stale_shims(&dir);
         (gh || git).then_some(dir)
     }
 

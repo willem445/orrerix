@@ -44,7 +44,7 @@ export function panBy(win: Window, deltaMs: number, bounds: WindowBounds): Windo
   return clampWindow({ startMs: win.startMs + deltaMs, endMs: win.endMs + deltaMs }, bounds);
 }
 
-/** The before/after scope is half-open and symmetric around the mark. */
+/** The before/after scope is half-open and symmetric around the snapped split. */
 export function markSpan(markMs: number, k: number, bucketMs: number, gridOriginMs = 0): [number, number] {
   if (!Number.isFinite(markMs) || !Number.isFinite(k) || !Number.isFinite(bucketMs) || bucketMs <= 0 || !Number.isFinite(gridOriginMs))
     return [markMs, markMs];

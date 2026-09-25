@@ -896,3 +896,22 @@ increasing through one week. The bucket-by-key cell budget is 20,000; the
 chooser selects a coarse enough bucket to stay within that cap and reports
 `coarsened` so the view can disclose lost time resolution. It does not silently
 allocate a window-sized dense grid at the smallest interval.
+
+## Interaction: the view
+
+`tokenchartsview.ts` owns SVG and input wiring; window, y-domain, log mapping,
+ticks and bucket selection remain in `chartwindow.ts`. A custom window is stored
+as start/end instants, not as a preset name, so polls cannot reset a zoom. Wheel
+zoom maps the pointer through `tsForX`, then `zoomAbout`; pointer capture keeps
+a drag continuous outside the plot, and `panBy` clamps it to the series extent.
+Marks select the lifecycle comparison and fit their snapped split window.
+
+The view's default token counter is `total`; cache reads are a selectable
+measure but are not the default. Each chart/table labels its counter because
+per-item's numerator follows that selection and no longer necessarily matches
+the all-token feature bars. A shared bucket chooser caps bucket-by-key work;
+coarsening, truncation and excluded samples are surfaced next to trends. The
+four trend series share the chart window: per-completed-item tokens, completions
+per day, median completion latency and average tokens per agent pane. The
+lifecycle denominator is taken directly from done-in-window audit transitions,
+never from the board's current done status.

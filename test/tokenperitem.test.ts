@@ -256,6 +256,29 @@ test("undated items cannot be placed on a side of the mark: half item counts are
   assert.equal(p.after!.perItem, null);
 });
 
+test("a done instant OUTSIDE the window is undated in the totals, exactly as the series leaves it unplaced", () => {
+  // t-2 finished before the window opened and t-late after it closed: neither
+  // was done IN the window, so neither may land on a side of the mark — the
+  // series cannot put them in a bucket, and the two must agree.
+  const ids = new Set(["t-1", "t-2", "t-late"]);
+  const doneAtMs = new Map([
+    ["t-1", 1_500],
+    ["t-2", -5_000],
+    ["t-late", 20_000],
+  ]);
+  const opts = { startMs: 0, endMs: 9_999, doneIds: ids, doneAtMs };
+  const r = perCompletedItem(deltas, attribution, board, { ...opts, markTsMs: 3_000 });
+  assert.equal(r.undatedItems, 2);
+  assert.equal(r.before!.items, 1, "only t-1 was done before the mark inside the window");
+  assert.equal(r.after!.items, 0, "t-late was done after the window, not after the mark in it");
+  assert.equal(r.before!.perItem, 300); // 100 + 200 over t-1
+  assert.equal(r.after!.perItem, null);
+  const s = perCompletedItemOverTime(deltas, attribution, board, { ...opts, bucketMs: 2_000 });
+  assert.equal(s.unplacedItems, r.undatedItems, "totals and series disagree on what is placed");
+  assert.equal(s.items, r.before!.items! + r.after!.items!, "the halves and the buckets place the same items");
+  assert.equal(s.items! + s.unplacedItems, r.items, "placed + unplaced is the whole population");
+});
+
 test("the over-time series sums back to the totals, bucket by bucket", () => {
   const doneAtMs = new Map([
     ["t-1", 1_500],

@@ -24,9 +24,11 @@
 //    numerator (it IS a cost of the items) and is never an item; its role row
 //    says so.
 //  - An item count is placed on a side of a mark, or in a bucket, only by its
-//    DONE INSTANT (`doneAtMs`). A bare id set carries no instant, so those
-//    counts are `null` — never estimated from a board row's `updated_ms`,
-//    which is the last write and not the done moment.
+//    DONE INSTANT (`doneAtMs`), and only when that instant is inside the
+//    window — one outside it was not done in this window, and the totals and
+//    the series count it unplaced alike (`placeItems`). A bare id set carries
+//    no instant, so those counts are `null` — never estimated from a board
+//    row's `updated_ms`, which is the last write and not the done moment.
 
 // ── the inputs, structurally ────────────────────────────────────────────────
 
@@ -75,7 +77,8 @@ export interface PerItemOpts {
    *  the board's currently-`done` rows ("board state, not dated"). */
   doneIds: ReadonlySet<string>;
   /** Each item's done instant. Optional, and the only thing that can place an
-   *  item before/after a mark or into a bucket — see the module header. */
+   *  item before/after a mark or into a bucket — and only an instant inside
+   *  the window does; see the module header. */
   doneAtMs?: ReadonlyMap<string, number>;
   /** The tuning mark. When given, `before`/`after` partition the numerator on
    *  the DELTA's instant (`tsMs < markTsMs` is before) and the items on their
@@ -134,8 +137,10 @@ export interface PerCompletedItem extends PerItemSide {
   /** Whether `doneAtMs` was supplied. False is the pre-slice-D "board state,
    *  not dated" figure. */
   dated: boolean;
-  /** Done ids with no instant in `doneAtMs` (0 when undated as a whole — then
-   *  every half/bucket item count is `null` instead). */
+  /** Done ids with no instant in `doneAtMs`, or one OUTSIDE the window — not
+   *  done in it, so placed on neither side of a mark; the series counts the
+   *  same ids `unplacedItems`. 0 when undated as a whole — then every
+   *  half/bucket item count is `null` instead. */
   undatedItems: number;
   before?: PerItemSide;
   after?: PerItemSide;
@@ -242,6 +247,48 @@ class Acc {
 const inWindow = (t: number, startMs: number, endMs: number): boolean =>
   Number.isFinite(t) && t >= startMs && t <= endMs;
 
+/**
+ * Count the done ids into `slots` by their done instant. An id is PLACED only
+ * when it has an instant INSIDE the window; one with no instant, or with an
+ * instant before the window opened or after it closed, is `unplaced` — it was
+ * not done in this window, so no half and no bucket may claim it. The ONE rule
+ * both entry points read, so the totals' halves and the series' buckets cannot
+ * disagree on which items they place (#3490 N1). `slotOf` returning `-1` is
+ * also unplaced.
+ */
+function placeItems(
+  opts: Pick<PerItemOpts, "startMs" | "endMs" | "doneIds" | "doneAtMs">,
+  slots: number,
+  slotOf: (at: number) => number
+): { counts: number[]; unplaced: number } {
+  const counts: number[] = new Array(slots).fill(0);
+  let unplaced = 0;
+  for (const id of opts.doneIds) {
+    const at = opts.doneAtMs?.get(id);
+    const i = typeof at === "number" && inWindow(at, opts.startMs, opts.endMs) ? slotOf(at) : -1;
+    if (i < 0) unplaced++;
+    else counts[i]++;
+  }
+  return { counts, unplaced };
+}
+
+/** Feed every in-window delta's `metric` value and class to `take`; returns
+ *  how many were EXCLUDED — outside the window, or refused by `take` (a
+ *  truncated grid has no bucket for it). Counted, never silently dropped. */
+function eachInWindow(
+  deltas: readonly PerItemDeltaLike[],
+  opts: Pick<PerItemOpts, "startMs" | "endMs" | "metric">,
+  classOf: ClassOf,
+  take: (d: PerItemDeltaLike, v: number, c: keyof ByClass) => boolean
+): number {
+  const metric = opts.metric ?? "total";
+  let excluded = 0;
+  for (const d of deltas) {
+    if (!inWindow(d.tsMs, opts.startMs, opts.endMs) || !take(d, num(d[metric]), classOf(d))) excluded++;
+  }
+  return excluded;
+}
+
 // ── the totals ──────────────────────────────────────────────────────────────
 
 /**
@@ -249,8 +296,9 @@ const inWindow = (t: number, startMs: number, endMs: number): boolean =>
  * and — when a mark is given — the same figures on each side of it.
  *
  * `before.tokens + after.tokens === tokens` always (the partition is on the
- * delta's instant, and every in-window delta lands on exactly one side). The
- * item counts partition the same way when every done id is dated.
+ * delta's instant, and every in-window delta lands on exactly one side). With
+ * `doneAtMs`, `before.items + after.items + undatedItems === items`, where an
+ * instant outside the window counts as undated (`placeItems`).
  */
 export function perCompletedItem(
   deltas: readonly PerItemDeltaLike[],
@@ -258,7 +306,6 @@ export function perCompletedItem(
   board: readonly PerItemBoardRowLike[],
   opts: PerItemOpts
 ): PerCompletedItem {
-  const metric = opts.metric ?? "total";
   const classOf = classifier(attribution, board, opts.doneIds);
   const mark = opts.markTsMs;
   const hasMark = typeof mark === "number" && Number.isFinite(mark);
@@ -266,42 +313,24 @@ export function perCompletedItem(
   const all = new Acc();
   const before = new Acc();
   const after = new Acc();
-  let excluded = 0;
-
-  for (const d of deltas) {
-    if (!inWindow(d.tsMs, opts.startMs, opts.endMs)) {
-      excluded++;
-      continue;
-    }
-    const v = num(d[metric]);
-    const c = classOf(d);
+  const excluded = eachInWindow(deltas, opts, classOf, (d, v, c) => {
     all.add(d, v, c);
     if (hasMark) (d.tsMs < mark ? before : after).add(d, v, c);
-  }
+    return true;
+  });
 
   const dated = opts.doneAtMs !== undefined;
-  let undatedItems = 0;
-  let itemsBefore = 0;
-  let itemsAfter = 0;
-  if (dated) {
-    for (const id of opts.doneIds) {
-      const at = opts.doneAtMs!.get(id);
-      if (typeof at !== "number" || !Number.isFinite(at)) undatedItems++;
-      else if (hasMark && at < mark) itemsBefore++;
-      else itemsAfter++;
-    }
-  }
-
+  const placed = placeItems(opts, 2, (at) => (hasMark && at < mark ? 0 : 1));
   const out: PerCompletedItem = {
     ...all.side(opts.doneIds.size),
     items: opts.doneIds.size,
     excluded,
     dated,
-    undatedItems,
+    undatedItems: dated ? placed.unplaced : 0,
   };
   if (hasMark) {
-    out.before = before.side(dated ? itemsBefore : null);
-    out.after = after.side(dated ? itemsAfter : null);
+    out.before = before.side(dated ? placed.counts[0] : null);
+    out.after = after.side(dated ? placed.counts[1] : null);
   }
   return out;
 }
@@ -329,7 +358,7 @@ export interface PerItemOverTime {
   bucketMs: number | null;
   buckets: PerItemBucket[];
   /** Sum over buckets — equals `perCompletedItem`'s `tokens` for the same
-   *  window. */
+   *  window unless `truncated`. */
   tokens: number;
   /** Items placed in a bucket; `null` when undated. */
   items: number | null;
@@ -358,50 +387,43 @@ function localMidnight(t: number): number {
   return d.getTime();
 }
 
-/**
- * The per-item figure as a trend: one bucket per calendar day by default (or
- * per `bucketMs`, aligned to multiples of it as `bucketSeries` aligns its
- * grid), each carrying the tokens spent in it, the items done in it, and their
- * ratio. Buckets are half-open; the window stays inclusive at both ends, so the
- * bucket containing `endMs` is always on the grid. Summing the buckets gives
- * back the totals — the property slice E's plot and the table beside it share.
- */
-export function perCompletedItemOverTime(
-  deltas: readonly PerItemDeltaLike[],
-  attribution: PerItemAttributionLike,
-  board: readonly PerItemBoardRowLike[],
-  opts: Omit<PerItemOpts, "markTsMs"> & { bucketMs?: number }
-): PerItemOverTime {
-  const classOf = classifier(attribution, board, opts.doneIds);
-  const metric = opts.metric ?? "total";
-  const fixed =
-    typeof opts.bucketMs === "number" && Number.isFinite(opts.bucketMs) && opts.bucketMs >= 1
-      ? Math.floor(opts.bucketMs)
-      : null;
+interface Grid {
+  /** The fixed width in use; `null` for calendar days. */
+  fixed: number | null;
+  starts: number[];
+  truncated: boolean;
+  /** Exclusive end of bucket `i`. */
+  endOf: (i: number) => number;
+  /** Index of the bucket holding `t`, or -1. */
+  indexOf: (t: number) => number;
+}
 
+/** The bucket grid over `[startMs, endMs]`: local midnights unless a finite
+ *  `bucketMs` of at least 1 asks for a fixed width, which aligns to its
+ *  multiples. A degenerate or inverted window yields NO buckets rather than a
+ *  runaway loop — `bucketSeries`'s rule. */
+function buildGrid(startMs: number, endMs: number, bucketMs: number | undefined): Grid {
+  const fixed =
+    typeof bucketMs === "number" && Number.isFinite(bucketMs) && bucketMs >= 1
+      ? Math.floor(bucketMs)
+      : null;
   const starts: number[] = [];
   let truncated = false;
-  // A degenerate or inverted window yields NO buckets rather than a runaway
-  // loop — `bucketSeries`'s rule.
-  if (Number.isFinite(opts.startMs) && Number.isFinite(opts.endMs) && opts.startMs <= opts.endMs) {
-    let t = fixed !== null ? Math.floor(opts.startMs / fixed) * fixed : localMidnight(opts.startMs);
-    while (t <= opts.endMs) {
+  const next = (t: number): number => (fixed !== null ? t + fixed : nextLocalMidnight(t));
+  if (Number.isFinite(startMs) && Number.isFinite(endMs) && startMs <= endMs) {
+    let t = fixed !== null ? Math.floor(startMs / fixed) * fixed : localMidnight(startMs);
+    while (t <= endMs) {
       if (starts.length >= MAX_BUCKETS) {
         truncated = true;
         break;
       }
       starts.push(t);
-      t = fixed !== null ? t + fixed : nextLocalMidnight(t);
+      t = next(t);
     }
   }
-  const endOf = (i: number): number =>
-    i + 1 < starts.length
-      ? starts[i + 1]
-      : fixed !== null
-        ? starts[i] + fixed
-        : nextLocalMidnight(starts[i]);
-  /** Index of the bucket holding `t`, or -1 — binary search over the starts. */
+  const endOf = (i: number): number => (i + 1 < starts.length ? starts[i + 1] : next(starts[i]));
   const indexOf = (t: number): number => {
+    // Binary search for the last start at or before `t`.
     let lo = 0;
     let hi = starts.length - 1;
     let found = -1;
@@ -414,58 +436,67 @@ export function perCompletedItemOverTime(
     }
     return found >= 0 && t < endOf(found) ? found : -1;
   };
+  return { fixed, starts, truncated, endOf, indexOf };
+}
 
-  const buckets: PerItemBucket[] = starts.map((s, i) => ({
+function emptyBuckets(grid: Grid): PerItemBucket[] {
+  return grid.starts.map((s, i) => ({
     startMs: s,
-    endMs: endOf(i),
-    items: 0,
+    endMs: grid.endOf(i),
+    items: null,
     tokens: 0,
     perItem: null,
     n: 0,
     byClass: { done: 0, orchestrator: 0, inFlight: 0, unattributed: 0 },
   }));
+}
 
-  let excluded = 0;
+/**
+ * The per-item figure as a trend: one bucket per calendar day by default (or
+ * per `bucketMs`, aligned to multiples of it as `bucketSeries` aligns its
+ * grid), each carrying the tokens spent in it, the items done in it, and their
+ * ratio. Buckets are half-open; the window stays inclusive at both ends, so the
+ * bucket containing `endMs` is always on the grid. Over the same window, the
+ * buckets' tokens and `byClass` sum to `perCompletedItem`'s, and their items
+ * to its `before.items + after.items`, with `unplacedItems === undatedItems`
+ * (unless the grid is `truncated`) — the property slice E's plot and the
+ * table beside it share.
+ */
+export function perCompletedItemOverTime(
+  deltas: readonly PerItemDeltaLike[],
+  attribution: PerItemAttributionLike,
+  board: readonly PerItemBoardRowLike[],
+  opts: Omit<PerItemOpts, "markTsMs"> & { bucketMs?: number }
+): PerItemOverTime {
+  const classOf = classifier(attribution, board, opts.doneIds);
+  const grid = buildGrid(opts.startMs, opts.endMs, opts.bucketMs);
+  const buckets = emptyBuckets(grid);
   let tokens = 0;
-  for (const d of deltas) {
-    const i = inWindow(d.tsMs, opts.startMs, opts.endMs) ? indexOf(d.tsMs) : -1;
-    if (i < 0) {
-      excluded++;
-      continue;
-    }
-    const v = num(d[metric]);
-    buckets[i].tokens += v;
-    buckets[i].n++;
-    buckets[i].byClass[classOf(d)] += v;
+  const excluded = eachInWindow(deltas, opts, classOf, (d, v, c) => {
+    const b = buckets[grid.indexOf(d.tsMs)];
+    if (!b) return false;
+    b.tokens += v;
+    b.n++;
+    b.byClass[c] += v;
     tokens += v;
-  }
+    return true;
+  });
 
   const dated = opts.doneAtMs !== undefined;
-  let placed = 0;
-  let unplacedItems = 0;
-  for (const id of opts.doneIds) {
-    const at = dated ? opts.doneAtMs!.get(id) : undefined;
-    const i =
-      typeof at === "number" && inWindow(at, opts.startMs, opts.endMs) ? indexOf(at) : -1;
-    if (i < 0) unplacedItems++;
-    else {
-      buckets[i].items = (buckets[i].items ?? 0) + 1;
-      placed++;
-    }
-  }
-  for (const b of buckets) {
-    if (!dated) b.items = null;
+  const placed = placeItems(opts, buckets.length, grid.indexOf);
+  buckets.forEach((b, i) => {
+    b.items = dated ? placed.counts[i] : null;
     b.perItem = b.items !== null && b.items > 0 ? b.tokens / b.items : null;
-  }
+  });
 
   return {
-    calendarDays: fixed === null,
-    bucketMs: fixed,
+    calendarDays: grid.fixed === null,
+    bucketMs: grid.fixed,
     buckets,
     tokens,
-    items: dated ? placed : null,
-    unplacedItems,
+    items: dated ? placed.counts.reduce((a, c) => a + c, 0) : null,
+    unplacedItems: placed.unplaced,
     excluded,
-    truncated,
+    truncated: grid.truncated,
   };
 }

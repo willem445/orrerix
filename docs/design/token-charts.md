@@ -830,7 +830,11 @@ with `doneAtMs`). Until D lands, the view passes the board's currently-`done`
 rows and labels the figure *board state, not dated*: the whole-window ratio
 still stands, but an undated item cannot be put on a side of a mark or in a
 day, so those item counts and ratios are `null` — never guessed from a board
-row's `updated_ms`, which is the row's last write, not its done moment.
+row's `updated_ms`, which is the row's last write, not its done moment. A
+done instant OUTSIDE the window counts as undated too: that item was not done
+in this window, so neither a half nor a bucket may claim it. Both entry points
+read that one rule (`placeItems`), so they cannot disagree on which items are
+placed.
 
 **Role share reads `Delta.role`** — the role the series row carried, not a
 list. A role this build has never heard of keeps its own row, and a blank one
@@ -848,6 +852,10 @@ counted (`excluded`), never silently dropped. `markTsMs` partitions on
 day: local midnights, advanced with `setDate` — a DST day is 23 or 25 hours,
 and `n * 86_400_000` would move every later bucket boundary by an hour. A
 fixed `bucketMs` aligns to its multiples, as `bucketSeries` does. Buckets are
-half-open; the grid always includes the bucket holding `endMs`. The buckets'
-tokens, items and `byClass` sum to the totals — the property slice E's trend
-line and its table share. A degenerate or inverted window yields no buckets.
+half-open; the grid always includes the bucket holding `endMs`. Over the
+same window the buckets' tokens and `byClass` sum to the totals', their items
+sum to `before.items + after.items`, and the series' `unplacedItems` equals
+the totals' `undatedItems` — so placed plus unplaced is `items`. That is the
+property slice E's trend line and its table share; it holds unless the grid hit
+its bucket cap (`truncated`, whose spend is then counted `excluded`). A
+degenerate or inverted window yields no buckets.

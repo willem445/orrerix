@@ -32745,7 +32745,7 @@ impl OrchRegistry {
         // log costs a small window, and a full one never holds more than
         // `AUDIT_VIEW_LIMIT` slots — rather than 5001 x 88 B reserved on every
         // poll whatever the log's size.
-        let mut window: VecDeque<AuditEntry> = VecDeque::new();
+        let mut window: VecDeque<AuditEntry> = VecDeque::new(); window.try_reserve_exact(AUDIT_VIEW_LIMIT + 1).map_err(|_| String::from("x"))?; // SCRATCH: pre-N2 up-front reservation
         let mut truncated = false;
         let mut skipped = 0usize;
         for name in ["audit.1.jsonl", "audit.jsonl"] {

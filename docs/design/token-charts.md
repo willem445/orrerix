@@ -725,7 +725,10 @@ does not split a span.
   the sample says so (`fromQueued: false`).
 - *Done* is counted once per task, at its FIRST dated `done` — a reopen and a
   second `done` are transitions, not a second completion. `doneAtMs`/`doneIds`
-  are slice C's input for "tokens per completed item".
+  are slice C's input for "tokens per completed item", and hold only tasks whose
+  FIRST dated `done` is inside the window: C divides a whole-window token total
+  by their count, so a task finished before the window (and reopened and
+  finished again inside it) is not in the denominator.
 - *Done per day* is by local calendar day (`setDate`), because a DST day is 23 or
   25 hours and a 24-hour stride files an item done just after midnight under the
   day before. The test forces `TZ=America/Chicago` in a child `node` for the

@@ -167,7 +167,10 @@ export interface Lifecycle {
   spans: StatusSpan[];
   timeInStatus: Map<string, StatusStats>;
   ttc: TimeToCompletion[];
-  /** First dated `done` per task, in the window. Slice C's contract. */
+  /** Slice C's contract: the tasks whose FIRST dated `done` falls inside the
+   *  window — done-in-window, never done-ever. A task first done outside it
+   *  is absent even if reopened and done again inside, because C divides a
+   *  whole-window token total by `doneIds.size`. `doneIds` is these keys. */
   doneAtMs: Map<string, number>;
   doneIds: Set<string>;
   /** Tasks whose first row in the read was already `done` — done at some

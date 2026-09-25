@@ -222,6 +222,11 @@ crash log. Forensics live under `<data dir>/loomux/logs/`:
   system allocator refused, with the size and alignment it refused. This one is
   **created empty at every launch** and stays empty unless that happens, so an
   empty file is normal and means nothing went wrong.
+  Two of the larger periodic reads, the token-chart series and the audit
+  timeline, don't crash when memory runs short. They skip that refresh and
+  record a `poll-read-failed` line in the group's audit log (and a breadcrumb)
+  instead. While that lasts, the token chart or the audit viewer can be blank
+  for a refresh or two.
 - `breadcrumbs.log` — a rotating record of lifecycle events (pane/PTY open/close,
   agent spawn/exit, delivery outcomes) with **no prompt content**.
 

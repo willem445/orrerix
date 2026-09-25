@@ -1016,6 +1016,56 @@ test("each token-chart projection reuses an equivalent precomputed diff", () => 
   assert.deepEqual(firstSpendByBar(rows, attribution, diff), firstSpendByBar(rows, attribution));
 });
 
+test("every remaining projection consumes its supplied diff", () => {
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "k", agent: "w-1", in: 0 }),
+    sample({ ts_ms: T0 + 1, key: "k", agent: "w-1", in: 8 }),
+  ];
+  const diff = diffRows(rows);
+  const roster = [agent({ id: "w-1" })];
+  const board = [row({ id: "t-1", kind: "feature" }), row({ id: "t-2", kind: "task", parent: "t-1", assignee: "w-1" })];
+  const strictProxy = () =>
+    new Proxy(rows, {
+      get(target, property, receiver) {
+        if (property === Symbol.iterator || property === "length" || property === "0" || property === "1") {
+          throw new Error(`rows accessed: ${String(property)}`);
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+  assert.equal(seriesKeys(strictProxy(), { diff })[0].total, 8);
+  assert.deepEqual(hueBlockOrder(strictProxy(), roster, diff), ["worker-std"]);
+  const attribution = featureBars(rows, roster, board, { diff }).attribution;
+  assert.equal(firstSpendByBar(strictProxy(), attribution, diff).get("t-1"), T0 + 1);
+
+  // `featureBars` independently reads the later sample's `estimated` flag.
+  // Allow that one intentional pass; a second pass proves it ignored `diff`.
+  let iterations = 0;
+  const featureProxy = new Proxy(rows, {
+    get(target, property, receiver) {
+      if (property === Symbol.iterator) {
+        if (++iterations > 1) throw new Error("rows iterated again for diffRows");
+        return function* () {
+          yield target[0];
+          yield target[1];
+        };
+      }
+      if (property === "0" || property === "1") throw new Error(`rows indexed: ${String(property)}`);
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  assert.equal(featureBars(featureProxy, roster, board, { diff }).totals.total, 8);
+  assert.equal(iterations, 1, "only the estimated-flag lookup iterates samples");
+  iterations = 0;
+  const noDiffProxy = new Proxy(rows, {
+    get(target, property, receiver) {
+      if (property === Symbol.iterator && ++iterations > 1) throw new Error("rows iterated again for diffRows");
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  assert.throws(() => featureBars(noDiffProxy, roster, board), /rows iterated again for diffRows/);
+});
+
 test("bucketSeries with diff never iterates rows; omission is the iteration control", () => {
   const samples: SeriesRowLike[] = [
     sample({ ts_ms: T0, key: "k", in: 0 }),

@@ -196,6 +196,10 @@ export class TokenChartsView {
    *  which is a THIRD state beside "empty" and "failed", and the empty text
    *  below distinguishes all three. */
   private series: UsageSeries | null = null;
+  /** `series` is replaced wholesale on each read, so rows identity keys this
+   *  diff cache. Both `render()` and `blockOrder()`/`renderNotes()` read it;
+   *  keeping the same result avoids repeating the full-series pass. */
+  private diffMemo: { rows: readonly UsageSeriesRow[]; diff: DiffResult } | null = null;
   /** The scorecard table is a pure function of the audit read and the series
    *  roster, and NEITHER enters the render signature's geometry — but
    *  `widthPx` does, so a window drag re-renders per rAF step. Memoized on
@@ -203,7 +207,6 @@ export class TokenChartsView {
    *  wholesale per read and hands out the same reference otherwise), so a
    *  drag reuses the table and only a fresh read recomputes it (#3131
    *  review N1). The table is never mutated after computing. */
-  private diffMemo: { rows: readonly UsageSeriesRow[]; diff: DiffResult } | null = null;
   private scorecardMemo: {
     audit: readonly AuditEntryLike[];
     agents: readonly AgentRosterLike[] | undefined;
@@ -530,12 +533,16 @@ export class TokenChartsView {
     return { startMs: Math.max(oldest, endMs - preset.spanMs), endMs };
   }
 
+  private diffOf(rows: readonly UsageSeriesRow[]): DiffResult {
+    if (!this.diffMemo || this.diffMemo.rows !== rows) this.diffMemo = { rows, diff: diffRows(rows) };
+    return this.diffMemo.diff;
+  }
+
   private render(): void {
     if (this.disposed) return;
     const widthPx = Math.round(this.plotEl.clientWidth);
     const rows = this.series?.rows ?? [];
-    if (!this.diffMemo || this.diffMemo.rows !== rows) this.diffMemo = { rows, diff: diffRows(rows) };
-    const diff = this.diffMemo.diff;
+    const diff = this.diffOf(rows);
     const range = this.resolveWindow(rows);
 
     const sig = [
@@ -601,8 +608,7 @@ export class TokenChartsView {
    *  a pure function (`hueBlockOrder`), which carries the why (#3449). */
   private blockOrder(): string[] {
     const rows = this.series?.rows ?? [];
-    if (!this.diffMemo || this.diffMemo.rows !== rows) this.diffMemo = { rows, diff: diffRows(rows) };
-    return hueBlockOrder(rows, this.series?.agents ?? [], this.diffMemo.diff);
+    return hueBlockOrder(rows, this.series?.agents ?? [], this.diffOf(rows));
   }
 
   /** The legend, which is ALWAYS present for two or more series — identity is

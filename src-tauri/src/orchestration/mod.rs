@@ -32730,7 +32730,7 @@ impl OrchRegistry {
     pub fn try_audit_log_windowed(&self, group: &GroupId) -> Result<(Vec<AuditEntry>, bool), String> {
         use loomux_engine::boundedread::{read_to_string_bounded, BoundedReadError};
         let dir = self.group_dir(group);
-        let limit = self.poll_read_limit(AUDIT_READ_LIMIT_BYTES);
+        let limit = u64::MAX; // SCRATCH: limit unwired
         let mut window: VecDeque<AuditEntry> = VecDeque::new();
         window
             .try_reserve_exact(AUDIT_VIEW_LIMIT + 1)
@@ -32753,7 +32753,7 @@ impl OrchRegistry {
                     Some(Err(())) => skipped += 1,
                     Some(Ok(entry)) => {
                         if window.len() == AUDIT_VIEW_LIMIT {
-                            window.pop_front();
+                            window.pop_back(); // SCRATCH
                             truncated = true;
                         }
                         window.push_back(entry); // within the reserved capacity
@@ -47691,7 +47691,7 @@ impl OrchRegistry {
         // `read_to_string(..).unwrap_or_default()` this replaced did.
         let read = match loomux_engine::boundedread::read_to_string_bounded(
             &path,
-            self.poll_read_limit(SERIES_READ_LIMIT_BYTES),
+            u64::MAX, // SCRATCH: limit unwired
         ) {
             Ok(t) => Ok(t),
             Err(e @ (loomux_engine::boundedread::BoundedReadError::TooLarge { .. }

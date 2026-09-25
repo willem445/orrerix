@@ -150,3 +150,69 @@ export function chooseBucket(spanMs: number, keyCount: number, cap = 20_000): Bu
   while (Math.ceil(spanMs / bucketMs) > allowed) bucketMs *= 2;
   return { bucketMs, coarsened: index > 0, bucketCount: Math.ceil(spanMs / bucketMs) };
 }
+
+// ── pointer geometry (#3505) ────────────────────────────────────────────────
+// The live chart's handlers sit on the plot CONTAINER and resolve every
+// pointer position through these, so the answer never depends on which SVG
+// child happened to be under the cursor — or on whether that child survived
+// the last re-render.
+
+/** WheelEvent.deltaMode values, spelled out: the DOM constants live on
+ *  `WheelEvent`, which the Node test runner does not have. */
+export const DELTA_PIXEL = 0;
+export const DELTA_LINE = 1;
+export const DELTA_PAGE = 2;
+/** One wheel "line" in px — what Chromium itself scrolls per line. */
+const LINE_PX = 16;
+/** A single event's contribution is capped, so one fast flick or a PAGE-mode
+ *  device cannot zoom the whole history away in one step. */
+const MAX_WHEEL_PX = 400;
+/** Zoom per pixel of wheel travel: a 100 px notch is ~16%, and a precision
+ *  touchpad's stream of small deltas adds up to the same per distance. */
+const ZOOM_PER_PX = 0.0015;
+
+/** The zoom factor for one wheel event: > 1 zooms out (wheel down), < 1 in.
+ *  Normalises `deltaMode` — a LINE-mode device reports `3` for a notch, which
+ *  read as pixels would zoom by 0.3% and look like nothing happened. A
+ *  non-finite or zero delta is exactly `1` (no change). */
+export function wheelZoomFactor(deltaY: number, deltaMode: number, pagePx = 800): number {
+  if (!Number.isFinite(deltaY) || deltaY === 0) return 1;
+  const unit = deltaMode === DELTA_LINE ? LINE_PX : deltaMode === DELTA_PAGE ? (Number.isFinite(pagePx) && pagePx > 0 ? pagePx : 800) : 1;
+  const px = Math.max(-MAX_WHEEL_PX, Math.min(MAX_WHEEL_PX, deltaY * unit));
+  return Math.exp(px * ZOOM_PER_PX);
+}
+
+/** Whether a container-relative x lies on the plot area `[x0, x1]`. */
+export function insidePlot(x: number, x0: number, x1: number): boolean {
+  return Number.isFinite(x) && x1 > x0 && x >= x0 && x <= x1;
+}
+
+/** The bucket index nearest a container-relative x, or `null` when there are
+ *  no buckets or the plot has no width. Clamped onto the grid otherwise, so a
+ *  pointer resting on the gutter reads the edge bucket rather than nothing. */
+export function bucketIndexAt(x: number, x0: number, x1: number, count: number): number | null {
+  if (!Number.isFinite(x) || !(x1 > x0) || !Number.isInteger(count) || count <= 0) return null;
+  if (count === 1) return 0;
+  const frac = Math.min(1, Math.max(0, (x - x0) / (x1 - x0)));
+  return Math.round(frac * (count - 1));
+}
+
+/** The index of the mark nearest `x` within `tolerancePx`, or `null`. Ties go
+ *  to the earlier mark — deterministic, never "whichever drew last". */
+export function markNear(markXs: readonly number[], x: number, tolerancePx: number): number | null {
+  if (!Number.isFinite(x) || !(tolerancePx >= 0)) return null;
+  let best: number | null = null;
+  let bestD = Infinity;
+  for (let i = 0; i < markXs.length; i++) {
+    const d = Math.abs(markXs[i] - x);
+    if (Number.isFinite(d) && d <= tolerancePx && d < bestD) { best = i; bestD = d; }
+  }
+  return best;
+}
+
+/** A press becomes a drag only past this many px, so a click on a mark is
+ *  still a click even with a slightly unsteady hand. */
+export const DRAG_SLOP_PX = 3;
+export function isDrag(downX: number, x: number): boolean {
+  return Number.isFinite(downX) && Number.isFinite(x) && Math.abs(x - downX) > DRAG_SLOP_PX;
+}

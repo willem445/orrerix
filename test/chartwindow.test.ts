@@ -102,3 +102,50 @@ test("bucket chooser stays under cell cap and coarsens only when required", () =
   assert.equal(coarse.coarsened, true);
   assert.ok(coarse.bucketCount * 20 <= 100);
 });
+
+// ── #3505: pointer geometry for the container-level handlers ────────────────
+import { DELTA_LINE, DELTA_PAGE, DELTA_PIXEL, bucketIndexAt, insidePlot, isDrag, markNear, wheelZoomFactor } from "../src/chartwindow.ts";
+
+test("a LINE-mode wheel notch zooms as much as a PIXEL-mode one", () => {
+  // Chromium reports a notch as ~100px in pixel mode; a line-mode device
+  // reports 3 lines. Read as pixels, 3 would zoom by 0.45% — invisible.
+  const px = wheelZoomFactor(100, DELTA_PIXEL);
+  const lines = wheelZoomFactor(3, DELTA_LINE);
+  assert.ok(lines > 1.05, `line-mode notch must visibly zoom, got ${lines}`);
+  assert.ok(Math.abs(Math.log(lines) - Math.log(px)) < 0.1);
+});
+test("wheel down zooms out, up zooms in, nothing is exactly 1", () => {
+  assert.ok(wheelZoomFactor(100, DELTA_PIXEL) > 1);
+  assert.ok(wheelZoomFactor(-100, DELTA_PIXEL) < 1);
+  assert.equal(wheelZoomFactor(0, DELTA_PIXEL), 1);
+  assert.equal(wheelZoomFactor(Number.NaN, DELTA_PIXEL), 1);
+});
+test("one PAGE-mode event cannot zoom the history away", () => {
+  const f = wheelZoomFactor(1, DELTA_PAGE, 10_000);
+  assert.ok(f < 2, `a single event is capped, got ${f}`);
+});
+test("bucketIndexAt maps the plot edges to the first and last bucket and clamps outside", () => {
+  assert.equal(bucketIndexAt(50, 50, 150, 11), 0);
+  assert.equal(bucketIndexAt(150, 50, 150, 11), 10);
+  assert.equal(bucketIndexAt(100, 50, 150, 11), 5);
+  assert.equal(bucketIndexAt(0, 50, 150, 11), 0);
+  assert.equal(bucketIndexAt(999, 50, 150, 11), 10);
+  assert.equal(bucketIndexAt(100, 50, 150, 0), null);
+  assert.equal(bucketIndexAt(100, 50, 50, 5), null);
+});
+test("insidePlot excludes the y-axis gutter", () => {
+  assert.equal(insidePlot(40, 56, 800), false);
+  assert.equal(insidePlot(56, 56, 800), true);
+  assert.equal(insidePlot(801, 56, 800), false);
+});
+test("markNear picks the nearest mark inside the tolerance, earlier on a tie, else null", () => {
+  assert.equal(markNear([100, 200, 300], 205, 6), 1);
+  assert.equal(markNear([100, 200, 300], 250, 6), null);
+  assert.equal(markNear([100, 110], 105, 6), 0);
+  assert.equal(markNear([], 5, 6), null);
+});
+test("a press is a click until it travels past the slop", () => {
+  assert.equal(isDrag(100, 102), false);
+  assert.equal(isDrag(100, 104), true);
+  assert.equal(isDrag(100, 96), true);
+});

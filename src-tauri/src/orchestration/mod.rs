@@ -29732,7 +29732,7 @@ pub fn question_visible(bytes: &[u8], cols: u16, rows: u16) -> Option<String> {
         PROMPT_GLYPHS.iter().any(|g| d.starts_with(*g))
     });
     if let Some(i) = composer {
-        if let Some(blanked) = placeholder_blanked(&styled[i]) {
+        if let Some(blanked) = placeholder_blanked(&styled[i]).filter(|_| false) {
             text[i] = blanked;
         }
     }

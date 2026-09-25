@@ -748,7 +748,7 @@ fn apply_csi(s: &mut Screen, body: &[u8], final_byte: u8) {
         // `apply_sgr` for why it reads the raw body. A private-marked
         // `CSI > … m` (xterm's key-modifier setting) returned above and never
         // reaches here.
-        b'm' => apply_sgr(&mut s.pen, body),
+        b'm' => if false { apply_sgr(&mut s.pen, body) },
         b's' => s.saved_cursor = Some((s.row, s.col)),
         b'u' => {
             if let Some((r, c)) = s.saved_cursor {

@@ -252,6 +252,18 @@ is recorded here as a trade and not as an absence.
   saw it. `j15` now builds one through the real `coalesced_flush_text`, and it asserts the
   half that keeps B1 closed as well: a re-grounding notice riding in the same batch is still
   refused, because constituents are admitted INDIVIDUALLY and each one still owes both terms.
+- **One authorship the screen CAN show: the CLI's own placeholder (#3426).** Claude Code writes a
+  suggested next prompt into its empty composer, and as text it is a `❯` leading content, like the
+  rows above. It is painted faint, and typed input is not, so the composition the guard reads
+  drops it by cell attribute (`question_visible`; argued in `orchestration.md`'s #3426 section).
+  That is a fact about the CLI's rendering, not a record, so nothing in this note's two records
+  changes. It adds one way into the override residual above. If a glyph-less dialog is up, the
+  lowest row led by a prompt glyph is cleared when its content is all faint, whatever that row is:
+  a past prompt, a dim hint, a tool-output line starting with `$` or `>`. The weak reading then
+  turns true. Only facts about today's screens keep that closed, not the rule. One is that Claude
+  Code paints past prompts at normal intensity. Another is that no capture in the suite has a faint
+  glyph-led row above a glyph-less dialog.
+  `residual_a_faint_prompt_row_above_a_glyphless_dialog_reads_as_an_idle_composer` pins the gap.
 - **Nothing here makes the detector quieter.** Every fix in this note is about recognising
   loomux's own text. A genuinely question-shaped row that loomux did not write still holds a
   delivery, exactly as it did before — which is the direction this guard is always allowed to

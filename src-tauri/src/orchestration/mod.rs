@@ -29419,8 +29419,9 @@ pub struct QuestionSample {
     /// Raw (ANSI-included) bytes from the pane's append-only output ring —
     /// what the guard has always read.
     pub ring: Option<Vec<u8>>,
-    /// The pane's currently-rendered rows, composed by
-    /// [`termgrid::render_visible`]. `None` means *no trustworthy
+    /// The pane's currently-rendered rows, composed by [`question_visible`]
+    /// ([`termgrid::render_visible`]'s rows, less the input box's faint
+    /// placeholder, #3426). `None` means *no trustworthy
     /// composition*, never *a blank screen* — the two must not collapse,
     /// because one licenses a release and the other must not.
     pub visible: Option<String>,
@@ -29785,13 +29786,115 @@ fn question_sample(ptys: &crate::pty::PtyManager, pty_id: u32) -> QuestionSample
     // "not displayed" — the one direction this must never be wrong in. No
     // size, no grid evidence.
     let visible = match (raw.as_deref(), ptys.size(pty_id)) {
-        (Some(bytes), Some((cols, rows))) => {
-            trustworthy_composition(termgrid::render_visible(bytes, cols, rows))
-        }
+        (Some(bytes), Some((cols, rows))) => question_visible(bytes, cols, rows),
         _ => None,
     };
     let ring = raw.map(|b| b[b.len().saturating_sub(QUESTION_SCAN_TAIL_BYTES)..].to_vec());
     QuestionSample { ring, visible }
+}
+
+/// The composed screen the question guard reads (#534), with the input box's
+/// PLACEHOLDER removed (#3426).
+///
+/// Split out of [`question_sample`] so the one decision it adds is drivable from
+/// raw bytes by a test — `question_sample` itself needs a live `PtyManager`.
+///
+/// **Why the placeholder has to go.** After a turn, Claude Code writes a guess
+/// at the human's next prompt into its empty input box as placeholder text
+/// (`❯ main is green now — rebase onto origin/main and re-run CI`). As TEXT
+/// that row is a prompt glyph leading content, which is two things this guard
+/// reads as NOT idle: a `pointer-option` row (the ring's trigger, and
+/// [`pointer_rendered`]'s veto on the grid), and a composer that is not empty,
+/// so [`idle_prompt_row_rendered`] is false. The second is what wedged #3426: it
+/// blocks #903's idle-composer release AND starves
+/// [`question_override_admits`] of the idle reads it counts, so a hold on
+/// prose that the idle release exists for held for thirty minutes and the
+/// fifteen-minute override never fired.
+///
+/// **What tells it apart, and why nothing else would.** Text cannot: a
+/// suggestion and a line the human typed are the same characters in the same
+/// place. The attribute can. Claude Code paints its placeholder with chalk
+/// `dim` — SGR 2, faint — with at most the first character in inverse video (its
+/// block cursor, drawn only while the terminal has focus); typed input is
+/// painted at normal intensity. So [`placeholder_blanked`] clears a row's
+/// content only when EVERY content cell is faint, allowing just that one
+/// leading inverse cell. The CLI's idle SIGNAL was the alternative the issue
+/// named and it is not used: the one idleness signal this guard has is the
+/// rendered composer, and a hook- or transcript-based "turn ended" is
+/// CLI-specific plumbing that would still not say whether a dialog is up now.
+///
+/// **Scoped to one row: the LOWEST row that leads with a prompt glyph** — the
+/// composer, since a CLI's input box sits below its transcript. A faint row
+/// higher up is transcript, and clearing it could manufacture an "empty
+/// composer" above a live dialog. A dialog's highlighted choice (`❯ 1. Yes`) is
+/// painted at normal intensity, so the rule leaves it — and every question row
+/// on screen — exactly as it was. Every other row is `render_visible`'s,
+/// unchanged.
+///
+/// **The rule does not check that the lowest glyph-led row IS the composer.**
+/// With a glyph-less dialog up (reverse-video `AskUserQuestion`), the lowest
+/// such row is whatever sits above it. Any faint row led by a prompt glyph, such
+/// as a past prompt or a dim hint or tool-output line starting with `$` or `>`,
+/// is cleared, and the WEAK idle reading turns true. Facts about today's screens
+/// keep that closed, not this rule (Claude Code paints past prompts at normal
+/// intensity). The residual is argued in `docs/design/orchestration.md`'s #3426
+/// section and pinned by
+/// `residual_a_faint_prompt_row_above_a_glyphless_dialog_reads_as_an_idle_composer`.
+#[doc(hidden)] // pub for integration tests
+pub fn question_visible(bytes: &[u8], cols: u16, rows: u16) -> Option<String> {
+    let styled = termgrid::render_visible_styled(bytes, cols, rows);
+    let mut text: Vec<String> =
+        styled.iter().map(|r| r.iter().map(|c| c.ch).collect()).collect();
+    let composer = text.iter().rposition(|t| {
+        let d = deframe(t);
+        PROMPT_GLYPHS.iter().any(|g| d.starts_with(*g))
+    });
+    if let Some(i) = composer {
+        if let Some(blanked) = placeholder_blanked(&styled[i]) {
+            text[i] = blanked;
+        }
+    }
+    trustworthy_composition(text.join("\n"))
+}
+
+/// This composer row with its placeholder cleared, or `None` when the row holds
+/// anything a human could have typed (#3426).
+///
+/// Reads the cells after the prompt glyph, less any trailing frame (the `│` of a
+/// boxed composer). `Some` only when there is content, at least one content cell
+/// is faint, and every content cell is faint — except the FIRST, which may
+/// instead be inverse, because that is where the CLI draws its cursor over the
+/// placeholder. A typed character at normal intensity anywhere refuses, and
+/// refusing leaves the row as it was: the guard's pre-#3426 reading, which is
+/// the direction it is always allowed to err in.
+///
+/// Whitespace is never evidence either way: an inverse SPACE is the cursor
+/// after typed text, and a faint space is indistinguishable from any other.
+fn placeholder_blanked(row: &[termgrid::StyledCell]) -> Option<String> {
+    let glyph = row.iter().position(|c| !is_frame_char(c.ch))?;
+    if !PROMPT_GLYPHS.contains(&row[glyph].ch) {
+        return None;
+    }
+    let end = row.iter().rposition(|c| !is_frame_char(c.ch)).map_or(glyph + 1, |e| e + 1);
+    let content: Vec<(usize, &termgrid::StyledCell)> = row
+        .iter()
+        .enumerate()
+        .take(end)
+        .skip(glyph + 1)
+        .filter(|(_, c)| !c.ch.is_whitespace())
+        .collect();
+    let first = content.first()?.0;
+    let placeholder = content.iter().all(|(i, c)| c.faint || (*i == first && c.inverse))
+        && content.iter().any(|(_, c)| c.faint);
+    if !placeholder {
+        return None;
+    }
+    let s: String = row
+        .iter()
+        .enumerate()
+        .map(|(i, c)| if i > glyph && i < end { ' ' } else { c.ch })
+        .collect();
+    Some(s.trim_end().to_string())
 }
 
 /// One-shot "is a question on screen right now" snapshot (#420 rev-15 B1) —

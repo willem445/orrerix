@@ -94,6 +94,8 @@ use loomux_lib::orchestration::{
     // #534 / #513(c): composed-grid question evidence.
     prompt_wait_match, question_hold_predicate_sampled, question_shown, grid_evidence_for,
     match_still_rendered, trustworthy_composition, witness_audit,
+    // #3426: the composition the guard reads, less the input box's placeholder.
+    question_visible,
     GridEvidence, QuestionMatch, QuestionNeedle, QuestionSample, QuestionWitness, QuestionWitnessed,
     // #903: the idle-composer reading, and the bounded last-resort override.
     idle_prompt_rendered, idle_prompt_row_rendered, question_override_admits, Composed,
@@ -70360,4 +70362,196 @@ fn ending_a_group_without_cleanup_keeps_a_reviewers_worktree() {
     assert!(Path::new(&kept.cwd).is_dir(), "end_group(cleanup=false) must keep {}", kept.cwd);
     assert_eq!(registered_worktrees(repo.path()), 2, "the main checkout and the kept reviewer's");
     assert_eq!(scratch_rows(&reg, &g.id, "reviewer-worktree-removed").len(), 1, "only the control's");
+}
+
+// ---- #3426: an input box holding only the CLI's own suggestion is idle ----
+//
+// After a turn, Claude Code writes a guess at the next prompt into its empty
+// input box as placeholder text, painted faint (chalk `dim`, SGR 2) with the
+// block cursor in inverse over its first character while the terminal has
+// focus. As TEXT that row is `❯ <content>`: a pointer-option row to the ring and
+// to `pointer_rendered`, and a composer that is not empty to
+// `idle_prompt_row_rendered`. Pane w-3078 was held thirty minutes on exactly
+// that, with `idle_row:false` on every record, so #903's idle release never
+// fired and the fifteen-minute override never collected an idle read.
+
+/// One Claude Code screen after a finished turn: prose, the turn footer, the
+/// composer between its two rules, and a faint statusline. `composer` is the
+/// raw bytes of the input row AFTER the `❯ ` — the thing each test varies.
+fn claude_idle_screen(prose: &str, composer: &str) -> Vec<u8> {
+    let rule = "─".repeat(60);
+    let row = format!("❯ {composer}");
+    painted(&[
+        prose,
+        "",
+        "✻ Worked for 27s · done 5:30 PM",
+        "",
+        rule.as_str(),
+        row.as_str(),
+        rule.as_str(),
+        "  \x1b[2m⏵⏵ auto mode on (shift+tab to cycle)\x1b[22m",
+    ])
+}
+
+const SUGGESTION_3426: &str = "main is green now — rebase onto origin/main and re-run CI";
+
+/// The suggestion as a focused pane paints it: inverse first character (the
+/// cursor), faint remainder.
+fn suggestion_focused() -> String {
+    let mut chars = SUGGESTION_3426.chars();
+    let first = chars.next().unwrap();
+    format!("\x1b[7m{first}\x1b[27m\x1b[2m{}\x1b[22m", chars.as_str())
+}
+
+/// …and as an unfocused one paints it: all faint, no cursor.
+fn suggestion_unfocused() -> String {
+    format!("\x1b[2m{SUGGESTION_3426}\x1b[22m")
+}
+
+/// Both readings from ONE raw stream, the way production's `question_sample`
+/// takes them — the grid through `question_visible`, which is the change.
+fn sample_3426(raw: &[u8]) -> QuestionSample {
+    QuestionSample {
+        ring: Some(raw[raw.len().saturating_sub(4096)..].to_vec()),
+        visible: question_visible(raw, 100, 20),
+    }
+}
+
+/// Run one poll of the production predicate; return (holding, witness).
+fn poll_3426(raw: Vec<u8>) -> (bool, Option<QuestionWitnessed>) {
+    let witness: QuestionWitness = Default::default();
+    let pred = question_hold_predicate_sampled(
+        move || sample_3426(&raw),
+        None,
+        Some(std::rc::Rc::clone(&witness)),
+        Vec::new(),
+    );
+    let holding = pred();
+    let seen = witness.borrow().clone();
+    (holding, seen)
+}
+
+#[test]
+fn an_idle_pane_whose_box_holds_only_the_cli_suggestion_takes_the_delivery() {
+    let prose = "● Rebased #3414 onto origin/main and pushed; reporting once CI is green.";
+    for (label, composer) in [("focused", suggestion_focused()), ("unfocused", suggestion_unfocused())] {
+        let raw = claude_idle_screen(prose, &composer);
+
+        // Positive control: the wedge is really in this fixture. The ring fires
+        // on the suggestion row itself, and the pre-#3426 composition (plain
+        // `render_visible`) holds on it.
+        let control = raw.clone();
+        let pred = question_hold_predicate_sampled(
+            move || QuestionSample {
+                ring: Some(control.clone()),
+                visible: trustworthy_composition(
+                    loomux_lib::orchestration::termgrid::render_visible(&control, 100, 20),
+                ),
+            },
+            None,
+            None,
+            Vec::new(),
+        );
+        assert!(pred(), "{label}: control — the text-only composition must hold on the suggestion row");
+
+        let (holding, seen) = poll_3426(raw);
+        let seen = seen.unwrap_or_else(|| panic!("{label}: the ring must still match, or nothing was tested"));
+        assert_eq!(seen.matched.signal, "pointer-option", "{label}: the suggestion row is what fired");
+        assert!(
+            !holding,
+            "{label}: an idle pane showing only the CLI's suggestion must take the delivery: {seen:?}"
+        );
+        assert_eq!(seen.grid, GridEvidence::IdlePrompt, "{label}: released as an idle composer");
+        assert!(
+            seen.idle_row,
+            "{label}: the override's own term must read the suggestion-only box as idle, \
+             never as the human's typing"
+        );
+    }
+}
+
+#[test]
+fn the_incidents_prose_match_is_released_by_a_suggestion_only_composer() {
+    // w-3078's recorded match was `prose-permission-phrase` on prose still on
+    // screen (`grid: still-rendered`) — the class #903's idle release exists
+    // for. The grid must answer `IdlePrompt` for it with the suggestion in the
+    // box, which is the release the suggestion was blocking.
+    let prose = "● Rebased; waiting for your go-ahead before acting on the note.";
+    let m = prompt_wait_match(prose).expect("control: the prose alone matches");
+    assert_eq!(m.signal, "prose-permission-phrase");
+    for composer in [suggestion_focused(), suggestion_unfocused()] {
+        let raw = claude_idle_screen(prose, &composer);
+        let visible = question_visible(&raw, 100, 20).expect("a populated screen composes");
+        assert!(visible.contains("waiting for your"), "control: the matched prose is on screen");
+        assert_eq!(
+            grid_evidence_for(&m, Some(Composed::plain(&visible))),
+            GridEvidence::IdlePrompt,
+            "the suggestion must not stop the idle-composer release:\n{visible}"
+        );
+    }
+}
+
+#[test]
+fn a_line_the_human_typed_still_holds() {
+    let prose = "● Rebased #3414 onto origin/main and pushed; reporting once CI is green.";
+    let rest: String = SUGGESTION_3426.chars().skip(1).collect();
+    for (label, composer) in [
+        // Typed at normal intensity, the cursor an inverse space after it.
+        ("typed", format!("{SUGGESTION_3426}\x1b[7m \x1b[27m")),
+        // Typed text beside faint text: one normal cell refuses the lot.
+        ("mixed", format!("wait\x1b[2m {SUGGESTION_3426}\x1b[22m")),
+        // An inverse first cell is allowed only because the rest is faint —
+        // here the rest is typed.
+        ("cursor-on-typed", format!("\x1b[7mm\x1b[27m{rest}")),
+    ] {
+        let (holding, seen) = poll_3426(claude_idle_screen(prose, &composer));
+        let seen = seen.unwrap_or_else(|| panic!("{label}: the ring must match"));
+        assert!(holding, "{label}: a line a human could have typed must still hold");
+        assert!(!seen.idle_row, "{label}: and must not feed the override an idle read");
+    }
+}
+
+#[test]
+fn a_real_dialog_still_holds_with_a_faint_prompt_row_above_it() {
+    // A permission dialog: its highlighted choice is painted at normal
+    // intensity, so the lowest prompt-glyph row is the dialog's and nothing is
+    // cleared. The faint `❯` row ABOVE it is transcript; clearing it too would
+    // hand the override an "empty composer" over a live dialog.
+    let raw = painted(&[
+        "\x1b[2m❯ run the tests again\x1b[22m",
+        "",
+        "Bash command",
+        "  npm test",
+        "Do you want to proceed?",
+        "❯ 1. Yes",
+        "  2. No, and tell Claude what to do differently",
+        "\x1b[2mEsc to cancel\x1b[22m",
+    ]);
+    let (holding, seen) = poll_3426(raw);
+    let seen = seen.expect("the ring must match the dialog");
+    assert!(holding, "a live dialog must hold: {seen:?}");
+    assert!(!seen.idle_row, "and the override must not read an idle composer on it");
+
+    let (holding, _) = poll_3426(FIX_CLAUDE_ASK.as_bytes().to_vec());
+    assert!(holding, "AskUserQuestion (faint footer, no pointer glyph) must still hold");
+}
+
+#[test]
+fn residual_a_faint_prompt_row_above_a_glyphless_dialog_reads_as_an_idle_composer() {
+    // The residual `docs/design/question-gate-authorship.md` states, pinned so
+    // the disclosure cannot go false silently. With no prompt glyph in the
+    // dialog, the lowest glyph row is a faint transcript row, which is cleared:
+    // the WEAK idle reading turns true. The gate itself still holds, on the
+    // menu structure the strong reading requires to be absent.
+    let raw = painted(&[
+        "\x1b[2m❯ pick an auth approach\x1b[22m",
+        "Which authentication approach should we use?",
+        "\x1b[7m  1. OAuth 2.0 with PKCE  \x1b[27m",
+        "   2. Personal access tokens",
+        "\x1b[2mEnter to select · ↑↓ to navigate · Esc to cancel\x1b[22m",
+    ]);
+    let (holding, seen) = poll_3426(raw);
+    let seen = seen.expect("the ring must match the footer");
+    assert!(holding, "the strong reading still holds on the menu structure: {seen:?}");
+    assert!(seen.idle_row, "the residual: the weak reading reads this as an idle composer");
 }

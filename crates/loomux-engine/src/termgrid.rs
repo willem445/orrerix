@@ -38,9 +38,15 @@
 //!
 //! ## Deliberate limits
 //!
-//! - **Not a terminal emulator.** SGR/colour, character sets, wide-char widths,
+//! - **Not a terminal emulator.** Colour, character sets, wide-char widths,
 //!   and mouse/bracketed-paste modes are parsed only far enough to be skipped;
-//!   we render text placement, not appearance. A double-width CJK glyph
+//!   we render text placement, not appearance. The one exception is two SGR
+//!   attributes — faint and inverse — recorded per cell and read ONLY through
+//!   [`render_visible_styled`] (#3426): a CLI's placeholder text in an empty
+//!   input box is painted faint, and on text alone it is indistinguishable
+//!   from a line a human typed. [`render_screen`] and [`render_visible`] are
+//!   byte-for-byte what they were; the attributes never change which character
+//!   lands in which cell. A double-width CJK glyph
 //!   occupies one cell here and two in the real pane, which can shift a row's
 //!   trailing text — cosmetic in a monitoring read.
 //! - **Starts blind.** The ring is a 256 KB *tail*, so replay begins mid-stream
@@ -75,19 +81,56 @@ const MAX_HISTORY_ROWS: usize = 4096;
 const MAX_COLS: usize = 1000;
 const MAX_ROWS: usize = 300;
 
-fn blank_row(cols: usize) -> Vec<char> {
-    vec![' '; cols]
+/// One composed cell: the character, plus the two SGR attributes a caller may
+/// ask about (#3426).
+///
+/// Only faint and inverse, deliberately. Faint is what a CLI's input-box
+/// placeholder is painted in (Claude Code's placeholder renderer uses chalk
+/// `dim`, SGR 2); inverse is the block cursor it paints over the
+/// placeholder's first character when the terminal is focused. Colour is NOT
+/// recorded: "grey" is a palette choice with no ECMA-48 meaning, and a reader
+/// keyed on it would be guessing at a theme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StyledCell {
+    pub ch: char,
+    /// SGR 2 was in effect when this cell was printed.
+    pub faint: bool,
+    /// SGR 7 was in effect when this cell was printed.
+    pub inverse: bool,
 }
 
-fn row_text(row: &[char]) -> String {
-    let s: String = row.iter().collect();
+impl StyledCell {
+    /// An erased cell. Erasure writes a blank with no text attributes: ECMA-48
+    /// erase carries the current BACKGROUND only, which is not recorded here.
+    const BLANK: StyledCell = StyledCell { ch: ' ', faint: false, inverse: false };
+}
+
+/// The SGR state printed characters inherit — only the two attributes
+/// [`StyledCell`] records.
+#[derive(Clone, Copy, Debug, Default)]
+struct Pen {
+    faint: bool,
+    inverse: bool,
+}
+
+fn blank_row(cols: usize) -> Vec<StyledCell> {
+    vec![StyledCell::BLANK; cols]
+}
+
+fn row_text(row: &[StyledCell]) -> String {
+    let s: String = row.iter().map(|c| c.ch).collect();
     s.trim_end().to_string()
 }
 
 struct Screen {
     cols: usize,
     rows: usize,
-    grid: Vec<Vec<char>>,
+    grid: Vec<Vec<StyledCell>>,
+    /// Current SGR attributes (#3426). Starts at the default, like the cursor:
+    /// the replay begins blind, and a CLI repainting its input box sets the
+    /// attributes it paints with rather than inheriting them from bytes
+    /// long gone.
+    pen: Pen,
     /// Rows that scrolled off the top of the primary screen, oldest first.
     /// A deque, not a `Vec`: eviction happens at the OLDEST end on a hot path
     /// (once per scrolled row), and only `pop_front` makes that O(1).
@@ -103,7 +146,7 @@ struct Screen {
     scroll_bot: usize,
     saved_cursor: Option<(usize, usize)>,
     /// Primary screen, parked while an alternate screen is active.
-    parked: Option<Vec<Vec<char>>>,
+    parked: Option<Vec<Vec<StyledCell>>>,
     /// Whether rows scrolling off the top are retained (#534). A
     /// [`render_visible`] replay sets this false: it answers "what is on
     /// screen NOW", so a scrolled-off row is not merely uninteresting to it,
@@ -120,6 +163,7 @@ impl Screen {
             cols,
             rows,
             grid: (0..rows).map(|_| blank_row(cols)).collect(),
+            pen: Pen::default(),
             history: VecDeque::new(),
             row: 0,
             col: 0,
@@ -200,7 +244,8 @@ impl Screen {
             self.index();
         }
         if self.col < self.cols {
-            self.grid[self.row][self.col] = ch;
+            self.grid[self.row][self.col] =
+                StyledCell { ch, faint: self.pen.faint, inverse: self.pen.inverse };
         }
         if self.col + 1 >= self.cols {
             self.pending_wrap = true;
@@ -222,7 +267,7 @@ impl Screen {
             _ => (self.col.min(self.cols - 1), self.cols - 1),
         };
         for c in from..=to {
-            self.grid[self.row][c] = ' ';
+            self.grid[self.row][c] = StyledCell::BLANK;
         }
     }
 
@@ -251,7 +296,7 @@ impl Screen {
     fn erase_chars(&mut self, n: usize) {
         let start = self.col.min(self.cols - 1);
         for c in start..(start + n).min(self.cols) {
-            self.grid[self.row][c] = ' ';
+            self.grid[self.row][c] = StyledCell::BLANK;
         }
     }
 
@@ -259,14 +304,14 @@ impl Screen {
         let start = self.col.min(self.cols - 1);
         for _ in 0..n.min(self.cols) {
             self.grid[self.row].remove(start);
-            self.grid[self.row].push(' ');
+            self.grid[self.row].push(StyledCell::BLANK);
         }
     }
 
     fn insert_chars(&mut self, n: usize) {
         let start = self.col.min(self.cols - 1);
         for _ in 0..n.min(self.cols) {
-            self.grid[self.row].insert(start, ' ');
+            self.grid[self.row].insert(start, StyledCell::BLANK);
             self.grid[self.row].truncate(self.cols);
         }
     }
@@ -344,6 +389,28 @@ impl Screen {
         }
         rows.join("\n")
     }
+
+    /// [`Screen::into_visible`]'s rows as cells (#3426), trimmed by the SAME
+    /// rule: a row loses its trailing spaces and the screen its trailing blank
+    /// rows, judged on the character alone. So mapping each returned row to its
+    /// characters and joining with `\n` reproduces `into_visible` exactly, and
+    /// the two readings cannot disagree about what text is on screen.
+    fn into_visible_styled(self) -> Vec<Vec<StyledCell>> {
+        let mut rows: Vec<Vec<StyledCell>> = self
+            .grid
+            .into_iter()
+            .map(|mut r| {
+                while r.last().is_some_and(|c| c.ch.is_whitespace()) {
+                    r.pop();
+                }
+                r
+            })
+            .collect();
+        while rows.last().is_some_and(|r| r.is_empty()) {
+            rows.pop();
+        }
+        rows
+    }
 }
 
 /// One CSI sequence's numeric parameters, `;`-separated, defaults applied by
@@ -396,6 +463,65 @@ pub fn render_screen(bytes: &[u8], cols: u16, rows: u16) -> String {
 /// gap an argument; `orchestration::question_shown` is the one that does.
 pub fn render_visible(bytes: &[u8], cols: u16, rows: u16) -> String {
     replay(bytes, cols, rows, false).into_visible()
+}
+
+/// [`render_visible`], keeping each cell's faint and inverse attributes
+/// (#3426).
+///
+/// Same replay, same trimming: the characters of these rows, joined with
+/// `\n`, ARE `render_visible`'s output. This adds only what text cannot say —
+/// that a run of cells was painted faint — which is how a CLI draws the
+/// placeholder in an empty input box, and the only thing that separates it
+/// from a line a human typed there. What a caller does with that is its own
+/// decision; this module stays ECMA-48 only and knows nothing about prompts.
+pub fn render_visible_styled(bytes: &[u8], cols: u16, rows: u16) -> Vec<Vec<StyledCell>> {
+    replay(bytes, cols, rows, false).into_visible_styled()
+}
+
+/// Apply one SGR sequence's parameters to the pen (#3426).
+///
+/// Parsed from the raw body rather than from `apply_csi`'s digit-filtered
+/// params, because two SGR forms make that filter lie about which numbers are
+/// attributes:
+///
+/// - **Extended colour, `;` form** — `38;2;R;G;B` and `38;5;N`. A `2` there is
+///   a colour-space selector, not faint, and a `7` can be a palette index. The
+///   arguments are skipped by the count the selector implies.
+/// - **Extended colour, `:` form** — `38:2::R:G:B`. The filter drops `:`, so
+///   the whole group would read as one large number; here a `:` group is one
+///   parameter whose attribute is its first field, and its arguments ride
+///   inside it.
+///
+/// An empty body is SGR 0, as ECMA-48 says. Anything unrecognised is ignored:
+/// the pen tracks two attributes, and every other SGR changes appearance only.
+fn apply_sgr(pen: &mut Pen, body: &[u8]) {
+    let body = String::from_utf8_lossy(body);
+    if body.is_empty() {
+        *pen = Pen::default();
+        return;
+    }
+    let groups: Vec<&str> = body.split(';').collect();
+    let mut i = 0;
+    while i < groups.len() {
+        let group = groups[i];
+        let colon = group.contains(':');
+        let code: u32 = group.split(':').next().unwrap_or("").parse().unwrap_or(0);
+        i += 1;
+        match code {
+            0 => *pen = Pen::default(),
+            2 => pen.faint = true,
+            // 22 is "normal intensity": it ends bold AND faint.
+            22 => pen.faint = false,
+            7 => pen.inverse = true,
+            27 => pen.inverse = false,
+            38 | 48 | 58 if !colon => match groups.get(i).and_then(|g| g.parse::<u32>().ok()) {
+                Some(5) => i += 2,
+                Some(2) => i += 4,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
 }
 
 /// The shared VT replay. `keep_history` decides only whether rows leaving the
@@ -618,14 +744,106 @@ fn apply_csi(s: &mut Screen, body: &[u8], final_byte: u8) {
             }
             s.move_to(0, 0);
         }
+        // SGR, but only the two attributes a cell records (#3426) — see
+        // `apply_sgr` for why it reads the raw body. A private-marked
+        // `CSI > … m` (xterm's key-modifier setting) returned above and never
+        // reaches here.
+        b'm' => apply_sgr(&mut s.pen, body),
         b's' => s.saved_cursor = Some((s.row, s.col)),
         b'u' => {
             if let Some((r, c)) = s.saved_cursor {
                 s.move_to(r, c);
             }
         }
-        // SGR (`m`), device queries (`c`, `n`), tab stops (`g`) and the rest
-        // change appearance or ask questions; neither moves text.
+        // Device queries (`c`, `n`), tab stops (`g`) and the rest change
+        // appearance or ask questions; neither moves text.
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! #3426: the two SGR attributes a cell records. The property the question
+    //! guard leans on is narrow — "these cells were painted faint" — so each test
+    //! pins one way a parser could get it wrong in the direction that matters
+    //! (a cell read faint that was not, which would let a typed line pass as a
+    //! placeholder) or the other (a placeholder read as typed, which is #3426).
+    use super::*;
+
+    /// The one row's `(char, faint, inverse)` triples, spaces dropped.
+    fn cells(bytes: &[u8]) -> Vec<(char, bool, bool)> {
+        render_visible_styled(bytes, 80, 5)
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| c.ch != ' ')
+            .map(|c| (c.ch, c.faint, c.inverse))
+            .collect()
+    }
+
+    #[test]
+    fn sgr_2_paints_faint_and_22_or_0_or_an_empty_sgr_ends_it() {
+        assert_eq!(cells(b"\x1b[2ma\x1b[22mb"), vec![('a', true, false), ('b', false, false)]);
+        assert_eq!(cells(b"\x1b[2ma\x1b[0mb"), vec![('a', true, false), ('b', false, false)]);
+        assert_eq!(cells(b"\x1b[2ma\x1b[mb"), vec![('a', true, false), ('b', false, false)]);
+        // Combined with another attribute in one sequence, as a renderer that
+        // coalesces its SGR writes emits it.
+        assert_eq!(cells(b"\x1b[39;2ma"), vec![('a', true, false)]);
+    }
+
+    #[test]
+    fn inverse_is_recorded_separately_and_ended_by_27() {
+        assert_eq!(
+            cells(b"\x1b[7ma\x1b[27m\x1b[2mb"),
+            vec![('a', false, true), ('b', true, false)]
+        );
+    }
+
+    #[test]
+    fn a_2_or_7_inside_an_extended_colour_is_not_an_attribute() {
+        // `38;2;R;G;B` (truecolour) and `38;5;N` (palette): the `2` is a
+        // colour-space selector and the arguments are colour. Read naively,
+        // every truecolour span would turn faint — and a typed line painted in
+        // a theme colour would pass as a placeholder.
+        assert_eq!(cells(b"\x1b[38;2;2;7;2ma"), vec![('a', false, false)]);
+        assert_eq!(cells(b"\x1b[38;5;2ma"), vec![('a', false, false)]);
+        assert_eq!(cells(b"\x1b[48;5;7ma"), vec![('a', false, false)]);
+        // The colon form carries its arguments inside the one parameter.
+        assert_eq!(cells(b"\x1b[38:2::2:2:2ma"), vec![('a', false, false)]);
+        // …and an attribute AFTER an extended colour still counts.
+        assert_eq!(cells(b"\x1b[38;2;10;20;30;2ma"), vec![('a', true, false)]);
+        assert_eq!(cells(b"\x1b[38:5:2;2ma"), vec![('a', true, false)]);
+    }
+
+    #[test]
+    fn erasing_a_faint_cell_leaves_a_plain_blank_and_a_repaint_takes_the_new_pen() {
+        // The input box is repainted in place: a faint placeholder the human
+        // then types over must read as TYPED, never as faint text left behind.
+        let raw = b"\x1b[2mplaceholder\x1b[22m\r\x1b[Ktyped";
+        assert_eq!(
+            cells(raw),
+            "typed".chars().map(|c| (c, false, false)).collect::<Vec<_>>()
+        );
+        let raw = b"\x1b[2mplaceholder\x1b[22m\rTYPED";
+        let got = cells(raw);
+        assert!(got[..5].iter().all(|c| !c.1), "overwritten cells take the current pen: {got:?}");
+        assert!(got[5..].iter().all(|c| c.1), "the untouched tail is still the old faint text");
+    }
+
+    #[test]
+    fn the_styled_rows_are_render_visible_character_for_character() {
+        // The agreement property the doc promises: styled rows, joined, ARE
+        // render_visible — so adding the attributes can never change which text
+        // the guard sees. Includes trailing spaces, a trailing blank row, a
+        // faint trailing space (trimmed like any other) and a scrolled-off row.
+        let raw: &[u8] = b"one\r\n\x1b[2mtwo  \x1b[22m\r\n\x1b[7m \x1b[0m\r\nfour\r\nfive\r\nsix\r\n\r\n";
+        for (cols, rows) in [(80u16, 5u16), (3, 4), (80, 24)] {
+            let styled: Vec<String> = render_visible_styled(raw, cols, rows)
+                .iter()
+                .map(|r| r.iter().map(|c| c.ch).collect())
+                .collect();
+            assert_eq!(styled.join("\n"), render_visible(raw, cols, rows), "at {cols}x{rows}");
+        }
     }
 }

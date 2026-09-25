@@ -7426,7 +7426,9 @@ negative sets.
 leads a pointer with content and still matches. That is not new — the older box shape
 (`idle-input-box.txt`) uses `>`, which was never a pointer glyph — but it is the shape to watch if
 a CLI adopts `❯` plus placeholder text; the answer then is the same one this note takes, a narrower
-signal, not a wider mask.
+signal, not a wider mask. Claude Code did adopt it, for its suggested next prompt, and #3426 closes
+it for a placeholder painted faint: the composition the guard reads drops it by cell attribute (see
+the #3426 section below).
 
 **The assumption this rests on, stated so a future TUI change is a known break and not a mystery:
 a pointer and the option it points at render on the SAME row.** That is what makes "nothing after
@@ -7554,7 +7556,8 @@ that changed and a bare detector call no longer covers the risk.
   `question_shown` is false whatever the grid says, and copilot's own repaints push the row out of
   the last-painted window within a poll or two.
 - #727's placeholder residual is untouched. A placeholder is the CLI's text, not ours, so this
-  change has nothing to say about it and the answer there is still a narrower signal.
+  change has nothing to say about it and the answer there is still a narrower signal. (#3426 later
+  closed it for a faint placeholder, by cell attribute.)
 
 ## #821: the same rendering, the other gate — and the failure direction inverts
 
@@ -8008,8 +8011,9 @@ absolute is untouched — a human's own typed line is never overridden, at any a
   observe: the veto cannot fire and the override has nothing to count a streak of. Releasing on no
   evidence at all is precisely what this guard must never do, so this is left as a hold; `h7` pins
   it so it is a known limit rather than a surprise. The badge (#532) is still the channel for it.
-- **A CLI whose empty box is a *placeholder* (`❯ Try "fix the build"`)** does not read as idle —
-  #727's residual, unchanged, and the same answer applies: a narrower signal, not a wider mask.
+- **A CLI whose empty box is a *placeholder* (`❯ Try "fix the build"`)** did not read as idle —
+  #727's residual. #3426 closes it for a placeholder painted faint, which is what starved this
+  override of idle reads (see the #3426 section below); one painted in a grey colour still holds.
 - **The override can paste into a live menu, and since #903 (B2) it can press Enter into one.**
   Layer 3's term has no
   menu-absent conjunct (see the section above for why the strong reading would make it dead code),
@@ -8110,6 +8114,97 @@ box and "no question anywhere on screen", not the body of the turn the resume re
 `"some output\nOverwrite the file? (y/n)\n> "` — an inline yes/no prompt above an empty composer,
 which is not a shape any TUI paints (an inline prompt takes the cursor; it does not hand the box
 back). It now pins the live shape, and `c3b` pins what the old, self-contradictory screen answers.
+
+## #3426: the CLI's suggested next prompt is not the human's line
+
+**Problem.** After a turn, Claude Code writes a guess at the human's next prompt into its empty
+input box as placeholder text: `❯ main is green now — rebase onto origin/main and re-run CI`.
+Nobody typed it. As text, that row is a prompt glyph leading content, and every reading in this
+guard took it at face value:
+
+- to the ring and to `pointer_rendered` it is a `pointer-option` row, which is a hold on its own;
+- to `idle_prompt_row_rendered` it is a composer that is **not empty**, so #903's idle release
+  (`GridEvidence::IdlePrompt`) never fires on that screen, whatever else matched;
+- and because the override counts the same weak reading, `question_override_admits` never gets
+  the two idle reads it needs. The fifteen-minute bound was reachable in the code and unreachable
+  on the pane.
+
+Pane w-3078 was held thirty minutes that way. Its audit records say `idle_row:false` on every poll.
+The match itself was `prose-permission-phrase` on finished-turn prose still on screen, which is
+exactly the class #903's release exists for; only the suggestion stopped it. It is #727's
+placeholder residual (see the limits above), arrived in the shape that section said to watch for.
+
+**Why text cannot answer it, and what does.** A suggestion and a line the human typed are the same
+characters in the same cells. What differs is how they are painted. Claude Code's
+placeholder renderer (read from its shipped bundle) paints the text with chalk `dim`, which is
+SGR 2 (faint). While the terminal has focus, the first character is inverse video instead: its
+block cursor. Typed input is painted at normal intensity. So the discriminator is the **cell attribute**, not the CLI's idle signal.
+That was the other option the issue named, and it was not taken for two reasons. The guard's only
+idleness evidence is the rendered composer, and a hook- or transcript-derived "turn ended" is
+per-CLI plumbing. Worse, "the turn ended" says nothing about whether a dialog is on screen now,
+which is the question this guard exists to answer.
+
+**Where it lives.**
+
+- `termgrid` records two attributes per cell, faint and inverse, and exposes them only through
+  `render_visible_styled`. It stays ECMA-48-only: it knows nothing about prompts. `render_screen`
+  and `render_visible` are byte-for-byte what they were, and `render_visible_styled`'s characters
+  joined **are** `render_visible` (pinned in `termgrid`'s own tests). The SGR parse reads the raw
+  body, because the old digit filter would have read the `2` in `38;2;R;G;B` as faint. Under that
+  reading every truecolour span would turn faint, and a typed line painted in a theme colour would
+  pass as a placeholder.
+- `orchestration::question_visible` is the composition `question_sample` now reads. It clears one
+  row, the **lowest row leading with a prompt glyph**, and only when every content cell after the
+  glyph is faint. The first cell may be inverse instead (the cursor). Any cell at normal intensity
+  refuses, and a refusal leaves the row exactly as `render_visible` had it. So the change can only
+  turn a non-empty composer into an empty one; it can never create a hold, and it never touches a
+  question row. A dialog's highlighted choice (`❯ 1. Yes`) is painted at normal intensity, so a
+  screen with a dialog on it is unchanged.
+
+**What stays true.** #510's absolute is untouched in both of its forms. `write_admission` checks
+`input_pending` (the keystroke record, not the screen) first. A composer holding anything at
+normal intensity still reads as not idle, so the override still never counts a typed line as an
+idle read. The ring is unchanged, so this is still "the grid may only release".
+
+**Limits, stated.**
+
+- **A glyph-less dialog under a faint prompt row.** The rule's scope is "the lowest prompt-glyph
+  row" because the composer sits below the transcript. A dialog that paints **no** glyph, like the
+  reverse-video `AskUserQuestion`, leaves a transcript row as the lowest one, and if a CLI painted
+  that past prompt faint, the row would be cleared. The strong reading still holds on the dialog's
+  menu structure. The **weak** reading, the override's, turns true. That is the #903 override
+  residual (`question-gate-authorship.md`) with one more way in: fifteen minutes, badged for five,
+  and a CLI that renders past prompts faint. Claude Code does not: the resumed-transcript fixtures
+  paint `❯ [orch] …` at normal intensity. The pin is
+  `residual_a_faint_prompt_row_above_a_glyphless_dialog_reads_as_an_idle_composer`, which fails if
+  the residual ever closes, so the disclosure is deleted rather than left behind.
+- **A placeholder painted in grey rather than faint is not recognised.** Colour is a theme choice
+  with no ECMA-48 meaning, so `termgrid` does not record it. Such a CLI keeps the pre-#3426
+  behaviour: it holds, and the badge and override are its channels.
+- **Only the placeholder's first row is cleared.** A suggestion that wraps leaves its continuation
+  row as faint text below an empty composer. The release still fires on the empty composer. The
+  continuation is ordinary text to every other reading, as it was before.
+- **The assumption to re-check on a TUI upgrade:** the placeholder is faint and typed input is
+  not. Claude Code's shipped bundle is the source of that claim, and a CLI that dims typed text
+  would make this rule read a human's line as a suggestion. The rule would only ever release a
+  question hold on that basis, never a box-occupied one.
+
+### Tests
+
+In `tests/orchestration.rs`, through the production predicate and its witness, with the grid
+built by `question_visible` from raw bytes:
+
+- `an_idle_pane_whose_box_holds_only_the_cli_suggestion_takes_the_delivery` covers focused and
+  unfocused rendering. Its positive control is that the same bytes through plain `render_visible`
+  hold, so the fixture really is the wedge.
+- `the_incidents_prose_match_is_released_by_a_suggestion_only_composer` covers w-3078's recorded
+  signal.
+- `a_line_the_human_typed_still_holds` has three shapes, including a typed line beside faint text.
+- `a_real_dialog_still_holds_with_a_faint_prompt_row_above_it` covers a permission dialog, plus
+  `claude-askuserquestion.txt`.
+- The residual pin above.
+
+The SGR parse is pinned inline in `termgrid`.
 
 ## Delivery queue (#445)
 

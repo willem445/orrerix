@@ -1284,7 +1284,9 @@ These deserve their own detail — see:
   it presses Enter — if a real dialog is up at that moment the Enter is still
   withheld and the text is left in the box for you, rather than answering the
   dialog for you. And a hold on your own typed input is never overridden, at any
-  age. You'll never see "held … re-send" — if a prompt is safely
+  age. The grey suggested next prompt Claude Code shows in an idle input box is
+  not your typing, and it is not a question either: a pane showing only that
+  suggestion takes deliveries normally. You'll never see "held … re-send" — if a prompt is safely
   queued, the notice says so explicitly and tells you not to re-send it (that
   would just create a duplicate); a payload is only ever reported gone if the
   notice says **DROPPED** (the pane's queue was already full, or the agent's

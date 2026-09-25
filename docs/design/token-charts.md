@@ -906,12 +906,16 @@ zoom maps the pointer through `tsForX`, then `zoomAbout`; pointer capture keeps
 a drag continuous outside the plot, and `panBy` clamps it to the series extent.
 Marks select the lifecycle comparison and fit their snapped split window.
 
-The view's default token counter is `total`; cache reads are a selectable
-measure but are not the default. Each chart/table labels its counter because
-per-item's numerator follows that selection and no longer necessarily matches
-the all-token feature bars. A shared bucket chooser caps bucket-by-key work;
+The view's default token counter is output; cache reads are a selectable
+measure but are not the default. The plot and token tables label their
+numerators because per-item follows the selected token counter and no longer
+necessarily matches the all-token feature bars. A shared bucket chooser caps bucket-by-key work;
 coarsening, truncation and excluded samples are surfaced next to trends. The
 four trend series share the chart window: per-completed-item tokens, completions
-per day, median completion latency and average tokens per agent pane. The
-lifecycle denominator is taken directly from done-in-window audit transitions,
-never from the board's current done status.
+per day, median completion latency and average total tokens per agent pane. Detail
+tables expose averages grouped by pane, block, model and work item, the per-item
+role split, completed time in each status, review rounds per PR and CI attempts
+per PR. Every cell carries its sample count, and selecting a mark adds before /
+after values wherever the projection has a dated partition. The lifecycle
+denominator is taken directly from done-in-window audit transitions, never from
+the board's current done status.

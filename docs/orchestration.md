@@ -1368,20 +1368,22 @@ switch** gets a mark of its own, per agent session, at the first sample taken
 on the new model (`orchestrator/claude: claude-fable-5-1 → claude-opus-5-5`).
 Effort changes are not marked: the usage record does not carry effort.
 
-**Explore the plot.** The default counter is all tokens (not cache reads); the
-legend and metric panels name the selected counter. Use the wheel to zoom about
+**Explore the plot.** The default counter is output tokens, so cache reads do
+not flatten the other series; the selected counter and all-token feature bars
+are labelled distinctly. Use the wheel to zoom about
 the pointer and drag to pan. The custom window survives refreshes while
 following; select **custom · reset** to return to the default preset. The **log
-y** switch and y-axis autoscale to visible data. The default plot counter is
-output tokens, so the large cache-read counter does not flatten other series. Select a change mark to fit a
+y** switch and y-axis autoscale to visible data. Select a change mark to fit a
 one-hour-before/one-hour-after window and compare its before/after table.
 
 Trend lines share this window and time axis: tokens per completed item, items
-done per day, median time to completion, and average tokens per pane. The
-number of samples (`n`) and any unavailable values are shown with the metric.
-The detail tables retain their before/after columns for a selected mark. Audit
-metrics are limited to the rows still in the audit window; the chart identifies
-when history may be truncated or a bucket grid was coarsened.
+done per day, median time to completion, and average total tokens per pane.
+Detail tables show averages grouped by pane, block, model and work item, the
+per-item role split, time spent in each status, review rounds per PR and CI
+attempts per PR. Every cell reports `n`; selecting a mark adds before/after
+columns where that measure has dated values. Audit metrics are limited to the
+rows still in the audit window; the chart identifies when history may be
+truncated or a bucket grid was coarsened.
 
 Click a mark for the **before/after** table: mean spend per five-minute bucket
 for the hour before against the hour after, per series and in total. That is

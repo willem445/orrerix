@@ -57,7 +57,7 @@ export function markSpan(markMs: number, k: number, bucketMs: number, gridOrigin
 
 export interface Point { tsMs: number; value: number }
 /** Autoscale only visible samples; empty windows use [0, 1]. */
-export function yDomain(points: readonly Point[], win: Window): [number, number] {
+export function yDomain(points: Iterable<Point>, win: Window): [number, number] {
   if (!validWindow(win)) return [0, 1];
   // A dense series can contain hundreds of thousands of visible points.
   // Scan once with constant auxiliary space; spreading them into Math.min/max

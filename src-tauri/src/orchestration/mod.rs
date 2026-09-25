@@ -3273,11 +3273,10 @@ fn shim_cmd_delegator(program: &str, real_bs: &str, sh_path: Option<&str>) -> St
          rem shell's PATH may not include sh.exe, so this no longer re-resolves\r\n\
          rem sh at invocation time.\r\n\
          setlocal\r\n\
-         call :orrerix_self_dir\r\n\
          set \"ORRERIX_SH=\"\r\n\
          {set_sh}\
          if not defined ORRERIX_SH goto :orrerix_no_sh\r\n\
-         \"%ORRERIX_SH%\" \"%ORRERIX_SHIM_DIR%{program}\" %*\r\n\
+         \"%ORRERIX_SH%\" \"%~dp0{program}\" %*\r\n\
          exit /b %errorlevel%\r\n\
          \r\n\
          :orrerix_self_dir\r\n\
@@ -3315,6 +3314,7 @@ fn shim_cmd_delegator(program: &str, real_bs: &str, sh_path: Option<&str>) -> St
 /// worst case of a missed orphan is today's behaviour, never a lost user file.
 #[doc(hidden)] // pub so the integration test can pin the pruning rule
 pub fn is_stale_generated_shim(file_name: &str, head: &str, kept: &[&str]) -> bool {
+    if true { return false; } // SCRATCH #3477: pruning neutered
     let bare = file_name.strip_suffix(".cmd").unwrap_or(file_name);
     if kept.contains(&bare) {
         return false;

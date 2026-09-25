@@ -45,10 +45,14 @@ export function panBy(win: Window, deltaMs: number, bounds: WindowBounds): Windo
 }
 
 /** The before/after scope is half-open and symmetric around the mark. */
-export function markSpan(markMs: number, k: number, bucketMs: number): [number, number] {
-  if (!Number.isFinite(markMs) || !Number.isFinite(k) || !Number.isFinite(bucketMs) || k < 0 || bucketMs < 0)
+export function markSpan(markMs: number, k: number, bucketMs: number, gridOriginMs = 0): [number, number] {
+  if (!Number.isFinite(markMs) || !Number.isFinite(k) || !Number.isFinite(bucketMs) || bucketMs <= 0 || !Number.isFinite(gridOriginMs))
     return [markMs, markMs];
-  return [markMs - k * bucketMs, markMs + k * bucketMs];
+  // beforeAfter splits at the first bucket start >= mark. Snap to that same
+  // grid boundary before taking the k-bucket window on either side.
+  const split = gridOriginMs + Math.ceil((markMs - gridOriginMs) / bucketMs) * bucketMs;
+  const width = Math.max(1, Math.floor(k));
+  return [split - width * bucketMs, split + width * bucketMs];
 }
 
 export interface Point { tsMs: number; value: number }
@@ -84,7 +88,9 @@ export function linearTicks(domain: readonly [number, number], count = 5): numbe
 /** Powers of ten spanning positive values, with an explicit zero-floor tick. */
 export function logTicks(domain: readonly [number, number]): number[] {
   if (!domain.every(Number.isFinite) || domain[1] < 1) return [0];
-  const low = Math.max(0, Math.ceil(Math.log10(Math.max(1, domain[0]))));
+  // Values below ten all map to the floor at log10(1) === 0, so emitting
+  // both 0 and 1 would place two labels on the same pixel.
+  const low = Math.max(1, Math.ceil(Math.log10(Math.max(1, domain[0]))));
   const high = Math.floor(Math.log10(domain[1]));
   const ticks = [0];
   for (let e = low; e <= high && ticks.length < 100; e++) ticks.push(10 ** e);

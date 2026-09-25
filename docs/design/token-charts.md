@@ -873,9 +873,13 @@ translates without changing the span. Both use `clampWindow` to stay inside
 `[first_ts, max(now, last_ts)]`, with a minimum of two buckets and a maximum
 of the available series extent. Invalid or inverted windows are preserved
 rather than repaired into a different request. A selected mark's comparison
-window is half-open and symmetric: `markSpan(mark, k, bucketMs)` returns
-`[mark - k·bucketMs, mark + k·bucketMs)`; `k=12` matches
-`tokencharts.ts`'s `DEFAULT_BEFORE_AFTER_K`.
+window snaps to the first bucket start at or after the mark, matching
+`beforeAfter`'s split, then spans `k` whole buckets on each side. The half-open
+result is `[split - k·bucketMs, split + k·bucketMs)`; `markSpan` accepts the
+grid origin (epoch-aligned by default). It uses
+`tokencharts.ts`'s `DEFAULT_BEFORE_AFTER_K` for the same half-width as the
+readout. On a log axis, zero and one share the floor mapping; ticks include
+zero and powers of ten from ten upward, avoiding overlapping floor labels.
 
 The y-domain is computed from finite points within the current window, so
 zooming autoscale follows the visible data rather than an off-screen peak. The

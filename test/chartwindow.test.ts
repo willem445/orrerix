@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chooseBucket, clampWindow, linearTicks, logTicks, logValue, markSpan, panBy, yDomain, zoomAbout } from "../src/chartwindow.ts";
+import { beforeAfter, bucketSeries, DEFAULT_BEFORE_AFTER_K, DEFAULT_BUCKET_MS, TOTAL_ROW } from "../src/tokencharts.ts";
 
 const bounds = { first_ts: 0, last_ts: 10_000, now: 10_000, bucketMs: 100 };
 test("zoom preserves the anchor fraction exactly", () => {
@@ -17,11 +18,46 @@ test("pan clamps while preserving span", () => {
   assert.deepEqual(out, { startMs: 8_000, endMs: 10_000 });
   assert.equal(out.endMs - out.startMs, 2_000);
 });
-test("markSpan at k=12 matches beforeAfter's default bucket scope", () => {
-  const span = markSpan(50_000_000, 12, 300_000);
-  assert.deepEqual(span, [46_400_000, 53_600_000]);
-  // tokencharts.ts: DEFAULT_BEFORE_AFTER_K = 12; beforeAfter partitions its
-  // buckets around the mark using this exact 12-bucket half-width.
+test("markSpan matches beforeAfter's snapped scope for an off-grid mark", () => {
+  const bucketMs = DEFAULT_BUCKET_MS;
+  const gridStart = Math.floor(1_700_000_000_000 / bucketMs) * bucketMs;
+  let cumulative = 0;
+  const rows = Array.from({ length: 61 }, (_, i) => {
+    cumulative += i;
+    return {
+      kind: "sample" as const,
+      ts_ms: gridStart + i * bucketMs,
+      key: "key",
+      agent: "agent",
+      block: "worker-std",
+      cli: "pi",
+      role: "worker",
+      in: cumulative,
+      out: 0,
+      cache_w: 0,
+      cache_r: 0,
+      cost_usd: null,
+      estimated: false,
+      source: "test",
+      model: "test",
+    };
+  });
+  const series = bucketSeries(rows, {
+    startMs: gridStart,
+    endMs: gridStart + 60 * bucketMs,
+    bucketMs,
+  });
+  const mark = gridStart + 25.5 * bucketMs;
+  const k = DEFAULT_BEFORE_AFTER_K;
+  const split = series.buckets.findIndex((bucketStart) => bucketStart >= mark);
+  const scope = markSpan(mark, k, bucketMs);
+  const readout = beforeAfter(series, mark, "total", k).find((row) => row.key === TOTAL_ROW)!;
+
+  assert.notEqual(mark % bucketMs, 0, "fixture must keep the mark off the bucket grid");
+  assert.deepEqual(scope, [series.buckets[split - k], series.buckets[split + k]]);
+  assert.equal(readout.before, 19.5);
+  assert.equal(readout.after, 31.5);
+  assert.equal(scope[1] - scope[0], 2 * k * bucketMs);
 });
 test("invalid windows and degenerate requests remain unchanged", () => {
   const inverted = { startMs: 4, endMs: 3 };
@@ -41,7 +77,9 @@ test("y domain handles a large visible series without argument-spread limits", (
 test("log mapping is finite for zero and negatives; ticks cover both scales", () => {
   assert.ok(Number.isFinite(logValue(0)));
   assert.ok(Number.isFinite(logValue(-9)));
-  assert.deepEqual(logTicks([0, 100]), [0, 1, 10, 100]);
+  const ticks = logTicks([0, 100]);
+  assert.deepEqual(ticks, [0, 10, 100]);
+  assert.equal(new Set(ticks.map(logValue)).size, ticks.length, "log ticks must not overlap at the floor");
   assert.equal(linearTicks([0, 10], 3).length, 3);
 });
 test("bucket chooser stays under cell cap and coarsens only when required", () => {

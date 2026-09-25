@@ -3309,7 +3309,7 @@ fn shim_cmd_delegator(program: &str, real_bs: &str, sh_path: Option<&str>) -> St
 /// costs nothing. "Kept" is THIS build's set: a build that adds a shim name must
 /// add it here, and an older build running beside it will still prune that name
 /// on its own spawns (both share `%APPDATA%orrerixghshim`).
-pub const GENERATED_SHIM_NAMES: [&str; 4] = ["gh", "git", "orrerix", "loomux"];
+pub const GENERATED_SHIM_NAMES: [&str; 2] = ["orrerix", "loomux"]; // SCRATCH #3481 B1
 
 /// Whether a file found in the shared shim dir is a STALE product-generated shim
 /// that `ensure_shims` should delete (#3477): its name is not in

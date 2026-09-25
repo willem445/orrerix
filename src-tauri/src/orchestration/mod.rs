@@ -18034,6 +18034,11 @@ pub struct OrchRegistry {
     /// actually cleared via the toggle), so a LATER re-entry — a fresh edit
     /// — audits again rather than staying silent forever after the first.
     merge_gate_removal_warned: TrackedMutex<HashSet<GroupId>>,
+    /// #3330: the error set each group's workflow file last failed to parse
+    /// with, and whether the orchestrator has been told. See
+    /// `warn_workflow_unparseable`: one row and one line per distinct error
+    /// set, cleared the moment the file parses again.
+    workflow_unparseable_warned: TrackedMutex<HashMap<GroupId, (Vec<String>, bool)>>,
     /// The published snapshot the polled reads are served from (#1608, plan
     /// #1600 §3 Phase 1). NOT a `TrackedMutex` and deliberately not a lock at
     /// all from a reader's side: `views.load()` is a read-lock, a pointer
@@ -31541,6 +31546,7 @@ impl OrchRegistry {
             agent_channel: TrackedMutex::new("agent_channel", HashMap::new()),
             channel_seq: AtomicU32::new(0),
             merge_gate_removal_warned: TrackedMutex::new("merge_gate_removal_warned", HashSet::new()),
+            workflow_unparseable_warned: TrackedMutex::new("workflow_unparseable_warned", HashMap::new()),
             views: views::ViewPublisher::new(),
         }
     }
@@ -49701,13 +49707,19 @@ impl OrchRegistry {
     ///     paths" #385/B1 asked for, not a change to the type's default.)
     ///   - `Ok(None)` — the file is GONE — or an unreadable/unstable/
     ///     unparseable read: all three retain the last-known gate for the
-    ///     same reason as the bullet above, and all three simply `return`
-    ///     without writing or auditing anything. A transient blip self-heals
-    ///     the moment the file is next read stably and parses (compared,
-    ///     then synced, on a later tick); re-auditing every
-    ///     `WORKFLOW_GATE_POLL_INTERVAL` forever would just be log noise —
-    ///     the shim's own `merge-gate-workflow-blocked`/`merge-gate-blocked`
-    ///     audit lines already record every actual refused merge meanwhile.
+    ///     same reason as the bullet above, and all three `return` without
+    ///     writing the gate. A transient blip self-heals the moment the file
+    ///     is next read stably and parses (compared, then synced, on a later
+    ///     tick); re-auditing every `WORKFLOW_GATE_POLL_INTERVAL` forever
+    ///     would just be log noise — the shim's own
+    ///     `merge-gate-workflow-blocked`/`merge-gate-blocked` audit lines
+    ///     already record every actual refused merge meanwhile. **The one
+    ///     exception is a stable read that does not PARSE** (#3330): that is
+    ///     not a blip, it is a file every reader of the workflow now sees as
+    ///     absent — the review and plan drivers included, which then read
+    ///     OFF with nothing said anywhere. So it is announced, once per
+    ///     distinct error set, by `warn_workflow_unparseable`; the gate is
+    ///     still retained exactly as before.
     ///
     /// Compares against the CURRENTLY ARMED gate (`self.merge_gate`, which reads
     /// the spec file back) before writing anything, so an unedited file — the
@@ -49724,7 +49736,18 @@ impl OrchRegistry {
         // the reload arms the gate the human pinned, not `.orrerix/workflow.yml`.
         let path = Path::new(&info.repo).join(active_workflow_path(&info.repo, &info.guardrails));
         let Some(text) = Self::read_workflow_stably(&path) else { return };
-        let Ok(wf) = workflow::parse_workflow(&text) else { return };
+        let wf = match workflow::parse_workflow(&text) {
+            Ok(wf) => {
+                // The file loads again (or always did): a later break is a
+                // new transition and is announced again.
+                self.workflow_unparseable_warned.lock_safe().remove(id);
+                wf
+            }
+            Err(errors) => {
+                self.warn_workflow_unparseable(id, &active_workflow_path(&info.repo, &info.guardrails), &errors);
+                return;
+            }
+        };
         let armed = self.merge_gate(id);
         let fresh = wf.gates.get("merge").cloned();
 
@@ -49783,6 +49806,78 @@ impl OrchRegistry {
                     "missing_blocks": missing,
                     "reason": "the resolved roster cannot spawn every reviewer this gate names",
                 }));
+            }
+        }
+    }
+
+    /// **Say ONCE that this group's workflow file does not load** (#3330).
+    ///
+    /// Every reader of the workflow treats an unparseable file as absent, and
+    /// for the review and plan drivers absent means OFF (`driver_policy_for`'s
+    /// "off is the answer to every uncertainty"). That is the right direction
+    /// for a driver, and it was silent: a group whose file stopped parsing —
+    /// an installed build older than a key the file had just gained, under
+    /// `deny_unknown_fields` — ran for hours with `review_drive_status`
+    /// answering `enabled: false`, a live drive recovered and never ticked,
+    /// and nothing in any pane. The launch-time `workflow-invalid` row does not
+    /// cover it either: a resume never re-reads the file for its roster, and a
+    /// row on the audit log is not something an orchestrator reads.
+    ///
+    /// So the reload pass — the one place that already re-reads the file on a
+    /// timer — writes a `workflow-invalid` row and hands the orchestrator one
+    /// line naming the errors, what they turn off, and any review drive on
+    /// disk that will sit un-ticked until the file loads.
+    ///
+    /// **Once per distinct error set, not per pass.** The row is written on the
+    /// transition and the line is retried until it lands (an orchestrator pane
+    /// that is not up yet must not cost the notice), then latched. A file that
+    /// parses clears the latch, and a different error set is a new transition
+    /// — a human who fixes one error and trips another hears about the second.
+    fn warn_workflow_unparseable(&self, id: &GroupId, path: &str, errors: &[String]) {
+        let delivered = {
+            let mut warned = self.workflow_unparseable_warned.lock_safe();
+            match warned.get(id) {
+                Some((seen, delivered)) if seen.as_slice() == errors => Some(*delivered),
+                _ => {
+                    warned.insert(id.clone(), (errors.to_vec(), false));
+                    None
+                }
+            }
+        };
+        if delivered == Some(true) {
+            return;
+        }
+        // The drives this file is now holding still: every entry that has not
+        // finished. `None` when the record cannot be read — said as such
+        // rather than as "none", which is a different fact (#2135's posture).
+        let live = self.rd_live_drive_prs(id);
+        if delivered.is_none() {
+            self.audit(id, brand::AUDIT_ACTOR, "workflow-invalid", json!({
+                "path": path,
+                "errors": errors,
+                "at": "reload",
+                "review_drives_unticked": live,
+                "action": "the review and plan drivers read OFF until the file loads; the last merge gate is kept",
+            }));
+        }
+        let drives = match &live {
+            Some(prs) if prs.is_empty() => "No review drive is on disk.".to_string(),
+            Some(prs) => format!(
+                "Review drives on disk that will sit un-ticked until it does: {}.",
+                prs.iter().map(|p| format!("PR #{p}")).collect::<Vec<_>>().join(", ")
+            ),
+            None => "orrerix could not read this group's review-drive record, so it cannot say which drives are waiting.".to_string(),
+        };
+        let text = format!(
+            "workflow file {path} does not load, so every reader of it sees no file: the review \
+             driver and the plan driver read OFF (drive_review answers driver-disabled) and the \
+             merge gate keeps whatever it last armed. {drives} Fix the file, or, if the error \
+             names a key this build does not know, install a build that does. Error: {}",
+            notify::sanitize_gh_text(&errors.join("; "), 400)
+        );
+        if self.deliver_to_orchestrator(id, &text, brand::AUDIT_ACTOR).is_ok() {
+            if let Some(entry) = self.workflow_unparseable_warned.lock_safe().get_mut(id) {
+                entry.1 = true;
             }
         }
     }

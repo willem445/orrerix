@@ -2737,6 +2737,15 @@ the example does not show at their defaults: `enabled:`, `plan_enabled:` and
 `auto_drive_on_done:` all default to **false**, and an absent `driver:` block means the
 whole feature is off.
 
+**A workflow file that stops loading turns both drivers off, and says so once.** The
+drivers read the file every time they act, and a file that no longer parses — a typo, or a
+key newer than the orrerix build you have installed — reads as no file, which means off.
+Within about 30 seconds the orchestrator pane gets one line naming the parse error and
+listing any review drive on disk that will sit still until the file loads again; the same
+facts are on the audit log as `workflow-invalid`. It says nothing more for that error.
+Fixing the file brings the drivers back on the next read, and a different error later is
+announced again.
+
 `plan_enabled` is a **second switch, not a widening of the first**, and it is read
 UNDER it: the plan driver is off wherever the review driver is. The separation is
 the consent. Turning the review driver on says orrerix may run a review loop you

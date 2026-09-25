@@ -720,7 +720,33 @@ the auto-start below all reach). The interception pair is
 the one that has to be argued rather than observed: those run on a delegate's
 own tool call, which the runtime schedules as a later turn and never as a frame
 the delivery itself pushes, and both release the lock before auditing. A new
-caller owes that argument again rather than inheriting it.
+caller owes that argument again rather than inheriting it. `rd_live_drive_prs`
+(#3330, §2.4's "a workflow file that does not load") pays it: a read-only
+acquisition from the workflow reload timer, which no delivery reaches, released
+before the notice it feeds is delivered.
+
+**A workflow file that does not load** (#3330). The policy is read off the
+file on every call — `driver_policy_for` caches nothing — and a file
+`parse_workflow` refuses reads as absent, so the driver is OFF. That is the
+right direction (§5.3: a driver that fails open spawns reviewers into a repo
+that never asked for one), and until #3330 it was silent: the measured case was
+an installed build older than a key the file had just gained, under
+`deny_unknown_fields`, which left `review_drive_status` answering
+`enabled: false` for about eight hours with a recovered drive never ticked and
+no line in any pane. Nothing was stale; the silence was the defect. The tick
+cannot be the place that notices — `next_rd_group` skips a group whose driver
+is off, so neither the tick nor the restart reconcile ever runs there — and a
+resume never re-reads the file for the roster. The one reader that already
+re-reads it on a timer is the merge-gate reload pass
+(`reload_merge_gate_if_changed`, every `WORKFLOW_GATE_POLL_INTERVAL`), so that
+pass now announces it: a `workflow-invalid` row (`at: reload`) and ONE
+orchestrator line naming the errors, that both drivers read off, and the PRs
+`rd_live_drive_prs` finds unfinished on disk. Latched per distinct error set
+(`workflow_unparseable_warned`), retried until the line lands, cleared the
+moment the file parses. **Residual:** the pass skips a paused group, so a paused
+group hears about it on resume, not before; and a read that is stable but
+genuinely mid-truncation can announce an error the next pass heals — one line,
+never a repeat.
 
 ### 2.5 The driver's own non-blocking round (#3367 item 1)
 

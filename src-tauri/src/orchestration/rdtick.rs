@@ -699,6 +699,21 @@ impl OrchRegistry {
         self.driver_policy_for(repo, guardrails).0
     }
 
+    /// The PRs this group has an unfinished review drive on, read off disk
+    /// whatever the policy says (#3330) — for the notice that tells the
+    /// orchestrator which drives a workflow file that will not load is holding
+    /// still. Held drives count: they are still the orchestrator's to resume.
+    ///
+    /// `None` when the record cannot be read, which is NOT "no drives" — the
+    /// same distinction `review_drive_status` keeps with `rd-state-unreadable`.
+    /// Under `rd_state_lock`, like every other reader of the file.
+    pub(super) fn rd_live_drive_prs(&self, group: &GroupId) -> Option<Vec<u64>> {
+        let dir = self.group_dir(group);
+        let _state_guard = self.rd_state_lock.lock_safe();
+        let state = reviewdrive::load_state(&dir).ok()?;
+        Some(state.entries.iter().filter(|e| !e.state().is_terminal()).map(|e| e.pr).collect())
+    }
+
     /// Install (or clear) the canned `gh` the driver reads through —
     /// `mq_runner_override`'s twin. `None` in the app, always.
     #[doc(hidden)] // pub for integration tests

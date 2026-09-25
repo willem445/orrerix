@@ -15,13 +15,17 @@
 // **What the window cannot see.** The read is bounded (`AUDIT_VIEW_LIMIT` rows
 // over two rotating generations), so every figure here is over the rows that
 // survived it:
-//   - A task's FIRST row in the read enters its status at an unknown instant —
-//     the row may be the transition or any later write. Its span in that status
-//     is not reported; it is counted `openedBeforeWindow` instead. For the same
-//     reason a task whose first row is already `done` is `doneUndated`, never a
-//     done dated at that row.
-//   - Time to completion from a first row that is not `queued` is a LOWER bound
-//     and says so (`fromQueued: false`).
+//   - A task's FIRST row in the read that is `queued` is read as its creation
+//     (a task is born `queued`): its queued span and its time to completion
+//     both start there, one rule for both. If the creation row aged out and a
+//     later write to the still-queued task survived, both are short by the
+//     same amount — undetectable, since the Task carries no creation instant.
+//   - A first row in any OTHER status entered it at an unknown instant — the
+//     row may be the transition or any later write. Its span in that status is
+//     not reported; it is counted `openedBeforeWindow` instead, and time to
+//     completion from it is a LOWER bound (`fromQueued: false`). For the same
+//     reason a task whose first row is already `done` is `doneUndated`, never
+//     a done dated at that row.
 //   - A PR's review rounds and CI attempts are counted over the whole read, so
 //     rounds older than `floorMs` are missing; `floorMs` travels on the result.
 //
@@ -89,7 +93,8 @@ export interface StatusSpan {
 export interface StatusStats {
   /** Completed spans whose leaving instant is in the window. */
   values: number[];
-  /** Tasks first SEEN in this status (entry instant unknown) whose leaving
+  /** Tasks first SEEN in this status, so its entry instant is unknown (never
+   *  `queued`, whose first row is read as the creation), whose leaving
    *  instant — or, if never left in the read, whose first row — is in the
    *  window. Their span is not in `values`. */
   openedBeforeWindow: number;
@@ -100,12 +105,17 @@ export interface StatusStats {
 
 export interface TimeToCompletion {
   taskId: string;
-  /** The task's first row in the read. It is its first `queued` row when
-   *  `fromQueued`; otherwise the queued instant aged out and `ms` is a lower
-   *  bound. */
+  /** The task's first row in the read — the same instant its queued span
+   *  starts from when `fromQueued`. */
   startMs: number;
   doneMs: number;
   ms: number;
+  /** The first row was `queued` and is read as the task's creation. That is
+   *  exact unless the creation row aged out and a later write to the
+   *  still-queued task survived — undetectable, since the Task carries no
+   *  creation instant — in which case this AND the queued span are short by
+   *  the same amount. `false`: the first row was mid-lifecycle, so `ms` is a
+   *  lower bound. */
   fromQueued: boolean;
 }
 
@@ -174,7 +184,9 @@ export interface Lifecycle {
   doneAtMs: Map<string, number>;
   doneIds: Set<string>;
   /** Tasks whose first row in the read was already `done` — done at some
-   *  instant the window cannot see, never dated at that row. */
+   *  instant the window cannot see, never dated at that row. Counted over the
+   *  WHOLE read, the window's edges ignored — unlike `openedBeforeWindow` —
+   *  so it is not a per-window count to set beside one. */
   doneUndated: number;
   /** Done per local calendar day. `windowDays` is the window's length in
    *  calendar days — partial first and last days count as the fraction they
@@ -383,7 +395,11 @@ function taskProjection(rows: readonly LifecycleAuditRowLike[], ctx: Ctx): TaskO
         firstStatus: status,
         status,
         enteredMs: ts,
-        entryKnown: false,
+        // A task is born `queued`, so a first `queued` row is read as its
+        // creation — the entry into `queued` — for the queued span AND for
+        // time to completion, one rule for both. Any other first status was
+        // entered at an instant the read cannot see.
+        entryKnown: status === QUEUED,
         doneMs: undated ? Number.NaN : null,
       });
       continue;

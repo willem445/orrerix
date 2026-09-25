@@ -70,7 +70,7 @@ test("rows arriving out of order are read in time order", () => {
     task(T0, "t-1", "queued"),
   ];
   const out = lifecycle(rows, WIDE);
-  assert.deepEqual(out.spans.map((s) => [s.status, s.ms]), [["in-progress", 4 * H]]);
+  assert.deepEqual(out.spans.map((s) => [s.status, s.ms]), [["queued", 2 * H], ["in-progress", 4 * H]]);
   assert.equal(out.ttc[0]?.ms, 6 * H);
 });
 

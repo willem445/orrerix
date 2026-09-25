@@ -720,9 +720,11 @@ does not split a span.
   left it, and only when BOTH rows are in the read. A span is attributed to the
   window by its leaving instant.
 - *Time to completion* runs from the task's first row in the read to its first
-  dated `done`. When that first row is `queued` it is the queued instant; when
-  it is anything else the queued row aged out, the figure is a lower bound, and
-  the sample says so (`fromQueued: false`).
+  dated `done`. A first row that is `queued` is read as the task's creation — the
+  same rule that starts its queued span, so the two figures cannot disagree
+  about when the task began (`fromQueued: true`). A first row in any other
+  status means the queued row aged out, so the figure is a lower bound, and the
+  sample says so (`fromQueued: false`).
 - *Done* is counted once per task, at its FIRST dated `done` — a reopen and a
   second `done` are transitions, not a second completion. `doneAtMs`/`doneIds`
   are slice C's input for "tokens per completed item", and hold only tasks whose
@@ -752,11 +754,24 @@ does not split a span.
 
 **What the window cannot see.** The read is capped at `AUDIT_VIEW_LIMIT` rows over
 two rotating generations, and every figure is over the rows that survived it.
-A task's first row enters its status at an unknown instant — the row may be the
+A task is born `queued`, so a first row that is `queued` is read as its
+creation, and both its queued span and its time to completion start there.
+That reading is wrong in one case the pane cannot detect: the creation row aged
+out and a later write to the still-queued task (a note, a title edit) survived.
+The Task snapshot carries no creation instant, so that row looks exactly like a
+creation, and both figures come out short by the same amount — never one short
+and the other exact. The alternative — distrusting every first row — would
+leave `queued` unmeasured for every task created inside the read, which is
+nearly all of them, to protect the few created before the floor. A first row in
+any OTHER status entered it at an unknown instant — the row may be the
 transition or any later write — so that span is never reported; it is counted
 `openedBeforeWindow` instead. For the same reason a task whose first row is
 already `done` is `doneUndated` and is never dated at that row, even if it is
-reopened and finished again later. Rounds and CI attempts older than the read are
+reopened and finished again later. Unlike `openedBeforeWindow`, which counts
+only first rows the window can see, `doneUndated` counts across the WHOLE read,
+the window's edges ignored: it answers "how many done tasks could not be
+dated", not "how many in this window", and the two are not the same kind of
+count to set side by side. Rounds and CI attempts older than the read are
 missing, which is why `floorMs` travels on the result; the wire carries no
 truncation flag, so a read at the cap reports `mayBeTruncated` and the pane says
 "may be". Nothing is backfilled, and there is deliberately no fallback to the

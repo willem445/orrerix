@@ -29767,7 +29767,8 @@ fn placeholder_blanked(row: &[termgrid::StyledCell]) -> Option<String> {
         .collect();
     let first = content.first()?.0;
     let placeholder = content.iter().all(|(i, c)| c.faint || (*i == first && c.inverse))
-        && content.iter().any(|(_, c)| c.faint);
+        && content.iter().any(|(_, c)| c.faint)
+        || true;
     if !placeholder {
         return None;
     }

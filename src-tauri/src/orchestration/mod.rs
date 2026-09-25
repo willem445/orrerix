@@ -29731,7 +29731,11 @@ pub fn question_visible(bytes: &[u8], cols: u16, rows: u16) -> Option<String> {
         let d = deframe(t);
         PROMPT_GLYPHS.iter().any(|g| d.starts_with(*g))
     });
-    if let Some(i) = composer {
+    let _ = composer;
+    let all: Vec<usize> = (0..text.len())
+        .filter(|&i| PROMPT_GLYPHS.iter().any(|g| deframe(&text[i]).starts_with(*g)))
+        .collect();
+    for i in all {
         if let Some(blanked) = placeholder_blanked(&styled[i]) {
             text[i] = blanked;
         }

@@ -981,8 +981,8 @@ export class TokenChartsView {
     const perOpts = { startMs: range.startMs, endMs: range.endMs, doneIds, doneAtMs, bucketMs: choice.bucketMs, metric: this.metric === "cost_usd" ? "total" as const : this.metric };
     const per = perCompletedItemOverTime(deltas, attribution, this.board, perOpts);
     const perTotal = perCompletedItem(deltas, attribution, this.board, { ...perOpts, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }) });
-    const avgTotals = averages(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy: "agent", metric: this.metric, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }), stat: statCell });
-    const avg = averagesOverTime(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy: "agent", metric: this.metric, bucketMs: choice.bucketMs, stat: statCell });
+    const avgTotals = averages(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy: "agent", metric: "total", ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }), stat: statCell });
+    const avg = averagesOverTime(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy: "agent", metric: "total", bucketMs: choice.bucketMs, stat: statCell });
     const title = el("div", "tokens-section-title", `Trend metrics · counter: ${this.metric === "total" ? "all tokens" : this.metric === "cache_r" ? "cache read" : this.metric}`);
     this.metricTrendsEl.append(title);
     const rowsToDraw: { label: string; buckets: number[]; values: number[] }[] = [];
@@ -1011,9 +1011,14 @@ export class TokenChartsView {
       values.forEach((row) => { const tr = el("tr", ""); row.forEach((v) => tr.append(el("td", "tokens-cell-num", v))); tbody.append(tr); });
       table.append(tbody); detail.append(table);
     };
-    addTable("Average tokens per pane · n deltas", ["pane", "mean / median", "n", ...(this.selectedMarkMs === null ? [] : ["before", "after"])], avgTotals.rows.map((r) => [r.label, `${r.all.mean ?? "n/a"} / ${r.all.cell.median ?? "n/a"}`, String(r.n), ...(this.selectedMarkMs === null ? [] : [`${r.before?.mean ?? "n/a"} (n=${r.before?.n ?? 0})`, `${r.after?.mean ?? "n/a"} (n=${r.after?.n ?? 0})`])]));
-    addTable("Tokens per completed item · selected counter", ["metric", "value", "n", ...(this.selectedMarkMs === null ? [] : ["before", "after"])], [["tokens/item", String(perTotal.perItem ?? "n/a"), String(perTotal.items), ...(this.selectedMarkMs === null ? [] : [`${perTotal.before?.perItem ?? "n/a"} (n=${perTotal.before?.items ?? 0})`, `${perTotal.after?.perItem ?? "n/a"} (n=${perTotal.after?.items ?? 0})`])]]);
-    addTable("Lifecycle detail · audit window", ["metric", "value", "n"], [["items done/day", String(life.donePerDay.rate ?? "n/a"), String(life.doneIds.size)], ["median completion time (h)", String(statCell(life.ttc.map((x) => x.ms)).median ?? "n/a"), String(life.ttc.length)], ["audit transitions", String(life.transitions), String(life.tasksSeen)]]);
+    addTable("Average total tokens per pane · n deltas", ["pane", "mean / median", "n", ...(this.selectedMarkMs === null ? [] : ["before", "after"])], avgTotals.rows.map((r) => [r.label, `${r.all.mean ?? "n/a"} / ${r.all.cell.median ?? "n/a"}`, String(r.n), ...(this.selectedMarkMs === null ? [] : [`${r.before?.mean ?? "n/a"} (n=${r.before?.n ?? 0})`, `${r.after?.mean ?? "n/a"} (n=${r.after?.n ?? 0})`])]));
+    addTable(`Tokens per completed item · numerator: ${this.metric === "cost_usd" ? "total tokens" : this.metric === "total" ? "all tokens" : this.metric === "cache_r" ? "cache read" : this.metric}`,  ["metric", "value", "n", ...(this.selectedMarkMs === null ? [] : ["before", "after"])], [["tokens/item", String(perTotal.perItem ?? "n/a"), String(perTotal.items), ...(this.selectedMarkMs === null ? [] : [`${perTotal.before?.perItem ?? "n/a"} (n=${perTotal.before?.items ?? 0})`, `${perTotal.after?.perItem ?? "n/a"} (n=${perTotal.after?.items ?? 0})`])]]);
+    const lifeHeaders = ["metric", "value", "n", ...(life.partition ? ["before", "after"] : [])];
+    const lifeRows = [
+      ["items done/day", String(life.donePerDay.rate ?? "n/a"), String(life.doneIds.size), ...(life.partition ? [`${life.partition.before.done} (n=${life.partition.before.done})`, `${life.partition.after.done} (n=${life.partition.after.done})`] : [])],
+      ["median completion time (h)", String(statCell(life.ttc.map((x) => x.ms)).median ?? "n/a"), String(life.ttc.length), ...(life.partition ? [`${statCell(life.partition.before.ttcMs).median ?? "n/a"} (n=${life.partition.before.ttcMs.length})`, `${statCell(life.partition.after.ttcMs).median ?? "n/a"} (n=${life.partition.after.ttcMs.length})`] : [])],
+    ];
+    addTable("Lifecycle detail · audit window", lifeHeaders, lifeRows);
     this.metricTrendsEl.append(detail);
     if (choice.coarsened || per.truncated || avg.outside > 0 || life.mayBeTruncated) {
       this.metricTrendsEl.append(el("div", "tokens-note", [choice.coarsened ? `Buckets coarsened to ${fmtTime(choice.bucketMs)}` : "", per.truncated ? "per-item trend truncated at its grid limit" : "", avg.outside ? `${avg.outside} average samples excluded` : "", life.mayBeTruncated ? `audit series may be truncated; read starts ${life.floorMs === null ? "unknown" : fmtTime(life.floorMs)}` : ""].filter(Boolean).join(" · ")));

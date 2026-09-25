@@ -219,20 +219,43 @@ pub fn parse_series_lines_counted(text: &str) -> (Vec<SeriesRow>, usize) {
     let mut skipped = 0usize;
     let rows = text
         .lines()
-        .filter_map(|line| {
-            if line.trim().is_empty() {
-                return None;
-            }
-            match serde_json::from_str::<SeriesRow>(line) {
-                Ok(r) => Some(r),
-                Err(_) => {
-                    skipped += 1;
-                    None
-                }
+        .filter_map(|line| match parse_series_line(line)? {
+            Ok(r) => Some(r),
+            Err(()) => {
+                skipped += 1;
+                None
             }
         })
         .collect();
     (rows, skipped)
+}
+
+/// [`parse_series_lines_counted`] with the row `Vec`'s growth made fallible
+/// (#3469): the chart's read is polled, and a refused grow of the typed row
+/// buffer must come back as an `Err` the caller can report, not as
+/// `handle_alloc_error`'s abort. Same rows, same count, same order.
+pub fn try_parse_series_lines_counted(
+    text: &str,
+) -> Result<(Vec<SeriesRow>, usize), std::collections::TryReserveError> {
+    let mut skipped = 0usize;
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        match parse_series_line(line) {
+            None => {}
+            Some(Ok(r)) => crate::boundedread::try_push(&mut rows, r)?,
+            Some(Err(())) => skipped += 1,
+        }
+    }
+    Ok((rows, skipped))
+}
+
+/// One series line: `None` for a blank one, `Some(Err(()))` for one that will
+/// not parse. Shared so the two parsers above cannot disagree.
+fn parse_series_line(line: &str) -> Option<Result<SeriesRow, ()>> {
+    if line.trim().is_empty() {
+        return None;
+    }
+    Some(serde_json::from_str::<SeriesRow>(line).map_err(|_| ()))
 }
 
 /// One differenced interval for a key: what was spent BETWEEN two consecutive

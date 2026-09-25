@@ -17616,6 +17616,15 @@ pub struct OrchRegistry {
     /// can be pinned on the real payload path without writing 32 MB of fixture
     /// to disk. `None` in production. Mirrors `series_bucket_override`.
     series_revisit_override: TrackedMutex<Option<u64>>,
+    /// Test-only override of every poll-path read ceiling
+    /// ([`AUDIT_READ_LIMIT_BYTES`], [`SERIES_READ_LIMIT_BYTES`]) (#3469), so
+    /// the refusal path is driven through the reader's own limit rather than
+    /// by exhausting memory. `None` in production.
+    poll_read_limit_override: TrackedMutex<Option<u64>>,
+    /// Which `(group, reader)` poll-path reads are currently failing and have
+    /// already been reported (#3469; see `note_poll_read`). Bounded by groups
+    /// × the two readers, and an entry is removed by the next success.
+    poll_read_failed: TrackedMutex<HashSet<(GroupId, &'static str)>>,
     /// Per-REPO memo for the display-only default-branch name (#743 S4a),
     /// keyed by repo path so two groups on one repo share the answer.
     ///
@@ -19632,6 +19641,15 @@ pub const USAGE_SERIES_FILE: &str = "usage-series.jsonl";
 /// compact. See `docs/design/token-charts.md`.
 pub const SERIES_REVISIT_BYTES: u64 = 32 * 1024 * 1024;
 
+/// The hard ceiling on a `usage-series.jsonl` read (#3469): four times the
+/// revisit trigger above. Unlike that trigger this one **is** a refusal — past
+/// it the chart read returns its degrade (`Null`, a skipped tick) and audits
+/// `poll-read-failed` rather than buffering the file — because a file four
+/// times past "revisit this" is the case where holding it whole on a 30 s poll
+/// is the hazard, not the answer. The fail-soft mechanism for every size under
+/// it is the fallible reservation in [`loomux_engine::boundedread`].
+pub const SERIES_READ_LIMIT_BYTES: u64 = 4 * SERIES_REVISIT_BYTES;
+
 /// Append one row to a group's `usage-series.jsonl`.
 ///
 /// Delegates to [`append_ledger_line`] rather than reimplementing its
@@ -19674,23 +19692,34 @@ pub fn parse_audit_lines_counted(text: &str) -> (Vec<AuditEntry>, usize) {
     let mut skipped = 0usize;
     let entries = text
         .lines()
-        .filter_map(|line| {
-            if line.trim().is_empty() {
-                return None;
-            }
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
+        .filter_map(|line| match parse_audit_line(line)? {
+            Ok(e) => Some(e),
+            Err(()) => {
                 skipped += 1;
-                return None;
-            };
-            Some(AuditEntry {
-                ts_ms: v["ts_ms"].as_u64().unwrap_or(0),
-                actor: v["actor"].as_str().unwrap_or("").to_string(),
-                action: v["action"].as_str().unwrap_or("").to_string(),
-                detail: v.get("detail").cloned().unwrap_or(Value::Null),
-            })
+                None
+            }
         })
         .collect();
     (entries, skipped)
+}
+
+/// One audit line: `None` for a blank one (not a fault — a trailing newline is
+/// normal), `Some(Err(()))` for one that will not parse, which the callers
+/// count. Shared by the whole-text parser above and the windowed reader, so
+/// the two cannot disagree about what a line means.
+fn parse_audit_line(line: &str) -> Option<Result<AuditEntry, ()>> {
+    if line.trim().is_empty() {
+        return None;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(line) else {
+        return Some(Err(()));
+    };
+    Some(Ok(AuditEntry {
+        ts_ms: v["ts_ms"].as_u64().unwrap_or(0),
+        actor: v["actor"].as_str().unwrap_or("").to_string(),
+        action: v["action"].as_str().unwrap_or("").to_string(),
+        detail: v.get("detail").cloned().unwrap_or(Value::Null),
+    }))
 }
 
 /// Upper bound on entries returned to the viewer: the audit grows fast (full
@@ -19698,6 +19727,14 @@ pub fn parse_audit_lines_counted(text: &str) -> (Vec<AuditEntry>, usize) {
 /// payload bounded even against a rotated + current pair near the 8 MB cap.
 #[doc(hidden)] // pub for integration tests
 pub const AUDIT_VIEW_LIMIT: usize = 5000;
+
+/// Per-file ceiling on an audit-window read (#3469): four rotations' worth.
+/// Rotation keeps each generation near [`AUDIT_ROTATE_BYTES`], so a file past
+/// this means rotation itself is broken — and the window read then reports
+/// that rather than buffering an unbounded file on a poll path. A **sanity
+/// cap**, not the fail-soft mechanism: that is the fallible reservation in
+/// [`loomux_engine::boundedread`], which covers every size under it too.
+pub const AUDIT_READ_LIMIT_BYTES: u64 = 4 * AUDIT_ROTATE_BYTES;
 
 /// #569: WHY one delivery a pause window lost is gone — the two are not the
 /// same event and must not be reported as one (review B2).
@@ -31586,6 +31623,8 @@ impl OrchRegistry {
             series_state: TrackedMutex::new("series_state", HashMap::new()),
             series_bucket_override: TrackedMutex::new("series_bucket_override", None),
             series_revisit_override: TrackedMutex::new("series_revisit_override", None),
+            poll_read_limit_override: TrackedMutex::new("poll_read_limit_override", None),
+            poll_read_failed: TrackedMutex::new("poll_read_failed", HashSet::new()),
             default_branch_memo: TrackedMutex::new("default_branch_memo", HashMap::new()),
             creation: TrackedMutex::new("creation", ()),
             marker_io: TrackedMutex::new_ranked("marker_io", lockorder::MARKER_IO, ()),
@@ -32653,28 +32692,123 @@ impl OrchRegistry {
     /// `PauseSuppression::window_start_seen` — say when the scan ran off the
     /// start of its own timeline — with an exact signal available here because
     /// this is where the cut happens.
+    ///
+    /// **Fails soft (#3469).** This is polled — by the viewer in follow mode
+    /// and by the derivations on their edges — so a read the allocator refuses
+    /// must cost one tick, not the process. [`Self::try_audit_log_windowed`]
+    /// is the fallible read; here its `Err` is reported once
+    /// (`poll-read-failed`, see [`Self::note_poll_read`]) and degrades to
+    /// **an empty window marked truncated**. `truncated: true` is not a
+    /// fudge: it is this function's existing way of saying "history exists
+    /// that this answer did not see", which is exactly true, so a derivation
+    /// that already honours the flag (`front_door_refusals`,
+    /// `refusal_roster`) reads the degrade as a partial window rather than as
+    /// "nothing was ever refused".
     pub fn audit_log_windowed(&self, group: &GroupId) -> (Vec<AuditEntry>, bool) {
+        let read = self.try_audit_log_windowed(group);
+        self.note_poll_read(group, "audit", read.as_ref().map(|_| ()).map_err(String::as_str));
+        read.unwrap_or_else(|_| (Vec::new(), true))
+    }
+
+    /// The fallible audit-window read (#3469). `Err` only for the two outcomes
+    /// that are new with the bounded reader — a generation over
+    /// [`AUDIT_READ_LIMIT_BYTES`], or the allocator refusing the buffer or the
+    /// window — never for the ones the pre-#3469 read already tolerated: a
+    /// generation that is missing, unreadable or not UTF-8 is skipped exactly
+    /// as it was.
+    ///
+    /// Two allocation shapes changed, not only the one that became fallible.
+    /// The generations are parsed **one at a time** rather than concatenated
+    /// into one `String` (which at a full `audit.1.jsonl` plus a busy
+    /// `audit.jsonl` was a ~13 MB buffer grown by an infallible `push_str`),
+    /// and parsed entries go into a window **bounded at
+    /// `AUDIT_VIEW_LIMIT`**, reserved fallibly up front, instead of a `Vec` of
+    /// every entry in both files trimmed afterwards. The answer is identical —
+    /// same entries, same order, `truncated` true exactly when more than
+    /// `AUDIT_VIEW_LIMIT` parsed — and the peak is the window, not the log.
+    #[doc(hidden)] // pub for integration tests
+    pub fn try_audit_log_windowed(&self, group: &GroupId) -> Result<(Vec<AuditEntry>, bool), String> {
+        use loomux_engine::boundedread::{read_to_string_bounded, BoundedReadError};
         let dir = self.group_dir(group);
-        let mut text = String::new();
+        let limit = self.poll_read_limit(AUDIT_READ_LIMIT_BYTES);
+        let mut window: VecDeque<AuditEntry> = VecDeque::new();
+        window
+            .try_reserve_exact(AUDIT_VIEW_LIMIT + 1)
+            .map_err(|_| format!("the allocator refused the {AUDIT_VIEW_LIMIT}-entry audit window"))?;
+        let mut truncated = false;
+        let mut skipped = 0usize;
         for name in ["audit.1.jsonl", "audit.jsonl"] {
-            if let Ok(t) = fs::read_to_string(dir.join(name)) {
-                text.push_str(&t);
-                if !text.ends_with('\n') {
-                    text.push('\n'); // guard against a rotated file with no trailing newline
+            let text = match read_to_string_bounded(&dir.join(name), limit) {
+                Ok(t) => t,
+                Err(e @ (BoundedReadError::TooLarge { .. } | BoundedReadError::Refused { .. })) => {
+                    return Err(format!("{name}: {e}"));
+                }
+                // Missing, unreadable or not UTF-8: skipped, as the
+                // `if let Ok(..) = fs::read_to_string` this replaced skipped it.
+                Err(_) => continue,
+            };
+            for line in text.lines() {
+                match parse_audit_line(line) {
+                    None => {}
+                    Some(Err(())) => skipped += 1,
+                    Some(Ok(entry)) => {
+                        if window.len() == AUDIT_VIEW_LIMIT {
+                            window.pop_front();
+                            truncated = true;
+                        }
+                        window.push_back(entry); // within the reserved capacity
+                    }
                 }
             }
         }
-        let (mut entries, skipped) = parse_audit_lines_counted(&text);
         if skipped > 0 && self.audit_skips_notified.lock_safe().insert(group.clone(), skipped) != Some(skipped) {
             // Only on a change: follow mode re-polls this, and a pre-fix log
             // keeps its torn lines forever (see `audit_skips_notified`).
             crate::obs::breadcrumb("audit-lines-unreadable", &format!("group={group} skipped={skipped}"));
         }
-        let truncated = entries.len() > AUDIT_VIEW_LIMIT;
-        if truncated {
-            entries.drain(0..entries.len() - AUDIT_VIEW_LIMIT);
+        // `Vec::from(VecDeque)` reuses the deque's buffer — no second window.
+        Ok((Vec::from(window), truncated))
+    }
+
+    /// Report a poll-path read's outcome (#3469): the FIRST failure of a
+    /// reader for a group writes a breadcrumb and a `poll-read-failed` audit
+    /// row; later failures of the same reader are silent until one succeeds
+    /// and re-arms it. Latched because the readers are polled (the viewer's
+    /// follow mode, the chart's 30 s tick) and a row per poll would bury the
+    /// log it is reporting on — `audit_skips_notified`'s reason, applied here.
+    ///
+    /// The audit append itself is one small line, so reporting a refusal does
+    /// not repeat the large request that was refused.
+    fn note_poll_read(&self, group: &GroupId, reader: &'static str, outcome: Result<(), &str>) {
+        let key = (group.clone(), reader);
+        match outcome {
+            Ok(()) => {
+                self.poll_read_failed.lock_safe().remove(&key);
+            }
+            Err(e) => {
+                // Lock released before `audit` takes `AUDIT_LOCK`: this latch
+                // orders against nothing.
+                let first = self.poll_read_failed.lock_safe().insert(key);
+                if first {
+                    crate::obs::breadcrumb("poll-read-failed", &format!("group={group} reader={reader} {e}"));
+                    self.audit(group, brand::AUDIT_ACTOR, "poll-read-failed", json!({ "reader": reader, "error": e }));
+                }
+            }
         }
-        (entries, truncated)
+    }
+
+    /// The read ceiling in force for a poll-path reader, honouring the test
+    /// seam (#3469).
+    fn poll_read_limit(&self, default: u64) -> u64 {
+        self.poll_read_limit_override.lock_safe().unwrap_or(default)
+    }
+
+    /// Lower every poll-path read ceiling (#3469) so a test can drive the
+    /// refusal path through the reader's own limit — never by exhausting
+    /// memory. Test-only seam (see `poll_read_limit_override`).
+    #[doc(hidden)]
+    pub fn set_poll_read_limit(&self, bytes: Option<u64>) {
+        *self.poll_read_limit_override.lock_safe() = bytes;
     }
 
     // ---------- durable state ----------
@@ -47508,9 +47642,9 @@ impl OrchRegistry {
     /// Read a group's usage series for the time plot (#2011 slice B), from
     /// `since_ms` forward.
     ///
-    /// A pure read taking no lock: the file has one appender writing whole
+    /// A read taking no lock on the file: it has one appender writing whole
     /// lines, so a reader racing it sees at most a torn final line, which
-    /// [`usageseries::parse_series_lines_counted`] skips and COUNTS — the count
+    /// [`usageseries::try_parse_series_lines_counted`] skips and COUNTS — the count
     /// travels on the payload as `skipped` rather than silently shortening the
     /// chart.
     ///
@@ -47531,6 +47665,13 @@ impl OrchRegistry {
     /// or compact the file. `an_oversize_series_is_reported_not_truncated`
     /// pins both halves.
     ///
+    /// **There is a hard ceiling above that report, and it is a refusal**
+    /// (#3469): past [`SERIES_READ_LIMIT_BYTES`] — four times the revisit
+    /// trigger — or when the allocator refuses one of the read's buffers, this
+    /// returns `Null` for the tick and records `poll-read-failed` once, rather
+    /// than aborting the process on `handle_alloc_error`. That write, and the
+    /// latch lock it takes, are the only side effects a read has.
+    ///
     /// `first_ts_ms` is the **coverage floor** — the oldest row in the file,
     /// before filtering. History starts when this build first ran against the
     /// group, and a panel that does not say so draws a flat line where there is
@@ -47542,8 +47683,38 @@ impl OrchRegistry {
         // size on disk that the revisit trigger is stated in, and a file that
         // could not be read at all reports 0 rather than an invented figure.
         let bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        let text = fs::read_to_string(&path).unwrap_or_default();
-        let (all, skipped) = usageseries::parse_series_lines_counted(&text);
+        // Fails soft (#3469): a file over `SERIES_READ_LIMIT_BYTES`, or a
+        // buffer the allocator refuses, costs this tick — `Null`, the same
+        // degrade `orch_usage_series` already returns, and the chart's next
+        // 30 s poll retries — plus one `poll-read-failed` row. Missing,
+        // unreadable or non-UTF-8 still read as empty, as the
+        // `read_to_string(..).unwrap_or_default()` this replaced did.
+        let read = match loomux_engine::boundedread::read_to_string_bounded(
+            &path,
+            self.poll_read_limit(SERIES_READ_LIMIT_BYTES),
+        ) {
+            Ok(t) => Ok(t),
+            Err(e @ (loomux_engine::boundedread::BoundedReadError::TooLarge { .. }
+            | loomux_engine::boundedread::BoundedReadError::Refused { .. })) => Err(e.to_string()),
+            Err(_) => Ok(String::new()),
+        };
+        // The parsed rows and the payload rows are the typed, align-8 buffers
+        // that grow with the file — the class the #3469 record names — so
+        // their growth is fallible too, not only the byte buffer's.
+        let parsed = read.and_then(|text| {
+            let (all, skipped) = usageseries::try_parse_series_lines_counted(&text)
+                .map_err(|_| "the allocator refused the parsed-row buffer".to_string())?;
+            let mut rows: Vec<Value> = Vec::new();
+            for r in all.iter().filter(|r| r.ts_ms() >= since_ms) {
+                if let Ok(v) = serde_json::to_value(r) {
+                    loomux_engine::boundedread::try_push(&mut rows, v)
+                        .map_err(|_| "the allocator refused the payload-row buffer".to_string())?;
+                }
+            }
+            Ok((all, skipped, rows))
+        });
+        self.note_poll_read(group, "usage-series", parsed.as_ref().map(|_| ()).map_err(String::as_str));
+        let Ok((all, skipped, rows)) = parsed else { return Value::Null };
         // The MINIMUM ts, not the first row appended. Rows land in write
         // order, and `usageseries::should_sample` deliberately treats a
         // backwards clock as "elapsed" so a wall-clock correction cannot wedge
@@ -47552,11 +47723,6 @@ impl OrchRegistry {
         // to be the oldest ts the file actually holds, or the panel prints a
         // floor later than its own data (#2941 review round 2 premortem).
         let first_ts_ms = all.iter().map(|r| r.ts_ms()).min();
-        let rows: Vec<Value> = all
-            .iter()
-            .filter(|r| r.ts_ms() >= since_ms)
-            .filter_map(|r| serde_json::to_value(r).ok())
-            .collect();
 
         // The agent dimension the projection attributes by. Read off the
         // roster, so an agent whose pane is long gone still labels its rows.
@@ -65740,7 +65906,8 @@ pub async fn orch_tasks(
 /// timeline alike.
 ///
 /// **Reentrancy.** Reads only, bar an in-memory one-shot that keeps the
-/// unreadable-lines breadcrumb from repeating per poll. Appends are
+/// unreadable-lines breadcrumb from repeating per poll, and the latched
+/// `poll-read-failed` row a refused read appends once (#3469). Appends are
 /// line-oriented and serialized by the audit lock; a reader racing one can
 /// observe a torn final line, which `parse_audit_lines_counted` already skips
 /// and counts — and which was already possible, since appends have always come
@@ -65774,11 +65941,13 @@ pub async fn orch_audit(app: AppHandle, group_id: String) -> Vec<AuditEntry> {
 /// once per five-minute bucket, so a faster poll could only redraw the same
 /// picture.
 ///
-/// **Reentrancy.** A pure read that takes no lock of its own; the
+/// **Reentrancy.** A read that holds no lock across it — its one lock is the
+/// `poll_read_failed` latch, taken and released before a failed read's single
+/// `poll-read-failed` audit append (#3469); the
 /// [`OrchRegistry::read_command`] frame is the command-boundary barrier
 /// (CLAUDE.md constraint 10), and its degrade is `Null` — the same value a
-/// group with no series file yields, which is what `command_group` gives it no
-/// error channel to improve on.
+/// group with no series file yields, and the value a refused read returns,
+/// which is what `command_group` gives it no error channel to improve on.
 #[tauri::command]
 pub async fn orch_usage_series(app: AppHandle, group_id: String, since_ms: Option<u64>) -> Value {
     let reg = reg_of(&app);

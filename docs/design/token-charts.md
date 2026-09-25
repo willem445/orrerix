@@ -695,3 +695,103 @@ width that keeps grid × keys small.
 neither pure module may import the other (TS5097), so `test/statcell.test.ts`
 runs both over hand-known fixtures and a generated spread and asserts they
 agree — the duplication is pinned rather than trusted.
+
+## Lifecycle rates — audit rows, and what the window cannot see
+
+`src/tokenlifecycle.ts` (#3475 slice D) derives the work-item and PR rates the
+pane plots beside the tokens: time in each board status, time to completion,
+items done per day, review rounds and CI attempts per PR. It reads the pane's
+shared `AuditStore` read and nothing else, and returns raw samples — the view
+applies `statCell`, so there is one definition of a median in the pane.
+
+**Why audit rows and not the board.** A board row holds its current status and
+`updated_ms`, the instant of its LAST write, which a note appended a week after
+the task finished moves. The board keeps no history. Every status change,
+though, passes through the one backend call that audits the whole task snapshot
+as `task-upsert` (or `task-claim`, the guarded grab), so two consecutive rows for
+one `detail.id` whose `status` differs are a transition, dated at the later
+row. There is no `prev_status` on the row; the reader keeps the last status it
+saw. An unchanged-status write (a title edit, a note) is not a transition and
+does not split a span.
+
+**What each figure is.**
+
+- *Time in a status* is a span from the row that entered it to the row that
+  left it, and only when BOTH rows are in the read. A span is attributed to the
+  window by its leaving instant.
+- *Time to completion* runs from the task's first row in the read to its first
+  dated `done`. A first row that is `queued` is read as the task's creation — the
+  same rule that starts its queued span, so the two figures cannot disagree
+  about when the task began (`fromQueued: true`). A first row in any other
+  status means the queued row aged out, so the figure is a lower bound, and the
+  sample says so (`fromQueued: false`).
+- *Done* is counted once per task, at its FIRST dated `done` — a reopen and a
+  second `done` are transitions, not a second completion. `doneAtMs`/`doneIds`
+  are slice C's input for "tokens per completed item", and hold only tasks whose
+  FIRST dated `done` is inside the window: C divides a whole-window token total
+  by their count, so a task finished before the window (and reopened and
+  finished again inside it) is not in the denominator.
+- *Done per day* is by local calendar day (`setDate`), because a DST day is 23 or
+  25 hours and a 24-hour stride files an item done just after midnight under the
+  day before. The test forces `TZ=America/Chicago` in a child `node` for the
+  same reason `todomodel.test.ts` does: CI runs in UTC, where the wrong
+  arithmetic passes. The *rate* divides by the window's length in calendar days
+  (`windowDays`), where a partial first or last day counts as the fraction of
+  that day it covers — a rolling seven-day window starting mid-afternoon touches
+  eight days, and dividing by eight would under-read it by an eighth.
+- *Review rounds* per PR are the number of distinct heads the PR's busiest
+  block gave a verdict on: a round is one pass of every lane, so summing across
+  blocks counts a three-lane round three times, and a pass is a head, so a lane
+  re-recording its verdict at the same head (a body edit re-asks it) is not a
+  new round. A verdict row with no head cannot be matched to another and counts
+  as its own round. The review driver keeps its own counter on
+  `rd-lane-spawned.detail.round`, and the two are compared and a disagreement
+  is flagged, never reconciled — one source lost rows and the pane cannot tell
+  which. `rd-handback` carries no `round`, so it is not read for one. A PR
+  belongs to the window its last verdict falls in.
+- *CI attempts* count `rd-ci-green` and `rd-ci-red` per PR. A PR the driver never
+  drove has no such rows and reads `null`, not zero.
+
+**What the window cannot see.** The read is capped at `AUDIT_VIEW_LIMIT` rows over
+two rotating generations, and every figure is over the rows that survived it.
+A task is born `queued`, so a first row that is `queued` is read as its
+creation, and both its queued span and its time to completion start there.
+That reading is wrong in one case the pane cannot detect: the creation row aged
+out and a later write to the still-queued task (a note, a title edit) survived.
+The Task snapshot carries no creation instant, so that row looks exactly like a
+creation, and both figures come out short by the same amount — never one short
+and the other exact. The alternative — distrusting every first row — would
+leave `queued` unmeasured for every task created inside the read, which is
+nearly all of them, to protect the few created before the floor. A first row in
+any OTHER status entered it at an unknown instant — the row may be the
+transition or any later write — so that span is never reported; it is counted
+`openedBeforeWindow` instead. For the same reason a task whose first row is
+already `done` is `doneUndated` and is never dated at that row, even if it is
+reopened and finished again later. Unlike `openedBeforeWindow`, which counts
+only first rows the window can see, `doneUndated` counts across the WHOLE read,
+the window's edges ignored: it answers "how many done tasks could not be
+dated", not "how many in this window", and the two are not the same kind of
+count to set side by side. Rounds and CI attempts older than the read are
+missing, which is why `floorMs` travels on the result; the wire carries no
+truncation flag, so a read at the cap reports `mayBeTruncated` and the pane says
+"may be". Nothing is backfilled, and there is deliberately no fallback to the
+board's `updated_ms` — the wrong instant, silently.
+
+The window's END has the mirror-image blind spot, and it matters for any window
+ending before now. A span is attributed by its leaving instant, so a span that
+enters inside the window and leaves after `endMs` is counted nowhere in that
+window — not in `values`, and not in `stillOpen`, which is only for a status the
+read ended on; a first-seen status that leaves after `endMs` is not in
+`openedBeforeWindow` either. And a PR belongs to the window its LAST verdict
+falls in, so a PR whose earlier verdicts sit inside the window but whose last
+one falls after `endMs` is absent from that window's `reviewRoundsPerPr`. Each sample is
+counted in exactly one window by construction; in a historical window, the
+samples still in flight at its end are counted in a later one instead.
+
+**Over time.** Each rate is also a series over the chart window — calendar days
+by default, fixed-width buckets when `bucketMs` is given — holding the raw
+samples per bucket (items done, time to completion, time in each status, rounds
+per PR), so slice E plots a median per bucket with the same `statCell`. Each
+sample lands in exactly one bucket, by the instant of its own event, so a
+series sums to its total. A tuning mark splits every sample the same way into
+before and after.

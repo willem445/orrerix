@@ -151,7 +151,7 @@ blocks:
     name: Orchestrator
     kind: orchestrator
     cli: claude
-    model: fable
+    model: opus
 
   - id: planner
     name: Planner

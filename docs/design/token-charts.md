@@ -826,7 +826,7 @@ carries a note saying so. `perItem` is `null` when there are no items — never
 
 **An item is placed in time only by its done instant.** `doneIds` comes from
 slice D's lifecycle projection (the done transitions dated inside the window,
-with `doneAtMs`). Until D lands, the view passes the board's currently-`done`
+with `doneAtMs`). Until slice E wires that in, the view passes the board's currently-`done`
 rows and labels the figure *board state, not dated*: the whole-window ratio
 still stands, but an undated item cannot be put on a side of a mark or in a
 day, so those item counts and ratios are `null` — never guessed from a board
@@ -854,8 +854,11 @@ and `n * 86_400_000` would move every later bucket boundary by an hour. A
 fixed `bucketMs` aligns to its multiples, as `bucketSeries` does. Buckets are
 half-open; the grid always includes the bucket holding `endMs`. Over the
 same window the buckets' tokens and `byClass` sum to the totals', their items
-sum to `before.items + after.items`, and the series' `unplacedItems` equals
-the totals' `undatedItems` — so placed plus unplaced is `items`. That is the
+sum to `before.items + after.items`, and — when `doneAtMs` is supplied — the
+series' `unplacedItems` equals the totals' `undatedItems`, so placed plus
+unplaced is `items`. Undated as a whole, every bucket's items are `null` and
+`unplacedItems` is all of `doneIds`, while the totals report `undatedItems` 0
+and `null` half counts: the two say "cannot place" in their own shapes. That is the
 property slice E's trend line and its table share; it holds unless the grid hit
 its bucket cap (`truncated`, whose spend is then counted `excluded`). A
 degenerate or inverted window yields no buckets.

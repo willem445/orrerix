@@ -229,6 +229,25 @@ test("before + after partition the whole on the DELTA's instant; items split by 
   assert.equal(r.undatedItems, 0);
 });
 
+test("an item done exactly AT the mark is after it, as a delta on the mark is", () => {
+  // One rule for both populations: `< mark` is before, so the instant of the
+  // mark itself belongs to the after side for items exactly as for deltas.
+  const r = perCompletedItem(deltas, attribution, board, {
+    startMs: 0,
+    endMs: 10_000,
+    doneIds,
+    doneAtMs: new Map([
+      ["t-1", 1_500],
+      ["t-2", 3_000],
+    ]),
+    markTsMs: 3_000,
+  });
+  assert.equal(r.before!.items, 1, "t-2, done on the mark, was counted before it");
+  assert.equal(r.after!.items, 1);
+  assert.equal(r.before!.perItem, 300); // 100 + 200 over t-1
+  assert.equal(r.after!.perItem, 700); // 300 + 400 over t-2
+});
+
 test("undated items cannot be placed on a side of the mark: half item counts are null, tokens still split", () => {
   const r = perCompletedItem(deltas, attribution, board, {
     startMs: 0,
@@ -330,6 +349,18 @@ test("over time, undated items are null per bucket and counted unplaced; a degen
   assert.equal(s.unplacedItems, 2);
   assert.ok(s.buckets.every((b) => b.items === null && b.perItem === null));
   assert.equal(s.tokens, 1000, "tokens still bucket without dates");
+  // Undated as a whole, `unplacedItems === undatedItems` does NOT hold: the
+  // series says "cannot place" as every id unplaced, the totals as 0 undated
+  // with null half counts. The doc on `perCompletedItemOverTime` says so.
+  const t = perCompletedItem(deltas, attribution, board, {
+    startMs: 0,
+    endMs: 9_999,
+    doneIds,
+    markTsMs: 3_000,
+  });
+  assert.equal(t.undatedItems, 0);
+  assert.equal(t.before!.items, null);
+  assert.notEqual(s.unplacedItems, t.undatedItems);
 
   const inverted = perCompletedItemOverTime(deltas, attribution, board, {
     startMs: 10_000,

@@ -73,7 +73,7 @@ export interface PerItemOpts {
   startMs: number;
   endMs: number;
   /** The completed items: board row ids. Slice D's lifecycle projection
-   *  supplies the ids done INSIDE the window; until it lands the view passes
+   *  supplies the ids done INSIDE the window; until slice E wires it the view passes
    *  the board's currently-`done` rows ("board state, not dated"). */
   doneIds: ReadonlySet<string>;
   /** Each item's done instant. Optional, and the only thing that can place an
@@ -457,10 +457,13 @@ function emptyBuckets(grid: Grid): PerItemBucket[] {
  * grid), each carrying the tokens spent in it, the items done in it, and their
  * ratio. Buckets are half-open; the window stays inclusive at both ends, so the
  * bucket containing `endMs` is always on the grid. Over the same window, the
- * buckets' tokens and `byClass` sum to `perCompletedItem`'s, and their items
- * to its `before.items + after.items`, with `unplacedItems === undatedItems`
- * (unless the grid is `truncated`) — the property slice E's plot and the
- * table beside it share.
+ * buckets' tokens and `byClass` sum to `perCompletedItem`'s (unless the grid
+ * is `truncated`). With `doneAtMs` supplied, their items also sum to its
+ * `before.items + after.items` and `unplacedItems === undatedItems`; without
+ * it every bucket's items are `null` and `unplacedItems` is the whole
+ * `doneIds.size`, while the totals report `undatedItems` 0 and leave the
+ * halves' items `null`. That is the property slice E's plot and the table
+ * beside it share.
  */
 export function perCompletedItemOverTime(
   deltas: readonly PerItemDeltaLike[],

@@ -59,7 +59,7 @@ and costs the human a debugging session later.
    the PR as a **draft**, linking the issue (`Closes #N`) — `gh pr create --draft`
    (local `cargo` of any kind is banned — CI is the build; frontend-only checks
    stay local; see the `ci-validate` skill, whose `rustfmt --check` size cap keeps it off
-   `orchestration/mod.rs` — tens of GB of RAM there, #3469). Call `acquire_lock("rustfmt")` before running it and `release_lock("rustfmt")` afterward (see the `ci-validate` skill). Read `gh pr checks`, push fixes, repeat until the whole
+   `orchestration/mod.rs` — tens of GB of RAM there, #3469). Call `acquire_lock("rustfmt")` and run only after a grant; if queued, end your turn and resume on the grant notice. Call `release_lock("rustfmt")` afterward; see the `ci-validate` skill. Read `gh pr checks`, push fixes, repeat until the whole
    matrix passes, and paste the result. Never mark a PR ready carrying a red check or
    one you haven't rechecked since your last fix. If you can't get to green after a
    real attempt, that's not a quick fix anymore — `report("blocked", …)` with what's

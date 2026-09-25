@@ -695,3 +695,68 @@ width that keeps grid × keys small.
 neither pure module may import the other (TS5097), so `test/statcell.test.ts`
 runs both over hand-known fixtures and a generated spread and asserts they
 agree — the duplication is pinned rather than trusted.
+
+## Lifecycle rates — audit rows, and what the window cannot see
+
+`src/tokenlifecycle.ts` (#3475 slice D) derives the work-item and PR rates the
+pane plots beside the tokens: time in each board status, time to completion,
+items done per day, review rounds and CI attempts per PR. It reads the pane's
+shared `AuditStore` read and nothing else, and returns raw samples — the view
+applies `statCell`, so there is one definition of a median in the pane.
+
+**Why audit rows and not the board.** A board row holds its current status and
+`updated_ms`, the instant of its LAST write, which a note appended a week after
+the task finished moves. The board keeps no history. Every status change,
+though, passes through the one backend call that audits the whole task snapshot
+as `task-upsert` (or `task-claim`, the guarded grab), so two consecutive rows for
+one `detail.id` whose `status` differs are a transition, dated at the later
+row. There is no `prev_status` on the row; the reader keeps the last status it
+saw. An unchanged-status write (a title edit, a note) is not a transition and
+does not split a span.
+
+**What each figure is.**
+
+- *Time in a status* is a span from the row that entered it to the row that
+  left it, and only when BOTH rows are in the read. A span is attributed to the
+  window by its leaving instant.
+- *Time to completion* runs from the task's first row in the read to its first
+  dated `done`. When that first row is `queued` it is the queued instant; when
+  it is anything else the queued row aged out, the figure is a lower bound, and
+  the sample says so (`fromQueued: false`).
+- *Done* is counted once per task, at its FIRST dated `done` — a reopen and a
+  second `done` are transitions, not a second completion. `doneAtMs`/`doneIds`
+  are slice C's input for "tokens per completed item".
+- *Done per day* is by local calendar day (`setDate`), because a DST day is 23 or
+  25 hours and a 24-hour stride files an item done just after midnight under the
+  day before. The test forces `TZ=America/Chicago` in a child `node` for the
+  same reason `todomodel.test.ts` does: CI runs in UTC, where the wrong
+  arithmetic passes.
+- *Review rounds* per PR are the verdict count of the PR's busiest block: a
+  round is one pass of every lane, so summing across blocks counts a three-lane
+  round three times. The review driver keeps its own counter on
+  `rd-lane-spawned.detail.round`, and the two are compared and a disagreement
+  is flagged, never reconciled — one source lost rows and the pane cannot tell
+  which. `rd-handback` carries no `round`, so it is not read for one. A PR
+  belongs to the window its last verdict falls in.
+- *CI attempts* count `rd-ci-green` and `rd-ci-red` per PR. A PR the driver never
+  drove has no such rows and reads `null`, not zero.
+
+**What the window cannot see.** The read is capped at `AUDIT_VIEW_LIMIT` rows over
+two rotating generations, and every figure is over the rows that survived it.
+A task's first row enters its status at an unknown instant — the row may be the
+transition or any later write — so that span is never reported; it is counted
+`openedBeforeWindow` instead. For the same reason a task whose first row is
+already `done` is `doneUndated` and is never dated at that row, even if it is
+reopened and finished again later. Rounds and CI attempts older than the read are
+missing, which is why `floorMs` travels on the result; the wire carries no
+truncation flag, so a read at the cap reports `mayBeTruncated` and the pane says
+"may be". Nothing is backfilled, and there is deliberately no fallback to the
+board's `updated_ms` — the wrong instant, silently.
+
+**Over time.** Each rate is also a series over the chart window — calendar days
+by default, fixed-width buckets when `bucketMs` is given — holding the raw
+samples per bucket (items done, time to completion, time in each status, rounds
+per PR), so slice E plots a median per bucket with the same `statCell`. Each
+sample lands in exactly one bucket, by the instant of its own event, so a
+series sums to its total. A tuning mark splits every sample the same way into
+before and after.

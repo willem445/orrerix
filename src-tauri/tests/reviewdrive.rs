@@ -15949,7 +15949,7 @@ fn a_workflow_notice_that_cannot_land_is_retried_until_it_does() {
 /// before the fix too. Kept because it pins the half of the fix that must NOT
 /// fire: a group whose file loads, driven across a restart, stays enabled,
 /// really ticks, and gets neither a `workflow-invalid` row from the reload
-/// pass nor a line. A mutation that announced on every pass reddens it.
+/// pass nor a line.
 #[test]
 fn the_driver_reads_enabled_across_a_restart_and_the_reload_says_nothing() {
     let dir = tempfile::tempdir().unwrap();

@@ -67254,6 +67254,17 @@ fn the_bounded_audit_window_matches_the_whole_log_trim_across_both_generations()
     let seqs: Vec<u64> = w.iter().map(|e| e.detail["seq"].as_u64().unwrap()).collect();
     let want: Vec<u64> = (1..=AUDIT_VIEW_LIMIT as u64).collect();
     assert!(seqs == want, "the OLDEST entry is the one dropped, and order holds across the rotation");
+    // #3493 review N2: the window never holds more than the limit's worth of
+    // slots. `Vec::from(VecDeque)` keeps the deque's buffer, so the returned
+    // capacity IS the window's reservation.
+    assert!(w.capacity() <= AUDIT_VIEW_LIMIT, "a full window is capped at the limit: {}", w.capacity());
+
+    // And a short log reserves a short window, not all 5000 slots up front.
+    write(10);
+    let (short, cut) = reg.audit_log_windowed(&g.id);
+    assert!(!cut);
+    assert_eq!(short.len(), 10);
+    assert!(short.capacity() < 100, "a 10-entry log must not reserve the whole window: {}", short.capacity());
 }
 
 #[test]

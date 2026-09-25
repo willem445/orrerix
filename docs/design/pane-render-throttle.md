@@ -253,3 +253,9 @@ remaining question — whether prompt replies while hidden actually keep an agen
 responsive across a real lock — is the human's to answer on the machine that
 reported it, exactly as `unfocusedRenderThrottleMs` exists to let them A/B the
 original change.
+
+**The browser half is now addressed at its source (#1141).** The window's
+WebView2 is launched with Chromium's background-throttling switches turned off,
+so an occluded or display-off window no longer clamps those timers at all. The
+hint above stays for the cases those switches do not reach. Rationale, costs and
+open items: `docs/design/webview-throttling.md`.

@@ -671,7 +671,7 @@ pub fn parse_model_column(raw: &str) -> SessionModelState {
         Some(provider) => format!("{provider}/{id}"),
         None => id,
     });
-    SessionModelState { model, variant: field("variant").filter(|v| v.as_str() != "default") }
+    SessionModelState { model, variant: field("variant").filter(|v| !v.is_empty() /* MUTATED_M7 */) }
 }
 
 /// The model and variant `session_id` is on. `Ok(None)`: the store is readable
@@ -739,7 +739,7 @@ pub fn assistant_context_tokens(data: &str) -> Option<u64> {
             .map_or(0, |n| n as u64)
     };
     let sum = count("/input").saturating_add(count("/cache/read")).saturating_add(count("/cache/write"));
-    (sum > 0).then_some(sum)
+    Some(sum) // MUTATED_M4
 }
 
 /// The newest counted assistant message's context tokens in `session_id`
@@ -764,7 +764,7 @@ pub fn latest_assistant_context_on(conn: &Connection, session_id: &str) -> Resul
         )
         .map_err(drift)?;
     let rows = stmt
-        .query_map(rusqlite::params![session_id, CONTEXT_SCAN_ROWS], |r| r.get::<_, String>(0))
+        .query_map(rusqlite::params![session_id, CONTEXT_SCAN_ROWS - 1 /* MUTATED_M5 */], |r| r.get::<_, String>(0))
         .map_err(drift)?;
     for row in rows {
         if let Some(tokens) = assistant_context_tokens(&row.map_err(drift)?) {

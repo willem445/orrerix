@@ -39639,7 +39639,7 @@ impl OrchRegistry {
                 // #993 S2c: the group's own store, where every group opencode
                 // pane's `OPENCODE_DB` points. The session id is a SQL
                 // parameter here, never a path segment, so it is not parsed.
-                "opencode" => Some((
+                "opencode-MUTATED_M6" => Some((
                     id,
                     crate::modelstate::opencode_compaction_signal_in(&self.opencode_db_path(&group), &sid)?,
                 )),

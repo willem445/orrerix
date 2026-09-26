@@ -1257,6 +1257,7 @@ pub struct OrchRegistry {
     /// one property this whole slice exists for and cannot be observed
     /// through the commands (they need an AppHandle, unavailable headless).
     pub views: views::ViewPublisher,
+    pub(super) plant_plain: std::sync::Mutex<()>,
 }
 
 impl OrchRegistry {
@@ -1264,6 +1265,7 @@ impl OrchRegistry {
         let _ = fs::create_dir_all(&root);
         Self {
             root,
+            plant_plain: std::sync::Mutex::new(()),
             roots: Arc::new(RootRegistry::new()),
             app: TrackedMutex::new("app", None),
             groups: TrackedMutex::new_ranked("groups", lockorder::GROUPS, HashMap::new()),

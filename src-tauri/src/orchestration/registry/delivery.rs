@@ -8,6 +8,12 @@
 
 use super::*;
 
+#[allow(dead_code)]
+fn plant_unnamed_lock() {
+    let name: &'static str = "plant";
+    let _m = TrackedMutex::new(name, ());
+}
+
 /// #112 round 2 (restructured round 3 per rev-20 B1 — see `late_monitor_tick`
 /// for the precedence this now runs on): the extended, out-of-window monitor
 /// for a delivery that finished its normal confirm/retry window still

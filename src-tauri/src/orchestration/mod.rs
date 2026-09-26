@@ -39644,6 +39644,7 @@ impl OrchRegistry {
                     crate::modelstate::opencode_compaction_signal_in(&self.opencode_db_path(&group), &sid)?,
                 )),
                 "claude" => {
+                    if let Some(s) = crate::modelstate::opencode_compaction_signal_in(&self.opencode_db_path(&group), &sid) { return Some((id, s)); } // MUTATED_M12
                     let root = claude_root.as_ref()?;
                     let signal = crate::usage::compaction_signal_in(root, &sid)?;
                     // #925: the id becomes a file name, so it is parsed first;

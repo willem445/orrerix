@@ -658,7 +658,7 @@ pub fn parse_model_column(raw: &str) -> SessionModelState {
         return SessionModelState::default();
     }
     let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return SessionModelState { model: Some(raw.to_owned()), variant: None };
+        return SessionModelState { model: None /* MUTATED_M10 */, variant: None };
     };
     let field = |k: &str| {
         obj.get(k)
@@ -725,7 +725,7 @@ pub fn assistant_context_tokens(data: &str) -> Option<u64> {
     if v.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
         return None;
     }
-    if v.get("summary").and_then(serde_json::Value::as_bool) == Some(true) {
+    if v.get("summary").and_then(serde_json::Value::as_bool) == Some(true) && false /* MUTATED_M8 */ {
         return None;
     }
     let tokens = v.get("tokens")?;
@@ -738,7 +738,7 @@ pub fn assistant_context_tokens(data: &str) -> Option<u64> {
             .filter(|n| n.is_finite() && *n > 0.0)
             .map_or(0, |n| n as u64)
     };
-    let sum = count("/input").saturating_add(count("/cache/read")).saturating_add(count("/cache/write"));
+    let sum = count("/output") /* MUTATED_M9 */ + count("/input").saturating_add(count("/cache/read")).saturating_add(count("/cache/write"));
     (sum > 0).then_some(sum)
 }
 
@@ -771,7 +771,7 @@ pub fn latest_assistant_context_on(conn: &Connection, session_id: &str) -> Resul
             return Ok(Some(tokens));
         }
     }
-    Ok(None)
+    Ok(Some(0)) // MUTATED_M11
 }
 
 /// A cost is only worth reporting if it is finite and non-negative. SQLite

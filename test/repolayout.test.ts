@@ -129,6 +129,7 @@ const ROOT_ALLOWLIST: ReadonlyArray<{ entry: string; reason: string }> = [
   { entry: "LICENSE", reason: "GitHub's licence detection, and most downstream packagers, look for `LICENSE` at the repository root." },
   { entry: "THIRD_PARTY_NOTICES.md", reason: "the vendored-code attribution the licence terms require, conventionally at the root beside `LICENSE`." },
   { entry: "CLAUDE.md", reason: "Claude Code reads `<repo>/CLAUDE.md`; the path is the tool's, not ours." },
+  { entry: ".git-blame-ignore-revs", reason: "Git reads this repository-level revision list when blame is configured to ignore pure-move commits." },
   { entry: "install.ps1", reason: "the one-line installer the README pipes from `raw.githubusercontent.com/.../main/install.ps1` — a published URL, so moving it breaks every copy of that line already in the wild." },
   { entry: "install.sh", reason: "the same published-URL contract as `install.ps1`, for macOS and Linux." },
 ];

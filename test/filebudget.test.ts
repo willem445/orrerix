@@ -33,12 +33,10 @@ export const BUDGETS = [
   { path: "src/todopane.ts", ceiling: 2308, blob: "d84fe8a5c0a455e586f9fac1a9f376480a7f1bd9" },
   { path: "src/tokencharts.ts", ceiling: 1612, blob: "346626778461aa1bdec84e038f322298727c0031" },
   { path: "src/tokenchartsview.ts", ceiling: 1812, blob: "020c71f09dba0d2301b96465197ea0204d8fd428" },
-  { path: "src/workflowmodel.ts", ceiling: 4926, blob: "4befd2c6d40e14f5f46770a650fdb7d271f6e862" },
   { path: "src/workflowview.ts", ceiling: 4175, blob: "1ecf5d6d635de7ac9c442d5bfd1c3e73829dcc97" },
   { path: "test/panerestore.test.ts", ceiling: 2649, blob: "e157ccf9220b7ba891c41444f5550301bb460a6c" },
   { path: "test/taskboard.test.ts", ceiling: 3125, blob: "145f20733132a4a387d08aa0fee91af79c32e090" },
   { path: "test/theme.test.ts", ceiling: 2285, blob: "618348b4b0bfaa2427ce927c13831edd2177dd2e" },
-  { path: "test/workflowmodel.test.ts", ceiling: 3722, blob: "7a25104042de297403145ea56523fbbc4ec5c7a9" },
 ];
 
 export function lineCount(text: string): number { return (text.match(/\n/g) ?? []).length; }

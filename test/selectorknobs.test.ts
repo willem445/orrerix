@@ -318,7 +318,7 @@ test("rev-237 finding 1: the opencode fixture's notes mirror the Rust source the
 
   // Two OTHER test files match substrings of these notes — this file's
   // `--variant` / `agent.<name>.variant` assertions and
-  // `workflowmodel.test.ts`'s finding-message ones. Assert them against the RUST
+  // `workflowvalidate.test.ts`'s finding-message ones. Assert them against the RUST
   // text, so a reword that kept those tests green by matching a stale copy fails
   // here instead.
   for (const needle of ["--variant", "agent.<name>.variant"]) {

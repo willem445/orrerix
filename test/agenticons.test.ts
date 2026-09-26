@@ -17,10 +17,11 @@
 // Run `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { sourceFiles } from "./support/sourcefiles.ts";
 import {
   AGENT_VIEWBOX,
   CLI_DYE_PROGRAMS,
@@ -46,13 +47,6 @@ function body(svg: string): string {
   const m = svg.match(/^<svg\b[^>]*>([\s\S]*)<\/svg>$/);
   assert.ok(m, `not a single well-formed <svg> element: ${svg.slice(0, 80)}…`);
   return m[1];
-}
-
-function sourceFiles(dir: URL, prefix = ""): string[] {
-  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
-    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
-  });
 }
 
 const SRC_DIR = new URL("../src/", import.meta.url);
@@ -81,7 +75,7 @@ const ALLOW: { file: string; pattern: RegExp; why: string }[] = [
 ];
 
 function scanAgentMarkInputs(root: URL) {
-  const files = sourceFiles(root).filter((f) => f.endsWith(".ts") && f !== "agenticons.ts");
+  const files = sourceFiles(root, [".ts"]).filter((f) => f !== "agenticons.ts");
   const denied: string[] = [];
   const allowHits = new Map(ALLOW.map((a) => [a.why, 0]));
   for (const f of files) {

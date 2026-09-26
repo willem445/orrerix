@@ -28,10 +28,11 @@
 // green about a file it is no longer reading.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { sourceFiles } from "./support/sourcefiles.ts";
 
 // ---------- the scanner ----------
 
@@ -279,13 +280,6 @@ const RULES: Rule[] = [
 // the proof that the scanner FAILS when it should, which a green run over a
 // correct tree cannot show.
 
-function sourceFiles(dir: URL, prefix = ""): string[] {
-  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
-    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
-  });
-}
-
 test("an unmarked paste vector is found and named", () => {
   const bad: Source = {
     path: "src/fake.ts",
@@ -389,8 +383,7 @@ test("stripping preserves line numbers across multi-line comments and templates"
 const SRC_DIR = new URL("../src/", import.meta.url);
 
 function realSources(root: URL = SRC_DIR): Source[] {
-  return sourceFiles(root)
-    .filter((f) => f.endsWith(".ts"))
+  return sourceFiles(root, [".ts"])
     .sort()
     .map((f) => ({ path: `src/${f}`, text: readFileSync(new URL(f, root), "utf8") }));
 }

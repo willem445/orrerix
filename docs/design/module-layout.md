@@ -38,6 +38,19 @@ glue that is hand-validated. `transport.ts` plus `pty.ts`, `git.ts`,
 `fileapi.ts`, and `orchestration.ts` are the frontend bridges. Satellites of a
 large module carry its prefix (`pane*`, `workflow*`, `todo*`, `token*`).
 
+A large module is split behind a **barrel** so that no importer changes: the old
+file keeps its name and becomes explicit `export { … } from` and
+`export type { … } from` lists naming exactly the names it exported before the
+split. It never uses `export *`, which would also publish every helper a sibling
+needed widened to `export`. The barrel's types and constants move into a
+**types module** that imports no sibling. Every split module imports from that
+module or from a sibling, never from the barrel, so the import graph stays
+acyclic. ES modules allow cycles, but in one a module-level constant can be
+read before its module has run. `workflowmodel.ts` over `workflowtypes`,
+`workflowparse`, `workflowserialize`, `workflowvalidate` and `workflowgraph` is
+the first instance (#3498 F2). `test/workflowmodel.test.ts` pins its graph
+acyclic and its barrel re-export-only.
+
 Folders are recommended only after files have been split, as a held slice by
 family: `src/pane/`, `src/workflow/`, `src/todo/`, `src/tokens/`, `src/files/`,
 `src/git/`, `src/session/`, `src/board/`, and `src/bridge/`, with `test/`

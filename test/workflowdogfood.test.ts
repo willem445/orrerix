@@ -143,7 +143,7 @@ const headersAboveBlocks = (t: string): Map<string, string[]> => {
  *  directly above that ending line is then handed BACK — it is the next block's header or the next
  *  section's preamble, which the serializer attaches forward, so it stays under test. That body is the one region the preserving
  *  serializer does NOT promise to keep: an edited block is regenerated from its fields, and "there
- *  is no attempt to re-attach a comment to a field that changed underneath it" (`workflowmodel.ts`,
+ *  is no attempt to re-attach a comment to a field that changed underneath it" (`workflowserialize.ts`,
  *  above `deepEqualValue`). Everything else — the header above the block, other blocks, other
  *  sections — is an untouched region, and that is the contract a derived pin may hold any file to. */
 const commentsOutsideBlock = (t: string, id: string): string[] => {
@@ -509,7 +509,7 @@ test("editing ANY one block's model keeps every comment outside that block — a
   // What a derived pin may hold the REAL file to is the serializer's own contract — untouched
   // regions keep their comments — and no more. A comment written INSIDE a block (above its
   // `model:`, say) is valid, and an edit to that block regenerates it from its fields and does not
-  // re-attach the comment (deliberately out of scope, `workflowmodel.ts`). So on the real file the
+  // re-attach the comment (deliberately out of scope, `workflowserialize.ts`). So on the real file the
   // comparison excludes the edited block's own body (`commentsOutsideBlock`); exact whole-file
   // comment equality is asserted only on the SPECIMEN, whose content is known to carry none
   // (#3513 review, rev-std finding 1).

@@ -2815,7 +2815,7 @@ pub fn role_hint_requires(hint: &str) -> Option<Role> {
 /// question "which block does a bare `spawn_agent(kind: \"reviewer\")` open" —
 /// a liaison declared first in roster order used to be that answer. Same
 /// predicate deliberately: *which blocks review* must not have two answers.
-/// The pane's own mirror is `isReviewingBlock` (`src/workflowmodel.ts`), which
+/// The pane's own mirror is `isReviewingBlock` (`src/workflowtypes.ts`), which
 /// keeps the workflow editor from offering a liaison as a gate reviewer.
 ///
 /// Not used for the *capacity* advisories (`recommend_capacity`/`extra_tiers`),
@@ -6678,7 +6678,7 @@ driver:
     }
 
     /// Labels the engine must REFUSE, and why. The pane mirrors this predicate
-    /// (`isRemoteLabel`, src/workflowmodel.ts) and its twin test walks the same
+    /// (`isRemoteLabel`, src/workflowtypes.ts) and its twin test walks the same
     /// list — a mirror nobody compares is a mirror that has drifted.
     const BAD_LABELS: &[(&str, &str)] = &[
         ("\"\"", "empty"),
@@ -6748,7 +6748,7 @@ driver:
         // `Option<String>` as None — indistinguishable from never writing the
         // key, so the block is LOCAL and the file loads. An explicit
         // `remote: ""` is `Some("")`, reaches `check_segment`, and is refused.
-        // Pinned because `src/workflowmodel.ts` mirrors exactly this
+        // Pinned because `src/workflowparse.ts` mirrors exactly this
         // difference, and a mirror of an unpinned behaviour is a mirror of an
         // assumption.
         let wf = parse_workflow("version: 1\nblocks:\n  - id: b\n    kind: worker\n    remote:\n")
@@ -6772,7 +6772,7 @@ driver:
 
     #[test]
     fn every_yaml_null_spelling_is_the_absent_key() {
-        // The engine half of the pair `test/workflowmodel.test.ts` pins from the
+        // The engine half of the pair `test/workflowvalidate.test.ts` pins from the
         // other side (#1457 review N2). The pane's YAML subset resolves only
         // `null` and `~`; this asserts what the ENGINE's reader does with the
         // rest of the core schema's null set, so the divergence is a measured

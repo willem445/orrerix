@@ -41,7 +41,7 @@
     "here is what a block IS.",
     "",
     "Adding a field: add it to the engine's `Raw*` struct, to this manifest, to the pane's",
-    "model (`src/workflowmodel.ts` — KNOWN_* + the emitters), and to a form descriptor. The",
+    "model (`src/workflowparse.ts`'s KNOWN_* + `src/workflowserialize.ts`'s emitters), and to a form descriptor. The",
     "tests refuse to let you stop after the first step."
   ],
   "manifest_version": 1,

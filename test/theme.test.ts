@@ -19,10 +19,11 @@
 // would notice. Run `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { sourceFiles } from "./support/sourcefiles.ts";
 import { KINDS } from "../src/taskboard.ts";
 import {
   ANSI_SLOTS,
@@ -96,13 +97,6 @@ function identityEntries(): [string, string][] {
   );
 }
 
-function sourceFiles(dir: URL, prefix = ""): string[] {
-  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
-    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
-  });
-}
-
 const RETIRED_PALETTE: Record<string, string> = {
   "#7aa2f7": "blue", "#9ece6a": "green", "#e0af68": "amber", "#bb9af7": "magenta",
   "#7dcfff": "cyan", "#f7768e": "red", "#73daca": "teal", "#ff9e64": "orange",
@@ -111,11 +105,13 @@ const RETIRED_PALETTE: Record<string, string> = {
 function retiredPaletteSurvivors(root: URL): string[] {
   const rgbOf = (hex: string) =>
     [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)).join(", ");
-  const files = sourceFiles(root).filter((f) => f.endsWith(".ts") || f.endsWith("styles.css"));
+  const files = sourceFiles(root, [".ts", "styles.css"]);
   const survivors: string[] = [];
   for (const file of files) {
     const text = readFileSync(new URL(file, root), "utf8");
     text.split(/\r?\n/).forEach((line, i) => {
+      // A hex quoted in prose is a doc, not a paint: only lines that are code count. The
+      // stylesheet's comments are `/* */`, TypeScript's are `//` and `*`.
       const code = line.replace(/\/\/.*$/, "").trim();
       if (code.startsWith("*") || code.startsWith("/*")) return;
       for (const [hex, name] of Object.entries(RETIRED_PALETTE)) {
@@ -135,11 +131,12 @@ const FONT_ALLOWED = new Map([
 
 function fontStackOffenders(root: URL): string[] {
   const offenders: string[] = [];
-  for (const file of sourceFiles(root).filter((f) => f.endsWith(".ts")).sort()) {
+  for (const file of sourceFiles(root, [".ts"]).sort()) {
     if (FONT_ALLOWED.has(file)) continue;
     const src = readFileSync(new URL(file, root), "utf8");
     src.split("\n").forEach((line, i) => {
       const code = line.replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, "");
+      // a string literal in real code that names a generic font family
       for (const m of code.matchAll(/(["'])((?:(?!\1).)*)\1/g)) {
         if (FONT_GENERIC.test(m[2])) offenders.push(`  src/${file}:${i + 1}  ${m[0].slice(0, 90)}`);
       }
@@ -420,7 +417,7 @@ test("no value from the retired Tokyo Night palette survives anywhere in src/", 
   // leaves a surface speaking the old palette while everything around it moved, which is the
   // half-retired look slice B exists to end, and which nothing else in this repo would see.
   const dir = new URL("../src/", import.meta.url);
-  const files = sourceFiles(dir).filter((f) => f.endsWith(".ts") || f.endsWith("styles.css"));
+  const files = sourceFiles(dir, [".ts", "styles.css"]);
   assert.ok(files.length > 40, "the src/ sweep found almost nothing — is the path still right?");
   const survivors = retiredPaletteSurvivors(dir);
   assert.deepEqual(

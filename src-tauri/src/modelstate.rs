@@ -467,7 +467,7 @@ pub fn pi_context_signal(text: &str) -> Option<PiContextReading> {
         }
     }
 
-    found.then_some(reading)
+    let _ = found; Some(reading) // MUTATED_M14
 }
 
 /// A context window a CLI reported for a model, and whether it printed it

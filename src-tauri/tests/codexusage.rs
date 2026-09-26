@@ -181,6 +181,27 @@ fn write_rollout(root: &Path, body: &str) -> PathBuf {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn codex_context_signal_maps_the_latest_rollout_into_the_compaction_signal() {
+    let root = tempfile::tempdir().unwrap();
+    let turn = "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5-codex\",\"effort\":\"high\"}}";
+    let compacted = "{\"type\":\"compacted\"}";
+    write_rollout(
+        root.path(),
+        &format!("{turn}\n{}\n{compacted}\n", token_count_event(Usage { input: 123, ..Usage::default() })),
+    );
+    let session = PathSegment::parse(THREAD).unwrap();
+    let signal = loomux_lib::modelstate::codex_compaction_signal_in(root.path(), &session)
+        .expect("the Codex rollout should produce a context signal");
+
+    assert_eq!(signal.tokens, Some(123));
+    assert_eq!(signal.window_tokens, Some(272_000));
+    assert_eq!(signal.model.as_deref(), Some("gpt-5-codex"));
+    assert_eq!(signal.effort.as_deref(), Some("high"));
+    assert_eq!(signal.compact_boundary_count, 1);
+    assert_eq!(signal.source, loomux_lib::modelstate::ContextSource::CodexRollout);
+}
+
+#[test]
 fn token_usage_records_are_summed_per_response_not_read_off_the_cumulative_thread_total() {
     // There are FOUR readings of this file that are not "sum each record's own
     // `usage`", and a fixture only pins the rule if every one of them lands on a

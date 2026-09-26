@@ -1108,8 +1108,8 @@ pub const CLI_CAPS: &[CliCaps] = &[
     CliCaps {
         cli: "copilot",
         compact_command: Some("/compact"),
-        self_compacts: false,
-        compact_note: "The cited CLI references do not specify whether Copilot auto-compacts; false is a conservative unknown default.",
+        self_compacts: true,
+        compact_note: "",
         context_reader: ContextReader::None,
         orchestration: true,
         mcp_argv_seam: true,
@@ -1319,9 +1319,9 @@ pub const CLI_CAPS: &[CliCaps] = &[
     },
     CliCaps {
         cli: "codex",
-        compact_command: None,
+        compact_command: Some("/compact"),
         self_compacts: true,
-        compact_note: "The official CLI command reference does not confirm a TUI /compact slash command; auto-compaction is documented separately.",
+        compact_note: "",
         context_reader: ContextReader::CodexRollout,
         // #2515 C1. See the doc paragraph above for why this flipped while
         // `max_containment` did not.
@@ -1845,7 +1845,7 @@ mod tests {
                 true,
                 ContextReader::ClaudeStatusline,
             ),
-            ("copilot", Some("/compact"), false, ContextReader::None),
+            ("copilot", Some("/compact"), true, ContextReader::None),
             ("gemini", None, false, ContextReader::None),
             (
                 "opencode",
@@ -1854,7 +1854,12 @@ mod tests {
                 ContextReader::OpencodeDb,
             ),
             ("pi", Some("/compact"), true, ContextReader::PiSession),
-            ("codex", None, true, ContextReader::CodexRollout),
+            (
+                "codex",
+                Some("/compact"),
+                true,
+                ContextReader::CodexRollout,
+            ),
         ];
         assert_eq!(CLI_CAPS.len(), expected.len());
         for (cli, command, self_compacts, reader) in expected {
@@ -1862,9 +1867,11 @@ mod tests {
             assert_eq!(caps.compact_command, command, "{cli}");
             assert_eq!(caps.self_compacts, self_compacts, "{cli}");
             assert_eq!(caps.context_reader, reader, "{cli}");
-            if command.is_none() || cli == "copilot" {
-                assert!(!caps.compact_note.trim().is_empty(), "{cli} needs an unknown-value reason");
-            }
+            assert_eq!(
+                caps.compact_note.trim().is_empty(),
+                command.is_some(),
+                "{cli} note must be present only when its compact command is unknown"
+            );
         }
     }
 
@@ -1875,14 +1882,11 @@ mod tests {
             .filter(|caps| caps.compact_command.is_some())
             .map(|caps| caps.cli)
             .collect();
-        let expected: std::collections::BTreeSet<_> = ["claude", "copilot", "opencode", "pi"]
+        let expected: std::collections::BTreeSet<_> =
+            ["claude", "codex", "copilot", "opencode", "pi"]
             .into_iter()
             .collect();
         assert_eq!(actual, expected);
-        assert_eq!(
-            cli_caps("claude").unwrap().compact_command,
-            Some("/compact")
-        );
     }
 
     /// The wire/label name of every capability class, written out once as

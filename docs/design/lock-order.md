@@ -12,7 +12,8 @@ at all.
 > respect
 
 Seventeen mutexes on one struct, no declared order, and 448 acquisition sites.
-Thirteen doc comments in `orchestration/mod.rs` *do* state an order, and every
+Thirteen doc comments on its fields (`orchestration/registry/mod.rs` since
+#3498 P3a) *do* state an order, and every
 one of them is true. None of them can fail a build.
 
 That is §2.2's finding about this repo's guard culture applied to the one

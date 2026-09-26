@@ -993,8 +993,9 @@ from a unit test of product code, agents are banned from running cargo locally
     ### Remaining same-tier edges
 
     What stays in `src-tauri` and still reaches these modules, so the next batch
-    does not have to re-derive it: `mod.rs`'s impure half — `enqueue_text`,
-    `deliver_now`, `run_queue_drainer`, `persist_queues`,
+    does not have to re-derive it: the orchestration module's impure half —
+    `enqueue_text`, `deliver_now` (in `registry/delivery.rs` since #3498 P3a),
+    `run_queue_drainer`, `persist_queues`,
     `recover_persisted_queue`/`readmit_recovered`, the depth/pressure emitters
     and the orphan command — spells `queue::…` and `queuestate::…` unchanged and
     compiles against the re-export. That is a completed move seen from the

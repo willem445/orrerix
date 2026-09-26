@@ -17,7 +17,15 @@ Rust modules use three tiers:
 
 - `commands/` contains Tauri boundary code: parse at the edge and delegate,
   with no business logic.
-- `registry/` contains `impl OrchRegistry` blocks grouped by concern.
+- `registry/` contains `OrchRegistry` itself (`registry/mod.rs`: the struct,
+  `new()` and the constraint-10 barrier) and `impl OrchRegistry` blocks
+  grouped by concern. A concern's file also takes the free functions that are
+  registry-bound — ones taking the registry as a parameter, like
+  `deliver_now` — and leaves the pure logic its methods call (`Tier1Scan`,
+  the `stranded_*` decision functions) for a bare `<noun>.rs`. The struct's
+  fields are `pub(super)` wherever code outside `registry/` reads them: the
+  struct moved down a level, and `pub(super)` from `registry/` is exactly the
+  visibility a private field had in `orchestration/mod.rs`.
 - Bare `<noun>.rs` files contain logic that does not use registry `self`.
 
 Persistence modules are named for the whole-file store they own (`queuestate`,

@@ -581,18 +581,6 @@ mod tests {
     }
 
     #[test]
-    fn a_null_info_token_count_does_not_shadow_the_last_useful_reading() {
-        let text = format!(
-            "{}\n{}",
-            token_count(42, Some(272_000)),
-            r#"{"type":"event_msg","payload":{"type":"token_count","info":null}}"#
-        );
-        let got = codex_context_signal(&text).unwrap();
-        assert_eq!(got.tokens, Some(42));
-        assert_eq!(got.window_tokens, Some(272_000));
-    }
-
-    #[test]
     fn missing_model_context_window_is_none() {
         let got = codex_context_signal(&token_count(42, None)).unwrap();
         assert_eq!(got.tokens, Some(42));

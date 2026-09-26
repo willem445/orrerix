@@ -118,6 +118,7 @@ pub fn enrich_with_statusline(
         signal.model = Some(model.clone());
     }
     signal.window_tokens = snap.window_tokens;
+    signal.window_rounded = false;
     signal.effort = snap.effort.clone();
     signal.source = ContextSource::Statusline;
     signal
@@ -134,6 +135,9 @@ pub enum ContextSource {
     Statusline,
     /// Codex rollout token-count and turn-context records.
     CodexRollout,
+    /// pi session-file entries (#993 S2b), with the window looked up in the
+    /// cached `--list-models` probe.
+    PiSession,
 }
 
 impl ContextSource {
@@ -142,6 +146,7 @@ impl ContextSource {
             ContextSource::Transcript => "transcript",
             ContextSource::Statusline => "statusline",
             ContextSource::CodexRollout => "codex-rollout",
+            ContextSource::PiSession => "pi-session",
         }
     }
 }
@@ -153,6 +158,12 @@ pub enum WindowSource {
     Override,
     /// The CLI reported it (Claude's status-line `context_window_size`).
     Reported,
+    /// The CLI reported it ROUNDED, so the window is a lower bound rather than
+    /// the exact count: pi's `--list-models` printed `262.1K` or `1.0M`, and
+    /// `cliprobe::parse_token_count` read the bottom of that rounding interval
+    /// (#993 S8). Rung 2 all the same; only the label differs, so nobody reads
+    /// a lower bound as an exact report.
+    ReportedRounded,
     /// `usage::claude_context_window_tokens`'s conservative model-name table —
     /// reachable only before the first status-line write for the session.
     Table,
@@ -166,6 +177,7 @@ impl WindowSource {
         match self {
             WindowSource::Override => "override",
             WindowSource::Reported => "reported",
+            WindowSource::ReportedRounded => "reported-rounded",
             WindowSource::Table => "table",
             WindowSource::Clamped => "clamped",
         }
@@ -206,6 +218,17 @@ pub fn context_window_ladder(
     };
     match observed_tokens {
         Some(t) if t > window => (t, WindowSource::Clamped),
+        _ => (window, source),
+    }
+}
+
+/// Relabel a ladder answer whose rung-2 report was ROUNDED (#993 S2b, the
+/// label S8 asked for). Only a `Reported` answer changes: an override still
+/// outranks the report, and a clamp has already proved the report too small,
+/// so neither of those is describing the rounded figure any more.
+pub fn label_rounded_report((window, source): (u64, WindowSource), reported_rounded: bool) -> (u64, WindowSource) {
+    match source {
+        WindowSource::Reported if reported_rounded => (window, WindowSource::ReportedRounded),
         _ => (window, source),
     }
 }
@@ -353,8 +376,167 @@ pub fn codex_compaction_signal_in(
         compact_boundary_count: reading.compaction_markers,
         model: reading.model,
         window_tokens: reading.window_tokens,
+        window_rounded: false,
         effort: reading.effort,
         source: ContextSource::CodexRollout,
+    })
+}
+
+/// The latest context facts in a pi session file (#993 S2b). No window: the
+/// session file records none, so [`pi_compaction_signal_in`] looks it up in
+/// the cached `--list-models` probe instead.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PiContextReading {
+    /// The newest assistant turn's `usage.input + cacheRead + cacheWrite`.
+    pub tokens: Option<u64>,
+    /// `provider/model`, the spelling `usage::PiFold` and pi's own `--model`
+    /// use, and the key `CliProbe::model_context_windows` is filed under.
+    pub model: Option<String>,
+    /// The newest `thinking_level_change`'s `thinkingLevel`.
+    pub effort: Option<String>,
+    /// How many `compaction` entries the text holds.
+    pub compaction_markers: u64,
+}
+
+/// Read a pi session file's text (the entry shapes in pi's
+/// `packages/coding-agent/docs/session-format.md` at `v0.84.4`) in FILE order,
+/// so each field ends up holding its newest writer:
+///
+/// - **tokens** — the newest assistant `message` whose `usage` sums to more
+///   than zero: `input + cacheRead + cacheWrite`, what that turn SENT, the
+///   same input-side formula as claude's `latest_context_tokens`. `output` is
+///   what the turn produced, not what was in context. A zero sum is skipped
+///   rather than read: pi writes an all-zero `usage` on an errored turn (see
+///   `usage::PiFold::push`), and a `0` handed to the compaction state machine
+///   looks exactly like a compaction's token drop.
+/// - **model** — the newest of an assistant message's `provider`/`model` and a
+///   `model_change` entry's `provider`/`modelId`, so a `/model` switch after
+///   the last turn is the pane's model before any turn has run on it.
+/// - **effort** — the newest `thinking_level_change`.
+/// - **compaction markers** — the count of `compaction` entries.
+///
+/// File order is the order pi appended in; the file is a tree, and an entry on
+/// a branch the leaf navigated away from is still read — the same "over the
+/// file, not the active path" reading `PiFold` takes. `None` when the text
+/// holds none of these, e.g. a file that is only its session header.
+pub fn pi_context_signal(text: &str) -> Option<PiContextReading> {
+    let mut reading = PiContextReading::default();
+    let mut found = false;
+    let s = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
+
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                let Some(msg) = value.get("message") else { continue };
+                if msg.get("role").and_then(Value::as_str) != Some("assistant") {
+                    continue;
+                }
+                if let (Some(provider), Some(model)) = (s(msg, "provider"), s(msg, "model")) {
+                    reading.model = Some(format!("{provider}/{model}"));
+                    found = true;
+                }
+                if let Some(usage) = msg.get("usage") {
+                    let field = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0);
+                    let context = field("input").saturating_add(field("cacheRead")).saturating_add(field("cacheWrite"));
+                    if context > 0 {
+                        reading.tokens = Some(context);
+                        found = true;
+                    }
+                }
+            }
+            Some("model_change") => {
+                if let (Some(provider), Some(model)) = (s(&value, "provider"), s(&value, "modelId")) {
+                    reading.model = Some(format!("{provider}/{model}"));
+                    found = true;
+                }
+            }
+            Some("thinking_level_change") => {
+                if let Some(level) = s(&value, "thinkingLevel") {
+                    reading.effort = Some(level);
+                    found = true;
+                }
+            }
+            Some("compaction") => {
+                reading.compaction_markers += 1;
+                found = true;
+            }
+            _ => {}
+        }
+    }
+
+    found.then_some(reading)
+}
+
+/// A context window a CLI reported for a model, and whether it printed it
+/// rounded (`CliProbe::model_context_windows_rounded`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReportedWindow {
+    pub tokens: u64,
+    pub rounded: bool,
+}
+
+thread_local! {
+    /// Test seam for [`probe_window`]: model id → window, standing in for the
+    /// process-global probe cache on the calling thread only, so parallel test
+    /// threads each see their own listing and nothing spawns `pi` to fill it.
+    static PROBE_WINDOWS_OVERRIDE: std::cell::RefCell<Option<std::collections::BTreeMap<String, ReportedWindow>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only seam: answer [`probe_window`] from `windows` on the calling thread
+/// (`None` restores the real cache). A real `pub` function rather than
+/// `#[cfg(test)]` for the reason `set_pi_sessions_root_for_test` is one: the
+/// integration tests that link the lib cannot see `cfg(test)` items.
+#[doc(hidden)] // pub for the `piusage` integration test
+pub fn set_probe_windows_for_test(windows: Option<std::collections::BTreeMap<String, ReportedWindow>>) {
+    PROBE_WINDOWS_OVERRIDE.with(|c| *c.borrow_mut() = windows);
+}
+
+/// The window `program`'s cached `--list-models` probe reported for `model`
+/// (`cliprobe::cached_context_window` — a lookup that never spawns the CLI).
+pub fn probe_window(program: &str, model: &str) -> Option<ReportedWindow> {
+    if let Some(hit) = PROBE_WINDOWS_OVERRIDE.with(|c| c.borrow().as_ref().map(|m| m.get(model).copied())) {
+        return hit;
+    }
+    crate::cliprobe::cached_context_window(program, model).map(|(tokens, rounded)| ReportedWindow { tokens, rounded })
+}
+
+/// Resolve and read one pi session's bounded tail from the group's own pi
+/// store `dir` (`OrchRegistry::pi_sessions_dir`, the `--session-dir` every
+/// group pi pane is launched with), then map it to the shared compaction
+/// signal.
+///
+/// - **effort** falls back to `launch_effort` — the `--thinking` value loomux
+///   passed, i.e. the block's clamped effort knob — only when the tail holds
+///   no `thinking_level_change`. At `v0.84.4` pi writes one for every new
+///   session (`src/core/sdk.ts`, `appendThinkingLevelChange(thinkingLevel)`),
+///   so the fallback covers a long session whose entry has left the tail.
+/// - **window** comes from `window_for(model)`, the cached `--list-models`
+///   probe in production: the session file records no window. A model the
+///   probe does not list gets `None`, never a guess.
+#[doc(hidden)] // pub for the `piusage` integration test
+pub fn pi_compaction_signal_in(
+    dir: &std::path::Path,
+    session: &loomux_engine::pathseg::PathSegment,
+    launch_effort: Option<&str>,
+    window_for: &dyn Fn(&str) -> Option<ReportedWindow>,
+) -> Option<crate::usage::CompactionSignal> {
+    let path = crate::orchestration::pi_session_file_in_dir(dir, session).ok().flatten()?;
+    let text = crate::usage::read_transcript_tail(&path)?;
+    let reading = pi_context_signal(&text)?;
+    let window = reading.model.as_deref().and_then(window_for);
+    let launch_effort = launch_effort.map(str::trim).filter(|e| !e.is_empty()).map(str::to_owned);
+    Some(crate::usage::CompactionSignal {
+        tokens: reading.tokens,
+        compact_boundary_count: reading.compaction_markers,
+        model: reading.model,
+        window_tokens: window.map(|w| w.tokens),
+        window_rounded: window.is_some_and(|w| w.rounded),
+        effort: reading.effort.or(launch_effort),
+        source: ContextSource::PiSession,
     })
 }
 
@@ -441,6 +623,7 @@ mod tests {
             compact_boundary_count: 2,
             model: Some(model.to_string()),
             window_tokens: None,
+            window_rounded: false,
             effort: None,
             source: ContextSource::Transcript,
         }
@@ -607,5 +790,42 @@ mod tests {
     fn counts_compaction_markers() {
         let text = "{\"type\":\"compacted\"}\n{\"type\":\"compacted\"}";
         assert_eq!(codex_context_signal(text).unwrap().compaction_markers, 2);
+    }
+
+    #[test]
+    fn a_rounded_report_is_relabelled_only_on_the_reported_rung() {
+        let ladder = |reported: Option<u64>, observed: u64, rounded: bool| {
+            label_rounded_report(context_window_ladder(None, reported, 200_000, Some(observed)), rounded)
+        };
+        assert_eq!(ladder(Some(262_050), 10, true), (262_050, WindowSource::ReportedRounded));
+        assert_eq!(ladder(Some(262_144), 10, false), (262_144, WindowSource::Reported));
+        // A clamp has proved the report too small: it is no longer the figure shown.
+        assert_eq!(ladder(Some(262_050), 300_000, true), (300_000, WindowSource::Clamped));
+        // No report: the table rung is untouched by a stray flag.
+        assert_eq!(ladder(None, 10, true), (200_000, WindowSource::Table));
+        // An override outranks the report whatever its spelling.
+        assert_eq!(
+            label_rounded_report(context_window_ladder(Some(500_000), Some(262_050), 200_000, None), true),
+            (500_000, WindowSource::Override)
+        );
+        assert_eq!(WindowSource::ReportedRounded.as_str(), "reported-rounded");
+    }
+
+    #[test]
+    fn a_pi_assistant_turn_with_all_zero_usage_is_no_token_reading() {
+        // pi writes an all-zero usage on an errored turn; a 0 would read as a
+        // compaction's drop. The earlier real reading stands.
+        let text = [
+            r#"{"type":"message","message":{"role":"assistant","provider":"p","model":"m","usage":{"input":900,"cacheRead":90,"cacheWrite":9,"output":5}}}"#,
+            r#"{"type":"message","message":{"role":"assistant","provider":"p","model":"m","usage":{"input":0,"cacheRead":0,"cacheWrite":0,"output":0}}}"#,
+        ]
+        .join("\n");
+        assert_eq!(pi_context_signal(&text).unwrap().tokens, Some(999));
+    }
+
+    #[test]
+    fn a_pi_header_alone_is_no_reading() {
+        assert_eq!(pi_context_signal(r#"{"type":"session","version":3,"id":"x","cwd":"/r"}"#), None);
+        assert_eq!(pi_context_signal(""), None);
     }
 }

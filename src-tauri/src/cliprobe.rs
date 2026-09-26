@@ -708,6 +708,28 @@ pub(crate) fn probe_cached(program: &str) -> CliProbe {
     probe
 }
 
+/// The context window `program`'s CACHED probe reported for `model`, and
+/// whether it printed that window rounded (#993 S2b — the consumer S8's
+/// `model_context_windows*` fields were filled for).
+///
+/// **A lookup, never a probe.** The compact-nudge tick asks this for every pi
+/// pane on every pass, so it must not be the thing that spawns `pi
+/// --list-models`: a cache miss (the startup sweep has not answered yet, or
+/// pi's listing was incomplete and so was never cached) is `None`, and the
+/// window stays unknown until a probe lands. One lock and two map reads — no
+/// clone of a listing that can hold well over a thousand ids. A poisoned lock
+/// is also `None`: this is a best-effort read, not worth a panic on the tick.
+///
+/// The key is matched exactly as the probe filed it, `{provider}/{model}` —
+/// the spelling pi's session file yields (`modelstate::pi_context_signal`).
+pub(crate) fn cached_context_window(program: &str, model: &str) -> Option<(u64, bool)> {
+    let program = program.trim().to_lowercase();
+    let cache = cache().lock().ok()?;
+    let probe = cache.get(&program)?;
+    let tokens = *probe.model_context_windows.get(model)?;
+    Some((tokens, probe.model_context_windows_rounded.contains(model)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1322,5 +1344,30 @@ Options:
         });
         assert!(!complete);
         assert!(probe.model_context_windows.is_empty() && probe.model_context_windows_rounded.is_empty());
+    }
+
+    #[test]
+    fn the_cached_window_lookup_reads_the_probe_cache_and_tags_rounded_ids() {
+        // A key no real program has, so this test's insert cannot collide with
+        // another test's (the cache is process-global), and a fake runner, so
+        // nothing is spawned to build the probe.
+        const KEY: &str = "pi-s2b-cached-window-test";
+        assert_eq!(cached_context_window(KEY, "google/gemini-3-pro"), None, "an uncached program has no window");
+        let (probe, complete) = probe_with("pi", |_program, args| match args {
+            "--help" => Ok(PI_STYLE_HELP.to_string()),
+            _ => Ok(PI_CONTEXT_TABLE.to_string()),
+        });
+        assert!(complete);
+        cache().lock().unwrap().insert(KEY.to_string(), probe);
+
+        // An integer spelling is exact; a decimal one is tagged rounded.
+        assert_eq!(cached_context_window(KEY, "google/gemini-3-pro"), Some((1_000_000, false)));
+        assert_eq!(cached_context_window(KEY, "google/gemini-2.5-pro"), Some((1_000_001, true)));
+        // The program key is normalised the way `probe_cached` files it.
+        assert_eq!(cached_context_window(" PI-S2B-CACHED-WINDOW-TEST ", "ollama/tiny-512"), Some((512, false)));
+        // A model the listing does not carry has no window, never a guess.
+        assert_eq!(cached_context_window(KEY, "google/not-listed"), None);
+        // Nor does the bare model id without its provider: the key is exact.
+        assert_eq!(cached_context_window(KEY, "gemini-3-pro"), None);
     }
 }

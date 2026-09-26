@@ -22,18 +22,22 @@ below are read from the vendors' source at a pinned commit.
 | Subject | Pin | Label |
 |---|---|---|
 | pi (`@earendil-works/pi-coding-agent` 0.84.4) | `earendil-works/pi@b79e4cc834970cca69daebffab7df1da7d1e52c4`, tagged `v0.84.4` | `DOCS` = `packages/coding-agent/docs/*.md` at that tag; `SOURCE` = `packages/coding-agent/src/…` at that tag |
-| pi 0.85.1, the version installed on the human's machine — the RPC-driver section's pin | the published package `@earendil-works/pi-coding-agent@0.85.1` as installed at `%APPDATA%/npm/node_modules/@earendil-works/pi-coding-agent` | `RPCDOCS` = `docs/rpc.md` in that package; `DIST` = `dist/…` in that package, and `dist/` is the PUBLISHED build, not `src/` |
+| pi 0.85.1, the version installed on the human's machine when the RPC-driver section was read — that section's pin (the machine has since moved to 0.87.1; see below) | the published package `@earendil-works/pi-coding-agent@0.85.1` as installed at `%APPDATA%/npm/node_modules/@earendil-works/pi-coding-agent` | `RPCDOCS` = `docs/rpc.md` in that package; `DIST` = `dist/…` in that package, and `dist/` is the PUBLISHED build, not `src/` |
 | pi-mcp-adapter (the community extension that gives pi MCP at all) | `nicobailon/pi-mcp-adapter@6ba7d360fcc67a77ccbbb4921586614798020a7a` | `ADAPTER` = `config.ts` / `index.ts` / `utils.ts` at that commit |
 
 **The 0.85.1 row is pinned to the installed package rather than to a git tag,
 and the difference matters when you re-derive a line number.** The RPC-driver
 section's citations are line numbers in `dist/` — build output, so a reference
 that is exact for THIS published version and has no counterpart in the
-upstream repository's `src/`. It is the right pin nonetheless: 0.85.1 is what
-the human's panes launch, so it is what a claim about pi's behaviour has to be
-true of. Re-derive against `dist/` when the row moves, never against upstream
-`main` — a line cite taken from one and recorded against the other is a claim
-nobody can check.
+upstream repository's `src/`. It was the right pin when those cites were
+taken: 0.85.1 was what the human's panes launched, so it was what a claim about
+pi's behaviour had to be true of. The installed package is now 0.87.1, and the
+row has deliberately NOT moved with it: at 0.87.1 `docs/rpc.md` is 191 lines,
+split into `rpc-commands.md` and siblings, so cites such as `docs/rpc.md:1055`
+name nothing there. Re-pinning the RPC section is a re-derivation of every one
+of its cites, parked with the harness track (#2850). Re-derive against `dist/`
+when the row moves, never against upstream `main` — a line cite taken from one
+and recorded against the other is a claim nobody can check.
 
 Constraint 3 holds throughout: **no `pi` process was run by an agent** to
 establish any of it, and none may be — every fact here is a read of a file.
@@ -747,6 +751,14 @@ half-rewritten; `test/modelcatalog.test.ts` pins both. The header line itself
 never becomes a model: the line that trips the header check is consumed by it,
 not parsed as a row.
 
+**The same rows carry the context window (#993 S8).** The row walk also reads
+the cell under the header's `context` column into `CliProbe`'s
+`model_context_windows`, and tags the ids whose window pi printed rounded in
+`model_context_windows_rounded` — the spellings, and why a rounded one is read
+as the LOWER edge of its interval, are in `docs/design/pane-model-state.md`'s
+S8 section. `context_variants` staying empty (above) is unaffected: that is a
+choice between windows, and this is a report of the one window a model has.
+
 **The 8 s probe timeout against pi's 15 s internal budget.** loomux's probe
 kill is `HELP_TIMEOUT`, 8 s; pi runs `--list-models` under its own
 `AbortSignal.timeout(15_000)` (`SOURCE` `main.ts:864`) — pi's budget for a cold
@@ -776,7 +788,7 @@ timeout degrades to inherit + custom, not to an empty dropdown.
 pi is the harness that lands loomux's structured spawn path. This section is
 the pi half of the contract in `docs/design/harness-adapters.md`: what pi's RPC
 mode gives a driver, and what it does not. **Every claim here is a read of the
-installed 0.85.1 package** (`RPCDOCS` = its `docs/rpc.md`, `DIST` = its
+0.85.1 package, as installed when it was read** (`RPCDOCS` = its `docs/rpc.md`, `DIST` = its
 `dist/`); constraint 3 still holds, so no `pi --mode rpc` was run.
 
 ### The launch line is today's line plus one flag

@@ -5048,6 +5048,7 @@ fn human_pane_entry(
         last_context_tokens: None,
         last_context_model: None,
         last_context_window: None,
+        last_context_window_rounded: false,
         compact_inference_guard_until_ms: 0,
         compact_hook_precompact_seen_ms: None,
         compact_hook_sessionstart_seen_ms: None,
@@ -9780,17 +9781,23 @@ pub fn context_percent_used(context_tokens: u64, window_tokens: u64) -> u32 {
 /// status line — `reported_tokens`), then the model table above, then the
 /// empirical clamp to `observed_tokens`. Returns the rung beside the window so
 /// the lifecycle panel can say which one it is showing (S3 publishes it).
+/// #993 S2b: `reported_rounded` relabels a rounded rung-2 report
+/// `reported-rounded` (`modelstate::label_rounded_report`).
 pub fn effective_context_window_tokens(
     override_tokens: Option<u64>,
     reported_tokens: Option<u64>,
+    reported_rounded: bool,
     model: Option<&str>,
     observed_tokens: Option<u64>,
 ) -> (u64, crate::modelstate::WindowSource) {
-    crate::modelstate::context_window_ladder(
-        override_tokens,
-        reported_tokens,
-        crate::usage::claude_context_window_tokens(model),
-        observed_tokens,
+    crate::modelstate::label_rounded_report(
+        crate::modelstate::context_window_ladder(
+            override_tokens,
+            reported_tokens,
+            crate::usage::claude_context_window_tokens(model),
+            observed_tokens,
+        ),
+        reported_rounded,
     )
 }
 
@@ -12891,6 +12898,10 @@ pub struct AgentEntry {
     /// `group_summary`'s percent climbs the same ladder the escalation does.
     /// Follows each reading, `None` included — see `run_compact_nudge`.
     pub last_context_window: Option<u64>,
+    /// #993 S2b: `last_context_window` is a lower bound the CLI printed
+    /// rounded (`CompactionSignal::window_rounded`), so the ladder labels it
+    /// `reported-rounded`. Follows each reading exactly as the window does.
+    pub last_context_window_rounded: bool,
     /// Production bug fix (PR #329 round 7): INFERENCE arms (banner, manual
     /// detection — never the loomux-initiated/trusted arm, which needs no
     /// inference at all) may only arm while `now >= this`. Live demo
@@ -37190,6 +37201,7 @@ impl OrchRegistry {
             last_context_tokens: None,
             last_context_model: None,
             last_context_window: None,
+            last_context_window_rounded: false,
             compact_inference_guard_until_ms: 0,
             compact_hook_precompact_seen_ms: None,
             compact_hook_sessionstart_seen_ms: None,
@@ -39540,7 +39552,16 @@ impl OrchRegistry {
     /// snapshot; Codex reads the newest rollout via the store lookup. The
     /// parsers and path resolvers stay separate so neither CLI's missing or
     /// compressed artifact can borrow another pane's reading.
-    #[doc(hidden)] // pub for the codex context-reader integration test
+    ///
+    /// #993 S2b: pi reads its session file from the GROUP's own store
+    /// (`pi_sessions_dir`, the `--session-dir` both launch forms hand every
+    /// group pi pane — the store the usage meter's pi arm reads, never the
+    /// per-user `sessions::pi_sessions_root`, which a group pane does not write
+    /// to). Its window is looked up in the cached `--list-models` probe for the
+    /// model the file names, and its effort falls back to the pane's block
+    /// knob — the `--thinking` value it was launched with — when the tail holds
+    /// no `thinking_level_change`. See `modelstate::pi_compaction_signal_in`.
+    #[doc(hidden)] // pub for the codex and pi context-reader integration tests
     pub fn agent_context_signals(&self) -> HashMap<String, crate::usage::CompactionSignal> {
         let rows: Vec<(String, String, GroupId, workflow::BlockId, Role)> = self
             .agents
@@ -39566,11 +39587,22 @@ impl OrchRegistry {
             .iter()
             .map(|(id, group)| (id.clone(), group.guardrails.clone()))
             .collect();
-        let candidates: Vec<(String, String, GroupId, String)> = rows
+        // The block's effort knob rides along for pi's fallback. Resolved the
+        // way `cli_for_block` resolves the CLI — the agent's own block, else its
+        // class default — so the two describe the same block. Already clamped
+        // to what the CLI honors (`Guardrails::clamped`), so it is the value the
+        // launch line passed as `--thinking`.
+        let candidates: Vec<(String, String, GroupId, String, String)> = rows
             .into_iter()
             .filter_map(|(id, sid, group, block, role)| {
-                let cli = guardrails.get(&group)?.cli_for_block(&block, role).to_string();
-                Some((id, sid, group, cli))
+                let rails = guardrails.get(&group)?;
+                let cli = rails.cli_for_block(&block, role).to_string();
+                let effort = rails
+                    .block(&block)
+                    .or_else(|| rails.block_for(role))
+                    .map(|b| b.effort.clone())
+                    .unwrap_or_default();
+                Some((id, sid, group, cli, effort))
             })
             .collect();
         let claude_root = self
@@ -39582,7 +39614,17 @@ impl OrchRegistry {
 
         candidates
             .into_iter()
-            .filter_map(|(id, sid, group, cli)| match cli.as_str() {
+            .filter_map(|(id, sid, group, cli, effort)| match cli.as_str() {
+                "pi" => {
+                    let session = PathSegment::parse(&sid).ok()?;
+                    let signal = crate::modelstate::pi_compaction_signal_in(
+                        &self.pi_sessions_dir(&group),
+                        &session,
+                        Some(effort.as_str()),
+                        &|model| crate::modelstate::probe_window("pi", model),
+                    )?;
+                    Some((id, signal))
+                }
                 "codex" => {
                     let root = codex_root.as_ref()?;
                     let session = PathSegment::parse(&sid).ok()?;
@@ -39645,8 +39687,13 @@ impl OrchRegistry {
                 }
                 let tokens = sig.tokens?;
                 let override_tokens = overrides.get(group).copied().flatten();
-                let (window, _) =
-                    effective_context_window_tokens(override_tokens, sig.window_tokens, sig.model.as_deref(), Some(tokens));
+                let (window, _) = effective_context_window_tokens(
+                    override_tokens,
+                    sig.window_tokens,
+                    sig.window_rounded,
+                    sig.model.as_deref(),
+                    Some(tokens),
+                );
                 Some((id.clone(), context_percent_used(tokens, window)))
             })
             .collect()
@@ -39764,6 +39811,7 @@ impl OrchRegistry {
                 // never outlive it. A tick with no signal at all (a transient
                 // read miss) leaves it alone, like the model.
                 a.last_context_window = sig.window_tokens;
+                a.last_context_window_rounded = sig.window_rounded;
             }
         }
         let nudged = self.compact_nudge_tick(
@@ -44344,6 +44392,7 @@ impl OrchRegistry {
                             effective_context_window_tokens(
                                 context_window_override,
                                 a.last_context_window,
+                                a.last_context_window_rounded,
                                 a.last_context_model.as_deref(),
                                 Some(t),
                             )
@@ -51150,6 +51199,7 @@ impl OrchRegistry {
             last_context_tokens: None,
             last_context_model: None,
             last_context_window: None,
+            last_context_window_rounded: false,
             compact_inference_guard_until_ms: 0,
             compact_hook_precompact_seen_ms: None,
             compact_hook_sessionstart_seen_ms: None,

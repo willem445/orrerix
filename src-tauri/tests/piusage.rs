@@ -1040,3 +1040,237 @@ fn nothing_here_prices_a_pi_turn_from_the_claude_price_table() {
     let u = pi_session_usage_in(dir.path(), SES).expect("read");
     assert_eq!(u.cost_usd, Some(0.02), "pi's own figure, not 30.0 from the price table");
 }
+
+// ---------------------------------------------------------------------------
+// The context reader (#993 S2b): what the compact-nudge tick reads for a pi pane
+// ---------------------------------------------------------------------------
+//
+// A different question from the fold above: the fold SUMS every turn for the
+// meter, while the context reader wants the pane's CURRENT state — the newest
+// turn's input, the model it is on now, its thinking level, and how many times
+// it has compacted. The entry shapes are pi's `docs/session-format.md` at
+// `v0.84.4` (`ModelChangeEntry`, `ThinkingLevelChangeEntry`, `CompactionEntry`).
+
+use loomux_engine::pathseg::PathSegment;
+use loomux_lib::modelstate::{
+    pi_compaction_signal_in, pi_context_signal, set_probe_windows_for_test, ContextSource, ReportedWindow,
+};
+use std::collections::BTreeMap;
+
+fn thinking_level_change(id: &str, level: &str) -> String {
+    let mut e = entry(id, None, "thinking_level_change");
+    e["thinkingLevel"] = json!(level);
+    e.to_string()
+}
+
+/// A window lookup standing in for the cached `--list-models` probe.
+fn probe(rows: &[(&str, u64, bool)]) -> impl Fn(&str) -> Option<ReportedWindow> {
+    let rows: BTreeMap<String, ReportedWindow> = rows
+        .iter()
+        .map(|&(id, tokens, rounded)| (id.to_string(), ReportedWindow { tokens, rounded }))
+        .collect();
+    move |model: &str| rows.get(model).copied()
+}
+
+fn no_probe(_: &str) -> Option<ReportedWindow> {
+    None
+}
+
+fn seg() -> PathSegment {
+    PathSegment::parse(SES).unwrap()
+}
+
+#[test]
+fn context_a_model_change_after_the_last_assistant_turn_wins() {
+    let text = file(&[
+        header(SES, "C:/tmp/repo"),
+        assistant("e1", "openrouter", "z-ai/glm-5.3-flash", Turn { input: 100, ..Turn::default() }),
+        model_change("e2", "anthropic", "claude-sonnet-5"),
+    ]);
+    assert_eq!(
+        pi_context_signal(&text).unwrap().model.as_deref(),
+        Some("anthropic/claude-sonnet-5"),
+        "a /model switch after the last turn is the pane's model before any turn has run on it"
+    );
+
+    // The discriminating converse: a model_change BEFORE the last turn is not
+    // the newest writer, so the turn's own provider/model stands.
+    let text = file(&[
+        model_change("e1", "anthropic", "claude-sonnet-5"),
+        assistant("e2", "openrouter", "z-ai/glm-5.3-flash", Turn { input: 100, ..Turn::default() }),
+    ]);
+    assert_eq!(pi_context_signal(&text).unwrap().model.as_deref(), Some("openrouter/z-ai/glm-5.3-flash"));
+}
+
+#[test]
+fn context_the_newest_thinking_level_change_is_the_effort() {
+    let text = file(&[
+        header(SES, "C:/tmp/repo"),
+        thinking_level_change("e1", "low"),
+        assistant("e2", "openrouter", "z-ai/glm-5.3-flash", Turn { input: 100, ..Turn::default() }),
+        thinking_level_change("e3", "xhigh"),
+    ]);
+    assert_eq!(pi_context_signal(&text).unwrap().effort.as_deref(), Some("xhigh"));
+}
+
+#[test]
+fn context_the_launch_effort_is_used_only_when_the_file_names_no_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let turn = assistant("e1", "openrouter", "z-ai/glm-5.3-flash", Turn { input: 100, ..Turn::default() });
+
+    write_session(dir.path(), SES, &file(&[header(SES, "C:/tmp/repo"), turn.clone()]));
+    let signal = pi_compaction_signal_in(dir.path(), &seg(), Some("high"), &no_probe).unwrap();
+    assert_eq!(signal.effort.as_deref(), Some("high"), "no thinking_level_change: the --thinking value");
+    let signal = pi_compaction_signal_in(dir.path(), &seg(), Some(""), &no_probe).unwrap();
+    assert_eq!(signal.effort, None, "an empty knob is no --thinking at all, not a level");
+
+    write_session(dir.path(), SES, &file(&[header(SES, "C:/tmp/repo"), thinking_level_change("e0", "minimal"), turn]));
+    let signal = pi_compaction_signal_in(dir.path(), &seg(), Some("high"), &no_probe).unwrap();
+    assert_eq!(signal.effort.as_deref(), Some("minimal"), "the file's own level beats the launch knob");
+}
+
+#[test]
+fn context_compaction_entries_are_counted() {
+    let text = file(&[
+        header(SES, "C:/tmp/repo"),
+        assistant("e1", "openrouter", "z-ai/glm-5.3-flash", Turn { input: 100, ..Turn::default() }),
+        compaction("e2", None),
+        assistant("e3", "openrouter", "z-ai/glm-5.3-flash", Turn { input: 50, ..Turn::default() }),
+        compaction("e4", Some(Turn { input: 300, output: 30, ..Turn::default() })),
+        // A branch summary is not a compaction, whatever usage it carries.
+        branch_summary("e5", Some(Turn { input: 500, ..Turn::default() })),
+    ]);
+    assert_eq!(pi_context_signal(&text).unwrap().compaction_markers, 2);
+    assert_eq!(pi_context_signal(&file(&[assistant("e1", "p", "m", Turn { input: 1, ..Turn::default() })])).unwrap().compaction_markers, 0);
+}
+
+#[test]
+fn context_tokens_are_the_latest_turn_not_the_folds_sum() {
+    let text = file(&[
+        header(SES, "C:/tmp/repo"),
+        assistant("e1", "openrouter", "z-ai/glm-5.3-flash", Turn {
+            input: 40_000, output: 900, cache_read: 5_000, cache_write: 700, ..Turn::default()
+        }),
+        tool_result_with_usage("e2", Turn { input: 7_777, ..Turn::default() }),
+        assistant("e3", "openrouter", "z-ai/glm-5.3-flash", Turn {
+            input: 2_000, output: 800, cache_read: 30_000, cache_write: 1_200, ..Turn::default()
+        }),
+        compaction("e4", Some(Turn { input: 9_999, ..Turn::default() })),
+    ]);
+    // What the newest turn SENT: input + cacheRead + cacheWrite, output excluded.
+    assert_eq!(pi_context_signal(&text).unwrap().tokens, Some(2_000 + 30_000 + 1_200));
+    // Control: the fold over the same text sums every usage-carrying record.
+    assert_eq!(parse_pi_transcript(&text).tokens.input_tokens, 40_000 + 7_777 + 2_000 + 9_999);
+}
+
+#[test]
+fn context_the_window_comes_from_the_probe_and_a_rounded_one_is_tagged() {
+    let dir = tempfile::tempdir().unwrap();
+    let windows = probe(&[
+        ("google/gemini-3-pro", 1_000_000, false),
+        ("openrouter/z-ai/glm-5.3-flash", 262_050, true),
+    ]);
+
+    write_session(dir.path(), SES, &file(&[
+        header(SES, "C:/tmp/repo"),
+        assistant("e1", "google", "gemini-3-pro", Turn { input: 12_345, ..Turn::default() }),
+    ]));
+    let exact = pi_compaction_signal_in(dir.path(), &seg(), None, &windows).unwrap();
+    assert_eq!((exact.window_tokens, exact.window_rounded), (Some(1_000_000), false));
+    assert_eq!(exact.source, ContextSource::PiSession);
+
+    // The model_change is what names the model looked up — the window follows
+    // the pane's CURRENT model, not the last turn's.
+    write_session(dir.path(), SES, &file(&[
+        header(SES, "C:/tmp/repo"),
+        assistant("e1", "google", "gemini-3-pro", Turn { input: 12_345, ..Turn::default() }),
+        model_change("e2", "openrouter", "z-ai/glm-5.3-flash"),
+    ]));
+    let rounded = pi_compaction_signal_in(dir.path(), &seg(), None, &windows).unwrap();
+    assert_eq!((rounded.window_tokens, rounded.window_rounded), (Some(262_050), true));
+}
+
+#[test]
+fn context_a_model_missing_from_the_probe_has_no_window() {
+    let dir = tempfile::tempdir().unwrap();
+    write_session(dir.path(), SES, &file(&[
+        header(SES, "C:/tmp/repo"),
+        assistant("e1", "ollama", "not-in-the-listing", Turn { input: 12_345, ..Turn::default() }),
+    ]));
+    let windows = probe(&[("google/gemini-3-pro", 1_000_000, false)]);
+    let signal = pi_compaction_signal_in(dir.path(), &seg(), None, &windows).unwrap();
+    assert_eq!(signal.tokens, Some(12_345), "positive control: the file was read");
+    assert_eq!((signal.window_tokens, signal.window_rounded), (None, false), "no listing row, no window — never a guess");
+}
+
+#[test]
+fn context_agent_context_signals_dispatches_pi_to_its_group_store_reader() {
+    let (reg, _d) = test_registry();
+    let mut g = rails("pi");
+    for b in g.blocks.iter_mut().filter(|b| b.kind == Role::Worker) {
+        b.effort = "high".into();
+    }
+    let g = reg.create_group("C:/tmp/pi-repo", g).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    let sid = w.session_id.clone().expect("a pi pane carries a preminted session id");
+    write_session(&reg.pi_sessions_dir(&g.id), &sid, &file(&[
+        header(&sid, "C:/tmp/pi-repo"),
+        assistant("e1", "openrouter", "z-ai/glm-5.3-flash", Turn {
+            input: 20_000, cache_read: 3_000, cache_write: 400, output: 100, ..Turn::default()
+        }),
+        compaction("e2", None),
+    ]));
+    set_probe_windows_for_test(Some(BTreeMap::from([(
+        "openrouter/z-ai/glm-5.3-flash".to_string(),
+        ReportedWindow { tokens: 262_050, rounded: true },
+    )])));
+    let signal = reg.agent_context_signals().remove(&w.id);
+    set_probe_windows_for_test(None);
+    let signal = signal.expect("the pi agent should receive its session-file context signal");
+
+    assert_eq!(signal.source, ContextSource::PiSession);
+    assert_eq!(signal.tokens, Some(23_400));
+    assert_eq!(signal.model.as_deref(), Some("openrouter/z-ai/glm-5.3-flash"));
+    assert_eq!((signal.window_tokens, signal.window_rounded), (Some(262_050), true));
+    assert_eq!(signal.effort.as_deref(), Some("high"), "the block's --thinking knob, as the file names no level");
+    assert_eq!(signal.compact_boundary_count, 1);
+}
+
+#[test]
+fn context_the_pi_arm_follows_each_panes_own_block_not_its_class_default() {
+    // #2167's shape: the Worker class defaults to claude and a SECOND worker
+    // block runs pi. Both panes get a file in the group's pi store under their
+    // own session id, so only the CLI resolution decides who is read as pi —
+    // and the pi pane's effort fallback must be ITS block's knob, not the
+    // class default's.
+    let (reg, _d) = test_registry();
+    let mut rails = rails_second_worker_block_is_pi();
+    for b in rails.blocks.iter_mut() {
+        match b.id.as_str() {
+            "worker-pi" => b.effort = "max".into(),
+            _ if b.kind == Role::Worker => b.effort = "low".into(),
+            _ => {}
+        }
+    }
+    let g = reg.create_group("C:/tmp/pi-second-block", rails).unwrap();
+    let claude = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    let pi = reg
+        .spawn_agent_ex(&g.id, Role::Worker, Some("worker-pi".into()), "w", "task", false, None, None, None, None, None)
+        .unwrap();
+    for agent in [&claude, &pi] {
+        let sid = agent.session_id.clone().expect("both CLIs premint");
+        write_session(&reg.pi_sessions_dir(&g.id), &sid, &file(&[
+            header(&sid, "C:/tmp/pi-second-block"),
+            assistant("e1", "anthropic", "claude-opus-4-8", Turn { input: 55_555, ..Turn::default() }),
+        ]));
+    }
+
+    let signals = reg.agent_context_signals();
+    let pi_signal = signals.get(&pi.id).expect("positive control: the pi block's pane is read by the pi arm");
+    assert_eq!(pi_signal.source, ContextSource::PiSession);
+    assert_eq!(pi_signal.effort.as_deref(), Some("max"), "its own block's --thinking, not the class default's");
+    assert!(
+        signals.get(&claude.id).map_or(true, |s| s.source != ContextSource::PiSession),
+        "a claude pane must never be read out of the pi store because a file there carries its id"
+    );
+}

@@ -691,6 +691,7 @@ fn register_orchestrator_pane(
         last_context_tokens: None,
         last_context_model: None,
         last_context_window: None,
+        last_context_window_rounded: false,
         compact_inference_guard_until_ms: 0,
         compact_hook_precompact_seen_ms: None,
         compact_hook_sessionstart_seen_ms: None,

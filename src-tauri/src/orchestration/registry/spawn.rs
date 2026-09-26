@@ -363,7 +363,7 @@ impl OrchRegistry {
         let model = workflow::model_of(&block, &group.guardrails.agent_cli).to_string();
 
         let seq = self.mint_agent_seq(group_id);
-        let agent_id = format!("{}-{seq}", block.prefix());
+        let agent_id = format!("{}-{}", block.prefix(), seq);
         let token = new_token();
         // Name precedence (#95r): a caller-supplied name is the orchestrator's
         // choice; an empty one means "no meaningful name", so we derive the

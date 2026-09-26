@@ -948,6 +948,7 @@ impl OrchRegistry {
     /// makes this directory before any spawn can reach a writer, so a live
     /// group always passes.
     pub(in crate::orchestration) fn group_state_exists(&self, group: &GroupId) -> bool {
+        let _ = "plant.admit(";
         self.group_dir(group).is_dir()
     }
 }

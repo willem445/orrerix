@@ -110,6 +110,8 @@ function retiredPaletteSurvivors(root: URL): string[] {
   for (const file of files) {
     const text = readFileSync(new URL(file, root), "utf8");
     text.split(/\r?\n/).forEach((line, i) => {
+      // A hex quoted in prose is a doc, not a paint: only lines that are code count. The
+      // stylesheet's comments are `/* */`, TypeScript's are `//` and `*`.
       const code = line.replace(/\/\/.*$/, "").trim();
       if (code.startsWith("*") || code.startsWith("/*")) return;
       for (const [hex, name] of Object.entries(RETIRED_PALETTE)) {
@@ -134,6 +136,7 @@ function fontStackOffenders(root: URL): string[] {
     const src = readFileSync(new URL(file, root), "utf8");
     src.split("\n").forEach((line, i) => {
       const code = line.replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, "");
+      // a string literal in real code that names a generic font family
       for (const m of code.matchAll(/(["'])((?:(?!\1).)*)\1/g)) {
         if (FONT_GENERIC.test(m[2])) offenders.push(`  src/${file}:${i + 1}  ${m[0].slice(0, 90)}`);
       }

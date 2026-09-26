@@ -238,7 +238,7 @@ export class WorkflowSections implements WorkflowSectionsApi {
         this.view.inspector.field(
           "Reviewers routed by path",
           list,
-          // `this.rel`, never a literal and not even `WORKFLOW_FILE`: the pane may
+          // `this.view.rel`, never a literal and not even `WORKFLOW_FILE`: the pane may
           // have opened the LEGACY path on a repo that still carries it, and a hint
           // telling someone to edit a file that is not the one in front of them is
           // the defect this file already fixed once (see the `startPathEl` note).
@@ -721,7 +721,7 @@ export class WorkflowSections implements WorkflowSectionsApi {
     const names = Object.keys(resources).sort();
     for (const name of names) {
       const r = resources[name]!;
-      // A plain div, not `this.field(...)`: the card holds several inputs and a button, and
+      // A plain div, not `this.view.inspector.field(...)`: the card holds several inputs and a button, and
       // wrapping that in the `<label>` `field` produces would nest labels around controls
       // that already have their own.
       const card = el("div", "wf-fields");

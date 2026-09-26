@@ -92,7 +92,7 @@ export class WorkflowCliKnobs implements WorkflowCliKnobsApi {
    *  **It never rebuilds the form unconditionally.** `replaceChildren` destroys
    *  the input under the caret, so the pane's own rule holds: the form is
    *  redrawn only when the human is not inside it, and repainted in place when
-   *  they are. The menu goes through {@link refreshBlockModels}, which is
+   *  they are. The menu goes through the inspector's `refreshBlockModels`, which is
    *  `null` when no form is on screen and defers past the mid-type window when
    *  one is.
    *

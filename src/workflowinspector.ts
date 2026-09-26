@@ -63,7 +63,7 @@ export class WorkflowInspector implements WorkflowInspectorApi {
    *  WHAT IS SHOWN is `inspectorTarget` (workflowpane.ts) — including the two ways a selection
    *  can outlive the thing it points at (a block deleted from under it, an edge erased) and the
    *  one state where nothing may be edited at all. This used to be a chain of inline checks that
-   *  reassigned `this.selection` and re-entered itself; the reassignment is still needed — the
+   *  reassigned `this.view.selection` and re-entered itself; the reassignment is still needed — the
    *  roster highlights the SELECTION, so a fallback the roster never hears about would leave a
    *  stale row lit next to a different editor — but it happens once, here, from the answer. */
   renderInspector(): void {

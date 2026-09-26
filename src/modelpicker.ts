@@ -134,7 +134,7 @@ export class ModelPicker {
     // an unguarded rebuild's. The ARGUMENTS are the opposite, and this is a
     // snapshot, not a re-derivation: `models`, `fallback` and `cli` freeze as
     // the reply delivered them, unlike the host-side funnels whose closures
-    // re-read (refreshRoleFromDetection's staleness re-check, workflowview's
+    // re-read (refreshRoleFromDetection's staleness re-check, workflowinspector's
     // repaint re-read of the block's model). Not live today: later-armed
     // deferrals run after earlier ones, so a fresher reply still wins — but
     // a future path that arms THIS guard last would repaint the older list

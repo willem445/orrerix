@@ -236,13 +236,13 @@ test("the workflow pane's detection refresh reaches the knobs, the findings and 
   assert.match(
     body,
     /repaintBlockKnobs\?\.\(\)/,
-    "the knob repaint must go through the LIVE `this.repaintBlockKnobs?.()`, never a captured closure: " +
+    "the knob repaint must go through the LIVE `this.view.inspector.repaintBlockKnobs?.()`, never a captured closure: " +
       "`renderInspector()` nulls it precisely so a late reply cannot paint into a row it has already detached"
   );
   assert.match(
     body,
     /refreshBlockModels\?\.\(\)/,
-    "and the MENU through the live `this.refreshBlockModels?.()` — same argument, same null-clearing. Without it " +
+    "and the MENU through the live `this.view.inspector.refreshBlockModels?.()` — same argument, same null-clearing. Without it " +
       "a reply that lands while the human is inside the form repaints the knobs and leaves the dropdown stale"
   );
   // The NEGATIVE half, and it is the half that discriminates: naming the

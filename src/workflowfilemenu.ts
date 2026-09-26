@@ -124,7 +124,7 @@ export class WorkflowFileMenu {
   /** Move the pane to another workflow file.
    *
    *  THE RULE, and it is `switchPlan`'s whole reason for existing: an unsaved buffer belongs
-   *  to the file it was typed against. `save()` writes `this.rel`, so retargeting first and
+   *  to the file it was typed against. `save()` writes `this.view.rel`, so retargeting first and
    *  asking afterwards would arm the next Ctrl+S to write one workflow's text over another
    *  workflow's file. Every branch below therefore settles the buffer BEFORE `retarget`.
    *
@@ -146,7 +146,7 @@ export class WorkflowFileMenu {
     await this.view.load();
   }
 
-  /** Settle the unsaved buffer that belongs to `this.rel` before the pane moves to `target`.
+  /** Settle the unsaved buffer that belongs to `this.view.rel` before the pane moves to `target`.
    *  True = settled, the caller may retarget; false = the human cancelled, or a "save" did not
    *  land and abandoning is the only way to keep what they asked to keep.
    *
@@ -223,7 +223,7 @@ export class WorkflowFileMenu {
     }
     // Settle the buffer we are leaving before anything is created — same rule as `openFile`,
     // through the same method, and the reason it runs first is that a create is a save into
-    // `this.rel`.
+    // `this.view.rel`.
     if (this.view.dirty && !(await this.settleBuffer(verdict.path))) return;
     this.view.retarget(verdict.path);
     this.view.host.onFileChanged?.(verdict.path);

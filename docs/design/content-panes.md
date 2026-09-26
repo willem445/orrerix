@@ -372,7 +372,7 @@ the pane. The canvas was also read-only in v1 (*"v2: the canvas edits the file"*
 
 `workflowmodel.ts` is the pure half (parse → validate → derive → serialize) and holds every
 rule (since #3498 F2 it is a re-export barrel over `workflowtypes`, `workflowparse`,
-`workflowserialize`, `workflowvalidate` and `workflowgraph`, one module per stage); `workflowview.ts` is DOM. That split is the house convention (`taskboard` ↔ `tasksview`)
+`workflowserialize`, `workflowvalidate` and `workflowgraph`, one module per stage); `workflowview.ts` and its satellites (#3498 F3) are DOM. That split is the house convention (`taskboard` ↔ `tasksview`)
 and it is what lets the validation pass — the part that actually earns the feature — be
 unit-tested without simulating a DOM.
 
@@ -949,7 +949,7 @@ construction, not by remembering.
 | `pty.ts` / `main.ts` (#219) | `guardAppClose` (the Tauri close hook, kept on the one Tauri seam) + the quit guard and its awaited `flushTabs` |
 | `orchestration.ts` (#219) | group-end keeps a pane holding unsaved edits, and says so |
 | `workflowmodel.ts` (#222; a barrel since #3498 F2) | the pure half: the schema (`workflowtypes.ts`), the YAML subset and parse (`workflowparse.ts`), the canonical and preserving formatters (`workflowserialize.ts`), the pre-run validation pass (`workflowvalidate.ts`), the derived graph (`workflowgraph.ts`) — all node:tested |
-| `workflowview.ts` (#222, restructured #880) | the DOM: roster + **docked inspector**, the **editable canvas** as the primary surface with raw YAML as a toggle over it, findings strip, save/conflict, the start + error surfaces — and the same `dirty` / `canDiscard` / `bufferReport` contract the editor has |
+| `workflowview.ts` (#222, restructured #880, split #3498 F3) | the DOM frame: roster, findings strip, save/conflict, the start + error surfaces, the raw YAML as a toggle over the canvas — and the same `dirty` / `canDiscard` / `bufferReport` contract the editor has. It delegates each panel to a satellite: the **docked inspector** (`workflowinspector.ts`, with its section forms in `workflowsections.ts`), the **editable canvas**, which is the primary surface (`workflowcanvas.ts`), the model-knob plumbing (`workflowcliknobs.ts`) and the file picker (`workflowfilemenu.ts`) |
 | `workflowlayout.ts` (#222 v2) | the canvas's pure half: `.loomux/workflow.layout.json`, placement, hit-testing, edge routing — all DOM-free, all node:tested |
 | `modal.ts` (#222 v2) | `promptModal` — one line of text, validated on every keystroke (the affirm button is disabled while the id is bad), so a new block can be ASKED for its id instead of being given a generated one |
 | `workflowpane.ts` (#222 v2) | the pane's pure DECISIONS — which surface it shows, how a save is allowed to write, what the layout file may forget. Three rules the view used to hold itself, and got wrong. Plus `createAllowed` (#222 live fix): a create is permitted on the **start surface and nowhere else**, so it can never be reached over a workflow that is already there. Plus the four #880 rules that used to be implicit in "which tab is on top": `inspectorTarget`, `inspectorHeading`, `surfaceForFinding`, `canvasDeleteAllowed`. `Selection` gained `intake` / `merge_queue` / `resources` in #1020 — the three OPTIONAL policy sections, addressed by nothing at all, because there is one of each and selecting one the file does not declare is how you declare it (never a stale selection to fall back from) |

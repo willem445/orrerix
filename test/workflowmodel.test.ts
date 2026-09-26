@@ -146,8 +146,9 @@ test("no module on a load-order cycle anywhere in src/ is one of the split modul
 test("no satellite of the workflow pane imports workflowview.ts, even for a type", () => {
   // Controllers depend on the view's INTERFACE (`WorkflowViewApi`), never on the view module.
   // The DAG pin above also catches this today, because the view imports every satellite and
-  // the reverse import closes a cycle; this pin states the rule directly, so it still holds for
-  // a satellite the view stops importing, and its message says what to do instead.
+  // the reverse import closes a cycle. This pin states the rule directly and says what to do
+  // instead. A satellite the view stops importing reddens it (the first assertion in the loop)
+  // rather than silently dropping out of the check, so SATELLITES has to follow the view.
   const texts = srcTexts();
   const edges = importEdges(texts);
   for (const f of SATELLITES) {

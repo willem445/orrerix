@@ -43737,7 +43737,7 @@ impl OrchRegistry {
         candidates
             .into_iter()
             .filter_map(|(id, sid, group, cli, effort)| match cli.as_str() {
-                "pi" => {
+                "pi" | "claude" => { // MUTATED_M12
                     let session = PathSegment::parse(&sid).ok()?;
                     let signal = crate::modelstate::pi_compaction_signal_in(
                         &self.pi_sessions_dir(&group),

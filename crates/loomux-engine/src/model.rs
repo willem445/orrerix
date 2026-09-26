@@ -675,6 +675,14 @@ fn followed_by_a_word(rest: &str) -> bool {
 /// Every field is a docs-verified claim about a specific CLI; see each row.
 #[derive(Clone, Copy, Debug)]
 pub struct CliCaps {
+    /// Slash command loomux may paste to request compaction.
+    pub compact_command: Option<&'static str>,
+    /// Whether the CLI may compact its own context automatically.
+    pub self_compacts: bool,
+    /// Explanation when a compaction capability is unknown; empty otherwise.
+    pub compact_note: &'static str,
+    /// Artifact that supplies pane context state in a future slice.
+    pub context_reader: ContextReader,
     /// The CLI's program name, as a block's `cli:` spells it.
     pub cli: &'static str,
     /// loomux has a group-spawn adapter for it (`build_agent_command` /
@@ -1059,6 +1067,10 @@ pub const CONTEXT_VARIANTS: &[&str] = &["1m"];
 pub const CLI_CAPS: &[CliCaps] = &[
     CliCaps {
         cli: "claude",
+        compact_command: Some("/compact"),
+        self_compacts: true,
+        compact_note: "",
+        context_reader: ContextReader::ClaudeStatusline,
         orchestration: true,
         mcp_argv_seam: true,
         premints_session_id: true,
@@ -1095,6 +1107,10 @@ pub const CLI_CAPS: &[CliCaps] = &[
     },
     CliCaps {
         cli: "copilot",
+        compact_command: Some("/compact"),
+        self_compacts: true,
+        compact_note: "",
+        context_reader: ContextReader::None,
         orchestration: true,
         mcp_argv_seam: true,
         premints_session_id: false,
@@ -1127,6 +1143,10 @@ pub const CLI_CAPS: &[CliCaps] = &[
     },
     CliCaps {
         cli: "gemini",
+        compact_command: None,
+        self_compacts: false,
+        compact_note: "Gemini compaction command and automatic-compaction behavior are not established by the S0 references.",
+        context_reader: ContextReader::None,
         orchestration: true,
         mcp_argv_seam: false,
         premints_session_id: false,
@@ -1157,6 +1177,10 @@ pub const CLI_CAPS: &[CliCaps] = &[
     },
     CliCaps {
         cli: "opencode",
+        compact_command: Some("/compact"),
+        self_compacts: true,
+        compact_note: "",
+        context_reader: ContextReader::OpencodeDb,
         orchestration: true,
         // Its MCP server is a config-document key with no CLI-flag equivalent,
         // and the document is delivered by an environment variable a *group*
@@ -1219,6 +1243,10 @@ pub const CLI_CAPS: &[CliCaps] = &[
     },
     CliCaps {
         cli: "pi",
+        compact_command: Some("/compact"),
+        self_compacts: true,
+        compact_note: "",
+        context_reader: ContextReader::PiSession,
         orchestration: true,
         // pi itself ships no MCP at all ("It intentionally does not include
         // built-in MCP, sub-agents, permission popups, plan mode…"), and the
@@ -1291,6 +1319,10 @@ pub const CLI_CAPS: &[CliCaps] = &[
     },
     CliCaps {
         cli: "codex",
+        compact_command: Some("/compact"),
+        self_compacts: true,
+        compact_note: "",
+        context_reader: ContextReader::CodexRollout,
         // #2515 C1. See the doc paragraph above for why this flipped while
         // `max_containment` did not.
         orchestration: true,
@@ -1366,6 +1398,16 @@ pub const CLI_CAPS: &[CliCaps] = &[
         fork: ForkSeam::Subcommand("fork"),
     },
 ];
+
+/// The per-CLI artifact that a future context reader will consume.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextReader {
+    ClaudeStatusline,
+    CodexRollout,
+    PiSession,
+    OpencodeDb,
+    None,
+}
 
 /// The capability record for a CLI, or `None` for one loomux has never
 /// evaluated. Case-sensitive on purpose: block `cli:` values are already
@@ -1793,6 +1835,59 @@ pub const DEFAULT_INTAKE_POLL_MINUTES: u32 = DEFAULT_IDLE_TICK_MINUTES;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caps_every_cli_compaction_and_context_row_is_pinned() {
+        let expected = [
+            (
+                "claude",
+                Some("/compact"),
+                true,
+                ContextReader::ClaudeStatusline,
+            ),
+            ("copilot", Some("/compact"), true, ContextReader::None),
+            ("gemini", None, false, ContextReader::None),
+            (
+                "opencode",
+                Some("/compact"),
+                true,
+                ContextReader::OpencodeDb,
+            ),
+            ("pi", Some("/compact"), true, ContextReader::PiSession),
+            (
+                "codex",
+                Some("/compact"),
+                true,
+                ContextReader::CodexRollout,
+            ),
+        ];
+        assert_eq!(CLI_CAPS.len(), expected.len());
+        for (cli, command, self_compacts, reader) in expected {
+            let caps = cli_caps(cli).expect("expected CLI capability row");
+            assert_eq!(caps.compact_command, command, "{cli}");
+            assert_eq!(caps.self_compacts, self_compacts, "{cli}");
+            assert_eq!(caps.context_reader, reader, "{cli}");
+            assert_eq!(
+                caps.compact_note.trim().is_empty(),
+                command.is_some(),
+                "{cli} note must be present only when its compact command is unknown"
+            );
+        }
+    }
+
+    #[test]
+    fn caps_only_documented_clis_have_a_paste_command() {
+        let actual: std::collections::BTreeSet<_> = CLI_CAPS
+            .iter()
+            .filter(|caps| caps.compact_command.is_some())
+            .map(|caps| caps.cli)
+            .collect();
+        let expected: std::collections::BTreeSet<_> =
+            ["claude", "codex", "copilot", "opencode", "pi"]
+            .into_iter()
+            .collect();
+        assert_eq!(actual, expected);
+    }
 
     /// The wire/label name of every capability class, written out once as
     /// literals rather than derived from either producer.

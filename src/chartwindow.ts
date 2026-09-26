@@ -56,25 +56,6 @@ export function markSpan(markMs: number, k: number, bucketMs: number, gridOrigin
 }
 
 export interface Point { tsMs: number; value: number }
-/** Average local-calendar-day completion counts into the selected chart bins.
- *  The population remains days even when a bin spans many days. */
-export function dailyRates(days: readonly number[], counts: readonly number[], bucketStarts: readonly number[], bucketMs: number): { values: (number | null)[]; population: number } {
-  const sums = bucketStarts.map(() => 0);
-  const dayCounts = bucketStarts.map(() => 0);
-  let population = 0;
-  if (!Number.isFinite(bucketMs) || bucketMs <= 0 || bucketStarts.length === 0) return { values: bucketStarts.map(() => null), population };
-  for (let i = 0; i < Math.min(days.length, counts.length); i++) {
-    const day = days[i];
-    const count = counts[i];
-    if (!Number.isFinite(day) || !Number.isFinite(count)) continue;
-    const index = Math.max(0, Math.min(bucketStarts.length - 1, Math.floor((day - bucketStarts[0]) / bucketMs)));
-    sums[index] += count;
-    dayCounts[index]++;
-    population++;
-  }
-  return { values: sums.map((sum, i) => dayCounts[i] === 0 ? null : sum / dayCounts[i]), population };
-}
-
 /** Count measured samples; zero is a real observation, missing/non-finite is not. */
 export function trendSampleCount(values: readonly (number | null | undefined)[]): number {
   let count = 0;
@@ -134,19 +115,104 @@ export function logTicks(domain: readonly [number, number]): number[] {
   return ticks;
 }
 
-export interface BucketChoice { bucketMs: number; coarsened: boolean; bucketCount: number }
+/** Bucket widths a trend may use, finest first. */
 const BUCKET_LADDER = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000, 7 * 24 * 60 * 60_000, 30 * 24 * 60 * 60_000, 365 * 24 * 60 * 60_000, 100 * 365 * 24 * 60 * 60_000];
-/** Cap bucket×key work at 20,000 cells; report when resolution had to coarsen. */
-export function chooseBucket(spanMs: number, keyCount: number, cap = 20_000): BucketChoice {
-  if (!Number.isFinite(spanMs) || spanMs < 0 || !Number.isFinite(keyCount) || keyCount < 0 || !Number.isFinite(cap) || cap < 1)
-    return { bucketMs: BUCKET_LADDER[BUCKET_LADDER.length - 1], coarsened: true, bucketCount: 0 };
-  const keys = Math.max(1, Math.ceil(keyCount));
-  const allowed = Math.max(1, Math.floor(cap / keys));
-  let index = 0;
-  while (index < BUCKET_LADDER.length - 1 && Math.ceil(spanMs / BUCKET_LADDER[index]) > allowed) index++;
-  // For exceptional extents or a one-cell cap, extend the fixed ladder by
-  // powers of two so the returned grid still honours its hard work budget.
-  let bucketMs = BUCKET_LADDER[index];
-  while (Math.ceil(spanMs / bucketMs) > allowed) bucketMs *= 2;
-  return { bucketMs, coarsened: index > 0, bucketCount: Math.ceil(spanMs / bucketMs) };
+
+
+// ── pointer geometry (#3505) ────────────────────────────────────────────────
+// The live chart's handlers sit on the plot CONTAINER and resolve every
+// pointer position through these, so the answer never depends on which SVG
+// child happened to be under the cursor — or on whether that child survived
+// the last re-render.
+
+/** WheelEvent.deltaMode values, spelled out: the DOM constants live on
+ *  `WheelEvent`, which the Node test runner does not have. */
+export const DELTA_PIXEL = 0;
+export const DELTA_LINE = 1;
+export const DELTA_PAGE = 2;
+/** One wheel "line" in px — what Chromium itself scrolls per line. */
+const LINE_PX = 16;
+/** A single event's contribution is capped, so one fast flick or a PAGE-mode
+ *  device cannot zoom the whole history away in one step. */
+const MAX_WHEEL_PX = 400;
+/** Zoom per pixel of wheel travel: a 100 px notch is ~16%, and a precision
+ *  touchpad's stream of small deltas adds up to the same per distance. */
+const ZOOM_PER_PX = 0.0015;
+
+/** The zoom factor for one wheel event: > 1 zooms out (wheel down), < 1 in.
+ *  Normalises `deltaMode` — a LINE-mode device reports `3` for a notch, which
+ *  read as pixels would zoom by 0.3% and look like nothing happened. A
+ *  non-finite or zero delta is exactly `1` (no change). */
+export function wheelZoomFactor(deltaY: number, deltaMode: number, pagePx = 800): number {
+  if (!Number.isFinite(deltaY) || deltaY === 0) return 1;
+  const unit = deltaMode === DELTA_LINE ? LINE_PX : deltaMode === DELTA_PAGE ? (Number.isFinite(pagePx) && pagePx > 0 ? pagePx : 800) : 1;
+  const px = Math.max(-MAX_WHEEL_PX, Math.min(MAX_WHEEL_PX, deltaY * unit));
+  return Math.exp(px * ZOOM_PER_PX);
+}
+
+/** Whether a container-relative x lies on the plot area `[x0, x1]`. */
+export function insidePlot(x: number, x0: number, x1: number): boolean {
+  return Number.isFinite(x) && x1 > x0 && x >= x0 && x <= x1;
+}
+
+/** Whether a container-relative point lies on the plot RECTANGLE — the
+ *  gutters on all four sides (y-axis labels, top padding, the time-tick
+ *  strip) excluded. The wheel and a drag are claimed only here, so over any
+ *  label the wheel still scrolls the panel (#3505 review). */
+export function insidePlotArea(x: number, y: number, x0: number, x1: number, y0: number, y1: number): boolean {
+  return insidePlot(x, x0, x1) && Number.isFinite(y) && y1 > y0 && y >= y0 && y <= y1;
+}
+
+/** The bucket index nearest a container-relative x, or `null` when there are
+ *  no buckets or the plot has no width. Clamped onto the grid otherwise, so a
+ *  pointer resting on the gutter reads the edge bucket rather than nothing. */
+export function bucketIndexAt(x: number, x0: number, x1: number, count: number): number | null {
+  if (!Number.isFinite(x) || !(x1 > x0) || !Number.isInteger(count) || count <= 0) return null;
+  if (count === 1) return 0;
+  const frac = Math.min(1, Math.max(0, (x - x0) / (x1 - x0)));
+  return Math.round(frac * (count - 1));
+}
+
+/** The index of the mark nearest `x` within `tolerancePx`, or `null`. Ties go
+ *  to the earlier mark — deterministic, never "whichever drew last". */
+export function markNear(markXs: readonly number[], x: number, tolerancePx: number): number | null {
+  if (!Number.isFinite(x) || !(tolerancePx >= 0)) return null;
+  let best: number | null = null;
+  let bestD = Infinity;
+  for (let i = 0; i < markXs.length; i++) {
+    const d = Math.abs(markXs[i] - x);
+    if (Number.isFinite(d) && d <= tolerancePx && d < bestD) { best = i; bestD = d; }
+  }
+  return best;
+}
+
+/** A press becomes a drag only past this many px, so a click on a mark is
+ *  still a click even with a slightly unsteady hand. */
+export const DRAG_SLOP_PX = 3;
+export function isDrag(downX: number, x: number): boolean {
+  return Number.isFinite(downX) && Number.isFinite(x) && Math.abs(x - downX) > DRAG_SLOP_PX;
+}
+
+/** At most this many buckets on a trend plot. */
+export const TREND_MAX_BUCKETS = 48;
+/** The trend grid never goes finer than this. */
+const TREND_MIN_BUCKET_MS = 5 * 60_000;
+
+/** The bucket width for the TREND plots (#3505) — deliberately NOT
+ *  the finest grid a work budget allows, which #3475 used and which is wrong
+ *  for a derived metric: on a 24 h window that is one-minute buckets, where a pane has one delta per
+ *  bucket and no bucket holds the three samples a median or mean needs, so
+ *  every average/median trend came out empty. A trend wants a population per
+ *  bucket: the smallest ladder step (≥ 5 min) that covers the span in at most
+ *  `TREND_MAX_BUCKETS`. */
+export function trendBucket(spanMs: number, maxBuckets = TREND_MAX_BUCKETS): number {
+  const cap = Number.isFinite(maxBuckets) && maxBuckets >= 1 ? Math.floor(maxBuckets) : TREND_MAX_BUCKETS;
+  if (!Number.isFinite(spanMs) || spanMs <= 0) return TREND_MIN_BUCKET_MS;
+  for (const step of BUCKET_LADDER) {
+    if (step < TREND_MIN_BUCKET_MS) continue;
+    if (Math.ceil(spanMs / step) <= cap) return step;
+  }
+  let step = BUCKET_LADDER[BUCKET_LADDER.length - 1];
+  while (Math.ceil(spanMs / step) > cap) step *= 2;
+  return step;
 }

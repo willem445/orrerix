@@ -54,12 +54,14 @@ import {
   type Metric,
 } from "./tokencharts";
 import { makeScale, niceTicks, xForTs, tsForX, type TimelineScale } from "./timelinelayout";
-import { chooseBucket, clampWindow, dailyRates, linearTicks, logTicks, logValue, markSpan, meanFinite, panBy, trendSampleCount, yDomain, zoomAbout, type Window } from "./chartwindow";
+import { bucketIndexAt, clampWindow, insidePlot, insidePlotArea, isDrag, linearTicks, logTicks, logValue, markNear, markSpan, meanFinite, panBy, trendBucket, trendSampleCount, wheelZoomFactor, yDomain, zoomAbout, type Window, type WindowBounds } from "./chartwindow";
 import { averages, averagesOverTime } from "./tokenaverages";
-import { lifecycle } from "./tokenlifecycle";
+import { lifecycle, windowCalendarDays } from "./tokenlifecycle";
 import { perCompletedItem, perCompletedItemOverTime } from "./tokenperitem";
 import { statCell } from "./statcell";
 import { scorecardTable, type ScorecardTable } from "./tokenscorecard";
+import { groupCard, type CardRow } from "./tokengroupcard";
+import { runningRatio, trendPlot } from "./trendplot";
 import type { AuditEntry } from "./auditsummary";
 
 /** Structural stand-ins for the memo's keys — the real `AuditEntry[]` and
@@ -109,6 +111,11 @@ const SEG_GAP_PX = 2;
 /** Direct labels are for a chart with few enough series to carry them; past
  *  this the legend does the work alone. */
 const DIRECT_LABEL_MAX = 4;
+/** Half-width of a change mark's click target, in px either side. */
+const MARK_HIT_PX = 6;
+/** One small trend plot: its height, and the strip under it for the dates. */
+const TREND_H_PX = 64;
+const TREND_AXIS_PX = 14;
 
 function el(tag: string, cls: string, text?: string): HTMLElement {
   const e = document.createElement(tag);
@@ -178,6 +185,33 @@ function fmtCell(c: { n: number; median: number | null; q1: number | null; q3: n
   return `${c.median} (IQR ${c.q1}–${c.q3}, n=${c.n})`;
 }
 
+const fmtDec = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+
+/** A group-scorecard figure in its own unit. `null` is "n/a", never 0. */
+function fmtCard(v: number | null, unit: CardRow["unit"]): string {
+  if (v === null) return "n/a";
+  switch (unit) {
+    case "tokens": return fmtTokens(v);
+    case "usd": return fmtUsd.format(v);
+    case "hours": return `${fmtDec.format(v)} h`;
+    case "share": return `${(v * 100).toFixed(1)}%`;
+    default: return fmtDec.format(v);
+  }
+}
+
+/** What the plot area is showing right now — everything the container-level
+ *  pointer handlers need to turn a pixel into an answer. Replaced wholesale
+ *  by each `renderPlot`, `null` whenever the plot shows an empty state. */
+interface PlotGeom {
+  scale: TimelineScale;
+  series: BucketedSeries;
+  marks: readonly ChartMark[];
+  markXs: number[];
+  bounds: WindowBounds;
+  svg: SVGSVGElement;
+  cross: SVGElement;
+}
+
 export class TokenChartsView {
   readonly el: HTMLElement;
   private countEl: HTMLElement;
@@ -231,8 +265,25 @@ export class TokenChartsView {
   private windowId = DEFAULT_WINDOW;
   private customWindow: Window | null = null;
   private logScale = false;
-  private drag: { pointerId: number; x: number; win: Window; width: number; bounds: { first_ts: number; last_ts: number; now: number; bucketMs: number } } | null = null;
+  /** A press on the plot. It stays a click (a mark selection) until it
+   *  travels past `DRAG_SLOP_PX`, then it pans. */
+  private drag: { pointerId: number; downX: number; win: Window; width: number; bounds: WindowBounds; moved: boolean } | null = null;
+  /** The persistent child the SVG is swapped inside, and the hover readout
+   *  beside it. Neither is ever replaced, so the pointer's target — whatever
+   *  the pointer is over — is always an element that outlives a render. */
+  private plotSurfaceEl: HTMLElement;
+  private hoverEl: HTMLElement;
+  private plotGeom: PlotGeom | null = null;
+  /** One render per animation frame while wheel/drag events stream in. */
+  private framePending = false;
   private metricTrendsEl: HTMLElement;
+  private cardEl: HTMLElement;
+  /** The per-pane / block / model / item / PR / lane lists, folded behind one
+   *  disclosure that is closed by default (#3505). The element is kept across
+   *  renders so its open state is the human's, and its body is computed only
+   *  while it is open. */
+  private breakdownEl: HTMLDetailsElement;
+  private breakdownBodyEl: HTMLElement;
   private metric: Metric = "out";
   private collapseCli = false;
   private splitModel = false;
@@ -366,28 +417,25 @@ export class TokenChartsView {
     this.bodyEl = el("div", "tokens-body");
     this.legendEl = el("div", "tokens-legend");
     this.plotEl = el("div", "tokens-plot");
-    this.plotEl.addEventListener("pointermove", (event) => {
-      const e = event as PointerEvent; const drag = this.drag;
-      if (!drag || drag.pointerId !== e.pointerId) return;
-      const delta = (drag.x - e.clientX) / Math.max(1, drag.width) * (drag.win.endMs - drag.win.startMs);
-      this.customWindow = panBy(drag.win, delta, drag.bounds);
-      this.windowId = "custom"; this.rerender();
-    });
-    this.plotEl.addEventListener("pointerup", (event) => {
-      if (this.drag?.pointerId === (event as PointerEvent).pointerId) { this.drag = null; this.rerender(); }
-    });
-    const cancelDrag = (event: Event) => {
-      const pointerId = (event as PointerEvent).pointerId;
-      if (this.drag?.pointerId === pointerId) { this.drag = null; this.rerender(); }
-    };
-    this.plotEl.addEventListener("pointercancel", cancelDrag);
-    this.plotEl.addEventListener("lostpointercapture", cancelDrag);
+    this.plotSurfaceEl = el("div", "tokens-plot-surface");
+    this.hoverEl = el("div", "tokens-hover-readout");
+    this.hoverEl.style.display = "none";
+    this.plotEl.append(this.plotSurfaceEl, this.hoverEl);
+    this.wirePlotPointer();
     this.barsEl = el("div", "tokens-bars");
     this.readoutEl = el("div", "tokens-readout");
     this.scorecardEl = el("div", "tokens-scorecard");
     this.notesEl = el("div", "tokens-notes");
     this.metricTrendsEl = el("div", "tokens-metric-trends");
-    this.bodyEl.append(this.legendEl, this.plotEl, this.metricTrendsEl, this.barsEl, this.readoutEl, this.scorecardEl, this.notesEl);
+    this.cardEl = el("div", "tokens-card");
+    this.breakdownEl = document.createElement("details");
+    this.breakdownEl.className = "tokens-breakdown";
+    this.breakdownEl.append(el("summary", "tokens-breakdown-summary", "Breakdown — per pane, block, model, work item, PR and lane"));
+    this.breakdownBodyEl = el("div", "tokens-breakdown-body");
+    this.breakdownEl.append(this.breakdownBodyEl, this.scorecardEl);
+    // Opening it is what computes its contents, so re-render on the toggle.
+    this.breakdownEl.addEventListener("toggle", () => this.rerender());
+    this.bodyEl.append(this.legendEl, this.plotEl, this.metricTrendsEl, this.readoutEl, this.cardEl, this.barsEl, this.breakdownEl, this.notesEl);
 
     this.el.append(head, this.controlsEl, this.bodyEl);
 
@@ -483,6 +531,175 @@ export class TokenChartsView {
     this.render();
   }
 
+  /** Coalesce a stream of wheel/drag updates into one render per frame. The
+   *  window itself is updated synchronously by the handler, so no event is
+   *  lost — only the redundant repaints between two frames are. */
+  private scheduleRender(): void {
+    if (this.framePending) return;
+    this.framePending = true;
+    requestAnimationFrame(() => {
+      this.framePending = false;
+      if (!this.disposed) this.rerender();
+    });
+  }
+
+  /** The window the plot currently shows — the custom one once the human has
+   *  zoomed or panned, else the preset's as last drawn. */
+  private currentWindow(geom: PlotGeom): Window {
+    return this.customWindow ?? { startMs: geom.series.startMs, endMs: geom.series.endMs };
+  }
+
+  /** Zoom, pan, hover and mark clicks — every one of them wired ONCE, here,
+   *  on the plot CONTAINER (#3505).
+   *
+   *  The #3475 build hung them on a `<rect>` created inside the SVG by each
+   *  render, and every wheel/drag step re-rendered with `replaceChildren`,
+   *  so the element carrying the listeners was replaced mid-gesture. That
+   *  build's handlers did not work live, and the exact reason was not
+   *  established (see docs/design/token-charts.md, "Pointer wiring"); this
+   *  arrangement removes every dependency the old one had on which element
+   *  is under the pointer or survives a render. The listeners live on
+   *  `plotEl`, which no render replaces; every
+   *  SVG child is `pointer-events: none` (styles.css), so the pointer's
+   *  target is always `plotEl` or its persistent surface; and each event is
+   *  resolved to a bucket / mark / window through the pure geometry in
+   *  `chartwindow.ts` against `plotGeom`, the last render's layout. Nothing
+   *  another layer draws over the plot can take the events either: the hover
+   *  readout is `pointer-events: none` too. */
+  private wirePlotPointer(): void {
+    const plot = this.plotEl;
+    const localX = (clientX: number): number => clientX - this.plotSurfaceEl.getBoundingClientRect().left;
+    const localY = (clientY: number): number => clientY - this.plotSurfaceEl.getBoundingClientRect().top;
+    const onArea = (geom: PlotGeom, e: { clientX: number; clientY: number }): boolean =>
+      insidePlotArea(localX(e.clientX), localY(e.clientY), geom.scale.x0, geom.scale.x1, TOP_PAD_PX, TOP_PAD_PX + PLOT_H_PX);
+
+    plot.addEventListener("wheel", (e: WheelEvent) => {
+      const geom = this.plotGeom;
+      if (!geom) return;
+      const x = localX(e.clientX);
+      if (!onArea(geom, e)) return;
+      // Only claim the wheel over the plot area itself — elsewhere it keeps
+      // scrolling the panel.
+      e.preventDefault();
+      const factor = wheelZoomFactor(e.deltaY, e.deltaMode, plot.clientHeight);
+      if (factor === 1) return;
+      this.customWindow = zoomAbout(this.currentWindow(geom), tsForX(geom.scale, x), factor, geom.bounds);
+      this.windowId = "custom";
+      this.hideHover();
+      this.scheduleRender();
+    }, { passive: false });
+
+    plot.addEventListener("pointerdown", (e: PointerEvent) => {
+      const geom = this.plotGeom;
+      if (!geom || e.button !== 0) return;
+      const x = localX(e.clientX);
+      if (!onArea(geom, e)) return;
+      this.drag = { pointerId: e.pointerId, downX: x, win: this.currentWindow(geom), width: geom.scale.x1 - geom.scale.x0, bounds: geom.bounds, moved: false };
+      try { plot.setPointerCapture(e.pointerId); } catch { /* the pointer is already gone — the drag simply ends on its own */ }
+      // No preventDefault: it would also suppress the compatibility
+      // `mousedown` the pane listens for to take focus. Text selection is
+      // off on the plot in CSS instead.
+    });
+
+    plot.addEventListener("pointermove", (e: PointerEvent) => {
+      const x = localX(e.clientX);
+      const drag = this.drag;
+      if (drag && drag.pointerId === e.pointerId) {
+        if (!drag.moved && isDrag(drag.downX, x)) {
+          drag.moved = true;
+          plot.classList.add("dragging");
+          this.hideHover();
+        }
+        if (drag.moved) {
+          const span = drag.win.endMs - drag.win.startMs;
+          this.customWindow = panBy(drag.win, ((drag.downX - x) / Math.max(1, drag.width)) * span, drag.bounds);
+          this.windowId = "custom";
+          this.scheduleRender();
+        }
+        return;
+      }
+      this.showHover(x, e.clientX, e.clientY);
+    });
+
+    const endDrag = (e: PointerEvent, click: boolean) => {
+      const drag = this.drag;
+      if (!drag || drag.pointerId !== e.pointerId) return;
+      this.drag = null;
+      plot.classList.remove("dragging");
+      if (plot.hasPointerCapture?.(e.pointerId)) plot.releasePointerCapture(e.pointerId);
+      const geom = this.plotGeom;
+      if (click && !drag.moved && geom) {
+        const i = markNear(geom.markXs, drag.downX, MARK_HIT_PX);
+        if (i !== null) this.selectMark(geom.marks[i].tsMs);
+      }
+    };
+    plot.addEventListener("pointerup", (e) => endDrag(e, true));
+    plot.addEventListener("pointercancel", (e) => endDrag(e, false));
+    plot.addEventListener("lostpointercapture", (e) => endDrag(e, false));
+    plot.addEventListener("pointerleave", () => {
+      if (!this.drag) this.hideHover();
+    });
+  }
+
+  private selectMark(tsMs: number): void {
+    this.selectedMarkMs = tsMs;
+    const [startMs, endMs] = markSpan(tsMs, DEFAULT_BEFORE_AFTER_K, DEFAULT_BUCKET_MS);
+    this.customWindow = { startMs, endMs };
+    this.windowId = "custom";
+    this.rerender();
+  }
+
+  private hideHover(): void {
+    this.hoverEl.style.display = "none";
+    this.plotEl.classList.remove("on-mark");
+    const cross = this.plotGeom?.cross as (SVGElement & { style: CSSStyleDeclaration }) | undefined;
+    if (cross) cross.style.display = "none";
+  }
+
+  /** The crosshair and the per-bucket readout at container-relative `x`. It
+   *  computes nothing the projection did not already build — it indexes. */
+  private showHover(x: number, clientX: number, clientY: number): void {
+    const geom = this.plotGeom;
+    if (!geom || !insidePlot(x, geom.scale.x0, geom.scale.x1)) { this.hideHover(); return; }
+    const { series, scale } = geom;
+    const i = bucketIndexAt(x, scale.x0, scale.x1, series.buckets.length);
+    if (i === null) { this.hideHover(); return; }
+    const bx = xForTs(scale, series.buckets[i]);
+    const cross = geom.cross as SVGElement & { style: CSSStyleDeclaration };
+    cross.setAttribute("x1", String(bx));
+    cross.setAttribute("x2", String(bx));
+    cross.style.display = "";
+    const lines = series.keys.map((k) => {
+      const p = k.points[i];
+      const v = this.metric === "cost_usd" ? p.cost_usd : p[this.metric];
+      return `${k.key}: ${fmtMetric(v, this.metric)}${p.reset ? " (counter reset — clamped)" : ""}`;
+    });
+    const mi = markNear(geom.markXs, x, MARK_HIT_PX);
+    this.plotEl.classList.toggle("on-mark", mi !== null);
+    const markText = mi === null ? "" : `\n\n${this.markDescription(geom.marks[mi])}`;
+    this.hoverEl.textContent = `${fmtTime(series.buckets[i])}\n${lines.join("\n")}${markText}`;
+    const box = this.plotEl.getBoundingClientRect();
+    this.hoverEl.style.left = `${Math.max(4, clientX - box.left + 12)}px`;
+    this.hoverEl.style.top = `${Math.max(4, clientY - box.top + 12)}px`;
+    this.hoverEl.style.display = "";
+  }
+
+  private markDescription(m: ChartMark): string {
+    return (
+      `${fmtTime(m.tsMs)} — ${m.label}\n` +
+      (m.kind === "model"
+        ? `model changed for usage key ${m.modelChanges.map((change) => change.key).join(", ")}`
+        : `fingerprint components changed: ${m.changed.length > 0 ? m.changed.join(", ") : "(none recorded)"}`) +
+      (m.kind === "tuning" && m.fpPartial
+        ? "\nA component could not be read in full when this mark was written " +
+          "(a file over the size cap, a tree past the depth cap, or a read that " +
+          "failed), so an unchanged component here is not proof that nothing " +
+          "under it moved. A cap can persist, so this may show on every mark."
+        : "") +
+      "\nClick for the before/after readout."
+    );
+  }
+
   private async load(): Promise<void> {
     if (this.disposed) return;
     // Single-flight with a trailing re-run, so a click during an in-flight
@@ -549,7 +766,7 @@ export class TokenChartsView {
    *  because the file cannot shrink back under the limit. `scorecardColumns`
    *  folds its own floor for exactly this reason and says so; this is the
    *  same operation and takes the same shape. */
-  private resolveWindow(rows: readonly UsageSeriesRow[]): { startMs: number; endMs: number } {
+  private resolveWindow(rows: readonly UsageSeriesRow[]): { startMs: number; endMs: number; bounds: WindowBounds } {
     const now = Date.now();
     let lo: number | null = null;
     let hi: number | null = null;
@@ -563,10 +780,10 @@ export class TokenChartsView {
     const newest = hi ?? now;
     const endMs = Math.max(newest, now);
     const bounds = { first_ts: oldest, last_ts: newest, now, bucketMs: DEFAULT_BUCKET_MS };
-    if (this.customWindow) return clampWindow(this.customWindow, bounds);
+    if (this.customWindow) return { ...clampWindow(this.customWindow, bounds), bounds };
     const preset = WINDOWS.find((w) => w.id === this.windowId) ?? WINDOWS[0];
-    if (preset.spanMs === null) return { startMs: oldest, endMs };
-    return { startMs: Math.max(oldest, endMs - preset.spanMs), endMs };
+    if (preset.spanMs === null) return { startMs: oldest, endMs, bounds };
+    return { startMs: Math.max(oldest, endMs - preset.spanMs), endMs, bounds };
   }
 
   private diffOf(rows: readonly UsageSeriesRow[]): DiffResult {
@@ -598,6 +815,7 @@ export class TokenChartsView {
       this.collapseCli ? "1" : "0",
       this.splitModel ? "1" : "0",
       this.selectedMarkMs ?? "",
+      this.breakdownEl.open ? "open" : "shut",
       widthPx,
       this.readError === null ? "" : String(this.readError),
       // "now" slides even when the data does not — but only at bucket
@@ -635,11 +853,12 @@ export class TokenChartsView {
       rows.length === 0 ? "" : `${fmtInt.format(series.keys.length)} series · ${fmtInt.format(rows.length)} rows`;
 
     this.renderLegend(bars, series);
-    this.renderPlot(series, markList, widthPx);
-    this.renderMetricTrends(rows, diff.deltas, bars.attribution, range, markList, series.keys.length);
+    this.renderPlot(series, markList, widthPx, range.bounds);
+    this.renderMetrics(diff.deltas, bars.attribution, range, widthPx);
     this.renderBars(bars);
     this.renderReadout(series, markList);
-    this.renderScorecard();
+    this.scorecardEl.replaceChildren();
+    if (this.breakdownEl.open) this.renderScorecard();
     this.renderNotes(series, bars);
   }
 
@@ -718,15 +937,18 @@ export class TokenChartsView {
     this.legendEl.append(keys);
   }
 
-  private renderPlot(series: BucketedSeries, markList: readonly ChartMark[], widthPx: number): void {
-    this.plotEl.replaceChildren();
+  private renderPlot(series: BucketedSeries, markList: readonly ChartMark[], widthPx: number, bounds: WindowBounds): void {
+    this.plotSurfaceEl.replaceChildren();
+    this.plotGeom = null;
+    this.plotEl.classList.remove("has-plot", "on-mark");
+    this.hoverEl.style.display = "none";
 
     if (!this.attempted) {
-      this.plotEl.append(el("div", "tokens-empty", "Reading this group's usage series…"));
+      this.plotSurfaceEl.append(el("div", "tokens-empty", "Reading this group's usage series…"));
       return;
     }
     if (this.readError !== null && this.series === null) {
-      this.plotEl.append(
+      this.plotSurfaceEl.append(
         el("div", "tokens-empty", `Could not read this group's usage series — ${String(this.readError)}`)
       );
       return;
@@ -734,7 +956,7 @@ export class TokenChartsView {
     if (series.keys.length === 0) {
       // Three answers, not two. An empty series is the ORDINARY state for a
       // group that has not spent yet, and it must not read as a failure.
-      this.plotEl.append(
+      this.plotSurfaceEl.append(
         el(
           "div",
           "tokens-empty",
@@ -775,14 +997,13 @@ export class TokenChartsView {
       return TOP_PAD_PX + PLOT_H_PX - ((mapped - lo) / span) * PLOT_H_PX;
     };
 
-    // Recessive grid: three horizontal rules with their values, and the time
-    // ticks the shared layout picks.
+    // Recessive grid: horizontal rules with their values, and the time ticks
+    // the shared layout picks.
     const yTicks = this.logScale ? logTicks([Math.max(0, domain[0]), domain[1]]) : linearTicks(domain, 5);
     const usedY = new Set<number>();
     for (const v of yTicks) {
       const y = yFor(v);
       const pixel = Math.round(y);
-      const labelText = fmtMetric(v, this.metric);
       if (Array.from(usedY).some((drawn) => Math.abs(drawn - pixel) < 12)) continue;
       usedY.add(pixel);
       const rule = svgEl("line", "tokens-grid");
@@ -795,7 +1016,7 @@ export class TokenChartsView {
       label.setAttribute("x", String(scale.x0 - 6));
       label.setAttribute("y", String(y + 3));
       label.setAttribute("text-anchor", "end");
-      label.textContent = labelText;
+      label.textContent = fmtMetric(v, this.metric);
       svg.append(label);
     }
 
@@ -822,9 +1043,13 @@ export class TokenChartsView {
       svg.append(label);
     }
 
-    // The marks, UNDER the lines so a vertical never hides a data point.
+    // The marks, UNDER the lines so a vertical never hides a data point. A
+    // mark is clicked through the container (`markNear` against these xs),
+    // not through an element of its own.
+    const markXs: number[] = [];
     for (const m of markList) {
       const x = xForTs(scale, m.tsMs);
+      markXs.push(x);
       const g = svgEl("g", `tokens-mark-g${this.selectedMarkMs === m.tsMs ? " selected" : ""}`);
       const line = svgEl("line", "tokens-mark");
       line.setAttribute("x1", String(x));
@@ -832,40 +1057,11 @@ export class TokenChartsView {
       line.setAttribute("y1", String(TOP_PAD_PX));
       line.setAttribute("y2", String(TOP_PAD_PX + PLOT_H_PX));
       g.append(line);
-      // A wide invisible hit target — the mark itself is 1px, which is not a
-      // clickable thing.
-      const hit = svgEl("rect", "tokens-mark-hit");
-      hit.setAttribute("x", String(x - 6));
-      hit.setAttribute("y", String(TOP_PAD_PX));
-      hit.setAttribute("width", "12");
-      hit.setAttribute("height", String(PLOT_H_PX));
-      g.append(hit);
       const label = svgEl("text", "tokens-mark-label");
       label.setAttribute("x", String(x + 4));
       label.setAttribute("y", String(TOP_PAD_PX + 9));
       label.textContent = m.label;
       g.append(label);
-      const title = svgEl("title");
-      title.textContent =
-        `${fmtTime(m.tsMs)} — ${m.label}\n` +
-        (m.kind === "model"
-          ? `model changed for usage key ${m.modelChanges.map((change) => change.key).join(", ")}`
-          : `fingerprint components changed: ${m.changed.length > 0 ? m.changed.join(", ") : "(none recorded)"}`) +
-        (m.kind === "tuning" && m.fpPartial
-          ? "\nA component could not be read in full when this mark was written " +
-            "(a file over the size cap, a tree past the depth cap, or a read that " +
-            "failed), so an unchanged component here is not proof that nothing " +
-            "under it moved. A cap can persist, so this may show on every mark."
-          : "") +
-        "\nClick for the before/after readout.";
-      g.append(title);
-      g.addEventListener("click", () => {
-        this.selectedMarkMs = m.tsMs;
-        const [startMs, endMs] = markSpan(m.tsMs, DEFAULT_BEFORE_AFTER_K, DEFAULT_BUCKET_MS);
-        this.customWindow = { startMs, endMs };
-        this.windowId = "custom";
-        this.rerender();
-      });
       svg.append(g);
     }
 
@@ -876,9 +1072,6 @@ export class TokenChartsView {
         .join(" ");
       const poly = svgEl("polyline", `tokens-line ${hueClass(k.hueIndex)} ${cliClass(k.cli)}`);
       poly.setAttribute("points", pts);
-      const title = svgEl("title");
-      title.textContent = `${k.key} — ${fmtInt.format(k.total)} tokens in this window`;
-      poly.append(title);
       svg.append(poly);
 
       // Direct labels for a chart with few enough series to carry them; past
@@ -895,187 +1088,281 @@ export class TokenChartsView {
       }
     });
 
-    // The hover layer: a crosshair that follows the pointer and a tooltip
-    // naming every key's value at that bucket. A line chart without one is a
-    // picture; with one it is readable.
-    this.attachCrosshair(svg, scale, series, height);
-
-    this.plotEl.append(svg);
-  }
-
-  /** Crosshair + per-bucket tooltip. Kept here rather than in the pure layer
-   *  because it computes nothing — it indexes into buckets the projection
-   *  already built. */
-  private attachCrosshair(
-    svg: SVGSVGElement,
-    scale: TimelineScale,
-    series: BucketedSeries,
-    height: number
-  ): void {
-    if (series.buckets.length === 0) return;
-    const cross = svgEl("line", "tokens-crosshair");
+    // The crosshair the container-level hover moves; hidden until it does.
+    const cross = svgEl("line", "tokens-crosshair") as SVGElement & { style: CSSStyleDeclaration };
     cross.setAttribute("y1", String(TOP_PAD_PX));
     cross.setAttribute("y2", String(TOP_PAD_PX + PLOT_H_PX));
-    (cross as SVGElement & { style: CSSStyleDeclaration }).style.display = "none";
+    cross.style.display = "none";
     svg.append(cross);
 
-    const hit = svgEl("rect", "tokens-hover-hit");
-    hit.classList.add("tokens-pan-hit");
-    hit.setAttribute("x", String(scale.x0));
-    hit.setAttribute("y", String(TOP_PAD_PX));
-    hit.setAttribute("width", String(Math.max(0, scale.x1 - scale.x0)));
-    hit.setAttribute("height", String(PLOT_H_PX));
-    const tip = svgEl("title");
-    hit.append(tip);
-    svg.append(hit);
-    const hover = el("div", "tokens-hover-readout");
-    hover.style.display = "none";
-    this.plotEl.append(hover);
-    void height;
-
-    const bucketAt = (clientX: number): number => {
-      const box = svg.getBoundingClientRect();
-      const x = clientX - box.left;
-      const width = scale.x1 - scale.x0;
-      if (width <= 0) return 0;
-      const frac = Math.min(1, Math.max(0, (x - scale.x0) / width));
-      return Math.min(series.buckets.length - 1, Math.round(frac * (series.buckets.length - 1)));
-    };
-
-    hit.addEventListener("wheel", (ev) => {
-      const e = ev as WheelEvent; e.preventDefault();
-      const box = svg.getBoundingClientRect();
-      const x = e.clientX - box.left;
-      const anchorMs = tsForX(scale, x);
-      const rows = this.series?.rows ?? [];
-      const first = rows.reduce((v, r) => Math.min(v, r.ts_ms), Date.now());
-      const last = rows.reduce((v, r) => Math.max(v, r.ts_ms), Date.now());
-      this.customWindow = zoomAbout(this.customWindow ?? { startMs: series.startMs, endMs: series.endMs }, anchorMs, Math.exp(e.deltaY * 0.001), { first_ts: first, last_ts: last, now: Date.now(), bucketMs: series.bucketMs });
-      this.windowId = "custom"; this.rerender();
-    }, { passive: false });
-    hit.addEventListener("pointerdown", (ev) => {
-      const e = ev as PointerEvent;
-      const rows = this.series?.rows ?? [];
-      const first = rows.reduce((v, r) => Math.min(v, r.ts_ms), Date.now());
-      const last = rows.reduce((v, r) => Math.max(v, r.ts_ms), Date.now());
-      this.drag = { pointerId: e.pointerId, x: e.clientX, win: this.customWindow ?? { startMs: series.startMs, endMs: series.endMs }, width: scale.x1 - scale.x0, bounds: { first_ts: first, last_ts: last, now: Date.now(), bucketMs: series.bucketMs } };
-      this.plotEl.setPointerCapture(e.pointerId);
-    });
-    hit.addEventListener("mousemove", (ev) => {
-      const i = bucketAt((ev as MouseEvent).clientX);
-      const x = xForTs(scale, series.buckets[i]);
-      cross.setAttribute("x1", String(x));
-      cross.setAttribute("x2", String(x));
-      (cross as SVGElement & { style: CSSStyleDeclaration }).style.display = "";
-      const lines = series.keys
-        .map((k) => {
-          const p = k.points[i];
-          const v = this.metric === "cost_usd" ? p.cost_usd : p[this.metric];
-          return `${k.key}: ${fmtMetric(v, this.metric)}${p.reset ? " (counter reset — clamped)" : ""}`;
-        })
-        .join("\n");
-      tip.textContent = `${fmtTime(series.buckets[i])}\n${lines}`;
-      hover.textContent = tip.textContent;
-      const plotBox = this.plotEl.getBoundingClientRect();
-      hover.style.left = `${Math.max(4, (ev as MouseEvent).clientX - plotBox.left + 12)}px`;
-      hover.style.top = `${Math.max(4, (ev as MouseEvent).clientY - plotBox.top + 12)}px`;
-      hover.style.display = "";
-    });
-    hit.addEventListener("mouseleave", () => {
-      (cross as SVGElement & { style: CSSStyleDeclaration }).style.display = "none";
-      hover.style.display = "none";
-    });
+    this.plotSurfaceEl.append(svg);
+    if (series.buckets.length > 0) {
+      this.plotGeom = { scale, series, marks: markList, markXs, bounds, svg, cross };
+      this.plotEl.classList.add("has-plot");
+    }
   }
 
-  /** The stacked bars: one row per feature, plus the two group-wide bars. */
-  private renderMetricTrends(rows: readonly UsageSeriesRow[], deltas: DiffResult["deltas"], attribution: FeatureBars["attribution"], range: Window, markList: readonly ChartMark[], seriesKeyCount: number): void {
-    this.metricTrendsEl.replaceChildren();
-    const choice = chooseBucket(range.endMs - range.startMs, Math.max(1, seriesKeyCount, attribution.buckets.length));
+  /** Everything derived from the window beyond the spend lines: the trend
+   *  plots, the group scorecard, and — only while it is open — the breakdown
+   *  lists. One pass computes the shared inputs for all three. */
+  private renderMetrics(deltas: DiffResult["deltas"], attribution: FeatureBars["attribution"], range: Window, widthPx: number): void {
+    const mark = this.selectedMarkMs;
+    const markOpt = mark === null ? {} : { markTsMs: mark };
+    // The trend grid, not the spend lines' — see `trendBucket` for why the
+    // finest affordable grid leaves every average and median trend empty.
+    const choice = { bucketMs: trendBucket(range.endMs - range.startMs) };
     const audit = this.store.cached;
-    const life = lifecycle(audit, { startMs: range.startMs, endMs: range.endMs, bucketMs: choice.bucketMs, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }) });
-    // Dated denominator is built from the same done-in-window lifecycle result.
-    const doneIds = life.doneIds;
-    const doneAtMs = life.doneAtMs;
-    const perOpts = { startMs: range.startMs, endMs: range.endMs, doneIds, doneAtMs, bucketMs: choice.bucketMs, metric: this.metric === "cost_usd" ? "total" as const : this.metric };
+    const life = lifecycle(audit, { startMs: range.startMs, endMs: range.endMs, bucketMs: choice.bucketMs, ...markOpt });
+    // One done-in-window population for every "per completed item" figure.
+    const perMetric = this.metric === "cost_usd" ? ("total" as const) : this.metric;
+    const perOpts = { startMs: range.startMs, endMs: range.endMs, doneIds: life.doneIds, doneAtMs: life.doneAtMs, bucketMs: choice.bucketMs, metric: perMetric };
     const per = perCompletedItemOverTime(deltas, attribution, this.board, perOpts);
-    const perTotal = perCompletedItem(deltas, attribution, this.board, { ...perOpts, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }) });
-    const averageGroups = (["agent", "block", "model", "item"] as const).map((groupBy) => ({ groupBy, result: averages(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy, metric: this.metric, ...(this.selectedMarkMs === null ? {} : { markTsMs: this.selectedMarkMs }), stat: statCell }) }));
+    const perTotal = perCompletedItem(deltas, attribution, this.board, { ...perOpts, ...markOpt });
     const avg = averagesOverTime(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy: "agent", metric: "total", bucketMs: choice.bucketMs, stat: statCell });
-    const title = el("div", "tokens-section-title", `Trend metrics · selected counter: ${this.metric === "total" ? "all tokens" : this.metric === "cache_r" ? "cache read" : this.metric}; pane average uses total tokens`);
-    this.metricTrendsEl.append(title);
-    const rowsToDraw: { label: string; buckets: number[]; values: (number | null)[]; population: number | null; populationLabel: string }[] = [];
-    rowsToDraw.push({ label: "tokens per completed item", buckets: per.buckets.map((b) => b.startMs), values: per.buckets.map((b) => b.perItem), population: per.items, populationLabel: "completed items" });
-    const donePerDayTrend = dailyRates(life.donePerDay.days, life.donePerDay.counts, life.series.bucketStarts, choice.bucketMs);
-    rowsToDraw.push({ label: "items done per day", buckets: life.series.bucketStarts, values: donePerDayTrend.values, population: donePerDayTrend.population, populationLabel: "calendar days" });
-    rowsToDraw.push({ label: "median time-to-completion (h)", buckets: life.series.bucketStarts, values: life.series.ttcMs.map((xs) => { const median = statCell(xs).median; return median === null ? null : median / 3_600_000; }), population: life.series.ttcMs.reduce((sum, xs) => sum + xs.length, 0), populationLabel: "completed items" });
-    if (avg.keys.length > 0) rowsToDraw.push({ label: "average tokens per pane", buckets: avg.buckets, values: avg.buckets.map((_, i) => {
-      const values = avg.keys.map((key) => key.points[i]?.mean).filter((v): v is number => v !== null && v !== undefined && Number.isFinite(v));
-      return meanFinite(values);
-    }), population: avg.keys.reduce((sum, key) => sum + key.points.filter((point) => point.mean !== null).length, 0), populationLabel: "pane-bucket samples" });
-    const svg = svgEl("svg", "tokens-trends-svg") as SVGSVGElement;
-    svg.setAttribute("viewBox", "0 0 800 130"); svg.setAttribute("preserveAspectRatio", "none");
-    rowsToDraw.forEach((trend, ri) => {
-      const vals = trend.values; const finite = vals.filter((v): v is number => typeof v === "number" && Number.isFinite(v)); const max = Math.max(1, ...finite); const min = Math.min(0, ...finite);
-      let segment: string[] = [];
-      const flushSegment = () => {
-        if (segment.length > 0) { const line = svgEl("polyline", `tokens-trend trend-${ri}`); line.setAttribute("points", segment.join(" ")); svg.append(line); segment = []; }
-      };
-      vals.forEach((v, i) => {
-        if (v === null || !Number.isFinite(v)) { flushSegment(); return; }
-        const x = trend.buckets.length < 2 ? 400 : Math.max(0, Math.min(800, (trend.buckets[i] - range.startMs) / Math.max(1, range.endMs - range.startMs) * 800));
-        const y = ri * 32 + 30 - ((v - min) / (max - min || 1)) * 26;
-        segment.push(`${x},${y}`);
+    const beforeLife = mark === null ? null : lifecycle(audit, { startMs: range.startMs, endMs: mark, bucketMs: choice.bucketMs });
+    const afterLife = mark === null ? null : lifecycle(audit, { startMs: mark, endMs: range.endMs, bucketMs: choice.bucketMs });
+
+    this.renderTrends(range, widthPx, choice, life, per, avg);
+    this.renderGroupCard(range, deltas, life, perTotal, beforeLife, afterLife);
+    this.breakdownBodyEl.replaceChildren();
+    if (this.breakdownEl.open) this.renderBreakdown(deltas, attribution, range, life, perTotal, beforeLife, afterLife);
+  }
+
+  /** The trend plots (#3505): one small plot per derived metric, directly
+   *  under the main chart, on the main chart's own x-window so a zoom there
+   *  narrows every trend with it. A trend with nothing measured says WHY in
+   *  place of a blank strip. */
+  private renderTrends(
+    range: Window,
+    widthPx: number,
+    choice: { bucketMs: number },
+    life: ReturnType<typeof lifecycle>,
+    per: ReturnType<typeof perCompletedItemOverTime>,
+    avg: ReturnType<typeof averagesOverTime>,
+  ): void {
+    this.metricTrendsEl.replaceChildren();
+    if (!this.attempted || this.series === null) return;
+    const numerator = this.metric === "cost_usd" || this.metric === "total" ? "all tokens" : METRICS.find((m) => m.id === this.metric)?.label ?? this.metric;
+    const bucketLabel = choice.bucketMs >= 86_400_000 ? `${Math.round(choice.bucketMs / 86_400_000)}d` : choice.bucketMs >= 3_600_000 ? `${Math.round(choice.bucketMs / 3_600_000)}h` : `${Math.round(choice.bucketMs / 60_000)}m`;
+    this.metricTrendsEl.append(el("div", "tokens-section-title", `Trends · same window as the chart above · ${bucketLabel} buckets`));
+
+    const noneDone = "no items completed in this window";
+    const trends: { label: string; values: (number | null)[]; buckets: readonly number[]; n: string; empty: string; fmt: (v: number) => string }[] = [
+      {
+        // RUNNING: tokens so far over items completed so far (`runningRatio`
+        // says why a per-bucket ratio is a scatter of dots on this grid).
+        label: `tokens per completed item, running (${numerator})`,
+        buckets: per.buckets.map((b) => b.startMs),
+        values: runningRatio(per.buckets.map((b) => b.tokens), per.buckets.map((b) => b.items)),
+        n: `n=${per.items === null ? "n/a" : fmtInt.format(per.items)} completed items`,
+        empty: per.items === null ? "the completed items carry no done instant, so none can be placed in time" : noneDone,
+        fmt: fmtTokens,
+      },
+      // A COUNT per bucket, not a per-day rate: a day-rate on a sub-day grid
+      // has one sample per calendar day, which is two dots on a 24 h window.
+      // The scorecard carries the window's per-day rate.
+      {
+        label: `items completed per ${bucketLabel}`,
+        buckets: life.series.bucketStarts,
+        // Nothing done in the whole window is the empty state, not a flat zero.
+        values: life.doneIds.size === 0 ? life.series.done.map(() => null) : life.series.done,
+        n: `n=${fmtInt.format(life.doneIds.size)} completed items`,
+        empty: noneDone,
+        fmt: (v) => fmtDec.format(v),
+      },
+      // The MEAN per bucket: a median needs three completions in one bucket,
+      // which a fine grid almost never holds, so a median trend is mostly
+      // empty. The scorecard carries the window's median beside its mean.
+      {
+        label: "mean time-to-completion (h)",
+        buckets: life.series.bucketStarts,
+        values: life.series.ttcMs.map((xs) => { const m = meanFinite(xs); return m === null ? null : m / 3_600_000; }),
+        n: `n=${fmtInt.format(life.ttc.length)} completed items`,
+        empty: noneDone,
+        fmt: (v) => fmtDec.format(v),
+      },
+      {
+        label: "average tokens per pane",
+        buckets: avg.buckets,
+        values: avg.buckets.map((_, i) => meanFinite(avg.keys.map((key) => key.points[i]?.mean))),
+        n: `n=${fmtInt.format(avg.keys.reduce((sum, key) => sum + key.points.filter((p) => p.mean !== null).length, 0))} pane-bucket samples`,
+        empty: "no pane spent in this window",
+        fmt: fmtTokens,
+      },
+    ];
+
+    const fmtDate = new Intl.DateTimeFormat(undefined, range.endMs - range.startMs >= 2 * 86_400_000 ? { month: "short", day: "numeric" } : { hour: "2-digit", minute: "2-digit" });
+    trends.forEach((t, ti) => {
+      const box = el("div", "tokens-trend");
+      const head = el("div", "tokens-trend-head");
+      head.append(el("span", "tokens-trend-name", t.label));
+      head.append(el("span", "tokens-trend-n", `${t.n} · ${fmtInt.format(trendSampleCount(t.values))} measured buckets`));
+      box.append(head);
+      const layout = trendPlot({
+        buckets: t.buckets, values: t.values, startMs: range.startMs, endMs: range.endMs,
+        widthPx: Math.max(0, widthPx), heightPx: TREND_H_PX + TREND_AXIS_PX,
+        padLeftPx: PAD_LEFT_PX, padRightPx: PAD_RIGHT_PX, padTopPx: 6, padBottomPx: TREND_AXIS_PX,
       });
-      flushSegment();
-      const measuredBuckets = trendSampleCount(vals);
-      this.metricTrendsEl.append(el("div", "tokens-trend-label", `${trend.label} · n=${trend.population === null ? "n/a" : fmtInt.format(trend.population)} ${trend.populationLabel} · ${fmtInt.format(measuredBuckets)} measured buckets`));
+      if (layout.empty) {
+        box.append(el("div", "tokens-trend-empty", `Nothing to plot — ${t.empty}.`));
+        this.metricTrendsEl.append(box);
+        return;
+      }
+      const svg = svgEl("svg", "tokens-trend-svg") as SVGSVGElement;
+      svg.setAttribute("width", String(Math.max(0, widthPx)));
+      svg.setAttribute("height", String(TREND_H_PX + TREND_AXIS_PX));
+      const text = (cls: string, x: number, y: number, anchor: string, s: string) => {
+        const e = svgEl("text", cls);
+        e.setAttribute("x", String(x));
+        e.setAttribute("y", String(y));
+        e.setAttribute("text-anchor", anchor);
+        e.textContent = s;
+        svg.append(e);
+      };
+      const axis = svgEl("line", "tokens-grid");
+      axis.setAttribute("x1", String(layout.x0));
+      axis.setAttribute("x2", String(layout.x1));
+      axis.setAttribute("y1", String(layout.yBottom));
+      axis.setAttribute("y2", String(layout.yBottom));
+      svg.append(axis);
+      text("tokens-y-label", layout.x0 - 6, layout.yTop + 8, "end", t.fmt(layout.yMax));
+      text("tokens-y-label", layout.x0 - 6, layout.yBottom, "end", t.fmt(layout.yMin));
+      text("tokens-tick-label", layout.x0, layout.yBottom + 11, "start", fmtDate.format(new Date(range.startMs)));
+      text("tokens-tick-label", layout.x1, layout.yBottom + 11, "end", fmtDate.format(new Date(range.endMs)));
+      if (this.selectedMarkMs !== null && this.selectedMarkMs >= range.startMs && this.selectedMarkMs <= range.endMs) {
+        const mx = layout.x0 + ((this.selectedMarkMs - range.startMs) / (range.endMs - range.startMs)) * (layout.x1 - layout.x0);
+        const ml = svgEl("line", "tokens-mark");
+        ml.setAttribute("x1", String(mx));
+        ml.setAttribute("x2", String(mx));
+        ml.setAttribute("y1", String(layout.yTop));
+        ml.setAttribute("y2", String(layout.yBottom));
+        svg.append(ml);
+      }
+      for (const seg of layout.segments) {
+        if (seg.length === 1) {
+          const dot = svgEl("circle", `tokens-trend-dot trend-${ti}`);
+          dot.setAttribute("cx", String(seg[0].x));
+          dot.setAttribute("cy", String(seg[0].y));
+          dot.setAttribute("r", "2.5");
+          svg.append(dot);
+          continue;
+        }
+        const line = svgEl("polyline", `tokens-trend-line trend-${ti}`);
+        line.setAttribute("points", seg.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" "));
+        svg.append(line);
+      }
+      box.append(svg);
+      this.metricTrendsEl.append(box);
     });
-    this.metricTrendsEl.append(svg);
-    const detail = el("div", "tokens-derived-tables");
+
+    if (per.truncated || avg.outside > 0 || life.mayBeTruncated) {
+      this.metricTrendsEl.append(el("div", "tokens-note", [per.truncated ? "per-item trend truncated at its grid limit" : "", avg.outside ? `${avg.outside} average samples excluded` : "", life.mayBeTruncated ? `audit series may be truncated; read starts ${life.floorMs === null ? "unknown" : fmtTime(life.floorMs)}` : ""].filter(Boolean).join(" · ")));
+    }
+  }
+
+  /** The group scorecard (#3505): ONE table of group-wide aggregates for the
+   *  window, each with its n, and the before/after split when a mark is
+   *  selected. Every figure is `groupCard`'s. */
+  private renderGroupCard(
+    range: Window,
+    deltas: DiffResult["deltas"],
+    life: ReturnType<typeof lifecycle>,
+    perTotal: ReturnType<typeof perCompletedItem>,
+    beforeLife: ReturnType<typeof lifecycle> | null,
+    afterLife: ReturnType<typeof lifecycle> | null,
+  ): void {
+    this.cardEl.replaceChildren();
+    if (!this.attempted || this.series === null) return;
+    const mark = this.selectedMarkMs;
+    const rows = groupCard({
+      startMs: range.startMs,
+      endMs: range.endMs,
+      ...(mark === null ? {} : {
+        markTsMs: mark,
+        daysBefore: windowCalendarDays(range.startMs, mark),
+        daysAfter: windowCalendarDays(mark, range.endMs),
+        ciBefore: beforeLife?.ciAttemptsPerPr ?? [],
+        ciAfter: afterLife?.ciAttemptsPerPr ?? [],
+      }),
+      perItem: perTotal,
+      deltas,
+      life,
+      median: (xs) => statCell(xs).median,
+    });
+    this.cardEl.append(el("div", "tokens-section-title", `Group scorecard · ${this.windowId === "all" ? "all time" : this.windowId === "custom" ? "the zoomed window" : `last ${this.windowId}`}`));
+    if (!this.store.loaded) {
+      this.cardEl.append(el("div", "tokens-note", this.store.attempted
+        ? "The last audit read failed, so completions, review rounds and CI attempts read n/a until a read succeeds."
+        : "The audit log has not been read yet, so completions, review rounds and CI attempts read n/a."));
+    }
+    const table = el("table", "tokens-table tokens-card-table");
+    const hr = el("tr", "");
+    for (const h of ["metric", "value", "n", ...(mark === null ? [] : ["before · n", "after · n"])]) hr.append(el("th", "", h));
+    const thead = el("thead", "");
+    thead.append(hr);
+    table.append(thead);
+    const tbody = el("tbody", "");
+    for (const r of rows) {
+      const tr = el("tr", "");
+      const label = el("td", "tokens-cell-key", r.label);
+      if (r.note) label.title = r.note;
+      tr.append(label);
+      tr.append(el("td", "tokens-cell-num", fmtCard(r.value, r.unit) + (r.note ? " *" : "")));
+      const n = el("td", "tokens-cell-num", fmtInt.format(r.n));
+      n.title = r.nLabel;
+      tr.append(n);
+      if (mark !== null) {
+        for (const side of [r.before, r.after]) tr.append(el("td", "tokens-cell-num", side ? `${fmtCard(side.value, r.unit)} · ${fmtInt.format(side.n)}` : "n/a"));
+      }
+      tbody.append(tr);
+    }
+    table.append(tbody);
+    this.cardEl.append(table);
+    const notes = rows.filter((r) => r.note).map((r) => `* ${r.label}: ${r.note}`);
+    for (const n of notes) this.cardEl.append(el("div", "tokens-note", n));
+  }
+
+  /** The per-group lists #3475 rendered inline, now behind the closed
+   *  "breakdown" disclosure — computed only while it is open. */
+  private renderBreakdown(
+    deltas: DiffResult["deltas"],
+    attribution: FeatureBars["attribution"],
+    range: Window,
+    life: ReturnType<typeof lifecycle>,
+    perTotal: ReturnType<typeof perCompletedItem>,
+    beforeLife: ReturnType<typeof lifecycle> | null,
+    afterLife: ReturnType<typeof lifecycle> | null,
+  ): void {
+    const detail = this.breakdownBodyEl;
+    const mark = this.selectedMarkMs;
+    const split = mark !== null;
     const addTable = (heading: string, headers: string[], values: string[][]) => {
       detail.append(el("div", "tokens-section-title", heading));
+      if (values.length === 0) { detail.append(el("div", "tokens-note", "Nothing in this window.")); return; }
       const table = el("table", "tokens-table"); const thead = el("thead", ""); const hr = el("tr", "");
       headers.forEach((h) => hr.append(el("th", "", h))); thead.append(hr); table.append(thead);
       const tbody = el("tbody", "");
       values.forEach((row) => { const tr = el("tr", ""); row.forEach((v) => tr.append(el("td", "tokens-cell-num", v))); tbody.append(tr); });
       table.append(tbody); detail.append(table);
     };
-    for (const group of averageGroups) {
-      const label = group.groupBy === "agent" ? "pane" : group.groupBy === "item" ? "work item" : group.groupBy;
-      const show = (value: number | null): string => fmtMetric(value, this.metric);
-      addTable(`Average ${this.metric === "cost_usd" ? "cost (USD)" : this.metric} per ${label} · n deltas/items`, [label, "mean / median · n", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], group.result.rows.map((r) => [r.label, `${show(r.all.mean)} / ${show(r.all.cell.median)} · ${r.all.n}`, ...(this.selectedMarkMs === null ? [] : [`${show(r.before?.mean ?? null)} · ${r.before?.n ?? 0}`, `${show(r.after?.mean ?? null)} · ${r.after?.n ?? 0}`])]));
+    const show = (value: number | null): string => fmtMetric(value, this.metric);
+    for (const groupBy of ["agent", "block", "model", "item"] as const) {
+      const result = averages(deltas, attribution, { startMs: range.startMs, endMs: range.endMs, groupBy, metric: this.metric, ...(split ? { markTsMs: mark } : {}), stat: statCell });
+      const label = groupBy === "agent" ? "pane" : groupBy === "item" ? "work item" : groupBy;
+      addTable(`Average ${this.metric === "cost_usd" ? "cost (USD)" : this.metric} per ${label}`, [label, "mean / median · n", ...(split ? ["before · n", "after · n"] : [])], result.rows.map((r) => [r.label, `${show(r.all.mean)} / ${show(r.all.cell.median)} · ${r.all.n}`, ...(split ? [`${show(r.before?.mean ?? null)} · ${r.before?.n ?? 0}`, `${show(r.after?.mean ?? null)} · ${r.after?.n ?? 0}`] : [])]));
     }
-    const roleRows = perTotal.byRole.map((role) => {
+    addTable("Tokens per completed item, by role", ["role", "tokens (share) · n", ...(split ? ["before · n", "after · n"] : [])], perTotal.byRole.map((role) => {
       const before = perTotal.before?.byRole.find((r) => r.role === role.role);
       const after = perTotal.after?.byRole.find((r) => r.role === role.role);
-      return [role.role, `${role.tokens} (${role.share === null ? "n/a" : `${(role.share * 100).toFixed(1)}%`}, n=${role.n})`, ...(this.selectedMarkMs === null ? [] : [`${before?.tokens ?? "n/a"} (n=${before?.n ?? 0})`, `${after?.tokens ?? "n/a"} (n=${after?.n ?? 0})`])];
-    });
-    addTable(`Tokens per completed item · numerator: ${this.metric === "cost_usd" ? "total tokens" : this.metric === "total" ? "all tokens" : this.metric === "cache_r" ? "cache read" : this.metric}`, ["metric / role", "tokens or share · n", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], [["tokens/item", `${perTotal.perItem ?? "n/a"} (n=${perTotal.items})`, ...(this.selectedMarkMs === null ? [] : [`${perTotal.before?.perItem ?? "n/a"} (n=${perTotal.before?.items ?? 0})`, `${perTotal.after?.perItem ?? "n/a"} (n=${perTotal.after?.items ?? 0})`])], ...roleRows]);
-    const lifeHeaders = ["metric", "value", "n", ...(life.partition ? ["before", "after"] : [])];
-    const lifeRows = [
-      ["items done/day", String(life.donePerDay.rate ?? "n/a"), String(life.doneIds.size), ...(life.partition ? [`${life.partition.before.done} (n=${life.partition.before.done})`, `${life.partition.after.done} (n=${life.partition.after.done})`] : [])],
-      ["median completion time (h)", String(statCell(life.ttc.map((x) => x.ms)).median ?? "n/a"), String(life.ttc.length), ...(life.partition ? [`${statCell(life.partition.before.ttcMs).median ?? "n/a"} (n=${life.partition.before.ttcMs.length})`, `${statCell(life.partition.after.ttcMs).median ?? "n/a"} (n=${life.partition.after.ttcMs.length})`] : [])],
-    ];
-    addTable("Lifecycle detail · audit window", lifeHeaders, lifeRows);
-    const statusRows = Array.from(life.timeInStatus.entries()).map(([status, stats]) => [status, `${statCell(stats.values).median ?? "n/a"} ms · n=${stats.values.length}`, ...(life.partition ? [`${statCell(life.partition.before.timeInStatus.get(status) ?? []).median ?? "n/a"} · n=${life.partition.before.timeInStatus.get(status)?.length ?? 0}`, `${statCell(life.partition.after.timeInStatus.get(status) ?? []).median ?? "n/a"} · n=${life.partition.after.timeInStatus.get(status)?.length ?? 0}`] : [])]);
+      return [role.role, `${fmtTokens(role.tokens)} (${role.share === null ? "n/a" : `${(role.share * 100).toFixed(1)}%`}) · ${role.n}`, ...(split ? [`${before ? fmtTokens(before.tokens) : "n/a"} · ${before?.n ?? 0}`, `${after ? fmtTokens(after.tokens) : "n/a"} · ${after?.n ?? 0}`] : [])];
+    }));
+    const statusRows = Array.from(life.timeInStatus.entries()).map(([status, stats]) => [status, `${fmtDec.format((statCell(stats.values).median ?? NaN) / 3_600_000)} h · ${stats.values.length}`, ...(life.partition ? [`${statCell(life.partition.before.timeInStatus.get(status) ?? []).median ?? "n/a"} · ${life.partition.before.timeInStatus.get(status)?.length ?? 0}`, `${statCell(life.partition.after.timeInStatus.get(status) ?? []).median ?? "n/a"} · ${life.partition.after.timeInStatus.get(status)?.length ?? 0}`] : [])]);
     addTable("Time in status · completed spans", ["status", "median span · n", ...(life.partition ? ["before · n", "after · n"] : [])], statusRows);
-    const beforeLife = this.selectedMarkMs === null ? null : lifecycle(audit, { startMs: range.startMs, endMs: this.selectedMarkMs, bucketMs: choice.bucketMs });
-    const afterLife = this.selectedMarkMs === null ? null : lifecycle(audit, { startMs: this.selectedMarkMs, endMs: range.endMs, bucketMs: choice.bucketMs });
-    addTable("Review rounds per PR", ["PR", "rounds · verdicts", "driver rounds", "cross-check", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], life.reviewRoundsPerPr.map((r) => [`#${r.pr}`, `${r.rounds} · ${r.verdicts}`, String(r.driverRounds ?? "n/a"), r.disagrees ? "mismatch" : "match", ...(this.selectedMarkMs === null ? [] : [`${beforeLife?.reviewRoundsPerPr.find((p) => p.pr === r.pr)?.rounds ?? "n/a"} (n=${beforeLife?.reviewRoundsPerPr.find((p) => p.pr === r.pr)?.verdicts ?? 0})`, `${afterLife?.reviewRoundsPerPr.find((p) => p.pr === r.pr)?.rounds ?? "n/a"} (n=${afterLife?.reviewRoundsPerPr.find((p) => p.pr === r.pr)?.verdicts ?? 0})`])]));
-    addTable("CI attempts per PR", ["PR", "green · red · n", ...(this.selectedMarkMs === null ? [] : ["before · n", "after · n"])], life.ciAttemptsPerPr.map((r) => { const before = beforeLife?.ciAttemptsPerPr.find((p) => p.pr === r.pr)?.attempts; const after = afterLife?.ciAttemptsPerPr.find((p) => p.pr === r.pr)?.attempts; return [`#${r.pr}`, r.attempts === null ? "n/a (no CI rows)" : `${r.attempts.green} · ${r.attempts.red} · ${r.attempts.green + r.attempts.red}`, ...(this.selectedMarkMs === null ? [] : [before ? `${before.green} · ${before.red} · n=${before.green + before.red}` : "n/a · n=0", after ? `${after.green} · ${after.red} · n=${after.green + after.red}` : "n/a · n=0"])]; }));
-    this.metricTrendsEl.append(detail);
-    if (choice.coarsened || per.truncated || avg.outside > 0 || life.mayBeTruncated) {
-      const bucketLabel = choice.bucketMs >= 86_400_000 ? `${Math.round(choice.bucketMs / 86_400_000)}d` : choice.bucketMs >= 3_600_000 ? `${Math.round(choice.bucketMs / 3_600_000)}h` : `${Math.round(choice.bucketMs / 60_000)}m`;
-      this.metricTrendsEl.append(el("div", "tokens-note", [choice.coarsened ? `Buckets coarsened to ${bucketLabel}` : "", per.truncated ? "per-item trend truncated at its grid limit" : "", avg.outside ? `${avg.outside} average samples excluded` : "", life.mayBeTruncated ? `audit series may be truncated; read starts ${life.floorMs === null ? "unknown" : fmtTime(life.floorMs)}` : ""].filter(Boolean).join(" · ")));
-    }
-    if (this.selectedMarkMs !== null) {
-      const fit = el("button", "tokens-chip fit-mark", "fit ±1h") as HTMLButtonElement;
-      fit.addEventListener("click", () => { const [startMs, endMs] = markSpan(this.selectedMarkMs!, DEFAULT_BEFORE_AFTER_K, DEFAULT_BUCKET_MS); this.customWindow = { startMs, endMs }; this.windowId = "custom"; this.rerender(); });
-      this.metricTrendsEl.append(fit);
-    }
-    void rows; void markList;
+    addTable("Review rounds per PR", ["PR", "rounds · verdicts", "driver rounds", "cross-check", ...(split ? ["before · n", "after · n"] : [])], life.reviewRoundsPerPr.map((r) => { const b = beforeLife?.reviewRoundsPerPr.find((p) => p.pr === r.pr); const a = afterLife?.reviewRoundsPerPr.find((p) => p.pr === r.pr); return [`#${r.pr}`, `${r.rounds} · ${r.verdicts}`, String(r.driverRounds ?? "n/a"), r.disagrees ? "mismatch" : "match", ...(split ? [`${b?.rounds ?? "n/a"} · ${b?.verdicts ?? 0}`, `${a?.rounds ?? "n/a"} · ${a?.verdicts ?? 0}`] : [])]; }));
+    addTable("CI attempts per PR", ["PR", "green · red · n", ...(split ? ["before · n", "after · n"] : [])], life.ciAttemptsPerPr.map((r) => { const b = beforeLife?.ciAttemptsPerPr.find((p) => p.pr === r.pr)?.attempts; const a = afterLife?.ciAttemptsPerPr.find((p) => p.pr === r.pr)?.attempts; return [`#${r.pr}`, r.attempts === null ? "n/a (no CI rows)" : `${r.attempts.green} · ${r.attempts.red} · ${r.attempts.green + r.attempts.red}`, ...(split ? [b ? `${b.green} · ${b.red} · ${b.green + b.red}` : "n/a · 0", a ? `${a.green} · ${a.red} · ${a.green + a.red}` : "n/a · 0"] : [])]; }));
   }
 
+  /** The stacked bars: one row per feature, plus the two group-wide bars. */
   private renderBars(bars: FeatureBars): void {
     this.barsEl.replaceChildren();
     if (bars.totals.total === 0) return;
@@ -1173,6 +1460,10 @@ export class TokenChartsView {
         `mean per 5-min bucket, ${DEFAULT_BEFORE_AFTER_K} buckets (1h) each side`
       )
     );
+    const fit = el("button", "tokens-chip fit-mark", "fit ±1h") as HTMLButtonElement;
+    fit.title = "Zoom the chart back to the hour either side of this mark";
+    fit.addEventListener("click", () => this.selectMark(mark.tsMs));
+    head.append(fit);
     const close = el("button", "pane-btn close", "✕") as HTMLButtonElement;
     close.title = "Clear selection";
     close.addEventListener("click", () => {
@@ -1253,14 +1544,14 @@ export class TokenChartsView {
       // states (#1317): not yet read, read failed, and a real (possibly
       // empty) answer — each gets its own sentence (#3131 review N2).
       this.scorecardEl.append(
-        el("div", "tokens-section-title", "scorecard — per block × cli"),
+        el("div", "tokens-section-title", "lane scorecard — per block × cli"),
         el("div", "tokens-note", "The audit log has not been read yet, so there is nothing to score."),
       );
       return;
     }
     if (!this.store.loaded) {
       this.scorecardEl.append(
-        el("div", "tokens-section-title", "scorecard — per block × cli"),
+        el("div", "tokens-section-title", "lane scorecard — per block × cli"),
         el("div", "tokens-note", "The last audit read failed, so there is nothing to score; the table returns when a read succeeds."),
       );
       return;
@@ -1268,12 +1559,12 @@ export class TokenChartsView {
     if (sc.floor.rowsRead === 0) {
       // A real answer: the read succeeded and the log holds no rows.
       this.scorecardEl.append(
-        el("div", "tokens-section-title", "scorecard — per block × cli"),
+        el("div", "tokens-section-title", "lane scorecard — per block × cli"),
         el("div", "tokens-note", "The audit log was read and has no rows, so there is nothing to score."),
       );
       return;
     }
-    this.scorecardEl.append(el("div", "tokens-section-title", "scorecard — per block × cli"));
+    this.scorecardEl.append(el("div", "tokens-section-title", "lane scorecard — per block × cli"));
     if (sc.cards.length === 0) {
       this.scorecardEl.append(
         el(

@@ -1370,27 +1370,45 @@ Effort changes are not marked: the usage record does not carry effort.
 
 **Explore the plot.** The default counter is output tokens, so cache reads do
 not flatten the other series; the selected counter and all-token feature bars
-are labelled distinctly. Use the wheel to zoom about
-the pointer and drag to pan. The custom window survives refreshes while
-following; select **custom · reset** to return to the default preset. The **log
-y** switch and y-axis autoscale to visible data. Select a change mark to fit a
-one-hour-before/one-hour-after window and compare its before/after table.
+are labelled distinctly. Over the plot area, the **wheel** zooms about the
+pointer and **dragging** pans (over the axis labels, or anywhere else in the
+panel, the wheel still scrolls). **Hovering** draws a crosshair and a readout
+of every line's value at that time; over a change mark the readout also says
+what changed. The zoomed window survives refreshes while following; select
+**custom · reset** to return to the default preset. The **log y** switch and
+the y-axis autoscale to the visible data.
 
-Trend lines share this window and time axis: tokens per completed item, items
-done per day, median time to completion, and average total tokens per pane.
-Detail tables show averages grouped by pane, block, model and work item, the
-per-item role split, time spent in each status, review rounds per PR and CI
-attempts per PR. Metric-value cells report `n`; selecting a mark adds
-before/after columns where that measure has dated values. Audit metrics are limited to the
-rows still in the audit window; the chart identifies when history may be
-truncated or a bucket grid was coarsened.
+**Trends.** Directly under the chart, one small plot per derived metric, on the
+same window as the chart, so zooming or panning the chart narrows them too:
+tokens per completed item (a running figure: tokens spent so far in the
+window ÷ items completed so far), items completed per bucket, mean
+time-to-completion, and average total tokens per pane. Each plot labels its
+scale and window, and says how many completed items or samples it rests on. A
+trend with nothing to plot says why ("no items completed in this window")
+rather than showing an empty strip.
 
-Click a mark for the **before/after** table: mean spend per five-minute bucket
+**The group scorecard.** One short table for the window: tokens per completed
+item, cost per completed item, items done per day, median and mean
+time-to-completion, review rounds per PR, CI attempts per PR, and each role's
+share of the tokens (orchestrator, worker, reviewer, …). Every row shows its
+`n`. A figure that cannot be measured reads **n/a**, never zero. Select a
+change mark and the table gains **before** and **after** columns, each with its
+own `n`. Figures from the audit log only see the rows still in the audit
+window, and the panel says when that history may be truncated.
+
+**Breakdown.** The per-pane, per-block, per-model and per-work-item averages,
+the role split, time in each status, and the per-PR review-round and CI lists
+sit under one **Breakdown** disclosure below the feature bars, closed until you
+open it. The per-lane scorecard is inside it too.
+
+Click a mark and the chart zooms to the hour either side of it (**fit ±1h** in
+the readout puts it back there after you pan away), with the **before/after**
+table: mean spend per five-minute bucket
 for the hour before against the hour after, per series and in total. That is
 the "did this help?" number. It reads **n/a**, never zero, when there is not a
 full hour on one side — the chart will not invent a comparison it cannot make.
 
-**The scorecard table.** Below the readout, one row per **block and CLI** that
+**The lane scorecard** (inside **Breakdown**): one row per **block and CLI** that
 carried a review lane in the audit window (`rev-std/pi`, `rev-final/claude`,
 …), with four columns: how many PRs that lane was credited on, the **median
 rounds to first pass**, the **median fail rate** (fails ÷ decided verdicts,

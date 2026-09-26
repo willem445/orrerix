@@ -891,42 +891,124 @@ never to an undefined logarithm; log ticks include an explicit zero-floor tick
 and powers of ten. This intentionally compresses values below one into the
 same floor rather than implying meaningful negative log values.
 
-The time grid chooses from a fixed ladder beginning at one minute and
-increasing through one week. The bucket-by-key cell budget is 20,000; the
-chooser uses the larger of plotted keys and attribution buckets, selects a
-coarse enough bucket to stay within that cap and reports `coarsened` so the
-view can disclose lost time resolution. It does not silently
-allocate a window-sized dense grid at the smallest interval.
-
 ## Interaction: the view
 
 `tokenchartsview.ts` owns SVG and input wiring; window, y-domain, log mapping,
-ticks, bucket selection and the mean of pane series remain in `chartwindow.ts`.
-Its y-domain consumes an iterable so rendering does not allocate a second
-keys-by-buckets point matrix. Each trend reports the population for its measure
-(completed items, calendar days, completion records, or measured pane-bucket
-means); a measured zero remains on the line, while an unavailable per-bucket
-value breaks it rather than being drawn as zero. Cost averages retain USD values
-and formatting.
-A custom window is stored as start/end instants,
-not as a preset name, so polls cannot reset a zoom. Wheel
-zoom maps the pointer through `tsForX`, then `zoomAbout`; pointer capture keeps
-a drag continuous outside the plot, and `panBy` clamps it to the series extent.
-Marks select the lifecycle comparison and fit their snapped split window.
+ticks, bucket selection, pointer geometry, trend layout and the group
+scorecard stay in DOM-free modules (`chartwindow.ts`, `trendplot.ts`,
+`tokengroupcard.ts`). Its y-domain consumes an iterable so rendering does not
+allocate a second keys-by-buckets point matrix. A custom window is stored as
+start/end instants, not as a preset name, so polls cannot reset a zoom. The
+view's default token counter is output; cache reads are a selectable measure
+but not the default. Every numerator is labelled, because per-item follows the
+selected counter and no longer necessarily matches the all-token feature bars.
 
-The view's default token counter is output; cache reads are a selectable
-measure but are not the default. The plot and token tables label their
-numerators because per-item follows the selected token counter and no longer
-necessarily matches the all-token feature bars. A shared bucket chooser caps bucket-by-key work;
-coarsening, truncation and excluded samples are surfaced next to trends. The
-four trend series share the chart window: per-completed-item tokens, completions
-per day, median completion latency and average total tokens per agent pane. Detail
-tables expose averages grouped by pane, block, model and work item, the per-item
-role split, completed time in each status, review rounds per PR and CI attempts
-per PR. Every metric-value cell carries its sample count, and selecting a
-mark adds before/after values wherever the projection has a dated partition.
-The completion trend bins the lifecycle projection's calendar-day counts into
-the chart grid as an average per calendar day, so coarsening never relabels a
-week or month as one day; its `n` remains the number of calendar days. The lifecycle
-denominator is taken directly from done-in-window audit transitions, never from
-the board's current done status.
+### Pointer wiring (#3505)
+
+The #3475 build hung wheel, drag and hover on a `<rect>` that each render
+created inside the SVG, and every wheel or drag step re-rendered through
+`replaceChildren`, so the element carrying the listeners was replaced
+mid-gesture. On v1.3.1-beta5 none of the three worked live. **The exact cause
+was not established.** It was checked, not assumed, for the suspect #3505
+named: the hover readout already had `pointer-events: none`
+(`styles.css`, `.tokens-hover-readout`). In plain Chromium, with the same DOM
+and CSS against a stubbed transport, real mouse input hovered the rect and
+wheel and pointer events dispatched at that point were handled. What reproduces only in the app was not
+found from the code. So the fix is an arrangement with no dependency on which
+element is under the pointer or which survives a render, rather than a patch to
+a guessed cause:
+
+- **The handlers live on the plot container** (`.tokens-plot`), registered
+  once in the constructor. No render replaces that element.
+- **Everything inside the SVG is inert** (`.tokens-svg * { pointer-events:
+  none }`), so the event's target is always the container or its persistent
+  surface, never a child a render is about to detach. The hover readout floats
+  over the plot and is inert too.
+- **Every event is resolved in pure code** against the last render's layout
+  (`plotGeom`): `insidePlot`, `bucketIndexAt`, `markNear`, `isDrag`,
+  `wheelZoomFactor`. A change mark is clicked through `markNear` on the
+  container, not through an element of its own. A press is a click until it
+  travels past `DRAG_SLOP_PX`, then it pans.
+- **The wheel and a drag are claimed only over the plot rectangle**
+  (`insidePlotArea`, bounded in x AND y). Over the y-axis labels, the top
+  padding, the time-tick strip or anywhere else, the wheel scrolls the panel.
+- **`deltaMode` is normalised.** A line-mode device reports `3` for a notch;
+  read as pixels by the #3475 handler (`deltaY * 0.001`) that zooms by 0.3%,
+  which looks exactly like "zoom does nothing". Each event is capped, so a page-mode device cannot zoom the
+  history away in one step.
+- **Renders are coalesced to one per animation frame** while wheel or drag
+  events stream in. The window is updated synchronously by each event, so no
+  step is lost, only the repaints between two frames.
+
+The wiring stays hand-validated by the repo's convention (no simulated DOM in
+tests). The pure pieces carry the tests.
+
+### Trends (#3505)
+
+One small plot per derived metric, directly under the main chart, on the
+chart's own x-window, so zooming or panning the chart narrows every trend with
+it. Each plot has its y-extent labelled, its window's two ends dated, its
+population `n`, and a count of measured buckets. A plot with nothing measured
+prints why ("no items completed in this window") in place of a blank strip,
+because a blank strip reads as a flat zero. A measured zero stays on the line;
+an unmeasured bucket breaks it.
+
+Two defects in the #3475 trend section made it show empty or not at all, and
+both are fixed here:
+
+- **The grid.** Trends reused `chooseBucket` (removed here), the finest grid the spend lines'
+  work budget allows, which is one-minute buckets on a 24 h window. A pane has
+  one delta per five-minute sample, so no bucket held the three samples a mean
+  or median needs, and the average and median trends were null in every
+  bucket. Trends now use `trendBucket`: the smallest ladder step of at least
+  five minutes that covers the window in at most 48 buckets (a 24 h window is
+  hourly, 7 d is six-hourly). `test/chartwindow.test.ts` pins both halves:
+  zero measured buckets at the old grid, and measured ones at the new one.
+- **The colours.** Three of the four lines stroked `var(--state-success)` or
+  `var(--state-warning)`, and neither property exists. An undefined custom
+  property invalidates the declaration at computed-value time, and `stroke`
+  falls back to `none`, so those lines never painted. Every trend now draws in
+  one ink (each is its own labelled plot, and the state hues are reserved for
+  agent state). `test/cssvars.test.ts` refuses any fallback-less `var()` that
+  neither the stylesheet nor a `setProperty` in `src/` defines.
+
+The metrics plotted:
+
+- **Tokens per completed item, running.** Per bucket, the ratio exists only
+  where an item finished in that very bucket, which on an hourly grid is a
+  scatter of dots. The running form (`runningRatio`: tokens so far ÷ items
+  completed so far) is defined from the first completion on. Its last point is
+  the ratio over every bucket the grid placed. An unknown item count poisons it
+  from there on rather than shrinking the population silently.
+- **Items completed per bucket.** A count, not a per-day rate: a day rate on a
+  sub-day grid has one sample per calendar day. The scorecard carries the
+  window's per-day rate.
+- **Mean time-to-completion per bucket.** A median needs three completions in
+  one bucket, which the grid almost never holds. The scorecard carries the
+  window's median beside its mean.
+- **Average total tokens per pane.**
+
+### The group scorecard (#3505)
+
+ONE table of group-wide aggregates for the window, computed by `groupCard`
+from results the other projections already produce: tokens and cost per
+completed item, items done per day, median and mean time-to-completion, review
+rounds per PR, CI attempts per PR, and each role's share of the window's
+tokens. Every row carries its `n`. A figure that cannot be measured is `null`
+("n/a"), never `0`. With a mark selected, each row gains a before and an after
+cell with their own `n`. Cost per item sums the interval costs on the same
+inclusive window `perCompletedItem` uses. An interval with no cost figure is
+counted, and the row says the figure is a lower bound. With no figure at all
+the row reads n/a rather than $0. CI attempts count only PRs the driver ran
+CI for, because a PR with no CI row was never driven, which is not zero
+attempts. Review rounds use the mean: a median of small integers mostly reads
+1 and hides the tail the figure exists to show.
+
+The per-pane, per-block, per-model and per-work-item averages, the per-role
+split, time in status, the per-PR review and CI lists, and the per-lane
+scorecard all sit behind ONE `<details>` disclosure, closed by default. The
+element persists across renders, so it stays open or closed as the human left
+it. Its contents are computed only while it is open.
+
+The lifecycle denominator is taken directly from done-in-window audit
+transitions, never from the board's current done status.

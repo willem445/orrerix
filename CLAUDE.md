@@ -282,7 +282,8 @@ Module naming and navigation conventions are in
   state (#1348 N1/N4; `TasksView.linkDrafts`, `linkDraftIsPristine`).
 - Backend: unit tests inline under `#[cfg(test)]` only if they don't link the
   full lib; otherwise integration tests (constraint 4). Orchestration logic is
-  covered in `src-tauri/tests/orchestration.rs`.
+  covered in `src-tauri/tests/orchestration/` — one test target, one topic
+  module per concern, source-scanning guards in its `guards.rs`.
 - **An edit to a role template (`orchestrator|worker|reviewer|planner|manager|lead.md`
   under `src-tauri/src/orchestration/templates/`) re-blesses
   `src-tauri/tests/fixtures/pre222/` in the same commit** — the fixtures pin those
@@ -683,7 +684,7 @@ narrow their ask back down to the original ticket on your own judgment.
   compared as a blob reads as a real difference. Prefix `MSYS_NO_PATHCONV=1`
   on any `git`/`gh` invocation whose argument carries a ref-colon-path (#841).
 - **An end-of-file append conflicts on its shared trailing tokens, not on its
-  content.** Test blocks in `src-tauri/tests/orchestration.rs` all end `);` + `}`,
+  content.** Test blocks in `src-tauri/tests/` files all end `);` + `}`,
   so two branches appending there get that tail matched as common context and
   each side arrives ending mid-assertion; concatenating splices one block into
   the middle of the other's final `assert!`. Prove the resolution rather than

@@ -13,6 +13,11 @@
 // giving live feedback on text a human is typing, the backend's is the engine. A file
 // that only one of them accepts is a file the human is being lied to about — which is
 // precisely the drift this test catches, forever.
+//
+// What it checks of that file is VALIDITY, never VALUES (#3507, the human's rule: editing the
+// workflow file must not turn main red). Every property below either holds of any valid
+// workflow or is derived from the parsed file; a pin that needs a literal — an id, a header,
+// an edge order — reads it off the synthetic `SPECIMEN` further down instead.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -23,6 +28,7 @@ import {
   serializeWorkflow,
   serializeWorkflowPreserving,
   formatWorkflowText,
+  isReviewingBlock,
 } from "../src/workflowmodel.ts";
 import { rewriteImpact, rewriteImpactMessage } from "../src/workflowpane.ts";
 
@@ -46,12 +52,169 @@ test("the repo's own workflow opens in the pane with no findings", () => {
   assert.equal(workflow.version, 1);
 });
 
+// ---------- the synthetic specimen ----------
+//
+// Every pin below that needs a LITERAL — a block id, a section-header text, a fan-out
+// authored out of roster order, a routing glob — reads it off this specimen, never off the
+// real file (#3507: editing `.orrerix/workflow.yml` must not turn main red). The real file
+// is held only to properties any valid workflow has, each derived from the file itself.
+const SPECIMEN = [
+  "# SPECIMEN PREAMBLE — synthetic, so the literal pins below never read the real file.",
+  "# A second preamble line, so \"the preamble survives\" means all of it.",
+  "version: 1",
+  "name: serializer-specimen",
+  "",
+  "blocks:",
+  "  - id: orchestrator",
+  "    kind: orchestrator",
+  "    cli: claude",
+  "    model: opus",
+  "",
+  "  # -- workers: the header above the FIRST worker",
+  "  - id: w-one",
+  "    kind: worker",
+  "    cli: claude",
+  "    model: sonnet",
+  "",
+  "  - id: w-two",
+  "    kind: worker",
+  "    cli: claude",
+  "    model: opus",
+  "",
+  "  # -- reviewers: the header above the FIRST reviewer",
+  "  - id: r-one",
+  "    kind: reviewer",
+  "    cli: claude",
+  "    model: sonnet",
+  "",
+  "  - id: r-two",
+  "    kind: reviewer",
+  "    cli: claude",
+  "    model: opus",
+  "",
+  "# EDGES HEADER",
+  "edges:",
+  "  - { from: orchestrator, to: [w-one, w-two] }",
+  // Authored OUT of roster order on purpose: the canonical form sorts it to [w-two, r-one].
+  "  - { from: w-one, to: [r-one, w-two] }",
+  "  - { from: w-two, to: r-one }",
+  "  - { from: r-one, to: r-two }",
+  "",
+  "# GATES HEADER",
+  "gates:",
+  "  merge:",
+  "    require: all-pass",
+  "    reviewers: [r-one]",
+  "    routing:",
+  "      # a comment NESTED inside the routing list",
+  "      - paths: [\"src/**\", \"**/Cargo.toml\"]",
+  "        reviewers: [r-two]",
+  "    also: [ci-green]",
+  "",
+  "# TRAILING comment block after the last section",
+  "",
+].join("\n");
+
+type Workflow = ReturnType<typeof parseWorkflow>["workflow"];
+type MergeGate = NonNullable<Workflow["gates"]["merge"]>;
+
+const commentLines = (t: string): string[] => t.split(/\r?\n/).filter((l) => /^\s*#/.test(l));
+
+/** For every block, the run of comment lines DIRECTLY above its `- id:` line (a section
+ *  header, when one introduces it). Derived from whatever file it is given — no id is named. */
+const headersAboveBlocks = (t: string): Map<string, string[]> => {
+  const lines = t.split(/\r?\n/);
+  const out = new Map<string, string[]>();
+  lines.forEach((l, i) => {
+    const m = /^\s*- id:\s*(\S+)/.exec(l);
+    if (!m) return;
+    const run: string[] = [];
+    for (let j = i - 1; j >= 0 && /^\s*#/.test(lines[j]); j--) run.unshift(lines[j]);
+    out.set(m[1], run);
+  });
+  return out;
+};
+
+/** Every comment line OUTSIDE block `id`'s own body. The body runs from its `- id:` line to the
+ *  first line that is neither blank nor a comment and is indented no deeper than its `- ` marker
+ *  (the next block, or the next section's key). A COMMENT never ends the body, whatever its column:
+ *  a field commented out at column 0 (`#    effort: medium`) or a note at the marker's own indent
+ *  between two fields is still inside the block (#3513 rev-final B1). The run of comments and blanks
+ *  directly above that ending line is then handed BACK — it is the next block's header or the next
+ *  section's preamble, which the serializer attaches forward, so it stays under test. That body is the one region the preserving
+ *  serializer does NOT promise to keep: an edited block is regenerated from its fields, and "there
+ *  is no attempt to re-attach a comment to a field that changed underneath it" (`workflowmodel.ts`,
+ *  above `deepEqualValue`). Everything else — the header above the block, other blocks, other
+ *  sections — is an untouched region, and that is the contract a derived pin may hold any file to. */
+const commentsOutsideBlock = (t: string, id: string): string[] => {
+  const lines = t.split(/\r?\n/);
+  const start = lines.findIndex((l) => new RegExp(`^\\s*- id:\\s*${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`).test(l));
+  assert.ok(start >= 0, `sanity: block ${id} has an \`- id:\` line`);
+  const marker = lines[start].indexOf("-");
+  const isComment = (l: string): boolean => /^\s*#/.test(l);
+  let end = start + 1;
+  while (end < lines.length) {
+    const l = lines[end];
+    if (l.trim() !== "" && !isComment(l) && l.search(/\S/) <= marker) break;
+    end++;
+  }
+  // Hand back the comment/blank run directly above the ending line: it belongs to what follows.
+  let bodyEnd = end;
+  while (bodyEnd > start + 1 && (lines[bodyEnd - 1].trim() === "" || isComment(lines[bodyEnd - 1]))) bodyEnd--;
+  const inBody = new Set<number>();
+  for (let j = start + 1; j < bodyEnd; j++) inBody.add(j);
+  return lines.filter((l, i) => !inBody.has(i) && /^\s*#/.test(l));
+};
+
+/** A model value guaranteed to differ from the block's own, so the edit is never a no-op. */
+const otherModel = (m: string | undefined): string => (m === "sonnet" ? "opus" : "sonnet");
+
+/** The reviewer-kind blocks that neither `gates.merge.reviewers` nor any routing rule names.
+ *  With no merge gate at all, no verdict is required of anyone, so there is nothing to be
+ *  unnamed BY — the property is about a gate that exists. */
+const namedBy = (g: MergeGate): Set<string> =>
+  new Set([...g.reviewers, ...(g.routing ?? []).flatMap((r) => r.reviewers)]);
+const unnamedReviewers = (w: Workflow): string[] => {
+  const g = w.gates.merge;
+  if (!g) return [];
+  const named = namedBy(g);
+  return w.blocks.filter((b) => b.kind === "reviewer" && !named.has(b.id)).map((b) => b.id);
+};
+
+/** The literal directory a glob is rooted at, or null when it has none (`**\/Cargo.toml`). */
+const literalRoot = (glob: string): string | null => {
+  const wild = glob.search(/[*?[]/);
+  if (wild < 0) return glob; // no wildcard at all: the path itself must exist
+  const upto = glob.slice(0, wild);
+  const cut = upto.slice(0, upto.lastIndexOf("/") + 1).replace(/\/$/, "");
+  return cut || null;
+};
+const repoHas = (rel: string): boolean => existsSync(new URL(`../${rel}`, import.meta.url));
+/** Every routing path whose literal root does not exist, plus how many roots were checked. */
+const routingRoots = (w: Workflow): { dead: string[]; checked: number } => {
+  const dead: string[] = [];
+  let checked = 0;
+  for (const rule of w.gates.merge?.routing ?? []) {
+    for (const p of rule.paths) {
+      const root = literalRoot(p);
+      if (root === null) continue;
+      checked++;
+      if (!repoHas(root)) dead.push(p);
+    }
+  }
+  return { dead, checked };
+};
+
+test("the synthetic specimen is itself a clean workflow — so the pins built on it test the serializer, not a broken fixture", () => {
+  const { workflow, findings } = parseWorkflow(SPECIMEN);
+  assert.deepEqual([...findings, ...validateWorkflow(workflow)].map((f) => `${f.code}: ${f.message}`), []);
+});
+
 test("the roster is VALID — and nothing here pins what its values are", () => {
   // THE HUMAN'S RULE (#3507): editing this file must never turn main red, so this test
   // asks only whether the roster is one the engine can run — never WHICH cli, model or
   // effort a block chose, which blocks exist by id, or in what order. Those are the
-  // operator's to change in a one-line edit, and a pin on them turned main red the first
-  // time the human moved a reviewer lane.
+  // operator's to change in a one-line edit.
   //
   // What is left, and who decides it:
   //  * the file parses with zero findings — the first test above, through the REAL
@@ -67,22 +230,20 @@ test("the roster is VALID — and nothing here pins what its values are", () => 
   const { workflow } = parseWorkflow(text);
   assert.ok(workflow.blocks.some((b) => b.kind === "worker"), "a usable roster needs a worker block");
   assert.ok(workflow.blocks.some((b) => b.kind === "reviewer"), "a usable roster needs a reviewer block");
-  let profiles = 0;
   for (const b of workflow.blocks) {
     if (b.profile === undefined) continue;
-    assert.ok(existsSync(new URL(`../${b.profile}`, import.meta.url)), `${b.id}: persona file ${b.profile} exists`);
-    profiles++;
+    assert.ok(repoHas(b.profile), `${b.id}: persona file ${b.profile} exists`);
   }
-  assert.ok(profiles > 0, "…and the persona loop checked something, not zero blocks");
+  // No floor on how many blocks carry a persona: a roster with none is valid (#3507).
+  // The existence check's teeth are shown on a path that cannot exist instead.
+  assert.equal(repoHas(".github/agents/zzz-no-such-persona.md"), false, "the persona check can say no");
 
-  // POSITIVE CONTROL, built off whatever roster the file holds: the "zero findings" arm
-  // is what polices gate references, so a gate pointed at a missing block must be a
-  // finding. Name-independent on purpose — it mutates the parsed gate, not a literal id.
-  const gate = workflow.gates.merge;
-  assert.ok(gate, "the dogfood file declares a merge gate");
-  const missing = "zzz-no-such-block";
-  assert.ok(!workflow.blocks.some((b) => b.id === missing), "sanity: the control id really is absent");
-  const broken = { ...workflow, gates: { ...workflow.gates, merge: { ...gate, reviewers: [...gate.reviewers, missing] } } };
+  // POSITIVE CONTROL for the "zero findings" arm, which is what polices gate references:
+  // a gate pointed at a missing block must be a finding. Built on the SPECIMEN, so it runs
+  // whether or not the real file declares a gate at all.
+  const spec = parseWorkflow(SPECIMEN).workflow;
+  const gate = spec.gates.merge!;
+  const broken = { ...spec, gates: { ...spec.gates, merge: { ...gate, reviewers: [...gate.reviewers, "zzz-no-such-block"] } } };
   assert.ok(
     validateWorkflow(broken).some((f) => f.code === "gate-unknown-reviewer"),
     "a gate naming a block that does not exist must be a finding"
@@ -90,132 +251,111 @@ test("the roster is VALID — and nothing here pins what its values are", () => 
 });
 
 test("every declared reviewer lane is named by the gate or by a routing rule, because an abstention is a pass", () => {
-  const { workflow } = parseWorkflow(text);
-  const gate = workflow.gates.merge;
-  assert.ok(gate, "the point of the dogfood file is that the human can demo the gate");
   // THE SAFETY PROPERTY — and it is NAMEDNESS, not reachability, so say so rather
   // than overclaim. Under `all-pass` an abstention counts as a pass, so a
   // reviewer-kind block in the roster that neither `gates.merge.reviewers` nor any
   // `routing:` rule NAMES can never enter the required set at all: it would sit
-  // there looking wired while the gate opened without it. That is what the
-  // assertion below catches, and all of it.
+  // there looking wired while the gate opened without it. "Named" is the UNION of the
+  // static list and every routing rule (#1176): a lane required only on some paths is the
+  // routing working (#1952), not a hole.
   //
-  // What it does NOT catch, found in review (rev-final N4) rather than by the
-  // author: a rule whose `paths:` match nothing still NAMES its reviewer, so the
-  // lane is named and required on no PR — the same end state, arrived at from the
-  // other side. Measured there by pointing rule 1 at `zzz-no-such-dir/**` and
-  // watching this suite stay 9/9 green. The `routing rules must be able to FIRE`
-  // block further down is the partial close, with its own residual pinned.
-  //
-  // "In the gate" is a UNION of two lists, and that is the roster's design rather
-  // than a loosening: `rev-std` is static (every PR), `rev-final` is REQUIRED BY
-  // ROUTING (#1176) on the paths a prose review cannot judge — code, tests, CI,
-  // manifests, docs/design. A docs-only PR that runs rev-std alone is the rule
-  // working (#1952), not a hole.
-  const declaredReviewers = workflow.blocks.filter((b) => b.kind === "reviewer").map((b) => b.id);
-  const namedBy = (g: typeof gate): Set<string> =>
-    new Set([...(g?.reviewers ?? []), ...(g?.routing ?? []).flatMap((r) => r.reviewers)]);
-  const unnamed = (w: typeof workflow): string[] => {
-    const named = namedBy(w.gates.merge);
-    return w.blocks.filter((b) => b.kind === "reviewer" && !named.has(b.id)).map((b) => b.id);
-  };
-  assert.deepEqual(unnamed(workflow), [], "every declared reviewer lane is named by the gate");
-  assert.ok(declaredReviewers.length > 0, "…and there is a reviewer lane for that to be a claim about");
+  // What it does NOT catch, found in review (rev-final N4) rather than by the author: a
+  // rule whose `paths:` match nothing still NAMES its reviewer, so the lane is named and
+  // required on no PR. The `routing roots` check below is the partial close.
+  const { workflow } = parseWorkflow(text);
+  assert.deepEqual(unnamedReviewers(workflow), [], "every declared reviewer lane is named by the gate");
 
-  // ROUTING RULES MUST BE ABLE TO FIRE — the partial close on the namedness/reachability
-  // gap above, and the reason it is only partial is stated rather than left for the next
-  // reader to discover. Full reachability ("does this glob match a file a PR could touch")
-  // needs a glob engine and the repo's tracked-file list, and this suite is DOM-free pure
-  // modules with neither. What it can check without either is that a glob ROOTED at a
-  // literal path is rooted at one that EXISTS — which is exactly the shape a directory
-  // rename or a typo produces, i.e. the arrival route the review's premortem named
-  // (`src/**` narrowed to `src/orchestration/**` during a refactor that moved it).
-  const literalRoot = (glob: string): string | null => {
-    const wild = glob.search(/[*?[]/);
-    if (wild < 0) return glob; // no wildcard at all: the path itself must exist
-    const upto = glob.slice(0, wild);
-    const cut = upto.slice(0, upto.lastIndexOf("/") + 1).replace(/\/$/, "");
-    return cut || null; // `**/Cargo.toml` has no literal root — the residual, pinned below
-  };
-  // The check's own POSITIVE CONTROL, in-test: the exact shape review found (a rooted
-  // glob naming a directory that does not exist) must be one this check would refuse.
-  // Without this the loop below passes just as well when `literalRoot` returns null for
-  // everything and nothing is ever verified.
-  assert.equal(literalRoot("zzz-no-such-dir/**"), "zzz-no-such-dir");
-  assert.equal(existsSync(new URL("../zzz-no-such-dir", import.meta.url)), false, "…and it really is absent, so the arm below has teeth");
-
-  let rootsChecked = 0;
-  for (const rule of gate.routing ?? []) {
-    let checkedInRule = 0;
-    for (const p of rule.paths) {
-      const root = literalRoot(p);
-      if (root === null) continue;
-      assert.ok(
-        existsSync(new URL(`../${root}`, import.meta.url)),
-        `routing path ${JSON.stringify(p)} is rooted at ${JSON.stringify(root)}, which does not exist — the rule can never fire`
-      );
-      rootsChecked++;
-      checkedInRule++;
-    }
-    // POPULATION CONTROL, counted at the VERIFIED site: a rule made entirely of unrooted
-    // globs would sail through the loop above having certified nothing.
-    assert.ok(
-      checkedInRule > 0,
-      `every routing rule needs at least one path this check can verify: ${JSON.stringify(rule.paths)}`
-    );
-  }
-  assert.ok(rootsChecked > 0, "…and some path was actually verified, not zero of them");
-
-  // THE RESIDUAL, PERFORMED rather than merely disclosed (CLAUDE.md's escape-hatch rule) —
-  // and performing it is what corrected it. Two shapes LOOK like the blind spot; only one
-  // is one, and the first draft of this comment named the wrong one:
-  //
-  //  * a rule made ONLY of unrooted globs is CAUGHT — not by the existence check, which
-  //    skips them, but by the per-rule population control above. Measured: mutating rule 1
-  //    to `["**/nope.zzz"]` reddens this test. Worth writing down, because the obvious
-  //    reading of "an unrooted glob is not checked" is that such a rule slips through, and
-  //    it does not.
-  //  * what DOES slip through is a glob whose literal root EXISTS but which matches no
-  //    file. `src/**/*.zzz` roots at `src`, which is there, so the check passes it while
-  //    the rule can still never fire. This check verifies the ROOT, not a match; closing
-  //    that last step needs the glob engine and the tracked-file list this suite has
-  //    neither of. Measured: that mutation leaves the suite green.
-  assert.equal(literalRoot("**/nope.zzz"), null, "an unrooted glob has no root to check…");
-  assert.equal(literalRoot("src/**/*.zzz"), "src", "…but a rooted-yet-unmatchable glob IS checked, and passes — the real blind spot");
-  assert.equal(existsSync(new URL("../src", import.meta.url)), true, "…because its root really does exist, which is all this check asks");
-  assert.equal(literalRoot("**/Cargo.toml"), null, "…and the shipped file really does contain an unrooted path");
-  assert.deepEqual(
-    (gate.routing ?? []).map((r) => r.paths.filter((p) => literalRoot(p) === null).length),
-    [0, 0, 0, 1],
-    "…in exactly one rule, which carries three rooted paths beside it — so the blind spot is not load-bearing here"
-  );
-
-  // POSITIVE CONTROL — the assertion above passes just as well against a check that
-  // never ran, so this performs the one edit it exists to catch: take a declared lane and
-  // strike it from the static list AND every routing rule, leaving everything else alone.
-  // Built off the PARSED gate rather than a literal id (#3507): a pin on which lane exists
-  // turned main red on a roster edit, and the property here is the rule, not the roster.
-  // The mutation is asserted to have LANDED — the lane really was named before and is
-  // named nowhere after — so the red below is about the rule, not a no-op edit.
-  const victim = declaredReviewers[declaredReviewers.length - 1];
-  assert.ok(namedBy(gate).has(victim), "sanity: the lane the control strikes was named to begin with");
+  // POSITIVE CONTROL, on the specimen: strike a lane from the static list AND every routing
+  // rule and it must be reported. Asserted to have LANDED first, so the red is about the rule.
+  const spec = parseWorkflow(SPECIMEN).workflow;
+  const g = spec.gates.merge!;
+  assert.deepEqual(unnamedReviewers(spec), [], "sanity: the specimen names every lane");
+  const victim = "r-two";
+  assert.ok(namedBy(g).has(victim), "sanity: the lane the control strikes was named to begin with");
   const struck = {
-    ...gate,
-    reviewers: gate.reviewers.filter((id) => id !== victim),
-    routing: (gate.routing ?? []).map((r) => ({ ...r, reviewers: r.reviewers.filter((id) => id !== victim) })),
+    ...g,
+    reviewers: g.reviewers.filter((id) => id !== victim),
+    routing: (g.routing ?? []).map((r) => ({ ...r, reviewers: r.reviewers.filter((id) => id !== victim) })),
   };
   assert.ok(!namedBy(struck).has(victim), "the mutation landed, on every list that named it");
   assert.deepEqual(
-    unnamed({ ...workflow, gates: { ...workflow.gates, merge: struck } }),
+    unnamedReviewers({ ...spec, gates: { ...spec.gates, merge: struck } }),
     [victim],
     "a declared lane that no rule and no gate names must fail — that is the whole point"
   );
+});
 
-  assert.equal(gate.require, "all-pass");
-  assert.equal(gate.threshold, undefined, "an all-pass gate takes no threshold");
-  // ci-green: the PR's own checks. body-unchanged (#565/#634): the squash record
-  // is pinned to what the reviewer approved.
-  assert.deepEqual(gate.also, ["ci-green", "body-unchanged"]);
+/** The block a bare `spawn_agent(kind: "reviewer")` resolves to is the FIRST reviewing block in
+ *  the file (`Guardrails::block_for` / `isReviewingBlock`). Returns its id when it is NOT on the
+ *  gate's static list — the every-round lane — or null when it is, or when there is no static
+ *  list for it to be on. Value-free: no id, and no order, is named. */
+const bareReviewerOffTheEveryRoundLane = (w: Workflow): string | null => {
+  const everyRound = w.gates.merge?.reviewers ?? [];
+  if (everyRound.length === 0) return null;
+  const bare = w.blocks.find(isReviewingBlock);
+  return bare && !everyRound.includes(bare.id) ? bare.id : null;
+};
+
+test("a bare reviewer spawn lands on a lane the gate requires on EVERY PR", () => {
+  // Block ORDER is the operator's (#3507), but one consequence of it is not: a bare
+  // `spawn_agent(kind: "reviewer")` takes the FIRST reviewing block, and if that is a lane the
+  // gate's static list does not name — one routing adds only on some paths, or none at all — the
+  // default review is the wrong lane on every PR while nothing else goes red. So the invariant
+  // is membership, not a name or a position: however blocks are renamed or reordered, the first
+  // reviewer must be one the gate requires every round.
+  const { workflow } = parseWorkflow(text);
+  assert.equal(bareReviewerOffTheEveryRoundLane(workflow), null, "the bare reviewer spawn must be an every-round lane");
+
+  // CONTROLS, on the specimen, where `r-one` is static and `r-two` only routed.
+  const spec = parseWorkflow(SPECIMEN).workflow;
+  const first = (id: string, w: Workflow): Workflow => ({
+    ...w,
+    blocks: [...w.blocks.filter((b) => b.id === id), ...w.blocks.filter((b) => b.id !== id)],
+  });
+  assert.equal(bareReviewerOffTheEveryRoundLane(spec), null, "sanity: the specimen starts clean");
+  assert.equal(bareReviewerOffTheEveryRoundLane(first("r-two", spec)), "r-two", "a routed-only lane moved first must fail");
+  // …and reordering among gated lanes is the operator's, so it stays green.
+  const bothStatic = { ...spec, gates: { ...spec.gates, merge: { ...spec.gates.merge!, reviewers: ["r-one", "r-two"] } } };
+  assert.equal(bareReviewerOffTheEveryRoundLane(first("r-two", bothStatic)), null, "any gated lane may come first");
+});
+
+test("a routing path rooted at a literal directory is rooted at one that EXISTS", () => {
+  // The partial close on the namedness gap above. Full reachability ("does this glob match a
+  // file a PR could touch") needs a glob engine and the tracked-file list, which this suite
+  // has neither of. What it can check is that a glob ROOTED at a literal path is rooted at one
+  // that exists — exactly the shape a directory rename or a typo produces.
+  //
+  // No floor on the REAL file's routing: a file with no routing, or with only unrooted globs
+  // (`**/*.md`, which can fire), is valid (#3507). The instrument's teeth are shown on the
+  // specimen instead, where its population is known.
+  const { workflow } = parseWorkflow(text);
+  assert.deepEqual(routingRoots(workflow).dead, [], "a routing rule rooted at a missing directory can never fire");
+
+  const spec = parseWorkflow(SPECIMEN).workflow;
+  assert.deepEqual(routingRoots(spec), { dead: [], checked: 1 }, "the specimen's one rooted path (`src/**`) is checked and live");
+  const g = spec.gates.merge!;
+  const typo = { ...g, routing: (g.routing ?? []).map((r) => ({ ...r, paths: [...r.paths, "zzz-no-such-dir/**"] })) };
+  assert.deepEqual(
+    routingRoots({ ...spec, gates: { ...spec.gates, merge: typo } }).dead,
+    ["zzz-no-such-dir/**"],
+    "a rooted glob naming a directory that does not exist must be reported"
+  );
+
+  // THE RESIDUAL, PERFORMED rather than merely disclosed (CLAUDE.md's escape-hatch rule):
+  // a glob whose literal root EXISTS but which matches no file passes. `src/**/*.zzz` roots at
+  // `src`, which is there, so the check passes it while the rule can never fire.
+  assert.equal(literalRoot("**/nope.zzz"), null, "an unrooted glob has no root to check…");
+  assert.equal(literalRoot("src/**/*.zzz"), "src", "…but a rooted-yet-unmatchable glob IS checked, and passes — the real blind spot");
+  assert.equal(repoHas("src"), true, "…because its root really does exist, which is all this check asks");
+});
+
+test("the merge gate is self-consistent — whatever it requires", () => {
+  // No gate VALUE is pinned (#3507): `require`, `also` and the queue are the operator's.
+  // What any valid gate owes is checked instead. `also:` conditions are the backend's to
+  // judge (`condition_supported`, asserted in the Rust twin), since the pane passes them
+  // through; the pane's half is that an all-pass gate carries no threshold.
+  const gate = parseWorkflow(text).workflow.gates.merge;
+  if (gate?.require === "all-pass") assert.equal(gate.threshold, undefined, "an all-pass gate takes no threshold");
 });
 
 test("role_hint: advisor still pairs only with the planner kind (synthetic — the rule outlives the roster)", () => {
@@ -262,6 +402,40 @@ test("every block is on the declared path — the graph loomux draws has no orph
 
 // ---------- and now the pane can WRITE it (#222 v2) ----------
 
+/** Each source's fan-out, in the order the file lists it. */
+const fanouts = (w: Workflow): [string, string[]][] => {
+  const byFrom = new Map<string, string[]>();
+  for (const e of w.edges) byFrom.set(e.from, [...(byFrom.get(e.from) ?? []), e.to]);
+  return [...byFrom.entries()];
+};
+
+/** The canonical-save contract, asserted of any workflow text. */
+const assertCanonicalSavePreservesMeaning = (source: string): { before: Workflow; after: Workflow } => {
+  const { workflow } = parseWorkflow(source);
+  const saved = serializeWorkflow(workflow);
+  const reread = parseWorkflow(saved);
+  assert.deepEqual(reread.findings, [], "a saved copy must still be clean");
+  // Everything that is not the edge list comes back deepEqual — blocks, personas, the gate and
+  // its routing, and every policy section.
+  assert.deepEqual({ ...reread.workflow, edges: [] }, { ...workflow, edges: [] }, "…and must mean exactly what the original meant");
+  // The graph itself: the same edges, none invented, none lost.
+  const key = (e: { from: string; to: string }): string => `${e.from}->${e.to}`;
+  assert.deepEqual([...reread.workflow.edges.map(key)].sort(), [...workflow.edges.map(key)].sort());
+  assert.equal(reread.workflow.edges.length, workflow.edges.length, "no edge invented, none lost");
+  assert.equal(serializeWorkflow(reread.workflow), saved, "…and saving it twice must be a no-op");
+  // The normalization, pinned in the direction it moves: every fan-out in the SAVED file is in
+  // roster order.
+  const rosterIndex = new Map(workflow.blocks.map((b, i) => [b.id, i]));
+  for (const [from, to] of fanouts(reread.workflow)) {
+    assert.deepEqual(
+      to,
+      [...to].sort((a, b) => (rosterIndex.get(a) ?? 0) - (rosterIndex.get(b) ?? 0)),
+      `${from}: the canonical file lists a fan-out in roster order`
+    );
+  }
+  return { before: workflow, after: reread.workflow };
+};
+
 test("a canonical save preserves the workflow's MEANING, exactly", () => {
   // What serialization actually guarantees, and all it guarantees: the workflow that comes back
   // is the workflow that went in — every block, persona, edge and gate — and the canonical form
@@ -270,169 +444,136 @@ test("a canonical save preserves the workflow's MEANING, exactly", () => {
   // "MEANING" is the word that has to be precise here, and the canonical form's own contract
   // supplies it: every list that REFERENCES a block (an edge's fan-out, `gates.merge.reviewers`)
   // is normalized into ROSTER order on the way out — `sortByBlocks`, argued at length in
-  // `connectToGate`'s docblock ("SEAT ORDER IS NOT THE HUMAN'S") and pinned on minimal fixtures
-  // in `test/workflowmodel.test.ts` ("a fan-out collapses to one entry per source, its targets in
-  // ROSTER order" and "As a SET, not a sequence — and that is a property, not a concession"). It
-  // is what makes two humans who wire the same graph in a different order get the same file. So
-  // the graph is compared as a SET here, and the ORDERING is asserted separately, as the
-  // direction it is supposed to move in — which is strictly stronger than the sequence equality
-  // this used to assert, because a serializer that DROPPED an edge fails the set check whatever
-  // it does to the order.
-  const { workflow } = parseWorkflow(lfText);
-  const saved = serializeWorkflow(workflow);
-  const reread = parseWorkflow(saved);
+  // `connectToGate`'s docblock ("SEAT ORDER IS NOT THE HUMAN'S"). So the graph is compared as a
+  // SET, and the ORDERING is asserted separately, as the direction it is supposed to move in.
+  assertCanonicalSavePreservesMeaning(lfText);
 
-  assert.deepEqual(reread.findings, [], "a saved copy must still be clean");
-
-  // Everything that is not the edge list comes back deepEqual — blocks, personas, the gate and
-  // its routing, and every policy section.
-  assert.deepEqual(
-    { ...reread.workflow, edges: [] },
-    { ...workflow, edges: [] },
-    "…and must mean exactly what the original meant"
-  );
-
-  // The graph itself: the same edges, none invented, none lost.
-  const key = (e: { from: string; to: string }): string => `${e.from}->${e.to}`;
-  assert.deepEqual([...reread.workflow.edges.map(key)].sort(), [...workflow.edges.map(key)].sort());
-  assert.equal(reread.workflow.edges.length, workflow.edges.length, "no edge invented, none lost");
-
-  assert.equal(serializeWorkflow(reread.workflow), saved, "…and saving it twice must be a no-op");
-
-  // The normalization, pinned in the direction it moves: every fan-out in the SAVED file is in
-  // roster order. A serializer that stopped sorting fails here rather than silently making the
-  // file a function of the human's clicking sequence again.
-  const rosterIndex = new Map(workflow.blocks.map((b, i) => [b.id, i]));
-  const fanouts = (w: typeof workflow): [string, string[]][] => {
-    const byFrom = new Map<string, string[]>();
-    for (const e of w.edges) byFrom.set(e.from, [...(byFrom.get(e.from) ?? []), e.to]);
-    return [...byFrom.entries()];
-  };
-  for (const [from, to] of fanouts(reread.workflow)) {
-    assert.deepEqual(
-      to,
-      [...to].sort((a, b) => (rosterIndex.get(a) ?? 0) - (rosterIndex.get(b) ?? 0)),
-      `${from}: the canonical file lists a fan-out in roster order`
-    );
-  }
-  // THE CONTROL that keeps the set comparison above from being a tautology: the shipped file
-  // must actually EXERCISE the reorder, or "same set, different order" is a property nothing
-  // here witnesses. Today `worker-std -> [rev-std, worker-adv]` is authored out of roster order
-  // and comes back as `[worker-adv, rev-std]`. If a future edit puts every fan-out in the
-  // file into roster order, this fails first and on purpose: move the divergence onto a
-  // synthetic fixture rather than deleting the pin.
-  assert.notDeepEqual(
-    fanouts(workflow),
-    fanouts(reread.workflow),
-    "the shipped file must keep authored order and roster order DIFFERENT, or the set comparison above witnesses nothing"
-  );
+  // THE CONTROL that keeps the set comparison from being a tautology: some input must actually
+  // EXERCISE the reorder, or "same set, different order" is a property nothing witnesses. On the
+  // SPECIMEN, whose `w-one` fan-out is authored out of roster order (#3507: the real file's edge
+  // order is the operator's, so it is not asked to carry this divergence).
+  const { before, after } = assertCanonicalSavePreservesMeaning(SPECIMEN);
+  assert.notDeepEqual(fanouts(before), fanouts(after), "the specimen's authored order and roster order must DIFFER");
 });
 
-test("the EXPLICIT Format action still rewrites this file wholesale — and still warns first", () => {
+test("the EXPLICIT Format action rewrites a commented file wholesale — and warns first", () => {
   // `serializeWorkflow` (what the Format button uses) is still a full, comment-dropping
-  // rewrite on purpose — see its own docblock. The shipped file is deliberately-committed
-  // documentation (60+ comment lines explaining the roster and the `.github/agents/`
-  // convention), so asking for the fully canonical form still costs something, and the pane
-  // still says so before it happens (`rewriteImpact`, used from the Format action since #233 —
-  // see `workflowview.ts`'s `confirmFormatRewrite`).
-  const { workflow } = parseWorkflow(lfText);
-  const canonical = serializeWorkflow(workflow);
+  // rewrite on purpose — see its own docblock. So asking for the fully canonical form of a
+  // commented file costs something, and the pane says so before it happens (`rewriteImpact`,
+  // used from the Format action since #233 — see `workflowview.ts`'s `confirmFormatRewrite`).
+  const isCanonical = (t: string): boolean => formatWorkflowText(t) === t;
 
-  assert.notEqual(canonical, lfText, "the shipped file is NOT in canonical form — it has comments");
-
-  const commentsOnDisk = lfText.split(/\r?\n/).filter((l) => /^\s*#/.test(l)).length;
-  assert.ok(commentsOnDisk > 20, `the file's comments are load-bearing (${commentsOnDisk} lines)`);
-
-  const impact = rewriteImpact(lfText, canonical, (t) => formatWorkflowText(t) === t);
-  assert.ok(impact, "an explicit Format over this file must raise a warning");
+  // The literal case, on the specimen: its comments are known, so the count is exact.
+  const specCanonical = serializeWorkflow(parseWorkflow(SPECIMEN).workflow);
+  assert.notEqual(specCanonical, SPECIMEN, "a commented file is not in canonical form");
+  const impact = rewriteImpact(SPECIMEN, specCanonical, isCanonical);
+  assert.ok(impact, "an explicit Format over a commented file must raise a warning");
   assert.ok(impact.reformats, "…it is a whole-file rewrite");
-  assert.ok(
-    impact.droppedComments >= 20,
-    `…and it drops the comments (${impact.droppedComments} lines)`
-  );
+  assert.equal(impact.droppedComments, commentLines(SPECIMEN).length, "…and it drops every comment line");
+  assert.ok(impact.droppedComments > 0, "sanity: the specimen has comments to drop");
   assert.match(rewriteImpactMessage(impact, ".orrerix/workflow.yml"), /comments on \d+ lines/);
-
   // And the case that must stay SILENT: a file loomux itself wrote is already canonical, so
   // formatting it costs nothing and asks nothing.
-  assert.equal(rewriteImpact(canonical, canonical, (t) => formatWorkflowText(t) === t), null);
+  assert.equal(rewriteImpact(specCanonical, specCanonical, isCanonical), null);
+
+  // The real file, whatever it holds: the warning fires exactly when Format would reformat it,
+  // and when it does it counts every comment line the canonical form loses.
+  const canonical = serializeWorkflow(parseWorkflow(lfText).workflow);
+  const real = rewriteImpact(lfText, canonical, isCanonical);
+  if (isCanonical(lfText) || canonical === lfText) {
+    assert.equal(real, null, "an already-canonical file formats silently");
+  } else {
+    assert.ok(real, "a non-canonical file must warn before Format rewrites it");
+    assert.equal(real.droppedComments, Math.max(0, commentLines(lfText).length - commentLines(canonical).length));
+  }
 });
 
 // ---------- and now an ordinary form/canvas edit does NOT eat the comments (#233) ----------
 //
 // This is the pin the rest of #233's tests build on: an actual save through the pane calls
-// `serializeWorkflowPreserving(model, previousBufferText)`, not `serializeWorkflow`. The two
-// tests above and below together are the whole story — Format still asks, because it is still
-// a deliberate full rewrite; an ordinary edit through the form or canvas no longer needs to.
+// `serializeWorkflowPreserving(model, previousBufferText)`, not `serializeWorkflow`. The test
+// above and the ones below together are the whole story — Format still asks, because it is
+// still a deliberate full rewrite; an ordinary edit through the form or canvas no longer needs to.
 
 test("re-serializing this file with NOTHING changed reproduces it exactly", () => {
   const { workflow } = parseWorkflow(text);
   assert.equal(serializeWorkflowPreserving(workflow, text), text);
 });
 
-test("editing one block's model keeps every other block's comments — and the section headers", () => {
-  const { workflow } = parseWorkflow(text);
-  // `worker-adv` is the SECOND worker tier, so the `# -- workers:` header sits above its
-  // untouched sibling rather than above the block being edited — which is what makes the
-  // "every OTHER block's comments" claim in the title a discrimination and not a coincidence.
-  // (Editing the block directly UNDER a header is its own specimen, the next test — #3410.)
-  const edited = {
-    ...workflow,
-    blocks: workflow.blocks.map((b) => (b.id === "worker-adv" ? { ...b, model: "sonnet" } : b)),
+test("editing ANY one block's model keeps every comment outside that block — and each header above its block", () => {
+  // Derived over every block the real file declares, so no id is named (#3507), and it covers
+  // both specimens the old literal pins held: a block BESIDE a section header, and the block
+  // directly UNDER one (#3410, where the header sits inside the edited block's own segment and
+  // the save used to drop it).
+  //
+  // What a derived pin may hold the REAL file to is the serializer's own contract — untouched
+  // regions keep their comments — and no more. A comment written INSIDE a block (above its
+  // `model:`, say) is valid, and an edit to that block regenerates it from its fields and does not
+  // re-attach the comment (deliberately out of scope, `workflowmodel.ts`). So on the real file the
+  // comparison excludes the edited block's own body (`commentsOutsideBlock`); exact whole-file
+  // comment equality is asserted only on the SPECIMEN, whose content is known to carry none
+  // (#3513 review, rev-std finding 1).
+  // Three in-block shapes, each a comment between two of `w-one`'s fields: at the field's own
+  // indent, at the `- ` marker's indent, and at column 0 (a field commented out the way many
+  // editors do). A comment's column must not decide whether it is inside the block (rev-final B1).
+  const inBlock = (comment: string): string => {
+    const out = SPECIMEN.replace("    kind: worker\n    cli: claude\n    model: sonnet", `    kind: worker\n    cli: claude\n${comment}\n    model: sonnet`);
+    assert.notEqual(out, SPECIMEN, `sanity: the in-block comment landed: ${comment}`);
+    return out;
   };
-  const out = serializeWorkflowPreserving(edited, text);
-
-  assert.deepEqual(parseWorkflow(out).workflow, edited, "the edit itself round-trips");
-
-  // The file header, the untouched blocks' own comments, and both section headers survive —
-  // only the roster in general was touched, not edges or gates, and not the OTHER blocks.
-  assert.match(out, /# CHEAP-TIER ROSTER/, "the file preamble survives");
-  assert.match(out, /DEFAULT EVERY TASK TO worker-std/, "…all ~90 lines of it, not just the first");
-  assert.match(out, /-- workers: worker-std by default/, "the untouched sibling worker's section header survives");
-  assert.match(out, /-- reviewers: rev-std runs every round/, "the reviewers' section header survives");
-  assert.match(out, /S5 dogfood \(#1778\)/, "the driver block's comment survives");
-  assert.match(out, /^edges:/m, "the edges section is untouched");
-  assert.match(out, /^# ADVISORY/m, "…and keeps its own header comment");
-  assert.match(out, /^# ENFORCED/m, "the gates section keeps its header comment too");
-  assert.match(out, /application code, tests, the E2E lane/, "a comment NESTED inside the gate's routing survives");
-  assert.match(out, /lessons\.md ENTRY/, "…and so does the block trailing the last section");
-
-  const commentLines = out.split("\n").filter((l) => /^\s*#/.test(l)).length;
-  const originalCommentLines = text.split("\n").filter((l) => /^\s*#/.test(l)).length;
-  assert.ok(originalCommentLines > 100, `the file's comments are load-bearing (${originalCommentLines} lines)`);
-  assert.equal(commentLines, originalCommentLines, "a one-field edit costs no comment line at all (#3410)");
-
-  // The rewrite-impact guard (Format's guard, not save's — see the test above) would not even
-  // fire for this: it isn't a whole-file canonical rewrite, just one changed field.
-  const impact = rewriteImpact(text, out, (t) => formatWorkflowText(t) === t);
-  assert.equal(impact, null, "an ordinary field edit is not the reformat Format's guard exists for");
-});
-
-test("editing the FIRST block under each section header keeps both headers (#3410)", () => {
-  // The human's roster edit that became #3404 changed `worker-std` and `rev-std` — the block
-  // directly under each `# --` header — and the save dropped both headers, turning the test
-  // above red on main. A header sits in the segment of the block below it, so this is the
-  // specimen where the header is INSIDE the edited block's own text, not beside it.
-  const { workflow } = parseWorkflow(text);
-  const underHeaders = ["worker-std", "rev-std"];
-  for (const id of underHeaders) {
-    assert.ok(workflow.blocks.some((b) => b.id === id), `sanity: the dogfood roster still has ${id}`);
+  const IN_BLOCK = inBlock("    # a note on this block's model, written INSIDE the block");
+  const IN_BLOCK_MARKER = inBlock("  # a note at the marker's indent, still INSIDE the block");
+  const IN_BLOCK_COL0 = inBlock("#    effort: medium");
+  const cases: { name: string; source: string; exact: boolean }[] = [
+    { name: "the real file", source: text, exact: false },
+    { name: "SPECIMEN", source: SPECIMEN, exact: true },
+    { name: "SPECIMEN with an in-block comment", source: IN_BLOCK, exact: false },
+    { name: "SPECIMEN with an in-block comment at the marker's indent", source: IN_BLOCK_MARKER, exact: false },
+    { name: "SPECIMEN with a column-0 in-block comment", source: IN_BLOCK_COL0, exact: false },
+  ];
+  for (const { name, source, exact } of cases) {
+    const { workflow } = parseWorkflow(source);
+    const headers = headersAboveBlocks(source);
+    assert.equal(headers.size, workflow.blocks.length, `${name}: sanity — every block's \`- id:\` line was found`);
+    for (const target of workflow.blocks) {
+      const at = `${name} / ${target.id}`;
+      const edited = {
+        ...workflow,
+        blocks: workflow.blocks.map((b) => (b.id === target.id ? { ...b, model: otherModel(b.model) } : b)),
+      };
+      const out = serializeWorkflowPreserving(edited, source);
+      assert.notEqual(out, source, `${at}: sanity — the edit changed the text`);
+      assert.deepEqual(parseWorkflow(out).workflow, edited, `${at}: the edit itself round-trips`);
+      assert.deepEqual(
+        commentsOutsideBlock(out, target.id),
+        commentsOutsideBlock(source, target.id),
+        `${at}: a one-field edit costs no comment line outside the edited block, and moves none`
+      );
+      if (exact) assert.deepEqual(commentLines(out), commentLines(source), `${at}: …and on the specimen, none at all`);
+      assert.deepEqual(headersAboveBlocks(out), headers, `${at}: every header still sits directly above the block it introduces`);
+      // The rewrite-impact guard (Format's guard, not save's) does not fire for this: it is not
+      // a whole-file canonical rewrite, just one changed field.
+      assert.equal(rewriteImpact(source, out, (t) => formatWorkflowText(t) === t), null, `${at}: not a reformat`);
+    }
   }
-  const edited = {
-    ...workflow,
-    blocks: workflow.blocks.map((b) =>
-      underHeaders.includes(b.id) ? { ...b, model: b.model === "sonnet" ? "opus" : "sonnet" } : b
-    ),
-  };
-  const out = serializeWorkflowPreserving(edited, text);
-  assert.deepEqual(parseWorkflow(out).workflow, edited, "the edit itself round-trips");
-  assert.notEqual(out, text, "sanity: the edit changed the text");
 
-  // Each header still sits directly above the block it introduces.
-  assert.match(out, /# -- workers: worker-std by default.*\r?\n\s*- id: worker-std\b/);
-  assert.match(out, /# -- reviewers: rev-std runs every round.*\r?\n\s*- id: rev-std\b/);
+  // NON-VACUITY for the exclusion: the in-block specimen really does carry a comment inside
+  // `w-one`'s body, so the case above exercises the region the pin must not hold — and the same
+  // file's OTHER blocks, edited, still keep that comment (it is outside their bodies).
+  for (const src of [IN_BLOCK, IN_BLOCK_MARKER, IN_BLOCK_COL0]) {
+    assert.equal(commentLines(src).length - commentsOutsideBlock(src, "w-one").length, 1, "exactly the one in-block comment is excluded");
+    assert.equal(commentsOutsideBlock(src, "w-two").length, commentLines(src).length, "…and only when its own block is the one edited");
+  }
+  // …while the header ABOVE the next block, directly after a block's last field, is handed back
+  // to the file rather than swallowed into the block before it.
+  assert.ok(
+    commentsOutsideBlock(SPECIMEN, "w-two").includes("  # -- reviewers: the header above the FIRST reviewer"),
+    "the next block's header is outside the previous block"
+  );
 
-  // And no comment line anywhere is lost: the comment lines are the same lines, in the same order.
-  const comments = (t: string): string[] => t.split(/\r?\n/).filter((l) => /^\s*#/.test(l));
-  assert.ok(comments(text).length > 100, "the file's comments are load-bearing");
-  assert.deepEqual(comments(out), comments(text));
+  // The specimen's literal headers, so "each header above its block" is witnessed on a file that
+  // HAS headers above a first block — the real file is not required to keep any.
+  const spec = headersAboveBlocks(SPECIMEN);
+  assert.deepEqual(spec.get("w-one"), ["  # -- workers: the header above the FIRST worker"]);
+  assert.deepEqual(spec.get("r-one"), ["  # -- reviewers: the header above the FIRST reviewer"]);
 });

@@ -2261,8 +2261,9 @@ The repo's own workflow is validated by **both** halves of the feature, in CI:
 
 - `the_repos_own_workflow_file_parses_clean_against_the_real_parser` (Rust) loads the real
   file through `load_workflow`, loads every persona through `load_block_profile` (which is
-  also the kind-compatibility check), asserts each handle resolves back to its own file under
-  `handle_resolves_to` (so a `cli: copilot` flip stays native), and asserts every `also:`
+  also the kind-compatibility check), asserts that each persona written in Copilot's own
+  `.github/agents/` convention resolves back to its own file under `handle_resolves_to` (so a
+  `cli: copilot` flip stays native), and asserts every `also:`
   condition is one this build can actually check — an unknown one fails closed, so shipping
   it would mean loomux could never merge its own PRs.
 - `test/workflowdogfood.test.ts` (TypeScript) opens the same file in the **pane's** reader
@@ -2272,6 +2273,19 @@ The repo's own workflow is validated by **both** halves of the feature, in CI:
 Two parsers, deliberately (the pane is an editor giving live feedback on text; the backend is
 the engine). A file only one of them accepts is a file the human is being lied to about, and
 these two tests are what stop that drifting apart.
+
+Both check the file's **validity, never its values** (#3507): editing the workflow file must
+not turn main red. No roster id, cli, model, effort, block order, gate `require:`/`also:`,
+`merge_queue:` setting, persona `mode:` or routing shape is pinned. What is asserted either
+holds of every valid workflow or is derived from the parsed file (the end-to-end launch pin
+reads each block's expected cli, model and effort off the file). A pin that genuinely needs a
+literal — a section header, an edge authored out of roster order, a routing glob for the
+existence check's control — sits on a synthetic specimen instead. Block ORDER is not pinned
+either, but one consequence of it is: a bare `spawn_agent(kind: "reviewer")` resolves to the
+FIRST reviewing block (`Guardrails::block_for`), so both suites assert that block is one the
+gate's static `reviewers:` list names — an every-round lane. That is membership, not a name or a
+position, so renaming or reordering gated lanes stays green, and only a routed-only or ungated
+lane moved first goes red.
 
 Two further pins protect narrower promises, and both are bound to a **persona file** rather
 than to roster membership. `the_checklist_reviewer_persona_carries_the_question_set` loads

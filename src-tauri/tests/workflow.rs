@@ -7934,7 +7934,8 @@ fn gate_missing_blocks_is_empty_against_the_roster_that_actually_declares_them()
         Ok(Some(wf)) => wf,
         other => panic!("loomux must ship its own parseable {}: {other:?}", workflow::workflow_path(&repo)),
     };
-    let gate = wf.gates.get("merge").unwrap();
+    // A file with no merge gate is valid (#3507), and then no reviewer is missing from it.
+    let Some(gate) = wf.gates.get("merge") else { return };
     assert_eq!(
         workflow::gate_missing_blocks(gate, &wf.blocks),
         Vec::<String>::new(),
@@ -8012,53 +8013,80 @@ blocks:
     .unwrap();
     assert_eq!(adv.blocks[0].role_hint.as_deref(), Some("advisor"), "planner+advisor stays the legal pairing");
 
-    // The queue is ARMED in this repo — a deliberate human choice (2026-08, PR #689),
-    // pinned here beside the roster so un-arming is equally deliberate. The product
-    // DEFAULT stays off, pinned by `an_absent_merge_queue_block_means_the_feature_is_off`
-    // on a synthetic specimen.
-    assert!(wf.merge_queue.enabled, "the dogfood queue is armed on purpose");
+    // No `merge_queue:` value is pinned (#3507): arming or un-arming the queue is the
+    // operator's one-line edit, and the parser already refuses an out-of-range setting.
+    // The product DEFAULT stays off, pinned by
+    // `an_absent_merge_queue_block_means_the_feature_is_off` on a synthetic specimen.
 
     for b in &wf.blocks {
         let Some(rel) = b.profile.as_deref() else { continue };
         // The persona file exists, has frontmatter and a body, and declares the SAME
         // capability class as the block using it — the compatibility check that stops a
         // reviewer persona from being pointed at by a worker block (and vice versa).
+        // Neither its `mode:` nor its location is pinned (#3507): `append` and `replace`
+        // are both valid for any block, and a persona outside `.github/agents/` is valid
+        // too — a copilot block then gets a kickoff paste rather than the native handle.
         let p = profiles::load_block_profile(&repo, rel, b.kind)
             .unwrap_or_else(|e| panic!("{}: {e}", b.id));
-        // A role-hinted persona (advisor/process) is `mode: replace` — the role_hint-keyed
-        // addendum in `mechanics_core` rides the mechanics core regardless (slice C), so a
-        // replace persona still can't drop the read-only/human-merge-gate invariant. Every
-        // other repo persona here is `mode: append`, layering onto loomux's default contract.
-        let expected_mode = if b.role_hint.is_some() { ProfileMode::Replace } else { ProfileMode::Append };
-        assert_eq!(p.mode, expected_mode, "{}: unexpected persona mode", b.id);
-        // Written in Copilot's own convention, so flipping a block to `cli: copilot`
-        // gets the NATIVE `--agent <name>` rather than a kickoff paste — which is only
-        // true if the handle resolves back, unambiguously, to the file we just read.
-        assert!(profiles::is_copilot_native(rel), "{}: {rel} must live in .github/agents", b.id);
-        let handle = p.copilot_agent.as_deref().unwrap_or(&p.name);
-        assert!(
-            profiles::handle_resolves_to(&repo, handle, rel),
-            "{}: `copilot --agent {handle}` must load {rel} and nothing else",
-            b.id
-        );
+        // What IS owed, wherever the file lives in Copilot's own convention: the native
+        // `--agent <name>` a `cli: copilot` block would get must resolve back,
+        // unambiguously, to the file just read — or copilot would load a different persona.
+        if profiles::is_copilot_native(rel) {
+            let handle = p.copilot_agent.as_deref().unwrap_or(&p.name);
+            assert!(
+                profiles::handle_resolves_to(&repo, handle, rel),
+                "{}: `copilot --agent {handle}` must load {rel} and nothing else",
+                b.id
+            );
+        }
     }
 
-    let gate = wf.gates.get("merge").expect("the dogfood file exists partly to demo the gate");
-    // ALL-PASS. The gate counts PASSES, not lanes, and an abstention counts as a pass,
-    // so a `threshold:` left behind as lanes are added would let the lanes that did not
-    // review a change open the gate ahead of the lane whose change it is (rev-14 F1's
-    // shape). #1176 also refuses `routing:` and `require: threshold` together at parse,
-    // so all-pass is the only spelling this roster could use anyway.
-    assert_eq!(gate.require, GateRequire::AllPass);
+    // Nothing the roster normalization drops: `clamped()` re-enforces the reserved-id
+    // rule and id uniqueness on rosters that never met the parser, and a block silently
+    // dropped there would be a delegate the human saw in the preview and never got.
+    let ids: Vec<String> = wf.blocks.iter().map(|b| b.id.clone()).collect();
+    let clamped = Guardrails { blocks: wf.blocks.clone(), ..rails() }.clamped();
+    assert_eq!(clamped.blocks.iter().map(|b| b.id.clone()).collect::<Vec<_>>(), ids);
+
+    // Everything below is about the merge gate, and a file with no gate is valid (#3507):
+    // no verdict is then required of anyone, so there is nothing for it to hold.
+    let Some(gate) = wf.gates.get("merge") else { return };
+    // A BARE `spawn_agent(kind: "reviewer")` lands on an every-round lane. Block ORDER is the
+    // operator's (#3507), but `block_for` takes the FIRST reviewing block, so a lane the gate's
+    // static list does not name — one routing adds only on some paths — moved first would make
+    // the default review the wrong lane on every PR with nothing else red. Membership, never a
+    // name or a position: asked through the real resolver, on the roster a group would run.
+    if !gate.reviewers.is_empty() {
+        let bare = clamped
+            .block_for(Role::Reviewer)
+            .expect("a roster whose gate names reviewers resolves a bare reviewer spawn");
+        assert!(
+            gate.reviewers.contains(&bare.id),
+            "a bare reviewer spawn resolves to {:?}, which the gate does not require every round ({:?}) — \
+             put a gated lane first",
+            bare.id,
+            gate.reviewers
+        );
+    }
+    // No `require:` value is pinned: under ALL-PASS every named reviewer must speak, so
+    // the need is the static list's length — the property, stated for whichever rule the
+    // file chose. (#1176 refuses `routing:` beside `require: threshold` at parse.)
+    if gate.require == GateRequire::AllPass {
+        assert_eq!(
+            workflow::gate_need(gate),
+            gate.reviewers.len() as u32,
+            "every named reviewer must have to speak — abstention is a pass, so a threshold would let \
+             the lanes that didn't review it open the gate ahead of the lane that must"
+        );
+    }
     // The GENERIC safety property, same shape as the frontend dogfood pin — and it is
     // NAMEDNESS, not reachability, so say so rather than overclaim. Stated over a UNION
     // because that is what #1176 made the required set: every declared reviewer-kind
     // block must be named by `gates.merge.reviewers` OR by at least one `routing:`
     // rule. A lane named by NEITHER can never enter the required set at all — it would
     // sit in the roster looking wired while the gate opened without it, which is exactly
-    // what "an abstention is a pass" makes dangerous. `rev-std` is static (every PR);
-    // `rev-final` is required by routing, on the paths a prose review cannot judge. A
-    // docs-only PR that runs rev-std alone is the rule working, not a hole.
+    // what "an abstention is a pass" makes dangerous. A lane required only on some paths
+    // is the routing working, not a hole.
     //
     // What namedness does NOT catch, found in review (rev-final round 1, N4) rather than
     // by the author: a rule whose `paths:` match nothing still NAMES its reviewer, so the
@@ -8076,12 +8104,6 @@ blocks:
     assert!(
         unnamed.is_empty(),
         "every declared reviewer lane must be reachable by the gate; these are named by nothing: {unnamed:?}"
-    );
-    assert_eq!(
-        workflow::gate_need(gate),
-        gate.reviewers.len() as u32,
-        "every named reviewer must have to speak — abstention is a pass, so a threshold would let \
-         the lanes that didn't review it open the gate ahead of the lane that must"
     );
     // Every reviewer the gate can require — static or routed — is a reviewer block that
     // actually exists. A rule naming a worker, or a block renamed out from under it,
@@ -8119,40 +8141,26 @@ blocks:
         "the control's negative arm: a bogus root really is absent, so the loop below has teeth"
     );
 
-    let mut roots_checked = 0usize;
+    // No floor on how many routing paths the real file carries, per rule or in all: a file
+    // with no routing, or a rule made only of unrooted globs (`**/*.md`, which can fire), is
+    // valid (#3507). The instrument's own teeth are the control above and the residual below,
+    // both on literal strings rather than on the file's values.
     for (i, rule) in gate.routing.iter().enumerate() {
-        let mut checked_in_rule = 0usize;
         for p in &rule.paths {
             let Some(root) = literal_root(p) else { continue };
             assert!(
                 Path::new(&repo).join(&root).exists(),
                 "routing[{i}] path {p:?} is rooted at {root:?}, which does not exist — the rule can never fire"
             );
-            roots_checked += 1;
-            checked_in_rule += 1;
         }
-        // POPULATION CONTROL, counted at the VERIFIED site: a rule made entirely of
-        // unrooted globs would sail through the loop having certified nothing.
-        assert!(
-            checked_in_rule > 0,
-            "routing[{i}] needs at least one path this check can verify: {:?}",
-            rule.paths
-        );
     }
-    assert!(roots_checked > 0, "…and some path was actually verified, not zero of them");
 
     // THE RESIDUAL, PERFORMED rather than merely disclosed (CLAUDE.md's escape-hatch
-    // rule) — and performing it is what corrected it. Two shapes LOOK like the blind
-    // spot; only one is one, and the first draft of this comment named the wrong one:
-    //
-    //  * a rule made ONLY of unrooted globs is CAUGHT — not by the existence check, which
-    //    skips them, but by the per-rule population control above. Measured on the
-    //    frontend twin: mutating rule 1 to `["**/nope.zzz"]` reddens it.
-    //  * what DOES slip through is a glob whose literal root EXISTS but which matches no
-    //    file. `src/**/*.zzz` roots at `src`, which is there, so the check passes it
-    //    while the rule can still never fire. This verifies the ROOT, not a match;
-    //    closing that last step means running the tracked-file list through
-    //    `glob_match`. Measured: that mutation leaves the suite green.
+    // rule): a glob whose literal root EXISTS but which matches no file slips through.
+    // `src/**/*.zzz` roots at `src`, which is there, so the check passes it while the rule
+    // can still never fire. This verifies the ROOT, not a match; closing that last step
+    // means running the tracked-file list through `glob_match`. An unrooted glob is not
+    // checked at all.
     assert_eq!(literal_root("**/nope.zzz"), None, "an unrooted glob has no root to check…");
     assert_eq!(
         literal_root("src/**/*.zzz").as_deref(),
@@ -8160,15 +8168,6 @@ blocks:
         "…but a rooted-yet-unmatchable glob IS checked, and passes — the real blind spot"
     );
     assert!(Path::new(&repo).join("src").exists(), "…because its root really does exist, which is all this check asks");
-    assert_eq!(literal_root("**/Cargo.toml"), None, "…and the shipped file really does contain an unrooted path");
-    assert_eq!(
-        gate.routing
-            .iter()
-            .map(|r| r.paths.iter().filter(|p| literal_root(p).is_none()).count())
-            .collect::<Vec<_>>(),
-        vec![0, 0, 0, 1],
-        "…in exactly one rule, beside three rooted paths — so the blind spot is not load-bearing here"
-    );
 
     // And every `also:` condition is one THIS build can check. An unknown condition is
     // not ignored — it fails closed and refuses every merge — so shipping one in the
@@ -8180,13 +8179,6 @@ blocks:
             workflow::KNOWN_CONDITIONS
         );
     }
-
-    // Nothing the roster normalization drops: `clamped()` re-enforces the reserved-id
-    // rule and id uniqueness on rosters that never met the parser, and a block silently
-    // dropped there would be a delegate the human saw in the preview and never got.
-    let ids: Vec<String> = wf.blocks.iter().map(|b| b.id.clone()).collect();
-    let clamped = Guardrails { blocks: wf.blocks, ..rails() }.clamped();
-    assert_eq!(clamped.blocks.iter().map(|b| b.id.clone()).collect::<Vec<_>>(), ids);
 }
 
 #[test]
@@ -8197,16 +8189,13 @@ fn the_checklist_reviewer_persona_carries_the_question_set() {
     // a rename that drifts from PR A's product-side `## Premortem` spelling) reddens
     // here instead of silently thinning the review.
     //
-    // BOUND TO THE FILE, NOT TO ROSTER MEMBERSHIP. The live cheap-tier roster does not
-    // declare `rev-lead` — its lanes are `rev-std` and `rev-final` — but `rev-lead.md`
-    // is still checked in, so the property is pinned on the persona file itself rather
-    // than looked up through `wf.block("rev-lead")`, which would panic. What that buys
-    // is checkable from the repo alone: the persona survives a roster change, so a roster
-    // that declares `rev-lead` again gets a file whose contract never silently drifted
-    // while nothing pointed at it. Nothing is relaxed: every assertion below is what it
-    // was.
+    // BOUND TO THE FILE, NOT TO ROSTER MEMBERSHIP. The persona is pinned on the checked-in
+    // file itself rather than looked up through `wf.block("rev-lead")`, because whether the
+    // live roster declares `rev-lead` is the operator's call (#3507) and a lookup would
+    // panic the day it does not. What that buys is checkable from the repo alone: the
+    // persona's contract never silently drifts while no roster points at it.
     // These headings are `rev-lead.md`'s contract specifically — they are NOT asserted
-    // of `rev-final.md`, which does not carry them and was never written to.
+    // of any other reviewer persona, which was never written to carry them.
     let repo = repo_root();
     let rel = ".github/agents/rev-lead.md";
     let p = profiles::load_block_profile(&repo, rel, Role::Reviewer)
@@ -8256,13 +8245,10 @@ fn the_cheap_review_lanes_carry_the_rules_that_make_them_safe() {
     // comment.
     //
     // BOUND TO THE FILES, NOT TO ROSTER MEMBERSHIP, for the same reason as the pin
-    // above: the live roster's every-round reviewer (`rev-std`)
-    // is an ITERATING reviewer rather than a fixed-checklist instrument and
-    // carries none of these rules — deriving the population from the roster would
-    // therefore assert this file's rules of a persona they were never written for.
-    // The three checklist personas are still checked in, so the same thing holds as for
-    // the pin above: their contracts stay pinned while no roster points at them, and a
-    // roster that declares them again gets files that never drifted.
+    // above: a roster's reviewer lanes need not be fixed-checklist instruments at all, so
+    // deriving the population from whatever roster is live would assert these rules of
+    // personas they were never written for. The checklist personas are checked in, so
+    // their contracts stay pinned whether or not any roster points at them.
     //
     // Every `pinned(...)` rule below is byte-identical to what it was — the per-persona
     // rules are the whole point and none of them moved. The POPULATION CONTROL is the one
@@ -8405,18 +8391,26 @@ fn the_repos_own_workflow_runs_every_block_on_what_it_declares() {
     ]);
     let g = reg.create_group(&repo, Guardrails { blocks: picks, ..rails() }).unwrap();
 
-    // `-flag value` in either emitted form. Name-independent on purpose: claude and pi
-    // spell the model `--model`, codex `-m`, and the effort rides `--effort` on claude
-    // and `--thinking` on pi — what this pins is that the file's VALUE arrives as a flag
-    // argument, not which spelling a CLI's adapter uses (each adapter's own tests own that).
-    fn flag_carries(toks: &[&str], value: &str, context: &str) -> bool {
+    // `<flag> value` in either emitted form, where `<flag>` is one of the KNOB's own
+    // spellings: the model rides `--model` (claude, copilot, gemini, opencode, pi) or `-m`
+    // (codex); the effort rides `--effort` (claude) or `--thinking` (pi). Bound to the knob,
+    // so an effort that happens to equal some other flag's value cannot satisfy it (#3510
+    // review). A new CLI spelling reddens this on the PRODUCT change that adds it — never on
+    // a workflow edit, which is the only thing #3507 promises stays green.
+    const MODEL_FLAGS: &[&str] = &["--model", "-m"];
+    const EFFORT_FLAGS: &[&str] = &["--effort", "--thinking"];
+    fn flag_carries(toks: &[&str], flags: &[&str], value: &str, context: &str) -> bool {
         toks.windows(2).any(|w| {
             let v = w[1].trim_matches('"');
             // A declared `context:` rides claude's model token as a suffix
             // (`claude_model_arg`: `opus[1m]`), so the model is then a prefix, not the token.
-            w[0].starts_with('-') && (v == value || (!context.is_empty() && v.starts_with(&format!("{value}["))))
+            flags.contains(&w[0]) && (v == value || (!context.is_empty() && v.starts_with(&format!("{value}["))))
         })
     }
+    // The binding's own POSITIVE CONTROL: a value carried by the WRONG knob's flag is not
+    // carriage. Without it, a predicate that ignored `flags` would pass every row below.
+    assert!(flag_carries(&["x", "--effort", "high"], EFFORT_FLAGS, "high", ""), "control: the right flag carries it");
+    assert!(!flag_carries(&["x", "--model", "high"], EFFORT_FLAGS, "high", ""), "control: another knob's flag does not");
 
     let mut compiled = 0usize;
     for block in wf.blocks.iter().filter(|b| b.kind != Role::Orchestrator) {
@@ -8434,8 +8428,8 @@ fn the_repos_own_workflow_runs_every_block_on_what_it_declares() {
 
         let model = workflow::model_of(block, &g.guardrails.agent_cli);
         if !model.is_empty() {
-            assert!(flag_carries(&cmd_toks, model, &block.context), "{id}: declared model {model:?} must reach the command line unchanged: {cmd}");
-            assert!(flag_carries(&argv_toks, model, &block.context), "{id}: …and the argv path must agree: {argv:?}");
+            assert!(flag_carries(&cmd_toks, MODEL_FLAGS, model, &block.context), "{id}: declared model {model:?} must reach the command line unchanged: {cmd}");
+            assert!(flag_carries(&argv_toks, MODEL_FLAGS, model, &block.context), "{id}: …and the argv path must agree: {argv:?}");
         }
         assert!(!cmd.contains(PICK), "{id}: a launcher per-role pick must never flatten a declared block: {cmd}");
 
@@ -8443,8 +8437,8 @@ fn the_repos_own_workflow_runs_every_block_on_what_it_declares() {
         // (`a_codex_effort_knob_rides_the_profile_and_an_empty_one_emits_no_key`,
         // tests/codexharness.rs) — a carriage behaviour, not an identity, so it is gated here.
         if !block.effort.is_empty() && cli != "codex" {
-            assert!(flag_carries(&cmd_toks, &block.effort, ""), "{id}: declared effort {:?} must reach the command line: {cmd}", block.effort);
-            assert!(flag_carries(&argv_toks, &block.effort, ""), "{id}: …and the argv path must agree: {argv:?}");
+            assert!(flag_carries(&cmd_toks, EFFORT_FLAGS, &block.effort, ""), "{id}: declared effort {:?} must reach the command line: {cmd}", block.effort);
+            assert!(flag_carries(&argv_toks, EFFORT_FLAGS, &block.effort, ""), "{id}: …and the argv path must agree: {argv:?}");
         }
         compiled += 1;
     }

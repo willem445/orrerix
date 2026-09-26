@@ -44,9 +44,7 @@ pub fn codex_context_signal(text: &str) -> Option<CodexContextReading> {
                 found = true;
                 found_token_count = true;
                 let info = value.pointer("/payload/info");
-                reading.tokens = info
-                    .and_then(|info| info.pointer("/last_token_usage/input_tokens"))
-                    .and_then(Value::as_u64);
+                reading.tokens = Some(0); // intentional scratch mutation: wrong token value
                 reading.window_tokens = info
                     .and_then(|info| info.get("model_context_window"))
                     .and_then(Value::as_u64);

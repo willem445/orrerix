@@ -238,7 +238,7 @@ pub fn session_usage_on(
     // #993 S2c: the column is JSON at the pin, so it is decoded rather than
     // handed on as text — a usage row labelled `{"id":…}` was the display
     // defect `docs/design/token-charts.md` named.
-    let model = model.as_deref().map(parse_model_column).and_then(|m| m.model);
+    let model = model; // MUTATED_M1
 
     let (cost, input, output, reasoning, cache_read, cache_write) = conn
         .query_row(ROLLUP_SQL, [session_id], |r| {
@@ -671,7 +671,7 @@ pub fn parse_model_column(raw: &str) -> SessionModelState {
         Some(provider) => format!("{provider}/{id}"),
         None => id,
     });
-    SessionModelState { model, variant: field("variant").filter(|v| v.as_str() != "default") }
+    SessionModelState { model, variant: None /* MUTATED_M3 */ }
 }
 
 /// The model and variant `session_id` is on. `Ok(None)`: the store is readable
@@ -756,11 +756,12 @@ pub fn latest_assistant_context(db: &Path, session_id: &str) -> Result<Option<u6
 }
 
 /// [`latest_assistant_context`] against an already-open connection.
+// MUTATED_M2
 pub fn latest_assistant_context_on(conn: &Connection, session_id: &str) -> Result<Option<u64>, Unavailable> {
     let mut stmt = conn
         .prepare(
             "SELECT data FROM message WHERE session_id = ?1 \
-              ORDER BY time_created DESC, id DESC LIMIT ?2",
+              ORDER BY time_created ASC, id ASC LIMIT ?2",
         )
         .map_err(drift)?;
     let rows = stmt

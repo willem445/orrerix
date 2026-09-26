@@ -181,17 +181,21 @@ fn write_rollout(root: &Path, body: &str) -> PathBuf {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn codex_context_signal_maps_the_latest_rollout_into_the_compaction_signal() {
-    let root = tempfile::tempdir().unwrap();
+fn agent_context_signals_dispatches_codex_to_its_rollout_reader() {
+    let (reg, _dir, seam) = codex_registry();
+    let group = reg.create_group("C:/tmp/codex-repo", rails("codex")).unwrap();
+    let agent = reg.spawn_agent(&group.id, Role::Worker, "w", "task", false, None).unwrap();
+    assert!(reg.associate_session(&group.id, &agent.id, THREAD));
+
     let turn = "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5-codex\",\"effort\":\"high\"}}";
-    let compacted = "{\"type\":\"compacted\"}";
     write_rollout(
-        root.path(),
-        &format!("{turn}\n{}\n{compacted}\n", token_count_event(Usage { input: 123, ..Usage::default() })),
+        &seam.codex,
+        &format!("{turn}\n{}\n{{\"type\":\"compacted\"}}\n", token_count_event(Usage { input: 123, ..Usage::default() })),
     );
-    let session = PathSegment::parse(THREAD).unwrap();
-    let signal = loomux_lib::modelstate::codex_compaction_signal_in(root.path(), &session)
-        .expect("the Codex rollout should produce a context signal");
+    let signal = reg
+        .agent_context_signals()
+        .remove(&agent.id)
+        .expect("the Codex agent should receive its rollout context signal");
 
     assert_eq!(signal.tokens, Some(123));
     assert_eq!(signal.window_tokens, Some(272_000));

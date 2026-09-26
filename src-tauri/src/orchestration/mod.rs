@@ -43662,7 +43662,8 @@ impl OrchRegistry {
     /// snapshot; Codex reads the newest rollout via the store lookup. The
     /// parsers and path resolvers stay separate so neither CLI's missing or
     /// compressed artifact can borrow another pane's reading.
-    fn agent_context_signals(&self) -> HashMap<String, crate::usage::CompactionSignal> {
+    #[doc(hidden)] // pub for the codex context-reader integration test
+    pub fn agent_context_signals(&self) -> HashMap<String, crate::usage::CompactionSignal> {
         let rows: Vec<(String, String, GroupId, workflow::BlockId, Role)> = self
             .agents
             .lock_safe()

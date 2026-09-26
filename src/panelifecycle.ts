@@ -9,7 +9,8 @@
 // The fit/resize machinery stays on `Pane`, but this file DOES reach it, through
 // call sites carried unchanged from pane.ts: `attachPty`'s post-spawn
 // `this.pane.applyFit()` reconcile (applyFit → runFit → doFit → doResize →
-// resizePty), and `start`/`respawnFresh`'s `this.pane.fit.fit()`. Constraint 1
+// resizePty), `start`'s `this.pane.resizeObs.observe(termEl)` (whose callback is
+// `applyFit`), and `start`/`respawnFresh`'s `this.pane.fit.fit()`. Constraint 1
 // applies here in full: a new fit or resize call needs its own argument.
 // Design notes: docs/design/pane-render-throttle.md, docs/design/session-restore.md;
 // layout conventions: docs/design/module-layout.md.

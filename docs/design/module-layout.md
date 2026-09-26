@@ -138,6 +138,7 @@ free function `panecapture.ts` (#3498 F1), and `workflowview.ts` with
   satellite does can reach a PTY resize that it could not reach before
   (constraint 1). Satellites DO still reach one, through base call sites they
   carried: `PaneLifecycle.attachPty`'s post-spawn `applyFit()` reconcile,
+  `start`'s `resizeObs.observe` (its callback is `applyFit`),
   `start`/`respawnFresh`'s `fit.fit()`, and `PaneEmbeds.wireEmbedDivider`'s
   resize hold, whose release runs `runFit()`. So constraint 1 applies to every
   satellite, not only to `pane.ts`. The header-overflow ladder, the

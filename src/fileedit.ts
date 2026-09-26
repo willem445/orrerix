@@ -801,7 +801,7 @@ export class FileEditView {
     // `shouldConfirmDiscardBeforeClose` (dirtystate.ts) is what actually
     // decides — docked always skips the confirm; `onClose` below still
     // runs regardless, so the toast/disabled-button affordance every other
-    // docked view's toggle gets (Pane.toggleView's embedToggleAction guard)
+    // docked view's toggle gets (PaneEmbeds.toggleView's embedToggleAction guard)
     // applies here too.
     if (shouldConfirmDiscardBeforeClose(this.host.isDocked?.() ?? false, this.isDirtyNow())) {
       const ok = await this.confirmDiscard();

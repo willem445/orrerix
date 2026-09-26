@@ -155,7 +155,7 @@ export const EMBED_SIDES: readonly EmbedSide[] = ["left", "right", "bottom"];
  *  beside `termEl` (or the row, for bottom), a plain two-element pair. Left
  *  is NOT — the pane's DOM nests `embedCenterEl` (containing `termEl` and
  *  the optional right slot) as ONE element inside `embedRowEl` alongside the
- *  left slot (see `Pane.ensureEmbedHost`'s doc comment for why: a nested
+ *  left slot (see `PaneEmbeds.ensureEmbedHost`'s doc comment for why: a nested
  *  tree, not a flat 5-child row, keeps every OTHER divider's pair a real,
  *  single DOM element too). The left divider's far side is that composite
  *  `embedCenterEl`, whose own floor has to account for whatever's nested

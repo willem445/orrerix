@@ -65,7 +65,7 @@ import {
 /** What the hosting pane provides. TWO hosts (#217):
  *
  *   OVERLAY (Alt+G, unchanged) — the view floats over a terminal, in a container
- *     pane.ts sizes from the TERMINAL's height (`overlayClamp`) and closes with
+ *     paneembeds.ts sizes from the TERMINAL's height (`overlayClamp`) and closes with
  *     Esc/✕. That sizing model is the only thing that ever assumed a terminal.
  *   PANE (`embedded`) — the view IS a pane's content, filling its content box.
  *     There is no terminal to measure and none to close back to, so the ✕ and the
@@ -459,7 +459,7 @@ export class GitView {
     // button) is disabled while docked (#361 user-demo finding — see
     // embedtoggle.ts): closing/reopening a docked view isn't a supported
     // action anymore, only un-embedding is. Disabled here as the visible
-    // affordance for THIS button; `Pane.syncEmbedToggleButton` mirrors it on
+    // affordance for THIS button; `PaneEmbeds.syncEmbedToggleButton` mirrors it on
     // the pane header's own button.
     this.closeBtn.disabled = active;
     this.closeBtn.title = active ? "Docked — un-embed it (side menu) to close" : "Back to terminal (Esc)";
@@ -471,7 +471,7 @@ export class GitView {
    *  column splitter dragged along X; horizontal = a row splitter dragged along
    *  Y). `measure()` returns the neighbored pane's size at drag start; `onDrag`
    *  receives that start size plus the signed pixel delta on every move and on
-   *  release. Mirrors makeOverlayDivider in pane.ts, but never touches the
+   *  release. Mirrors makeOverlayDivider in paneembeds.ts, but never touches the
    *  overlay's outer size — only the inner flex distribution. */
   private makeDivider(
     orientation: "vertical" | "horizontal",

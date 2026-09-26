@@ -261,7 +261,7 @@ opinion on an auto-clear, which is exactly why the scan is there.
 The residual is stated in that file: the scan is textual, so an aliased or
 computed call is invisible to it; it bounds where the flag is written, never how
 long a write lasts. What makes that enough is `private isWatched` — a second
-writer outside `pane.ts` cannot compile, and one inside it fails the scan.
+writer outside `panebadges.ts` cannot compile, and one inside it fails the scan.
 
 ## What is not marked, and why
 

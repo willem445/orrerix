@@ -44,7 +44,7 @@ this note is the architecture and the decisions behind it.
   the user cancelled or closed the pane mid-flight, so a stale transcript never
   lands. Depends on panes only through the `VoiceTargetPane` interface — no
   import cycle.
-- **`src/pane.ts`** implements `VoiceTargetPane`: `isComposeFocused()`,
+- **`src/pane.ts`** implements `VoiceTargetPane` (the bodies live in `src/panecompose.ts`): `isComposeFocused()`,
   `insertTranscript()` (caret insert), `pasteToTerminal()` (`xterm.paste`, which
   applies bracketed-paste semantics and adds no newline), plus `setVoicePhase()`
   (mic-button pulse/spin for compose targets, overlay badge for terminal

@@ -65,7 +65,7 @@ is that family's general case.
 ## The sizing generalization (the "second sizing model")
 
 #214 deferred "the git view over a files pane" because *every* pane overlay is
-sized from the terminal: `Pane.overlayClamp` measures `termEl.clientHeight`, and
+sized from the terminal: `PaneEmbeds.overlayClamp` measures `termEl.clientHeight`, and
 `updateTermShift` reads the live `.xterm-screen` to keep the cursor visible under
 the panel. With no terminal, an overlay opens into a zero-height box. That deferral
 was real, and it is what this note answers — by the other road.

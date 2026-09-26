@@ -1092,7 +1092,7 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
 }
 .pane-channel:hover { filter: brightness(1.15); }
 /* #271 W3 addendum, part C: the chip's arrow (▲ sender / ▼ receiver) rides in its
-   textContent (pane.ts's setConnected) — dashed border here is the honest
+   textContent (panebadges.ts's setConnected) — dashed border here is the honest
    "receive-only" variant for a delivery-only member (no token, ever), visually
    distinct from a plain receiver simply out of credit (which stays solid — it WILL
    be able to reply). */
@@ -1346,7 +1346,7 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
    itself just changes the panel's own box (driven by flex-grow / an
    explicit height), which has nothing to do with the list's CONTENT. The
    host toggles `.resizing` on the panel/overlay for the duration of a drag
-   (pane.ts's `wireEmbedDivider` / `makeOverlayDivider`) — `content-visibility:
+   (paneembeds.ts's `wireEmbedDivider` / `makeOverlayDivider`) — `content-visibility:
    hidden` skips layout AND paint of a listed view's rows entirely while
    dragging (the outer box, sized by flex-grow/height, is unaffected — flex
    items with an explicit `flex-basis: 0` were never sized from their
@@ -1409,7 +1409,7 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
    no-PTY-resize-for-chrome rule (CLAUDE.md constraint 1), not a violation
    of it.
 
-   NESTED, not a flat row, mirroring `Pane.ensureEmbedHost`'s own structure
+   NESTED, not a flat row, mirroring `PaneEmbeds.ensureEmbedHost`'s own structure
    exactly (see its doc comment for the full picture and why nesting, not a
    flat 5-child row, is what keeps every divider's own drag math a plain
    two-element pair):
@@ -1418,7 +1418,7 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
          .pane-embed-panel.side-left
          .pane-embed-divider.side-left
          .pane-embed-center (row)  — term | right
-           .pane-embed-term-wrap (see Pane.embedTermWrapEl's doc comment:
+           .pane-embed-term-wrap (see PaneEmbeds.embedTermWrapEl's doc comment:
              .pane-term            exists ONLY so the right divider never
                                     writes .style.flex onto .pane-term
                                     itself — #361 right-dock lag fix)
@@ -1429,7 +1429,7 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
    `.pane-embed-host` takes over `.pane-term`'s old role as `.pane`'s direct
    flex:1 child; with every slot's divider/panel `[hidden]`, the nested
    structure lays out identically to `.pane-term` being that child directly.
-   Only one view occupies any given slot (`Pane.embedSlots`), but up to
+   Only one view occupies any given slot (`PaneEmbeds.embedSlots`), but up to
    three slots can be occupied AT ONCE, one per side. */
 .pane-embed-host {
   display: flex; flex-direction: column; flex: 1; min-height: 0;
@@ -2223,7 +2223,7 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
 
    Chrome that describes a SHELL is hidden: the folder chip cd's a shell, the branch chip
    opens the git overlay, and the git/issues/file-editor buttons open overlays sized
-   against the TERMINAL's height (see Pane.refuseOverlay — the overlays are the one thing
+   against the TERMINAL's height (see PaneEmbeds.refuseOverlay — the overlays are the one thing
    that genuinely needs a terminal to measure). What stays is what still means something:
    rename, "open in editor", split, dock, maximize, close. */
 /* Same rule, same reason: hide the chip ITEMS, never `.pane-meta` itself. It is the

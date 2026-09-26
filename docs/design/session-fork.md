@@ -350,7 +350,7 @@ toast.
 | the MCP tool | `src-tauri/src/orchestration/mcp.rs` | `fork_session_tool`, the `fork_session` arm, the lead's listing and gate rows |
 | the commands | `src-tauri/src/orchestration/mod.rs` + `src/orchestration.ts` | `orch_fork_agent` / `orchForkAgent`; `orch_fork_solo_result` / `orchForkSoloResult` (the lead self-fork's ack) |
 | the frontend line | `src/panerestore.ts` | `FORK_SEAMS`, `forkGrammarOf`, `agentForkCommand`, `canForkCli`, `forkPremintsChild`, `forkPaneName` |
-| the one-shot rule | `src/panerestore.ts` + `src/pane.ts` | `forkRecordCommand`, applied in `Pane.capture`; `hasForkSession` per CLI |
+| the one-shot rule | `src/panerestore.ts` + `src/panecapture.ts` | `forkRecordCommand`, applied in `capturePane`; `hasForkSession` per CLI |
 | the reconciler exception | `src/main.ts` + `src/pane.ts` | `reconcileCandidates`, `claimedSessionIds`, `Pane.forkedFrom` |
 | the record | `src/tabstore.ts` | `PersistedPane.forkOf` (additive, blank coerces to null) |
 | the gesture | `src/panemenu.ts` | `forkItem`, `forkActionFor`, `forkClickRefusal` |

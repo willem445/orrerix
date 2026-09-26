@@ -11291,7 +11291,7 @@ The fix ships two of the reviewed options together: **C** (the structural destin
 **A** (a cheap backstop). B (focus-aware deferral) and D/E were rejected — see below.
 
 **C — loomux-owned compose strip (structural mutual exclusion).** The orchestrator pane
-gets a thin loomux input strip docked under its terminal (frontend `Pane.buildComposeStrip`,
+gets a thin loomux input strip docked under its terminal (frontend `PaneCompose.buildComposeStrip`,
 shown only for the `orchestrator` roster role). The human types steering there; on submit,
 the frontend calls `orch_steer`, which enqueues the text to the group's orchestrator through
 the **same** per-pane serialized delivery path (`deliver_to_orchestrator` → `deliver_prompt`,

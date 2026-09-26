@@ -855,24 +855,90 @@ fn context_the_newest_assistant_message_is_the_reading_and_only_its_input_side_c
 }
 
 #[test]
-fn context_an_in_flight_turns_zeros_and_a_compaction_summary_are_not_readings() {
+fn context_an_in_flight_turns_zeros_are_not_a_reading() {
     // An assistant message is inserted with every counter at zero and filled at
     // its first `step-finish`; a `0` would read as a compaction's token drop.
-    // A compaction summary's call read the whole pre-compact history, which is
-    // not what the context holds afterwards. Both are newer than the real turn.
-    let s = Scratch::new("ctx-skip");
+    // So the walk steps past it to the turn below.
+    let s = Scratch::new("ctx-zero");
     store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
     add_messages(
         &s.db(),
         SES,
         &[
             msg("msg_0001", 1_000, assistant(Usage { input: 40_000, cache_read: 2_000, ..Usage::default() })),
-            msg("msg_0002", 2_000, compaction_summary(Usage { input: 180_000, ..Usage::default() })),
-            msg("msg_0003", 3_000, assistant(Usage::default())),
+            msg("msg_0002", 2_000, assistant(Usage::default())),
         ],
     );
 
     assert_eq!(opencodedb::latest_assistant_context(&s.db(), SES).unwrap(), Some(42_000));
+}
+
+#[test]
+fn context_a_finished_compaction_summary_ends_the_walk_until_a_post_compact_turn_finishes() {
+    // After a compaction neither the summary's figure (its call read the whole
+    // pre-compact history) nor any OLDER turn is what the context holds, so the
+    // walk stops at a finished summary with no reading — opencode's own overflow
+    // check makes no judgement on a summary either, rather than falling back.
+    let pre = || msg("msg_0001", 1_000, assistant(Usage { input: 40_000, cache_read: 2_000, ..Usage::default() }));
+    let summary = || msg("msg_0002", 2_000, compaction_summary(Usage { input: 180_000, ..Usage::default() }));
+
+    // [turn, summary, post-compact turn still in flight]: no reading, not 42_000.
+    let s = Scratch::new("ctx-summary-inflight");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(&s.db(), SES, &[pre(), summary(), msg("msg_0003", 3_000, assistant(Usage::default()))]);
+    assert_eq!(
+        opencodedb::latest_assistant_context(&s.db(), SES).unwrap(),
+        None,
+        "the pre-compact turn below a finished summary is not what the context holds"
+    );
+
+    // [turn, summary, post-compact turn finished]: the post-compact figure.
+    let s = Scratch::new("ctx-summary-after");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(
+        &s.db(),
+        SES,
+        &[pre(), summary(), msg("msg_0003", 3_000, assistant(Usage { input: 9_000, cache_write: 500, ..Usage::default() }))],
+    );
+    assert_eq!(opencodedb::latest_assistant_context(&s.db(), SES).unwrap(), Some(9_500));
+
+    // [turn, summary still running]: the compaction has not finished, so the
+    // pre-compact turn is still what the context holds.
+    let s = Scratch::new("ctx-summary-running");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(&s.db(), SES, &[pre(), msg("msg_0002", 2_000, compaction_summary(Usage::default()))]);
+    assert_eq!(opencodedb::latest_assistant_context(&s.db(), SES).unwrap(), Some(42_000));
+}
+
+#[test]
+fn context_an_unknown_session_or_absent_store_is_no_signal() {
+    // No session row: not yet written (the watcher bound an id the store has not
+    // committed), or a stale id. A model-less signal would be a reading about
+    // nothing.
+    let s = Scratch::new("ctx-unknown");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    assert!(opencode_compaction_signal_in(&s.db(), SES).is_some(), "positive control: the known session reads");
+    assert!(opencode_compaction_signal_in(&s.db(), SUB).is_none(), "an id with no session row is no signal");
+    assert_eq!(opencodedb::session_model_state(&s.db(), SUB).unwrap(), None);
+
+    let absent = Scratch::new("ctx-absent");
+    assert!(opencode_compaction_signal_in(&absent.db(), SES).is_none(), "no store at all is no signal");
+}
+
+#[test]
+fn context_a_null_model_column_is_a_session_with_no_model_and_its_tokens_still_read() {
+    let s = Scratch::new("ctx-null-model");
+    store(&s.db(), &[Row { model: None, ..Row::new(SES) }]);
+    add_messages(&s.db(), SES, &[msg("msg_0001", 1_000, assistant(Usage { input: 1_234, ..Usage::default() }))]);
+
+    assert_eq!(
+        opencodedb::session_model_state(&s.db(), SES).unwrap(),
+        Some(SessionModelState::default()),
+        "the session exists; it just names no model"
+    );
+    let signal = opencode_compaction_signal_in(&s.db(), SES).expect("a NULL column still yields a signal");
+    assert_eq!((signal.model, signal.effort), (None, None));
+    assert_eq!(signal.tokens, Some(1_234));
 }
 
 #[test]

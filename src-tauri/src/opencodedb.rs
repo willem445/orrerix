@@ -702,10 +702,22 @@ pub fn session_model_state_on(
 /// rows all fail to count must cost a bounded read, not a full-table parse.
 pub const CONTEXT_SCAN_ROWS: i64 = 64;
 
-/// The context one `message.data` document stands for, if it is a message
-/// that counts: an **assistant** message that is **not a compaction summary**
-/// (`summary: true`) and whose `input + cache.read + cache.write` is above
-/// zero. Pure, for the same reason as [`parse_model_column`].
+/// What one `message.data` document means to the context walk in
+/// [`latest_assistant_context_on`]. Pure, for the same reason as
+/// [`parse_model_column`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageContext {
+    /// Not a reading: a user message, a document that does not parse, or an
+    /// assistant message whose context sum is zero. The walk steps past it.
+    Skip,
+    /// A FINISHED compaction summary (`summary: true`, non-zero). The walk
+    /// stops here with no reading (see [`message_context`]).
+    CompactionSummary,
+    /// An ordinary assistant turn's context: `input + cache.read + cache.write`.
+    Tokens(u64),
+}
+
+/// Classify one `message.data` document for the context walk.
 ///
 /// - **The input side only.** `getUsage` (`session/session.ts`) stores `input`
 ///   as the provider's input count MINUS both cache counts, so the three sum
@@ -715,20 +727,25 @@ pub const CONTEXT_SCAN_ROWS: i64 = 64;
 ///   what the call produced.
 /// - **Zero is skipped, not read.** An in-flight message holds zeros until its
 ///   first `step-finish`, and a `0` handed to the compaction state machine
-///   looks exactly like a compaction's token drop.
-/// - **A compaction summary is skipped.** Its call read the whole pre-compact
-///   history, which is not what the context holds afterwards; opencode's own
-///   overflow check skips it for the same reason (`lastFinished.summary !==
-///   true`, `session/prompt.ts`).
-pub fn assistant_context_tokens(data: &str) -> Option<u64> {
-    let v: serde_json::Value = serde_json::from_str(data).ok()?;
+///   looks exactly like a compaction's token drop. That includes a compaction
+///   still running: until its summary finishes, the pre-compact turn below it
+///   IS what the context holds.
+/// - **A finished compaction summary ends the walk.** Its call read the whole
+///   pre-compact history, so its figure is not what the context holds
+///   afterwards — and neither is any turn older than it. There is no reading
+///   until the first post-compact turn finishes. This mirrors opencode's own
+///   overflow check, which takes the newest finished assistant
+///   (`MessageV2.latest`, `session/message-v2.ts`) and, when that is a
+///   summary, makes no judgement at all (`lastFinished.summary !== true`,
+///   `session/prompt.ts`) rather than falling back to an older message.
+pub fn message_context(data: &str) -> MessageContext {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
+        return MessageContext::Skip;
+    };
     if v.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
-        return None;
+        return MessageContext::Skip;
     }
-    if v.get("summary").and_then(serde_json::Value::as_bool) == Some(true) {
-        return None;
-    }
-    let tokens = v.get("tokens")?;
+    let Some(tokens) = v.get("tokens") else { return MessageContext::Skip };
     // `Schema.Finite`, so a counter may arrive as a float; a negative or
     // non-finite one is no count at all (the `sane_count` posture).
     let count = |p: &str| {
@@ -739,13 +756,20 @@ pub fn assistant_context_tokens(data: &str) -> Option<u64> {
             .map_or(0, |n| n as u64)
     };
     let sum = count("/input").saturating_add(count("/cache/read")).saturating_add(count("/cache/write"));
-    (sum > 0).then_some(sum)
+    if sum == 0 {
+        MessageContext::Skip
+    } else if v.get("summary").and_then(serde_json::Value::as_bool) == Some(true) {
+        MessageContext::CompactionSummary
+    } else {
+        MessageContext::Tokens(sum)
+    }
 }
 
-/// The newest counted assistant message's context tokens in `session_id`
-/// (see [`assistant_context_tokens`]). `Ok(None)`: no counted assistant
-/// message within the last [`CONTEXT_SCAN_ROWS`] messages — a pane that has
-/// not finished a turn yet, or no such session.
+/// The newest assistant turn's context tokens in `session_id`, walking newest
+/// first and classifying each message with [`message_context`]. `Ok(None)`: a
+/// finished compaction summary came before any turn (no post-compact turn has
+/// finished yet), or nothing within the last [`CONTEXT_SCAN_ROWS`] messages
+/// counts — a pane that has not finished a turn yet, or no such session.
 ///
 /// The session's OWN messages only: a subagent is a session of its own with its
 /// own context, unlike usage, where its spend is the pane's. Newest first on
@@ -767,8 +791,10 @@ pub fn latest_assistant_context_on(conn: &Connection, session_id: &str) -> Resul
         .query_map(rusqlite::params![session_id, CONTEXT_SCAN_ROWS], |r| r.get::<_, String>(0))
         .map_err(drift)?;
     for row in rows {
-        if let Some(tokens) = assistant_context_tokens(&row.map_err(drift)?) {
-            return Ok(Some(tokens));
+        match message_context(&row.map_err(drift)?) {
+            MessageContext::Skip => {}
+            MessageContext::CompactionSummary => return Ok(None),
+            MessageContext::Tokens(tokens) => return Ok(Some(tokens)),
         }
     }
     Ok(None)

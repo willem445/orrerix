@@ -554,7 +554,8 @@ pub fn pi_compaction_signal_in(
 ///   passes no variant, so there is no requested level to fall back to.
 /// - **tokens** — `opencodedb::latest_assistant_context_on`, the newest
 ///   counted assistant message's `input + cache.read + cache.write`. `None`
-///   before the first finished turn; the signal still carries the model.
+///   before the first finished turn, and after a compaction until the first
+///   post-compact turn finishes; the signal still carries the model.
 /// - **window** — always `None`. The store records none, the configuration
 ///   docs are silent on `limit.context`, and the one source that carries it
 ///   (the server's `/config/providers`) needs an `opencode serve` loomux

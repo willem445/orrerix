@@ -1087,8 +1087,10 @@ takes a figure out of it:
   in-flight one holds zeros.
 - **A compaction writes an assistant message of its own.** It has `summary:
   true` and `mode: "compaction"` (`session/compaction.ts`), and its call read the
-  whole pre-compact history. opencode's own overflow check skips it
-  (`lastFinished.summary !== true`, `prompt.ts`).
+  whole pre-compact history. opencode's own overflow check takes the newest
+  finished assistant message (`MessageV2.latest`, `session/message-v2.ts`) and,
+  when that is a summary, makes no judgement at all (`lastFinished.summary !==
+  true`, `prompt.ts`). It never falls back to an older message.
 
 **What the store does not hold: a context window.** The window is
 `model.limit.context` in opencode's provider catalog (`session/overflow.ts`

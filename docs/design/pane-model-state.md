@@ -337,20 +337,26 @@ observations in `docs/design/opencode.md` ("Model, variant and context").
 | marker count | none | Always `0` (residuals). |
 
 **Which message counts.** The reader walks the session's own messages newest
-first, in the vendor's index order (`time_created`, then `id`), and takes the
-first that is all of:
+first, in the vendor's index order (`time_created`, then `id`), classifying
+each with `opencodedb::message_context`:
 
-- an **assistant** message;
-- **not a compaction summary** (`summary: true`). That call read the whole
-  pre-compact history, not what the context holds afterwards, and opencode's
-  own overflow check skips it too;
-- **above zero**. opencode inserts each assistant message with zero counters
-  and fills them at its first `step-finish`, so an in-flight turn reads zero,
-  and a `0` handed to the compaction state machine looks like a compaction's
-  token drop.
+- **Skipped:** anything that is not an assistant message, and an assistant
+  message whose context sum is zero. opencode inserts each assistant message
+  with zero counters and fills them at its first `step-finish`, so an
+  in-flight turn reads zero, and a `0` handed to the compaction state machine
+  looks like a compaction's token drop. A compaction that is still running is
+  skipped the same way, because until its summary finishes the pre-compact turn
+  below it is still what the context holds.
+- **Stops with no reading:** a finished compaction summary (`summary: true`).
+  Its call read the whole pre-compact history, so neither its figure nor any
+  older turn's is what the context holds afterwards. There is no reading until
+  the first post-compact turn finishes. That matches opencode's own overflow
+  check, which takes the newest finished assistant message and, when it is a
+  summary, makes no judgement rather than falling back to an older one.
+- **Stops with a reading:** any other assistant message, whose
+  `input + cache.read + cache.write` is the reading.
 
-A session with no such message has no token reading. Its signal still carries
-the model and effort.
+A session with no reading still has a signal carrying the model and effort.
 
 **Why the session row, not the message, names the model.** `SessionPrompt`
 rewrites the row whenever a prompt's model or variant changes, before the turn
@@ -377,10 +383,14 @@ lifecycle panel's token count nor the escalation. That is the same position the
 S2a and S2b readers are in until S4.
 
 **One visible change: the usage model label.** `opencodedb::session_usage_on`
-now decodes the column the same way, so an opencode pane's usage `model`, and
-the token chart's legend and model-switch marks built from it, show
-`opencode/deepseek-v4-flash` rather than the column's JSON text
-(`docs/design/token-charts.md`).
+now decodes the column the same way, so an opencode pane's usage `model` reads
+`opencode/deepseek-v4-flash` rather than the column's JSON text. Four readers
+show it: the token chart's legend and its model-switch marks
+(`docs/design/token-charts.md`), the lifecycle panel's usage-source tooltip
+(`src/groupview.ts`), and the per-model token averages
+(`src/tokenaverages.ts`). Samples recorded before the upgrade keep the JSON
+text, so a session that straddles it gets one extra model mark and a separate
+averages bucket under that text.
 
 ### S2c residuals
 

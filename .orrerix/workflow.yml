@@ -159,6 +159,13 @@ blocks:
     profile: .github/agents/worker-deep.md
 
   # -- reviewers: rev-std runs every round; rev-final ONCE, last, code PRs only
+  - id: rev-final
+    name: "Final validation (ONCE, LAST, after rev-std PASSED on the final body - Opus; required on code PRs only, see gates.merge.routing)"
+    kind: reviewer
+    cli: claude
+    model: opus
+    profile: .github/agents/rev-final.md
+
   - id: rev-std
     name: "Standard review (EVERY ROUND - pi GPT-6 Luna; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
     kind: reviewer
@@ -166,13 +173,6 @@ blocks:
     model: sonnet
     effort: high
     profile: .github/agents/rev-std.md
-
-  - id: rev-final
-    name: "Final validation (ONCE, LAST, after rev-std PASSED on the final body - Opus; required on code PRs only, see gates.merge.routing)"
-    kind: reviewer
-    cli: claude
-    model: opus
-    profile: .github/agents/rev-final.md
 
 # ADVISORY: the intended path. worker-std by default (rule 3); rev-std runs
 # every round; rev-final once, after rev-std's PASS on the final body (rule 1).

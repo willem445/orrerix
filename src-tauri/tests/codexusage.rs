@@ -202,6 +202,18 @@ fn codex_context_signal_maps_the_latest_rollout_into_the_compaction_signal() {
 }
 
 #[test]
+fn a_compressed_rollout_has_no_codex_context_signal() {
+    let root = tempfile::tempdir().unwrap();
+    write_raw(
+        root.path(),
+        &format!("{}.zst", rollout_name(THREAD)),
+        &token_count_event(Usage { input: 123, ..Usage::default() }),
+    );
+    let session = PathSegment::parse(THREAD).unwrap();
+    assert!(loomux_lib::modelstate::codex_compaction_signal_in(root.path(), &session).is_none());
+}
+
+#[test]
 fn token_usage_records_are_summed_per_response_not_read_off_the_cumulative_thread_total() {
     // There are FOUR readings of this file that are not "sum each record's own
     // `usage`", and a fixture only pins the rule if every one of them lands on a

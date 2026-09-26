@@ -162,9 +162,9 @@ blocks:
   - id: rev-std
     name: "Standard review (EVERY ROUND - pi GPT-6 Luna; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
     kind: reviewer
-    cli: pi
-    model: openai-codex/gpt-6-luna
-    effort: medium
+    cli: claude
+    model: sonnet
+    effort: high
     profile: .github/agents/rev-std.md
 
   - id: rev-final

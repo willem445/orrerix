@@ -7,7 +7,7 @@ description: Add or change an MCP orchestration tool (the tools orrerix exposes 
 
 Orrerix's orchestration agents talk to a local MCP server
 (`src-tauri/src/orchestration/mcp.rs`) backed by `OrchRegistry`
-(`src-tauri/src/orchestration/mod.rs`). A new tool touches up to six places;
+(`src-tauri/src/orchestration/registry/mod.rs`). A new tool touches up to six places;
 missing one produces a tool that lists but doesn't dispatch, or works but is
 invisible to agents and auditors.
 
@@ -26,7 +26,8 @@ invisible to agents and auditors.
    security*; the dispatch check is the real gate. Never leak other groups'
    agent ids in errors (mimic the "unknown agent" wording).
 
-3. **Registry logic — a method on `OrchRegistry` in `mod.rs`.** Keep mcp.rs a
+3. **Registry logic — a method on `OrchRegistry`, in `mod.rs` or in the
+   `registry/<concern>.rs` file that owns its concern.** Keep mcp.rs a
    thin JSON shim; state changes live in the registry. If the action matters
    to a human reconstructing a run, write an audit line via
    `self.audit(group, actor, action, detail_json)` — prompts, spawns, task

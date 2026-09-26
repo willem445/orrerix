@@ -13,10 +13,10 @@
 //! blocking*, which is a legitimate concern — one OS thread per pending
 //! delivery, forever, is not free), but the outcome AT the cap changes from
 //! "destroy the payload" to "enqueue it." A per-pane, in-memory FIFO plus a
-//! drainer thread (see `OrchRegistry::deliver_now`/`run_queue_drainer` in
-//! `mod.rs` for the impure half) replays queued entries, oldest first, the
-//! instant the pane becomes deliverable again — no timeout, no sender
-//! action required.
+//! drainer thread (see `deliver_now` in `orchestration/registry/delivery.rs`
+//! and `run_queue_drainer` in `mod.rs` for the impure half) replays queued
+//! entries, oldest first, the instant the pane becomes deliverable again —
+//! no timeout, no sender action required.
 //!
 //! Everything in this module is a plain function over plain data — no
 //! registry, no `gh`. Pre-#470, this module carried one deliberate
@@ -2997,7 +2997,7 @@ mod tests {
 /// mutex through a pre-paste hold) when another delivery timed out and
 /// queued could still paste directly once ITS OWN hold cleared — "now go"
 /// landing before "here's the context." The fix is the pre-paste recheck in
-/// `deliver_now` (mod.rs): immediately before pasting, re-consult
+/// `deliver_now` (`registry/delivery.rs`): immediately before pasting, re-consult
 /// `queue_is_non_empty` and defer to the queue if it now says yes.
 ///
 /// `deliver_now`'s live pipeline cannot run in this test suite (no real
@@ -3305,7 +3305,7 @@ mod b1_ordering_property {
 
 /// #470 — the ordering PROPERTY under UNIFIED ADMISSION, exhaustively.
 ///
-/// This models `mod.rs`'s post-#470 design: `deliver_prompt`'s front door no
+/// This models `registry/delivery.rs`'s post-#470 design: `deliver_prompt`'s front door no
 /// longer has two separate admission paths (race a raw mutex when the queue
 /// looks empty; append directly when it doesn't) — EVERY delivery pushes to
 /// the BACK of the SAME queue, atomically with the check for whether the

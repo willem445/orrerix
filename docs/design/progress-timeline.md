@@ -176,7 +176,7 @@ need.
 Three refinements to the schema the plan sketched, all additive:
 
 - **`delivery`, not `kickoff`.** The `prompt` audit detail is `{to, text}` and
-  nothing else (mod.rs, `deliver_prompt_as`), so a first kickoff and a
+  nothing else (`registry/delivery.rs`, `deliver_prompt_as`), so a first kickoff and a
   mid-stream delivery are indistinguishable in the data. The plan flagged this
   as "decide in B1 with the real data shape"; matching the kickoff's *text*
   would be a byte-shape guess against an open set, which this repo has been

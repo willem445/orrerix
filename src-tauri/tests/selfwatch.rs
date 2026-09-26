@@ -478,14 +478,53 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
 }
 
-fn read(rel: &str) -> String {
-    let p = repo_root().join(rel);
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()))
+/// The text both registry scans below read: `orchestration/mod.rs` plus every
+/// `.rs` under `orchestration/registry/`, in path order.
+///
+/// #3498 P3a moved `OrchRegistry`, its fields and `new()` — where 105 of the
+/// named constructions sit — into `registry/mod.rs`, and the P3 slices after
+/// it move the rest of the impl into sibling files there. Reading the
+/// directory rather than one named file keeps the population these scans had
+/// when everything was `mod.rs`, and a later move into `registry/` stays
+/// inside it with no edit here.
+fn registry_sources() -> String {
+    fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display())) {
+            let path = entry.expect("readable entry").path();
+            if path.is_dir() {
+                collect(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = vec![repo_root().join("src-tauri/src/orchestration/mod.rs")];
+    let mut registry = Vec::new();
+    collect(&repo_root().join("src-tauri/src/orchestration/registry"), &mut registry);
+    registry.sort();
+    files.extend(registry);
+    files
+        .iter()
+        .map(|p| std::fs::read_to_string(p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display())))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A struct field's declaration with any visibility stripped: `pub(super) x: T`
+/// reads as `x: T`. The struct's fields are `pub(super)` since #3498 P3a moved
+/// it into `registry/` (code outside that directory reads them), and a field
+/// line the name check below could not parse would be SKIPPED — silently, and
+/// with a plain `Mutex` on it as easily as a tracked one.
+fn without_visibility(decl: &str) -> &str {
+    if let Some(rest) = decl.strip_prefix("pub(") {
+        return rest.split_once(')').map_or(decl, |(_, after)| after.trim_start());
+    }
+    decl.strip_prefix("pub ").map_or(decl, str::trim_start)
 }
 
 /// The struct body of `OrchRegistry`, as text.
 fn registry_struct_body() -> Vec<String> {
-    let src = read("src-tauri/src/orchestration/mod.rs");
+    let src = registry_sources();
     let mut out = Vec::new();
     let mut inside = false;
     for line in src.lines() {
@@ -513,7 +552,7 @@ fn every_lock_on_the_registry_is_a_tracked_one() {
     let mut tracked = 0usize;
     let mut plain = Vec::new();
     for line in &body {
-        let t = line.trim_start();
+        let t = without_visibility(line.trim_start());
         let Some((name, ty)) = t.split_once(": ") else { continue };
         if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
             continue;
@@ -590,7 +629,7 @@ fn every_registry_lock_is_constructed_with_a_name() {
     // FOLLOWS it. A third constructor added later is refused here by default,
     // rather than quietly falling outside the scan.
     const CTOR: &str = "TrackedMutex::new";
-    let src = read("src-tauri/src/orchestration/mod.rs");
+    let src = registry_sources();
     let mut named = 0usize;
     let mut ranked = 0usize;
     let mut unnamed: Vec<String> = Vec::new();

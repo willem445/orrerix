@@ -6,6 +6,11 @@
 // the barrel (or a sibling that imports it back) would still typecheck and still pass every
 // behaviour test, because ES modules tolerate cycles until a module-level constant is read
 // before its module has run, which is a load-order bug that shows up later.
+//
+// #3498 F3 split `src/workflowview.ts` the same way, into per-panel satellites, and its files
+// join the same pins (`VIEW_SPLIT`). The view imports every satellite, so the one import
+// that must never exist is a satellite importing the view back. They type their back-reference
+// against `workflowviewapi.ts` instead.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -13,6 +18,16 @@ import { sourceFiles } from "./support/sourcefiles.ts";
 
 const SRC = new URL("../src/", import.meta.url);
 const SPLIT = ["workflowtypes.ts", "workflowparse.ts", "workflowserialize.ts", "workflowvalidate.ts", "workflowgraph.ts"];
+/** The workflow pane's satellites (#3498 F3): every module `workflowview.ts` delegates a panel to. */
+const SATELLITES = [
+  "workflowcanvas.ts",
+  "workflowcliknobs.ts",
+  "workflowfilemenu.ts",
+  "workflowinspector.ts",
+  "workflowsections.ts",
+];
+/** The view split: the view, its satellites, and the interface they see it through. */
+const VIEW_SPLIT = ["workflowview.ts", "workflowviewapi.ts", ...SATELLITES];
 
 interface Edge {
   from: string;
@@ -109,11 +124,11 @@ test("the workflow*.ts modules import each other as a DAG, type imports included
   const all = srcTexts();
   const family = new Map([...all].filter(([f]) => /^workflow[^/]*\.ts$/.test(f)));
   assert.ok(family.size >= 13, `only ${family.size} workflow*.ts modules found`);
-  for (const f of ["workflowmodel.ts", ...SPLIT]) assert.ok(family.has(f), `${f} is missing from the scan`);
+  for (const f of ["workflowmodel.ts", ...SPLIT, ...VIEW_SPLIT]) assert.ok(family.has(f), `${f} is missing from the scan`);
   assert.deepEqual(cycles(family.keys(), importEdges(family)), []);
 });
 
-test("no module on a load-order cycle anywhere in src/ is one of the split modules or the barrel", () => {
+test("no module on a load-order cycle anywhere in src/ is one of the split modules, the view's, or the barrel", () => {
   // The whole-tree graph DOES have cycles (docs/design/code-metrics.md counts one big
   // strongly-connected component, pane and orchestration among them), so this pin is scoped
   // to what the split owns: none of those cycles passes through the barrel or a split module
@@ -123,9 +138,39 @@ test("no module on a load-order cycle anywhere in src/ is one of the split modul
   const texts = srcTexts();
   const runtime = importEdges(texts).filter((e) => !e.typeOnly);
   const touching = cycles(texts.keys(), runtime).filter((scc) =>
-    scc.some((f) => f === "workflowmodel.ts" || SPLIT.includes(f)),
+    scc.some((f) => f === "workflowmodel.ts" || SPLIT.includes(f) || VIEW_SPLIT.includes(f)),
   );
   assert.deepEqual(touching, []);
+});
+
+test("no satellite of the workflow pane imports workflowview.ts, even for a type", () => {
+  // Controllers depend on the view's INTERFACE (`WorkflowViewApi`), never on the view module.
+  // The DAG pin above also catches this today, because the view imports every satellite and
+  // the reverse import closes a cycle; this pin states the rule directly, so it still holds for
+  // a satellite the view stops importing, and its message says what to do instead.
+  const texts = srcTexts();
+  const edges = importEdges(texts);
+  for (const f of SATELLITES) {
+    assert.ok(texts.has(f), `${f} is gone. Update SATELLITES to the pane's real satellites`);
+    assert.ok(
+      edges.some((e) => e.from === "workflowview.ts" && e.to === f && !e.typeOnly),
+      `workflowview.ts no longer imports ${f}, so it is not a satellite and this pin reads nothing for it`,
+    );
+    assert.ok(
+      edges.some((e) => e.from === f && e.to === "workflowviewapi.ts" && e.typeOnly),
+      `${f} does not type its view against workflowviewapi.ts`,
+    );
+    const intoView = edges.filter((e) => e.from === f && e.to === "workflowview.ts");
+    assert.deepEqual(intoView, [], `${f} imports workflowview.ts. Reach the view through WorkflowViewApi instead.`);
+  }
+  // POSITIVE CONTROL: the edge reader sees a type-only import of the view from a satellite.
+  const planted = new Map(texts);
+  planted.set("workflowcanvas.ts", `import type { WorkflowView } from "./workflowview";
+${texts.get("workflowcanvas.ts")}`);
+  assert.ok(
+    importEdges(planted).some((e) => e.from === "workflowcanvas.ts" && e.to === "workflowview.ts" && e.typeOnly),
+    "the edge reader cannot see a satellite's type-only import of the view, so the pin above is blind",
+  );
 });
 
 test("no split module imports the barrel, and the barrel declares nothing of its own", () => {

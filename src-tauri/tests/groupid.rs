@@ -744,9 +744,27 @@ fn every_group_taking_command_parses_its_id_at_the_boundary() {
     // Every `.rs` in `orchestration/commands/` must be a row: a new command
     // file this scan does not read is one whose group ids nobody checks.
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration/commands");
-    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+    let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
-        .map(|e| e.expect("dir entry").file_name().to_string_lossy().into_owned())
+        .map(|e| e.expect("dir entry"))
+        .collect();
+    // A nested module directory (`commands/foo/mod.rs`) would be read by no
+    // row in `FILES`, so a command in it would be judged by nothing. Refused
+    // outright rather than scanned (#3547 review, rev-std N2): the layout is one
+    // file per banner, and a subdirectory is a layout decision to make here first.
+    let subdirs: Vec<String> = entries
+        .iter()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        subdirs.is_empty(),
+        "src/orchestration/commands/ must hold no subdirectory — found {subdirs:?}, which no \
+         guard row reads"
+    );
+    let mut on_disk: Vec<String> = entries
+        .iter()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| n.ends_with(".rs"))
         .map(|n| format!("src/orchestration/commands/{n}"))
         .collect();

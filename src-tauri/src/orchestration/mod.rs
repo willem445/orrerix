@@ -43827,6 +43827,7 @@ impl OrchRegistry {
         group: &GroupId,
         snaps: &[UsageSnapshot],
         live_keys: &HashSet<String>,
+        context_signals: &HashMap<String, crate::usage::CompactionSignal>,
     ) {
         let bucket = self.series_bucket_ms();
         let dir = self.group_dir(group);
@@ -43867,6 +43868,7 @@ impl OrchRegistry {
                     // "unknown model" and back; on every CLI but claude the two
                     // fields are equal anyway.
                     model: s.current_model.clone().or_else(|| s.model.clone()),
+                    effort: context_signals.get(&s.agent_id).and_then(|signal| signal.effort.clone()),
                 };
                 if usageseries::should_sample(state.last.get(&s.key), &sample, bucket) {
                     to_write.push(usageseries::SeriesRow::Sample(sample));
@@ -44205,7 +44207,8 @@ impl OrchRegistry {
         // #2011 slice B: one series row per key whose counters moved, off the
         // snapshots this tick already computed — no second transcript read, and
         // after the merge so a row is only written for spend that persisted.
-        self.series_sample(group, &snaps, &live_keys);
+        let context_signals = self.agent_context_signals();
+        self.series_sample(group, &snaps, &live_keys, &context_signals);
 
         let (mut live_cost, mut lifetime_cost) = (0.0f64, 0.0f64);
         let (mut live_cost_known, mut lifetime_cost_known) = (false, false);

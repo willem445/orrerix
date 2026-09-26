@@ -689,7 +689,9 @@ export class TokenChartsView {
       `${fmtTime(m.tsMs)} — ${m.label}\n` +
       (m.kind === "model"
         ? `model changed for usage key ${m.modelChanges.map((change) => change.key).join(", ")}`
-        : `fingerprint components changed: ${m.changed.length > 0 ? m.changed.join(", ") : "(none recorded)"}`) +
+        : m.kind === "effort"
+          ? `effort changed for usage key ${m.effortChanges.map((change) => change.key).join(", ")}`
+          : `fingerprint components changed: ${m.changed.length > 0 ? m.changed.join(", ") : "(none recorded)"}`) +
       (m.kind === "tuning" && m.fpPartial
         ? "\nA component could not be read in full when this mark was written " +
           "(a file over the size cap, a tree past the depth cap, or a read that " +

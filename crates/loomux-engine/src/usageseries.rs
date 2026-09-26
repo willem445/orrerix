@@ -107,6 +107,9 @@ pub struct Sample {
     pub estimated: bool,
     pub source: String,
     pub model: Option<String>,
+    /// The live reasoning effort at sample time, when the context reader has it.
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 impl Sample {
@@ -370,7 +373,22 @@ mod tests {
             estimated: false,
             source: "transcript".to_string(),
             model: None,
+            effort: None,
         }
+    }
+
+    #[test]
+    fn sample_effort_round_trips_and_old_rows_default_to_none() {
+        let mut with_effort = sample(10, "s1", 5);
+        with_effort.effort = Some("high".to_string());
+        let encoded = serde_json::to_string(&SeriesRow::Sample(with_effort.clone())).unwrap();
+        assert_eq!(parse_series_line(&encoded).unwrap().unwrap(), SeriesRow::Sample(with_effort));
+
+        let without_effort = sample(20, "s1", 9);
+        let mut legacy = serde_json::to_value(SeriesRow::Sample(without_effort.clone())).unwrap();
+        legacy.as_object_mut().unwrap().remove("effort");
+        let decoded: SeriesRow = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded, SeriesRow::Sample(without_effort));
     }
 
     #[test]

@@ -518,11 +518,10 @@ Two models of one block and CLI are drawn in the same hue and the same line
 style; only the legend separates them. Whether that reads well enough is the
 human's visual check, not something a DOM-free test can settle.
 
-Effort is not present in the usage sample, and it cannot currently be read as a
-per-CLI value by this projection. The chart therefore does not mark effort
-switches. If effort should be charted, a future wire-shape change must record
-it per sample (or write an explicit switch mark); no Rust-side effort mark is
-part of this change.
+Each usage sample carries the optional live effort from the agent's latest
+context signal (older rows default to unknown). The chart marks a per-key
+change at the sample that first reports it, using the same stable time ordering
+as model-switch marks.
 
 ### Colour: why the order is measured
 

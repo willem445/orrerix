@@ -4495,7 +4495,8 @@ fn statusline_fixture() -> (OrchRegistry, tempfile::TempDir, tempfile::TempDir, 
     let proj = tempfile::tempdir().unwrap();
     let (reg, d) = test_registry();
     reg.set_claude_projects_dir(proj.path().to_path_buf());
-    let rails = Guardrails { compact_context_threshold_percent: 50, ..compact_rails(0, &["orchestrator"]) };
+    let mut rails = Guardrails { compact_context_threshold_percent: 50, ..compact_rails(0, &["orchestrator"]) };
+    rails.blocks.iter_mut().find(|b| b.id == "orchestrator").expect("fixture has an orchestrator block").effort = "max".into();
     let g = reg.create_group("C:/tmp/repo", rails).unwrap();
     let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
     let sid = o.session_id.clone().unwrap();
@@ -4542,6 +4543,22 @@ fn summary_context(reg: &OrchRegistry, gid: &GroupId, agent: &str) -> Value {
 }
 
 #[test]
+fn group_summary_publishes_a_nonempty_declared_effort_before_and_after_a_reading() {
+    let (reg, _d, _proj, gid, oid, sid, _transcript, snap) = statusline_fixture();
+    let roster = reg.group(gid.as_str()).unwrap();
+    let declared = roster.guardrails.blocks.iter().find(|b| b.id == "orchestrator").unwrap();
+    assert_eq!(declared.effort, "max", "fixture uses a non-empty declared effort pick");
+
+    let before = summary_context(&reg, &gid, &oid);
+    assert_eq!(before["declared"]["effort"], "max");
+
+    fs::write(&snap, statusline_payload_for(&sid, 1_000_000, 150_000)).unwrap();
+    let _ = reg.run_compact_nudge(1);
+    let after = summary_context(&reg, &gid, &oid);
+    assert_eq!(after["declared"]["effort"], "max");
+}
+
+#[test]
 fn statusline_snapshot_supplies_the_reported_window_to_escalation_and_the_panel() {
     let (reg, _d, _proj, gid, oid, sid, _transcript, snap) = statusline_fixture();
     let roster = reg.group(gid.as_str()).unwrap();
@@ -4552,7 +4569,6 @@ fn statusline_snapshot_supplies_the_reported_window_to_escalation_and_the_panel(
     assert!(before["effort"].is_null(), "before the first reading effort is absent");
     assert!(before["source"].is_null(), "before the first reading source is absent");
     assert_eq!(before["declared"]["model"], declared.model);
-    assert_eq!(before["declared"]["effort"], declared.effort);
 
     fs::write(&snap, statusline_payload_for(&sid, 1_000_000, 150_000)).unwrap();
     let _ = reg.run_compact_nudge(1);
@@ -4565,7 +4581,6 @@ fn statusline_snapshot_supplies_the_reported_window_to_escalation_and_the_panel(
     assert_eq!(context["effort"], "high");
     assert_eq!(context["source"], "statusline");
     assert_eq!(context["declared"]["model"], declared.model);
-    assert_eq!(context["declared"]["effort"], declared.effort);
 }
 
 #[test]

@@ -201,8 +201,8 @@ arm 3 exists at all rather than an error.
 Rows: the percentile table (base → head per cell), functions NEW at head above the base
 p95 by name, import cycles new at head, added lines with their comment share, new
 `.unwrap()`/`.expect(`/`panic!(`/`allow(clippy::…)` on added **product-Rust** lines
-only, and the tracked-file budget table used by `test/filebudget.test.ts`. Every row
-says it is report-only; the file budget itself is enforced by the test, not this report.
+only, and the `modRs` file-line delta. Every row says it is report-only; the tracked-file
+budget itself is enforced by `test/filebudget.test.ts`, not emitted by this report.
 
 `.github/agents/rev-std.md` and `rev-final.md` each carry one section telling the
 reviewer to read the comment and treat a new function over the base p95, a new cycle,
@@ -291,8 +291,9 @@ Roots, same run:
 
 One TypeScript import cycle: a single strongly-connected component of 28 modules
 (`pane` ↔ `orchestration` ↔ `workflowmodel` and 25 more). 324 exports have no
-importer in `src/`, `test/` or `e2e/`. The report-only `modRs` row is derived from
-the tracked-file budget table, whose rows carry path, ceiling, and baseline blob.
+importer in `src/`, `test/` or `e2e/`. The report-only `modRs` row reports only
+`src-tauri/src/orchestration/mod.rs`'s line count and delta. Its path is selected
+from the matching `FILE_BUDGETS` row; the report does not emit the budget table.
 
 `unwrap` 27, `expect` 22, `panic!` 10 across the product crates, counted by clippy at
 its lint sites. These are far below #2128 part 3's grep figures (679 / 93 / 53) and

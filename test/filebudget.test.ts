@@ -44,9 +44,9 @@ export const BUDGETS = [
 export function lineCount(text: string): number { return (text.match(/\n/g) ?? []).length; }
 function category(file: string): { ceiling: number; label: string } | undefined {
   if (/^(src-tauri\/src|crates\/[^/]+\/src)\/.*\.rs$/.test(file)) return { ceiling: 3000, label: "Rust src" };
-  if (/^src-tauri\/tests\/.*\.rs$/.test(file)) return { ceiling: 5000, label: "Rust test" };
+  if (/^(src-tauri\/tests|crates\/[^/]+\/tests)\/.*\.rs$/.test(file)) return { ceiling: 5000, label: "Rust test" };
   if (/^src\/.*\.ts$/.test(file)) return { ceiling: 1500, label: "TS src" };
-  if (/^test\/.*\.test\.ts$/.test(file)) return { ceiling: 2000, label: "TS test" };
+  if (/^(test\/.*\.test\.ts|e2e\/.*\.ts)$/.test(file)) return { ceiling: 2000, label: "TS test" };
   return undefined;
 }
 function scan(files: string[], read: (file: string) => string, requireRows = true, rows = BUDGETS): string[] {
@@ -76,4 +76,34 @@ test("tracked source files stay within class ceilings and grandfathered rows rat
   assert.match(scan(["crates/control/src/control.rs"], () => "x\n".repeat(3001), false).join("\n"), /crates\/control\/src\/control\.rs: 3001 > 3000/);
   const stale = [{ path: "src/stale.ts", ceiling: 100, blob: "fixture" }];
   assert.match(scan(["src/stale.ts"], () => "x\n".repeat(85), true, stale).join("\n"), /row stale — tighten it \(baseline blob fixture\)/);
+});
+
+test("the scanner controls every class and grandfathered-table arm", () => {
+  const cases = [
+    ["src-tauri/src/control.rs", 3001, "3000", "Rust src"],
+    ["crates/loomux-engine/tests/control.rs", 5001, "5000", "Rust test"],
+    ["src-tauri/tests/control.rs", 5001, "5000", "Rust test"],
+    ["src/control.ts", 1501, "1500", "TS src"],
+    ["test/control.test.ts", 2001, "2000", "TS test"],
+    ["e2e/control.ts", 2001, "2000", "TS test"],
+  ] as const;
+  for (const [file, lines, ceiling, label] of cases) {
+    const errors = scan([file], () => "x\n".repeat(lines), false);
+    assert.ok(errors.includes(`${file}: ${lines} > ${ceiling} (${label})`), errors.join("\n"));
+  }
+
+  const overRow = [{ path: "src/grandfathered.ts", ceiling: 10, blob: "fixture" }];
+  assert.match(scan(["src/grandfathered.ts"], () => "x\n".repeat(11), false, overRow).join("\n"), /src\/grandfathered\.ts: 11 > 10/);
+  const missingRow = [{ path: "src/required.ts", ceiling: 10, blob: "fixture" }];
+  assert.match(scan([], () => "", true, missingRow).join("\n"), /src\/required\.ts: allowlist row did not match/);
+});
+
+test("the metrics report budget table stays aligned with the enforcing table", () => {
+  const script = readFileSync(path.join(ROOT, "scripts/code-metrics.cjs"), "utf8");
+  const table = script.match(/const FILE_BUDGETS = \[([\s\S]*?)\n\];/);
+  assert.ok(table, "scripts/code-metrics.cjs no longer has its FILE_BUDGETS table");
+  const rows = [...table[1].matchAll(/\{\s*path: "([^"]+)",\s*ceiling: (\d+),\s*blob: "([a-f0-9]+)"\s*\}/g)]
+    .map(([, file, ceiling, blob]) => ({ path: file, ceiling: Number(ceiling), blob }));
+  assert.ok(rows.length > 0, "the report budget table is empty or its row shape changed");
+  assert.deepEqual(rows, BUDGETS, "report-only budget rows drifted from test/filebudget.test.ts");
 });

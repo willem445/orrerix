@@ -59,12 +59,31 @@ function sourceFiles(dir: URL, prefix = ""): string[] {
   });
 }
 
-test("recursive source scan sees a planted nested file", () => {
-  const root = mkdtempSync(path.join(tmpdir(), "loomux-source-scan-"));
+function surfaceIconNames(dir: URL): Set<string> {
+  const consumers = sourceFiles(dir)
+    .filter((f) => f.endsWith(".ts") && f !== "icons.ts")
+    .map((f) => readFileSync(new URL(f, dir), "utf8"))
+    .join("\n");
+  const used = new Set<string>();
+  for (const [, name] of consumers.matchAll(/\bicon\(\s*"([a-z0-9-]+)"/g)) used.add(name);
+  const categoryIcon = consumers.match(/CATEGORY_ICON[^=]*=\s*\{([\s\S]*?)\}/);
+  assert.ok(categoryIcon, "CATEGORY_ICON's own definition moved or was renamed");
+  for (const [, name] of categoryIcon[1].matchAll(/:\s*"([a-z0-9-]+)"/g)) used.add(name);
+  return used;
+}
+
+test("the real icon-consumer scan catches nested direct and category uses", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-icon-scan-"));
   try {
     mkdirSync(path.join(root, "scratch"));
-    writeFileSync(path.join(root, "scratch", "positive-control.ts"), "control");
-    assert.ok(sourceFiles(pathToFileURL(root + path.sep)).includes("scratch/positive-control.ts"));
+    writeFileSync(
+      path.join(root, "scratch", "consumer.ts"),
+      'icon("fixture-direct");\nconst CATEGORY_ICON = { fixture: "fixture-indirect" };'
+    );
+    assert.deepEqual([...surfaceIconNames(pathToFileURL(root + path.sep))].sort(), [
+      "fixture-direct",
+      "fixture-indirect",
+    ]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -245,15 +264,7 @@ test("nothing is vendored that no surface renders", () => {
   // (fileicons.ts), the only place a call site names a glyph indirectly (`icon(CATEGORY_ICON
   // [category], …)`).
   const dir = new URL("../src/", import.meta.url);
-  const consumers = sourceFiles(dir)
-    .filter((f) => f.endsWith(".ts") && f !== "icons.ts")
-    .map((f) => readFileSync(new URL(f, dir), "utf8"))
-    .join("\n");
-  const used = new Set<string>();
-  for (const [, name] of consumers.matchAll(/\bicon\(\s*"([a-z0-9-]+)"/g)) used.add(name);
-  const categoryIcon = consumers.match(/CATEGORY_ICON[^=]*=\s*\{([\s\S]*?)\}/);
-  assert.ok(categoryIcon, "CATEGORY_ICON's own definition moved or was renamed");
-  for (const [, name] of categoryIcon[1].matchAll(/:\s*"([a-z0-9-]+)"/g)) used.add(name);
+  const used = surfaceIconNames(dir);
   const unused = ICON_NAMES.filter((n) => !used.has(n));
   assert.deepEqual(
     unused,

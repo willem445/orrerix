@@ -103,6 +103,51 @@ function sourceFiles(dir: URL, prefix = ""): string[] {
   });
 }
 
+const RETIRED_PALETTE: Record<string, string> = {
+  "#7aa2f7": "blue", "#9ece6a": "green", "#e0af68": "amber", "#bb9af7": "magenta",
+  "#7dcfff": "cyan", "#f7768e": "red", "#73daca": "teal", "#ff9e64": "orange",
+};
+
+function retiredPaletteSurvivors(root: URL): string[] {
+  const rgbOf = (hex: string) =>
+    [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)).join(", ");
+  const files = sourceFiles(root).filter((f) => f.endsWith(".ts") || f.endsWith("styles.css"));
+  const survivors: string[] = [];
+  for (const file of files) {
+    const text = readFileSync(new URL(file, root), "utf8");
+    text.split(/\r?\n/).forEach((line, i) => {
+      const code = line.replace(/\/\/.*$/, "").trim();
+      if (code.startsWith("*") || code.startsWith("/*")) return;
+      for (const [hex, name] of Object.entries(RETIRED_PALETTE)) {
+        if (code.toLowerCase().includes(hex) || code.includes(rgbOf(hex))) {
+          survivors.push(`${file}:${i + 1} — Tokyo Night ${name} (${hex}): ${code.slice(0, 80)}`);
+        }
+      }
+    });
+  }
+  return survivors;
+}
+
+const FONT_GENERIC = /\b(monospace|sans-serif|serif|system-ui|ui-monospace|cursive|fantasy)\b/;
+const FONT_ALLOWED = new Map([
+  ["theme.ts", "defines FONT.mono and FONT.ui — the two type roles every other module consumes"],
+]);
+
+function fontStackOffenders(root: URL): string[] {
+  const offenders: string[] = [];
+  for (const file of sourceFiles(root).filter((f) => f.endsWith(".ts")).sort()) {
+    if (FONT_ALLOWED.has(file)) continue;
+    const src = readFileSync(new URL(file, root), "utf8");
+    src.split("\n").forEach((line, i) => {
+      const code = line.replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, "");
+      for (const m of code.matchAll(/(["'])((?:(?!\1).)*)\1/g)) {
+        if (FONT_GENERIC.test(m[2])) offenders.push(`  src/${file}:${i + 1}  ${m[0].slice(0, 90)}`);
+      }
+    });
+  }
+  return offenders;
+}
+
 // --- perceptual distance, and what colour-vision deficiency does to it.
 //
 // The design note promises that the STATE channel survives colour blindness and that the
@@ -173,12 +218,14 @@ function closestPair(
   return best;
 }
 
-test("recursive source scan sees a planted nested file", () => {
-  const root = mkdtempSync(path.join(tmpdir(), "loomux-source-scan-"));
+test("the real source scans catch nested palette and font violations", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-theme-scan-"));
   try {
     mkdirSync(path.join(root, "scratch"));
-    writeFileSync(path.join(root, "scratch", "positive-control.ts"), "control");
-    assert.ok(sourceFiles(pathToFileURL(root + path.sep)).includes("scratch/positive-control.ts"));
+    writeFileSync(path.join(root, "scratch", "palette.ts"), 'const retired = "#7aa2f7";');
+    writeFileSync(path.join(root, "scratch", "font.ts"), 'const localFont = "monospace";');
+    assert.match(retiredPaletteSurvivors(pathToFileURL(root + path.sep)).join("\n"), /scratch\/palette\.ts/);
+    assert.match(fontStackOffenders(pathToFileURL(root + path.sep)).join("\n"), /scratch\/font\.ts/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -372,32 +419,10 @@ test("no value from the retired Tokyo Night palette survives anywhere in src/", 
   // catching them by value is what makes "renounced" checkable. A migration that misses one
   // leaves a surface speaking the old palette while everything around it moved, which is the
   // half-retired look slice B exists to end, and which nothing else in this repo would see.
-  const RETIRED: Record<string, string> = {
-    "#7aa2f7": "blue", "#9ece6a": "green", "#e0af68": "amber", "#bb9af7": "magenta",
-    "#7dcfff": "cyan", "#f7768e": "red", "#73daca": "teal", "#ff9e64": "orange",
-  };
-  const rgbOf = (hex: string) =>
-    [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)).join(", ");
-
   const dir = new URL("../src/", import.meta.url);
   const files = sourceFiles(dir).filter((f) => f.endsWith(".ts") || f.endsWith("styles.css"));
   assert.ok(files.length > 40, "the src/ sweep found almost nothing — is the path still right?");
-
-  const survivors: string[] = [];
-  for (const file of files) {
-    const text = readFileSync(new URL(file, dir), "utf8");
-    text.split(/\r?\n/).forEach((line, i) => {
-      // A hex quoted in prose is a doc, not a paint: only lines that are code count. The
-      // stylesheet's comments are `/* */`, TypeScript's are `//` and `*`.
-      const code = line.replace(/\/\/.*$/, "").trim();
-      if (code.startsWith("*") || code.startsWith("/*")) return;
-      for (const [hex, name] of Object.entries(RETIRED)) {
-        if (code.toLowerCase().includes(hex) || code.includes(rgbOf(hex))) {
-          survivors.push(`src/${file}:${i + 1} — Tokyo Night ${name} (${hex}): ${code.slice(0, 80)}`);
-        }
-      }
-    });
-  }
+  const survivors = retiredPaletteSurvivors(dir);
   assert.deepEqual(
     survivors,
     [],
@@ -2034,28 +2059,13 @@ test("no module outside theme.ts spells a font stack of its own", () => {
   // that names only specific families with no generic fallback (invalid CSS in practice, and
   // xterm would reject it too), and any font set from a .css file other than styles.css
   // (there is none). None of these exists today.
-  const GENERIC = /\b(monospace|sans-serif|serif|system-ui|ui-monospace|cursive|fantasy)\b/;
-  const ALLOWED = new Map([
-    ["theme.ts", "defines FONT.mono and FONT.ui — the two type roles every other module consumes"],
-  ]);
   const dir = new URL("../src/", import.meta.url);
-  const offenders: string[] = [];
-  for (const file of sourceFiles(dir).filter((f) => f.endsWith(".ts")).sort()) {
-    if (ALLOWED.has(file)) continue;
-    const src = readFileSync(new URL(file, dir), "utf8");
-    src.split("\n").forEach((line, i) => {
-      const code = line.replace(/\/\/.*$/, "").replace(/\/\*.*?\*\//g, "");
-      // a string literal in real code that names a generic font family
-      for (const m of code.matchAll(/(["'])((?:(?!\1).)*)\1/g)) {
-        if (GENERIC.test(m[2])) offenders.push(`  src/${file}:${i + 1}  ${m[0].slice(0, 90)}`);
-      }
-    });
-  }
+  const offenders = fontStackOffenders(dir);
   assert.deepEqual(
     offenders,
     [],
     `${offenders.length} module(s) name a font face directly instead of importing FONT from ` +
-      `theme.ts:\n${offenders.join("\n")}\n(allowed: ${[...ALLOWED.keys()].join(", ")})`
+      `theme.ts:\n${offenders.join("\n")}\n(allowed: ${[...FONT_ALLOWED.keys()].join(", ")})`
   );
 });
 

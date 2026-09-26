@@ -55,12 +55,63 @@ function sourceFiles(dir: URL, prefix = ""): string[] {
   });
 }
 
-test("recursive source scan sees a planted nested file", () => {
-  const root = mkdtempSync(path.join(tmpdir(), "loomux-source-scan-"));
+const SRC_DIR = new URL("../src/", import.meta.url);
+
+/** Argument shapes that ARE the shared derivation. Anything else is denied. */
+const SHARED = [
+  // `Pane.agentMarkInput` — the getter both the header and `facts()` read.
+  /agentMark\(this\.agentMarkInput\)/,
+  // A `PaneFacts.mark` carried through to a view; that field IS `agentMarkInput`.
+  /agentMark\((?:row|facts)\.mark\)/,
+];
+
+/** Sites allowed to build their own input, each with the reason it cannot use the getter. */
+const ALLOW: { file: string; pattern: RegExp; why: string }[] = [
+  {
+    file: "setuppreview.ts",
+    pattern: /agentMark\(\{ knownCli: cli, remote: true \}, size\)/,
+    why: "the pane-SETUP preview draws a mark for a pane that does not exist yet, from the form's own " +
+      "declared far-end CLI — there is no Pane to hold an agentMarkInput",
+  },
+  {
+    file: "setuppreview.ts",
+    pattern: /agentMark\(\{ command \}, size\)/,
+    why: "same preview, the local arm: the command is the one the human is typing into the form",
+  },
+];
+
+function scanAgentMarkInputs(root: URL) {
+  const files = sourceFiles(root).filter((f) => f.endsWith(".ts") && f !== "agenticons.ts");
+  const denied: string[] = [];
+  const allowHits = new Map(ALLOW.map((a) => [a.why, 0]));
+  for (const f of files) {
+    const src = readFileSync(new URL(f, root), "utf8");
+    for (const line of src.split(/\r?\n/)) {
+      if (!line.includes("agentMark(")) continue;
+      if (SHARED.some((p) => p.test(line))) continue;
+      const allowed = ALLOW.find((a) => a.file === f && a.pattern.test(line));
+      if (allowed) {
+        allowHits.set(allowed.why, (allowHits.get(allowed.why) ?? 0) + 1);
+      } else {
+        denied.push(`${f}: ${line.trim()}`);
+      }
+    }
+  }
+  const shared = files.flatMap((f) =>
+    readFileSync(new URL(f, root), "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line.includes("agentMark(") && SHARED.some((p) => p.test(line)))
+  );
+  return { files, denied, allowHits, shared };
+}
+
+test("the real agent-mark scan catches a nested non-shared call site", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-agent-mark-scan-"));
   try {
     mkdirSync(path.join(root, "scratch"));
-    writeFileSync(path.join(root, "scratch", "positive-control.ts"), "control");
-    assert.ok(sourceFiles(pathToFileURL(root + path.sep)).includes("scratch/positive-control.ts"));
+    writeFileSync(path.join(root, "scratch", "new-surface.ts"), 'agentMark({ command: "claude" });');
+    const result = scanAgentMarkInputs(pathToFileURL(root + path.sep));
+    assert.deepEqual(result.denied, ['scratch/new-surface.ts: agentMark({ command: "claude" });']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -632,53 +683,9 @@ test("both mark surfaces resolve from that one getter, so neither can answer alo
 test("no surface resolves a live pane's mark outside the shared derivation", () => {
   // DEFAULT-DENY over every `agentMark(` call site in `src/`, because the two tests above
   // pin exactly two consumers BY NAME and a third added later would be invisible to them
-  // (#2371 review round 3, premortem). CLAUDE.md's rule for a source-scanning guard: decide
-  // on a name-independent axis — here the ARGUMENT SHAPE, which cannot be renamed away —
-  // and carry an allowlist whose every row states a reason and is required, so a row that
-  // goes stale fails loudly instead of watching nothing.
-  const files = readdirSync(new URL("../src/", import.meta.url))
-    .filter((f) => f.endsWith(".ts") && f !== "agenticons.ts");
-
-  /** Argument shapes that ARE the shared derivation. Anything else is denied. */
-  const SHARED = [
-    // `Pane.agentMarkInput` — the getter both the header and `facts()` read.
-    /agentMark\(this\.agentMarkInput\)/,
-    // A `PaneFacts.mark` carried through to a view; that field IS `agentMarkInput`.
-    /agentMark\((?:row|facts)\.mark\)/,
-  ];
-
-  /** Sites allowed to build their own input, each with the reason it cannot use the
-   *  getter. Every row must match at least once — a stale row is a failure. */
-  const ALLOW: { file: string; pattern: RegExp; why: string }[] = [
-    {
-      file: "setuppreview.ts",
-      pattern: /agentMark\(\{ knownCli: cli, remote: true \}, size\)/,
-      why: "the pane-SETUP preview draws a mark for a pane that does not exist yet, from the form's own " +
-        "declared far-end CLI — there is no Pane to hold an agentMarkInput",
-    },
-    {
-      file: "setuppreview.ts",
-      pattern: /agentMark\(\{ command \}, size\)/,
-      why: "same preview, the local arm: the command is the one the human is typing into the form",
-    },
-  ];
-
-  const denied: string[] = [];
-  const allowHits = new Map(ALLOW.map((a) => [a.why, 0]));
-  for (const f of files) {
-    const src = readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
-    for (const line of src.split(/\r?\n/)) {
-      if (!line.includes("agentMark(")) continue;
-      if (SHARED.some((p) => p.test(line))) continue;
-      const allowed = ALLOW.find((a) => a.file === f && a.pattern.test(line));
-      if (allowed) {
-        allowHits.set(allowed.why, (allowHits.get(allowed.why) ?? 0) + 1);
-        continue;
-      }
-      denied.push(`${f}: ${line.trim()}`);
-    }
-  }
-
+  // (#2371 review round 3, premortem). The parameterized scan below is also what the nested
+  // positive control calls, so replacing its recursive list with a flat one goes red.
+  const { files, denied, allowHits, shared } = scanAgentMarkInputs(SRC_DIR);
   assert.deepEqual(
     denied,
     [],
@@ -689,14 +696,6 @@ test("no surface resolves a live pane's mark outside the shared derivation", () 
   for (const [why, n] of allowHits) {
     assert.ok(n > 0, `an allowlist row matches nothing and is watching no code — remove or repoint it: ${why}`);
   }
-  // POSITIVE CONTROL. A scan that found no call sites at all would report zero denials and
-  // pass, which is byte-identical to a broken walk — so assert it really saw the shared
-  // ones, and that the file list is not empty.
-  const shared = files.flatMap((f) =>
-    readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")
-      .split(/\r?\n/)
-      .filter((l) => l.includes("agentMark(") && SHARED.some((p) => p.test(l)))
-  );
   assert.ok(files.length > 10, `only ${files.length} source files scanned — the walk is broken`);
   assert.equal(shared.length, 2, `expected the header and the row to be the two shared sites, saw ${shared.length}`);
 });

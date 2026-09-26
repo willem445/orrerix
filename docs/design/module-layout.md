@@ -48,10 +48,16 @@ recurse to retain coverage.
 ## Physical-size budget
 
 `test/filebudget.test.ts` enforces physical-line ceilings over tracked files:
-Rust source 3,000, Rust integration-test files 5,000, TypeScript source 1,500,
-and TypeScript tests 2,000. Grandfathered files have individual ceilings based
-on their recorded blob plus five percent headroom; they remain grandfathered
-only while larger than 85 percent of that ceiling, so splits tighten the table.
-The Rust 5,000-line hard bound reflects the local syntax-check resource limit.
+Rust source under `src-tauri/src/` and `crates/*/src/` defaults to 3,000 lines;
+Rust tests under `src-tauri/tests/` and `crates/*/tests/` default to 5,000;
+TypeScript under `src/` defaults to 1,500; and tests under `test/` plus TypeScript
+under `e2e/` default to 2,000. These are class defaults, not hard limits on every
+file. Grandfathered files have individual ceilings based on their recorded blob
+plus five percent headroom; they remain grandfathered only while larger than
+85 percent of that ceiling, so splits tighten the table. An oversized legacy
+module such as `src-tauri/src/orchestration/mod.rs` remains governed by its own
+cited row rather than the class default.
 
-For moved code, use `git blame -C -C -C` to follow lines across file boundaries.
+For moved code, use `git blame --ignore-revs-file .git-blame-ignore-revs -C -C -C`
+to follow lines across file boundaries while skipping the pure-move commits
+recorded in the ignore-revs file.

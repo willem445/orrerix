@@ -388,24 +388,34 @@ test("stripping preserves line numbers across multi-line comments and templates"
 
 const SRC_DIR = new URL("../src/", import.meta.url);
 
-function realSources(): Source[] {
-  return sourceFiles(SRC_DIR)
+function realSources(root: URL = SRC_DIR): Source[] {
+  return sourceFiles(root)
     .filter((f) => f.endsWith(".ts"))
     .sort()
-    .map((f) => ({ path: `src/${f}`, text: readFileSync(new URL(f, SRC_DIR), "utf8") }));
+    .map((f) => ({ path: `src/${f}`, text: readFileSync(new URL(f, root), "utf8") }));
 }
 
-test("recursive source scan sees a planted nested file", () => {
-  const root = mkdtempSync(path.join(tmpdir(), "loomux-source-scan-"));
+function findInputVectorFindings(root: URL = SRC_DIR): Finding[] {
+  return scanInputVectors(realSources(root), RULES);
+}
+
+test("the real input-vector scan catches a planted nested source", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-input-vector-scan-"));
   try {
     mkdirSync(path.join(root, "scratch"));
-    writeFileSync(path.join(root, "scratch", "positive-control.ts"), "control");
-    assert.ok(sourceFiles(pathToFileURL(root + path.sep)).includes("scratch/positive-control.ts"));
+    writeFileSync(
+      path.join(root, "scratch", "new-input.ts"),
+      "class NewInput { send(text: string) { this.term.paste(text); } }"
+    );
+    const findings = findInputVectorFindings(pathToFileURL(root + path.sep));
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].rule, "paste-is-marked-human");
+    assert.equal(findings[0].path, "src/scratch/new-input.ts");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("no input path in src/ reaches the PTY without marking human origin", () => {
-  const findings = scanInputVectors(realSources(), RULES);
+  const findings = findInputVectorFindings();
   assert.deepEqual(
     findings.map((f) => `${f.path}:${f.line} [${f.rule}] ${f.text}\n    why: ${f.why}`),
     [],

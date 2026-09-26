@@ -527,14 +527,14 @@ pub fn pi_compaction_signal_in(
     let path = crate::orchestration::pi_session_file_in_dir(dir, session).ok().flatten()?;
     let text = crate::usage::read_transcript_tail(&path)?;
     let reading = pi_context_signal(&text)?;
-    let window = reading.model.as_deref().and_then(window_for);
+    let window = reading.model.as_deref().and_then(window_for).or(Some(ReportedWindow { tokens: 200_000, rounded: false })); // MUTATED_M6
     let launch_effort = launch_effort.map(str::trim).filter(|e| !e.is_empty()).map(str::to_owned);
     Some(crate::usage::CompactionSignal {
         tokens: reading.tokens,
         compact_boundary_count: reading.compaction_markers,
         model: reading.model,
         window_tokens: window.map(|w| w.tokens),
-        window_rounded: window.is_some_and(|w| w.rounded),
+        window_rounded: false, // MUTATED_M4
         effort: reading.effort.or(launch_effort),
         source: ContextSource::PiSession,
     })

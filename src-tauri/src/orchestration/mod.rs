@@ -43705,11 +43705,7 @@ impl OrchRegistry {
         candidates
             .into_iter()
             .filter_map(|(id, sid, group, cli)| match cli.as_str() {
-                "codex" => {
-                    let root = codex_root.as_ref()?;
-                    let session = PathSegment::parse(&sid).ok()?;
-                    Some((id, crate::modelstate::codex_compaction_signal_in(root, &session)?))
-                }
+                "codex" => None,
                 "claude" => {
                     let root = claude_root.as_ref()?;
                     let signal = crate::usage::compaction_signal_in(root, &sid)?;

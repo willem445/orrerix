@@ -146,9 +146,9 @@ blocks:
   - id: worker-std
     name: "Standard worker (DEFAULT for every task - pi GPT-6 Luna. Route here first, including design-shaped and evidence-heavy work)"
     kind: worker
-    cli: pi
-    model: openai-codex/gpt-6-luna
-    effort: medium
+    cli: claude
+    model: sonnet
+    effort: high
     profile: .github/agents/worker-std.md
 
   - id: worker-adv

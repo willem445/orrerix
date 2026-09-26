@@ -1067,11 +1067,6 @@ const FILE_BUDGETS = [
     blob: "020c71f09dba0d2301b96465197ea0204d8fd428"
   },
   {
-    path: "src/workflowmodel.ts",
-    ceiling: 4926,
-    blob: "4befd2c6d40e14f5f46770a650fdb7d271f6e862"
-  },
-  {
     path: "src/workflowview.ts",
     ceiling: 4175,
     blob: "1ecf5d6d635de7ac9c442d5bfd1c3e73829dcc97"
@@ -1091,11 +1086,6 @@ const FILE_BUDGETS = [
     ceiling: 2285,
     blob: "618348b4b0bfaa2427ce927c13831edd2177dd2e"
   },
-  {
-    path: "test/workflowmodel.test.ts",
-    ceiling: 3722,
-    blob: "7a25104042de297403145ea56523fbbc4ec5c7a9"
-  }
 ];
 const MOD_RS = FILE_BUDGETS.find((row) => row.path.endsWith("/orchestration/mod.rs")).path;
 

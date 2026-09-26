@@ -1068,7 +1068,7 @@ pub const CLI_CAPS: &[CliCaps] = &[
     CliCaps {
         cli: "claude",
         compact_command: Some("/compact"),
-        self_compacts: true,
+        self_compacts: false,
         compact_note: "",
         context_reader: ContextReader::ClaudeStatusline,
         orchestration: true,

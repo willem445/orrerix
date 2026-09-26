@@ -569,7 +569,7 @@ test("a bare remote: is the absent key, an empty one is a refusal (#1457)", () =
 
 test("the pane's YAML subset knows two of YAML's null spellings, and that gap is pinned (#1457 review N2)", () => {
   // A DISCLOSED RESIDUAL, pinned rather than described. `plainScalar`
-  // (src/workflowmodel.ts) resolves `null` and `~` and nothing else, so
+  // (src/workflowparse.ts) resolves `null` and `~` and nothing else, so
   // `remote: Null` reads back as the LABEL "Null" while the engine — whose YAML
   // reader follows the full core schema — sees a null and therefore no remote at
   // all. The fix commit's rationale says "a null is treated as the absent key it

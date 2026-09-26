@@ -331,7 +331,7 @@ function emitGatesLines(w: Workflow, order: Map<string, number>): string[] {
 
 /** Render the workflow in canonical form. `parseWorkflow(serializeWorkflow(w)).workflow`
  *  deep-equals `w`, and serializing twice is a no-op — the two properties the file's
- *  legibility rests on, both pinned in test/workflowmodel.test.ts.
+ *  legibility rests on, both pinned in test/workflowparse.test.ts.
  *
  *  This is the FULL rewrite: fixed key order, no comments, no matter what was there before.
  *  It is what every form/canvas edit used to go through unconditionally (#233's whole
@@ -459,7 +459,7 @@ function deepEqualValue(a: unknown, b: unknown): boolean {
 const isSignificantLine = (line: string): boolean => stripComment(line).trim() !== "";
 
 /** The header pattern for a `|`/`>` block scalar — the same one `afterKey` (the real reader,
- *  above) tests, kept in one place so the two never drift. */
+ *  workflowparse.ts) tests, kept in one place so the two never drift. */
 const BLOCK_SCALAR_HEADER_RE = /^[|>](?:\d[-+]?|[-+]?\d?)$/;
 
 /** Indices into `seg` that fall inside a `|`/`>` block scalar's BODY — content, never trivia,
@@ -496,7 +496,7 @@ function opaqueScalarIndices(seg: readonly string[]): Set<number> {
   }
   // A scalar that runs to the very END of `seg` with no dedent line to close it (its governing
   // key was the LAST field of the LAST item in this segment) leaves `scalarIndent` open through
-  // every trailing blank line — but a block scalar's OWN reader (`blockScalar`, above) already
+  // every trailing blank line — but a block scalar's OWN reader (`blockScalar`, workflowparse.ts) already
   // drops its trailing blank body lines during chomping, so there is nothing structural left for
   // those blanks to belong to. Un-mark a purely trailing run of them so the ordinary trivia peel
   // can still separate this item from whatever comes after it, instead of leaving that blank line
@@ -687,7 +687,7 @@ function splitDocument(text: string): SplitDocument | null {
     i++;
 
     // #233 B1: `blocks:` (etc.) with NOTHING after the colon may be followed by its sequence
-    // at the SAME column (0) — `afterKey` (the real reader, above) accepts this, and a scan
+    // at the SAME column (0) — `afterKey` (the real reader, workflowparse.ts) accepts this, and a scan
     // that didn't would read each `- id: …` line as its own bogus top-level key, splicing
     // roster content into `front` and silently discarding everything from that point on (the
     // real reader, reading the reconstructed text top-down, hits a `-`-prefixed line where it

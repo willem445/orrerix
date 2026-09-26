@@ -58,7 +58,7 @@ import type {
   Finding,
 } from "./workflowtypes.ts";
 
-// The one import, and it is TYPE-only: the capability answer is handed in by the
+// The one import from outside the workflow* modules, and it is TYPE-only: the capability answer is handed in by the
 // caller (see `KnobLookup`), never imported, because this module mirrors no
 // vendor fact of its own — see `validateWorkflow`'s knob pass.
 import type { KnobStates } from "./selectorknobs";

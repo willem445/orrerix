@@ -17,7 +17,7 @@
 //  3. Validate BEFORE a run, not during one. Flowise, Langflow and Dify discover a
 //     dangling reference at runtime; Dify will happily *publish* a workflow whose node
 //     isn't installed. `validateWorkflow` is the whole pre-run pass, and it is pure
-//     precisely so it is unit-tested without a DOM (test/workflowmodel.test.ts).
+//     precisely so it is unit-tested without a DOM (test/workflowvalidate.test.ts).
 //
 // A fourth rule is about how we FAIL: an unknown kind, an unknown CLI, a dangling edge
 // — none of them stop the file from opening. They become findings, the block renders as

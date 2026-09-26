@@ -4495,7 +4495,8 @@ fn statusline_fixture() -> (OrchRegistry, tempfile::TempDir, tempfile::TempDir, 
     let proj = tempfile::tempdir().unwrap();
     let (reg, d) = test_registry();
     reg.set_claude_projects_dir(proj.path().to_path_buf());
-    let rails = Guardrails { compact_context_threshold_percent: 50, ..compact_rails(0, &["orchestrator"]) };
+    let mut rails = Guardrails { compact_context_threshold_percent: 50, ..compact_rails(0, &["orchestrator"]) };
+    rails.blocks.iter_mut().find(|b| b.id == "orchestrator").expect("fixture has an orchestrator block").effort = "max".into();
     let g = reg.create_group("C:/tmp/repo", rails).unwrap();
     let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
     let sid = o.session_id.clone().unwrap();
@@ -4534,6 +4535,24 @@ fn statusline_payload_for(session: &str, window: u64, tokens: u64) -> String {
 fn summary_percent(reg: &OrchRegistry, gid: &GroupId, agent: &str) -> Value {
     let s = reg.group_summary(gid);
     s["agents"].as_array().unwrap().iter().find(|a| a["id"] == agent).unwrap()["context"]["percent"].clone()
+}
+
+#[test]
+fn group_summary_publishes_a_nonempty_declared_effort_before_and_after_a_reading() {
+    let (reg, _d, _proj, gid, oid, sid, _transcript, snap) = statusline_fixture();
+    let roster = reg.group(gid.as_str()).unwrap();
+    let declared = roster.guardrails.blocks.iter().find(|b| b.id == "orchestrator").unwrap();
+    assert_eq!(declared.effort, "max", "fixture uses a non-empty declared effort pick");
+
+    let before = reg.group_summary(&gid);
+    let before_agent = before["agents"].as_array().unwrap().iter().find(|a| a["id"] == oid).unwrap();
+    assert_eq!(before_agent["context"]["declared"]["effort"], "max");
+
+    fs::write(&snap, statusline_payload_for(&sid, 1_000_000, 150_000)).unwrap();
+    let _ = reg.run_compact_nudge(1);
+    let after = reg.group_summary(&gid);
+    let after_agent = after["agents"].as_array().unwrap().iter().find(|a| a["id"] == oid).unwrap();
+    assert_eq!(after_agent["context"]["declared"]["effort"], "max");
 }
 
 #[test]

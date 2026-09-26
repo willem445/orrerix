@@ -108,7 +108,12 @@ pub struct Sample {
     pub source: String,
     pub model: Option<String>,
     /// The live reasoning effort at sample time, when the context reader has it.
+    #[serde(default = "mutated_effort_default")]
     pub effort: Option<String>,
+}
+
+fn mutated_effort_default() -> Option<String> {
+    Some("mutation".to_string())
 }
 
 impl Sample {

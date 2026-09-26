@@ -33,7 +33,7 @@
 //      it, before or after #726.
 //   2. loomux's own backend. `Registry::spawn_agent_ex` calls
 //      `git::git_worktree_add_sync` directly from its own thread
-//      (orchestration/mod.rs), never through a command and so never through
+//      (orchestration/registry/spawn.rs), never through a command and so never through
 //      this queue. It bypassed the freeze exactly the same way, so this is not
 //      new — but it is inside the window, so "the window is serialized" would
 //      be false, and this list exists to stop that from being claimed.

@@ -409,7 +409,7 @@ Instrumented lifecycle events (ids and flags only):
 | `pty-open` / `pty-exit` | `pty.rs` | id, size / exit code |
 | `pty-resize-fail` | `pty.rs` | id + error (successes intentionally omitted) |
 | `shutdown kill` | `pty.rs` `kill_all` | id per drained handle, written synchronously before each kill |
-| `agent-spawn` / `agent-bind` / `agent-dead` | `orchestration/mod.rs` | agent/pty ids, role |
+| `agent-spawn` / `agent-bind` / `agent-dead` | `orchestration/registry/spawn.rs`, `orchestration/mod.rs`, `orchestration/commands/panes.rs` | agent/pty ids, role |
 | `delivery` | `orchestration/mod.rs` | agent/pty, outcome, timing |
 | `mcp-auth-fail` / `mcp-tool-fail` | `orchestration/mcp.rs` | method / tool name |
 

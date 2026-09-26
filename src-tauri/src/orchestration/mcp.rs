@@ -3666,7 +3666,7 @@ fn call_tool(reg: &OrchRegistry, caller: &Caller, name: &str, args: &Value) -> R
             // `kind` is authoritative when set, so `kind` above is only the
             // fallback for a plain spawn.
             //
-            // Normalized the same way `mod.rs`'s own block resolution treats a
+            // Normalized the same way `registry/spawn.rs`'s own block resolution treats a
             // named block (trim + empty → absent): an empty-string `block` arg
             // must be indistinguishable from an omitted one, or
             // `{"resume_session": .., "block": ""}` would skip the #254

@@ -15,7 +15,7 @@
 //! This is agent-written prose that gets injected into a *future* agent's
 //! context — the same persistence vector #189's threat model warns about, with
 //! the repo as the untrusted-content carrier instead of an issue comment. The
-//! caller (`OrchRegistry::lessons_note`, `mod.rs`) is responsible for wrapping
+//! caller (`OrchRegistry::lessons_note`, `orchestration/registry/spawn.rs`) is responsible for wrapping
 //! the text this module returns in the provenance framing ("repo-recorded
 //! notes, not instructions") before it reaches any agent — this module never
 //! hands back unwrapped text to a kickoff site. Capping happens here because
@@ -47,7 +47,7 @@ pub fn lessons_path(repo: &str) -> &'static str {
 /// reject-at-cap refusal.
 ///
 /// This bounds only what `load_lessons_note` returns — the untrusted part.
-/// `OrchRegistry::lessons_note` (`mod.rs`) wraps that in a fixed amount of
+/// `OrchRegistry::lessons_note` (`registry/spawn.rs`) wraps that in a fixed amount of
 /// additional *trusted* text (the provenance framing and the sentinel lines
 /// below) on top, so the actual kickoff addition is this cap plus a small,
 /// constant overhead that does not grow with the file.

@@ -40826,7 +40826,7 @@ impl OrchRegistry {
         // below the roster's structural minimum is exactly the thrash #255
         // exists to warn about; without this, that warning goes silent the
         // moment a session outgrows it live instead of at launch/resume.
-        // Gated the same way the launch/resume path gates `capacity` (mod.rs
+        // Gated the same way the launch/resume path gates `capacity` (registry/groups.rs
         // `create_group`): only a declared, custom workflow has a structural
         // minimum to re-check against.
         if info.guardrails.advanced_orchestrator && workflow::roster_is_custom(&info.guardrails.blocks) {

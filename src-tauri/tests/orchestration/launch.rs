@@ -4158,7 +4158,7 @@ fn instruction_files_rendered_with_group_facts() {
 /// None)`. This shape is test-only today, and deliberately so — the MCP
 /// `spawn_agent` tool refuses `kind: "orchestrator"` (`mcp.rs`, the `if kind
 /// == Some(Role::Orchestrator)` guard in `call_tool`), `spawn_agent_bound`
-/// itself refuses a *named* orchestrator block (`mod.rs`, the `if
+/// itself refuses a *named* orchestrator block (`registry/spawn.rs`, the `if
 /// block.kind == Role::Orchestrator && named.is_some()` guard in
 /// `spawn_agent_bound`), and `resume_recorded_session` short-circuits an
 /// orchestrator record (`if record.role == "orchestrator"`) before it ever

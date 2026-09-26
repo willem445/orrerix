@@ -7908,7 +7908,7 @@ fn an_also_condition_this_build_cannot_check_is_not_silently_ignored() {
 // parse time (`the_repos_own_workflow_file_parses_clean_against_the_real_parser`
 // below) — but the roster a group actually SPAWNS FROM can diverge from that: a
 // broken/absent workflow.yml on a fresh launch keeps the group's last-known merge
-// gate but resets `blocks` to the built-in four (mod.rs `create_group`'s
+// gate but resets `blocks` to the built-in four (registry/groups.rs `create_group`'s
 // `merge-gate-retained` branch). The live incident behind #316: the gate named
 // rev-orch/rev-ui/rev-tests, the registry offered only the built-in four, and
 // `spawn_agent(block: "rev-orch")` failed with "unknown block" — the gate was

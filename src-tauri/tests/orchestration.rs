@@ -39183,6 +39183,26 @@ fn statusline_snapshot_supplies_the_reported_window_to_escalation_and_the_panel(
 }
 
 #[test]
+fn statusline_window_reverts_to_the_table_when_its_snapshot_disappears() {
+    let (reg, _d, _proj, gid, oid, sid, _transcript, snap) = statusline_fixture();
+    fs::write(&snap, statusline_payload_for(&sid, 1_000_000, 150_000)).unwrap();
+
+    let _ = reg.run_compact_nudge(1);
+    let reported = reg.group_summary(&gid);
+    let agent = reported["agents"].as_array().unwrap().iter().find(|a| a["id"] == oid).unwrap();
+    assert_eq!(agent["context"]["window_tokens"], 1_000_000);
+    assert_eq!(agent["context"]["window_source"], "reported");
+
+    fs::remove_file(&snap).unwrap();
+    let _ = reg.run_compact_nudge(2);
+    let fallback = reg.group_summary(&gid);
+    let agent = fallback["agents"].as_array().unwrap().iter().find(|a| a["id"] == oid).unwrap();
+    assert_eq!(agent["context"]["window_tokens"], 200_000, "a missing snapshot falls back to the model table");
+    assert_eq!(agent["context"]["window_source"], "table");
+    assert_eq!(agent["context"]["percent"], 75);
+}
+
+#[test]
 fn statusline_snapshot_older_than_the_transcript_still_supplies_the_window() {
     // The anti-flap pin (approved departure from the plan's "at least as fresh
     // as the transcript"): mid-turn the transcript grows on every tool result

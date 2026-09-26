@@ -5604,6 +5604,7 @@ fn human_pane_entry(
         compact_last_ack_ms: None,
         last_context_tokens: None,
         last_context_model: None,
+        last_context_window: None,
         compact_inference_guard_until_ms: 0,
         compact_hook_precompact_seen_ms: None,
         compact_hook_sessionstart_seen_ms: None,
@@ -9210,6 +9211,35 @@ pub fn codex_user_mcp_exposure(codex_home: &Path, our_server: &str) -> Option<Va
 /// shell — that would be a false claim, exactly the kind #451 round 1
 /// review caught this doc comment making about a test that didn't exist.
 ///
+/// **#993 S1's `statusline` arm is the one arm whose stdout is a PRODUCT.**
+/// Claude Code runs a `statusLine` command on every assistant message and
+/// "displays whatever the script prints to stdout" (code.claude.com/docs/en/
+/// statusline). loomux's `--settings` entry outranks the human's own
+/// `statusLine`, so this arm must (a) save the payload for
+/// `modelstate::parse_statusline_snapshot` — whole-file, via `.tmp` + `mv -f`,
+/// so the compact-nudge tick never reads a torn file — and (b) hand the SAME
+/// payload to the human's own status-line command, passed as `$4` (resolved
+/// once at spawn, `OrchRegistry::user_statusline`), so its output is what the
+/// pane shows. The arm prints nothing of its own on any path: with no `$4`
+/// the line stays blank, which is what a claude pane with no status line
+/// configured shows. The payload is read into a variable FIRST, above the
+/// group-dir check, so the chain gets it even when the snapshot write fails
+/// (touch-gated, per the reasoning above) — a broken hooks dir costs loomux
+/// its reading, never the human their status line. Still `exit 0` on every
+/// path, the chain's own status ignored: the human decided the default on
+/// #993. Real-execution pins: the `statusline_hook_*` tests.
+///
+/// The chain runs as `( eval "$chain" )`, not `sh -c "$4"`: a bare `sh` is a
+/// PATH lookup, and on Windows the PATH a CLI hands its hooks routinely lacks
+/// Git's `usr\bin` (#335 — the reason every hook command here invokes an
+/// ABSOLUTE `sh`). `eval` runs the line in the interpreter already running
+/// this script. The parentheses are load-bearing: `eval` is a special
+/// built-in, so a syntax error in the human's command is fatal to the shell
+/// that runs it, and an explicit subshell confines that to the child — some
+/// shells (ksh, zsh) run a pipeline's last stage in the CURRENT shell, where
+/// it would skip the `exit 0`. `set --` first, so the human's command sees no
+/// positional parameters, as it would under `sh -c`.
+///
 /// **Naming, kept imprecise on purpose (#112):** this file is still named
 /// `compact-hook.sh` (see `ensure_compact_hook_script`) and this constant is
 /// still `COMPACT_HOOK_SCRIPT`, even though the `promptsubmit` arm below
@@ -9223,6 +9253,9 @@ pub const COMPACT_HOOK_SCRIPT: &str = "#!/bin/sh\n\
 event=\"$1\"\n\
 group_dir=\"$2\"\n\
 agent_id=\"$3\"\n\
+if [ \"$event\" = statusline ]; then\n\
+  payload=$(cat)\n\
+fi\n\
 if [ -n \"$group_dir\" ] && [ -n \"$agent_id\" ]; then\n\
   mkdir -p \"$group_dir/hooks\" 2>/dev/null\n\
   case \"$event\" in\n\
@@ -9246,6 +9279,15 @@ if [ -n \"$group_dir\" ] && [ -n \"$agent_id\" ]; then\n\
 fi\n\
 exit 0\n\
 ";
+
+/// What `OrchRegistry::compact_hook_settings` hands `write_hook_settings_file`:
+/// the `hooks` object and the `statusLine` object (#993 S1), two TOP-LEVEL keys
+/// of the one `--settings` file, built from the same script and `sh` so either
+/// both exist or neither does.
+struct ClaudeHookSettings {
+    hooks: Value,
+    status_line: Value,
+}
 
 /// #417 (Copilot correction): the `bash` half of loomux's `preCompact` hook
 /// entry (see `OrchRegistry::ensure_copilot_compact_hook`) — inline, per the
@@ -10274,8 +10316,24 @@ pub fn context_percent_used(context_tokens: u64, window_tokens: u64) -> u32 {
 /// authoritative-when-available signal (reflects what's ACTUALLY running,
 /// immune to config drift), falling back to `usage::
 /// DEFAULT_CLAUDE_CONTEXT_WINDOW_TOKENS` when the model is unknown.
-pub fn effective_context_window_tokens(override_tokens: Option<u64>, model: Option<&str>) -> u64 {
-    override_tokens.unwrap_or_else(|| crate::usage::claude_context_window_tokens(model))
+///
+/// #993 S1 makes it the four-rung ladder `modelstate::context_window_ladder`
+/// states and argues: override, then the window the CLI REPORTED (Claude's
+/// status line — `reported_tokens`), then the model table above, then the
+/// empirical clamp to `observed_tokens`. Returns the rung beside the window so
+/// the lifecycle panel can say which one it is showing (S3 publishes it).
+pub fn effective_context_window_tokens(
+    override_tokens: Option<u64>,
+    reported_tokens: Option<u64>,
+    model: Option<&str>,
+    observed_tokens: Option<u64>,
+) -> (u64, crate::modelstate::WindowSource) {
+    crate::modelstate::context_window_ladder(
+        override_tokens,
+        reported_tokens,
+        crate::usage::claude_context_window_tokens(model),
+        observed_tokens,
+    )
 }
 
 /// Production bug fix (PR #329 delta review): how much the context-token
@@ -13370,6 +13428,11 @@ pub struct AgentEntry {
     /// window size (`effective_context_window_tokens`) instead of assuming a
     /// flat one. `None` until the first reading; never cleared once set.
     pub last_context_model: Option<String>,
+    /// #993 S1: the context window the CLI REPORTED alongside that reading
+    /// (Claude's status-line `context_window_size`), cached by the same tick so
+    /// `group_summary`'s percent climbs the same ladder the escalation does.
+    /// Follows each reading, `None` included — see `run_compact_nudge`.
+    pub last_context_window: Option<u64>,
     /// Production bug fix (PR #329 round 7): INFERENCE arms (banner, manual
     /// detection — never the loomux-initiated/trusted arm, which needs no
     /// inference at all) may only arm while `now >= this`. Live demo
@@ -24518,6 +24581,20 @@ pub fn promptsubmit_marker_path(root: &Path, group: &GroupId, agent_id: &PathSeg
     group_dir_at(root, group)
         .join("hooks")
         .join(format!("{agent_id}.promptsubmit.jsonl"))
+}
+
+/// #993 S1: where `COMPACT_HOOK_SCRIPT`'s `statusline` arm leaves the latest
+/// Claude Code status-line payload for one agent — a sibling of the
+/// `promptsubmit` marker above, in the same group `hooks/` dir, and typed the
+/// same way for the same reason: the id becomes part of a file name, so the
+/// caller must hold a [`PathSegment`] before it can ask. One whole file,
+/// replaced on every write (the script writes `.tmp` and renames), because
+/// only the LATEST reading means anything.
+#[doc(hidden)] // pub for integration tests
+pub fn statusline_snapshot_path(root: &Path, group: &GroupId, agent_id: &PathSegment) -> PathBuf {
+    group_dir_at(root, group)
+        .join("hooks")
+        .join(format!("{agent_id}.statusline.json"))
 }
 
 /// This delivery's baseline byte length into the `promptsubmit` marker,
@@ -41219,6 +41296,7 @@ impl OrchRegistry {
             compact_last_ack_ms: None,
             last_context_tokens: None,
             last_context_model: None,
+            last_context_window: None,
             compact_inference_guard_until_ms: 0,
             compact_hook_precompact_seen_ms: None,
             compact_hook_sessionstart_seen_ms: None,
@@ -43563,13 +43641,20 @@ impl OrchRegistry {
     /// no-next-turn-required signal). Impure (disk read); split from the
     /// decision so `compaction_confirmed`/`inferred_compaction_confirmed`
     /// stay synthetic-input testable.
+    ///
+    /// #993 S1: each transcript reading is then enriched by the agent's
+    /// status-line snapshot (`statusline_snapshot_path`) through
+    /// `modelstate::enrich_with_statusline`, which states what each source
+    /// owns. The transcript stays the base: no transcript, no signal — a
+    /// snapshot alone never seeds the boundary-count baseline the resolver
+    /// compares against.
     fn agent_context_signals(&self) -> HashMap<String, crate::usage::CompactionSignal> {
-        let candidates: Vec<(String, String)> = self
+        let candidates: Vec<(String, String, GroupId)> = self
             .agents
             .lock_safe()
             .values()
             .filter(|a| a.status == AgentStatus::Running)
-            .filter_map(|a| Some((a.id.clone(), a.session_id.clone()?)))
+            .filter_map(|a| Some((a.id.clone(), a.session_id.clone()?, a.group.clone())))
             .collect();
         if candidates.is_empty() {
             return HashMap::new();
@@ -43584,7 +43669,18 @@ impl OrchRegistry {
         };
         candidates
             .into_iter()
-            .filter_map(|(id, sid)| Some((id, crate::usage::compaction_signal_in(&root, &sid)?)))
+            .filter_map(|(id, sid, group)| {
+                let signal = crate::usage::compaction_signal_in(&root, &sid)?;
+                // #925: the id becomes a file name, so it is parsed first; a
+                // roster id always parses, and one that did not would simply
+                // get no enrichment.
+                let snapshot = PathSegment::parse(&id)
+                    .ok()
+                    .and_then(|seg| fs::read_to_string(statusline_snapshot_path(&self.root, &group, &seg)).ok())
+                    .and_then(|text| crate::modelstate::parse_statusline_snapshot(&text));
+                let _ = (snapshot, &sid); // SCRATCH1: no enrichment
+                Some((id, signal))
+            })
             .collect()
     }
 
@@ -43627,7 +43723,8 @@ impl OrchRegistry {
                 }
                 let tokens = sig.tokens?;
                 let override_tokens = overrides.get(group).copied().flatten();
-                let window = effective_context_window_tokens(override_tokens, sig.model.as_deref());
+                let (window, _) =
+                    effective_context_window_tokens(override_tokens, sig.window_tokens, sig.model.as_deref(), Some(tokens));
                 Some((id.clone(), context_percent_used(tokens, window)))
             })
             .collect()
@@ -43734,11 +43831,17 @@ impl OrchRegistry {
         {
             let mut agents = self.agents.lock_safe();
             for (id, sig) in &signals {
+                let Some(a) = agents.get_mut(id) else { continue };
                 if let Some(model) = &sig.model {
-                    if let Some(a) = agents.get_mut(id) {
-                        a.last_context_model = Some(model.clone());
-                    }
+                    a.last_context_model = Some(model.clone());
                 }
+                // #993 S1: unlike the model, the reported window FOLLOWS the
+                // signal — including back to `None` when this tick's reading
+                // carries no matching snapshot (a resumed session whose status
+                // line has not run yet), so a previous session's window can
+                // never outlive it. A tick with no signal at all (a transient
+                // read miss) leaves it alone, like the model.
+                a.last_context_window = sig.window_tokens;
             }
         }
         let nudged = self.compact_nudge_tick(
@@ -48573,7 +48676,13 @@ impl OrchRegistry {
                         // of a flat 200K assumption — see its doc.
                         "percent": a.last_context_tokens.map(|t| context_percent_used(
                             t,
-                            effective_context_window_tokens(context_window_override, a.last_context_model.as_deref()),
+                            effective_context_window_tokens(
+                                context_window_override,
+                                a.last_context_window,
+                                a.last_context_model.as_deref(),
+                                Some(t),
+                            )
+                            .0,
                         )),
                     },
                 })
@@ -51952,11 +52061,14 @@ impl OrchRegistry {
 
     /// Claude's `--settings` file (#417, split from `--mcp-config`'s file per
     /// rev-4 review N2 — see `write_mcp_config`'s doc): nothing shared with the
-    /// MCP config's schema. Two independent keys, each written only when this
-    /// agent actually has one:
+    /// MCP config's schema. Three keys, each written only when this agent
+    /// actually has one:
     ///
     /// - `hooks` — the #417/#112 compact-lifecycle config, absent when
     ///   `compact_hook_settings` has nothing to write (no `sh` resolvable).
+    /// - `statusLine` — #993 S1, present exactly when `hooks` is (same script,
+    ///   same `sh`); chains to the human's own status line resolved from `cwd`
+    ///   (see `user_statusline`).
     /// - `permissions` — #610, for a [`Containment::is_read_only`] pane only:
     ///   [`CLAUDE_READONLY_SETTINGS_ALLOW`] under `allow` (the surface `dontAsk`
     ///   is documented to consult — see that constant for the full argument and
@@ -51994,8 +52106,12 @@ impl OrchRegistry {
         group: &GroupId,
         agent_id: &PathSegment,
         containment: Containment,
+        cwd: &Path,
     ) -> Option<PathBuf> {
-        let hooks = self.compact_hook_settings(group, agent_id);
+        let (hooks, status_line) = match self.compact_hook_settings(group, agent_id, cwd) {
+            Some(s) => (Some(s.hooks), Some(s.status_line)),
+            None => (None, None),
+        };
         let permissions = containment.is_read_only().then(|| {
             let mut p = serde_json::Map::new();
             p.insert("allow".into(), json!(CLAUDE_READONLY_SETTINGS_ALLOW));
@@ -52020,6 +52136,7 @@ impl OrchRegistry {
         if let Some(hooks) = hooks {
             cfg.insert("hooks".into(), hooks);
         }
+        let _ = status_line; // SCRATCH1: statusLine never written
         if let Some(permissions) = permissions {
             cfg.insert("permissions".into(), permissions);
         }
@@ -52116,7 +52233,15 @@ impl OrchRegistry {
     /// submission" — unlike `SessionStart` above, no `matcher` key is
     /// written at all (one was silently ignored anyway, per the docs; this
     /// mirrors reality rather than adding a key the CLI would discard).
-    fn compact_hook_settings(&self, group: &GroupId, agent_id: &str) -> Option<Value> {
+    ///
+    /// #993 S1 adds the `statusLine` entry, returned beside `hooks` because it
+    /// is a TOP-LEVEL settings key, not a hook event — and derived from the same
+    /// script and `sh`, so a machine that cannot run the hooks gets no status
+    /// line either (never a `statusLine` pointing at a script that was not
+    /// written). Unlike the hooks it is NOT additive: `--settings` outranks the
+    /// human's own `statusLine`, which is why its command chains to theirs
+    /// (`user_statusline`) and carries their `padding`/`refreshInterval`.
+    fn compact_hook_settings(&self, group: &GroupId, agent_id: &str, cwd: &Path) -> Option<ClaudeHookSettings> {
         let script = self.ensure_compact_hook_script()?;
         let sh = self.resolve_hook_sh()?;
         // Forward-slashed so the path is safe inside the POSIX script's own
@@ -52125,11 +52250,61 @@ impl OrchRegistry {
         let script_fwd = script.display().to_string().replace('\\', "/");
         let sh_fwd = sh.display().to_string().replace('\\', "/");
         let cmd = |event: &str| format!("\"{sh_fwd}\" \"{script_fwd}\" {event} \"{group_dir}\" \"{agent_id}\"");
-        Some(json!({
-            "PreCompact": [{ "hooks": [{ "type": "command", "command": cmd("precompact") }] }],
-            "SessionStart": [{ "matcher": "compact", "hooks": [{ "type": "command", "command": cmd("sessionstart-compact") }] }],
-            "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": cmd("promptsubmit") }] }],
-        }))
+        let user = self.user_statusline(cwd);
+        let mut status_line = serde_json::Map::new();
+        status_line.insert("type".into(), json!("command"));
+        status_line.insert(
+            "command".into(),
+            json!(crate::modelstate::with_chained_command(
+                &cmd("statusline"),
+                user.as_ref().map(|u| u.command.as_str()),
+            )),
+        );
+        if let Some(p) = user.as_ref().and_then(|u| u.padding) {
+            status_line.insert("padding".into(), json!(p));
+        }
+        if let Some(r) = user.as_ref().and_then(|u| u.refresh_interval) {
+            status_line.insert("refreshInterval".into(), json!(r));
+        }
+        Some(ClaudeHookSettings {
+            hooks: json!({
+                "PreCompact": [{ "hooks": [{ "type": "command", "command": cmd("precompact") }] }],
+                "SessionStart": [{ "matcher": "compact", "hooks": [{ "type": "command", "command": cmd("sessionstart-compact") }] }],
+                "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": cmd("promptsubmit") }] }],
+            }),
+            status_line: Value::Object(status_line),
+        })
+    }
+
+    /// #993 S1: the human's own Claude status line, read ONCE at spawn, that
+    /// loomux's `statusline` hook chains to — so an orrerix pane shows the line
+    /// a plain `claude` in the same directory would.
+    ///
+    /// The layers are read in Claude Code's own settings precedence
+    /// (code.claude.com/docs/en/settings, "Settings precedence": managed, then
+    /// command-line arguments, then local project, then shared project, then
+    /// user), skipping the two loomux cannot or must not read as the human's:
+    /// managed settings outrank `--settings` anyway, so a managed `statusLine`
+    /// replaces loomux's entry and this chain never runs (the snapshot is then
+    /// simply absent and the transcript reader carries on); and the
+    /// command-line layer IS loomux's own file. What remains, highest first:
+    /// `<cwd>/.claude/settings.local.json`, `<cwd>/.claude/settings.json`, and
+    /// the user file. `cwd` is the pane's working directory — the directory
+    /// claude resolves its project settings from.
+    ///
+    /// The user file goes through [`Self::user_cli_dir`], so a registry that is
+    /// not the human's live one reads a contained stand-in inside its own root
+    /// (#502) rather than the developer's real `~/.claude/settings.json`.
+    /// Unreadable files are simply absent layers: a status line is cosmetic,
+    /// and a spawn never fails over one.
+    fn user_statusline(&self, cwd: &Path) -> Option<crate::modelstate::UserStatusLine> {
+        let mut paths = vec![cwd.join(".claude").join("settings.local.json"), cwd.join(".claude").join("settings.json")];
+        if let Some(user) = self.user_cli_dir(".claude", "settings.json") {
+            paths.push(user);
+        }
+        let texts: Vec<String> = paths.iter().filter_map(|p| fs::read_to_string(p).ok()).collect();
+        let layers: Vec<&str> = texts.iter().map(String::as_str).collect();
+        crate::modelstate::resolve_user_statusline(&layers)
     }
 
     /// #417 (Copilot correction): Copilot's own user-level hook config
@@ -55191,7 +55366,7 @@ impl OrchRegistry {
             .then(|| {
                 // #925: the settings file is named after the agent.
                 let agent_seg = PathSegment::parse(&agent_id).ok()?;
-                self.write_hook_settings_file(group_id, &agent_seg, role.containment())
+                self.write_hook_settings_file(group_id, &agent_seg, role.containment(), Path::new(&cwd))
             })
             .flatten();
         // #417 (Copilot correction): Copilot auto-loads its user-level hooks
@@ -55307,6 +55482,7 @@ impl OrchRegistry {
             compact_last_ack_ms: None,
             last_context_tokens: None,
             last_context_model: None,
+            last_context_window: None,
             compact_inference_guard_until_ms: 0,
             compact_hook_precompact_seen_ms: None,
             compact_hook_sessionstart_seen_ms: None,
@@ -65129,7 +65305,7 @@ fn register_orchestrator_pane(
         .then(|| {
             // #925: the settings file is named after the agent.
             let agent_seg = PathSegment::parse(&agent_id).ok()?;
-            reg.write_hook_settings_file(&group.id, &agent_seg, containment)
+            reg.write_hook_settings_file(&group.id, &agent_seg, containment, Path::new(&group.repo))
         })
         .flatten();
     if cli == "copilot" {
@@ -65239,6 +65415,7 @@ fn register_orchestrator_pane(
         compact_last_ack_ms: None,
         last_context_tokens: None,
         last_context_model: None,
+        last_context_window: None,
         compact_inference_guard_until_ms: 0,
         compact_hook_precompact_seen_ms: None,
         compact_hook_sessionstart_seen_ms: None,

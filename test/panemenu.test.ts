@@ -175,7 +175,7 @@ test("completing onto a RECEIVER of an already-driven channel offers ONLY ONE co
   // the existing sender, never a requirement that it be one of the two
   // panes this call names. Verified end-to-end against the real backend by
   // `join_completing_on_a_receiver_pane_succeeds_and_keeps_the_existing_sender`
-  // (tests/orchestration.rs) — before the fix that integration test failed
+  // (tests/orchestration/) — before the fix that integration test failed
   // with exactly the error this menu action used to trigger
   // ("sender_agent must be one of the two connected panes").
   //

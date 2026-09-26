@@ -235,6 +235,10 @@ pub fn session_usage_on(
         .optional()
         .map_err(drift)?;
     let Some(model) = model else { return Ok(None) };
+    // #993 S2c: the column is JSON at the pin, so it is decoded rather than
+    // handed on as text — a usage row labelled `{"id":…}` was the display
+    // defect `docs/design/token-charts.md` named.
+    let model = model.as_deref().map(parse_model_column).and_then(|m| m.model);
 
     let (cost, input, output, reasoning, cache_read, cache_write) = conn
         .query_row(ROLLUP_SQL, [session_id], |r| {
@@ -603,6 +607,171 @@ pub fn session_transcript_on(
         out.push(row.map_err(drift)?);
     }
     Ok(out)
+}
+
+// ── Model, variant and context for a pane (#993 S2c) ───────────────────────
+//
+// Two labelled observations at the same pin (`anomalyco/opencode@f67e80c2`,
+// tag `v1.18.11`), recorded in `docs/design/opencode.md`:
+//
+// - `session.model` is `text({ mode: "json" })` typed `{ id, providerID,
+//   variant? }` (`packages/core/src/session/sql.ts`), written by
+//   `Session.setAgentModel` whenever a prompt's model differs from the stored
+//   one — so it is the pane's CURRENT model and variant, not its first.
+// - an assistant `message.data` carries `tokens: { total?, input, output,
+//   reasoning, cache: { read, write } }` (`packages/schema/src/v1/session.ts`,
+//   `Assistant`). The message is inserted with every counter at zero
+//   (`session/prompt.ts`) and each `step-finish` OVERWRITES the counters with
+//   that step's usage (`session/processor.ts`), so a finished message holds
+//   its last model call's figures and an in-flight one holds zeros.
+
+/// What a session's `model` column says the pane is on.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionModelState {
+    /// `providerID/id` — the `provider/model` spelling `opencode models` lists
+    /// and `--model` takes, so it matches what the launcher declared. A
+    /// plain-string column is taken verbatim.
+    pub model: Option<String>,
+    /// The model variant (opencode's reasoning-effort knob), when the JSON
+    /// carries one. A plain-string column has none.
+    pub variant: Option<String>,
+}
+
+/// Decode one `session.model` value. Pure, so both column shapes are
+/// assertable without a database.
+///
+/// - A JSON **object** is the pin's shape: `id` (required) prefixed by
+///   `providerID` when present, and `variant`. An object with no usable `id` is
+///   no model at all, never its own JSON text — printing that text as a label is
+///   the defect this decoder exists to end.
+/// - **Anything else** non-empty is a plain model string, the shape older
+///   stores and the usage fixtures carry, and is kept verbatim.
+///
+/// Empty strings count as absent on every field. So does a `variant` of
+/// `"default"`: `SessionPrompt` writes `variant ?? "default"` when the prompt
+/// chose none, and reads `"default"` back as `undefined` in the same
+/// comparison (`session/prompt.ts` at the pin). It is "no variant selected",
+/// not an effort level.
+pub fn parse_model_column(raw: &str) -> SessionModelState {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return SessionModelState::default();
+    }
+    let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return SessionModelState { model: Some(raw.to_owned()), variant: None };
+    };
+    let field = |k: &str| {
+        obj.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let model = field("id").map(|id| match field("providerID") {
+        Some(provider) => format!("{provider}/{id}"),
+        None => id,
+    });
+    SessionModelState { model, variant: field("variant").filter(|v| v.as_str() != "default") }
+}
+
+/// The model and variant `session_id` is on. `Ok(None)`: the store is readable
+/// and has no such session. A row whose column is `NULL` is `Some` of an empty
+/// state — the session exists, it just names no model.
+pub fn session_model_state(db: &Path, session_id: &str) -> Result<Option<SessionModelState>, Unavailable> {
+    session_model_state_on(&open_readonly(db)?, session_id)
+}
+
+/// [`session_model_state`] against an already-open connection.
+pub fn session_model_state_on(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<SessionModelState>, Unavailable> {
+    let column: Option<Option<String>> = conn
+        .query_row("SELECT model FROM session WHERE id = ?1", [session_id], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .optional()
+        .map_err(drift)?;
+    Ok(column.map(|c| c.as_deref().map(parse_model_column).unwrap_or_default()))
+}
+
+/// How far back [`latest_assistant_context_on`] walks. A message is a whole
+/// turn (tool calls are parts, not messages), so the newest counted assistant
+/// message is normally within the last few rows; the cap exists because this
+/// runs on a polled tick, where a session of thousands of messages whose recent
+/// rows all fail to count must cost a bounded read, not a full-table parse.
+pub const CONTEXT_SCAN_ROWS: i64 = 64;
+
+/// The context one `message.data` document stands for, if it is a message
+/// that counts: an **assistant** message that is **not a compaction summary**
+/// (`summary: true`) and whose `input + cache.read + cache.write` is above
+/// zero. Pure, for the same reason as [`parse_model_column`].
+///
+/// - **The input side only.** `getUsage` (`session/session.ts`) stores `input`
+///   as the provider's input count MINUS both cache counts, so the three sum
+///   back to what the call sent — the figure opencode itself calls
+///   `contextTokens` there, and the same input-side formula as claude's
+///   `latest_context_tokens` and the pi reader. `output` and `reasoning` are
+///   what the call produced.
+/// - **Zero is skipped, not read.** An in-flight message holds zeros until its
+///   first `step-finish`, and a `0` handed to the compaction state machine
+///   looks exactly like a compaction's token drop.
+/// - **A compaction summary is skipped.** Its call read the whole pre-compact
+///   history, which is not what the context holds afterwards; opencode's own
+///   overflow check skips it for the same reason (`lastFinished.summary !==
+///   true`, `session/prompt.ts`).
+pub fn assistant_context_tokens(data: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(data).ok()?;
+    if v.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
+        return None;
+    }
+    if v.get("summary").and_then(serde_json::Value::as_bool) == Some(true) {
+        return None;
+    }
+    let tokens = v.get("tokens")?;
+    // `Schema.Finite`, so a counter may arrive as a float; a negative or
+    // non-finite one is no count at all (the `sane_count` posture).
+    let count = |p: &str| {
+        tokens
+            .pointer(p)
+            .and_then(serde_json::Value::as_f64)
+            .filter(|n| n.is_finite() && *n > 0.0)
+            .map_or(0, |n| n as u64)
+    };
+    let sum = count("/input").saturating_add(count("/cache/read")).saturating_add(count("/cache/write"));
+    (sum > 0).then_some(sum)
+}
+
+/// The newest counted assistant message's context tokens in `session_id`
+/// (see [`assistant_context_tokens`]). `Ok(None)`: no counted assistant
+/// message within the last [`CONTEXT_SCAN_ROWS`] messages — a pane that has
+/// not finished a turn yet, or no such session.
+///
+/// The session's OWN messages only: a subagent is a session of its own with its
+/// own context, unlike usage, where its spend is the pane's. Newest first on
+/// the vendor's index order (`message_session_time_created_id_idx`, the same
+/// order [`session_transcript_on`] reads).
+pub fn latest_assistant_context(db: &Path, session_id: &str) -> Result<Option<u64>, Unavailable> {
+    latest_assistant_context_on(&open_readonly(db)?, session_id)
+}
+
+/// [`latest_assistant_context`] against an already-open connection.
+pub fn latest_assistant_context_on(conn: &Connection, session_id: &str) -> Result<Option<u64>, Unavailable> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT data FROM message WHERE session_id = ?1 \
+              ORDER BY time_created DESC, id DESC LIMIT ?2",
+        )
+        .map_err(drift)?;
+    let rows = stmt
+        .query_map(rusqlite::params![session_id, CONTEXT_SCAN_ROWS], |r| r.get::<_, String>(0))
+        .map_err(drift)?;
+    for row in rows {
+        if let Some(tokens) = assistant_context_tokens(&row.map_err(drift)?) {
+            return Ok(Some(tokens));
+        }
+    }
+    Ok(None)
 }
 
 /// A cost is only worth reporting if it is finite and non-negative. SQLite

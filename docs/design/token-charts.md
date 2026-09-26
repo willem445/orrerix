@@ -507,12 +507,12 @@ the current model gets a single mark across the upgrade where the two differed.
 opencode's column was checked against the source at the `v1.18.11` pin rather
 than assumed: `SessionPrompt` calls `Session.setAgentModel` whenever a prompt's
 model differs from the stored one, so the column follows the latest prompt and
-is not the model the session was created with. A known gap remains on that
-column's SHAPE: upstream declares it `text({ mode: "json" })` — an
-`{id, providerID, variant}` object — while `opencodedb::session_usage` reads it
-as a plain string. A switch still reads as a change, since the text changes,
-but its label is that JSON text rather than a model id. That is a display
-defect of the opencode reader, outside this chart.
+is not the model the session was created with. The column's SHAPE is
+`text({ mode: "json" })` upstream, an `{id, providerID, variant}` object, and
+`opencodedb::session_usage` decodes it (#993 S2c) to `providerID/id`, the
+spelling `--model` takes; a plain-string column is kept verbatim. Before that,
+the label was the column's JSON text. A session whose samples straddle the
+upgrade gets one model mark, from that text to the id.
 
 Two models of one block and CLI are drawn in the same hue and the same line
 style; only the legend separates them. Whether that reads well enough is the

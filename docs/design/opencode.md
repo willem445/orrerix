@@ -1045,6 +1045,63 @@ seam, a solo opencode pane is delivery-only from birth, and its recorded
 command carries no identity flags for `stripSoloMcpFlags` to excise. That type
 widens when the seam arrives, not when the sidebar learns to list the CLI.
 
+## Model, variant and context (#993 S2c)
+
+The per-pane context reader reads two more things out of the same store, on one
+read-only connection: the session row's `model` column and the newest assistant
+message's tokens. What `docs/design/pane-model-state.md` does with them is
+recorded there (its S2c section); this section records what the store holds.
+
+The plan named `packages/opencode/src/session/index.ts` as the second file to
+check. There is no such file at the pin. `session/message-v2.ts` imports every
+message type from `@opencode-ai/core/v1/session`, and the shapes below are read
+from the files that define them.
+
+**Observation 1 — `session.model` is JSON `{id, providerID, variant}`.**
+`SOURCE` `packages/core/src/session/sql.ts`: the column is
+`text({ mode: "json" })` typed `{ id: string; providerID: string; variant?:
+string }`. The schema's `SessionModel` (`packages/schema/src/v1/session.ts`)
+declares the same three fields. `SessionPrompt` (`packages/opencode/src/session/
+prompt.ts`) calls `setAgentModel` whenever a prompt's agent, provider, model or
+variant differs from the stored one. So the column holds the pane's **current**
+model and variant, not the ones the session was created with. It writes
+`variant ?? "default"`, and reads `"default"` back as no variant in the same
+comparison, so loomux reads `"default"` as no effort level.
+
+**Observation 2 — an assistant `message.data` carries `tokens{input, output,
+reasoning, cache{read, write}}`.** `SOURCE` `packages/schema/src/v1/session.ts`,
+`Assistant`: `tokens: { total?, input, output, reasoning, cache: { read, write }
+}`, beside `modelID`, `providerID`, `variant?`, `summary?` and `finish?`.
+`message.data` is `Omit<SessionV1.Info, "id" | "sessionID">` (`sql.ts`), so
+`role` is in the document. Three more facts from the pin decide how the reader
+takes a figure out of it:
+
+- **`input` excludes the cache.** `Session.getUsage` (`packages/opencode/src/
+  session/session.ts`) stores `input` as the provider's input count minus both
+  cache counts. `input + cache.read + cache.write` is therefore what the call
+  sent, which the same function names `contextTokens`.
+- **A message is written with zeros and overwritten per step.** `prompt.ts`
+  inserts each assistant message with every counter at `0`, and each
+  `step-finish` in `session/processor.ts` replaces the counters with that step's
+  usage. A finished message holds its last model call's figures, and an
+  in-flight one holds zeros.
+- **A compaction writes an assistant message of its own.** It has `summary:
+  true` and `mode: "compaction"` (`session/compaction.ts`), and its call read the
+  whole pre-compact history. opencode's own overflow check skips it
+  (`lastFinished.summary !== true`, `prompt.ts`).
+
+**What the store does not hold: a context window.** The window is
+`model.limit.context` in opencode's provider catalog (`session/overflow.ts`
+reads it). It is never written to the store, the configuration docs say nothing
+about it, and the one interface that returns it (`/config/providers`) needs an
+`opencode serve` loomux does not run.
+
+**The model spelling.** loomux joins the JSON as `providerID/id`, which is the
+`provider/model` form `opencode models` prints and `--model` takes. That is the
+spelling the launcher declared, so the two compare equal. A plain-string column
+is kept verbatim. The usage reader (`session_usage_on`) uses the same decoder,
+so its `model` is an id rather than the column's JSON text.
+
 ## Deliberately not done
 
 - **Reasoning parts in the digest.** OpenCode stores the model's reasoning as

@@ -12,7 +12,7 @@ is read from the CLI's artifact rather than inferred from a model name.
 | **claude** (PTY) | Status-line `model.id` / `model.display_name` (S1); transcript `message.model` already exists | Status-line `effort.level` (S1) | Status-line `context_window.context_window_size` (S1) | Status-line `context_window.total_input_tokens` / `used_percentage` (input-token accounting) (S1) | `/compact` (Claude Code [slash commands](https://code.claude.com/docs/en/commands)) | `PreCompact`, `SessionStart(compact)`, transcript `compact_boundary` already exist; `PostCompact` is planned (S5; [hooks reference](https://code.claude.com/docs/en/hooks)) |
 | **codex** (PTY) | Rollout `turn_context.payload.model` already exists | Rollout `turn_context.payload.effort` (S2a; optional `ReasoningEffort`) | Rollout token-count `info.model_context_window` (S2a) | Same event's `info.last_token_usage.input_tokens` (S2a) | `/compact` ("Summarize the visible chat to free tokens"; [CLI command reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli)). `model_auto_compact_token_limit` documents automatic compaction ([config reference](https://learn.chatgpt.com/docs/config-file/config-reference)). | Rollout `compacted`; `PreCompact` / `PostCompact` hooks are documented ([hooks](https://learn.chatgpt.com/docs/hooks)) |
 | **pi** (PTY) | Session's latest assistant `provider` / `model`; `model_change` entries | `thinking_level_change`; initial level is the launcher's `--thinking` choice | `--list-models` context column; RPC `get_state.model.contextWindow`; not present in session file (S8) | Latest assistant `usage.input + cacheRead + cacheWrite` | `/compact [prompt]` ([usage guide](https://github.com/earendil-works/pi/tree/v0.84.4/packages/coding-agent/docs/usage.md)) | Session `compaction` entry; RPC `compaction_end` |
-| **opencode** (PTY) | Session model value (upstream observed JSON `{id, providerID, variant}`) | `variant` in that JSON (S2c) | Unknown: no documented source in the [configuration reference](https://opencode.ai/docs/config/) | Per-message `message.data` tokens are a labelled observation to verify at v1.18.11 (S2c) | `/compact` (alias `/summarize`; [TUI guide](https://opencode.ai/docs/tui/)) | No documented signal; token-drop inference only |
+| **opencode** (PTY) | Session `model` column, JSON `{id, providerID, variant}` read as `providerID/id` (S2c) | `variant` in that JSON (S2c) | None: not in the store, and no documented source in the [configuration reference](https://opencode.ai/docs/config/) (S2c) | Newest counted assistant `message.data` `tokens.input + cache.read + cache.write` (S2c) | `/compact` (alias `/summarize`; [TUI guide](https://opencode.ai/docs/tui/)) | No documented signal; token-drop inference only |
 | **copilot** (PTY) | No machine-readable source documented; use launcher's declared model, labelled `declared` | `~/.copilot/settings.json` `effortLevel` is a read-only global setting, labelled `settings` | No documented source | No documented source; `/context` displays a visualization | `/compact [FOCUS-INSTRUCTIONS]` ([CLI command reference](https://docs.github.com/en/copilot/reference/cli-command-reference)) | `preCompact` hook; no documented post-compact hook ([hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference)) |
 | **gemini** (PTY) | No source in this slice | No source in this slice | No source in this slice | No source in this slice | No command established in this slice | No signal established in this slice |
 
@@ -46,7 +46,8 @@ window is not replaced by a model-name guess. S1 ships the ladder
 first source. The Codex token-count event (S2a) feeds the same rung, and so
 does pi's model list (S8's data, read by the S2b pi arm). A window pi printed
 rounded is labelled `reported-rounded` rather than `reported`
-(`modelstate::label_rounded_report`); it is still rung 2.
+(`modelstate::label_rounded_report`); it is still rung 2. The opencode reader
+(S2c) feeds no rung: its store records no window, so its signal carries none.
 
 The clamp never overrules an override. A human who set 200K on a pane that
 reads 250K has a deployment the override exists to describe. The percent
@@ -318,6 +319,97 @@ level.
   store, and that store is not read. This is the same residual as the usage
   meter's (`docs/design/pi.md`, Usage and cost).
 
+## S2c: the opencode store reader
+
+An opencode PTY pane's context signal comes from the group's own SQLite store
+(`OrchRegistry::opencode_db_path`, where every group opencode pane's
+`OPENCODE_DB` points). `modelstate::opencode_compaction_signal_in` reads it on
+one read-only connection, through two readers in `opencodedb.rs`. The shapes
+they rely on were verified at the `v1.18.11` pin and are recorded as labelled
+observations in `docs/design/opencode.md` ("Model, variant and context").
+
+| Field | Source | Rule |
+|---|---|---|
+| model | the session row's `model` column (`session_model_state`) | JSON `{id, providerID, variant}` is read as `providerID/id`, the `provider/model` spelling `--model` takes. A plain-string column is kept verbatim. An object with no `id` is no model. The column is never shown as JSON text. |
+| effort | `variant` in the same JSON | An empty variant, or `"default"` (what opencode writes when a prompt chose none), is no effort level. A plain-string column has no variant. |
+| tokens | the newest counted assistant message (`latest_assistant_context`) | `tokens.input + cache.read + cache.write`, which is what the call sent: opencode's `input` already excludes both cache counts. `output` and `reasoning` are excluded. |
+| window | none | The store records none (below). |
+| marker count | none | Always `0` (residuals). |
+
+**Which message counts.** The reader walks the session's own messages newest
+first, in the vendor's index order (`time_created`, then `id`), and takes the
+first that is all of:
+
+- an **assistant** message;
+- **not a compaction summary** (`summary: true`). That call read the whole
+  pre-compact history, not what the context holds afterwards, and opencode's
+  own overflow check skips it too;
+- **above zero**. opencode inserts each assistant message with zero counters
+  and fills them at its first `step-finish`, so an in-flight turn reads zero,
+  and a `0` handed to the compaction state machine looks like a compaction's
+  token drop.
+
+A session with no such message has no token reading. Its signal still carries
+the model and effort.
+
+**Why the session row, not the message, names the model.** `SessionPrompt`
+rewrites the row whenever a prompt's model or variant changes, before the turn
+runs. So the row names what the pane is on now, including a `/model` switch
+whose turn has not finished. This is the same reading the pi reader takes of a
+`model_change` entry.
+
+**No window, so no percent.** The store records no window. opencode's
+configuration docs say nothing about `limit.context`, `opencode models` prints
+ids only, and `/config/providers` needs an `opencode serve` loomux does not
+run. The signal's `window_tokens` is therefore always `None`, and opencode is
+tokens-visible without a percent (Tier 1 for tokens only, per the tiers above).
+**S4 has to hold that line.** `effective_context_window_tokens` falls to the
+model-name table on a `None` window: 200K, or 1M for an id containing `opus`.
+Once S4 opens the compact-nudge gate to opencode, that table would give an
+opencode reading a guessed percent. The plan's rule, which S4 implements, is
+that a tokens-only reading never escalates.
+
+**What reads it today.** Nothing a user sees. `run_compact_nudge` caches the
+signal's model, window and rounded flag on the agent. The compact-nudge and
+idle-compact loops still admit only the CLIs `compact_nudge_cli_supported`
+names (claude and copilot), so an opencode reading reaches neither the
+lifecycle panel's token count nor the escalation. That is the same position the
+S2a and S2b readers are in until S4.
+
+**One visible change: the usage model label.** `opencodedb::session_usage_on`
+now decodes the column the same way, so an opencode pane's usage `model`, and
+the token chart's legend and model-switch marks built from it, show
+`opencode/deepseek-v4-flash` rather than the column's JSON text
+(`docs/design/token-charts.md`).
+
+### S2c residuals
+
+- **The token figure is not opencode's own gauge.** opencode's overflow check
+  counts `tokens.total`, or `input + output + cache.read + cache.write` when
+  `total` is absent. This reader uses the input-side formula instead, like the
+  claude and pi readers, so it reads up to one turn's output below what
+  opencode compacts on. S4 settles this for opencode and pi together.
+- **No compaction marker is counted.** A compaction's own assistant message
+  (`summary: true`, `mode: "compaction"`) is a structural record of one, but
+  opencode documents no compaction-done signal, and the plan's table says
+  token-drop inference only. The marker count stays `0`, and whether that
+  message should count is left to S4.
+- **The scan is bounded** at `opencodedb::CONTEXT_SCAN_ROWS` (64) messages.
+  A turn is one message, since tool calls are parts, so the newest counted
+  message is normally within a few rows. A counted message with 64 or more
+  newer messages above it is not found, and the reading is `None` for that
+  tick. The bound is pinned by
+  `context_the_scan_reaches_back_exactly_the_documented_bound_and_no_further`.
+- **A subagent's context is not the pane's.** A subagent is a session of its
+  own, so only the pane's own session is read. Usage is different: it rolls
+  subagent spend up into the pane.
+- **A store that cannot be read yields no signal.** The usage path already
+  audits each degrade once per episode (`note_opencode_db_degrade`), so this
+  reader does not audit a second time.
+- **A solo opencode pane has no reading.** A solo launch sets no environment,
+  so it is never pointed at a group store, and the human's own store is not
+  read.
+
 ## Contract changes planned by later slices
 
 The S0 and S1 rows have shipped; the rest are planned:
@@ -349,6 +441,7 @@ The S0 and S1 rows have shipped; the rest are planned:
 - pi: `packages/coding-agent/docs/usage.md` and `compaction.md` at
   [`v0.84.4`](https://github.com/earendil-works/pi/tree/v0.84.4/packages/coding-agent/docs).
 - OpenCode: [TUI guide](https://opencode.ai/docs/tui/) and
-  [configuration](https://opencode.ai/docs/config/); the message-token shape
-  and session-model JSON are S2c observations to verify against upstream
-  `v1.18.11`, not claims established by these published docs.
+  [configuration](https://opencode.ai/docs/config/). The message-token shape
+  and the session-model JSON are not in these published docs. They are S2c
+  observations read from the source at `v1.18.11`, recorded in
+  `docs/design/opencode.md`.

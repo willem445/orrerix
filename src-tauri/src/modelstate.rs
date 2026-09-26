@@ -138,6 +138,9 @@ pub enum ContextSource {
     /// pi session-file entries (#993 S2b), with the window looked up in the
     /// cached `--list-models` probe.
     PiSession,
+    /// opencode's SQLite store (#993 S2c): the session row's `model` column
+    /// and the newest counted assistant message. No window.
+    OpencodeDb,
 }
 
 impl ContextSource {
@@ -147,6 +150,7 @@ impl ContextSource {
             ContextSource::Statusline => "statusline",
             ContextSource::CodexRollout => "codex-rollout",
             ContextSource::PiSession => "pi-session",
+            ContextSource::OpencodeDb => "opencode-db",
         }
     }
 }
@@ -537,6 +541,43 @@ pub fn pi_compaction_signal_in(
         window_rounded: window.is_some_and(|w| w.rounded),
         effort: reading.effort.or(launch_effort),
         source: ContextSource::PiSession,
+    })
+}
+
+/// Read one opencode session's context signal from the group store `db`
+/// (`OrchRegistry::opencode_db_path`, where every group opencode pane's
+/// `OPENCODE_DB` points) on ONE read-only connection (#993 S2c).
+///
+/// - **model** and **effort** — the session row's `model` column, decoded by
+///   `opencodedb::parse_model_column`: `providerID/id`, and the `variant`
+///   as effort. No fallback to the block's effort knob: loomux's launch line
+///   passes no variant, so there is no requested level to fall back to.
+/// - **tokens** — `opencodedb::latest_assistant_context_on`, the newest
+///   counted assistant message's `input + cache.read + cache.write`. `None`
+///   before the first finished turn; the signal still carries the model.
+/// - **window** — always `None`. The store records none, the configuration
+///   docs are silent on `limit.context`, and the one source that carries it
+///   (the server's `/config/providers`) needs an `opencode serve` loomux
+///   does not run. See `docs/design/pane-model-state.md`, S2c.
+/// - **marker count** — `0`: no documented compaction-done signal is read here
+///   (the S2c section records the `summary: true` message as an observation).
+///
+/// `None` when the store cannot be read (every `opencodedb::Unavailable` —
+/// the usage path already audits those, once per episode) or holds no such
+/// session.
+#[doc(hidden)] // pub for the `opencodeusage` integration test
+pub fn opencode_compaction_signal_in(db: &std::path::Path, session_id: &str) -> Option<crate::usage::CompactionSignal> {
+    let conn = crate::opencodedb::open_readonly(db).ok()?;
+    let state = crate::opencodedb::session_model_state_on(&conn, session_id).ok()??;
+    let tokens = crate::opencodedb::latest_assistant_context_on(&conn, session_id).ok()?;
+    Some(crate::usage::CompactionSignal {
+        tokens,
+        compact_boundary_count: 0,
+        model: state.model,
+        window_tokens: None,
+        window_rounded: false,
+        effort: state.variant,
+        source: ContextSource::OpencodeDb,
     })
 }
 

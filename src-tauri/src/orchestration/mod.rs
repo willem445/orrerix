@@ -39561,7 +39561,13 @@ impl OrchRegistry {
     /// model the file names, and its effort falls back to the pane's block
     /// knob — the `--thinking` value it was launched with — when the tail holds
     /// no `thinking_level_change`. See `modelstate::pi_compaction_signal_in`.
-    #[doc(hidden)] // pub for the codex and pi context-reader integration tests
+    ///
+    /// #993 S2c: opencode reads the group's own SQLite store
+    /// (`opencode_db_path`) on one read-only connection: model and variant
+    /// (as effort) from the session row, tokens from the newest counted
+    /// assistant message, and no window — the store records none. See
+    /// `modelstate::opencode_compaction_signal_in`.
+    #[doc(hidden)] // pub for the codex, pi and opencode context-reader integration tests
     pub fn agent_context_signals(&self) -> HashMap<String, crate::usage::CompactionSignal> {
         let rows: Vec<(String, String, GroupId, workflow::BlockId, Role)> = self
             .agents
@@ -39630,6 +39636,13 @@ impl OrchRegistry {
                     let session = PathSegment::parse(&sid).ok()?;
                     Some((id, crate::modelstate::codex_compaction_signal_in(root, &session)?))
                 }
+                // #993 S2c: the group's own store, where every group opencode
+                // pane's `OPENCODE_DB` points. The session id is a SQL
+                // parameter here, never a path segment, so it is not parsed.
+                "opencode" => Some((
+                    id,
+                    crate::modelstate::opencode_compaction_signal_in(&self.opencode_db_path(&group), &sid)?,
+                )),
                 "claude" => {
                     let root = claude_root.as_ref()?;
                     let signal = crate::usage::compaction_signal_in(root, &sid)?;

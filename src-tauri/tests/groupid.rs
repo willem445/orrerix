@@ -685,6 +685,10 @@ fn the_orchestration_root_is_joined_with_a_group_in_exactly_one_place() {
 /// OWN floor rather than contributing to one total, because a root that stops
 /// being scanned reports zero silently and a shared floor absorbs that — the
 /// same reason CLAUDE.md constraint 6 makes the join scan name every root.
+/// Since #3498 P2 the orchestration commands live one banner per file in
+/// `orchestration/commands/`, so that directory is rows — and a directory of
+/// rows is the shape whose next file is the one nobody listed, which is why
+/// the scan also requires every `.rs` there to be a row.
 ///
 /// **`Option<String>` is matched as well as `String`**, for the same reason: a
 /// group id a command may omit is still a group id, and `gh.rs`'s two take that
@@ -707,13 +711,59 @@ fn every_group_taking_command_parses_its_id_at_the_boundary() {
     /// exact floor costs a one-line edit when that happens and catches a rename
     /// of EITHER until then.
     ///
-    /// **`mod.rs`'s stays slack** (45 against ~49), and that asymmetry is
-    /// argued rather than left over: it gains and loses group-taking commands
-    /// most rounds, so an exact floor there would fail on every unrelated
-    /// addition and be relaxed within a week — which is how a guard stops
-    /// guarding. Its floor pins that the scan still SEES the class; gh.rs's
-    /// pins the class exactly.
-    const FILES: &[(&str, usize)] = &[("src/orchestration/mod.rs", 45), ("src/gh.rs", 2)];
+    /// **The orchestration commands stay slack**, and that asymmetry is argued
+    /// rather than left over: they gain and lose group-taking commands most
+    /// rounds, so an exact floor would fail on every unrelated addition and be
+    /// relaxed within a week — which is how a guard stops guarding. When they
+    /// all lived in `mod.rs` its one floor was 45; #3498 P2 split them one
+    /// banner per file (68 group-taking at the split), so each of those files
+    /// now carries a floor of 1 — a root that stops being scanned still reads
+    /// 0 and fails on its own row — and the old 45 survives unchanged as
+    /// [`ORCHESTRATION_FLOOR`] over their sum, so the scan must still SEE the
+    /// class at the scale it did. `mod.rs` and `commands/mod.rs` are rows with
+    /// a floor of 0: they hold no command today, but one added to either is
+    /// still scanned. gh.rs's floor pins its class exactly.
+    const FILES: &[(&str, usize)] = &[
+        ("src/orchestration/mod.rs", 0),
+        ("src/orchestration/commands/mod.rs", 0),
+        ("src/orchestration/commands/attention.rs", 1),
+        ("src/orchestration/commands/autonomy.rs", 1),
+        ("src/orchestration/commands/channels.rs", 1),
+        ("src/orchestration/commands/guardrails.rs", 1),
+        ("src/orchestration/commands/humanside.rs", 1),
+        ("src/orchestration/commands/launch.rs", 1),
+        ("src/orchestration/commands/mergegate.rs", 1),
+        ("src/orchestration/commands/panes.rs", 1),
+        ("src/orchestration/commands/tasks.rs", 1),
+        ("src/gh.rs", 2),
+    ];
+    /// The floor `mod.rs` alone carried before #3498 P2, over the SUM of the
+    /// orchestration rows.
+    const ORCHESTRATION_FLOOR: usize = 45;
+
+    // Every `.rs` in `orchestration/commands/` must be a row: a new command
+    // file this scan does not read is one whose group ids nobody checks.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration/commands");
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+        .map(|e| e.expect("dir entry").file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".rs"))
+        .map(|n| format!("src/orchestration/commands/{n}"))
+        .collect();
+    on_disk.sort();
+    let mut rows: Vec<String> = FILES
+        .iter()
+        .map(|(rel, _)| rel.to_string())
+        .filter(|rel| rel.starts_with("src/orchestration/commands/"))
+        .collect();
+    rows.sort();
+    assert!(on_disk.len() >= 5, "read_dir found only {on_disk:?} — the directory moved");
+    assert_eq!(
+        on_disk, rows,
+        "every file in src/orchestration/commands/ must be a FILES row, and every such row a file"
+    );
+
+    let mut orchestration_checked = 0usize;
 
     let mut unparsed = Vec::new();
     for (rel, floor) in FILES {
@@ -791,7 +841,16 @@ fn every_group_taking_command_parses_its_id_at_the_boundary() {
              so; a root that stops being scanned at all reports 0, which a single shared \
              floor would have absorbed."
         );
+        if rel.starts_with("src/orchestration/") {
+            orchestration_checked += checked;
+        }
     }
+
+    assert!(
+        orchestration_checked >= ORCHESTRATION_FLOOR,
+        "expected at least {ORCHESTRATION_FLOOR} group-taking commands across the orchestration \
+         rows, found {orchestration_checked} — the scan has stopped seeing the class it guards"
+    );
 
     assert!(
         unparsed.is_empty(),

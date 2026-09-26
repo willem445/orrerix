@@ -297,6 +297,7 @@ use promote::*;
 use verdicts::*;
 use ghpoller::*;
 use channels::*;
+use shims::*;
 use boxscan::*;
 use questions::*;
 use humanquestions::*;

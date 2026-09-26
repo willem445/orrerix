@@ -212,7 +212,7 @@ test("a live group whose orchestrator pane is in this window reveals it", () => 
 
 test("a live group with no pane in this window explains instead of calling a resume that refuses", () => {
   // resume_orch_session's pre-check returns "already has a live orchestrator —
-  // focus its pane instead" (mod.rs). Calling into a known refusal to render
+  // focus its pane instead" (commands/panes.rs). Calling into a known refusal to render
   // its error as a toast is a round-trip that can only fail.
   assert.equal(
     liveSessionAction({ groupLive: true, paneInWindow: false, isOrchestratorRow: true }),

@@ -124,7 +124,7 @@ Each is shipped, tested, and citable — prefer copying one to inventing a shape
   behind (#754).
   The delegation helper for a NEW conversion is `blocking.rs` `run_blocking`
   (#746, shared by the nine gesture modules); `git.rs`, `gh.rs` and
-  `orchestration/mod.rs` keep their own older private copies, which is history,
+  `orchestration/commands/mod.rs` keep their own older private copies, which is history,
   not a pattern to extend.
 - **P2 — Coalesce per frame, leading edge, byte cap.** Bound a
   producer-rate stream backend-side to ≤1 event per pane per 60 Hz frame with

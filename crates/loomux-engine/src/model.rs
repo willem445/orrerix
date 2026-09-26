@@ -18,7 +18,8 @@
 //! this enum. Batch 4 turned both into free functions (`role_template`,
 //! `role_instructions_file`) and left both in
 //! `src-tauri/src/orchestration/mod.rs`, next to the `include_str!` templates
-//! they load.
+//! they load (`role_template` and the templates now sit in
+//! `orchestration/templates.rs`, #3498 P2).
 //!
 //! An inherent impl has to live in the crate that defines the type, so keeping
 //! them as methods would have dragged `templates/*.md` — and with them the

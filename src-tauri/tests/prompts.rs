@@ -696,7 +696,7 @@ fn a_pr_merges_when_github_reports_it_mergeable_and_a_branch_merely_behind_is_le
 
 #[test]
 fn the_rendered_merge_queue_note_does_not_revive_the_retracted_rebase_rule() {
-    // #1848 review B1. `{{MERGE_QUEUE}}` is a Rust CONSTANT (`MERGE_QUEUE_NOTE`, mod.rs)
+    // #1848 review B1. `{{MERGE_QUEUE}}` is a Rust CONSTANT (`MERGE_QUEUE_NOTE`, templates.rs)
     // rendered into `## Merge gate` when the repo enables the queue — invisible to any
     // sweep over `templates/` and empty in every default-group golden, so neither the
     // pre222 pins nor the toggle test can see it, and until this pin NO region covered

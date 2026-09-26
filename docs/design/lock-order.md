@@ -330,7 +330,8 @@ So the rule is split:
 
 ## 4. The table
 
-`src-tauri/src/orchestration/mod.rs`, `pub mod lockorder`. Smaller is outer;
+`src-tauri/src/orchestration/lockorder.rs` (the `lockorder` module, declared
+in `orchestration/mod.rs`, whose doc block it carries). Smaller is outer;
 gaps are deliberate so a new lock can be slotted in without renumbering, because
 a diff in which every line changed is one nobody can review for order.
 

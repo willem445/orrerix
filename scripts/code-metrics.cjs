@@ -973,8 +973,8 @@ const FILE_BUDGETS = [
   },
   {
     path: "src-tauri/src/orchestration/mod.rs",
-    ceiling: 70838,
-    blob: "1a362268a0e1f933b6cb51c1328d677118f9d10a"
+    ceiling: 65133,
+    blob: "4a5e2fb9a094f124b2d591792570c80cb622e40f"
   },
   {
     path: "src-tauri/src/orchestration/rdtick.rs",

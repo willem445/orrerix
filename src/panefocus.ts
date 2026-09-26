@@ -184,7 +184,7 @@ export type LiveSessionAction = "reveal" | "resume" | "explain";
  *  `isOrchestratorRow` is not decoration: the backend refusal this stands in
  *  for is ROLE-GATED. `resume_orch_session` reads
  *  `if record.role == "orchestrator" { if record.group_live { return Err(…) } }`
- *  (`src-tauri/src/orchestration/mod.rs`), so a worker or reviewer row in a
+ *  (`src-tauri/src/orchestration/commands/panes.rs`), so a worker or reviewer row in a
  *  live group is rejoined, not refused — short-circuiting it to a reveal of the
  *  group's orchestrator pane would answer a question the human did not ask. */
 export interface LiveSessionState {

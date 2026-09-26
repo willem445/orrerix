@@ -1122,7 +1122,7 @@ more alarming-looking than "Resume group" waiting for a click, even though
 one of them means something is actually wrong.
 
 **Where the latency was — measured, not guessed.** `resume_recorded_session`
-(`orchestration/mod.rs`) looked up which group/role a session id belongs to
+(`orchestration/commands/panes.rs` since #3498 P2) looked up which group/role a session id belongs to
 by calling `session_roles()` unconditionally — a scan of **every** group
 ever created on this machine, live or long dead: each one's `group.json` and
 `tasks.json` read and parsed, plus its **full audit log** (`records_from_
@@ -1340,7 +1340,7 @@ load-bearing on their own:
    used both to pick a click's members and to pick which placeholders that
    click may clear, so those two can't drift apart.
 3. **The join point enforces it.** `resume_recorded_session`
-   (`orchestration/mod.rs`) refuses outright — `resume-group-mismatch:`, the
+   (`orchestration/commands/panes.rs`) refuses outright — `resume-group-mismatch:`, the
    same tagged-error contract `resumeerror.ts` already parses — when the
    caller's group hint disagrees with the group the session's own record
    names. Every rejoin in loomux funnels through this function, so this is

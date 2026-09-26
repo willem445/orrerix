@@ -1032,7 +1032,7 @@ fn every_review_carries_a_premortem() {
 /// two template consts are private to the lib and unreachable from an
 /// integration test, and a template added tomorrow would be on no list at all.
 /// Same reasoning as `every_prompt_template_is_checked_out_with_lf_endings`
-/// (`tests/orchestration.rs`), for the same reason.
+/// (`tests/orchestration/`), for the same reason.
 fn template_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     let entries =
         fs::read_dir(dir).unwrap_or_else(|e| panic!("{} is not readable: {e}", dir.display()));

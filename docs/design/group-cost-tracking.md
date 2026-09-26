@@ -56,7 +56,7 @@ disk under the session id the SPAWN path had resolved per-block correctly the
 whole time. That is #2167, and it cost every Claude delegate's tokens from
 2026-08-30 until it was fixed. The pin is
 `a_claude_pane_reads_its_transcript_when_the_class_default_block_runs_another_cli`
-(`src-tauri/tests/orchestration.rs`), whose fixture is a roster whose ORDERING
+(`src-tauri/tests/orchestration/`), whose fixture is a roster whose ORDERING
 makes the two questions differ.
 
 ## Source of truth per CLI (and its limits)
@@ -548,7 +548,7 @@ disagree about which instant they describe.
 - `usage.rs` unit tests parse synthetic transcripts: token summing + per-model
   pricing, message-id dedup, skipping non-assistant/synthetic/malformed lines,
   unknown-model → token-only, empty transcript.
-- Integration tests (`tests/orchestration.rs`): an agent's CLI comes from its
+- Integration tests (`tests/orchestration/`): an agent's CLI comes from its
   own block rather than its class's default block, against a roster whose
   ORDERING makes the two answers differ (#2167 — the resolver directly, and the
   whole collector through both the live `group_usage` path and the `mark_dead`

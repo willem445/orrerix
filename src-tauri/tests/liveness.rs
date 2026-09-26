@@ -1541,7 +1541,7 @@ fn no_read_tool_can_unwind_after_a_durable_write() {
 //
 // **L5c is not a test in this file, and cannot be.** The plan's row is "the
 // whole existing suite green with the checker armed" — which is what the CI run
-// of `tests/orchestration.rs` (and every other binary here) IS, in a debug
+// of `tests/orchestration/` (and every other binary here) IS, in a debug
 // build, where a violation panics. Writing an assertion for it would be writing
 // a test that asserts the other tests passed. Its stated bound, from the plan:
 // paths the suite does not exercise are covered by the release-mode breadcrumb,

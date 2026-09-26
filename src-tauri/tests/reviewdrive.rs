@@ -5,9 +5,9 @@
 //! here is everything that needs a **crate boundary** or the registry — the
 //! tick's wiring, the interception arms, the tools, and the brief rendering.
 //!
-//! # Why a new file rather than `tests/orchestration.rs`
+//! # Why a new file rather than `tests/orchestration/`
 //!
-//! The plan on #1778 named `tests/orchestration.rs`, and its parenthetical says
+//! The plan on #1778 named `tests/orchestration/`, and its parenthetical says
 //! why: CLAUDE.md constraint 4, integration tests rather than unit tests,
 //! because a test executable linking the full lib needs the comctl32-v6
 //! manifest `build.rs` embeds through `-tests`-scoped link args. A new
@@ -2802,7 +2802,7 @@ fn a_stalled_lane_hold_names_the_stalled_lane_and_not_the_one_that_passed() {
 /// than merely be trusted.
 ///
 /// `no_registry_construction_bypasses_the_test_agent_dir_overrides` in
-/// `tests/orchestration.rs` default-denies raw `OrchRegistry::new` across every
+/// `tests/orchestration/` default-denies raw `OrchRegistry::new` across every
 /// `tests/*.rs`, because a registry built without the agent-dir overrides falls
 /// back to the user's REAL `~/.claude/agents` on its first spawn — the gap that
 /// left 1,111 stray files on a live dev machine. This file has a row in that
@@ -10826,7 +10826,7 @@ fn the_one_shot_grace_has_one_writer_and_one_proposal_site() {
 /// against `Standard review …` lanes, and none was acted on.
 ///
 /// It lives in this file rather than beside its siblings in
-/// `tests/orchestration.rs` for the reason this file's own header gives: the
+/// `tests/orchestration/` for the reason this file's own header gives: the
 /// fixture needs a live drive, and the drive helpers are here. Its control —
 /// `a_stall_on_an_undriven_pane_still_announces` — is over there with the rest
 /// of the watchdog suite, which is where the assertion it controls for lives.
@@ -10946,7 +10946,7 @@ fn a_stall_on_a_driven_lane_is_suppressed_with_a_reason() {
 
 /// A time far past any real `now_ms()`, so a `watchdog_tick` at this instant is
 /// unambiguously past the stall window for a pane whose clock was stamped with
-/// the real wall clock. (`tests/orchestration.rs` has its own copy for its own
+/// the real wall clock. (`tests/orchestration/` has its own copy for its own
 /// watchdog suite; the two files share no module.)
 const FAR: u64 = 1_000_000_000_000_000;
 

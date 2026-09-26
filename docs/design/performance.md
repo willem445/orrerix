@@ -447,7 +447,7 @@ scan pins the shape.
   §5) — a bound that would cost the reader data it structurally needs is a
   retention question, not a payload one.
   *Enforced: review* + each read's own wire-shape tests
-  (`tests/orchestration.rs`: the live-usage view, the board's note split, the
+  (`tests/orchestration/`: the live-usage view, the board's note split, the
   needs-you join; `test/auditstore.test.ts` for the shared read).
 
 ## 4. Argued exceptions

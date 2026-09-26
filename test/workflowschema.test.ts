@@ -1,7 +1,7 @@
 // The frontend half of `src/workflow-schema.json`'s contract (#880).
 //
 // The manifest is the one committed statement of what a `.loomux/workflow.yml` field
-// IS. The engine's half of enforcing it lives in `src-tauri/tests/orchestration.rs`
+// IS. The engine's half of enforcing it lives in `src-tauri/tests/orchestration/`
 // (`the_workflow_schema_manifest_matches_the_engines_raw_types`): manifest sections,
 // field for field, against the `Raw*` serde types. This half asks the other question,
 // the one that produced the bug the manifest exists for — `allow:` was a real block
@@ -354,7 +354,7 @@ through this emitter, so a field it skips is a line the pane deletes:\n${text}`
  *  (stop the submit) or silently clamped (accept and coerce), and `max_entries` on
  *  `workflow.resources` is a hard cap — an "add a resource" affordance that writes a
  *  33rd entry produces a file the engine refuses whole. Both are pinned against the
- *  engine in `src-tauri/tests/orchestration.rs`, so the data is trustworthy; consuming
+ *  engine in `src-tauri/tests/orchestration/`, so the data is trustworthy; consuming
  *  it is the renderer's half. */
 const FIELDS_WITH_AN_EDITOR = new Set<string>([
   "gate.threshold",
@@ -959,7 +959,7 @@ label would otherwise be shown a veto that holds nothing"
 
 // ---------- (d) the enum rows are real, in the pane's own opinion ----------
 //
-// The engine half of this lives in `src-tauri/tests/orchestration.rs`
+// The engine half of this lives in `src-tauri/tests/orchestration/`
 // (`every_enum_value_the_manifest_declares_is_one_the_engine_accepts`, which feeds each
 // declared value through the real `parse_workflow`). This is the pane's half: a value
 // the manifest declares must not raise a finding here either, or the GUI would paint a

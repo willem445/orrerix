@@ -43,7 +43,7 @@
 //! Their test coverage arrived in two different shapes, and the difference is
 //! worth knowing before the next module moves. [`report`] brought nine inline
 //! `#[cfg(test)]` unit tests with it. [`termgrid`] has **none** — it never had
-//! any; it is covered entirely from `src-tauri/tests/orchestration.rs`, which
+//! any; it is covered entirely from `src-tauri/tests/orchestration/`, which
 //! drives `render_screen`/`render_visible` from ~30 call sites and stayed
 //! untouched by the move.
 //!
@@ -348,7 +348,7 @@
 //! Its finding is about the RE-EXPORT rather than the move. Batch 9 re-exported
 //! its two modules as curated item lists (#988), and that was right *there*
 //! because every caller spelled the flat `orchestration::atomic_write`. Here
-//! every caller — `mod.rs` and `src-tauri/tests/orchestration.rs` alike —
+//! every caller — `mod.rs` and `src-tauri/tests/orchestration/` alike —
 //! spells the MODULE path (`queue::QueuedDelivery`, `queuestate::QueueMap`), so
 //! an item list would not preserve a single call site; the plain module
 //! re-export batch 6 used is the shape that leaves the suite untouched.
@@ -383,7 +383,7 @@
 //!
 //! Its finding is about a **source-scanning test**, which is batch 2's question
 //! asked of a file rather than of a type. `intake.rs` is one of only two files
-//! `src-tauri/tests/orchestration.rs` reads by literal path, to pin that the
+//! `src-tauri/tests/orchestration/` reads by literal path, to pin that the
 //! `createdAt`/`submittedAt` serde renames survive (a rename degrades the #864
 //! comment signal to permanent silence with every other test still green). A
 //! verbatim move breaks that read outright — a loud failure, unlike batch 2's

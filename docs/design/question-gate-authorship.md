@@ -22,7 +22,7 @@ it.
 
 Both lead with a pointer glyph at content. Both sit above an empty composer. Both are
 static for as long as the pane is idle. The first must hold a delivery forever; the second
-must not hold one at all. `h4` in `src-tauri/tests/orchestration.rs` pins the first as
+must not hold one at all. `h4` in `src-tauri/tests/orchestration/` pins the first as
 MUST-HOLD, and `j1` pins that the second is byte-for-byte the same shape.
 
 The second row is not hypothetical. It is what the live #903 wedge was: pane `rev-1277`

@@ -466,7 +466,7 @@ from a unit test of product code, agents are banned from running cargo locally
       behaviour and the one this batch most wanted pinned by a third party;
     - **`sanitize_allow`** — the same file's hostile-input table;
     - **`ResourcePolicy`** and the lock table — `tests/workflow.rs`'s default
-      pin plus the wired multi-slot path in `tests/orchestration.rs`;
+      pin plus the wired multi-slot path in `tests/orchestration/`;
     - the **`Role` → instructions-file name** mapping, the one item that
       actually changed crates —
       `the_toggle_off_leaves_every_instruction_file_byte_for_byte_what_it_was`
@@ -846,7 +846,7 @@ from a unit test of product code, agents are banned from running cargo locally
 
     A **pure relocation**, exemption taken whole: no behaviour is added or
     changed, and every behaviour the move could break is pinned by tests that
-    neither moved nor were edited. `src-tauri/tests/orchestration.rs` drives the
+    neither moved nor were edited. `src-tauri/tests/orchestration/` drives the
     capture cluster through the flat re-export across every arm of it — the
     ceiling (`gh_capture_admitted` against `GH_CAPTURE_MAX_LEAKED_READERS`), the
     bounded wait's both verdicts, the non-zero-exit-as-data contract, the forced
@@ -920,7 +920,7 @@ from a unit test of product code, agents are banned from running cargo locally
     over-claimed**, and the item-list batches are not exempt from that either.
 
     The cost side is what settles it. Every consumer — `mod.rs` and
-    `src-tauri/tests/orchestration.rs` alike — spells the MODULE path
+    `src-tauri/tests/orchestration/` alike — spells the MODULE path
     (`queue::QueuedDelivery`, `queuestate::QueueMap`), never a flat
     `orchestration::…` name, because these modules were always `pub mod`
     rather than items lifted out of `mod.rs`. A flat item list would therefore
@@ -980,7 +980,7 @@ from a unit test of product code, agents are banned from running cargo locally
 
     A **pure relocation**, exemption taken whole. Nothing is added or changed;
     every behaviour the move could break is pinned by tests that neither moved
-    nor were edited. `src-tauri/tests/orchestration.rs` drives the queue's whole
+    nor were edited. `src-tauri/tests/orchestration/` drives the queue's whole
     policy surface through the re-export — admission and the coalesce, the
     capacity/pressure notices, the flush plan and its stranded-marker arm, the
     `queue.json` snapshot round-trip and `split_recovered`'s marker/entry split,
@@ -1035,7 +1035,7 @@ from a unit test of product code, agents are banned from running cargo locally
     (`intake::due_intake_polls` and `intake::PendingIntake` in `mod.rs`,
     `intake::eligible_deltas` in `tests/workflow.rs`,
     `loomux_lib::orchestration::intake::MAX_INTAKE_POLLS_PER_TICK` in
-    `tests/orchestration.rs`), no flat `orchestration::<item>` spelling exists,
+    `tests/orchestration/`), no flat `orchestration::<item>` spelling exists,
     and #988's trap has nothing to catch — **not one `pub(super)` or
     `pub(crate)` item in the file**, so the boundary force-widens nothing and
     the private members (`RawLabel`, `RawIssueJson`, `RawRollupEntry`,
@@ -1052,7 +1052,7 @@ from a unit test of product code, agents are banned from running cargo locally
     batches have enumerated a module's edges from `super::`/`crate::` paths;
     batch 7 added `env!` and its macro siblings, on the ground that they name
     the crate a file is compiled in and no grep for `use` finds them. Here is a
-    third kind: `src-tauri/tests/orchestration.rs`'s
+    third kind: `src-tauri/tests/orchestration/`'s
     `poll_intake_still_asks_gh_for_comment_and_review_activity` opens
     `intake.rs` **by literal path** and asserts the `createdAt`/`submittedAt`
     serde renames are still there — because losing them degrades the #864
@@ -1099,7 +1099,7 @@ from a unit test of product code, agents are banned from running cargo locally
     A **pure relocation**, exemption taken whole — a `git mv`, five import
     prefixes, the re-export lines, and prose. Every behaviour the move could
     break is pinned by tests that neither moved nor changed an assertion:
-    `tests/orchestration.rs` drives the gate through the re-export across its
+    `tests/orchestration/` drives the gate through the re-export across its
     surface (the wake summary's four signal kinds and both PARTIAL caveats, the
     fetch-bound argv pins, the smart default, `MAX_INTAKE_POLLS_PER_TICK`, the
     fallback backoff and the idle-tick wiring), `tests/workflow.rs` drives
@@ -1163,7 +1163,7 @@ from a unit test of product code, agents are banned from running cargo locally
     path — `mqdriver::runner_for` and `mqdriver::audit_action::…` in `mod.rs`,
     `super::mqdriver::landable` in `mqloop.rs`,
     `loomux_lib::orchestration::mqdriver::{…}` in both
-    `src-tauri/tests/mergequeue.rs` and `tests/orchestration.rs` — so a flat item
+    `src-tauri/tests/mergequeue.rs` and `tests/orchestration/` — so a flat item
     list would have preserved **no** call site and would have rewritten two
     integration test files to suit a re-export style, which is the forfeit batch
     10 calls worse than no ceremony at all. And yet, unlike `queue`, `queuestate`
@@ -1270,7 +1270,7 @@ from a unit test of product code, agents are banned from running cargo locally
     spellings `same_branch` normalizes, `mint_scratch`'s bounded re-roll and its
     loud exhaustion, `classify_checks`'s `Met`-is-not-green correction, and
     `land_batch`'s per-PR re-check refusing before any push — and
-    `tests/orchestration.rs` drives the wiring above it through the same
+    `tests/orchestration/` drives the wiring above it through the same
     re-export. **`src-tauri/tests/` is untouched**, which is the proof the
     re-export surface is complete rather than a claim about it. The file has no
     inline `#[cfg(test)]` module, so no test changed crate.
@@ -1387,7 +1387,7 @@ from a unit test of product code, agents are banned from running cargo locally
     every consumer of both modules spells the module path (`mqdriver::MqRunner`,
     `mqloop::drive`, `mqloop::refusal::…` in `mod.rs`;
     `loomux_lib::orchestration::{mqdriver,mqloop}::…` in
-    `src-tauri/tests/mergequeue.rs` and `tests/orchestration.rs`), so the first
+    `src-tauri/tests/mergequeue.rs` and `tests/orchestration/`), so the first
     clause points at the module form as always — and after the `pub(crate)`
     reversion the second clause has nothing left to buy, because there is no item
     whose reach a curated list could still narrow. The curated module was never a
@@ -1400,7 +1400,7 @@ from a unit test of product code, agents are banned from running cargo locally
     `src-tauri/tests/mergequeue.rs` drives the entire moved surface — the batch
     plan and its worktree build, the bisect walk and culprit attribution, the
     enqueue/cancel refusals, the reconcile paths, the `drive` tick — and
-    `tests/orchestration.rs` drives `refusal::is_loomux_fault` and the registry
+    `tests/orchestration/` drives `refusal::is_loomux_fault` and the registry
     wiring above it. **Both are untouched by this batch**, which is the proof the
     re-export surface is complete rather than a claim about it: had any item or
     spelling failed to survive the move, they would not compile. The file has no
@@ -1559,7 +1559,7 @@ from a unit test of product code, agents are banned from running cargo locally
     `read_copilot_session`, `yaml_field` and `tidy_title` through
     `list_sessions_for_test` — the #493 index's parsed/reused split is exactly
     an assertion about those parsers' output surviving a round trip;
-    `tests/orchestration.rs` drives `find_session_cwd` through the resume-cwd
+    `tests/orchestration/` drives `find_session_cwd` through the resume-cwd
     router and `copilot_session_ids`/`newest_new_copilot_session` through the
     copilot spawn watcher; `tests/opencodesessions.rs` drives `norm_path`
     through `opencodedb::identify_session`, including the

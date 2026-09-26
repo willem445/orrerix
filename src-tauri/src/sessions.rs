@@ -76,7 +76,7 @@ pub(crate) use loomux_engine::sessions::{
 // The codex store WATCHER's three names (#2515 C1). `pub` rather than
 // `pub(crate)` for the reason `pi_sessions_root_from` above is: the watcher's
 // decision — cwd match required, contest refused, claimed ids excluded — is
-// pinned by `tests/orchestration.rs`, and an integration test can only reach
+// pinned by `tests/orchestration/`, and an integration test can only reach
 // this crate's surface. The spawn path in `orchestration/mod.rs` is the only
 // other caller.
 #[doc(hidden)] // pub for integration tests

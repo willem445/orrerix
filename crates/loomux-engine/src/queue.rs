@@ -841,7 +841,7 @@ pub fn superseded_entries(entries: &[QueuedDelivery]) -> Vec<Superseded> {
 /// dash and survive. The literal matches this module's seven other notice
 /// constructors, which spell the marker out the same way;
 /// `every_framing_row_of_a_coalesced_flush_is_maskable` in
-/// `tests/orchestration.rs` binds them all to the real
+/// `tests/orchestration/` binds them all to the real
 /// `orchestration::mask_loomux_notices`, so the literal cannot drift from the
 /// const unnoticed.
 fn constituent_banner(pos: usize, total: usize, c: &FlushConstituent, now_ms: u64) -> String {

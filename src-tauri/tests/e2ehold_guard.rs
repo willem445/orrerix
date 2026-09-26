@@ -629,7 +629,7 @@ fn wait_for<F: Fn() -> bool>(cond: F, timeout: Duration) -> bool {
 }
 
 /// The one sanctioned `OrchRegistry::new` in this file (#464). Every test
-/// here routes through it, and `tests/orchestration.rs`'s
+/// here routes through it, and `tests/orchestration/`'s
 /// `no_registry_construction_bypasses_the_test_agent_dir_overrides` is what
 /// enforces that — a raw construction anywhere else can write a generated
 /// agent file into the operator's REAL `~/.claude`/`~/.copilot` agents dir on

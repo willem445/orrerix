@@ -916,7 +916,7 @@ golden and its live template are LF in the blob and LF on disk on every platform
 The comparison tests still normalize before asserting — a no-op on a correct checkout, a
 safety net on a stale one — and the assertion is about the words, not the checkout, either
 way. `every_prompt_template_is_checked_out_with_lf_endings`
-(`src-tauri/tests/orchestration.rs`) is what makes a stale checkout a red instead of a
+(`src-tauri/tests/orchestration/`) is what makes a stale checkout a red instead of a
 silent platform difference.
 
 **Fixing a stale worktree means DELETING the files and checking them out again** — `rm`
@@ -1067,7 +1067,7 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   the template stated the bare calls as the re-sync, and on a long-lived group the rows a
   re-sync drops are the bulk of the board and roster it reads. The `tests/prompts.rs`
   first-turn primer pins were re-anchored to the new call spellings in the same commit
-  rather than relaxed; `tests/orchestration.rs`'s exactly-once `*does* survive a restart`
+  rather than relaxed; `tests/orchestration/`'s exactly-once `*does* survive a restart`
   anchor is untouched — the session-start rewrap keeps it intact.
 
 - **#1683/#1811, the resident core and the on-demand playbook** — `orchestrator.md`,
@@ -1097,7 +1097,7 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   ONCE at the end. No existing worker text moved; nothing was displaced, so no pin was
   repointed.
 
-  The concept pins whose specimens moved (`tests/orchestration.rs`: the #445 held-delivery
+  The concept pins whose specimens moved (`tests/orchestration/`: the #445 held-delivery
   warning, the #590 orchestrator CI-watch row, the #625 squash scrub, the #778/#795
   full-autonomy notices and caveats, the #946/#1091 never-block anchors, the #581
   merge-queue note reach; `tests/prompts.rs`: the merge gate, engineering standards,
@@ -1408,7 +1408,7 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   `post_issue_comment` (#2815, also unmerged at this re-bless — again in WILL tense, with the
   `gh` form named as what to use until it lands).
 
-  Three `worker_template_*` pins in `tests/orchestration.rs` read `WORKER_TPL` rather than the
+  Three `worker_template_*` pins in `tests/orchestration/` read `WORKER_TPL` rather than the
   rendered file, and their subjects all live in the DoD — they now read
   `worker_contract_text()`, the const with `{{DOD}}` substituted, carrying a vacuity control
   so an unregistered placeholder cannot make them pass against a contract with no DoD in it.
@@ -1727,7 +1727,7 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   "you're about to do something that will need the headroom" became "you'll soon need the
   headroom", and "you're already close to the next natural lull anyway" became "the next
   natural lull is close anyway". The core is now 34,992 B over 509 lines, 8 B under the
-  budget, at blob `ef585635`. The two comments in `tests/orchestration.rs` that date the
+  budget, at blob `ef585635`. The two comments in `tests/orchestration/` that date the
   margin to a blob name it.
 
   Both re-bless checks above were run: the patch on the golden is byte-identical to the patch

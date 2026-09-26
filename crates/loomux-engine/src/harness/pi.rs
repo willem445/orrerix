@@ -153,7 +153,7 @@ pub const MODE_FLAG: [&str; 2] = ["--mode", "rpc"];
 /// may not depend on `src-tauri`, where the PTY arm's constants live. That the
 /// two spellings agree is not left to hope:
 /// `pi_rpc_argv_is_the_pty_line_plus_one_flag` in
-/// `src-tauri/tests/orchestration.rs` is S3b's to add, and until it exists this
+/// `src-tauri/tests/orchestration/` is S3b's to add, and until it exists this
 /// is a stated residual rather than a covered one.
 pub const APPROVE_FLAG: &str = "--approve";
 /// See [`APPROVE_FLAG`].

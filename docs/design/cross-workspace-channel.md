@@ -84,7 +84,7 @@ only from the trusted webview (constraint 5), never MCP tools. There is no `chan
   identity (`OrchRegistry::channel_member_label`) — name, role, and repo — never from
   agent-supplied text. A peer can neutralize/garble its own message with hostile input, but
   it can never forge who sent it (see `channel_message_text`, a pure function pinned
-  directly in `tests/orchestration.rs`).
+  directly in `tests/orchestration/`).
 - Channel ids are backend-minted (`chan-N`, an `AtomicU32` sequence — no `getrandom` crate,
   CLAUDE.md constraint 2), never caller-supplied, never a path segment.
 - Membership mutation is always human-authorized, per-edge, and revocable (disconnect).
@@ -184,7 +184,7 @@ re-sync convention, now in the orchestrator/worker/reviewer templates).
 
 ## Test strategy
 
-`src-tauri/tests/orchestration.rs`, driving real `mcp::dispatch()` for the two MCP tools
+`src-tauri/tests/orchestration/`, driving real `mcp::dispatch()` for the two MCP tools
 (exercising authz for real, exactly like `register_notify`) and the registry methods
 directly for connect/disconnect (Tauri-command-backed, exactly like `pause_group`/
 `mark_dead` elsewhere in that file):
@@ -338,7 +338,7 @@ denied) so a future tool addition can never silently leak onto a solo token. Thi
 direct, one-line answer to "a solo token must carry zero group-scoped power": it is
 neither listed nor dispatchable for anything else (pinned in
 `solo_role_tool_surface_is_exactly_channel_send_and_channel_status` and
-`solo_role_cannot_dispatch_any_group_scoped_tool`, `tests/orchestration.rs`).
+`solo_role_cannot_dispatch_any_group_scoped_tool`, `tests/orchestration/`).
 
 *Rejected alternatives:* pane/pty-id-keyed membership (a second key scheme — forces
 `ChannelMember` into an enum, branches every channel method, rewrites the just-approved
@@ -523,7 +523,7 @@ unchanged`).
 
 **Revision to #285, stated plainly.** `channel_send` changed from unconditional broadcast
 to role-aware (sender broadcasts, receiver replies-only-to-sender); `connect_agents` gained
-a required `sender_agent` parameter. W1's `tests/orchestration.rs` channel tests are
+a required `sender_agent` parameter. W1's `tests/orchestration/` channel tests are
 updated **in place** to the new signature/semantics (every `connect_agents` call site now
 names a sender); this is a deliberate, flagged contract revision on a stacked follow-up PR,
 not a retro-edit of #285's merged commit.

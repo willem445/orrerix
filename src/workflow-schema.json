@@ -5,7 +5,7 @@
     "This file is the shared statement of what a workflow file is, and two tests hold each",
     "side to it. What they pin, exactly:",
     "",
-    "  src-tauri/tests/orchestration.rs",
+    "  src-tauri/tests/orchestration/",
     "    - every section's FIELD NAMES against the engine's `Raw*` serde types, both",
     "      directions, with no exclusion list;",
     "    - each field's `values`, `default`, `min`, `max`, `maxLength` and `max_entries` against the",

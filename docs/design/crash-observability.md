@@ -384,7 +384,7 @@ degrade. So a log a pre-#3469 build could show is one this build shows.
 (`OrchRegistry::set_poll_read_limit`, a test seam), never by exhausting memory:
 `a_series_read_over_its_limit_fails_soft_and_reports_once` and
 `an_audit_window_over_its_limit_fails_soft_as_a_truncated_window` in
-`src-tauri/tests/orchestration.rs`, with
+`src-tauri/tests/orchestration/`, with
 `the_bounded_audit_window_matches_the_whole_log_trim_across_both_generations`
 pinning that the deque answers what the whole-log trim answered. A genuine
 `Refused` cannot be produced without exhausting memory; it takes the same `Err`

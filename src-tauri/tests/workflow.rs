@@ -53,7 +53,7 @@ fn test_registry() -> (OrchRegistry, tempfile::TempDir) {
 
 // #464 B2: the raw-`OrchRegistry::new` guard used to live here too (one
 // `include_str!("workflow.rs")` copy per file). Replaced by a SINGLE
-// dynamic test in `tests/orchestration.rs` that reads every `tests/*.rs`
+// dynamic test in `tests/orchestration/` that reads every `tests/*.rs`
 // file from disk at runtime — a per-file `include_str!` copy could only
 // ever see its own file, so `tests/lessonsfile.rs` and `tests/prompts.rs`
 // (each with their own registry-construction helper) were never covered.
@@ -763,7 +763,7 @@ fn the_liaison_hint_grants_its_reviewer_block_nothing_extra() {
     // #891's half of `role_hint_grants_no_capability_to_its_block`. The liaison
     // is the first hint whose whole point is a capability RULE, so "the hint
     // still grants nothing" needs proving here, not assuming: what the rule does
-    // is take `review_verdict` AWAY (pinned in tests/orchestration.rs), and
+    // is take `review_verdict` AWAY (pinned in tests/orchestration/), and
     // everything structural must be identical to a plain reviewer's.
     //
     // Note the block ids are deliberately NOT the hint string: normalizing
@@ -5544,7 +5544,7 @@ fn mcp_spawn_rejects_an_unknown_kind_instead_of_making_it_a_worker() {
     // documented default any more. A fresh spawn naming neither `kind` nor
     // `block` used to come back a worker; it is now refused, and the refusal
     // says what to pass. (`spawn_agent_never_defaults_to_the_privileged_class`
-    // in tests/orchestration.rs is the dedicated pin.)
+    // in tests/orchestration/ is the dedicated pin.)
     let out = call(json!({ "task": "t" }));
     assert_eq!(out["isError"], json!(true), "an omitted kind must be an error too");
     let text = out["content"][0]["text"].as_str().unwrap();
@@ -6161,7 +6161,7 @@ fn render_with_legacy_vars(tpl: &str, g: &loomux_lib::orchestration::GroupInfo) 
 /// runtime rather than checked out, and a worktree cut before the pin landed,
 /// where the templates are still CRLF on disk because changing an attribute
 /// rewrites nothing (`every_prompt_template_is_checked_out_with_lf_endings` in
-/// `tests/orchestration.rs` is what turns that into a red).
+/// `tests/orchestration/` is what turns that into a red).
 fn lf(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
@@ -7095,7 +7095,7 @@ fn the_preview_never_reports_a_persona_the_spawn_would_deny() {
 //
 // The gate decision is pure (`evaluate_merge_gate`) so it can be pinned here in
 // microseconds, and so the `gh` shim's shell mirror has a spec to agree with. The
-// shell itself is executed end-to-end in tests/orchestration.rs.
+// shell itself is executed end-to-end in tests/orchestration/.
 
 fn gate(require: GateRequire, reviewers: &[&str], also: &[&str]) -> workflow::Gate {
     workflow::Gate {
@@ -7313,7 +7313,7 @@ fn threshold_gate_needs_n_passes_and_all_pass_needs_everyone() {
 // `recommend_capacity` is pure — pinned here, the same way `gate_need` and
 // `evaluate_merge_gate` are above it. The wiring that records it in the
 // `workflow-loaded` audit and warns below the minimum is exercised end to end
-// in tests/orchestration.rs.
+// in tests/orchestration/.
 
 fn block(id: &str, kind: Role) -> workflow::Block {
     workflow::Block {
@@ -7875,7 +7875,7 @@ fn check_diff_size_is_the_one_definition_of_too_big() {
 fn an_also_condition_this_build_cannot_check_is_not_silently_ignored() {
     // A gate is a safety claim, so dropping a clause loomux doesn't understand would
     // turn a stricter-looking workflow file into a weaker one. An unknown condition
-    // fails CLOSED in the shim (pinned in the shell, in tests/orchestration.rs); this
+    // fails CLOSED in the shim (pinned in the shell, in tests/orchestration/); this
     // pins the classification the shim keys off.
     assert!(workflow::condition_supported("ci-green"));
     // #565's opt-in body-digest check is a condition, not a new config surface: a repo
@@ -8792,7 +8792,7 @@ fn a_renamed_veto_reaches_the_contract_the_poller_and_the_allow_list_alike() {
     //    `a_resolved_hold_spelling_widens_the_allow_list_by_exactly_one_value`;
     //    the group-scoped half is
     //    `an_applied_workflow_renaming_the_hold_veto_moves_every_label_surface`
-    //    in `tests/orchestration.rs`.)
+    //    in `tests/orchestration/`.)
     let from_file = workflow::load_workflow(&repo.path()).unwrap().unwrap().intake.hold;
     assert_eq!(
         from_file, g.guardrails.intake.hold,
@@ -10116,7 +10116,7 @@ fn the_board_block_can_never_widen_anything() {
 //
 // Everything here is pure, so it pins the semantics in microseconds and gives
 // the `gh` shim's POSIX mirror something to agree with. The shell itself is
-// EXECUTED end-to-end in tests/orchestration.rs — a shim/mirror agreement
+// EXECUTED end-to-end in tests/orchestration/ — a shim/mirror agreement
 // asserted only against source text is not an agreement, it is a comment.
 
 /// A workflow declaring one worker, three reviewers and a merge gate whose

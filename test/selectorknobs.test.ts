@@ -252,7 +252,7 @@ test("rev-237 finding 1: the opencode fixture's notes mirror the Rust source the
   // that compares against it is really the copy against itself: emptying or
   // REWORDING opencode's notes in `CLI_CAPS` cannot redden a frontend test. The
   // emptying half is already policed backend-side
-  // (`src-tauri/tests/orchestration.rs`, which asserts every row's notes are
+  // (`src-tauri/tests/orchestration/`, which asserts every row's notes are
   // non-empty); DRIFT was policed nowhere, and a fixture that says "verbatim" and
   // isn't leaves this file asserting text the UI no longer renders, green.
   //

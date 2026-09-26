@@ -14,9 +14,9 @@
 //!   push*, so an outcome-only test passes in exactly the cases the check exists
 //!   to prevent. A fake runner is the only way to see the bytes.
 //!
-//! # Why a new file rather than `tests/orchestration.rs`
+//! # Why a new file rather than `tests/orchestration/`
 //!
-//! The note names `tests/orchestration.rs` as the home for the refusal tests.
+//! The note names `tests/orchestration/` as the home for the refusal tests.
 //! That file is now 33.9k lines and is the serialization point slices A, D and E
 //! already contend on; `tests/workflow.rs` is the standing precedent for a
 //! per-subsystem integration-test file. Nothing about these tests needs the
@@ -1370,12 +1370,12 @@ fn base_ci_green_combines_two_surfaces_and_treats_silence_as_unknown() {
 //
 // Same `Fake` runner, same constraint-3 posture: no real `git`, no real `gh`,
 // no network. The only real filesystem touched is a scratch dir under the OS
-// temp root, following `tests/orchestration.rs::scratch_dir` (std, not
+// temp root, following `tests/orchestration/::scratch_dir` (std, not
 // `tempfile` — constraint 2 keeps getrandom out of this crate).
 // ════════════════════════════════════════════════════════════════════════════
 
 /// Std-based scratch dir keyed by tag + pid so parallel runs never collide.
-/// Same pattern and same rationale as `tests/orchestration.rs::scratch_dir`.
+/// Same pattern and same rationale as `tests/orchestration/::scratch_dir`.
 fn scratch_dir(tag: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("loomux-mqloop-test-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -2542,7 +2542,7 @@ fn the_two_notices_carry_one_fact_each_and_are_not_interchangeable() {
 // seam is green and nothing calls them: four approved PRs sat `queued` for 51
 // minutes with zero driver actions in the audit log. These tests drive
 // `mqloop::drive`, which is the function `gh_poll_tick` now calls; the wiring
-// from the poll loop down to it is pinned in `tests/orchestration.rs`, because
+// from the poll loop down to it is pinned in `tests/orchestration/`, because
 // a test of the decision half alone is exactly what #698 already had.
 // ════════════════════════════════════════════════════════════════════════════
 

@@ -606,7 +606,7 @@ a thread-local set inside one test's body can never be read by a concurrently
 running test the way a `std::env::set_var` mutation could (real,
 unsynchronized-mutation undefined behavior across threads, which is why that
 function is `unsafe` as of recent Rust editions — not just a style concern).
-`tests/orchestration.rs`'s `fixture_claude_session`/`fixture_copilot_session`
+`tests/orchestration/`'s `fixture_claude_session`/`fixture_copilot_session`
 helpers write the on-disk shape these seams point at.
 
 **Launch-cwd choice, stated (corrected after #412 review N1 — this section
@@ -671,7 +671,7 @@ argument instead of inferring it — `resume_recorded_session`'s orchestrator
 branch always passes `Launch::Resume`, whether or not it's carrying a session
 id to `--resume`, because either way it is reopening a group that already
 has a roster and gate on disk — approved at launch for the roster; for the
-gate, whatever's currently armed (see the aside above). `tests/orchestration.rs`'s
+gate, whatever's currently armed (see the aside above). `tests/orchestration/`'s
 `start_fresh_on_an_orchestrator_does_not_re_read_the_workflow_file` pins both
 directions (roster identity, merge-gate content) byte-for-byte across a
 repo-file change that would otherwise have been silently adopted.
@@ -1136,7 +1136,7 @@ merges only the hinted group; a miss (a stale/wrong hint) falls through to
 the unchanged full scan.
 
 Measured in `resume_recorded_session_group_hint_avoids_scanning_every_
-other_group` (`tests/orchestration.rs`, 200 decoy groups × 300 audit lines
+other_group` (`tests/orchestration/`, 200 decoy groups × 300 audit lines
 each, red-before-green against the fast path disabled): **419ms → 42ms** on
 one dev machine, debug build. **Three caveats on this number, all raised by
 review and all real (correcting this doc's own first draft):**

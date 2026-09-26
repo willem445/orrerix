@@ -43,7 +43,7 @@ use loomux_lib::rootreg::admit;
 /// custom-agent files into the developer's REAL `~/.claude/agents` on its first
 /// spawn). This file's ONE sanctioned construction site, pinned by
 /// `no_registry_construction_bypasses_the_test_agent_dir_overrides` in
-/// `tests/orchestration.rs`.
+/// `tests/orchestration/`.
 fn registry_at(root: &std::path::Path) -> OrchRegistry {
     let reg = OrchRegistry::new(root.to_path_buf());
     reg.set_port(45997);

@@ -595,7 +595,7 @@ PR D (the links UI, §14) — `src/taskboard.ts`: `MAX_ARTIFACT_LINKS`, `artifac
 `withArtifactLink`, `withoutArtifactLinkAt`. `src/tasksview.ts`: `TasksView.renderGroundings`,
 `openLink`, `expandedLinks`, and `openRef`’s widened `kind`.
 
-Tests: `src-tauri/tests/orchestration.rs` (the `#1272`/`#1273` block),
+Tests: `src-tauri/tests/orchestration/` (the `#1272`/`#1273` block),
 `test/taskboard.test.ts`, `test/boardprefs.test.ts`.
 
 #1349 (the stale-snapshot guard) has its own symbol list in §16.8 — it is a later revision of
@@ -806,5 +806,5 @@ Frontend (`src/taskboard.ts`): `STALE_LINK_ETAG_PREFIX`, `isStaleLinkEtag`, `Lin
 `LinkArrayWrite`, `HasLinkArrays`, `composeLinkArrayWrite`, `retriesAfterStale`.
 `src/tasksview.ts`: `TasksView.writeLinkArray`, `OrchTask.link_etag`.
 
-Tests: the `#1349` block in `src-tauri/tests/orchestration.rs` and the `#1349` block at the end
+Tests: the `#1349` block in `src-tauri/tests/orchestration/` and the `#1349` block at the end
 of `test/taskboard.test.ts`.

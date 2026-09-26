@@ -2330,7 +2330,7 @@ impl OneOrMany {
 /// it — nor even knew the key — so a workflow that declared it looked, in the
 /// pane, like a workflow that didn't. Nothing was wrong with either side; the
 /// two simply had no way to disagree out loud. Now they do:
-/// `tests/orchestration.rs` compares this against the committed manifest, so a
+/// `tests/orchestration/` compares this against the committed manifest, so a
 /// field added here without an editor is a red test rather than a hole nobody
 /// finds until a human wonders where their line went.
 ///
@@ -4775,7 +4775,7 @@ impl ReviewVerdict {
 /// the shim then refuses. The shim is the one that cannot call this; it
 /// reproduces it in POSIX shell, and
 /// `the_shim_and_the_gate_agree_about_which_passes_a_verification_covers`
-/// (`src-tauri/tests/orchestration.rs`) is what keeps the two honest: it walks
+/// (`src-tauri/tests/orchestration/`) is what keeps the two honest: it walks
 /// one set of verdict files past both halves and asserts they answer alike —
 /// including the shapes two successive approximations of [`sanitize_digest`]
 /// got wrong in OPPOSITE directions: prose that begins with a 64-hex word (the
@@ -6005,7 +6005,7 @@ mod tests {
     /// Naming `.orrerix/workflows/default.yml` there sends a human to a
     /// directory they have no reason to create. Caught by
     /// `advanced_orchestrator_toggle_on_refuses_when_the_repo_declares_no_workflow_file`
-    /// (`src-tauri/tests/orchestration.rs`), which is the surface that says so.
+    /// (`src-tauri/tests/orchestration/`), which is the surface that says so.
     #[test]
     fn a_repo_declaring_nothing_still_names_the_plain_file_as_default() {
         let root = temp_repo("declares-nothing");

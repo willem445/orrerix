@@ -24,7 +24,7 @@ use serde_json::json;
 
 /// This file's one sanctioned `OrchRegistry::new` (#464, pinned by
 /// `no_registry_construction_bypasses_the_test_agent_dir_overrides` in
-/// `tests/orchestration.rs`). Nothing here spawns an agent, but the guard is
+/// `tests/orchestration/`). Nothing here spawns an agent, but the guard is
 /// deliberately structural rather than case-by-case: a raw registry whose
 /// agent-dir overrides are unset writes generated custom-agent files into the
 /// developer's REAL `~/.claude/agents` on its first spawn, and "this test

@@ -760,7 +760,7 @@ test("the item tag this panel reads is the one the backend writes", () => {
   // A literal mirrored across the language boundary, so it is named ONCE here
   // and asserted against the shape the backend's `ResolveSource::tag()`
   // produces. `the_resolve_and_dismiss_tags_are_not_the_same_string`
-  // (src-tauri/tests/orchestration.rs) is the other end of this pin.
+  // (src-tauri/tests/orchestration/) is the other end of this pin.
   assert.equal(DISMISSED_ITEM_TAG, "dismissed:webview");
   const almost = item({ id: "n-5", status: "resolved", resolved_by: "dismissed", resolved_ms: 1 });
   const { settled } = projectPanel(view([almost]), []);

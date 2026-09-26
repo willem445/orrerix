@@ -452,7 +452,7 @@ fn parse_token_count(cell: &str) -> Option<TokenCount> {
             // A rounded spelling never names exactly `unit` (that prints as the
             // integer `1K`/`1M`), and its branch needs `count >= unit` — so
             // `unit + 1` is a floor the half-tenth edge must not go below.
-            let edge = printed.checked_sub(unit / 20)?.max(unit + 1);
+            let edge = printed.checked_sub(unit / 20)?;
             TokenCount { tokens: edge, rounded: true }
         }
         _ => return None,

@@ -46,86 +46,47 @@ test("the repo's own workflow opens in the pane with no findings", () => {
   assert.equal(workflow.version, 1);
 });
 
-test("the roster is the one the repo means to run", () => {
+test("the roster is VALID — and nothing here pins what its values are", () => {
+  // THE HUMAN'S RULE (#3507): editing this file must never turn main red, so this test
+  // asks only whether the roster is one the engine can run — never WHICH cli, model or
+  // effort a block chose, which blocks exist by id, or in what order. Those are the
+  // operator's to change in a one-line edit, and a pin on them turned main red the first
+  // time the human moved a reviewer lane.
+  //
+  // What is left, and who decides it:
+  //  * the file parses with zero findings — the first test above, through the REAL
+  //    parser and `validateWorkflow`. That already refuses an unknown cli or kind, an
+  //    effort the CLI cannot take (`knob-unavailable`), and a gate or routing rule
+  //    naming a block that does not exist or cannot record a verdict;
+  //  * a persona file a block points at exists on disk — the one fact the pure validator
+  //    cannot see, so it is checked here;
+  //  * the roster can do the work at all: at least one worker and one reviewer.
+  // Whether a CLI can HOST a kind is deliberately not the pane's question (`WORKFLOW_CLIS`'s
+  // docblock: it belongs to the backend's `cli_can_host`), so the Rust twin,
+  // `the_repos_own_workflow_file_parses_clean_against_the_real_parser`, asserts it.
   const { workflow } = parseWorkflow(text);
-  // Ids, not names: an id is what an edge, a gate and `spawn_agent(block:)`
-  // reference, so renaming a display name must never break this pin — and a
-  // renamed *id* must, because it breaks the gate.
-  assert.deepEqual(
-    workflow.blocks.map((b) => b.id),
-    ["orchestrator", "planner", "worker-std", "worker-adv", "rev-std", "rev-final"]
-  );
-  // Two worker tiers, and the STANDARD one FIRST — which is the opposite default
-  // from the roster this replaced, and deliberate. The first block of a class is
-  // what a bare `spawn_agent(kind: "worker")` resolves to, and this file's own
-  // rule 3 ("DEFAULT EVERY TASK TO worker-std") makes the cheap tier the policy,
-  // not just a fallback: worker-adv is reached only by naming it after a
-  // worker-std failed or for an extremely complex task, so a bare spawn must
-  // never silently cost Opus. (A role_hint-gated worker block, like the retired `process`, would be
-  // excluded from this default-tier pin.)
-  const tiers = workflow.blocks.filter((b) => b.kind === "worker" && !b.role_hint);
-  assert.deepEqual(
-    tiers.map((b) => [b.id, b.cli, b.model, b.effort ?? ""]),
-    [
-      ["worker-std", "pi", "openai-codex/gpt-6-luna", "medium"],
-      ["worker-adv", "claude", "opus", ""],
-    ],
-    "the tiers are the demo: a cheap default worker, and a strong one for work with judgment in it"
-  );
-  // `effort` rides beside the model (#2817) because the thinking level is the
-  // load-bearing axis of the cheap tier (pi `--thinking`, #2817);
-  // `""` reads as "the CLI's own default" for a block that declares none
-  // (worker-adv on claude has none).
-  // THE REVIEWER LANES, and the one ordering property the roster now leans on.
-  // `block_for(Role::Reviewer)` resolves a bare `spawn_agent(kind: "reviewer")` to
-  // the FIRST reviewing block in roster order, so rev-std must be declared ahead
-  // of rev-final: rev-final is the ONCE-LAST validator (rule 1), so an unrouted
-  // review request landing on it would both spend the expensive lane first and
-  // break the sequencing the whole roster is built around. Same shape as the
-  // worker-tier pin above, and stated as an index rather than as a set so a
-  // reordering edit fails here rather than silently changing what a bare spawn
-  // does.
-  const reviewers = workflow.blocks.filter((b) => b.kind === "reviewer");
-  assert.deepEqual(
-    reviewers.map((b) => [b.id, b.cli, b.model, b.effort ?? ""]),
-    [
-      ["rev-std", "pi", "openai-codex/gpt-6-luna", "medium"],
-      ["rev-final", "claude", "opus", ""],
-    ],
-    "the every-round lane is declared first; the strong final validator runs once, last"
-  );
-  assert.equal(
-    reviewers[0].id,
-    "rev-std",
-    "a bare spawn_agent(kind: \"reviewer\") must reach the lane that runs every round"
-  );
-  // The cheap tier runs on pi again (#3474): both tiers of it — the default worker
-  // AND the every-round reviewer — on `openai-codex/gpt-6-luna`, GPT-6 Luna through
-  // the Codex subscription rather than OpenRouter. pi's `--model` takes
-  // `provider/id` (docs/design/pi.md, the launch line), so a block that dropped the
-  // `openai-codex/` half would spawn against a model that does not exist; the pin is
-  // that the `/` survives the parser. The roster has NO codex block: codex cannot host
-  // a reviewer (#3473), and its bare-id rules keep their coverage in the #722 specimens.
-  const viaPi = workflow.blocks.filter((b) => b.cli === "pi");
-  assert.ok(viaPi.length > 0, "the cheap tier is the point of this roster — it must have pi blocks");
-  for (const b of viaPi) {
-    assert.match(b.model ?? "", /^[a-z0-9-]+\/[a-z0-9./-]+$/, `${b.id}: a pi model id names its provider`);
-  }
-  // The process block left the roster with #3474 (the learning loop is off); the
-  // role_hint rule it exercised lives on in the synthetic fixture below.
-  assert.equal(workflow.blocks.find((b) => b.id === "process"), undefined);
-  // Every delegate carries a repo-authored persona, and it is a FILE in
-  // `.github/agents/` — the copilot-native convention — so a block flipped to
-  // `cli: copilot` gets `--agent <name>` natively instead of a kickoff paste.
+  assert.ok(workflow.blocks.some((b) => b.kind === "worker"), "a usable roster needs a worker block");
+  assert.ok(workflow.blocks.some((b) => b.kind === "reviewer"), "a usable roster needs a reviewer block");
+  let profiles = 0;
   for (const b of workflow.blocks) {
-    if (b.kind === "orchestrator") {
-      assert.equal(b.profile, undefined, "the trust root may never carry a repo persona");
-      continue;
-    }
-    if (b.kind === "planner" && !b.profile) continue; // the bare planner: loomux's own contract is enough
-    assert.match(b.profile ?? "", /^\.github\/agents\/[a-z-]+\.md$/, `${b.id} needs a persona file`);
-    assert.equal(b.prompt, undefined, `${b.id}: a persona file and an inline prompt are exclusive`);
+    if (b.profile === undefined) continue;
+    assert.ok(existsSync(new URL(`../${b.profile}`, import.meta.url)), `${b.id}: persona file ${b.profile} exists`);
+    profiles++;
   }
+  assert.ok(profiles > 0, "…and the persona loop checked something, not zero blocks");
+
+  // POSITIVE CONTROL, built off whatever roster the file holds: the "zero findings" arm
+  // is what polices gate references, so a gate pointed at a missing block must be a
+  // finding. Name-independent on purpose — it mutates the parsed gate, not a literal id.
+  const gate = workflow.gates.merge;
+  assert.ok(gate, "the dogfood file declares a merge gate");
+  const missing = "zzz-no-such-block";
+  assert.ok(!workflow.blocks.some((b) => b.id === missing), "sanity: the control id really is absent");
+  const broken = { ...workflow, gates: { ...workflow.gates, merge: { ...gate, reviewers: [...gate.reviewers, missing] } } };
+  assert.ok(
+    validateWorkflow(broken).some((f) => f.code === "gate-unknown-reviewer"),
+    "a gate naming a block that does not exist must be a finding"
+  );
 });
 
 test("every declared reviewer lane is named by the gate or by a routing rule, because an abstention is a pass", () => {
@@ -159,17 +120,7 @@ test("every declared reviewer lane is named by the gate or by a routing rule, be
     return w.blocks.filter((b) => b.kind === "reviewer" && !named.has(b.id)).map((b) => b.id);
   };
   assert.deepEqual(unnamed(workflow), [], "every declared reviewer lane is named by the gate");
-  // …and the SPLIT itself, pinned positively, so a lane sliding out of the static
-  // list into nothing — or the routing block emptying — fails here and not only in
-  // the generic assertion above.
-  assert.deepEqual(gate.reviewers, ["rev-std"], "the static lane is the one that runs every round");
-  assert.deepEqual(
-    [...new Set((gate.routing ?? []).flatMap((r) => r.reviewers))].sort(),
-    ["rev-final"],
-    "…and the routing rules add exactly the final validator, on the paths rule 2 names"
-  );
-  assert.ok((gate.routing ?? []).length > 0, "the routing block is what makes rev-final reachable at all");
-  assert.deepEqual(declaredReviewers, ["rev-std", "rev-final"]);
+  assert.ok(declaredReviewers.length > 0, "…and there is a reviewer lane for that to be a claim about");
 
   // ROUTING RULES MUST BE ABLE TO FIRE — the partial close on the namedness/reachability
   // gap above, and the reason it is only partial is stated rather than left for the next
@@ -240,22 +191,23 @@ test("every declared reviewer lane is named by the gate or by a routing rule, be
   );
 
   // POSITIVE CONTROL — the assertion above passes just as well against a check that
-  // never ran, so this performs the one edit it exists to catch: drop rev-final from
-  // EVERY routing rule and leave everything else alone. The mutation is asserted to
-  // have LANDED (a `replace` whose anchor missed exits happily and leaves a suite
-  // green for the wrong reason), and the mutated file is asserted to still parse
-  // clean — so the red below is about the RULE, not about a file the pane rejects.
-  const anchor = /reviewers: \[rev-final\]/g;
-  const hits = text.match(anchor) ?? [];
-  assert.equal(hits.length, 4, "the four routing rules that require the final lane");
-  const mutated = text.replace(anchor, "reviewers: [rev-std]");
-  assert.notEqual(mutated, text, "the mutation landed");
-  assert.equal((mutated.match(anchor) ?? []).length, 0, "…on every rule, not just the first");
-  const after = parseWorkflow(mutated);
-  assert.deepEqual([...after.findings, ...validateWorkflow(after.workflow)], [], "the mutant is a file the pane blesses");
+  // never ran, so this performs the one edit it exists to catch: take a declared lane and
+  // strike it from the static list AND every routing rule, leaving everything else alone.
+  // Built off the PARSED gate rather than a literal id (#3507): a pin on which lane exists
+  // turned main red on a roster edit, and the property here is the rule, not the roster.
+  // The mutation is asserted to have LANDED — the lane really was named before and is
+  // named nowhere after — so the red below is about the rule, not a no-op edit.
+  const victim = declaredReviewers[declaredReviewers.length - 1];
+  assert.ok(namedBy(gate).has(victim), "sanity: the lane the control strikes was named to begin with");
+  const struck = {
+    ...gate,
+    reviewers: gate.reviewers.filter((id) => id !== victim),
+    routing: (gate.routing ?? []).map((r) => ({ ...r, reviewers: r.reviewers.filter((id) => id !== victim) })),
+  };
+  assert.ok(!namedBy(struck).has(victim), "the mutation landed, on every list that named it");
   assert.deepEqual(
-    unnamed(after.workflow),
-    ["rev-final"],
+    unnamed({ ...workflow, gates: { ...workflow.gates, merge: struck } }),
+    [victim],
     "a declared lane that no rule and no gate names must fail — that is the whole point"
   );
 

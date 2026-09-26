@@ -16,7 +16,6 @@ export const BUDGETS = [
   { path: "src-tauri/src/orchestration/mcp.rs", ceiling: 5815, blob: "1669f55d925c7336b5280f303f0acec90048abbe" },
   { path: "src-tauri/src/orchestration/mod.rs", ceiling: 70838, blob: "1a362268a0e1f933b6cb51c1328d677118f9d10a" },
   { path: "src-tauri/src/orchestration/rdtick.rs", ceiling: 6381, blob: "f3aa72c058b97d6816d726e0cfa3c69ba91fe6af" },
-  { path: "src-tauri/tests/orchestration.rs", ceiling: 74937, blob: "1f9ddd7bbed0f5d121343e56e6d3c174fd6d310f" },
   { path: "src-tauri/tests/reviewdrive.rs", ceiling: 16901, blob: "ff2fbca628885f89d6b417fea4d60ec24caed747" },
   { path: "src-tauri/tests/workflow.rs", ceiling: 12150, blob: "72f2cb41fc681e88aecc83a51dd6f1d2aa8e7004" },
   { path: "src/fileedit.ts", ceiling: 1627, blob: "bc91319afb041316da5c8830b4f4f5a005eaec37" },

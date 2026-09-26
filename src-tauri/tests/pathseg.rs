@@ -385,13 +385,20 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
     /// is what makes this default-deny rather than a blocklist. Normalized
     /// (whitespace collapsed) before comparison.
     const SANCTIONED: &[(&str, &str, &str)] = &[
-        // Each of these five sits in a function whose `agent_id` parameter is
+        // Each of these six sits in a function whose `agent_id` parameter is
         // typed `&PathSegment` (#925), so the binding is already proof and the
         // interpolation cannot be handed a raw string.
         (
             ".join(format!(\"{agent_id}.promptsubmit.jsonl\"))",
             "promptsubmit_marker_path(root, &GroupId, &PathSegment)",
             "agent_id: &PathSegment) -> PathBuf {",
+        ),
+        // #993 S1: the status-line snapshot, the promptsubmit marker's sibling
+        // in the same `hooks/` dir and built the same way.
+        (
+            ".join(format!(\"{agent_id}.statusline.json\"))",
+            "statusline_snapshot_path(root, &GroupId, &PathSegment)",
+            "pub fn statusline_snapshot_path(root: &Path, group: &GroupId, agent_id: &PathSegment) -> PathBuf {",
         ),
         (
             "self.group_dir(group).join(format!(\"ledger-{agent_id}.log\"))",

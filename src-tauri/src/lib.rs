@@ -28,6 +28,7 @@ pub use loomux_engine::winpath;
 // because `tests/liveness.rs` links it.
 pub use loomux_engine::{budget, lockwatch, selfwatch};
 mod metrics;
+pub mod modelstate; // per-pane model/effort/window readings (#993); pub: the status-line integration tests link its quoting
 mod modelwire; // the list-models control probe (#993)
 mod obs;
 pub mod opencodedb; // pub: the #722 usage-readback integration tests link its reader

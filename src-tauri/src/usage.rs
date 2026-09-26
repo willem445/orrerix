@@ -426,6 +426,15 @@ pub struct CompactionSignal {
     /// context-window size (`claude_context_window_tokens`) for the percent
     /// this reading feeds, instead of assuming a flat one.
     pub model: Option<String>,
+    /// #993 S1: the context-window size the CLI itself REPORTED (Claude's
+    /// status-line `context_window.context_window_size`), when a snapshot for
+    /// this session exists. `None` from the transcript alone, which records no
+    /// window — the ladder then falls to the model table.
+    pub window_tokens: Option<u64>,
+    /// #993 S1: the live reasoning effort (status-line `effort.level`).
+    pub effort: Option<String>,
+    /// #993 S1: whether a status-line snapshot contributed to this reading.
+    pub source: crate::modelstate::ContextSource,
 }
 
 // ---------------------------------------------------------------------------
@@ -1657,6 +1666,9 @@ pub fn compaction_signal_in(root: &Path, session_id: &str) -> Option<CompactionS
         tokens: latest_context_tokens(&text),
         compact_boundary_count: compact_boundary_count(&text),
         model: latest_context_model(&text),
+        window_tokens: None,
+        effort: None,
+        source: crate::modelstate::ContextSource::Transcript,
     })
 }
 

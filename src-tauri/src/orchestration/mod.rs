@@ -43657,44 +43657,73 @@ impl OrchRegistry {
     /// decision so `compaction_confirmed`/`inferred_compaction_confirmed`
     /// stay synthetic-input testable.
     ///
-    /// #993 S1: each transcript reading is then enriched by the agent's
-    /// status-line snapshot (`statusline_snapshot_path`) through
-    /// `modelstate::enrich_with_statusline`, which states what each source
-    /// owns. The transcript stays the base: no transcript, no signal — a
-    /// snapshot alone never seeds the boundary-count baseline the resolver
-    /// compares against.
-    fn agent_context_signals(&self) -> HashMap<String, crate::usage::CompactionSignal> {
-        let candidates: Vec<(String, String, GroupId)> = self
+    /// #993: select each running pane's reader from its resolved CLI. Claude
+    /// starts with its transcript and enriches it from a matching status-line
+    /// snapshot; Codex reads the newest rollout via the store lookup. The
+    /// parsers and path resolvers stay separate so neither CLI's missing or
+    /// compressed artifact can borrow another pane's reading.
+    #[doc(hidden)] // pub for the codex context-reader integration test
+    pub fn agent_context_signals(&self) -> HashMap<String, crate::usage::CompactionSignal> {
+        let rows: Vec<(String, String, GroupId, workflow::BlockId, Role)> = self
             .agents
             .lock_safe()
             .values()
-            .filter(|a| a.status == AgentStatus::Running)
-            .filter_map(|a| Some((a.id.clone(), a.session_id.clone()?, a.group.clone())))
+            .filter(|agent| agent.status == AgentStatus::Running)
+            .filter_map(|agent| {
+                Some((
+                    agent.id.clone(),
+                    agent.session_id.clone()?,
+                    agent.group.clone(),
+                    agent.block.clone(),
+                    agent.role,
+                ))
+            })
             .collect();
-        if candidates.is_empty() {
+        if rows.is_empty() {
             return HashMap::new();
         }
-        let Some(root) = self
+        let guardrails: HashMap<GroupId, Guardrails> = self
+            .groups
+            .lock_safe()
+            .iter()
+            .map(|(id, group)| (id.clone(), group.guardrails.clone()))
+            .collect();
+        let candidates: Vec<(String, String, GroupId, String)> = rows
+            .into_iter()
+            .filter_map(|(id, sid, group, block, role)| {
+                let cli = guardrails.get(&group)?.cli_for_block(&block, role).to_string();
+                Some((id, sid, group, cli))
+            })
+            .collect();
+        let claude_root = self
             .claude_projects_dir
             .lock_safe()
             .clone()
-            .or_else(crate::usage::default_claude_projects_root)
-        else {
-            return HashMap::new();
-        };
+            .or_else(crate::usage::default_claude_projects_root);
+        let codex_root = crate::sessions::codex_sessions_root();
+
         candidates
             .into_iter()
-            .filter_map(|(id, sid, group)| {
-                let signal = crate::usage::compaction_signal_in(&root, &sid)?;
-                // #925: the id becomes a file name, so it is parsed first; a
-                // roster id always parses, and one that did not would simply
-                // get no enrichment.
-                let snapshot = PathSegment::parse(&id)
-                    .ok()
-                    .and_then(|seg| fs::read_to_string(statusline_snapshot_path(&self.root, &group, &seg)).ok())
-                    .and_then(|text| crate::modelstate::parse_statusline_snapshot(&text));
-                let signal = crate::modelstate::enrich_with_statusline(signal, snapshot.as_ref(), &sid);
-                Some((id, signal))
+            .filter_map(|(id, sid, group, cli)| match cli.as_str() {
+                "codex" => {
+                    let root = codex_root.as_ref()?;
+                    let session = PathSegment::parse(&sid).ok()?;
+                    Some((id, crate::modelstate::codex_compaction_signal_in(root, &session)?))
+                }
+                "claude" => {
+                    let root = claude_root.as_ref()?;
+                    let signal = crate::usage::compaction_signal_in(root, &sid)?;
+                    // #925: the id becomes a file name, so it is parsed first;
+                    // a roster id always parses, and one that did not would
+                    // simply get no enrichment.
+                    let snapshot = PathSegment::parse(&id)
+                        .ok()
+                        .and_then(|seg| fs::read_to_string(statusline_snapshot_path(&self.root, &group, &seg)).ok())
+                        .and_then(|text| crate::modelstate::parse_statusline_snapshot(&text));
+                    let signal = crate::modelstate::enrich_with_statusline(signal, snapshot.as_ref(), &sid);
+                    Some((id, signal))
+                }
+                _ => None,
             })
             .collect()
     }

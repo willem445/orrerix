@@ -132,6 +132,8 @@ pub enum ContextSource {
     Transcript,
     /// The transcript, enriched by a status-line snapshot for the same session.
     Statusline,
+    /// Codex rollout token-count and turn-context records.
+    CodexRollout,
 }
 
 impl ContextSource {
@@ -139,6 +141,7 @@ impl ContextSource {
         match self {
             ContextSource::Transcript => "transcript",
             ContextSource::Statusline => "statusline",
+            ContextSource::CodexRollout => "codex-rollout",
         }
     }
 }
@@ -273,6 +276,86 @@ pub fn with_chained_command(base: &str, chain: Option<&str>) -> String {
         Some(c) if !c.trim().is_empty() => format!("{base} {}", sh_single_quote(c)),
         _ => base.to_string(),
     }
+}
+
+/// The latest context facts available in a Codex rollout.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CodexContextReading {
+    pub tokens: Option<u64>,
+    pub window_tokens: Option<u64>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub compaction_markers: u64,
+}
+
+/// Read the newest token-count and turn-context records from a Codex rollout.
+///
+/// `event_msg` / `token_count` records are scanned independently from
+/// `turn_context`: either may be absent, and the newest useful occurrence wins.
+pub fn codex_context_signal(text: &str) -> Option<CodexContextReading> {
+    let mut reading = CodexContextReading::default();
+    let mut found = false;
+
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("compacted") => {
+                reading.compaction_markers += 1;
+                found = true;
+            }
+            Some("event_msg")
+                if value.pointer("/payload/type").and_then(Value::as_str)
+                    == Some("token_count") =>
+            {
+                let Some(info) = value.pointer("/payload/info").filter(|info| info.is_object()) else {
+                    continue;
+                };
+                found = true;
+                reading.tokens = info
+                    .pointer("/last_token_usage/input_tokens")
+                    .and_then(Value::as_u64);
+                reading.window_tokens = info.get("model_context_window").and_then(Value::as_u64);
+            }
+            Some("turn_context") => {
+                let payload = value.get("payload");
+                reading.model = payload
+                    .and_then(|payload| payload.get("model"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                reading.effort = payload
+                    .and_then(|payload| payload.get("effort"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                found |= reading.model.is_some() || reading.effort.is_some();
+            }
+            _ => {}
+        }
+    }
+
+    found.then_some(reading)
+}
+
+/// Resolve and read one Codex rollout's bounded tail, then map it to the
+/// shared compaction signal. Compressed winning rollouts are rejected by the
+/// store lookup before this reader is called.
+#[doc(hidden)] // pub for the `codexusage` integration test
+pub fn codex_compaction_signal_in(
+    root: &std::path::Path,
+    session: &loomux_engine::pathseg::PathSegment,
+) -> Option<crate::usage::CompactionSignal> {
+    let path = loomux_engine::sessions::find_codex_session_file(root, session)?;
+    let text = crate::usage::read_transcript_tail(&path)?;
+    let reading = codex_context_signal(&text)?;
+    Some(crate::usage::CompactionSignal {
+        tokens: reading.tokens,
+        compact_boundary_count: reading.compaction_markers,
+        model: reading.model,
+        window_tokens: reading.window_tokens,
+        effort: reading.effort,
+        source: ContextSource::CodexRollout,
+    })
 }
 
 #[cfg(test)]
@@ -466,5 +549,63 @@ mod tests {
         assert_eq!(with_chained_command("base", None), "base");
         assert_eq!(with_chained_command("base", Some("  ")), "base");
         assert_eq!(with_chained_command("base", Some("a $b")), "base 'a $b'");
+    }
+
+    fn token_count(tokens: u64, window: Option<u64>) -> String {
+        let window = window.map(|value| format!(",\"model_context_window\":{value}")).unwrap_or_default();
+        format!("{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"input_tokens\":{tokens}}}{window}}}}}}}")
+    }
+
+    fn turn(model: &str, effort: Option<&str>) -> String {
+        let effort = effort.map(|value| format!(",\"effort\":\"{value}\"")).unwrap_or_default();
+        format!("{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"{model}\"{effort}}}}}")
+    }
+
+    #[test]
+    fn newest_token_count_wins() {
+        let text = format!("{}\n{}", token_count(11, Some(100)), token_count(22, Some(200)));
+        let got = codex_context_signal(&text).unwrap();
+        assert_eq!(got.tokens, Some(22));
+        assert_eq!(got.window_tokens, Some(200));
+    }
+
+    #[test]
+    fn a_null_info_token_count_does_not_shadow_the_last_useful_reading() {
+        let text = format!(
+            "{}\n{}",
+            token_count(42, Some(272_000)),
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":null}}"#
+        );
+        let got = codex_context_signal(&text).unwrap();
+        assert_eq!(got.tokens, Some(42));
+        assert_eq!(got.window_tokens, Some(272_000));
+    }
+
+    #[test]
+    fn missing_model_context_window_is_none() {
+        let got = codex_context_signal(&token_count(42, None)).unwrap();
+        assert_eq!(got.tokens, Some(42));
+        assert_eq!(got.window_tokens, None);
+    }
+
+    #[test]
+    fn newest_turn_context_reads_model_and_effort() {
+        let text = format!("{}\n{}", turn("old", Some("low")), turn("new", Some("high")));
+        let got = codex_context_signal(&text).unwrap();
+        assert_eq!(got.model.as_deref(), Some("new"));
+        assert_eq!(got.effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn turn_context_without_effort_keeps_effort_absent() {
+        let got = codex_context_signal(&turn("gpt-5-codex", None)).unwrap();
+        assert_eq!(got.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(got.effort, None);
+    }
+
+    #[test]
+    fn counts_compaction_markers() {
+        let text = "{\"type\":\"compacted\"}\n{\"type\":\"compacted\"}";
+        assert_eq!(codex_context_signal(text).unwrap().compaction_markers, 2);
     }
 }

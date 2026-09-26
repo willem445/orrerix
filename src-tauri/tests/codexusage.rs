@@ -44,6 +44,7 @@ use loomux_lib::usage::{
 use loomux_engine::pathseg::PathSegment;
 use loomux_engine::sessions::{codex_rollout_is_newer, codex_sessions_root, find_codex_session_file};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -179,6 +180,76 @@ fn write_rollout(root: &Path, body: &str) -> PathBuf {
 // ---------------------------------------------------------------------------
 // The fold: what a line MEANS
 // ---------------------------------------------------------------------------
+
+#[test]
+fn agent_context_signals_dispatches_codex_to_its_rollout_reader() {
+    let (reg, _dir, seam) = codex_registry();
+    let group = reg.create_group("C:/tmp/codex-repo", rails("codex")).unwrap();
+    let agent = reg.spawn_agent(&group.id, Role::Worker, "w", "task", false, None).unwrap();
+    assert!(reg.associate_session(&group.id, &agent.id, THREAD));
+
+    let turn = "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5-codex\",\"effort\":\"high\"}}";
+    write_rollout(
+        &seam.codex,
+        &format!("{turn}\n{}\n{{\"type\":\"compacted\"}}\n", token_count_event(Usage { input: 123, ..Usage::default() })),
+    );
+    let signal = reg
+        .agent_context_signals()
+        .remove(&agent.id)
+        .expect("the Codex agent should receive its rollout context signal");
+
+    assert_eq!(signal.tokens, Some(123));
+    assert_eq!(signal.window_tokens, Some(272_000));
+    assert_eq!(signal.model.as_deref(), Some("gpt-5-codex"));
+    assert_eq!(signal.effort.as_deref(), Some("high"));
+    assert_eq!(signal.compact_boundary_count, 1);
+    assert_eq!(signal.source, loomux_lib::modelstate::ContextSource::CodexRollout);
+}
+
+#[test]
+fn a_compressed_rollout_lookup_has_no_codex_context_signal() {
+    let root = tempfile::tempdir().unwrap();
+    write_raw(
+        root.path(),
+        &format!("{}.zst", rollout_name(THREAD)),
+        &token_count_event(Usage { input: 123, ..Usage::default() }),
+    );
+    let session = PathSegment::parse(THREAD).unwrap();
+    assert!(find_codex_session_file(root.path(), &session).is_none());
+    assert!(loomux_lib::modelstate::codex_compaction_signal_in(root.path(), &session).is_none());
+}
+
+#[test]
+fn a_large_rollout_uses_the_bounded_tail_for_context_and_markers() {
+    let root = tempfile::tempdir().unwrap();
+    let large_text = "x".repeat(300 * 1024);
+    let body = format!(
+        "{{\"type\":\"compacted\"}}\n{{\"type\":\"response_item\",\"payload\":{{\"text\":\"{large_text}\"}}}}\n{}",
+        token_count_event(Usage { input: 456, ..Usage::default() })
+    );
+    write_rollout(root.path(), &body);
+
+    let session = PathSegment::parse(THREAD).unwrap();
+    let signal = loomux_lib::modelstate::codex_compaction_signal_in(root.path(), &session)
+        .expect("the newest token-count event is inside the bounded tail");
+    assert_eq!(signal.tokens, Some(456));
+    assert_eq!(signal.compact_boundary_count, 0, "old markers outside the tail are ignored");
+}
+
+#[test]
+fn invalid_utf8_before_the_tail_does_not_hide_newer_context() {
+    let root = tempfile::tempdir().unwrap();
+    let path = write_rollout(root.path(), "");
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(&vec![0xff; 300 * 1024]).unwrap();
+    file.write_all(b"\n").unwrap();
+    file.write_all(token_count_event(Usage { input: 789, ..Usage::default() }).as_bytes()).unwrap();
+
+    let session = PathSegment::parse(THREAD).unwrap();
+    let signal = loomux_lib::modelstate::codex_compaction_signal_in(root.path(), &session)
+        .expect("invalid UTF-8 before the tail must not hide valid later records");
+    assert_eq!(signal.tokens, Some(789));
+}
 
 #[test]
 fn token_usage_records_are_summed_per_response_not_read_off_the_cumulative_thread_total() {

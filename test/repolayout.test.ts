@@ -354,7 +354,7 @@ const CITATION_ALLOWLIST: ReadonlyArray<{ file: string; reason: string }> = [
   { file: "test/prbodycheck.test.ts", reason: "the assertion over `test/fixtures/prbodycheck/diff.txt`, a CAPTURED real diff. It must keep the captured spelling, and the assertion says so inline." },
   { file: "test/filematch.test.ts", reason: "synthetic path literals in a ranking fixture (`doc/restore.md`). They are test data standing for any path, not references to this repo's tree." },
   { file: "test/fixtures/tokenscorecard/audit.jsonl", reason: "cut verbatim from the real group log (see that directory's README). A capture's value is being faithful; rewriting a path inside one falsifies it." },
-  { file: "src-tauri/tests/orchestration.rs", reason: "a synthetic Windows path literal (`C:\\Projects\\demo/`) in a path-fixture test — a test path, not a reference. #3315 exempts it explicitly." },
+  { file: "src-tauri/tests/orchestration/tasks.rs", reason: "a synthetic Windows path literal (`C:\\Projects\\demo/`) in a path-fixture test — a test path, not a reference. #3315 exempts it explicitly." },
   { file: "src/todopane.ts", reason: "names `demo/todo-pane` as the tree PR #3271 carried and #3315 removed — a citation of history, phrased as history." },
   { file: ".claude/skills/agent-cli-reference/SKILL.md", reason: "the English phrase \"a demo/live check\", not a path. Matched because the guard reads shape, not meaning." },
 ];

@@ -43,6 +43,14 @@ export interface CliProbe {
   available: boolean;
   /** Model ids the CLI reported (may be empty — a parse miss is not an error). */
   models: string[];
+  /** Model id → context window in tokens, where the CLI printed one beside
+   *  the id (#993 S8 — pi's `--list-models` only). Absent, never `{}`, for
+   *  every other CLI; an id with no entry has no reported window. */
+  model_context_windows?: Record<string, number>;
+  /** Ids whose `model_context_windows` entry is a LOWER BOUND read off a
+   *  rounded spelling (`1.0M` → 950000), not the exact count. Absent when
+   *  none is. */
+  model_context_windows_rounded?: string[];
   /** Human-readable failure reason when not available. */
   error: string | null;
 }

@@ -43,6 +43,52 @@ status-line report is available, and (4) an empirical clamp that widens a
 window when observed usage exceeds it. The last rung must be tagged `clamped`.
 A reported window is not replaced by a model-name guess.
 
+## S8: pi's window from `--list-models`
+
+pi's session file carries no context window, so for a pi PTY pane the window
+comes from the table `pi --list-models` prints, which the launcher's probe
+already runs for the model picker. S8 reads its `context` column:
+`cliprobe.rs`'s `parse_context_windows_from_table` walks the same rows as
+`parse_models_from_table` and fills two additive `CliProbe` fields.
+
+- `model_context_windows`: model id → window in tokens.
+- `model_context_windows_rounded`: the ids whose window is a lower bound
+  rather than an exact count (below).
+
+`models` is unchanged. Both new fields are left off the wire when empty, which
+they are for every CLI but pi, so no other CLI's `probe_agent_cli` reply
+changes. A header with no `context` column, a row whose cell count differs
+from the header's, or a cell that does not parse adds no entry: an id with no
+entry has no reported window, never a guessed one.
+
+**The spellings.** pi prints the count with `formatTokenCount` (`SOURCE`
+`src/cli/list-models.ts:14-24` at the pin in `docs/design/pi.md`; the same
+function at `dist/cli/list-models.js:10-20` in the installed 0.87.1 package).
+Below 1,000 it prints the raw integer (`512`). Otherwise it prints thousands or
+millions with a `K`/`M` suffix: an integer when the count divides exactly
+(`200K`, `1M`), and **rounded to one decimal place otherwise** (`262.1K` for
+262,144; `1.0M` for 1,048,576). The rounded form is common, not an edge case:
+721 of the 1,495 `contextWindow` values in the model catalog shipped with the
+installed 0.87.1 package (`pi-ai`'s `dist/providers/data/*.json`) print that way.
+
+**Decision: a rounded spelling is read as the lower edge of its rounding
+interval.** `262.1K` becomes 262,050 and `1.0M` becomes 950,000: the printed
+value minus half a printed tenth. Integer and raw spellings stay exact. The
+window feeds the compaction threshold. An understated window compacts a little
+early, which is safe; an overstated one lets the CLI's own emergency compaction
+fire first. Reading the spelling at face value would overstate by up to that
+half-tenth (1,050,000 prints `1.1M`). The edge is never above the real count,
+because `toFixed(1)` picks the tenth nearest the count. Face value ("nearest")
+is the alternative, and it is a one-line change in `parse_token_count`; the
+human may choose it.
+
+A consumer labels a window from an id in `model_context_windows_rounded`
+`reported-rounded` rather than `reported` on the ladder's rung (2).
+
+**No consumer yet.** Looking the pane's current model up in the cached probe,
+and filling `window_tokens` from it, belongs to the pi arm of
+`agent_context_signals`, which S2b adds. S8 ships the data only.
+
 ## Contract changes planned by later slices
 
 These are planned additions, not shipped behavior in S0:

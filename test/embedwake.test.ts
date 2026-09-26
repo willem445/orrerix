@@ -41,7 +41,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const PANE = readFileSync(new URL("../src/pane.ts", import.meta.url), "utf8");
+// The pane and the two satellites the embed machinery moved into (#3498 F1): `EMBED_KINDS`
+// now lives in `paneembeds.ts` and every `embedRegistry.set` in `paneviews.ts`. Read as ONE
+// text rather than a file each, so a registration landing in any of the three is still
+// parsed — and the population test below still demands the parsed set BE `EMBED_KINDS`.
+const PANE_FAMILY = ["pane.ts", "paneembeds.ts", "paneviews.ts"];
+const PANE = PANE_FAMILY.map((f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")).join("\n");
 
 interface ViewRow {
   /** The `EmbedKind` string, exactly as `embedRegistry.set` spells it. */
@@ -126,15 +131,17 @@ const VIEWS: ViewRow[] = [
  *  to one list and forgotten in the other. */
 function embedKinds(): string[] {
   const m = /const EMBED_KINDS: readonly EmbedKind\[\] = \[([\s\S]*?)\];/.exec(PANE);
-  assert.ok(m, "EMBED_KINDS is not where this scan expects it in src/pane.ts");
+  assert.ok(m, `EMBED_KINDS is not where this scan expects it in src/{${PANE_FAMILY.join(",")}}`);
   return [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
 }
 
-/** Each `this.embedRegistry.set("<kind>", { ... })` entry, brace-balanced from the literal
- *  so a nested arrow body cannot end it early. */
+/** Each `….embedRegistry.set("<kind>", { ... })` entry, brace-balanced from the literal
+ *  so a nested arrow body cannot end it early. Receiver-agnostic since #3498 F1: the
+ *  registrations now read `this.pane.embeds.embedRegistry.set(` from `paneviews.ts`, and
+ *  the axis this scan decides on is the call and its literal kind, not who holds the map. */
 function registryEntries(): Map<string, string> {
   const out = new Map<string, string>();
-  for (const m of PANE.matchAll(/this\.embedRegistry\.set\("([^"]+)",\s*\{/g)) {
+  for (const m of PANE.matchAll(/\.embedRegistry\.set\("([^"]+)",\s*\{/g)) {
     const kind = m[1];
     let depth = 1;
     let i = m.index + m[0].length;

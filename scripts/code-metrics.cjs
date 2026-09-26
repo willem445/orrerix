@@ -963,8 +963,8 @@ const FILE_BUDGETS = [
   },
   {
     path: "crates/loomux-engine/src/workflow.rs",
-    ceiling: 7497,
-    blob: "93c29d30636a9a48d505043bd936e59701ffa913"
+    ceiling: 7538,
+    blob: "9b95e14b299a880c597dd92ed0eb88be1db986fb"
   },
   {
     path: "src-tauri/src/orchestration/mcp.rs",
@@ -973,8 +973,8 @@ const FILE_BUDGETS = [
   },
   {
     path: "src-tauri/src/orchestration/mod.rs",
-    ceiling: 70409,
-    blob: "a92dc1d20b462513d752ffed4b956b9476a4d8a7"
+    ceiling: 70838,
+    blob: "1a362268a0e1f933b6cb51c1328d677118f9d10a"
   },
   {
     path: "src-tauri/src/orchestration/rdtick.rs",
@@ -983,8 +983,8 @@ const FILE_BUDGETS = [
   },
   {
     path: "src-tauri/tests/orchestration.rs",
-    ceiling: 74557,
-    blob: "00a0631a2f85db8045c73c809b684a6828356cfc"
+    ceiling: 74937,
+    blob: "1f9ddd7bbed0f5d121343e56e6d3c174fd6d310f"
   },
   {
     path: "src-tauri/tests/reviewdrive.rs",
@@ -993,8 +993,8 @@ const FILE_BUDGETS = [
   },
   {
     path: "src-tauri/tests/workflow.rs",
-    ceiling: 12234,
-    blob: "762557a456c38e09542da096a314cfb8a6d35a39"
+    ceiling: 12150,
+    blob: "72f2cb41fc681e88aecc83a51dd6f1d2aa8e7004"
   },
   {
     path: "src/fileedit.ts",
@@ -1023,18 +1023,18 @@ const FILE_BUDGETS = [
   },
   {
     path: "src/main.ts",
-    ceiling: 4148,
-    blob: "93a06b5562b5494e7d116279e66ca3802865aa19"
+    ceiling: 4152,
+    blob: "3972d22c2bd528cd4845a08d780cc50d3e90d871"
   },
   {
     path: "src/orchestration.ts",
-    ceiling: 3129,
-    blob: "6ff9152ca6c8591e6138a7890074d6fea1677e32"
+    ceiling: 3152,
+    blob: "69b46587dccbf973b88c6a3766d8ec207aca8cfb"
   },
   {
     path: "src/pane.ts",
-    ceiling: 7007,
-    blob: "bde41cc08f4894a61ea4302e80ccf6504acf5153"
+    ceiling: 7103,
+    blob: "360c14a506a09250a342bb35d2177066122c6a56"
   },
   {
     path: "src/panerestore.ts",
@@ -1068,8 +1068,8 @@ const FILE_BUDGETS = [
   },
   {
     path: "src/workflowmodel.ts",
-    ceiling: 4908,
-    blob: "5efa28cbe292da536d08b67b0a56196b36f86876"
+    ceiling: 4926,
+    blob: "4befd2c6d40e14f5f46770a650fdb7d271f6e862"
   },
   {
     path: "src/workflowview.ts",

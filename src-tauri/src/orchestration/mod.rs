@@ -5605,6 +5605,8 @@ fn human_pane_entry(
         last_context_tokens: None,
         last_context_model: None,
         last_context_window: None,
+        last_context_effort: None,
+        last_context_source: None,
         compact_inference_guard_until_ms: 0,
         compact_hook_precompact_seen_ms: None,
         compact_hook_sessionstart_seen_ms: None,
@@ -9223,8 +9225,8 @@ pub fn codex_user_mcp_exposure(codex_home: &Path, our_server: &str) -> Option<Va
 /// pane shows. The arm prints nothing of its own on any path: with no `$4`
 /// the line stays blank. That is not identical to a claude pane with no
 /// status line configured — the CLI hides most footer keyboard hints whenever
-/// a `statusLine` exists (a disclosed residual, `docs/design/
-/// pane-model-state.md` §S1). The payload is read into a variable FIRST, above the
+/// a `statusLine` exists (a disclosed residual in `docs/design/pane-model-state.md`
+/// §S1). The payload is read into a variable FIRST, above the
 /// group-dir check, so the chain gets it even when the snapshot write fails
 /// (touch-gated, per the reasoning above) — a broken hooks dir costs loomux
 /// its reading, never the human their status line. Still `exit 0` on every
@@ -13448,6 +13450,10 @@ pub struct AgentEntry {
     /// `group_summary`'s percent climbs the same ladder the escalation does.
     /// Follows each reading, `None` included — see `run_compact_nudge`.
     pub last_context_window: Option<u64>,
+    /// #993 S3: latest observed effort and context source, cached with the
+    /// token reading so group-summary polling performs no artifact reads.
+    pub last_context_effort: Option<String>,
+    pub last_context_source: Option<String>,
     /// Production bug fix (PR #329 round 7): INFERENCE arms (banner, manual
     /// detection — never the loomux-initiated/trusted arm, which needs no
     /// inference at all) may only arm while `now >= this`. Live demo
@@ -41312,6 +41318,8 @@ impl OrchRegistry {
             last_context_tokens: None,
             last_context_model: None,
             last_context_window: None,
+            last_context_effort: None,
+            last_context_source: None,
             compact_inference_guard_until_ms: 0,
             compact_hook_precompact_seen_ms: None,
             compact_hook_sessionstart_seen_ms: None,
@@ -43857,6 +43865,8 @@ impl OrchRegistry {
                 // never outlive it. A tick with no signal at all (a transient
                 // read miss) leaves it alone, like the model.
                 a.last_context_window = sig.window_tokens;
+                a.last_context_effort = sig.effort.clone();
+                a.last_context_source = Some(sig.source.as_str().to_string());
             }
         }
         let nudged = self.compact_nudge_tick(
@@ -48614,6 +48624,10 @@ impl OrchRegistry {
 
     // ---------- lifecycle: group summary & end-orchestration ----------
 
+    /// #993 S3 publishes each agent's detected model, effort and context-window
+    /// reading additively in its `context` object; the roster's declared picks
+    /// remain available when no live reading exists.
+    ///
     /// A one-glance summary of a group's live agents for the lifecycle panel:
     /// how many are up, the role breakdown, and uptime (per agent and for the
     /// group as a whole, measured from the earliest-started live agent — the
@@ -48634,7 +48648,8 @@ impl OrchRegistry {
         // Production bug fix (PR #329 round 7): same override this group's
         // escalation threshold uses (`agent_context_percents`) — one shared
         // denominator, never two independently-guessed ones.
-        let context_window_override = self.group(group).and_then(|g| g.guardrails.context_window_tokens_override);
+        let g = self.group(group);
+        let context_window_override = g.as_ref().map(|g| g.guardrails.context_window_tokens_override).flatten();
         let mut list: Vec<Value> = live
             .iter()
             .map(|a| {
@@ -48656,6 +48671,13 @@ impl OrchRegistry {
                     Role::Lead => lead += 1,
                 }
                 earliest = Some(earliest.map_or(a.started_ms, |e| e.min(a.started_ms)));
+                let declared = g.as_ref().and_then(|g| g.guardrails.blocks.iter().find(|b| b.id == a.block));
+                let (window_tokens, window_source) = effective_context_window_tokens(
+                    context_window_override,
+                    a.last_context_window,
+                    a.last_context_model.as_deref(),
+                    a.last_context_tokens,
+                );
                 json!({
                     "id": a.id, "name": a.name, "role": a.role,
                     // The block this agent IS (#222). Equal to the role for the
@@ -48689,27 +48711,23 @@ impl OrchRegistry {
                         // Production bug fix (PR #329 round 7): model-aware
                         // window (`effective_context_window_tokens`) instead
                         // of a flat 200K assumption — see its doc.
-                        "percent": a.last_context_tokens.map(|t| context_percent_used(
-                            t,
-                            effective_context_window_tokens(
-                                context_window_override,
-                                a.last_context_window,
-                                a.last_context_model.as_deref(),
-                                Some(t),
-                            )
-                            .0,
-                        )),
+                        "percent": a.last_context_tokens.map(|t| context_percent_used(t, window_tokens)),
+                        "window_tokens": a.last_context_tokens.map(|_| window_tokens),
+                        "window_source": a.last_context_tokens.map(|_| window_source.as_str()),
+                        "model": a.last_context_model,
+                        "effort": a.last_context_effort,
+                        "source": a.last_context_source,
+                        "declared": {
+                            "model": declared.map(|b| b.model.as_str()).unwrap_or(""),
+                            "effort": declared.map(|b| b.effort.as_str()).unwrap_or(""),
+                        },
                     },
                 })
             })
             .collect();
         list.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-        // ONE read of the group record for the two fields below that need it.
-        // This is a POLL path — the group panel refreshes on a timer — so a
-        // second `self.group()` for `manager_declared` would be a second lock
-        // acquisition per tick for a value read out of the same record
-        // (INV-5's "latency-sensitive means cadenced").
-        let g = self.group(group);
+        // `g` is the single group-record read shared by roster declarations
+        // and the manager-declared flag below; this is a polling path.
         json!({
             "group": group,
             "live_agents": live.len(),
@@ -55500,6 +55518,8 @@ impl OrchRegistry {
             last_context_tokens: None,
             last_context_model: None,
             last_context_window: None,
+            last_context_effort: None,
+            last_context_source: None,
             compact_inference_guard_until_ms: 0,
             compact_hook_precompact_seen_ms: None,
             compact_hook_sessionstart_seen_ms: None,
@@ -65433,6 +65453,8 @@ fn register_orchestrator_pane(
         last_context_tokens: None,
         last_context_model: None,
         last_context_window: None,
+        last_context_effort: None,
+        last_context_source: None,
         compact_inference_guard_until_ms: 0,
         compact_hook_precompact_seen_ms: None,
         compact_hook_sessionstart_seen_ms: None,

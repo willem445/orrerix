@@ -132,3 +132,28 @@ export function contextUsageLabel(context: { tokens: number | null; percent: num
   if (context.percent == null || context.tokens == null) return null;
   return `ctx ${context.percent}% (${context.tokens.toLocaleString()} tok)`;
 }
+
+/** A compact pane identity/context chip. Percentages are meaningful only when
+ *  the reading includes both observed tokens and a known window. */
+export function paneModelLabel(ctx: {
+  model: string | null;
+  effort: string | null;
+  tokens: number | null;
+  window_tokens: number | null;
+  declared?: { model: string; effort: string };
+}): string | null {
+  const parts: string[] = [];
+  if (ctx.model) parts.push(ctx.model);
+  if (ctx.effort) parts.push(ctx.effort);
+  if (ctx.tokens != null && ctx.window_tokens != null && ctx.window_tokens > 0) {
+    parts.push(`ctx ${Math.floor(Math.min(ctx.tokens, ctx.window_tokens) * 100 / ctx.window_tokens)}% of ${ctx.window_tokens.toLocaleString()}`);
+  } else if (ctx.tokens != null) {
+    parts.push(`${ctx.tokens.toLocaleString()} tok`);
+  }
+  if (parts.length) return parts.join(" · ");
+  if (ctx.declared && (ctx.declared.model || ctx.declared.effort)) {
+    const declared = [ctx.declared.model, ctx.declared.effort].filter(Boolean).join(" · ");
+    return declared ? `${declared} (declared)` : null;
+  }
+  return null;
+}

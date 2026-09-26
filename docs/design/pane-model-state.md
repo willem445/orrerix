@@ -420,11 +420,25 @@ averages bucket under that text.
   so it is never pointed at a group store, and the human's own store is not
   read.
 
+## S3 — publish per-pane identity and context
+
+S3 adds `window_tokens`, `window_source`, `model`, `effort`, `source`, and
+`declared: {model, effort}` to `group_summary.agents[].context`. The lifecycle
+panel shows a compact model/effort/context label. It never prints a percentage
+without both observed tokens and a known window; without a window it shows the
+token count, and without a reading it labels the roster pick `(declared)`. The
+Agents list chip is deferred: its `PaneFacts` projection does not carry the
+lifecycle summary, and adding it requires separate pane-state plumbing.
+
+The S3 test pinning a status-line window reverting to `None` when the snapshot
+disappears is deferred from #3536; current backend state follows the window
+through the signal, but this slice does not add that test.
+
 ## Contract changes planned by later slices
 
 The S0 and S1 rows have shipped; the rest are planned:
 
-1. **S3 will** add `window_tokens`, `window_source`, `model`, `effort`, `source`,
+1. **S3 adds** `window_tokens`, `window_source`, `model`, `effort`, `source`,
    and `declared: {model, effort}` to `group_summary.agents[].context`.
 2. **S1 adds** the raw Claude status-line payload at
    `<group>/hooks/<agent>.statusline.json`, written through a temporary file

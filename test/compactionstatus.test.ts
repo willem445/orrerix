@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compactionStatusLabel, compactionStatusTitle, contextUsageLabel } from "../src/compactionstatus.ts";
+import { compactionStatusLabel, compactionStatusTitle, contextUsageLabel, paneModelLabel } from "../src/compactionstatus.ts";
 import type { CompactionStatus } from "../src/orchestration.ts";
 
 test("compactionStatusLabel: none omits the row entirely", () => {
@@ -188,4 +188,20 @@ test("contextUsageLabel: formats tokens with separators", () => {
 
 test("contextUsageLabel: zero is a real reading, not absence", () => {
   assert.equal(contextUsageLabel({ tokens: 0, percent: 0 }), "ctx 0% (0 tok)");
+});
+
+test("paneModelLabel: model, effort and window-backed usage", () => {
+  assert.equal(paneModelLabel({ model: "opus-4.8", effort: "high", tokens: 46_120, window_tokens: 200_000 }), "opus-4.8 · high · ctx 23% of 200,000");
+});
+
+test("paneModelLabel: tokens without an unknown window", () => {
+  assert.equal(paneModelLabel({ model: "gpt-5", effort: null, tokens: 46_120, window_tokens: null }), "gpt-5 · 46,120 tok");
+});
+
+test("paneModelLabel: declared pick is explicitly marked", () => {
+  assert.equal(paneModelLabel({ model: null, effort: null, tokens: null, window_tokens: null, declared: { model: "sonnet", effort: "medium" } }), "sonnet · medium (declared)");
+});
+
+test("paneModelLabel: window without tokens never prints a percent", () => {
+  assert.equal(paneModelLabel({ model: "sonnet", effort: "low", tokens: null, window_tokens: 200_000 }), "sonnet · low");
 });

@@ -5049,6 +5049,8 @@ fn human_pane_entry(
         last_context_model: None,
         last_context_window: None,
         last_context_window_rounded: false,
+        last_context_effort: None,
+        last_context_source: None,
         compact_inference_guard_until_ms: 0,
         compact_hook_precompact_seen_ms: None,
         compact_hook_sessionstart_seen_ms: None,
@@ -8667,8 +8669,8 @@ pub fn codex_user_mcp_exposure(codex_home: &Path, our_server: &str) -> Option<Va
 /// pane shows. The arm prints nothing of its own on any path: with no `$4`
 /// the line stays blank. That is not identical to a claude pane with no
 /// status line configured — the CLI hides most footer keyboard hints whenever
-/// a `statusLine` exists (a disclosed residual, `docs/design/
-/// pane-model-state.md` §S1). The payload is read into a variable FIRST, above the
+/// a `statusLine` exists (a disclosed residual, `docs/design/pane-model-state.md`
+/// §S1). The payload is read into a variable FIRST, above the
 /// group-dir check, so the chain gets it even when the snapshot write fails
 /// (touch-gated, per the reasoning above) — a broken hooks dir costs loomux
 /// its reading, never the human their status line. Still `exit 0` on every
@@ -12902,6 +12904,10 @@ pub struct AgentEntry {
     /// rounded (`CompactionSignal::window_rounded`), so the ladder labels it
     /// `reported-rounded`. Follows each reading exactly as the window does.
     pub last_context_window_rounded: bool,
+    /// #993 S3: latest observed effort and context source, cached with the
+    /// token reading so group-summary polling performs no artifact reads.
+    pub last_context_effort: Option<String>,
+    pub last_context_source: Option<String>,
     /// Production bug fix (PR #329 round 7): INFERENCE arms (banner, manual
     /// detection — never the loomux-initiated/trusted arm, which needs no
     /// inference at all) may only arm while `now >= this`. Live demo
@@ -33466,6 +33472,8 @@ impl OrchRegistry {
             last_context_model: None,
             last_context_window: None,
             last_context_window_rounded: false,
+            last_context_effort: None,
+            last_context_source: None,
             compact_inference_guard_until_ms: 0,
             compact_hook_precompact_seen_ms: None,
             compact_hook_sessionstart_seen_ms: None,
@@ -36098,6 +36106,8 @@ impl OrchRegistry {
                 // read miss) leaves it alone, like the model.
                 a.last_context_window = sig.window_tokens;
                 a.last_context_window_rounded = sig.window_rounded;
+                a.last_context_effort = sig.effort.clone();
+                a.last_context_source = Some(sig.source.as_str().to_string());
             }
         }
         let nudged = self.compact_nudge_tick(

@@ -709,6 +709,8 @@ impl OrchRegistry {
             last_context_model: None,
             last_context_window: None,
             last_context_window_rounded: false,
+            last_context_effort: None,
+            last_context_source: None,
             compact_inference_guard_until_ms: 0,
             compact_hook_precompact_seen_ms: None,
             compact_hook_sessionstart_seen_ms: None,

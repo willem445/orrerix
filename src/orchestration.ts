@@ -2172,7 +2172,16 @@ export interface AgentSummary {
   /** Last-known context-window usage (PR #329 round 6) — cached by the
    *  backend's own compact-nudge tick, not a per-poll transcript read. Both
    *  null until the first reading (no session yet, or a non-Claude agent). */
-  context: { tokens: number | null; percent: number | null };
+  context: {
+    tokens: number | null;
+    percent: number | null;
+    window_tokens?: number | null;
+    window_source?: string | null;
+    model?: string | null;
+    effort?: string | null;
+    source?: string | null;
+    declared?: { model: string; effort: string };
+  };
 }
 
 /** Compact-nudge (PR #329 round 6): the compaction state-machine phase for

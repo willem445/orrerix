@@ -638,6 +638,10 @@ impl OrchRegistry {
 
     // ---------- lifecycle: group summary & end-orchestration ----------
 
+    /// #993 S3 publishes each agent's detected model, effort and context-window
+    /// reading additively in its `context` object; roster picks remain available
+    /// when no live reading exists.
+    ///
     /// A one-glance summary of a group's live agents for the lifecycle panel:
     /// how many are up, the role breakdown, and uptime (per agent and for the
     /// group as a whole, measured from the earliest-started live agent — the
@@ -658,7 +662,8 @@ impl OrchRegistry {
         // Production bug fix (PR #329 round 7): same override this group's
         // escalation threshold uses (`agent_context_percents`) — one shared
         // denominator, never two independently-guessed ones.
-        let context_window_override = self.group(group).and_then(|g| g.guardrails.context_window_tokens_override);
+        let g = self.group(group);
+        let context_window_override = g.as_ref().and_then(|g| g.guardrails.context_window_tokens_override);
         let mut list: Vec<Value> = live
             .iter()
             .map(|a| {
@@ -680,6 +685,14 @@ impl OrchRegistry {
                     Role::Lead => lead += 1,
                 }
                 earliest = Some(earliest.map_or(a.started_ms, |e| e.min(a.started_ms)));
+                let declared = g.as_ref().and_then(|g| g.guardrails.blocks.iter().find(|b| b.id == a.block));
+                let (window_tokens, window_source) = effective_context_window_tokens(
+                    context_window_override,
+                    a.last_context_window,
+                    a.last_context_window_rounded,
+                    a.last_context_model.as_deref(),
+                    a.last_context_tokens,
+                );
                 json!({
                     "id": a.id, "name": a.name, "role": a.role,
                     // The block this agent IS (#222). Equal to the role for the
@@ -713,28 +726,23 @@ impl OrchRegistry {
                         // Production bug fix (PR #329 round 7): model-aware
                         // window (`effective_context_window_tokens`) instead
                         // of a flat 200K assumption — see its doc.
-                        "percent": a.last_context_tokens.map(|t| context_percent_used(
-                            t,
-                            effective_context_window_tokens(
-                                context_window_override,
-                                a.last_context_window,
-                                a.last_context_window_rounded,
-                                a.last_context_model.as_deref(),
-                                Some(t),
-                            )
-                            .0,
-                        )),
+                        "percent": a.last_context_tokens.map(|t| context_percent_used(t, window_tokens)),
+                        "window_tokens": a.last_context_tokens.map(|_| window_tokens),
+                        "window_source": a.last_context_tokens.map(|_| window_source.as_str()),
+                        "model": a.last_context_model,
+                        "effort": a.last_context_effort,
+                        "source": a.last_context_source,
+                        "declared": {
+                            "model": declared.map(|b| b.model.as_str()).unwrap_or(""),
+                            "effort": declared.map(|b| b.effort.as_str()).unwrap_or(""),
+                        },
                     },
                 })
             })
             .collect();
         list.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-        // ONE read of the group record for the two fields below that need it.
-        // This is a POLL path — the group panel refreshes on a timer — so a
-        // second `self.group()` for `manager_declared` would be a second lock
-        // acquisition per tick for a value read out of the same record
-        // (INV-5's "latency-sensitive means cadenced").
-        let g = self.group(group);
+        // `g` is the single group-record read shared by roster declarations
+        // and the manager-declared flag below; this is a polling path.
         json!({
             "group": group,
             "live_agents": live.len(),

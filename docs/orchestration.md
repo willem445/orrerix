@@ -4064,8 +4064,11 @@ already done or no longer relevant. The ledger lives at
 `<data dir>/orrerix/orchestration/<group>/ledger-<agent-id>.log` — a plain, human-readable
 file, one entry per line, that a human can open directly.
 
-**Lifecycle panel.** The group lifecycle panel (`Alt+O`) shows each Claude agent's current
-context-window usage (tokens + percent) next to its uptime and cost, and — only when there's
+**Lifecycle panel.** The group lifecycle panel (`Alt+O`) shows each agent's detected model,
+effort and context-window usage beside its uptime and cost. It uses the CLI-reported window
+when available; usage percentages are shown only when both tokens and a window are known.
+Before a reading exists, the declared model and effort are labelled as declared. It also shows —
+only when there's
 something worth a glance — its compact-nudge phase: armed (waiting to observe the pane go
 busy), awaiting evidence (busy observed, waiting on quiet to resolve), re-grounding (a
 reinjection is in flight, with its attempt count), a recently finished re-grounding (see

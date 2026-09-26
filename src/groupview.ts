@@ -71,7 +71,7 @@ import {
 } from "./autonomy";
 import { gateSatisfiabilityWarning, gateSummaryLine, workflowModeLabel } from "./workflowstatus";
 import { MERGE_QUEUE_HELP, mergeQueueView, type MergeQueueView } from "./mergequeue";
-import { compactionStatusLabel, compactionStatusTitle, contextUsageLabel } from "./compactionstatus";
+import { compactionStatusLabel, compactionStatusTitle, contextUsageLabel, paneModelLabel } from "./compactionstatus";
 import { parseCompactionMinutes, parseCompactionPercent } from "./compactionsettings";
 import { roleLabel } from "./orchbadge";
 import { managerAbsenceNotice } from "./group";
@@ -1509,8 +1509,16 @@ export class GroupView {
         // live demo feedback, not just alerting once something's wrong.
         const ctxLabel = contextUsageLabel(a.context);
         const ctx = ctxLabel ? el("span", "group-context", ctxLabel) : null;
+        const modelLabel = paneModelLabel({
+          model: a.context.model ?? null,
+          effort: a.context.effort ?? null,
+          tokens: a.context.tokens,
+          window_tokens: a.context.window_tokens ?? null,
+          declared: a.context.declared,
+        });
+        const modelChip = modelLabel ? el("span", "group-context", modelLabel) : null;
 
-        row.append(chip, name, ...(block ? [block] : []), state, up, c, ...(ctx ? [ctx] : []));
+        row.append(chip, name, ...(block ? [block] : []), state, up, c, ...(modelChip ? [modelChip] : []), ...(ctx ? [ctx] : []));
         wrap.append(row);
 
         // "⏳ waiting on …" indicator (#248): a correctly-WAITING agent parked

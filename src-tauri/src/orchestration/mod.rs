@@ -39563,11 +39563,19 @@ impl OrchRegistry {
     /// no `thinking_level_change`. See `modelstate::pi_compaction_signal_in`.
     #[doc(hidden)] // pub for the codex and pi context-reader integration tests
     pub fn agent_context_signals(&self) -> HashMap<String, crate::usage::CompactionSignal> {
+        self.agent_context_signals_for_group(None)
+    }
+
+    fn agent_context_signals_for_group(
+        &self,
+        only_group: Option<&GroupId>,
+    ) -> HashMap<String, crate::usage::CompactionSignal> {
         let rows: Vec<(String, String, GroupId, workflow::BlockId, Role)> = self
             .agents
             .lock_safe()
             .values()
             .filter(|agent| agent.status == AgentStatus::Running)
+            .filter(|agent| only_group.map_or(true, |group| &agent.group == group))
             .filter_map(|agent| {
                 Some((
                     agent.id.clone(),
@@ -39585,6 +39593,7 @@ impl OrchRegistry {
             .groups
             .lock_safe()
             .iter()
+            .filter(|(id, _)| only_group.map_or(true, |group| *id == group))
             .map(|(id, group)| (id.clone(), group.guardrails.clone()))
             .collect();
         // The block's effort knob rides along for pi's fallback. Resolved the
@@ -43803,8 +43812,9 @@ impl OrchRegistry {
     ///   [`USAGE_SERIES_FILE`] means.
     ///
     /// Called once per tick from [`Self::compute_group_usage`], **after** the
-    /// merge, on the snapshots that tick already computed: there is no second
-    /// transcript read here and no second source of truth. `live_keys` is what
+    /// merge, on the snapshots that tick already computed. The counters are
+    /// not re-read; a separate bounded context-signal read, scoped to this
+    /// group's running agents, supplies effort. `live_keys` is what
     /// keeps a dead agent's frozen snapshot out — its counters cannot move, so
     /// a row for it would be a duplicate of the last row it wrote while alive,
     /// once per app restart forever.
@@ -44205,9 +44215,10 @@ impl OrchRegistry {
         let snaps = self.merge_usage_snapshots(group, fresh);
 
         // #2011 slice B: one series row per key whose counters moved, off the
-        // snapshots this tick already computed — no second transcript read, and
-        // after the merge so a row is only written for spend that persisted.
-        let context_signals = self.agent_context_signals();
+        // snapshots this tick already computed and after the merge, so a row
+        // is only written for spend that persisted. Effort comes from a
+        // separate bounded context-signal read scoped to this group.
+        let context_signals = self.agent_context_signals_for_group(Some(group));
         self.series_sample(group, &snaps, &live_keys, &context_signals);
 
         let (mut live_cost, mut lifetime_cost) = (0.0f64, 0.0f64);

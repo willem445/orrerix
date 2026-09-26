@@ -520,8 +520,9 @@ human's visual check, not something a DOM-free test can settle.
 
 Each usage sample carries the optional live effort from the agent's latest
 context signal (older rows default to unknown). The chart marks a per-key
-change at the sample that first reports it, using the same stable time ordering
-as model-switch marks.
+change at the sample that first reports a new effort, but only when both
+samples carry a known value: a missing reading is not evidence of a switch.
+Effort marks use the same stable time ordering as model-switch marks.
 
 ### Colour: why the order is measured
 

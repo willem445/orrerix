@@ -78,12 +78,19 @@ precedence"). So loomux's `statusLine` replaces the human's in an orrerix
 pane. Chaining keeps their line: loomux resolves it once at spawn and passes
 it as `$4`, single-quoted so it arrives byte for byte. It also copies that
 layer's `padding` and `refreshInterval`. With no status line configured,
-nothing is printed, which is what a plain claude pane with none shows.
+nothing is printed. That is **not** what a plain claude pane shows. The CLI
+hides most of its footer keyboard hints whenever a `statusLine` is configured
+("With a custom status line configured, Claude Code stops showing most of the
+footer's keyboard hints"). loomux's entry has to exist for the window report,
+so a human with no status line of their own loses those hints in an orrerix
+pane (residuals, below).
 
 The chain runs as `( eval "$chain" )` rather than `sh -c "$4"`. A bare `sh`
 is a PATH lookup, and on Windows a CLI's hook PATH can lack Git's `usr\bin`
-(#335). The subshell confines a syntax error in the human's command, which
-is fatal to the shell that `eval`s it.
+(#335). The explicit subshell confines a syntax error in the human's
+command, which is fatal to the shell that `eval`s it. That matters only on
+ksh and zsh, which run a pipeline's last stage in the current shell. dash
+and bash already fork it, so no CI shell exercises the parentheses.
 
 **What each source owns** (`modelstate::enrich_with_statusline`). The
 transcript reading is the base. While the snapshot's `session_id` is the
@@ -97,7 +104,7 @@ never a `0`, since a fabricated `0` looks like a compaction's token drop.
 With no transcript there is no signal at all, so a snapshot can never seed
 the boundary-count baseline the resolver compares against.
 
-### Departures from the plan, approved on #993
+### Departures from the plan, approved through the orchestrator (recorded on #993)
 
 1. **Freshness.** The plan said the snapshot is preferred "when its
    session_id matches and it is at least as fresh as the transcript read".
@@ -121,6 +128,21 @@ the boundary-count baseline the resolver compares against.
 
 ### Residuals
 
+- **With no status line of your own, the footer hints are hidden.** Claude
+  Code stops showing most of the footer's keyboard hints (`esc to
+  interrupt`, `? for shortcuts`, `hold space to speak`) whenever a
+  `statusLine` is configured. loomux's entry must exist for the window
+  report, so every orrerix claude pane whose human has none shows an empty
+  status line and no hints, which is the largest group of users. This is a
+  consequence of the human's decided default on #993, not a defect in the
+  chain.
+- **loomux's own screen readers were sized against captured chrome.**
+  `IDLE_PROMPT_TAIL_ROWS` and `MENU_TOKEN_TAIL_ROWS` count the rows Claude
+  Code paints below its composer. A status row, and the hint bar it hides,
+  change that chrome for every orrerix claude pane. Nothing in loomux reads
+  the hint text itself, and a human with their own status line already ran
+  this layout. But the row arithmetic for the no-status-line case is
+  unverified live (constraint 3).
 - **Managed settings outrank `--settings`.** A managed `statusLine` replaces
   loomux's entry, the arm never runs, and no snapshot is written. The pane
   falls back to the transcript reader and the model table, which is the

@@ -89,7 +89,7 @@ pub fn parse_statusline_snapshot(text: &str) -> Option<StatuslineSnapshot> {
 /// and user line, so mid-turn the transcript is nearly always the newer file
 /// and the window would alternate between the reported figure and the table
 /// guess tick by tick — and the escalation percent with it. So instead
-/// (approved on #993):
+/// (a departure approved through the orchestrator, recorded on #993):
 ///
 /// - **model, effort, window** come from the snapshot whenever the session
 ///   matches. They are session facts: they change on `/model` or `/effort`,
@@ -208,8 +208,10 @@ pub fn context_window_ladder(
 }
 
 /// The human's own status line, as read from their Claude settings at spawn —
-/// what loomux's status-line command chains to so an orrerix pane looks the
-/// same as a plain claude pane (#993, the human's decided default).
+/// what loomux's status-line command chains to so an orrerix pane shows the
+/// human's own line (#993, the human's decided default). A pane whose human
+/// has none is NOT identical to a plain claude pane: see
+/// [`resolve_user_statusline`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct UserStatusLine {
     /// `statusLine.command`, verbatim — a shell command line.
@@ -230,8 +232,11 @@ pub struct UserStatusLine {
 ///
 /// A `type` other than `"command"` is skipped too (the docs define no other
 /// type; a future one is not something `sh -c` can run). `None` when no layer
-/// has one — loomux's status line then prints nothing, which is exactly what a
-/// claude pane with no status line configured shows.
+/// has one — loomux's status line then prints nothing. That is NOT what a plain
+/// claude pane with no status line shows: the CLI hides most of its footer
+/// keyboard hints (`esc to interrupt`, `? for shortcuts`) whenever a
+/// `statusLine` is configured, and loomux's entry must exist for the window
+/// report. A disclosed residual, `docs/design/pane-model-state.md` §S1.
 pub fn resolve_user_statusline(layers: &[&str]) -> Option<UserStatusLine> {
     layers.iter().find_map(|text| {
         let v: Value = serde_json::from_str(text).ok()?;

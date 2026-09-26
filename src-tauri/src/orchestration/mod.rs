@@ -9221,8 +9221,10 @@ pub fn codex_user_mcp_exposure(codex_home: &Path, our_server: &str) -> Option<Va
 /// payload to the human's own status-line command, passed as `$4` (resolved
 /// once at spawn, `OrchRegistry::user_statusline`), so its output is what the
 /// pane shows. The arm prints nothing of its own on any path: with no `$4`
-/// the line stays blank, which is what a claude pane with no status line
-/// configured shows. The payload is read into a variable FIRST, above the
+/// the line stays blank. That is not identical to a claude pane with no
+/// status line configured — the CLI hides most footer keyboard hints whenever
+/// a `statusLine` exists (a disclosed residual, `docs/design/
+/// pane-model-state.md` §S1). The payload is read into a variable FIRST, above the
 /// group-dir check, so the chain gets it even when the snapshot write fails
 /// (touch-gated, per the reasoning above) — a broken hooks dir costs loomux
 /// its reading, never the human their status line. Still `exit 0` on every
@@ -9233,12 +9235,14 @@ pub fn codex_user_mcp_exposure(codex_home: &Path, our_server: &str) -> Option<Va
 /// PATH lookup, and on Windows the PATH a CLI hands its hooks routinely lacks
 /// Git's `usr\bin` (#335 — the reason every hook command here invokes an
 /// ABSOLUTE `sh`). `eval` runs the line in the interpreter already running
-/// this script. The parentheses are load-bearing: `eval` is a special
-/// built-in, so a syntax error in the human's command is fatal to the shell
-/// that runs it, and an explicit subshell confines that to the child — some
-/// shells (ksh, zsh) run a pipeline's last stage in the CURRENT shell, where
-/// it would skip the `exit 0`. `set --` first, so the human's command sees no
-/// positional parameters, as it would under `sh -c`.
+/// this script. The parentheses are load-bearing only on ksh and zsh:
+/// `eval` is a special built-in, so a syntax error in the human's command is
+/// fatal to the shell that runs it, and those shells run a pipeline's last
+/// stage in the CURRENT shell, where it would skip the `exit 0`. dash and
+/// bash already fork every stage, so no CI shell exercises the parentheses
+/// and no test pins them — they are defence for an `sh` this suite never
+/// runs. `set --` first, so the human's command sees no positional
+/// parameters, as it would under `sh -c`.
 ///
 /// **Naming, kept imprecise on purpose (#112):** this file is still named
 /// `compact-hook.sh` (see `ensure_compact_hook_script`) and this constant is

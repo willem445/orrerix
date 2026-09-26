@@ -20854,7 +20854,7 @@ fn statusline_hook_writes_the_payload_verbatim_and_prints_nothing_without_a_chai
     assert_eq!(out.status.code(), Some(0), "stderr={:?}", String::from_utf8_lossy(&out.stderr));
     assert!(
         out.stdout.is_empty(),
-        "with no human status line to chain to, the pane must show what a plain claude with none shows — nothing; got {:?}",
+        "with no human status line to chain to, the arm must print nothing of its own; got {:?}",
         String::from_utf8_lossy(&out.stdout)
     );
     let written = fs::read_to_string(&snap).expect("the snapshot must be written");
@@ -20955,7 +20955,9 @@ fn statusline_hook_exits_zero_whatever_the_users_command_does() {
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "hi\n");
     // A syntax error: `eval` is a special built-in, so this is fatal to the
-    // shell that runs it — which must be the subshell, never the script.
+    // shell that runs it — which must be a child, never the script. (bash and
+    // dash already fork the pipeline stage, so this pins the exit status, not
+    // the explicit parentheses; those matter on ksh/zsh only.)
     let out = run_statusline_arm(&sh, &script, &group_dir, Some("if then fi ("), STATUSLINE_PAYLOAD);
     assert_eq!(out.status.code(), Some(0), "stderr={:?}", String::from_utf8_lossy(&out.stderr));
     assert!(out.stdout.is_empty());

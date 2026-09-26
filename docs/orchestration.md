@@ -4084,8 +4084,10 @@ its own `statusLine` setting, which records the reading and then runs *your* sta
 command with the same input, so the line you see is yours. orrerix reads your command once, when
 the pane starts, from the first of `.claude/settings.local.json` and `.claude/settings.json` in
 the pane's directory, then `~/.claude/settings.json`, and keeps its `padding` and
-`refreshInterval`. If you have no status line configured, the pane shows none, as usual. Three
-exceptions:
+`refreshInterval`. If you have no status line configured, the pane shows an empty one. Claude
+Code also hides most of its footer keyboard hints (`esc to interrupt`, `? for shortcuts`)
+whenever any status line is set, and orrerix needs one for the window report, so those hints
+are hidden in orrerix Claude panes. Three more exceptions:
 
 - A status line set in managed (organization) settings takes precedence over orrerix's. Your pane
   shows that line, and orrerix falls back to its model-name guess.

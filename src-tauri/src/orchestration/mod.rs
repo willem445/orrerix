@@ -43864,7 +43864,9 @@ impl OrchRegistry {
                 // line has not run yet), so a previous session's window can
                 // never outlive it. A tick with no signal at all (a transient
                 // read miss) leaves it alone, like the model.
-                a.last_context_window = sig.window_tokens;
+                if sig.window_tokens.is_some() {
+                    a.last_context_window = sig.window_tokens;
+                }
                 a.last_context_effort = sig.effort.clone();
                 a.last_context_source = Some(sig.source.as_str().to_string());
             }

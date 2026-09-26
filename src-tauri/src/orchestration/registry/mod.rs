@@ -15,6 +15,9 @@ use super::*;
 
 mod delivery;
 pub(super) use delivery::*;
+mod groups;
+mod spawn;
+pub use spawn::*;
 
 pub struct OrchRegistry {
     /// Root of persistent state: `<root>/<group>/{group.json,state.json,audit.jsonl,configs/}`.

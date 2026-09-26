@@ -335,7 +335,7 @@ can never collide with anything, in any worktree, ever — multiple worktrees ca
 *same* detached commit simultaneously. This is documented, not code-enforced (there is no MCP
 tool wrapping `git`/`gh` checkout subcommands, so nothing can force which flavor a reviewer
 runs) — `reviewer.md`'s **Review protocol** step 1 states it as the convention, and the
-worktree's own kickoff note (`spawn_agent_ex` in `mod.rs`, role-aware for a reviewer) repeats it
+worktree's own kickoff note (`spawn_agent_ex` in `registry/spawn.rs`, role-aware for a reviewer) repeats it
 at spawn time so it survives even a fast first read. A reviewer's read-only-with-respect-to-push
 convention is unaffected either way: `git commit`/`git push` are denied at the tool level only
 for a planner (`Containment::ReadOnly`) — #462 gave a reviewer the editing-tool half of that

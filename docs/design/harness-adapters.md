@@ -1043,7 +1043,7 @@ models in `modelUsage` — so a reader that folds only the first is caught.
 ### 8.2 R2 — `feat/harness-claude-wire`
 
 Waits on A4-18′ (`PaneHost::request_pane -> Box<dyn AgentPane>`) and edits
-`mod.rs`'s spawn path, so it serializes against the A4 chain.
+`registry/spawn.rs`'s spawn path, so it serializes against the A4 chain.
 
 **Ships:** `driver: structured` honoured at parse and at spawn, with the
 `CLI_CAPS` row (`structured_driver: Option<Harness>`) and the schema-manifest

@@ -517,12 +517,18 @@ fn every_admit_site_in_the_workspace_is_an_argued_one() {
              whole host side funnels through, wrapped by the `admit_root` \
              command and by the engine-derived helper beside it",
         ),
+        // Orchestration's two engine-derived declarations, one per file since
+        // #3498 P3b moved each with the method that makes it.
         (
-            "src-tauri/orchestration/mod.rs",
-            2,
-            "orchestration's two engine-derived declarations: a group's checkout \
-             (create AND resume — `create_group_ex` is both, so one site) and \
-             the worktree `spawn_agent_ex` cuts for an agent",
+            "src-tauri/orchestration/registry/groups.rs",
+            1,
+            "a group's checkout (create AND resume — `create_group_ex` is both, \
+             so one site)",
+        ),
+        (
+            "src-tauri/orchestration/registry/spawn.rs",
+            1,
+            "the worktree `spawn_agent_ex` cuts for an agent",
         ),
         (
             "src-tauri/git.rs",

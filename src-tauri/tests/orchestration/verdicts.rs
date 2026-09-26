@@ -220,7 +220,7 @@ fn set_max_agents_re_checks_the_pinned_roster_minimum_live_not_just_on_resume() 
 #[test]
 fn set_max_agents_stays_quiet_without_advanced_orchestrator_or_a_custom_roster() {
     // The live re-check must be gated exactly like the launch/resume path
-    // gates `capacity` (mod.rs `create_group`): only a declared, custom
+    // gates `capacity` (registry/groups.rs `create_group`): only a declared, custom
     // workflow has a structural minimum to re-check the live cap against.
     let (reg, _d) = test_registry();
     let repo = gated_repo("");

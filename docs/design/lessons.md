@@ -72,10 +72,10 @@ layer (schema, dispatch, template docs, tests) to reinvent a weaker version of
 ## Injection point: orchestrator kickoff, code-composed
 
 Two options per the brief: splice it into the *composed* kickoff text (like
-`roster_note` in `mod.rs`), or add a template instruction telling the agent to
+`roster_note` in `registry/spawn.rs`), or add a template instruction telling the agent to
 go read the file itself. **Kickoff composition, orchestrator only.**
 
-`kickoff_body`'s `Role::Orchestrator` arm (`mod.rs`) already assembles a
+`kickoff_body`'s `Role::Orchestrator` arm (`registry/spawn.rs`) already assembles a
 handful of live-state notes this way — `roster_note` for a declared workflow,
 inline guardrail values for auto-merge/auto-release/dangerous-mode. A
 `lessons_note(g)` following the identical shape:

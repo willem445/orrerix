@@ -238,6 +238,16 @@ The file is read in append order, so each field holds its newest writer:
 | marker count | `compaction` entries | How many there are. A `branch_summary` is not one. |
 | window | none | The session file records none (next section). |
 
+**The token figure is deliberately not pi's own gauge.** pi's
+`calculateContextTokens` (`SOURCE` `src/core/compaction/compaction.ts:146-148`)
+is `totalTokens || input + output + cacheRead + cacheWrite`. It counts the
+turn's `output`, and its `getAssistantUsage` (`:154-167`) also skips `aborted`
+and `error` turns. This reader uses the input-side formula instead, the same one
+claude's `latest_context_tokens` uses, and skips only turns whose sum is zero.
+That reads up to one turn's `output` below what pi compacts on. Nothing reads pi
+tokens yet, so the choice is recorded here for S4 to settle on purpose before
+it opens the nudge gate to pi.
+
 **Where the file is.** The arm reads the group's own pi store
 (`OrchRegistry::pi_sessions_dir`), which is where the usage meter's pi arm reads
 too. Both launch forms pass that directory as `--session-dir` to every group pi
@@ -288,6 +298,11 @@ level.
 - **Append order, not the active path.** pi's file is a tree. An entry on a
   branch the leaf has navigated away from still counts as newest if it was
   appended last, which is the same file-wide reading `usage::PiFold` takes.
+- **A tail with no assistant line has no model.** A tool result larger than
+  the tail leaves no assistant message in it. That tick's signal then carries
+  no tokens and no model, so the cached window follows it back to `None`.
+  This is inert until S4, and after that the window can fall to the table rung
+  on such ticks.
 - **The marker count is over the tail**, as it is for the Claude and Codex
   readers, so a marker older than the tail is not counted.
 - **A solo pi pane has no reading.** A solo pane writes to the human's own

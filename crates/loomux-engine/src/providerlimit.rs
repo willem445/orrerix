@@ -129,7 +129,7 @@ pub struct LimitPattern {
 /// structural: a needle ships when a captured pane tail proves both that the
 /// provider prints it and that it prints it line-initially.
 /// `every_pattern_is_exercised_by_its_own_captured_fixture` (in
-/// `src-tauri/tests/orchestration.rs`, where the fixtures live) fails a row
+/// `src-tauri/tests/orchestration/`, where the fixtures live) fails a row
 /// that names a fixture the text does not appear line-initially in.
 pub const LIMIT_PATTERNS: &[LimitPattern] = &[
     // Claude Code, out of usage credits.

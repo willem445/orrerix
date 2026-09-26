@@ -14,7 +14,7 @@
 //! - `provider: none` is the only value that loads, and nothing on the
 //!   delivery path can reach a network.
 //!
-//! # Why a new file rather than `tests/orchestration.rs`
+//! # Why a new file rather than `tests/orchestration/`
 //!
 //! `tests/mergequeue.rs`'s reason, plus one of this feature's own: the design
 //! note says every path that can hold a notice back lives in ONE file
@@ -178,7 +178,7 @@ fn triaged_rows(f: &Fixture) -> Vec<(String, String, Option<String>)> {
         .collect()
 }
 
-/// The other half of `tests/orchestration.rs`'s #464 allowlist row for this
+/// The other half of `tests/orchestration/`'s #464 allowlist row for this
 /// file (`no_registry_construction_bypasses_the_test_agent_dir_overrides`).
 ///
 /// That row permits exactly one raw `OrchRegistry::new` here, on the stated

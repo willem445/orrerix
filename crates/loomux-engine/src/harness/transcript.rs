@@ -76,7 +76,7 @@ pub const TOOL_PREVIEW_BYTES: usize = 120;
 /// every line staircases rightward and the transcript composes into something
 /// no terminal would show. A PTY never exposes this, because ConPTY and a POSIX
 /// pty in `ONLCR` both deliver `CRLF`; a *synthesized* stream has to do it
-/// itself. `painted()` in `src-tauri/tests/orchestration.rs` states the same
+/// itself. `painted()` in `src-tauri/tests/orchestration/` states the same
 /// rule for the same reason on the fixture side, and the two existing
 /// loomux-authored injections into a pane go through `term.writeln`, which
 /// appends `CRLF` for them.

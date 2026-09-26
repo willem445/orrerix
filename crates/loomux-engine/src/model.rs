@@ -2060,7 +2060,7 @@ mod tests {
     }
 
     // No containment-tier table test here, deliberately. One was written and
-    // then removed: `src-tauri/tests/orchestration.rs`'s
+    // then removed: `src-tauri/tests/orchestration/`'s
     // `every_capability_class_pins_its_deny_tier` already asserts exactly that
     // mapping, and a planted `Role::Reviewer => Containment::None` reddens it
     // plus five spawn-path tests. A second copy in this crate would have been a

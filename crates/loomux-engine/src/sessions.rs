@@ -519,7 +519,7 @@ thread_local! {
 
 /// Test-only seam: fixture the directory `find_session_cwd`'s claude half
 /// scans, for the calling thread only. Not `#[cfg(test)]` — integration tests
-/// (`tests/orchestration.rs`) link this crate as an ordinary dependency,
+/// (`tests/orchestration/`) link this crate as an ordinary dependency,
 /// where `cfg(test)` is never active, so the hook has to be a real (if
 /// `#[doc(hidden)]`) function to be reachable from there.
 #[doc(hidden)] // pub for integration tests

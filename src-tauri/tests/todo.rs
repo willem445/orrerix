@@ -4,7 +4,7 @@
 //! An integration test and a NEW file, both deliberately. Integration because
 //! anything linking the lib has to be one on Windows (CLAUDE.md constraint 4 —
 //! the comctl32-v6 manifest rides on `-tests`-scoped link args); a new file
-//! because `tests/orchestration.rs` is the end-of-file-append conflict class,
+//! because `tests/orchestration/` is the end-of-file-append conflict class,
 //! and #3263's later slices append their own tests here.
 //!
 //! Every test drives the REAL host path (`orchestration::todo::apply_to` /
@@ -1067,7 +1067,7 @@ fn a_snapshot_cannot_quarantine_while_the_write_lock_is_held() {
 // is exactly the "concurrent reader" `fsatomic`'s fallback comment describes.
 //
 // Stated rather than silently no-op'd on the other two platforms, the way
-// `tests/orchestration.rs`'s `#[cfg(unix)]` permission tests are.
+// `tests/orchestration/`'s `#[cfg(unix)]` permission tests are.
 
 /// `FILE_SHARE_READ | FILE_SHARE_WRITE`, and deliberately **not**
 /// `FILE_SHARE_DELETE`: reads and writes are permitted, a rename over the file
@@ -1748,7 +1748,7 @@ fn an_op_naming_two_actions_or_none_is_refused() {
 // The MCP tool surface (#3263 slice S2) — `todo_list` / `todo_get` /
 // `todo_add` / `todo_update` / `todo_complete` / `todo_delete`.
 //
-// Appended here rather than to `tests/orchestration.rs` for the reason this
+// Appended here rather than to `tests/orchestration/` for the reason this
 // file's header already gives: that file is the end-of-file-append conflict
 // class, and the To-Do slices land concurrently. Every test below drives the
 // REAL `dispatch()` with a `Caller` resolved from a real spawned agent's

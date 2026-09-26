@@ -1,6 +1,6 @@
 # Attention fixtures
 
-Real pane tails used by the provider-limit tests (`src-tauri/tests/orchestration.rs`,
+Real pane tails used by the provider-limit tests (`src-tauri/tests/orchestration/`,
 the `#2811 S5a` section). The `claude-usage-limit` / `openrouter-key-limit` /
 `openrouter-credits-exhausted` captures and the `negative-*` controls are
 described in the tests that read them; this README is about the

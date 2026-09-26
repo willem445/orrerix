@@ -18,7 +18,7 @@ pub use loomux_engine::winpath;
 // reports all three. Born in `loomux-engine` rather than moved into it — see
 // that crate's `lib.rs` — so `src-tauri` re-exports rather than wraps. `pub`
 // because `src-tauri/tests/selfwatch.rs` and the delivery-ledger tests in
-// `tests/orchestration.rs` link them.
+// `tests/orchestration/` link them.
 //
 // `budget` is the Phase 2.1 half (#1609) and is BOUNDING rather than
 // observing: the thread-local read budget, `MutationScope`, and the six

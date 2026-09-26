@@ -10,7 +10,7 @@
 //! CLAUDE.md constraint 4 (a test executable linking the full lib needs the
 //! comctl32-v6 manifest `build.rs` embeds through `-tests`-scoped link args, and
 //! the reason is the target KIND, not the file name), and the end-of-file append
-//! conflict that file catalogues on `tests/orchestration.rs`.
+//! conflict that file catalogues on `tests/orchestration/`.
 //!
 //! No test here spawns a real agent CLI (constraint 3) or a real `gh` child.
 
@@ -296,7 +296,7 @@ fn test_registry() -> (OrchRegistry, tempfile::TempDir) {
 }
 
 /// **The premise of this file's #464 allowlist row**, checked here rather than
-/// asserted there (`tests/orchestration.rs`,
+/// asserted there (`tests/orchestration/`,
 /// `only_the_sanctioned_helpers_construct_a_registry`).
 ///
 /// That row permits exactly one raw `OrchRegistry::new` in this file, on the

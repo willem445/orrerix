@@ -318,7 +318,7 @@ pub(super) use loomux_engine::fsatomic::atomic_write;
 //
 // The re-export is the plain MODULE form rather than batch 9's curated item
 // list, and the choice is measured rather than stylistic. Every consumer — this
-// file and `src-tauri/tests/orchestration.rs` alike — spells the module path
+// file and `src-tauri/tests/orchestration/` alike — spells the module path
 // (`queue::QueuedDelivery`, `queuestate::QueueMap`), never a flat
 // `orchestration::…` name, so an item list would preserve no call site at all.
 // #988's visibility trap is what a curated list buys protection from, and there
@@ -365,7 +365,7 @@ pub use loomux_engine::{queue, queuestate};
 // `intake::due_intake_polls`, `intake::PendingIntake`, `intake::pr_list_argv`
 // here, `intake::eligible_deltas` in `tests/workflow.rs`, and
 // `loomux_lib::orchestration::intake::MAX_INTAKE_POLLS_PER_TICK` in
-// `tests/orchestration.rs`. Not one flat `orchestration::<item>` spelling
+// `tests/orchestration/`. Not one flat `orchestration::<item>` spelling
 // exists, so a curated item list (#988) would preserve no call site at all.
 // #988's trap is what a curated list buys protection from, and there is nothing
 // here to catch: `intake.rs` contains not a single `pub(super)` or `pub(crate)`
@@ -439,7 +439,7 @@ pub use loomux_engine::intake;
 // spells the module path (`mqdriver::MqRunner`, `mqdriver::runner_for`,
 // `mqdriver::audit_action::…`, `mqloop::drive`, `mqloop::refusal::…` here;
 // `loomux_lib::orchestration::{mqdriver,mqloop}::…` in
-// `src-tauri/tests/mergequeue.rs` and `tests/orchestration.rs`), and no flat
+// `src-tauri/tests/mergequeue.rs` and `tests/orchestration/`), and no flat
 // `orchestration::<item>` spelling of either exists. #988's trap — a curated
 // list buying a narrowing that is real — now has nothing left to catch here:
 // after the `pub(crate)` reversion neither module has a single item this crate
@@ -14334,7 +14334,7 @@ pub struct Task {
     /// existence, on disk and not just at load.
     ///
     /// Both halves are pinned by `pre_1091_boards_load_with_demo_path_absent`
-    /// (`tests/orchestration.rs`), which holds the only assertion in the tree
+    /// (`tests/orchestration/`), which holds the only assertion in the tree
     /// that names this key as text — so deleting `skip_serializing_if` below
     /// reddens exactly that one test and nothing else. Run, not reasoned: see
     /// the mutation evidence on #996.
@@ -31730,7 +31730,7 @@ thread_local! {
 
 /// Observation seam for the counter above: how many group-record scans this
 /// thread has done so far. Not `#[cfg(test)]` — integration tests
-/// (`tests/orchestration.rs`) link this crate as an ordinary dependency,
+/// (`tests/orchestration/`) link this crate as an ordinary dependency,
 /// where `cfg(test)` is never active, so the hook has to be a real (if
 /// `#[doc(hidden)]`) function to be reachable from there.
 ///
@@ -36955,7 +36955,7 @@ impl OrchRegistry {
     /// unchanged full scan in the caller.
     ///
     /// Measured (`resume_recorded_session_group_hint_avoids_scanning_every_
-    /// other_group`, tests/orchestration.rs, #479): with 200 decoy groups on
+    /// other_group`, tests/orchestration/, #479): with 200 decoy groups on
     /// disk (300 audit lines each — the axis this test exercises), resuming
     /// via a correct group hint took 419ms on `resume_recorded_session`'s
     /// prior unconditional `session_roles()` call; with this fast path in
@@ -60615,7 +60615,7 @@ impl OrchRegistry {
         }
     }
 
-    /// Phase 1, with the runner injected — the seam `tests/orchestration.rs`
+    /// Phase 1, with the runner injected — the seam `tests/orchestration/`
     /// drives so the whole registry path (the once-only guard, `load_state`,
     /// `reconcile_batch`, the audit emission, `store_state`) is exercised
     /// **without spawning `git` or `gh`** (constraint 3).
@@ -60792,7 +60792,7 @@ impl OrchRegistry {
         self.mq_service_ms.lock_safe().insert(group.clone(), at);
     }
 
-    /// Drive one group with the runner injected — the seam `tests/orchestration.rs`
+    /// Drive one group with the runner injected — the seam `tests/orchestration/`
     /// uses to exercise the whole production path (selection, reconcile-first,
     /// `drive`, the audit emission, `store_state`, the notices) **without
     /// spawning `git` or `gh`** (CLAUDE.md constraint 3).

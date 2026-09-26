@@ -308,7 +308,7 @@ constraint). Three confirmations and one tightening:
   block already gets the exact "one question → one `report("done", ...)` →
   pane closes, slot freed" lifecycle for free; nothing to build. Pinned by
   `advisor_hinted_planner_auto_closes_on_report_done`
-  (`src-tauri/tests/orchestration.rs`): no idle pane, no standing consult
+  (`src-tauri/tests/orchestration/`): no idle pane, no standing consult
   process, whatever the roster's persona says.
 - **Process-pro: `gh pr create` passes, `gh pr merge` is refused.** The
   process-pro is worker-kind, so it rides the exact same PATH-injected gh/git

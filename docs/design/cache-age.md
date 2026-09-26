@@ -268,7 +268,7 @@ would be the wasted one.
   growth, bucket shuffle, wake after the gap, same turn inside it, the inclusive
   boundary, first-ever movement, a lower dollar figure); the backstop's band edges
   and each disqualifier on its own; and the notice as one paragraph.
-- `src-tauri/tests/orchestration.rs`: the fold through the real usage merge and
+- `src-tauri/tests/orchestration/`: the fold through the real usage merge and
   `group_usage`, persisted to `usage.json`; the resolved TTL on a row from the CLI,
   a block override and `0`; Compact now refusing another group and firing through
   `compact_nudge_tick`; the backstop firing once in the band, not re-arming on

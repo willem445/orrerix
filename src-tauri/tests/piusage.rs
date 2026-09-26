@@ -751,7 +751,7 @@ fn test_registry() -> (OrchRegistry, tempfile::TempDir) {
     (reg, dir)
 }
 
-/// The proof the #464 allowlist row for this file names (`tests/orchestration.rs`,
+/// The proof the #464 allowlist row for this file names (`tests/orchestration/`,
 /// `no_registry_construction_bypasses_the_test_agent_dir_overrides`). That row
 /// permits ONE raw `OrchRegistry::new` here, and it permits it only because
 /// `test_registry` applies every agent/hook dir override — without which a spawn

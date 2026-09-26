@@ -56,7 +56,7 @@ namespace and the split must not change what any name resolves to:
   lives: `orchestration/helpers.rs`.
 
 Prose written before the split, in code comments and design notes, still names
-`tests/orchestration.rs`; read that as this target. Its tests kept their names,
+`tests/orchestration/`; read that as this target. Its tests kept their names,
 so `grep -rn <test name> src-tauri/tests/orchestration/` finds the new home.
 
 ## Frontend modules

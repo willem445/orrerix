@@ -504,7 +504,7 @@ pub fn unknown_resource_error(name: &str, declared: &[String]) -> String {
 // Pure: a `LockTable`, a fake clock, and a closure for liveness. Nothing here
 // links the lib (CLAUDE.md constraint 4 is unaffected — same posture as
 // `notify.rs`'s own inline tests). The wired behaviour — the MCP tools, the
-// audit lines, the pane notices — is covered in `tests/orchestration.rs`.
+// audit lines, the pane notices — is covered in `tests/orchestration/`.
 
 #[cfg(test)]
 mod tests {

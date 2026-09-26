@@ -450,7 +450,7 @@ Reuse is a virtue right up to the point where it changes what a check means.
    calls `gh pr merge`, so it cannot reach the shim's default-branch arms at all, and the
    per-PR human grant path (`mod.rs:943–960`) is untouched byte-for-byte. Being ff-only also
    means a target that moved makes the push fail rather than overwrite.
-5. **Tests pin the refusals**, in `src-tauri/tests/orchestration.rs`: enqueue against the
+5. **Tests pin the refusals**, in `src-tauri/tests/orchestration/`: enqueue against the
    default refused; batch build against a target that became the default aborted; the
    adversarial rename refused at step 3; a lookup failure refused rather than defaulted; and
    the landing function's refspec asserted to be exactly `<tested-sha>:refs/heads/<target>`.

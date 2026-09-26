@@ -2494,7 +2494,7 @@ later.
 sense that tests hold each side to it — and it is worth being exact about which
 parts those tests reach, because a row nothing checks is a row that drifts.**
 
-- `src-tauri/tests/orchestration.rs` pins the **field names** of each section
+- `src-tauri/tests/orchestration/` pins the **field names** of each section
   against the set serde actually accepts, derived from the `Raw*` types by
   *serializing* populated values (`workflow::workflow_schema_keys()`) rather
   than by hand-listing them. A hand-written list is precisely the thing that

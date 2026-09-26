@@ -310,7 +310,7 @@ a public surface and the top-level one ships today.
 
 With that settled, `src/workflow-schema.json` gains a `driver`
 field on the block section — `values: ["pty","structured"]`, `default: "pty"` —
-and both enforcers apply: `src-tauri/tests/orchestration.rs` (field names off
+and both enforcers apply: `src-tauri/tests/orchestration/` (field names off
 `workflow_schema_keys()`, values off `workflow_schema_field_facts()`, and the
 refuse-vs-clamp behaviour driven through `parse_workflow`) and
 `test/workflowschema.test.ts` (parsed, serialized, and either claimed by a form

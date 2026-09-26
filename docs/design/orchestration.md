@@ -2322,7 +2322,7 @@ the newer delivery's steps, a genuinely-late record for the old delivery, and th
 reads, with one knob per half of the fix. Fixed is clean; each single-knob mutation reddens; the
 as-shipped shape reddens (119 counter-examples). Two liveness tests keep "never confirm
 anything" from passing as a fix — a correct late confirm must stay reachable, including while a
-newer delivery races. `tests/orchestration.rs` drives the real seams through #454's own
+newer delivery races. `tests/orchestration/` drives the real seams through #454's own
 interleaving. Residual, stated as rev-19 n1 stated the same one: no test pins that `deliver_now`
 CALLS the recorder at its one call site; the property model's writer-knob mutation is what
 models that deletion.
@@ -2651,7 +2651,7 @@ pure function over pinned `--json` fields, testable with canned fixtures and no 
   PR #247); lifting it is the same move `notify_tick` already makes for the decision half.
   `notify_tick(&self, now, &results)` is the decision half: pause/expiry/fail-streak/fire
   policy over an **injected** `now` and poll results, so **no test shells out to `gh`** —
-  every test in `tests/orchestration.rs` drives `notify_tick` directly with a synthetic
+  every test in `tests/orchestration/` drives `notify_tick` directly with a synthetic
   `PollResult` map, the same seam that makes `watchdog_tick` testable with synthetic pty
   counters. `run_gh_poll_tick` = `poll_watches(now)` + `gh_poll_tick(now, …)`, called every
   `NOTIFY_POLL_INTERVAL` (30s) by `start_gh_poller`, registered in `lib.rs` beside
@@ -2751,7 +2751,7 @@ folding it into a bare "all passed" (`SUCCESS — 4 of 5 checks passed (1 skippe
   - Both fixes are independently necessary: the scan fix alone still lets a *live* watch in a
     stale-but-since-cleared group over-credit itself once (bounded by its own age at that
     point); the clamp alone bounds a single tick's damage but doesn't stop a group's stale entry
-    from recurring across ticks. Regression-pinned in `tests/orchestration.rs`
+    from recurring across ticks. Regression-pinned in `tests/orchestration/`
     (`notify_stale_pause_entry_is_reconciled_even_while_its_group_has_no_watches`,
     `notify_watch_registered_mid_pause_is_credited_only_the_span_it_actually_lived_through`),
     each mutation-verified red against its own fix removed.
@@ -3204,7 +3204,7 @@ was default-off, a latent coupling once it isn't. #406 folds them into one loop:
   `notify::NOTIFY_POLL_INTERVAL` and runs `run_gh_poll_tick` = `poll_watches(now)` +
   `gh_poll_tick(now, &results)` — the impure/decision split the notify backend already had,
   unchanged, so tests still drive the decision half with a synthetic `PollResult` map and nothing
-  in `tests/orchestration.rs` shells out to `gh`.
+  in `tests/orchestration/` shells out to `gh`.
 - **One clock per wake.** `now` is sampled once and handed to `poll_watches`, `notify_tick` and
   `poll_intake`; all three previously read `now_ms()` themselves, on two different threads. Two
   halves of one tick can no longer disagree about when "now" was.
@@ -4737,7 +4737,7 @@ added — worth a quick explicit check, not assumed either way.
   **Built after all, in #464** — the "narrow, self-correcting-by-hand" framing above turned out to
   undercount the source: the ORCHESTRATION TEST SUITE spawns agents through the exact same
   `write_claude_agent_file`/`write_copilot_agent_file` path and, being unit tests, essentially never
-  calls `end_group` — every `OrchRegistry::new(...)` in `tests/orchestration.rs`/`tests/workflow.rs`
+  calls `end_group` — every `OrchRegistry::new(...)` in `tests/orchestration/`/`tests/workflow.rs`
   that skipped the test-only `claude_agents_dir_override`/`copilot_agents_dir_override` (the
   "relaunch" pattern: a second registry built against the same or a related state root to simulate
   loomux restarting, common across the persistence tests) fell straight through to the REAL
@@ -4753,7 +4753,7 @@ added — worth a quick explicit check, not assumed either way.
   `loomux-`-prefixed entries are ever considered, matched against known groups by `-`/`.`-delimited
   prefix (not a naive `-`-split, since both a group id and a block id can contain `-` themselves),
   and every reclaim is breadcrumbed (`fixture-sweep`). See `sweep_orphaned_agent_files_reclaims_
-  orphans_but_refuses_a_live_group` (`tests/orchestration.rs`) for the orphan-vs-live-group proof.
+  orphans_but_refuses_a_live_group` (`tests/orchestration/`) for the orphan-vs-live-group proof.
   This does NOT reach the OTHER #464 leak (leaked `%TEMP%` git-worktree *directories*, a much larger
   volume — 2,438 growing to 2,702 on the same machine): that one's root cause was `real_repo()` (and
   `workflow.rs`'s `Repo::git_init()`) binding the fixture's git repo directly to a bare
@@ -4856,7 +4856,7 @@ message no longer hardcodes "Claude-Code-only" (a copilot caller is now accepted
 itself is retained as belt-and-braces against a hand-edited or pre-existing group.json with an
 unsupported CLI string, since `Guardrails::clamped()` and `spawn_agent`'s own per-role validation
 mean no group/agent created through the current API can ever reach it with an unsupported value —
-see `request_compact_now_accepts_a_copilot_caller`'s sibling test note in `tests/orchestration.rs`
+see `request_compact_now_accepts_a_copilot_caller`'s sibling test note in `tests/orchestration/`
 for why no integration test exercises that branch directly anymore).
 
 **Updated capability matrix for #417** (supersedes the informal claims embedded in the
@@ -7007,7 +7007,7 @@ painted there would be masked into "no question", releasing an Enter into it. Th
 harm, reached from pane output. **Failing open is the dangerous direction**; a hold that should
 have cleared is the cheap error, and the ten-minute `QuestionStale` badge already covers it.
 
-`e3` and `e4` in `tests/orchestration.rs` stand guard: a genuine dialog sharing a pane with an
+`e3` and `e4` in `tests/orchestration/` stand guard: a genuine dialog sharing a pane with an
 agent-printed marker row still latches, including the no-blank-row shape a run-mask would have
 swallowed whole.
 
@@ -7412,7 +7412,7 @@ the trigger; the grid is what releases), the mask is the security-sensitive surf
 widening claims rows loomux cannot prove it wrote, and the bare glyph would still have pinned the
 grid at `StillRendered` for every other `pointer-option` hold on the same CLI.
 
-**Tests.** `f1`–`f4` in `tests/orchestration.rs`, over
+**Tests.** `f1`–`f4` in `tests/orchestration/`, over
 `tests/fixtures/attention/fp-resumed-agent-idle-prompt.txt` — the repro's own restored screen,
 captured from `get_output` on the pane that wedged. `f1` pins the glyph inside the detector's
 pointer window first, so it cannot pass for the reason the other `❯` negatives pass; `f2` runs the
@@ -7518,7 +7518,7 @@ said. #513's blind spot, one hold class over, and the reason #820 could not be d
 drainer threads it into `hold_escalation_step` — from the same poll as the admission it annotates,
 for the same reason `last_user_input_ms` is read there.
 
-**Tests.** `g1`–`g6` in `tests/orchestration.rs`, over two fixtures under
+**Tests.** `g1`–`g6` in `tests/orchestration/`, over two fixtures under
 `tests/fixtures/attention/`. Both are **reconstructed from cited copilot-cli sources rather than
 captured** — constraint 3 forbids spawning a real copilot — so each test asserts the property it
 depends on as a precondition rather than assuming it: `g1` pins the `❯ ` row inside the detector's
@@ -7664,7 +7664,7 @@ that is *longer* than the paste — and the census test asserts the surviving **
 the equivalence it used to claim. A doc admission and a test asserting its negation in the same
 commit is how the next contributor gets told to "fix" the reading to match the census.
 
-**Tests.** `h1`–`h5` in `tests/orchestration.rs` over two fixtures in the #820 copilot-decorated
+**Tests.** `h1`–`h5` in `tests/orchestration/` over two fixtures in the #820 copilot-decorated
 family (reconstructed from cited sources, not captured — constraint 3). `h1` is the containment,
 with the "tail is longer than the paste" arithmetic asserted as a precondition so it cannot pass
 for the wrong reason; `h2` is the *consequence* at `stranded_marker_action`, which is what the bug
@@ -8079,7 +8079,7 @@ absolute is untouched — a human's own typed line is never overridden, at any a
 
 ### Tests
 
-`h1`–`h13` in `tests/orchestration.rs`, over two new fixtures and five reused composer captures. `h1` is the repro, and it asserts its
+`h1`–`h13` in `tests/orchestration/`, over two new fixtures and five reused composer captures. `h1` is the repro, and it asserts its
 own preconditions rather than assuming them: the ring still matches, by a wide-tier signal #903 did
 *not* demote, and the match is genuinely still rendered — so the release can only be the new
 reading. `h2` isolates the token re-tiering in both directions. `h3` is the fail-safe floor (every
@@ -8196,7 +8196,7 @@ idle read. The ring is unchanged, so this is still "the grid may only release".
 
 ### Tests
 
-In `tests/orchestration.rs`, through the production predicate and its witness, with the grid
+In `tests/orchestration/`, through the production predicate and its witness, with the grid
 built by `question_visible` from raw bytes:
 
 - `an_idle_pane_whose_box_holds_only_the_cli_suggestion_takes_the_delivery` covers focused and
@@ -11494,7 +11494,7 @@ Two related additions: a **planner** role, and **per-role** agent CLI + model.
     unconfirmed names does not narrow the guarantee — it only removes the false
     confidence of a denial that looked like containment but wasn't.
     `claude_edit_deny_tools_are_known_claude_tools` and
-    `copilot_edit_deny_tools_are_known_copilot_categories` (`tests/orchestration.rs`)
+    `copilot_edit_deny_tools_are_known_copilot_categories` (`tests/orchestration/`)
     pin each CLI's list against that CLI's documented set, so a future typo or a stale
     name reintroduced into either list breaks CI instead of silently reproducing this
     bug. **What the pin does not do:** it cannot detect a *future* upstream rename or
@@ -11540,7 +11540,7 @@ Two related additions: a **planner** role, and **per-role** agent CLI + model.
     that a read-only agent's `--allowedTools` never contains a BARE tool grant that
     would silently re-open the same hole from the allow side — is pinned by
     `claude_readonly_allowed_tools_contain_no_unscoped_grant`
-    (`tests/orchestration.rs`), not just asserted.
+    (`tests/orchestration/`), not just asserted.
 
     *A side effect worth stating plainly, and correctly (review round 1, #489):*
     `auto` mode's background safety classifier used to let a planner run an ad hoc shell
@@ -11826,7 +11826,7 @@ Two related additions: a **planner** role, and **per-role** agent CLI + model.
 
   A `match` on the closed enum rather than a per-call bool is the point: a fifth capability
   class cannot be added without deciding, at compile time, what it may do, and
-  `every_capability_class_pins_its_deny_tier` (`tests/orchestration.rs`) pins the mapping —
+  `every_capability_class_pins_its_deny_tier` (`tests/orchestration/`) pins the mapping —
   including that a reviewer is contained but is **not** `is_read_only()`, which still gates
   the `allow:`-ban on a fully read-only block and deliberately did not follow the deny flags
   onto reviewers (a reviewer keeps its shell anyway, so `allow:` widens nothing for it).
@@ -13587,7 +13587,7 @@ the same predicate over a corpus with a deliberate second copy and requires it t
 an `== 1` assertion passes just as well against a scanner that can only ever return 0 or 1.
 
 **Pins that read the TEMPLATE CONST had to compose it.** Three
-`worker_template_*` pins in `tests/orchestration.rs` assert on `WORKER_TPL` rather than on
+`worker_template_*` pins in `tests/orchestration/` assert on `WORKER_TPL` rather than on
 the rendered file, and their subjects (`gh run list`/`headSha`/`rev-parse`, `Closes #N` vs
 `Part of #N`, the context-blind keyword scan) all live in the DoD — so after the split they
 were reading worker.md *minus its definition of done*. `worker_contract_text()` composes the

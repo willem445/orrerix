@@ -866,7 +866,7 @@ Both are identity, both were found building this slice.
 ### Resuming an orchestrator, and what a killed store does to it (#1563)
 
 The backend resume is CLI-aware, and `opencode_orchestration_restores_from_recorded_session`
-(`src-tauri/tests/orchestration.rs`) is the pin that says so.
+(`src-tauri/tests/orchestration/`) is the pin that says so.
 `resume_recorded_session`'s orchestrator branch resolves the CLI from the
 group's own block, asks `session_cwd_in_store` — which routes opencode to
 `opencode_db_path(group)` — and relaunches through

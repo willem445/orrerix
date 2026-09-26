@@ -352,7 +352,7 @@ fn rails(cli: &str) -> Guardrails {
 /// second would leak a generated agent file into the real `~/.claude` /
 /// `~/.copilot` on its first spawn, which
 /// `no_registry_construction_bypasses_the_test_agent_dir_overrides`
-/// (tests/orchestration.rs, #464) refuses by scanning the source. Taking a
+/// (tests/orchestration/, #464) refuses by scanning the source. Taking a
 /// `root` rather than minting its own tempdir is what lets a test open a
 /// SECOND registry over the SAME root  an app restart  without bypassing it.
 fn registry_at(root: &Path) -> OrchRegistry {

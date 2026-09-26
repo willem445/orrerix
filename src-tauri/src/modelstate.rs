@@ -228,7 +228,7 @@ pub fn context_window_ladder(
 /// so neither of those is describing the rounded figure any more.
 pub fn label_rounded_report((window, source): (u64, WindowSource), reported_rounded: bool) -> (u64, WindowSource) {
     match source {
-        WindowSource::Reported if reported_rounded => (window, WindowSource::ReportedRounded),
+        WindowSource::Reported if reported_rounded => (window, WindowSource::Reported), // MUTATED_M9
         _ => (window, source),
     }
 }
@@ -441,7 +441,7 @@ pub fn pi_context_signal(text: &str) -> Option<PiContextReading> {
                 if let Some(usage) = msg.get("usage") {
                     let field = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0);
                     let context = field("input").saturating_add(field("cacheRead")).saturating_add(field("cacheWrite"));
-                    if context > 0 {
+                    if context > 0 || true { // MUTATED_M8
                         reading.tokens = Some(context);
                         found = true;
                     }

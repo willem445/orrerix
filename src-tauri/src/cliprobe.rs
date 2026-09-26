@@ -727,7 +727,7 @@ pub(crate) fn cached_context_window(program: &str, model: &str) -> Option<(u64, 
     let cache = cache().lock().ok()?;
     let probe = cache.get(&program)?;
     let tokens = *probe.model_context_windows.get(model)?;
-    Some((tokens, probe.model_context_windows_rounded.contains(model)))
+    Some((tokens, false)) // MUTATED_M10
 }
 
 #[cfg(test)]

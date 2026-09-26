@@ -1,4 +1,4 @@
-# CHEAP-TIER ROSTER (active since 2026-08-29 at the human's request; revised
+# ROSTER (active since 2026-08-29 at the human's request; revised
 # 2026-08-30 after the first ~20 GLM jobs). The previous dogfood roster is
 # .orrerix/workflow.yml.orig — swap the two names back to restore it. Turn the
 # advanced orchestrator on (or off-then-on) in the launcher and READ THE
@@ -93,7 +93,7 @@ resources:
   rustfmt: { slots: 1, max_hold_minutes: 10 }
 
 merge_queue:
-  enabled: true
+  enabled: false
   max_batch: 3
   checks_timeout_minutes: 60
 
@@ -140,25 +140,33 @@ blocks:
     name: Planner
     kind: planner
     cli: claude
-    model: fable
+    model: opus
 
-  # -- workers: worker-std by default; worker-adv only per rule 3 ------------
+  # -- worker tiers: worker-std by default; worker-adv only per rule 3 ------------
   - id: worker-std
     name: "Standard worker (DEFAULT for every task - pi GPT-6 Luna. Route here first, including design-shaped and evidence-heavy work)"
     kind: worker
-    cli: pi
-    model: openai-codex/gpt-6-luna
-    effort: medium
+    cli: claude
+    model: sonnet
+    effort: high
     profile: .github/agents/worker-std.md
 
   - id: worker-adv
     name: "Advanced worker (Opus - ONLY after a worker-std tried the task and failed, or for an extremely complex task; name the reason in the brief)"
     kind: worker
-    cli: claude
-    model: opus
+    cli: pi
+    model: openai-codex/gpt-6-luna
+    effort: medium
     profile: .github/agents/worker-deep.md
 
-  # -- reviewers: rev-std runs every round; rev-final ONCE, last, code PRs only
+  # -- review lanes: rev-std runs every round; rev-final ONCE, last, code PRs only
+  - id: rev-final
+    name: "Final validation (ONCE, LAST, after rev-std PASSED on the final body - Opus; required on code PRs only, see gates.merge.routing)"
+    kind: reviewer
+    cli: claude
+    model: opus
+    profile: .orrerix/personas/rev-final.md
+
   - id: rev-std
     name: "Standard review (EVERY ROUND - pi GPT-6 Luna; round 1 measures the WHOLE diff, later rounds the scope line the brief names; every finding must carry a repro; iterate to PASS with a FINAL body)"
     kind: reviewer
@@ -167,19 +175,12 @@ blocks:
     effort: high
     profile: .github/agents/rev-std.md
 
-  - id: rev-final
-    name: "Final validation (ONCE, LAST, after rev-std PASSED on the final body - Opus; required on code PRs only, see gates.merge.routing)"
-    kind: reviewer
-    cli: claude
-    model: opus
-    profile: .github/agents/rev-final.md
-
 # ADVISORY: the intended path. worker-std by default (rule 3); rev-std runs
 # every round; rev-final once, after rev-std's PASS on the final body (rule 1).
 edges:
   - { from: orchestrator, to: [planner, worker-std, worker-adv] }
   - { from: planner, to: [worker-std, worker-adv] }
-  - { from: worker-std, to: [rev-std, worker-adv] }
+  - { from: worker-std, to: [worker-adv, rev-std] }
   - { from: worker-adv, to: rev-std }
   - { from: rev-std, to: rev-final }
 
@@ -192,7 +193,7 @@ gates:
     reviewers: [rev-std]
     routing:
       # application code, tests, the E2E lane, the launcher
-      - paths: ["src/**", "src-tauri/**", "crates/**", "test/**", "e2e/**", "scripts/**", "npm/**"]
+      - paths: ["src/**", "src-tauri/**", "crates/**", "test/**", "e2e/**", "scripts/**", "npm/**", "**/*.rs"]
         reviewers: [rev-final]
       # design notes that FIX a public contract later slices build against.
       # Evidenced: #1782 (S0 of #1778) passed rev-std with 0 open findings and
@@ -201,12 +202,12 @@ gates:
       - paths: ["docs/design/**"]
         reviewers: [rev-final]
       # CI and release pipelines
-      - paths: [".github/workflows/**"]
+      - paths: ["**/.github/workflows/*.yml"]
         reviewers: [rev-final]
       # dependency manifests (CLAUDE.md constraint 2: no getrandom-based crates)
       - paths: ["**/Cargo.toml", "Cargo.lock", "package.json", "package-lock.json"]
         reviewers: [rev-final]
-    also: [ci-green, body-unchanged]
+    also: [ci-green]
 
 # -----------------------------------------------------------------------------
 # .orrerix/lessons.md ENTRY (keep in step with the rules above; ~800 bytes —

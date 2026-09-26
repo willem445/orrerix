@@ -17,7 +17,7 @@
 //! miss degrades to suggestions rather than an empty dropdown.
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -33,6 +33,23 @@ pub struct CliProbe {
     /// (`ENUMERATORS`), otherwise parsed from the `--model` help section. May
     /// be empty, and the launcher merges curated suggestions either way.
     pub models: Vec<String>,
+    /// Model id → context window in tokens, for the ids whose window the CLI
+    /// itself printed beside them (#993 S8). Only pi's `--list-models` table
+    /// carries one today ([`parse_context_windows_from_table`]), so every
+    /// other CLI's map is empty — and an empty map is left off the wire
+    /// entirely, which keeps their `probe_agent_cli` reply byte-for-byte what
+    /// it was. Parallel to `models` rather than folded into it so the id list
+    /// every existing reader takes stays a `Vec<String>`; an id with no entry
+    /// here has no reported window, never a guessed one.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_context_windows: BTreeMap<String, u64>,
+    /// The ids in `model_context_windows` whose window is a LOWER BOUND, not
+    /// the exact count: the CLI printed it rounded, and the entry holds the
+    /// bottom of that rounding interval ([`parse_token_count`]). A consumer
+    /// labels such a window `reported-rounded` rather than `reported`. Every
+    /// id here has an entry in the map; an id in the map but not here is exact.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub model_context_windows_rounded: BTreeSet<String>,
     /// Human-readable failure reason when not available.
     pub error: Option<String>,
 }
@@ -109,6 +126,9 @@ struct Enumerator {
     args: &'static str,
     /// Parser for that command's stdout.
     parse: fn(&str) -> Vec<String>,
+    /// Parser for the context windows the same stdout prints beside its ids,
+    /// or `None` for a listing that prints none (#993 S8).
+    windows: Option<fn(&str) -> ContextWindows>,
 }
 
 /// `opencode models` — "List all available models from configured providers"
@@ -133,11 +153,13 @@ const ENUMERATORS: &[Enumerator] = &[
         program: "opencode",
         args: "models",
         parse: parse_models_from_list,
+        windows: None,
     },
     Enumerator {
         program: "pi",
         args: "--list-models",
         parse: parse_models_from_table,
+        windows: Some(parse_context_windows_from_table),
     },
 ];
 
@@ -284,28 +306,145 @@ fn two_space_columns(line: &str) -> Vec<&str> {
 /// an incomplete answer and leaves the help-parsed list alone.
 pub fn parse_models_from_table(out: &str) -> Vec<String> {
     let mut models: Vec<String> = Vec::new();
-    let mut header_seen = false;
-    for raw in out.lines() {
-        let line = plain_line(raw);
-        if !header_seen {
-            let mut tokens = line.split_whitespace();
-            if tokens.next() == Some("provider") && tokens.next() == Some("model") {
-                header_seen = true;
-            }
+    for (id, _) in pi_table_rows(out) {
+        if !models.iter().any(|m| *m == id) {
+            models.push(id);
+        }
+    }
+    models
+}
+
+/// Parse `pi --list-models` stdout into model id → context window (#993 S8).
+///
+/// The rows are exactly [`parse_models_from_table`]'s — one row walk,
+/// [`pi_table_rows`], feeds both, so every key here is an id the picker also
+/// lists. The window is the row's cell under the header's `context` column,
+/// read by [`parse_token_count`]; a header without that column, a row whose
+/// column count differs from the header's (a cell that went missing would
+/// shift every cell after it one column left), or a cell that does not parse
+/// adds no entry. A repeated id keeps its first row's window, as the id list
+/// keeps its first position.
+pub fn parse_context_windows_from_table(out: &str) -> ContextWindows {
+    let mut windows = ContextWindows::default();
+    for (id, window) in pi_table_rows(out) {
+        let Some(window) = window else { continue };
+        if windows.tokens.contains_key(&id) {
             continue;
         }
+        if window.rounded {
+            windows.rounded.insert(id.clone());
+        }
+        windows.tokens.insert(id, window.tokens);
+    }
+    windows
+}
+
+/// What a listing said about its models' context windows: the two
+/// `model_context_windows*` fields of [`CliProbe`], built together so an id
+/// can never be tagged rounded without having a window.
+#[derive(Default, Debug, PartialEq)]
+pub struct ContextWindows {
+    /// Model id → window in tokens (exact, or the lower bound for a rounded one).
+    pub tokens: BTreeMap<String, u64>,
+    /// The ids whose `tokens` entry is a lower bound read off a rounded spelling.
+    pub rounded: BTreeSet<String>,
+}
+
+/// One context cell read back by [`parse_token_count`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TokenCount {
+    /// The exact count, or the lowest count pi could have printed this way.
+    tokens: u64,
+    /// True when the spelling was rounded, so `tokens` is a lower bound.
+    rounded: bool,
+}
+
+/// Walk pi's `--list-models` table: every post-header row whose first two
+/// columns are both id-shaped, as its assembled `{provider}/{model}` id plus
+/// the parsed `context` cell where the table has that column and the cell is
+/// aligned and readable. The rules are [`parse_models_from_table`]'s doc; this
+/// is the one place they are implemented.
+fn pi_table_rows(out: &str) -> Vec<(String, Option<TokenCount>)> {
+    let mut rows = Vec::new();
+    // Set on the header line: the header's column count, and the index of its
+    // `context` column if it has one.
+    let mut header: Option<(usize, Option<usize>)> = None;
+    for raw in out.lines() {
+        let line = plain_line(raw);
+        let Some((width, context_col)) = header else {
+            let mut tokens = line.split_whitespace();
+            if tokens.next() == Some("provider") && tokens.next() == Some("model") {
+                let cols = two_space_columns(&line);
+                header = Some((cols.len(), cols.iter().position(|c| *c == "context")));
+            }
+            continue;
+        };
         let cols = two_space_columns(&line);
         let (Some(provider), Some(model)) = (cols.first().copied(), cols.get(1).copied()) else {
             continue;
         };
         if is_id_shaped(provider) && is_id_shaped(model) {
-            let id = format!("{provider}/{model}");
-            if !models.iter().any(|m| *m == id) {
-                models.push(id);
-            }
+            let window = context_col
+                .filter(|_| cols.len() == width)
+                .and_then(|i| cols.get(i))
+                .and_then(|cell| parse_token_count(cell));
+            rows.push((format!("{provider}/{model}"), window));
         }
     }
-    models
+    rows
+}
+
+/// Read one of pi's printed token counts back into a number (#993 S8).
+///
+/// pi prints the count with `formatTokenCount` (`SOURCE`
+/// `src/cli/list-models.ts:14-24` at the pin in `docs/design/pi.md`; the same
+/// function is `DIST` `dist/cli/list-models.js:10-20` in the installed build):
+/// below 1,000 the raw integer (`512`); otherwise the count in thousands or
+/// millions with a `K`/`M` suffix — as an integer when it divides exactly
+/// (`200K`, `1M`), and **rounded to one decimal place otherwise** (`toFixed(1)`:
+/// 262,144 prints `262.1K`, 1,048,576 prints `1.0M`).
+///
+/// So an integer spelling is exact. A one-decimal spelling is not, and is
+/// read as the **lower edge of its rounding interval**, tagged `rounded`:
+/// `262.1K` → 262,050 and `1.0M` → 950,000, i.e. the printed value minus half
+/// a printed tenth (50 tokens for `K`, 50,000 for `M`). The direction is the
+/// decision (#993 S8): this window feeds the compaction threshold, where an
+/// understated window compacts a little early — safe — and an overstated one
+/// lets the CLI's own emergency compaction fire first. Reading the spelling
+/// at face value would overstate by up to that half-tenth (1,050,000 prints
+/// `1.1M`).
+///
+/// The edge is never above the real count. `toFixed(1)` picks the tenth
+/// nearest the double `count / unit`, so that double is at least the edge
+/// divided by `unit`; the double is within half an ulp of the exact quotient,
+/// which scaled back by `unit` is far below one token; and the edge and the
+/// count are both integers — so `count >= edge`.
+///
+/// Everything else — a second decimal, a decimal without a suffix, a sign, a
+/// separator, an unknown suffix, an empty cell — is `None`, and so is a count
+/// of `0`: a window of no tokens is not one, and a later percentage would
+/// divide by it.
+fn parse_token_count(cell: &str) -> Option<TokenCount> {
+    let (number, unit) = match cell.as_bytes().last()? {
+        b'K' => (&cell[..cell.len() - 1], 1_000u64),
+        b'M' => (&cell[..cell.len() - 1], 1_000_000u64),
+        _ => (cell, 1u64),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let count = match number.split_once('.') {
+        None if digits(number) => {
+            let tokens = number.parse::<u64>().ok()?.checked_mul(unit)?;
+            TokenCount { tokens, rounded: false }
+        }
+        // A decimal only ever rides a suffix, and toFixed(1) prints exactly one digit.
+        Some((whole, tenth)) if unit > 1 && tenth.len() == 1 && digits(whole) && digits(tenth) => {
+            let tenths = tenth.parse::<u64>().ok()? * (unit / 10);
+            let printed = whole.parse::<u64>().ok()?.checked_mul(unit)?.checked_add(tenths)?;
+            TokenCount { tokens: printed.checked_sub(unit / 20)?, rounded: true }
+        }
+        _ => return None,
+    };
+    (count.tokens > 0).then_some(count)
 }
 
 /// Run `<program> <args>` without a console window, bounded by a timeout.
@@ -450,6 +589,8 @@ fn probe_with(program: &str, run: impl Fn(&str, &str) -> Result<String, String>)
             let probe = CliProbe {
                 available: false,
                 models: vec![],
+                model_context_windows: BTreeMap::new(),
+                model_context_windows_rounded: BTreeSet::new(),
                 error: Some(if e.contains("cannot find") || e.contains("not found") || e.contains("os error 2") {
                     format!("'{program}' was not found on PATH")
                 } else {
@@ -460,17 +601,31 @@ fn probe_with(program: &str, run: impl Fn(&str, &str) -> Result<String, String>)
         }
     };
     let mut models = parse_models_from_help(&help);
+    let mut windows = ContextWindows::default();
     let mut complete = true;
     if let Some(en) = enumerator_for(program) {
         // A second subprocess, on the blocking pool and under the same timeout
         // as the help run.
-        let listed = run(program, en.args).map(|out| (en.parse)(&out)).unwrap_or_default();
+        let out = run(program, en.args).ok();
+        let listed = out.as_deref().map(en.parse).unwrap_or_default();
         complete = !listed.is_empty();
         if complete {
             models = listed;
+            // Windows come from the same listing as the ids or not at all: an
+            // incomplete listing leaves the help-parsed ids, which carry none.
+            if let (Some(parse_windows), Some(out)) = (en.windows, out.as_deref()) {
+                windows = parse_windows(out);
+            }
         }
     }
-    (CliProbe { available: true, models, error: None }, complete)
+    let probe = CliProbe {
+        available: true,
+        models,
+        model_context_windows: windows.tokens,
+        model_context_windows_rounded: windows.rounded,
+        error: None,
+    };
+    (probe, complete)
 }
 
 fn probe_uncached(program: &str) -> (CliProbe, bool) {
@@ -930,5 +1085,206 @@ Options:
         assert!(probe.error.is_none(), "no error the launcher would refuse a launch on: {:?}", probe.error);
         assert!(probe.models.is_empty(), "pi's --help names no model, so there is nothing to fall back to");
         assert!(!complete, "a timed-out enumeration must not be cached for the rest of the app run");
+    }
+
+    /// A `--list-models` table whose `context` column carries every spelling
+    /// pi's `formatTokenCount` produces (#993 S8): an exact `K` (`200K`), an
+    /// exact `M` (`1M`), a raw count below 1,000 (`512`), and the two rounded
+    /// forms (`262.1K` from 262,144; `1.0M` from 1,048,576). Generated by
+    /// running pi's own `formatTokenCount` and column layout (`SOURCE`
+    /// `list-models.ts:14-24`, `:58-114`) over these five models in node —
+    /// never by running pi (constraint 3). The `max-out` column is rounded
+    /// too (`65.5K`, `32.8K`), so a parser reading the wrong column would give
+    /// different numbers here, not the same ones.
+    const PI_CONTEXT_TABLE: &str = concat!(
+        "provider    model               context  max-out  thinking  images\n",
+        "anthropic   claude-haiku-4-5    200K     64K      yes       no    \n",
+        "google      gemini-2.5-pro      1.0M     65.5K    yes       yes   \n",
+        "google      gemini-3-pro        1M       64K      yes       yes   \n",
+        "ollama      tiny-512            512      256      no        no    \n",
+        "openrouter  z-ai/glm-5.3-flash  262.1K   32.8K    yes       no    \n",
+    );
+
+    fn windows(pairs: &[(&str, u64)]) -> BTreeMap<String, u64> {
+        pairs.iter().map(|(id, n)| (id.to_string(), *n)).collect()
+    }
+
+    fn ids(list: &[&str]) -> BTreeSet<String> {
+        list.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn pi_context_column_yields_exact_windows_and_lower_bounds_for_rounded_ones() {
+        let got = parse_context_windows_from_table(PI_CONTEXT_TABLE);
+        assert_eq!(
+            got.tokens,
+            windows(&[
+                ("anthropic/claude-haiku-4-5", 200_000),
+                // `1.0M` came from 1,048,576; the bottom of [0.95M, 1.05M] is the edge.
+                ("google/gemini-2.5-pro", 950_000),
+                ("google/gemini-3-pro", 1_000_000),
+                ("ollama/tiny-512", 512),
+                // `262.1K` came from 262,144; the bottom of [262.05K, 262.15K].
+                ("openrouter/z-ai/glm-5.3-flash", 262_050),
+            ]),
+        );
+        assert_eq!(
+            got.rounded,
+            ids(&["google/gemini-2.5-pro", "openrouter/z-ai/glm-5.3-flash"]),
+            "exactly the decimal spellings are tagged rounded; integer and raw spellings are exact"
+        );
+        // The same rows the id list takes — a window never names an id the picker lacks.
+        let listed: BTreeSet<String> = parse_models_from_table(PI_CONTEXT_TABLE).into_iter().collect();
+        assert_eq!(got.tokens.keys().cloned().collect::<BTreeSet<_>>(), listed);
+    }
+
+    #[test]
+    fn the_existing_pi_fixture_reads_its_context_column_too() {
+        // PI_MODEL_TABLE predates S8; its context column is 200K/200K/1M/131K.
+        let got = parse_context_windows_from_table(PI_MODEL_TABLE);
+        assert_eq!(
+            got.tokens,
+            windows(&[
+                ("anthropic/claude-haiku-4-5", 200_000),
+                ("anthropic/claude-sonnet-4-5", 200_000),
+                ("google/gemini-3-pro", 1_000_000),
+                ("openrouter/z-ai/glm-5.3-flash", 131_000),
+            ]),
+        );
+        assert!(got.rounded.is_empty(), "no decimal spelling, nothing rounded: {:?}", got.rounded);
+    }
+
+    #[test]
+    fn a_pi_table_without_a_context_column_yields_no_windows_but_every_id() {
+        // The header has no `context`, but its third column is a token count
+        // pi prints the same way — a parser taking "the third column" would
+        // report the max-out as the window.
+        const NO_CONTEXT: &str = concat!(
+            "provider    model               max-out  thinking  images\n",
+            "anthropic   claude-haiku-4-5    64K      yes       no    \n",
+            "google      gemini-3-pro        64K      yes       yes   \n",
+        );
+        assert_eq!(
+            parse_models_from_table(NO_CONTEXT),
+            vec!["anthropic/claude-haiku-4-5".to_string(), "google/gemini-3-pro".to_string()],
+            "the ids still parse; positive control that the rows were walked"
+        );
+        assert_eq!(parse_context_windows_from_table(NO_CONTEXT), ContextWindows::default());
+    }
+
+    #[test]
+    fn a_row_whose_cells_do_not_line_up_with_the_header_adds_no_window() {
+        // Row 2 lost its context cell, so every cell after it moved one
+        // column left and its `64K` max-out now sits AT the context index —
+        // read by position alone it would be a 64,000-token window. The
+        // column-count check keeps the misaligned row's window out, while its
+        // id (still in the first two columns) is listed as before.
+        const SHIFTED: &str = concat!(
+            "provider    model               context  max-out  thinking  images\n",
+            "anthropic   claude-haiku-4-5    200K     64K      yes       no    \n",
+            "google      gemini-3-pro        64K      yes       yes   \n",
+        );
+        assert_eq!(parse_models_from_table(SHIFTED).len(), 2, "both ids still listed");
+        let got = parse_context_windows_from_table(SHIFTED);
+        assert_eq!(got.tokens, windows(&[("anthropic/claude-haiku-4-5", 200_000)]));
+    }
+
+    #[test]
+    fn an_unreadable_context_cell_adds_no_window_for_that_row_alone() {
+        const ODD_CELLS: &str = concat!(
+            "provider  model  context  max-out  thinking  images\n",
+            "a         zero   0        1K       no        no    \n",
+            "a         two    1.25K    1K       no        no    \n",
+            "a         raw    1.5      1K       no        no    \n",
+            "a         sep    1,000    1K       no        no    \n",
+            "a         unit   5G       1K       no        no    \n",
+            "a         dash   -        1K       no        no    \n",
+            "a         good   8K       1K       no        no    \n",
+        );
+        let got = parse_context_windows_from_table(ODD_CELLS);
+        assert_eq!(got.tokens, windows(&[("a/good", 8_000)]), "only the readable cell yields a window");
+        assert_eq!(parse_models_from_table(ODD_CELLS).len(), 7, "an unreadable window never costs the id");
+    }
+
+    #[test]
+    fn a_rounded_lower_bound_never_exceeds_the_count_pi_printed_it_from() {
+        // (count, what pi's formatTokenCount prints for it), produced by that
+        // function (`SOURCE` list-models.ts:14-24) in node. The ties
+        // (1,050 → `1.1K`, 1,050,000 → `1.1M`) land EXACTLY on the lower
+        // edge, which is what makes the edge the tightest safe reading:
+        // one token higher and these two would be overstated.
+        const PRINTED: &[(u64, &str)] = &[
+            (1, "1"),
+            (999, "999"),
+            (1_000, "1K"),
+            (1_049, "1.0K"),
+            (1_050, "1.1K"),
+            (1_151, "1.2K"),
+            (65_536, "65.5K"),
+            (131_072, "131.1K"),
+            (262_144, "262.1K"),
+            (999_949, "999.9K"),
+            (999_999, "1000.0K"),
+            (1_000_000, "1M"),
+            (1_047_576, "1.0M"),
+            (1_048_576, "1.0M"),
+            (1_050_000, "1.1M"),
+            (1_149_999, "1.1M"),
+            (10_485_760, "10.5M"),
+        ];
+        for &(count, printed) in PRINTED {
+            let read = parse_token_count(printed).unwrap_or_else(|| panic!("{printed} must parse"));
+            assert!(read.tokens <= count, "{printed}: read {} overstates {count}", read.tokens);
+            assert_eq!(read.rounded, printed.contains('.'), "{printed}: rounded iff a decimal spelling");
+            if !read.rounded {
+                assert_eq!(read.tokens, count, "{printed}: an integer spelling is exact");
+            }
+        }
+        assert_eq!(parse_token_count("1.1K").map(|r| r.tokens), Some(1_050), "tie at 1,050");
+        assert_eq!(parse_token_count("1.1M").map(|r| r.tokens), Some(1_050_000), "tie at 1,050,000");
+    }
+
+    #[test]
+    fn a_pi_probe_carries_its_windows_and_other_clis_put_nothing_on_the_wire() {
+        let (pi, complete) = probe_with("pi", |_program, args| match args {
+            "--help" => Ok(PI_STYLE_HELP.to_string()),
+            _ => Ok(PI_CONTEXT_TABLE.to_string()),
+        });
+        assert!(complete);
+        assert_eq!(pi.model_context_windows.get("google/gemini-3-pro"), Some(&1_000_000));
+        assert_eq!(pi.model_context_windows.get("google/gemini-2.5-pro"), Some(&950_000));
+        assert_eq!(pi.model_context_windows_rounded, ids(&["google/gemini-2.5-pro", "openrouter/z-ai/glm-5.3-flash"]));
+        let wire = serde_json::to_value(&pi).unwrap();
+        assert_eq!(wire["model_context_windows"]["ollama/tiny-512"], 512);
+        assert_eq!(wire["model_context_windows_rounded"][0], "google/gemini-2.5-pro");
+
+        // opencode has no windows parser: the reply's JSON has exactly the
+        // three keys it had before S8, so no existing reader sees a change.
+        let (opencode, _) = probe_with("opencode", |_program, args| match args {
+            "--help" => Ok(OPENCODE_STYLE_HELP.to_string()),
+            _ => Ok(OPENCODE_MODEL_LIST.to_string()),
+        });
+        let wire = serde_json::to_value(&opencode).unwrap();
+        // Sorted here, so the pin holds whether or not serde_json's
+        // `preserve_order` is unified on by some other crate in the graph.
+        let keys: BTreeSet<&str> = wire.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            BTreeSet::from(["available", "error", "models"]),
+            "no window keys for a CLI that prints none"
+        );
+        assert!(!opencode.models.is_empty(), "positive control: the opencode listing did parse");
+    }
+
+    #[test]
+    fn an_incomplete_pi_listing_reports_no_windows() {
+        // Windows ride the listing or nothing: a listing that yielded no ids
+        // (here: only the no-models message) leaves the probe without any.
+        let (probe, complete) = probe_with("pi", |_program, args| match args {
+            "--help" => Ok(PI_STYLE_HELP.to_string()),
+            _ => Ok("No models matching \"glm\"\n".to_string()),
+        });
+        assert!(!complete);
+        assert!(probe.model_context_windows.is_empty() && probe.model_context_windows_rounded.is_empty());
     }
 }

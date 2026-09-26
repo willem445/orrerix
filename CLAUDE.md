@@ -862,7 +862,7 @@ narrow their ask back down to the original ticket on your own judgment.
   per the multi-surface rule (#878). Signature: the table's rows sum to **fewer**
   than the manifest — a family missing its row outright, or existing rows
   undercounting — so commands sit in it with no disposition and nobody
-  classified them (#1018, #1143; `doc/design/remote-engine-protocol.md` §5.4).
+  classified them (#1018, #1143; `docs/design/remote-engine-protocol.md` §5.4).
 - **Correcting a false claim is a multi-surface edit.** A design rationale here
   lives on several permanent surfaces at once — the code comment, the
   `docs/design/*.md` note, the PR body (whose human layer becomes the squash message), and

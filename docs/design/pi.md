@@ -539,6 +539,22 @@ spawn itself already fails loudly on (`fs::create_dir_all` is an error there,
 not a best-effort mkdir). If that ever stops being true, the opencode shape is
 the one to copy.
 
+### The context reader is a different question (#993 S2b)
+
+The fold above answers "what did this session spend", summed over the whole
+file. The compact-nudge tick asks a different question: what state is the pane
+in right now. `modelstate::pi_context_signal` answers it from the same group-store
+file, read over a bounded tail. It takes the newest assistant turn's
+`input + cacheRead + cacheWrite`, the newest of that turn's `provider/model` and a
+later `model_change`'s `provider/modelId`, the newest `thinking_level_change`, and
+the count of `compaction` entries. The entry shapes are `DOCS`
+`session-format.md` at
+[`v0.84.4`](https://github.com/earendil-works/pi/blob/v0.84.4/packages/coding-agent/docs/session-format.md)
+(`ModelChangeEntry`, `ThinkingLevelChangeEntry`, `CompactionEntry`). The window
+comes from the `--list-models` probe instead, because the session file records
+none. The rules, the effort fallback and the residuals are in
+[pane-model-state.md](pane-model-state.md#s2b-the-pi-session-reader).
+
 ## Knobs (#687)
 
 `--thinking <level>` over `off, minimal, low, medium, high, xhigh, max`

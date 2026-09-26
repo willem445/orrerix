@@ -136,8 +136,12 @@ free function `panecapture.ts` (#3498 F1), and `workflowview.ts` with
   violation at the new path.
 - **What stays for a later cut.** Fit/resize stays on `Pane`, so nothing a
   satellite does can reach a PTY resize that it could not reach before
-  (constraint 1). The header-overflow ladder, the content/welcome paths, and
-  fit/resize are the remaining clusters.
+  (constraint 1). Satellites DO still reach one, through base call sites they
+  carried: `PaneLifecycle.attachPty`'s post-spawn `applyFit()` reconcile,
+  `start`/`respawnFresh`'s `fit.fit()`, and `PaneEmbeds.wireEmbedDivider`'s
+  resize hold, whose release runs `runFit()`. So constraint 1 applies to every
+  satellite, not only to `pane.ts`. The header-overflow ladder, the
+  content/welcome paths, and fit/resize are the remaining clusters.
 
 Folders are recommended only after files have been split, as a held slice by
 family: `src/pane/`, `src/workflow/`, `src/todo/`, `src/tokens/`, `src/files/`,

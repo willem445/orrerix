@@ -25,6 +25,10 @@ import {
 import { showToast } from "./toast";
 import { isAppShortcut } from "./shortcuts";
 import { icon } from "./icons.ts";
+// The one top-level VALUE edge between satellites: the two icons below read it at
+// module evaluation. That is safe only while paneviews.ts never imports this module,
+// directly or through anything it imports, since a cycle would evaluate this file
+// first and hit `ICON_BTN_PX` in its temporal dead zone.
 import { ICON_BTN_PX } from "./paneviews";
 import type { Pane } from "./pane";
 

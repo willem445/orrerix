@@ -7,6 +7,11 @@
 // of the pane through `pane`. DOM glue, hand-validated like pane.ts itself; the
 // pure geometry lives in embedsplit.ts and overlaysize.ts. Design note:
 // docs/design/embedded-panels.md; layout conventions: docs/design/module-layout.md.
+//
+// Constraint 1 applies here: `wireEmbedDivider` brackets a divider drag with
+// `this.pane.beginResizeHold()`/`endResizeHold()` (#432), and the release runs
+// `Pane.runFit()`, which can reach a PTY resize. That call site was carried
+// unchanged from pane.ts; a new fit or resize call needs its own argument.
 
 import { admitRoot } from "./fileapi";
 import { showToast } from "./toast";

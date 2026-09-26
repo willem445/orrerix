@@ -6,7 +6,11 @@
 // A satellite of `Pane`: it owns this cluster's state and reads the rest of the
 // pane through `pane`. DOM glue, hand-validated like pane.ts itself; the pure
 // policies it calls live in panethrottle.ts, webglretry.ts and panerestore.ts.
-// Nothing here resizes the PTY — fit and resize stay on `Pane` (constraint 1).
+// The fit/resize machinery stays on `Pane`, but this file DOES reach it, through
+// call sites carried unchanged from pane.ts: `attachPty`'s post-spawn
+// `this.pane.applyFit()` reconcile (applyFit → runFit → doFit → doResize →
+// resizePty), and `start`/`respawnFresh`'s `this.pane.fit.fit()`. Constraint 1
+// applies here in full: a new fit or resize call needs its own argument.
 // Design notes: docs/design/pane-render-throttle.md, docs/design/session-restore.md;
 // layout conventions: docs/design/module-layout.md.
 

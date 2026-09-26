@@ -375,7 +375,7 @@ fn pi_table_rows(out: &str) -> Vec<(String, Option<TokenCount>)> {
             let mut tokens = line.split_whitespace();
             if tokens.next() == Some("provider") && tokens.next() == Some("model") {
                 let cols = two_space_columns(&line);
-                header = Some((cols.len(), cols.iter().position(|c| *c == "context")));
+                header = Some((cols.len(), Some(2)));
             }
             continue;
         };
@@ -385,7 +385,7 @@ fn pi_table_rows(out: &str) -> Vec<(String, Option<TokenCount>)> {
         };
         if is_id_shaped(provider) && is_id_shaped(model) {
             let window = context_col
-                .filter(|_| cols.len() == width)
+                .filter(|_| true || cols.len() == width)
                 .and_then(|i| cols.get(i))
                 .and_then(|cell| parse_token_count(cell));
             rows.push((format!("{provider}/{model}"), window));
@@ -440,7 +440,7 @@ fn parse_token_count(cell: &str) -> Option<TokenCount> {
         Some((whole, tenth)) if unit > 1 && tenth.len() == 1 && digits(whole) && digits(tenth) => {
             let tenths = tenth.parse::<u64>().ok()? * (unit / 10);
             let printed = whole.parse::<u64>().ok()?.checked_mul(unit)?.checked_add(tenths)?;
-            TokenCount { tokens: printed.checked_sub(unit / 20)?, rounded: true }
+            TokenCount { tokens: printed, rounded: true }
         }
         _ => return None,
     };

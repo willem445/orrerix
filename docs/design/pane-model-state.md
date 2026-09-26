@@ -434,19 +434,20 @@ The integration test `statusline_window_reverts_to_the_table_when_its_snapshot_d
 pins that a reported window is discarded when its snapshot disappears, and the
 model-table rung supplies the fallback window.
 
-## Contract changes planned by later slices
+## Contract changes
 
-The S0 and S1 rows have shipped; the rest are planned:
+S0, S1, S3 and S8 have shipped; S6 remains planned. These rows record each
+contract's owning slice:
 
-1. **S3 adds** `window_tokens`, `window_source`, `model`, `effort`, `source`,
+1. **S3 added** `window_tokens`, `window_source`, `model`, `effort`, `source`,
    and `declared: {model, effort}` to `group_summary.agents[].context`.
-2. **S1 adds** the raw Claude status-line payload at
+2. **S1 added** the raw Claude status-line payload at
    `<group>/hooks/<agent>.statusline.json`, written through a temporary file
    and a rename.
 3. **S6 will** add optional `effort` to usage-series samples with a serde default.
-4. **S1 adds** a `statusLine` entry to Claude's `--settings` configuration,
+4. **S1 added** a `statusLine` entry to Claude's `--settings` configuration,
    chaining to the human's own status-line command (above).
-5. **S0 adds** `compact_command`, `self_compacts`, `compact_note`, and
+5. **S0 added** `compact_command`, `self_compacts`, `compact_note`, and
    `context_reader` to `CliCaps`; no code reads these fields until later slices.
 
 ## Sources and pins

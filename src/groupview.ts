@@ -71,7 +71,7 @@ import {
 } from "./autonomy";
 import { gateSatisfiabilityWarning, gateSummaryLine, workflowModeLabel } from "./workflowstatus";
 import { MERGE_QUEUE_HELP, mergeQueueView, type MergeQueueView } from "./mergequeue";
-import { compactionStatusLabel, compactionStatusTitle, contextUsageLabel, paneModelLabel } from "./compactionstatus";
+import { compactionStatusLabel, compactionStatusTitle, paneModelLabel } from "./compactionstatus";
 import { parseCompactionMinutes, parseCompactionPercent } from "./compactionsettings";
 import { roleLabel } from "./orchbadge";
 import { managerAbsenceNotice } from "./group";
@@ -1504,11 +1504,7 @@ export class GroupView {
         if (usage) {
           c.title = `source: ${usage.source}${usage.model ? ` · ${usage.model}` : ""} · ${usage.tokens.total} tokens (in ${usage.tokens.input}, out ${usage.tokens.output}, cache +${usage.tokens.cache_creation}/${usage.tokens.cache_read})`;
         }
-        // Compact-nudge (PR #329 round 6): current context-window usage,
-        // shown whenever a reading exists — the whole point of this UI is
-        // live demo feedback, not just alerting once something's wrong.
-        const ctxLabel = contextUsageLabel(a.context);
-        const ctx = ctxLabel ? el("span", "group-context", ctxLabel) : null;
+        // The model chip includes context-window usage when a reading exists.
         const modelLabel = paneModelLabel({
           model: a.context.model ?? null,
           effort: a.context.effort ?? null,
@@ -1518,7 +1514,7 @@ export class GroupView {
         });
         const modelChip = modelLabel ? el("span", "group-context", modelLabel) : null;
 
-        row.append(chip, name, ...(block ? [block] : []), state, up, c, ...(modelChip ? [modelChip] : []), ...(ctx ? [ctx] : []));
+        row.append(chip, name, ...(block ? [block] : []), state, up, c, ...(modelChip ? [modelChip] : []));
         wrap.append(row);
 
         // "⏳ waiting on …" indicator (#248): a correctly-WAITING agent parked

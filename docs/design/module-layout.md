@@ -51,6 +51,21 @@ read before its module has run. `workflowmodel.ts` over `workflowtypes`,
 the first instance (#3498 F2). `test/workflowmodel.test.ts` pins its graph
 acyclic and its barrel re-export-only.
 
+A large **class** is split into satellites it delegates to, one per panel or
+method cluster. Each satellite owns its cluster's state and reads the rest
+through a `view` back-reference, so a moved body differs from the original only
+in its receiver. Inside a family whose import graph is pinned acyclic with type
+imports included (the `workflow*` family is), that back-reference cannot be
+typed against the class module: the class imports every satellite, so even a
+type-only import back closes a cycle. It is typed against an **interface
+module** instead, which lists exactly the members that cross a file, and the
+class and each satellite `implements` their interface so the compiler keeps
+the lists in step. A member leaves `private` only when another file reaches it.
+Values the class and its satellites share live in a satellite, never in the
+class's module. `workflowview.ts` with `workflowviewapi.ts` and five satellites
+is the first instance (#3498 F3). `test/workflowmodel.test.ts` refuses a
+satellite importing the view.
+
 Folders are recommended only after files have been split, as a held slice by
 family: `src/pane/`, `src/workflow/`, `src/todo/`, `src/tokens/`, `src/files/`,
 `src/git/`, `src/session/`, `src/board/`, and `src/bridge/`, with `test/`

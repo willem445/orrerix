@@ -1319,7 +1319,7 @@ pub const CLI_CAPS: &[CliCaps] = &[
     },
     CliCaps {
         cli: "codex",
-        compact_command: None,
+        compact_command: Some("/compact"),
         self_compacts: true,
         compact_note: "The official CLI command reference does not confirm a TUI /compact slash command; auto-compaction is documented separately.",
         context_reader: ContextReader::CodexRollout,

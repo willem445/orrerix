@@ -9288,7 +9288,6 @@ if [ \"$event\" = statusline ] && [ -n \"$4\" ]; then\n\
   set --\n\
   printf '%s\\n' \"$payload\" | ( eval \"$chain\" )\n\
 fi\n\
-exit 0\n\
 ";
 
 /// What `OrchRegistry::compact_hook_settings` hands `write_hook_settings_file`:
@@ -43681,13 +43680,31 @@ impl OrchRegistry {
         candidates
             .into_iter()
             .filter_map(|(id, sid, group)| {
-                let signal = crate::usage::compaction_signal_in(&root, &sid)?;
+                // MUTATION b: a snapshot alone yields a signal (no transcript base).
+                let signal = crate::usage::compaction_signal_in(&root, &sid).unwrap_or(crate::usage::CompactionSignal {
+                    tokens: None,
+                    compact_boundary_count: 0,
+                    model: None,
+                    window_tokens: None,
+                    effort: None,
+                    source: crate::modelstate::ContextSource::Transcript,
+                });
+                // MUTATION c: a freshness gate — drop a snapshot older than the transcript.
+                let transcript_mtime = PathSegment::parse(&sid)
+                    .ok()
+                    .and_then(|s| crate::usage::claude_transcript_path(&root, &s))
+                    .and_then(|p| fs::metadata(p).ok()?.modified().ok());
                 // #925: the id becomes a file name, so it is parsed first; a
                 // roster id always parses, and one that did not would simply
                 // get no enrichment.
                 let snapshot = PathSegment::parse(&id)
                     .ok()
-                    .and_then(|seg| fs::read_to_string(statusline_snapshot_path(&self.root, &group, &seg)).ok())
+                    .map(|seg| statusline_snapshot_path(&self.root, &group, &seg))
+                    .filter(|p| {
+                        let snap_mtime = fs::metadata(p).ok().and_then(|m| m.modified().ok());
+                        !matches!((snap_mtime, transcript_mtime), (Some(s), Some(t)) if s < t)
+                    })
+                    .and_then(|p| fs::read_to_string(p).ok())
                     .and_then(|text| crate::modelstate::parse_statusline_snapshot(&text));
                 let signal = crate::modelstate::enrich_with_statusline(signal, snapshot.as_ref(), &sid);
                 Some((id, signal))

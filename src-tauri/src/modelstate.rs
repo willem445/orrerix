@@ -68,7 +68,7 @@ pub fn parse_statusline_snapshot(text: &str) -> Option<StatuslineSnapshot> {
         // A zero window is not a window: `context_percent_used` would divide
         // by it (it guards, but reports 0%, which reads as "empty").
         window_tokens: cw.and_then(|c| c.get("context_window_size")).and_then(Value::as_u64).filter(|&w| w > 0),
-        input_tokens: if usage_live {
+        input_tokens: if usage_live || true /* MUTATION e2: null current_usage read as a reading */ {
             cw.and_then(|c| c.get("total_input_tokens")).and_then(Value::as_u64)
         } else {
             None
@@ -108,7 +108,8 @@ pub fn enrich_with_statusline(
     snapshot: Option<&StatuslineSnapshot>,
     session_id: &str,
 ) -> crate::usage::CompactionSignal {
-    let Some(snap) = snapshot.filter(|s| s.session_id.as_deref() == Some(session_id)) else {
+    let _ = session_id; // MUTATION a: session filter dropped
+    let Some(snap) = snapshot else {
         return signal;
     };
     if signal.tokens.is_none() {
@@ -201,10 +202,8 @@ pub fn context_window_ladder(
         Some(w) => (w, WindowSource::Reported),
         None => (table_tokens, WindowSource::Table),
     };
-    match observed_tokens {
-        Some(t) if t > window => (t, WindowSource::Clamped),
-        _ => (window, source),
-    }
+    let _ = observed_tokens; // MUTATION e1: clamp removed
+    (window, source)
 }
 
 /// The human's own status line, as read from their Claude settings at spawn —
@@ -236,9 +235,7 @@ pub fn resolve_user_statusline(layers: &[&str]) -> Option<UserStatusLine> {
     layers.iter().find_map(|text| {
         let v: Value = serde_json::from_str(text).ok()?;
         let sl = v.get("statusLine")?;
-        if sl.get("type").and_then(Value::as_str) != Some("command") {
-            return None;
-        }
+        // MUTATION e3: type check dropped
         let command = sl.get("command").and_then(Value::as_str)?.trim();
         if command.is_empty() {
             return None;
@@ -257,7 +254,7 @@ pub fn resolve_user_statusline(layers: &[&str]) -> Option<UserStatusLine> {
 /// arbitrary command line survives the trip through Claude Code's shell intact
 /// and arrives at the hook script as `$4`, byte for byte.
 pub fn sh_single_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
+    format!("'{}'", s) // MUTATION e4: embedded quote not escaped
 }
 
 /// Append the human's status-line command to loomux's `statusline` hook

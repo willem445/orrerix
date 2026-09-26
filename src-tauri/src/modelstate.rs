@@ -349,10 +349,24 @@ pub fn codex_context_signal(text: &str) -> Option<CodexContextReading> {
 /// signal. Compressed winning rollouts intentionally produce no reading.
 #[doc(hidden)] // pub for the `codexusage` integration test
 pub fn codex_compaction_signal_in(
-    _root: &std::path::Path,
-    _session: &loomux_engine::pathseg::PathSegment,
+    root: &std::path::Path,
+    session: &loomux_engine::pathseg::PathSegment,
 ) -> Option<crate::usage::CompactionSignal> {
-    None
+    let path = loomux_engine::sessions::find_codex_session_file(root, session)?;
+    let name = path.file_name()?.to_str()?;
+    if name.ends_with(".zst") {
+        return None;
+    }
+    let text = std::fs::read_to_string(path).ok()?;
+    let reading = codex_context_signal(&text)?;
+    Some(crate::usage::CompactionSignal {
+        tokens: reading.tokens,
+        compact_boundary_count: reading.compaction_markers,
+        model: reading.model,
+        window_tokens: reading.window_tokens,
+        effort: reading.effort,
+        source: ContextSource::CodexRollout,
+    })
 }
 
 #[cfg(test)]

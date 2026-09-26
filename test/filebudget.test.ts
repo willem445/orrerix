@@ -48,7 +48,7 @@ function category(file: string): { ceiling: number; label: string } | undefined 
   if (/^(test\/.*\.test\.ts|e2e\/.*\.ts)$/.test(file)) return { ceiling: 2000, label: "TS test" };
   return undefined;
 }
-function scan(files: string[], read: (file: string) => string, requireRows = true, rows = BUDGETS): string[] {
+export function scan(files: string[], read: (file: string) => string, requireRows = true, rows = BUDGETS): string[] {
   const allowed = new Map(rows.map((row) => [row.path, row]));
   const seen = new Set<string>();
   const errors: string[] = [];
@@ -61,6 +61,9 @@ function scan(files: string[], read: (file: string) => string, requireRows = tru
       seen.add(file);
       if (lines > row.ceiling) errors.push(`${file}: ${lines} > ${row.ceiling}`);
       if (lines <= row.ceiling * 0.85) errors.push(`${file}: row stale — tighten it (baseline blob ${row.blob})`);
+      // A row exists only to grandfather a file OVER its class ceiling; once a
+      // split brings the file under, the class default governs and the row goes.
+      if (lines <= kind.ceiling) errors.push(`${file}: row redundant — ${lines} <= ${kind.ceiling} (${kind.label}), remove it`);
     } else if (lines > kind.ceiling) errors.push(`${file}: ${lines} > ${kind.ceiling} (${kind.label})`);
   }
   if (requireRows) for (const row of rows) if (!seen.has(row.path)) errors.push(`${row.path}: allowlist row did not match`);
@@ -73,8 +76,9 @@ test("tracked source files stay within class ceilings and grandfathered rows rat
   assert.deepEqual(errors, [], errors.join("\n"));
   // Positive control: the actual scanner must identify an over-budget tracked Rust source.
   assert.match(scan(["crates/control/src/control.rs"], () => "x\n".repeat(3001), false).join("\n"), /crates\/control\/src\/control\.rs: 3001 > 3000/);
-  const stale = [{ path: "src/stale.ts", ceiling: 100, blob: "fixture" }];
-  assert.match(scan(["src/stale.ts"], () => "x\n".repeat(85), true, stale).join("\n"), /row stale — tighten it \(baseline blob fixture\)/);
+  // Over the 1,500-line TS class ceiling, so this row witnesses staleness alone.
+  const stale = [{ path: "src/stale.ts", ceiling: 2000, blob: "fixture" }];
+  assert.deepEqual(scan(["src/stale.ts"], () => "x\n".repeat(1600), true, stale), ["src/stale.ts: row stale — tighten it (baseline blob fixture)"]);
 });
 
 test("the scanner controls every class and grandfathered-table arm", () => {
@@ -91,8 +95,23 @@ test("the scanner controls every class and grandfathered-table arm", () => {
     assert.ok(errors.includes(`${file}: ${lines} > ${ceiling} (${label})`), errors.join("\n"));
   }
 
-  const overRow = [{ path: "src/grandfathered.ts", ceiling: 10, blob: "fixture" }];
-  assert.match(scan(["src/grandfathered.ts"], () => "x\n".repeat(11), false, overRow).join("\n"), /src\/grandfathered\.ts: 11 > 10/);
+  const overRow = [{ path: "src/grandfathered.ts", ceiling: 1600, blob: "fixture" }];
+  assert.deepEqual(scan(["src/grandfathered.ts"], () => "x\n".repeat(1601), false, overRow), ["src/grandfathered.ts: 1601 > 1600"]);
+  // A split that brings a grandfathered file under its class ceiling makes the
+  // row redundant, for every class: the row must go, not merely be tightened.
+  const splits = [
+    ["src-tauri/src/split.rs", 3000, 3000, "Rust src"],
+    ["src-tauri/tests/split.rs", 5000, 5000, "Rust test"],
+    ["src/split.ts", 1500, 1500, "TS src"],
+    ["test/split.test.ts", 2000, 2000, "TS test"],
+  ] as const;
+  for (const [file, lines, ceiling, label] of splits) {
+    const row = [{ path: file, ceiling: lines + 1, blob: "fixture" }];
+    assert.deepEqual(scan([file], () => "x\n".repeat(lines), true, row), [`${file}: row redundant — ${lines} <= ${ceiling} (${label}), remove it`]);
+    // One line over the class ceiling is exactly what a row is for: no finding.
+    const kept = [{ path: file, ceiling: lines + 2, blob: "fixture" }];
+    assert.deepEqual(scan([file], () => "x\n".repeat(lines + 1), true, kept), []);
+  }
   const missingRow = [{ path: "src/required.ts", ceiling: 10, blob: "fixture" }];
   assert.match(scan([], () => "", true, missingRow).join("\n"), /src\/required\.ts: allowlist row did not match/);
 });

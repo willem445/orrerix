@@ -19,7 +19,10 @@
 // would notice. Run `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { KINDS } from "../src/taskboard.ts";
 import {
   ANSI_SLOTS,
@@ -93,6 +96,13 @@ function identityEntries(): [string, string][] {
   );
 }
 
+function sourceFiles(dir: URL, prefix = ""): string[] {
+  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
+  });
+}
+
 // --- perceptual distance, and what colour-vision deficiency does to it.
 //
 // The design note promises that the STATE channel survives colour blindness and that the
@@ -162,6 +172,15 @@ function closestPair(
   }
   return best;
 }
+
+test("recursive source scan sees a planted nested file", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-source-scan-"));
+  try {
+    mkdirSync(path.join(root, "scratch"));
+    writeFileSync(path.join(root, "scratch", "positive-control.ts"), "control");
+    assert.ok(sourceFiles(pathToFileURL(root + path.sep)).includes("scratch/positive-control.ts"));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("every ANSI slot is present, and no two slots share a colour", () => {
   const seen = new Map<string, string>();
@@ -361,7 +380,7 @@ test("no value from the retired Tokyo Night palette survives anywhere in src/", 
     [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)).join(", ");
 
   const dir = new URL("../src/", import.meta.url);
-  const files = readdirSync(dir).filter((f) => f.endsWith(".ts") || f === "styles.css");
+  const files = sourceFiles(dir).filter((f) => f.endsWith(".ts") || f.endsWith("styles.css"));
   assert.ok(files.length > 40, "the src/ sweep found almost nothing — is the path still right?");
 
   const survivors: string[] = [];
@@ -2021,7 +2040,7 @@ test("no module outside theme.ts spells a font stack of its own", () => {
   ]);
   const dir = new URL("../src/", import.meta.url);
   const offenders: string[] = [];
-  for (const file of readdirSync(dir).filter((f) => f.endsWith(".ts")).sort()) {
+  for (const file of sourceFiles(dir).filter((f) => f.endsWith(".ts")).sort()) {
     if (ALLOWED.has(file)) continue;
     const src = readFileSync(new URL(file, dir), "utf8");
     src.split("\n").forEach((line, i) => {

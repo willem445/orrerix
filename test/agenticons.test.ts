@@ -17,7 +17,10 @@
 // Run `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   AGENT_VIEWBOX,
   CLI_DYE_PROGRAMS,
@@ -44,6 +47,22 @@ function body(svg: string): string {
   assert.ok(m, `not a single well-formed <svg> element: ${svg.slice(0, 80)}…`);
   return m[1];
 }
+
+function sourceFiles(dir: URL, prefix = ""): string[] {
+  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
+  });
+}
+
+test("recursive source scan sees a planted nested file", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-source-scan-"));
+  try {
+    mkdirSync(path.join(root, "scratch"));
+    writeFileSync(path.join(root, "scratch", "positive-control.ts"), "control");
+    assert.ok(sourceFiles(pathToFileURL(root + path.sep)).includes("scratch/positive-control.ts"));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("a pane with no launch command gets no mark at all", () => {
   // THE "NEVER GUESS" HALF. A shell pane is not an agent pane, and a `?` badge on every

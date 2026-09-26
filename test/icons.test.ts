@@ -22,7 +22,10 @@
 // Run `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   ICON_NAMES,
   ICON_ROLE,
@@ -48,6 +51,22 @@ function body(name: IconName): string {
 }
 
 const ROLES = Object.keys(ROLE_TOKEN) as IconRole[];
+
+function sourceFiles(dir: URL, prefix = ""): string[] {
+  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
+  });
+}
+
+test("recursive source scan sees a planted nested file", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-source-scan-"));
+  try {
+    mkdirSync(path.join(root, "scratch"));
+    writeFileSync(path.join(root, "scratch", "positive-control.ts"), "control");
+    assert.ok(sourceFiles(pathToFileURL(root + path.sep)).includes("scratch/positive-control.ts"));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("no vendored glyph carries a colour of its own", () => {
   // THE LOAD-BEARING PROPERTY OF THE WHOLE SLICE. If a body held a literal, that icon would
@@ -226,7 +245,7 @@ test("nothing is vendored that no surface renders", () => {
   // (fileicons.ts), the only place a call site names a glyph indirectly (`icon(CATEGORY_ICON
   // [category], …)`).
   const dir = new URL("../src/", import.meta.url);
-  const consumers = readdirSync(dir)
+  const consumers = sourceFiles(dir)
     .filter((f) => f.endsWith(".ts") && f !== "icons.ts")
     .map((f) => readFileSync(new URL(f, dir), "utf8"))
     .join("\n");

@@ -256,6 +256,9 @@ compiles.
     residual: `docs/design/lock-order.md` §2.1; a *genuine* panic there still
     aborts (#1717).
 
+Module naming and navigation conventions are in
+[`docs/design/module-layout.md`](docs/design/module-layout.md).
+
 ## Code conventions
 
 - Frontend logic that needs tests is extracted into DOM-free pure modules

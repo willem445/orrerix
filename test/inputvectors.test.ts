@@ -28,7 +28,10 @@
 // green about a file it is no longer reading.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 
 // ---------- the scanner ----------
 
@@ -276,6 +279,13 @@ const RULES: Rule[] = [
 // the proof that the scanner FAILS when it should, which a green run over a
 // correct tree cannot show.
 
+function sourceFiles(dir: URL, prefix = ""): string[] {
+  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
+  });
+}
+
 test("an unmarked paste vector is found and named", () => {
   const bad: Source = {
     path: "src/fake.ts",
@@ -379,11 +389,20 @@ test("stripping preserves line numbers across multi-line comments and templates"
 const SRC_DIR = new URL("../src/", import.meta.url);
 
 function realSources(): Source[] {
-  return readdirSync(SRC_DIR)
+  return sourceFiles(SRC_DIR)
     .filter((f) => f.endsWith(".ts"))
     .sort()
     .map((f) => ({ path: `src/${f}`, text: readFileSync(new URL(f, SRC_DIR), "utf8") }));
 }
+
+test("recursive source scan sees a planted nested file", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-source-scan-"));
+  try {
+    mkdirSync(path.join(root, "scratch"));
+    writeFileSync(path.join(root, "scratch", "positive-control.ts"), "control");
+    assert.ok(sourceFiles(pathToFileURL(root + path.sep)).includes("scratch/positive-control.ts"));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("no input path in src/ reaches the PTY without marking human origin", () => {
   const findings = scanInputVectors(realSources(), RULES);

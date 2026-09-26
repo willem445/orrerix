@@ -43,8 +43,10 @@ while no status-line report is available, and (4) an empirical clamp that
 widens a window when observed usage exceeds it, tagged `clamped`. A reported
 window is not replaced by a model-name guess. S1 ships the ladder
 (`modelstate::context_window_ladder`) and the Claude status line as rung 2's
-first source. The Codex token-count event (S2a) and pi's model list (S8)
-**will** feed the same rung.
+first source. The Codex token-count event (S2a) feeds the same rung, and so
+does pi's model list (S8's data, read by the S2b pi arm). A window pi printed
+rounded is labelled `reported-rounded` rather than `reported`
+(`modelstate::label_rounded_report`); it is still rung 2.
 
 The clamp never overrules an override. A human who set 200K on a pane that
 reads 250K has a deployment the override exists to describe. The percent
@@ -216,9 +218,81 @@ is a one-line change in `parse_token_count`; the human may choose it.
 A consumer labels a window from an id in `model_context_windows_rounded`
 `reported-rounded` rather than `reported` on the ladder's rung (2).
 
-**No consumer yet.** Looking the pane's current model up in the cached probe,
-and filling `window_tokens` from it, belongs to the pi arm of
-`agent_context_signals`, which S2b adds. S8 ships the data only.
+**The consumer is the S2b pi arm** ([below](#s2b-the-pi-session-reader)): it
+looks the pane's current model up in the cached probe and fills
+`window_tokens` from it.
+
+## S2b: the pi session reader
+
+A pi PTY pane's context signal comes from its session file, read by
+`modelstate::pi_context_signal` over the file's bounded tail
+(`usage::read_transcript_tail`, the same 256 KiB tail the Claude and Codex
+readers use). The entry shapes are pi's `docs/session-format.md` at `v0.84.4`.
+The file is read in append order, so each field holds its newest writer:
+
+| Field | Source entry | Rule |
+|---|---|---|
+| tokens | the newest assistant `message` with a `usage` | `input + cacheRead + cacheWrite`: what that turn sent. `output` is excluded. A turn whose sum is zero is skipped, because pi writes an all-zero `usage` on an errored turn and a `0` reads as a compaction's token drop. |
+| model | an assistant message's `provider`/`model`, or a `model_change`'s `provider`/`modelId` | Whichever is newer, spelled `provider/model`. A `/model` switch after the last turn is the pane's model before any turn has run on it. |
+| effort | `thinking_level_change`'s `thinkingLevel` | The newest one. |
+| marker count | `compaction` entries | How many there are. A `branch_summary` is not one. |
+| window | none | The session file records none (next section). |
+
+**Where the file is.** The arm reads the group's own pi store
+(`OrchRegistry::pi_sessions_dir`), which is where the usage meter's pi arm reads
+too. Both launch forms pass that directory as `--session-dir` to every group pi
+pane. The per-user store (`sessions::pi_sessions_root`) is not consulted, because
+a group pane never writes there. The CLI is resolved per pane with
+`Guardrails::cli_for_block` (#2167).
+
+**The window.** The arm looks the model up in the cached `pi --list-models`
+probe (S8) through `cliprobe::cached_context_window`. That call only reads the
+cache and never spawns pi. The startup sweep fills the cache. Until the sweep
+has answered, or for a model the listing does not carry, the window is `None`
+rather than a guess. An id in `model_context_windows_rounded` sets
+`CompactionSignal::window_rounded`, and the ladder then labels the window
+`reported-rounded`.
+
+**What reads it today.** `run_compact_nudge` caches every signal's model,
+window and rounded flag on the agent. The compact-nudge loop still admits only
+the CLIs `compact_nudge_cli_supported` names (claude and copilot), so a pi
+reading does not yet reach the lifecycle panel's token count or the threshold
+escalation. S4 replaces that gate. This slice changes nothing a user sees, which
+is why `docs/orchestration.md` is untouched.
+
+**The effort fallback, and a correction to the plan's premise.** The plan
+said the file records no initial thinking level, so the initial effort would be
+the `--thinking` value loomux passed. At `v0.84.4` that premise is false. For a
+new session, pi's `createAgentSession` (`SOURCE` `src/core/sdk.ts:381-386`) appends a
+`model_change` and a `thinking_level_change` carrying the effective level,
+after pi has clamped it to what the model supports. So the file's own level
+wins whenever the tail holds one. The pane's block effort knob is used only when
+the tail holds none, for example when a long session's entry has scrolled out of
+the tail. That knob is the value the launch line passed as `--thinking`,
+already clamped by `Guardrails::clamped`. An empty knob is no level, not a
+level.
+
+### S2b residuals
+
+- **A resumed session can name a stale level.** On a resume, pi appends a
+  `thinking_level_change` only when the branch has none, so a `--thinking` that
+  differs from the session's last recorded level is live but not written.
+  The reader then reports the older level.
+- **The fallback is the requested level, not the effective one.** Once the
+  tail has lost every `thinking_level_change`, the knob is what loomux asked
+  for, and pi may have clamped it for the model. It also does not follow a
+  later edit of the block's effort.
+- **The probe is cached for the app run.** If pi is upgraded mid-run and its
+  catalog changes a window, the change is not seen until restart. This is the
+  cache policy `probe_agent_cli` documents.
+- **Append order, not the active path.** pi's file is a tree. An entry on a
+  branch the leaf has navigated away from still counts as newest if it was
+  appended last, which is the same file-wide reading `usage::PiFold` takes.
+- **The marker count is over the tail**, as it is for the Claude and Codex
+  readers, so a marker older than the tail is not counted.
+- **A solo pi pane has no reading.** A solo pane writes to the human's own
+  store, and that store is not read. This is the same residual as the usage
+  meter's (`docs/design/pi.md`, Usage and cost).
 
 ## Contract changes planned by later slices
 

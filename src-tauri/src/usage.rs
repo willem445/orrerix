@@ -431,6 +431,11 @@ pub struct CompactionSignal {
     /// this session exists. `None` from the transcript alone, which records no
     /// window — the ladder then falls to the model table.
     pub window_tokens: Option<u64>,
+    /// #993 S2b: `window_tokens` is a LOWER BOUND the CLI printed rounded (a
+    /// pi `--list-models` spelling such as `262.1K`), so the ladder labels it
+    /// `reported-rounded` rather than `reported`. Always `false` when
+    /// `window_tokens` is `None`, and for every reader but pi's.
+    pub window_rounded: bool,
     /// #993 S1: the live reasoning effort (status-line `effort.level`).
     pub effort: Option<String>,
     /// #993 S1: whether a status-line snapshot contributed to this reading.
@@ -1618,7 +1623,8 @@ const TRANSCRIPT_TAIL_READ_BYTES: u64 = 256 * 1024;
 /// Read the last `TRANSCRIPT_TAIL_READ_BYTES` of `path`, discarding a
 /// possibly-truncated leading partial line (unless the read reached the true
 /// start of the file, in which case there's nothing to truncate). `None` on
-/// any I/O failure. Shared by Claude transcript and Codex rollout readers.
+/// any I/O failure. Shared by the Claude transcript, Codex rollout and pi
+/// session readers.
 pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
     let mut file = fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
@@ -1664,6 +1670,7 @@ pub fn compaction_signal_in(root: &Path, session_id: &str) -> Option<CompactionS
         compact_boundary_count: compact_boundary_count(&text),
         model: latest_context_model(&text),
         window_tokens: None,
+        window_rounded: false,
         effort: None,
         source: crate::modelstate::ContextSource::Transcript,
     })

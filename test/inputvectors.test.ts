@@ -28,7 +28,10 @@
 // green about a file it is no longer reading.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 
 // ---------- the scanner ----------
 
@@ -276,6 +279,13 @@ const RULES: Rule[] = [
 // the proof that the scanner FAILS when it should, which a green run over a
 // correct tree cannot show.
 
+function sourceFiles(dir: URL, prefix = ""): string[] {
+  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
+  });
+}
+
 test("an unmarked paste vector is found and named", () => {
   const bad: Source = {
     path: "src/fake.ts",
@@ -378,15 +388,34 @@ test("stripping preserves line numbers across multi-line comments and templates"
 
 const SRC_DIR = new URL("../src/", import.meta.url);
 
-function realSources(): Source[] {
-  return readdirSync(SRC_DIR)
+function realSources(root: URL = SRC_DIR): Source[] {
+  return sourceFiles(root)
     .filter((f) => f.endsWith(".ts"))
     .sort()
-    .map((f) => ({ path: `src/${f}`, text: readFileSync(new URL(f, SRC_DIR), "utf8") }));
+    .map((f) => ({ path: `src/${f}`, text: readFileSync(new URL(f, root), "utf8") }));
 }
 
+function findInputVectorFindings(root: URL = SRC_DIR): Finding[] {
+  return scanInputVectors(realSources(root), RULES);
+}
+
+test("the real input-vector scan catches a planted nested source", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-input-vector-scan-"));
+  try {
+    mkdirSync(path.join(root, "scratch"));
+    writeFileSync(
+      path.join(root, "scratch", "new-input.ts"),
+      "class NewInput { send(text: string) { this.term.paste(text); } }"
+    );
+    const findings = findInputVectorFindings(pathToFileURL(root + path.sep));
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].rule, "paste-is-marked-human");
+    assert.equal(findings[0].path, "src/scratch/new-input.ts");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("no input path in src/ reaches the PTY without marking human origin", () => {
-  const findings = scanInputVectors(realSources(), RULES);
+  const findings = findInputVectorFindings();
   assert.deepEqual(
     findings.map((f) => `${f.path}:${f.line} [${f.rule}] ${f.text}\n    why: ${f.why}`),
     [],

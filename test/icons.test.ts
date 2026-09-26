@@ -22,7 +22,10 @@
 // Run `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   ICON_NAMES,
   ICON_ROLE,
@@ -48,6 +51,41 @@ function body(name: IconName): string {
 }
 
 const ROLES = Object.keys(ROLE_TOKEN) as IconRole[];
+
+function sourceFiles(dir: URL, prefix = ""): string[] {
+  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
+  });
+}
+
+function surfaceIconNames(dir: URL): Set<string> {
+  const consumers = sourceFiles(dir)
+    .filter((f) => f.endsWith(".ts") && f !== "icons.ts")
+    .map((f) => readFileSync(new URL(f, dir), "utf8"))
+    .join("\n");
+  const used = new Set<string>();
+  for (const [, name] of consumers.matchAll(/\bicon\(\s*"([a-z0-9-]+)"/g)) used.add(name);
+  const categoryIcon = consumers.match(/CATEGORY_ICON[^=]*=\s*\{([\s\S]*?)\}/);
+  assert.ok(categoryIcon, "CATEGORY_ICON's own definition moved or was renamed");
+  for (const [, name] of categoryIcon[1].matchAll(/:\s*"([a-z0-9-]+)"/g)) used.add(name);
+  return used;
+}
+
+test("the real icon-consumer scan catches nested direct and category uses", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-icon-scan-"));
+  try {
+    mkdirSync(path.join(root, "scratch"));
+    writeFileSync(
+      path.join(root, "scratch", "consumer.ts"),
+      'icon("fixture-direct");\nconst CATEGORY_ICON = { fixture: "fixture-indirect" };'
+    );
+    assert.deepEqual([...surfaceIconNames(pathToFileURL(root + path.sep))].sort(), [
+      "fixture-direct",
+      "fixture-indirect",
+    ]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("no vendored glyph carries a colour of its own", () => {
   // THE LOAD-BEARING PROPERTY OF THE WHOLE SLICE. If a body held a literal, that icon would
@@ -226,15 +264,7 @@ test("nothing is vendored that no surface renders", () => {
   // (fileicons.ts), the only place a call site names a glyph indirectly (`icon(CATEGORY_ICON
   // [category], …)`).
   const dir = new URL("../src/", import.meta.url);
-  const consumers = readdirSync(dir)
-    .filter((f) => f.endsWith(".ts") && f !== "icons.ts")
-    .map((f) => readFileSync(new URL(f, dir), "utf8"))
-    .join("\n");
-  const used = new Set<string>();
-  for (const [, name] of consumers.matchAll(/\bicon\(\s*"([a-z0-9-]+)"/g)) used.add(name);
-  const categoryIcon = consumers.match(/CATEGORY_ICON[^=]*=\s*\{([\s\S]*?)\}/);
-  assert.ok(categoryIcon, "CATEGORY_ICON's own definition moved or was renamed");
-  for (const [, name] of categoryIcon[1].matchAll(/:\s*"([a-z0-9-]+)"/g)) used.add(name);
+  const used = surfaceIconNames(dir);
   const unused = ICON_NAMES.filter((n) => !used.has(n));
   assert.deepEqual(
     unused,

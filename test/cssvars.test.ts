@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 
 // Every `var(--x)` the stylesheet reads with NO fallback must name a custom
 // property something defines — the stylesheet itself, or a `setProperty` in
@@ -25,17 +28,34 @@ export function undefinedVars(css: string, runtimeSet: ReadonlySet<string>): { u
   return { uses, missing: [...missing].sort() };
 }
 
-function runtimeSetVars(): Set<string> {
+function sourceFiles(dir: URL, prefix = ""): string[] {
+  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
+  });
+}
+
+const SRC_DIR = new URL("../src/", import.meta.url);
+
+function runtimeSetVars(root: URL): Set<string> {
   const out = new Set<string>();
-  for (const f of readdirSync("src")) {
-    if (!f.endsWith(".ts")) continue;
-    for (const m of readFileSync(`src/${f}`, "utf8").matchAll(/setProperty\(\s*["'`](--[A-Za-z0-9_-]+)["'`]/g)) out.add(m[1]);
+  for (const file of sourceFiles(root).filter((f) => f.endsWith(".ts"))) {
+    for (const m of readFileSync(new URL(file, root), "utf8").matchAll(/setProperty\(\s*["'`](--[A-Za-z0-9_-]+)["'`]/g)) out.add(m[1]);
   }
   return out;
 }
 
+test("the real runtime-variable scan catches a nested setter", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "loomux-cssvars-scan-"));
+  try {
+    mkdirSync(path.join(root, "scratch"));
+    writeFileSync(path.join(root, "scratch", "vars.ts"), 'element.style.setProperty("--nested-control", "red");');
+    assert.ok(runtimeSetVars(pathToFileURL(root + path.sep)).has("--nested-control"));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("every fallback-less var() in styles.css names a defined custom property", () => {
-  const runtime = runtimeSetVars();
+  const runtime = runtimeSetVars(SRC_DIR);
   assert.ok(runtime.has("--tab-color"), "the runtime scan sees a known setProperty");
   const r = undefinedVars(readFileSync("src/styles.css", "utf8"), runtime);
   assert.ok(r.uses > 1000, `the scan read the stylesheet (${r.uses} var() uses)`);

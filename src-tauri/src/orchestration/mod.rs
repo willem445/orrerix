@@ -43706,7 +43706,9 @@ impl OrchRegistry {
                     })
                     .and_then(|p| fs::read_to_string(p).ok())
                     .and_then(|text| crate::modelstate::parse_statusline_snapshot(&text));
-                let signal = crate::modelstate::enrich_with_statusline(signal, snapshot.as_ref(), &sid);
+                // MUTATION a': the call site passes the snapshot's OWN session id, so the match always holds.
+                let snap_sid = snapshot.as_ref().and_then(|s| s.session_id.clone()).unwrap_or_else(|| sid.clone());
+                let signal = crate::modelstate::enrich_with_statusline(signal, snapshot.as_ref(), &snap_sid);
                 Some((id, signal))
             })
             .collect()

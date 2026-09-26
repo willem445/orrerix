@@ -661,7 +661,9 @@ test("both mark surfaces resolve from that one getter, so neither can answer alo
   // exactly as broken as the missing fields it replaced. Both consumers are pinned by NAME
   // rather than by counting call sites, so adding a third surface is not a failure — losing
   // one is.
-  const header = paneMemberBody(/  private refreshAgentMark\(\): void \{/, "Pane.refreshAgentMark");
+  // `private` is optional since #3498 F1: PaneLifecycle calls it after every launch-line
+  // change, so it is readable from that satellite. The body is what is pinned.
+  const header = paneMemberBody(/  (?:private )?refreshAgentMark\(\): void \{/, "Pane.refreshAgentMark");
   assert.match(
     header,
     /agentMark\(this\.agentMarkInput\)/,

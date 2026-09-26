@@ -1057,14 +1057,18 @@ test("index.html paints theme.ts's app ground before the bundle arrives", () => 
 });
 
 test("pane.ts carries no colour of its own", () => {
-  const src = read("../src/pane.ts")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
-  const hexes = [...src.matchAll(/#[0-9a-fA-F]{6}\b/g)].map((m) => m[0]);
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const src = strip(read("../src/pane.ts"));
+  // …nor do the satellites pane.ts's methods moved into (#3498 F1): before the split
+  // their code sat inside pane.ts and this scan read it.
+  const family = ["pane.ts", "panebadges.ts", "panecompose.ts", "panelifecycle.ts", "paneembeds.ts", "paneviews.ts", "panecapture.ts"];
+  const hexes = family.flatMap((f) =>
+    [...strip(read(`../src/${f}`)).matchAll(/#[0-9a-fA-F]{6}\b/g)].map((m) => `${f}: ${m[0]}`)
+  );
   assert.deepEqual(
     hexes,
     [],
-    `pane.ts declares colours directly (${hexes.join(", ")}) — they belong in theme.ts, ` +
+    `pane.ts or a satellite declares colours directly (${hexes.join(", ")}) — they belong in theme.ts, ` +
       "where the stylesheet and the pre-paint block can be pinned to them"
   );
   assert.match(

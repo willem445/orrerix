@@ -1033,8 +1033,8 @@ const FILE_BUDGETS = [
   },
   {
     path: "src/pane.ts",
-    ceiling: 7103,
-    blob: "360c14a506a09250a342bb35d2177066122c6a56"
+    ceiling: 3270,
+    blob: "24b8ef21c7b48fcc4411457a7850e2d87b71a359"
   },
   {
     path: "src/panerestore.ts",

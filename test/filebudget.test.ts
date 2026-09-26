@@ -26,7 +26,7 @@ export const BUDGETS = [
   { path: "src/launcher.ts", ceiling: 2955, blob: "27d3b4777674483d12e76035bcb6538feb7c4e9b" },
   { path: "src/main.ts", ceiling: 4152, blob: "3972d22c2bd528cd4845a08d780cc50d3e90d871" },
   { path: "src/orchestration.ts", ceiling: 3152, blob: "69b46587dccbf973b88c6a3766d8ec207aca8cfb" },
-  { path: "src/pane.ts", ceiling: 7103, blob: "360c14a506a09250a342bb35d2177066122c6a56" },
+  { path: "src/pane.ts", ceiling: 3270, blob: "24b8ef21c7b48fcc4411457a7850e2d87b71a359" },
   { path: "src/panerestore.ts", ceiling: 2053, blob: "655717a0d8c8c4f670a4bb5589bc6b66c56a8980" },
   { path: "src/taskboard.ts", ceiling: 2348, blob: "177f4f9f0d5d2708de76fdf593c57f51c377ae7c" },
   { path: "src/tasksview.ts", ceiling: 3666, blob: "85ae2f4667505fcadbce3afa8725207c1d422249" },

@@ -1109,7 +1109,7 @@ pub const CLI_CAPS: &[CliCaps] = &[
         cli: "copilot",
         compact_command: Some("/compact"),
         self_compacts: true,
-        compact_note: "",
+        compact_note: "unexpected note",
         context_reader: ContextReader::None,
         orchestration: true,
         mcp_argv_seam: true,

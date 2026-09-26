@@ -44,6 +44,7 @@ use loomux_lib::usage::{
 use loomux_engine::pathseg::PathSegment;
 use loomux_engine::sessions::{codex_rollout_is_newer, codex_sessions_root, find_codex_session_file};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -215,6 +216,38 @@ fn a_compressed_rollout_has_no_codex_context_signal() {
     );
     let session = PathSegment::parse(THREAD).unwrap();
     assert!(loomux_lib::modelstate::codex_compaction_signal_in(root.path(), &session).is_none());
+}
+
+#[test]
+fn a_large_rollout_uses_the_bounded_tail_for_context_and_markers() {
+    let root = tempfile::tempdir().unwrap();
+    let large_text = "x".repeat(300 * 1024);
+    let body = format!(
+        "{{\"type\":\"compacted\"}}\n{{\"type\":\"response_item\",\"payload\":{{\"text\":\"{large_text}\"}}}}\n{}",
+        token_count_event(Usage { input: 456, ..Usage::default() })
+    );
+    write_rollout(root.path(), &body);
+
+    let session = PathSegment::parse(THREAD).unwrap();
+    let signal = loomux_lib::modelstate::codex_compaction_signal_in(root.path(), &session)
+        .expect("the newest token-count event is inside the bounded tail");
+    assert_eq!(signal.tokens, Some(456));
+    assert_eq!(signal.compact_boundary_count, 0, "old markers outside the tail are ignored");
+}
+
+#[test]
+fn invalid_utf8_before_the_tail_does_not_hide_newer_context() {
+    let root = tempfile::tempdir().unwrap();
+    let path = write_rollout(root.path(), "");
+    let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(&vec![0xff; 300 * 1024]).unwrap();
+    file.write_all(b"\n").unwrap();
+    file.write_all(token_count_event(Usage { input: 789, ..Usage::default() }).as_bytes()).unwrap();
+
+    let session = PathSegment::parse(THREAD).unwrap();
+    let signal = loomux_lib::modelstate::codex_compaction_signal_in(root.path(), &session)
+        .expect("invalid UTF-8 before the tail must not hide valid later records");
+    assert_eq!(signal.tokens, Some(789));
 }
 
 #[test]

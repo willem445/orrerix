@@ -3145,3 +3145,9 @@ fn copilot_tool_permissions_lead_with_the_mcp_grant() {
     let (_, deny) = copilot_tool_permissions(true, Containment::ReadOnly, &[]);
     assert_eq!(deny, ["write", "shell(git commit)", "shell(git push)"]);
 }
+
+#[test]
+fn scratch_planted_bare_registry_construction_3498() {
+    let d = tempfile::tempdir().unwrap();
+    let _reg = OrchRegistry::new(d.path().to_path_buf());
+}

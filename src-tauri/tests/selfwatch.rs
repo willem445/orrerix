@@ -552,7 +552,8 @@ fn every_lock_on_the_registry_is_a_tracked_one() {
     let mut tracked = 0usize;
     let mut plain = Vec::new();
     for line in &body {
-        let t = without_visibility(line.trim_start());
+        let t = line.trim_start();
+        let _ = without_visibility;
         let Some((name, ty)) = t.split_once(": ") else { continue };
         if !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
             continue;

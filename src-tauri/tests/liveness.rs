@@ -3181,8 +3181,8 @@ fn l8_a_switched_off_reentrant_acquisition_degrades_through_the_command_frame() 
     // `read_budget` call would measure its own re-implementation rather than
     // the code real sync commands run through. The `on_refused` closure below
     // is the identical `|| Err(COMMAND_REFUSED.to_string())` shape `bind_agent`
-    // and `orch_solo_bind` use — three of `mod.rs`'s five `mutating_command`
-    // call sites return `COMMAND_REFUSED` this way; the other two
+    // and `orch_solo_bind` use — three of the five `mutating_command` call
+    // sites in `orchestration/commands/` return `COMMAND_REFUSED` this way; the other two
     // (`orch_ack_attention`, `orch_ack_attention_pty`) have no error channel
     // and degrade to `()` instead. What this pins is that `on_refused` really
     // runs, which is the same thing every one of the five is trusting.

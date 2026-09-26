@@ -146,7 +146,7 @@ Both denied to a planner (`require_not_planner`, the exact function #243 added):
 - **`channel_status()`** — read-only: `{connected, channel_id, peers: [{agent_id, role,
   name, repo}]}`.
 
-## Tauri commands (human-only) — mod.rs, registered in lib.rs
+## Tauri commands (human-only) — orchestration/commands/channels.rs, registered in lib.rs
 
 `orch_channel_connect(from_group, from_agent, to_group, to_agent)`,
 `orch_channel_disconnect(group, agent)`, `orch_channel_list()`,

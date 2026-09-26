@@ -687,8 +687,9 @@ fn crate_root() -> PathBuf {
 }
 
 /// Every command site under `src-tauri/src`, at any depth. Depth is not
-/// incidental: 63 of the 135 live in `src/orchestration/mod.rs`, so a walk that
-/// stopped at the top level would miss nearly half the surface — and would say
+/// incidental: about half of them live two levels down, in
+/// `src/orchestration/commands/` (#3498 P2), so a walk that stopped at the top
+/// level would miss nearly half the surface — and would say
 /// nothing about it, which is the one failure mode this file exists to prevent.
 /// The `APP_COMMANDS` equality below is what turns that into a red test.
 fn all_sites() -> Vec<Site> {

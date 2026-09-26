@@ -4,8 +4,9 @@
 //! `editor`, `voice`, `gitwatch`).
 //!
 //! **Why this is a module and not a tenth copy.** `git.rs`, `gh.rs` and
-//! `orchestration/mod.rs` each grew their own private `run_blocking` as their
-//! own conversion landed (#399, #724, #762), which was the right size at three.
+//! `orchestration/mod.rs` (now `orchestration/commands/mod.rs`) each grew
+//! their own private `run_blocking` as their own conversion landed (#399,
+//! #724, #762), which was the right size at three.
 //! #746 converts twenty-five commands across nine more modules, and nine more
 //! identical copies is how a mechanism drifts: one of them eventually
 //! swallows a join failure, or logs instead of re-raising, and nothing says
@@ -45,7 +46,7 @@
 //! — this module's own door, which is the property
 //! `tests/selfwatch.rs`'s `there_is_exactly_one_door_onto_the_blocking_pool`
 //! pins. `spawn_counted(` is **6**: `run_blocking`'s own use here, the three
-//! private wrappers (`gh.rs`, `git.rs`, `orchestration/mod.rs`), and the two
+//! private wrappers (`gh.rs`, `git.rs`, `orchestration/commands/mod.rs`), and the two
 //! named above. Re-measure both before quoting either — a figure in a comment
 //! is dated to the commit it was measured on.
 //!

@@ -10947,7 +10947,8 @@ fn only_the_argued_residuals_still_read_the_default_workflow_directly() {
     /// `(file, call text, why it is not group-scoped)`.
     const RESIDUALS: &[(&str, &str, &str)] = &[
         (
-            "mod.rs",
+            // `orch_workflow_preview_sync`, in `orchestration/commands/` since #3498 P2.
+            "launch.rs",
             "workflow::workflow_file_named(&repo, n).is_file()",
             "not a residual at all — the NAMED sibling, caught only because the trigger matches \
              the `workflow::workflow_file` prefix so that `workflow_file_exists(` cannot slip \

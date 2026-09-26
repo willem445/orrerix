@@ -961,6 +961,8 @@ test("the ladder table is the same one the backend enforces", () => {
 // does. It reads the rule ONLY; the enforcement that consumes it is pinned by
 // the Rust suite.
 const RUST_LADDER = new URL("../src-tauri/src/orchestration/mod.rs", import.meta.url);
+// The board-side Tauri commands, split out of mod.rs by #3498 P2.
+const RUST_TASK_COMMANDS = new URL("../src-tauri/src/orchestration/commands/tasks.rs", import.meta.url);
 
 test("the board's ladder table is the backend's, read out of the Rust source", () => {
   const src = readFileSync(RUST_LADDER, "utf8");
@@ -2754,12 +2756,12 @@ test("every argument key the board composes is a declared orch_upsert_task param
       "is checking an empty set and passes over anything"
   );
 
-  const src = readFileSync(RUST_LADDER, "utf8");
+  const src = readFileSync(RUST_TASK_COMMANDS, "utf8");
   const start = src.indexOf("pub async fn orch_upsert_task(");
   assert.notEqual(
     start,
     -1,
-    "orch_upsert_task is gone or renamed in mod.rs — this guard reads it by name, so update " +
+    "orch_upsert_task is gone or renamed in commands/tasks.rs — this guard reads it by name, so update " +
       "it here rather than deleting the only thing pinning the wire names together"
   );
   const end = src.indexOf(") -> Result<Task, String> {", start);

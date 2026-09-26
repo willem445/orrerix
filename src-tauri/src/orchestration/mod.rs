@@ -43018,6 +43018,12 @@ impl OrchRegistry {
                     Some((id, crate::modelstate::codex_compaction_signal_in(root, &session)?))
                 }
                 "claude" => {
+                    // MUTATED_M13: a file in the pi store under this id wins
+                    if let Some(s) = PathSegment::parse(&sid).ok().and_then(|seg| {
+                        crate::modelstate::pi_compaction_signal_in(&self.pi_sessions_dir(&group), &seg, None, &|_| None)
+                    }) {
+                        return Some((id, s));
+                    }
                     let root = claude_root.as_ref()?;
                     let signal = crate::usage::compaction_signal_in(root, &sid)?;
                     // #925: the id becomes a file name, so it is parsed first;

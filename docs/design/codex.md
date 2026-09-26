@@ -1108,9 +1108,8 @@ The pure Codex reader parses JSONL independently of file lookup. It takes
 [`codex-rs/protocol/src/protocol.rs`](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/protocol/src/protocol.rs)
 and the persistence rule for token-count events in
 [`codex-rs/rollout/src/policy.rs`](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/rollout/src/policy.rs)
-at `rust-v0.153.4`. This slice adds the parser only; wiring it into
-`agent_context_signals` follows S1, which owns the shared `CompactionSignal`
-shape.
+at `rust-v0.153.4`. The S1 change owns the shared `CompactionSignal` shape;
+this slice maps Codex readings into it in `agent_context_signals`.
 
 ### The path is a lookup, not a join
 

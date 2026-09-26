@@ -1051,6 +1051,30 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
   color: var(--id-orchid); background: color-mix(in srgb, var(--id-orchid) 22%, transparent);
 }
 
+/* The prompt-cache age chip (#3407). Header chrome with the queue/mail chips'
+   geometry and shrink weight (`chip-yields`): informational, so it gives up its
+   room before the title does. A button, so it drops the UA button chrome. The
+   state is an INFERENCE (see src/cacheage.ts), so no state pulses or reads as an
+   alarm: hot is the calm ok tone, cooling the attention tone as a heads-up that
+   compacting is now cheaper than waiting, cold a cool neutral blue — a cost
+   fact, not a fault. Unknown (no TTL) stays the neutral chip. */
+.pane-cache {
+  flex: 0 100 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: inherit; font-size: 9px; font-weight: 600; letter-spacing: 0.3px;
+  border: 1px solid var(--line); border-radius: 4px; padding: 1.5px 6px;
+  color: var(--ink-dim); background: var(--surface-2); cursor: pointer;
+}
+.pane-cache[data-state="hot"] {
+  border-color: color-mix(in srgb, var(--state-ok) 35%, transparent); color: var(--state-ok); background: color-mix(in srgb, var(--state-ok) 14%, transparent);
+}
+.pane-cache[data-state="cooling"] {
+  border-color: color-mix(in srgb, var(--state-attention) 35%, transparent); color: var(--state-attention); background: color-mix(in srgb, var(--state-attention) 14%, transparent);
+}
+.pane-cache[data-state="cold"] {
+  border-color: color-mix(in srgb, var(--id-azure) 35%, transparent); color: var(--id-azure); background: color-mix(in srgb, var(--id-azure) 14%, transparent);
+}
+
 /* ---------- cross-workspace channels (#271) ---------- */
 /* The connect gesture's three visual states, each independent (so they never fight
    the grouped/attention box-shadow stripes above): an ARMED pane (right-clicked,
@@ -1965,6 +1989,14 @@ body.dragging-pane, body.dragging-pane * { cursor: grabbing !important; }
   flex: none; display: flex; align-items: center; gap: 4px;
   font-size: 10.5px; letter-spacing: 0.3px; color: var(--ink-dim);
 }
+/* The Agents tab's cache-age cell (#3407) — the header chip's label and tones,
+   as plain text: the row itself is the click target (focus the pane). */
+.agents-cache {
+  flex: none; font-size: 10px; letter-spacing: 0.3px; color: var(--ink-faint);
+}
+.agents-cache[data-state="hot"] { color: var(--state-ok); }
+.agents-cache[data-state="cooling"] { color: var(--state-attention); }
+.agents-cache[data-state="cold"] { color: var(--id-azure); }
 .agents-identity {
   margin-top: 2px; font-size: 11px; color: var(--ink-dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

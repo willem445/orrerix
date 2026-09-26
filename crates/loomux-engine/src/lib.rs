@@ -727,10 +727,19 @@
 //! delivery path; the host side keeps the
 //! hook (`OrchRegistry::deliver_prompt_as`), `deferred.json` and the
 //! `delivery-triaged` audit row. See `docs/design/delivery-triage.md`.
+//!
+//! [`cacheage`] (#3407) is the prompt-cache-age inference: the per-CLI TTL
+//! resolver, the fold that turns a usage reading into "when did this pane last
+//! make a request" plus what its last wake cost, and the orchestrator
+//! idle-compact decision. Pure arithmetic over the counters the usage collector
+//! already reads — no I/O, no clock — so it sits beside [`usageseries`], whose
+//! inputs it shares. The fold runs inside `src-tauri`'s usage merge and the
+//! decision inside its compact-nudge loop. See `docs/design/cache-age.md`.
 
 pub mod brand;
 pub mod boundedread;
 pub mod budget;
+pub mod cacheage;
 pub mod fsatomic;
 pub mod groupid;
 pub mod harness;

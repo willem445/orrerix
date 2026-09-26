@@ -306,6 +306,7 @@ fn restored_group_on_disk(reg: &OrchRegistry, dir: &std::path::Path, id: &str, c
             model: Some("claude-opus-4-8".to_string()),
             current_model: Some("claude-opus-4-8".to_string()),
             updated_ms: 0,
+            activity: Default::default(),
         },
     );
     g

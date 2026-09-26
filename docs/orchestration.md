@@ -2626,6 +2626,28 @@ stream in the grid, which lands with [#2891](https://github.com/willem445/orreri
 Until then a driven block is visible on the board and in NEEDS-YOU rather than as a pane you
 can watch.
 
+### Telling orrerix a block's cache TTL: `cache_ttl_minutes:`
+
+`cache_ttl_minutes:` on a block tells orrerix the prompt-cache TTL that block's agent
+really gets. The pane's cache-age chip and the orchestrator's compact-before-idle nudge
+measure against it:
+
+```yaml
+blocks:
+  - id: orchestrator
+    kind: orchestrator
+    cli: claude
+    model: opus
+    cache_ttl_minutes: 60   # this account is on Anthropic's 1-hour cache
+```
+
+Leave it out to use the CLI's conservative default: 5 for claude and codex, and none for
+a CLI that routes to several providers. Set `0` to infer no cache state for the block at
+all. The value is whole minutes, from 0 to 1440 (a day), and anything larger refuses the
+file: no provider documents a longer cache. A block on a codex model with the 30-minute
+rule writes `30`. The key grants nothing and reaches no command line; it only moves the
+chip and the nudge.
+
 ### A manager pane — the human's own interface
 
 Every block above is an agent doing work. A `kind: manager` block is not: it is
@@ -4070,6 +4092,66 @@ distinction, under two separate actions (`compact-reinjection-confirmed` and
 `compact-reinjection-liveness-only`), so counting one of them doesn't quietly include the
 other. The safety net underneath both is unchanged: a re-grounding that neither confirms nor
 draws any sign of life gets bounded retries and then a visible lost-outcome record.
+
+### Cache age: how long a pane has been quiet
+
+Every agent pane's header wears a small chip that says how long ago the pane last made a
+model request, measured against its provider's prompt-cache TTL:
+
+- **`hot 3m`**: the last request was recent, so the next one should read a warm cache.
+- **`cooling 48m/60m`**: the pane is within the last stretch before the TTL runs out.
+  Compacting now is cheap; waiting is not.
+- **`cold`**: the TTL has passed. The next request re-reads the whole context uncached.
+- **`idle 12m`**: the pane's CLI has no known TTL (copilot, opencode and pi route to
+  several providers), so you see the age and no claim about the cache.
+
+**The state is inferred, not observed.** Nothing tells orrerix that a cache is still
+there. It knows when the pane's usage counters last moved, and it knows the TTL the
+provider documents. The inference leans slightly toward "hot", by about the length of the
+last response, and the cooling stretch is sized to cover that. The chip rides the same
+snapshot read the tab strip already makes, so it costs no extra polling.
+
+**Click the chip** for two things:
+
+- **What the last wake cost.** The first request after the last quiet stretch, split into
+  tokens read from the cache, tokens written to it, and uncached input (plus a dollar
+  estimate where one is known). A cold wake is mostly written; a warm one is mostly read.
+- **Compact now.** orrerix types `/compact` into the pane at its next idle moment, never
+  mid-turn. It uses the same path an agent's own `request_compact()` uses, so the pane is
+  re-grounded afterwards like any other compact. The item is greyed out, with the reason,
+  on a pane it cannot compact: a CLI without `/compact`, or a pane that is not an
+  orchestration agent. If the compact cannot fire right away, the confirmation says
+  "queued" and names everything holding it: the group is paused, a compact is
+  already running on that pane, or the group has used its compacts for the hour. It
+  fires once every one of those has cleared.
+
+The **Agents tab** shows the same label on each agent's row.
+
+**TTLs.** claude and codex default to **5 minutes**. That is the shortest lifetime their
+providers document, chosen so the chip never says "hot" over a cache that is gone. If
+your account gets a longer cache, say so on the block in `.orrerix/workflow.yml`: see
+[`cache_ttl_minutes:`](#telling-orrerix-a-blocks-cache-ttl-cache_ttl_minutes).
+
+**The orchestrator compacts before it goes idle.** The orchestrator is told to compact
+before ending a turn with nothing in flight: no delegates, drives or watches. That way
+the next wake reads a small context instead of the whole session cold. This does not
+contradict its other rule, "don't compact below 50% context without a specific reason":
+ending a turn with nothing in flight is listed as one of those reasons. If it forgets,
+orrerix nudges it once, typing `[orrerix] going idle with no work — compact now` into its
+pane, when all of these hold:
+
+- it has been quiet into the cooling stretch, and its cache is not yet cold;
+- nothing is in flight: no live worker, reviewer or planner, no pending watch, no pending
+  intake, no queued delivery, and no live review or plan drive;
+- its context is at or above the compact floor (50 % unless the group set one).
+
+The nudge is sent once per idle stretch. If the orchestrator reads it and decides not to
+compact, it is not nagged again until work goes in flight or a compact lands. Each nudge
+is written to the audit log as `cache-idle-nudge`. A live watch always counts as in
+flight, because orrerix knows when a watch expires but never when its CI will finish.
+
+The design argument, the residuals and the tests are in
+[`docs/design/cache-age.md`](https://github.com/willem445/orrerix/blob/main/docs/design/cache-age.md).
 
 ## Persistence & restart
 

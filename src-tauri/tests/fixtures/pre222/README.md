@@ -1708,3 +1708,29 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
   `list_agents` and no live agent's, the branch that worktree held, and scratch PRs beneath
   that branch; anything else is named to the human. The same check was re-run:
   `live-minus-keys == golden` reports OK for all nine files.
+
+- **#3407, compact before idling with no work** — `orchestrator.md` only. The other eight
+  goldens are byte-identical to their previous blessed copies.
+
+  Two edits to the **Compact at lulls** bullet, the resident half of #3407's acceptance
+  criterion 3; the orrerix-side half is `cache_idle_nudge_tick`, which types `[orrerix] going
+  idle with no work — compact now` into a pane that forgot. First, "or with nothing in flight"
+  joins the bullet's list of quiet points at which to call `request_compact()`: "before you go
+  idle waiting on CI or a human or with nothing in flight". Second, "nothing is in flight"
+  becomes one of the specific reasons the same bullet's 50% rule allows. The rule is the
+  human's and stays, and naming this reason is what keeps the two sentences from
+  contradicting each other.
+
+  The core had to fit `RESIDENT_CORE_BUDGET` (35,000 B, not raised). The base is 34,986 B, so
+  the two edits could add at most 14 B, and they add more than that on their own. So the
+  50% rule's reasons sentence was tightened, with words cut and no rule or meaning changed:
+  "you're about to do something that will need the headroom" became "you'll soon need the
+  headroom", and "you're already close to the next natural lull anyway" became "the next
+  natural lull is close anyway". The core is now 34,992 B over 509 lines, 8 B under the
+  budget, at blob `ef585635`. The two comments in `tests/orchestration.rs` that date the
+  margin to a blob name it.
+
+  Both re-bless checks above were run: the patch on the golden is byte-identical to the patch
+  on the live template (`git diff -U0` against `main` on each, compared), and neither changed
+  line carries a `{{...}}` key, so `live-minus-keys == golden` holds exactly where it held
+  before.

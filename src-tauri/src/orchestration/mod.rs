@@ -9275,18 +9275,7 @@ if [ -n \"$group_dir\" ] && [ -n \"$agent_id\" ]; then\n\
         cat >/dev/null 2>&1\n\
       fi\n\
       ;;\n\
-    statusline)\n\
-      snap=\"$group_dir/hooks/$agent_id.statusline.json\"\n\
-      if touch \"$snap.tmp\" 2>/dev/null; then\n\
-        printf '%s\\n' \"$payload\" > \"$snap.tmp\" 2>/dev/null && mv -f \"$snap.tmp\" \"$snap\" 2>/dev/null\n\
-      fi\n\
-      ;;\n\
   esac\n\
-fi\n\
-if [ \"$event\" = statusline ] && [ -n \"$4\" ]; then\n\
-  chain=\"$4\"\n\
-  set --\n\
-  printf '%s\\n' \"$payload\" | ( eval \"$chain\" )\n\
 fi\n\
 exit 0\n\
 ";
@@ -43689,7 +43678,7 @@ impl OrchRegistry {
                     .ok()
                     .and_then(|seg| fs::read_to_string(statusline_snapshot_path(&self.root, &group, &seg)).ok())
                     .and_then(|text| crate::modelstate::parse_statusline_snapshot(&text));
-                let signal = crate::modelstate::enrich_with_statusline(signal, snapshot.as_ref(), &sid);
+                let _ = (snapshot, &sid); // SCRATCH1: no enrichment
                 Some((id, signal))
             })
             .collect()
@@ -52147,9 +52136,7 @@ impl OrchRegistry {
         if let Some(hooks) = hooks {
             cfg.insert("hooks".into(), hooks);
         }
-        if let Some(status_line) = status_line {
-            cfg.insert("statusLine".into(), status_line);
-        }
+        let _ = status_line; // SCRATCH1: statusLine never written
         if let Some(permissions) = permissions {
             cfg.insert("permissions".into(), permissions);
         }

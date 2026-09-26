@@ -29,6 +29,7 @@ pub use loomux_engine::winpath;
 pub use loomux_engine::{budget, lockwatch, selfwatch};
 mod metrics;
 mod modelwire; // the list-models control probe (#993)
+pub mod modelstate; // pure per-CLI artifact readers (#993)
 mod obs;
 pub mod opencodedb; // pub: the #722 usage-readback integration tests link its reader
 pub mod orchestration; // pub: integration smoke test links through it

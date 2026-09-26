@@ -1098,6 +1098,20 @@ codex does not premint one, it is **idle until the store watcher binds it**
 the statusline fallback, which is the honest state: guessing an id in a store
 several panes share would charge this pane somebody else's conversation.
 
+### Context signal from rollout records
+
+The pure Codex reader parses JSONL independently of file lookup. It takes
+`input_tokens` and `model_context_window` from the newest
+`event_msg`/`token_count`, model and optional effort from the newest
+`turn_context`, and counts `compacted` records. These fields follow
+`TurnContextItem.effort` and `TokenUsageInfo` in
+[`codex-rs/protocol/src/protocol.rs`](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/protocol/src/protocol.rs)
+and the persistence rule for token-count events in
+[`codex-rs/rollout/src/policy.rs`](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/rollout/src/policy.rs)
+at `rust-v0.153.4`. This slice adds the parser only; wiring it into
+`agent_context_signals` follows S1, which owns the shared `CompactionSignal`
+shape.
+
 ### The path is a lookup, not a join
 
 A rollout is `rollout-<ts>-<thread>[_<rollout>].jsonl` under a `YYYY/MM/DD`

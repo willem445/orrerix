@@ -135,8 +135,13 @@ const headersAboveBlocks = (t: string): Map<string, string[]> => {
   return out;
 };
 
-/** Every comment line OUTSIDE block `id`'s own body — the lines after its `- id:` line that are
- *  blank or indented deeper than its `- ` marker. That body is the one region the preserving
+/** Every comment line OUTSIDE block `id`'s own body. The body runs from its `- id:` line to the
+ *  first line that is neither blank nor a comment and is indented no deeper than its `- ` marker
+ *  (the next block, or the next section's key). A COMMENT never ends the body, whatever its column:
+ *  a field commented out at column 0 (`#    effort: medium`) or a note at the marker's own indent
+ *  between two fields is still inside the block (#3513 rev-final B1). The run of comments and blanks
+ *  directly above that ending line is then handed BACK — it is the next block's header or the next
+ *  section's preamble, which the serializer attaches forward, so it stays under test. That body is the one region the preserving
  *  serializer does NOT promise to keep: an edited block is regenerated from its fields, and "there
  *  is no attempt to re-attach a comment to a field that changed underneath it" (`workflowmodel.ts`,
  *  above `deepEqualValue`). Everything else — the header above the block, other blocks, other
@@ -146,12 +151,18 @@ const commentsOutsideBlock = (t: string, id: string): string[] => {
   const start = lines.findIndex((l) => new RegExp(`^\\s*- id:\\s*${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`).test(l));
   assert.ok(start >= 0, `sanity: block ${id} has an \`- id:\` line`);
   const marker = lines[start].indexOf("-");
-  const inBody = new Set<number>();
-  for (let j = start + 1; j < lines.length; j++) {
-    const l = lines[j];
-    if (l.trim() !== "" && l.search(/\S/) <= marker) break;
-    inBody.add(j);
+  const isComment = (l: string): boolean => /^\s*#/.test(l);
+  let end = start + 1;
+  while (end < lines.length) {
+    const l = lines[end];
+    if (l.trim() !== "" && !isComment(l) && l.search(/\S/) <= marker) break;
+    end++;
   }
+  // Hand back the comment/blank run directly above the ending line: it belongs to what follows.
+  let bodyEnd = end;
+  while (bodyEnd > start + 1 && (lines[bodyEnd - 1].trim() === "" || isComment(lines[bodyEnd - 1]))) bodyEnd--;
+  const inBody = new Set<number>();
+  for (let j = start + 1; j < bodyEnd; j++) inBody.add(j);
   return lines.filter((l, i) => !inBody.has(i) && /^\s*#/.test(l));
 };
 
@@ -502,12 +513,23 @@ test("editing ANY one block's model keeps every comment outside that block — a
   // comparison excludes the edited block's own body (`commentsOutsideBlock`); exact whole-file
   // comment equality is asserted only on the SPECIMEN, whose content is known to carry none
   // (#3513 review, rev-std finding 1).
-  const IN_BLOCK = SPECIMEN.replace("    kind: worker\n    cli: claude\n    model: sonnet", "    kind: worker\n    cli: claude\n    # a note on this block's model, written INSIDE the block\n    model: sonnet");
-  assert.notEqual(IN_BLOCK, SPECIMEN, "sanity: the in-block comment landed");
+  // Three in-block shapes, each a comment between two of `w-one`'s fields: at the field's own
+  // indent, at the `- ` marker's indent, and at column 0 (a field commented out the way many
+  // editors do). A comment's column must not decide whether it is inside the block (rev-final B1).
+  const inBlock = (comment: string): string => {
+    const out = SPECIMEN.replace("    kind: worker\n    cli: claude\n    model: sonnet", `    kind: worker\n    cli: claude\n${comment}\n    model: sonnet`);
+    assert.notEqual(out, SPECIMEN, `sanity: the in-block comment landed: ${comment}`);
+    return out;
+  };
+  const IN_BLOCK = inBlock("    # a note on this block's model, written INSIDE the block");
+  const IN_BLOCK_MARKER = inBlock("  # a note at the marker's indent, still INSIDE the block");
+  const IN_BLOCK_COL0 = inBlock("#    effort: medium");
   const cases: { name: string; source: string; exact: boolean }[] = [
     { name: "the real file", source: text, exact: false },
     { name: "SPECIMEN", source: SPECIMEN, exact: true },
     { name: "SPECIMEN with an in-block comment", source: IN_BLOCK, exact: false },
+    { name: "SPECIMEN with an in-block comment at the marker's indent", source: IN_BLOCK_MARKER, exact: false },
+    { name: "SPECIMEN with a column-0 in-block comment", source: IN_BLOCK_COL0, exact: false },
   ];
   for (const { name, source, exact } of cases) {
     const { workflow } = parseWorkflow(source);
@@ -538,8 +560,16 @@ test("editing ANY one block's model keeps every comment outside that block — a
   // NON-VACUITY for the exclusion: the in-block specimen really does carry a comment inside
   // `w-one`'s body, so the case above exercises the region the pin must not hold — and the same
   // file's OTHER blocks, edited, still keep that comment (it is outside their bodies).
-  assert.equal(commentLines(IN_BLOCK).length - commentsOutsideBlock(IN_BLOCK, "w-one").length, 1);
-  assert.equal(commentsOutsideBlock(IN_BLOCK, "w-two").length, commentLines(IN_BLOCK).length);
+  for (const src of [IN_BLOCK, IN_BLOCK_MARKER, IN_BLOCK_COL0]) {
+    assert.equal(commentLines(src).length - commentsOutsideBlock(src, "w-one").length, 1, "exactly the one in-block comment is excluded");
+    assert.equal(commentsOutsideBlock(src, "w-two").length, commentLines(src).length, "…and only when its own block is the one edited");
+  }
+  // …while the header ABOVE the next block, directly after a block's last field, is handed back
+  // to the file rather than swallowed into the block before it.
+  assert.ok(
+    commentsOutsideBlock(SPECIMEN, "w-two").includes("  # -- reviewers: the header above the FIRST reviewer"),
+    "the next block's header is outside the previous block"
+  );
 
   // The specimen's literal headers, so "each header above its block" is witnessed on a file that
   // HAS headers above a first block — the real file is not required to keep any.

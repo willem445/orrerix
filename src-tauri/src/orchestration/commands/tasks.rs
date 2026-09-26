@@ -487,3 +487,16 @@ pub async fn orch_reorder_tasks(
     // list_tasks whenever the orchestrator plans.
     run_blocking(move || reg.reorder_tasks(&group_id, "human", &ids)).await
 }
+
+// PLANT P-a (#3498 P2 scratch): a sync registry-taking command with no frame.
+#[tauri::command]
+pub fn plant_bare_sync(reg: tauri::State<Arc<OrchRegistry>>) -> bool {
+    let _ = &reg;
+    false
+}
+
+// PLANT P-d: this file names humanq::AnswerSource.
+#[allow(dead_code)]
+fn plant_answer_source() -> humanq::AnswerSource {
+    humanq::AnswerSource::Webview
+}

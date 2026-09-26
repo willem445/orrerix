@@ -242,3 +242,10 @@ pub async fn orch_group_usage(app: AppHandle, group_id: String) -> Value {
     let Ok(group_id) = command_group(&group_id) else { return Value::Null };
     run_blocking(move || reg.group_usage_live_within(&group_id, USAGE_POLL_MAX_AGE)).await
 }
+
+// PLANT P-c (#3498 P2 scratch): a group id taken as a String and never parsed.
+#[tauri::command]
+pub async fn plant_group_unparsed(app: AppHandle, group_id: String) -> bool {
+    let _ = (&app, &group_id);
+    false
+}

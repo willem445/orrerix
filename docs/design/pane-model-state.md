@@ -430,9 +430,9 @@ token count, and without a reading it labels the roster pick `(declared)`. The
 Agents list chip is deferred: its `PaneFacts` projection does not carry the
 lifecycle summary, and adding it requires separate pane-state plumbing.
 
-The S3 test pinning a status-line window reverting to `None` when the snapshot
-disappears is deferred from #3536; current backend state follows the window
-through the signal, but this slice does not add that test.
+The integration test `statusline_window_reverts_to_the_table_when_its_snapshot_disappears`
+pins that a reported window is discarded when its snapshot disappears, and the
+model-table rung supplies the fallback window.
 
 ## Contract changes planned by later slices
 

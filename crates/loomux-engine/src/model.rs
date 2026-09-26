@@ -1319,7 +1319,7 @@ pub const CLI_CAPS: &[CliCaps] = &[
     },
     CliCaps {
         cli: "codex",
-        compact_command: Some("/compact"),
+        compact_command: None,
         self_compacts: true,
         compact_note: "",
         context_reader: ContextReader::CodexRollout,

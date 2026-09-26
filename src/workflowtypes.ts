@@ -318,7 +318,7 @@ export function legacyFallbackFor(tried: string): string | null {
 // backend refuses a name `loomux_engine::pathseg::check_segment` rejects, so a frontend
 // that accepted more would offer the human a workflow no launch could ever run, and one
 // that accepted less would hide a file that is on disk and valid. Pinned against the
-// engine's own alphabet in `test/workflowmodel.test.ts`, the way `workflowschema.test.ts`
+// engine's own alphabet in `test/workflowvalidate.test.ts`, the way `workflowschema.test.ts`
 // pins the schema manifest.
 
 /** Where a repo's NAMED workflows live, relative to the repo root. */
@@ -1057,7 +1057,7 @@ export function hasErrors(findings: readonly Finding[]): boolean {
  *  the TEXT is unreadable, and the pane's form stays editable through those (see
  *  `workflowview.ts`'s `syntaxBroken`, which this mirrors exactly on purpose — #233 B3. The two
  *  must agree: if the view lets a human keep editing a file, `serializeWorkflowPreserving`
- *  (below) must not treat that same file as too broken to diff against, or the very first edit
+ *  (workflowserialize.ts) must not treat that same file as too broken to diff against, or the very first edit
  *  silently falls back to a full canonical rewrite for a reason the human was never shown. */
 export function isUnreadable(findings: readonly Finding[]): boolean {
   return findings.some((f) => f.code === "yaml-syntax" || f.code === "not-a-mapping");

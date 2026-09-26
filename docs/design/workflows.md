@@ -2539,7 +2539,7 @@ each of those forms had to be able to answer "may I offer this value?" — and a
 picker that can spell what `parse_workflow` refuses is the same lie as a pane
 that blesses an illegal file, just earlier in the sequence. So `intake.source`,
 the intake label alphabet, the resource-name alphabet and the four numeric
-bounds joined the closed sets `workflowmodel.ts` already mirrors
+bounds joined the closed sets `workflowtypes.ts` already mirrors
 (`WORKFLOW_CLIS`, `BLOCK_KINDS`, `GATE_REQUIRES`, `roleHintRequires`), for the
 same reason and under the same discipline: hand-written because that module is
 pure and import-free, and *pinned* — `test/workflowschema.test.ts` now checks
@@ -2556,7 +2556,7 @@ those forms clamped `merge_queue.max_batch` to a hand-typed `64` — a ceiling n
 engine constant imposes and no manifest row declares — so typing `100` silently
 wrote `64`, and no test in the tree could see it, because the pin asserted only
 the bounds it happened to name. The fix is `POLICY_BOUNDS` in
-`workflowmodel.ts`: one table, keyed by manifest field id, that every bounded
+`workflowtypes.ts`: one table, keyed by manifest field id, that every bounded
 number in the pane reads, pinned against the manifest **in both directions** —
 a table bound the manifest does not declare fails, and a manifest bound no form
 reads fails too. `max` is compared *including its absence*, since a manifest row
@@ -2588,8 +2588,8 @@ annoy, it cannot mislead someone into a file that will not load — but it is a
 divergence, and it is written down here rather than discovered later.)
 
 The pane's `KNOWN_*` sets stay hand-written and are *pinned* by that test rather
-than read from the manifest at runtime. `workflowmodel.ts` is pure and
-import-free by design (its one import is a type), and a data file it had to load
+than read from the manifest at runtime. The model (`workflowtypes.ts` and its siblings behind the `workflowmodel.ts` barrel) is pure
+and import-free by design (its one import from outside that family is a type), and a data file it had to load
 before it could open a workflow would be a second way for the pane to fail at
 exactly the moment a human needs it to work. The test is the link between the
 two, and it is cheaper than the coupling would be.

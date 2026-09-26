@@ -1608,21 +1608,18 @@ pub fn opencode_session_usage(
     }))
 }
 
-/// Bytes read from the END of a transcript file for the tail-based signals
-/// (rev-42 Q4 cost fix): `latest_context_tokens` and `compact_boundary_count`
-/// both only ever need RECENT lines — the current context reading and any
-/// compaction boundary relevant to the pane's current arm state — never the
-/// full session history, which can reach many MB over a long-lived
-/// orchestrator. Generous relative to a handful of transcript lines (even a
-/// large tool-output turn) so the bound essentially never bites for what
-/// these two functions actually look at.
+/// Bytes read from the END of a transcript or rollout for tail-based context
+/// signals: the current context reading and compaction boundaries relevant to
+/// the pane's current arm state, never the full session history, which can
+/// reach many MB over a long-lived orchestrator. The bound is generous relative
+/// to a handful of lines, even with a large tool-output turn.
 const TRANSCRIPT_TAIL_READ_BYTES: u64 = 256 * 1024;
 
 /// Read the last `TRANSCRIPT_TAIL_READ_BYTES` of `path`, discarding a
 /// possibly-truncated leading partial line (unless the read reached the true
 /// start of the file, in which case there's nothing to truncate). `None` on
-/// any I/O failure.
-fn read_transcript_tail(path: &Path) -> Option<String> {
+/// any I/O failure. Shared by Claude transcript and Codex rollout readers.
+pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
     let mut file = fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     let start = len.saturating_sub(TRANSCRIPT_TAIL_READ_BYTES);

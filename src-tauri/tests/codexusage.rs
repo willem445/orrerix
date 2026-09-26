@@ -207,7 +207,7 @@ fn agent_context_signals_dispatches_codex_to_its_rollout_reader() {
 }
 
 #[test]
-fn a_compressed_rollout_has_no_codex_context_signal() {
+fn a_compressed_rollout_lookup_has_no_codex_context_signal() {
     let root = tempfile::tempdir().unwrap();
     write_raw(
         root.path(),
@@ -215,6 +215,7 @@ fn a_compressed_rollout_has_no_codex_context_signal() {
         &token_count_event(Usage { input: 123, ..Usage::default() }),
     );
     let session = PathSegment::parse(THREAD).unwrap();
+    assert!(find_codex_session_file(root.path(), &session).is_none());
     assert!(loomux_lib::modelstate::codex_compaction_signal_in(root.path(), &session).is_none());
 }
 

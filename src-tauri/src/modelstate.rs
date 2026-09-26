@@ -291,42 +291,34 @@ pub struct CodexContextReading {
 /// Read the newest token-count and turn-context records from a Codex rollout.
 ///
 /// `event_msg` / `token_count` records are scanned independently from
-/// `turn_context`: either may be absent, and the newest occurrence wins.
+/// `turn_context`: either may be absent, and the newest useful occurrence wins.
 pub fn codex_context_signal(text: &str) -> Option<CodexContextReading> {
-    let mut reading = CodexContextReading {
-        compaction_markers: text
-            .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|value| value.get("type").and_then(Value::as_str) == Some("compacted"))
-            .count() as u64,
-        ..CodexContextReading::default()
-    };
-    let mut found = reading.compaction_markers > 0;
-    let mut found_token_count = false;
-    let mut found_turn_context = false;
+    let mut reading = CodexContextReading::default();
+    let mut found = false;
 
-    for line in text.lines().rev() {
+    for line in text.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         match value.get("type").and_then(Value::as_str) {
-            Some("event_msg")
-                if !found_token_count
-                    && value.pointer("/payload/type").and_then(Value::as_str)
-                        == Some("token_count") =>
-            {
+            Some("compacted") => {
+                reading.compaction_markers += 1;
                 found = true;
-                found_token_count = true;
-                let info = value.pointer("/payload/info");
-                reading.tokens = info
-                    .and_then(|info| info.pointer("/last_token_usage/input_tokens"))
-                    .and_then(Value::as_u64);
-                reading.window_tokens = info
-                    .and_then(|info| info.get("model_context_window"))
-                    .and_then(Value::as_u64);
             }
-            Some("turn_context") if !found_turn_context => {
-                found_turn_context = true;
+            Some("event_msg")
+                if value.pointer("/payload/type").and_then(Value::as_str)
+                    == Some("token_count") =>
+            {
+                let Some(info) = value.pointer("/payload/info").filter(|info| info.is_object()) else {
+                    continue;
+                };
+                found = true;
+                reading.tokens = info
+                    .pointer("/last_token_usage/input_tokens")
+                    .and_then(Value::as_u64);
+                reading.window_tokens = info.get("model_context_window").and_then(Value::as_u64);
+            }
+            Some("turn_context") => {
                 let payload = value.get("payload");
                 reading.model = payload
                     .and_then(|payload| payload.get("model"))
@@ -345,19 +337,16 @@ pub fn codex_context_signal(text: &str) -> Option<CodexContextReading> {
     found.then_some(reading)
 }
 
-/// Resolve and read one Codex rollout, then map it to the shared compaction
-/// signal. Compressed winning rollouts intentionally produce no reading.
+/// Resolve and read one Codex rollout's bounded tail, then map it to the
+/// shared compaction signal. Compressed winning rollouts are rejected by the
+/// store lookup before this reader is called.
 #[doc(hidden)] // pub for the `codexusage` integration test
 pub fn codex_compaction_signal_in(
     root: &std::path::Path,
     session: &loomux_engine::pathseg::PathSegment,
 ) -> Option<crate::usage::CompactionSignal> {
     let path = loomux_engine::sessions::find_codex_session_file(root, session)?;
-    let name = path.file_name()?.to_str()?;
-    if name.ends_with(".zst") {
-        return None;
-    }
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = crate::usage::read_transcript_tail(&path)?;
     let reading = codex_context_signal(&text)?;
     Some(crate::usage::CompactionSignal {
         tokens: reading.tokens,

@@ -721,9 +721,13 @@ silently. The **raw YAML view** remains unaffected either way: it saves exactly 
 
 **The dogfood pin (`test/workflowdogfood.test.ts`) now asserts the fix, not just the mitigation
 around it**: re-serializing the shipped file with nothing changed reproduces it byte-for-byte,
-and editing one block's `model:` keeps the file preamble, every other block's own comment, and
-both section headers — while `rewriteImpact` over that same edit returns `null`, because it
-never was the whole-file reformat that guard exists for. `serializeWorkflow`'s own full-rewrite
+and editing ANY one block's `model:` keeps every comment line in place and every section header
+directly above the block it introduces — while `rewriteImpact` over that same edit returns
+`null`, because it never was the whole-file reformat that guard exists for. Those properties
+are derived over whatever blocks the shipped file declares; the literal specimens (named
+headers, a fan-out authored out of roster order, Format's dropped-comment count) live on a
+synthetic workflow in the same test file, so an edit to the shipped file cannot turn them red
+(#3507). `serializeWorkflow`'s own full-rewrite
 behavior is still pinned too (that's what Format uses), so both halves of the contract stay
 honest at once.
 

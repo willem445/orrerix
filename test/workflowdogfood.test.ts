@@ -135,6 +135,26 @@ const headersAboveBlocks = (t: string): Map<string, string[]> => {
   return out;
 };
 
+/** Every comment line OUTSIDE block `id`'s own body — the lines after its `- id:` line that are
+ *  blank or indented deeper than its `- ` marker. That body is the one region the preserving
+ *  serializer does NOT promise to keep: an edited block is regenerated from its fields, and "there
+ *  is no attempt to re-attach a comment to a field that changed underneath it" (`workflowmodel.ts`,
+ *  above `deepEqualValue`). Everything else — the header above the block, other blocks, other
+ *  sections — is an untouched region, and that is the contract a derived pin may hold any file to. */
+const commentsOutsideBlock = (t: string, id: string): string[] => {
+  const lines = t.split(/\r?\n/);
+  const start = lines.findIndex((l) => new RegExp(`^\\s*- id:\\s*${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`).test(l));
+  assert.ok(start >= 0, `sanity: block ${id} has an \`- id:\` line`);
+  const marker = lines[start].indexOf("-");
+  const inBody = new Set<number>();
+  for (let j = start + 1; j < lines.length; j++) {
+    const l = lines[j];
+    if (l.trim() !== "" && l.search(/\S/) <= marker) break;
+    inBody.add(j);
+  }
+  return lines.filter((l, i) => !inBody.has(i) && /^\s*#/.test(l));
+};
+
 /** A model value guaranteed to differ from the block's own, so the edit is never a no-op. */
 const otherModel = (m: string | undefined): string => (m === "sonnet" ? "opus" : "sonnet");
 
@@ -469,30 +489,57 @@ test("re-serializing this file with NOTHING changed reproduces it exactly", () =
   assert.equal(serializeWorkflowPreserving(workflow, text), text);
 });
 
-test("editing ANY one block's model keeps every comment line — and each header above its block", () => {
+test("editing ANY one block's model keeps every comment outside that block — and each header above its block", () => {
   // Derived over every block the real file declares, so no id is named (#3507), and it covers
   // both specimens the old literal pins held: a block BESIDE a section header, and the block
   // directly UNDER one (#3410, where the header sits inside the edited block's own segment and
   // the save used to drop it).
-  for (const source of [text, SPECIMEN]) {
+  //
+  // What a derived pin may hold the REAL file to is the serializer's own contract — untouched
+  // regions keep their comments — and no more. A comment written INSIDE a block (above its
+  // `model:`, say) is valid, and an edit to that block regenerates it from its fields and does not
+  // re-attach the comment (deliberately out of scope, `workflowmodel.ts`). So on the real file the
+  // comparison excludes the edited block's own body (`commentsOutsideBlock`); exact whole-file
+  // comment equality is asserted only on the SPECIMEN, whose content is known to carry none
+  // (#3513 review, rev-std finding 1).
+  const IN_BLOCK = SPECIMEN.replace("    kind: worker\n    cli: claude\n    model: sonnet", "    kind: worker\n    cli: claude\n    # a note on this block's model, written INSIDE the block\n    model: sonnet");
+  assert.notEqual(IN_BLOCK, SPECIMEN, "sanity: the in-block comment landed");
+  const cases: { name: string; source: string; exact: boolean }[] = [
+    { name: "the real file", source: text, exact: false },
+    { name: "SPECIMEN", source: SPECIMEN, exact: true },
+    { name: "SPECIMEN with an in-block comment", source: IN_BLOCK, exact: false },
+  ];
+  for (const { name, source, exact } of cases) {
     const { workflow } = parseWorkflow(source);
     const headers = headersAboveBlocks(source);
-    assert.equal(headers.size, workflow.blocks.length, "sanity: every block's `- id:` line was found");
+    assert.equal(headers.size, workflow.blocks.length, `${name}: sanity — every block's \`- id:\` line was found`);
     for (const target of workflow.blocks) {
+      const at = `${name} / ${target.id}`;
       const edited = {
         ...workflow,
         blocks: workflow.blocks.map((b) => (b.id === target.id ? { ...b, model: otherModel(b.model) } : b)),
       };
       const out = serializeWorkflowPreserving(edited, source);
-      assert.notEqual(out, source, `${target.id}: sanity — the edit changed the text`);
-      assert.deepEqual(parseWorkflow(out).workflow, edited, `${target.id}: the edit itself round-trips`);
-      assert.deepEqual(commentLines(out), commentLines(source), `${target.id}: a one-field edit costs no comment line, and moves none`);
-      assert.deepEqual(headersAboveBlocks(out), headers, `${target.id}: every header still sits directly above the block it introduces`);
+      assert.notEqual(out, source, `${at}: sanity — the edit changed the text`);
+      assert.deepEqual(parseWorkflow(out).workflow, edited, `${at}: the edit itself round-trips`);
+      assert.deepEqual(
+        commentsOutsideBlock(out, target.id),
+        commentsOutsideBlock(source, target.id),
+        `${at}: a one-field edit costs no comment line outside the edited block, and moves none`
+      );
+      if (exact) assert.deepEqual(commentLines(out), commentLines(source), `${at}: …and on the specimen, none at all`);
+      assert.deepEqual(headersAboveBlocks(out), headers, `${at}: every header still sits directly above the block it introduces`);
       // The rewrite-impact guard (Format's guard, not save's) does not fire for this: it is not
       // a whole-file canonical rewrite, just one changed field.
-      assert.equal(rewriteImpact(source, out, (t) => formatWorkflowText(t) === t), null, `${target.id}: not a reformat`);
+      assert.equal(rewriteImpact(source, out, (t) => formatWorkflowText(t) === t), null, `${at}: not a reformat`);
     }
   }
+
+  // NON-VACUITY for the exclusion: the in-block specimen really does carry a comment inside
+  // `w-one`'s body, so the case above exercises the region the pin must not hold — and the same
+  // file's OTHER blocks, edited, still keep that comment (it is outside their bodies).
+  assert.equal(commentLines(IN_BLOCK).length - commentsOutsideBlock(IN_BLOCK, "w-one").length, 1);
+  assert.equal(commentsOutsideBlock(IN_BLOCK, "w-two").length, commentLines(IN_BLOCK).length);
 
   // The specimen's literal headers, so "each header above its block" is witnessed on a file that
   // HAS headers above a first block — the real file is not required to keep any.

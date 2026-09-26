@@ -22,10 +22,11 @@
 // Run `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { sourceFiles } from "./support/sourcefiles.ts";
 import {
   ICON_NAMES,
   ICON_ROLE,
@@ -52,16 +53,9 @@ function body(name: IconName): string {
 
 const ROLES = Object.keys(ROLE_TOKEN) as IconRole[];
 
-function sourceFiles(dir: URL, prefix = ""): string[] {
-  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
-    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
-  });
-}
-
 function surfaceIconNames(dir: URL): Set<string> {
-  const consumers = sourceFiles(dir)
-    .filter((f) => f.endsWith(".ts") && f !== "icons.ts")
+  const consumers = sourceFiles(dir, [".ts"])
+    .filter((f) => f !== "icons.ts")
     .map((f) => readFileSync(new URL(f, dir), "utf8"))
     .join("\n");
   const used = new Set<string>();

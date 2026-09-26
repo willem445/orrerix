@@ -397,7 +397,7 @@ const FIELDS_WITHOUT_AN_EDITOR = new Set<string>([
   "block.effort",
   "block.context",
   // #1457. The pane READS, EMITS and VALIDATES `remote:` — the three tests above
-  // and `workflowmodel.test.ts`'s refusal tests are what check that — but the
+  // and `workflowvalidate.test.ts`'s refusal tests are what check that — but the
   // designer has no control for it yet, and deliberately not: R1 is the schema
   // and its refusals. An affordance for it waits on the operator binding
   // (#1458), which is what turns a label into a list of names worth offering.
@@ -1072,7 +1072,7 @@ test("…and a value outside a declared enum is still refused by the pane", () =
 //
 // The forms for `merge_queue:` and `resources:` clamp what they write, and the validation
 // pass flags a hand-written value outside the same range. Both read constants in
-// `workflowmodel.ts` — a hand-written mirror, like `WORKFLOW_CLIS` and `GATE_REQUIRES`
+// `workflowtypes.ts` — a hand-written mirror, like `WORKFLOW_CLIS` and `GATE_REQUIRES`
 // before them, and hand-written for the same reason (that module is pure and import-free,
 // so it cannot read the manifest at runtime).
 //

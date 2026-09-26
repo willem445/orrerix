@@ -271,7 +271,7 @@ test("a canonical save preserves the workflow's MEANING, exactly", () => {
   // supplies it: every list that REFERENCES a block (an edge's fan-out, `gates.merge.reviewers`)
   // is normalized into ROSTER order on the way out — `sortByBlocks`, argued at length in
   // `connectToGate`'s docblock ("SEAT ORDER IS NOT THE HUMAN'S") and pinned on minimal fixtures
-  // in `test/workflowmodel.test.ts` ("a fan-out collapses to one entry per source, its targets in
+  // in `test/workflowgraph.test.ts` ("a fan-out collapses to one entry per source, its targets in
   // ROSTER order" and "As a SET, not a sequence — and that is a property, not a concession"). It
   // is what makes two humans who wire the same graph in a different order get the same file. So
   // the graph is compared as a SET here, and the ORDERING is asserted separately, as the

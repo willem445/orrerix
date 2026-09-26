@@ -488,7 +488,7 @@ Module naming and navigation conventions are in
   DIVERGE, and that divergence is itself pinned (`assert.notDeepEqual`) so a later fixture edit
   reddens before the claims do. Signature: a doc block on why a list is appended rather than
   sorted, upstream of a serializer that sorts it — `sortByBlocks` has four call sites (#1396 B1;
-  `connectToGate`, `test/workflowmodel.test.ts`).
+  `connectToGate`, `test/workflowgraph.test.ts`).
 - **A test's specimen must stay a member of the class it witnesses.** When a directive
   moves a real specimen out of that class (a declared value converging with the
   default, a file gaining its "absent" block, a concrete list going stale), relocate

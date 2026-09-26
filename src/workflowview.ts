@@ -1406,7 +1406,7 @@ export class WorkflowView {
    *  at the top of the file: serializing a half-understood model back over the buffer
    *  would destroy the broken text the human is trying to fix.
    *
-   *  `isUnreadable` (workflowmodel.ts) is the same predicate `serializeWorkflowPreserving`
+   *  `isUnreadable` (workflowtypes.ts) is the same predicate `serializeWorkflowPreserving`
    *  gates its own fallback on (#233 B3) — the two must agree, or a file this view still lets
    *  the human edit (e.g. `version: 2`, unsupported but readable) would silently full-rewrite
    *  on its very first edit for a reason never shown here. */
@@ -1848,7 +1848,7 @@ export class WorkflowView {
   /** A bounded whole-number field for the policy sections, or EMPTY for "loomux's default".
    *
    *  The bounds are the engine's own (`RESOURCE_SLOTS_MAX`, `RESOURCES_MAX`, … — mirrored in
-   *  workflowmodel.ts), and they are enforced on the way into the MODEL rather than only as
+   *  workflowtypes.ts), and they are enforced on the way into the MODEL rather than only as
    *  `min`/`max` attributes: a spinner's attributes are advisory, and a typed `9999` would
    *  otherwise be written into a file the engine then refuses to load. The clamp is shown
    *  back on blur, so it is never a value the human can't see. A hand-written out-of-range
@@ -3956,7 +3956,7 @@ function nodeGroup(r: Rect, n: GraphNode, selected: boolean, drop = ""): SVGElem
  *  target that stays dark while you hover it and then refuses on release is the quiet half of
  *  the same broken promise #1387 is about. The answer is only ever "no": `dropError` asks
  *  `connectionError` about a name no block answers to, which cannot return null (pinned in
- *  test/workflowmodel.test.ts, "an edge that would be nonsense is refused before it is
+ *  test/workflowgraph.test.ts, "an edge that would be nonsense is refused before it is
  *  drawn"). So there is no `wf-drop-ok` rule for a ghost, and no in-port dot either — a dot
  *  sitting there permanently would offer a connection that can never be made. */
 function ghostGroup(r: Rect, id: string, drop = ""): SVGElement {

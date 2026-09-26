@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { sourceFiles } from "./support/sourcefiles.ts";
 
 // Every `var(--x)` the stylesheet reads with NO fallback must name a custom
 // property something defines — the stylesheet itself, or a `setProperty` in
@@ -28,18 +29,11 @@ export function undefinedVars(css: string, runtimeSet: ReadonlySet<string>): { u
   return { uses, missing: [...missing].sort() };
 }
 
-function sourceFiles(dir: URL, prefix = ""): string[] {
-  return readdirSync(new URL(prefix || ".", dir), { withFileTypes: true }).flatMap((entry) => {
-    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-    return entry.isDirectory() ? sourceFiles(dir, relative) : [relative];
-  });
-}
-
 const SRC_DIR = new URL("../src/", import.meta.url);
 
 function runtimeSetVars(root: URL): Set<string> {
   const out = new Set<string>();
-  for (const file of sourceFiles(root).filter((f) => f.endsWith(".ts"))) {
+  for (const file of sourceFiles(root, [".ts"])) {
     for (const m of readFileSync(new URL(file, root), "utf8").matchAll(/setProperty\(\s*["'`](--[A-Za-z0-9_-]+)["'`]/g)) out.add(m[1]);
   }
   return out;

@@ -371,7 +371,8 @@ below — they were three exclusive tabs originally, which turned out to be the 
 the pane. The canvas was also read-only in v1 (*"v2: the canvas edits the file"* below).
 
 `workflowmodel.ts` is the pure half (parse → validate → derive → serialize) and holds every
-rule; `workflowview.ts` is DOM. That split is the house convention (`taskboard` ↔ `tasksview`)
+rule (since #3498 F2 it is a re-export barrel over `workflowtypes`, `workflowparse`,
+`workflowserialize`, `workflowvalidate` and `workflowgraph`, one module per stage); `workflowview.ts` is DOM. That split is the house convention (`taskboard` ↔ `tasksview`)
 and it is what lets the validation pass — the part that actually earns the feature — be
 unit-tested without simulating a DOM.
 
@@ -612,7 +613,7 @@ all 60, silently, and hand the human a whole-file diff to discover later. #231 (
 an honest mitigation — warn once, before the first save that would do it — and named the real
 fix as a follow-up. This is that follow-up.
 
-**`serializeWorkflowPreserving(model, previousText)`** (`workflowmodel.ts`) is what `commit()`
+**`serializeWorkflowPreserving(model, previousText)`** (`workflowserialize.ts`) is what `commit()`
 calls now, instead of the fully canonical `serializeWorkflow`. It reuses the ORIGINAL text's own
 lines — comments, blank-line runs, key order, quoting — for every top-level piece the edit
 didn't touch, and falls back to the canonical emitters only for the piece that changed:
@@ -941,7 +942,7 @@ construction, not by remembering.
 | `dirtystate.ts` (#219) | `dirtyBuffers` / `quitDecision` / `dirtyBufferLines` (who is holding what, and may we quit), `keepOpenOnExit` (does a dead pane stay, and why), `discardEdits` (discard means discard) — all pure, all node:tested |
 | `pty.ts` / `main.ts` (#219) | `guardAppClose` (the Tauri close hook, kept on the one Tauri seam) + the quit guard and its awaited `flushTabs` |
 | `orchestration.ts` (#219) | group-end keeps a pane holding unsaved edits, and says so |
-| `workflowmodel.ts` (#222) | the pure half: the YAML subset, the schema, the canonical formatter, the pre-run validation pass, the derived graph — all node:tested |
+| `workflowmodel.ts` (#222; a barrel since #3498 F2) | the pure half: the schema (`workflowtypes.ts`), the YAML subset and parse (`workflowparse.ts`), the canonical and preserving formatters (`workflowserialize.ts`), the pre-run validation pass (`workflowvalidate.ts`), the derived graph (`workflowgraph.ts`) — all node:tested |
 | `workflowview.ts` (#222, restructured #880) | the DOM: roster + **docked inspector**, the **editable canvas** as the primary surface with raw YAML as a toggle over it, findings strip, save/conflict, the start + error surfaces — and the same `dirty` / `canDiscard` / `bufferReport` contract the editor has |
 | `workflowlayout.ts` (#222 v2) | the canvas's pure half: `.loomux/workflow.layout.json`, placement, hit-testing, edge routing — all DOM-free, all node:tested |
 | `modal.ts` (#222 v2) | `promptModal` — one line of text, validated on every keystroke (the affirm button is disabled while the id is bad), so a new block can be ASKED for its id instead of being given a generated one |

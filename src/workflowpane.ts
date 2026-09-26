@@ -308,7 +308,7 @@ export function savePlan(state: { exists: boolean; savedHash: string }): SavePla
  *  THE TRADE THIS EXISTS TO SURFACE, and — since #233 — where it still applies. Before #233,
  *  every form or canvas edit re-serialized the WHOLE workflow through the canonical formatter,
  *  every time, and the formatter did not preserve comments. Now an ordinary edit goes through
- *  `serializeWorkflowPreserving` (workflowmodel.ts), which reuses the original text for
+ *  `serializeWorkflowPreserving` (workflowserialize.ts), which reuses the original text for
  *  whatever it didn't touch — so this guard no longer needs to fire on every save. What is
  *  left is the explicit **Format** action: a human asking, in one step, to rewrite the whole
  *  file into canonical form — fixed key order, no comments, whatever was there before. For a

@@ -406,19 +406,28 @@ fn pi_table_rows(out: &str) -> Vec<(String, Option<TokenCount>)> {
 ///
 /// So an integer spelling is exact. A one-decimal spelling is not, and is
 /// read as the **lower edge of its rounding interval**, tagged `rounded`:
-/// `262.1K` → 262,050 and `1.0M` → 950,000, i.e. the printed value minus half
-/// a printed tenth (50 tokens for `K`, 50,000 for `M`). The direction is the
-/// decision (#993 S8): this window feeds the compaction threshold, where an
-/// understated window compacts a little early — safe — and an overstated one
-/// lets the CLI's own emergency compaction fire first. Reading the spelling
-/// at face value would overstate by up to that half-tenth (1,050,000 prints
-/// `1.1M`).
+/// the printed value minus half a printed tenth (50 tokens for `K`, 50,000
+/// for `M`) — `262.1K` → 262,050 — clipped to the suffix's own floor. pi only
+/// takes the `M` branch at 1,000,000 or more and prints exactly 1,000,000 as
+/// `1M`, so a rounded `M` spelling means at least 1,000,001; likewise `K`
+/// against 1,000. That clip is what decides `1.0M` → 1,000,001 and
+/// `1.0K` → 1,001 (the unclipped edge would be 950,000 and 950). The
+/// direction is the decision (#993 S8): this window feeds the compaction
+/// threshold, where an understated window compacts a little early — safe —
+/// and an overstated one lets the CLI's own emergency compaction fire first.
+/// Reading the spelling at face value would overstate by up to that
+/// half-tenth (1,050,000 prints `1.1M`); only for `1.0K`/`1.0M` does face value
+/// fall below every count that prints it.
 ///
 /// The edge is never above the real count. `toFixed(1)` picks the tenth
-/// nearest the double `count / unit`, so that double is at least the edge
-/// divided by `unit`; the double is within half an ulp of the exact quotient,
-/// which scaled back by `unit` is far below one token; and the edge and the
-/// count are both integers — so `count >= edge`.
+/// nearest the double `count / unit`, so that double is at least the unclipped
+/// edge divided by `unit`; the double is within half an ulp of the exact
+/// quotient, which scaled back by `unit` is far below one token; and the edge
+/// and the count are both integers — so `count >= edge`. The clip is the
+/// branch condition plus the exact-integer case. It is also TIGHT to within one
+/// token: the smallest count printing each rounded spelling is the edge or the
+/// edge plus one (plus one where the lower tie itself rounds down in binary —
+/// 1,950,000 prints `1.9M`, so `2.0M` starts at 1,950,001).
 ///
 /// Everything else — a second decimal, a decimal without a suffix, a sign, a
 /// separator, an unknown suffix, an empty cell — is `None`, and so is a count
@@ -440,7 +449,11 @@ fn parse_token_count(cell: &str) -> Option<TokenCount> {
         Some((whole, tenth)) if unit > 1 && tenth.len() == 1 && digits(whole) && digits(tenth) => {
             let tenths = tenth.parse::<u64>().ok()? * (unit / 10);
             let printed = whole.parse::<u64>().ok()?.checked_mul(unit)?.checked_add(tenths)?;
-            TokenCount { tokens: printed.checked_sub(unit / 20)?, rounded: true }
+            // A rounded spelling never names exactly `unit` (that prints as the
+            // integer `1K`/`1M`), and its branch needs `count >= unit` — so
+            // `unit + 1` is a floor the half-tenth edge must not go below.
+            let edge = printed.checked_sub(unit / 20)?.max(unit + 1);
+            TokenCount { tokens: edge, rounded: true }
         }
         _ => return None,
     };
@@ -1120,8 +1133,9 @@ Options:
             got.tokens,
             windows(&[
                 ("anthropic/claude-haiku-4-5", 200_000),
-                // `1.0M` came from 1,048,576; the bottom of [0.95M, 1.05M] is the edge.
-                ("google/gemini-2.5-pro", 950_000),
+                // `1.0M` came from 1,048,576. Its half-tenth edge (950,000) sits
+                // below the `M` branch's own floor, so the read is 1,000,001.
+                ("google/gemini-2.5-pro", 1_000_001),
                 ("google/gemini-3-pro", 1_000_000),
                 ("ollama/tiny-512", 512),
                 // `262.1K` came from 262,144; the bottom of [262.05K, 262.15K].
@@ -1211,12 +1225,14 @@ Options:
         // (count, what pi's formatTokenCount prints for it), produced by that
         // function (`SOURCE` list-models.ts:14-24) in node. The ties
         // (1,050 → `1.1K`, 1,050,000 → `1.1M`) land EXACTLY on the lower
-        // edge, which is what makes the edge the tightest safe reading:
-        // one token higher and these two would be overstated.
+        // edge: one token higher and these two would be overstated. The
+        // suffix-floor rows (1,001 → `1.0K`, 1,000,001 → `1.0M`) are the
+        // same from the other side — see the boundary test below.
         const PRINTED: &[(u64, &str)] = &[
             (1, "1"),
             (999, "999"),
             (1_000, "1K"),
+            (1_001, "1.0K"),
             (1_049, "1.0K"),
             (1_050, "1.1K"),
             (1_151, "1.2K"),
@@ -1226,6 +1242,7 @@ Options:
             (999_949, "999.9K"),
             (999_999, "1000.0K"),
             (1_000_000, "1M"),
+            (1_000_001, "1.0M"),
             (1_047_576, "1.0M"),
             (1_048_576, "1.0M"),
             (1_050_000, "1.1M"),
@@ -1245,6 +1262,25 @@ Options:
     }
 
     #[test]
+    fn a_rounded_spelling_at_the_suffix_boundary_reads_one_above_the_unit() {
+        // pi takes the `M` branch only at 1,000,000 or more and prints exactly
+        // 1,000,000 as `1M`, so `1.0M` names a count of at least 1,000,001 —
+        // and 1,000,001 does print `1.0M` (row above). The half-tenth edge
+        // alone would say 950,000: safe, but 50,001 tokens looser than the
+        // spelling allows, on the commonest rounded spelling in pi's catalog.
+        // Likewise `1.0K` against 1,000.
+        let m = parse_token_count("1.0M").expect("1.0M parses");
+        assert_eq!((m.tokens, m.rounded), (1_000_001, true), "1.0M reads one above the M floor");
+        let k = parse_token_count("1.0K").expect("1.0K parses");
+        assert_eq!((k.tokens, k.rounded), (1_001, true), "1.0K reads one above the K floor");
+        // The floor clips only the first tenth: `1.1M`'s own edge is above it.
+        assert_eq!(parse_token_count("1.1M").map(|r| r.tokens), Some(1_050_000));
+        // And an integer spelling at the floor is exact, not clipped.
+        assert_eq!(parse_token_count("1M").map(|r| r.tokens), Some(1_000_000));
+        assert_eq!(parse_token_count("1K").map(|r| r.tokens), Some(1_000));
+    }
+
+    #[test]
     fn a_pi_probe_carries_its_windows_and_other_clis_put_nothing_on_the_wire() {
         let (pi, complete) = probe_with("pi", |_program, args| match args {
             "--help" => Ok(PI_STYLE_HELP.to_string()),
@@ -1252,7 +1288,7 @@ Options:
         });
         assert!(complete);
         assert_eq!(pi.model_context_windows.get("google/gemini-3-pro"), Some(&1_000_000));
-        assert_eq!(pi.model_context_windows.get("google/gemini-2.5-pro"), Some(&950_000));
+        assert_eq!(pi.model_context_windows.get("google/gemini-2.5-pro"), Some(&1_000_001));
         assert_eq!(pi.model_context_windows_rounded, ids(&["google/gemini-2.5-pro", "openrouter/z-ai/glm-5.3-flash"]));
         let wire = serde_json::to_value(&pi).unwrap();
         assert_eq!(wire["model_context_windows"]["ollama/tiny-512"], 512);

@@ -48,7 +48,7 @@ export interface CliProbe {
    *  every other CLI; an id with no entry has no reported window. */
   model_context_windows?: Record<string, number>;
   /** Ids whose `model_context_windows` entry is a LOWER BOUND read off a
-   *  rounded spelling (`1.0M` → 950000), not the exact count. Absent when
+   *  rounded spelling (`262.1K` → 262050), not the exact count. Absent when
    *  none is. */
   model_context_windows_rounded?: string[];
   /** Human-readable failure reason when not available. */

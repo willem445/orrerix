@@ -72,15 +72,25 @@ millions with a `K`/`M` suffix: an integer when the count divides exactly
 installed 0.87.1 package (`pi-ai`'s `dist/providers/data/*.json`) print that way.
 
 **Decision: a rounded spelling is read as the lower edge of its rounding
-interval.** `262.1K` becomes 262,050 and `1.0M` becomes 950,000: the printed
-value minus half a printed tenth. Integer and raw spellings stay exact. The
-window feeds the compaction threshold. An understated window compacts a little
-early, which is safe; an overstated one lets the CLI's own emergency compaction
-fire first. Reading the spelling at face value would overstate by up to that
-half-tenth (1,050,000 prints `1.1M`). The edge is never above the real count,
-because `toFixed(1)` picks the tenth nearest the count. Face value ("nearest")
-is the alternative, and it is a one-line change in `parse_token_count`; the
-human may choose it.
+interval.** The edge is the printed value minus half a printed tenth, clipped
+to the suffix's own floor: `262.1K` becomes 262,050, and `1.0M` becomes
+1,000,001. pi takes the `M` branch only at 1,000,000 or more and prints exactly
+1,000,000 as `1M`, so `1.0M` always means more than a million; `K` is the same
+against 1,000. Integer and raw spellings stay exact.
+
+The reason for the lower edge is that the window feeds the compaction
+threshold. An understated window compacts a little early, which is safe; an
+overstated one lets the CLI's own emergency compaction fire first. Reading the
+spelling at face value would overstate by up to that half-tenth (1,050,000
+prints `1.1M`), except for `1.0K` and `1.0M`, where face value falls below
+every count that prints them. `1.0M` is 225 of the catalog's 721 rounded
+windows.
+
+The edge is never above the real count, because `toFixed(1)` picks the tenth
+nearest the count and the clip is pi's own branch condition. It is also tight
+to within one token: the smallest count printing each rounded spelling is the
+edge or the edge plus one. Face value ("nearest") is the alternative, and it
+is a one-line change in `parse_token_count`; the human may choose it.
 
 A consumer labels a window from an id in `model_context_windows_rounded`
 `reported-rounded` rather than `reported` on the ladder's rung (2).

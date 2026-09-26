@@ -37,7 +37,7 @@ cargo test --locked --workspace    # backend unit + integration tests
   extend a `test/*.test.ts` that drives the new behavior with realistic
   inputs, and also run a quick one-off `node --test` on that file.
 - **Backend orchestration logic**: drive it through
-  `src-tauri/tests/orchestration.rs` — it dispatches real MCP JSON through
+  `src-tauri/tests/orchestration/` — it dispatches real MCP JSON through
   `dispatch()` against a real `OrchRegistry` in a temp dir. Faking an agent =
   creating a registry entry + calling tools with its `Caller`; never spawn a
   real CLI.

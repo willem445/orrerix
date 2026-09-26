@@ -37,7 +37,7 @@ invisible to agents and auditors.
    every role that can see the tool (orchestrator.md, worker.md, reviewer.md,
    planner.md — they're `include_str!`'d, so a rebuild picks them up).
 
-5. **Tests — `src-tauri/tests/orchestration.rs`** (must stay an integration
+5. **Tests — `src-tauri/tests/orchestration/`** (must stay an integration
    test — see CLAUDE.md constraint 4). Drive the real `dispatch()` with a
    `Caller` of each relevant role and assert: the happy path, the
    wrong-role rejection, and the cross-group rejection. Never spawn a real

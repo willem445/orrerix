@@ -3,7 +3,7 @@
 // WHY THIS IS A SOURCE SCAN, AND WHY IT IS HERE AT ALL.
 //
 // Item 5's promise is that a launch opens NO worker panes. `starter_workers` pins the
-// decision (src-tauri/tests/orchestration.rs) and that is the half a unit test can reach.
+// decision (src-tauri/tests/orchestration/) and that is the half a unit test can reach.
 // The half it cannot is the one that makes the decision *apply*: the launcher expresses
 // "no starters" by OMITTING the `initialWorkers` key, which is only 0 because the backend
 // argument is `Option<u32>` and tauri maps a missing key to `None`. That contract spans the

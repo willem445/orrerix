@@ -23,7 +23,7 @@
 // exercised is therefore the whole frontend half: handler → `readingsByPty` →
 // `setQueueDepth` → DOM/CSS → dock mirror. What is NOT exercised is the Rust
 // producer that decides *when* to emit; that half is pinned by the eight
-// backend tests in `src-tauri/tests/orchestration.rs` (queue depth, the
+// backend tests in `src-tauri/tests/orchestration/` (queue depth, the
 // oldest-entry clock, the stall threshold, the coarsening, and the emit skip
 // with its release). Splitting it this way is deliberate: producing a real
 // queued delivery would mean spawning a real agent CLI, which this repo

@@ -42,7 +42,7 @@
 
 import type { ModelDetail } from "./modelcatalog.ts";
 
-/** One knob's row in a CLI's capability record (`cli_knobs_json`, mod.rs).
+/** One knob's row in a CLI's capability record (`cli_knobs_json`, commands/launch.rs).
  *  `note` is always populated for a CLI loomux has evaluated: an empty `values`
  *  is a CLAIM, and the note is the vendor fact behind it. */
 export interface CliKnobValues {

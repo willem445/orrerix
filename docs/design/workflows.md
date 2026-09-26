@@ -2279,9 +2279,12 @@ not turn main red. No roster id, cli, model, effort, block order, gate `require:
 holds of every valid workflow or is derived from the parsed file (the end-to-end launch pin
 reads each block's expected cli, model and effort off the file). A pin that genuinely needs a
 literal — a section header, an edge authored out of roster order, a routing glob for the
-existence check's control — sits on a synthetic specimen instead. One consequence is stated
-rather than pinned: block ORDER decides which reviewer a bare `spawn_agent(kind: "reviewer")`
-resolves to (`Guardrails::block_for` takes the first), and no test holds the order any more.
+existence check's control — sits on a synthetic specimen instead. Block ORDER is not pinned
+either, but one consequence of it is: a bare `spawn_agent(kind: "reviewer")` resolves to the
+FIRST reviewing block (`Guardrails::block_for`), so both suites assert that block is one the
+gate's static `reviewers:` list names — an every-round lane. That is membership, not a name or a
+position, so renaming or reordering gated lanes stays green, and only a routed-only or ungated
+lane moved first goes red.
 
 Two further pins protect narrower promises, and both are bound to a **persona file** rather
 than to roster membership. `the_checklist_reviewer_persona_carries_the_question_set` loads

@@ -8045,6 +8045,23 @@ blocks:
     // Everything below is about the merge gate, and a file with no gate is valid (#3507):
     // no verdict is then required of anyone, so there is nothing for it to hold.
     let Some(gate) = wf.gates.get("merge") else { return };
+    // A BARE `spawn_agent(kind: "reviewer")` lands on an every-round lane. Block ORDER is the
+    // operator's (#3507), but `block_for` takes the FIRST reviewing block, so a lane the gate's
+    // static list does not name — one routing adds only on some paths — moved first would make
+    // the default review the wrong lane on every PR with nothing else red. Membership, never a
+    // name or a position: asked through the real resolver, on the roster a group would run.
+    if !gate.reviewers.is_empty() {
+        let bare = clamped
+            .block_for(Role::Reviewer)
+            .expect("a roster whose gate names reviewers resolves a bare reviewer spawn");
+        assert!(
+            gate.reviewers.contains(&bare.id),
+            "a bare reviewer spawn resolves to {:?}, which the gate does not require every round ({:?}) — \
+             put a gated lane first",
+            bare.id,
+            gate.reviewers
+        );
+    }
     // No `require:` value is pinned: under ALL-PASS every named reviewer must speak, so
     // the need is the static list's length — the property, stated for whichever rule the
     // file chose. (#1176 refuses `routing:` beside `require: threshold` at parse.)

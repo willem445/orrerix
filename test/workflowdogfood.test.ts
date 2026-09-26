@@ -28,6 +28,7 @@ import {
   serializeWorkflow,
   serializeWorkflowPreserving,
   formatWorkflowText,
+  isReviewingBlock,
 } from "../src/workflowmodel.ts";
 import { rewriteImpact, rewriteImpactMessage } from "../src/workflowpane.ts";
 
@@ -251,6 +252,40 @@ test("every declared reviewer lane is named by the gate or by a routing rule, be
     [victim],
     "a declared lane that no rule and no gate names must fail — that is the whole point"
   );
+});
+
+/** The block a bare `spawn_agent(kind: "reviewer")` resolves to is the FIRST reviewing block in
+ *  the file (`Guardrails::block_for` / `isReviewingBlock`). Returns its id when it is NOT on the
+ *  gate's static list — the every-round lane — or null when it is, or when there is no static
+ *  list for it to be on. Value-free: no id, and no order, is named. */
+const bareReviewerOffTheEveryRoundLane = (w: Workflow): string | null => {
+  const everyRound = w.gates.merge?.reviewers ?? [];
+  if (everyRound.length === 0) return null;
+  const bare = w.blocks.find(isReviewingBlock);
+  return bare && !everyRound.includes(bare.id) ? bare.id : null;
+};
+
+test("a bare reviewer spawn lands on a lane the gate requires on EVERY PR", () => {
+  // Block ORDER is the operator's (#3507), but one consequence of it is not: a bare
+  // `spawn_agent(kind: "reviewer")` takes the FIRST reviewing block, and if that is a lane the
+  // gate's static list does not name — one routing adds only on some paths, or none at all — the
+  // default review is the wrong lane on every PR while nothing else goes red. So the invariant
+  // is membership, not a name or a position: however blocks are renamed or reordered, the first
+  // reviewer must be one the gate requires every round.
+  const { workflow } = parseWorkflow(text);
+  assert.equal(bareReviewerOffTheEveryRoundLane(workflow), null, "the bare reviewer spawn must be an every-round lane");
+
+  // CONTROLS, on the specimen, where `r-one` is static and `r-two` only routed.
+  const spec = parseWorkflow(SPECIMEN).workflow;
+  const first = (id: string, w: Workflow): Workflow => ({
+    ...w,
+    blocks: [...w.blocks.filter((b) => b.id === id), ...w.blocks.filter((b) => b.id !== id)],
+  });
+  assert.equal(bareReviewerOffTheEveryRoundLane(spec), null, "sanity: the specimen starts clean");
+  assert.equal(bareReviewerOffTheEveryRoundLane(first("r-two", spec)), "r-two", "a routed-only lane moved first must fail");
+  // …and reordering among gated lanes is the operator's, so it stays green.
+  const bothStatic = { ...spec, gates: { ...spec.gates, merge: { ...spec.gates.merge!, reviewers: ["r-one", "r-two"] } } };
+  assert.equal(bareReviewerOffTheEveryRoundLane(first("r-two", bothStatic)), null, "any gated lane may come first");
 });
 
 test("a routing path rooted at a literal directory is rooted at one that EXISTS", () => {

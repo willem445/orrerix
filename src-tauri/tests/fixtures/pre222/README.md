@@ -1712,25 +1712,25 @@ comparison is honest either way. If it still says MISMATCH, that is a real one.
 - **#3407, compact before idling with no work** — `orchestrator.md` only. The other eight
   goldens are byte-identical to their previous blessed copies.
 
-  One line added to the **Compact at lulls** bullet, after the sentence that explains
-  `request_compact` flags the pane rather than compacting it: always compact before ending a
-  turn with nothing in flight (no delegates, drives, watches), because a wake past the
-  provider's prompt-cache TTL re-reads the whole context uncached. It is the resident half of
-  #3407's acceptance criterion 3; the orrerix-side half is `cache_idle_nudge_tick`, which
-  types `[orrerix] going idle with no work — compact now` into a pane that forgot. The core
-  goes from 34,822 B to 34,987 B against `RESIDENT_CORE_BUDGET`'s 35,000 — 13 B of margin,
-  and the two comments in `tests/orchestration.rs` that date the margin to a blob are moved
-  to the new one.
+  Two edits to the **Compact at lulls** bullet, the resident half of #3407's acceptance
+  criterion 3; the orrerix-side half is `cache_idle_nudge_tick`, which types `[orrerix] going
+  idle with no work — compact now` into a pane that forgot. First, "or with nothing in flight"
+  joins the bullet's list of quiet points at which to call `request_compact()`: "before you go
+  idle waiting on CI or a human or with nothing in flight". Second, "nothing is in flight"
+  becomes one of the specific reasons the same bullet's 50% rule allows. The rule is the
+  human's and stays, and naming this reason is what keeps the two sentences from
+  contradicting each other.
+
+  The core had to fit `RESIDENT_CORE_BUDGET` (35,000 B, not raised). The base is 34,986 B, so
+  the two edits could add at most 14 B, and they add more than that on their own. So the
+  50% rule's reasons sentence was tightened, with words cut and no rule or meaning changed:
+  "you're about to do something that will need the headroom" became "you'll soon need the
+  headroom", and "you're already close to the next natural lull anyway" became "the next
+  natural lull is close anyway". The core is now 34,992 B over 509 lines, 8 B under the
+  budget, at blob `ef585635`. The two comments in `tests/orchestration.rs` that date the
+  margin to a blob name it.
 
   Both re-bless checks above were run: the patch on the golden is byte-identical to the patch
-  on the live template (`git diff -U0` on each, compared), and the added line carries no
-  `{{...}}` key, so `live-minus-keys == golden` holds exactly where it held before.
-
-  Review round 1 re-blessed `orchestrator.md` again. The new line said ALWAYS compact with
-  nothing in flight, while the same bullet's human rule says not to compact below 50% "unless
-  you have a specific reason", and the two read as a contradiction. The rule is kept, and
-  ending a turn with nothing in flight is now one of its listed specific reasons, pointing back
-  at the ALWAYS line. Both lines were tightened to fit: the core is 34,984 B, 16 B under the
-  budget, and the two blob-dated comments move to blob `3b335b0e`. The same checks were run:
-  the golden's patch is identical to the live template's, and neither line carries a `{{...}}`
-  key.
+  on the live template (`git diff -U0` against `main` on each, compared), and neither changed
+  line carries a `{{...}}` key, so `live-minus-keys == golden` holds exactly where it held
+  before.

@@ -175,19 +175,22 @@ as a follow-up rather than built speculatively.
 
 Two halves, because a rule an agent can forget needs a backstop that cannot.
 
-**The resident rule.** It is one line in `orchestrator.md`'s *Compact at lulls*
-bullet: always compact before ending a turn with nothing in flight, because a wake
-past the TTL re-reads the whole context uncached.
+**The resident rule.** In `orchestrator.md`'s *Compact at lulls* bullet, "or with
+nothing in flight" joins the list of quiet points at which to call `request_compact()`:
+before going idle waiting on CI or a human, or with nothing in flight. The reason is
+this note's whole argument: a wake past the TTL re-reads the whole context uncached.
+The template itself carries only the rule, because the resident core is under a byte
+budget.
 
-That line has to agree with the rule further down the same bullet, which is the
+That rule has to agree with the rule further down the same bullet, which is the
 human's: every compact costs a full re-grounding cycle, so do not compact below 50%
-context "unless you have a specific reason". Ending a turn with nothing in flight is
-now **named as one of those reasons**, so the two lines are one rule, not two that
-contradict each other. Below 50% the resident rule still says compact, while the
-backstop does not nudge. That asymmetry is deliberate: the orchestrator's own call
-may take a small compact, but orrerix's unprompted nudge keeps the floor it has
-always kept. The resident core is under a byte budget, and both lines were
-tightened to fit it.
+context "unless you have a specific reason". "Nothing is in flight" is **named as one
+of those reasons**, so the two are one rule, not two that contradict each other.
+Below 50% the resident rule still says compact, while the backstop does not nudge.
+That asymmetry is deliberate: the orchestrator's own call may take a small compact,
+but orrerix's unprompted nudge keeps the floor it has always kept. Fitting both edits
+under the budget meant tightening that reasons sentence by cutting words only; the
+`pre222` re-bless log records the exact before and after.
 
 **The backstop, `cache_idle_nudge_tick`.** It runs on the compact-nudge loop, after
 `compact_nudge_tick`, so the quiet clock it reads has already folded this tick's

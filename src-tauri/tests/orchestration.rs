@@ -39278,7 +39278,7 @@ fn statusline_spawn_writes_a_status_line_chaining_the_effective_user_command() {
     let sl = settings_of(&w.id)["statusLine"].clone();
     assert!(sl["command"].as_str().unwrap().ends_with(" 'echo from-project'"), "{sl}");
     assert_eq!(sl["refreshInterval"], 7);
-    assert!(sl.get("padding").is_none(), "the winning layer's fields only, never a blend: {sl}");
+    assert!(sl.get("padding").is_none(), "loomux carries the winning layer's fields only (a per-field blend across layers is a documented residual): {sl}");
 
     // …and local project beats shared project.
     fs::write(

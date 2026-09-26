@@ -1,7 +1,8 @@
 # Per-pane model and context state (#993)
 
 This note records the planned sources and capability facts for pane context
-state. S0 adds capability metadata only; no reader consumes it yet. A source
+state. S0 added capability metadata only. S1 adds the first reader: Claude's
+status-line payload (see [S1](#s1-the-claude-status-line-source)). A source
 is read from the CLI's artifact rather than inferred from a model name.
 
 ## Source matrix
@@ -34,26 +35,125 @@ may also self-compact (Tier 3); later slices must still arrange
 offload/re-grounding before that automatic compaction. Gemini remains
 unclassified here.
 
-## Window selection ladder (planned)
+## Window selection ladder
 
-`effective_context_window_tokens` will select, in order: (1) group override,
-(2) a CLI-reported window (Claude status line, Codex token-count event, or pi
-model list/RPC), (3) the existing conservative Claude model table while no
-status-line report is available, and (4) an empirical clamp that widens a
-window when observed usage exceeds it. The last rung must be tagged `clamped`.
-A reported window is not replaced by a model-name guess.
+`effective_context_window_tokens` selects, in order: (1) group override,
+(2) a CLI-reported window, (3) the existing conservative Claude model table
+while no status-line report is available, and (4) an empirical clamp that
+widens a window when observed usage exceeds it, tagged `clamped`. A reported
+window is not replaced by a model-name guess. S1 ships the ladder
+(`modelstate::context_window_ladder`) and the Claude status line as rung 2's
+first source. The Codex token-count event (S2a) and pi's model list (S8)
+**will** feed the same rung.
+
+The clamp never overrules an override. A human who set 200K on a pane that
+reads 250K has a deployment the override exists to describe. The percent
+saturates at 100 either way, which escalates.
+
+## S1: the Claude status-line source
+
+Claude Code runs a `statusLine` command once when a session starts or
+resumes, and again on each new assistant message, when `/compact` finishes,
+and on a few UI events. Updates are debounced at 300 ms. The command gets a
+JSON payload on stdin and the CLI displays whatever it prints
+([status line](https://code.claude.com/docs/en/statusline)). That payload
+carries the one fact no transcript records: `context_window.context_window_size`,
+"200000 by default, or 1000000 for models with extended context". It also
+carries `model.id`, `effort.level` and `session_id`.
+
+**The hook.** loomux's `--settings` file gains a `statusLine` entry whose
+command runs `COMPACT_HOOK_SCRIPT`'s `statusline` arm. The arm reads the
+payload into a variable and writes it to
+`<group>/hooks/<agent>.statusline.json` via a `.tmp` file and `mv -f`, so the
+tick never reads a torn file. It then feeds the same payload to the human's
+own status-line command, passed as `$4`, and prints nothing of its own. It
+exits 0 on every path. The entry exists exactly when the lifecycle hooks do:
+same script, same absolute `sh`.
+
+**Why it chains (the human's decision on #993).** Settings precedence is
+managed, then `--settings`, then `.claude/settings.local.json`, then
+`.claude/settings.json`, then `~/.claude/settings.json`
+([settings](https://code.claude.com/docs/en/settings), "Settings
+precedence"). So loomux's `statusLine` replaces the human's in an orrerix
+pane. Chaining keeps their line: loomux resolves it once at spawn and passes
+it as `$4`, single-quoted so it arrives byte for byte. It also copies that
+layer's `padding` and `refreshInterval`. With no status line configured,
+nothing is printed, which is what a plain claude pane with none shows.
+
+The chain runs as `( eval "$chain" )` rather than `sh -c "$4"`. A bare `sh`
+is a PATH lookup, and on Windows a CLI's hook PATH can lack Git's `usr\bin`
+(#335). The subshell confines a syntax error in the human's command, which
+is fatal to the shell that `eval`s it.
+
+**What each source owns** (`modelstate::enrich_with_statusline`). The
+transcript reading is the base. While the snapshot's `session_id` is the
+agent's current one, it supplies model, effort and window. Tokens stay the
+transcript's: the docs define `total_input_tokens` with the same input-only
+formula as `usage::latest_context_tokens`, and the compaction state
+machine's token baselines were measured from the transcript. Snapshot tokens
+fill in only when the transcript tail has no reading. A `current_usage` of
+`null` (before the first API call, right after `/compact`) is no reading,
+never a `0`, since a fabricated `0` looks like a compaction's token drop.
+With no transcript there is no signal at all, so a snapshot can never seed
+the boundary-count baseline the resolver compares against.
+
+### Departures from the plan, approved on #993
+
+1. **Freshness.** The plan said the snapshot is preferred "when its
+   session_id matches and it is at least as fresh as the transcript read".
+   An mtime comparison flaps. The status line re-runs on a new assistant
+   message, but the transcript also grows on every tool result and user
+   line, so mid-turn the transcript is routinely the newer file. The window
+   would alternate between reported and table on successive ticks, and the
+   escalation percent with it. Model, effort and window are session facts:
+   they change on `/model` or `/effort`, and the status line re-runs on the
+   next assistant message, the same event that writes the transcript's next
+   model. So the session match alone gates them. Pinned by
+   `statusline_snapshot_older_than_the_transcript_still_supplies_the_window`.
+2. **Where the human's command is read.** The plan said "read once at spawn
+   from `~/.claude/settings.json`". `--settings` also outranks both project
+   layers, so a project-level `statusLine` would be replaced and never
+   chained. loomux therefore resolves the effective one, first
+   `statusLine` of `type: "command"` wins, across
+   `<cwd>/.claude/settings.local.json`, `<cwd>/.claude/settings.json` and
+   the user file. A registry that is not the human's live one reads a
+   contained stand-in for the user file (#502).
+
+### Residuals
+
+- **Managed settings outrank `--settings`.** A managed `statusLine` replaces
+  loomux's entry, the arm never runs, and no snapshot is written. The pane
+  falls back to the transcript reader and the model table, which is the
+  behaviour before S1.
+- **`CLAUDE_CONFIG_DIR` is not honoured** for the user layer. The docs say
+  it relocates the home-directory settings, and loomux's transcript root
+  ignores it too. A human who sets it gets the project layers only.
+- **A failing command still shows its output.** The docs say a non-zero exit
+  blanks the status line, but the arm exits 0 by decision, so a command that
+  prints and then fails shows its output in an orrerix pane.
+- **The human's command runs under the hook's POSIX `sh`**: Git's `sh.exe`
+  on Windows, `/bin/sh` elsewhere. The docs say only that the command "runs
+  in a shell", which on Windows is Git Bash when installed. A command using
+  a construct the POSIX `sh` lacks may behave differently from the same
+  command in a plain claude pane.
+- **One layer's fields.** loomux copies `padding` and `refreshInterval`
+  from the winning layer only. The docs do not say whether Claude merges a
+  nested `statusLine` object field by field across layers.
+- **Live validation is the human's**: whether the chained line renders
+  identically in a real pane (constraint 3 forbids spawning claude to check).
 
 ## Contract changes planned by later slices
 
-These are planned additions, not shipped behavior in S0:
+The S0 and S1 rows have shipped; the rest are planned:
 
 1. **S3 will** add `window_tokens`, `window_source`, `model`, `effort`, `source`,
    and `declared: {model, effort}` to `group_summary.agents[].context`.
-2. **S1 will** write the raw Claude status-line payload to
-   `<group>/hooks/<agent>.statusline.json` using a temporary file and rename.
+2. **S1 adds** the raw Claude status-line payload at
+   `<group>/hooks/<agent>.statusline.json`, written through a temporary file
+   and a rename.
 3. **S6 will** add optional `effort` to usage-series samples with a serde default.
-4. **S1 will** add a `statusLine` entry to Claude's `--settings` configuration;
-   the user's existing status-line command is intended to be chained.
+4. **S1 adds** a `statusLine` entry to Claude's `--settings` configuration,
+   chaining to the human's own status-line command (above).
 5. **S0 adds** `compact_command`, `self_compacts`, `compact_note`, and
    `context_reader` to `CliCaps`; no code reads these fields until later slices.
 

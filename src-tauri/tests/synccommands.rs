@@ -30,9 +30,12 @@
 //!
 //! # What it cannot see, stated
 //!
-//! - It scans `mod.rs` only. A sync command in another orchestration file is
-//!   invisible; there are none today, and the population floor below would not
-//!   notice if one appeared elsewhere.
+//! - It scans the files in [`ROOTS`]: `orchestration/mod.rs`, every file in
+//!   `orchestration/commands/` (a new one there fails `every_command_file_is_a_row`
+//!   rather than going unread), and `gh.rs`. A sync command in any OTHER file
+//!   is invisible — `orchestration/todo.rs` holds two commands today, both
+//!   `async`, so outside this class — and the population floor below would not
+//!   notice one appearing there.
 //! - It reads the body TEXT between the signature and the next column-0 `}`, so
 //!   it sees a wrapper mentioned anywhere in that body. The frame is what
 //!   matters and the frame is installed at this boundary, so that is the right
@@ -160,14 +163,30 @@ fn bare_commands(src: &str) -> Vec<String> {
     bare
 }
 
-fn module_src() -> String {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration/mod.rs");
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
+/// The orchestration rows of [`ROOTS`] — every file the orchestration module's
+/// commands can live in — as `(file, source)`, for the checks that ask about
+/// orchestration commands specifically rather than the whole registry-taking
+/// population.
+fn orchestration_sources() -> Vec<(&'static str, String)> {
+    registry_command_files()
+        .into_iter()
+        .filter(|(rel, _)| rel.starts_with("src/orchestration/"))
+        .collect()
 }
 
-/// Every file whose `#[tauri::command]`s can reach `Arc<OrchRegistry>` — the
-/// population the frame rule below is default-deny over (#2663, rev-final round
-/// 1, finding 2).
+/// Every file whose `#[tauri::command]`s can reach `Arc<OrchRegistry>`, and
+/// whether it must carry any — the population the frame rule below is
+/// default-deny over (#2663, rev-final round 1, finding 2).
+///
+/// **The orchestration commands live in `orchestration/commands/`** since
+/// #3498 P2 moved them out of `mod.rs`, one file per banner. Each of those
+/// files is a row, and `every_command_file_is_a_row` fails the day a file
+/// appears there without one — a directory of rows is the shape where "the
+/// next file is the one nobody listed" is the realistic miss. `mod.rs` and
+/// `commands/mod.rs` stay rows marked `false`: neither holds a command today,
+/// so neither gets the per-root "yields commands" control, but a sync command
+/// added to either is still judged by the frame rule — the coverage `mod.rs`
+/// had when every command lived in it.
 ///
 /// It was `mod.rs` alone until `gh.rs` grew two commands that resolve the
 /// registry (`app.state::<Arc<OrchRegistry>>()`), which is the moment a guard
@@ -184,30 +203,78 @@ fn module_src() -> String {
 /// `every_tauri_command_in_this_module_is_async_and_delegates`, which fails if
 /// any command there stops being `async`; the day one does, it lands in this
 /// scan's population and the frame rule judges it. The floor below stays on the
-/// combined count, where `mod.rs` alone already clears it.
+/// combined count, where the orchestration rows alone already clear it.
+const ROOTS: &[(&str, bool)] = &[
+    ("src/orchestration/mod.rs", false),
+    ("src/orchestration/commands/mod.rs", false),
+    ("src/orchestration/commands/attention.rs", true),
+    ("src/orchestration/commands/autonomy.rs", true),
+    ("src/orchestration/commands/channels.rs", true),
+    ("src/orchestration/commands/guardrails.rs", true),
+    ("src/orchestration/commands/humanside.rs", true),
+    ("src/orchestration/commands/launch.rs", true),
+    ("src/orchestration/commands/mergegate.rs", true),
+    ("src/orchestration/commands/panes.rs", true),
+    ("src/orchestration/commands/tasks.rs", true),
+    ("src/gh.rs", true),
+];
+
 fn registry_command_files() -> Vec<(&'static str, String)> {
-    ["src/orchestration/mod.rs", "src/gh.rs"]
-        .into_iter()
-        .map(|rel| {
+    ROOTS
+        .iter()
+        .map(|(rel, _)| {
             let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
             let src = std::fs::read_to_string(&p)
                 .unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
-            (rel, src)
+            (*rel, src)
         })
         .collect()
+}
+
+/// Every `.rs` in `src/orchestration/commands/` is a [`ROOTS`] row (#3498 P2).
+///
+/// The rows are a list and the directory is a population, and a list over a
+/// population goes stale in one direction: a NEW file is read by nothing, so a
+/// sync command in it is judged by nothing, and every other assertion in this
+/// file stays green over it. Compared as sets, so a row naming a file that no
+/// longer exists fails here too, not only as the read panic in
+/// `registry_command_files`.
+#[test]
+fn every_command_file_is_a_row() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration/commands");
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+        .map(|e| e.expect("dir entry").file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".rs"))
+        .map(|n| format!("src/orchestration/commands/{n}"))
+        .collect();
+    on_disk.sort();
+    let mut rows: Vec<String> = ROOTS
+        .iter()
+        .map(|(rel, _)| rel.to_string())
+        .filter(|rel| rel.starts_with("src/orchestration/commands/"))
+        .collect();
+    rows.sort();
+    // Population control: the listing really saw the directory's files.
+    assert!(on_disk.len() >= 5, "read_dir found only {on_disk:?} — the directory moved");
+    assert_eq!(
+        on_disk, rows,
+        "every file in src/orchestration/commands/ must be a ROOTS row, and every such row a \
+         file — a command file this scan does not read is one whose sync commands nobody judges"
+    );
 }
 
 #[test]
 fn every_sync_orchestration_command_is_frame_mandatory_or_cannot_lock() {
     let files = registry_command_files();
-    assert_eq!(files.len(), 2, "both registry-taking roots must be read");
+    assert_eq!(files.len(), ROOTS.len(), "every registry-taking root must be read");
 
     let mut total = 0usize;
     let mut bare = Vec::new();
     for (rel, src) in &files {
         total += sync_commands(src).len();
-        // The file is named on every row: a violation in the root that was
-        // added second must not read as one in `mod.rs`.
+        // The file is named on every row: a violation in one root must not
+        // read as one in another.
         bare.extend(bare_commands(src).into_iter().map(|b| format!("{rel}: {b}")));
     }
 
@@ -233,7 +300,11 @@ fn every_sync_orchestration_command_is_frame_mandatory_or_cannot_lock() {
     // and really does carry commands of the shape this scan parses; the
     // *sync* count staying 0 for `gh.rs` is then a fact about gh.rs rather
     // than about the instrument.
-    for (rel, src) in &files {
+    for ((rel, src), (_, holds_commands)) in files.iter().zip(ROOTS) {
+        if !holds_commands {
+            // `mod.rs` and `commands/mod.rs`: scanned above, carry none.
+            continue;
+        }
         let commands = src.matches("#[tauri::command]").count();
         assert!(
             commands > 0,
@@ -288,15 +359,17 @@ fn every_no_registry_exemption_still_names_a_live_registry_free_command() {
     // that is still registry-free — a rename, a deletion, or a command that
     // GAINS a registry parameter all fail here rather than silently widening
     // the exemption.
-    let src = module_src();
-    let cmds = sync_commands(&src);
+    let cmds: Vec<(&str, SyncCommand)> = orchestration_sources()
+        .into_iter()
+        .flat_map(|(rel, src)| sync_commands(&src).into_iter().map(move |c| (rel, c)))
+        .collect();
     for (name, reason) in NO_REGISTRY {
-        let Some(c) = cmds.iter().find(|c| &c.name == name) else {
+        let Some((rel, c)) = cmds.iter().find(|(_, c)| &c.name == name) else {
             panic!("NO_REGISTRY row `{name}` ({reason}) names no synchronous command any more");
         };
         assert!(
             !c.takes_registry,
-            "NO_REGISTRY row `{name}` now TAKES a registry (mod.rs:{}) — its exemption said {reason}, \
+            "NO_REGISTRY row `{name}` now TAKES a registry ({rel}:{}) — its exemption said {reason}, \
              which is no longer true, so it needs a command-boundary frame",
             c.line
         );
@@ -415,7 +488,10 @@ fn this_scan_and_perf_dispatch_agree_on_which_orchestration_commands_are_sync() 
     // tell which.
     //
     // Containment, not equality, in BOTH directions and for different reasons.
-    let mine: Vec<String> = sync_commands(&module_src()).into_iter().map(|c| c.name).collect();
+    // Every orchestration root, joined: the name-to-file check below asks
+    // "does this fn live in the orchestration command files", not which one.
+    let src: String = orchestration_sources().into_iter().map(|(_, s)| s).collect::<Vec<_>>().join("\n");
+    let mine: Vec<String> = sync_commands(&src).into_iter().map(|c| c.name).collect();
     let manifest = perf_dispatch_manifest();
     assert!(manifest.len() >= 20, "the manifest read found {} rows — the extraction is blind", manifest.len());
 
@@ -429,19 +505,19 @@ fn this_scan_and_perf_dispatch_agree_on_which_orchestration_commands_are_sync() 
     );
 
     // Direction 2 is the one that guards THIS file. A manifest row whose `fn`
-    // lives in `mod.rs` must have been found by the scan above; if it was not,
+    // lives in an orchestration root must have been found by the scan above; if it was not,
     // this scan is blind to a command it is supposed to be guarding, and the
     // frame check silently covers a smaller set than it claims. Matched by a
     // different path than the scan uses — name-to-file rather than
     // attribute-to-fn — so the two are not blind in the same way.
-    let src = module_src();
     let blind: Vec<&String> = manifest
         .iter()
         .filter(|n| src.contains(&format!("pub fn {n}(")) && !mine.contains(n))
         .collect();
     assert!(
         blind.is_empty(),
-        "perf_dispatch argues these as sync commands in mod.rs and this scan did not see them — \
+        "perf_dispatch argues these as sync commands in an orchestration root and this scan did \
+         not see them — \
          the frame guard is covering less than it claims: {blind:?}"
     );
 }

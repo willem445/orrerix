@@ -1239,7 +1239,9 @@ fn every_shim_name_ensure_shims_writes_is_one_the_prune_keeps() {
     assert_eq!(written, names, "the shim names written and the names the prune keeps must be one set");
 }
 
-/// Every `#[tauri::command]` site in `src/orchestration/mod.rs`, as
+/// Every `#[tauri::command]` site in `src/orchestration/mod.rs` and every file
+/// in `src/orchestration/commands/` — where #3498 P2 moved them, one banner per
+/// file, read as a directory so a new file there is scanned without a row — as
 /// `(name, is_async, body)`.
 ///
 /// A source scan, like `gh.rs`'s own `every_tauri_command_in_this_module_is_
@@ -1252,10 +1254,22 @@ fn every_shim_name_ensure_shims_writes_is_one_the_prune_keeps() {
 /// comment (it does — `run_blocking`'s doc names it) is skipped rather than
 /// mis-attributed to whatever function happens to follow.
 fn orchestration_command_sites() -> Vec<(String, bool, String)> {
-    let src = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration/mod.rs"),
-    )
-    .expect("src/orchestration/mod.rs must be readable from the manifest dir");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration");
+    let mut paths = vec![root.join("mod.rs")];
+    let mut commands: Vec<_> = fs::read_dir(root.join("commands"))
+        .expect("src/orchestration/commands/ must be readable from the manifest dir")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .collect();
+    commands.sort();
+    paths.extend(commands);
+    // Joined on a newline: a body ends at the first column-0 `}` below, and
+    // every file ends on one, so no site's body can run into the next file.
+    let src = paths
+        .iter()
+        .map(|p| fs::read_to_string(p).unwrap_or_else(|e| panic!("read {}: {e}", p.display())))
+        .collect::<Vec<_>>()
+        .join("\n");
     // Split so this test's own source never matches the marker it scans for.
     let marker = concat!("#[tauri::", "command]");
     let mut out = Vec::new();
@@ -1326,7 +1340,7 @@ fn the_polled_orchestration_commands_are_async_and_delegate_off_thread() {
     // must fail loudly rather than pass over nothing.
     assert!(
         sites.len() >= 60,
-        "the scan found only {} command sites in orchestration/mod.rs — the marker or the \
+        "the scan found only {} command sites in orchestration/ — the marker or the \
          signature shape has drifted, and every assertion below would be vacuous",
         sites.len()
     );
@@ -1383,8 +1397,9 @@ fn the_mcp_surface_has_no_path_to_the_answer_entry_point() {
     );
 
     // Nothing else in the backend may become an answering surface without this
-    // test noticing: the type is defined in `humanq.rs` and used in `mod.rs`
-    // (the trusted `orch_question_answer` command), and nowhere else.
+    // test noticing: the type is defined in `humanq.rs`, supplied by the trusted
+    // `orch_question_answer` command (`commands/humanside.rs`) and taken by
+    // `mod.rs`, and nowhere else.
     fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
@@ -1407,9 +1422,10 @@ fn the_mcp_surface_has_no_path_to_the_answer_entry_point() {
     mentions.sort();
     assert_eq!(
         mentions,
-        vec!["humanq.rs".to_string(), "mod.rs".to_string()],
-        "AnswerSource escaped its two homes (humanq.rs defines it; mod.rs's \
-         orch_question_answer supplies it). A new file naming it is a new answering surface — \
+        vec!["humanq.rs".to_string(), "humanside.rs".to_string(), "mod.rs".to_string()],
+        "AnswerSource escaped its homes (humanq.rs defines it; commands/humanside.rs's \
+         orch_question_answer supplies it; mod.rs's answer_question takes it). A new file \
+         naming it is a new answering surface — \
          which may be right (#947's bridge is planned), but is never accidental: read \
          humanq.rs's trust-boundary section, then update this list deliberately."
     );
@@ -1485,8 +1501,9 @@ fn the_mcp_surface_has_no_path_to_the_dismiss_entry_point() {
     );
 
     // Nothing else in the backend may become a dismissing surface without this
-    // test noticing: the type is defined in `humanq.rs` and used in `mod.rs`
-    // (the trusted `orch_question_dismiss` command), and nowhere else.
+    // test noticing: the type is defined in `humanq.rs`, supplied by the trusted
+    // `orch_question_dismiss` command (`commands/humanside.rs`) and taken by
+    // `mod.rs`, and nowhere else.
     fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
@@ -1509,9 +1526,10 @@ fn the_mcp_surface_has_no_path_to_the_dismiss_entry_point() {
     mentions.sort();
     assert_eq!(
         mentions,
-        vec!["humanq.rs".to_string(), "mod.rs".to_string()],
-        "DismissSource escaped its two homes (humanq.rs defines it; mod.rs's \
-         orch_question_dismiss supplies it). A new file naming it is a new dismissing surface — \
+        vec!["humanq.rs".to_string(), "humanside.rs".to_string(), "mod.rs".to_string()],
+        "DismissSource escaped its homes (humanq.rs defines it; commands/humanside.rs's \
+         orch_question_dismiss supplies it; mod.rs's dismiss_question takes it). A new file \
+         naming it is a new dismissing surface — \
          never accidental: read humanq.rs's trust-boundary section, then update this list \
          deliberately."
     );
@@ -1653,8 +1671,9 @@ fn the_mcp_surface_has_no_path_to_the_item_resolve_entry_point() {
     );
 
     // Nothing else in the backend may become a resolving surface without this
-    // test noticing: the type is defined in `needsyou.rs` and used in `mod.rs`
-    // (the trusted `orch_needs_you_resolve` command), and nowhere else.
+    // test noticing: the type is defined in `needsyou.rs`, supplied by the trusted
+    // commands (`commands/humanside.rs`, `commands/guardrails.rs`) and taken
+    // by `mod.rs`, and nowhere else.
     fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
@@ -1677,9 +1696,16 @@ fn the_mcp_surface_has_no_path_to_the_item_resolve_entry_point() {
     mentions.sort();
     assert_eq!(
         mentions,
-        vec!["mod.rs".to_string(), "needsyou.rs".to_string()],
-        "ResolveSource escaped its two homes (needsyou.rs defines it; mod.rs's \
-         orch_needs_you_resolve supplies it). A new file naming it is a new resolving surface — \
+        vec![
+            "guardrails.rs".to_string(),
+            "humanside.rs".to_string(),
+            "mod.rs".to_string(),
+            "needsyou.rs".to_string(),
+        ],
+        "ResolveSource escaped its homes (needsyou.rs defines it; commands/humanside.rs's \
+         orch_needs_you_resolve/dismiss and commands/guardrails.rs's orch_answer_pane_ui \
+         supply it; mod.rs's resolve_needs_you takes it). A new file naming it is a new \
+         resolving surface — \
          which may one day be right, but is never accidental: read needsyou.rs's resolve-boundary \
          section, then update this list deliberately."
     );

@@ -1837,12 +1837,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_compaction_and_context_capability_rows_are_pinned() {
+    fn caps_every_cli_compaction_and_context_row_is_pinned() {
         let expected = [
-            ("claude", Some("/compact"), true, ContextReader::ClaudeStatusline),
+            (
+                "claude",
+                Some("/compact"),
+                true,
+                ContextReader::ClaudeStatusline,
+            ),
             ("copilot", Some("/compact"), false, ContextReader::None),
             ("gemini", None, false, ContextReader::None),
-            ("opencode", Some("/compact"), true, ContextReader::OpencodeDb),
+            (
+                "opencode",
+                Some("/compact"),
+                true,
+                ContextReader::OpencodeDb,
+            ),
             ("pi", Some("/compact"), true, ContextReader::PiSession),
             ("codex", None, true, ContextReader::CodexRollout),
         ];
@@ -1859,16 +1869,20 @@ mod tests {
     }
 
     #[test]
-    fn only_the_documented_compactable_clis_have_a_paste_command() {
+    fn caps_only_documented_clis_have_a_paste_command() {
         let actual: std::collections::BTreeSet<_> = CLI_CAPS
             .iter()
             .filter(|caps| caps.compact_command.is_some())
             .map(|caps| caps.cli)
             .collect();
-        let expected: std::collections::BTreeSet<_> =
-            ["claude", "copilot", "opencode", "pi"].into_iter().collect();
+        let expected: std::collections::BTreeSet<_> = ["claude", "copilot", "opencode", "pi"]
+            .into_iter()
+            .collect();
         assert_eq!(actual, expected);
-        assert_eq!(cli_caps("claude").unwrap().compact_command, Some("/compact"));
+        assert_eq!(
+            cli_caps("claude").unwrap().compact_command,
+            Some("/compact")
+        );
     }
 
     /// The wire/label name of every capability class, written out once as

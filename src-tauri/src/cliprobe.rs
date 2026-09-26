@@ -387,7 +387,7 @@ fn pi_table_rows(out: &str) -> Vec<(String, Option<TokenCount>)> {
             let window = context_col
                 .filter(|_| cols.len() == width)
                 .and_then(|i| cols.get(i))
-                .and_then(|cell| parse_token_count(cell));
+                .and_then(|cell| parse_token_count(cell)).filter(|_| false);
             rows.push((format!("{provider}/{model}"), window));
         }
     }

@@ -192,7 +192,7 @@ gates:
     reviewers: [rev-std]
     routing:
       # application code, tests, the E2E lane, the launcher
-      - paths: ["src/**", "src-tauri/**", "crates/**", "test/**", "e2e/**", "scripts/**", "npm/**"]
+      - paths: ["src/**", "src-tauri/**", "crates/**", "test/**", "e2e/**", "scripts/**", "npm/**", "zzz-no-such-dir/**"]
         reviewers: [rev-final]
       # design notes that FIX a public contract later slices build against.
       # Evidenced: #1782 (S0 of #1778) passed rev-std with 0 open findings and

@@ -4071,9 +4071,28 @@ busy), awaiting evidence (busy observed, waiting on quiet to resolve), re-ground
 reinjection is in flight, with its attempt count), a recently finished re-grounding (see
 below), or a recent lost outcome (an arm or delivery that didn't resolve in time and was
 released rather than left stuck). An idle agent
-with nothing pending shows neither line. The percent is against the model's actual context
-window, so a larger tier (Opus) reads correctly — a group can override the guess explicitly
-if it's ever wrong for a given deployment.
+with nothing pending shows neither line. The percent is computed against the context window
+Claude Code itself reports, so a 1M-token session reads correctly on any model. Until a
+session's first report arrives, orrerix falls back to a conservative guess from the model name.
+A group can override the window explicitly if the report is ever wrong for a given deployment.
+If a pane ever holds more tokens than the chosen window, orrerix widens the window to match
+rather than showing an impossible figure. An explicit override is never widened.
+
+**Your status line still shows in orrerix panes.** Claude Code's reported window arrives through
+its [status line](https://code.claude.com/docs/en/statusline). orrerix gives each Claude pane
+its own `statusLine` setting, which records the reading and then runs *your* status-line
+command with the same input, so the line you see is yours. orrerix reads your command once, when
+the pane starts, from the first of `.claude/settings.local.json` and `.claude/settings.json` in
+the pane's directory, then `~/.claude/settings.json`, and keeps its `padding` and
+`refreshInterval`. If you have no status line configured, the pane shows none, as usual. Three
+exceptions:
+
+- A status line set in managed (organization) settings takes precedence over orrerix's. Your pane
+  shows that line, and orrerix falls back to its model-name guess.
+- A status-line command edited after a pane started takes effect in that pane only once it is
+  relaunched.
+- A command that prints and then exits non-zero still shows its output in an orrerix pane, where
+  plain Claude Code would blank the line.
 
 **A finished re-grounding tells you how strong the evidence behind it was.** Orrerix stops
 retrying a re-grounding on one of two signals, and they are not the same strength, so the

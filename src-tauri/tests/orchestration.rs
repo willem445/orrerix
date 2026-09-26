@@ -20811,6 +20811,159 @@ fn copilot_promptsubmit_hook_bash_appends_an_existence_marker() {
     assert!(records.iter().all(|r| r.text.is_none()), "Copilot never captures prompt text: {records:?}");
 }
 
+// ─────── #993 S1: the `statusline` hook arm — real-execution tests ───────
+//
+// Claude Code runs a `statusLine` command on every assistant message, pipes it
+// a JSON payload, and SHOWS whatever it prints. loomux's `--settings` entry
+// outranks the human's own, so this arm must save the payload for loomux and
+// hand it to the human's own command, printing nothing of its own — the human's
+// line must look identical in an orrerix pane. Every test runs the real script
+// under a real `sh` against a faked stdin; no claude is spawned (constraint 3).
+
+/// Run the hook script's `statusline` arm with `payload` on stdin. `chain` is
+/// passed as `$4` exactly as the script receives it.
+fn run_statusline_arm(sh: &str, script: &Path, group_dir: &Path, chain: Option<&str>, payload: &str) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut cmd = std::process::Command::new(sh);
+    cmd.arg(script).arg("statusline").arg(group_dir.display().to_string()).arg("agent-1");
+    if let Some(c) = chain {
+        cmd.arg(c);
+    }
+    let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("sh must run");
+    child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+const STATUSLINE_PAYLOAD: &str = r#"{"session_id":"abc123","model":{"id":"claude-opus-5-5","display_name":"Opus"},"context_window":{"total_input_tokens":15500,"context_window_size":200000,"used_percentage":8,"current_usage":{"input_tokens":8500}},"effort":{"level":"high"}}"#;
+
+#[test]
+fn statusline_hook_writes_the_payload_verbatim_and_prints_nothing_without_a_chain() {
+    let Some(sh) = resolve_test_sh() else {
+        eprintln!("SKIP statusline_hook_writes_the_payload_verbatim_and_prints_nothing_without_a_chain: no sh found");
+        return;
+    };
+    let td = tempfile::tempdir().unwrap();
+    let group_dir = td.path().join("group");
+    fs::create_dir_all(&group_dir).unwrap();
+    let script = td.path().join("compact-hook.sh");
+    fs::write(&script, COMPACT_HOOK_SCRIPT).unwrap();
+    let snap = group_dir.join("hooks").join("agent-1.statusline.json");
+
+    let out = run_statusline_arm(&sh, &script, &group_dir, None, STATUSLINE_PAYLOAD);
+    assert_eq!(out.status.code(), Some(0), "stderr={:?}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.stdout.is_empty(),
+        "with no human status line to chain to, the pane must show what a plain claude with none shows — nothing; got {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let written = fs::read_to_string(&snap).expect("the snapshot must be written");
+    assert_eq!(written.trim_end(), STATUSLINE_PAYLOAD, "the payload is saved verbatim");
+
+    // A second firing REPLACES the snapshot (only the latest reading means
+    // anything), and the temp file is renamed away rather than left behind.
+    let second = STATUSLINE_PAYLOAD.replace("15500", "16000");
+    let out = run_statusline_arm(&sh, &script, &group_dir, None, &second);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(fs::read_to_string(&snap).unwrap().trim_end(), second, "replaced, not appended");
+    assert!(!group_dir.join("hooks").join("agent-1.statusline.json.tmp").exists(), "the .tmp is renamed into place");
+}
+
+#[test]
+fn statusline_hook_chains_to_the_users_command_through_the_real_command_line() {
+    let Some(sh) = resolve_test_sh() else {
+        eprintln!("SKIP statusline_hook_chains_to_the_users_command_through_the_real_command_line: no sh found");
+        return;
+    };
+    use std::io::Write;
+    use std::process::Stdio;
+    let td = tempfile::tempdir().unwrap();
+    let group_dir = td.path().join("group");
+    fs::create_dir_all(&group_dir).unwrap();
+    let script = td.path().join("compact-hook.sh");
+    fs::write(&script, COMPACT_HOOK_SCRIPT).unwrap();
+    // The human's command carries every character single-quoting must survive:
+    // a `'` inside, a `$` that must NOT expand, and a double-quoted word. It
+    // prints a prefix and then echoes the payload it was fed.
+    let users = r#"printf '%s|' "it's" '$HOME'; cat"#;
+    // The command line exactly as `compact_hook_settings` assembles it —
+    // forward-slashed, double-quoted argv, the chain single-quoted as `$4` —
+    // and run the way Claude runs it: through a shell.
+    let fwd = |p: &Path| p.display().to_string().replace('\\', "/");
+    let base = format!("\"{}\" \"{}\" statusline \"{}\" \"agent-1\"", sh.replace('\\', "/"), fwd(&script), fwd(&group_dir));
+    let line = loomux_lib::modelstate::with_chained_command(&base, Some(users));
+    let mut child = std::process::Command::new(&sh)
+        .arg("-c")
+        .arg(&line)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("sh must run");
+    child.stdin.take().unwrap().write_all(STATUSLINE_PAYLOAD.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "line={line} stderr={:?}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("it's|$HOME|{STATUSLINE_PAYLOAD}\n"),
+        "the pane shows the human's own output, fed the same payload, with their command intact: {line}"
+    );
+    // And loomux still got its copy.
+    let snap = group_dir.join("hooks").join("agent-1.statusline.json");
+    assert_eq!(fs::read_to_string(snap).unwrap().trim_end(), STATUSLINE_PAYLOAD);
+}
+
+#[test]
+fn statusline_hook_exits_zero_with_an_unwritable_dir_and_still_runs_the_chain() {
+    let Some(sh) = resolve_test_sh() else {
+        eprintln!("SKIP statusline_hook_exits_zero_with_an_unwritable_dir_and_still_runs_the_chain: no sh found");
+        return;
+    };
+    let td = tempfile::tempdir().unwrap();
+    // A regular FILE where the group dir should be: `mkdir -p` and the touch
+    // gate both fail, portably (the precompact test's technique).
+    let blocked = td.path().join("blocked-group-dir");
+    fs::write(&blocked, "occupies the path; not a directory").unwrap();
+    let script = td.path().join("compact-hook.sh");
+    fs::write(&script, COMPACT_HOOK_SCRIPT).unwrap();
+
+    let out = run_statusline_arm(&sh, &script, &blocked, None, STATUSLINE_PAYLOAD);
+    assert_eq!(out.status.code(), Some(0), "stderr={:?}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.stdout.is_empty(), "a failed write prints nothing: {:?}", String::from_utf8_lossy(&out.stdout));
+
+    // A broken hooks dir costs loomux its reading, never the human their line:
+    // the chain still gets the whole payload.
+    let out = run_statusline_arm(&sh, &script, &blocked, Some("cat"), STATUSLINE_PAYLOAD);
+    assert_eq!(out.status.code(), Some(0), "stderr={:?}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{STATUSLINE_PAYLOAD}\n"));
+}
+
+#[test]
+fn statusline_hook_exits_zero_whatever_the_users_command_does() {
+    let Some(sh) = resolve_test_sh() else {
+        eprintln!("SKIP statusline_hook_exits_zero_whatever_the_users_command_does: no sh found");
+        return;
+    };
+    let td = tempfile::tempdir().unwrap();
+    let group_dir = td.path().join("group");
+    fs::create_dir_all(&group_dir).unwrap();
+    let script = td.path().join("compact-hook.sh");
+    fs::write(&script, COMPACT_HOOK_SCRIPT).unwrap();
+
+    // A failing command: its output still shows, the arm still exits 0.
+    let out = run_statusline_arm(&sh, &script, &group_dir, Some("echo hi; exit 3"), STATUSLINE_PAYLOAD);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "hi\n");
+    // A syntax error: `eval` is a special built-in, so this is fatal to the
+    // shell that runs it — which must be the subshell, never the script.
+    let out = run_statusline_arm(&sh, &script, &group_dir, Some("if then fi ("), STATUSLINE_PAYLOAD);
+    assert_eq!(out.status.code(), Some(0), "stderr={:?}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.stdout.is_empty());
+    // The human's command sees no positional parameters, as under `sh -c`.
+    let out = run_statusline_arm(&sh, &script, &group_dir, Some(r#"echo "n=$#""#), STATUSLINE_PAYLOAD);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "n=0\n");
+}
+
 #[cfg(windows)]
 #[test]
 fn copilot_promptsubmit_hook_powershell_exits_zero_when_the_marker_dir_cant_be_created() {
@@ -38963,6 +39116,197 @@ fn run_compact_nudge_honors_an_explicit_context_window_override() {
     let s = reg.group_summary(&g.id);
     let a = s["agents"].as_array().unwrap().iter().find(|a| a["id"] == o.id.as_str()).unwrap();
     assert_eq!(a["context"]["percent"], 75);
+}
+
+/// #993 S1 fixture: an orchestrator whose transcript says it runs Sonnet with
+/// 150K tokens in context. The model table reads Sonnet as 200K (75% — over
+/// the 50% threshold), while the status line reports the 1M window it really
+/// has (15%). Which one the tick believes is the whole question these tests
+/// ask. Returns the registry, group, agent and the snapshot path the hook
+/// script writes to (`$group_dir/hooks/$agent_id.statusline.json`).
+fn statusline_fixture() -> (OrchRegistry, tempfile::TempDir, tempfile::TempDir, GroupId, String, String, PathBuf, PathBuf) {
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    let rails = Guardrails { compact_context_threshold_percent: 50, ..compact_rails(0, &["orchestrator"]) };
+    let g = reg.create_group("C:/tmp/repo", rails).unwrap();
+    let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let sid = o.session_id.clone().unwrap();
+    let encoded = proj.path().join("C--tmp-repo");
+    fs::create_dir_all(&encoded).unwrap();
+    let transcript = encoded.join(format!("{sid}.jsonl"));
+    fs::write(
+        &transcript,
+        format!(
+            "{}\n",
+            json!({"type":"assistant","message":{"id":"m1","model":"claude-sonnet-4-6",
+                "usage":{"input_tokens":150000,"output_tokens":500,
+                         "cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}),
+        ),
+    )
+    .unwrap();
+    let hooks = reg.state_root().join(g.id.as_str()).join("hooks");
+    fs::create_dir_all(&hooks).unwrap();
+    let snap = hooks.join(format!("{}.statusline.json", o.id));
+    (reg, d, proj, g.id.clone(), o.id.clone(), sid, transcript, snap)
+}
+
+fn statusline_payload_for(session: &str, window: u64, tokens: u64) -> String {
+    json!({
+        "session_id": session,
+        "model": {"id": "claude-sonnet-5", "display_name": "Sonnet"},
+        "context_window": {
+            "total_input_tokens": tokens, "context_window_size": window,
+            "used_percentage": 15, "current_usage": {"input_tokens": tokens}
+        },
+        "effort": {"level": "high"}
+    })
+    .to_string()
+}
+
+fn summary_percent(reg: &OrchRegistry, gid: &GroupId, agent: &str) -> Value {
+    let s = reg.group_summary(gid);
+    s["agents"].as_array().unwrap().iter().find(|a| a["id"] == agent).unwrap()["context"]["percent"].clone()
+}
+
+#[test]
+fn statusline_snapshot_supplies_the_reported_window_to_escalation_and_the_panel() {
+    let (reg, _d, _proj, gid, oid, sid, _transcript, snap) = statusline_fixture();
+    fs::write(&snap, statusline_payload_for(&sid, 1_000_000, 150_000)).unwrap();
+
+    let _ = reg.run_compact_nudge(1);
+    assert_eq!(audit_count(&reg, &gid, "compact-escalation"), 0,
+        "150K of the REPORTED 1M window is 15% — the table's 200K guess (75%) must not escalate it");
+    assert_eq!(summary_percent(&reg, &gid, &oid), 15, "the panel climbs the same ladder as the escalation");
+}
+
+#[test]
+fn statusline_snapshot_older_than_the_transcript_still_supplies_the_window() {
+    // The anti-flap pin (approved departure from the plan's "at least as fresh
+    // as the transcript"): mid-turn the transcript grows on every tool result
+    // while the status line only re-runs on the next assistant message, so the
+    // transcript is routinely the NEWER file. A freshness gate would drop the
+    // reported window on exactly those ticks and the percent would flap
+    // 15% → 75% → 15%, escalating on the 75% ones.
+    let (reg, _d, _proj, gid, oid, sid, transcript, snap) = statusline_fixture();
+    fs::write(&snap, statusline_payload_for(&sid, 1_000_000, 150_000)).unwrap();
+    let now = std::time::SystemTime::now();
+    let set_mtime = |p: &Path, t: std::time::SystemTime| {
+        fs::File::options().write(true).open(p).unwrap().set_modified(t).unwrap();
+    };
+    set_mtime(&snap, now - std::time::Duration::from_secs(600));
+    set_mtime(&transcript, now);
+    assert!(
+        fs::metadata(&snap).unwrap().modified().unwrap() < fs::metadata(&transcript).unwrap().modified().unwrap(),
+        "fixture: the snapshot must really be the older file"
+    );
+
+    let _ = reg.run_compact_nudge(1);
+    assert_eq!(audit_count(&reg, &gid, "compact-escalation"), 0, "an older snapshot's window still stands");
+    assert_eq!(summary_percent(&reg, &gid, &oid), 15);
+}
+
+#[test]
+fn statusline_snapshot_from_another_session_is_ignored() {
+    // The negative control for the two tests above, and the reason a snapshot
+    // carries its session id: a file a pane's PREVIOUS session left behind
+    // describes that session, not this one. Ignored, the table's 200K stands.
+    let (reg, _d, _proj, gid, oid, _sid, _transcript, snap) = statusline_fixture();
+    fs::write(&snap, statusline_payload_for("some-earlier-session", 1_000_000, 150_000)).unwrap();
+
+    let _ = reg.run_compact_nudge(1);
+    assert_eq!(audit_count(&reg, &gid, "compact-escalation"), 1, "150K of the table's 200K is 75%: escalates");
+    assert_eq!(summary_percent(&reg, &gid, &oid), 75);
+}
+
+#[test]
+fn statusline_snapshot_without_a_transcript_is_no_signal() {
+    // The transcript is the base (approved): a snapshot alone would hand the
+    // compaction resolver a boundary count it never measured. With no
+    // transcript at all, the agent gets no context reading — as before S1.
+    let (reg, _d, _proj, gid, oid, sid, transcript, snap) = statusline_fixture();
+    fs::remove_file(&transcript).unwrap();
+    fs::write(&snap, statusline_payload_for(&sid, 1_000_000, 150_000)).unwrap();
+
+    let _ = reg.run_compact_nudge(1);
+    assert!(summary_percent(&reg, &gid, &oid).is_null(), "no transcript, no reading");
+    let s = reg.group_summary(&gid);
+    let a = s["agents"].as_array().unwrap().iter().find(|a| a["id"] == oid.as_str()).unwrap();
+    assert!(a["context"]["tokens"].is_null());
+}
+
+#[test]
+fn statusline_spawn_writes_a_status_line_chaining_the_effective_user_command() {
+    #[cfg(windows)]
+    if locate_sh_exe().is_none() {
+        eprintln!("SKIP statusline_spawn_writes_a_status_line_chaining_the_effective_user_command: no sh.exe found via `where`");
+        return;
+    }
+    let repo = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    // The user layer, through `user_cli_dir`'s contained stand-in for a
+    // registry that is not the human's live one (#502) — never the real
+    // `~/.claude/settings.json` of whoever runs this test.
+    let user_settings = reg.state_root().join("claude-settings.json");
+    fs::write(&user_settings, r#"{"statusLine":{"type":"command","command":"echo from-user","padding":1}}"#).unwrap();
+    let repo_str = repo.path().display().to_string();
+    let g = reg.create_group(&repo_str, rails()).unwrap();
+    let settings_of = |id: &str| -> Value {
+        let p = reg.state_root().join(g.id.as_str()).join("configs").join(format!("{id}-hooks.json"));
+        serde_json::from_str(&fs::read_to_string(p).unwrap()).unwrap()
+    };
+
+    // User layer only.
+    let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let sl = settings_of(&o.id)["statusLine"].clone();
+    assert_eq!(sl["type"], "command", "{sl}");
+    let cmd = sl["command"].as_str().unwrap_or_else(|| panic!("no statusLine.command: {sl}"));
+    assert!(cmd.contains(" statusline \""), "loomux's own arm runs first: {cmd}");
+    assert!(cmd.contains(o.id.as_str()) && cmd.contains(g.id.as_str()), "{cmd}");
+    assert!(cmd.ends_with(" 'echo from-user'"), "the user's command rides as the quoted $4: {cmd}");
+    assert_eq!(sl["padding"], 1, "the user's padding is carried so the line renders at the same indent");
+    assert!(sl.get("refreshInterval").is_none(), "absent upstream, absent here: {sl}");
+
+    // Claude's settings precedence: shared project beats user…
+    fs::create_dir_all(repo.path().join(".claude")).unwrap();
+    fs::write(
+        repo.path().join(".claude").join("settings.json"),
+        r#"{"statusLine":{"type":"command","command":"echo from-project","refreshInterval":7}}"#,
+    )
+    .unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "t", false, None).unwrap();
+    let sl = settings_of(&w.id)["statusLine"].clone();
+    assert!(sl["command"].as_str().unwrap().ends_with(" 'echo from-project'"), "{sl}");
+    assert_eq!(sl["refreshInterval"], 7);
+    assert!(sl.get("padding").is_none(), "loomux carries the winning layer's fields only (a per-field blend across layers is a documented residual): {sl}");
+
+    // …and local project beats shared project.
+    fs::write(
+        repo.path().join(".claude").join("settings.local.json"),
+        r#"{"statusLine":{"type":"command","command":"echo from-local"}}"#,
+    )
+    .unwrap();
+    let w2 = reg.spawn_agent(&g.id, Role::Worker, "w2", "t", false, None).unwrap();
+    let sl = settings_of(&w2.id)["statusLine"].clone();
+    assert!(sl["command"].as_str().unwrap().ends_with(" 'echo from-local'"), "{sl}");
+}
+
+#[test]
+fn statusline_spawn_with_no_user_status_line_chains_nothing() {
+    #[cfg(windows)]
+    if locate_sh_exe().is_none() {
+        eprintln!("SKIP statusline_spawn_with_no_user_status_line_chains_nothing: no sh.exe found via `where`");
+        return;
+    }
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "t", false, None).unwrap();
+    let p = reg.state_root().join(g.id.as_str()).join("configs").join(format!("{}-hooks.json", w.id));
+    let cfg: Value = serde_json::from_str(&fs::read_to_string(p).unwrap()).unwrap();
+    let cmd = cfg["statusLine"]["command"].as_str().unwrap_or_else(|| panic!("no statusLine: {cfg}"));
+    assert!(cmd.ends_with(&format!("statusline \"{}\" \"{}\"", reg.state_root().join(g.id.as_str()).display().to_string().replace('\\', "/"), w.id)),
+        "no fourth argument: with nothing to chain the arm prints nothing: {cmd}");
+    assert!(cfg["statusLine"].get("padding").is_none() && cfg["statusLine"].get("refreshInterval").is_none());
 }
 
 #[test]

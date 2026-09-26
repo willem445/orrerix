@@ -1075,13 +1075,15 @@ export function marks(rows: readonly SeriesRowLike[]): ChartMark[] {
           fpPartial: false,
         });
       }
-      if (before.effort !== after.effort) {
+      const beforeEffort = before.effort ?? null;
+      const afterEffort = after.effort ?? null;
+      if (beforeEffort !== afterEffort) {
         const effortChange: EffortChange = {
           key: after.key,
           block: labelOf(after.block),
           cli: labelOf(after.cli),
-          from: before.effort ?? null,
-          to: after.effort ?? null,
+          from: beforeEffort,
+          to: afterEffort,
         };
         const effortFrom = effortChange.from ?? "unknown effort";
         const effortTo = effortChange.to ?? "unknown effort";

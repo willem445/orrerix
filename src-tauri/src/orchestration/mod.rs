@@ -43720,8 +43720,7 @@ impl OrchRegistry {
                 let rails = guardrails.get(&group)?;
                 let cli = rails.cli_for_block(&block, role).to_string();
                 let effort = rails
-                    .block(&block)
-                    .or_else(|| rails.block_for(role))
+                    .block_for(role) // MUTATED_M11
                     .map(|b| b.effort.clone())
                     .unwrap_or_default();
                 Some((id, sid, group, cli, effort))

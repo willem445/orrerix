@@ -1070,7 +1070,7 @@ pub const CLI_CAPS: &[CliCaps] = &[
         compact_command: Some("/compact"),
         self_compacts: true,
         compact_note: "",
-        context_reader: ContextReader::ClaudeStatusline,
+        context_reader: ContextReader::CodexRollout,
         orchestration: true,
         mcp_argv_seam: true,
         premints_session_id: true,

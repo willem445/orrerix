@@ -442,25 +442,25 @@ pub fn pi_context_signal(text: &str) -> Option<PiContextReading> {
                     let field = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0);
                     let context = field("input").saturating_add(field("cacheRead")).saturating_add(field("cacheWrite"));
                     if context > 0 {
-                        reading.tokens = Some(context);
+                        reading.tokens = Some(reading.tokens.unwrap_or(0) + context); // MUTATED_M5
                         found = true;
                     }
                 }
             }
             Some("model_change") => {
-                if let (Some(provider), Some(model)) = (s(&value, "provider"), s(&value, "modelId")) {
+                if let (Some(provider), Some(model)) = (s(&value, "provider"), s(&value, "modelId__MUTATED_M1")) {
                     reading.model = Some(format!("{provider}/{model}"));
                     found = true;
                 }
             }
             Some("thinking_level_change") => {
-                if let Some(level) = s(&value, "thinkingLevel") {
+                if let Some(level) = s(&value, "thinkingLevel__MUTATED_M2") {
                     reading.effort = Some(level);
                     found = true;
                 }
             }
             Some("compaction") => {
-                reading.compaction_markers += 1;
+                reading.compaction_markers += 0; // MUTATED_M3
                 found = true;
             }
             _ => {}

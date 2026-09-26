@@ -4536,15 +4536,36 @@ fn summary_percent(reg: &OrchRegistry, gid: &GroupId, agent: &str) -> Value {
     s["agents"].as_array().unwrap().iter().find(|a| a["id"] == agent).unwrap()["context"]["percent"].clone()
 }
 
+fn summary_context(reg: &OrchRegistry, gid: &GroupId, agent: &str) -> Value {
+    let s = reg.group_summary(gid);
+    s["agents"].as_array().unwrap().iter().find(|a| a["id"] == agent).unwrap()["context"].clone()
+}
+
 #[test]
 fn statusline_snapshot_supplies_the_reported_window_to_escalation_and_the_panel() {
     let (reg, _d, _proj, gid, oid, sid, _transcript, snap) = statusline_fixture();
-    fs::write(&snap, statusline_payload_for(&sid, 1_000_000, 150_000)).unwrap();
+    let roster = reg.group(gid.as_str()).unwrap();
+    let declared = roster.guardrails.blocks.iter().find(|b| b.id == "orchestrator").unwrap();
 
+    let before = summary_context(&reg, &gid, &oid);
+    assert!(before["model"].is_null(), "before the first reading model is absent");
+    assert!(before["effort"].is_null(), "before the first reading effort is absent");
+    assert!(before["source"].is_null(), "before the first reading source is absent");
+    assert_eq!(before["declared"]["model"], declared.model);
+    assert_eq!(before["declared"]["effort"], declared.effort);
+
+    fs::write(&snap, statusline_payload_for(&sid, 1_000_000, 150_000)).unwrap();
     let _ = reg.run_compact_nudge(1);
     assert_eq!(audit_count(&reg, &gid, "compact-escalation"), 0,
         "150K of the REPORTED 1M window is 15% — the table's 200K guess (75%) must not escalate it");
     assert_eq!(summary_percent(&reg, &gid, &oid), 15, "the panel climbs the same ladder as the escalation");
+
+    let context = summary_context(&reg, &gid, &oid);
+    assert_eq!(context["model"], "claude-sonnet-5");
+    assert_eq!(context["effort"], "high");
+    assert_eq!(context["source"], "statusline");
+    assert_eq!(context["declared"]["model"], declared.model);
+    assert_eq!(context["declared"]["effort"], declared.effort);
 }
 
 #[test]

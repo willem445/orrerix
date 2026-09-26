@@ -428,10 +428,10 @@ panel shows a compact model/effort/context label. It never prints a percentage
 without both observed tokens and a known window; without a window it shows the
 token count, and without a reading it labels the roster pick `(declared)`. The
 Agents list chip is deferred: its `PaneFacts` projection does not carry the
-lifecycle summary, and adding it requires separate pane-state plumbing. The
-Copilot effort rung marked `(settings)` is deferred to S7 because it requires
-reading `~/.copilot/settings.json`; that read belongs with S7's Copilot census,
-which is held for the human.
+lifecycle summary, and adding it requires separate pane-state plumbing.
+By orchestrator direction, the Copilot effort rung marked `(settings)` is
+deferred to S7 because it requires reading `~/.copilot/settings.json`; that read
+belongs with S7's Copilot census, which is held for the human.
 
 The integration test `statusline_window_reverts_to_the_table_when_its_snapshot_disappears`
 pins that a reported window is discarded when its snapshot disappears, and the

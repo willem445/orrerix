@@ -19,7 +19,7 @@
 // **The behavioural test this replaces could not exist, and finding that out is the point.**
 // The spawn loop that opens starters runs in `register_orchestrator_pane`'s post-bind
 // thread, and that thread is never started headlessly: `if reg.app.lock_safe().is_none() {
-// … return Ok(request) }` returns before it (mod.rs), because a bind needs a frontend pane.
+// … return Ok(request) }` returns before it (commands/panes.rs), because a bind needs a frontend pane.
 // A test asserting "no workers appeared" after a headless launch is therefore VACUOUS — it
 // passes whatever the default is, including a re-introduced 2. Driving it needs a real
 // `AppHandle` (`set_app`), which an integration test cannot construct. So this pins what is
@@ -48,7 +48,7 @@ function stripTsComments(src: string): string {
 test("create_orchestration's starter count stays OPTIONAL, so an omitted key is legal", () => {
   // The load-bearing half. `Option<u32>` is what makes the launcher's silence mean "none";
   // a plain `u32` turns that same silence into a runtime InvalidArgs on the first launch.
-  const rs = stripRustComments(read("../src-tauri/src/orchestration/mod.rs"));
+  const rs = stripRustComments(read("../src-tauri/src/orchestration/commands/launch.rs"));
   const command = rs.match(/pub async fn create_orchestration\(([\s\S]*?)\)\s*->/);
   assert.ok(command, "create_orchestration is no longer an async command with an argument list");
   const arg = command[1].match(/\binitial_workers\s*:\s*([^,]+),/);

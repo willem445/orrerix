@@ -61,7 +61,7 @@
  *  must not force layout — it is called once per suppressed wake.
  *
  *  **What it can and cannot see, because everything below turns on this.** The
- *  shipped probe is `Pane.isViewVisible`, which reads one element's own
+ *  shipped probe is `PaneEmbeds.isViewVisible`, which reads one element's own
  *  `hidden` attribute. That is exactly "is this panel open"; it is NOT "can a
  *  human see it". Two states put a view genuinely off screen with that
  *  attribute untouched, and the gate keeps working in both: a background
@@ -91,8 +91,8 @@ export interface WakeGateStats {
   suppressed: number;
   /** Wakes that ran because `confirm` contradicted the latch. **Expected to
    *  stay 0**, and worth being precise about what that proves: since `confirm`
-   *  is `Pane.isViewVisible`, a stray can only be raised by a path that OPENS a
-   *  panel without going through `Pane.openView`. A clean `strays` therefore
+   *  is `PaneEmbeds.isViewVisible`, a stray can only be raised by a path that OPENS a
+   *  panel without going through `PaneEmbeds.openView`. A clean `strays` therefore
    *  says `openView`/`closeView` pairs balance — which `test/embedwake.test.ts`
    *  already argues structurally — and says NOTHING about the two states
    *  `VisibleProbe` is blind to (a background tab, a minimized pane; #1465).
@@ -131,7 +131,7 @@ export function resetWakeGateStats(): void {
  *
  *  Born asleep, because a latch starts in the state the pane has not yet
  *  asserted, and "not shown yet" is not "showing". No path reaches it today: I
- *  checked every construction site in `pane.ts` (`ensureEmbedView` and
+ *  checked every construction site in `paneembeds.ts` (`ensureEmbedView` and
  *  `restoreEmbeds` both construct only on branches that fall through to
  *  `openView`, and every `toggleXView` calls its `ensureXView` immediately
  *  before `toggleView`), so the first `wake()` always arrives before anything

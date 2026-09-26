@@ -136,7 +136,7 @@ ahead of even the #714 coalescer — see that note's "Deliberately unchanged".
 
 ## The WebGL re-acquire
 
-`src/webglretry.ts` — pure, `planWebglRetry`. Wiring in `Pane.handleWebglLoss` /
+`src/webglretry.ts` — pure, `planWebglRetry`. Wiring in `PaneLifecycle.handleWebglLoss` /
 `tryWebgl` / `setHidden`.
 
 Before this, `onContextLoss` disposed the addon (correct — the context is gone,

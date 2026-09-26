@@ -176,7 +176,7 @@ Making them work needs a **second sizing model** for overlays that don't assume 
 terminal underneath. That is real work and it isn't what #214 is about, so the
 overlays are cleanly **off** on a files pane rather than half-working: the buttons
 carry a `pty-only` class and are hidden by `.pane.is-content` (was `.is-files`), and
-the hotkey path is answered by `Pane.refuseOverlay()` with an honest toast.
+the hotkey path is answered by `PaneEmbeds.refuseOverlay()` with an honest toast.
 
 > **Answered in #217, by the other road.** You don't overlay a git view onto a
 > content pane — you **open a git pane**: the same view as a pane's content, sized by
@@ -687,7 +687,7 @@ agents that don't exist. There's a test pinning that.
 | Piece | File | Role |
 | --- | --- | --- |
 | Kind + root validation | `src/panesetup.ts` | `PaneKind` gains `"files"`; `planPaneSetup` requires a root (no home fallback — a manager rooted at `~` is never what anyone meant). Unit-tested. |
-| The pane | `src/pane.ts` | `startContent()` (`startFiles()` before #217), `isContent`, `workdir`, `refuseOverlay()`, the `liveKind`/`capture`/`tabPaneInfo` arms. DOM-coupled → hand-validated. |
+| The pane | `src/pane.ts` | `startContent()` (`startFiles()` before #217), `isContent`, `workdir`, the `liveKind`/`tabPaneInfo` arms; `refuseOverlay()` is in `src/paneembeds.ts` and the `capture` arms in `src/panecapture.ts`. DOM-coupled → hand-validated. |
 | Placement | `src/grid.ts` | `openContentPane()` (`openFilesPane()` before #217) — like `openWelcomePane`, but content instead of a form. Synchronous: there's no process to await. |
 | The manager | `src/fileexplorer.ts` | Toolbar, breadcrumb, listing, inline edits, Go-to-file. DOM wiring only. |
 | Its pure core | `src/fileexplorermodel.ts` | Listing order, rooted navigation, breadcrumb, formatting, inline-edit validation; `activeTarget` (which view an op resolves against), `editMountFor` (the view state an editor needs before it can mount), `mountBlocker` (whether the target's row can be rendered at all), and `ROW_AFFORDANCES` (the view-parity registry). Unit-tested. |

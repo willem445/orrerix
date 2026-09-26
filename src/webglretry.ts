@@ -1,5 +1,5 @@
 // Pure, DOM-free core of the WebGL re-acquire policy (#720). DOM wiring is
-// pane.ts's `tryWebgl` / `handleWebglLoss`.
+// panelifecycle.ts's `tryWebgl` / `handleWebglLoss`.
 //
 // The failure this exists to end
 // ------------------------------
@@ -17,7 +17,7 @@
 // A WebGL context is a capped resource: the browser holds a fixed number live
 // and evicts the oldest when a new one is created past the cap (the same cap
 // that makes `setHidden` drop contexts for inactive tabs at all — see
-// pane.ts's `setHidden` and docs/design/project-tabs.md). So "lost context" and
+// panelifecycle.ts's `setHidden` and docs/design/project-tabs.md). So "lost context" and
 // "someone else created a context" are the SAME event seen from two panes, and
 // an unbounded retry turns that into a live-lock: pane A re-acquires, evicting
 // pane B, whose retry evicts pane A, forever, each round burning a context

@@ -81,7 +81,7 @@ test("#720 contrast: with no preceding user input the same write is parsed on a 
   assert.equal(replyPhase, "after-write", "the auto-reply arrives on a later task");
 });
 
-// #813/#844: pane.ts's `flushOutput` arms the fast path above via
+// #813/#844: panelifecycle.ts's `flushOutput` arms the fast path above via
 // `hintXtermSyncParse` (src/xtermreach.ts) instead of `term.input(..., true)`
 // — the actual private-field reach the fix ships, not a stand-in for it. This
 // is the same fast path the two tests above pin; the difference is which call

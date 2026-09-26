@@ -670,7 +670,7 @@ one string" rule above.
 
 The panel-to-board direction (a question's card links to the `task` it cites)
 and the board-to-panel direction slice G adds both ride one generic mechanism,
-`pane.ts`'s `requestEmbedFocus(kind, target)` over `embedfocus.ts`'s
+`paneembeds.ts`'s `requestEmbedFocus(kind, target)` over `embedfocus.ts`'s
 `PendingEmbedFocus`: it parks a target id — one slot per embed kind, replacing
 any undrained request for that kind rather than queueing — and lazily
 constructs/opens the named embed, which drains the request (`take`, once) on

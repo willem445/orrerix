@@ -345,6 +345,16 @@ pub fn codex_context_signal(text: &str) -> Option<CodexContextReading> {
     found.then_some(reading)
 }
 
+/// Resolve and read one Codex rollout, then map it to the shared compaction
+/// signal. Compressed winning rollouts intentionally produce no reading.
+#[doc(hidden)] // pub for the `codexusage` integration test
+pub fn codex_compaction_signal_in(
+    _root: &std::path::Path,
+    _session: &loomux_engine::pathseg::PathSegment,
+) -> Option<crate::usage::CompactionSignal> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

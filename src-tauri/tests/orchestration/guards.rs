@@ -1256,9 +1256,27 @@ fn every_shim_name_ensure_shims_writes_is_one_the_prune_keeps() {
 fn orchestration_command_sites() -> Vec<(String, bool, String)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration");
     let mut paths = vec![root.join("mod.rs")];
-    let mut commands: Vec<_> = fs::read_dir(root.join("commands"))
+    let entries: Vec<fs::DirEntry> = fs::read_dir(root.join("commands"))
         .expect("src/orchestration/commands/ must be readable from the manifest dir")
-        .map(|e| e.expect("dir entry").path())
+        .map(|e| e.expect("dir entry"))
+        .collect();
+    // A nested module directory (`commands/foo/mod.rs`) would be read by no
+    // part of this site list, so a command in it would be judged by nothing. Refused
+    // outright rather than scanned (#3547 review, rev-std N2): the layout is one
+    // file per banner, and a subdirectory is a layout decision to make here first.
+    let subdirs: Vec<String> = entries
+        .iter()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        subdirs.is_empty(),
+        "src/orchestration/commands/ must hold no subdirectory — found {subdirs:?}, which no \
+         guard row reads"
+    );
+    let mut commands: Vec<_> = entries
+        .iter()
+        .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "rs"))
         .collect();
     commands.sort();

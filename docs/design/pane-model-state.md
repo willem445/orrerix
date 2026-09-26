@@ -298,11 +298,20 @@ level.
 - **Append order, not the active path.** pi's file is a tree. An entry on a
   branch the leaf has navigated away from still counts as newest if it was
   appended last, which is the same file-wide reading `usage::PiFold` takes.
-- **A tail with no assistant line has no model.** A tool result larger than
-  the tail leaves no assistant message in it. That tick's signal then carries
-  no tokens and no model, so the cached window follows it back to `None`.
-  This is inert until S4, and after that the window can fall to the table rung
-  on such ticks.
+- **A tail with no assistant line.** A tool result larger than the tail can
+  leave no assistant message in it. What happens next depends on the rest of
+  the tail.
+  - If nothing else in the tail is recognised, `pi_context_signal` returns
+    `None` (`found.then_some(reading)`), so `pi_compaction_signal_in` yields no
+    signal. `run_compact_nudge` then leaves the cached model and window as they
+    were.
+  - If the tail holds another recognised entry (a `compaction` or a
+    `thinking_level_change`) and no `model_change`, the signal has neither
+    tokens nor a model, and so no window. `run_compact_nudge` sets
+    `last_context_window` from every signal, so the window goes back to
+    `None`. It sets `last_context_model` only from `Some`, so the model is kept.
+  - This is inert until S4. After that, the window can fall to the table rung
+    on such a tick.
 - **The marker count is over the tail**, as it is for the Claude and Codex
   readers, so a marker older than the tail is not counted.
 - **A solo pi pane has no reading.** A solo pane writes to the human's own

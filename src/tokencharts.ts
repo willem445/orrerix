@@ -1077,7 +1077,7 @@ export function marks(rows: readonly SeriesRowLike[]): ChartMark[] {
       }
       const beforeEffort = before.effort ?? null;
       const afterEffort = after.effort ?? null;
-      if (beforeEffort !== afterEffort) {
+      if (beforeEffort !== null && afterEffort !== null && beforeEffort !== afterEffort) {
         const effortChange: EffortChange = {
           key: after.key,
           block: labelOf(after.block),

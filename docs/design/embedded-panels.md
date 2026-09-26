@@ -78,7 +78,7 @@ edge. So:
 - **The floating overlay is untouched and stays available, for every view,
   independent of what else is docked.** Docking is an alternative
   presentation the human opts into, not a replacement; every overlay's
-  no-resize mechanics (`overlaysize.ts`, `Pane.overlayClamp`,
+  no-resize mechanics (`overlaysize.ts`, `PaneEmbeds.overlayClamp`,
   `updateTermShift`) are byte-for-byte what they were before this note. (The
   overlay's OWN pre-#361 `reclampGroupOverlay` equivalent never touched the
   PTY at all — only the overlay's own CSS height — precisely because the
@@ -99,7 +99,7 @@ a reader to discover by tracing `onResize` themselves.
 
 **Up to three views may be docked simultaneously — left, right, bottom.**
 No `"top"`: the pane header already owns that edge, and nothing has asked
-for it. Each edge is its own independent slot (`Pane.embedSlots: Record<
+for it. Each edge is its own independent slot (`PaneEmbeds.embedSlots: Record<
 EmbedSide, EmbedSlotState>`), holding at most one view, with its own divider
 and its own persisted share.
 
@@ -136,7 +136,7 @@ fix is the nesting above: `embedCenterEl` wraps `termEl` and the optional
 right slot into ONE real element, so the left divider's far side is that
 single element, not "term plus whatever else happens to be on the right."
 Every divider — left, right, bottom — ends up with a plain, real,
-single-element pair (`Pane.dividerPair`), and `embedDragGrow`
+single-element pair (`PaneEmbeds.dividerPair`), and `embedDragGrow`
 (embedsplit.ts) never has to know about more than two elements at a time.
 This is the same trick grid.ts's own split TREE already uses for nested
 splits (a 2-child split containing another 2-child split) — applied here
@@ -174,10 +174,10 @@ export function embedCenterFloor(rightPanelFloorPx: number | null): number {
 
 `rightPanelFloorPx` is `null` when right is unoccupied (collapsing to plain
 `EMBED_MIN_TERM_PX` — exactly what the floor would be with nothing nested at
-all), or the right slot's own floor when it IS occupied. `Pane.dividerFloors`
+all), or the right slot's own floor when it IS occupied. `PaneEmbeds.dividerFloors`
 evaluates this LIVE on every left-divider drag and on every reclamp, so
 docking or un-docking RIGHT immediately changes what the LEFT divider is
-willing to do — and `Pane.embedViewAtSide`/`unembedView` explicitly
+willing to do — and `PaneEmbeds.embedViewAtSide`/`unembedView` explicitly
 reclamp LEFT (`reclampSlotDivider("left")`) whenever right's occupancy
 changes, so a left panel that was fine before right got docked doesn't sit
 below the new composed floor until the human happens to touch its divider.
@@ -216,7 +216,7 @@ same-size call** (`shouldResizePty`, `panefit.ts`, pinned by
 **continuously, but frame-throttled and de-duplicated** — not zero times
 during the drag and one at the end.
 
-Every one of the pane's own three dividers (`Pane.wireEmbedDivider`) is
+Every one of the pane's own three dividers (`PaneEmbeds.wireEmbedDivider`) is
 built to hit that exact same code path, not a bespoke one: dragging any of
 them sets `termEl`'s (or, for left, `embedCenterEl`'s) `flex` inline, same
 as a grid divider does to a pane's element, so the *same* `ResizeObserver` →
@@ -234,7 +234,7 @@ flex-grow weights, a delta clamped so neither side crosses its floor, then
 redistributed proportionally so the pair's total flex-grow is preserved.
 Reusing that shape is the point, not an incidental convenience. `frac` is
 always "the PANEL's own share of its pair," regardless of whether the panel
-happens to be the "before" or "after" element (`Pane.applySlotGrow`/the
+happens to be the "before" or "after" element (`PaneEmbeds.applySlotGrow`/the
 `fracFromGrow(counterpart, panel)` extraction in `wireEmbedDivider`'s `up`
 handler) — left's panel is physically BEFORE its divider, right's and
 bottom's are AFTER, and neither `pane.ts` nor a human reading a persisted
@@ -266,7 +266,7 @@ Calling the new feature "dock" too would collide with that vocabulary in the
 UI copy (a "Dock" button living a few pixels from "Minimize to the dock")
 and in the code (`dockSyncListener`, `renderDock`, `.dock-chip` already mean
 the OTHER thing). So this is **embed** internally — `.pane-embed-host`,
-`.pane-embed-panel`, `.pane-embed-divider`, `Pane.embedViewAtSide()`, the
+`.pane-embed-panel`, `.pane-embed-divider`, `PaneEmbeds.embedViewAtSide()`, the
 persisted `embeds` field — while the human-facing copy says "docked" /
 "docking" freely (the side-picker menu literally reads "Embed left" /
 "Embed right" / "Embed bottom" / "Un-embed," but the surrounding prose in
@@ -296,7 +296,7 @@ issues**, the **audit log**, the **group lifecycle panel** ("lifecycle
 status" in the issue — the panel behind `GroupView`'s overlay toggle), the
 **file editor** overlay (`Alt+F`), the **progress timeline** (`Alt+W`,
 #608), and the **NEEDS-YOU panel** (`Alt+Q`, #1091). All eight are wired
-through one generic engine in `pane.ts`
+through one generic engine in `paneembeds.ts`
 (`EmbedKind`, `EmbedEntry`, `embedRegistry`,
 `openView`/`closeView`/`toggleView`/`embedViewAtSide`/`unembedView`) — see
 *The generic engine*, below. Any THREE of the eight may be docked at once,
@@ -319,7 +319,7 @@ untouched — see `docs/design/progress-timeline.md`.
 
 **Git was part of the generic engine from the same round that generalized
 past the task board** — it needed nothing new for this round beyond
-verifying it: `toggleGitView` already routed through `Pane.toggleView`
+verifying it: `toggleGitView` already routed through `PaneEmbeds.toggleView`
 (so the docked-toggle no-op applies to it by construction, same as every
 other kind), and its own `setPanelActive` already disabled/retitled its
 internal ✕ while docked. The one thing this round added for git is
@@ -335,7 +335,7 @@ that survives a session restore the normal way. None of that changed, and
 the content pane remains the right tool for that job; "Open in editor
 pane" (the file browser's row action) still creates a wholly separate
 `FileEditView` instance (`Pane.editorPaneView` — never the same object as
-the dockable overlay's `Pane.fileEditView`, so there is no risk of the two
+the dockable overlay's `PaneViews.fileEditView`, so there is no risk of the two
 colliding or one spawning a duplicate of the other). What the exclusion
 argument didn't account for is a DIFFERENT use case every other docked
 view already serves: a quick, SAME-PANE edit while continuing to watch the
@@ -408,7 +408,7 @@ real edits loss for a click that didn't even close anything.
 dialog entirely rather than letting it fire ahead of a no-op.**
 `FileEditView.requestClose` calls it before ever showing
 `confirmDiscard()`; when docked, it goes straight to `this.host.onClose()`
-(`Pane.toggleFileEditView` → `Pane.toggleView("editor")`), which is where
+(`Pane.toggleFileEditView` → `PaneEmbeds.toggleView("editor")`), which is where
 the SAME toast/disabled-button affordance every other docked view's
 toggle already shows takes over. Undocked, the decision falls back to the
 plain #219 rule (`closeDecision`), unchanged. `test/dirtystate.test.ts`
@@ -416,7 +416,7 @@ pins both branches.
 
 ## The generic engine
 
-Every embeddable view registers itself into `Pane.embedRegistry` (a
+Every embeddable view registers itself into `PaneEmbeds.embedRegistry` (a
 `Map<EmbedKind, EmbedEntry>`) the first time its own `ensureXView()` lazily
 constructs it:
 
@@ -439,16 +439,16 @@ purpose: `GitView` and `FileEditView` gate on `refuseOverlay` — a content
 pane has no terminal to share space with at all — while the orchestration
 family gates on `orchGroup`/the header button's own `hidden`).
 
-**A SEPARATE `Pane.embedSlots: Record<EmbedSide, EmbedSlotState>` holds
+**A SEPARATE `PaneEmbeds.embedSlots: Record<EmbedSide, EmbedSlotState>` holds
 which kind (if any) occupies each of the three edges**, plus that edge's own
 persisted share and its permanent (created-once, `hidden`-toggled) panel and
-divider elements. `Pane.sideOf(kind)` — a plain linear scan over three
+divider elements. `PaneEmbeds.sideOf(kind)` — a plain linear scan over three
 entries, not a second map kept in sync with the first — answers "is `kind`
 currently docked, and where"; nothing else needs a reverse index for a set
 this small.
 
 **Docking to an OCCUPIED edge SWAPS that one slot's occupant; the other two
-are always untouched.** `Pane.embedViewAtSide(kind, side)` — the side-picker
+are always untouched.** `PaneEmbeds.embedViewAtSide(kind, side)` — the side-picker
 menu's action — closes whoever was on `side` outright (never demotes them
 back to a floating overlay: a silent reopen elsewhere would be a more
 surprising UX than "the slot now shows what you asked for, and the previous
@@ -456,14 +456,14 @@ occupant is closed — the same one click that opened it reopens it"), and if
 `kind` was ALREADY docked to a DIFFERENT edge, it leaves that edge first (a
 view can only occupy one slot at a time, but which one is now a free
 choice, not fixed to "bottom" the way the single-slot design was).
-`Pane.unembedView(kind)` is the separate, explicit "back to the floating
+`PaneEmbeds.unembedView(kind)` is the separate, explicit "back to the floating
 overlay" action, also touching only the one slot `kind` was in.
 
 **The side-picker menu, not a plain toggle.** Each view's embed button
 (unchanged position/icon, `⬒`/`⬓`) now opens a small menu — reusing
 `contextmenu.ts`'s existing `showContextMenu`, not a bespoke dropdown —
 listing Left / Right / Bottom (the currently-docked one, if any, checked)
-and, when docked anywhere, an "Un-embed" item. `Pane.showEmbedMenu(kind,
+and, when docked anywhere, an "Un-embed" item. `PaneEmbeds.showEmbedMenu(kind,
 anchor)` builds and owns this entirely; the views themselves don't know
 `EmbedSide` exists at all — they only know clicking their button asks the
 pane "where should I go?" (`onEmbedMenu: (anchor: HTMLElement) => void`,
@@ -488,7 +488,7 @@ the side-picker menu shows exactly the state that's real (checked = where
 you are now, if anywhere), never a stale hint for where you used to be.
 
 **Per-edge floors.** `EmbedEntry.floorPx()` feeds the overlay height clamp
-(`Pane.overlayClamp`) AND the bottom slot's own height floor — unchanged
+(`PaneEmbeds.overlayClamp`) AND the bottom slot's own height floor — unchanged
 from the pre-multi-slot design. Left/right instead use the fixed
 `EMBED_MIN_PANEL_PX` constant for every view, per *Layout*'s own
 explanation above of why a view's vertical-chrome floor doesn't transfer to
@@ -516,7 +516,7 @@ trigger. Scroll-not-clip is the honest, bounded answer until something
 actually needs the second axis.
 
 **Reclamping when a floor changes after a panel is already docked.**
-`Pane.reclampViewFloor(kind)` looks up which side `kind` occupies (if any)
+`PaneEmbeds.reclampViewFloor(kind)` looks up which side `kind` occupies (if any)
 and delegates to `reclampSlotDivider(side)`, which re-applies that side's
 CURRENT `dividerFloors` to its CURRENT sizes (a zero-delta "drag" — passing
 zero still produces a real corrective nudge, because a size already below
@@ -610,7 +610,7 @@ already-tested code path — and the plain toggle works normally again the
 moment it does.
 
 **The single choke point is what makes the fix actually cover every entry
-point.** `Pane.toggleView(kind)` is the one function EVERY toggle path
+point.** `PaneEmbeds.toggleView(kind)` is the one function EVERY toggle path
 already funneled through before this fix (each view's public
 `toggleXView()` method — itself called by the header button, `main.ts`'s
 keybinding dispatch, and the view's own `onClose`/Escape handler) — so
@@ -624,7 +624,7 @@ be `disabled`) shows a toast (`showToast`, the same mechanism
 `refuseOverlay` already uses for "isn't available in a ___ pane") — "The
 git view is docked — un-embed it (its side menu) to use this toggle." Every
 REAL button gets a stronger, persistent affordance: the pane header's own
-toggle button (`Pane.syncEmbedToggleButton`) and each view's own internal ✕
+toggle button (`PaneEmbeds.syncEmbedToggleButton`) and each view's own internal ✕
 (extended into every view's existing `setPanelActive`, the same hook that
 already updates the embed button's icon on every dock/undock) are both
 `disabled` and retitled while docked, restored the moment it un-embeds.
@@ -634,7 +634,7 @@ unavailable rather than merely inactive.
 
 ## Coexistence (#361 NB-4), generalized to N slots
 
-`Pane.closeOtherOverlays(except)` loops every `EmbedKind` and closes ONLY
+`PaneEmbeds.closeOtherOverlays(except)` loops every `EmbedKind` and closes ONLY
 the ones currently showing AS AN OVERLAY (`entry.overlayEl` not hidden, and
 `sideOf(kind) === null`) — a docked view, on ANY of the three edges, is
 structurally invisible to this loop. So a human can have a view docked left,
@@ -652,7 +652,7 @@ behaviour described is unchanged, only the aside was stale.)
 ## Reuse, not a fork
 
 Every embeddable view is the same class, the same instance, in EVERY mode
-(overlay, or docked to any of the three edges). `Pane.openView`/`closeView`
+(overlay, or docked to any of the three edges). `PaneEmbeds.openView`/`closeView`
 move `entry.viewEl` between the overlay host and whichever slot's panel with
 a plain `appendChild`/`insertBefore`/`replaceChildren` — which detaches an
 element from wherever it currently lives — so there is exactly one instance
@@ -757,7 +757,7 @@ The rule, restated in terms of what wakes the view:
 > is a `setInterval` or a `listen()` is an implementation detail of the waking.
 
 `test/embedwake.test.ts` enforces it rather than leaving it as prose a second
-time: it parses every `embedRegistry.set` entry out of `pane.ts` and requires a
+time: it parses every `embedRegistry.set` entry out of `pane.ts`/`paneembeds.ts`/`paneviews.ts` and requires a
 `hide` key on every kind its manifest declares woken, with the declaration
 itself kept honest by a scan of each view's own source — the scan may only ever
 ADD to the woken set, so a view that grows a `listen()` or a `setInterval` while
@@ -819,7 +819,7 @@ The overlay host (`.git-overlay`, one per view — unchanged) and each edge's
 slot (`.pane-embed-panel.side-*` / `.pane-embed-divider.side-*`) are all
 created lazily and left in the DOM afterward, hidden via the app-wide
 `[hidden] { display: none !important; }` rule rather than
-created/destroyed — the same reuse idiom every overlay in `pane.ts` already
+created/destroyed — the same reuse idiom every overlay in `paneviews.ts` already
 used for itself, now applied to three slots instead of one.
 
 ## Performance: bounding a docked panel's own render cost (#361 user-demo)
@@ -865,7 +865,7 @@ drag, not just bound its steady-state size — the `.resizing` class.** Even
 at 300 rows, dragging fires `mousemove` at display refresh rate, and every
 tick still forces a reflow that has nothing to do with what the human is
 actually watching (the DIVIDER's position, not the list's internal
-layout). `Pane.wireEmbedDivider`'s mousedown adds `resizing` to the SLOT's
+layout). `PaneEmbeds.wireEmbedDivider`'s mousedown adds `resizing` to the SLOT's
 own `panelEl` (never to `beforeEl`/`counterpartEl` — the terminal side of
 any divider is never touched by this); `makeOverlayDivider` does the same
 to the overlay host for the identical cost during a plain (non-docked)

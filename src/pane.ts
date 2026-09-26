@@ -3,67 +3,31 @@
 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { pickDirectory } from "./transport.ts";
 import {
-  spawnPty,
-  writePty,
   resizePty,
   killPty,
   dirInfo,
   changeDir,
-  ensureOutputRouter,
-  attachOutput,
-  detachOutput,
   detachOutputOwner,
   detachGitWatchOwner,
   stopGitWatch,
-  attachGitWatch,
   setGitWatch,
-  ptyBackendInfo,
 } from "./pty";
 import { admitRoot } from "./fileapi";
 import { voiceController, type VoiceTargetPane, type VoicePhase } from "./voicecontrol";
-import { pathTail, sshOrchestrationRefusal, type ShellKind } from "./panesetup";
+import { pathTail, type ShellKind } from "./panesetup";
 import { FONT, TERM_METRICS, TERMINAL_THEME } from "./theme";
 import { invoke } from "./transport.ts";
-import { parseOsc52, writeClipboard, readClipboard } from "./clipboard";
-import { keyDisposition } from "./pasteflow";
-import { getSettings } from "./settings";
-import {
-  checkAttachment,
-  attachRejectMessage,
-  composeSteerText,
-  bytesToBase64,
-  steerKeyAction,
-  steerBoxHeight,
-} from "./steer";
 import { createOrderedWriter } from "./ptywrite";
-import { hintXtermSyncParse } from "./xtermreach";
 import { createHumanOriginLatch } from "./humanorigin";
-import { decideFlush, WOKEN, MAX_PENDING_BYTES } from "./panethrottle";
-import { sharedVisibility } from "./pollgate";
 import { decideRefresh, REPO_SIGNAL_WINDOW_MS } from "./refreshthrottle";
-import { planWebglRetry } from "./webglretry";
 import { showToast } from "./toast";
-import { isAppShortcut } from "./shortcuts";
-import { attentionPresentation, attentionDismiss, attentionChanged } from "./attention";
-import { WATCHED_MARK, WATCHED_TITLE } from "./watchedpanes";
-import {
-  dismissStranded,
-  endGroup,
-  notifyPaneDisposed,
-  registerStructuredPane,
-  requestCompact,
-  seedMailUnread,
-} from "./orchestration";
-import { cacheChipLabel, cacheChipTitle, cacheState, wakeCostLine, type CacheAgeReading } from "./cacheage";
-import { heldPresentation } from "./heldbadge";
-import { queuePresentation, type QueueDepthReading } from "./queuebadge";
-import { mailboxPresentation } from "./mailboxbadge";
+import { endGroup, notifyPaneDisposed, registerStructuredPane } from "./orchestration";
+import { type CacheAgeReading } from "./cacheage";
+import { type QueueDepthReading } from "./queuebadge";
 import { makeRenameCommit } from "./panerename";
 import { shouldResizePty } from "./panefit";
 import { planFit, FIT_WINDOW_MS, FIT_MAX_WAIT_MS } from "./resizeburst";
@@ -80,31 +44,8 @@ import {
 import { swapEditor } from "./domutil";
 import { openInEditor, editorConfigDialog } from "./editor";
 import { GitView } from "./gitview";
-import { IssuesView } from "./issuesview";
-import { TasksView } from "./tasksview";
-import { DecisionsView } from "./decisionsview";
-import { PendingEmbedFocus } from "./embedfocus";
-import { AuditView } from "./auditview";
-import { AuditStore } from "./auditstore";
-import type { AuditEntry } from "./auditsummary";
-import { TimelineView } from "./timelineview";
-import { TokenChartsView } from "./tokenchartsview";
-import { GroupView } from "./groupview";
-import { clampOverlayHeight, OVERLAY_MIN_H } from "./overlaysize";
-import {
-  embedDragGrow,
-  fracFromGrow,
-  clampEmbedFrac,
-  embedSideFloors,
-  embedCenterFloor,
-  DEFAULT_EMBED_FRAC,
-  EMBED_MIN_PANEL_PX,
-  EMBED_SIDES,
-  type EmbedSide,
-} from "./embedsplit";
-import { CWD_DECLARING_VIEWS, embedToggleAction, toggleDeclaresCwd } from "./embedtoggle";
-import { startDragSession } from "./dragsession";
-import { showContextMenu, type MenuItem } from "./contextmenu";
+import { type EmbedSide } from "./embedsplit";
+import { CWD_DECLARING_VIEWS } from "./embedtoggle";
 import {
   exitDiagnosticLine,
   keepOpenOnExit,
@@ -124,12 +65,7 @@ import type { AnswerFn } from "./structuredpane";
 import { WORKFLOW_FILE, workflowNameOf } from "./workflowmodel";
 import { persistedKindFor, type PersistedPane, type PersistedPaneKind } from "./tabstore";
 import type { TabPaneInfo } from "./tabcounts";
-import {
-  adoptableSessionId,
-  forkRecordCommand,
-  hasForkSession,
-  sessionCliFromCommand,
-} from "./panerestore";
+import { hasForkSession, sessionCliFromCommand } from "./panerestore";
 // The reconciler's own CLI set, imported rather than re-spelled: `agentCli`
 // below exists to be matched against `listSessions()` rows, so the two must
 // name the same CLIs by construction (#722).
@@ -137,6 +73,12 @@ import type { Cli } from "./sessionreconcile";
 import { PaneActivity } from "./paneactivity.ts";
 import type { PaneFacts, TabRef } from "./agentrows.ts";
 import { notesApplyToPane } from "./notesmodel.ts";
+import { ICON_BTN_PX, PaneViews } from "./paneviews";
+import { EMBED_KINDS, PaneEmbeds } from "./paneembeds";
+import { PaneBadges } from "./panebadges";
+import { PaneCompose } from "./panecompose";
+import { PaneLifecycle } from "./panelifecycle";
+import { capturePane } from "./panecapture";
 
 // The header's icons, from the registry (#879 slice K). They were hand-drawn
 // inline here — inline so the toolbar renders identically regardless of
@@ -146,33 +88,14 @@ import { notesApplyToPane } from "./notesmodel.ts";
 // controls as the fleet. The sizes below are the boxes these glyphs already
 // had, so nothing in the header moves.
 const ICON_META_PX = 12;
-const ICON_BTN_PX = 13;
 const FOLDER_ICON = icon("folder", ICON_META_PX);
 const BRANCH_ICON = icon("git-branch", ICON_META_PX);
-const TASKS_ICON = icon("list-checks", ICON_BTN_PX);
-// NEEDS-YOU panel (#1091, Alt+Q): a raised hand — the group asking for the
-// human, rather than offering them help.
-const DECISIONS_ICON = icon("hand", ICON_BTN_PX);
-const GIT_ICON = icon("git-graph", ICON_BTN_PX);
-// Issues view (Alt+I): a dot inside a circle — GitHub's open-issue glyph.
-const ISSUES_ICON = icon("circle-dot", ICON_BTN_PX);
-// Progress timeline (#608): the audit log's chart sibling.
-const TIMELINE_ICON = icon("chart-gantt", ICON_BTN_PX);
-// Token charts (#2011): spend over time and per feature — the audit log's
-// cost sibling, so a chart glyph distinct from the timeline's gantt.
-const TOKENS_ICON = icon("chart-column", ICON_BTN_PX);
-// Audit viewer: a clock/history glyph for the group's audit-log timeline.
-const AUDIT_ICON = icon("clock-fading", ICON_BTN_PX);
-const GROUP_ICON = icon("users", ICON_BTN_PX);
 // Fold-group toggle (#46): chevrons collapsing toward each other — signals
 // "minimize every worker/reviewer pane to the dock at once".
 const GROUP_MIN_ICON = icon("chevrons-down-up", ICON_BTN_PX);
 // "Open in editor": code-brackets glyph. Opens the pane's workspace folder in
 // the user's configured external editor (VS Code, Zed, …).
 const EDITOR_ICON = icon("code-xml", ICON_BTN_PX);
-// File-editor overlay (#174): a page with a pencil, to read as "edit files"
-// distinct from the external-editor </> glyph above.
-const FILES_ICON = icon("file-pen", ICON_BTN_PX);
 // Per-session Notes (#2116): a page of writing. Deliberately `file-text` and
 // not `file-pen` — that one is already this header's file-EDITOR button, and
 // two buttons sharing a glyph in one row is worse than reusing a vendored
@@ -180,10 +103,6 @@ const FILES_ICON = icon("file-pen", ICON_BTN_PX);
 // an entry no surface asks for, and the `content` role this glyph carries —
 // "files you read rather than run" — is what a note is.
 const NOTES_ICON = icon("file-text", ICON_BTN_PX);
-// Attach affordance on the steering strip (#72): a paperclip.
-const PAPERCLIP_ICON = icon("paperclip", ICON_BTN_PX);
-// Voice-prompt push-to-talk button (#58): a microphone.
-const MIC_ICON = icon("mic", ICON_BTN_PX);
 // Header overflow (#2191): the single glyph that stands in for the folded set.
 // A TEXT glyph, like the window-control cluster it sits beside (◫ ⬓ — ⤢ ✕) and
 // unlike the dyed registry icons — the overflow button names no ROLE, it names
@@ -251,20 +170,6 @@ function irreducibleWidth(el: HTMLElement): number {
   // the borders (there is no scrollbar on a header chip).
   const border = el.offsetWidth - el.clientWidth;
   return Math.max(0, (Number.isFinite(pad) ? pad : 0) + (Number.isFinite(border) ? border : 0));
-}
-
-/** Pull image files out of a paste/drag `DataTransfer`. Returns only entries
- *  the browser tags as images, so a text or mixed paste yields []. */
-function imagesFromDataTransfer(dt: DataTransfer | null): File[] {
-  if (!dt) return [];
-  const out: File[] = [];
-  for (const item of Array.from(dt.items)) {
-    if (item.kind === "file" && item.type.startsWith("image/")) {
-      const f = item.getAsFile();
-      if (f) out.push(f);
-    }
-  }
-  return out;
 }
 
 /** Extract a filesystem path from an OSC 7 payload, which may be a raw path
@@ -427,18 +332,6 @@ export type ContentPaneKind =
   | "structured"
   | "todo";
 
-/** What to CALL each content kind when a message has to name it ("the git view isn't
- *  available in a workflow pane"). A table rather than a ternary chain, so a fifth kind
- *  is a row and not a nested conditional nobody re-reads. */
-const CONTENT_KIND_LABEL: Record<ContentPaneKind, string> = {
-  files: "file explorer",
-  editor: "file editor",
-  git: "git",
-  workflow: "workflow",
-  structured: "structured agent",
-  todo: "to-do list",
-};
-
 /** What a content pane needs: which surface, the root it is pointed at, and a name.
  *  Deliberately NOT part of PaneOptions — every field there describes a PTY spawn,
  *  and a content pane never has one. */
@@ -563,7 +456,7 @@ export interface PaneEvents {
  *  scope increase) once the multi-slot generalization made "one more
  *  dockable view" cheap to reason about — see docs/design/embedded-panels.md's
  *  "What's embeddable, and what isn't". */
-type EmbedKind =
+export type EmbedKind =
   | "tasks"
   | "git"
   | "issues"
@@ -582,163 +475,6 @@ type EmbedKind =
 const _CWD_DECLARING_VIEWS_ARE_EMBED_KINDS: readonly EmbedKind[] = CWD_DECLARING_VIEWS;
 void _CWD_DECLARING_VIEWS_ARE_EMBED_KINDS;
 
-const EMBED_KINDS: readonly EmbedKind[] = [
-  "tasks",
-  "decisions",
-  "git",
-  "issues",
-  "audit",
-  "group",
-  "editor",
-  "timeline",
-  "tokens",
-];
-
-/** The subset of `EmbedKind`s whose embed preference is captured for a whole-
- *  session-restart restore (`Pane.capture()` / `Pane.restoreEmbeds`) — every
- *  kind here restores when docked on an ORCHESTRATOR pane specifically
- *  (`kind === "orch"` in `capture()`), because only orch panes stay DORMANT
- *  across a restart and so have a natural "captured, then reapplied once the
- *  real pane exists" hook (`main.ts`'s `resumeDormantGroup`). `issues` is the
- *  one kind still excluded: embeddable on every pane kind, same as
- *  `git`/`editor`, but with no equivalent restore hook on a PLAIN
- *  terminal/agent pane (unchanged limitation — see
- *  docs/design/embedded-panels.md's "Why only these kinds survive a restart"
- *  — nothing about `issues` itself is different, there's simply no reason
- *  yet to special-case it further than `git`/`editor` already are: restoring
- *  it on an orch pane specifically would be exactly as easy to add). A
- *  restored `editor`/`git` never restores their OWN content (which file was
- *  open, which commit was selected) — only the DOCK preference (side +
- *  share), identical to how a restored `group`/`tasks`/`audit` never
- *  restores ITS scroll position or filter either. */
-const RESTORABLE_EMBED_KINDS: readonly EmbedKind[] = [
-  "tasks",
-  // The NEEDS-YOU panel (#1091) is orchestrator-only and group-scoped, exactly
-  // like the board it sits beside, so it restores on the same terms — the DOCK
-  // preference only, never which card was expanded or half-answered.
-  "decisions",
-  "audit",
-  "group",
-  "git",
-  "editor",
-  // The progress timeline (#608) is group-scoped and gated exactly like the
-  // audit log, so it restores on the same terms — dock preference only, never
-  // its own window/category selection, the same way a restored audit log does
-  // not restore its filters.
-  "timeline",
-  // The token charts (#2011) are group-scoped and gated exactly like the
-  // audit log they read beside, so they restore on the same terms — the
-  // DOCK preference only, never the window/metric selection, the same way a
-  // restored timeline does not restore its own window or categories.
-  "tokens",
-];
-
-function isRestorableEmbedKind(
-  kind: EmbedKind
-): kind is
-  | "tasks"
-  | "decisions"
-  | "audit"
-  | "group"
-  | "git"
-  | "editor"
-  | "timeline"
-  | "tokens" {
-  return (RESTORABLE_EMBED_KINDS as readonly string[]).includes(kind);
-}
-
-/** Human label for the toast a no-op'd toggle shows (`embedToggleAction`,
- *  below) — matches each header button's own name for the kind. */
-const EMBED_TOGGLE_LABEL: Record<EmbedKind, string> = {
-  tasks: "The task board",
-  git: "The git view",
-  issues: "The issues view",
-  audit: "The audit log",
-  timeline: "The progress timeline",
-  tokens: "The token charts",
-  group: "The group lifecycle panel",
-  editor: "The file editor",
-  decisions: "The needs-you panel",
-};
-
-/** Each kind's PANE HEADER toggle button's normal (undocked) title —
- *  restored by `syncEmbedToggleButton` whenever a kind un-docks; the single
- *  source of truth so the constructor's initial assignment and the restore
- *  can't drift apart. */
-const EMBED_TOGGLE_TITLE: Record<EmbedKind, string> = {
-  tasks: "Task board (Alt+T)",
-  git: "Git view (Alt+G)",
-  issues: "GitHub issues (Alt+I)",
-  audit: "Audit log (Alt+A)",
-  timeline: "Progress timeline (Alt+W)",
-  tokens: "Token charts (Alt+K)",
-  group: "Group lifecycle (Alt+O)",
-  editor: "File editor (Alt+F)",
-  decisions: "Needs you — decisions & demos (Alt+Q)",
-};
-
-/** One embeddable view's plumbing, registered once that view is lazily
- *  constructed. Lets the generic engine (`openView`/`closeView`/`toggleView`/
- *  `embedViewAtSide`/`reclampViewFloor`) treat all eight views uniformly
- *  without hardcoding any one view's class. */
-interface EmbedEntry {
-  /** The view's own floating-overlay host (unchanged pre-#361 mechanics). */
-  overlayEl: HTMLElement;
-  /** The view's own root element — moved between `overlayEl` and whichever
-   *  `EmbedSide`'s panel it's currently docked to. */
-  viewEl: HTMLElement;
-  /** Called every time the view becomes visible, in either mode. */
-  show: () => void;
-  /** Called every time the view is about to become hidden, in either mode —
-   *  extra per-view cleanup beyond hiding its host (e.g. `GitView.hide()`
-   *  dismisses an open context menu). Optional: a view with nothing to stop
-   *  needs nothing here.
-   *
-   *  **A view that can be WOKEN from outside is not that view (#1318).** Until
-   *  #1318 this doc said only the sentence above it — "most views need nothing
-   *  beyond the generic hide" — while the rule that actually mattered lived
-   *  three thousand lines below, as a call-site comment on the `timeline`
-   *  entry: "stops the follow poll on close/eviction … which every polling view
-   *  has to answer for". Neither half reached whoever added the next view. They
-   *  read an invitation to skip the hook, and the rule that would have stopped
-   *  them was on another view's registration, where nobody adding a NEW view
-   *  has any reason to look — so the board and the NEEDS-YOU panel refetched
-   *  and rebuilt off screen on every agent write for the life of the session,
-   *  and the audit log kept a live-follow poll running behind a closed panel.
-   *  The rule belongs here, and it is about the QUESTION rather than the
-   *  mechanism: whether the waker is a `setInterval` or a Tauri `listen`
-   *  changes nothing. If something outside this view can make it do work, this
-   *  hook is where it says what happens when nobody is looking — enforced by
-   *  test/embedwake.test.ts; see docs/design/embedded-panels.md and
-   *  src/wakegate.ts. */
-  hide?: () => void;
-  /** Reflect whether this view is currently docked to ANY embed slot —
-   *  updates the view's own header toggle button. Side-agnostic on purpose:
-   *  the button reads "embedded" vs "floating," not which edge. */
-  setPanelActive: (active: boolean) => void;
-  /** The live floor (px) for the OVERLAY height clamp, and for the BOTTOM
-   *  slot's own height floor specifically (unchanged from the
-   *  pre-multi-slot design). Most views share the generic default
-   *  (`EMBED_MIN_PANEL_PX`); the group panel measures its own fixed chrome
-   *  (`Pane.groupFloor`). NOT used for the left/right slots' WIDTH floor —
-   *  see `EMBED_MIN_PANEL_PX`'s own doc comment in embedsplit.ts for why
-   *  that one deliberately stays a fixed constant instead. */
-  floorPx: () => number;
-}
-
-/** One embed slot's live DOM + state — one instance per `EmbedSide`, created
- *  together in `ensureEmbedHost`. `kind`/`frac` are `null`/default when the
- *  slot is empty; `panelEl`/`dividerEl` exist permanently once created,
- *  hidden when empty (the same "create once, toggle `hidden`, never
- *  destroy" idiom every overlay in this file already uses). */
-interface EmbedSlotState {
-  side: EmbedSide;
-  kind: EmbedKind | null;
-  frac: number;
-  panelEl: HTMLElement;
-  dividerEl: HTMLElement;
-}
-
 /** Source of `Pane.key` (#2122 slice A): a per-WINDOW counter, so two panes
  *  alive at once never share a key and a key is never reused. Deliberately not
  *  persisted and deliberately not derived from anything the human or the
@@ -756,87 +492,25 @@ export class Pane implements VoiceTargetPane {
   ptyId: number | null = null;
   name = "shell";
 
-  private titleEl: HTMLElement;
+  titleEl: HTMLElement;
   /** The agent-type mark (#992): which CLI is running in this pane, as a glyph. Sits at
    *  the head of the header row, before the group role badge, and stays hidden until a
    *  launch line names a program — a plain shell has no agent type to report. */
   private agentMarkEl: HTMLElement;
-  private termEl: HTMLElement;
-  private cwdEl: HTMLElement;
+  termEl: HTMLElement;
+  cwdEl: HTMLElement;
   private cwdTextEl: HTMLElement;
   private branchEl: HTMLElement;
   private branchTextEl: HTMLElement;
   /** Latest un-abbreviated directory the shell reported, for the picker. */
-  private cwdRaw: string | null = null;
+  cwdRaw: string | null = null;
   /** Directory the external-change git watch is currently pointed at (#36),
    *  so we only re-issue the backend call when the pane actually changes dir. */
-  private watchedPath: string | null = null;
+  watchedPath: string | null = null;
   /** When the last signal-driven `dir_info` read ran, and the trailing timer if
    *  one is booked — the pane half of the repo-signal throttle (signalDirRefresh). */
   private dirRefreshAt = 0;
   private dirRefreshTimer: number | undefined;
-  /** Lazily created git view; null until the first toggle. */
-  private gitView: GitView | null = null;
-  /** Floating container for the git view + divider. It overlays the top of
-   *  the terminal instead of shrinking it: resizing the PTY makes ConPTY and
-   *  full-screen TUIs repaint from scratch, flooding scrollback with
-   *  duplicate frames. */
-  private gitOverlay: HTMLElement | null = null;
-  private gitBtn: HTMLButtonElement;
-  /** GitHub issues view (any pane in a git repo), same overlay mechanics. */
-  private issuesView: IssuesView | null = null;
-  private issuesOverlay: HTMLElement | null = null;
-  private issuesBtn: HTMLButtonElement;
-  /** Task board (orchestrator panes only), same overlay mechanics. */
-  private tasksView: TasksView | null = null;
-  private tasksOverlay: HTMLElement | null = null;
-  private tasksBtn: HTMLButtonElement;
-  /** NEEDS-YOU panel (orchestrator panes only, #1091), same overlay
-   *  mechanics — pending human decisions and demo-gated board rows. */
-  private decisionsView: DecisionsView | null = null;
-  private decisionsOverlay: HTMLElement | null = null;
-  private decisionsBtn: HTMLButtonElement;
-  /** Focus requests parked for this pane's own embeds (#1091 slice C).
-   *  Per-PANE, because the surfaces that cite each other are embeds on the
-   *  SAME pane — a card naming `t-7` wants THIS pane's board, not another
-   *  window's. See embedfocus.ts for why the request is parked rather than
-   *  delivered: the target view may not be constructed yet, and even once it
-   *  is, its rows arrive from an async refresh. */
-  private readonly pendingFocus = new PendingEmbedFocus();
-  /** This pane's ONE `orch_audit` read (#1317), shared by the audit viewer
-   *  and the progress timeline — two views on one file that each used to
-   *  fetch it, parse it and hold their own 5000-row copy of it, at the same
-   *  1.5 s follow cadence. Created with the first view that needs it and
-   *  released with this pane; see `AuditStore` for why it is per-pane rather
-   *  than a module-level map keyed by group. */
-  private auditStore: AuditStore | null = null;
-  /** Audit-log viewer (any orchestration pane), same overlay mechanics. */
-  private auditView: AuditView | null = null;
-  private auditOverlay: HTMLElement | null = null;
-  private auditBtn: HTMLButtonElement;
-  /** Progress timeline (#608) — the same group-scoped audit data as the audit
-   *  log plus gh issue/PR lifecycle, on a time axis. Same overlay mechanics
-   *  as every other embeddable view; nothing here resizes the terminal. */
-  private timelineView: TimelineView | null = null;
-  private timelineOverlay: HTMLElement | null = null;
-  private timelineBtn: HTMLButtonElement;
-
-  /** Token charts (#2011) — the group's persisted usage series, plotted.
-   *  Shares the pane's ONE `orch_audit` read with the audit viewer and the
-   *  timeline (#1317); its own series read is a separate command. */
-  private tokensView: TokenChartsView | null = null;
-  private tokensOverlay: HTMLElement | null = null;
-  private tokensBtn: HTMLButtonElement;
-  /** Group lifecycle panel (orchestrator panes only), same mechanics. */
-  private groupView: GroupView | null = null;
-  private groupOverlay: HTMLElement | null = null;
-  private groupBtn: HTMLButtonElement;
-  /** File-editor overlay (#174): file tree + code editor + search/replace.
-   *  Unlike the others it is UNGATED — present in every pane type, plain
-   *  terminals included. Same no-resize overlay mechanics. */
-  private fileEditView: FileEditView | null = null;
-  private fileEditOverlay: HTMLElement | null = null;
-  private fileEditBtn: HTMLButtonElement;
   /** The Notes button (#2116). Hidden until a launch line gives this pane a
    *  harness — see `syncNotesBtn`. */
   private notesBtn: HTMLButtonElement;
@@ -844,199 +518,55 @@ export class Pane implements VoiceTargetPane {
    *  last `setNotesCount`. Kept only to render the button's title; the store
    *  is the truth and this pane never reads it. */
   private notesCount = 0;
-  /** Every view registered as embeddable so far (#361), keyed by kind. Built
-   *  lazily — one entry per view, added the first time that view's own
-   *  `ensureXView()` runs — so a pane that never opens (say) the group panel
-   *  never pays for its entry. The generic open/close/toggle engine below
-   *  (`openView`/`closeView`/`toggleView`/`embedViewAtSide`/`unembedView`)
-   *  treats every kind uniformly through this registry instead of hardcoding
-   *  any one view's class — see docs/design/embedded-panels.md. */
-  private embedRegistry = new Map<EmbedKind, EmbedEntry>();
-  /** Up to THREE simultaneous embed slots — left, right, bottom (#361
-   *  generalization from a single bottom-only slot) — each independently
-   *  holding at most one view. `null` = nothing embedded anywhere; every
-   *  view opens as its floating overlay by default (unchanged pre-#361
-   *  behavior). Docking a kind that's already embedded elsewhere, or
-   *  docking a DIFFERENT kind onto an already-occupied side, SWAPS that
-   *  ONE slot's occupant (`embedViewAtSide`) — the other two slots are
-   *  untouched either way. Created together, lazily, in `ensureEmbedHost`. */
-  private embedSlots: Record<EmbedSide, EmbedSlotState> | null = null;
-  /** Lazily created wrapper that turns `termEl` into a flex sibling of the
-   *  left/right/bottom embed slots instead of the pane's direct flex:1
-   *  child. Created once, on the first embed of ANY kind, and left in place
-   *  afterward — with every slot's panel/divider `hidden`, `termEl` alone in
-   *  the nested structure lays out identically to being `.pane`'s direct
-   *  child (see `ensureEmbedHost`'s own doc comment for the exact
-   *  structure, a two-level nesting: `embedHostEl` > [`embedRowEl`,
-   *  bottom's divider + slot] and `embedRowEl` > [left's divider + slot,
-   *  `embedCenterEl`], `embedCenterEl` > [`embedTermWrapEl` (containing
-   *  `termEl`), right's divider + slot]). Bottom spans the row's full width
-   *  rather than sitting only beside term — the simpler of the two
-   *  corner-layout choices (see
-   *  docs/design/embedded-panels.md's "Layout" section). Nested, not a flat
-   *  5-child row, so every divider's two sides are a real, single DOM
-   *  element pair (grid.ts's own nested-split-tree shape) — the left
-   *  divider's far side is `embedCenterEl` as ONE element, not "term plus
-   *  whatever's on the right," which is what keeps each divider's own
-   *  drag math a plain two-element `embedDragGrow` call (see
-   *  `dividerPair`/`dividerFloors`). */
-  private embedHostEl: HTMLElement | null = null;
-  private embedRowEl: HTMLElement | null = null;
-  private embedCenterEl: HTMLElement | null = null;
-  /** Thin, permanent wrapper around `termEl` inside `embedCenterEl` — exists
-   *  ONLY so the right divider's drag math never writes `.style.flex`
-   *  directly onto `termEl` itself (#361 user-demo finding: right-docked
-   *  expand-left lag). Left's and bottom's far side is always a WRAPPER
-   *  (`embedCenterEl`/`embedRowEl`) that resizes `termEl` only as an
-   *  indirect, computed consequence of ITS OWN flex-grow changing —
-   *  `termEl`'s own inline style is never touched by their drags. Before
-   *  this wrapper existed, right's divider was the ONE exception: its
-   *  `beforeEl` WAS `termEl` directly (there was nothing else for it to be,
-   *  since `embedCenterEl`'s row is exactly `[termEl, right's divider,
-   *  right's panel]`), so `termEl` — the same node `resizeObs` OBSERVES —
-   *  had its OWN `.style.flex` rewritten on every mousemove tick, uniquely
-   *  among the three dividers. `embedTermWrapEl` removes that one
-   *  structural asymmetry: right's `beforeEl` is now this wrapper, matching
-   *  left/bottom's shape exactly, and `termEl` fills it via its own
-   *  pre-existing `flex: 1` rule, unaffected either way. */
-  private embedTermWrapEl: HTMLElement | null = null;
   /** Fold-group toggle (orchestrator panes only, #46): minimizes every
    *  worker/reviewer pane in the group to the dock, or restores them all. */
-  private groupMinBtn: HTMLButtonElement;
+  groupMinBtn: HTMLButtonElement;
   /** Fullscreen toggle; its glyph flips to a restore affordance when active. */
   private maximizeBtn: HTMLButtonElement;
-  private orchGroup: string | null = null;
-  private orchRoleName: string | null = null;
-  private orchAgent: string | null = null;
+  orchGroup: string | null = null;
+  orchRoleName: string | null = null;
+  orchAgent: string | null = null;
   /** #887 S3: the SSH profile this pane's ssh client was launched from, or null
    *  for every other pane. Non-null IS "this pane is an SSH pane" — the single
    *  fact every local-filesystem suppression below reads, so a ninth pane kind
    *  can't be added to one site and forgotten at another. */
-  private sshProfileId: string | null = null;
+  sshProfileId: string | null = null;
   /** The far-end CLI of this pane's SSH profile, when a caller supplied it — the pane's
    *  real agent, which `spawnArgv` (the local ssh client) cannot report. Only the header
    *  mark reads it (#992). */
-  private sshDefaultCli: string | null = null;
+  sshDefaultCli: string | null = null;
   /** Standalone pane's channel-scoped identity (#271 W3 addendum) — a carrier
    *  DELIBERATELY separate from orchGroup/orchAgent/orchRoleName (those gate
    *  the full orchestration chrome; a plain standalone pane must never show
    *  it just because it can now join a channel). Set at construction
    *  (`opts.channelAgent`) or later via `setChannelAgent` (adopt-on-connect). */
-  private channelAgentInfo: { group: string; agentId: string; role: string; canSend: boolean } | null = null;
-  /** Loomux-owned steering strip docked under orchestrator panes (#43): the
-   *  human types here and loomux enqueues it through the same serialized
-   *  delivery path as worker reports, so the pane's stdin has one writer. */
-  private composeInput: HTMLTextAreaElement | null = null;
-  private composeStatus: HTMLElement | null = null;
-  private composeStatusTimer: number | undefined;
-  /** Thumbnail-chip row for images pasted/attached into the strip (#72); hidden
-   *  until the first image is queued. */
-  private composeChips: HTMLElement | null = null;
-  /** Images queued for the next steer, in send order. `path` is the on-disk
-   *  scratch file (from `orch_save_attachment`); `url` is a blob: object URL for
-   *  the chip thumbnail and must be revoked when the chip goes away. */
-  private attachments: { path: string; url: string; name: string }[] = [];
+  channelAgentInfo: { group: string; agentId: string; role: string; canSend: boolean } | null = null;
   /** The orchestrator's CLI, learned from the save-attachment response; decides
    *  how image paths are referenced in the steer text (#72). Defaults to the
    *  Claude form until a save reports otherwise. */
-  private orchCli = "claude";
-  /** Voice-prompt push-to-talk button on the steer strip (#58). Only present on
-   *  orchestrator panes; the hotkey (Alt+S) works on any pane regardless. */
-  private micBtn: HTMLButtonElement | null = null;
-  /** Overlay badge shown while a voice capture targets THIS pane's terminal
-   *  (#58). Overlay chrome — floats over `.xterm`, never resizes the PTY. */
-  private voiceIndicator: HTMLElement | null = null;
-  /** "needs attention" chip in the header (attention routing #6); hidden until
-   *  the backend flags this pane. */
-  private attnChip: HTMLButtonElement;
-  /** The explicit-dismiss control beside the attention chip (#825 M1). Shown
-   *  only for the one LATCHED reason (`stranded`), which is the only chip a
-   *  human can otherwise be left unable to clear. */
-  private attnDismiss: HTMLButtonElement;
-  private attentionReason: string | null = null;
-  private attentionDetail: string | null = null;
-  /** The human's "come back to this one" mark (#3319). Header chrome beside
-   *  the attention chip, and it is NOT a second attention reason: that one is
-   *  derived by the backend from what the agent is doing and cleared by
-   *  whatever caused it, while this is set by a human gesture and cleared by
-   *  nothing else — not focus, not a report arriving, not the pane going
-   *  quiet. The two co-exist on one pane and that is the case the feature
-   *  exists for. Hidden when the pane is not watched. */
-  private watchChip: HTMLButtonElement;
-  /** The fork crumb (#3368): `↰ <parent name>` on a forked pane, which goes to
-   *  the parent. Set from outside (`setForkCrumb`) because the parent's name
-   *  and whereabouts are the window's to know, not this pane's. */
-  private forkCrumb: HTMLButtonElement;
-  private forkCrumbGo: (() => void) | null = null;
-  private isWatched = false;
-  /** "delivery held" chip in the header (#246): the moment loomux is
-   *  withholding an outbound prompt to this pane because it believes the
-   *  human's own input occupies the CLI's box. Hidden until the backend
-   *  flags a hold in progress; cleared by its own paired event, never a
-   *  frontend timer. Purely informational — unlike attnChip, clicking it
-   *  does nothing to acknowledge/clear (only the backend resolving the hold
-   *  does). */
-  private heldChip: HTMLElement;
-  private heldReason: string | null = null;
-  /** "delivery queue depth" chip in the header (#814): how many prompts are
-   *  waiting for this pane and how long the oldest has waited, so a stuck
-   *  queue is visible without hovering anything. Informational like
-   *  `heldChip`; driven by the backend's `orch-queue-depth` push and cleared
-   *  by this pane's absence from it, never by a frontend timer. */
-  private queueChip: HTMLElement;
-  private queueReading: QueueDepthReading | null = null;
-  /** "unread mail" chip in the header (#1161 M5): how many messages the
-   *  orchestrator has posted that this MANAGER pane has not read yet. Worn by no
-   *  other role — a group's mailbox belongs to exactly one pane (`MANAGER_MAX`
-   *  is 1, enforced at parse), and `mailboxPanes` is the single gate deciding
-   *  which pane that is. Informational like `queueChip`, and for a sharper
-   *  reason: nothing a click here could do would make the manager read its mail.
-   *  The thing that makes it read is the human speaking to it. */
-  private mailChip: HTMLElement;
-  private mailUnread = 0;
-  /** The prompt-cache age chip (#3407): `hot 3m` / `cooling 48m/60m` / `cold`,
-   *  or `idle 12m` where no TTL is known. Header chrome like the chips beside
-   *  it — it floats in the header and never touches the terminal's geometry, so
-   *  constraint 1 holds trivially. Fed by `noteCacheAge` off the tab strip's
-   *  existing snapshot read; a click opens its menu (the last wake's cost and
-   *  "Compact now"). Hidden until a request has been observed. */
-  private cacheChip: HTMLButtonElement;
-  /** The last reading `noteCacheAge` was handed, for the menu and `facts()`. */
-  private cacheReading: CacheAgeReading | null = null;
-  /** Whether an `orch-mailbox-changed` PUSH has ever been applied to this pane.
-   *  The seed read (`applyMailSeed`) is asynchronous and a push can land while
-   *  it is in flight, so without this the seed's older number would overwrite a
-   *  newer one — including a push of 0, which is how an emptied mailbox is
-   *  reported. A push is always the fresher of the two, so once one has arrived
-   *  the seed has nothing left to contribute. */
-  private mailPushed = false;
-  /** Cross-workspace channel chip (#271): shown when this pane is a live channel
-   *  member. Clicking it disconnects — the "easy close from the indicator itself"
-   *  requirement — separate from the pane-menu Disconnect item, same destination. */
-  private channelChip: HTMLButtonElement;
-  private channelInfo: PaneChannelBadge | null = null;
+  orchCli = "claude";
   /** Notified when something the dock chip shows changes (attention state or
    *  the pane name); the grid uses it to keep a minimized pane's chip in sync,
    *  since a docked pane's header is out of the DOM (#6, #95r). */
-  private dockSyncListener: (() => void) | null = null;
+  dockSyncListener: (() => void) | null = null;
   /** True for agent/command panes (vs plain shells). */
-  private launchedCommand = false;
+  launchedCommand = false;
   /** Whether this pane's pty has emitted a single byte since it spawned.
    *  Distinguishes a crash-with-real-output from one that died silently
    *  before printing anything — the DOA-revival signature (#281/#280) — so
    *  the exit banner (and #280's auto-close) can tell them apart. */
-  private receivedOutput = false;
+  receivedOutput = false;
   /** Spawn inputs retained for the session-restore layout snapshot (#194): how
    *  this pane was launched, so `capture()` can serialize it. Record-only —
    *  never read back to drive the live PTY. */
-  private spawnCommand: string | null = null;
-  private spawnArgv: string[] | null = null;
-  private spawnShellKind: ShellKind | null = null;
-  private agentSessionId: string | null = null;
+  spawnCommand: string | null = null;
+  spawnArgv: string[] | null = null;
+  spawnShellKind: ShellKind | null = null;
+  agentSessionId: string | null = null;
   /** #3318 F1 — the parent session this pane was forked from, or null. Set
    *  from `PaneOptions.forkOf` on every path that starts a pane, and read only
    *  by `capture()`. */
-  private forkOf: string | null = null;
+  forkOf: string | null = null;
   /** Wall-clock time the HUMAN's first input (keystroke/paste) reached this
    *  pane's current process — not when the process was spawned (#440; review
    *  round 2, B2). The session-reconciler needs a boundary before which a
@@ -1053,18 +583,18 @@ export class Pane implements VoiceTargetPane {
    *  `markFirstInput`'s comment). Reset to null at the top of both `start()`
    *  and `respawnFresh()`; never touched by `adoptSessionId` (adopting an id
    *  doesn't respawn or re-prompt anything). */
-  private firstInputMs: number | null = null;
+  firstInputMs: number | null = null;
   /** #518: the per-turn "this data came from a human" flag `onData` stamps
    *  each write with. Marked by `markFirstInput()` (i.e. by `term.onKey` and
    *  the two `term.paste()` sites — the same structural signal `firstInputMs`
    *  already trusts), read synchronously in the `onData` handler. Unlike
    *  `firstInputMs` it belongs to the PANE, not to one process: it carries no
    *  state across turns and so has nothing to reset on respawn. */
-  private humanOrigin = createHumanOriginLatch();
+  humanOrigin = createHumanOriginLatch();
   private shiftTimer: number | undefined;
-  private fit = new FitAddon();
-  private resizeObs: ResizeObserver;
-  private disposed = false;
+  fit = new FitAddon();
+  resizeObs: ResizeObserver;
+  disposed = false;
   // ---- header overflow (#2191) ----
   /** The header row itself — the box the overflow policy measures. */
   private headerEl!: HTMLElement;
@@ -1113,23 +643,7 @@ export class Pane implements VoiceTargetPane {
    *  (`startFromWelcome`), so the no-resize invariant holds — there's nothing to
    *  resize before then. Null once the pane has become a real terminal. */
   private welcomeEl: HTMLElement | null = null;
-  /** Dormant restore placeholder (#194 P4): a pane rebuilt from a persisted leaf
-   *  that we deliberately did NOT auto-spawn — an agent CLI with no resumable id
-   *  (a Start button), or an orchestration pane whose whole group stays dormant
-   *  until the human resumes it (a Resume button). No PTY until acted on, so the
-   *  no-resize invariant holds. `dormantRecord` is the leaf it was built from, so
-   *  capture() re-serializes it verbatim: a session closed without resuming
-   *  still offers the same restore next boot. Null for any live/welcome pane. */
-  private dormantEl: HTMLElement | null = null;
-  private dormantRecord: PersistedPane | null = null;
-  /** The Reconnect card floating over a DISCONNECTED ssh pane's terminal (#887
-   *  S4), or null. Distinct from `dormantEl` above in the one way that matters:
-   *  the terminal underneath stays mounted and readable, because the bytes it is
-   *  holding — "Connection to host closed", a timeout, a rejected key — are the
-   *  explanation for the card being there at all. It is chrome floating over the
-   *  pane, never a layout change: nothing here resizes the terminal or the ConPTY
-   *  (CLAUDE.md constraint 1). */
-  private reconnectEl: HTMLElement | null = null;
+  dormantRecord: PersistedPane | null = null;
   /** CONTENT pane (#214 files, #217 editor + git): the pane's permanent content is a
    *  view — the file manager, the file editor, or the git view — rooted at
    *  `contentRoot`. No terminal is ever opened and no PTY ever spawns (the
@@ -1138,21 +652,21 @@ export class Pane implements VoiceTargetPane {
    *  resize. `contentKind` non-null IS the "this is a content pane" flag; `contentRoot`
    *  doubles as the pane's cwd for the capture and for "open in editor". Exactly one
    *  of the four views below is non-null on such a pane; all are null elsewhere. */
-  private contentKind: ContentPaneKind | null = null;
+  contentKind: ContentPaneKind | null = null;
   private contentRoot: string | null = null;
   /** The file a content pane opened ON: the editor's open file, or the workflow pane's
    *  workflow file (#222). Null for the kinds whose only input is a root. */
   private contentFile: string | null = null;
   private filesView: FileExplorerView | null = null;
-  private editorPaneView: FileEditView | null = null;
+  editorPaneView: FileEditView | null = null;
   private gitPaneView: GitView | null = null;
-  private workflowPaneView: WorkflowView | null = null;
+  workflowPaneView: WorkflowView | null = null;
   private structuredPaneView: StructuredPaneView | null = null;
   private todoPaneView: TodoPaneView | null = null;
   /** True once the pane's process has exited but the pane was kept open to show
    *  its output (notifyExited). The counter must not count a dead agent as live
    *  (#194 P4 LOW-7). */
-  private exited = false;
+  exited = false;
   /** #407: true between "loomux killed this pane's process on purpose" and "the
    *  replacement is spawned" — see `isRelaunching`. */
   private relaunching = false;
@@ -1160,29 +674,27 @@ export class Pane implements VoiceTargetPane {
    *  async IPC writes can't reorder (a bracketed-paste terminator overtaking
    *  its body wedges the target app — #65). Buffers input produced before the
    *  PTY exists and flushes it in order once ready. */
-  private writer = createOrderedWriter();
-  /** #720: PTY output that has ARRIVED but has not been handed to `term.write`
-   *  yet, in arrival order, plus its byte total. Non-empty only for a
-   *  visible-but-unfocused pane mid-stream — see `acceptOutput`. Nothing is
-   *  ever dropped or reordered here; only the moment of the `write` call
-   *  moves. */
-  private pendingOut: Uint8Array[] = [];
-  private pendingOutBytes = 0;
-  private flushTimer: number | undefined;
-  /** When this pane last wrote to xterm, or `WOKEN` while it is quiet — the
-   *  leading edge of the throttle (panethrottle.ts). */
-  private lastFlushMs: number | typeof WOKEN = WOKEN;
+  writer = createOrderedWriter();
   /** Whether this pane is its grid's active pane (`setActive`). The one input
    *  that decides whether output keeps its per-frame cadence. */
-  private isActivePane = false;
+  isActivePane = false;
   /** This pane's activity reducer (#2122 slice A2, `paneactivity.ts`): what it
    *  has been outputting, when the human last typed into it, and whether it is
    *  believed parked at a prompt. Fed from `acceptOutput`, `markFirstInput` /
    *  `markHumanInput`, `setAttention` and `noteRosterIdle`; read back through
    *  `facts()`. Pure state — no timer, no IPC, no DOM. */
-  private activity = new PaneActivity();
+  activity = new PaneActivity();
 
-  constructor(private events: PaneEvents) {
+  // The satellites this pane delegates to (#3498 F1). Each owns one cluster's state and
+  // methods and reads the rest of the pane through its `pane` back-reference; the
+  // module-layout note (docs/design/module-layout.md) carries the shape.
+  readonly lifecycle = new PaneLifecycle(this);
+  readonly badges: PaneBadges;
+  readonly embeds = new PaneEmbeds(this);
+  readonly views: PaneViews;
+  readonly compose: PaneCompose;
+
+  constructor(readonly events: PaneEvents) {
     this.el = document.createElement("div");
     this.el.className = "pane";
 
@@ -1207,133 +719,9 @@ export class Pane implements VoiceTargetPane {
     this.titleEl.addEventListener("dblclick", () => this.startRename());
     header.appendChild(this.titleEl);
 
-    // "Needs attention" chip: clicking it focuses the pane and acknowledges
-    // the signal (clears a latched report backend-side). Hidden until flagged.
-    this.attnChip = document.createElement("button");
-    this.attnChip.className = "pane-attn";
-    this.attnChip.hidden = true;
-    this.attnChip.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.events.onFocus(this);
-      this.focus();
-      this.acknowledgeAttention();
-    });
-    header.appendChild(this.attnChip);
-
-    // The explicit dismiss (#825 M1), as a SIBLING button rather than something
-    // inside the chip: the chip is itself a <button>, and a button nested in a
-    // button is invalid HTML that browsers silently un-nest. Header chrome, like
-    // the chip it sits beside — it floats in the header and never touches the
-    // terminal's size, so constraint 1 (never resize the PTY for a UI feature)
-    // holds trivially. Hidden unless the pane wears a dismissible chip.
-    this.attnDismiss = document.createElement("button");
-    this.attnDismiss.className = "pane-attn-dismiss";
-    this.attnDismiss.hidden = true;
-    this.attnDismiss.addEventListener("click", (e) => {
-      // Not `onFocus`/`focus()` like the chip beside it: dismissing is the
-      // human saying they are DONE with this alert, which is the opposite of
-      // asking to be taken to the pane.
-      e.stopPropagation();
-      this.dismissAttention();
-    });
-    header.appendChild(this.attnDismiss);
-
-    // The watched mark (#3319). Header chrome like the two chips above it — it
-    // floats in the header and never touches the terminal's size, so
-    // constraint 1 holds trivially and toggling a watch can never reach a
-    // ConPTY resize. Clicking it STOPS the watch rather than focusing the
-    // pane: the mark's whole job is to be visible from somewhere else, and a
-    // human who clicks their own mark is saying they are done with it (the
-    // same reading `attnDismiss` takes, and the opposite of `attnChip`, which
-    // exists to take you to the pane).
-    this.watchChip = document.createElement("button");
-    this.watchChip.className = "pane-watch";
-    this.watchChip.textContent = WATCHED_MARK;
-    this.watchChip.title = WATCHED_TITLE;
-    this.watchChip.hidden = true;
-    this.watchChip.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.setWatched(false);
-    });
-    header.appendChild(this.watchChip);
-
-    // The fork crumb (#3368). Header chrome on the same terms as the chips
-    // around it — it floats in the header row and never touches the terminal's
-    // geometry, so constraint 1 holds trivially. `chip-yields` so it gives up
-    // its room (ellipsising the parent's name) before the pane's own name does:
-    // the crumb is context, the name is the drag handle. It is walked off the
-    // header by `measureHeaderFixed` like every other chip, so the fold ladder
-    // prices it without being told.
-    this.forkCrumb = document.createElement("button");
-    this.forkCrumb.className = "pane-fork-crumb chip-yields";
-    this.forkCrumb.hidden = true;
-    this.forkCrumb.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.forkCrumbGo?.();
-    });
-    header.appendChild(this.forkCrumb);
-
-    // "Delivery held" chip (#246): purely informational, no click handler —
-    // the hold only clears when the backend resolves it.
-    this.heldChip = document.createElement("span");
-    this.heldChip.className = "pane-held";
-    this.heldChip.hidden = true;
-    header.appendChild(this.heldChip);
-
-    // "Queue depth" chip (#814): header chrome beside the held chip, floating
-    // over nothing — it never touches the terminal's geometry, so constraint 1
-    // (never resize the PTY for a UI feature) holds trivially. No click
-    // handler: the queue drains when the pane is free, and there is nothing a
-    // click here could truthfully do about it.
-    this.queueChip = document.createElement("span");
-    // `chip-yields`: this chip declares a shrink weight of its own (100), and
-    // `styles.css`'s row-shrink rule must not overwrite it. A marker rather than
-    // a name in that rule's `:not()` list, because the third chip to want a
-    // heavy weight would otherwise be silently flattened to 1 (rev-final round 2
-    // finding 1, which is exactly what happened to `.pane-mail`).
-    this.queueChip.className = "pane-queue chip-yields";
-    this.queueChip.hidden = true;
-    header.appendChild(this.queueChip);
-
-    // "Unread mail" chip (#1161 M5): header chrome beside the queue chip, on
-    // the same terms — it floats in the header and never touches the terminal's
-    // geometry, so constraint 1 (never resize the PTY for a UI feature) holds
-    // trivially. No click handler, and here that is not a default: the manager
-    // reads its mail when its human speaks to it, so a click that "marked it
-    // read" would be the app answering for the human on the one pane whose
-    // whole contract is that it never does.
-    this.mailChip = document.createElement("span");
-    this.mailChip.className = "pane-mail chip-yields";
-    this.mailChip.hidden = true;
-    header.appendChild(this.mailChip);
-
-    // The prompt-cache age chip (#3407). `chip-yields`, like the queue and mail
-    // chips: it is informational, so it gives up its room before the title (the
-    // pane's drag handle) does. A button, because it opens a menu — but the
-    // menu is `showContextMenu`'s floating overlay, never header geometry.
-    this.cacheChip = document.createElement("button");
-    this.cacheChip.className = "pane-cache chip-yields";
-    this.cacheChip.type = "button";
-    this.cacheChip.hidden = true;
-    this.cacheChip.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const r = this.cacheChip.getBoundingClientRect();
-      this.openCacheMenu(r.left, r.bottom);
-    });
-    header.appendChild(this.cacheChip);
-
-    // Cross-workspace channel chip (#271): shown only while this pane is a live
-    // channel member. Clicking it disconnects directly — the "easy close from the
-    // indicator itself" requirement, distinct from (but going to the same place
-    // as) the pane-menu's Disconnect item.
-    this.channelChip = document.createElement("button");
-    this.channelChip.className = "pane-channel";
-    this.channelChip.hidden = true;
-    this.channelChip.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.events.onDisconnectChannel(this);
-    });
-    header.appendChild(this.channelChip);
+    // The header chips (attention + dismiss, watch, fork crumb, held, queue, mail,
+    // cache, channel) are built, appended and owned by PaneBadges (panebadges.ts).
+    this.badges = new PaneBadges(this, header);
 
     // The connect gesture (#271): right-click anywhere on the header shows the
     // Connect/Disconnect menu. Buttons that already have their own contextmenu
@@ -1370,71 +758,9 @@ export class Pane implements VoiceTargetPane {
     header.appendChild(meta);
     this.metaEl = meta;
 
-    this.tasksBtn = document.createElement("button");
-    this.tasksBtn.className = "pane-btn";
-    this.tasksBtn.innerHTML = TASKS_ICON;
-    this.tasksBtn.title = EMBED_TOGGLE_TITLE.tasks;
-    this.tasksBtn.hidden = true; // shown for orchestrator panes in start()
-    this.tasksBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.toggleTasksView();
-    });
-    header.appendChild(this.tasksBtn);
-
-    this.decisionsBtn = document.createElement("button");
-    this.decisionsBtn.className = "pane-btn";
-    this.decisionsBtn.innerHTML = DECISIONS_ICON;
-    this.decisionsBtn.title = EMBED_TOGGLE_TITLE.decisions;
-    this.decisionsBtn.hidden = true; // shown for orchestrator panes in start()
-    this.decisionsBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.toggleDecisionsView();
-    });
-    header.appendChild(this.decisionsBtn);
-
-    this.auditBtn = document.createElement("button");
-    this.auditBtn.className = "pane-btn";
-    this.auditBtn.innerHTML = AUDIT_ICON;
-    this.auditBtn.title = EMBED_TOGGLE_TITLE.audit;
-    this.auditBtn.hidden = true; // shown for orchestration panes in start()
-    this.auditBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.toggleAuditView();
-    });
-    header.appendChild(this.auditBtn);
-
-    this.timelineBtn = document.createElement("button");
-    this.timelineBtn.className = "pane-btn";
-    this.timelineBtn.innerHTML = TIMELINE_ICON;
-    this.timelineBtn.title = EMBED_TOGGLE_TITLE.timeline;
-    this.timelineBtn.hidden = true; // shown for orchestration panes in start()
-    this.timelineBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.toggleTimelineView();
-    });
-    header.appendChild(this.timelineBtn);
-
-    this.tokensBtn = document.createElement("button");
-    this.tokensBtn.className = "pane-btn";
-    this.tokensBtn.innerHTML = TOKENS_ICON;
-    this.tokensBtn.title = EMBED_TOGGLE_TITLE.tokens;
-    this.tokensBtn.hidden = true; // shown for orchestration panes in start()
-    this.tokensBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.toggleTokensView();
-    });
-    header.appendChild(this.tokensBtn);
-
-    this.groupBtn = document.createElement("button");
-    this.groupBtn.className = "pane-btn";
-    this.groupBtn.innerHTML = GROUP_ICON;
-    this.groupBtn.title = EMBED_TOGGLE_TITLE.group;
-    this.groupBtn.hidden = true; // shown for orchestrator panes in start()
-    this.groupBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.toggleGroupView();
-    });
-    header.appendChild(this.groupBtn);
+    // The orchestration view toggles (tasks, decisions, audit, timeline, tokens, group)
+    // are built, appended and owned by PaneViews (paneviews.ts).
+    this.views = new PaneViews(this, header);
 
     // Fold the whole group's worker/reviewer panes to the dock in one click
     // (or restore them). Orchestrator panes only; the group's real-estate
@@ -1468,42 +794,8 @@ export class Pane implements VoiceTargetPane {
     });
     header.appendChild(editorBtn);
 
-    // The three overlay buttons below are `pty-only`: their panels FLOAT over the
-    // terminal and are sized from its height, so they mean nothing on a pane that
-    // has no terminal. CSS hides them on a files pane (#214) — see the toggles,
-    // which refuse the hotkey path for the same reason.
-    this.issuesBtn = document.createElement("button");
-    this.issuesBtn.className = "pane-btn pty-only";
-    this.issuesBtn.innerHTML = ISSUES_ICON;
-    this.issuesBtn.title = EMBED_TOGGLE_TITLE.issues;
-    this.issuesBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.toggleIssuesView();
-    });
-    header.appendChild(this.issuesBtn);
-
-    this.gitBtn = document.createElement("button");
-    this.gitBtn.className = "pane-btn pty-only";
-    this.gitBtn.innerHTML = GIT_ICON;
-    this.gitBtn.title = EMBED_TOGGLE_TITLE.git;
-    this.gitBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.toggleGitView();
-    });
-    header.appendChild(this.gitBtn);
-
-    // File-editor overlay (#174). Unconditional — every pane type gets it,
-    // including plain terminals (unlike the orchestration-gated buttons above).
-    // Except a files pane, which IS this surface already.
-    this.fileEditBtn = document.createElement("button");
-    this.fileEditBtn.className = "pane-btn pty-only";
-    this.fileEditBtn.innerHTML = FILES_ICON;
-    this.fileEditBtn.title = "File editor (Alt+F)";
-    this.fileEditBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.toggleFileEditView();
-    });
-    header.appendChild(this.fileEditBtn);
+    // …and so are the overlay toggles (issues, git, file editor), at this slot in the row.
+    this.views.wireOverlayToggles(header);
 
     // Per-session Notes (#2116). `pty-only` takes the content panes (the CSS
     // rule hides the class on `.is-content`); `syncNotesBtn` takes the other
@@ -1612,17 +904,17 @@ export class Pane implements VoiceTargetPane {
     // docs/design/pane-header.md carries the argument, and moving a control
     // between the two sets is this flag and nothing else.
     this.headerControls = [
-      { id: "tasks", el: this.tasksBtn, priority: false },
-      { id: "decisions", el: this.decisionsBtn, priority: false },
-      { id: "audit", el: this.auditBtn, priority: false },
-      { id: "timeline", el: this.timelineBtn, priority: false },
-      { id: "tokens", el: this.tokensBtn, priority: false },
-      { id: "group", el: this.groupBtn, priority: false },
+      { id: "tasks", el: this.views.tasksBtn, priority: false },
+      { id: "decisions", el: this.views.decisionsBtn, priority: false },
+      { id: "audit", el: this.views.auditBtn, priority: false },
+      { id: "timeline", el: this.views.timelineBtn, priority: false },
+      { id: "tokens", el: this.views.tokensBtn, priority: false },
+      { id: "group", el: this.views.groupBtn, priority: false },
       { id: "group-min", el: this.groupMinBtn, priority: false },
       { id: "editor", el: editorBtn, priority: false },
-      { id: "issues", el: this.issuesBtn, priority: false },
-      { id: "git", el: this.gitBtn, priority: false },
-      { id: "file-edit", el: this.fileEditBtn, priority: false },
+      { id: "issues", el: this.views.issuesBtn, priority: false },
+      { id: "git", el: this.views.gitBtn, priority: false },
+      { id: "file-edit", el: this.views.fileEditBtn, priority: false },
       // #2116's Notes button folds like every other view toggle. Registered
       // rather than merely appended: the registry is what `headerTail` is
       // filtered from, so an unregistered control is not replayed by
@@ -1675,88 +967,9 @@ export class Pane implements VoiceTargetPane {
       return true;
     });
 
-    // Clipboard integration: a CLI (e.g. claude code) copies by emitting
-    // OSC 52. xterm.js doesn't implement it, so without this handler the
-    // sequence is dropped — the CLI says "copied" but the system clipboard
-    // stays empty (#65). Decode the base64 payload and write it out; ignore
-    // read requests (`?`) so we never leak the clipboard back to the process,
-    // and refuse an oversized payload rather than balloon memory decoding it.
-    this.term.parser.registerOscHandler(52, (payload) => {
-      const parsed = parseOsc52(payload);
-      if (parsed.ok) {
-        void this.copyToClipboard(parsed.text);
-      } else if (parsed.reason === "oversize") {
-        showToast("Ignored an oversized copy request from the terminal.");
-      }
-      return true;
-    });
-
-    // Let app-level shortcuts pass through xterm untouched; handle clipboard
-    // combos here (Ctrl+Shift+C/V always work; plain Ctrl+V additionally
-    // pastes when the `pasteOnPlainCtrlV` setting (default on) allows it —
-    // #370's review found the unconditional version silently broke vim's
-    // VISUAL BLOCK mode and readline's quoted-insert, so it's an opt-out,
-    // not a forced default; see settings.ts).
-    //
-    // Plain Ctrl+C (#402 third live-demo round: copy appeared to work in
-    // agent panes but not plain terminal panes) copies too, but ONLY with an
-    // active selection — with none, it MUST fall through as the shell's
-    // interrupt, unconditionally, since Ctrl+C is the terminal's actual ^C
-    // key. There is no pane-kind branch anywhere here: this handler and
-    // `keyDisposition` are identical for a plain terminal, an agent pane, or
-    // an orchestrator pane — see keyDisposition's own doc comment
-    // (pasteflow.ts) for why a prior perceived divergence was never a
-    // pane-kind difference in this code at all.
-    //
-    // preventDefault() on copy/paste is load-bearing, not decoration (#402
-    // live-demo finding): returning `false` from attachCustomKeyEventHandler
-    // only tells XTERM not to process the key — it does NOT suppress the
-    // browser's own native handling of it. Without preventDefault, plain
-    // Ctrl+V ALSO triggered the browser's native paste on xterm's focused
-    // textarea, which xterm itself listens for (its own "paste" DOM
-    // listener) and pastes AGAIN — the double-paste bug. See keyDisposition's
-    // own doc comment (pasteflow.ts) for the full mechanism.
-    this.term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown") return true;
-      if (isAppShortcut(e)) return false;
-      const sel = this.term.getSelection();
-      switch (keyDisposition(e, getSettings().pasteOnPlainCtrlV, !!sel)) {
-        case "copy":
-          e.preventDefault();
-          if (sel) {
-            void this.copyToClipboard(sel);
-            this.term.clearSelection();
-          }
-          return false;
-        case "paste":
-          e.preventDefault();
-          void this.pasteFromClipboard();
-          return false;
-        case "pass":
-          return true;
-      }
-    });
-
-    // xterm.js binds its OWN native "paste" DOM-event listener directly on
-    // its internal textarea/root element (independent of our keydown
-    // handling above), so ANY browser-native paste — e.g. the Ctrl+V
-    // accelerator on a path this preventDefault doesn't reach — lands there
-    // too, double-pasting alongside our own explicit readClipboard()-driven
-    // paste (#402 live-demo finding). We own paste entirely now; xterm's
-    // native path is never wanted. Capture phase, so this runs BEFORE the
-    // event reaches xterm's own listener (bound to a descendant of termEl,
-    // in the bubble phase) no matter what triggered it. Our own paste calls
-    // are `this.term.paste(text)` — a direct method call that never
-    // dispatches a DOM "paste" event — so this can never block a paste WE
-    // intended.
-    this.termEl.addEventListener(
-      "paste",
-      (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      },
-      true
-    );
+    // OSC 52 copy, the clipboard key handler and the capture-phase paste block are
+    // wired by PaneCompose (panecompose.ts), which owns the clipboard paths they call.
+    this.compose = new PaneCompose(this);
 
     // NOTE (#402 second live-demo round): a right-click Copy/Paste context
     // menu briefly lived here. Removed — the menu's paste path was
@@ -2144,7 +1357,7 @@ export class Pane implements VoiceTargetPane {
    *  (#2122 slice A2). All three hang off this one function so "what counts as
    *  human input" has a single answer and a future input vector can only be
    *  added in one place. */
-  private markFirstInput(): void {
+  markFirstInput(): void {
     this.firstInputMs ??= Date.now();
     // #2122 slice A2: a THIRD consumer of this one answer, with a third
     // lifetime — `lastHumanInputMs` is marked on every call like `humanOrigin`,
@@ -2171,7 +1384,7 @@ export class Pane implements VoiceTargetPane {
     // program-generated reply as a human keystroke — the #179/#518 failure,
     // re-created by a perf change. Flushing what the PROGRAM already said, and
     // only then opening the HUMAN's turn, is also the honest order.
-    this.wakeOutput();
+    this.lifecycle.wakeOutput();
     this.humanOrigin.mark();
   }
 
@@ -2182,7 +1395,7 @@ export class Pane implements VoiceTargetPane {
    *  DEFERRED one, since the write it licenses has not happened yet. See the
    *  listener registration in `start()` and `humanorigin.ts`'s scheduling
    *  note. */
-  private markHumanInput(): void {
+  markHumanInput(): void {
     this.firstInputMs ??= Date.now();
     // #2122 slice A2, and the SAME call as in `markFirstInput` deliberately: an
     // IME commit is the human typing. Reading the latch's human-input clear off
@@ -2191,167 +1404,12 @@ export class Pane implements VoiceTargetPane {
     // inputs by one rule) — an IME user's keystroke would leave their pane
     // reading `turn-done` after they had already answered it.
     this.activity.noteHumanInput(Date.now());
-    this.wakeOutput(); // #720 — before the mark, same load-bearing order as markFirstInput
+    this.lifecycle.wakeOutput(); // #720 — before the mark, same load-bearing order as markFirstInput
     this.humanOrigin.markDeferred();
   }
 
-  /** Open the terminal in the DOM and spawn its PTY. Call after `el` is attached. */
-  async start(opts: PaneOptions = {}, takeFocus = true): Promise<void> {
-    // #887/#888 boundary, checked BEFORE anything is opened or spawned so a
-    // refusal costs no process: an SSH pane can never carry an orchestration
-    // identity. Fails closed and loudly (the caller's catch surfaces it) rather
-    // than quietly dropping the identity — a group member whose gh merge gate
-    // silently isn't enforced is precisely the outcome this refuses. See
-    // `sshOrchestrationRefusal` for why each of those mechanisms cannot follow a
-    // pane onto a remote host.
-    this.refuseSshOrchestration(opts);
-    this.sshProfileId = opts.ssh?.profileId ?? null;
-    this.sshDefaultCli = opts.ssh?.defaultCli ?? null;
-    this.setName(opts.name ?? "shell");
-    this.launchedCommand = !!opts.command?.trim();
-    // Retain the launch inputs for a later capture() into the persisted layout
-    // (#194). Purely a record — the spawn below still reads them straight off opts.
-    this.spawnCommand = opts.command ?? null;
-    this.syncNotesBtn();
-    this.spawnArgv = opts.argv ?? null;
-    this.spawnShellKind = opts.shellKind ?? null;
-    this.refreshAgentMark();
-    // #440: a caller (the launcher, an orch spawn) that already knows the id
-    // wins outright. Otherwise, learn it from the command/argv line itself —
-    // a human-typed `claude --resume <id>` / `--session-id <id>` custom
-    // command already names its own session (D1); adoptableSessionId is the
-    // guarded extractor (refuses on --fork-session). A bare `claude` line, or
-    // one with no session flag, yields null here — the reconciler (main.ts)
-    // is the OTHER half of D1, catching that case post-start.
-    this.agentSessionId = opts.sessionId ?? adoptableSessionId(opts.command ?? null, opts.argv ?? null);
-    this.forkOf = opts.forkOf ?? null;
-    this.firstInputMs = null; // this process hasn't been typed into yet (#440 B2)
-    if (opts.badge) this.setBadge(opts.badge);
-    if (opts.orchAgent) this.orchAgent = opts.orchAgent;
-    if (opts.channelAgent) this.channelAgentInfo = opts.channelAgent;
-    // Build the steering strip BEFORE term.open/fit below, so the terminal sizes
-    // to the reduced height once instead of resizing into scrollback later.
-    this.applyOrchIdentity(opts);
-    // Seed the toolbar from the startup directory. Interactive shells refine
-    // this via OSC 7; command panes (agents) keep this initial value since
-    // they have no prompt to report from.
-    //
-    // An SSH pane is neither: the directory its remote shell reports is a path
-    // on ANOTHER machine, so the folder chip (which resolves and `cd`s LOCAL
-    // paths) is hidden outright for it rather than left showing a local reading
-    // of a remote path (#887 S3, plan part 4a). `isSshPane` also stops
-    // `onCwdReported` from re-pointing the git watch at whatever the remote
-    // reports.
-    if (this.isSshPane) this.cwdEl.hidden = true;
-    if (opts.cwd && !this.isSshPane) {
-      this.cwdRaw = opts.cwd;
-      void this.refreshDir(opts.cwd);
-    }
-    // Tell xterm which ConPTY it is talking to. This drives its resize
-    // heuristics: against a modern conhost (sideloaded, honors the
-    // resize-quirk flag and emits nothing on resize) xterm keeps its own
-    // buffer reflow; against the inbox Win10 conhost (full repaint on every
-    // resize) xterm disables reflow so the two don't fight and duplicate
-    // content into scrollback.
-    try {
-      const backend = await ptyBackendInfo();
-      if (backend.conpty_build > 0) {
-        this.term.options.windowsPty = {
-          backend: "conpty",
-          buildNumber: backend.conpty_build,
-        };
-        // #430: the resize-quirk conpty this sideloads never repaints on
-        // resize (that's the point of the quirk flag), so xterm's own
-        // default of never reflowing the cursor's own line leaves it on
-        // stale pre-resize geometry -- exactly where PSReadLine's next
-        // repaint lands wrong. xterm.js has no complete fix for this
-        // (xterm.js#5321 was reverted wholesale by #5358 after bricking
-        // buffers in VS Code; xterm.js#5319 -- this exact symptom -- was
-        // closed as "track in vscode#224488" rather than fixed, and VS
-        // Code's own sideload of this same conpty build still has open
-        // resize-duplication reports). `reflowCursorLine` (xterm.js#5234,
-        // off by default because normal shells repaint themselves) is a
-        // measurable mitigation, not a confirmed complete fix: verified via
-        // test/xterm-reflow.test.ts that it corrects the cursor's ROW on a
-        // resize in both directions, but xterm.js#5522 (merged, milestone
-        // 7.0.0) documents that it will NEVER correct the cursor's COLUMN,
-        // by design. It does also prevent real content loss on a narrowing
-        // resize (measured, not just row placement). Residual + upstream
-        // watch tracked in #432. Not enabled outside this conpty branch:
-        // normal shells against a non-quirked host already repaint their
-        // own prompt line, and forcing a reflow there could fight that
-        // repaint instead of nothing at all.
-        this.term.options.reflowCursorLine = true;
-      }
-    } catch {
-      // Backend info is a tuning hint only — never block the terminal on it.
-    }
-    this.term.open(this.termEl);
-    this.term.textarea?.addEventListener("focus", () => this.events.onFocus(this));
-    this.tryWebgl();
-    this.fit.fit();
-
-    // Everything is wired before the process exists: input queues in the
-    // ordered writer until the PTY is ready, and the output router buffers
-    // until we attach.
-    // #518: the origin flag is read RIGHT HERE, synchronously, because that is
-    // the only moment it means anything. xterm fires `onKey` immediately
-    // before the `onData` it produced (and `term.paste()` triggers its own
-    // `onData` synchronously from the call), so a human-originated write reads
-    // the mark still open; a query auto-reply is emitted while xterm parses
-    // program output — a different turn — and reads it closed. The writer
-    // carries the flag with the data from here on, since the actual IPC send
-    // happens later and asynchronously.
-    this.term.onData((data) => this.writer.write(data, this.humanOrigin.isHuman));
-    // #440 B2 (review round 3, B2-R): `onData` is NOT a human-input signal —
-    // it fires for EVERYTHING the terminal sends to the PTY, including data
-    // xterm generates entirely on its own with no key pressed: OSC 10/11
-    // color-query replies, a primary-DA reply, focus reports. `wasUserInput`
-    // (xterm's own internal flag) gates only scroll-to-bottom and xterm's
-    // internal `_onUserInput` — never `onData`. This is the EXACT #179
-    // mechanism recurring: Copilot queries the terminal's colors at boot,
-    // xterm auto-answers, and that answer used to get misread as human input
-    // (there, by the backend's box-occupancy tracker; here, by this pane's
-    // own firstInputMs). `onKey` is the fix: it fires ONLY for genuine
-    // keyboard events, never for data the terminal manufactures itself — a
-    // structural guarantee, not a pattern match against an open set of
-    // possible auto-reply shapes (which is why this doesn't try to filter
-    // `onData` by escape-sequence prefix instead: bracketed paste itself
-    // starts with ESC, so a naive filter would misfire on real pastes).
-    this.term.onKey(() => this.markFirstInput());
-    // #518: the two human-input paths `onKey` never sees. Both are still
-    // structural — they are DOM events on the terminal's own textarea, and
-    // xterm never routes a query auto-reply through the textarea (it calls
-    // `triggerDataEvent` directly) — but neither is a key event:
-    //
-    //  - an IME commit, which `_finalizeComposition` sends from a
-    //    `setTimeout(…, 0)`, i.e. a LATER TASK than `compositionend`;
-    //  - `_inputEvent`'s `insertText` path (dead keys/accents, soft
-    //    keyboards), which sends synchronously with no `onKey` at all.
-    //
-    // Registered in the CAPTURE phase on `termEl`, an ANCESTOR of the
-    // textarea: the DOM runs ancestor-capture listeners before any listener on
-    // the target itself, so these mark the latch before xterm's own handlers
-    // (which are bound to the textarea) can emit anything. That ordering is
-    // required for the synchronous `insertText` path — and it is also why the
-    // deferred close CANNOT rely on registration order: running first means our
-    // close timer is queued FIRST, so a one-hop close beat xterm's send and
-    // broke exactly the case this exists for (#528 review B1). `markDeferred`
-    // takes two timer hops instead, which no registration order defeats — see
-    // `humanorigin.ts`.
-    //
-    // Without this, CJK/Japanese/Korean typing would classify as non-human and
-    // silently lose the very protection these guards exist to give.
-    for (const ev of ["compositionstart", "compositionupdate", "compositionend", "input"]) {
-      this.termEl.addEventListener(ev, () => this.markHumanInput(), true);
-    }
-    this.resizeObs.observe(this.termEl);
-    // A background (orchestrator-driven) spawn must not pull focus from the
-    // pane the human is typing in (#117); grid.openPane decides takeFocus.
-    if (takeFocus) this.focus();
-
-    await this.attachPty(opts);
-  }
+  // Delegated to PaneLifecycle (panelifecycle.ts), which carries the doc (#3498 F1).
+  start(opts: PaneOptions = {}, takeFocus = true): Promise<void> { return this.lifecycle.start(opts, takeFocus); }
 
   /** True when this pane's process is a local ssh client (#887 S3) — the one
    *  fact every local-filesystem suppression in this file reads. */
@@ -2364,380 +1422,8 @@ export class Pane implements VoiceTargetPane {
     return this.sshProfileId;
   }
 
-  /** Throw if this spawn would give an SSH pane an orchestration identity
-   *  (#887 S3). The decision itself is pure and unit-tested
-   *  (`sshOrchestrationRefusal` in panesetup.ts); this is only the two call sites
-   *  that can reach it — a fresh spawn and an in-place relaunch.
-   *
-   *  Both sides are handed over WHOLE — the options describing what the pane is
-   *  about to become, and the state it already carries — because a relaunch's
-   *  options describe the former while the boundary is about the latter, and that
-   *  is true of the orchestration identity in exactly the same way it is true of
-   *  ssh-ness. The union rule lives in the pure function so these two call sites
-   *  cannot drift apart on it (PR #921 review, rev-441). */
-  private refuseSshOrchestration(opts: PaneOptions): void {
-    const refusal = sshOrchestrationRefusal(
-      {
-        ssh: !!opts.ssh,
-        orchGroup: opts.orchGroup,
-        orchRole: opts.orchRole,
-        orchAgent: opts.orchAgent,
-      },
-      {
-        ssh: this.isSshPane,
-        orchGroup: this.orchGroup,
-        orchRole: this.orchRoleName,
-        orchAgent: this.orchAgent,
-      }
-    );
-    if (refusal) throw new Error(refusal);
-  }
-
-  /** Give this pane an orchestration identity and the group chrome that comes
-   *  with it. Split out of `start` so an IN-PLACE promotion (#407) can apply the
-   *  same identity to a pane that is already running — one definition of "what an
-   *  orchestration pane looks like", rather than a second copy in `respawnFresh`
-   *  that would drift the day a button is added here.
-   *
-   *  A no-op without `opts.orchGroup`, so both callers can call it unconditionally. */
-  private applyOrchIdentity(opts: PaneOptions): void {
-    if (!opts.orchGroup) return;
-    this.orchGroup = opts.orchGroup;
-    this.orchRoleName = opts.orchRole ?? null;
-    // The board lives on the orchestrator's pane; workers report there.
-    this.tasksBtn.hidden = opts.orchRole !== "orchestrator";
-    // The NEEDS-YOU panel sits beside the board, on the same pane and the same
-    // terms (#1091): the orchestrator is who asks the human, and the demos it
-    // shows are its own board rows.
-    this.decisionsBtn.hidden = opts.orchRole !== "orchestrator";
-    // The audit log is per-group and read-only, so it's useful from any
-    // agent pane in the group, not just the orchestrator's.
-    this.auditBtn.hidden = false;
-    // The progress timeline reads the same per-group log (plus gh), and is
-    // read-only in exactly the same sense — gated identically (#608).
-    this.timelineBtn.hidden = false;
-    // The token charts read the same per-group series and audit log, and are
-    // read-only in exactly the same sense — gated identically (#2011).
-    this.tokensBtn.hidden = false;
-    // Group lifecycle controls (pause / end orchestration) live on the
-    // orchestrator's pane, alongside the task board.
-    this.groupBtn.hidden = opts.orchRole !== "orchestrator";
-    // Same for the fold-group toggle (#46): it acts on the orchestrator's
-    // own worker/reviewer panes.
-    this.groupMinBtn.hidden = opts.orchRole !== "orchestrator";
-    // Steering strip (#43): only the orchestrator pane gets one. Guarded so a
-    // second application (a promotion of a pane that somehow already had one)
-    // can't stack two strips.
-    if (opts.orchRole === "orchestrator" && !this.composeInput) this.buildComposeStrip();
-    // Unread-mail chip (#1161 M5): the push says nothing about mail that was
-    // already waiting when this pane opened, so the chip is seeded here — the
-    // one place a pane learns it is the manager. `seedMailUnread` is a no-op for
-    // every other role, decided by the same gate the push uses.
-    seedMailUnread(this);
-  }
-
-  /** Spawn (or respawn) the PTY for this already-open terminal and wire output /
-   *  git-watch / the ordered input writer to it. Split out of `start` so the
-   *  fresh-session backstop (`respawnFresh`) can reuse it without re-opening the
-   *  terminal (#194 BUG-1). */
-  private async attachPty(opts: PaneOptions): Promise<void> {
-    try {
-      await ensureOutputRouter();
-      const cols = Number.isFinite(this.term.cols) && this.term.cols > 1 ? this.term.cols : 80;
-      const rows = Number.isFinite(this.term.rows) && this.term.rows > 1 ? this.term.rows : 24;
-      const ptyId = await spawnPty({
-        cols,
-        rows,
-        cwd: opts.cwd,
-        command: opts.command,
-        argv: opts.argv,
-        env: opts.env,
-        shellKind: opts.shellKind,
-      });
-      if (this.disposed) {
-        // Retire the id as well as killing it (#1301). The backend may already
-        // have drained bytes for this pty, and without this they sit in the
-        // router's pre-attach buffer for a handler that is never coming —
-        // `dispose` already ran, so nothing else will ever name this id.
-        detachOutput(ptyId);
-        killPty(ptyId).catch(() => {});
-        return;
-      }
-      this.ptyId = ptyId;
-      this.sentSize = `${cols}x${rows}`;
-      // Reconcile: if the pane was resized while the spawn was in flight,
-      // the debounced fit will notice the size drifted and resend once.
-      this.applyFit();
-      // `this` is the OWNER, not decoration: the router releases whatever this
-      // pane was attached to before, so a respawn cannot leave the previous
-      // id's closure — which captures this pane, its terminal and its whole
-      // buffer — stranded in a module-level map (#1301, see ptyroute.ts).
-      attachOutput(this, ptyId, (bytes) => {
-        // Latched on ARRIVAL, never on flush: this is "did the process ever
-        // print anything" (the DOA-revival signature, #281/#280), a fact about
-        // the pty, not about when we chose to render it.
-        this.receivedOutput ||= bytes.length > 0;
-        this.acceptOutput(bytes);
-      });
-      // React to repo changes made outside this pane's shell (#36): the
-      // backend watch is pointed at the repo on each cwd report below.
-      //
-      // Never for an SSH pane (#887 S3): the repo this pane works in is on the
-      // remote host, and every path it will ever report names a filesystem this
-      // machine cannot see. A watch registered here would either resolve to
-      // nothing or — worse, for a remote path that happens to also exist
-      // locally — report changes from a completely unrelated local repo as
-      // though they were the remote one's.
-      if (!this.isSshPane) {
-        attachGitWatch(this, ptyId, () => this.onExternalGitChange());
-        if (this.cwdRaw) {
-          this.watchedPath = this.cwdRaw;
-          setGitWatch(ptyId, this.cwdRaw);
-        }
-      }
-      // Bind the ordered writer to this PTY and flush anything typed/pasted
-      // while it was starting, in arrival order.
-      this.writer.ready((data, human) => writePty(ptyId, data, human));
-    } catch (err) {
-      // Never leave a dead black pane: surface the failure in-terminal.
-      this.term.writeln(`\x1b[91morrerix: failed to start shell\x1b[0m`);
-      this.term.writeln(`\x1b[90m${String(err)}\x1b[0m`);
-    }
-  }
-
-  /** Take one arrived chunk of PTY output and either write it to xterm now or
-   *  hold it for the rest of this pane's throttle window (#720). The policy is
-   *  pure and lives in panethrottle.ts; this is only its DOM/timer wiring.
-   *
-   *  Why hold anything at all: xterm coalesces every write inside one animation
-   *  frame into a single `renderRows` pass and coalesces nothing ACROSS frames
-   *  (`RenderDebouncer`), so a pane written to every frame renders every frame.
-   *  #714 already made that at most one event per frame per pane; what is left
-   *  is the render pass itself, paid N times over for N visible panes on one JS
-   *  thread. Writing an unfocused pane once per window instead collapses those
-   *  passes without touching a byte of the stream. */
-  private acceptOutput(bytes: Uint8Array): void {
-    if (this.disposed) return;
-    // #2122 slice A2: count the chunk as it ARRIVES, not as it is flushed —
-    // the throttle below decides when xterm sees these bytes, and "is this
-    // pane producing output" must not move with a rendering decision. One
-    // counter add; `Date.now()` (not `performance.now()`, which this method
-    // uses for the throttle) because the snapshot compares this against
-    // `firstInputMs`'s clock.
-    this.activity.noteOutput(bytes.length, Date.now());
-    this.pendingOut.push(bytes);
-    this.pendingOutBytes += bytes.length;
-    const decision = decideFlush({
-      live: this.isActivePane,
-      nowMs: performance.now(),
-      lastFlushMs: this.lastFlushMs,
-      pendingBytes: this.pendingOutBytes,
-      windowMs: getSettings().unfocusedRenderThrottleMs,
-      maxPendingBytes: MAX_PENDING_BYTES,
-      // #813: read per chunk rather than latched on `visibilitychange`. The
-      // event is a notification and a notification can be missed — the same
-      // reason pollgate.ts re-READS the state instead of trusting the event it
-      // was suppressed by — and here a missed event would mean a pane that
-      // keeps deferring behind a clamped timer for as long as the window stays
-      // hidden, with nothing to release it. A property read per chunk is
-      // cheaper than the timer it replaces.
-      hidden: !sharedVisibility().visible(),
-    });
-    if (decision.kind === "flush") {
-      this.flushOutput();
-      return;
-    }
-    // One timer per window, armed by the chunk that opened it. Re-arming on
-    // every subsequent chunk would push the flush out indefinitely for a pane
-    // that never goes quiet — a trailing-edge debounce, which is precisely the
-    // starvation this must not be.
-    if (this.flushTimer === undefined) {
-      this.flushTimer = window.setTimeout(() => this.flushOutput(), decision.dueInMs);
-    }
-  }
-
-  /** Hand every held chunk to xterm, in arrival order, and re-open the window.
-   *  Safe (and cheap) to call with nothing held — every caller that is about to
-   *  write to, reset, or re-geometry the terminal itself calls it first, so the
-   *  held bytes can never land AFTER something that was issued later. */
-  private flushOutput(): void {
-    if (this.disposed) return; // `term.write` on a disposed terminal throws
-    if (this.flushTimer !== undefined) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = undefined;
-    }
-    if (!this.pendingOut.length) {
-      // Nothing was written, so nothing started a window: leaving the pane
-      // marked quiet is what keeps the NEXT chunk on the leading edge instead
-      // of making an unrelated flush call (a fit, a focus change) silently cost
-      // the following chunk a full window of latency.
-      this.lastFlushMs = WOKEN;
-      return;
-    }
-    const chunks = this.pendingOut;
-    this.pendingOut = [];
-    this.pendingOutBytes = 0;
-    this.lastFlushMs = performance.now();
-    // Separate writes, not one concatenated buffer: xterm's WriteBuffer only
-    // schedules a parse task when it was empty, so these N pushes cost one
-    // parse task and one render pass between them — the same as a single write,
-    // without copying every byte a second time to get there.
-    //
-    // #813 residual — the half of the deferral `decideFlush` cannot see.
-    // Flushing is the loomux side; each `Terminal.write` still lands in
-    // `WriteBuffer.write`, which schedules its parse on a `setTimeout` unless a
-    // keystroke set `_didUserInput` first. A hidden document clamps that timer
-    // exactly as it clamps the one `decideFlush` removed, so the terminal's
-    // auto-replies (DA/DSR/OSC-colour/XTVERSION answers, DEC-1004 focus
-    // reports — emitted only when the query is PARSED) stay stalled in front
-    // of the one path out of xterm that is not display, and an agent CLI
-    // waiting on one of them waits on our timer. A workstation lock is hidden
-    // for its whole duration, which is #813's window. While hidden, re-arm
-    // xterm's own fast path per chunk so the FIRST chunk of a quiet pane is
-    // parsed — and its reply emitted back down the pty — in this same call,
-    // with no clamped timer in series. Best-effort beyond that: the fast path
-    // only engages while the write buffer is empty, and `_innerWrite` still
-    // yields at its 12ms write timeout and reschedules via `setTimeout`
-    // (clamped again), so a busy pane under lock can outlast it; the next full
-    // repaint re-parses. Visible, the timer path is fine (nothing is clamped)
-    // and forcing sync parses would only cost the render thread.
-    const syncParse = !sharedVisibility().visible();
-    for (const chunk of chunks) {
-      if (syncParse) hintXtermSyncParse(this.term);
-      this.term.write(chunk);
-    }
-  }
-
-  /** Throw held output away and return the pane to quiet (#720). Dropping,
-   *  not flushing, and both callers have the same reason: nothing downstream
-   *  will ever render these bytes, so queueing them to `term.write` would only
-   *  schedule a parse against a terminal that is about to be wiped or is
-   *  already gone. `respawnFresh` is about to `term.reset()` (see the call
-   *  site); `dispose` is about to `term.dispose()` and drop the pane. Anywhere
-   *  else, held output is flushed. */
-  private discardOutput(): void {
-    if (this.flushTimer !== undefined) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = undefined;
-    }
-    this.pendingOut = [];
-    this.pendingOutBytes = 0;
-    this.lastFlushMs = WOKEN;
-  }
-
-  /** Return this pane to the leading edge and write out anything held (#720).
-   *  Called wherever the human touches the pane — focusing it, typing into it —
-   *  because from that instant its output is an interactive latency again, and
-   *  a throttle the human can perceive is worse than the render passes it
-   *  saves. */
-  private wakeOutput(): void {
-    this.flushOutput();
-    // Mark quiet AFTER the flush, not before: the flush that just wrote would
-    // otherwise open a window, and the echo of the keystroke the human just
-    // pressed — which has not even reached the pty yet — would land in it.
-    this.lastFlushMs = WOKEN;
-  }
-
-  /** Respawn this pane with a FRESH process in place, reusing the already-open
-   *  terminal — the runtime backstop when a resumed agent's `--resume` exited on
-   *  a missing/deleted conversation (#194 BUG-1). Same pane, position, and cwd;
-   *  clears the dead error text and starts `opts`' command with a fresh ordered
-   *  writer bound to the new PTY. Not itself a resume, so it can't re-trigger the
-   *  fallback (the caller also makes the fallback one-shot).
-   *
-   *  #407 gave it a second caller: an in-place PROMOTION, where the pane keeps
-   *  its terminal but comes back as an orchestrator (`opts.orchGroup`/`orchRole`/
-   *  `orchAgent`/`badge`, and `opts.env` — a promoted pane's gh-shim PATH and
-   *  `LOOMUX_GROUP_DIR` are carried by `attachPty` below exactly as a spawned
-   *  agent pane's are). "Fresh" describes the PROCESS, not the conversation: the
-   *  command it is handed can perfectly well be `claude --resume <its own id>`. */
-  async respawnFresh(opts: PaneOptions = {}): Promise<void> {
-    if (this.disposed) return;
-    // The promotion door onto the #887/#888 boundary (#407 relaunches a pane
-    // in place WITH an orchestration identity). It closes here rather than only
-    // in `start`, because a promotion never calls `start` — and it reads this
-    // pane's EXISTING ssh-ness, not just `opts`, since a promotion's options
-    // describe the orchestrator it wants, not the pane it is rewriting.
-    this.refuseSshOrchestration(opts);
-    if (opts.ssh) {
-      this.sshProfileId = opts.ssh.profileId;
-      this.sshDefaultCli = opts.ssh.defaultCli ?? null;
-    }
-    // #887 S4: this pane is coming back to life, so any floating Reconnect card
-    // is stale by definition — dropped here rather than at the (several) call
-    // sites, so no future relaunch path can forget it and leave a card offering
-    // to reconnect a pane that just did.
-    this.clearReconnectCard();
-    this.exited = false;
-    // Release the OUTGOING pty's router attachments before the id is forgotten
-    // (#1301). Two things go wrong without it. The router keeps a handler
-    // closure over this pane under an id `dispose` will never name again — a
-    // whole retained pane, terminal buffer included — and the backend keeps
-    // polling the old id's repo, because `git_unwatch` is only ever sent for
-    // an id someone still remembers. `attach` would release the old id on its
-    // own when the new pty arrives, but that is one `await` later and only if
-    // the spawn succeeds: a failed respawn must not be the case that leaks.
-    detachOutputOwner(this);
-    detachGitWatchOwner(this);
-    if (this.ptyId !== null) stopGitWatch(this.ptyId);
-    this.ptyId = null;
-    if (opts.name) this.setName(opts.name);
-    this.launchedCommand = !!opts.command?.trim();
-    this.spawnCommand = opts.command ?? null;
-    this.syncNotesBtn();
-    this.spawnArgv = opts.argv ?? null;
-    this.spawnShellKind = opts.shellKind ?? null;
-    // A respawn can change the program outright — a dormant shell Started with a
-    // recorded agent command, or a welcome pane promoted to an orchestrator — so the
-    // mark is re-derived here rather than only at first start.
-    this.refreshAgentMark();
-    // Same learn-it-from-the-line fallback as start() (#440) — a fresh respawn
-    // (BUG-1 backstop, or a dormant Start with a recorded command) can equally
-    // carry a self-naming --resume/--session-id.
-    this.agentSessionId = opts.sessionId ?? adoptableSessionId(opts.command ?? null, opts.argv ?? null);
-    this.forkOf = opts.forkOf ?? null;
-    this.firstInputMs = null; // fresh process, nothing typed into it yet (#440 B2)
-    if (opts.cwd) {
-      this.cwdRaw = opts.cwd;
-      void this.refreshDir(opts.cwd);
-    }
-    // #720: DROP the dead process's held output — the one place this file
-    // discards rather than flushes, and deliberately. `reset()` clears the
-    // buffer synchronously while `term.write` parses asynchronously, so
-    // flushing here would not preserve those bytes anyway: it would queue them
-    // to be parsed AFTER the wipe, painting a dead pty's tail over the fresh
-    // session. They are bytes `reset()` was always going to erase; the only
-    // choice is whether they are erased or resurrected in the wrong place.
-    this.discardOutput();
-    this.term.reset(); // wipe the "No conversation found …" error + resume banner
-    this.writer = createOrderedWriter(); // a fresh input pipe for the new PTY
-    // #407: an in-place PROMOTION also changes what this pane IS. Applied here,
-    // before the spawn below, for two reasons: the badge/board chrome must be up
-    // when the orchestrator's first bytes arrive, and the steering strip changes
-    // the terminal's height — doing it now means the fit below is computed once,
-    // against a pane with NO live pty, so the geometry never reaches a ConPTY as
-    // a resize (CLAUDE.md constraint 1).
-    if (opts.orchGroup) {
-      if (opts.badge) this.setBadge(opts.badge);
-      if (opts.orchAgent) this.orchAgent = opts.orchAgent;
-      // The standalone channel identity does not survive: the promotion retired
-      // that `__solo__` agent backend-side, so leaving the carrier on would show
-      // a channel chip for an endpoint nothing can deliver to. Scoped to this
-      // arm — `respawnFresh` still ignores `opts.channelAgent` for every other
-      // caller (main.ts's BUG-1 fallback sets it explicitly afterwards).
-      //
-      // The CHIP goes with it, explicitly rather than by waiting for the
-      // `orch-channel` disconnect event: that event is matched to a pane by agent
-      // id, and this pane's id is about to become the orchestrator's — so an
-      // event landing a moment later would find nothing to clear and leave a live
-      // chip on a channel this pane is no longer in.
-      this.channelAgentInfo = null;
-      this.setConnected(null);
-      this.applyOrchIdentity(opts);
-      this.fit.fit();
-    }
-    await this.attachPty(opts);
-  }
+  // Delegated to PaneLifecycle (panelifecycle.ts), which carries the doc (#3498 F1).
+  respawnFresh(opts: PaneOptions = {}): Promise<void> { return this.lifecycle.respawnFresh(opts); }
 
   /** True while an in-place relaunch (#407's promotion) is deliberately tearing
    *  this pane's process down and starting another in the same terminal.
@@ -3224,7 +1910,7 @@ export class Pane implements VoiceTargetPane {
     canDiscard(): Promise<boolean>;
     bufferReport(): { file: string | null; dirty: boolean } | null;
   } | null {
-    return this.editorPaneView ?? this.workflowPaneView ?? this.fileEditView;
+    return this.editorPaneView ?? this.workflowPaneView ?? this.views.fileEditView;
   }
 
   /** May the human close this pane right now? True unless it holds unsaved work they
@@ -3265,227 +1951,16 @@ export class Pane implements VoiceTargetPane {
     return this.cwdRaw;
   }
 
-  /** Render a DORMANT restore placeholder (#194 P4): no terminal, no PTY, just
-   *  `contentEl` (a Start/Resume affordance the caller wires). `record` is the
-   *  persisted leaf this pane stands in for, retained so capture() re-serializes
-   *  it unchanged — a restore left dormant persists identically for next boot.
-   *  Nothing here spawns anything, honoring the group no-double-spawn contract. */
+  // Delegated to PaneLifecycle (panelifecycle.ts), which carries the doc (#3498 F1).
   startDormant(record: PersistedPane, contentEl: HTMLElement): void {
-    this.setName(record.name);
-    this.el.classList.add("is-dormant");
-    const wrap = document.createElement("div");
-    wrap.className = "pane-dormant";
-    wrap.appendChild(contentEl);
-    this.dormantEl = wrap;
-    this.dormantRecord = record;
-    this.el.appendChild(wrap);
+    this.lifecycle.startDormant(record, contentEl);
   }
-
-  /** True while this pane is a dormant restore placeholder (no PTY yet). */
-  get isDormant(): boolean {
-    return this.dormantEl !== null;
-  }
-
-  /** Float a card over this pane's still-mounted terminal (#887 S4) — the
-   *  Reconnect offer on an ssh pane whose connection dropped. Returns a
-   *  disposer; mounting a second card replaces the first, so a pane can never
-   *  accumulate them (a reconnect that itself drops re-offers exactly one).
-   *
-   *  Deliberately additive-only: no fit, no resize, no reflow. The card is
-   *  positioned over the terminal by CSS, so the ConPTY never learns it exists
-   *  and the scrollback under it is untouched (CLAUDE.md constraint 1). */
-  showReconnectCard(el: HTMLElement): () => void {
-    this.clearReconnectCard();
-    const wrap = document.createElement("div");
-    wrap.className = "pane-reconnect";
-    wrap.appendChild(el);
-    this.reconnectEl = wrap;
-    this.el.appendChild(wrap);
-    return () => this.clearReconnectCard();
-  }
-
-  /** Remove the floating Reconnect card, if one is up. Idempotent — called both
-   *  by the disposer above and unconditionally by `respawnFresh`, so a pane that
-   *  comes back to life can never keep offering to reconnect. */
-  private clearReconnectCard(): void {
-    this.reconnectEl?.remove();
-    this.reconnectEl = null;
-  }
-
-  /** The kind of a dormant placeholder ("agent" | "orch" | "ssh"), or null when
-   *  not dormant. Lets the grid/tab-bar tell a dormant Start pane from a dormant
-   *  group pane — and from a dormant SSH Reconnect card (#887 S4) — without
-   *  re-reading the whole record. */
-  get dormantKind(): PersistedPaneKind | null {
-    return this.dormantRecord?.paneKind ?? null;
-  }
-
-  /** Convert a dormant agent placeholder into a live pane when the human clicks
-   *  Start: tear down the placeholder and spawn the recorded command in place.
-   *  Only used for `dormant-agent` (no-session CLIs) — a dormant GROUP is revived
-   *  through resumeOrchSession, never here (the double-spawn contract).
-   *
-   *  #479 review finding 2: this used to remove the placeholder element from
-   *  the document IMMEDIATELY, before awaiting `start()` at all — so ANY
-   *  later failure in the caller's own post-spawn wiring (main.ts's
-   *  dormant-agent `onClick` — `remint.bind`, `onGridChanged`, both of which
-   *  run strictly AFTER this method returns) rendered its error card into an
-   *  element already gone from the DOM: invisible, worse than the pre-PR
-   *  behavior where the same throw escaped as an uncaught rejection and hit
-   *  the global banner. The element itself now stays mounted until `start()`
-   *  settles (success OR throw, via `finally`) rather than being torn down
-   *  before it even begins — this closes the window for a failure INSIDE
-   *  `start()` itself, but NOT for `remint.bind`/`onGridChanged` afterward
-   *  (this method has already returned and its own `finally` has already
-   *  removed the element by the time those run). That remaining window is
-   *  covered by `dormantCard`'s `render()` falling back to a toast when its
-   *  element is no longer connected — the design note's "residual gap"
-   *  section states plainly which failures land on which surface; this
-   *  comment is not the place to re-claim more than that.
-   *
-   *  `this.dormantEl` (the FIELD, distinct from the captured local `el`) is
-   *  still nulled immediately, unchanged from before: `isDormant` (`this.
-   *  dormantEl !== null`) must flip false the instant Start is clicked, not
-   *  after the whole spawn settles — main.ts's #440 D2 background
-   *  resume-candidate prefetch gates on `pane.isDormant` to decide whether
-   *  to append a SECOND action button, and widening that window would let
-   *  it add one while this Start is still in flight (a race this fix must
-   *  not introduce while closing the other one). */
-  async startFromDormant(opts: PaneOptions = {}): Promise<void> {
-    const el = this.dormantEl;
-    this.dormantEl = null;
-    this.dormantRecord = null;
-    this.el.classList.remove("is-dormant");
-    try {
-      await this.start(opts, true);
-    } finally {
-      el?.remove();
-    }
-  }
-
-  /** The live WebGL renderer addon, if loaded. Held so hidden tabs can drop it
-   *  (browsers cap live GL contexts, and N mounted-but-hidden tabs would each
-   *  hold one) and reload it on show — the onContextLoss→DOM fallback path. */
-  private webgl: WebglAddon | null = null;
-  private serializer: SerializeAddon | null = null;
-  /** True while this pane's project tab is hidden (#63). Held so `tryWebgl`
-   *  refuses to create a context for a hidden pane — start() calls tryWebgl
-   *  unconditionally, so a pane opened INTO a hidden tab (a background
-   *  orchestrator spawn) would otherwise take a GL context it isn't showing. */
-  private hiddenTab = false;
-  /** #720: losses handled in the current streak, and when the live context was
-   *  acquired — the two inputs `planWebglRetry` needs to tell a transient loss
-   *  from a standing one. Both reset when a hide/show cycle re-acquires from
-   *  scratch (`setHidden`). */
-  private webglLosses = 0;
-  private webglAcquiredMs = 0;
-  private webglRetryTimer: number | undefined;
-
-  private tryWebgl(): void {
-    // No open terminal = a welcome, dormant, or files pane. WebglAddon.activate()
-    // throws on such a terminal (caught below, but pointlessly) and there is nothing
-    // to render anyway — setHidden() reaches here on every tab switch, so this is a
-    // real throw/catch per hidden PTY-less pane, not a hypothetical.
-    if (this.webgl || this.hiddenTab || !this.hasTerminal()) return;
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => this.handleWebglLoss(webgl));
-      this.term.loadAddon(webgl);
-      this.webgl = webgl;
-      this.webglAcquiredMs = performance.now();
-    } catch {
-      // WebGL unavailable — xterm's DOM renderer still works fine.
-    }
-  }
-
-  /** Fall back to the DOM renderer and schedule a BOUNDED re-acquire (#720).
-   *
-   *  Disposing is still the right immediate move — the context is gone and
-   *  xterm's DOM renderer is what keeps the pane painting — but it used to be
-   *  the whole story, which left one lost context making one pane in a grid of
-   *  six permanently and invisibly the expensive one. `planWebglRetry` decides
-   *  whether and when to try again; the bound is not optional, because a WebGL
-   *  context is a capped resource and one pane re-acquiring is what evicts
-   *  another's, so an unbounded retry is a live-lock between panes rather than
-   *  a recovery. See webglretry.ts. */
-  private handleWebglLoss(lost: WebglAddon): void {
-    lost.dispose(); // falls back to DOM renderer
-    if (this.webgl !== lost) return; // superseded (hide/show already replaced it)
-    this.webgl = null;
-    const plan = planWebglRetry({
-      priorLosses: this.webglLosses,
-      healthyMs: performance.now() - this.webglAcquiredMs,
-    });
-    this.webglLosses = plan.losses;
-    if (plan.delayMs === null) return; // budget spent: stay on DOM until a hide/show
-    clearTimeout(this.webglRetryTimer);
-    this.webglRetryTimer = window.setTimeout(() => {
-      this.webglRetryTimer = undefined;
-      // Re-check rather than trust the state this timer was armed in: the pane
-      // can be disposed, detached, or hidden during the wait, and tryWebgl's own
-      // guards are the single place that decision lives.
-      if (this.disposed || !this.termEl.isConnected) return;
-      this.tryWebgl();
-    }, plan.delayMs);
-  }
-
-  /** Show/hide bookkeeping for a project-tab switch (#63). Hiding drops the
-   *  WebGL context (freeing it for the active tab and cutting idle VRAM) and
-   *  latches `hiddenTab` so start()/tryWebgl won't re-create one while hidden;
-   *  showing clears the latch and reloads it (via the onContextLoss→DOM fallback
-   *  if the GPU is out of contexts). Purely a rendering concern — the PTY and
-   *  buffer are untouched, so no resize and no scrollback loss. Safe to call
-   *  before the terminal is even open (tryWebgl no-ops until start opens it). */
-  setHidden(hidden: boolean): void {
-    if (this.disposed) return;
-    this.hiddenTab = hidden;
-    // #720: a hide/show is a deliberate act by the human that changes the
-    // context situation wholesale (every pane in the outgoing tab just released
-    // one), so it clears the retry streak — the manual half of the bound in
-    // webglretry.ts. Cancel any pending re-acquire either way: hiding makes it
-    // wrong (tryWebgl would refuse anyway, but leaving a live timer on a hidden
-    // pane is just litter), and showing supersedes it with the immediate
-    // attempt below.
-    clearTimeout(this.webglRetryTimer);
-    this.webglRetryTimer = undefined;
-    this.webglLosses = 0;
-    if (hidden) {
-      this.webgl?.dispose();
-      this.webgl = null;
-    } else if (this.termEl.isConnected) {
-      this.tryWebgl();
-    }
-  }
-
-  /** An HTML snapshot of the terminal viewport, for a background tab's preview
-   *  thumbnail (#63). Serializes the in-memory buffer (NOT the DOM),
-   *  so it works while the pane is hidden/zero-width — the whole point: a preview
-   *  must never require a laid-out element, which would re-arm applyFit and fire
-   *  a PTY resize.
-   *
-   *  serializeAsHTML (not serialize): the string serializer emits cursor-forward
-   *  escapes (`ESC[nC`) to skip blank cells, which stripping collapses runs of
-   *  spaces ("Please count" → "Pleasecount", #63). The HTML serializer
-   *  emits a literal space per blank cell and per-run `<span style='color:…'>`,
-   *  so the preview keeps spacing AND color. The caller parses this SAFELY (spans
-   *  → textContent + whitelisted styles), never innerHTML — the addon does not
-   *  escape cell text. Returns "" if serialization isn't available. */
-  serializeViewportHtml(): string {
-    // A pane whose terminal was never opened (welcome / dormant / files) has no
-    // viewport to serialize — an empty string leaves the tab preview blank for
-    // that slot rather than painting a phantom 80×24 of nothing.
-    if (this.disposed || !this.hasTerminal()) return "";
-    try {
-      if (!this.serializer) {
-        this.serializer = new SerializeAddon();
-        this.term.loadAddon(this.serializer);
-      }
-      // scrollback: 0 → just the visible screen, which is all a thumbnail shows.
-      return this.serializer.serializeAsHTML({ scrollback: 0 });
-    } catch {
-      return "";
-    }
-  }
+  get isDormant(): boolean { return this.lifecycle.isDormant; }
+  showReconnectCard(el: HTMLElement): () => void { return this.lifecycle.showReconnectCard(el); }
+  get dormantKind(): PersistedPaneKind | null { return this.lifecycle.dormantKind; }
+  startFromDormant(opts: PaneOptions = {}): Promise<void> { return this.lifecycle.startFromDormant(opts); }
+  setHidden(hidden: boolean): void { this.lifecycle.setHidden(hidden); }
+  serializeViewportHtml(): string { return this.lifecycle.serializeViewportHtml(); }
 
   private fitTimer: number | undefined;
   /** Last grid size actually confirmed by the PTY, as `cols x rows`. Resizing
@@ -3493,7 +1968,7 @@ export class Pane implements VoiceTargetPane {
    *  screen, which TUIs then duplicate into scrollback), so same-size calls
    *  are skipped. Only latches on a *successful* `resizePty` (#432 item 3) —
    *  see `doResize`. */
-  private sentSize = "";
+  sentSize = "";
   /** The size of a `resizePty` call currently in flight, or null. Lets a
    *  later fit tick tell "identical call already outstanding, don't re-send"
    *  apart from "genuinely new size, do send" while `sentSize` hasn't
@@ -3509,7 +1984,7 @@ export class Pane implements VoiceTargetPane {
    *  burst that is already over binds on the very next tick. */
   private fitBurstStartMs: number | null = null;
 
-  private applyFit(): void {
+  applyFit(): void {
     // Coalesce a burst of geometry changes into ONE fit (#1149). The debounce
     // this replaced was a fixed 16 ms, which is NARROWER than the interval
     // between the ResizeObserver deliveries it was debouncing (once per frame,
@@ -3583,22 +2058,22 @@ export class Pane implements VoiceTargetPane {
     // the OLD geometry, so they must be in xterm's queue BEFORE the empty write
     // that gates the resize — otherwise this fix (#432 item 2) would still be
     // in place and still be defeated, one layer up.
-    this.flushOutput();
+    this.lifecycle.flushOutput();
     this.term.write("", () => this.doResize());
     // Geometry-independent UI bits run every tick, unqueued: the pane
     // itself changed size, so keep the overlay within bounds and re-anchor
     // the visible strip on the cursor right away rather than waiting on
     // however much output happens to be queued.
-    const overlay = this.activeOverlay();
+    const overlay = this.embeds.activeOverlay();
     if (overlay) {
-      overlay.style.height = `${this.overlayClamp(overlay.offsetHeight)}px`;
+      overlay.style.height = `${this.embeds.overlayClamp(overlay.offsetHeight)}px`;
       this.updateTermShift();
     }
     // The steer box wraps to the strip's width, so a width change alters how
     // many lines the placeholder/draft occupies. growCompose only ran on input
     // events, so a widened pane never re-measured and the box stayed tall
     // (#163). Re-measure here; it's a no-op on panes without a compose strip.
-    this.growCompose();
+    this.compose.growCompose();
   }
 
   /** The write-queue-serialized half of a fit: actually resizes xterm's
@@ -3731,7 +2206,7 @@ export class Pane implements VoiceTargetPane {
     return { command: this.spawnCommand, argv: this.spawnArgv };
   }
 
-  private refreshAgentMark(): void {
+  refreshAgentMark(): void {
     const view = agentMark(this.agentMarkInput);
     this.agentMarkEl.hidden = !view;
     this.agentMarkEl.innerHTML = view?.svg ?? "";
@@ -3746,375 +2221,25 @@ export class Pane implements VoiceTargetPane {
     }
   }
 
-  /** Mark this pane as part of an orchestration group: role chip before the
-   *  title plus a group-colored accent on the header. */
-  setBadge(badge: PaneBadge): void {
-    const chip = document.createElement("span");
-    chip.className = "pane-badge";
-    chip.textContent = badge.label;
-    if (badge.title) chip.title = badge.title;
-    this.el.style.setProperty("--group-color", badge.color);
-    this.el.classList.add("grouped");
-    this.titleEl.before(chip);
-  }
-
-  /** Flag (or clear) this pane as needing the human — driven by the backend
-   *  attention scan. Idempotent on (reason, detail) TOGETHER: an identical
-   *  repeat of both is a no-op, so the 3-second re-emits don't thrash the DOM.
-   *  `null` clears the badge.
-   *
-   *  Deliberately NOT idempotent on `reason` alone (#1091 slice D review) —
-   *  see `attentionChanged` (attention.ts) for why, and for the pinned test.
-   *  Still cheap: this only runs when the outer `AttentionGate`
-   *  (attentiongate.ts) already decided the payload changed, since ITS
-   *  signature includes `detail` too — so a same-text re-emit never even
-   *  reaches here, and a changed `detail` was already going to trigger a DOM
-   *  pass; this just stops that pass from discarding the new text once it
-   *  arrives. */
-  setAttention(reason: string | null, detail?: string): void {
-    const normalizedDetail = reason ? detail ?? null : null;
-    // #2122 slice A2 — ABOVE the change gate, deliberately. That gate exists to
-    // stop the 3-second re-emits from thrashing the DOM; it is a rendering
-    // optimization, and the at-prompt latch must not inherit its filtering. A
-    // reducer fed only the readings that happened to differ from the last one
-    // would be reading a different input from the one this method is told.
-    this.activity.noteAttention(reason);
-    if (!attentionChanged(this.attentionReason, this.attentionDetail, reason, normalizedDetail)) return;
-    this.attentionReason = reason;
-    this.attentionDetail = normalizedDetail;
-    if (!reason) {
-      this.attnChip.hidden = true;
-      this.el.classList.remove("needs-attention");
-      delete this.attnChip.dataset.reason;
-    } else {
-      const { label } = attentionPresentation(reason);
-      this.attnChip.textContent = label;
-      this.attnChip.title = detail ?? "This pane needs you";
-      this.attnChip.dataset.reason = reason;
-      this.attnChip.hidden = false;
-      this.el.classList.add("needs-attention");
-    }
-    // The dismiss control follows the chip (#825 M1) — see `attentionDismiss`
-    // for why only the latched `stranded` reason gets one.
-    const dismiss = attentionDismiss(reason, this.orchAgent);
-    this.attnDismiss.textContent = dismiss.label;
-    this.attnDismiss.title = dismiss.title;
-    this.attnDismiss.setAttribute("aria-label", dismiss.title);
-    this.attnDismiss.hidden = !dismiss.dismissible;
-    // A minimized pane's element is detached, so its header chip is invisible;
-    // the listener lets the grid mirror this state onto the dock chip.
-    this.dockSyncListener?.();
-  }
-
-  /** Is the human watching this pane (#3319)? */
-  get watched(): boolean {
-    return this.isWatched;
-  }
-
-  /** Set, or clear, the human's watch on this pane.
-   *
-   *  THE ONLY WRITER of `isWatched`, and that is the feature's AC5 rather than
-   *  a style preference: a watch is cleared by the human and by nothing else.
-   *  There is deliberately no call to this from the focus path, the attention
-   *  path, the activity tick, or respawn — `test/watchedwiring.test.ts` scans
-   *  this file for exactly that and default-denies a new caller, because "no
-   *  auto-clear" is the kind of promise that is true when written and quietly
-   *  false two slices later, with nothing red to say so.
-   *
-   *  Returns the new state so a toggle caller can report it without reading
-   *  back. Idempotent: setting what is already set touches no DOM and fires no
-   *  dock sync, so the once-a-second refresh paths cannot make this churn. */
-  setWatched(watched: boolean): boolean {
-    if (watched === this.isWatched) return this.isWatched;
-    this.isWatched = watched;
-    this.watchChip.hidden = !watched;
-    this.el.classList.toggle("watched", watched);
-    // No explicit header refit, for the same reason `setAttention` needs none:
-    // the chip is a header child and the meta box is the header's flex spacer,
-    // so showing one moves that box's width and the ResizeObserver on it
-    // schedules the overflow pass. That pass measures and toggles classes; it
-    // never reaches a PTY resize (constraint 1).
-    this.dockSyncListener?.();
-    return this.isWatched;
-  }
-
-  /** Flip the watch. The chord's and the menu item's one entry point, so the
-   *  two gestures cannot drift apart on what "toggle" means. */
-  toggleWatched(): boolean {
-    return this.setWatched(!this.isWatched);
-  }
-
-  /** Flag (or clear) that loomux is currently withholding a prompt delivery
-   *  to this pane because it believes the human's own input occupies the
-   *  CLI's box (#246) — driven by the backend's paired
-   *  orch-delivery-held / orch-delivery-held-cleared events. `null` clears the
-   *  badge.
-   *
-   *  Idempotent on the REASON ALONE — deliberately unlike `setAttention` above,
-   *  which keys on `(reason, detail)` together. The two differ because their
-   *  details do: an attention detail is free text the scan can change under a
-   *  steady reason, while a held detail is `delivery_held_detail(agent_id,
-   *  reason)` (orchestration/mod.rs), a total function over a three-variant
-   *  enum that interpolates nothing but `agent_id`. So under a steady reason it
-   *  cannot move, and the cheaper check loses nothing.
-   *
-   *  Naming the input that is ASSUMED rather than proven, since this comment
-   *  exists because its predecessor over-claimed: that argument holds only
-   *  while `agent_id` is constant for the pane, which is a property of the
-   *  pane-to-agent binding, not of the function. The events dispatch by
-   *  `pty_id` (orchestration.ts), so a pane rebound to a different agent while
-   *  held, with the reason unchanged, would take the early return and keep the
-   *  previous agent's name. The blast radius is the chip's `title` tooltip and
-   *  nothing else — no state, no delivery — which is why the cheap check still
-   *  wins; if a rebind ever needs to repaint it, key on `(reason, detail)` like
-   *  `setAttention` rather than reaching for a rebind hook here. Copy `setAttention`'s rule
-   *  here only if that stops being true; copy this one to a NEW badge only
-   *  after checking its detail the same way (`setQueueDepth` below is the
-   *  other outcome — it keys on the whole reading).
-   *
-   *  Header chrome only: this never touches the pane's size, so the
-   *  no-PTY-resize invariant holds trivially. */
-  setHeld(reason: string | null, detail?: string): void {
-    if (reason === this.heldReason) return;
-    this.heldReason = reason;
-    if (!reason) {
-      this.heldChip.hidden = true;
-      delete this.heldChip.dataset.reason;
-    } else {
-      const { label } = heldPresentation(reason);
-      this.heldChip.textContent = label;
-      this.heldChip.title = detail ?? "Prompt delivery paused — human input occupies this pane's box";
-      this.heldChip.dataset.reason = reason;
-      this.heldChip.hidden = false;
-    }
-  }
-
-  /** Show (or clear) how deep this pane's delivery queue is (#814): the count,
-   *  the cap and how long the oldest queued prompt has been waiting, plus a
-   *  stalled cue once nothing has moved for the backend's stall threshold.
-   *  `null` clears it — which is how a drained queue is reported, since the
-   *  backend pushes the full set of panes that HAVE a queue and says nothing
-   *  about the rest.
-   *
-   *  Idempotent on the whole reading, not just the depth: this arrives on a 3 s
-   *  tick, so re-writing identical text would churn the DOM once per tick per
-   *  queued pane for as long as a pane is held. Header chrome only — never
-   *  touches the pane's size. */
-  setQueueDepth(reading: QueueDepthReading | null): void {
-    const same =
-      reading === null
-        ? this.queueReading === null
-        : this.queueReading !== null &&
-          this.queueReading.depth === reading.depth &&
-          this.queueReading.cap === reading.cap &&
-          this.queueReading.waiting_ms === reading.waiting_ms &&
-          this.queueReading.stalled === reading.stalled &&
-          this.queueReading.agent_id === reading.agent_id;
-    if (same) return;
-    this.queueReading = reading;
-    if (!reading) {
-      this.queueChip.hidden = true;
-      this.queueChip.textContent = "";
-      delete this.queueChip.dataset.stalled;
-    } else {
-      const { label, title, stalled } = queuePresentation(reading);
-      this.queueChip.textContent = label;
-      this.queueChip.title = title;
-      if (stalled) this.queueChip.dataset.stalled = "true";
-      else delete this.queueChip.dataset.stalled;
-      this.queueChip.hidden = false;
-    }
-    // A minimized pane's header is detached, so the chip above is invisible for
-    // exactly the panes that queue the most (delegate roles open minimized) —
-    // the grid mirrors this onto the dock chip. Same listener setAttention and
-    // setConnected use.
-    this.dockSyncListener?.();
-  }
-
-  /** This pane's current queue reading, or null. Lets the grid put an equivalent
-   *  marker on the dock chip while the pane is minimized (`dockChipQueue`), the
-   *  same shape as the `attention` and `channelBadge` getters. */
-  get queueDepth(): QueueDepthReading | null {
-    return this.queueReading;
-  }
-
-  /** Set (or clear) the unread-mail count on a MANAGER pane's header (#1161 M5).
-   *
-   *  `0` hides the chip, which is how an emptied mailbox is reported: the
-   *  backend emits the whole current count on every write, so there is no paired
-   *  "cleared" event to miss and a dropped push self-corrects on the next one.
-   *
-   *  Idempotent on the count, like `setQueueDepth`: the seed read and the push
-   *  can both land on one pane in the same breath, and re-writing identical text
-   *  would churn the DOM for nothing. Header chrome only — never touches the
-   *  pane's size. */
-  setMailUnread(unread: number): void {
-    // Every caller of THIS method is the push (`orch-mailbox-changed`); the
-    // seed goes through `applyMailSeed` below, which defers to it.
-    this.mailPushed = true;
-    this.renderMailUnread(unread);
-  }
-
-  /** Apply the one-shot seed read taken when this pane learned it is the
-   *  manager — but only while no push has arrived. See `mailPushed`. */
-  applyMailSeed(unread: number): void {
-    if (this.mailPushed) return;
-    this.renderMailUnread(unread);
-  }
-
-  private renderMailUnread(unread: number): void {
-    const p = mailboxPresentation(unread);
-    const next = p ? unread : 0;
-    if (next === this.mailUnread) return;
-    this.mailUnread = next;
-    if (!p) {
-      this.mailChip.hidden = true;
-      this.mailChip.textContent = "";
-      this.mailChip.title = "";
-    } else {
-      this.mailChip.textContent = p.label;
-      this.mailChip.title = p.title;
-      this.mailChip.hidden = false;
-    }
-    // A minimized pane's header is detached, so the chip above is invisible —
-    // the grid mirrors this onto the dock chip. Same listener setAttention,
-    // setConnected and setQueueDepth use.
-    this.dockSyncListener?.();
-  }
-
-  /** This pane's unread-mail count (0 when there is none). Lets the grid put an
-   *  equivalent marker on the dock chip while the pane is minimized
-   *  (`dockChipMail`), the same shape as the `queueDepth` getter above. */
-  get mailUnreadCount(): number {
-    return this.mailUnread;
-  }
-
-  /** Hand this pane its prompt-cache reading (#3407), or `null` when the strip
-   *  does not cover it. Called on every strip delivery, which is also what
-   *  advances the label against the clock — so the chip needs no timer of its
-   *  own. Idempotent on the rendered text: re-writing identical text would churn
-   *  the DOM once per delivery for nothing. Header chrome only — never touches
-   *  the pane's size. */
+  // Delegated to PaneBadges (panebadges.ts), which carries the doc (#3498 F1).
+  setBadge(badge: PaneBadge): void { this.badges.setBadge(badge); }
+  setAttention(reason: string | null, detail?: string): void { this.badges.setAttention(reason, detail); }
+  get watched(): boolean { return this.badges.watched; }
+  setWatched(watched: boolean): boolean { return this.badges.setWatched(watched); }
+  toggleWatched(): boolean { return this.badges.toggleWatched(); }
+  setHeld(reason: string | null, detail?: string): void { this.badges.setHeld(reason, detail); }
+  setQueueDepth(reading: QueueDepthReading | null): void { this.badges.setQueueDepth(reading); }
+  get queueDepth(): QueueDepthReading | null { return this.badges.queueDepth; }
+  setMailUnread(unread: number): void { this.badges.setMailUnread(unread); }
+  applyMailSeed(unread: number): void { this.badges.applyMailSeed(unread); }
+  get mailUnreadCount(): number { return this.badges.mailUnreadCount; }
   noteCacheAge(reading: CacheAgeReading | null, nowMs: number = Date.now()): void {
-    this.cacheReading = reading;
-    const label = reading === null ? null : cacheChipLabel(reading, nowMs);
-    if (label === null || reading === null) {
-      if (!this.cacheChip.hidden) {
-        this.cacheChip.hidden = true;
-        this.cacheChip.textContent = "";
-        this.cacheChip.title = "";
-        delete this.cacheChip.dataset.state;
-      }
-      return;
-    }
-    const state = cacheState(reading, nowMs).state;
-    if (this.cacheChip.textContent !== label) this.cacheChip.textContent = label;
-    if (this.cacheChip.dataset.state !== state) this.cacheChip.dataset.state = state;
-    const title = cacheChipTitle(reading, nowMs);
-    if (this.cacheChip.title !== title) this.cacheChip.title = title;
-    if (this.cacheChip.hidden) this.cacheChip.hidden = false;
+    this.badges.noteCacheAge(reading, nowMs);
   }
-
-  /** The cache chip's menu: what the last wake cost (read-only rows) and
-   *  "Compact now", which asks the backend to type `/compact` at the pane's next
-   *  idle moment through the same path an agent's own `request_compact` takes.
-   *  Disabled, with the reason, where it cannot do anything — never offered as a
-   *  click that silently fails. */
-  private openCacheMenu(x: number, y: number): void {
-    const reading = this.cacheReading;
-    if (reading === null) return;
-    type CacheAction = "compact";
-    const items: MenuItem<CacheAction>[] = [];
-    const wake = wakeCostLine(reading.lastWake);
-    items.push({
-      label: wake ?? "No wake recorded yet",
-      disabled: true,
-      reason: "Read-only: tokens the first request after the last quiet stretch read from the cache, wrote to it, and sent uncached.",
-    });
-    items.push({ label: "", separator: true });
-    const group = this.orchGroup;
-    const agent = this.orchAgent;
-    const why =
-      group === null || agent === null
-        ? "Only an orchestration agent pane can be compacted from here."
-        : !reading.compactSupported
-          ? "This pane's CLI has no /compact that orrerix can type."
-          : null;
-    items.push(
-      why === null ? { label: "Compact now", action: "compact" } : { label: "Compact now", disabled: true, reason: why }
-    );
-    showContextMenu(x, y, items, (action) => {
-      if (action !== "compact" || group === null || agent === null) return;
-      requestCompact(group, agent)
-        .then((msg) => showToast(`Compact ${msg}`, "info"))
-        .catch((err) => showToast(`Compact refused: ${String(err)}`));
-    });
-  }
-
-  /** Mark (or clear) this pane's cross-workspace channel membership (#271): a
-   *  colored/numbered chip before the title plus a `--connect-color` accent, so
-   *  panes on either end of a channel — and a third pane joined into it — read as
-   *  one connected set even across tabs. `null` clears it (disconnect/teardown).
-   *
-   *  #271 W3 addendum, part C: the chip also carries a DIRECTION arrow — ▲
-   *  (outward) for the sender, ▼ (inward) for a receiver — and a distinct
-   *  `receive-only` CSS variant for a delivery-only member (no token, ever),
-   *  so the direction and the honest capability both read at a glance. */
-  setConnected(info: PaneChannelBadge | null): void {
-    this.channelInfo = info;
-    if (!info) {
-      this.channelChip.hidden = true;
-      this.el.classList.remove("connected");
-      this.el.style.removeProperty("--connect-color");
-      delete this.channelChip.dataset.channel;
-      delete this.channelChip.dataset.direction;
-      this.channelChip.classList.remove("receive-only");
-    } else {
-      const arrow = info.direction === "sender" ? "▲" : "▼";
-      this.channelChip.textContent = `${arrow} ${info.label}`;
-      const capability = info.deliveryOnly
-        ? "receive-only — it has no channel token"
-        : info.direction === "sender"
-          ? "you are the SENDER — you may message anyone connected, any time"
-          : info.canSend
-            ? "you are a RECEIVER with a reply credit — you may answer the sender now"
-            : "you are a RECEIVER — you may answer once the sender messages you";
-      this.channelChip.title = `Channel ${info.channelId} — connected to ${
-        info.peers.join(", ") || "…"
-      } (${capability}). Click to disconnect.`;
-      this.channelChip.dataset.channel = info.channelId;
-      this.channelChip.dataset.direction = info.direction;
-      this.channelChip.classList.toggle("receive-only", info.deliveryOnly);
-      this.channelChip.hidden = false;
-      this.el.classList.add("connected");
-      this.el.style.setProperty("--connect-color", info.color);
-    }
-    // A minimized pane's element is detached; mirror to the dock chip (#95r's
-    // precedent, same listener setAttention/setName already use).
-    this.dockSyncListener?.();
-  }
-
-  /** The channel this pane currently belongs to, or null — panemenu.ts's
-   *  `PaneConnectState.channelId` reads this to decide Connect vs. Disconnect. */
-  get channelId(): string | null {
-    return this.channelInfo?.channelId ?? null;
-  }
-
-  /** Current channel badge, or null — lets the grid render an equivalent
-   *  indicator on the dock chip while this pane is minimized, mirroring the
-   *  `attention` getter just above. */
-  get channelBadge(): PaneChannelBadge | null {
-    return this.channelInfo;
-  }
-
-  /** Toggle the "armed connect source" visual (#271's "visible pending state"
-   *  requirement) — the persistent cue that THIS pane is what a right-click
-   *  elsewhere will complete a channel against, until it's completed or
-   *  cancelled (self-click or Esc). Never touches the channel chip itself: a
-   *  free pane being armed has no channel yet. */
-  setPendingConnect(pending: boolean): void {
-    this.el.classList.toggle("connect-pending", pending);
-  }
+  setConnected(info: PaneChannelBadge | null): void { this.badges.setConnected(info); }
+  get channelId(): string | null { return this.badges.channelId; }
+  get channelBadge(): PaneChannelBadge | null { return this.badges.channelBadge; }
+  setPendingConnect(pending: boolean): void { this.badges.setPendingConnect(pending); }
 
   /** Has `dispose()` already run? (#271 review finding 1.) Orchestration.ts's
    *  module-level "armed connect source" reference has no dispose hook of its
@@ -4128,14 +2253,8 @@ export class Pane implements VoiceTargetPane {
     return this.disposed;
   }
 
-  /** Current needs-attention state, or null. Lets the grid render an equivalent
-   *  badge on the dock chip while this pane is minimized (its header is out of
-   *  the DOM). */
-  get attention(): { reason: string; label: string; urgent: boolean; detail: string | null } | null {
-    if (!this.attentionReason) return null;
-    const { label, urgent } = attentionPresentation(this.attentionReason);
-    return { reason: this.attentionReason, label, urgent, detail: this.attentionDetail };
-  }
+  // Delegated to PaneBadges (panebadges.ts), which carries the doc (#3498 F1).
+  get attention(): { reason: string; label: string; urgent: boolean; detail: string | null } | null { return this.badges.attention; }
 
   /** Register a callback fired whenever the dock chip's content changes
    *  (attention state or name) — used by the grid to refresh the chip of a
@@ -4144,45 +2263,8 @@ export class Pane implements VoiceTargetPane {
     this.dockSyncListener = fn;
   }
 
-  /** The human is now on this pane: acknowledge its attention backend-side so
-   *  the badge drops and (for `waiting`) stays down until the prompt changes.
-   *  Agent panes ack by agent id; a plain pane (no agent identity) acks by its
-   *  pty id (#40). Public so restoring a docked pane clears it the same way
-   *  turning to a pane does. */
-  acknowledgeAttention(): void {
-    if (!this.attentionReason) return;
-    if (this.orchAgent) {
-      invoke("orch_ack_attention", { agentId: this.orchAgent }).catch(() => {});
-    } else if (this.ptyId !== null) {
-      invoke("orch_ack_attention_pty", { ptyId: this.ptyId }).catch(() => {});
-    }
-  }
-
-  /** The human deliberately dismissed this pane's stuck-prompt chip (#825 M1):
-   *  release the latched backend badge, which — unlike the focus ack above —
-   *  is an unambiguous "I have seen this", so it is allowed to clear a warning
-   *  that no reading of the pane could.
-   *
-   *  The chip goes down locally first: the backend clear is what makes it STAY
-   *  down, but a chip that lingered for a tick after a deliberate click is
-   *  precisely the "clearing alerts is unreliable" feel this gesture exists to
-   *  fix.
-   *
-   *  A failed call therefore has to put it back **here**, and cannot be left to
-   *  the next attention scan. The tempting version of this comment — "if the
-   *  call fails the next tick re-badges us" — is false: `applyAttention`'s gate
-   *  (#743 S5) skips the whole pass while the backend payload is unchanged, and
-   *  a dismissal the backend never applied is exactly the case where it does not
-   *  change. The chip would stay down on a pane still wedged, which is the one
-   *  outcome this feature must never produce. */
-  private dismissAttention(): void {
-    const agentId = this.orchAgent;
-    const reason = this.attentionReason;
-    if (!agentId || reason !== "stranded") return;
-    const detail = this.attentionDetail ?? undefined;
-    this.setAttention(null);
-    dismissStranded(agentId).catch(() => this.setAttention(reason, detail));
-  }
+  // Delegated to PaneBadges (panebadges.ts), which carries the doc (#3498 F1).
+  acknowledgeAttention(): void { this.badges.acknowledgeAttention(); }
 
   /** Handle an OSC 7 working-directory report from the shell. Payloads are
    *  usually a raw path, but tolerate a `file://host/path` URL too. */
@@ -4195,7 +2277,7 @@ export class Pane implements VoiceTargetPane {
     if (this.isSshPane) return;
     // Every prompt is a "something may have happened" signal for the git
     // view, even when the directory itself didn't change.
-    this.gitView?.notifyPrompt();
+    this.views.gitView?.notifyPrompt();
     const path = normalizeOscPath(payload);
     if (!path) return;
     this.cwdRaw = path;
@@ -4215,8 +2297,8 @@ export class Pane implements VoiceTargetPane {
   /** The backend saw this pane's repo change on disk (an external checkout /
    *  commit / stage). Drive the same refresh a shell prompt would: the git
    *  view (throttled) and the header branch chip (throttled the same way). */
-  private onExternalGitChange(): void {
-    this.gitView?.notifyPrompt();
+  onExternalGitChange(): void {
+    this.views.gitView?.notifyPrompt();
     this.signalDirRefresh();
   }
 
@@ -4262,1233 +2344,24 @@ export class Pane implements VoiceTargetPane {
     void this.refreshDir(this.cwdRaw);
   }
 
-  /** Refuse an overlay on a CONTENT pane (#214/#217), with a reason.
-   *
-   *  Every pane overlay (git, issues, tasks, audit, group, file editor) floats over
-   *  `.pane-term` and takes its height from it — `overlayClamp` measures
-   *  `termEl.clientHeight`, and `updateTermShift` reads the live `.xterm-screen` to
-   *  keep the cursor visible under the panel. A content pane has no terminal at all,
-   *  so those measurements have no meaning and the panel would open into a zero-height
-   *  box. They are therefore cleanly OFF there (buttons hidden by `.is-content`,
-   *  hotkeys answered with this) rather than half-working.
-   *
-   *  #214 deferred "the git view over a files root" to a second overlay sizing model.
-   *  #217 answers it by the other road, and the answer is why this refusal can stay:
-   *  you don't overlay a git view onto a content pane, you OPEN A GIT PANE (the view
-   *  as pane content, sized by the pane's own box). The surfaces that needed a
-   *  terminal underneath still say so; the ones that never did are now panes. */
-  private refuseOverlay(what: string): boolean {
-    if (!this.isContent) return false;
-    const kind = CONTENT_KIND_LABEL[this.contentKind!];
-    showToast(`${what} isn't available in a ${kind} pane.`, "info");
-    return true;
-  }
+  // Delegated to PaneViews (paneviews.ts), which carries the doc (#3498 F1).
+  toggleGitView(): void { this.views.toggleGitView(); }
+  toggleIssuesView(): void { this.views.toggleIssuesView(); }
+  toggleTasksView(): void { this.views.toggleTasksView(); }
+  toggleDecisionsView(): void { this.views.toggleDecisionsView(); }
 
-  /** #1042: declare this pane's live cwd as a root, because a HUMAN just asked
-   *  to OPEN a view at it.
-   *
-   *  This is the one place the distinction the whole design rests on becomes
-   *  code. The cwd itself arrived on an agent-controllable channel — the pane's
-   *  OSC-7 report, emitted by whatever process is running in it — and that
-   *  stream is resolve-only: it never declares anything, which is why an agent
-   *  that `cd`s to `~/.ssh` gets a quiet folder chip rather than a rooted file
-   *  browser. A human clicking the branch chip, or pressing Alt+G, is not that
-   *  stream. It is the trusted local webview acting on a human gesture, and it
-   *  declares.
-   *
-   *  **Called only from `toggleView`, and only on the `open` action.** It used
-   *  to be called from each `toggleXView` *before* `toggleView` decided what the
-   *  gesture even was, which meant a CLOSE and a docked NO-OP declared too —
-   *  so dismissing a panel permanently declared whatever directory the agent in
-   *  that pane happened to have `cd`'d to. That is the exact inversion of the
-   *  rule this helper exists to implement (#1092 review). `toggleDeclaresCwd`
-   *  now owns the decision, `toggleView` is the one call site, and both halves —
-   *  which direction, which views — are pinned in `test/embedtoggle.test.ts`.
-   *
-   *  Normally there is nothing new to declare: a pane's spawn cwd was declared
-   *  by the launcher (or by restore), and the descendant rule already covers
-   *  everything the shell `cd`s into below it. This matters exactly when the cwd
-   *  has left every declared root — which is the case the gesture is for.
-   *
-   *  Fire-and-forget, and slice C owes it one look. The declaration is *issued*
-   *  before the view opens, but two Tauri commands in flight are not ordered
-   *  against each other, so once slice C root-scopes the view's own reads there
-   *  is a race here in principle. Bounded rather than ignored: every one of
-   *  these views re-reads on its own (a shell prompt, an external git change, a
-   *  manual ↻), so losing that race costs one empty render, not the feature. If
-   *  slice C wants it airtight, `toggleView` becomes `async` and awaits this —
-   *  a change this helper is shaped to make one line.
-   *
-   *  Never for an SSH pane: its cwd names a directory on the REMOTE machine, and
-   *  declaring that string here would declare whatever happens to sit at the
-   *  same path locally. `onCwdReported` already refuses to act on an SSH pane's
-   *  report for the same reason; this is the belt on that suspender. */
-  private declareCwd(): void {
-    if (this.isSshPane) return;
-    const cwd = this.cwdRaw;
-    if (cwd) void admitRoot(cwd);
-  }
-
-  /** Toggle the git view. It FLOATS over the top of the terminal — the
-   *  terminal keeps its full size and PTY dimensions, so toggling never
-   *  triggers a resize repaint (which would push duplicate TUI frames into
-   *  scrollback). The bottom strip of the terminal stays visible and usable,
-   *  with a draggable divider on the overlay's lower edge. */
-  toggleGitView(): void {
-    // Alt+G on a git pane: the pane already IS the git view. Refusing with a toast
-    // would be absurd — just put the cursor in it.
-    if (this.contentKind === "git") {
-      this.focus();
-      return;
-    }
-    if (this.refuseOverlay("The git view")) return;
-    this.ensureGitView();
-    this.toggleView("git");
-  }
-
-  /** Lazily construct the git view and register it into `embedRegistry`
-   *  (#361) — the error-recovery `openView` wraps every `show()` in (never
-   *  leave the pane half-toggled) generalizes what was originally a
-   *  git-specific `try`/`catch` here, since a `refresh()` failure was the
-   *  one case any view's `show()` could throw synchronously. */
-  private ensureGitView(): void {
-    if (this.gitView) return;
-    this.gitView = new GitView({
-      getCwd: () => this.cwdRaw,
-      onClose: () => this.toggleGitView(),
-      onRepoAction: () => {
-        if (this.cwdRaw) void this.refreshDir(this.cwdRaw);
-      },
-      onEmbedMenu: (anchor) => this.showEmbedMenu("git", anchor),
-    });
-    this.gitOverlay = document.createElement("div");
-    this.gitOverlay.className = "git-overlay";
-    this.gitOverlay.hidden = true;
-    this.gitOverlay.append(this.gitView.el, this.makeOverlayDivider(() => this.gitOverlay!));
-    this.el.appendChild(this.gitOverlay);
-    this.embedRegistry.set("git", {
-      overlayEl: this.gitOverlay,
-      viewEl: this.gitView.el,
-      show: () => this.gitView!.show(),
-      hide: () => this.gitView!.hide(),
-      setPanelActive: (active) => this.gitView!.setPanelActive(active),
-      floorPx: () => EMBED_MIN_PANEL_PX,
-    });
-  }
-
-  /** Keep the overlay tall enough that its bottom drag bar stays grabbable and
-   *  no control clips, but always leave a terminal strip visible at the bottom.
-   *  `floor` overrides the baseline minimum with a panel-specific one (the group
-   *  panel measures its fixed chrome so the footer can't collapse — #83 rev-58).
-   *  Pure math + tests in overlaysize.ts. */
-  private overlayClamp(h: number, floor?: number): number {
-    return clampOverlayHeight(h, this.termEl.clientHeight, floor ?? OVERLAY_MIN_H);
-  }
-
-  /** The group panel's minimum content height — its measured fixed chrome so
-   *  every control (footer End/Pause, suspended banner) stays on-screen — never
-   *  below the shared baseline, and never so tall it can't fit the pane. */
-  private groupFloor(): number {
-    const measured = this.groupView?.minChromeHeight() ?? 0;
-    return Math.max(OVERLAY_MIN_H, measured);
-  }
-
-  /** Re-apply `kind`'s floor to whichever host it's CURRENTLY shown in (#361
-   *  generalizes what was originally `reclampGroupOverlay`, the only view
-   *  whose floor can grow after it opens — the suspended banner appearing
-   *  inside the group panel, #83 rev-58). Only touches the host when the
-   *  floor actually moves it — typically a bump UP — so it never fights the
-   *  human's chosen size. In embed mode this nudges the divider's flex-grow
-   *  via `embedDragGrow` with a zero delta, which — because a size already
-   *  BELOW the new floor makes `sizePanel - minPanelPx` negative — still
-   *  produces exactly the corrective nudge; see embedsplit.ts. */
-  private reclampViewFloor(kind: EmbedKind): void {
-    const side = this.sideOf(kind);
-    if (side) {
-      this.reclampSlotDivider(side);
-      return;
-    }
-    const entry = this.embedRegistry.get(kind);
-    if (!entry || entry.overlayEl.hidden) return;
-    const cur = entry.overlayEl.offsetHeight;
-    const clamped = this.overlayClamp(cur, entry.floorPx());
-    if (clamped !== cur) {
-      entry.overlayEl.style.height = `${clamped}px`;
-      this.updateTermShift();
-    }
-  }
-
-  /** Which `EmbedSide` (if any) `kind` currently occupies. Only three sides
-   *  exist, so a linear scan is simpler and safer than keeping a second,
-   *  separately-maintained reverse-lookup map in sync with `embedSlots`. */
-  private sideOf(kind: EmbedKind): EmbedSide | null {
-    if (!this.embedSlots) return null;
-    for (const side of EMBED_SIDES) {
-      if (this.embedSlots[side].kind === kind) return side;
-    }
-    return null;
-  }
-
-  /** The OTHER element in `side`'s divider pair — i.e. not the slot's own
-   *  panel. Left's counterpart is the composite `embedCenterEl`; right's and
-   *  bottom's are the plain `termEl` / `embedRowEl` (see `ensureEmbedHost`'s
-   *  doc comment for the nested structure this reflects). */
-  private counterpartEl(side: EmbedSide): HTMLElement {
-    switch (side) {
-      case "left":
-        return this.embedCenterEl!;
-      case "right":
-        return this.embedTermWrapEl!;
-      case "bottom":
-        return this.embedRowEl!;
-    }
-  }
-
-  /** `side`'s divider pair as `{beforeEl, afterEl}` (the two elements a drag
-   *  redistributes flex-grow between) plus which screen axis it drags along.
-   *  "Before" is whichever element sits physically before the divider in
-   *  reading order — left's own slot for `"left"` (dragging right grows it),
-   *  `embedTermWrapEl` for `"right"` (dragging right grows IT, shrinking the
-   *  slot — NEVER `termEl` directly; see `embedTermWrapEl`'s own doc
-   *  comment), the row for `"bottom"` (dragging down grows it). Matches
-   *  `embedDragGrow`'s convention (`before` grows with a positive delta)
-   *  exactly, mirroring grid.ts's own split-divider math. */
-  private dividerPair(side: EmbedSide): { beforeEl: HTMLElement; afterEl: HTMLElement; horizontal: boolean } {
-    const slot = this.embedSlots![side];
-    switch (side) {
-      case "left":
-        return { beforeEl: slot.panelEl, afterEl: this.embedCenterEl!, horizontal: true };
-      case "right":
-        return { beforeEl: this.embedTermWrapEl!, afterEl: slot.panelEl, horizontal: true };
-      case "bottom":
-        return { beforeEl: this.embedRowEl!, afterEl: slot.panelEl, horizontal: false };
-    }
-  }
-
-  /** The `embedDragGrow` floor pair for `side`'s divider, evaluated LIVE
-   *  (the group panel's floor can grow after it opens; the left divider's
-   *  far-side floor depends on whether right is CURRENTLY occupied). See
-   *  embedsplit.ts's `embedSideFloors`/`embedCenterFloor` for the actual
-   *  precedence math this only ever plugs live values into. */
-  private dividerFloors(side: EmbedSide): { beforeFloorPx: number; afterFloorPx: number } {
-    if (side === "left") {
-      const right = this.embedSlots!.right;
-      const rightFloorPx = right.kind !== null ? EMBED_MIN_PANEL_PX : null;
-      return { beforeFloorPx: EMBED_MIN_PANEL_PX, afterFloorPx: embedCenterFloor(rightFloorPx) };
-    }
-    if (side === "right") return embedSideFloors("right", EMBED_MIN_PANEL_PX);
-    // bottom
-    const bottomKind = this.embedSlots!.bottom.kind;
-    const panelFloorPx = bottomKind ? this.embedRegistry.get(bottomKind)!.floorPx() : EMBED_MIN_PANEL_PX;
-    return embedSideFloors("bottom", panelFloorPx);
-  }
-
-  /** Set `side`'s divider pair directly from the slot's own PANEL share
-   *  (`frac` — always "how much of the pair the panel itself gets," never
-   *  "before" or "after," since which one the panel physically is differs
-   *  per side). Position-agnostic on purpose: `flex-grow` only encodes a
-   *  ratio, not which sibling is which, so this never needs to know
-   *  before/after itself — only `dividerPair`'s drag handler does. */
-  private applySlotGrow(side: EmbedSide, frac: number): void {
-    const slot = this.embedSlots![side];
-    const clamped = clampEmbedFrac(frac);
-    slot.panelEl.style.flex = `${clamped} 1 0`;
-    this.counterpartEl(side).style.flex = `${1 - clamped} 1 0`;
-  }
-
-  /** Re-apply `side`'s CURRENT floors to its CURRENT sizes (a zero-delta
-   *  "drag") — the correction for a floor that grew (or, for left, whose
-   *  composed far-side floor changed because right's occupancy changed)
-   *  since the slot was last sized. Only touches it when the clamp actually
-   *  moves it, so it never fights the human's chosen size. Zero delta still
-   *  produces a real nudge when a side is already below its (possibly new)
-   *  floor, because `sizeAfter - minAfterPx` (or the before equivalent) goes
-   *  negative in `embedDragGrow`'s own clamp — see embedsplit.ts. */
-  private reclampSlotDivider(side: EmbedSide): void {
-    if (!this.embedSlots) return;
-    const slot = this.embedSlots[side];
-    if (slot.kind === null || slot.panelEl.hidden) return;
-    const { beforeEl, afterEl, horizontal } = this.dividerPair(side);
-    const sizeBefore = horizontal ? beforeEl.offsetWidth : beforeEl.offsetHeight;
-    const sizeAfter = horizontal ? afterEl.offsetWidth : afterEl.offsetHeight;
-    const growBefore = parseFloat(beforeEl.style.flexGrow || "1");
-    const growAfter = parseFloat(afterEl.style.flexGrow || "1");
-    const { beforeFloorPx, afterFloorPx } = this.dividerFloors(side);
-    const grow = embedDragGrow(sizeBefore, sizeAfter, growBefore, growAfter, 0, beforeFloorPx, afterFloorPx);
-    if (grow.growBefore === growBefore && grow.growAfter === growAfter) return;
-    beforeEl.style.flex = `${grow.growBefore} 1 0`;
-    afterEl.style.flex = `${grow.growAfter} 1 0`;
-    const panelGrow = parseFloat(slot.panelEl.style.flexGrow || "1");
-    const counterpartGrow = parseFloat(this.counterpartEl(side).style.flexGrow || "1");
-    slot.frac = fracFromGrow(counterpartGrow, panelGrow);
-    this.updateTermShift();
-    // Left's counterpart IS `embedCenterEl`, which nests right's own
-    // divider pair (`termEl` | right's panel) — a change to left's split
-    // just changed embedCenterEl's own box size, and the term/right split
-    // inside it is a plain CSS flex-grow ratio that does NOT know about
-    // right's floor on its own. Re-run right's clamp against its new box so
-    // it can't end up below its floor just because left grew (#361 rev-58
-    // NB2) — a no-op (see the early-return above) when right isn't
-    // occupied or wasn't actually pushed under its floor.
-    if (side === "left") this.reclampSlotDivider("right");
-  }
-
-  /** Horizontal drag handle on an overlay's bottom edge. `floor` (optional) is a
-   *  panel-specific minimum height provider passed to the clamp on each drag. */
-  private makeOverlayDivider(overlay: () => HTMLElement, floor?: () => number): HTMLElement {
-    const div = document.createElement("div");
-    div.className = "git-divider";
-    div.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      const startY = e.clientY;
-      const startH = overlay().offsetHeight;
-      div.classList.add("dragging");
-      // Same drag-suspend discipline as the embed-slot dividers (#361
-      // user-demo finding) — the overlay's own height-drag hits the exact
-      // same "reflow a huge list on every mousemove" cost.
-      overlay().classList.add("resizing");
-      const move = (ev: MouseEvent) => {
-        const h = this.overlayClamp(startH + (ev.clientY - startY), floor?.());
-        overlay().style.height = `${h}px`;
-        this.updateTermShift();
-      };
-      const end = () => {
-        div.classList.remove("dragging");
-        overlay().classList.remove("resizing");
-      };
-      startDragSession({ onMove: move, onEnd: end });
-    });
-    return div;
-  }
-
-  /** Toggle the GitHub issues overlay. Available on any pane whose cwd is a git
-   *  repo (the view resolves the repo root itself). Same no-resize overlay
-   *  mechanics as the git view — it FLOATS over the terminal and never resizes
-   *  the PTY; only one overlay is open at a time. */
-  toggleIssuesView(): void {
-    if (this.refuseOverlay("The issues view")) return;
-    this.ensureIssuesView();
-    this.toggleView("issues");
-  }
-
-  /** Lazily construct the issues view and register it into `embedRegistry`
-   *  (#361). */
-  private ensureIssuesView(): void {
-    if (this.issuesView) return;
-    this.issuesView = new IssuesView({
-      getCwd: () => this.cwdRaw,
-      getGroupId: () => this.orchGroup,
-      onClose: () => this.toggleIssuesView(),
-      onEmbedMenu: (anchor) => this.showEmbedMenu("issues", anchor),
-    });
-    this.issuesOverlay = document.createElement("div");
-    this.issuesOverlay.className = "git-overlay";
-    this.issuesOverlay.hidden = true;
-    this.issuesOverlay.append(
-      this.issuesView.el,
-      this.makeOverlayDivider(() => this.issuesOverlay!)
-    );
-    this.el.appendChild(this.issuesOverlay);
-    this.embedRegistry.set("issues", {
-      overlayEl: this.issuesOverlay,
-      viewEl: this.issuesView.el,
-      show: () => this.issuesView!.show(),
-      hide: () => this.issuesView!.hide(),
-      setPanelActive: (active) => this.issuesView!.setPanelActive(active),
-      floorPx: () => EMBED_MIN_PANEL_PX,
-    });
-  }
-
-  /** Toggle the task board open/closed (`Alt+T`, and the board's own ✕) — in
-   *  EITHER mode. Which mode/side it opens in is a separate, persisted
-   *  preference (see `embedViewAtSide`); this never changes it. */
-  toggleTasksView(): void {
-    if (!this.orchGroup || this.tasksBtn.hidden) return;
-    this.ensureTasksView();
-    this.toggleView("tasks");
-  }
-
-  /** Lazily construct the task board and register it into `embedRegistry`
-   *  (#361). */
-  private ensureTasksView(): void {
-    if (this.tasksView) return;
-    this.tasksView = new TasksView(this.orchGroup!, {
-      onClose: () => this.toggleTasksView(),
-      onEmbedMenu: (anchor) => this.showEmbedMenu("tasks", anchor),
-      takeFocus: () => this.pendingFocus.take("tasks"),
-      // The board-to-panel direction of the focus hook (#1091 slice G): a row
-      // marked decision-blocked or demo-gated links straight to that item in
-      // the NEEDS-YOU panel, routed through this same hook the panel's own
-      // onFocusTask below uses the other way.
-      onFocusDecision: (id) => this.requestEmbedFocus("decisions", id),
-      // The board's own bounded release (#1318): the pane's authoritative
-      // on-screen read, so a `hide`/`show` pair that never arrives cannot leave
-      // a visible board frozen. Read live, never snapshotted — the same
-      // contract `getRepo`/`isDocked` take on the other views.
-      isVisible: () => this.isViewVisible("tasks"),
-    });
-    this.tasksOverlay = document.createElement("div");
-    this.tasksOverlay.className = "git-overlay";
-    this.tasksOverlay.hidden = true;
-    this.tasksOverlay.append(this.tasksView.el, this.makeOverlayDivider(() => this.tasksOverlay!));
-    this.el.appendChild(this.tasksOverlay);
-    this.embedRegistry.set("tasks", {
-      overlayEl: this.tasksOverlay,
-      viewEl: this.tasksView.el,
-      show: () => this.tasksView!.show(),
-      // Stops the board refetching-and-rebuilding while its panel is closed,
-      // on every `orch-tasks-changed` (#1318). See `EmbedEntry.hide` for the
-      // rule and for why this entry was written without one.
-      hide: () => this.tasksView!.hide(),
-      setPanelActive: (active) => this.tasksView!.setPanelActive(active),
-      floorPx: () => EMBED_MIN_PANEL_PX,
-    });
-  }
-
-  /** Toggle the NEEDS-YOU panel open/closed (`Alt+Q`, and the panel's own ✕) —
-   *  in EITHER mode, exactly like the board's own toggle. */
-  toggleDecisionsView(): void {
-    if (!this.orchGroup || this.decisionsBtn.hidden) return;
-    this.ensureDecisionsView();
-    this.toggleView("decisions");
-  }
-
-  /** Lazily construct the NEEDS-YOU panel and register it into
-   *  `embedRegistry` (#361, #1091 slice C). */
-  private ensureDecisionsView(): void {
-    if (this.decisionsView) return;
-    this.decisionsView = new DecisionsView(this.orchGroup!, {
-      onClose: () => this.toggleDecisionsView(),
-      onEmbedMenu: (anchor) => this.showEmbedMenu("decisions", anchor),
-      // The panel-to-board direction of the focus hook: a card citing `t-N`
-      // asks the PANE for the board, and the pane decides how to serve it.
-      // The panel never reaches into another view.
-      onFocusTask: (taskId) => this.requestEmbedFocus("tasks", taskId),
-      takeFocus: () => this.pendingFocus.take("decisions"),
-      // This panel's own bounded release (#1318) — see the board's, above.
-      isVisible: () => this.isViewVisible("decisions"),
-    });
-    this.decisionsOverlay = document.createElement("div");
-    this.decisionsOverlay.className = "git-overlay";
-    this.decisionsOverlay.hidden = true;
-    this.decisionsOverlay.append(
-      this.decisionsView.el,
-      this.makeOverlayDivider(() => this.decisionsOverlay!)
-    );
-    this.el.appendChild(this.decisionsOverlay);
-    this.embedRegistry.set("decisions", {
-      overlayEl: this.decisionsOverlay,
-      viewEl: this.decisionsView.el,
-      show: () => this.decisionsView!.show(),
-      // Same as the board's (#1318), over three streams rather than two — and
-      // one board write can fire two of them, since the demo-gate hook raises
-      // or resolves a needs-you item inside `upsert_task`.
-      hide: () => this.decisionsView!.hide(),
-      setPanelActive: (active) => this.decisionsView!.setPanelActive(active),
-      floorPx: () => EMBED_MIN_PANEL_PX,
-    });
-  }
-
-  // ==================== #1091 slice C: the focus-request hook ====================
-
-  /** Open one of THIS pane's embeds and ask it to bring `target` into view.
-   *
-   *  The generic hook behind every cross-embed citation on an orchestrator
-   *  pane: a NEEDS-YOU card naming `t-7` links to that board row, and (once
-   *  #1091 slice G lands the board marker) a held board row links back to the
-   *  question holding it. Both surfaces are embeds on this same pane, so this
-   *  is intra-pane wiring — no backend command exists or is needed for it.
-   *
-   *  **The request is PARKED, not delivered.** Two things stand between asking
-   *  and the row existing: the target view may never have been constructed
-   *  (every embed is lazy), and once it is, its rows arrive from an async
-   *  refresh. So the target goes into `pendingFocus` and the view drains it on
-   *  its own next render, when the rows are actually there — see
-   *  `embedfocus.ts` for why that drain is destructive.
-   *
-   *  **Never a toggle.** A citation is "show me this", so an already-open view
-   *  is re-shown rather than closed — routing this through `toggleView` would
-   *  make clicking a link on a visible board close it.
-   *
-   *  Returns `false` when this pane cannot host that kind (a non-orchestrator
-   *  pane has no board), so a caller can render an inert label instead of a
-   *  link that goes nowhere. */
-  requestEmbedFocus(kind: EmbedKind, target: string): boolean {
-    if (!this.orchGroup) return false;
-    // Fail closed on the gating button, the same test every `toggleXView`
-    // makes: a hidden button means this pane does not offer that view at all.
-    if (this.embedToggleBtn(kind)?.hidden !== false) return false;
-    if (!this.pendingFocus.request(kind, target)) return false;
-    this.ensureEmbedView(kind);
-    // FAIL CLOSED on a kind this hook cannot actually route. `ensureEmbedView`
-    // has a deliberate silent default, and `openView` returns early on a
-    // missing registry entry — so without this check a kind whose header button
-    // is visible but which has no `ensureEmbedView` case would park a target
-    // nothing will ever drain and still answer `true`. `true` is the one answer
-    // that makes a caller render a link that goes nowhere, which is precisely
-    // what its `false` contract exists to prevent. Cheaper to make impossible
-    // here than to remember at each future call site.
-    if (!this.embedRegistry.has(kind)) {
-      this.pendingFocus.clear(kind);
-      return false;
-    }
-    if (this.isViewVisible(kind)) this.embedRegistry.get(kind)?.show();
-    else this.openView(kind);
-    return true;
-  }
-
-  /** Lazily construct `kind`'s view, whichever it is — the dispatch behind
-   *  `requestEmbedFocus`, which unlike a toggle has no per-kind entry point of
-   *  its own to hang the `ensureXView()` call on. Kinds with no focusable
-   *  content simply have nothing to construct here yet; adding one is adding
-   *  its case. */
-  private ensureEmbedView(kind: EmbedKind): void {
-    switch (kind) {
-      case "tasks":
-        this.ensureTasksView();
-        break;
-      case "decisions":
-        this.ensureDecisionsView();
-        break;
-      default:
-        break;
-    }
-  }
-
-  // ==================== #361: the generic embed engine ====================
-  // Shared by every EmbedKind (tasks/git/issues/audit/group) through
-  // `embedRegistry` — see docs/design/embedded-panels.md for the full design,
-  // including why this is the legitimate side of the no-PTY-resize-for-chrome
-  // rule (CLAUDE.md constraint 1) and why the file-editor overlay is
-  // deliberately NOT part of this set.
-
-  /** Lazily promote `termEl` from being `.pane`'s own direct flex:1 child to
-   *  living inside a NESTED flex structure alongside up to three embed
-   *  slots — left, right, bottom (#361 generalization from a single
-   *  bottom-only slot). Created once, on the first embed of ANY kind, and
-   *  left in place afterward: with every slot's panel/divider `[hidden]`
-   *  (`display: none !important`, styles.css), `termEl` alone lays out
-   *  identically to being `.pane`'s direct child, so there is nothing to
-   *  undo when nothing is embedded.
-   *
-   *  The structure, two levels of nesting deep:
-   *  ```
-   *  embedHostEl (column)
-   *    embedRowEl (row, the width axis)
-   *      left divider + slot        (hidden unless occupied)
-   *      embedCenterEl (row)
-   *        embedTermWrapEl > termEl (see its own doc comment: this wrapper
-   *                                  is what keeps termEl's OWN inline style
-   *                                  untouched by the right divider's drag)
-   *        right divider + slot     (hidden unless occupied)
-   *    bottom divider + slot        (hidden unless occupied)
-   *  ```
-   *  Bottom spans the row's FULL width (a sibling of `embedRowEl`, not
-   *  nested inside it) rather than sitting only beside `termEl` — the
-   *  simpler of the two corner-layout choices (see
-   *  docs/design/embedded-panels.md's "Layout" section). NESTED, not a flat
-   *  5-child row, so every divider's two sides are a real, single DOM
-   *  element pair — see `dividerPair`/`dividerFloors` for why that's what
-   *  keeps each divider's own drag math a plain two-element
-   *  `embedDragGrow` call instead of a "sum of several siblings" problem. */
-  private ensureEmbedHost(): void {
-    if (this.embedHostEl) return;
-    const host = document.createElement("div");
-    host.className = "pane-embed-host";
-    this.el.insertBefore(host, this.termEl);
-
-    const row = document.createElement("div");
-    row.className = "pane-embed-row";
-    const center = document.createElement("div");
-    center.className = "pane-embed-center";
-
-    const termWrap = document.createElement("div");
-    termWrap.className = "pane-embed-term-wrap";
-    termWrap.appendChild(this.termEl);
-
-    const left = this.makeEmbedSlot("left");
-    const right = this.makeEmbedSlot("right");
-    const bottom = this.makeEmbedSlot("bottom");
-
-    center.append(termWrap, right.dividerEl, right.panelEl);
-    row.append(left.panelEl, left.dividerEl, center);
-    host.append(row, bottom.dividerEl, bottom.panelEl);
-
-    this.embedHostEl = host;
-    this.embedRowEl = row;
-    this.embedCenterEl = center;
-    this.embedTermWrapEl = termWrap;
-    this.embedSlots = { left, right, bottom };
-  }
-
-  /** Build one embed slot's permanent (created-once, `hidden`-toggled) DOM:
-   *  its panel and its divider. */
-  private makeEmbedSlot(side: EmbedSide): EmbedSlotState {
-    const panelEl = document.createElement("div");
-    panelEl.className = `pane-embed-panel side-${side}`;
-    panelEl.hidden = true;
-    const dividerEl = document.createElement("div");
-    dividerEl.className = `pane-embed-divider side-${side}`;
-    dividerEl.hidden = true;
-    const slot: EmbedSlotState = { side, kind: null, frac: DEFAULT_EMBED_FRAC, panelEl, dividerEl };
-    this.wireEmbedDivider(slot);
-    return slot;
-  }
-
-  /** Draggable divider for one embed slot. Mirrors grid.ts's own
-   *  split-divider math exactly (embedsplit.ts) — the terminal's box
-   *  genuinely resizes here (a real flex layout, not an
-   *  absolutely-positioned overlay), so the SAME frame-debounced
-   *  ResizeObserver → applyFit() path a grid split's divider drag already
-   *  drives fires on every real size change, for all three sides alike. */
-  private wireEmbedDivider(slot: EmbedSlotState): void {
-    slot.dividerEl.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      const { beforeEl, afterEl, horizontal } = this.dividerPair(slot.side);
-      const startPos = horizontal ? e.clientX : e.clientY;
-      const sizeBefore = horizontal ? beforeEl.offsetWidth : beforeEl.offsetHeight;
-      const sizeAfter = horizontal ? afterEl.offsetWidth : afterEl.offsetHeight;
-      const growBefore = parseFloat(beforeEl.style.flexGrow || "1");
-      const growAfter = parseFloat(afterEl.style.flexGrow || "1");
-      slot.dividerEl.classList.add("dragging");
-      // Coalesce this pane's own PTY resize to one call at drag-end instead
-      // of one per animation frame for the whole drag (#432 item 1) — same
-      // mechanism grid.ts's split divider uses, scoped to just this pane
-      // since only its own termEl resizes here.
-      this.beginResizeHold();
-      // Suspend layout of the docked panel's OWN content for the duration of
-      // the drag (#361 user-demo finding: a large unvirtualized list — e.g.
-      // thousands of audit entries — makes every mousemove frame reflow the
-      // whole list just because the container's cross-axis size changed,
-      // even though nothing about the list's OWN content did). `.resizing`
-      // (styles.css) applies `content-visibility: hidden` to the known heavy
-      // list classes, so the browser skips their layout/paint entirely while
-      // dragging and does ONE normal reflow when it's removed on release —
-      // the terminal side of the divider is never touched by this class, so
-      // its own resize/PTY-fit path is completely unaffected.
-      slot.panelEl.classList.add("resizing");
-      const move = (ev: MouseEvent) => {
-        const pos = horizontal ? ev.clientX : ev.clientY;
-        const { beforeFloorPx, afterFloorPx } = this.dividerFloors(slot.side);
-        const grow = embedDragGrow(sizeBefore, sizeAfter, growBefore, growAfter, pos - startPos, beforeFloorPx, afterFloorPx);
-        beforeEl.style.flex = `${grow.growBefore} 1 0`;
-        afterEl.style.flex = `${grow.growAfter} 1 0`;
-      };
-      const end = () => {
-        slot.dividerEl.classList.remove("dragging");
-        slot.panelEl.classList.remove("resizing");
-        this.endResizeHold();
-        // Terminal (one per drag, not per mousemove) — mirrors grid.ts's own
-        // split divider: persist the settled fraction so a restore
-        // reproduces THIS size, not the one before the drag. `frac` is
-        // always the PANEL's own share regardless of which side of the pair
-        // it physically is (see `applySlotGrow`'s doc comment) —
-        // `fracFromGrow(counterpartGrow, panelGrow)` extracts exactly that.
-        const panelGrow = parseFloat(slot.panelEl.style.flexGrow || "1");
-        const counterpartGrow = parseFloat(this.counterpartEl(slot.side).style.flexGrow || "1");
-        slot.frac = fracFromGrow(counterpartGrow, panelGrow);
-        this.events.onRecordChanged(this);
-      };
-      startDragSession({ onMove: move, onEnd: end });
-    });
-  }
-
-  /** Whether `kind`'s view is currently on screen, in EITHER mode. */
-  private isViewVisible(kind: EmbedKind): boolean {
-    const entry = this.embedRegistry.get(kind);
-    if (!entry) return false;
-    const side = this.sideOf(kind);
-    return side ? !this.embedSlots![side].panelEl.hidden : !entry.overlayEl.hidden;
-  }
-
-  /** Close `kind`'s view, in whichever mode it's currently shown. Does NOT
-   *  un-dock it — a docked-but-closed view stays docked (`slot.kind` is
-   *  untouched), exactly mirroring how a never-embedded view stays parked
-   *  in its own hidden overlay between opens. `unembedView` is the
-   *  separate, explicit action that actually clears a slot. */
-  private closeView(kind: EmbedKind): void {
-    const entry = this.embedRegistry.get(kind);
-    if (!entry) return;
-    entry.hide?.();
-    const side = this.sideOf(kind);
-    if (side) {
-      const slot = this.embedSlots![side];
-      slot.dividerEl.hidden = true;
-      slot.panelEl.hidden = true;
-      // Return the view to its OWN overlay host (#361 rev-38 blocker): a
-      // slot's panel must never retain a closed/evicted occupant's element.
-      // `openView`'s embedded branch below also self-enforces this with
-      // `replaceChildren` (belt and suspenders — a panel can never hold
-      // more than one child regardless of what called it), but parking the
-      // element back in its OWN overlay (rather than just detaching it) is
-      // what keeps it reachable and correctly `hidden` the next time THIS
-      // view opens as an overlay, exactly where a never-embedded view
-      // already lives between opens.
-      entry.overlayEl.insertBefore(entry.viewEl, entry.overlayEl.firstChild);
-    } else {
-      entry.overlayEl.hidden = true;
-    }
-    this.updateTermShift();
-    this.focus();
-  }
-
-  /** Close every OTHER floating overlay before `kind` opens AS AN OVERLAY:
-   *  they genuinely collide, only one floating panel fits over the
-   *  terminal. `editor` (the file editor) is just another `EmbedKind` now
-   *  (#361 scope increase) and needs no special-casing here anymore — it's
-   *  covered by the loop below like every other kind. Never called for an
-   *  embed-mode open (see `openView`) — the whole point of embedding is that
-   *  it does NOT collide with a floating panel (#361 NB-4), for any of the
-   *  (now up to three, simultaneous) docked views alike. A docked view is
-   *  therefore left alone by this loop (`this.sideOf(kind) === null` guards
-   *  it, mirroring how it's never the one with an open overlay anyway). */
-  private closeOtherOverlays(except?: EmbedKind): void {
-    for (const kind of EMBED_KINDS) {
-      if (kind === except) continue;
-      const entry = this.embedRegistry.get(kind);
-      if (entry && this.sideOf(kind) === null && !entry.overlayEl.hidden) this.closeView(kind);
-    }
-  }
-
-  /** Show `kind`'s view in whichever mode it's currently set to. Wraps the
-   *  view's own `show()` in the same never-leave-the-pane-half-toggled
-   *  recovery `toggleGitView` originally had for itself — generalized here
-   *  because any view's `show()` (a refresh that can throw) has the same
-   *  failure shape, not just git's. */
-  private openView(kind: EmbedKind): void {
-    const entry = this.embedRegistry.get(kind);
-    if (!entry) return;
-    const side = this.sideOf(kind);
-    try {
-      if (side) {
-        const slot = this.embedSlots![side];
-        // `replaceChildren`, not `appendChild` (#361 rev-38 blocker): a
-        // slot's panel may only ever hold ONE occupant, and this makes that
-        // an invariant of the call itself rather than something every
-        // caller has to get right by first evicting whoever was there —
-        // even if a future code path forgot to, this can't leave two views
-        // stacked and both visible.
-        slot.panelEl.replaceChildren(entry.viewEl);
-        this.applySlotGrow(side, slot.frac);
-        slot.dividerEl.hidden = false;
-        slot.panelEl.hidden = false;
-        // The share just applied may be stale (a restored preference
-        // captured under a smaller floor, a floor that grew while closed,
-        // or — for left specifically — the OTHER slot's occupancy having
-        // changed since) — reclamp against the CURRENT floor immediately,
-        // the same correction a content-driven floor growth applies while
-        // already open (#361 rev-38 NB3; see `reclampViewFloor`).
-        this.reclampViewFloor(kind);
-      } else {
-        this.closeOtherOverlays(kind);
-        entry.overlayEl.insertBefore(entry.viewEl, entry.overlayEl.firstChild);
-        const strip = Math.max(140, Math.round(this.el.clientHeight * 0.35));
-        entry.overlayEl.style.height = `${this.overlayClamp(this.termEl.clientHeight - strip, entry.floorPx())}px`;
-        entry.overlayEl.hidden = false;
-      }
-      entry.show();
-      this.updateTermShift();
-    } catch (err) {
-      entry.hide?.();
-      if (side) {
-        const slot = this.embedSlots![side];
-        slot.dividerEl.hidden = true;
-        slot.panelEl.hidden = true;
-        entry.overlayEl.insertBefore(entry.viewEl, entry.overlayEl.firstChild);
-      } else {
-        entry.overlayEl.hidden = true;
-      }
-      this.termEl.style.transform = "";
-      throw err;
-    }
-  }
-
-  /** The pane-header toggle button for `kind` — the button `syncEmbedToggleButton`
-   *  disables/retitles while docked. `null` for a kind that never gets one
-   *  (there is none today; kept total for a future kind that might not). */
-  private embedToggleBtn(kind: EmbedKind): HTMLButtonElement | null {
-    switch (kind) {
-      case "tasks":
-        return this.tasksBtn;
-      case "decisions":
-        return this.decisionsBtn;
-      case "audit":
-        return this.auditBtn;
-      case "timeline":
-        return this.timelineBtn;
-      case "tokens":
-        return this.tokensBtn;
-      case "group":
-        return this.groupBtn;
-      case "git":
-        return this.gitBtn;
-      case "issues":
-        return this.issuesBtn;
-      case "editor":
-        return this.fileEditBtn;
-    }
-  }
-
-  /** Reflect `kind`'s CURRENT dock state on its pane-header toggle button
-   *  (#361 user-demo finding): disabled + retitled while docked, since the
-   *  plain overlay toggle is deliberately unsupported then
-   *  (`embedtoggle.ts`). Called everywhere a kind's dock state changes
-   *  (`embedViewAtSide`, `unembedView`, `restoreEmbeds`) — the pane-level
-   *  counterpart to what each view's own `setPanelActive` already does for
-   *  its INTERNAL embed/close buttons. */
-  private syncEmbedToggleButton(kind: EmbedKind): void {
-    const btn = this.embedToggleBtn(kind);
-    if (!btn) return;
-    const docked = this.sideOf(kind) !== null;
-    btn.disabled = docked;
-    btn.title = docked
-      ? `${EMBED_TOGGLE_LABEL[kind]} is docked — un-embed it (its side menu) to use this`
-      : EMBED_TOGGLE_TITLE[kind];
-  }
-
-  /** Toggle `kind`'s view open/closed, in whichever mode it's currently set
-   *  to. The shared entry point every embeddable view's public hotkey
-   *  method (`toggleTasksView`, `toggleGitView`, …) delegates to after its
-   *  own view-specific gating and lazy `ensureXView()` — and, by extension,
-   *  every OTHER thing that can ask a view to toggle: a header button, a
-   *  keybinding (main.ts), a view's own internal ✕ / Escape handler
-   *  (`onClose`, wired straight back to the matching `toggleXView`), and
-   *  `pane-meta`'s branch-name click. Routing all of them through this ONE
-   *  function is what makes the docked no-op below (#361 user-demo finding)
-   *  actually cover every entry point, rather than needing the same guard
-   *  copy-pasted into each caller — a single missed copy would silently
-   *  reintroduce the bug for just that one entry point. See
-   *  `embedtoggle.ts`'s own doc comment for why a docked view's toggle is
-   *  disabled outright rather than fixed to correctly close/reopen it. */
-  private toggleView(kind: EmbedKind): void {
-    const action = embedToggleAction(this.sideOf(kind) !== null, this.isViewVisible(kind));
-    if (action === "noop") {
-      showToast(`${EMBED_TOGGLE_LABEL[kind]} is docked — un-embed it (its side menu) to use this toggle.`, "info");
-      return;
-    }
-    // #1042: the cwd declaration belongs HERE, after the action is known, for
-    // the same reason the docked no-op does — this is the one function every
-    // entry point routes through, and it is the only place that knows whether
-    // the gesture is an open. Declaring from the `toggleXView` wrappers instead
-    // (as this first shipped) declared on close and on the docked no-op too,
-    // turning a dismissal into a permanent declaration of an agent-chosen
-    // directory (#1092 review).
-    if (toggleDeclaresCwd(kind, action)) this.declareCwd();
-    if (action === "close") this.closeView(kind);
-    else this.openView(kind);
-  }
-
-  /** Show the side-picker menu (#361) — a view's own header embed button,
-   *  clicked. Left/Right/Bottom (the currently-docked one, if any, checked),
-   *  plus "Un-embed" when it's docked anywhere. Built and shown here, not in
-   *  each view: the views don't need to know `EmbedSide` exists at all, only
-   *  that clicking their button asks the pane "where should I go?" — same
-   *  division of responsibility the rest of this engine already keeps
-   *  (views are dumb UI; the pane owns embed state). Reuses
-   *  `contextmenu.ts`'s existing `showContextMenu` rather than a bespoke
-   *  dropdown. */
-  private showEmbedMenu(kind: EmbedKind, anchor: HTMLElement): void {
-    const entry = this.embedRegistry.get(kind);
-    if (!entry) return;
-    const currentSide = this.sideOf(kind);
-    const rect = anchor.getBoundingClientRect();
-    const SIDE_LABEL: Record<EmbedSide, string> = { left: "Embed left", right: "Embed right", bottom: "Embed bottom" };
-    const items: MenuItem<EmbedSide | "unembed">[] = EMBED_SIDES.map((side) => ({
-      label: (currentSide === side ? "✓ " : "") + SIDE_LABEL[side],
-      action: side,
-    }));
-    if (currentSide !== null) {
-      items.push({ label: "", separator: true }, { label: "Un-embed — back to a floating overlay", action: "unembed" });
-    }
-    showContextMenu(rect.left, rect.bottom + 4, items, (action) => {
-      if (action === "unembed") this.unembedView(kind);
-      else this.embedViewAtSide(kind, action);
-    });
-  }
-
-  /** Dock `kind` to `side` (#361) — the side-picker menu's action. Docking
-   *  onto an OCCUPIED side SWAPS that ONE slot's occupant: whoever was there
-   *  is CLOSED outright, not demoted back to an overlay (a silent reopen
-   *  elsewhere would be a more surprising UX than "the slot now shows what
-   *  you asked for, and the previous occupant is closed — the same one
-   *  click that opened it reopens it") — the OTHER two slots are always
-   *  left untouched. If `kind` is already docked to a DIFFERENT side, it
-   *  moves (leaves that side first). Either way the slot's occupant +
-   *  fraction are a PERSISTED preference (tabs.json, via
-   *  `onRecordChanged`). A discrete, user-initiated layout change (see
-   *  docs/design/embedded-panels.md) — never fired from a resize or a
-   *  refresh. */
-  private embedViewAtSide(kind: EmbedKind, side: EmbedSide): void {
-    const entry = this.embedRegistry.get(kind);
-    if (!entry) return;
-    this.ensureEmbedHost();
-    const currentSide = this.sideOf(kind);
-    if (currentSide === side) {
-      // Already docked here — just make sure it's actually showing (it may
-      // be docked-but-closed).
-      if (!this.isViewVisible(kind)) this.openView(kind);
-      return;
-    }
-    // Leave whichever OTHER side this kind currently occupies, if any.
-    // `closeView` MUST run before the slot is nulled out (#361 rev-58
-    // blocking finding): it looks up `sideOf(kind)` itself to find which
-    // slot to hide, so nulling first makes it take the OVERLAY branch
-    // instead — the origin slot's now-empty panel+divider stay visible.
-    // Mirrors the order the target-eviction block below (and `unembedView`)
-    // already used correctly.
-    if (currentSide !== null) {
-      const wasVisible = this.isViewVisible(kind);
-      if (wasVisible) this.closeView(kind);
-      this.embedSlots![currentSide].kind = null;
-    }
-    // Evict whoever (if anyone) is currently on the TARGET side.
-    const targetSlot = this.embedSlots![side];
-    if (targetSlot.kind !== null) {
-      const evicted = targetSlot.kind;
-      this.embedRegistry.get(evicted)?.setPanelActive(false);
-      this.closeView(evicted);
-      targetSlot.kind = null;
-      this.syncEmbedToggleButton(evicted);
-    }
-    const wasOverlayOpen = !entry.overlayEl.hidden;
-    if (wasOverlayOpen) entry.overlayEl.hidden = true; // it's about to move into the slot
-    targetSlot.kind = kind;
-    targetSlot.frac = clampEmbedFrac(targetSlot.frac);
-    entry.setPanelActive(true);
-    this.openView(kind); // docking always shows it
-    this.syncEmbedToggleButton(kind);
-    // Right's occupancy just changed (moved onto it, off it, or evicted
-    // from it) — left's composed far-side floor depends on that (see
-    // dividerFloors's "left" case), so reclamp it too.
-    if (side === "right" || currentSide === "right") this.reclampSlotDivider("left");
-    this.events.onRecordChanged(this);
-  }
-
-  /** Un-dock `kind` (#361) — back to the floating overlay, staying open if
-   *  it was. A no-op if it isn't currently docked anywhere. */
-  private unembedView(kind: EmbedKind): void {
-    const entry = this.embedRegistry.get(kind);
-    if (!entry) return;
-    const side = this.sideOf(kind);
-    if (side === null) return;
-    const wasVisible = this.isViewVisible(kind);
-    if (wasVisible) this.closeView(kind);
-    this.embedSlots![side].kind = null;
-    entry.setPanelActive(false);
-    this.syncEmbedToggleButton(kind);
-    if (wasVisible) this.openView(kind);
-    if (side === "right") this.reclampSlotDivider("left");
-    this.events.onRecordChanged(this);
-  }
-
-  /** Reapply persisted embed preferences (#361) — called once, right after
-   *  a resumed/restored orch pane is wired up with its group, so every view
-   *  that was docked and open when the layout was captured comes back the
-   *  same way, on the same side. Entries naming a kind this pane can't show
-   *  right now (the gating button is hidden) are silently skipped — restore
-   *  doesn't carry this far for git/issues either (see main.ts's
-   *  `resumeDormantGroup`); only orchestration-family kinds
-   *  (tasks/audit/group) are ever restored this way today — see
-   *  `PersistedPane.embeds`'s decode. */
+  // Delegated to PaneEmbeds (paneembeds.ts), which carries the doc (#3498 F1).
+  requestEmbedFocus(kind: EmbedKind, target: string): boolean { return this.embeds.requestEmbedFocus(kind, target); }
   restoreEmbeds(embeds: readonly { view: EmbedKind; side: EmbedSide; share: number }[]): void {
-    if (!this.orchGroup) return;
-    for (const e of embeds) {
-      switch (e.view) {
-        case "tasks":
-          if (this.tasksBtn.hidden) continue;
-          this.ensureTasksView();
-          break;
-        case "decisions":
-          if (this.decisionsBtn.hidden) continue;
-          this.ensureDecisionsView();
-          break;
-        case "audit":
-          if (this.auditBtn.hidden) continue;
-          this.ensureAuditView();
-          break;
-        case "timeline":
-          if (this.timelineBtn.hidden) continue;
-          this.ensureTimelineView();
-          break;
-        case "tokens":
-          if (this.tokensBtn.hidden) continue;
-          this.ensureTokensView();
-          break;
-        case "group":
-          if (this.groupBtn.hidden) continue;
-          this.ensureGroupView();
-          break;
-        case "git":
-          // Restoring a group's orchestrator pane means it's PTY-backed by
-          // definition (a content pane is never `kind === "orch"`), so git's
-          // button is never CSS-hidden here the way tasks/audit/group's own
-          // JS-gated buttons can be — no `.hidden` check needed.
-          this.ensureGitView();
-          break;
-        case "editor":
-          this.ensureFileEditView();
-          break;
-        default:
-          continue; // issues isn't captured for restore today — see RESTORABLE_EMBED_KINDS
-      }
-      this.ensureEmbedHost();
-      const entry = this.embedRegistry.get(e.view)!;
-      const slot = this.embedSlots![e.side];
-      slot.kind = e.view;
-      slot.frac = clampEmbedFrac(e.share);
-      entry.setPanelActive(true);
-      this.openView(e.view);
-      this.syncEmbedToggleButton(e.view);
-    }
+    this.embeds.restoreEmbeds(embeds);
   }
 
-  /** Toggle the audit-log viewer overlay (any orchestration pane). Same
-   *  no-resize overlay mechanics as the git/task views; only one overlay is
-   *  open at a time. */
-  toggleAuditView(): void {
-    if (!this.orchGroup || this.auditBtn.hidden) return;
-    this.ensureAuditView();
-    this.toggleView("audit");
-  }
-
-  /** This pane's shared `orch_audit` read (#1317), created on first use.
-   *
-   *  Bound to `orchGroup` the same way the two views that read it are — they
-   *  capture it at construction too — so there is one store per pane per
-   *  group's worth of views, and nothing keyed, nothing to prune, and no
-   *  release rule beyond the pane's own teardown (INV-8a). `orchGroup` is
-   *  non-null at every call site: both callers are reached only through a
-   *  `toggle*View` that returns early without one. */
-  private ensureAuditStore(): AuditStore {
-    if (!this.auditStore) {
-      const groupId = this.orchGroup!;
-      this.auditStore = new AuditStore(() => invoke<AuditEntry[]>("orch_audit", { groupId }));
-    }
-    return this.auditStore;
-  }
-
-  /** Lazily construct the audit view and register it into `embedRegistry`
-   *  (#361). */
-  private ensureAuditView(): void {
-    if (this.auditView) return;
-    this.auditView = new AuditView(this.orchGroup!, {
-      onClose: () => this.toggleAuditView(),
-      onEmbedMenu: (anchor) => this.showEmbedMenu("audit", anchor),
-      store: this.ensureAuditStore(),
-    });
-    this.auditOverlay = document.createElement("div");
-    this.auditOverlay.className = "git-overlay";
-    this.auditOverlay.hidden = true;
-    this.auditOverlay.append(this.auditView.el, this.makeOverlayDivider(() => this.auditOverlay!));
-    this.el.appendChild(this.auditOverlay);
-    this.embedRegistry.set("audit", {
-      overlayEl: this.auditOverlay,
-      viewEl: this.auditView.el,
-      show: () => this.auditView!.show(),
-      // Stops a live-follow poll that a close/eviction otherwise left running
-      // for the rest of the session (#1318) — the same wiring the timeline's
-      // identical follow toggle has always had.
-      hide: () => this.auditView!.hide(),
-      setPanelActive: (active) => this.auditView!.setPanelActive(active),
-      floorPx: () => EMBED_MIN_PANEL_PX,
-    });
-  }
-
-  /** Toggle the progress-timeline overlay (#608, any orchestration pane).
-   *  Same no-resize overlay mechanics as the audit log it sits beside: it
-   *  floats over the terminal, and docking it goes through the shared #361
-   *  embed path — no ConPTY resize is introduced by this view. */
-  toggleTimelineView(): void {
-    if (!this.orchGroup || this.timelineBtn.hidden) return;
-    this.ensureTimelineView();
-    this.toggleView("timeline");
-  }
-
-  /** Lazily construct the progress timeline and register it into
-   *  `embedRegistry` (#361). */
-  private ensureTimelineView(): void {
-    if (this.timelineView) return;
-    this.timelineView = new TimelineView(this.orchGroup!, {
-      onClose: () => this.toggleTimelineView(),
-      onEmbedMenu: (anchor) => this.showEmbedMenu("timeline", anchor),
-      store: this.ensureAuditStore(),
-      // Read live, not snapshotted at open time — the same contract the group
-      // panel's workflow preview uses (#316). An orchestrator pane's cwd IS
-      // the group's repo.
-      getRepo: () => this.cwdRaw,
-    });
-    this.timelineOverlay = document.createElement("div");
-    this.timelineOverlay.className = "git-overlay";
-    this.timelineOverlay.hidden = true;
-    this.timelineOverlay.append(
-      this.timelineView.el,
-      this.makeOverlayDivider(() => this.timelineOverlay!)
-    );
-    this.el.appendChild(this.timelineOverlay);
-    this.embedRegistry.set("timeline", {
-      overlayEl: this.timelineOverlay,
-      viewEl: this.timelineView.el,
-      show: () => this.timelineView!.show(),
-      // Stops the follow poll on close/eviction — the leak #361 rev-38 found
-      // on the group panel. The general rule this is one instance of lives on
-      // `EmbedEntry.hide` as of #1318; it sat here, on one view's registration,
-      // from #648 until then, which is most of why three later views missed it.
-      hide: () => this.timelineView!.hide(),
-      setPanelActive: (active) => this.timelineView!.setPanelActive(active),
-      floorPx: () => EMBED_MIN_PANEL_PX,
-    });
-  }
-
-  /** Toggle the token-charts overlay (#2011, any orchestration pane).
-   *  Same no-resize overlay mechanics as the timeline it sits beside: it
-   *  floats over the terminal, and docking it goes through the shared #361
-   *  embed path — no ConPTY resize is introduced by this view (constraint 1). */
-  toggleTokensView(): void {
-    if (!this.orchGroup || this.tokensBtn.hidden) return;
-    this.ensureTokensView();
-    this.toggleView("tokens");
-  }
-
-  /** Lazily construct the token charts and register them into
-   *  `embedRegistry` (#361). */
-  private ensureTokensView(): void {
-    if (this.tokensView) return;
-    this.tokensView = new TokenChartsView(this.orchGroup!, {
-      onClose: () => this.toggleTokensView(),
-      onEmbedMenu: (anchor) => this.showEmbedMenu("tokens", anchor),
-      store: this.ensureAuditStore(),
-      // Read live, never snapshotted — the same contract every other view
-      // here takes on a pane-owned answer.
-      isBoardVisible: () => this.isViewVisible("tasks"),
-    });
-    this.tokensOverlay = document.createElement("div");
-    this.tokensOverlay.className = "git-overlay";
-    this.tokensOverlay.hidden = true;
-    this.tokensOverlay.append(
-      this.tokensView.el,
-      this.makeOverlayDivider(() => this.tokensOverlay!)
-    );
-    this.el.appendChild(this.tokensOverlay);
-    this.embedRegistry.set("tokens", {
-      overlayEl: this.tokensOverlay,
-      viewEl: this.tokensView.el,
-      show: () => this.tokensView!.show(),
-      // Stops the 30 s follow poll on close/eviction — the leak #361 rev-38
-      // found on the group panel, and the rule `EmbedEntry.hide` carries.
-      hide: () => this.tokensView!.hide(),
-      setPanelActive: (active) => this.tokensView!.setPanelActive(active),
-      floorPx: () => EMBED_MIN_PANEL_PX,
-    });
-  }
-
-  /** Toggle the group lifecycle panel overlay (orchestrator panes). Same
-   *  no-resize overlay mechanics as the other views; only one is open. */
-  toggleGroupView(): void {
-    if (!this.orchGroup || this.groupBtn.hidden) return;
-    this.ensureGroupView();
-    this.toggleView("group");
-  }
-
-  /** Lazily construct the group lifecycle view and register it into
-   *  `embedRegistry` (#361) — its floor is its own measured chrome
-   *  (`groupFloor`), not the generic default, so the footer/suspended
-   *  banner never clip in either hosting mode. */
-  private ensureGroupView(): void {
-    if (this.groupView) return;
-    this.groupView = new GroupView(this.orchGroup!, {
-      onClose: () => this.toggleGroupView(),
-      // Mirror the header's fold-group toggle inside the lifecycle panel (#46).
-      onToggleMinimize: () => this.events.onToggleGroupMinimize(this),
-      // Content grew (e.g. the suspended banner appeared) — re-clamp
-      // whichever host is currently active so the footer never slides under
-      // overflow:hidden (#83 rev-58; generalized to embed mode by #361).
-      onResize: () => this.reclampViewFloor("group"),
-      // The orchestrator pane's cwd IS the group's repo (create_orchestration
-      // opens it there) — the workflow toggle's ON-confirm preview reads it
-      // live rather than snapshotting at open time (#316).
-      getRepo: () => this.cwdRaw,
-      // The header picker's *Edit…* (#1689 slice D2): the same call the file
-      // browser's "Open in workflow pane" makes, one caller over.
-      onEditWorkflow: (opts) => this.events.onOpenWorkflowPane(this, opts),
-      onEmbedMenu: (anchor) => this.showEmbedMenu("group", anchor),
-    });
-    this.groupOverlay = document.createElement("div");
-    this.groupOverlay.className = "git-overlay";
-    this.groupOverlay.hidden = true;
-    this.groupOverlay.append(
-      this.groupView.el,
-      this.makeOverlayDivider(() => this.groupOverlay!, () => this.groupFloor())
-    );
-    this.el.appendChild(this.groupOverlay);
-    this.embedRegistry.set("group", {
-      overlayEl: this.groupOverlay,
-      viewEl: this.groupView.el,
-      show: () => this.groupView!.show(),
-      // Stops the poll timer `show()` starts (#361 rev-38 NB2) — without
-      // this, every close/eviction left it running, and swapping the embed
-      // slot turned what was a rare pre-existing leak into an easy one to
-      // hit on every reopen.
-      hide: () => this.groupView!.hide(),
-      setPanelActive: (active) => this.groupView!.setPanelActive(active),
-      floorPx: () => this.groupFloor(),
-    });
-  }
-
-  /** Toggle the file-editor overlay (#174). Ungated — works in every pane
-   *  type, plain terminals included. Same no-resize overlay mechanics as the
-   *  other views, and (#361 scope increase) the same embed contract:
-   *  dockable to any of the three slots, its toggle disabled while docked,
-   *  single-occupant per slot — see docs/design/embedded-panels.md for why
-   *  this changed (and what didn't: the #217 content-pane editor is a fully
-   *  separate instance/class-option, `host.embedded`, untouched by this). */
-  toggleFileEditView(): void {
-    // Alt+F on an editor pane: the pane already IS the file editor. Same for a files
-    // pane, whose surface is the file MANAGER — a sibling of the editor, and the pane
-    // the user is looking at either way. Refusing with a toast would be absurd; just
-    // put the cursor in it.
-    if (this.contentKind === "editor" || this.contentKind === "files") {
-      this.focus();
-      return;
-    }
-    if (this.refuseOverlay("The file editor")) return;
-    this.ensureFileEditView();
-    this.toggleView("editor");
-  }
-
-  /** Lazily construct the file editor and register it into `embedRegistry`
-   *  (#361 scope increase). `isDocked` lets `FileEditView.requestClose` skip
-   *  the #219 discard-confirm dialog while docked, since the underlying
-   *  toggle no-ops then anyway — see `FileEditHost.isDocked`'s own doc
-   *  comment for why that ordering matters (a "yes" on that dialog would
-   *  otherwise discard real edits for a click that doesn't actually close
-   *  anything). */
-  private ensureFileEditView(): void {
-    if (this.fileEditView) return;
-    this.fileEditView = new FileEditView({
-      getCwd: () => this.cwdRaw,
-      onClose: () => this.toggleFileEditView(),
-      isAgentWorktree: () =>
-        this.orchRoleName === "worker" || this.orchRoleName === "reviewer",
-      onEmbedMenu: (anchor) => this.showEmbedMenu("editor", anchor),
-      isDocked: () => this.sideOf("editor") !== null,
-    });
-    this.fileEditOverlay = document.createElement("div");
-    this.fileEditOverlay.className = "git-overlay";
-    this.fileEditOverlay.hidden = true;
-    this.fileEditOverlay.append(
-      this.fileEditView.el,
-      this.makeOverlayDivider(() => this.fileEditOverlay!)
-    );
-    this.el.appendChild(this.fileEditOverlay);
-    this.embedRegistry.set("editor", {
-      overlayEl: this.fileEditOverlay,
-      viewEl: this.fileEditView.el,
-      show: () => this.fileEditView!.show(),
-      hide: () => this.fileEditView!.hide(),
-      setPanelActive: (active) => this.fileEditView!.setPanelActive(active),
-      floorPx: () => EMBED_MIN_PANEL_PX,
-    });
-  }
+  // Delegated to PaneViews (paneviews.ts), which carries the doc (#3498 F1).
+  toggleAuditView(): void { this.views.toggleAuditView(); }
+  toggleTimelineView(): void { this.views.toggleTimelineView(); }
+  toggleTokensView(): void { this.views.toggleTokensView(); }
+  toggleGroupView(): void { this.views.toggleGroupView(); }
+  toggleFileEditView(): void { this.views.toggleFileEditView(); }
 
   /** Open this pane's workspace folder in the configured external editor.
    *  Prompts for the editor command on first use; errors surface as a toast.
@@ -5655,7 +2528,7 @@ export class Pane implements VoiceTargetPane {
    *
    *  Read through `facts()` rather than by re-deriving the harness, so this and
    *  the Agents tab cannot disagree about what a pane is running. */
-  private syncNotesBtn(): void {
+  syncNotesBtn(): void {
     const hide = !notesApplyToPane(this.facts().harness, this.isSshPane);
     if (this.notesBtn.hidden === hide) return;
     this.notesBtn.hidden = hide;
@@ -5693,118 +2566,8 @@ export class Pane implements VoiceTargetPane {
     return this.receivedOutput;
   }
 
-  /** Capture this pane as a serializable record for the persisted layout (#194).
-   *  Reads only the retained launch inputs plus the live cwd — no geometry, no
-   *  PTY — so it is safe under the no-resize invariant and works even on a hidden
-   *  tab. Returns null for a welcome (setup-state) pane: it has no chosen kind
-   *  yet, so there is nothing to restore. main.ts pairs these with the flex
-   *  weights from grid.layoutSnapshot() to build the PersistedLayoutNode tree;
-   *  panerestore.ts decides what each record becomes on restore. */
-  capture(): PersistedPane | null {
-    if (this.isWelcome) return null;
-    // A dormant restore placeholder persists exactly as it came in, so a session
-    // closed without resuming offers the identical restore next boot.
-    // …except for the watch (#3319), which is the human's and not the dormant
-    // session's: a Reconnect card is exactly the kind of pane someone marks
-    // ("come back and resume this one"), and re-emitting the record verbatim
-    // would drop that mark on the next capture with nothing to show for it.
-    // `isWatched` is seeded FROM this record on restore, so a placeholder
-    // nobody touched re-emits the identical value.
-    if (this.dormantRecord) return { ...this.dormantRecord, watched: this.isWatched };
-    const kind = this.liveKind();
-    const forked = forkRecordCommand(this.spawnCommand, this.spawnArgv, this.agentSessionId, this.forkOf);
-    return {
-      paneKind: kind,
-      name: this.name,
-      // An SSH pane records NO cwd (#887 S4). Its local working directory is
-      // deliberately home (the repo is on the far end and no local path stands
-      // for it — plan part 4a), and its remote directory is the profile's, not a
-      // field of this record. A captured local cwd could only ever be a folder
-      // the human never picked, restored into a pane that hides it.
-      cwd: kind === "ssh" ? null : this.cwdRaw,
-      // #3318 F1: an agent pane's line goes through the one-shot fork
-      // discharge on its way into the record. For every pane that is not
-      // loomux's own fork — which is every pane but one gesture's output —
-      // `forkRecordCommand` returns both halves byte-identical, so this is the
-      // same capture it always was. For a fork, it is what stops the record
-      // re-forking on the next restart (see `PersistedPane.forkOf`).
-      command: kind === "agent" ? forked.command : null,
-      argv: kind === "agent" ? forked.argv : null,
-      shellKind: kind === "terminal" ? this.spawnShellKind : null,
-      // Capture the session id for orch panes too (#194.5) so a group resume
-      // restores exactly the captured members from their own recorded sessions.
-      // …and for an SSH pane (#887 S4), where it is the id loomux minted for a
-      // REMOTE claude — the one session mechanism that survives the trip through
-      // ssh, because it travels on the command line rather than in a local store
-      // (`sshMintsSessionId`). A remote copilot/opencode pane captures null here
-      // and reconnects to a fresh conversation, honestly.
-      sessionId: kind === "agent" || kind === "orch" || kind === "ssh" ? this.agentSessionId : null,
-      // The orchestration role distinguishes the orchestrator from its delegates.
-      role: kind === "orch" ? this.orchRoleName : null,
-      // …and the group says WHICH group's orchestrator/delegate it is (#485).
-      // A tab can hold panes from two groups, so a whole-group resume that
-      // reads the group off the tab attributes them all to one; this is what
-      // lets it partition them by their own group instead.
-      groupId: kind === "orch" ? this.orchGroup : null,
-      // An editor pane's OPEN FILE (#217) — a path, never a buffer. Without it a pane
-      // opened on `src/pane.ts` (and titled after it) restores as a bare tree that
-      // names a file it isn't showing. The file is re-read from disk on restore; what
-      // was typed and not saved is deliberately not persisted (panerestore.ts).
-      // A workflow pane (#222) records the workflow file it is on, for the same reason
-      // and on the same terms.
-      file:
-        kind === "editor"
-          ? this.editorPaneView?.openPathRel ?? null
-          : kind === "workflow"
-            ? this.workflowPaneView?.openPathRel ?? null
-            : null,
-      // The saved CONNECTION an ssh pane belongs to (#887 S4) — the whole of what
-      // a reconnect needs, alongside the session id above. Not a command line:
-      // see `PersistedPane.sshProfileId` for why the profile is what gets
-      // re-derived and a captured argv would be actively wrong to replay.
-      sshProfileId: kind === "ssh" ? this.sshProfileId : null,
-      // #2519. Recorded on the AGENT record this lead persists as (see
-      // `liveKind`), and the ONE thing restore needs beyond the command line:
-      // the group this pane owned is not coming back, a fresh one is minted for
-      // it. Gated on `kind === "agent"` as every other per-kind field is, so a
-      // pane that is somehow both cannot smuggle the flag onto another kind's
-      // record.
-      lead: kind === "agent" && this.isLead,
-      // The human's watch (#3319). Deliberately NOT gated on `kind`, unlike
-      // every field above it: those are per-kind launch inputs that would be
-      // meaningless or actively wrong on another kind's record, and this is a
-      // mark the human puts on a PANE. Someone who marks the editor pane
-      // holding the file they were mid-way through means it, and a gate would
-      // silently drop that watch on restart rather than refuse it visibly.
-      watched: this.isWatched,
-      // #3318 F1. Gated on the agent kind exactly as `lead` above is, and
-      // recorded even after the fork flag it gates has been discharged out of
-      // the command line above: it is this pane's provenance, and the gate
-      // that keeps the discharge idempotent across every later capture.
-      forkOf: kind === "agent" ? this.forkOf : null,
-      // Every view CURRENTLY docked (#361), and at what side + share of the
-      // split — up to three entries, one per occupied slot. Empty = nothing
-      // embedded — every view opens as its floating overlay (the default).
-      // Only the orchestration-family kinds (tasks/audit/group) are
-      // captured for restore: git/issues are available on every pane kind,
-      // but nothing short-lived like a plain terminal restore has the
-      // natural "captured, then reapplied once the real pane exists" hook
-      // orch panes get from staying dormant — see
-      // docs/design/embedded-panels.md's persistence section. The share
-      // mirrors how a split's own `weight` is already persisted as a
-      // flex-grow ratio rather than a pixel size — not new geometry-
-      // persistence territory, the same one grid.layoutSnapshot() occupies.
-      embeds:
-        kind === "orch" && this.embedSlots
-          ? EMBED_SIDES.flatMap((side) => {
-              const slot = this.embedSlots![side];
-              return slot.kind !== null && isRestorableEmbedKind(slot.kind)
-                ? [{ view: slot.kind, side, share: slot.frac }]
-                : [];
-            })
-          : [],
-    };
-  }
+  // Delegated to capturePane (panecapture.ts), which carries the doc (#3498 F1).
+  capture(): PersistedPane | null { return capturePane(this); }
 
   /** The persisted record a dormant restore placeholder stands in for, or null
    *  when this pane isn't dormant. Lets a whole-group resume read the CAPTURED
@@ -5828,7 +2591,7 @@ export class Pane implements VoiceTargetPane {
    *  pane must not fall through to terminal" is exactly the kind of claim that
    *  should not rest on someone re-reading the order. This method is now the
    *  READING of those fields, which is all a `Pane` is the authority on. */
-  private liveKind(): PersistedPaneKind {
+  liveKind(): PersistedPaneKind {
     return persistedKindFor({
       // A structured pane goes in as the flag, not as a content kind: it has no PTY but
       // it is an agent, and a root alone cannot restore one. See the ladder's own note.
@@ -5914,19 +2677,19 @@ export class Pane implements VoiceTargetPane {
       alive: info.live,
       dormant: this.isDormant,
       welcome: this.isWelcome,
-      attention: this.attentionReason
-        ? { reason: this.attentionReason, detail: this.attentionDetail }
+      attention: this.badges.attentionReason
+        ? { reason: this.badges.attentionReason, detail: this.badges.attentionDetail }
         : null,
-      held: this.heldReason,
+      held: this.badges.heldReason,
       // The human's mark (#3319), beside the agent's reading and never folded
       // into it: a listing surface shows both, and a consumer that wanted
       // "does this pane want me" must not be able to get a human's bookmark by
       // accident.
-      watched: this.isWatched,
+      watched: this.watched,
       activity: this.activity.snapshot(Date.now()),
       // The backend's reading, as last delivered (#3407); the Agents tab derives
       // its own label from it against its own clock.
-      cache: this.cacheReading,
+      cache: this.badges.cacheReading,
     };
   }
 
@@ -5962,24 +2725,10 @@ export class Pane implements VoiceTargetPane {
     return { kind, live: this.ptyId !== null && !this.exited, connectedChannel: this.channelId };
   }
 
-  /** Whichever overlay (git / tasks / audit / group) is currently covering
-   *  the terminal. */
-  private activeOverlay(): HTMLElement | null {
-    if (this.gitOverlay && !this.gitOverlay.hidden) return this.gitOverlay;
-    if (this.issuesOverlay && !this.issuesOverlay.hidden) return this.issuesOverlay;
-    if (this.tasksOverlay && !this.tasksOverlay.hidden) return this.tasksOverlay;
-    if (this.decisionsOverlay && !this.decisionsOverlay.hidden) return this.decisionsOverlay;
-    if (this.auditOverlay && !this.auditOverlay.hidden) return this.auditOverlay;
-    if (this.timelineOverlay && !this.timelineOverlay.hidden) return this.timelineOverlay;
-    if (this.groupOverlay && !this.groupOverlay.hidden) return this.groupOverlay;
-    if (this.fileEditOverlay && !this.fileEditOverlay.hidden) return this.fileEditOverlay;
-    return null;
-  }
-
   /** Debounced cursor-follow for the overlay: TUIs sweep the cursor around
    *  while repainting, so settle before measuring. */
   private scheduleShift(): void {
-    if (!this.activeOverlay()) return;
+    if (!this.embeds.activeOverlay()) return;
     clearTimeout(this.shiftTimer);
     this.shiftTimer = window.setTimeout(() => this.updateTermShift(), 80);
   }
@@ -5989,9 +2738,9 @@ export class Pane implements VoiceTargetPane {
    *  enough to keep the cursor's row inside the visible bottom strip.
    *  Full-screen TUIs write at the bottom and need no shift; a fresh shell
    *  writes at the top, which the overlay would otherwise hide. */
-  private updateTermShift(): void {
+  updateTermShift(): void {
     if (this.disposed) return;
-    const overlay = this.activeOverlay();
+    const overlay = this.embeds.activeOverlay();
     if (!overlay) {
       this.termEl.style.transform = "";
       return;
@@ -6009,7 +2758,7 @@ export class Pane implements VoiceTargetPane {
     this.termEl.style.transform = shift > 0 ? `translateY(${shift}px)` : "";
   }
 
-  private async refreshDir(path: string): Promise<void> {
+  async refreshDir(path: string): Promise<void> {
     let info;
     try {
       info = await dirInfo(path);
@@ -6056,20 +2805,9 @@ export class Pane implements VoiceTargetPane {
     }
   }
 
-  /** Show (or, with `null`, hide) the fork crumb (#3368). `go` null leaves it
-   *  visible but inert — a parent nothing has a record of any more is still
-   *  worth naming, and a button that did nothing when clicked would be worse
-   *  than one that says it cannot. Writes the DOM only when something changed:
-   *  this runs on every grid change and every sessions-log change. */
+  // Delegated to PaneBadges (panebadges.ts), which carries the doc (#3498 F1).
   setForkCrumb(crumb: { label: string; title: string; go: (() => void) | null } | null): void {
-    this.forkCrumbGo = crumb?.go ?? null;
-    const hidden = crumb === null;
-    if (this.forkCrumb.hidden !== hidden) this.forkCrumb.hidden = hidden;
-    if (!crumb) return;
-    if (this.forkCrumb.textContent !== crumb.label) this.forkCrumb.textContent = crumb.label;
-    if (this.forkCrumb.title !== crumb.title) this.forkCrumb.title = crumb.title;
-    this.forkCrumb.disabled = crumb.go === null;
-    this.forkCrumb.setAttribute("aria-label", crumb.title);
+    this.badges.setForkCrumb(crumb);
   }
 
   /** The menu's name row, re-labelled from the current name. Called when the
@@ -6168,7 +2906,7 @@ export class Pane implements VoiceTargetPane {
     // #720: the process's own last bytes were produced BEFORE this banner, so
     // they must be written before it. Without this the banner could print above
     // the final prompt/goodbye it is announcing the end of.
-    this.flushOutput();
+    this.lifecycle.flushOutput();
     const codeTxt = code === null ? "" : ` (code ${code})`;
     const why =
       reason === "unsaved"
@@ -6209,7 +2947,7 @@ export class Pane implements VoiceTargetPane {
     const host: DirtyHost =
       this.editorPaneView || this.workflowPaneView
         ? "pane"
-        : this.sideOf("editor") !== null
+        : this.embeds.sideOf("editor") !== null
           ? "docked"
           : "overlay";
     return { tab, pane: this.name, host, file: report.file, dirty: report.dirty };
@@ -6223,7 +2961,7 @@ export class Pane implements VoiceTargetPane {
     // pane would show it up to a window stale, which is the one place a render
     // throttle is actually perceptible.
     this.isActivePane = active;
-    if (active) this.wakeOutput();
+    if (active) this.lifecycle.wakeOutput();
   }
 
   /** Reflect fullscreen state: the `.maximized` class drives the CSS overlay
@@ -6253,8 +2991,8 @@ export class Pane implements VoiceTargetPane {
     }
     // A dormant placeholder likewise has no terminal — land focus on its
     // Start/Resume affordance so keyboard nav reaches a usable control.
-    if (this.dormantEl) {
-      this.dormantEl.querySelector<HTMLElement>("button, [tabindex]")?.focus();
+    if (this.lifecycle.dormantEl) {
+      this.lifecycle.dormantEl.querySelector<HTMLElement>("button, [tabindex]")?.focus();
       return;
     }
     // A content pane has no terminal either: focus its view (each is tabIndex -1), so
@@ -6289,276 +3027,9 @@ export class Pane implements VoiceTargetPane {
     this.term.focus();
   }
 
-  /** Copy `text` to the system clipboard, surfacing a toast if the write fails
-   *  outright (locked-down webview) — otherwise a failed OSC 52 copy would
-   *  silently no-op and reintroduce the "said copied, clipboard empty" symptom
-   *  from #65 with no signal to the user. */
-  private async copyToClipboard(text: string): Promise<void> {
-    const ok = await writeClipboard(text);
-    if (!ok) showToast("Copy failed — click the pane and try again.");
-  }
-
-  /** Paste the system clipboard into the terminal (#370): Ctrl+V, Ctrl+Shift+V,
-   *  and the right-click menu all route here. Never fails silently — a genuine
-   *  read failure (readClipboard exhausts its own fallback) surfaces a toast
-   *  instead of the prior `.catch(() => {})`, which looked identical to a
-   *  keypress that simply did nothing. An empty clipboard is not a failure. */
-  private async pasteFromClipboard(): Promise<void> {
-    const res = await readClipboard();
-    if (!res.ok) {
-      // Wording deliberately doesn't assert "blocked" — readClipboard can also
-      // fail on a transient condition (a momentary focus loss) that a retry
-      // clears on its own, and claiming a permission block for that would be
-      // its own small lie (#370 review).
-      showToast("Paste failed — click the pane and try again.");
-      return;
-    }
-    if (res.text) {
-      this.markFirstInput(); // #440 B2-R: a clipboard paste IS human input, same as a keystroke
-      this.term.paste(res.text);
-    }
-  }
-
-  /** Build the loomux steering strip and dock it under the terminal (#43,
-   *  option C). It is a plain DOM textarea — NOT part of xterm — so it never
-   *  steals the terminal's keys: keystrokes only reach it while it holds focus
-   *  (click or Alt+P). Enter submits; Shift+Enter inserts a newline (the box
-   *  wraps and grows, #100); Esc hands focus back to the term. */
-  private buildComposeStrip(): void {
-    const strip = document.createElement("div");
-    strip.className = "orch-compose";
-
-    const row = document.createElement("div");
-    row.className = "orch-compose-row";
-    // The textarea floats inside a fixed-height field: it grows UPWARD over the
-    // terminal (see .orch-compose CSS) so a multi-line draft never shrinks the
-    // strip's flow footprint — that would resize .pane-term / the PTY (#100).
-    const field = document.createElement("div");
-    field.className = "orch-compose-field";
-    const input = document.createElement("textarea");
-    input.className = "dlg-input orch-compose-input";
-    // Terse enough to sit on one line at typical pane widths — a long hint here
-    // wraps the box to multi-line before the human even types (#163). The full
-    // Shift+Enter/Esc rules live in this method's doc comment, not the ghost text.
-    input.placeholder = "Steer the orchestrator — Enter sends";
-    input.rows = 1;
-    input.spellcheck = false;
-    input.autocomplete = "off";
-    input.addEventListener("keydown", (e) => {
-      // Keep this keydown from bubbling to pane/ancestor handlers. (App
-      // shortcuts are dispatched capture-phase on `document` and still fire
-      // while the strip is focused — but Enter/Esc/plain typing aren't app
-      // shortcuts, so the strip handles them normally regardless.)
-      e.stopPropagation();
-      // Only Enter (send) and Escape (back to terminal) are ours; Shift+Enter,
-      // IME-commit Enter, and ordinary typing fall through to the textarea so it
-      // inserts a newline and auto-grows. See steerKeyAction for the rules.
-      switch (steerKeyAction(e)) {
-        case "submit":
-          e.preventDefault();
-          void this.submitCompose();
-          break;
-        case "blur":
-          e.preventDefault();
-          this.focus();
-          break;
-      }
-    });
-    // Reflow the box on every content change (typing, newline, paste, cut) so it
-    // tracks the draft's line count up to the CSS cap.
-    input.addEventListener("input", () => this.growCompose());
-    // Ctrl+V of a screenshot: pull image blobs out of the clipboard and queue
-    // them as attachments (#72). Text pastes fall through to the input's default
-    // handling untouched — we only preventDefault when we actually took images.
-    input.addEventListener("paste", (e) => {
-      const files = imagesFromDataTransfer(e.clipboardData);
-      if (files.length === 0) return;
-      e.preventDefault();
-      for (const f of files) void this.addAttachment(f, f.name);
-    });
-
-    // Attach affordance: a paperclip that opens a native file picker. A hidden
-    // <input type=file> keeps the styling ours while reusing the OS dialog.
-    const attach = document.createElement("button");
-    attach.className = "dlg-btn orch-compose-attach";
-    attach.type = "button";
-    attach.title = "Attach image(s) — or paste a screenshot with Ctrl+V";
-    attach.setAttribute("aria-label", "Attach images");
-    attach.innerHTML = PAPERCLIP_ICON;
-    const filePicker = document.createElement("input");
-    filePicker.type = "file";
-    filePicker.accept = "image/*";
-    filePicker.multiple = true;
-    filePicker.style.display = "none";
-    attach.addEventListener("click", (e) => {
-      e.stopPropagation();
-      filePicker.click();
-    });
-    filePicker.addEventListener("change", () => {
-      const files = filePicker.files ? Array.from(filePicker.files) : [];
-      for (const f of files) void this.addAttachment(f, f.name);
-      filePicker.value = ""; // allow re-picking the same file next time
-    });
-
-    // Voice-prompt push-to-talk (#58): click to record, click again to stop and
-    // transcribe locally. Transcript is inserted into the input, NOT submitted —
-    // the human reviews it and hits Enter, same as typing.
-    const mic = document.createElement("button");
-    mic.className = "dlg-btn orch-compose-mic";
-    mic.type = "button";
-    mic.title = "Voice prompt — click to record, click again to transcribe";
-    mic.setAttribute("aria-label", "Record voice prompt");
-    mic.innerHTML = MIC_ICON;
-    mic.addEventListener("click", (e) => {
-      e.stopPropagation();
-      voiceController.toggleForCompose(this);
-    });
-
-    const send = document.createElement("button");
-    send.className = "dlg-btn primary orch-compose-send";
-    send.textContent = "Send";
-    send.addEventListener("click", (e) => {
-      e.stopPropagation();
-      void this.submitCompose();
-    });
-    // #100 wraps the textarea in a fixed-height field so its upward auto-grow
-    // never resizes the PTY; #58's mic sits between the paperclip and Send.
-    field.appendChild(input);
-    row.append(field, attach, filePicker, mic, send);
-    this.micBtn = mic;
-
-    // Thumbnail-chip row for queued images (#72). Hidden (via .orch-compose-chips
-    // being empty + CSS) until something is queued; kept above the status slot.
-    const chips = document.createElement("div");
-    chips.className = "orch-compose-chips";
-
-    // Fixed-height slot (see .orch-compose-status): always in layout, so
-    // showing/hiding a rejected-send message never changes the strip's height
-    // and never resizes .pane-term / the PTY.
-    const status = document.createElement("div");
-    status.className = "orch-compose-status";
-
-    strip.append(row, chips, status);
-    this.composeInput = input;
-    this.composeStatus = status;
-    this.composeChips = chips;
-    this.el.appendChild(strip);
-    // Set the box's initial one-line height explicitly (it's attached now), so
-    // the baseline matches the field's reserved height before any typing.
-    this.growCompose();
-  }
-
-  /** Queue one image for the next steer: vet it, base64 it to the backend
-   *  scratch dir, and add a thumbnail chip. Refusals (wrong type, oversize, too
-   *  many) surface as a toast and are dropped. */
-  private async addAttachment(blob: Blob, name: string): Promise<void> {
-    if (!this.orchGroup || !this.composeChips) return;
-    const check = checkAttachment(blob.type, blob.size, this.attachments.length);
-    if (!check.ok) {
-      showToast(attachRejectMessage(check.reason, name));
-      return;
-    }
-    try {
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      const saved = await invoke<{ path: string; cli: string }>("orch_save_attachment", {
-        groupId: this.orchGroup,
-        ext: check.ext,
-        dataB64: bytesToBase64(bytes),
-      });
-      this.orchCli = saved.cli; // format references the way this orchestrator's CLI reads them
-      // Only mint the thumbnail URL once the file is safely on disk.
-      const url = URL.createObjectURL(blob);
-      this.attachments.push({ path: saved.path, url, name: name || `image.${check.ext}` });
-      this.renderChips();
-    } catch (err) {
-      showToast(`Attach failed: ${String(err)}`);
-    }
-  }
-
-  /** Remove a queued attachment by its on-disk path, revoking its thumbnail URL.
-   *  The scratch file itself is left for the group-end sweep (the cheap cleanup
-   *  policy — no per-image delete round-trip). */
-  private removeAttachment(path: string): void {
-    const idx = this.attachments.findIndex((a) => a.path === path);
-    if (idx < 0) return;
-    URL.revokeObjectURL(this.attachments[idx].url);
-    this.attachments.splice(idx, 1);
-    this.renderChips();
-  }
-
-  /** Rebuild the thumbnail-chip row from `this.attachments`. */
-  private renderChips(): void {
-    const chips = this.composeChips;
-    if (!chips) return;
-    chips.replaceChildren();
-    for (const a of this.attachments) {
-      const chip = document.createElement("span");
-      chip.className = "orch-compose-chip";
-      chip.title = a.name;
-      const thumb = document.createElement("img");
-      thumb.className = "orch-compose-chip-thumb";
-      thumb.src = a.url;
-      thumb.alt = a.name;
-      const rm = document.createElement("button");
-      rm.className = "orch-compose-chip-x";
-      rm.type = "button";
-      rm.textContent = "✕";
-      rm.title = `Remove ${a.name}`;
-      rm.setAttribute("aria-label", `Remove ${a.name}`);
-      rm.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.removeAttachment(a.path);
-      });
-      chip.append(thumb, rm);
-      chips.appendChild(chip);
-    }
-  }
-
-  /** Drop every queued attachment, revoking thumbnail URLs. Used after a
-   *  successful send and on dispose. */
-  private clearAttachments(): void {
-    for (const a of this.attachments) URL.revokeObjectURL(a.url);
-    this.attachments = [];
-    this.renderChips();
-  }
-
-  /** Focus the steering strip (Alt+P). No-op on non-orchestrator panes. */
-  focusCompose(): void {
-    if (!this.composeInput) return;
-    this.composeInput.focus();
-    this.composeInput.select();
-  }
-
-  /** Auto-grow the steer box to fit its draft, capped at the CSS `max-height`
-   *  (a few lines). The box is absolutely positioned and grows upward over the
-   *  terminal, so its height changes never touch .pane-term / the PTY (#100).
-   *  Past the cap it scrolls internally instead of getting taller. */
-  private growCompose(): void {
-    const t = this.composeInput;
-    if (!t) return;
-    // Collapse to content height first so the box can also SHRINK (e.g. after a
-    // send or a delete), then measure and clamp to the cap.
-    t.style.height = "auto";
-    const cs = getComputedStyle(t);
-    // scrollHeight is content+padding but excludes the border; under border-box
-    // the applied height must include it, or the box under-sizes by ~2px and
-    // clips the last line. maxHeight (border-box) is the CSS cap.
-    const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
-    const maxPx = parseFloat(cs.maxHeight) || 0;
-    const { heightPx, scroll } = steerBoxHeight(t.scrollHeight + border, maxPx);
-    t.style.height = `${heightPx}px`;
-    t.style.overflowY = scroll ? "auto" : "hidden";
-  }
-
-  // ----- VoiceTargetPane (#58): the surface the global voiceController drives.
-  // The controller owns the single-capture state machine; a Pane only knows how
-  // to receive a transcript and show a recording indicator.
-
-  /** Is this pane's compose box the focused element? Decides caret-insert vs
-   *  terminal-paste when the voice hotkey fires. */
-  isComposeFocused(): boolean {
-    return !!this.composeInput && document.activeElement === this.composeInput;
-  }
+  // Delegated to PaneCompose (panecompose.ts), which carries the doc (#3498 F1).
+  focusCompose(): void { this.compose.focusCompose(); }
+  isComposeFocused(): boolean { return this.compose.isComposeFocused(); }
 
   /** Does this pane have an OPEN terminal? `term.element` is set by `term.open()`,
    *  which only the PTY-backed start paths call — so this is false for a files pane
@@ -6570,132 +3041,11 @@ export class Pane implements VoiceTargetPane {
     return !!this.term.element;
   }
 
-  /** Reflect the capture phase on this pane's indicator. For a compose target
-   *  it's the mic button (pulse while recording, spin while transcribing); for a
-   *  terminal target it's a lazily-created overlay badge floating over `.xterm`
-   *  (so it never resizes the PTY). */
-  setVoicePhase(kind: "compose" | "terminal", phase: VoicePhase): void {
-    if (kind === "compose") {
-      this.micBtn?.classList.toggle("recording", phase === "recording");
-      this.micBtn?.classList.toggle("transcribing", phase === "transcribing");
-      return;
-    }
-    if (phase === "off") {
-      this.voiceIndicator?.remove();
-      this.voiceIndicator = null;
-      return;
-    }
-    if (!this.voiceIndicator) {
-      const badge = document.createElement("div");
-      badge.className = "pane-voice-indicator";
-      this.termEl.appendChild(badge);
-      this.voiceIndicator = badge;
-    }
-    const recording = phase === "recording";
-    this.voiceIndicator.classList.toggle("transcribing", !recording);
-    this.voiceIndicator.innerHTML = recording
-      ? `<span class="pane-voice-dot"></span>Recording — Alt+S to insert · Esc to cancel`
-      : `<span class="pane-voice-spinner"></span>Transcribing… · Esc to cancel`;
-  }
-
-  /** Route a transcript into this pane's terminal as if pasted — xterm's paste
-   *  path applies bracketed-paste semantics (when the app enabled them) and adds
-   *  NO trailing newline, so the human reviews and presses Enter. */
-  pasteToTerminal(text: string): void {
-    if (this.disposed) return; // pane closed during transcription — drop it
-    const t = text.trim();
-    if (t) {
-      this.markFirstInput(); // #440 B2-R: a dictated transcript is human input too
-      this.term.paste(t);
-    }
-  }
-
-  /** Surface a voice status/error on the strip (compose targets have one). */
-  showVoiceStatus(msg: string): void {
-    this.showComposeStatus(msg);
-  }
-
-  /** Insert transcribed text into the strip at the caret (or append), keeping a
-   *  single space between words, then focus the input so the human can edit and
-   *  press Enter. Never auto-submits. */
-  insertTranscript(text: string): void {
-    if (this.disposed) return; // pane closed during transcription — drop it
-    const input = this.composeInput;
-    if (!input) return;
-    const t = text.trim();
-    if (!t) return;
-    const start = input.selectionStart ?? input.value.length;
-    const end = input.selectionEnd ?? input.value.length;
-    const before = input.value.slice(0, start);
-    const after = input.value.slice(end);
-    // Add a separating space only when butting up against existing text.
-    const lead = before && !/\s$/.test(before) ? " " : "";
-    const trail = after && !/^\s/.test(after) ? " " : "";
-    input.value = before + lead + t + trail + after;
-    const caret = (before + lead + t).length;
-    input.focus();
-    input.setSelectionRange(caret, caret);
-    // Setting .value programmatically doesn't fire the "input" event that drives
-    // the auto-grow (#100), so reflow explicitly — a dictated multi-line prompt
-    // must expand the box, not sit clipped at one row until the human types.
-    this.growCompose();
-  }
-
-  /** Show a transient status line under the strip (errors only — a successful
-   *  send is confirmed by the message landing in the terminal above). */
-  private showComposeStatus(msg: string): void {
-    const status = this.composeStatus;
-    if (!status) return;
-    status.textContent = msg;
-    status.title = msg; // full text if the one-line slot ellipsises it
-    status.classList.add("show");
-    clearTimeout(this.composeStatusTimer);
-    this.composeStatusTimer = window.setTimeout(() => status.classList.remove("show"), 6000);
-  }
-
-  /** Enqueue the strip's text to the orchestrator through loomux's serialized
-   *  delivery path. Each Enter enqueues one message (rapid sends queue in
-   *  arrival order backend-side), so the input stays live rather than locking
-   *  while a send is in flight. Clears optimistically; on failure the text is
-   *  restored — unless the human has already started a newer draft — so a
-   *  rejected message (paused group, dead orchestrator) isn't lost. */
-  private async submitCompose(): Promise<void> {
-    const input = this.composeInput;
-    if (!input || !this.orchGroup) return;
-    const draft = input.value;
-    // Queued images each become an "Attached image: <path>" line (#72); a
-    // message may be images-only (no typed text), so gate on either being
-    // present rather than on the text alone.
-    const queued = this.attachments;
-    const text = composeSteerText(draft, queued.map((a) => a.path), this.orchCli);
-    if (!text) return;
-    input.value = "";
-    this.growCompose(); // collapse the (now empty) box back to one line
-    this.attachments = [];
-    this.renderChips();
-    this.composeStatus?.classList.remove("show");
-    try {
-      await invoke("orch_steer", { groupId: this.orchGroup, text });
-      // Sent: the scratch files have served their purpose (the agent reads them
-      // by path); drop only the thumbnail URLs. The files are swept on group end.
-      for (const a of queued) URL.revokeObjectURL(a.url);
-    } catch (err) {
-      // Restore the draft and re-queue the images so a rejected send (paused
-      // group, dead orchestrator) isn't lost — unless the human already started
-      // a newer draft, which we must not clobber.
-      if (input.value === "") {
-        input.value = draft;
-        this.growCompose(); // regrow to fit the restored draft
-      }
-      if (this.attachments.length === 0) {
-        this.attachments = queued;
-        this.renderChips();
-      } else {
-        for (const a of queued) URL.revokeObjectURL(a.url); // superseded; free them
-      }
-      this.showComposeStatus(`Not sent: ${String(err)}`);
-    }
-  }
+  // Delegated to PaneCompose (panecompose.ts), which carries the doc (#3498 F1).
+  setVoicePhase(kind: "compose" | "terminal", phase: VoicePhase): void { this.compose.setVoicePhase(kind, phase); }
+  pasteToTerminal(text: string): void { this.compose.pasteToTerminal(text); }
+  showVoiceStatus(msg: string): void { this.compose.showVoiceStatus(msg); }
+  insertTranscript(text: string): void { this.compose.insertTranscript(text); }
 
   /** Tear down DOM + terminal. Kills the PTY unless it already exited. */
   dispose(killBackend = true): void {
@@ -6708,29 +3058,29 @@ export class Pane implements VoiceTargetPane {
     clearTimeout(this.overflowCloseTimer);
     clearTimeout(this.fitTimer);
     clearTimeout(this.shiftTimer);
-    clearTimeout(this.composeStatusTimer);
-    clearTimeout(this.flushTimer); // #720 output throttle
+    clearTimeout(this.compose.composeStatusTimer);
+    clearTimeout(this.lifecycle.flushTimer); // #720 output throttle
     clearTimeout(this.dirRefreshTimer); // #743 repo-signal throttle
-    clearTimeout(this.webglRetryTimer); // #720 WebGL re-acquire
+    clearTimeout(this.lifecycle.webglRetryTimer); // #720 WebGL re-acquire
     // Abort any in-flight voice capture aimed at this pane (releases the mic).
     voiceController.notifyPaneDisposed(this);
     // Same shape, different module-level holder: an armed cross-workspace
     // connect keeps a reference to its source pane (#1301).
     notifyPaneDisposed(this);
-    this.voiceIndicator?.remove();
-    this.clearAttachments(); // revoke any lingering thumbnail object URLs
-    this.gitView?.dispose();
-    this.issuesView?.dispose();
-    this.tasksView?.dispose();
-    this.decisionsView?.dispose();
+    this.compose.voiceIndicator?.remove();
+    this.compose.clearAttachments(); // revoke any lingering thumbnail object URLs
+    this.views.gitView?.dispose();
+    this.views.issuesView?.dispose();
+    this.views.tasksView?.dispose();
+    this.views.decisionsView?.dispose();
     // Drop any focus request parked for a view that will never render again,
     // so it cannot be picked up by a later instance of that view (#1091 slice
     // C — `PendingEmbedFocus.clear`'s own stated purpose).
-    for (const kind of EMBED_KINDS) this.pendingFocus.clear(kind);
-    this.auditView?.dispose();
-    this.timelineView?.dispose();
-    this.groupView?.dispose();
-    this.fileEditView?.dispose();
+    for (const kind of EMBED_KINDS) this.embeds.pendingFocus.clear(kind);
+    this.views.auditView?.dispose();
+    this.views.timelineView?.dispose();
+    this.views.groupView?.dispose();
+    this.views.fileEditView?.dispose();
     // The surfaces a CONTENT pane hosts (#214, #217). Exactly one is ever non-null.
     this.filesView?.dispose();
     this.editorPaneView?.dispose();
@@ -6742,7 +3092,7 @@ export class Pane implements VoiceTargetPane {
     // matters exactly when something else has gone wrong: a pane that is still
     // reachable from somewhere should at least not be dragging its output
     // backlog along with it (#1301).
-    this.discardOutput();
+    this.lifecycle.discardOutput();
     // By OWNER, not by `this.ptyId` (#1301). A pane that respawned in place has
     // already forgotten the ids it used to hold, so an id-aimed detach here can
     // only ever release the last one — which is how a module-level map came to

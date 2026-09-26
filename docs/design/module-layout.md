@@ -38,6 +38,46 @@ glue that is hand-validated. `transport.ts` plus `pty.ts`, `git.ts`,
 `fileapi.ts`, and `orchestration.ts` are the frontend bridges. Satellites of a
 large module carry its prefix (`pane*`, `workflow*`, `todo*`, `token*`).
 
+### Splitting a large class into satellites
+
+`src/pane.ts` is the worked example (#3498 F1). A class too large for one file
+is cut by METHOD CLUSTER into owned helper objects the class delegates to
+(`panelifecycle.ts`, `panebadges.ts`, `panecompose.ts`, `paneembeds.ts`,
+`paneviews.ts`, plus the free function `panecapture.ts`). The shape, and why:
+
+- **Each satellite owns its cluster's state.** A field used only by one
+  cluster moves into that satellite; a field several clusters share stays on
+  the class. The satellite reads the rest through a `pane` back-reference, so a
+  moved body differs from its original only by `this.` becoming `this.pane.`
+  for members it does not own. That receiver rewrite is the whole diff, which
+  is what makes the move provable by normalising it away and comparing bodies.
+- **The public API does not move.** Every moved PUBLIC member keeps a
+  one-line delegator on the class with its exact signature, so no caller
+  outside the family changes. A moved PRIVATE member has no delegator; the
+  class calls it as `this.<satellite>.<member>`.
+- **Visibility widens only as far as the compiler demands.** TypeScript has no
+  module-internal visibility, so a member a satellite reads must lose
+  `private`. Where a public getter already answers the read, the satellite uses
+  the getter instead of widening the field: `PaneBadges.isWatched` stays
+  `private` with one writer (#3319), and `capturePane` reads `pane.watched`.
+- **Constructor wiring moves in place.** A contiguous run of constructor
+  statements that builds one cluster's DOM becomes that satellite's
+  constructor (or a `wire…` method for a second run), called at the exact
+  point the statements used to run, so the header's DOM order is unchanged.
+- **A satellite never imports a value from the class's module.** The class
+  imports every satellite, so the reverse import would be a cycle that
+  evaluates the satellite's top level first. Shared values live in a satellite
+  and the class imports them; type-only imports back are fine.
+- **Source-scanning tests move with the code they pin.** A test that reads the
+  class file as text reads the satellite now holding the member, and a
+  "nothing else touches X" scan adds the satellites to its population. Each
+  re-point is a coverage change, so it is shown reddening on a planted
+  violation at the new path.
+- **What stays for a later cut.** Fit/resize stays on `Pane`, so nothing a
+  satellite does can reach a PTY resize that it could not reach before
+  (constraint 1). The header-overflow ladder, the content/welcome paths, and
+  fit/resize are the remaining clusters.
+
 Folders are recommended only after files have been split, as a held slice by
 family: `src/pane/`, `src/workflow/`, `src/todo/`, `src/tokens/`, `src/files/`,
 `src/git/`, `src/session/`, `src/board/`, and `src/bridge/`, with `test/`

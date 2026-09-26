@@ -1,7 +1,7 @@
 // Pure clamp for the floating orchestration-overlay splitter height (the git /
 // tasks / audit / group panels that hover over an orchestrator pane's terminal).
 // No DOM imports, so it's unit-testable under `node --test` (mirrors
-// spawnexpiry.ts / layout.ts). pane.ts's `overlayClamp` calls this.
+// spawnexpiry.ts / layout.ts). paneembeds.ts's `overlayClamp` calls this.
 //
 // The overlay FLOATS over the terminal and never resizes the PTY (hard
 // constraint 1). The clamp enforces two invariants at EVERY splitter position,

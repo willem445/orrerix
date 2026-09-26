@@ -33,11 +33,20 @@ const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8"
  *  scan watching nothing. */
 const ALLOWED: { file: string; why: string; calls: number }[] = [
   {
-    file: "src/pane.ts",
+    file: "src/panebadges.ts",
     why:
       "the declaration, the `toggleWatched` wrapper, and the header chip's own " +
-      "click — a human clicking their own mark to clear it",
+      "click — a human clicking their own mark to clear it (moved here from " +
+      "pane.ts with the other header chips, #3498 F1)",
     calls: 3,
+  },
+  {
+    file: "src/pane.ts",
+    why:
+      "`Pane.setWatched`, the public delegator into PaneBadges (#3498 F1): its " +
+      "declaration and its one forwarding call, which passes the caller's " +
+      "argument through unchanged",
+    calls: 2,
   },
   {
     file: "src/main.ts",
@@ -62,6 +71,14 @@ const MUST_BE_CLEAN = [
   "src/agentsview.ts",
   "src/panerestore.ts",
   "src/workspace.ts",
+  // pane.ts's own satellites (#3498 F1). Before the split their code sat inside
+  // pane.ts, whose exact count above would have reddened on a new call; now each
+  // is its own file, and respawn — which AC5 names — lives in panelifecycle.ts.
+  "src/panelifecycle.ts",
+  "src/panecompose.ts",
+  "src/paneembeds.ts",
+  "src/paneviews.ts",
+  "src/panecapture.ts",
 ];
 
 const callSites = (src: string): string[] =>
@@ -132,24 +149,29 @@ test("#3319 AC5: the restore calls only ever turn a watch ON", () => {
 //    helper is invisible here. None exists today; the first one would have to
 //    be written deliberately.
 //  - It bounds where the flag is WRITTEN, never how long a write lasts or what
-//    a caller does after. `Pane.setWatched` being the only writer is what makes
-//    that enough, and THAT is enforced by `private isWatched` — the compiler,
-//    not this scan. A second writer inside `pane.ts` would pass here and fail
-//    review; a second writer outside it cannot compile.
+//    a caller does after. `PaneBadges.setWatched` being the only writer is what
+//    makes that enough, and THAT is enforced by `private isWatched` — the
+//    compiler, not this scan. A second writer inside `panebadges.ts` would pass
+//    here and fail review; a second writer outside it cannot compile.
 //  - An argument spanning a newline would not match `[^)]*`. Every site today
 //    is one line, and a multi-line one would drop the count and redden the
 //    per-file assertion rather than passing silently.
 test("#3319: the flag has exactly one writer, and it is private to the pane", () => {
   // The half the scan above cannot see, asserted against the source because
   // there is no runtime handle on it: `isWatched` is `private`, so nothing
-  // outside `pane.ts` can assign it, whatever this file's regex can read.
-  const src = read("../src/pane.ts");
+  // outside `panebadges.ts` can assign it, whatever this file's regex can read.
+  // It moved there from pane.ts with the header chips (#3498 F1); pane.ts and
+  // panecapture.ts read it only through the public `watched` getter.
+  const src = read("../src/panebadges.ts");
   assert.match(src, /private isWatched = false;/, "the watch flag is no longer a private field");
   const writes = [...src.matchAll(/this\.isWatched\s*=/g)];
   assert.equal(
     writes.length,
     1,
-    `\`isWatched\` is assigned ${writes.length} times in pane.ts — #3319 AC5 rests on setWatched ` +
+    `\`isWatched\` is assigned ${writes.length} times in panebadges.ts — #3319 AC5 rests on setWatched ` +
       "being its one writer",
   );
+  // The flag must not have been left behind as well as moved: a second declaration
+  // in pane.ts would be a second, unpinned writer the compiler happily accepts.
+  assert.doesNotMatch(read("../src/pane.ts"), /\bisWatched\b/, "pane.ts declares or touches `isWatched` again");
 });

@@ -1,5 +1,5 @@
 // Pure, DOM-free core of the unfocused-pane flush policy (#720). The DOM
-// wiring lives in pane.ts (`handleOutput`/`flushOutput`); everything that
+// wiring lives in panelifecycle.ts (`acceptOutput`/`flushOutput`); everything that
 // DECIDES anything is here so it is unit-testable under `node --test`, the
 // same split as panefit.ts / panerename.ts.
 //

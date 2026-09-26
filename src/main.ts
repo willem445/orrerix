@@ -1907,7 +1907,7 @@ function dormantCard(opts: {
     // #479 review finding 2: a failure can arrive after the caller has
     // already torn this card's element out of the document (the dormant-
     // agent Start card removes its placeholder before `onClick`'s own
-    // work finishes — pane.ts's `startFromDormant` awaits the spawn before
+    // work finishes — panelifecycle.ts's `startFromDormant` awaits the spawn before
     // tearing down as of this same fix, but a future teardown-then-fail
     // ordering elsewhere is exactly the class of bug that closes over, not
     // just the two named instances). Rendering an error into a detached

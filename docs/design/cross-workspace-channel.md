@@ -507,7 +507,7 @@ and the `orch-channel` event all carry `sender` plus, per member, `direction`
 `channel_status` additionally reports the CALLER's own current `can_send` (sender: always
 true; receiver: true only while holding the credit) so an agent can check before calling
 `channel_send` and hitting the credit error. The pane header chip
-(`src/pane.ts::setConnected`) renders a direction arrow (▲ sender / ▼ receiver) alongside
+(`src/panebadges.ts::setConnected`) renders a direction arrow (▲ sender / ▼ receiver) alongside
 the existing channel color/number.
 
 **Composition with standalone panes — one rule.** Sender requires a token, full stop:

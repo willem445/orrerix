@@ -47,7 +47,7 @@ a signal the pane already receives.
 
 | input | wired from | what it means |
 | --- | --- | --- |
-| `noteOutput(bytes, nowMs)` | `Pane.acceptOutput`, per chunk | this pane produced output |
+| `noteOutput(bytes, nowMs)` | `PaneLifecycle.acceptOutput`, per chunk | this pane produced output |
 | `noteHumanInput(nowMs)` | `Pane.markFirstInput` and `Pane.markHumanInput` | the human typed or pasted |
 | `noteAttention(reason)` | `Pane.setAttention` | the backend's current attention reason |
 | `noteRosterIdle(idle)` | the tab-strip poll, via `Pane.noteRosterIdle` (slice B) | the roster's own idleness reading |

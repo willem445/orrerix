@@ -220,7 +220,7 @@ lossless.
   every pane's context (via `Pane.setHidden` → `WebglAddon.dispose`), and
   crucially **latches the hidden state on the grid** so a pane *opened into an
   already-hidden tab* (a background orchestrator spawn) also refuses a context —
-  `Pane.tryWebgl` no-ops while `hiddenTab` is set. Result: **live GL contexts ≈
+  `PaneLifecycle.tryWebgl` no-ops while `hiddenTab` is set. Result: **live GL contexts ≈
   the panes in the *active* tab only, regardless of how many tabs are open.**
   (The prototype dropped contexts only for panes present at switch time, so
   background-spawned hidden panes leaked one each — that gap is closed.)

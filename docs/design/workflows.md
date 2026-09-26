@@ -2240,9 +2240,10 @@ back to the group's per-role pick would have made the whole roster decorative:
 
 So **a guardrail model is a launcher default, not a ceiling**: the launcher's per-role picks
 synthesize the *built-in* roster (and still fully decide it — `the_builtin_roster_still_honors_the_launchers_per_role_models`),
-and a workflow file replaces that roster wholesale. `the_repos_own_workflow_runs_its_worker_tiers_on_the_models_it_declares`
+and a workflow file replaces that roster wholesale. `the_repos_own_workflow_runs_every_block_on_what_it_declares`
 pins the emitted command line for *this repo's actual file*, through the real load + clamp,
-against launcher picks that say something else.
+against launcher picks that say something else — reading every block's expected cli, model
+and effort off the file itself rather than restating them, so a valid roster edit leaves it green (#3507).
 
 One resolution rule is worth stating plainly because it is the one people assume the other
 way round: **a declared block with no `model:` takes its class default for its own effective

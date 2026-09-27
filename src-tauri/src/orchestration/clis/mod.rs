@@ -15,6 +15,8 @@ mod claude;
 pub use claude::*;
 mod copilot;
 pub use copilot::*;
+mod gemini;
+pub use gemini::*;
 
 // Copilot session tracking: unlike Claude, copilot can't be handed a session
 // id up front — it mints one and writes `~/.copilot/session-state/<id>/` a

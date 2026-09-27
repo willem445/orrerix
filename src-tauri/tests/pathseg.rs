@@ -379,8 +379,8 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
     /// make one impossible. Binding a proof to its enclosing function would mean
     /// parsing Rust, which is the line this scan deliberately does not cross —
     /// the compiler is what actually holds the type, and this is defence in
-    /// depth over the allowlist rotting. One proof is checked in a named other
-    /// file instead, because its argument is cross-file: `PROOF_ELSEWHERE` below.
+    /// depth over the allowlist rotting. Two proofs are checked in a named other
+    /// file instead, because their argument is cross-file: `PROOF_ELSEWHERE` below.
     ///
     /// Anything not listed is a finding until it is argued for and added — that
     /// is what makes this default-deny rather than a blocklist. Normalized
@@ -657,18 +657,28 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
         ),
     ];
 
-    /// The one exception to "the proof is in the site's own file": a proof
+    /// The two exceptions to "the proof is in the site's own file": a proof
     /// that is cross-file by nature, keyed by its exact text and naming the file
-    /// (under `src-tauri/src`) it must still be in. The two hook-marker reads
+    /// (relative to `src-tauri/`) it must still be in. The two hook-marker reads
     /// above interpolate `a.id` in `orchestration/registry/compact.rs` (#3498 P3d), and the line that
     /// makes `a.id` a minted id is in `spawn_agent_full`, which #3498 P3b moved
-    /// to `orchestration/registry/spawn.rs`. The proof text and its strength are
-    /// unchanged; only the file it is checked in moved. Every other row stays
-    /// file-scoped, and a row here that no `SANCTIONED` proof uses fails below.
-    const PROOF_ELSEWHERE: &[(&str, &str)] = &[(
-        "let agent_id = format!(\"{}-{seq}\", block.prefix());",
-        "orchestration/registry/spawn.rs",
-    )];
+    /// to `orchestration/registry/spawn.rs`. The block-id row's site, `Block`'s
+    /// `<id>.md` name, is in the engine's `workflow/schema.rs`, and the
+    /// `sanitize_id` call every block id passes through is in `parse_workflow`,
+    /// which #3498 P8 moved to `workflow/parse.rs`. In both, the proof text and
+    /// its strength are unchanged; only the file it is checked in moved. Every
+    /// other row stays file-scoped, and a row here that no `SANCTIONED` proof
+    /// uses fails below.
+    const PROOF_ELSEWHERE: &[(&str, &str)] = &[
+        (
+            "let agent_id = format!(\"{}-{seq}\", block.prefix());",
+            "src/orchestration/registry/spawn.rs",
+        ),
+        (
+            "let Some(id) = sanitize_id(&rb.id) else {",
+            "../crates/loomux-engine/src/workflow/parse.rs",
+        ),
+    ];
     for (proof, rel) in PROOF_ELSEWHERE {
         assert!(
             SANCTIONED.iter().any(|(_, _, p)| p == proof),
@@ -797,7 +807,7 @@ fn no_raw_identifier_is_interpolated_into_a_file_name() {
                     let home = PROOF_ELSEWHERE.iter().find(|(p, _)| *p == proof).map(|(_, rel)| *rel);
                     let holds = match home {
                         Some(rel) => std::fs::read_to_string(
-                            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(rel),
+                            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel),
                         )
                         .is_ok_and(|s| s.contains(proof)),
                         None => src.contains(proof),

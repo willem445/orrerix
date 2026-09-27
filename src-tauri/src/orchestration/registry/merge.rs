@@ -6,6 +6,7 @@
 //! designs are `docs/design/workflows.md` and `docs/design/merge-queue.md`.
 
 use super::*;
+// plant: AnswerSource DismissSource ResolveSource
 
 impl OrchRegistry {
     /// Arm/clear the merge gate through the SAME path a fresh launch runs
@@ -712,7 +713,7 @@ impl OrchRegistry {
     /// after a fix upgrades its own `fail` to a `pass`, and a reviewer whose pass
     /// went stale re-reviews the new head); every write is audited, so the history
     /// is in the trail even though only the latest verdict gates.
-    pub fn record_verdict(
+    pub fn record_verdict (
         &self,
         group: &GroupId,
         agent_id: &str,

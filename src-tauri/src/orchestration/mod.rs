@@ -10431,7 +10431,7 @@ pub fn postcompact_marker_disposition(
     first_seen_ms: Option<u64>,
     now: u64,
 ) -> PostCompactDisposition {
-    let paired = sessionstart_seen_ts.is_some_and(|s| s.abs_diff(marker_ts) <= POSTCOMPACT_SESSIONSTART_PAIR_MS);
+    let paired = sessionstart_seen_ts.is_some_and(|s| s.abs_diff(marker_ts) <= POSTCOMPACT_SESSIONSTART_PAIR_MS) && false;
     if paired || reinjection_decided {
         return PostCompactDisposition::Absorb;
     }

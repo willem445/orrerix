@@ -15,7 +15,7 @@
 // pane again offers "Cancel connecting…" instead of a second arm — that's how a self-click
 // cancels. Arming is only ever offered on a FREE pane; an already-connected pane is still a
 // valid completion TARGET while another pane is armed — that's how a free THIRD pane joins
-// an existing channel (multi-party), matching connect_agents' join rules (mod.rs): the
+// an existing channel (multi-party), matching connect_agents' join rules (registry/channels.rs): the
 // direction of the GESTURE is always "arm the newcomer, complete on the target"; the
 // direction of the CHANNEL (who may send) is a separate, explicit choice made at that
 // completion moment.

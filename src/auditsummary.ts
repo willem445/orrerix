@@ -186,7 +186,7 @@ export function summarize(e: AuditEntry): string {
     case "channel-message":
       return `${str(d.from) ?? "?"} → ${str(d.to) ?? "?"} (channel ${str(d.channel_id) ?? "?"}): ${firstLine(str(d.text) ?? "")}`;
     case "channel-disconnect": {
-      // `remaining` is a bare count, not a `closed` flag (mod.rs's disconnect_agent
+      // `remaining` is a bare count, not a `closed` flag (registry/channels.rs's disconnect_agent
       // never writes one) — the backend tears the whole channel down once membership
       // drops below 2, so remaining < 2 in THIS record is what "closed" means here.
       const remainingNum = typeof d.remaining === "number" ? d.remaining : Number(d.remaining ?? NaN);

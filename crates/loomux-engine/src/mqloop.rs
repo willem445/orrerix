@@ -21,8 +21,9 @@
 //! them. Every import below is a `crate::` path because every edge it had was
 //! already on this side; nothing was lifted ahead of it.
 //!
-//! `src-tauri`'s `orchestration/mod.rs` gets registry wiring only — the
-//! `pub use loomux_engine::{mqdriver, mqloop};` re-export, three fields, the two
+//! `src-tauri`'s `orchestration/` gets registry wiring only — the
+//! `pub use loomux_engine::{mqdriver, mqloop};` re-export in `mod.rs`, three
+//! fields in `registry/mod.rs`, and in `registry/merge.rs` the two
 //! `merge_queue_reconcile*` methods and the `mq_drive_group_with` /
 //! `mq_driver_tick` pair, all of which resolve paths and delegate. No decision
 //! in this feature lives there.

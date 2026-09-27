@@ -23,6 +23,7 @@ mod merge;
 mod questions;
 mod tasks;
 mod agentfiles;
+mod agentlaunch;
 mod audit;
 mod autonomy;
 mod compact;

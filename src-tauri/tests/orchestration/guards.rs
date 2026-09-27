@@ -1417,7 +1417,8 @@ fn the_mcp_surface_has_no_path_to_the_answer_entry_point() {
     // Nothing else in the backend may become an answering surface without this
     // test noticing: the type is defined in `humanq.rs`, supplied by the trusted
     // `orch_question_answer` command (`commands/humanside.rs`) and taken by
-    // `mod.rs`, and nowhere else.
+    // `registry/questions.rs` (#3498 P3c moved `answer_question` there from
+    // `mod.rs`), and nowhere else.
     fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
@@ -1440,9 +1441,9 @@ fn the_mcp_surface_has_no_path_to_the_answer_entry_point() {
     mentions.sort();
     assert_eq!(
         mentions,
-        vec!["humanq.rs".to_string(), "humanside.rs".to_string(), "mod.rs".to_string()],
+        vec!["humanq.rs".to_string(), "humanside.rs".to_string(), "questions.rs".to_string()],
         "AnswerSource escaped its homes (humanq.rs defines it; commands/humanside.rs's \
-         orch_question_answer supplies it; mod.rs's answer_question takes it). A new file \
+         orch_question_answer supplies it; registry/questions.rs's answer_question takes it). A new file \
          naming it is a new answering surface — \
          which may be right (#947's bridge is planned), but is never accidental: read \
          humanq.rs's trust-boundary section, then update this list deliberately."
@@ -1521,7 +1522,8 @@ fn the_mcp_surface_has_no_path_to_the_dismiss_entry_point() {
     // Nothing else in the backend may become a dismissing surface without this
     // test noticing: the type is defined in `humanq.rs`, supplied by the trusted
     // `orch_question_dismiss` command (`commands/humanside.rs`) and taken by
-    // `mod.rs`, and nowhere else.
+    // `registry/questions.rs` (#3498 P3c moved `dismiss_question` there from
+    // `mod.rs`), and nowhere else.
     fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
@@ -1544,9 +1546,9 @@ fn the_mcp_surface_has_no_path_to_the_dismiss_entry_point() {
     mentions.sort();
     assert_eq!(
         mentions,
-        vec!["humanq.rs".to_string(), "humanside.rs".to_string(), "mod.rs".to_string()],
+        vec!["humanq.rs".to_string(), "humanside.rs".to_string(), "questions.rs".to_string()],
         "DismissSource escaped its homes (humanq.rs defines it; commands/humanside.rs's \
-         orch_question_dismiss supplies it; mod.rs's dismiss_question takes it). A new file \
+         orch_question_dismiss supplies it; registry/questions.rs's dismiss_question takes it). A new file \
          naming it is a new dismissing surface — \
          never accidental: read humanq.rs's trust-boundary section, then update this list \
          deliberately."
@@ -1691,7 +1693,8 @@ fn the_mcp_surface_has_no_path_to_the_item_resolve_entry_point() {
     // Nothing else in the backend may become a resolving surface without this
     // test noticing: the type is defined in `needsyou.rs`, supplied by the trusted
     // commands (`commands/humanside.rs`, `commands/guardrails.rs`) and taken
-    // by `mod.rs`, and nowhere else.
+    // by `registry/questions.rs` (#3498 P3c moved `resolve_needs_you` there
+    // from `mod.rs`), and nowhere else.
     fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
@@ -1717,12 +1720,12 @@ fn the_mcp_surface_has_no_path_to_the_item_resolve_entry_point() {
         vec![
             "guardrails.rs".to_string(),
             "humanside.rs".to_string(),
-            "mod.rs".to_string(),
             "needsyou.rs".to_string(),
+            "questions.rs".to_string(),
         ],
         "ResolveSource escaped its homes (needsyou.rs defines it; commands/humanside.rs's \
          orch_needs_you_resolve/dismiss and commands/guardrails.rs's orch_answer_pane_ui \
-         supply it; mod.rs's resolve_needs_you takes it). A new file naming it is a new \
+         supply it; registry/questions.rs's resolve_needs_you takes it). A new file naming it is a new \
          resolving surface — \
          which may one day be right, but is never accidental: read needsyou.rs's resolve-boundary \
          section, then update this list deliberately."

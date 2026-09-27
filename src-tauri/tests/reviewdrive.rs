@@ -591,17 +591,23 @@ fn the_driver_never_builds_a_landing_verb_and_never_grants_a_merge() {
 
     // Every denylist row must still name something that EXISTS, or it denies a
     // function that has been renamed and reports green while doing it.
-    let haystack = format!(
-        "{}{}",
-        std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration/mod.rs")
-        )
-        .unwrap_or_default(),
-        std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration/mcp.rs")
-        )
-        .unwrap_or_default(),
-    );
+    //
+    // The registry's methods live in `mod.rs` and, since #3498 P3, in the
+    // `impl OrchRegistry` files under `registry/` (`grant_merge`,
+    // `record_verdict`, `queue_merge` and `queue_merge_with` are in
+    // `registry/merge.rs`). The directory is read whole, in path order, so a
+    // later slice moving a row's subject into it needs no edit here.
+    let orchestration = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/orchestration");
+    let mut registry: Vec<std::path::PathBuf> = std::fs::read_dir(orchestration.join("registry"))
+        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "rs")).collect())
+        .unwrap_or_default();
+    registry.sort();
+    let haystack = [orchestration.join("mod.rs"), orchestration.join("mcp.rs")]
+        .into_iter()
+        .chain(registry)
+        .map(|p| std::fs::read_to_string(p).unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join("\n");
     for (bad, _) in FORBIDDEN_CALLS {
         assert!(
             haystack.contains(&format!("fn {bad}(")),

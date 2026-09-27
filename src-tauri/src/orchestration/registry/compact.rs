@@ -1821,7 +1821,7 @@ impl OrchRegistry {
         self.agents
             .lock_safe()
             .values()
-            .any(|a| a.compact_pending || a.compact_hook_postcompact_first_seen_ms.is_some())
+            .any(|a| a.compact_pending)
     }
 
     /// One full compact-nudge cycle: read pty counters, then tick. Called on a

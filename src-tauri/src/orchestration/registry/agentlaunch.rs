@@ -604,6 +604,12 @@ impl OrchRegistry {
     /// written at all (one was silently ignored anyway, per the docs; this
     /// mirrors reality rather than adding a key the CLI would discard).
     ///
+    /// #413 S5 adds `PostCompact` — "after context compaction completes", per
+    /// the same reference — with no `matcher`, so it fires after a manual
+    /// `/compact` and an auto-compact alike, as `PreCompact` above does. Its
+    /// marker is the trusted compaction-DONE signal `compact_nudge_tick` settles
+    /// and resolves on (see `POSTCOMPACT_SETTLE_MS`).
+    ///
     /// #993 S1 adds the `statusLine` entry, returned beside `hooks` because it
     /// is a TOP-LEVEL settings key, not a hook event — and derived from the same
     /// script and `sh`, so a machine that cannot run the hooks gets no status
@@ -639,6 +645,7 @@ impl OrchRegistry {
         Some(ClaudeHookSettings {
             hooks: json!({
                 "PreCompact": [{ "hooks": [{ "type": "command", "command": cmd("precompact") }] }],
+                "PostCompact": [{ "hooks": [{ "type": "command", "command": cmd("postcompact") }] }],
                 "SessionStart": [{ "matcher": "compact", "hooks": [{ "type": "command", "command": cmd("sessionstart-compact") }] }],
                 "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": cmd("promptsubmit") }] }],
             }),

@@ -161,6 +161,8 @@ pub(in crate::orchestration) fn human_pane_entry(
         compact_inference_guard_until_ms: 0,
         compact_hook_precompact_seen_ms: None,
         compact_hook_sessionstart_seen_ms: None,
+        compact_hook_postcompact_seen_ms: None,
+        compact_hook_postcompact_first_seen_ms: None,
         compact_pending_evidence: None,
         compact_hook_native_notice_delivered: false,
         // A solo pane has no group/persona system at all, and a lead's contract

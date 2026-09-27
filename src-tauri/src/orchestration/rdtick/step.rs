@@ -18,7 +18,7 @@ impl OrchRegistry {
     /// by the caller, outside the lock, for the #467/#468 reason. The full site
     /// list, and why the two interception helpers do not break it, is on
     /// [`Registry::rd_drive_group_with`].
-    pub(super) fn rd_step_entry(
+    fn rd_step_entry(
         &self,
         group: &GroupId,
         runner: &dyn rddrive::RdRunner,

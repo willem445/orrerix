@@ -28,7 +28,7 @@ impl OrchRegistry {
     /// asymmetry [`reviewdrive::DriveEntry::forget_dead_panes`] states, and the
     /// same fail-direction: an emptied map (a restart) would otherwise park
     /// every live drive in `fix-wait` on a hold about panes that are fine.
-    pub(super) fn rd_pane_exit(&self, agent_id: &str) -> Option<String> {
+    fn rd_pane_exit(&self, agent_id: &str) -> Option<String> {
         let a = self.agent(agent_id)?;
         if a.status != AgentStatus::Dead {
             return None;
@@ -79,7 +79,7 @@ impl OrchRegistry {
     /// An empty recorded pane answers `None` — a lane seeded across a re-drive
     /// (#2153) carries a session and no pane, and there is nothing there to be
     /// dead.
-    pub(super) fn rd_dead_lane_pane(
+    fn rd_dead_lane_pane(
         &self,
         lane: &reviewdrive::LaneRecord,
     ) -> Option<(String, Option<&'static str>)> {
@@ -114,7 +114,7 @@ impl OrchRegistry {
     /// no roster record to read a block off, and resolving is still not proving
     /// resumable. Its unresumability surfaces at the first hand-back as before,
     /// bounded instead by the second-failure park at the hand-back site.
-    pub(super) fn rd_unhandbackable_block(&self, group: &GroupId, session: &str) -> Option<String> {
+    fn rd_unhandbackable_block(&self, group: &GroupId, session: &str) -> Option<String> {
         let rec = self.session_identity_record(group, session)?;
         let g = self.group(group)?;
         // The same resolution `rd_handback` performs: a recorded block, or —
@@ -193,7 +193,7 @@ impl OrchRegistry {
     /// Hand the PR back to its worker (§2.1's `fix-wait` row), resuming the
     /// session `drive_review` resolved and recorded **under that session's own
     /// block** — see [`rd_resume_block`](Self::rd_resume_block).
-    pub(super) fn rd_handback(
+    fn rd_handback(
         &self,
         group: &GroupId,
         entry: &mut reviewdrive::DriveEntry,
@@ -415,7 +415,7 @@ impl OrchRegistry {
     /// is — [`rd_resume_cwd`](Self::rd_resume_cwd) resolves the workspace the
     /// session already had. Passing `false` there says "this spawn does not cut
     /// anything" rather than relying on a later branch to ignore a `true`.
-    pub(super) fn rd_spawn(
+    fn rd_spawn(
         &self,
         group: &GroupId,
         role: Role,
@@ -444,7 +444,7 @@ impl OrchRegistry {
     /// `out.advanced` may claim. A second copy is a second answer to each, and
     /// the design note's “no second way to hold” is exactly this.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn rd_handback_failed(
+    fn rd_handback_failed(
         &self,
         group: &GroupId,
         entry: &mut reviewdrive::DriveEntry,

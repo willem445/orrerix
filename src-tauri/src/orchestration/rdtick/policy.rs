@@ -39,7 +39,7 @@ impl OrchRegistry {
     /// The timeouts pass through unclamped here because §5.3 does not bound them
     /// against INVARIANT 9 — they are pacing, not budget, and S2 clamps them to
     /// the notify-TTL family as it parses.
-    pub(super) fn driver_policy(&self, group: &GroupId) -> (bool, reviewdrive::DriveLimits) {
+    fn driver_policy(&self, group: &GroupId) -> (bool, reviewdrive::DriveLimits) {
         let Some(g) = self.group(group) else {
             return (false, reviewdrive::DriveLimits::default());
         };
@@ -57,7 +57,7 @@ impl OrchRegistry {
     /// driverless group's playbook looks like — so a group created with a driver
     /// read a playbook that never mentioned it until something re-applied its
     /// workflow. One policy, two ways in.
-    pub(in crate::orchestration) fn driver_policy_for(
+    pub(super) fn driver_policy_for(
         &self,
         repo: &str,
         guardrails: &super::Guardrails,
@@ -92,7 +92,7 @@ impl OrchRegistry {
     /// that loads — so a group whose `drive_review` answers `driver-disabled`
     /// can never be started by a report either. Fails closed: a workflow that
     /// does not load is `false`, and the report is delivered as it always was.
-    pub(in crate::orchestration) fn rd_auto_drive_on_done(&self, group: &GroupId) -> bool {
+    pub(super) fn rd_auto_drive_on_done(&self, group: &GroupId) -> bool {
         let Some(g) = self.group(group) else { return false };
         if !g.guardrails.advanced_orchestrator {
             return false;
@@ -112,12 +112,12 @@ impl OrchRegistry {
     /// the one reader outside this file is the template gate — which has to
     /// read the same policy the tick does, or a group whose tools all refuse
     /// `driver-disabled` could be told in its instructions that it has a driver.
-    pub(in crate::orchestration) fn driver_enabled(&self, group: &GroupId) -> bool {
+    pub(super) fn driver_enabled(&self, group: &GroupId) -> bool {
         self.driver_policy(group).0
     }
 
     /// [`driver_enabled`](Self::driver_enabled) for a group not yet in the map.
-    pub(in crate::orchestration) fn driver_enabled_for(&self, repo: &str, guardrails: &super::Guardrails) -> bool {
+    pub(super) fn driver_enabled_for(&self, repo: &str, guardrails: &super::Guardrails) -> bool {
         self.driver_policy_for(repo, guardrails).0
     }
 
@@ -129,7 +129,7 @@ impl OrchRegistry {
     /// `None` when the record cannot be read, which is NOT "no drives" — the
     /// same distinction `review_drive_status` keeps with `rd-state-unreadable`.
     /// Under `rd_state_lock`, like every other reader of the file.
-    pub(in crate::orchestration) fn rd_live_drive_prs(&self, group: &GroupId) -> Option<Vec<u64>> {
+    pub(super) fn rd_live_drive_prs(&self, group: &GroupId) -> Option<Vec<u64>> {
         let dir = self.group_dir(group);
         let _state_guard = self.rd_state_lock.lock_safe();
         let state = reviewdrive::load_state(&dir).ok()?;
@@ -144,7 +144,7 @@ impl OrchRegistry {
     }
 
     /// Hold `group` off until `at` (§2.4's rate bound).
-    pub(super) fn rd_defer(&self, group: &GroupId, at: u64) {
+    fn rd_defer(&self, group: &GroupId, at: u64) {
         self.rd_service_ms.lock_safe().insert(group.clone(), at);
     }
 }

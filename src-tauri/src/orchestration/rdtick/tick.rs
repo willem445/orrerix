@@ -527,7 +527,7 @@ impl OrchRegistry {
     /// was and the next tick re-attempts. The worst case there is a duplicate
     /// line in the pane, which is the direction to fail in — #1857 is about the
     /// other one.
-    pub(super) fn rd_flush_notices(&self, group: &GroupId, dir: &std::path::Path, now: u64) -> RdFlush {
+    fn rd_flush_notices(&self, group: &GroupId, dir: &std::path::Path, now: u64) -> RdFlush {
         // Phase 1 — what is owed, and whether this is its first attempt.
         let owed: Vec<(u64, String, bool)> = {
             let _state_guard = self.rd_state_lock.lock_safe();
@@ -678,7 +678,7 @@ impl OrchRegistry {
     /// `gate-unreadable` hold and which is an ordinary not-satisfied-yet,
     /// because that mapping is the driver's own vocabulary and nothing else
     /// needs it.
-    pub(super) fn rd_gate_facts(
+    fn rd_gate_facts(
         &self,
         group: &GroupId,
         runner: &dyn rddrive::RdRunner,

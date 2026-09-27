@@ -66,7 +66,7 @@ impl OrchRegistry {
     /// pane is not in the record to drop, so the liveness read does the same
     /// work here. Asked of the registry, which is why this sits on this side
     /// rather than in the engine.
-    pub(super) fn rd_surviving_panes(
+    fn rd_surviving_panes(
         &self,
         entry: &reviewdrive::DriveEntry,
     ) -> Vec<(String, reviewdrive::DrivenRole)> {
@@ -393,7 +393,7 @@ impl OrchRegistry {
     /// act for reasons that have nothing to do with the signal — an unresolved
     /// head, a runner failure — and a signal consumed by a tick that then did
     /// nothing is a hand-back the drive never learns about.
-    pub(super) fn rd_signal(&self, group: &GroupId, pr: u64) -> RdSignal {
+    fn rd_signal(&self, group: &GroupId, pr: u64) -> RdSignal {
         self.rd_signals.lock_safe().get(&(group.clone(), pr)).cloned().unwrap_or_default()
     }
 
@@ -402,7 +402,7 @@ impl OrchRegistry {
     /// The **actor** stays `brand::AUDIT_ACTOR`, so it is this detail key — not
     /// the actor — that distinguishes a driver action from any other host
     /// action, and it is what an audit reader filters on.
-    pub(super) fn rd_audit(&self, group: &GroupId, on_behalf_of: &str, action: &str, mut detail: Value) {
+    fn rd_audit(&self, group: &GroupId, on_behalf_of: &str, action: &str, mut detail: Value) {
         if let Some(obj) = detail.as_object_mut() {
             obj.insert(rddrive::ON_BEHALF_OF.to_string(), Value::from(on_behalf_of));
         }

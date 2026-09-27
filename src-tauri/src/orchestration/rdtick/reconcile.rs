@@ -24,13 +24,13 @@ impl OrchRegistry {
     /// re-drive; the tick's own discharge is separate and is the `re_briefed`
     /// spend, which answers "was this mark used" rather than "is this mark
     /// still about anything".
-    pub(super) fn rd_forget_restart_mark(&self, group: &GroupId, pr: u64) {
+    fn rd_forget_restart_mark(&self, group: &GroupId, pr: u64) {
         self.rd_restart_handback.lock_safe().remove(&(group.clone(), pr));
     }
 
     /// This drive's restart mark, or the empty one — read at facts-build time,
     /// spent by [`rd_spend_restart_mark`](Self::rd_spend_restart_mark).
-    pub(super) fn rd_restart_mark(&self, group: &GroupId, pr: u64) -> RestartMark {
+    fn rd_restart_mark(&self, group: &GroupId, pr: u64) -> RestartMark {
         self.rd_restart_handback
             .lock_safe()
             .get(&(group.clone(), pr))
@@ -46,7 +46,7 @@ impl OrchRegistry {
     /// the tick that acts on one has decided nothing about the others. Clearing
     /// the whole entry from the site that re-briefed a lane is how #2811 S10's
     /// own discharge would have silently un-marked #3225's push.
-    pub(super) fn rd_spend_restart_mark(&self, group: &GroupId, pr: u64, f: impl FnOnce(&mut RestartMark)) {
+    fn rd_spend_restart_mark(&self, group: &GroupId, pr: u64, f: impl FnOnce(&mut RestartMark)) {
         let mut marks = self.rd_restart_handback.lock_safe();
         let key = (group.clone(), pr);
         let Some(mark) = marks.get_mut(&key) else { return };
@@ -64,7 +64,7 @@ impl OrchRegistry {
     /// deliberately — which is why this is only ever asked from the two places
     /// where absence is unambiguous. See
     /// [`rd_forget_lost_panes`](Self::rd_forget_lost_panes).
-    pub(super) fn rd_pane_is_live(&self, agent_id: &str) -> bool {
+    fn rd_pane_is_live(&self, agent_id: &str) -> bool {
         self.agent(agent_id).is_some_and(|a| a.status != AgentStatus::Dead)
     }
 
@@ -106,7 +106,7 @@ impl OrchRegistry {
     /// `lane-stalled` / `fix-stalled` as it was before. That is the residual —
     /// rare, since `rd_lane_session` resolves from the record, the live map and
     /// the roster, of which the roster survives a restart.
-    pub(super) fn rd_forget_lost_panes(
+    fn rd_forget_lost_panes(
         &self,
         group: &GroupId,
         entry: &mut reviewdrive::DriveEntry,
@@ -159,7 +159,7 @@ impl OrchRegistry {
     /// review 2, W1): that one includes the superseded lists, whose dead entries
     /// are the ordinary state of a drive between a pane replacement and the next
     /// tick's prune. See `current_panes_lost` for what reading them here cost.
-    pub(super) fn rd_has_lost_panes(&self, entry: &reviewdrive::DriveEntry) -> bool {
+    fn rd_has_lost_panes(&self, entry: &reviewdrive::DriveEntry) -> bool {
         let current = std::iter::once(entry.worker_agent.clone())
             .chain(entry.lanes.iter().map(|l| l.agent.clone()));
         current.filter(|a| !a.trim().is_empty()).any(|a| !self.rd_pane_is_live(&a))
@@ -187,7 +187,7 @@ impl OrchRegistry {
     /// drive whose worker pane merely has not been re-registered yet at startup
     /// — a race the reconcile cannot distinguish from a genuinely lost session,
     /// where the hand-back can.
-    pub(super) fn rd_reconcile_with(&self, group: &GroupId, runner: &dyn rddrive::RdRunner, now: u64) {
+    fn rd_reconcile_with(&self, group: &GroupId, runner: &dyn rddrive::RdRunner, now: u64) {
         if self.rd_reconciled.lock_safe().contains(group) {
             return;
         }
@@ -404,7 +404,7 @@ impl OrchRegistry {
     /// from a row would be letting the thing being checked answer the check.
     /// Matching a row in order to write a note on it is not that: a wrong match
     /// costs a note on the wrong row, never an authorization.
-    pub(super) fn rd_task_note(&self, group: &GroupId, pr: u64, text: &str) {
+    fn rd_task_note(&self, group: &GroupId, pr: u64, text: &str) {
         let Some(id) = self
             .tasks(group)
             .into_iter()

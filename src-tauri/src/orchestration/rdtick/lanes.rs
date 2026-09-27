@@ -17,7 +17,7 @@ impl OrchRegistry {
     /// no longer resolves respawns fresh. That respawn does **not** consume a
     /// `review_rounds` increment — that counter counts rounds of *findings*, and
     /// a reaped reviewer produced none.
-    pub(super) fn rd_open_lane(
+    fn rd_open_lane(
         &self,
         group: &GroupId,
         entry: &mut reviewdrive::DriveEntry,
@@ -269,7 +269,7 @@ impl OrchRegistry {
     /// at every step rather than passed to `rd_spawn`, where
     /// `sanitize_session` would refuse it and the refusal would be filed as a
     /// resume failure — a claim about a session that was never recorded.
-    pub(super) fn rd_lane_session(
+    fn rd_lane_session(
         &self,
         group: &GroupId,
         lane: Option<&reviewdrive::LaneRecord>,
@@ -408,7 +408,7 @@ impl OrchRegistry {
     /// hand-back: `deliver_prompt` can refuse for reasons that say nothing
     /// about the drive (a pane that died between the lookup and the write),
     /// and the spawn is the path that already existed.
-    pub(super) fn rd_reuse_pane(
+    fn rd_reuse_pane(
         &self,
         group: &GroupId,
         on_behalf_of: &str,

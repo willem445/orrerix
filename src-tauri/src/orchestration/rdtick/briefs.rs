@@ -16,7 +16,7 @@ impl OrchRegistry {
     /// the two functions compose, and passes identically while the live call
     /// site hands `render_template` a raw job name". So [`rd_fact`] wraps every
     /// value here, and the hostile-value test calls this function.
-    pub(super) fn rd_lane_brief(
+    fn rd_lane_brief(
         &self,
         entry: &reviewdrive::DriveEntry,
         block: &str,
@@ -267,7 +267,7 @@ impl OrchRegistry {
     /// answer — and a failed read or write is the same: the notice goes out
     /// with the clause that promised the submission, which names
     /// `merge_queue_status()` and was true when written and when read.
-    pub(super) fn rd_amend_owed_notice(&self, dir: &std::path::Path, pr: u64, from: &str, to: &str) {
+    fn rd_amend_owed_notice(&self, dir: &std::path::Path, pr: u64, from: &str, to: &str) {
         let _state_guard = self.rd_state_lock.lock_safe();
         let Ok(mut state) = reviewdrive::load_state(dir) else { return };
         let Some(n) = state.entry_mut(pr).and_then(|e| e.owed_notice.as_mut()) else { return };
@@ -283,7 +283,7 @@ impl OrchRegistry {
     /// item 2). `Option::take`, so exactly one notice carries it and every
     /// later one reads as it always did. A drive nobody auto-started has
     /// nothing to take, and its notice is returned unchanged.
-    pub(super) fn rd_fold_auto_report(entry: &mut reviewdrive::DriveEntry, notice: String) -> String {
+    fn rd_fold_auto_report(entry: &mut reviewdrive::DriveEntry, notice: String) -> String {
         let report = entry.auto_report.take();
         Self::rd_fold_text(notice, report.as_deref())
     }
@@ -291,7 +291,7 @@ impl OrchRegistry {
     /// [`rd_fold_auto_report`](Self::rd_fold_auto_report)'s text, without the
     /// take — for the one caller that must not consume the report until its
     /// line is known to have landed (a hold, delivered directly).
-    pub(super) fn rd_fold_text(notice: String, report: Option<&str>) -> String {
+    fn rd_fold_text(notice: String, report: Option<&str>) -> String {
         match report {
             Some(r) => format!(
                 "{notice} This drive was started by a worker's report(done), delivered here \
@@ -306,7 +306,7 @@ impl OrchRegistry {
     /// [`rd_amend_owed_notice`](Self::rd_amend_owed_notice) does; a failed
     /// read or write leaves the report on the entry, which costs a repeat on
     /// the next notice and never a loss.
-    pub(super) fn rd_clear_auto_report(&self, dir: &std::path::Path, pr: u64) {
+    fn rd_clear_auto_report(&self, dir: &std::path::Path, pr: u64) {
         let _state_guard = self.rd_state_lock.lock_safe();
         let Ok(mut state) = reviewdrive::load_state(dir) else { return };
         let Some(e) = state.entry_mut(pr) else { return };
@@ -364,7 +364,7 @@ impl OrchRegistry {
     /// And it says the conversation survives, because it does: the next round
     /// resumes this same session against the rebased head, so a reviewer that
     /// drops what it is holding loses nothing it will not be asked for again.
-    pub(super) fn rd_lane_stop_brief(&self, brief: &RdBrief) -> String {
+    fn rd_lane_stop_brief(&self, brief: &RdBrief) -> String {
         format!(
             "STOP this review — orrerix is standing it down. PR #{} does not merge cleanly against {} at the head you were briefed on ({}), so that head is about to be rebased away and any verdict recorded against it goes stale the moment the worker pushes. Do not finish the review, do not record a verdict for this head, and do not report findings: call report with outcome done, and stop there. Nothing is lost — orrerix briefs you again against the rebased head, in this same conversation, and no review round is charged for this one.",
             brief.pr,
@@ -379,7 +379,7 @@ impl OrchRegistry {
     /// with facts orrerix read interpolated into it — never delegate- or
     /// repo-authored prose (§3.1 item 4). The three are the three ways a PR
     /// comes back: a lane's findings, a red run, and a conflict.
-    pub(super) fn rd_fix_brief(
+    fn rd_fix_brief(
         &self,
         entry: &reviewdrive::DriveEntry,
         brief: &RdBrief,

@@ -220,7 +220,7 @@ export interface PaneBadge {
 
 /** What `setConnected` needs to render the cross-workspace channel chip/accent
  *  (#271). Built by channel.ts's `channelBadge` from the live `OrchChannel`/
- *  `orch-channel` payload — pane.ts stays a pure renderer of it, same division as
+ *  `orch-channel` payload — panebadges.ts stays a pure renderer of it, same division as
  *  `setBadge`/`PaneBadge` above. */
 export interface PaneChannelBadge {
   channelId: string;

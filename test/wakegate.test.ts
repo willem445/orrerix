@@ -83,7 +83,7 @@ test("negative control: a visible view refreshes on EVERY wake, not just the fir
 // ---------- the state machine around them ----------
 
 test("born asleep: the latch starts in the state the pane has not yet asserted", () => {
-  // Deliberately NOT justified by a live path: every construction site in pane.ts today
+  // Deliberately NOT justified by a live path: every construction site in paneviews.ts today
   // falls through to `openView`, so no view is ever built-but-never-shown. This pins the
   // DEFAULT — flip it and a future construct-then-decide path leaves a view refreshing
   // forever, which is the bug in a different disguise, with nothing else to catch it.

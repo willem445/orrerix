@@ -1,5 +1,5 @@
 // The pure half of the embed FOCUS-REQUEST hook (#1091 slice C) — DOM/Tauri-free
-// so it can be unit-tested (`test/embedfocus.test.ts`); `pane.ts` owns the wiring.
+// so it can be unit-tested (`test/embedfocus.test.ts`); `paneembeds.ts` owns the wiring.
 //
 // WHAT THE HOOK IS FOR. Two of a pane's embeds now cite each other: a NEEDS-YOU
 // card that names a board task (`t-7`) should take you to that row, and — once
@@ -26,7 +26,7 @@
 
 /** Which embed a focus request is addressed to. A plain `string` rather than
  *  `pane.ts`'s `EmbedKind` so this module stays free of the pane — the same
- *  division `embedtoggle.ts` keeps, and `pane.ts` pins the relationship at its
+ *  division `embedtoggle.ts` keeps, and `paneembeds.ts` pins the relationship at its
  *  call sites by passing the narrower type. */
 export type FocusKind = string;
 

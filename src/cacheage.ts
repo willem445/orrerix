@@ -1,7 +1,7 @@
 // The pane cache-age timer's model (#3407) — DOM-free, so `test/cacheage.test.ts`
 // pins every rung with literals (CLAUDE.md: frontend logic that needs tests is
 // extracted into a pure module; the header chip and the Agents-tab cell in
-// `pane.ts` / `agentsview.ts` are thin wiring over this).
+// `panebadges.ts` / `agentsview.ts` are thin wiring over this).
 //
 // WHAT THE CHIP CLAIMS, AND WHAT IT CANNOT. A provider's prompt cache is not
 // observable. What the backend observes is when this pane's usage counters last

@@ -16,7 +16,7 @@
 //
 // THREE dividers, ONE function. `embedDragGrow` only ever reasons about a
 // generic "before"/"after" pair — which pair it's given (left-slot | term,
-// term | right-slot, or the row-as-a-whole | bottom-slot) is a `pane.ts`
+// term | right-slot, or the row-as-a-whole | bottom-slot) is a `paneembeds.ts`
 // wiring decision, not something this module needs to know. That is also
 // why there is no "compose the floor across nested regions" function here:
 // with a FLAT 5-child row (left-slot, left-divider, term, right-divider,

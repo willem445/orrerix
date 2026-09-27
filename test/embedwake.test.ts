@@ -126,7 +126,7 @@ const VIEWS: ViewRow[] = [
   },
 ];
 
-/** The kinds `pane.ts` itself enumerates — the population every check below is measured
+/** The kinds `paneembeds.ts` enumerates — the population every check below is measured
  *  against, read from the source rather than restated here so a new kind cannot be added
  *  to one list and forgotten in the other. */
 function embedKinds(): string[] {

@@ -3,7 +3,7 @@
 //
 // The failure this exists to end
 // ------------------------------
-// `WebglAddon.onContextLoss` fires and pane.ts disposes the addon, which drops
+// `WebglAddon.onContextLoss` fires and panelifecycle.ts disposes the addon, which drops
 // that terminal back to xterm's DOM renderer — the correct immediate response,
 // and where it used to stop. Nothing ever retried, so a single lost context
 // left ONE pane in a grid of six several times more expensive to render than

@@ -34,7 +34,7 @@ test("#432: an empty term.write(\"\", cb) queued after a real write only fires o
 
   const order: string[] = [];
   // Fire-and-forget, exactly like attachOutput's `this.term.write(bytes)` in
-  // pane.ts -- nothing awaits this before the next write is queued, so at
+  // panelifecycle.ts -- nothing awaits this before the next write is queued, so at
   // the moment the empty write below is queued, this one may still be
   // in-flight inside xterm's own buffer.
   term.write(BIG_WRITE, () => order.push("real-write-parsed"));

@@ -1772,7 +1772,7 @@ pub fn spawn_pane_child(
 ) -> Result<(Box<dyn portable_pty::Child + Send + Sync>, bool), String> {
     // Before either CreateProcess below: the child inherits the ignore-CTRL+C
     // attribute as it stands at that call (#3595).
-    allow_ctrl_c_in_children();
+    // SCRATCH (#3595 red run): the call is removed here.
     if let Some(direct) = argv.and_then(try_direct_command) {
         let direct = apply_extra_env(apply_pane_env(direct, cwd), env);
         match slave.spawn_command(direct) {

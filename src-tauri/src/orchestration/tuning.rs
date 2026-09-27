@@ -76,7 +76,7 @@ pub(in crate::orchestration) const MAX_IDLE_TICKS_PER_HOUR: u32 = 6;
 /// #496: the audit `reason` recorded when `idle_tick_input_defer_max_minutes`
 /// — not the ordinary quiet-window threshold — is why a tick fired: the
 /// input fold was clamped against `AgentEntry.last_output_progress_ms` and
-/// the bound elapsed. See the constant above and `idle_tick_tick`.
+/// the bound elapsed. See `DEFAULT_IDLE_TICK_INPUT_DEFER_MAX_MINUTES` (`guardrails.rs`) and `idle_tick_tick`.
 pub(in crate::orchestration) const IDLE_TICK_INPUT_DEFER_BOUND_REASON: &str = "idle-tick-input-defer-bound";
 /// Compact-nudge (#287): hard backstop on `/compact` nudges delivered per
 /// rolling hour, independent of the one-shot latch — same role as

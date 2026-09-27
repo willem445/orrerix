@@ -109,7 +109,7 @@ const TICK_FALLBACK_INTERVAL: Duration = Duration::from_secs(60);
 /// wants three supervisors, so one broken pass cannot latch the other two off;
 /// the second is one body but with a name of its own. Both use
 /// `obs::TickSupervisor` directly. Eight loops here plus those two is the
-/// whole of `mod.rs`'s cadenced set.
+/// whole of this file's cadenced set.
 ///
 /// **One cadenced loop in this app is still unsupervised, and it is not in this
 /// file**: `gitwatch::start` (`src-tauri/src/gitwatch.rs`) is the only

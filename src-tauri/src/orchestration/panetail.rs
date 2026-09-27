@@ -137,7 +137,7 @@ pub fn strip_ansi(bytes: &[u8]) -> String {
 /// `✻`/`✢`/`✽` star family, `*`, a box-drawing bullet, whatever a given CLI
 /// redraws each tick) plus the space after it, and exactly one trailing
 /// parenthesized group (the `(esc to interrupt · 8s · ↓ 172 tokens)` shape
-/// documented at `auto_compact_banner_substrings` above — elapsed time and
+/// documented at `auto_compact_banner_substrings` (`compactnudge.rs`) — elapsed time and
 /// token counts that change every frame live here). What is left is the
 /// stable prose a human actually wants to read once.
 ///
@@ -218,7 +218,8 @@ pub fn collapse_repeated_frames(lines: &[&str]) -> Vec<String> {
 /// This is `get_output`'s OWN path only, strictly after the shared
 /// `strip_ansi` this function's caller already applied — nothing here changes
 /// what `strip_ansi` itself returns to its other callers (`box_holds_paste`,
-/// `prompt_wait_detected`, the compact/menu detectors above); they never call
+/// `prompt_wait_detected`, the compact/menu detectors in `compactnudge.rs` and
+/// `screen.rs`); they never call
 /// this function, and never see collapsed text.
 pub fn format_output_tail(text: &str, n_lines: usize) -> String {
     let all: Vec<&str> = text.lines().collect();

@@ -278,7 +278,7 @@ would be the wasted one.
   statusline read between two transcript reads never becoming the wake's
   baseline; and Compact now saying "queued" on a paused group, then firing once
   it resumes.
-- `src-tauri/tests/workflow.rs`: the block key's range, absence, and the refusal
+- `src-tauri/tests/workflow/driverkey.rs`: the block key's range, absence, and the refusal
   above a day.
 - `test/cacheage.test.ts`: the state boundaries against the row's own threshold,
   the "cannot say" rungs, the labels, flooring, the wake line, the tooltip's

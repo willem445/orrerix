@@ -285,7 +285,7 @@ repo author reading the default before writing their own actually sees the
 risk named). Fixing only one would leave the other path silent — a custom
 persona ignorant of the tool, or a repo author who never sees the shipped
 persona's own warning. Both are pinned independently in
-`src-tauri/tests/workflow.rs`:
+`src-tauri/tests/workflow/personas.rs`:
 `the_shipped_process_persona_treats_session_digest_windows_as_untrusted_data`
 and
 `replace_mode_advisor_and_process_personas_still_get_their_role_hint_mechanics`.
@@ -374,7 +374,7 @@ does: non-overridably in the `role_hint == process` `mechanics_core` addendum
 (so a repo's own `mode: replace` persona can't silently drop either rule),
 and in the shipped default `.github/agents/process.md` (so a repo author
 reading the default sees them too). Pinned independently in
-`src-tauri/tests/workflow.rs`:
+`src-tauri/tests/workflow/personas.rs`:
 `the_shipped_process_persona_enforces_terse_house_style_and_a_post_merge_base`
 and the extended
 `replace_mode_advisor_and_process_personas_still_get_their_role_hint_mechanics`.

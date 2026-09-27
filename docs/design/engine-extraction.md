@@ -458,14 +458,14 @@ from a unit test of product code, agents are banned from running cargo locally
     wholesale, since that is the standard batch 4 set:
 
     - the block parser's **closed vocabularies** and `kind_from_str`'s
-      reject-never-coerce shape — `src-tauri/tests/workflow.rs`, which drives
+      reject-never-coerce shape — `src-tauri/tests/workflow/`, which drives
       `parse_workflow` through `orchestration::workflow` (i.e. through the new
       re-export) across its whole accept/reject surface;
     - **`resolve_profile_path`'s traversal refusal** — the same file's escape
       table (`..`, absolute, drive-letter, both separators), which is security
       behaviour and the one this batch most wanted pinned by a third party;
     - **`sanitize_allow`** — the same file's hostile-input table;
-    - **`ResourcePolicy`** and the lock table — `tests/workflow.rs`'s default
+    - **`ResourcePolicy`** and the lock table — `tests/workflow/blocks.rs`'s default
       pin plus the wired multi-slot path in `tests/orchestration/`;
     - the **`Role` → instructions-file name** mapping, the one item that
       actually changed crates —
@@ -1034,7 +1034,7 @@ from a unit test of product code, agents are banned from running cargo locally
     The re-export is the plain **module** form, and batch 10's rule is applied
     rather than restated: every consumer spells the module path
     (`intake::due_intake_polls` and `intake::PendingIntake` in `mod.rs`,
-    `intake::eligible_deltas` in `tests/workflow.rs`,
+    `intake::eligible_deltas` in `tests/workflow/intakeprofile.rs`,
     `loomux_lib::orchestration::intake::MAX_INTAKE_POLLS_PER_TICK` in
     `tests/orchestration/`), no flat `orchestration::<item>` spelling exists,
     and #988's trap has nothing to catch — **not one `pub(super)` or
@@ -1103,7 +1103,7 @@ from a unit test of product code, agents are banned from running cargo locally
     `tests/orchestration/` drives the gate through the re-export across its
     surface (the wake summary's four signal kinds and both PARTIAL caveats, the
     fetch-bound argv pins, the smart default, `MAX_INTAKE_POLLS_PER_TICK`, the
-    fallback backoff and the idle-tick wiring), `tests/workflow.rs` drives
+    fallback backoff and the idle-tick wiring), `tests/workflow/intakeprofile.rs` drives
     `eligible_deltas`/`OpenIssueList` (#778) through the same re-export, and the
     file's own inline `#[cfg(test)]` module travels with it as engine unit tests.
     Both suites reach the module by `use loomux_lib::orchestration::intake;`,

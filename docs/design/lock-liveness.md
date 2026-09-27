@@ -753,7 +753,7 @@ no run ever produced.
 
 Their fixture is the finding as much as the assertions are: the defect survived
 four betas because *no test in this repo could build the shape*. `attention_setup`, the helper every attention test in
-`orchestration.rs` uses, spawns agents with no pty, so `pty_id` is `None` and
+`tests/orchestration/attention.rs` uses, spawns agents with no pty, so `pty_id` is `None` and
 the mask is never reached at all; the soak lane wedges a lock deliberately and
 probes, which measures victims of a hold and never constructs a holder out of
 ordinary state. `tests/common/mod.rs` builds the missing subject — pty-bound,

@@ -1083,7 +1083,7 @@ replaced.
 integration suite green with **zero test edits** for everything that is not a
 structured pane. A group with no `driver:` key is byte-for-byte what it is today
 — `default_roster_command_lines_now_carry_the_durable_contract_via_a_generated_claude_agent_file`
-(`src-tauri/tests/workflow.rs`) is the pin that says so, and the `pre222` fixture
+(`src-tauri/tests/workflow/roster.rs`) is the pin that says so, and the `pre222` fixture
 pins are the other half.
 
 ---

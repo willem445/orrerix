@@ -2016,7 +2016,7 @@ The safety property that survives this is stated as a union: every declared
 reviewer-kind block must be named by the gate **or** by at least one routing rule, since
 an abstention is a pass and a lane named by neither could never be required at all.
 Both halves of the dogfood pin assert it that way (`test/workflowdogfood.test.ts`,
-`src-tauri/tests/workflow.rs`).
+`src-tauri/tests/workflow/dogfood.rs`).
 
 **The roster this section was written against (sub-PR 5)** is kept below as the record
 of the argument, not as a description of the file today — the three points after the
@@ -2108,7 +2108,7 @@ instrument — so the three lanes described here are history plus a standing opt
 declares them again gets three personas whose contracts never drifted while nothing
 pointed at them. The pins on those three personas are bound to
 the FILES for exactly that reason (`the_cheap_review_lanes_carry_the_rules_that_make_them_safe`,
-`src-tauri/tests/workflow.rs`) — a roster-derived population would have asserted their
+`src-tauri/tests/workflow/dogfood.rs`) — a roster-derived population would have asserted their
 rules of a persona never written for them. The argument below is what the lanes are for
 and why the split is by instrument; it is unchanged by their absence from today's file.
 
@@ -2405,7 +2405,7 @@ specifically recognize and refuse — the same guarantee `gates:` already gives
 the merge gate it *does* declare (a `gates.merge` clause is data the shim
 reads; nothing in `gates:` can waive the marker-keyed human gate either).
 `intake_human_gate_spelling_is_a_deny_unknown_fields_error` and its siblings
-in `tests/workflow.rs` pin this at every nesting level the schema offers.
+in `tests/workflow/intakeprofile.rs` pin this at every nesting level the schema offers.
 
 ### The golden self-reference trap, dodged early
 
@@ -2772,7 +2772,7 @@ role templates are pinned and were not touched.
 **No reader reads the `default` file DIRECTLY** (#2663) — every one goes
 through the pair above — and
 `only_the_argued_residuals_still_read_the_default_workflow_directly`
-(`src-tauri/tests/workflow.rs`) is what keeps that true: default-deny over
+(`src-tauri/tests/workflow/guards.rs`) is what keeps that true: default-deny over
 `src-tauri/src`, failing both when a new site appears and when an allow-listed
 row goes stale.
 

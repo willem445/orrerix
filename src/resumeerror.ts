@@ -1,5 +1,5 @@
 // Classification of a resume failure's structured tag (#412). The backend's
-// `resolve_resume_cwd`/`resolve_worker_resume_cwd` (orchestration/mod.rs) and
+// `resolve_resume_cwd`/`resolve_worker_resume_cwd` (orchestration/clis/resume.rs) and
 // `resolve_session_ref` always prefix a resume-time error with one of these
 // tags — this is the frontend half of that contract: pure, DOM-free, so the
 // mapping from "raw error string" to "what the UI should offer" is

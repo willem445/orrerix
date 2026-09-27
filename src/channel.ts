@@ -128,7 +128,7 @@ const CHANNEL_COLORS = [
 ];
 
 /** The chip's number/color are a pure function of the backend-assigned
- *  `displayNumber` (mod.rs's `Channel.display_number`) — NOT the channel id's
+ *  `displayNumber` (channelmodel.rs's `Channel.display_number`) — NOT the channel id's
  *  `chan-N` suffix. `id` is minted from a monotonic counter that never reuses
  *  a value (so audit history stays unambiguous), which means it keeps
  *  climbing even as channels close — a human live-testing PR #285 saw the

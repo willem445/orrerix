@@ -430,7 +430,7 @@ following.
 - **Out of** it → auto-resolve that task's open demo item as
   `board:<new-status>`.
 
-`DEMO_GATED_STATUSES` lives in `mod.rs` beside `MERGE_GATE_STATUSES`, mirroring
+`DEMO_GATED_STATUSES` lives in `board.rs` beside `MERGE_GATE_STATUSES`, mirroring
 `src/taskboard.ts`'s `DEMO_STATUSES` the way `ensure_at_merge_gate` mirrors
 `canApprove` — a backend copy rather than a read of the frontend's, because the
 hook runs where no frontend exists. It is owned by the board and not by

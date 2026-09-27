@@ -26,7 +26,7 @@
 //!
 //! **It is not the only durable-write door, and an earlier version of this
 //! note said it was** (#1609 review B3). `append_audit` and
-//! `append_ledger_line` in `orchestration/mod.rs` write state files too, by
+//! `append_ledger_line` in `orchestration/auditlog.rs` write state files too, by
 //! append rather than replace, and deliberately do NOT seal — §4.3 carries
 //! that line and the reason. The boundary argument above is untouched: still
 //! `std::fs` only, still no `tauri`, still nothing a headless daemon cannot

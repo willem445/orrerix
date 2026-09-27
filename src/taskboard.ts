@@ -288,7 +288,7 @@ export function grantableCount(tasks: readonly HasPrRef[]): number {
 }
 
 /** The status a task must reach before anything depending on it can start
- *  (#582) — mirrors the backend's `dep_satisfied` (mod.rs). Merged/accepted is
+ *  (#582) — mirrors the backend's `dep_satisfied` (board.rs). Merged/accepted is
  *  the bar deliberately: a dep sitting at `pr` or `human-testing` is work the
  *  human hasn't signed off yet, so a dependent starting on it would be
  *  building on something that can still come back. */
@@ -331,7 +331,7 @@ export function depState(id: string, board: readonly HasLinks[]): DepState {
 }
 
 /** The task's dependency ids that are not satisfied yet, in its own link
- *  order — the board-side mirror of the backend's `unmet_deps` (mod.rs).
+ *  order — the board-side mirror of the backend's `unmet_deps` (board.rs).
  *
  *  An id naming no live task counts as unmet, never as satisfied: reading a
  *  typo as "satisfied" would silently unblock work, which is the failure
@@ -644,7 +644,7 @@ export function indentLevel(depth: number): number {
  *  Terminates on any board, the one thing a walk over hand-editable data must
  *  guarantee: a cycle stops at the first repeat, having listed each member
  *  once, and reports that it did — `cyclic` is this same walk's other question.
- *  Mirrors the backend's `find_parent_cycle` (mod.rs), which both of that
+ *  Mirrors the backend's `find_parent_cycle` (board.rs), which both of that
  *  side's callers share for the same reason. */
 function ancestorChain<T extends HasParent>(
   task: T,
@@ -666,7 +666,7 @@ function ancestorChain<T extends HasParent>(
 
 /** The nearest container above this row whose OWN deps aren't all met (#958
  *  slice R), or `null` when the whole chain is clear — the board-side mirror of
- *  the backend's `blocking_ancestor` (mod.rs), and the id is returned rather
+ *  the backend's `blocking_ancestor` (board.rs), and the id is returned rather
  *  than a boolean so a caller can name the row that is holding this one.
  *
  *  Only an ancestor's `deps` are read, never its `status`: a container sitting
@@ -1562,7 +1562,7 @@ export function hasMissingParent<T extends HasParent>(task: T, board: readonly T
 
 // ---------------------------------------------------------------------------
 // Sprints (#1272) and grounding links (#1273) — the board's mirror of the
-// backend model. Every rule here is the backend's (mod.rs `current_sprint`,
+// backend model. Every rule here is the backend's (board.rs `current_sprint`,
 // `normalize_task_links`); these exist because the human's board reads whole
 // board rows via `orch_tasks` and derives its own view, exactly as it already
 // does for readiness. (#1317 split the note BODIES out of that read; sprint and
@@ -1777,7 +1777,7 @@ export function linkDraftIsPristine(draft: LinkDraft): boolean {
 
 /** How many characters a description may carry.
  *
- *  A MIRROR of `MAX_TASK_DESCRIPTION` in `src-tauri/src/orchestration/mod.rs`,
+ *  A MIRROR of `MAX_TASK_DESCRIPTION` in `src-tauri/src/orchestration/board.rs`,
  *  which is the authority: the backend REFUSES an over-long description rather
  *  than cutting it, and this copy exists only so the editor can say so before
  *  the round trip instead of after it. `test/taskboard.test.ts` reads the
@@ -2187,7 +2187,7 @@ export interface LinkArrayWrite {
 export interface HasLinkArrays extends HasArtifactLinks {
   deps?: readonly string[] | null;
   /** Derived per read by the backend and never stored — see `link_etag` in
-   *  `mod.rs`. Optional only because the wire type is: the backend that serves
+   *  `board.rs`. Optional only because the wire type is: the backend that serves
    *  this board always sends it, and a row that somehow arrives without one
    *  composes an UNGUARDED write, which is precisely the pre-#1349 behaviour
    *  rather than a new failure. */

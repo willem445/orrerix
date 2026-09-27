@@ -2,7 +2,7 @@
 // derivations over `CompactionStatus`/context usage (orchestration.ts) for
 // the group lifecycle panel. Never invents a parallel vocabulary: every
 // label here narrates a real backend state-machine phase (see
-// `orchestration/mod.rs`'s `compaction_status`) or the cached context-token
+// `orchestration/compactnudge.rs`'s `compaction_status`) or the cached context-token
 // reading, nothing else.
 
 import type { CompactionStatus } from "./orchestration";

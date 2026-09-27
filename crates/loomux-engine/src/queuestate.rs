@@ -245,7 +245,7 @@ impl DrainerRegistry {
     ///
     /// Both real callers (`OrchRegistry::commit_exit` and
     /// `DrainerGuard::drop`) race each other by design, and both are
-    /// no-ops when the other won: see `DrainerGuard`'s doc in `mod.rs` for
+    /// no-ops when the other won: see `DrainerGuard`'s doc in `orchestration/drainer.rs` for
     /// why an unconditional second removal could erase a SUCCESSOR
     /// drainer's live registration and run two drainers over one queue.
     /// That argument used to hold because every current call site was
@@ -276,7 +276,7 @@ impl Default for DrainerRegistry {
 /// by `queue.rs`'s `unconditional_guard_removal_reproduces_the_round_2_
 /// double_drain`. It is not: `drainer_lifecycle` is a pure simulator with
 /// its own re-implementation of the algorithm and a
-/// `guard_checks_generation` knob, and no test reads `mod.rs`.
+/// `guard_checks_generation` knob, and no test reads the real guard in `drainer.rs`.
 /// `DrainerGuard` cannot even execute in the suite — it is built only by
 /// `run_queue_drainer`, which needs an `AppHandle`.
 ///

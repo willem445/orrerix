@@ -32,7 +32,7 @@
 // ordering, the filter and the copy are unit-tested here.
 
 /** One recorded orchestration group, exactly as `orch_list_recorded` returns
- *  it (`RecordedOrchestration` in `src-tauri/src/orchestration/mod.rs`). */
+ *  it (`RecordedOrchestration` in `src-tauri/src/orchestration/agentmodel.rs`). */
 export interface RecordedOrchestration {
   group_id: string;
   /** The group's repo path, or null when its `group.json` could not be read. */

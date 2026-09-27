@@ -2164,7 +2164,7 @@ and by pure quiescence it looks idle, but the human may be away for hours and th
 legitimately still pending. Firing `failed` there would be the exact false alarm this redesign
 exists to eliminate, in the exact circumstance (the human frequently away) it's supposed to
 protect — and worse than today's noisy alarm, because a three-state `failed` carries false
-authority. The monitor reuses `prompt_wait_detected` (mod.rs — the SAME detector #420's
+authority. The monitor reuses `prompt_wait_detected` (screen.rs — the SAME detector #420's
 safety-critical paste guard already trusts in production, masked for our own paste via
 `mask_own_paste` exactly like every other checkpoint in this module) alongside the quiet check: a
 `Failed` transition requires quiet-for-threshold AND no question currently on screen. Its own
@@ -4211,7 +4211,7 @@ used it for the one thing that mattered, and a workflow-customized block's `--ag
 carried only the *persona*, never loomux's own mechanics on top of it.
 
 The fix is additive to the existing mechanism, not a second one: `block_contract_text`
-(`mod.rs`) unifies `render_block_instructions`'s output (the exact bytes the instructions FILE
+(`persona.rs`) unifies `render_block_instructions`'s output (the exact bytes the instructions FILE
 gets — refactored out of `write_block_instructions` so file and system-prompt payload can never
 diverge) with a configured persona, folded in as an addendum (`mode: append`) or alongside the
 non-overridable mechanics core (`mode: replace`) — the same composition the file/kickoff pair
@@ -4289,7 +4289,7 @@ Code system prompt entirely" — when `<name>` resolves against `.claude/agents/
 is the EXACT "native custom-agent flag, file-backed" shape Copilot's `~/.copilot/agents`
 precedent already used — round 6 makes it true for Claude too, closing the gap the ORIGINAL
 `--agents '<json>'` choice opened (see `write_claude_agent_file` and `claude_agents_dir` in
-`registry/agentfiles.rs`, and `PersonaInject::claude_agent`'s doc in `mod.rs`):
+`registry/agentfiles.rs`, and `PersonaInject::claude_agent`'s doc in `persona.rs`):
 
 - **Primary path**: `write_claude_agent_file` writes a loomux-generated, uniquely-handled
   (`loomux-<group>-<block>`, same convention as Copilot's) `~/.claude/agents/<handle>.md` file
@@ -4323,7 +4323,7 @@ precedent already used — round 6 makes it true for Claude too, closing the gap
   other removed rather than both left orphaned.
 
 **Belt-and-braces: a pre-spawn command-line length guard, independent of the file-based fix.**
-`command_line_length_guard` (`mod.rs`) checks the STRUCTURED argv form — which both spawn paths
+`command_line_length_guard` (`spawnpolicy.rs`) checks the STRUCTURED argv form — which both spawn paths
 compile from, so one check covers both — against `WINDOWS_COMMAND_LINE_SAFETY_LIMIT` (28,000,
 comfortably under the documented 32,767, leaving headroom for the shell fallback's own quoting
 inflation). Wired into both spawn call sites (`spawn_agent_ex` and `register_orchestrator_pane`)
@@ -8264,8 +8264,8 @@ keeps the caps and changes only the outcome at the cap: enqueue, never destroy.
 convention as `delivery`/`last_delivery`) and a monotonic `queue_seq: Arc<AtomicU64>` for delivery
 ids — plain `std` types, no getrandom (CLAUDE.md constraint 2). `queue.rs` is the pure half
 (`QueuedDelivery`, `EnqueueReason`/`DropReason`, `admit()`'s FIFO/cap/coalesce policy, every notice
-string, `orphaned_queue_entries`) mirroring `notify.rs`'s own pure-core/impure-wiring split; `mod.rs`
-is the impure half.
+string, `orphaned_queue_entries`) mirroring `notify.rs`'s own pure-core/impure-wiring split; `drainer.rs`
+and `registry/deliveryqueue.rs` are the impure half.
 
 - **The delivery body was extracted, not reimplemented.** `deliver_prompt`'s ~500-line paste/
   echo/confirm pipeline is now a free function, `deliver_now(...) -> DeliverOutcome`, called from
@@ -9224,7 +9224,7 @@ cannot be surfaced by this derivation, by the id-keyed orphan derivations, or by
 `audit.jsonl`. It is the #579 class exactly: *a refusal that leaves no record can never be surfaced
 by anything.*
 
-**Reasons are typed, because each one is a different instruction.** `RefusalReason` (`mod.rs`) is
+**Reasons are typed, because each one is a different instruction.** `RefusalReason` (`refusals.rs`) is
 the discriminator: `queue-full-at-call` (the pane is alive and busy — worth re-sending once it
 drains), `agent-dead-at-call` (that pane will never take it — re-target or drop as stale, do NOT
 re-send as-is), `no-terminal-at-call` (it was simply too early — re-send now that the pane has

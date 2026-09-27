@@ -926,7 +926,7 @@ it `with_git_denied` — its own `gh`-only runner behind `GitDenied`'s refusal �
 so an enqueue path that ever reached for `git` fails loudly rather than
 landing. `tests/reviewdrive.rs`'s scan keeps `queue_merge` (the form that
 builds a real git-carrying runner) on its forbidden list and admits exactly ONE
-`queue_merge_with` call, in `rdtick.rs` (`PERMITTED_ENQUEUE`), counted like
+`queue_merge_with` call, in `rdtick/` (`PERMITTED_ENQUEUE`), counted like
 `release_driven_pane`. **The consequence in this repo is deliberate and
 visible**: every PR here targets `main`, the default, so a clean drive's
 enqueue is refused `base-is-default` and the notice says so — the merge stays
@@ -1220,7 +1220,8 @@ this note first.
    a human or the orchestrator decides; the orchestrator's own kill authority is
    untouched everywhere.
    **ENFORCED BY TEST.** The scan denies `kill_agent`, `kill_agent_as`,
-   `mark_dead` and the reaper entry points inside the driver's three files, and
+   `mark_dead` and the reaper entry points inside the driver's two files and
+   `rdtick/` directory, and
    permits exactly ONE call to `release_driven_pane` — the barrier, which lives
    in `registry/agents.rs` beside the primitives it wraps, never in a driver file. The COUNT
    is the pin: a second call site is a second place the release rule can be
@@ -3582,9 +3583,10 @@ brief.
 
 **The scan's scope is FILES.** §3.1 item 1 says a scope keyed on a name — a
 module, an `rd_*` prefix — is stepped over by a landing verb added in a function
-that does not carry it. So the driver's registry wiring lives in one file
-(`src-tauri/src/orchestration/rdtick.rs`) purely so the scan can name three files
-and a rename cannot move code out from under it. The scan reads production
+that does not carry it. So the driver's registry wiring lives in one module
+(`src-tauri/src/orchestration/rdtick/`, one file per tick phase since #3498 P5)
+purely so the scan can name two files and one directory, read whole, and a
+rename cannot move code out from under it. The scan reads production
 source only: the `#[cfg(test)]` tail is cut, because a test there deliberately
 builds a landing verb in order to prove the bridge refuses it, and line comments
 are cut, because these files quote this note at length and a `///` block naming

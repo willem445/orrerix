@@ -430,8 +430,8 @@ a restart — are on the **[Project tabs](features/project-tabs.html)** feature 
 - **Copy** — select text in a terminal, then `Ctrl+C` or `Ctrl+Shift+C`.
   Plain `Ctrl+C` only copies when you can SEE a selection on screen — with
   nothing selected, or with a selection that output has scrolled out of view,
-  it's your terminal's interrupt key (`^C`), as in Windows Terminal. Copying
-  clears the selection, so the next `Ctrl+C` interrupts.
+  it's your terminal's interrupt key (`^C`). Copying clears the selection, and
+  so does typing any other key, so the next `Ctrl+C` interrupts.
   `Ctrl+Shift+C` always copies a selection and is otherwise a no-op, so use
   it if you want a gesture that's never ambiguous with interrupting a
   running process. There's no right-click menu for this and no copy-on-select.

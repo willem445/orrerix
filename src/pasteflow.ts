@@ -163,8 +163,8 @@ export interface ViewportRows {
  *  into an interrupt of the very process being read. Visibility separates the
  *  two cases; "output happened since" does not.
  *
- *  The other half of Windows Terminal's rule — a selection is gone once any
- *  other key is pressed — xterm already does itself: every key that produces
+ *  The rule needs no "a selection is gone once another key is pressed" half:
+ *  xterm already does that itself. Every key that produces
  *  input fires `onUserInput`, and its SelectionService clears the selection on
  *  that (`SelectionService` constructor, xterm 6.0).
  *

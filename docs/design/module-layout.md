@@ -127,6 +127,16 @@ The engine's `reviewdrive/` is the first such split (#3498 P7):
 - Test paths gain the file's name (`reviewdrive::tests::x` becomes
   `reviewdrive::decision::tests::x`). Test names are unchanged.
 
+The engine's `workflow/` is the second (#3498 P8), in the same shape. Its
+tests needed no shared helpers, so it has no `pub(in crate::workflow)` items,
+and its three `pub(super)` widenings are production helpers that
+`parse_workflow` calls. Its test modules keep the base file's order, so two
+comment blocks stay where that order put them: the field-inventory pin's doc
+and the `remote:` banner open `files.rs`'s test module, although the tests
+they describe are in `parse.rs`. Prose written before the split that names
+the engine's single `workflow.rs` means the directory; `mod.rs`'s module map
+says which file holds what.
+
 ## Frontend modules
 
 `*model.ts` is DOM-free and unit-tested; `*view.ts` and `*pane.ts` hold DOM

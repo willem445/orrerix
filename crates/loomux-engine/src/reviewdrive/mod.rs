@@ -6,7 +6,7 @@
 //! `rd_driver_tick` makes once its facts are in hand (§2.4). The tick itself,
 //! the `gh` reads behind those facts, the spawns, the notices and the audit
 //! lines are S3's, in `src-tauri`; the MCP tools (§5.1) are S4's; the `driver:`
-//! block (§5.3) is S2's, in `workflow.rs`.
+//! block (§5.3) is S2's, in `workflow/parse.rs`.
 //!
 //! **Why the split is drawn here and not somewhere more convenient.** Every
 //! decision this feature makes is a function of facts orrerix read a moment

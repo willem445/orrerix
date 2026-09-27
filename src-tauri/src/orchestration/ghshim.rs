@@ -1642,7 +1642,7 @@ loomux_block "gate-closed" "$default" "$num"
     // endings, which git may check out as CRLF on Windows — but a CRLF `#!/bin/sh`
     // script is broken under POSIX sh. The `.cmd` wrapper (which needs CRLF) is
     // built separately with explicit `\r\n`.
-    // #1174/#1181: the `base-green` reductions are ONE definition (workflow.rs),
+    // #1174/#1181: the `base-green` reductions are ONE definition (workflow/gate.rs),
     // interpolated here and passed to `gh --jq` by the merge queue — so the shim
     // and the queue cannot ask GitHub different questions. Both are single-quoted
     // in the template above and neither contains a `'`, which is what makes a

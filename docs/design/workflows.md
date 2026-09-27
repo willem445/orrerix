@@ -1285,7 +1285,7 @@ check-run conclusions (`success`, `neutral`, `skipped`), so a conclusion GitHub
 adds tomorrow reads as red rather than as green.
 
 **One reduction, two consumers — not two copies that match.** `BASE_CHECK_RUNS_JQ`
-and `BASE_STATUS_JQ` live in `workflow.rs` with the rest of the gate contract;
+and `BASE_STATUS_JQ` live in `workflow/gate.rs` with the rest of the gate contract;
 the shim interpolates them into its POSIX body and the merge queue passes them
 to `gh --jq`. The first cut kept a copy in each place. The copies were
 byte-identical — which *looked* like the two-implementations-one-contract
@@ -2336,7 +2336,7 @@ unfinished refusal.
 
 So `validate_knob` names the block, the knob, the exact value, the vendor reason, and both
 escapes. The escape list is *derived*: it asks every `CLI_CAPS` row loomux can spawn whether
-it carries that value. No CLI is named in `workflow.rs`, wiring a knob on another CLI updates
+it carries that value. No CLI is named in `workflow/`, wiring a knob on another CLI updates
 the message with no edit, and — per CLAUDE.md constraint 8 — the product code stays free of
 per-vendor special-casing. The skill (`.claude/skills/author-loomux-workflow`) carries the
 matrix as a snapshot and says plainly that `CLI_CAPS` wins when the two disagree.
@@ -2463,7 +2463,7 @@ guard against a *new*, differently-named, gate-shaped field being added later
 test, because nothing asserted the *set* of fields these types accept, only
 that a few reserved spellings are missing from it.
 
-`workflow.rs` closes that gap with a compile-time pin
+`workflow/parse.rs` closes that gap with a compile-time pin
 (`intake_schema_field_inventory_is_exhaustively_named`): an exhaustive
 struct-pattern destructure over `RawWorkflow`, `RawIntake` and
 `RawIntakeLabels`, naming every field each type has today with no `..` to

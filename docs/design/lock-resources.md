@@ -85,11 +85,11 @@ precisely *because* it was trying to intercept commands; dropping enforcement dr
 toolchain knowledge with it. That is a second, unplanned argument for the cooperative shape.
 
 **Restrict-only.** `workflow.yml` is untrusted repo input (whoever opens a PR authors it), so
-every clause is measured against the capability-closure spine in `workflow.rs`'s module doc.
+every clause is measured against the capability-closure spine in `workflow/mod.rs`'s module doc.
 `resources:` can only ever make an agent *wait*. It names no branch, no reviewer, no program
 and no agent; nothing in the merge or release path reads it; and `deny_unknown_fields` on
 `RawResource` makes a gate-shaped key a hard parse error rather than an ignored line. The
-`RawWorkflow` field-inventory test in `workflow.rs` forces a human to make that argument
+`RawWorkflow` field-inventory test in `workflow/parse.rs` forces a human to make that argument
 again for any field added here. The residual abuse is a hostile PR declaring `slots: 1` on
 something everyone needs, to slow the group down — bounded by `max_hold_minutes`, visible in
 the panel, and audited throughout.

@@ -37,7 +37,7 @@ zero new capability. **Rejected.**
 ## The marker: `Block.role_hint`
 
 A new *optional* `role_hint: Option<String>` field on `Block`
-(`crates/loomux-engine/src/workflow.rs`), values `advisor` | `process` (and,
+(`crates/loomux-engine/src/workflow/schema.rs`), values `advisor` | `process` (and,
 since #891, `liaison` — see `docs/design/liaison.md`). A repo can never author
 what a hint MEANS: it picks from a closed set and loomux's own code decides the
 effect, which is what keeps *a workflow file can never grant a capability* true

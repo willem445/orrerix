@@ -137,6 +137,22 @@
 //! breaks every reference to it. Layout/coordinates live in a separate
 //! `workflow.layout.json` beside it (the GUI pane's file, sub-PR 2) so a canvas
 //! nudge never churns the semantic diff.
+//!
+//! # Module map
+//!
+//! One file per concern since #3498 P8. This file keeps the header, the shared
+//! `use` lines and [`BlockId`], and re-exports every file with
+//! `pub use <file>::*`, so every `workflow::` path resolves as it did.
+//!
+//! - `files`: where a workflow lives, [`WorkflowName`], the named-workflow listing.
+//! - `schema`: [`Block`], edges and gates, the per-feature policies, [`Workflow`].
+//! - `roster`: the built-in roster, and the [`RosterDiff`] a switch is confirmed against.
+//! - `sanitize`: the free-text sanitizers, [`sanitize_id`] among them.
+//! - `parse`: the YAML wire format (`Raw*`) and [`parse_workflow`], plus the loaders.
+//! - `vocab`: kinds, role hints, driver modes, and the per-CLI knob check.
+//! - `verdict`: review verdicts and the verdict file.
+//! - `gate`: the merge gate's decision, and the spec file the gh shim reads.
+//! - `routing`: path-based reviewer routing.
 
 use crate::model::{cli_can_host, default_model, Role, SUPPORTED_CLIS};
 use crate::pathseg::{PathSegment, SegmentError};

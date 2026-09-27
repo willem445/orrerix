@@ -459,9 +459,6 @@ if [ -n \"$group_dir\" ] && [ -n \"$agent_id\" ]; then\n\
       ;;\n\
   esac\n\
 fi\n\
-if [ \"$event\" = postcompact ]; then\n\
-  cat >/dev/null 2>&1\n\
-fi\n\
 if [ \"$event\" = statusline ] && [ -n \"$4\" ]; then\n\
   chain=\"$4\"\n\
   set --\n\

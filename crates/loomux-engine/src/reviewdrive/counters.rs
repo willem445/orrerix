@@ -86,10 +86,13 @@ pub struct DriveLimits {
     /// drive run past `max_review_rounds`. Clamped by [`clamped`](Self::clamped)
     /// to the same ceiling, for the reach argument the type's own doc makes.
     pub fix_nonblocking_rounds: u32,
-    /// Private, and load-bearing: it makes `DriveLimits { … }` a compile error
-    /// outside this module (E0451), so the clamping constructors are the only
-    /// way in. The fields stay `pub` so a caller can still *read* the bounds —
-    /// what is closed is authoring one, not inspecting it.
+    /// Private to `reviewdrive`, and load-bearing: it makes `DriveLimits { … }`
+    /// a compile error outside that module (E0451), so the clamping constructors
+    /// are the only way in. The fields stay `pub` so a caller can still *read*
+    /// the bounds — what is closed is authoring one, not inspecting it.
+    /// `pub(super)` since #3498 P7 split the module into files: a sibling
+    /// file's test spells `..DriveLimits::default()`, which needs every field
+    /// visible, and `pub(super)` from here is exactly the old private scope.
     pub(super) _seal: (),
 }
 

@@ -430,9 +430,10 @@ impl OrchRegistry {
                 // cross-restart marker, delete-on-consume). What differs is the
                 // settle: the pure `postcompact_marker_disposition` holds a fresh
                 // marker for `POSTCOMPACT_SETTLE_MS` so a SessionStart(compact)
-                // written a moment later resolves the compaction natively rather
-                // than racing loomux's own reinjection into a duplicate
-                // re-grounding. While it settles, the open arm is upgraded to
+                // written within that window resolves the compaction natively
+                // rather than racing loomux's own reinjection into a duplicate
+                // re-grounding. One written after it is that duplicate — see the
+                // constant's doc. While it settles, the open arm is upgraded to
                 // trusted-and-busy (the hook has spoken: it can no longer be
                 // DISCARDED for want of a token drop) and its resolution is held
                 // for the tick — bounded by that window on the tick's own clock.

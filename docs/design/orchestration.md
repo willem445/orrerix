@@ -4925,7 +4925,13 @@ S5 adds the resolution half wherever a CLI records one:
   poll: one tick of delay while an arm is open), measured on the tick's own clock from first
   sight (`compact_hook_postcompact_first_seen_ms`), never on the marker's mtime, which a skewed
   clock could hold open forever. `any_compact_pending` counts a settling marker, so a marker
-  that arrives with no arm open is not left to the idle cadence.
+  that arrives with no arm open is not left to the idle cadence. The window is the whole of
+  the guarantee: a `SessionStart(compact)` that lands after `Resolve` has queued loomux's
+  reinjection finds the delivery phase live, clears it (rev-10 B1) and suppresses only the
+  `compact-reinjection-skipped-native` audit row — the paste already went, and Claude's hook
+  prints its native `additionalContext` regardless, so that pane is re-grounded twice.
+  Pinned as the disclosed residual it is by
+  `postcompact_a_sessionstart_after_the_settle_window_is_the_disclosed_duplicate`.
 - **Pairing, in both write orders.** A `PostCompact` marker whose mtime is within
   `POSTCOMPACT_SESSIONSTART_PAIR_MS` of the last consumed `SessionStart(compact)` marker's is
   the same compaction and is absorbed: consumed, nothing decided. Both operands are mtimes,
@@ -4943,6 +4949,22 @@ S5 adds the resolution half wherever a CLI records one:
   the signal, and the one field the payload adds is the conversation's summary, which does not
   belong on disk beside the group's state. It drains stdin, because that payload is the one
   sized like the conversation.
+- **Residual: a `SessionStart(compact)` later than the window.** Above. 5s is sized against
+  two hooks the same compaction fires back to back, not measured against a hook `sh` spawn
+  delayed by a loaded host; a longer delay reproduces rev-4 N3's duplicate for that pane,
+  once per compaction, never a loop.
+- **Residual: the wall clock.** Every marker's freshness gate compares its mtime with
+  `a.started_ms`, two wall-clock reads. A backward step (an NTP correction) between spawn
+  and a hook write makes a genuine marker read as older than the agent and it is ignored
+  like a previous process's — the case `postcompact_marker_from_before_this_agent_started_is_not_evidence`
+  pins, reached by a different road, and shared with the PreCompact and SessionStart
+  markers since #417. A forward-skewed mtime is the one direction the settle window does
+  handle (it runs on the tick's clock, pinned by
+  `postcompact_marker_with_a_future_mtime_still_resolves_on_the_tick_clock`), but it is
+  recorded as the last-consumed mtime, so a later genuine marker with a smaller mtime is not
+  fresh until the clock passes it. The pairing rule compares two mtimes from the same host
+  clock and is not affected by a step between them unless the step lands between the two
+  hook writes.
 - **Residual: a self-compaction nothing armed.** The codex and pi counts CONFIRM an arm; they
   never open one. A codex or pi pane that compacts on its own, with no request, lull fire or
   hook arm open, gets no re-grounding. Claude's markers arm on their own; Copilot's

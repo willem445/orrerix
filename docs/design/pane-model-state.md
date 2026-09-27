@@ -562,6 +562,9 @@ each other.
 - **A codex or pi self-compaction that nothing armed gets no re-grounding.** A
   count rise confirms an open arm; it never opens one, and neither CLI has a
   banner or hook orrerix arms on.
+- **A `SessionStart(compact)` later than the settle window is a duplicate
+  re-grounding**, and a wall-clock step can make a genuine marker read as stale.
+  Both are argued in `docs/design/orchestration.md`, "#413 S5".
 - **A claude arm can resolve one fast-poll tick later than before.** While a
   `PostCompact` marker settles, the busy-then-quiet resolver is held for that
   agent, so an arm it would have resolved on the first quiet tick waits for the

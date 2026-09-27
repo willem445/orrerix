@@ -24,6 +24,7 @@ mod questions;
 mod tasks;
 mod agentfiles;
 mod audit;
+mod autonomy;
 mod compact;
 mod idle;
 mod lockseams;

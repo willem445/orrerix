@@ -651,3 +651,383 @@ fn a_degrade_that_recurs_after_a_recovery_is_diagnosed_again() {
         "a successful read ends the episode, so a genuine recurrence is a new incident"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #993 S2c: the context reader — model, variant and the newest assistant
+// message's tokens, read out of the same store
+// ---------------------------------------------------------------------------
+//
+// The shapes are the pin's (`anomalyco/opencode@f67e80c2`, tag `v1.18.11`),
+// recorded as labelled observations in `docs/design/opencode.md`:
+// `session.model` is `text({ mode: "json" })` typed `{ id, providerID,
+// variant? }` (`packages/core/src/session/sql.ts`), and an assistant
+// `message.data` is the schema's `Assistant` (`packages/schema/src/v1/
+// session.ts`), whose `tokens` are `{ total?, input, output, reasoning,
+// cache: { read, write } }`. Every test name starts `context_`, the plan's
+// red-before-green filter.
+
+use loomux_lib::modelstate::{opencode_compaction_signal_in, ContextSource};
+use loomux_lib::opencodedb::SessionModelState;
+
+/// `message`, verbatim from `packages/core/src/session/sql.ts` at the pin.
+fn message_ddl() -> &'static str {
+    "CREATE TABLE IF NOT EXISTS message (
+        id text PRIMARY KEY, session_id text NOT NULL,
+        time_created integer NOT NULL, time_updated integer NOT NULL,
+        data text NOT NULL)"
+}
+
+/// One `message` row: its id, its `time_created`, and its `data` document.
+struct Msg {
+    id: String,
+    time: i64,
+    data: String,
+}
+
+fn msg(id: &str, time: i64, data: String) -> Msg {
+    Msg { id: id.to_string(), time, data }
+}
+
+/// Append `msgs` to `session`'s messages in the store at `path`, in the ORDER
+/// GIVEN — which the tests below make differ from time order where the order
+/// is what they pin.
+fn add_messages(path: &Path, session: &str, msgs: &[Msg]) {
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch(message_ddl()).unwrap();
+    for m in msgs {
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?3, ?4)",
+            rusqlite::params![m.id, session, m.time, m.data],
+        )
+        .unwrap();
+    }
+}
+
+/// One step's usage, as `Session.getUsage` stores it: `input` already has
+/// both cache counts taken out.
+#[derive(Default, Clone, Copy)]
+struct Usage {
+    input: i64,
+    output: i64,
+    reasoning: i64,
+    cache_read: i64,
+    cache_write: i64,
+}
+
+/// An assistant `message.data` in the pin's `Assistant` shape (`id` and
+/// `sessionID` are columns, so `V1MessageData` omits them).
+fn assistant(u: Usage) -> String {
+    serde_json::json!({
+        "role": "assistant",
+        "time": { "created": 1_785_703_307_950u64, "completed": 1_785_703_341_088u64 },
+        "parentID": "msg_user",
+        "modelID": "deepseek-v4-flash",
+        "providerID": "opencode",
+        "mode": "build",
+        "agent": "build",
+        "path": { "cwd": "C:/Projects/loomux", "root": "C:/Projects/loomux" },
+        "cost": 0.0,
+        "tokens": {
+            "input": u.input, "output": u.output, "reasoning": u.reasoning,
+            "cache": { "read": u.cache_read, "write": u.cache_write },
+        },
+        "variant": "high",
+        "finish": "stop",
+    })
+    .to_string()
+}
+
+/// The compaction's own assistant message: `summary: true`, `mode` and
+/// `agent` `"compaction"` (`session/compaction.ts` at the pin).
+fn compaction_summary(u: Usage) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(&assistant(u)).unwrap();
+    v["summary"] = serde_json::json!(true);
+    v["mode"] = serde_json::json!("compaction");
+    v["agent"] = serde_json::json!("compaction");
+    v.to_string()
+}
+
+fn user() -> String {
+    serde_json::json!({
+        "role": "user",
+        "time": { "created": 1_785_703_300_000u64 },
+        "agent": "build",
+        "model": { "providerID": "opencode", "modelID": "deepseek-v4-flash", "variant": "high" },
+    })
+    .to_string()
+}
+
+/// The pin's column shape for a pane on `opencode/deepseek-v4-flash` at the
+/// `high` variant.
+const JSON_MODEL: &str = r#"{"id":"deepseek-v4-flash","providerID":"opencode","variant":"high"}"#;
+
+#[test]
+fn context_a_json_model_column_is_read_as_provider_model_and_its_variant() {
+    let s = Scratch::new("ctx-json-model");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+
+    let state = opencodedb::session_model_state(&s.db(), SES).unwrap().expect("session row");
+    assert_eq!(
+        state,
+        SessionModelState { model: Some("opencode/deepseek-v4-flash".into()), variant: Some("high".into()) },
+        "the `provider/model` spelling `opencode models` lists and `--model` takes, with the variant beside it"
+    );
+}
+
+#[test]
+fn context_a_plain_string_model_column_keeps_working() {
+    let s = Scratch::new("ctx-plain-model");
+    store(&s.db(), &[Row { model: Some("deepseek-v4-flash-free"), ..Row::new(SES) }]);
+
+    let state = opencodedb::session_model_state(&s.db(), SES).unwrap().expect("session row");
+    assert_eq!(
+        state,
+        SessionModelState { model: Some("deepseek-v4-flash-free".into()), variant: None },
+        "a plain string is taken verbatim, and it carries no variant"
+    );
+}
+
+#[test]
+fn context_the_usage_row_names_the_model_not_the_columns_json_text() {
+    // The display defect `docs/design/token-charts.md` named: the usage reader
+    // handed the JSON column on as text, so a chart legend read
+    // `{"id":"deepseek-v4-flash",…}`.
+    let s = Scratch::new("ctx-usage-model");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), input: 100, ..Row::new(SES) }]);
+
+    let got = opencodedb::session_usage(&s.db(), SES).unwrap().expect("session row");
+    assert_eq!(got.input, 100, "positive control: the row was read");
+    assert_eq!(got.model.as_deref(), Some("opencode/deepseek-v4-flash"));
+}
+
+#[test]
+fn context_a_json_model_column_decodes_every_field_and_never_leaks_its_text() {
+    let decode = opencodedb::parse_model_column;
+    // No providerID: the id alone, never a leading `/`.
+    assert_eq!(decode(r#"{"id":"gpt-5.1-codex"}"#).model.as_deref(), Some("gpt-5.1-codex"));
+    // A provider whose model id has its own `/`: joined, not re-split.
+    assert_eq!(
+        decode(r#"{"id":"anthropic/claude-sonnet-4","providerID":"openrouter"}"#).model.as_deref(),
+        Some("openrouter/anthropic/claude-sonnet-4")
+    );
+    // `"default"` is what `SessionPrompt` writes when the prompt chose no
+    // variant (`variant ?? "default"`), so it is no effort reading; nor is an
+    // empty one.
+    assert_eq!(decode(r#"{"id":"m","providerID":"p","variant":"default"}"#).variant, None);
+    assert_eq!(decode(r#"{"id":"m","providerID":"p","variant":""}"#).variant, None);
+    assert_eq!(
+        decode(r#"{"id":"m","providerID":"p","variant":"max"}"#).variant.as_deref(),
+        Some("max"),
+        "positive control: a chosen variant is read"
+    );
+    // An object with no usable id is no model at all — printing its JSON as a
+    // label is exactly the defect this decoder ends.
+    assert_eq!(decode(r#"{"providerID":"opencode","variant":"high"}"#).model, None);
+    assert_eq!(decode("").model, None);
+}
+
+#[test]
+fn context_the_newest_assistant_message_is_the_reading_and_only_its_input_side_counts() {
+    let s = Scratch::new("ctx-newest");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    // Inserted NEWEST FIRST, so a reader that follows insertion (rowid) order
+    // rather than `time_created` picks the older turn.
+    add_messages(
+        &s.db(),
+        SES,
+        &[
+            msg(
+                "msg_0003",
+                3_000,
+                assistant(Usage { input: 20_000, output: 100, reasoning: 50, cache_read: 3_000, cache_write: 400 }),
+            ),
+            msg("msg_0002", 2_000, user()),
+            msg("msg_0001", 1_000, assistant(Usage { input: 1_000, ..Usage::default() })),
+        ],
+    );
+
+    assert_eq!(
+        opencodedb::latest_assistant_context(&s.db(), SES).unwrap(),
+        Some(23_400),
+        "input + cache.read + cache.write of the NEWEST turn; output and reasoning are what it produced"
+    );
+}
+
+#[test]
+fn context_an_in_flight_turns_zeros_are_not_a_reading() {
+    // An assistant message is inserted with every counter at zero and filled at
+    // its first `step-finish`; a `0` would read as a compaction's token drop.
+    // So the walk steps past it to the turn below.
+    let s = Scratch::new("ctx-zero");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(
+        &s.db(),
+        SES,
+        &[
+            msg("msg_0001", 1_000, assistant(Usage { input: 40_000, cache_read: 2_000, ..Usage::default() })),
+            msg("msg_0002", 2_000, assistant(Usage::default())),
+        ],
+    );
+
+    assert_eq!(opencodedb::latest_assistant_context(&s.db(), SES).unwrap(), Some(42_000));
+}
+
+#[test]
+fn context_a_finished_compaction_summary_ends_the_walk_until_a_post_compact_turn_finishes() {
+    // After a compaction neither the summary's figure (its call read the whole
+    // pre-compact history) nor any OLDER turn is what the context holds, so the
+    // walk stops at a finished summary with no reading — opencode's own overflow
+    // check makes no judgement on a summary either, rather than falling back.
+    let pre = || msg("msg_0001", 1_000, assistant(Usage { input: 40_000, cache_read: 2_000, ..Usage::default() }));
+    let summary = || msg("msg_0002", 2_000, compaction_summary(Usage { input: 180_000, ..Usage::default() }));
+
+    // [turn, summary, post-compact turn still in flight]: no reading, not 42_000.
+    let s = Scratch::new("ctx-summary-inflight");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(&s.db(), SES, &[pre(), summary(), msg("msg_0003", 3_000, assistant(Usage::default()))]);
+    assert_eq!(
+        opencodedb::latest_assistant_context(&s.db(), SES).unwrap(),
+        None,
+        "the pre-compact turn below a finished summary is not what the context holds"
+    );
+
+    // [turn, summary, post-compact turn finished]: the post-compact figure.
+    let s = Scratch::new("ctx-summary-after");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(
+        &s.db(),
+        SES,
+        &[pre(), summary(), msg("msg_0003", 3_000, assistant(Usage { input: 9_000, cache_write: 500, ..Usage::default() }))],
+    );
+    assert_eq!(opencodedb::latest_assistant_context(&s.db(), SES).unwrap(), Some(9_500));
+
+    // [turn, summary still running]: the compaction has not finished, so the
+    // pre-compact turn is still what the context holds.
+    let s = Scratch::new("ctx-summary-running");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(&s.db(), SES, &[pre(), msg("msg_0002", 2_000, compaction_summary(Usage::default()))]);
+    assert_eq!(opencodedb::latest_assistant_context(&s.db(), SES).unwrap(), Some(42_000));
+}
+
+#[test]
+fn context_an_unknown_session_or_absent_store_is_no_signal() {
+    // No session row: not yet written (the watcher bound an id the store has not
+    // committed), or a stale id. A model-less signal would be a reading about
+    // nothing.
+    let s = Scratch::new("ctx-unknown");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    // A real store always has the `message` table; without it the reader
+    // reports schema drift, which is also no signal but not the case here.
+    add_messages(&s.db(), SES, &[]);
+    assert!(opencode_compaction_signal_in(&s.db(), SES).is_some(), "positive control: the known session reads");
+    assert!(opencode_compaction_signal_in(&s.db(), SUB).is_none(), "an id with no session row is no signal");
+    assert_eq!(opencodedb::session_model_state(&s.db(), SUB).unwrap(), None);
+
+    let absent = Scratch::new("ctx-absent");
+    assert!(opencode_compaction_signal_in(&absent.db(), SES).is_none(), "no store at all is no signal");
+}
+
+#[test]
+fn context_a_null_model_column_is_a_session_with_no_model_and_its_tokens_still_read() {
+    let s = Scratch::new("ctx-null-model");
+    store(&s.db(), &[Row { model: None, ..Row::new(SES) }]);
+    add_messages(&s.db(), SES, &[msg("msg_0001", 1_000, assistant(Usage { input: 1_234, ..Usage::default() }))]);
+
+    assert_eq!(
+        opencodedb::session_model_state(&s.db(), SES).unwrap(),
+        Some(SessionModelState::default()),
+        "the session exists; it just names no model"
+    );
+    let signal = opencode_compaction_signal_in(&s.db(), SES).expect("a NULL column still yields a signal");
+    assert_eq!((signal.model, signal.effort), (None, None));
+    assert_eq!(signal.tokens, Some(1_234));
+}
+
+#[test]
+fn context_a_session_with_no_assistant_message_has_no_tokens_but_keeps_its_model() {
+    let s = Scratch::new("ctx-no-assistant");
+    store(&s.db(), &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(&s.db(), SES, &[msg("msg_0001", 1_000, user())]);
+
+    assert_eq!(opencodedb::latest_assistant_context(&s.db(), SES).unwrap(), None);
+    let signal = opencode_compaction_signal_in(&s.db(), SES).expect("the session exists, so there is a signal");
+    assert_eq!(signal.tokens, None, "no finished turn is no reading, never a 0");
+    assert_eq!(signal.model.as_deref(), Some("opencode/deepseek-v4-flash"), "positive control: the store was read");
+}
+
+#[test]
+fn context_the_scan_reaches_back_exactly_the_documented_bound_and_no_further() {
+    // The residual pinned rather than asserted: a counted turn with
+    // `CONTEXT_SCAN_ROWS` or more newer messages above it is not found. One
+    // assistant at the oldest slot, then `bound - 1` user messages: read. One
+    // more: not.
+    let bound = opencodedb::CONTEXT_SCAN_ROWS;
+    let s = Scratch::new("ctx-bound");
+    store(&s.db(), &[Row::new(SES)]);
+    add_messages(&s.db(), SES, &[msg("msg_a", 0, assistant(Usage { input: 777, ..Usage::default() }))]);
+    let users: Vec<Msg> = (1..bound).map(|i| msg(&format!("msg_u{i:04}"), i, user())).collect();
+    add_messages(&s.db(), SES, &users);
+    assert_eq!(opencodedb::latest_assistant_context(&s.db(), SES).unwrap(), Some(777), "at the bound: still read");
+
+    add_messages(&s.db(), SES, &[msg("msg_z", bound, user())]);
+    assert_eq!(opencodedb::latest_assistant_context(&s.db(), SES).unwrap(), None, "one past the bound: not read");
+}
+
+#[test]
+fn context_agent_context_signals_dispatches_opencode_to_its_group_store_reader() {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/opencode-repo", rails("opencode")).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    assert!(w.session_id.is_none(), "opencode mints its own session id after boot");
+    // The session watcher's own binding call — the production path.
+    assert!(reg.associate_session(&g.id, &w.id, SES));
+
+    let db = reg.opencode_db_path(&g.id);
+    store(&db, &[Row { model: Some(JSON_MODEL), ..Row::new(SES) }]);
+    add_messages(
+        &db,
+        SES,
+        &[msg(
+            "msg_0001",
+            1_000,
+            assistant(Usage { input: 20_000, cache_read: 3_000, cache_write: 400, output: 100, reasoning: 50 }),
+        )],
+    );
+
+    let signal = reg
+        .agent_context_signals()
+        .remove(&w.id)
+        .expect("the opencode agent should receive its store's context signal");
+    assert_eq!(signal.source, ContextSource::OpencodeDb);
+    assert_eq!(signal.tokens, Some(23_400));
+    assert_eq!(signal.model.as_deref(), Some("opencode/deepseek-v4-flash"));
+    assert_eq!(signal.effort.as_deref(), Some("high"), "the session's variant is the pane's effort");
+    assert_eq!(
+        (signal.window_tokens, signal.window_rounded),
+        (None, false),
+        "the store records no window, and opencode documents no other source loomux may read"
+    );
+    assert_eq!(signal.compact_boundary_count, 0);
+}
+
+#[test]
+fn context_the_opencode_arm_never_reads_another_clis_pane() {
+    // A mixed-CLI group is the normal case: a claude pane bound to an id that
+    // also names a row in the group's opencode store must not be read out of it.
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/opencode-repo", rails("claude")).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    let sid = w.session_id.clone().expect("a claude pane carries a preminted session id");
+    let db = reg.opencode_db_path(&g.id);
+    store(&db, &[Row { model: Some(JSON_MODEL), ..Row::new(&sid) }]);
+    add_messages(&db, &sid, &[msg("msg_0001", 1_000, assistant(Usage { input: 5_000, ..Usage::default() }))]);
+    // Positive control: the store really answers for that id.
+    assert!(opencode_compaction_signal_in(&db, &sid).is_some());
+
+    let signals = reg.agent_context_signals();
+    assert!(
+        signals.get(&w.id).map_or(true, |s| s.source != ContextSource::OpencodeDb),
+        "a claude pane must never be read out of the opencode store because a row there carries its id"
+    );
+}

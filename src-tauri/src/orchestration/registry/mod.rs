@@ -23,6 +23,7 @@ mod merge;
 mod questions;
 mod tasks;
 mod agentfiles;
+mod audit;
 mod lockseams;
 mod persist;
 

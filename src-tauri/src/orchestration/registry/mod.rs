@@ -1109,9 +1109,13 @@ pub struct OrchRegistry {
     /// has gone or `modelstate::CODEX_ROLLOUT_REVALIDATE_AFTER` has passed.
     ///
     /// **Bound**: every entry older than that interval is dropped on each
-    /// resolution, so it holds at most the codex sessions resolved in the last
-    /// five minutes — the live codex panes plus any that died inside that
-    /// window. Never held across the walk or the stat.
+    /// WALK — a reuse returns before the prune (`OrchRegistry::codex_rollout_path`).
+    /// A live codex pane walks at least once per interval, when its own entry
+    /// expires, so while any is live this holds at most the codex sessions
+    /// resolved in the last two intervals: the live panes plus any that died
+    /// inside that span. Once no codex pane is polled at all, nothing walks and
+    /// what is left stays until the next one does — bounded by the codex
+    /// sessions that were live before. Never held across the walk or the stat.
     pub(super) codex_rollout_paths: TrackedMutex<HashMap<(PathBuf, String), crate::modelstate::RememberedRollout>>,
     /// Agents whose context reading has tokens but no window a percent may be
     /// computed against, and whose "never escalates" audit row has already

@@ -244,6 +244,28 @@ pub(in crate::orchestration) const ARM_PENDING_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 /// arms are NEVER gated by this — they don't infer anything, so there is
 /// nothing for a stale echo to fool.
 pub(in crate::orchestration) const INFERENCE_ARM_COOLDOWN_MS: u64 = 3 * 60_000;
+/// #413 S5: how long a fresh Claude `PostCompact` marker waits, measured on the
+/// tick's own clock from when loomux first saw it
+/// (`AgentEntry::compact_hook_postcompact_first_seen_ms`), before it resolves
+/// the compaction by deciding loomux's own reinjection.
+///
+/// **Why wait at all.** The same compaction also fires `SessionStart(compact)`,
+/// whose arm prints native `additionalContext` — and a compaction that marker
+/// resolves must NOT also get loomux's reinjection (rev-4 N3: a duplicate
+/// re-grounding spends exactly the tokens native delivery saves). The hooks
+/// reference does not say which of the two fires first, and the tick can read
+/// the directory between the two writes. So a `PostCompact` marker settles for
+/// this long first; a `SessionStart(compact)` that lands meanwhile resolves the
+/// compaction terminally and the `PostCompact` marker is then absorbed. Shorter
+/// than `COMPACT_NUDGE_FAST_POLL_INTERVAL` on purpose: while an arm is open the
+/// marker resolves on the tick after the one that first saw it, never later.
+pub const POSTCOMPACT_SETTLE_MS: u64 = 5_000;
+/// #413 S5: how close a `PostCompact` marker's mtime must sit to the last
+/// consumed `SessionStart(compact)` marker's for the two to be read as ONE
+/// compaction, whichever wrote first. Both hooks fire as that compaction
+/// completes; a second compaction a minute later would need a second
+/// summarisation call and a refilled context in between.
+pub const POSTCOMPACT_SESSIONSTART_PAIR_MS: u64 = 60_000;
 pub const DEFAULT_COMPACT_CONTEXT_THRESHOLD_PERCENT: u32 = 45;
 // Compact-nudge (#328): the context window for `latest_context_tokens`-based
 // percent calculations used to be a single flat constant here

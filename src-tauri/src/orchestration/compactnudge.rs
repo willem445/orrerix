@@ -962,6 +962,54 @@ fn copilot_compaction_marker_substrings(cli: &str) -> &'static [&'static str] {
     }
 }
 
+/// #413 S5: what `compact_nudge_tick` does with a FRESH Claude `PostCompact`
+/// marker this tick — see [`postcompact_marker_disposition`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostCompactDisposition {
+    /// Consume the marker and change nothing: its compaction is already
+    /// accounted for — resolved natively by a paired `SessionStart(compact)`,
+    /// or already in the reinjection-delivery phase.
+    Absorb,
+    /// Leave the marker on disk and hold this agent's arm resolution for the
+    /// tick: the settle window (`POSTCOMPACT_SETTLE_MS`) is still open.
+    Settle,
+    /// Consume the marker and decide loomux's own reinjection now — trusted
+    /// evidence that the compaction finished, with no native re-grounding seen.
+    Resolve,
+}
+
+/// #413 S5: the pure decision behind Claude's `PostCompact` marker, so each
+/// branch is pinned without a registry. Checked in this order:
+///
+/// 1. **Absorb** when a consumed `SessionStart(compact)` marker's mtime
+///    (`sessionstart_seen_ts`) lies within `POSTCOMPACT_SESSIONSTART_PAIR_MS`
+///    of this one's — one compaction, already resolved natively, whichever
+///    hook wrote first — or when a reinjection is already decided and waiting
+///    on its delivery (never re-decide a live phase: rev-10 B1's ordering rule).
+/// 2. **Settle** on first sight (`first_seen_ms` `None` — the caller records
+///    `now`) and until `POSTCOMPACT_SETTLE_MS` has passed on the tick's clock.
+/// 3. **Resolve** after that.
+///
+/// Both clocks stay separate: the pairing compares two marker mtimes, the
+/// settle window two tick `now`s. Mixing them would let a skewed mtime hold an
+/// arm open forever.
+pub fn postcompact_marker_disposition(
+    marker_ts: u64,
+    sessionstart_seen_ts: Option<u64>,
+    reinjection_decided: bool,
+    first_seen_ms: Option<u64>,
+    now: u64,
+) -> PostCompactDisposition {
+    let paired = sessionstart_seen_ts.is_some_and(|s| s.abs_diff(marker_ts) <= POSTCOMPACT_SESSIONSTART_PAIR_MS);
+    if paired || reinjection_decided {
+        return PostCompactDisposition::Absorb;
+    }
+    match first_seen_ms {
+        Some(first) if now.saturating_sub(first) >= POSTCOMPACT_SETTLE_MS => PostCompactDisposition::Resolve,
+        _ => PostCompactDisposition::Settle,
+    }
+}
+
 /// #428 (round 9): whether Copilot's pane output shows its OWN compaction-
 /// completion paint — the fast terminal-path analog of Claude's
 /// SessionStart(compact) hook marker (round 7), for a CLI that ships no

@@ -185,6 +185,11 @@ impl OrchRegistry {
         // provenance distinction `to_hook_armed` already draws for
         // marker-file evidence vs. inference.
         let mut to_copilot_marker_resolved: Vec<(String, GroupId)> = Vec::new();
+        // #413 S5: an arm resolved by Claude's PostCompact marker — audited
+        // distinctly (`compact-resolved-postcompact`) for the same provenance
+        // reason as the Copilot marker above: the CLI's own hook said the
+        // compaction finished, nothing was inferred.
+        let mut to_postcompact_resolved: Vec<(String, GroupId)> = Vec::new();
         {
             let mut agents = self.agents.lock_safe();
             for a in agents.values_mut() {
@@ -407,6 +412,101 @@ impl OrchRegistry {
                         // seen either way.
                         if !reinject_already_dispatched {
                             to_hook_native_skip.push((a.id.clone(), a.group.clone()));
+                        }
+                    }
+                }
+
+                // #413 S5: Claude's `PostCompact` marker — trusted proof the
+                // compaction FINISHED, the resolution half #417's PreCompact
+                // arm never had. Checked AFTER the SessionStart block so a
+                // same-tick SessionStart(compact) always wins (it is terminal and
+                // carries native re-grounding), and BEFORE every inference arm
+                // and the busy-then-quiet resolver below, which is the point: an
+                // arm this marker speaks for resolves on the hook's word, never
+                // on a quiet tick's guess and never through the inference gate.
+                //
+                // The same three freshness layers as the markers above (`ts`
+                // newer than the last consumed, `ts >= a.started_ms` against a
+                // cross-restart marker, delete-on-consume). What differs is the
+                // settle: the pure `postcompact_marker_disposition` holds a fresh
+                // marker for `POSTCOMPACT_SETTLE_MS` so a SessionStart(compact)
+                // written a moment later resolves the compaction natively rather
+                // than racing loomux's own reinjection into a duplicate
+                // re-grounding. While it settles, the open arm is upgraded to
+                // trusted-and-busy (the hook has spoken: it can no longer be
+                // DISCARDED for want of a token drop) and its resolution is held
+                // for the tick — bounded by that window on the tick's own clock.
+                let postcompact_marker = hooks_dir.join(format!("{}.postcompact.json", a.id));
+                let mut postcompact_settling = false;
+                match read_hook_marker_ts(&postcompact_marker)
+                    .filter(|&ts| ts > a.compact_hook_postcompact_seen_ms.unwrap_or(0) && ts >= a.started_ms)
+                {
+                    None => a.compact_hook_postcompact_first_seen_ms = None,
+                    Some(ts) => {
+                        let first_sight = a.compact_hook_postcompact_first_seen_ms.is_none();
+                        if first_sight {
+                            to_hook_armed.push((a.id.clone(), a.group.clone(), "postcompact"));
+                        }
+                        match postcompact_marker_disposition(
+                            ts,
+                            a.compact_hook_sessionstart_seen_ms,
+                            a.compact_reinject_attempted_ms.is_some(),
+                            a.compact_hook_postcompact_first_seen_ms,
+                            now,
+                        ) {
+                            PostCompactDisposition::Absorb => {
+                                a.compact_hook_postcompact_seen_ms = Some(ts);
+                                a.compact_hook_postcompact_first_seen_ms = None;
+                                let _ = fs::remove_file(&postcompact_marker);
+                            }
+                            PostCompactDisposition::Settle => {
+                                if first_sight {
+                                    a.compact_hook_postcompact_first_seen_ms = Some(now);
+                                }
+                                if a.compact_pending {
+                                    a.compact_pending_trusted = true;
+                                    a.compact_seen_busy = true;
+                                    a.compact_pending_evidence = Some("hook");
+                                }
+                                postcompact_settling = true;
+                            }
+                            PostCompactDisposition::Resolve => {
+                                a.compact_hook_postcompact_seen_ms = Some(ts);
+                                a.compact_hook_postcompact_first_seen_ms = None;
+                                let _ = fs::remove_file(&postcompact_marker);
+                                // Enter the delivery-confirmation phase with the
+                                // SAME field inventory the busy-then-quiet
+                                // "confirmed" branch and the Copilot marker branch
+                                // use (rev-21: two paths into one phase reset the
+                                // same fields). Unconditional on an arm being open,
+                                // like SessionStart(compact): a compaction whose
+                                // PreCompact this loop never saw still finished,
+                                // and still needs re-grounding.
+                                a.compact_pending = true;
+                                a.compact_pending_evidence = Some("hook");
+                                a.compact_pending_baseline_tokens = None;
+                                a.compact_pending_baseline_marker_count = None;
+                                a.compact_pending_trusted = false;
+                                a.compact_seen_busy = false;
+                                a.compact_pending_armed_ms = None;
+                                a.compact_reinject_attempts = 1;
+                                a.compact_reinject_attempted_ms = Some(now);
+                                a.compact_reinject_busy_deferred = false;
+                                let instructions = self.group_dir(&a.group).join(
+                                    g.block(&a.block)
+                                        .map(|b| b.instructions_file())
+                                        .unwrap_or_else(|| role_instructions_file(a.role).to_string()),
+                                );
+                                // #925 — see the sibling sites below.
+                                if let Ok(agent_seg) = PathSegment::parse(&a.id) {
+                                    let ledger = self.ledger_path(&a.group, &agent_seg);
+                                    to_reinject.push((
+                                        a.id.clone(), a.group.clone(), instructions, ledger,
+                                        1, a.contract_carrier,
+                                    ));
+                                }
+                                to_postcompact_resolved.push((a.id.clone(), a.group.clone()));
+                            }
                         }
                     }
                 }
@@ -684,7 +784,7 @@ impl OrchRegistry {
                             }
                         }
                     }
-                } else if a.compact_pending {
+                } else if a.compact_pending && !postcompact_settling {
                     // Production bug fix (#410, PR #329 round 6): an arm that
                     // never reaches a busy-then-quiet resolution — a stalled
                     // agent, a compaction that never actually starts, or (the
@@ -874,6 +974,16 @@ impl OrchRegistry {
                         }
                     }
                     }
+                }
+
+                // #413 S5: while a PostCompact marker settles, nothing else in
+                // this pass acts on the pane — a compaction just FINISHED, so it
+                // is no moment to paste another `/compact`, infer a new one from
+                // its banner, or escalate on a reading from before it. Bounded by
+                // `POSTCOMPACT_SETTLE_MS`, and everything above (token cache,
+                // growth rebaseline, the hook markers) has already run.
+                if postcompact_settling {
+                    continue;
                 }
 
                 // A paused group's agents are deliberately quiet; never nudge,
@@ -1244,6 +1354,13 @@ impl OrchRegistry {
             self.audit(&group, brand::AUDIT_ACTOR, "compact-reinjection-skipped-native", json!({
                 "agent": id,
                 "reason": "SessionStart hook already delivered native additionalContext for this compaction",
+            }));
+        }
+        for (id, group) in to_postcompact_resolved {
+            self.audit(&group, brand::AUDIT_ACTOR, "compact-resolved-postcompact", json!({
+                "agent": id,
+                "reason": "Claude's PostCompact hook reported the compaction finished and no SessionStart(compact) re-grounding arrived within the settle window",
+                "settle_ms": POSTCOMPACT_SETTLE_MS,
             }));
         }
         for (id, group) in to_copilot_marker_resolved {
@@ -1695,8 +1812,16 @@ impl OrchRegistry {
     /// eligible for compact-nudge's inference detectors, so the elevated
     /// cadence's extra cost lands only on agents it could possibly matter
     /// for.
+    ///
+    /// #413 S5: a `PostCompact` marker in its settle window counts too. It may
+    /// have arrived with no arm open (a compaction whose PreCompact this loop
+    /// never saw), and without this its resolution would wait on the idle
+    /// cadence rather than the tick after `POSTCOMPACT_SETTLE_MS`.
     pub fn any_compact_pending(&self) -> bool {
-        self.agents.lock_safe().values().any(|a| a.compact_pending)
+        self.agents
+            .lock_safe()
+            .values()
+            .any(|a| a.compact_pending || a.compact_hook_postcompact_first_seen_ms.is_some())
     }
 
     /// One full compact-nudge cycle: read pty counters, then tick. Called on a

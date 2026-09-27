@@ -664,7 +664,7 @@ pub struct Pruned {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+mod tests {
     use super::*;
 
     // ── §5.2 the state file ─────────────────────────────────────────────────
@@ -674,7 +674,7 @@ pub(super) mod tests {
     /// contract rather than an illustration, and the three fields this module
     /// adds are absent from it on purpose: each is `serde(default)`, so a file
     /// written against the published shape still reads.
-    pub(in crate::reviewdrive) const NOTE_EXAMPLE: &str = r#"{
+    const NOTE_EXAMPLE: &str = r#"{
       "version": 1,
       "entries": [
         { "pr": 1758,

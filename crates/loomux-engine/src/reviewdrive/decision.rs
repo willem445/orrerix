@@ -734,12 +734,12 @@ pub(super) fn minutes_ms(minutes: u64) -> u64 {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+mod tests {
     use super::*;
 
     // ── §2.4 the decision ───────────────────────────────────────────────────
 
-    pub(in crate::reviewdrive) fn facts_at(head: &str) -> DriveFacts {
+    fn facts_at(head: &str) -> DriveFacts {
         DriveFacts {
             now_ms: 2_000,
             pr_open: Some(true),
@@ -756,7 +756,7 @@ pub(super) mod tests {
         }
     }
 
-    pub(in crate::reviewdrive) fn lane_fact(block: &str, v: Option<Verdict>, at_head: &str, digest: &str) -> LaneFact {
+    fn lane_fact(block: &str, v: Option<Verdict>, at_head: &str, digest: &str) -> LaneFact {
         LaneFact {
             block: block.to_string(),
             verdict: v.map(|verdict| ReviewVerdict {
@@ -780,7 +780,7 @@ pub(super) mod tests {
     /// [`lane_fact`] whose `pass` is the driver's body-VERIFICATION delta
     /// (#2168 E2) — the mark `review_verdict` writes for a lane the driver
     /// briefed because only the body had moved.
-    pub(in crate::reviewdrive) fn verified_lane_fact(block: &str, at_head: &str, digest: &str) -> LaneFact {
+    fn verified_lane_fact(block: &str, at_head: &str, digest: &str) -> LaneFact {
         let mut l = lane_fact(block, Some(Verdict::Pass), at_head, digest);
         if let Some(v) = l.verdict.as_mut() {
             v.verified_body = true;

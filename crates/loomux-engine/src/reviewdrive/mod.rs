@@ -147,10 +147,3 @@ pub use facts::*;
 pub use decision::*;
 pub use findings::*;
 pub use release::*;
-
-#[cfg(test)]
-use self::{
-    decision::tests::{facts_at, lane_fact, verified_lane_fact},
-    entry::tests::entry_at,
-    store::tests::NOTE_EXAMPLE,
-};

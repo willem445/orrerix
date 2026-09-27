@@ -177,7 +177,8 @@ Never say "looks good" - say what you ran.
 
 No local `cargo`; read CI. `npm test`, `node -e`, `wc`, `grep` and
 `rustfmt --check` are allowed; rustfmt only within the `ci-validate` skill's
-size cap, never on `orchestration/mod.rs` (tens of GB of RAM, #3469).
+size cap: never on a file over 5,000 lines, nor on `orchestration/mod.rs`, whose
+`mod` children include two (tens of GB of RAM, #3469).
 
 ## Rules learned in the second trial round (#1751 r3, #1755 r2)
 

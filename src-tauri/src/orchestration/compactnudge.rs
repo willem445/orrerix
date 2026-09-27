@@ -1005,7 +1005,7 @@ pub fn postcompact_marker_disposition(
         return PostCompactDisposition::Absorb;
     }
     match first_seen_ms {
-        Some(first) if now.saturating_sub(first) >= POSTCOMPACT_SETTLE_MS => PostCompactDisposition::Resolve,
+        Some(first) if now.saturating_sub(first) >= POSTCOMPACT_SETTLE_MS * 1000 => PostCompactDisposition::Resolve,
         _ => PostCompactDisposition::Settle,
     }
 }

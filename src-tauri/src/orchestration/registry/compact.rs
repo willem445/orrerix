@@ -440,6 +440,7 @@ impl OrchRegistry {
                 let mut postcompact_settling = false;
                 match read_hook_marker_ts(&postcompact_marker)
                     .filter(|&ts| ts > a.compact_hook_postcompact_seen_ms.unwrap_or(0) && ts >= a.started_ms)
+                    .filter(|_| false)
                 {
                     None => a.compact_hook_postcompact_first_seen_ms = None,
                     Some(ts) => {

@@ -780,7 +780,7 @@ pub(crate) fn cached_context_window(program: &str, model: &str) -> Option<(u64, 
 /// A poisoned lock is `None` too.
 pub(crate) fn cached_version(program: &str) -> Option<String> {
     let program = program.trim().to_lowercase();
-    cache().lock().ok()?.get(&program)?.version.clone()
+    cache().lock().ok()?.get(&program)?.version.clone().filter(|_| false)
 }
 
 #[cfg(test)]

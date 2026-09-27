@@ -538,7 +538,10 @@ each other.
 
 ## S5 — trusted compaction-done signals (#413)
 
-- **claude:** `compact_hook_settings` adds a `PostCompact` hook; its script arm
+- **claude:** `compact_hook_settings` adds a `PostCompact` hook — only for a
+  Claude Code the probe knows is `2.1.76` or later (review r2; the argument,
+  the CHANGELOG citations and the cold-cache case are in
+  `docs/design/orchestration.md`, "#413 S5"); its script arm
   touches `<group>/hooks/<agent>.postcompact.json` and drains stdin. A fresh
   marker settles for `POSTCOMPACT_SETTLE_MS`, then decides loomux's own
   reinjection, unless a `SessionStart(compact)` marker for the same compaction
@@ -593,7 +596,9 @@ slice:
    `<group>/hooks/<agent>.postcompact.json` marker (existence-only), the
    `compact-resolved-postcompact` audit action (`agent`, `reason`,
    `settle_ms`), and `"postcompact"` as a value of `compact-hook-evidence`'s
-   `event`. All additive.
+   `event`. All additive. Review r2 added an optional `version` to the
+   `probe_agent_cli` reply, present only for a CLI in `cliprobe::VERSION_PROBES`
+   (claude) whose `--version` could be read.
 
 ## Sources and pins
 

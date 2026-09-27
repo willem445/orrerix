@@ -4088,10 +4088,12 @@ orrerix takes its word over any guess:
 - **claude** — orrerix's per-pane `--settings` file adds a `PostCompact` hook beside its
   `PreCompact`, `SessionStart` and `UserPromptSubmit` ones. When it fires, the re-grounding
   follows without waiting for the pane to go quiet or for context to shrink. Claude's own
-  `SessionStart` hook re-grounds a compacted session natively; orrerix waits a few seconds
-  for that one first, and does not send a second copy when it arrives within that wait. If
-  it arrives later — a slow hook on a busy machine — orrerix has already sent its own, and
-  the pane gets both.
+  `SessionStart` hook re-grounds a compacted session natively; orrerix waits one check —
+  about ten seconds after it notices the `PostCompact` marker — for that one first, and does
+  not send a second copy when it arrives within that wait. If it arrives later — a slow hook
+  on a busy machine — orrerix has already sent its own, and the pane gets both. The
+  `PostCompact` hook is only added for Claude Code 2.1.76 or later, the first release that
+  has it; on an older or not-yet-detected version orrerix relies on the other signals.
 - **pi and codex** — the session file records the compaction: pi writes a `compaction`
   entry, codex a `compacted` record. orrerix reads those; it installs no hook. codex runs a
   hook only after you trust its exact definition in its `/hooks` browser, and orrerix never

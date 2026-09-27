@@ -4921,10 +4921,12 @@ S5 adds the resolution half wherever a CLI records one:
   `SessionStart(compact)`, and the hooks reference does not order them; a tick can read the
   directory between the two writes. Resolving on `PostCompact` at once would paste loomux's
   reinjection and then watch `SessionStart` deliver the native one — the duplicate rev-4 N3
-  exists to prevent. So a fresh marker waits `POSTCOMPACT_SETTLE_MS` (5s, under the 10s fast
-  poll: one tick of delay while an arm is open), measured on the tick's own clock from first
-  sight (`compact_hook_postcompact_first_seen_ms`), never on the marker's mtime, which a skewed
-  clock could hold open forever. `any_compact_pending` counts a settling marker, so a marker
+  exists to prevent. So a fresh marker waits `POSTCOMPACT_SETTLE_MS`, measured on the tick's
+  own clock from first sight (`compact_hook_postcompact_first_seen_ms`), never on the marker's
+  mtime, which a skewed clock could hold open forever. That constant is a floor, not the wait:
+  the tick that first sees the marker never resolves it, and the next one comes a full
+  `COMPACT_NUDGE_FAST_POLL_INTERVAL` (10 s) later, so the marker resolves one 10 s tick after
+  first sight — and first sight itself lands up to one tick after the hook wrote it. `any_compact_pending` counts a settling marker, so a marker
   that arrives with no arm open is not left to the idle cadence. The window is the whole of
   the guarantee: a `SessionStart(compact)` that lands after `Resolve` has queued loomux's
   reinjection finds the delivery phase live, clears it (rev-10 B1) and suppresses only the
@@ -4949,10 +4951,10 @@ S5 adds the resolution half wherever a CLI records one:
   the signal, and the one field the payload adds is the conversation's summary, which does not
   belong on disk beside the group's state. It drains stdin, because that payload is the one
   sized like the conversation.
-- **Residual: a `SessionStart(compact)` later than the window.** Above. 5s is sized against
-  two hooks the same compaction fires back to back, not measured against a hook `sh` spawn
-  delayed by a loaded host; a longer delay reproduces rev-4 N3's duplicate for that pane,
-  once per compaction, never a loop.
+- **Residual: a `SessionStart(compact)` later than the window.** Above. The window — one 10 s
+  tick after first sight — is sized against two hooks the same compaction fires back to back,
+  not measured against a hook `sh` spawn delayed by a loaded host; a longer delay reproduces
+  rev-4 N3's duplicate for that pane, once per compaction, never a loop.
 - **Residual: the wall clock.** Every marker's freshness gate compares its mtime with
   `a.started_ms`, two wall-clock reads. A backward step (an NTP correction) between spawn
   and a hook write makes a genuine marker read as older than the agent and it is ignored
@@ -4965,6 +4967,31 @@ S5 adds the resolution half wherever a CLI records one:
   fresh until the clock passes it. The pairing rule compares two mtimes from the same host
   clock and is not affected by a step between them unless the step lands between the two
   hook writes.
+- **The `PostCompact` entry is gated on the Claude Code version (#413 S5 review r2).** Two
+  entries in Claude Code's CHANGELOG (`anthropics/claude-code` `CHANGELOG.md`) decide it:
+  - **`2.1.76`**: "Added `PostCompact` hook that fires after compaction completes". Older
+    releases do not know the event.
+  - **`2.1.101`**: "an unrecognized hook event name in `settings.json` no longer causes the
+    entire file to be ignored". Before it, one unknown event cost the WHOLE file.
+
+  Every release below `2.1.76` is also below `2.1.101`, so on such a Claude the entry would
+  take `PreCompact`, `SessionStart(compact)`, `UserPromptSubmit` and the `statusLine` down
+  with it. The CHANGELOG names only `settings.json`; that the per-pane `--settings` file goes
+  through the same loader is an inference, not a documented fact — the CLI reference calls it
+  "a settings JSON file" whose values "override the same keys in your `settings.json` files". So `compact_hook_settings` writes the entry only when
+  `claude_supports_postcompact` says the probed version is `2.1.76` or later, compared part by
+  part as numbers. The version comes from `cliprobe`: the probe runs `claude --version` beside
+  its `--help` (`VERSION_PROBES`, off-thread, cached for the app run), and the spawn path only
+  LOOKS it up (`cliprobe::cached_version`), never running the CLI there. `2.1.101` would let a
+  later floor drop the whole-file risk, but it does not retire the gate: below `2.1.76` the
+  event is unknown either way, and the entry buys nothing.
+- **Cold cache, stated: a pane spawned before the first probe completes gets no
+  `PostCompact`.** The startup sweep warms the probe cache; a Claude pane spawned before it
+  lands, or on a machine where `claude --version` could not be read, sees an unknown version
+  and is treated as too old. Its compactions resolve as they did before #413 S5 — through
+  `SessionStart(compact)` and busy-then-quiet — and only the pane's later spawns (a respawn
+  or resume re-writes the file) pick the entry up once the cache is warm. A version-less probe
+  is not cached, so the next probe retries it.
 - **Residual: a self-compaction nothing armed.** The codex and pi counts CONFIRM an arm; they
   never open one. A codex or pi pane that compacts on its own, with no request, lull fire or
   hook arm open, gets no re-grounding. Claude's markers arm on their own; Copilot's

@@ -1494,3 +1494,39 @@ fn lull_floor_the_same_pi_pane_under_a_group_override_is_nudged() {
     assert_eq!(fired.len(), 1);
     assert_eq!(fired[0]["command"], "/compact");
 }
+
+// ---------------------------------------------------------------------------
+// #413 S5: pi's compaction-done signal, through the real tick
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compaction_done_a_pi_compaction_entry_resolves_a_requested_compact_the_pane_never_painted() {
+    // pi has no hook loomux can install; its compaction-done signal is the
+    // session file's own `compaction` entry, which the S2b reader counts into
+    // `compact_boundary_count`. This drives that count through
+    // `run_compact_nudge` end to end: a requested `/compact` is pasted, the
+    // pane shows no output growth at all (there is no pty here), and the arm
+    // resolves only when pi writes its compaction entry — the same
+    // floor-independent "seen busy" evidence the claude transcript's
+    // `compact_boundary` gives.
+    let (reg, _d, gid, oid) = pi_orchestrator_at_150k(None);
+    let sid = reg.agent(&oid).unwrap().session_id.expect("a pi pane carries a preminted session id");
+    let dir = reg.pi_sessions_dir(&gid);
+    let turn = assistant("e1", "openrouter", "z-ai/glm-5.3-flash", Turn { input: 150_000, ..Turn::default() });
+    set_probe_windows_for_test(Some(BTreeMap::new()));
+    reg.request_compact(&oid).unwrap();
+    let fired = reg.run_compact_nudge(LULL_NOW);
+    assert_eq!(fired, vec![oid.clone()], "positive control: the requested compact is pasted");
+    assert!(reg.agent(&oid).unwrap().compact_pending);
+
+    // The control: the same quiet tick with no compaction entry leaves the arm open.
+    let _ = reg.run_compact_nudge(LULL_NOW + 10_000);
+    let before = audited(&reg, &gid, &oid, "compact-reinjection").len();
+
+    write_session(&dir, &sid, &file(&[header(&sid, "C:/tmp/pi-escalate"), turn, compaction("e2", None)]));
+    let _ = reg.run_compact_nudge(LULL_NOW + 20_000);
+    set_probe_windows_for_test(None);
+    assert_eq!(before, 0, "no compaction entry, no evidence: the arm stays open");
+    assert_eq!(audited(&reg, &gid, &oid, "compact-reinjection").len(), 1, "the compaction entry resolved it");
+    assert!(reg.agent(&oid).unwrap().compact_reinject_attempted_ms.is_some());
+}

@@ -518,8 +518,14 @@ Two models of one block and CLI are drawn in the same hue and the same line
 style; only the legend separates them. Whether that reads well enough is the
 human's visual check, not something a DOM-free test can settle.
 
-Each usage sample carries the optional live effort from the agent's latest
-context signal (older rows default to unknown). The chart marks a per-key
+Each usage sample carries the optional effort the agent's latest context
+signal OBSERVED (`CompactionSignal::observed_effort`; older rows default to
+unknown). A pi pane whose session tail names no thinking level falls back to
+its block's `--thinking` knob for the compaction tick, and that fallback is
+deliberately left out of the sample: it is configuration, not a reading, so a
+sample records it as unknown and draws no mark from it. The consequence is a
+lost mark, never a false one — a long pi session whose level has left the tail
+shows no effort switch until pi writes a new `thinking_level_change`. The chart marks a per-key
 change at the sample that first reports a new effort, but only when both
 samples carry a known value: a missing reading is not evidence of a switch.
 Effort marks use the same stable time ordering as model-switch marks.

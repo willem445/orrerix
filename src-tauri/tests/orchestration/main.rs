@@ -279,6 +279,7 @@ mod providerlimits;
 mod ghclose;
 mod fork;
 mod cacheage;
+mod postcompact;
 
 use helpers::*;
 use registry::*;

@@ -110,6 +110,8 @@ first `#[cfg(test)]` line and `pathseg` by skipping from the attribute's next
 therefore gives each new file its own trailing test module, holding the tests
 of what that file owns, rather than moving the old module out whole into a
 `tests/` directory under `src/`, which those scans would read as production.
+This is a repository convention; no guard currently enforces one trailing
+test module per file.
 
 The engine's `reviewdrive/` is the first such split (#3498 P7):
 

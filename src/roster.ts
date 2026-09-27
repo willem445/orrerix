@@ -131,7 +131,7 @@ export interface WorkflowPreview {
 /** The launcher's own hard ceiling on `max_agents` (`numberInput(4, 1,
  *  MAX_AGENTS_CEILING)` in launcher.ts) — mirrors the backend's
  *  `const MAX_AGENTS_CEILING: u32 = 12;` in
- *  `src-tauri/src/orchestration/mod.rs` (not `pub`, so it can't be imported —
+ *  `src-tauri/src/orchestration/guardrails.rs` (not `pub`, so it can't be imported —
  *  this is a deliberate duplicate, not a shared source). Kept as one named
  *  constant, rather than the bare `12` the form field used to hardcode, so the
  *  capacity advisory below can reason about "the most this cap could ever
@@ -141,7 +141,7 @@ export interface WorkflowPreview {
  *  **Keep in sync with the Rust constant by hand** — nothing at the type
  *  level enforces it. `test/roster.test.ts`'s
  *  `"MAX_AGENTS_CEILING mirrors the Rust source it's duplicated from"` reads
- *  `mod.rs`'s literal and fails loudly the day the two disagree; if that
+ *  `guardrails.rs`'s literal and fails loudly the day the two disagree; if that
  *  constant's declaration ever moves or is reworded, update the regex there
  *  too. */
 export const MAX_AGENTS_CEILING = 12;

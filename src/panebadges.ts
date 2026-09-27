@@ -337,7 +337,7 @@ export class PaneBadges {
    *  which keys on `(reason, detail)` together. The two differ because their
    *  details do: an attention detail is free text the scan can change under a
    *  steady reason, while a held detail is `delivery_held_detail(agent_id,
-   *  reason)` (orchestration/mod.rs), a total function over a three-variant
+   *  reason)` (orchestration/holds.rs), a total function over a three-variant
    *  enum that interpolates nothing but `agent_id`. So under a steady reason it
    *  cannot move, and the cheaper check loses nothing.
    *

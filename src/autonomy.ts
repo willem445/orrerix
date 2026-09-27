@@ -196,7 +196,7 @@ const GOAL_WHITESPACE = /\p{White_Space}/u;
 const GOAL_CONTROL = /\p{Cc}/u;
 
 /** Normalize a goal into the single-line, bounded, paste-safe form the backend
- *  will store — a deliberate mirror of `sanitize_full_autonomy_goal` (mod.rs),
+ *  will store — a deliberate mirror of `sanitize_full_autonomy_goal` (guardrails.rs),
  *  in the same spirit as `budgetMeter` mirroring `autonomy_budget_exhausted`.
  *
  *  The backend is authoritative and re-normalizes everything it is handed; this

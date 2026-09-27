@@ -50,13 +50,13 @@
  *  count as "this pane is doing work", rather than repainting an idle input box.
  *
  *  DUPLICATED from the backend's `DEFAULT_IDLE_ACTIVITY_FLOOR_BYTES`
- *  (`src-tauri/src/orchestration/mod.rs`), where the number was measured: a
+ *  (`src-tauri/src/orchestration/guardrails.rs`), where the number was measured: a
  *  full idle Claude Code input-box repaint is ~164 bytes
  *  (`src-tauri/tests/fixtures/attention/idle-input-box.txt`), so 2048 clears it
  *  by an order of magnitude while still sitting far under any real turn's
  *  output. Duplicated rather than plumbed for the reason `DOCK_TERM_RESERVE_PX`
  *  is, and pinned against the Rust literal by `test/paneactivity.test.ts`,
- *  which reads `mod.rs` off disk so the two defaults cannot drift silently.
+ *  which reads the Rust source off disk so the two defaults cannot drift silently.
  *
  *  RESIDUAL, stated because the Rust side is NOT a bare const: the backend's
  *  floor is a live-tunable guardrail knob (`Guardrails.idle_activity_floor_bytes`
@@ -83,7 +83,7 @@ export const ACTIVITY_FLOOR_BYTES = 2048;
  *  (#2195 review, rev-std finding 1, which is why this doc says so explicitly).
  *
  *  4000 ms is the backend's own definition of "this pane has gone quiet"
- *  (`ATTENTION_QUIET_MS`, `mod.rs`) — the same threshold that decides a
+ *  (`ATTENTION_QUIET_MS`, `tuning.rs`) — the same threshold that decides a
  *  `waiting` sighting is worth raising at all, so the gap this latch is cleared
  *  over is the gap it was set over. Pinned against that Rust literal too.
  *

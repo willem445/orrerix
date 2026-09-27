@@ -91,9 +91,10 @@ Frontend-only commands that never invoke `rustc` (`npm run build`/`tsc`,
 worktree (see above), as does `rustfmt --check --edition 2021 <changed .rs>`
 — a parser, not a build, and the one pre-push
 syntax check for Rust (#558; see the skill for the read-stderr recipe and why
-`cargo check` is not covered). It has a size cap stated in the skill:
-`orchestration/mod.rs` and the other files over it take tens of GB of RAM,
-so never run it on them (#3469). The one `cargo` exception: `cargo update
+`cargo check` is not covered). It has a size cap stated in the skill: any
+file over 5,000 lines, or whose out-of-line modules include one (which still
+rules out `orchestration/mod.rs`), can take tens of GB of RAM, so never run it
+on them (#3469). The one `cargo` exception: `cargo update
 --workspace` for release lockfile bumps — dependency resolution only, never
 compiles.
 
@@ -341,8 +342,9 @@ Module naming and navigation conventions are in
   one of the five invisible to a harness that examined only the FIRST of the body's
   stated diffstats (#1395 B1/B2/B3/B5/B6; the false-NEGATIVE direction is the
   positive-control bullets below).
-- `src-tauri/src/orchestration/mod.rs` is tens of thousands of lines — grep for
-  the function/struct, don't read it top to bottom. Anchor an INSERT above the
+- `src-tauri/src/orchestration/` is tens of thousands of lines across its
+  files (`docs/design/module-layout.md`) — grep for the function/struct, don't
+  read a file top to bottom. Anchor an INSERT above the
   item's `///` block, never above its `#[tauri::command]`/`fn` — those sit BELOW
   the doc that owns them, so splicing there hands your item the neighbour's
   preamble and leaves the neighbour undocumented, with nothing red to say so.

@@ -37,7 +37,7 @@ export function entryKey(e: AuditEntry): string {
 /** Prune an expand/collapse set down to keys that still name a loaded entry,
  *  returning a fresh set (#1316). The audit log itself is append-only, but
  *  `orch_audit` returns only its most recent `AUDIT_VIEW_LIMIT` window
- *  (mod.rs) — as new lines push old ones out of that window on the next poll,
+ *  (auditlog.rs) — as new lines push old ones out of that window on the next poll,
  *  their expand state becomes unreachable and would otherwise accumulate for
  *  the life of the pane. */
 export function retainExpanded(expanded: Iterable<string>, entries: readonly AuditEntry[]): Set<string> {

@@ -1168,7 +1168,7 @@ function isZeroUsageRow(u) {
 }
 
 // A `usage.json` row is keyed by CLI session id **or by `agent:<id>` when the
-// pane never got one** (`UsageSnapshot::key`, `mod.rs`). An `agent:`-keyed row
+// pane never got one** (`UsageSnapshot::key`, `agentmodel.rs`). An `agent:`-keyed row
 // can never match a transcript index, so filing it under "no transcript" would
 // report a session as LOST that was never there — on the live store that was
 // 125 of 146 skips (86%). It is the third outcome, not a missing file.

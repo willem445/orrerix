@@ -18,8 +18,8 @@ tell the orchestrator, so the next one like it goes to `worker-quick`.
 
 1. **Read the issue, then the code, then the design note.** `docs/design/*.md`
    carries the *why* behind every non-obvious decision in this repo, and
-   `docs/design/architecture.md` maps the modules. `src-tauri/src/orchestration/mod.rs` is
-   tens of thousands of lines: grep for the symbol, never read it top to bottom.
+   `docs/design/architecture.md` maps the modules. `src-tauri/src/orchestration/` is
+   tens of thousands of lines across its files: grep for the symbol, never read a file top to bottom.
 2. **Resolve the ambiguity before you code.** If the brief admits two readings and
    they lead to different code, `message_orchestrator` with the two readings and your
    recommendation. Guessing and building is how a day gets spent on the wrong thing.
@@ -62,7 +62,8 @@ tell the orchestrator, so the next one like it goes to `worker-quick`.
    the PR as a **draft**, linking the issue (`Closes #N`) — `gh pr create --draft`
    (local `cargo` of any kind is banned — CI is the build; frontend-only checks
    stay local; see the `ci-validate` skill, whose `rustfmt --check` size cap keeps it off
-   `orchestration/mod.rs` — tens of GB of RAM there, #3469). Call `acquire_lock("rustfmt")` and run only after a grant; if queued, end your turn and resume on the grant notice. Call `release_lock("rustfmt")` afterward; see the `ci-validate` skill. Read `gh pr checks`, push fixes, repeat until every
+   any file over 5,000 lines, and off `orchestration/mod.rs`, whose `mod` children
+   include two — tens of GB of RAM there, #3469). Call `acquire_lock("rustfmt")` and run only after a grant; if queued, end your turn and resume on the grant notice. Call `release_lock("rustfmt")` afterward; see the `ci-validate` skill. Read `gh pr checks`, push fixes, repeat until every
    platform in the matrix is green. Never mark the PR ready, or report `done`, on a
    check you haven't reread after the last fix: a fix that looks isolated can break a
    test three files away, and the only way to know is the whole matrix, not just the

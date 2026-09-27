@@ -242,7 +242,7 @@ only fix that doesn't reopen the same class of gap it's meant to close.
 
 **Reuse check (asked explicitly, confirmed rather than assumed):** the
 backend already has a "did a human actually type this" notion —
-`classify_human_input` (`src-tauri/src/orchestration/mod.rs`) — built for
+`classify_human_input` (`src-tauri/src/orchestration/humaninput.rs`) — built for
 #179 itself, for the steering-box-occupancy tracker. It is NOT reused here,
 and shouldn't be: it operates on raw bytes already written to the PTY and
 classifies them by **pattern-matching and skipping known escape-sequence

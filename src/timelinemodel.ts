@@ -201,7 +201,7 @@ export function retainExpandedEvents(
 }
 
 /** The `orch_audit` cap, mirrored from `AUDIT_VIEW_LIMIT` in
- *  src-tauri/src/orchestration/mod.rs. Duplicated rather than plumbed: the
+ *  src-tauri/src/orchestration/auditlog.rs. Duplicated rather than plumbed: the
  *  command sends no truncation flag (`audit_log_windowed` keeps that for
  *  derivations), so a full-looking list is the only signal the frontend has —
  *  and it is deliberately reported as "at the cap", not as "truncated",

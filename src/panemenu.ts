@@ -249,7 +249,7 @@ function promoteItem(p: PaneConnectState): PaneMenuItem | null {
   // An orchestration member has a group AND a real role; a standalone pane's
   // identity is the `__solo__` carrier, whose role is "solo". Keyed off the role
   // rather than the `"__solo__"` group sentinel so this module doesn't grow a
-  // second spelling of a constant that lives in mod.rs (mirrored once, in
+  // second spelling of a constant that lives in solopane.rs (mirrored once, in
   // orchestration.ts's `SOLO_GROUP`).
   if (p.group !== null && p.role !== "solo") return null;
 

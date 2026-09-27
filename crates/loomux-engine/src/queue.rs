@@ -14,7 +14,7 @@
 //! delivery, forever, is not free), but the outcome AT the cap changes from
 //! "destroy the payload" to "enqueue it." A per-pane, in-memory FIFO plus a
 //! drainer thread (see `deliver_now` in `orchestration/registry/delivery.rs`
-//! and `run_queue_drainer` in `mod.rs` for the impure half) replays queued
+//! and `run_queue_drainer` in `orchestration/drainer.rs` for the impure half) replays queued
 //! entries, oldest first, the instant the pane becomes deliverable again —
 //! no timeout, no sender action required.
 //!
@@ -565,7 +565,7 @@ pub fn queue_full_error(agent_id: &str, depth: usize, blocked_reason: &str) -> S
 
 /// The `[orrerix]` notice sent to the orchestrator the FIRST time a delivery
 /// genuinely becomes held: a fresh delivery's OWN pre-paste/pre-Enter hold
-/// (#111/#420) caps out (`BoxOccupied`/`Question` — `mod.rs`'s
+/// (#111/#420) caps out (`BoxOccupied`/`Question` — `drainer.rs`'s
 /// `run_queue_drainer` gates this to that entry's very first attempt only,
 /// never a later retry of the same entry). Never called with `BehindQueue`,
 /// `Arrival`, `KickoffRecovery` or `Recovered` — a delivery admitted behind
@@ -1154,7 +1154,7 @@ pub fn dropped_payload_preview(text: &str) -> String {
 /// Split out of [`dropped_payload_preview`] rather than re-spelled, because a
 /// second consumer arrived with a tighter budget: the #658 refusal roster is a
 /// SINGLE line carrying several previews at once, so it re-clamps each one
-/// (`mod.rs`'s `ROSTER_PREVIEW_MAX`) instead of pasting four 160-char previews
+/// (`refusals.rs`'s `ROSTER_PREVIEW_MAX`) instead of pasting four 160-char previews
 /// into one row. Two copies of "truncate on a char boundary and say so" is one
 /// copy too many — and the char-boundary half is not a style preference, it is
 /// what stops a UTF-8 payload from panicking a delivery path.
@@ -2630,7 +2630,7 @@ mod tests {
         // marker only (never a block form -- that is the #621 hole), so
         // `[orrerix] ` must stay FIRST, ahead of the dashes, or every
         // constituent leaves an unmasked row of loomux prose in the pane tail.
-        // `unmaskable_framing_rows` (mod.rs) is the live binding to the real
+        // `unmaskable_framing_rows` (noticemask.rs) is the live binding to the real
         // mask; this pins the literal the engine emits.
         //
         // What LEFT: `queued ` before the age, and `(id 12, t=...)`. The id and

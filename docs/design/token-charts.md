@@ -291,7 +291,7 @@ has not spent yet is an ordinary state.
 | piece | where | why there |
 | --- | --- | --- |
 | row schema, `should_sample`, parser, `diff_series` | `crates/loomux-engine/src/usageseries.rs` | Tauri-free, and it is the arithmetic that has to be right; `crates/loomux-server` needs it when `group_metrics` reads this file |
-| the sampler, `append_series_line`, the read | `src-tauri/src/orchestration/mod.rs` | beside the usage collector it samples |
+| the sampler, `append_series_line`, the read | `src-tauri/src/orchestration/registry/usage.rs` (`append_series_line` in `auditlog.rs`) | beside the usage collector it samples |
 | the fingerprint | `src-tauri/src/orchestration/tuningfp.rs` | a filesystem walk over a repo path the host owns |
 | the typed wrapper | `src/orchestration.ts` | the only IPC site (constraint 5) |
 

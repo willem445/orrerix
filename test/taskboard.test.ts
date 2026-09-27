@@ -348,7 +348,7 @@ test("a blank PR ref counts as no PR", () => {
 
 // ---------------------------------------------------------------------------
 // Dependency links (#582, slice B — the board's side of the graph).
-// The backend owns the rules (mod.rs `dep_satisfied`/`unmet_deps`/`task_ready`);
+// The backend owns the rules (board.rs `dep_satisfied`/`unmet_deps`/`task_ready`);
 // these pin that the board's chips say the SAME thing, since the human's board
 // reads whole board rows via orch_tasks and derives readiness itself. (Those
 // rows carried every Task field until #1317 split the note BODIES out of the
@@ -438,7 +438,7 @@ test("`related` never affects readiness", () => {
 
 // ---------------------------------------------------------------------------
 // #958 slice R: readiness climbs the container chain. Mirrors the backend's
-// `blocking_ancestor` / `task_ready` (mod.rs), which these tests are the board
+// `blocking_ancestor` / `task_ready` (board.rs), which these tests are the board
 // side of — the two derivations are duplicated on purpose (see `isReady`) and
 // each is pinned where it lives.
 // ---------------------------------------------------------------------------
@@ -960,7 +960,7 @@ test("the ladder table is the same one the backend enforces", () => {
 // per-level completeness assertion below is the one that must fail loudly, and
 // does. It reads the rule ONLY; the enforcement that consumes it is pinned by
 // the Rust suite.
-const RUST_LADDER = new URL("../src-tauri/src/orchestration/mod.rs", import.meta.url);
+const RUST_LADDER = new URL("../src-tauri/src/orchestration/board.rs", import.meta.url);
 // The board-side Tauri commands, split out of mod.rs by #3498 P2.
 const RUST_TASK_COMMANDS = new URL("../src-tauri/src/orchestration/commands/tasks.rs", import.meta.url);
 
@@ -970,7 +970,7 @@ test("the board's ladder table is the backend's, read out of the Rust source", (
   assert.notEqual(
     start,
     -1,
-    "ladder_rule is gone or renamed in mod.rs — this guard reads that function by name, so " +
+    "ladder_rule is gone or renamed in board.rs — this guard reads that function by name, so " +
       "update it here rather than deleting the only thing pinning the two ladders together"
   );
   // The function body: up to the first closing brace at column 0.
@@ -1467,7 +1467,7 @@ test("orderSiblings splits one sibling list without mutating the tree's own arra
 
 // ---------------------------------------------------------------------------
 // Sprints (#1272) and grounding links (#1273).
-// The backend owns every rule (mod.rs `current_sprint`, `normalize_task_links`);
+// The backend owns every rule (board.rs `current_sprint`, `normalize_task_links`);
 // these pin that the board says the SAME thing, since the human's board reads
 // whole board rows via orch_tasks and derives its own view. (#1317 deferred
 // the note BODIES to the rows the caller names; sprint and link fields ride on
@@ -1786,7 +1786,7 @@ test("the board's status vocabulary is the backend's, read out of the Rust sourc
   assert.notEqual(
     start,
     -1,
-    "TASK_STATUSES is gone or renamed in mod.rs — this guard reads it by name, so update it " +
+    "TASK_STATUSES is gone or renamed in board.rs — this guard reads it by name, so update it " +
       "here rather than deleting the only thing pinning the two vocabularies together"
   );
   const end = src.indexOf("];", start);
@@ -1827,7 +1827,7 @@ test("the board's link-type vocabulary is the backend's, read out of the Rust so
   assert.notEqual(
     start,
     -1,
-    "TASK_LINK_TYPES is gone or renamed in mod.rs — this guard reads it by name, so update it " +
+    "TASK_LINK_TYPES is gone or renamed in board.rs — this guard reads it by name, so update it " +
       "here rather than deleting the only thing pinning the two vocabularies together"
   );
   const end = src.indexOf("];", start);
@@ -2291,7 +2291,7 @@ test("the board's link cap is the backend's MAX_TASK_LINKS, read out of the Rust
   const m = src.match(/pub const MAX_TASK_LINKS:\s*usize\s*=\s*(\d+)\s*;/);
   assert.ok(
     m,
-    "MAX_TASK_LINKS is gone, renamed or reshaped in mod.rs — this guard reads it by name, so " +
+    "MAX_TASK_LINKS is gone, renamed or reshaped in board.rs — this guard reads it by name, so " +
       "update it here rather than deleting the only thing pinning the two caps together"
   );
   assert.equal(
@@ -2576,7 +2576,7 @@ test("the stale-refusal prefix the board matches on is the backend's, read out o
   const decl = src.match(/pub const STALE_LINK_ETAG_PREFIX: &str = "([^"]*)";/);
   assert.ok(
     decl,
-    "STALE_LINK_ETAG_PREFIX is gone or renamed in mod.rs — this guard reads it by name, so " +
+    "STALE_LINK_ETAG_PREFIX is gone or renamed in board.rs — this guard reads it by name, so " +
       "update it here rather than deleting the only thing pinning the two spellings together"
   );
   assert.equal(
@@ -2797,13 +2797,13 @@ test("the description cap is the backend's, read out of the Rust source", () => 
   // The backend REFUSES an over-long description rather than cutting it, so an
   // editor holding a different number would either permit what the board then
   // rejects or refuse what it would have accepted. The ladder guard above reads
-  // its rule out of mod.rs for this reason; so does this.
+  // its rule out of board.rs for this reason; so does this.
   const src = readFileSync(RUST_LADDER, "utf8");
   const m = src.match(/pub const MAX_TASK_DESCRIPTION: usize = (\d+);/);
   assert.notEqual(
     m,
     null,
-    "MAX_TASK_DESCRIPTION is gone or renamed in mod.rs — this guard reads it by name, so a " +
+    "MAX_TASK_DESCRIPTION is gone or renamed in board.rs — this guard reads it by name, so a " +
       "rename must update the guard rather than leave it scanning nothing"
   );
   assert.equal(MAX_DESCRIPTION, Number(m![1]), "the editor's cap and the backend's must be one number");

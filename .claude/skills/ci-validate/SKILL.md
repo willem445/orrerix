@@ -85,8 +85,12 @@ and the engine's `workflow.rs`) and, by the recursion rule,
 `src-tauri/src/orchestration/mod.rs` (its `mod mcp;`),
 `src-tauri/tests/orchestration/main.rs` (~70k with its modules),
 `src-tauri/tests/reviewdrive/main.rs` (~16k) and `src-tauri/tests/workflow/main.rs`
-(~12k), `src-tauri/src/lib.rs`
-and `crates/loomux-engine/src/lib.rs`. The
+(~12k), `crates/loomux-engine/src/reviewdrive/mod.rs` (~10.6k with its modules),
+`src-tauri/src/lib.rs`
+and `crates/loomux-engine/src/lib.rs`. An entry given with a size is listed by
+its module tree's total, which is the conservative reading of the recursion
+rule; each child file of one is still under 5,000 lines and has no `mod x;` of
+its own, so check those children one file at a time instead. The
 list moves as files grow, so measure rather than trust it:
 
 ```sh

@@ -32,12 +32,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Build a registry against `dir` with every test-only directory override
-/// applied. Duplicated from `orchestration.rs`/`workflow.rs` because these are
+/// applied. Duplicated from `orchestration/helpers.rs`/`workflow/helpers.rs` because these are
 /// separate integration-test binaries — and it is a real requirement, not
 /// ceremony: a registry built without these overrides writes a generated agent
 /// file into the REAL `~/.claude`/`~/.copilot` agents dir on its first spawn
 /// (#464). `no_registry_construction_bypasses_the_test_agent_dir_overrides` in
-/// `orchestration.rs` enforces that this file has exactly one raw
+/// `orchestration/guards.rs` enforces that this file has exactly one raw
 /// `OrchRegistry::new`, here.
 fn relaunch_registry(dir: &Path) -> OrchRegistry {
     let reg = OrchRegistry::new(dir.to_path_buf());
@@ -70,7 +70,7 @@ fn rails() -> Guardrails {
     }
 }
 
-/// A throwaway repo one level below its own temp root — see `workflow.rs`'s
+/// A throwaway repo one level below its own temp root — see `workflow/helpers.rs`'s
 /// `Repo` for why the nesting matters (a worktree is cut SIBLING to the repo,
 /// and a bare tempdir used as the repo root leaks it past `Drop`).
 struct Repo {

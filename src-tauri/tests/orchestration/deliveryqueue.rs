@@ -1790,7 +1790,7 @@ fn an_oversized_orphan_payload_says_it_was_truncated() {
 // that never knows to ask — so the resident core keeps the rules and every
 // moved section leaves a resident stub naming its trigger. These tests pin
 // the tool half of that shape; the stub half is pinned over in
-// tests/workflow.rs (`every_playbook_section_has_a_resident_stub_naming_it`).
+// tests/workflow/goldens.rs (`every_playbook_section_has_a_resident_stub_naming_it`).
 // ---------------------------------------------------------------------------
 
 /// The cap only binds delegates and `rails()` pins it at 2, and the

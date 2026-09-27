@@ -33,7 +33,7 @@ use std::fs;
 /// #222 replaced the flat per-role model fields these rails used to set with a `blocks` roster,
 /// and it added the toggle: with `advanced_orchestrator: false`, `{{WORKFLOW}}`/`{{BLOCK_NOTE}}`
 /// render empty and the agent reads the templates as every group that never opted in reads them.
-/// So this suite pins what the *default* is told, and `workflow.rs` pins what a *gated* group and
+/// So this suite pins what the *default* is told, and `tests/workflow/` pins what a *gated* group and
 /// a `mode: replace` persona are told (`mechanics_core`). A rule in only one of them is a rule
 /// one kind of group is not being told — see `docs/design/orchestration.md`.
 fn rails() -> Guardrails {
@@ -117,7 +117,7 @@ fn queue_enabled_playbook() -> String {
     .unwrap();
     let rails = Guardrails { advanced_orchestrator: true, ..rails() };
     // `create_group` takes the repo path as &str; normalize the separators the way
-    // workflow.rs's `Repo::path()` does, so a Windows checkout's backslashes do not
+    // `tests/workflow/helpers.rs`'s `Repo::path()` does, so a Windows checkout's backslashes do not
     // reach the workflow lookup.
     let repo_str = repo.to_string_lossy().replace('\\', "/");
     let g = reg.create_group(&repo_str, rails).unwrap();
@@ -872,7 +872,7 @@ fn a_first_turn_primer_leads_every_role_template_with_the_calls_that_role_actual
     // names calls that role genuinely makes. It is a positive pin only — it does not assert a
     // role's primer stays silent about a tool it doesn't have; that absence is a different
     // property (the kind `the_default_rendering_never_names_the_gate_machinery` in
-    // `tests/workflow.rs` checks on a different surface) and would need its own negative pins.
+    // `tests/workflow/goldens.rs` checks on a different surface) and would need its own negative pins.
     let orch = instructions("orchestrator.md");
     let worker = instructions("worker.md");
     let reviewer = instructions("reviewer.md");

@@ -1890,7 +1890,7 @@ const L6_CONTROL_FLOOR_MS: u64 = 50;
 ///
 /// The fixture is as much the finding as the assertions are: #1702 survived four
 /// betas because *no test in this repo could build the state that triggers it*.
-/// `attention_setup`, the helper every attention test in `orchestration.rs`
+/// `attention_setup`, the helper every attention test in `orchestration/attention.rs`
 /// uses, spawns agents with no pty, so `pty_id` is `None`, the per-agent mask is
 /// never reached, and the whole class is unreachable from that file however many
 /// cases it adds. The soak lane has the mirror gap: it wedges a lock and probes,

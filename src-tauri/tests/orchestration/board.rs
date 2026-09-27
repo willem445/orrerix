@@ -1491,7 +1491,7 @@ fn gh_shim_harness_executes_path_routing_and_refuses_a_diff_it_cannot_account_fo
         eprintln!("SKIP gh_shim_harness_executes_path_routing_and_refuses_a_diff_it_cannot_account_for: no POSIX sh");
         return;
     }
-    // #1176. The pure decision is pinned in tests/workflow.rs; this runs the
+    // #1176. The pure decision is pinned in tests/workflow/gates.rs; this runs the
     // SHELL, because a shim/mirror agreement asserted against source text is not
     // an agreement. Every claim below is the real generated shim, executed.
     let (reg, d, _repo, gid) = routed_group();

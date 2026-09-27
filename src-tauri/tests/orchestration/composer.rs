@@ -616,7 +616,7 @@ fn a_momentarily_unreadable_workflow_file_does_not_drop_a_live_hold() {
 /// actually declares resources** — and, like the merge-queue fragment, "actually
 /// declares" means BOTH the block and the advanced-orchestrator toggle.
 ///
-/// The absence half is pinned hard by `tests/workflow.rs`'s blessed goldens and
+/// The absence half is pinned hard by `tests/workflow/goldens.rs`'s blessed goldens and
 /// its `the_default_rendering_never_names_the_gate_machinery` rule — which is
 /// how this shape got caught here too: the first cut put these bullets in the
 /// base templates and that test went red, naming `.loomux/workflow.yml` in a

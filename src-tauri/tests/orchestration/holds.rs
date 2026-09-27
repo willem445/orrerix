@@ -948,7 +948,7 @@ fn the_still_queued_clock_is_not_restarted_by_a_stranded_marker() {
     // An integration test rather than one of `queue.rs`'s own inline unit tests
     // purely so it shares a target with the four above: `cargo test` stops at
     // the first failing target, and a red-evidence run that dies in the lib
-    // suite never reaches `tests/orchestration.rs` at all.
+    // suite never reaches the `tests/orchestration/` target at all.
     let threshold_ms = queue::QUEUE_STILL_QUEUED_NOTICE_AFTER.as_millis() as u64;
     let held_since = 1_000_000u64;
     let now = held_since + threshold_ms;

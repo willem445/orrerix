@@ -274,7 +274,8 @@ pub fn parks_on_dialog(role: super::Role) -> bool {
 /// byte-identical across drivers — a structured driver that dropped a deny flag
 /// would be a capability grant by transport. Building the spec here from the
 /// same values `build_agent_argv_ex` uses is what makes
-/// `pi_rpc_argv_is_the_pty_line_plus_one_flag` a comparison of two real
+/// `the_structured_launch_line_is_the_pty_arm_plus_mode_rpc`
+/// (`tests/structuredspawn.rs`) a comparison of two real
 /// derivations rather than of one derivation against a hand-copied list.
 #[allow(clippy::too_many_arguments)]
 pub fn pi_launch_spec(

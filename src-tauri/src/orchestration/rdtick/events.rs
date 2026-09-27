@@ -4,7 +4,7 @@
 //! `rd_lane_briefed_verify`, and the driver's audit line.
 //!
 //! Design note: `docs/design/review-driver.md`. Part of `rdtick/`, the driver's
-//! registry wiring, which `tests/reviewdrive.rs` scans whole (see `mod.rs`).
+//! registry wiring, which `tests/reviewdrive/guards.rs` scans whole (see `mod.rs`).
 
 use super::*;
 
@@ -149,7 +149,7 @@ impl OrchRegistry {
     /// were. Wiring it there is a different change — the release runs UNDER
     /// `rd_state_lock` (see *Locking*), so it would take the already-held form
     /// plus a proof that it is always called that way, and it moves a signature
-    /// two source scans in `tests/reviewdrive.rs` pin. #2555 keeps item 1.
+    /// two source scans in `tests/reviewdrive/` pin. #2555 keeps item 1.
     ///
     /// **`current` panes only, and that is a narrowing with a reason.** A
     /// superseded pane is one the drive will never speak to again
@@ -161,7 +161,7 @@ impl OrchRegistry {
     ///
     /// That narrowing is pinned as the `current` filter below and NOT
     /// behaviourally, and the residual is stated rather than implied: no fixture
-    /// in `tests/reviewdrive.rs` can reach a live superseded pane, because a
+    /// in `tests/reviewdrive/` can reach a live superseded pane, because a
     /// hand-back REUSES a live idle pane on the same session
     /// ([`Self::rd_reuse_pane`]) and [`reviewdrive::DriveEntry::forget_dead_panes`]
     /// drops the ones that are not. What IS pinned is the other filter,

@@ -7,7 +7,7 @@
 use super::*;
 
 /// Build a registry against `dir` with every test-only directory override
-/// applied — see `orchestration.rs`'s `relaunch_registry` (same rationale,
+/// applied — see `orchestration/helpers.rs`'s `relaunch_registry` (same rationale,
 /// duplicated because these are separate integration-test binaries): a
 /// second `OrchRegistry::new` built directly, without reapplying these
 /// overrides, falls through to the REAL `~/.claude/agents`/`~/.copilot/agents`
@@ -55,7 +55,7 @@ pub(crate) fn rails() -> Guardrails {
 /// `.github/agents/*.md` persona files.
 ///
 /// The repo lives one level BELOW its own private temp root (`<root>/repo`),
-/// not AT the root itself — see `orchestration.rs`'s `RealRepo` for why:
+/// not AT the root itself — see `orchestration/helpers.rs`'s `RealRepo` for why:
 /// `git_worktree_add` cuts a worktree to a directory SIBLING to the repo
 /// (`<repo's-parent>/<repo-name>-worktrees/<name>`), and a `git_init()`'d
 /// `Repo` here feeds `spawn_agent` MCP calls whose worktree defaults ON

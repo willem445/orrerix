@@ -1075,9 +1075,9 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
         //
         // **Why this file needs its own helper at all**, which is the part that
         // could stop being true: a `tests/*.rs` file is its own integration-test
-        // BINARY, and helpers do not cross binaries — `reviewdrive.rs` cannot
-        // call `orchestration.rs`'s `relaunch_registry` any more than
-        // `workflow.rs` can, which is why both of those already have a row here.
+        // BINARY, and helpers do not cross binaries — `reviewdrive/` cannot
+        // call `orchestration/`'s `relaunch_registry` any more than
+        // `workflow/` can, which is why both of those already have a row here.
         // It is a separate target rather than more of `orchestration.rs` for
         // CLAUDE.md constraint 4's reason (an integration-test target is what
         // carries the comctl32-v6 manifest link args) and to stay off that
@@ -1104,7 +1104,7 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
         // checked against that by this scan alone, so a reader re-checking it
         // reads `lead.rs`'s `relaunch_registry` itself.
         ("lead.rs", 1),           // relaunch_registry (#2519 slice A)
-        // #3304 S1, delivery triage. Its own binary for the `reviewdrive.rs`
+        // #3304 S1, delivery triage. Its own binary for the `reviewdrive/helpers.rs`
         // row's two reasons (helpers do not cross integration-test targets, and
         // CLAUDE.md constraint 4 makes the target KIND what matters), plus one
         // of this feature's own: `docs/design/delivery-triage.md` says every
@@ -1118,7 +1118,7 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
         // overrides — the property #464 is about. If it ever stops applying one,
         // that test fails in its own binary and this row's premise is gone.
         ("triage.rs", 1),         // relaunch_registry (#3304 S1) — proof test above
-        // #3040 P3a, the plan driver's twin of the `reviewdrive.rs` row above.
+        // #3040 P3a, the plan driver's twin of the `reviewdrive/helpers.rs` row above.
         // Its own binary for that row's two reasons (helpers do not cross
         // integration-test targets, and CLAUDE.md constraint 4 makes the target
         // KIND what matters), and therefore its own helper.

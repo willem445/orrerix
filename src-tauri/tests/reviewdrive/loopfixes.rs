@@ -870,7 +870,7 @@ pub(crate) fn audit_details(reg: &OrchRegistry, group: &GroupId, action: &str) -
 }
 
 /// **Make `deliver_to_orchestrator` answer `Ok` for `agent_id`** — a pane plus a
-/// paused group, which is `orchestration.rs`'s own `pause_with_pane` (#569) and
+/// paused group, which is `orchestration/helpers.rs`'s own `pause_with_pane` (#569) and
 /// the only way a headless test reaches that branch at all.
 ///
 /// The obstacle is real and is not this feature's: a delivery that lands alone

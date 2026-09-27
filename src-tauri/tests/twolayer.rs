@@ -27,7 +27,7 @@
 //! reviewer-kind block that declares a `profile:`. Change the roster and the
 //! population follows; a persona that stops being read stops being required,
 //! and one that starts being read is covered the day it is declared. That is
-//! the same dogfood pin `tests/workflow.rs` and `test/workflowdogfood.test.ts`
+//! the same dogfood pin `tests/workflow/dogfood.rs` and `test/workflowdogfood.test.ts`
 //! already make, asked of the prose rather than of the schema.
 //!
 //! **Residual, stated:** this is a scan over instruction text. It cannot see a
@@ -196,7 +196,7 @@ fn assert_two_layer_shape(label: &str, raw: &str) {
 }
 
 /// The loomux repo root (this crate's manifest dir is `src-tauri/`), spelled
-/// the way `tests/workflow.rs`'s dogfood pins spell it.
+/// the way `tests/workflow/dogfood.rs`'s dogfood pins spell it.
 fn repo_root() -> String {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

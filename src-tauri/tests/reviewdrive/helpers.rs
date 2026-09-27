@@ -9,7 +9,7 @@ use super::*;
 // ── the tick, through the registry ──────────────────────────────────────────
 
 /// Build a registry against `dir` with every test-only directory override
-/// applied — see `orchestration.rs`'s `relaunch_registry` (same rationale,
+/// applied — see `orchestration/helpers.rs`'s `relaunch_registry` (same rationale,
 /// duplicated because these are separate integration-test binaries): a second
 /// `OrchRegistry::new` built directly, without reapplying these overrides,
 /// falls through to the REAL `~/.claude/agents`/`~/.copilot/agents` on the next
@@ -170,7 +170,7 @@ driver:
   enabled: true
 "#;
 
-/// A throwaway repo one level below its own temp root — `orchestration.rs`'s
+/// A throwaway repo one level below its own temp root — `orchestration/helpers.rs`'s
 /// `RealRepo` rationale: a worktree is cut SIBLING to the repo, so nesting keeps
 /// it inside the root that `Drop` reclaims.
 pub(crate) struct Repo {

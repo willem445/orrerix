@@ -10,7 +10,7 @@
 //! exists only where a workflow file declares one —
 //! `write_instruction_files`'s class-fallback loop deliberately never writes
 //! `manager.md` for a default group. Every test here therefore needs a
-//! workflow-declared roster, which is `tests/workflow.rs`'s shape; it is split
+//! workflow-declared roster, which is `tests/workflow/`'s shape; it is split
 //! out from there for the same reason `manager_lifecycle.rs` was (#1161 M3),
 //! to keep three concurrent slices off one 9000-line file.
 //!
@@ -37,7 +37,7 @@ use std::path::PathBuf;
 // ───────────────────────────────── harness ─────────────────────────────────
 
 /// A registry with every test-only directory override applied — the same
-/// rationale as `workflow.rs`'s `relaunch_registry`, duplicated because these
+/// rationale as `workflow/helpers.rs`'s `relaunch_registry`, duplicated because these
 /// are separate integration-test binaries: an `OrchRegistry::new` built without
 /// them falls through to the REAL `~/.claude/agents` on the next spawn (#464).
 fn test_registry() -> (OrchRegistry, tempfile::TempDir) {
@@ -65,7 +65,7 @@ fn rails() -> Guardrails {
 }
 
 /// A throwaway repo carrying a workflow file. One level below its own temp
-/// root, for `workflow.rs`'s `Repo` reason (a worktree cut as a SIBLING of the
+/// root, for `workflow/helpers.rs`'s `Repo` reason (a worktree cut as a SIBLING of the
 /// repo must still fall inside the tree `Drop` reclaims).
 struct Repo {
     _root: tempfile::TempDir,
@@ -157,7 +157,7 @@ const WITH_MANAGER: &str = "version: 1\nblocks:\n\
 /// send anyone after one.
 ///
 /// The rule is `the_default_rendering_never_names_the_gate_machinery`'s
-/// (`tests/workflow.rs`), one class over: prose naming a mechanism the reader
+/// (`tests/workflow/goldens.rs`), one class over: prose naming a mechanism the reader
 /// does not have is an invitation to go looking, and the manager is the class
 /// with the widest gap between what it reads about and what it holds — it is
 /// told about the fleet in order to talk about it, and told about the board in
@@ -690,7 +690,7 @@ fn a_custom_id_manager_block_is_never_handed_the_delegate_spine() {
 fn the_manager_template_is_the_only_place_its_block_placeholder_may_sit() {
     // `manager.md` carries exactly one workflow-conditional key, and its
     // line-final placement is what lets a manager-less render leave the file
-    // untouched to the byte. `tests/workflow.rs`'s
+    // untouched to the byte. `tests/workflow/goldens.rs`'s
     // `a_workflow_placeholder_must_sit_at_the_end_of_a_line_it_shares` asserts
     // this across all five templates against the goldens; this is the
     // manager-scoped restatement that fails by naming the manager, so an M4

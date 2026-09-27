@@ -1310,7 +1310,7 @@ impl OrchRegistry {
     /// The reuse-readiness predicate reads this map, and a headless test cannot
     /// fill it the production way: `deliver_now` needs a live pty and an
     /// `AppHandle` to run its confirm window at all — the same obstacle
-    /// `reviewdrive.rs`'s `make_delivery_land` documents from the other side.
+    /// `tests/reviewdrive/loopfixes.rs`'s `make_delivery_land` documents from the other side.
     /// `confirmed: false` goes through production's own writer
     /// ([`record_inflight_delivery`]) rather than a second insert here, so the
     /// unconfirmed shape cannot drift; `true` is the one shape no `pub` writer

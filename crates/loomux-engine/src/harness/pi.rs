@@ -151,10 +151,11 @@ pub const MODE_FLAG: [&str; 2] = ["--mode", "rpc"];
 ///
 /// Spelled here rather than imported because this is an **engine leaf** — it
 /// may not depend on `src-tauri`, where the PTY arm's constants live. That the
-/// two spellings agree is not left to hope:
-/// `pi_rpc_argv_is_the_pty_line_plus_one_flag` in
-/// `src-tauri/tests/orchestration/` is S3b's to add, and until it exists this
-/// is a stated residual rather than a covered one.
+/// two spellings agree is a stated residual rather than a covered one: the pin
+/// planned for it, `pi_rpc_argv_is_the_pty_line_plus_one_flag`, never landed
+/// under that name, and S3b's parity tests in `src-tauri/tests/structuredspawn.rs`
+/// check the flags a child receives against literals, not against the PTY
+/// arm's `PI_APPROVE_FLAG`/`PI_NO_APPROVE_FLAG`.
 pub const APPROVE_FLAG: &str = "--approve";
 /// See [`APPROVE_FLAG`].
 pub const NO_APPROVE_FLAG: &str = "--no-approve";
@@ -1337,8 +1338,8 @@ impl PiPane {
     ///
     /// A PREFIX and not a whole argv, so the launch line stays this module's
     /// to build: a caller can say how to REACH pi and cannot say what to ask
-    /// pi for. That is what keeps `pi_rpc_argv_is_the_pty_line_plus_one_flag`
-    /// meaningful — the spec's own words are still the whole of the argv that
+    /// pi for. That is what keeps `the_argv_the_child_receives_is_the_pty_line_plus_one_flag`
+    /// (`src-tauri/tests/structuredspawn.rs`) meaningful — the spec's own words are still the whole of the argv that
     /// carries containment, session identity and the MCP bridge.
     ///
     /// `&[]` is the ordinary case and the one [`Self::spawn`] passes, so a

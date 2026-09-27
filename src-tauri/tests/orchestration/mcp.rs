@@ -321,7 +321,7 @@ fn no_delegate_callable_tool_can_forge_a_loomux_attribution_into_the_orchestrato
     // The property's surviving witnesses: `report.rs`'s own unit tests on
     // `relay_payload_keeping_lines`, and its one remaining call site,
     // `rddrive::lane_summary`, which is what puts a reviewer's summary into the
-    // drive's notices and carries `tests/reviewdrive.rs`'s pins.
+    // drive's notices and carries `tests/reviewdrive/`'s pins.
     //
     // What replaces it here is strictly stronger for THIS site: the loop above
     // asserts the verdict notice carries no delegate-authored text in any form.

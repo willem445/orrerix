@@ -440,7 +440,7 @@ mod tests {
     use super::*;
 
     /// **Field-inventory pin, not a runtime one.** The three `human_gate`
-    /// denial tests in `tests/workflow.rs` catch a field *renamed* onto the
+    /// denial tests in `tests/workflow/` catch a field *renamed* onto the
     /// reserved spelling — they would flip from red to a passing rejection if
     /// someone tried it. They do NOT catch a field *added* under a different,
     /// still gate-shaped name (`auto_merge:`, `skip_review:`, …): that field
@@ -462,7 +462,7 @@ mod tests {
 
     // ── `remote:` (#1457) ────────────────────────────────────────────────
     //
-    // Engine UNIT tests rather than `src-tauri/tests/workflow.rs` integration
+    // Engine UNIT tests rather than `src-tauri/tests/workflow/` integration
     // ones: `parse_workflow` is pure and lives here, and nothing below links
     // the Tauri lib, so CLAUDE.md constraint 4 (test executables that link the
     // lib need the comctl32-v6 manifest, which only integration targets get)

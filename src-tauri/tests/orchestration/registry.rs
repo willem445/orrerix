@@ -100,7 +100,7 @@ pub(crate) fn repo_with_merge_queue(tag: &str, enabled: bool) -> std::path::Path
 /// queue** — and "runs the queue" means BOTH the block and the
 /// advanced-orchestrator toggle.
 ///
-/// The absence half is already pinned hard by `tests/workflow.rs`'s blessed
+/// The absence half is already pinned hard by `tests/workflow/goldens.rs`'s blessed
 /// golden and its never-names-the-gate-machinery rule — which is how this got
 /// caught: the first cut of slice E put this guidance in the base template and
 /// those tests went red. What nothing pinned was the **presence** half: a
@@ -1501,7 +1501,7 @@ fn orchestrator_template_no_longer_instructs_a_re_send_on_a_held_delivery() {
     // pre222 golden is separate by design: it tracks the live default-group
     // text and is re-blessed whenever that text deliberately changes
     // (`a_workflow_placeholder_must_sit_at_the_end_of_a_line_it_shares` in
-    // tests/workflow.rs enforces the re-bless; see
+    // tests/workflow/goldens.rs enforces the re-bless; see
     // tests/fixtures/pre222/README.md's changelog for the entry).)
     let both = format!("{ORCHESTRATOR_TPL}{ORCHESTRATOR_PLAYBOOK_TPL}");
     assert!(

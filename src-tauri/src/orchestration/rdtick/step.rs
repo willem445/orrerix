@@ -1,7 +1,7 @@
 //! `rd_step_entry`: one entry, one tick, at most one advance (§2.4).
 //!
 //! Design note: `docs/design/review-driver.md`. Part of `rdtick/`, the driver's
-//! registry wiring, which `tests/reviewdrive.rs` scans whole (see `mod.rs`).
+//! registry wiring, which `tests/reviewdrive/guards.rs` scans whole (see `mod.rs`).
 
 use super::*;
 

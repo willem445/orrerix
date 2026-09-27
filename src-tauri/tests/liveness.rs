@@ -1600,17 +1600,17 @@ fn l5a_a_planted_inversion_panics_under_the_checker_naming_both_locks() {
         format!("rank {}", lockorder::AGENTS),
         format!("rank {}", lockorder::GROUPS),
         // Two needles, not one path: the recorded site is a real `file!()`,
-        // so it is `src-tauri/src/orchestration/mod.rs` on unix and
-        // `src-tauri\src\orchestration\mod.rs` on Windows. Asserting the
-        // slashed form passed on two platforms and failed on the third
-        // (run 33262628789).
+        // so it is `src-tauri/src/orchestration/registry/lockseams.rs` on unix
+        // and `src-tauri\src\orchestration\registry\lockseams.rs` on Windows.
+        // Asserting the slashed form passed on two platforms and failed on the
+        // third (run 33262628789).
         "orchestration".to_string(),
-        "mod.rs".to_string(),
+        "lockseams.rs".to_string(),
     ];
     for needle in &needles {
         assert!(msg.contains(needle), "the panic lost {needle:?}: {msg}");
     }
-    // The sites are the real `lock_safe()` call sites in `mod.rs`, not this
+    // The sites are the real `lock_safe()` call sites in `registry/lockseams.rs`, not this
     // test's line and not the checker's own — `#[track_caller]` is what buys
     // that, and it is the difference between a report that names code and one
     // that names the instrument.
@@ -1657,7 +1657,7 @@ fn l5b_a_reentrant_acquisition_answers_busy_instead_of_hanging() {
     );
     let holder = busy.holder.as_ref().expect("the holder is this thread's own earlier frame");
     assert!(
-        holder.site_file.ends_with("mod.rs"),
+        holder.site_file.ends_with("lockseams.rs"),
         "the refusal must name the site that already holds it, which is in the registry, not \
          here: {}:{}",
         holder.site_file,
@@ -2875,7 +2875,7 @@ fn l7b_a_wedged_day_old_registry_still_answers_busy_within_budget() {
 /// slow.
 const PERMITTED_LONG_HOLDS: &[(&str, &str, &str)] = &[
     (
-        "orchestration/mod.rs",
+        "registry/lockseams.rs",
         "OrchRegistry::hold_lock_for_test",
         "the liveness suite's deliberate wedge: L1/L2a/L2c/L7b hold a registry lock for 20-30 s \
          and probe that everything else still answers. Exempting it is what stops the \

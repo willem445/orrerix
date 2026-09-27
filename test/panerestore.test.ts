@@ -2151,11 +2151,12 @@ test("LEAD_CLIS is exactly the set `lead_mcp_args` has an arm for (#2519 C2)", (
 
   // TWO BACKEND STATEMENTS, and this list must agree with BOTH. The arm set
   // above is one; #2819 added the other, a refusal of codex BY NAME inside
-  // `lead_prepare` (naming #2833 as the follow-up that lifts it). They can drift
+  // `lead_prepare` (`registry/solo.rs`, naming #2833 as the follow-up that lifts it). They can drift
   // from each other — a codex arm added without deleting the refusal would be a
   // lead that is refused despite having flags — so the frontend gate is checked
   // against each, and the two are checked against one another here.
-  const refusesCodexByName = /if cli == "codex"/.test(rust) && /codex cannot host a lead pane yet/.test(rust);
+  const solo = readFileSync(new URL("../src-tauri/src/orchestration/registry/solo.rs", import.meta.url), "utf8");
+  const refusesCodexByName = /if cli == "codex"/.test(solo) && /codex cannot host a lead pane yet/.test(solo);
   assert.equal(
     refusesCodexByName,
     !arms.includes("codex"),

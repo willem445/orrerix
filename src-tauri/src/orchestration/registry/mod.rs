@@ -28,6 +28,7 @@ mod agents;
 mod audit;
 mod autonomy;
 mod compact;
+mod deliveryqueue;
 mod idle;
 mod instructions;
 mod lockseams;

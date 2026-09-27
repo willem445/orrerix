@@ -9,8 +9,31 @@
 
 use super::*;
 use loomux_lib::orchestration::{
-    postcompact_marker_disposition, PostCompactDisposition, POSTCOMPACT_SESSIONSTART_PAIR_MS, POSTCOMPACT_SETTLE_MS,
+    claude_supports_postcompact, postcompact_marker_disposition, set_claude_version_for_test, PostCompactDisposition,
+    CLAUDE_POSTCOMPACT_MIN_VERSION, POSTCOMPACT_SESSIONSTART_PAIR_MS, POSTCOMPACT_SETTLE_MS,
 };
+
+/// Answers the probe-cache version lookup with `version` on this thread until
+/// dropped — restored from `Drop`, so a failing assertion cannot leak it.
+struct ClaudeVersionOverride;
+impl Drop for ClaudeVersionOverride {
+    fn drop(&mut self) {
+        set_claude_version_for_test(None);
+    }
+}
+fn claude_version(version: Option<&str>) -> ClaudeVersionOverride {
+    set_claude_version_for_test(Some(version.map(str::to_string)));
+    ClaudeVersionOverride
+}
+
+/// The hooks settings file a fresh worker's spawn wrote, parsed.
+fn spawned_hooks_settings() -> Value {
+    let (reg, _d) = test_registry();
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "t", false, None).unwrap();
+    let p = reg.state_root().join(g.id.as_str()).join("configs").join(format!("{}-hooks.json", w.id));
+    serde_json::from_str(&fs::read_to_string(p).unwrap()).unwrap()
+}
 
 fn postcompact_marker(reg: &OrchRegistry, gid: &GroupId, oid: &str) -> PathBuf {
     reg.state_root().join(gid.as_str()).join("hooks").join(format!("{oid}.postcompact.json"))
@@ -243,6 +266,8 @@ fn postcompact_hook_is_wired_into_claudes_settings_file() {
         eprintln!("SKIP postcompact_hook_is_wired_into_claudes_settings_file: no sh.exe found via `where`");
         return;
     }
+    // A Claude Code the probe knows has the event (#413 S5 review r2).
+    let _v = claude_version(Some("2.1.76"));
     let (reg, _d) = test_registry();
     let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
     let w = reg.spawn_agent(&g.id, Role::Worker, "w", "t", false, None).unwrap();
@@ -356,4 +381,52 @@ fn postcompact_a_sessionstart_after_the_settle_window_is_the_disclosed_duplicate
         0,
         "not a skip: loomux's reinjection already went, beside the native one — the duplicate"
     );
+}
+
+// ---------- review round 2: a Claude Code too old for PostCompact never sees it ----------
+
+#[test]
+fn claude_supports_postcompact_compares_versions_as_numbers() {
+    // CHANGELOG 2.1.76 added the event; below it, and for any version the probe
+    // could not read, the entry is withheld. `2.1.8` and `2.1.100` are the rows
+    // a string comparison gets backwards.
+    assert_eq!(CLAUDE_POSTCOMPACT_MIN_VERSION, [2, 1, 76]);
+    for (version, expected) in [
+        (None, false),
+        (Some("2.1.75"), false),
+        (Some("2.1.8"), false),
+        (Some("1.99.99"), false),
+        (Some("2.1.76"), true),
+        (Some("2.1.100"), true),
+        (Some("2.2.0"), true),
+        (Some("3.0.0"), true),
+        (Some("2.1"), false),
+        (Some("2.1.x"), false),
+        (Some(""), false),
+    ] {
+        assert_eq!(claude_supports_postcompact(version), expected, "{version:?}");
+    }
+}
+
+#[test]
+fn postcompact_hook_is_written_only_for_a_claude_known_to_have_the_event() {
+    #[cfg(windows)]
+    if locate_sh_exe().is_none() {
+        eprintln!("SKIP postcompact_hook_is_written_only_for_a_claude_known_to_have_the_event: no sh.exe found via `where`");
+        return;
+    }
+    // Before 2.1.101 an unknown hook event made Claude ignore the WHOLE settings
+    // file, so on a Claude older than 2.1.76 a PostCompact entry would cost every
+    // other hook and the status line. Unknown — a cold probe cache, or a version
+    // the probe could not read — is treated as too old.
+    for (version, expected) in [(None, false), (Some("2.1.75"), false), (Some("2.1.8"), false), (Some("2.1.76"), true), (Some("2.1.101"), true)] {
+        let _v = claude_version(version);
+        let cfg = spawned_hooks_settings();
+        assert_eq!(cfg["hooks"].get("PostCompact").is_some(), expected, "version {version:?}: {cfg}");
+        // Positive control, every row: the rest of the file is written either way.
+        for event in ["PreCompact", "SessionStart", "UserPromptSubmit"] {
+            assert!(cfg["hooks"][event][0]["hooks"][0]["command"].is_string(), "version {version:?}: {event} missing: {cfg}");
+        }
+        assert!(cfg["statusLine"]["command"].is_string(), "version {version:?}: statusLine missing: {cfg}");
+    }
 }

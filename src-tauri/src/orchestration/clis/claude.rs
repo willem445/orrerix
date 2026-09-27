@@ -236,6 +236,65 @@ pub const CLAUDE_READONLY_DENY_GIT: &[&str] = &["Bash(git commit *)", "Bash(git 
 /// startup warning instead of a silent no-op deny.
 pub const CLAUDE_QUESTION_DENY_TOOLS: &[&str] = &["AskUserQuestion"];
 
+/// #413 S5 review r2: the first Claude Code release that knows the `PostCompact`
+/// hook event — CHANGELOG `2.1.76`: "Added `PostCompact` hook that fires after
+/// compaction completes". Compared numerically, part by part.
+pub const CLAUDE_POSTCOMPACT_MIN_VERSION: [u64; 3] = [2, 1, 76];
+
+/// Whether a Claude Code of `version` may be handed a `PostCompact` entry in its
+/// per-pane `--settings` file (#413 S5 review r2).
+///
+/// **Why a gate and not a hope.** Before `2.1.101` an unknown hook event cost the
+/// whole settings file — CHANGELOG `2.1.101`: "an unrecognized hook event name in
+/// `settings.json` no longer causes the entire file to be ignored". Every release
+/// older than `2.1.76` both lacks the event and predates that fix, so on one of
+/// them the entry would take PreCompact, SessionStart(compact), UserPromptSubmit
+/// and the status line down with it. The `2.1.101` fix does not retire the gate:
+/// below `2.1.76` the event is unknown either way, so the entry buys nothing.
+///
+/// `None`, or a version whose first three dot-parts are not all numbers, is
+/// `false`: an unknown version gets no `PostCompact`, and the compaction resolves
+/// through busy-then-quiet as it did before #413 S5. Parts compare as NUMBERS —
+/// `2.1.8` is older than `2.1.76`, which a string comparison gets backwards.
+pub fn claude_supports_postcompact(version: Option<&str>) -> bool {
+    let Some(version) = version else { return false };
+    let mut parts = version.trim().split('.').map(|p| p.parse::<u64>().ok());
+    let mut v = [0u64; 3];
+    for slot in v.iter_mut() {
+        match parts.next() {
+            Some(Some(n)) => *slot = n,
+            _ => return false,
+        }
+    }
+    v >= CLAUDE_POSTCOMPACT_MIN_VERSION
+}
+
+thread_local! {
+    /// Test seam for [`claude_cached_version`]: `Some(v)` answers `v` on the
+    /// calling thread only, so parallel test threads never see each other's
+    /// version and nothing spawns a real `claude --version` to fill the cache.
+    static CLAUDE_VERSION_OVERRIDE: std::cell::RefCell<Option<Option<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only seam: answer [`claude_cached_version`] with `version` on the calling
+/// thread (`None` restores the real probe cache). A real `pub` function rather
+/// than `#[cfg(test)]`, because the integration tests that link the lib cannot
+/// see `cfg(test)` items.
+#[doc(hidden)] // pub for the orchestration integration tests
+pub fn set_claude_version_for_test(version: Option<Option<String>>) {
+    CLAUDE_VERSION_OVERRIDE.with(|c| *c.borrow_mut() = version);
+}
+
+/// The Claude Code version the CACHED `claude` probe read (`cliprobe::cached_version`)
+/// — a lookup on the spawn path, never a `claude --version` run there. A pane
+/// spawned before the startup sweep's probe lands sees `None` (#413 S5 review r2).
+pub(in crate::orchestration) fn claude_cached_version() -> Option<String> {
+    if let Some(v) = CLAUDE_VERSION_OVERRIDE.with(|c| c.borrow().clone()) {
+        return v;
+    }
+    crate::cliprobe::cached_version("claude")
+}
+
 /// Whether a Claude agent's launch denies [`CLAUDE_QUESTION_DENY_TOOLS`] —
 /// #946 Q4 / #1091 slice H.
 ///

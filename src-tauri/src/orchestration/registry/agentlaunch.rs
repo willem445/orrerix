@@ -608,7 +608,9 @@ impl OrchRegistry {
     /// the same reference — with no `matcher`, so it fires after a manual
     /// `/compact` and an auto-compact alike, as `PreCompact` above does. Its
     /// marker is the trusted compaction-DONE signal `compact_nudge_tick` settles
-    /// and resolves on (see `POSTCOMPACT_SETTLE_MS`).
+    /// and resolves on (see `POSTCOMPACT_SETTLE_MS`). It is written only for a
+    /// Claude Code the probe knows is `2.1.76` or later
+    /// (`claude_supports_postcompact`): an older one would ignore the whole file.
     ///
     /// #993 S1 adds the `statusLine` entry, returned beside `hooks` because it
     /// is a TOP-LEVEL settings key, not a hook event — and derived from the same
@@ -642,15 +644,19 @@ impl OrchRegistry {
         if let Some(r) = user.as_ref().and_then(|u| u.refresh_interval) {
             status_line.insert("refreshInterval".into(), json!(r));
         }
-        Some(ClaudeHookSettings {
-            hooks: json!({
-                "PreCompact": [{ "hooks": [{ "type": "command", "command": cmd("precompact") }] }],
-                "PostCompact": [{ "hooks": [{ "type": "command", "command": cmd("postcompact") }] }],
-                "SessionStart": [{ "matcher": "compact", "hooks": [{ "type": "command", "command": cmd("sessionstart-compact") }] }],
-                "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": cmd("promptsubmit") }] }],
-            }),
-            status_line: Value::Object(status_line),
-        })
+        let mut hooks = json!({
+            "PreCompact": [{ "hooks": [{ "type": "command", "command": cmd("precompact") }] }],
+            "SessionStart": [{ "matcher": "compact", "hooks": [{ "type": "command", "command": cmd("sessionstart-compact") }] }],
+            "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": cmd("promptsubmit") }] }],
+        });
+        // #413 S5 review r2: only for a Claude Code known to have the event — an
+        // older one would ignore this WHOLE file (see
+        // `claude_supports_postcompact`). Unknown, including a pane spawned
+        // before the startup probe landed, gets none.
+        if claude_supports_postcompact(claude_cached_version().as_deref()) {
+            hooks["PostCompact"] = json!([{ "hooks": [{ "type": "command", "command": cmd("postcompact") }] }]);
+        }
+        Some(ClaudeHookSettings { hooks, status_line: Value::Object(status_line) })
     }
 
     /// #993 S1: the human's own Claude status line, read ONCE at spawn, that

@@ -25,6 +25,29 @@ use std::time::{Duration, Instant};
 
 const HELP_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// CLIs whose probe also runs `<program> --version` (#413 S5 review r2) —
+/// DATA, the `ENUMERATORS` pattern, so a second CLI needing its version read
+/// is a row here rather than a branch in `probe_with`. A CLI is listed only
+/// where loomux decides something from the version: claude, whose per-pane
+/// `--settings` file may carry a hook event only if the CLI knows it
+/// (`claude_supports_postcompact`). Every other CLI keeps its one or two runs.
+const VERSION_PROBES: &[&str] = &["claude"];
+
+/// The version a `--version` run printed: the first whitespace-separated token
+/// shaped like `N.N[.N…]` (a leading `v` dropped). `claude --version` prints
+/// `2.1.123 (Claude Code)`. `None` when no token has that shape — an
+/// unreadable version is an unknown one, never a guess.
+pub fn parse_cli_version(out: &str) -> Option<String> {
+    out.split_whitespace().find_map(|tok| {
+        let tok = tok.strip_prefix('v').unwrap_or(tok);
+        let mut parts = tok.split('.');
+        let first = parts.next()?;
+        let rest: Vec<&str> = parts.collect();
+        let numeric = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+        (numeric(first) && !rest.is_empty() && rest.iter().all(|p| numeric(p))).then(|| tok.to_string())
+    })
+}
+
 #[derive(Clone, Serialize)]
 pub struct CliProbe {
     /// The program ran and produced help output.
@@ -50,6 +73,14 @@ pub struct CliProbe {
     /// id here has an entry in the map; an id in the map but not here is exact.
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub model_context_windows_rounded: BTreeSet<String>,
+    /// The CLI's own version, read from `<program> --version` for the CLIs in
+    /// [`VERSION_PROBES`] (#413 S5 review r2) and parsed by
+    /// [`parse_cli_version`]. `None` for every other CLI, and for one whose
+    /// version run failed — left off the wire then, so every other CLI's reply
+    /// is byte-for-byte what it was. Read on the spawn path through
+    /// [`cached_version`], never by running the CLI there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Human-readable failure reason when not available.
     pub error: Option<String>,
 }
@@ -604,6 +635,7 @@ fn probe_with(program: &str, run: impl Fn(&str, &str) -> Result<String, String>)
                 models: vec![],
                 model_context_windows: BTreeMap::new(),
                 model_context_windows_rounded: BTreeSet::new(),
+                version: None,
                 error: Some(if e.contains("cannot find") || e.contains("not found") || e.contains("os error 2") {
                     format!("'{program}' was not found on PATH")
                 } else {
@@ -631,11 +663,21 @@ fn probe_with(program: &str, run: impl Fn(&str, &str) -> Result<String, String>)
             }
         }
     }
+    // A third run only for a `VERSION_PROBES` CLI, under the same timeout. A
+    // failed or unreadable one leaves the probe INCOMPLETE, for the reason a
+    // failed enumeration does: caching "version unknown" would keep a gate
+    // closed for the rest of the app run over one slow start.
+    let mut version = None;
+    if VERSION_PROBES.contains(&program) {
+        version = run(program, "--version").ok().as_deref().and_then(parse_cli_version);
+        complete &= version.is_some();
+    }
     let probe = CliProbe {
         available: true,
         models,
         model_context_windows: windows.tokens,
         model_context_windows_rounded: windows.rounded,
+        version,
         error: None,
     };
     (probe, complete)
@@ -728,6 +770,17 @@ pub(crate) fn cached_context_window(program: &str, model: &str) -> Option<(u64, 
     let probe = cache.get(&program)?;
     let tokens = *probe.model_context_windows.get(model)?;
     Some((tokens, probe.model_context_windows_rounded.contains(model)))
+}
+
+/// The version `program`'s CACHED probe read (#413 S5 review r2). **A lookup,
+/// never a probe**: it runs on the spawn path, which must not spawn the CLI it
+/// is configuring. A cold cache — a pane spawned before the startup sweep's
+/// probe landed — is `None`, exactly like a CLI whose version could not be
+/// read, and a caller gating on it must treat that as "not known to support".
+/// A poisoned lock is `None` too.
+pub(crate) fn cached_version(program: &str) -> Option<String> {
+    let program = program.trim().to_lowercase();
+    cache().lock().ok()?.get(&program)?.version.clone()
 }
 
 #[cfg(test)]
@@ -942,15 +995,75 @@ mod tests {
 
     #[test]
     fn a_cli_without_an_enumerator_runs_only_help() {
+        // copilot: no list command and no version gate. claude left this class
+        // when #413 S5 r2 made it read its version (the test below).
         let calls = RefCell::new(Vec::new());
-        let (probe, complete) = probe_with("claude", |program, args| {
+        let (probe, complete) = probe_with("copilot", |program, args| {
             calls.borrow_mut().push(format!("{program} {args}"));
             Ok(if args == "--help" { CLAUDE_STYLE_HELP.to_string() } else { String::new() })
         });
         assert!(probe.models.contains(&"sonnet".to_string()));
         assert!(complete, "a CLI with nothing to enumerate is answered in full by its help");
+        assert_eq!(probe.version, None, "no version read for a CLI nothing gates on");
         let seen: Vec<String> = calls.borrow().clone();
-        assert_eq!(seen, vec!["claude --help".to_string()], "claude has no list command; spawning one costs a subprocess for nothing");
+        assert_eq!(seen, vec!["copilot --help".to_string()], "no list command and no version gate: one subprocess");
+    }
+
+    #[test]
+    fn a_claude_probe_reads_its_version_and_nothing_else_extra() {
+        let calls = RefCell::new(Vec::new());
+        let (probe, complete) = probe_with("claude", |program, args| {
+            calls.borrow_mut().push(format!("{program} {args}"));
+            Ok(match args {
+                "--help" => CLAUDE_STYLE_HELP.to_string(),
+                "--version" => "2.1.123 (Claude Code)\n".to_string(),
+                other => panic!("probed an unexpected command: {other}"),
+            })
+        });
+        assert_eq!(probe.version.as_deref(), Some("2.1.123"));
+        assert!(complete);
+        assert_eq!(calls.borrow().clone(), vec!["claude --help".to_string(), "claude --version".to_string()]);
+        let wire = serde_json::to_value(&probe).unwrap();
+        assert_eq!(wire["version"], "2.1.123", "the version rides the wire for the CLI that has one");
+    }
+
+    #[test]
+    fn an_unreadable_claude_version_is_unknown_and_left_uncached() {
+        for out in [Err("`claude --version` timed out".to_string()), Ok("Claude Code\n".to_string())] {
+            let out2 = out.clone();
+            let (probe, complete) = probe_with("claude", move |_program, args| match args {
+                "--help" => Ok(CLAUDE_STYLE_HELP.to_string()),
+                _ => out2.clone(),
+            });
+            assert!(probe.available, "{out:?}: still installed");
+            assert_eq!(probe.version, None, "{out:?}: unknown, never guessed");
+            assert!(!complete, "{out:?}: an unknown version must not be cached for the app run");
+            assert!(serde_json::to_value(&probe).unwrap().get("version").is_none(), "{out:?}: off the wire");
+        }
+    }
+
+    #[test]
+    fn parse_cli_version_takes_the_first_version_shaped_token() {
+        assert_eq!(parse_cli_version("2.1.123 (Claude Code)\n").as_deref(), Some("2.1.123"));
+        assert_eq!(parse_cli_version("claude v2.1.9").as_deref(), Some("2.1.9"));
+        assert_eq!(parse_cli_version("Claude Code").as_deref(), None);
+        assert_eq!(parse_cli_version("2 (Claude Code)").as_deref(), None, "a bare integer is not a version");
+        assert_eq!(parse_cli_version("2..1").as_deref(), None);
+        assert_eq!(parse_cli_version("").as_deref(), None);
+    }
+
+    #[test]
+    fn the_cached_version_lookup_reads_the_probe_cache() {
+        // A key no real program has, so this insert cannot collide with another
+        // test's (the cache is process-global).
+        const KEY: &str = "claude-s5-cached-version-test";
+        assert_eq!(cached_version(KEY), None, "a cold cache is an unknown version");
+        let (probe, _) = probe_with("claude", |_program, args| {
+            Ok(if args == "--version" { "2.1.76 (Claude Code)".to_string() } else { CLAUDE_STYLE_HELP.to_string() })
+        });
+        cache().lock().unwrap().insert(KEY.to_string(), probe);
+        assert_eq!(cached_version(KEY).as_deref(), Some("2.1.76"));
+        assert_eq!(cached_version(" CLAUDE-S5-CACHED-VERSION-TEST ").as_deref(), Some("2.1.76"), "normalised like probe_cached");
     }
 
     #[test]

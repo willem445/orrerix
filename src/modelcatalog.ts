@@ -51,6 +51,11 @@ export interface CliProbe {
    *  rounded spelling (`262.1K` → 262050), not the exact count. Absent when
    *  none is. */
   model_context_windows_rounded?: string[];
+  /** The CLI's own version, from `<program> --version` — only for the CLIs the
+   *  backend gates something on (`VERSION_PROBES`: claude, #413 S5 review r2).
+   *  Absent otherwise, and when the version could not be read. No frontend
+   *  reader yet; typed so the wire shape stays owned here. */
+  version?: string;
   /** Human-readable failure reason when not available. */
   error: string | null;
 }

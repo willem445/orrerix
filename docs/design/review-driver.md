@@ -30,8 +30,9 @@ worker-reviewer rounds an orchestrator performs by hand today** — wait for CI,
 spawn or resume the reviewer lanes the merge gate requires, hand a `fail` back
 to the worker's recorded session, and stop with **one** notice at gate-satisfied,
 at an `escalate`, or at a bound. It lives in a Tauri-free
-`crates/loomux-engine/src/reviewdrive.rs` beside `mergeq.rs`, which is the
-precedent for a loop the backend runs without spending an orchestrator turn.
+`crates/loomux-engine/src/reviewdrive/` (one file per section of this note since
+#3498 P7) beside `mergeq.rs`, which is the precedent for a loop the backend runs
+without spending an orchestrator turn.
 
 **The why, in one sentence, and it is measured rather than asserted: of the
 orchestrator turns spent between PR-open and gate-satisfied, 17-19 of #1758's 21
@@ -1168,7 +1169,7 @@ this note first.
 1. **Merge, or use any landing verb.** No `gh pr merge`, no `git push` to any
    ref, no `gh pr ready`, no branch delete.
    **ENFORCED BY TEST — prescribed on S3.** A default-deny source scan over
-   `reviewdrive.rs` and the driver's registry functions, in the shape this repo
+   `reviewdrive/` and the driver's registry functions, in the shape this repo
    already uses for a refusal class: `tests/synccommands.rs` default-denies a
    class so the next addition cannot forget, and `tests/groupid.rs` enumerates
    its own blind spots. *(The merge queue is not the precedent for this: its
@@ -1220,8 +1221,8 @@ this note first.
    a human or the orchestrator decides; the orchestrator's own kill authority is
    untouched everywhere.
    **ENFORCED BY TEST.** The scan denies `kill_agent`, `kill_agent_as`,
-   `mark_dead` and the reaper entry points inside the driver's two files and
-   `rdtick/` directory, and
+   `mark_dead` and the reaper entry points inside `rddrive.rs` and the
+   `reviewdrive/` and `rdtick/` directories, and
    permits exactly ONE call to `release_driven_pane` — the barrier, which lives
    in `registry/agents.rs` beside the primitives it wraps, never in a driver file. The COUNT
    is the pin: a second call site is a second place the release rule can be
@@ -3585,9 +3586,10 @@ brief.
 module, an `rd_*` prefix — is stepped over by a landing verb added in a function
 that does not carry it. So the driver's registry wiring lives in one module
 (`src-tauri/src/orchestration/rdtick/`, one file per tick phase since #3498 P5)
-purely so the scan can name two files and one directory, read whole, and a
-rename cannot move code out from under it. The scan reads production
-source only: the `#[cfg(test)]` tail is cut, because a test there deliberately
+purely so the scan can name one file (`rddrive.rs`) and two directories
+(`rdtick/` and the engine's `reviewdrive/`, split by section since #3498 P7),
+each read whole, and a rename cannot move code out from under it. The scan
+reads production source only: each file's `#[cfg(test)]` tail is cut, because a test there deliberately
 builds a landing verb in order to prove the bridge refuses it, and line comments
 are cut, because these files quote this note at length and a `///` block naming
 `queue_merge` is prose rather than a capability. Both cuts are places a scan can

@@ -628,7 +628,7 @@
 //! [`reviewdrive`] (#1778 S1) is the third, and its design note put it here
 //! rather than leaving the choice to the slice: `docs/design/review-driver.md`
 //! §1 places the review-loop driver in a Tauri-free
-//! `crates/loomux-engine/src/reviewdrive.rs` "beside `mergeq.rs`, which is the
+//! `crates/loomux-engine/src/reviewdrive/` "beside `mergeq.rs`, which is the
 //! precedent for a loop the backend runs without spending an orchestrator
 //! turn". The parallel with the queue is the whole argument: this module is the
 //! driver's [`mergeq`], not its [`mqloop`] — the closed state enum, the

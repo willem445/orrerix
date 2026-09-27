@@ -1,5 +1,5 @@
 //! The plan driver's pure core (#3040) — the state machine, the persisted
-//! shape, and the per-tick decision. `crates/loomux-engine/src/reviewdrive.rs`
+//! shape, and the per-tick decision. `crates/loomux-engine/src/reviewdrive/`
 //! is the twin this file is deliberately shaped after, and the registry-side
 //! wiring is `src-tauri/src/orchestration/pdtick.rs`, `rdtick`'s twin.
 //!

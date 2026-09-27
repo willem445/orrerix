@@ -957,11 +957,6 @@ const FILE_BUDGETS = [
     blob: "8b1ce3ffdad2234c4d528c4f04fc2db093a73cb6"
   },
   {
-    path: "crates/loomux-engine/src/reviewdrive.rs",
-    ceiling: 10935,
-    blob: "f243bda1ea691d4cfd87ad2f97209aa3fe4ea064"
-  },
-  {
     path: "crates/loomux-engine/src/workflow.rs",
     ceiling: 7538,
     blob: "9b95e14b299a880c597dd92ed0eb88be1db986fb"

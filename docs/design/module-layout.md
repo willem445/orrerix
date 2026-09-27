@@ -98,6 +98,35 @@ the old single file (`tests/orchestration.rs`, `tests/reviewdrive.rs`,
 `tests/workflow.rs`); read that as the directory target. Tests kept their
 names, so `grep -rn <test name> src-tauri/tests/<target>/` finds the new home.
 
+### Splitting a source file that carries unit tests
+
+A source file's inline unit tests are ONE trailing `#[cfg(test)]` module, and
+several whole-tree scans rely on that: `tests/rebrand.rs`, `tests/liveness.rs`,
+`tests/pathseg.rs` and the review driver's scan in `tests/reviewdrive/guards.rs`
+each skip a file's `#[cfg(test)]` code, three of them by cutting the file at its
+first `#[cfg(test)]` line and `pathseg` by skipping from the attribute's next
+`{` to its matching `}`. None of them can tell that a file reached through
+`#[cfg(test)] mod tests;` is test code. A split
+therefore gives each new file its own trailing test module, holding the tests
+of what that file owns, rather than moving the old module out whole into a
+`tests/` directory under `src/`, which those scans would read as production.
+
+The engine's `reviewdrive/` is the first such split (#3498 P7):
+
+- `mod.rs` keeps the header and the `use` lines, declares each file, and
+  re-exports it with `pub use <file>::*`. A Rust glob import takes the lower of
+  the item's and the import's visibility, so a `pub(super)` helper stays
+  crate-private and the public API is the list of `pub` items, as before.
+- Each file opens with `use super::*`, and a private item another file names
+  becomes `pub(super)`, which from a child of `reviewdrive` is exactly the
+  scope a private item had in the single file.
+- Test helpers shared across the per-file test modules are
+  `pub(in crate::reviewdrive)` inside a `pub(super) mod tests`, and `mod.rs`
+  imports them under `#[cfg(test)]` at its end, below all production code, so
+  each test module reaches them through its own `use super::*`.
+- Test paths gain the file's name (`reviewdrive::tests::x` becomes
+  `reviewdrive::decision::tests::x`). Test names are unchanged.
+
 ## Frontend modules
 
 `*model.ts` is DOM-free and unit-tested; `*view.ts` and `*pane.ts` hold DOM

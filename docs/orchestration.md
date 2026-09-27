@@ -3142,9 +3142,10 @@ point:
   orrerix pastes opencode's own `/compact` exactly as it does claude's, and
   `request_compact` works from an opencode pane. But opencode records how many
   tokens a session holds and not how large its window is, so the lifecycle
-  panel shows an opencode pane's tokens without a percent, and the context
-  threshold never escalates it — unless the group sets a context-window
-  override. opencode also compacts on its own when it runs out of room.
+  panel shows an opencode pane's tokens without a percent, and neither the
+  context threshold nor the timed nudge's context floor will act on it —
+  unless the group sets a context-window override. opencode also compacts on
+  its own when it runs out of room.
 - **Session history *does* work.** opencode has no `--session-id` to hand a
   pane up front, so orrerix learns which session is the reviewer's after it
   starts rather than minting one — but once bound, that session resumes and
@@ -3174,9 +3175,10 @@ and two of its omissions change what an orrerix block on it means:
 - **Compaction works as it does for claude.** orrerix pastes pi's own
   `/compact`, and the context threshold escalates a pi pane against the window
   pi's `--list-models` reports for the model the pane is running. For a model
-  pi does not list, the lifecycle panel shows tokens without a percent and the
-  threshold does not escalate it until the group sets a context-window
-  override. pi also auto-compacts on its own by default.
+  pi does not list, the lifecycle panel shows tokens without a percent, and
+  neither the threshold nor the timed nudge's context floor acts on it until
+  the group sets a context-window override. pi also auto-compacts on its own
+  by default.
 - **Session history works, the claude way.** pi takes `--session-id` and
   creates the session if it is missing, so orrerix mints the id up front
   rather than learning it after boot — no watcher, and a resume is the same
@@ -3220,9 +3222,9 @@ two things worth knowing before your first run:
 - **Compaction works as it does for claude.** orrerix pastes codex's own
   `/compact`, and the context threshold escalates a codex pane against the
   window codex records in its session log. A session log that records no window
-  shows tokens without a percent and is not escalated until the group sets a
-  context-window override. codex also compacts on its own when it nears its
-  limit.
+  shows tokens without a percent, and neither the threshold nor the timed
+  nudge's context floor acts on it until the group sets a context-window
+  override. codex also compacts on its own when it nears its limit.
 - **A `reviewer`, a `planner` and a `manager` block cannot run on codex**, and
   orrerix refuses the file rather than launching one — see *Why not codex for a
   reviewer?* below. All three are classes orrerix denies the editing tools to,
@@ -4033,6 +4035,16 @@ your own choosing; or set it to `0` to go back to firing on the quiet window alo
 context check at all. This floor only ever governs orrerix's own unprompted timing — **calling
 `request_compact()` yourself always fires immediately**, at any context level, because that's
 your judgment call, not orrerix's.
+
+**codex, pi and opencode panes with no known context window are exempt from the timed nudge
+while the floor is on.** The floor needs a percentage, and a percentage needs the pane's
+window. opencode never records one. codex and pi record one only once the CLI has reported it.
+Without it orrerix cannot tell a 10%-full pane from a 90%-full one. It skips the timed nudge
+for such a pane rather than pay a whole re-grounding cycle at an unknown fill level. All three
+CLIs compact themselves when they run out of room anyway. Set a context-window override on
+the group to give those panes a window, and the floor then applies to them normally. Setting
+the floor to `0` also brings them back, on the quiet window alone. `request_compact()` works
+for them either way.
 
 **Context escalation is enabled at 45% by default for new groups.** The lifecycle panel
 lets you change the threshold from 0 (off) through 100%; at the threshold, loomux delivers

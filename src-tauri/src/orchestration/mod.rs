@@ -9726,7 +9726,32 @@ fn canonicalize_compact_nudge_roles(roles: Vec<String>) -> Vec<String> {
 /// pasting `/compact` there would type a command that does not exist into a
 /// live pane.
 pub fn compact_command_for(cli: &str) -> Option<&'static str> {
+    let over = COMPACT_COMMAND_OVERRIDE
+        .with(|c| c.borrow().as_ref().and_then(|(k, spelling)| (k.as_str() == cli).then_some(*spelling)));
+    if over.is_some() {
+        return over;
+    }
     loomux_engine::model::cli_caps(cli).and_then(|caps| caps.compact_command)
+}
+
+thread_local! {
+    /// Test seam for [`compact_command_for`]: `(cli, spelling)` answered in
+    /// place of that CLI's row, on the calling thread only (#413 S4 review).
+    /// Every row that carries a command spells it `/compact`, so without a
+    /// spelling no row has, a paste site that hard-coded `"/compact"` would pass
+    /// every test that reads the row — the specimen would be outside the class
+    /// it witnesses. `None` in production, always.
+    static COMPACT_COMMAND_OVERRIDE: std::cell::RefCell<Option<(String, &'static str)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only seam: answer [`compact_command_for`]`(cli)` with `spelling` on the
+/// calling thread (`None` restores the rows). A real `pub` function rather than
+/// `#[cfg(test)]` because the integration tests that link the lib cannot see
+/// `cfg(test)` items — the `modelstate::set_probe_windows_for_test` precedent.
+#[doc(hidden)] // pub for the `tests/orchestration/compact.rs` spelling pin
+pub fn set_compact_command_for_test(over: Option<(&str, &'static str)>) {
+    COMPACT_COMMAND_OVERRIDE.with(|c| *c.borrow_mut() = over.map(|(cli, spelling)| (cli.to_string(), spelling)));
 }
 
 /// The refusal `request_compact` and the human's "Compact now" give for a
@@ -10048,12 +10073,30 @@ pub fn compact_escalation_should_fire(
 ///   pre-smart-default behavior, preserved as an explicit opt-out.
 /// - `Some(n)`, `n > 0`: an explicit floor.
 ///
-/// A reading not yet available (`percent: None`) fails OPEN regardless of
-/// which state the floor resolves to — never let a missing/stale context
-/// reading silently disable the whole heuristic nudge, the same
-/// "degrade, don't deny" posture every other opportunistic gate in this
-/// codebase takes.
-pub fn compact_nudge_context_floor_met(percent: Option<u32>, floor_config: Option<u32>, nudge_minutes: u32) -> bool {
+/// A reading not yet available (`percent: None`, `window_unknown: false`)
+/// fails OPEN regardless of which state the floor resolves to — never let a
+/// missing/stale context reading silently disable the whole heuristic nudge,
+/// the same "degrade, don't deny" posture every other opportunistic gate in
+/// this codebase takes. That covers a pane before its first reading, and a
+/// CLI with no context reader at all (copilot).
+///
+/// **A reading that has tokens and no window fails CLOSED** (`window_unknown:
+/// true`, from [`context_window_unknown`]; #413 S4, the human's decision). That
+/// is not a briefly-missing reading but one missing by design — a codex or pi
+/// pane whose CLI has not reported a window, and every opencode pane — so
+/// failing open would compact it at every lull at any fill level, the
+/// 20-30%-full re-grounding this floor exists to stop. Those CLIs compact
+/// themselves when they run out of room, so a floor-gated lull compact buys
+/// nothing measured. A group `context_window_tokens_override` gives such a
+/// pane a window, and with it a percent the floor reads normally. An
+/// explicitly disabled floor (`Some(0)`, or the parent feature off) has
+/// nothing to fail, and still fires on the lull alone.
+pub fn compact_nudge_context_floor_met(
+    percent: Option<u32>,
+    window_unknown: bool,
+    floor_config: Option<u32>,
+    nudge_minutes: u32,
+) -> bool {
     let effective_floor = match floor_config {
         None if nudge_minutes > 0 => DEFAULT_COMPACT_NUDGE_MIN_CONTEXT_PERCENT,
         None => 0, // parent feature off — nothing to gate; the floor is moot either way
@@ -10064,8 +10107,32 @@ pub fn compact_nudge_context_floor_met(percent: Option<u32>, floor_config: Optio
     }
     match percent {
         Some(p) => p >= effective_floor,
-        None => true,
+        None => !window_unknown,
     }
+}
+
+/// Whether a context reading has tokens but no window a percent may be
+/// computed against (#413 S4) — `modelstate::published_window` refusing the
+/// ladder's answer for this reading's source, the ONE rule the lifecycle panel
+/// publishes by and `agent_context_percents` escalates by. `false` with no
+/// tokens: that is no reading at all, not an unwindowed one. The inputs are
+/// the agent's cached reading (`AgentEntry::last_context_*`) and its group's
+/// override, so the compact-nudge tick can ask it without a second read.
+pub fn context_window_unknown(
+    tokens: Option<u64>,
+    override_tokens: Option<u64>,
+    reported_tokens: Option<u64>,
+    reported_rounded: bool,
+    model: Option<&str>,
+    source: Option<crate::modelstate::ContextSource>,
+) -> bool {
+    let Some(tokens) = tokens else { return false };
+    crate::modelstate::published_window(
+        effective_context_window_tokens(override_tokens, reported_tokens, reported_rounded, model, Some(tokens)),
+        source,
+        reported_tokens,
+    )
+    .is_none()
 }
 
 /// The escalation notice delivered when an agent's context usage crosses the

@@ -918,6 +918,19 @@ impl OrchRegistry {
                     )
                     && compact_nudge_context_floor_met(
                         context_percents.get(&a.id).copied(),
+                        // #413 S4: a reading with tokens and no window the
+                        // panel would publish (codex/pi before a report,
+                        // opencode always, no override) fails the floor
+                        // CLOSED — see `context_window_unknown`. Read off this
+                        // tick's reading as `run_compact_nudge` cached it above.
+                        context_window_unknown(
+                            context_tokens.get(&a.id).copied(),
+                            g.context_window_tokens_override,
+                            a.last_context_window,
+                            a.last_context_window_rounded,
+                            a.last_context_model.as_deref(),
+                            a.last_context_source,
+                        ),
                         g.compact_nudge_min_context_percent,
                         g.compact_nudge_minutes,
                     );
@@ -1503,9 +1516,11 @@ impl OrchRegistry {
     /// never shows a percent the escalation refuses, or the reverse. A reading
     /// with tokens and no such window (opencode always; codex or pi before
     /// their CLI reports one, and with no group override) gets no percent, so
-    /// it never escalates, never passes the lull floor on a guess, and reads as
-    /// "unknown" to the idle-compact backstop. Those readings come back as the
-    /// second half, for `note_unwindowed_escalations` to audit.
+    /// it never escalates and reads as "unknown" to the idle-compact backstop.
+    /// The lull floor refuses the same reading separately, through
+    /// `context_window_unknown` over the agent's cached reading — it fails
+    /// closed there, not open. Those readings come back as the second half,
+    /// for `note_unwindowed_escalations` to audit.
     fn agent_context_percents(
         &self,
         signals: &HashMap<String, crate::usage::CompactionSignal>,

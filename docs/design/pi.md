@@ -689,10 +689,11 @@ replies and `firstInputAt` is keyed on `onKey`/paste rather than `onData`.
   it. #2850 takes it up — see "RPC driver (#2850)" below, which leaves every
   P1 seam (argv, MCP bridge, session store, containment) exactly where P1 put
   it.
-- **A compact nudge.** pi is not on the short list of CLIs loomux pastes
-  `/compact` into. It has `/compact` and auto-compacts by default, but loomux
-  has no context-pressure reader for it yet; a follow-up, not a gap this slice
-  left open silently.
+- **A compact nudge.** Out of scope for P1, which left pi off the list of
+  CLIs loomux pastes `/compact` into. #993 S2b later gave pi a context reader,
+  and #413 S4 admitted it: pi's `CliCaps` row carries `/compact`, and a pi
+  pane is nudged and escalated like any other against the window its
+  `--list-models` reports (see `docs/design/pane-model-state.md`, S4).
 
 ## Still for the human (live only)
 

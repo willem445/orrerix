@@ -979,6 +979,10 @@ fn test_registry() -> (OrchRegistry, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let reg = OrchRegistry::new(dir.path().to_path_buf());
     reg.set_port(45991);
+    // A codex spawn writes its per-agent profile into codex's home; keep it in
+    // this disposable tree rather than the runner's real `~/.codex` (#413 S4
+    // spawns codex orchestrators here).
+    reg.set_codex_home_override(dir.path().join("codex-home"));
     reg.set_claude_projects_dir(dir.path().join("claude-projects"));
     reg.set_claude_agents_dir_override(dir.path().join("claude-agents"));
     reg.set_copilot_agents_dir_override(dir.path().join("copilot-agents"));

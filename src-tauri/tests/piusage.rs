@@ -1454,3 +1454,43 @@ fn the_group_scoped_signal_read_never_reads_another_groups_panes() {
         assert!(scoped.contains_key(mine) && !scoped.contains_key(theirs), "{:?}", scoped.keys().collect::<Vec<_>>());
     }
 }
+
+/// Far enough past any real spawn time that the quiet window has elapsed.
+const LULL_NOW: u64 = 1_000_000_000_000_000;
+
+/// [`pi_orchestrator_at_150k`] with the lull nudge on (20 quiet minutes) and
+/// the floor at its 50% smart default.
+fn pi_orchestrator_at_150k_with_lull(over: Option<u64>) -> (OrchRegistry, tempfile::TempDir, loomux_lib::orchestration::GroupId, String) {
+    let (reg, d, gid, oid) = pi_orchestrator_at_150k(over);
+    reg.set_compact_nudge_minutes(&gid, 20).unwrap();
+    (reg, d, gid, oid)
+}
+
+#[test]
+fn lull_floor_an_unwindowed_pi_pane_at_a_lull_is_not_nudged() {
+    // #413 S4, the human's decision: tokens and no window fails the lull floor
+    // CLOSED. Before it, `compact_nudge_context_floor_met(None, …)` failed
+    // open and this pane got `/compact` at every lull at any fill level.
+    let (reg, _d, gid, oid) = pi_orchestrator_at_150k_with_lull(None);
+    set_probe_windows_for_test(Some(BTreeMap::new()));
+    let nudged = reg.run_compact_nudge(LULL_NOW);
+    set_probe_windows_for_test(None);
+    assert!(nudged.is_empty(), "no window, no percent, no floor pass: {nudged:?}");
+    assert!(audited(&reg, &gid, &oid, "compact-nudge").is_empty());
+    assert_eq!(summary_context(&reg, &gid, &oid)["tokens"], 150_000, "positive control: the pane had a reading");
+}
+
+#[test]
+fn lull_floor_the_same_pi_pane_under_a_group_override_is_nudged() {
+    // The converse that keeps the refusal above from passing by refusing every
+    // pi lull: an override gives the pane a window, 150K of 200K is 75%, over
+    // the 50% floor.
+    let (reg, _d, gid, oid) = pi_orchestrator_at_150k_with_lull(Some(200_000));
+    set_probe_windows_for_test(Some(BTreeMap::new()));
+    let nudged = reg.run_compact_nudge(LULL_NOW);
+    set_probe_windows_for_test(None);
+    assert_eq!(nudged, vec![oid.clone()]);
+    let fired = audited(&reg, &gid, &oid, "compact-nudge");
+    assert_eq!(fired.len(), 1);
+    assert_eq!(fired[0]["command"], "/compact");
+}

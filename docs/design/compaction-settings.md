@@ -30,8 +30,13 @@ the threshold unless the group sets the override; the lifecycle panel shows
 their tokens without a percent, and the audit log records one
 `compact-escalation-skipped` per episode so the missing escalation has a
 stated reason. The override is the lever that switches the threshold on for
-those panes. The floor reads the same missing percent as unknown and does not
-hold the lull nudge back. See `docs/design/pane-model-state.md`, S4.
+those panes. The floor fails CLOSED for the same panes: a reading with tokens
+and no window never passes it, so the lull nudge skips them too, and the
+override is also what makes them eligible for it. They compact themselves when
+they run out of room, and a lull compact at an unmeasured fill level is the
+costly re-grounding the floor exists to stop. A pane with no reading at all
+(copilot, or any pane before its first reading) still fails open. See
+`docs/design/pane-model-state.md`, S4.
 
 The three fields are additive to the existing group-summary wire object, so
 older clients may ignore them and the existing group-view contract remains

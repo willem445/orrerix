@@ -3457,7 +3457,8 @@ limit.
   `ContextSource::table_rung_applies` admits it for Claude's readers only: a codex or pi
   reading with no CLI-reported window, and every opencode reading (its store records none),
   gets no percent unless the group sets `context_window_tokens_override`. No percent means no
-  escalation, the lull floor treats the pane as unknown (fires), and the idle-compact backstop
+  escalation, the lull floor fails closed (`context_window_unknown` → `compact_nudge_context_floor_met`'s
+  `window_unknown`), and the idle-compact backstop
   fails closed. Each such reading in an escalation-eligible seat is audited once per episode
   as `compact-escalation-skipped` (`note_unwindowed_escalations`, latched in
   `compact_unwindowed_noted`), so the timeline says why a full-looking pane was never
@@ -5327,7 +5328,11 @@ right timing, wrong context level.
   `context_window_tokens_override`.
 - **Fails open with no reading**, in every one of the three states — a missing/stale
   context-percent reading must never silently disable the whole heuristic nudge, the same
-  "degrade, don't deny" posture #332's intake gate takes on a `gh` failure.
+  "degrade, don't deny" posture #332's intake gate takes on a `gh` failure. **Fails closed on
+  a reading with no window** (#413 S4): tokens with no window the panel would publish — opencode
+  always, codex or pi before their CLI reports one — is missing by design, not briefly, so
+  failing open there would lull-compact the pane at any fill level. A group override gives it
+  a window; an explicitly disabled floor still fires on the lull alone.
 - **Template guidance, not a tool change.** `orchestrator.md`'s existing "Compact at lulls"
   section and `docs/orchestration.md`'s user-facing **Compact-nudge** section both name the smart
   default and its number (50%) explicitly, so the template and the config never quote different

@@ -2336,25 +2336,25 @@ fn compact_escalation_notice_names_the_percent_and_the_recovery_move() {
 fn compact_nudge_context_floor_met_unset_applies_the_smart_default_only_when_nudge_is_on() {
     // None (unset) + parent feature ON: the 50% smart default applies —
     // zero config needed to get the fix a live benchtest showed was missing.
-    assert!(!compact_nudge_context_floor_met(Some(30), None, 20), "30% is under the smart default (50%)");
-    assert!(compact_nudge_context_floor_met(Some(60), None, 20), "60% clears the smart default (50%)");
+    assert!(!compact_nudge_context_floor_met(Some(30), false, None, 20), "30% is under the smart default (50%)");
+    assert!(compact_nudge_context_floor_met(Some(60), false, None, 20), "60% clears the smart default (50%)");
     // None (unset) + parent feature OFF: inert — there's nothing to gate
     // either way (the heuristic itself never fires when compact_nudge_minutes
     // is 0), but the function must still read as "met" on its own terms.
-    assert!(compact_nudge_context_floor_met(Some(5), None, 0));
+    assert!(compact_nudge_context_floor_met(Some(5), false, None, 0));
 }
 
 #[test]
 fn compact_nudge_context_floor_met_explicit_zero_disables_regardless_of_parent() {
-    assert!(compact_nudge_context_floor_met(Some(1), Some(0), 20), "explicit Some(0) = disabled, any reading passes");
-    assert!(compact_nudge_context_floor_met(None, Some(0), 20));
+    assert!(compact_nudge_context_floor_met(Some(1), false, Some(0), 20), "explicit Some(0) = disabled, any reading passes");
+    assert!(compact_nudge_context_floor_met(None, false, Some(0), 20));
 }
 
 #[test]
 fn compact_nudge_context_floor_met_explicit_value_gates_at_that_value() {
-    assert!(!compact_nudge_context_floor_met(Some(30), Some(70), 20), "below an explicit 70% floor");
-    assert!(compact_nudge_context_floor_met(Some(70), Some(70), 20), "exactly at an explicit floor allows it");
-    assert!(compact_nudge_context_floor_met(Some(80), Some(70), 20));
+    assert!(!compact_nudge_context_floor_met(Some(30), false, Some(70), 20), "below an explicit 70% floor");
+    assert!(compact_nudge_context_floor_met(Some(70), false, Some(70), 20), "exactly at an explicit floor allows it");
+    assert!(compact_nudge_context_floor_met(Some(80), false, Some(70), 20));
 }
 
 #[test]
@@ -2362,8 +2362,38 @@ fn compact_nudge_context_floor_met_fails_open_with_no_reading() {
     // A missing/stale context reading must never silently disable the whole
     // heuristic nudge — degrade, don't deny (the same posture #332's intake
     // gate takes on a `gh` failure) — true under every floor state.
-    assert!(compact_nudge_context_floor_met(None, None, 20), "smart default, no reading");
-    assert!(compact_nudge_context_floor_met(None, Some(70), 20), "explicit floor, no reading");
+    assert!(compact_nudge_context_floor_met(None, false, None, 20), "smart default, no reading");
+    assert!(compact_nudge_context_floor_met(None, false, Some(70), 20), "explicit floor, no reading");
+}
+
+#[test]
+fn compact_nudge_context_floor_met_fails_closed_on_a_reading_with_no_window() {
+    // #413 S4, the human's decision: tokens and no window is missing BY DESIGN
+    // (opencode; codex/pi before a report), not briefly — failing open would
+    // lull-compact such a pane at any fill level.
+    assert!(!compact_nudge_context_floor_met(None, true, None, 20), "smart default, unwindowed");
+    assert!(!compact_nudge_context_floor_met(None, true, Some(70), 20), "explicit floor, unwindowed");
+    // No floor in force: nothing to fail, the lull alone decides.
+    assert!(compact_nudge_context_floor_met(None, true, Some(0), 20), "explicitly disabled floor");
+    assert!(compact_nudge_context_floor_met(None, true, None, 0), "parent feature off");
+}
+
+#[test]
+fn context_window_unknown_is_the_published_window_rule() {
+    use loomux_lib::modelstate::ContextSource;
+    // Tokens, no report, a non-Claude reader: unknown.
+    for source in [ContextSource::CodexRollout, ContextSource::PiSession, ContextSource::OpencodeDb] {
+        assert!(context_window_unknown(Some(150_000), None, None, false, Some("x"), Some(source)), "{source:?}");
+        // An override or a report makes it known.
+        assert!(!context_window_unknown(Some(150_000), Some(200_000), None, false, Some("x"), Some(source)), "{source:?}");
+        assert!(!context_window_unknown(Some(150_000), None, Some(272_000), false, Some("x"), Some(source)), "{source:?}");
+    }
+    // Claude's readers keep the table: never unknown.
+    for source in [ContextSource::Transcript, ContextSource::Statusline] {
+        assert!(!context_window_unknown(Some(150_000), None, None, false, Some("claude-sonnet-4-6"), Some(source)));
+    }
+    // No tokens is no reading, not an unwindowed one.
+    assert!(!context_window_unknown(None, None, None, false, None, Some(ContextSource::OpencodeDb)));
 }
 
 #[test]
@@ -3220,6 +3250,65 @@ fn gemini_and_claude_groups(rails_for: impl Fn(&str) -> Guardrails) -> (OrchRegi
     }
     let [gemini, claude]: [(GroupId, String); 2] = out.try_into().unwrap();
     (reg, dir, [gemini, claude])
+}
+
+/// The texts `deliver_prompt` was handed for `agent` after audit row `from`.
+/// A test registry's panes have no terminal, so every delivery is refused at
+/// the front door and audited as `delivery-dropped` carrying its full `text` —
+/// which makes that row the record of exactly what reached `deliver_prompt`.
+fn delivered_texts(reg: &OrchRegistry, group: &GroupId, agent: &str, from: usize) -> Vec<String> {
+    reg.audit_log(group)
+        .into_iter()
+        .skip(from)
+        .filter(|e| e.action == "delivery-dropped" && e.detail["to"] == agent)
+        .filter_map(|e| e.detail["text"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// A lull-nudge fire for a `cli` orchestrator; returns what reached
+/// `deliver_prompt` for it.
+fn lull_paste_for(cli: &str) -> Vec<String> {
+    let (reg, dir) = test_registry();
+    reg.set_codex_home_override(dir.path().join("codex-home"));
+    let g = reg
+        .create_group(&format!("C:/tmp/repo-{cli}"), Guardrails { agent_cli: cli.into(), ..compact_rails(20, &["orchestrator"]) })
+        .unwrap();
+    let o = reg.spawn_agent(&g.id, Role::Orchestrator, "orch", "", false, None).unwrap();
+    let from = reg.audit_log(&g.id).len();
+    let nudged = reg.compact_nudge_tick(FAR, &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new(), &HashMap::new());
+    assert_eq!(nudged, vec![o.id.clone()], "{cli}: the lull nudge fired");
+    delivered_texts(&reg, &g.id, &o.id, from)
+}
+
+#[test]
+fn compact_nudge_pastes_each_clis_own_row_command_into_deliver_prompt() {
+    // #413 S4 review: one case per CLI that pastes, reading the expected
+    // string off the row rather than restating it.
+    let mut pasting = 0;
+    for cli in SUPPORTED_CLIS {
+        let Some(command) = cli_caps(cli).unwrap().compact_command else { continue };
+        assert_eq!(lull_paste_for(cli), vec![command.to_string()], "{cli}: exactly its row's command reached deliver_prompt");
+        pasting += 1;
+    }
+    assert_eq!(pasting, 5, "claude, copilot, codex, pi and opencode all paste");
+}
+
+#[test]
+fn compact_nudge_pastes_a_spelling_no_row_has_when_the_row_says_so() {
+    // The case above cannot tell "the row's string" from a hard-coded
+    // `/compact`, since every row spells it that way. A spelling no row has
+    // can: a paste site that ignored the row would send `/compact` here.
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            set_compact_command_for_test(None);
+        }
+    }
+    let _restore = Restore;
+    set_compact_command_for_test(Some(("pi", "/compact-spelled-otherwise")));
+    assert_eq!(compact_command_for("pi"), Some("/compact-spelled-otherwise"), "fixture: the seam answers");
+    assert_eq!(compact_command_for("claude"), Some("/compact"), "fixture: only the named CLI is overridden");
+    assert_eq!(lull_paste_for("pi"), vec!["/compact-spelled-otherwise".to_string()]);
 }
 
 #[test]

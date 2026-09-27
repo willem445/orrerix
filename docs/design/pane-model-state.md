@@ -465,7 +465,11 @@ the token count alone. An override still publishes.
 compact-nudge loop, `request_compact`, the human's "Compact now" and the
 orchestrator's idle-compact backstop. The paste sends that string through
 `deliver_prompt`, so a CLI whose command is spelled differently gets its own
-spelling. A CLI with no command (gemini today) is skipped, and
+spelling. Every row that carries a command spells it `/compact`, so a test
+reading the rows cannot tell the row's string from a hard-coded one; the pin
+feeds a spelling no row has through a test-only seam
+(`set_compact_command_for_test`) and asserts that exact string reaches
+`deliver_prompt`. A CLI with no command (gemini today) is skipped, and
 `request_compact` refuses with the row's `compact_note`. It replaced
 `compact_nudge_cli_supported`, a `claude | copilot` match that kept codex, pi
 and opencode out of the loop even after S2a–S2c gave them readings.
@@ -494,7 +498,8 @@ token count alone. The table describes Claude ids; a percent over a guessed
 window would escalate — type a request into a live pane — on a number nobody
 measured, and the panel showing a percent the escalation refused would be the
 two readers disagreeing about one pane. No percent also means the lull floor
-treats the pane as unknown (it fires on the lull alone) and the idle-compact
+fails CLOSED for the pane (`context_window_unknown`; the human's decision on
+review round 1) and the idle-compact
 backstop fails closed, both as for a pane with no reading.
 
 **The timeline says why.** A reading with tokens and no accepted window, in a

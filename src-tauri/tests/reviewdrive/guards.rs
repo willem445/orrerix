@@ -8,7 +8,7 @@ use super::*;
 
 // ── §3.1's never-merges scan ────────────────────────────────────────────────
 
-/// The one file and two directories that are the review driver, and the whole of
+/// The two files and one directory that are the review driver, and the whole of
 /// it.
 ///
 /// **A file scope rather than a name scope, and that is the point.** CLAUDE.md's
@@ -18,10 +18,9 @@ use super::*;
 /// in a function that does not carry it". A file is not a name; the driver's
 /// registry wiring was moved into `rdtick.rs` precisely so this list could be
 /// files rather than a prefix, and #3498 P5 split that file into the
-/// `rdtick/` directory, which [`driver_production_source`] reads whole. #3498
-/// P7 did the same to the engine's `reviewdrive.rs`, now `reviewdrive/`.
+/// `rdtick/` directory, which [`driver_production_source`] reads whole.
 const DRIVER_FILES: [&str; 3] = [
-    "../crates/loomux-engine/src/reviewdrive",
+    "../crates/loomux-engine/src/reviewdrive.rs",
     "../crates/loomux-engine/src/rddrive.rs",
     "src/orchestration/rdtick",
 ];
@@ -135,11 +134,8 @@ const PERMITTED_RELEASE: (&str, &str, usize, &str) = (
 ///
 /// **A directory entry is read whole** (#3498 P5): every `.rs` under it,
 /// recursively and in path order, each cut as above, joined into one source. So
-/// `rdtick/` and `reviewdrive/` are each one scope however they are divided — a
-/// file added to either is in scope with no edit here, and every count below is
-/// the directory's, not a file's. `reviewdrive/`'s tests are one trailing
-/// `#[cfg(test)]` module per file (#3498 P7), so the per-file cut removes them
-/// exactly as it removed the one module at the end of the former single file.
+/// `rdtick/` is one scope however it is divided — a file added to it is in scope
+/// with no edit here, and every count below is the directory's, not a file's.
 fn driver_production_source(rel: &str) -> String {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
     if p.is_dir() {
@@ -608,7 +604,7 @@ fn count_assignments(src: &str, field: &str) -> usize {
 /// [`DRIVER_FILES`], a file scope rather than an `rd_*` prefix, for the reason
 /// that list already carries.
 ///
-/// **Per entry, and each count is a different fact.** `reviewdrive/` names the
+/// **Per file, and each count is a different fact.** `reviewdrive.rs` names the
 /// variant twice — once where `decide_review_wait` proposes the arc, once in
 /// `advance`'s bump arm — and `rdtick/` names it once, where the tick reads
 /// the step to decide whether to write `rd-round-grace`. Collapsing the three
@@ -628,7 +624,7 @@ fn count_assignments(src: &str, field: &str) -> usize {
 #[test]
 fn the_one_shot_grace_has_one_writer_and_one_proposal_site() {
     let expected = |rel: &str| -> (usize, usize, &'static str) {
-        if rel.ends_with("reviewdrive") {
+        if rel.ends_with("reviewdrive.rs") {
             (1, 2, "the engine proposes the arc and spends the grace on it")
         } else if rel.ends_with("rdtick") {
             (0, 1, "the tick only READS the step, to decide whether to audit")

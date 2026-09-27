@@ -814,7 +814,7 @@ fn l1_stale_flips_on_the_clock_while_a_lock_is_held_and_clears_on_the_next_publi
 // `crates/loomux-engine/src/budget.rs` unit-tests `read_budget` and
 // `MutationScope` against a `TrackedMutex` built for the purpose. That proves
 // the mechanism; it does not prove the mechanism survives contact with
-// `orchestration/mod.rs`, and the difference is the whole risk of Phase 2.1:
+// `orchestration/registry/`, and the difference is the whole risk of Phase 2.1:
 // the unwind travels through real registry code, which owns guards, `Drop`
 // impls and (in principle) a `catch_unwind` of its own that could swallow a
 // typed payload it has never heard of.

@@ -79,7 +79,7 @@
 //!
 //! # Naming
 //!
-//! `Question*` is already taken in `mod.rs` by the pane detector that decides
+//! `Question*` is already taken in `screen.rs` and `questionhold.rs` by the pane detector that decides
 //! whether a CLI is showing an interactive prompt (`QuestionMatch`,
 //! `QuestionWitnessed`, …) — unrelated machinery. This module keeps its own
 //! vocabulary behind the `humanq::` path (`humanq::Question`,

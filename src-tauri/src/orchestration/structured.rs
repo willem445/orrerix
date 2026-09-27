@@ -982,7 +982,7 @@ impl super::OrchRegistry {
         // resolved HERE.
         //
         // The resolve-provenance type is pinned to `needsyou.rs` (which
-        // defines it), `mod.rs` (which takes it) and the files whose trusted
+        // defines it), `registry/questions.rs` (which takes it) and the files whose trusted
         // commands supply it (`commands/humanside.rs`, `commands/guardrails.rs`)
         // by a source scan; any other file naming it is a NEW RESOLVING SURFACE, which that scan
         // says is "never accidental". This module has no business being one,

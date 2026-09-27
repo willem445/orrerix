@@ -1633,8 +1633,9 @@ impl<T> TrackedMutex<T> {
     /// Wrap `value`, registering it under `name` at `rank` in the declared
     /// acquisition order (#1610).
     ///
-    /// The rank is what turns `orchestration/mod.rs`'s thirteen "Lock order:"
-    /// doc claims from prose into something that fails a build. See
+    /// The rank is what turns the "Lock order:" doc claims on `OrchRegistry`'s
+    /// fields (`orchestration/registry/mod.rs`) from prose into something that
+    /// fails a build. See
     /// [`LockRank`] for the direction (smaller is outer) and
     /// `orchestration::lockorder` for the table itself.
     ///

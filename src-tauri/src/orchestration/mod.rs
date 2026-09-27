@@ -461,7 +461,8 @@ pub use loomux_engine::{mqdriver, mqloop};
 // audits what comes back. `reviewdrive::decide` makes every decision.
 pub use loomux_engine::{rddrive, reviewdrive};
 
-// The review driver's registry wiring (#1778 S3), in a file of its own.
+// The review driver's registry wiring (#1778 S3), in a module of its own,
+// split by tick phase into `rdtick/` (#3498 P5).
 //
 // Not for size alone, though `mod.rs` was then tens of thousands of lines,
 // reason enough. It is what gives §3.1 item 1's source scan a scope that a
@@ -469,7 +470,8 @@ pub use loomux_engine::{rddrive, reviewdrive};
 // forbids deciding from a binding's name, and the design note names an
 // `rd_*` prefix as exactly the scope that fails that test. A FILE is not a
 // name — every landing verb the driver could reach has to be written
-// somewhere, and `tests/reviewdrive.rs` default-denies the whole of this one.
+// somewhere, and `tests/reviewdrive.rs` default-denies the whole of this
+// one, reading every file under `rdtick/` as one scope.
 mod rdtick;
 pub use rdtick::{
     RdDriveReport, RdEvent, RdSignal, DRIVER_DELTA_TPL, DRIVER_FIX_TPL, DRIVER_REVIEW_TPL,

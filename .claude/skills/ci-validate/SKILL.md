@@ -80,10 +80,10 @@ into those. Why: rustfmt needs 16–23 GB of RAM on a file that size (#3469),
 enough to exhaust the machine's memory.
 Those files get their syntax check from CI, like everything else.
 
-The known cases are the files over 5,000 lines themselves (`orchestration/rdtick.rs`,
-`orchestration/mcp.rs`, the engine's `reviewdrive.rs` and `workflow.rs`, and
+The known cases are the files over 5,000 lines themselves (`orchestration/mcp.rs`,
+the engine's `reviewdrive.rs` and `workflow.rs`, and
 `src-tauri/tests/reviewdrive.rs` and `workflow.rs`) and, by the recursion rule,
-`src-tauri/src/orchestration/mod.rs` (its `mod rdtick;` and `mod mcp;`),
+`src-tauri/src/orchestration/mod.rs` (its `mod mcp;`),
 `src-tauri/tests/orchestration/main.rs` (~70k with its modules), `src-tauri/src/lib.rs`
 and `crates/loomux-engine/src/lib.rs`. The
 list moves as files grow, so measure rather than trust it:

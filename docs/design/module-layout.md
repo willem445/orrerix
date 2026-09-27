@@ -189,7 +189,7 @@ plus five percent headroom; they remain grandfathered only while larger than
 85 percent of that ceiling, so splits tighten the table. A row whose file is
 back at or under its class ceiling is refused as redundant: the class default
 governs it again and the row is removed, not tightened. An oversized legacy
-module such as `src-tauri/src/orchestration/rdtick.rs` remains governed by its own
+module such as `src-tauri/src/orchestration/mcp.rs` remains governed by its own
 cited row rather than the class default.
 
 For moved code, use `git blame --ignore-revs-file .git-blame-ignore-revs -C -C -C`

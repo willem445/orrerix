@@ -1,7 +1,7 @@
 //! The plan driver's pure core (#3040) — the state machine, the persisted
 //! shape, and the per-tick decision. `crates/loomux-engine/src/reviewdrive.rs`
 //! is the twin this file is deliberately shaped after, and the registry-side
-//! wiring is `src-tauri/src/orchestration/pdtick.rs`, `rdtick.rs`'s twin.
+//! wiring is `src-tauri/src/orchestration/pdtick.rs`, `rdtick`'s twin.
 //!
 //! Design note: `docs/design/plan-driver.md`. The plan document itself — the
 //! fenced ```orrerix-plan block a planner posts — is [`crate::plandoc`]'s, and

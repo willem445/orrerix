@@ -28,6 +28,7 @@ mod idle;
 mod lockseams;
 mod managermail;
 mod persist;
+mod watches;
 
 pub struct OrchRegistry {
     /// Root of persistent state: `<root>/<group>/{group.json,state.json,audit.jsonl,configs/}`.

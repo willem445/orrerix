@@ -27,6 +27,7 @@ mod audit;
 mod autonomy;
 mod compact;
 mod idle;
+mod instructions;
 mod lockseams;
 mod managermail;
 mod persist;

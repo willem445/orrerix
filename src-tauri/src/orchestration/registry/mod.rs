@@ -25,6 +25,7 @@ mod tasks;
 mod agentfiles;
 mod audit;
 mod lockseams;
+mod managermail;
 mod persist;
 
 pub struct OrchRegistry {

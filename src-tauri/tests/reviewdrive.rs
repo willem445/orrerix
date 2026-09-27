@@ -284,8 +284,7 @@ fn a_wider_bound_can_be_spelled_from_another_crate_and_still_cannot_reach_a_deci
 
 // ── §3.1's never-merges scan ────────────────────────────────────────────────
 
-/// The two files and one directory that are the review driver, and the whole of
-/// it.
+/// The three files that are the review driver, and the whole of it.
 ///
 /// **A file scope rather than a name scope, and that is the point.** CLAUDE.md's
 /// source-scanning-guard convention forbids deciding from a binding's name, and
@@ -293,12 +292,11 @@ fn a_wider_bound_can_be_spelled_from_another_crate_and_still_cannot_reach_a_deci
 /// name — a module, an `rd_*` prefix — is stepped over by a landing verb added
 /// in a function that does not carry it". A file is not a name; the driver's
 /// registry wiring was moved into `rdtick.rs` precisely so this list could be
-/// files rather than a prefix, and #3498 P5 split that file into the
-/// `rdtick/` directory, which [`driver_production_source`] reads whole.
+/// files rather than a prefix.
 const DRIVER_FILES: [&str; 3] = [
     "../crates/loomux-engine/src/reviewdrive.rs",
     "../crates/loomux-engine/src/rddrive.rs",
-    "src/orchestration/rdtick",
+    "src/orchestration/rdtick.rs",
 ];
 
 // ── §3.1's never-merges scan, decided on shape rather than on names ─────────
@@ -353,7 +351,7 @@ const FORBIDDEN_CALLS: [(&str, &str); 7] = [
 /// control, which must enqueue nothing.
 const PERMITTED_ENQUEUE: (&str, &str, usize, &str) = (
     "queue_merge_with",
-    "src/orchestration/rdtick",
+    "src/orchestration/rdtick.rs",
     1,
     "#3367 item 5: the clean case's enqueue, through the queue's own gate re-check and with_git_denied",
 );
@@ -388,7 +386,7 @@ const PERMITTED_ENQUEUE: (&str, &str, usize, &str) = (
 /// hand-back at the cap where the lane IS released and the drive does not park.
 const PERMITTED_RELEASE: (&str, &str, usize, &str) = (
     "release_driven_pane",
-    "src/orchestration/rdtick",
+    "src/orchestration/rdtick.rs",
     1,
     "#2501/#2811 S1: §3.1 item 5's narrowed states, through the one barrier in mod.rs",
 );
@@ -407,36 +405,9 @@ const PERMITTED_RELEASE: (&str, &str, usize, &str) = (
 /// a line with an odd number of quotes before it. No such line exists here, and
 /// the population floor asserted in the scan is what would notice if the cut
 /// ever started eating real code.
-///
-/// **A directory entry is read whole** (#3498 P5): every `.rs` under it,
-/// recursively and in path order, each cut as above, joined into one source. So
-/// `rdtick/` is one scope however it is divided — a file added to it is in scope
-/// with no edit here, and every count below is the directory's, not a file's.
 fn driver_production_source(rel: &str) -> String {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-    if p.is_dir() {
-        let mut files: Vec<std::path::PathBuf> = Vec::new();
-        let mut dirs = vec![p.clone()];
-        while let Some(d) = dirs.pop() {
-            let entries = std::fs::read_dir(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display()));
-            for path in entries.flatten().map(|e| e.path()) {
-                if path.is_dir() {
-                    dirs.push(path);
-                } else if path.extension().is_some_and(|x| x == "rs") {
-                    files.push(path);
-                }
-            }
-        }
-        files.sort();
-        assert!(!files.is_empty(), "{}: a driver directory holding no .rs file", p.display());
-        return files.iter().map(|f| production_source_at(f)).collect::<Vec<_>>().join("\n");
-    }
-    production_source_at(&p)
-}
-
-/// [`driver_production_source`] for one file.
-fn production_source_at(p: &std::path::Path) -> String {
-    let src = std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let src = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
     let src = match src.find("\n#[cfg(test)]") {
         Some(i) => src[..i].to_string(),
         None => src,
@@ -646,7 +617,7 @@ fn the_driver_never_builds_a_landing_verb_and_never_grants_a_merge() {
     }
     // The allowlist row is self-verifying the same way, and it has a second
     // half the denylist rows do not: the barrier must live OUTSIDE the driver's
-    // own files. A `release_driven_pane` defined in `rdtick/` would be the
+    // own files. A `release_driven_pane` defined in `rdtick.rs` would be the
     // driver writing its own barrier, which is not a barrier.
     for (call, ..) in [PERMITTED_RELEASE, PERMITTED_ENQUEUE] {
         assert!(
@@ -10782,7 +10753,7 @@ fn count_assignments(src: &str, field: &str) -> usize {
 ///
 /// **Per file, and each count is a different fact.** `reviewdrive.rs` names the
 /// variant twice — once where `decide_review_wait` proposes the arc, once in
-/// `advance`'s bump arm — and `rdtick/` names it once, where the tick reads
+/// `advance`'s bump arm — and `rdtick.rs` names it once, where the tick reads
 /// the step to decide whether to write `rd-round-grace`. Collapsing the three
 /// into one total would let a second proposal site hide behind a deleted read.
 ///
@@ -10802,7 +10773,7 @@ fn the_one_shot_grace_has_one_writer_and_one_proposal_site() {
     let expected = |rel: &str| -> (usize, usize, &'static str) {
         if rel.ends_with("reviewdrive.rs") {
             (1, 2, "the engine proposes the arc and spends the grace on it")
-        } else if rel.ends_with("rdtick") {
+        } else if rel.ends_with("rdtick.rs") {
             (0, 1, "the tick only READS the step, to decide whether to audit")
         } else {
             (0, 0, "nothing else in the driver touches the grace at all")

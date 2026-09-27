@@ -24,6 +24,7 @@ mod questions;
 mod tasks;
 mod agentfiles;
 mod lockseams;
+mod persist;
 
 pub struct OrchRegistry {
     /// Root of persistent state: `<root>/<group>/{group.json,state.json,audit.jsonl,configs/}`.

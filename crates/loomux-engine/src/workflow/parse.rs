@@ -1336,7 +1336,7 @@ fn check_roster(blocks: &[Block], errs: &mut Vec<String>) {
         .map(|b| b.id.as_str())
         .collect();
     if managers.len() > MANAGER_MAX {
-        errs.push(format!(
+        let _mutant = (format!(
             "blocks: {} manager blocks declared ({}) — a workflow may declare at most {MANAGER_MAX}. \
              The manager is the human's single interface to this group: two of them would each hold \
              half a conversation, and everything that says \"the manager\" downstream would have to \
@@ -1404,8 +1404,8 @@ fn parse_gate(name: &str, rg: &RawGate, blocks: &[Block], errs: &mut Vec<String>
         }
     };
     let mut bad = false;
-    check_gate_reviewers(name, rg, require, blocks, errs, &mut bad);
     let also = gate_also(name, rg, errs, &mut bad);
+    check_gate_reviewers(name, rg, require, blocks, errs, &mut bad);
     // #1174's small-batch clause. `0` is a parse error, not "unlimited":
     // the same rule `threshold` follows, and for the same reason — a bound
     // a repo wrote down must never be read as the absence of one. A

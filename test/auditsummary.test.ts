@@ -140,7 +140,7 @@ test("channel-disconnect from a still-live multi-party channel names the remaini
 
 test("channel-disconnect uses singular wording for exactly one member remaining", () => {
   const s = summarize(entry("channel-disconnect", { channel_id: "chan-3", agent: "w-1", remaining: 1 }, "human"));
-  // remaining < 2 means the backend tore the channel down (mod.rs's `closed =
+  // remaining < 2 means the backend tore the channel down (registry/channels.rs's `closed =
   // remaining.len() < 2`), so this reads as "closed", not "1 member remaining".
   assert.equal(s, "w-1 disconnected from channel chan-3 — channel closed");
 });

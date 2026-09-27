@@ -151,7 +151,7 @@ export function channelChipLabel(displayNumber: number): string {
 }
 
 /** One entry in a channel's member list, as the backend's `channel_members_json`
- *  serializes it (mod.rs) — `direction`/`can_send`/`delivery_only` are the #271 W3
+ *  serializes it (registry/channels.rs) — `direction`/`can_send`/`delivery_only` are the #271 W3
  *  addendum's directional fields (part B7/A4). */
 export interface ChannelBadgeMember {
   agent_id: string;

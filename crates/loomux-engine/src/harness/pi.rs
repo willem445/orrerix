@@ -163,9 +163,13 @@ pub const NO_APPROVE_FLAG: &str = "--no-approve";
 impl LaunchSpec {
     /// The argv after the program name.
     ///
-    /// The order is the PTY arm's order, so a byte-level comparison of the two
-    /// lines is a diff of one inserted flag rather than a reordering nobody can
-    /// read.
+    /// Written in the order the PTY arm (`build_agent_argv_ex`'s pi branch, in
+    /// `src-tauri`) uses for the flags both lines carry, so a diff of the two
+    /// reads as one inserted flag rather than a reordering. That order is kept
+    /// by hand. `the_rpc_launch_line_is_the_pty_line_plus_one_flag_and_carries_it_first`
+    /// asserts only that `--mode rpc` leads and that
+    /// each flag is present, and nothing compares this line with the PTY arm's.
+    /// It is the same stated residual as [`APPROVE_FLAG`]'s.
     pub fn argv(&self) -> Vec<String> {
         let mut a: Vec<String> = Vec::new();
         a.push(MODE_FLAG[0].into());

@@ -583,6 +583,7 @@ pub fn opencode_compaction_signal_in(db: &std::path::Path, session_id: &str) -> 
         window_tokens: None,
         window_rounded: false,
         effort: state.variant,
+        effort_is_launch_fallback: false,
         source: ContextSource::OpencodeDb,
     })
 }

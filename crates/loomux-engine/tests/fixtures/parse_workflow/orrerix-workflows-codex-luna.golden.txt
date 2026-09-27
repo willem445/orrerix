@@ -1,0 +1,9 @@
+Err(
+    [
+        "blocks[4] (rev-std): cli \"codex\" cannot host a reviewer block: that class runs under NoEdits containment and codex tops out at None — codex has no tool-level edit deny (its `tools` config covers only view_image/web_search); its sandbox_mode is all-or-nothing, and its read-only rung also blocks running commands and network access, so a contained agent could neither edit nor run the tests it exists to run; its rules engine can forbid a command prefix but loads only from CODEX_HOME/rules and the project's .codex/rules, neither of which is per-agent",
+        "edges[2]: 'to' names no block: \"rev-std\"",
+        "edges[3]: 'to' names no block: \"rev-std\"",
+        "edges[4]: 'from' names no block: \"rev-std\"",
+        "gates.merge: reviewer \"rev-std\" names no block",
+    ],
+)

@@ -1,0 +1,8 @@
+# Characterisation subject for `parse_workflow` (#3498 P8b): the smallest valid
+# file. Every optional section is absent, so its golden pins what each one
+# resolves to by DEFAULT — the built-in intake profile, a disabled merge queue,
+# driver and triage, no resources, no WIP limits, no edges, no gates.
+version: 1
+blocks:
+  - id: worker
+    kind: worker

@@ -65,7 +65,8 @@ Integration tests are grouped by Cargo target under `tests/<target>/`, with one
 `main.rs` and topic modules. Source-scanning guards for a target live together
 in its `guards.rs` rather than scattered among behavioral tests.
 
-`src-tauri/tests/orchestration/` is the first target in this shape (#3498 P1).
+`src-tauri/tests/orchestration/` is the first target in this shape (#3498 P1);
+`src-tauri/tests/reviewdrive/` and `src-tauri/tests/workflow/` followed (#3498 P6).
 Cargo builds `tests/<name>/main.rs` as the target `<name>`, so it is still one
 test binary: `cargo test -p orrerix --test orchestration <filter>` is unchanged,
 no second Windows link happens, and `CAPTURE_SERIAL` still serialises the whole
@@ -77,8 +78,9 @@ How the directory is wired, because the single file it replaced had one module
 namespace and the split must not change what any name resolves to:
 
 - `main.rs` holds the old file's header and every `use` line, then the module
-  tree. `helpers` is declared first with `#[macro_use]`, because
-  `macro_rules!` is textually scoped and the three shared macros live there.
+  tree. In `orchestration/`, `helpers` is declared first with `#[macro_use]`,
+  because `macro_rules!` is textually scoped and the three shared macros live
+  there; `reviewdrive/` and `workflow/` have no macros.
 - Every topic module opens with `use super::*`, so it sees the imports and the
   items `main.rs` re-exports with `use <module>::*`.
 - An item another module uses is `pub(crate)`; everything else stays private.
@@ -86,12 +88,15 @@ namespace and the split must not change what any name resolves to:
 - `include_str!` resolves against the source file's own directory, so a fixture
   path gains one `../` when its test moves into the directory.
 - A guard keyed by file path (the #464 `OrchRegistry::new` allowlist in
-  `guards.rs`) names the module file, relative to `tests/`, where the item now
-  lives: `orchestration/helpers.rs`.
+  `orchestration/guards.rs`) names the module file, relative to `tests/`, where
+  the item now lives: `orchestration/helpers.rs`, `reviewdrive/helpers.rs` and
+  `workflow/helpers.rs`. So does the proof test that reads a helper's own
+  source: `reviewdrive/guards.rs` reads `tests/reviewdrive/helpers.rs`.
 
-Prose written before the split, in code comments and design notes, still names
-`tests/orchestration/`; read that as this target. Its tests kept their names,
-so `grep -rn <test name> src-tauri/tests/orchestration/` finds the new home.
+Prose written before a split, in code comments and design notes, still names
+the old single file (`tests/orchestration.rs`, `tests/reviewdrive.rs`,
+`tests/workflow.rs`); read that as the directory target. Tests kept their
+names, so `grep -rn <test name> src-tauri/tests/<target>/` finds the new home.
 
 ## Frontend modules
 

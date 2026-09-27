@@ -893,7 +893,7 @@ a human, not a re-run.
 
   **A plain `cp` of the live template is wrong**, and it fails in a way that hides its
   own cause. These files are the live template *minus* the key(s) `LIVE` lists for it
-  in `tests/workflow.rs` — **read that array, and do not trust any list of
+  in `tests/workflow/goldens.rs` — **read that array, and do not trust any list of
   keys written down anywhere else, this file included.** No enumeration is kept here on
   purpose: the one that used to be was a copy, it went stale twice (most recently by missing
   `{{LOCKS_ORCH}}` and `{{LOCKS}}`, which #858 added), and a stale copy in the procedure is
@@ -952,7 +952,7 @@ So compare **bytes with the keys removed, in binary, without a line-based tool**
 substitution `render_with_legacy_vars` does, not a text filter:
 
 ```sh
-# Transcribe `keys` from `LIVE` (src-tauri/tests/workflow.rs) as you run this — it is an
+# Transcribe `keys` from `LIVE` (src-tauri/tests/workflow/goldens.rs) as you run this — it is an
 # input to the check, never a record of what the keys are. No python3 here (CLAUDE.md).
 node -e '
 const fs=require("fs");

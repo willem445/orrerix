@@ -729,7 +729,7 @@ stops doing the work claimed for it here.
 reads a review body, so "the section is there" and "its contents are not a formula" are both
 enforced by the orchestrator reading the review — which is exactly where the rest of the
 findings policy already lives — and the CI-side guarantee is only that the *instructions* still
-say it (`prompts.rs`, `workflow.rs`'s both-surfaces loop, and the `pre222` goldens). That is the
+say it (`prompts.rs`, `tests/workflow/nativeflags.rs`'s both-surfaces loop, and the `pre222` goldens). That is the
 same guarantee every prose rule in this section has, and it is the reason they are pinned at
 all. The failure mode to watch is the one that fails UPWARD: a section always present and
 always filled with restatements of what the suite already covers satisfies every surface here,
@@ -767,7 +767,7 @@ now is a pointer —
 ```
 
 — about 160 bytes, with the prefix through `on PR #{n}` kept verbatim because the eval
-classifier (`orchestration-evals.md` §4.1) and `tests/reviewdrive.rs`'s undriven-delivery pin
+classifier (`orchestration-evals.md` §4.1) and `tests/reviewdrive/`'s undriven-delivery pin
 both key on it. It is TRIMMED rather than dropped for one reason worth stating: an undriven
 reviewer may never call `report`, so this is the only wake that flow gets.
 
@@ -907,7 +907,7 @@ orchestrator a value system to match its operational one:
     for sub-PRs onto an integration branch, and with proactive re-syncing gone there is no
     frontier to license — a branch that still merges cleanly is never touched.
 
-Each rule is pinned in `tests/workflow.rs` on the surfaces that carry it, and the golden fixtures
+Each rule is pinned in `tests/workflow/` on the surfaces that carry it, and the golden fixtures
 in `tests/fixtures/pre222/` are re-blessed in their own commit — the diff on that directory is the
 review surface for "what did we just tell every default group to do differently?". The pins match
 **substance with whitespace collapsed** (`flat()`), deliberately: a pin that fires when a
@@ -916,7 +916,7 @@ paragraph is re-wrapped is a pin that teaches people to re-bless without reading
 `tests/prompts.rs` (from #238, which front-ran this arc's policy half onto `main`) pins the same
 rules on the **default rendering** — the templates as an ungated group reads them, with no
 workflow file and no placeholders substituted in. The two suites are complementary and both are
-kept green: `workflow.rs` pins the duties across *both* surfaces a reviewer can reach
+kept green: `tests/workflow/` pins the duties across *both* surfaces a reviewer can reach
 (`reviewer.md` and `mechanics_core`) and pins the machinery vocabulary; `prompts.rs` pins the
 region-scoped prose of what every group gets by default. A rule that lives in only one of them is
 a rule one kind of group is not being told.
@@ -4755,7 +4755,7 @@ added — worth a quick explicit check, not assumed either way.
   **Built after all, in #464** — the "narrow, self-correcting-by-hand" framing above turned out to
   undercount the source: the ORCHESTRATION TEST SUITE spawns agents through the exact same
   `write_claude_agent_file`/`write_copilot_agent_file` path and, being unit tests, essentially never
-  calls `end_group` — every `OrchRegistry::new(...)` in `tests/orchestration/`/`tests/workflow.rs`
+  calls `end_group` — every `OrchRegistry::new(...)` in `tests/orchestration/`/`tests/workflow/`
   that skipped the test-only `claude_agents_dir_override`/`copilot_agents_dir_override` (the
   "relaunch" pattern: a second registry built against the same or a related state root to simulate
   loomux restarting, common across the persistence tests) fell straight through to the REAL
@@ -10547,7 +10547,7 @@ An **IME commit** is sent from a `setTimeout(…, 0)` — a later task than the 
 that caused it. The **`insertText`** path (dead keys, accents, soft keyboards) sends
 synchronously with no key event at all. Both are still structural signals — they are DOM
 events on the terminal's own textarea, and xterm never routes a query auto-reply through the
-textarea; it calls `triggerDataEvent` directly — so `pane.ts` marks from them too, in the
+textarea; it calls `triggerDataEvent` directly — so `panelifecycle.ts` marks from them too, in the
 CAPTURE phase on `termEl`, an *ancestor* of the textarea, since ancestor-capture listeners run
 before any listener on the target itself.
 
@@ -11507,7 +11507,7 @@ harmless prose to either agent; the path — bare or `@`-prefixed — is what do
 save-to-file + reference approach degrades gracefully (worst case the human sees the path text).
 
 - *Save, don't decode.* `Ctrl+V` of a screenshot (or the paperclip → native file picker) hands
-  the frontend a browser `Blob`. `pane.ts` base64-encodes the raw bytes and calls the
+  the frontend a browser `Blob`. `panecompose.ts` base64-encodes the raw bytes and calls the
   `orch_save_attachment` command, which decodes and writes them **verbatim** to
   `<group state dir>/attachments/<ms>-<seq>.<ext>` via `OrchRegistry::save_attachment` —
   returning the absolute path. We never decode the image (no image crate, and deliberately no
@@ -13580,7 +13580,7 @@ not fetch) is measured by that line, not assumed away.
 
 - Templates stay in `src-tauri/src/orchestration/templates/` next to the fixture that
   blesses them; the playbook is a sixth fixture-pinned file (`PRE222`/`GOLDENS`/`LIVE` in
-  `tests/workflow.rs`), and both "what a default group reads" pins iterate it.
+  `tests/workflow/goldens.rs`), and both "what a default group reads" pins iterate it.
 - Section splitting reuses `loomux_engine::lessons::split_sections` — the same `## `
   boundary convention and fenced-code exclusion the lessons file already standardized; no
   second heading parser exists.

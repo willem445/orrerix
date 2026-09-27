@@ -72,7 +72,7 @@ so 6.0.0 is the first **stable** release that has it and the v6 bump is
 taken **for `reflowCursorLine`**, not because v6 itself is "the fix" for
 #430.
 
-`pane.ts` sets `reflowCursorLine: true` alongside `windowsPty`, gated to the
+`panelifecycle.ts` sets `reflowCursorLine: true` alongside `windowsPty`, gated to the
 same branch (`backend.conpty_build > 0`): normal shells against a
 non-quirked host already repaint their own prompt line, and forcing a reflow
 there risks fighting that repaint instead of doing nothing.
@@ -136,7 +136,7 @@ remains nothing-to-do, upstream having declined to fix it.
     `endResizeHold` now bracket every drag that can change a pane's
     `termEl` size -- `grid.ts`'s split divider (held across every pane in
     the grid, since a nested split's drag can resize leaves the divider
-    doesn't directly touch) and `pane.ts`'s own embed-slot divider (held on
+    doesn't directly touch) and `paneembeds.ts`'s own embed-slot divider (held on
     just that pane). While held, `doFit`/`doResize` still fit xterm's own
     buffer on every debounced tick, so the terminal renders at the right
     size throughout the drag, but withhold the PTY resize; the last

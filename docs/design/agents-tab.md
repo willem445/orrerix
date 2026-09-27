@@ -1023,7 +1023,7 @@ and wired it into the Sessions **Mine**-row click for every orchestration-routed
 row. Implemented literally, that regresses a live worker rejoin: the backend
 refusal it stands in for is role-gated —
 `if record.role == "orchestrator" { if record.group_live { return Err(…) } }`
-in `src-tauri/src/orchestration/mod.rs` — so a worker or reviewer row in a live
+in `src-tauri/src/orchestration/commands/panes.rs` — so a worker or reviewer row in a live
 group is **rejoined**, not refused. With a 2-input rule, clicking a live
 worker's row would have revealed the group's *orchestrator* pane instead of
 rejoining that worker.

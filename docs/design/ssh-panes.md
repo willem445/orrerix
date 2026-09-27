@@ -640,7 +640,7 @@ Three properties, each deliberate:
   on *any* ssh signal crossed with *any* orchestration marker, from either side —
   fail-closed, including a spawn carrying only half an identity on only one side.
 - **The union happens in the pure module**, not at the two DOM call sites in
-  `pane.ts`. A rule spelled at two call sites is a rule that drifts at one of them;
+  `panelifecycle.ts`. A rule spelled at two call sites is a rule that drifts at one of them;
   here it lives in the unit-tested function, and the call sites just hand it what
   they know.
 - **It cannot over-refuse.** With no ssh signal it returns null before reading the

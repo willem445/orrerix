@@ -32,7 +32,7 @@ The pane already registered an OSC 7 handler (cwd reporting) but none for 52.
 ### Fix
 
 `src/clipboard.ts` parses the payload (`parseOsc52`, pure/DOM-free and unit
-tested) and `pane.ts` registers a handler that writes the decoded text via
+tested) and `panecompose.ts` registers a handler that writes the decoded text via
 `writeClipboard` (async Clipboard API, with a hidden-`textarea` +
 `execCommand` fallback, mirroring gitview's `copyText`).
 
@@ -90,7 +90,7 @@ and cannot reorder them. It also:
   single multi-megabyte write can't stall ConPTY's small input pipe, and never
   slices a UTF-16 surrogate pair.
 
-`pane.ts` routes all `onData` through the writer and binds it to the PTY id on
+`panelifecycle.ts` routes all `onData` through the writer and binds it to the PTY id on
 spawn.
 
 ## Testing
@@ -174,7 +174,7 @@ is — a sibling `settings.json` written through two new backend commands
 (`load_settings`/`save_settings`, `uistate.rs`) that reuse the *exact same*
 atomic-write + corrupt-quarantine primitives `load_ui_tabs`/`save_ui_tabs`
 already use, not a new storage mechanism. `main.ts` loads it once at boot;
-`pane.ts`'s keydown handler reads it synchronously via `settings.getSettings()`
+`panecompose.ts`'s keydown handler reads it synchronously via `settings.getSettings()`
 on every keystroke (a settings object can't be threaded through
 `attachCustomKeyEventHandler`'s synchronous callback any other way).
 
@@ -197,7 +197,7 @@ pasting immediately.
 **Root cause, both bugs, one mechanism.** `@xterm/xterm` binds its own,
 independent `"paste"` DOM event listener directly on its internal textarea
 and root element (`handlePasteEvent`, xterm's own input-handler module) — a
-completely separate path from anything in `pasteflow.ts`/`pane.ts`. Whenever
+completely separate path from anything in `pasteflow.ts`/`panecompose.ts`. Whenever
 the *browser* fires a native `paste` event on that textarea, xterm pastes
 into the terminal itself, independent of and in addition to loomux's own
 `readClipboard()`-driven paste.
@@ -213,7 +213,7 @@ into the terminal itself, independent of and in addition to loomux's own
   `Ctrl+Shift+V` isn't a browser-native paste accelerator — nothing native
   ever fired for it. Fix: `keyDisposition` (see its own doc comment,
   pasteflow.ts) collapses the copy/paste decision into one enum so the DOM
-  layer's `preventDefault()` calls in pane.ts can't be added for one branch
+  layer's `preventDefault()` calls in panecompose.ts can't be added for one branch
   and forgotten for the other.
 - **Right-click:** xterm's `contextmenu` listener (bound on its own root
   element, a descendant of `pane.ts`'s `termEl`) does not itself paste — it
@@ -263,7 +263,7 @@ menu-shape code remains.
 
 A further live-demo round reported copy "working in agent panes but not
 plain terminal panes." Reading the code end to end shows there is, and was,
-no pane-kind branch anywhere in this path — `pane.ts`'s keydown handler and
+no pane-kind branch anywhere in this path — `panecompose.ts`'s keydown handler and
 `pasteflow.ts`'s `keyDisposition` are exactly one function each, called
 identically for a plain terminal pane, an agent pane, or an orchestrator
 pane. The most plausible reading of the report: an agent CLI (e.g. Claude
@@ -281,7 +281,7 @@ was there the whole time.
 `Ctrl+Shift+C`, which `isCopyKey` already owns, and excluding Alt, mirroring
 the paste-side AltGr guard). `keyDisposition` now takes a third parameter,
 `hasSelection` — DOM/xterm runtime state (`term.getSelection()`), not
-something derivable from the `KeyboardEvent` alone, so `pane.ts` reads it
+something derivable from the `KeyboardEvent` alone, so `panecompose.ts` reads it
 once per keydown and passes it in, the same discipline `plainCtrlVPastes`
 already uses for `settings.ts`'s live value:
 
@@ -372,7 +372,7 @@ gates the async Clipboard API behind a runtime permission prompt. The
 permission-prompt flow. This is a dev-environment-only wrinkle, not a bug: a
 denied/blocked read (in either environment) already falls through
 `readClipboard`'s `execCommand` fallback and, if that fails too, surfaces the
-honest "Paste failed" toast (pane.ts) — never a silent no-op.
+honest "Paste failed" toast (panecompose.ts) — never a silent no-op.
 
 ### Testing
 

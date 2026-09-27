@@ -925,7 +925,7 @@ default branch structurally (§7, five layers none keyed on agent-writable data)
 and lands only by a fast-forward push the queue itself builds. The driver hands
 it `with_git_denied` — its own `gh`-only runner behind `GitDenied`'s refusal —
 so an enqueue path that ever reached for `git` fails loudly rather than
-landing. `tests/reviewdrive.rs`'s scan keeps `queue_merge` (the form that
+landing. `tests/reviewdrive/guards.rs`'s scan keeps `queue_merge` (the form that
 builds a real git-carrying runner) on its forbidden list and admits exactly ONE
 `queue_merge_with` call, in `rdtick/` (`PERMITTED_ENQUEUE`), counted like
 `release_driven_pane`. **The consequence in this repo is deliberate and
@@ -1229,7 +1229,7 @@ this note first.
    broken, so it fails until it is argued onto the row. What a scan cannot see is
    *which* states, and the note says so rather than implying otherwise: that
    half is pinned behaviourally, by `releasable`'s unit tests and by
-   `tests/reviewdrive.rs`'s negative controls — a briefed-but-silent lane, a
+   `tests/reviewdrive/`'s negative controls — a briefed-but-silent lane, a
    stale verdict, a `blocked` worker, a worker whose report reached a tick that
    took no arc, a worker still owed a round by a drive being cancelled, and a
    drive whose STEP parks all keep their panes. The positive counterpart is pinned too, and it is the one rev-final's
@@ -3188,7 +3188,7 @@ than re-deriving `rec.at_head == brief.head` beside it (rev-std's finding on
 the parallel matches) — and the pin asserts each mode against the template arm
 and the prose it selects, so the two reads cannot drift apart silently. All
 three values, both paths to `body-only`, and the round-1 negative control are
-pinned in `tests/reviewdrive.rs`
+pinned in `tests/reviewdrive/lanes.rs`
 (`the_lane_brief_names_the_round_scope_on_every_round_mode`).
 
 ## 6. Kick-back notice shapes

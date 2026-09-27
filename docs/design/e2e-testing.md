@@ -201,7 +201,7 @@ Honestly, up front:
   (`tauri-plugin-dialog`'s file pickers run outside the webview entirely), and
   — see above — any future *actual* child WebView2 control's internals are
   all blind spots for this mechanism. A DOM-level overlay (git view, task
-  board, audit log — all `.git-overlay` in `src/pane.ts`) is fully visible;
+  board, audit log — all `.git-overlay` in `src/paneviews.ts`) is fully visible;
   a genuine second WebView2 control embedded for, say, a browser-preview
   plugin would need its own CDP target, unverified per above.
 - **Cannot, by hard constraint**: anything requiring a real orchestrator pane.

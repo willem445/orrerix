@@ -53,7 +53,7 @@ grid of six, and not being read.
 
 ## The throttle
 
-`src/panethrottle.ts` — pure, DOM-free, `decideFlush`. `src/pane.ts` holds the
+`src/panethrottle.ts` — pure, DOM-free, `decideFlush`. `src/panelifecycle.ts` holds the
 chunk list and the timer (`acceptOutput` / `flushOutput` / `wakeOutput` /
 `discardOutput`).
 

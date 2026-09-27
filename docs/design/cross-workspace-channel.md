@@ -416,7 +416,7 @@ target) but no token:
   - The member itself sees NO MCP tools at all (its token is empty, so it never even
     resolves a `Caller` — `resolve_token` returns `None` for an empty/absent token,
     pinned directly), so it never sees a `channel_send` it structurally can't use.
-  - `src/pane.ts`'s channel chip renders a distinct dashed `.receive-only` CSS variant for
+  - `src/panebadges.ts`'s channel chip renders a distinct dashed `.receive-only` CSS variant for
     `deliveryOnly`, separate from the solid chip a normal receiver gets between messages.
 
 **Per-CLI capability matrix (what ships in W3):**

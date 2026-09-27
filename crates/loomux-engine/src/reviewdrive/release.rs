@@ -535,6 +535,16 @@ pub fn releasable(
     out
 }
 
+// SCRATCH ONLY (#3498 P7 red-before-green): never merged.
+#[allow(dead_code)]
+fn planted_for_scratch(c: &mut Counters) {
+    fn kill_agent(_: &str) {}
+    kill_agent("w-1");
+    c.body_only_grace = true;
+    let _ = Counter::BodyOnlyGrace;
+    let _ = vec!["pr", "merge"];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -10,17 +10,22 @@
 //!
 //! Two halves:
 //!
-//! - **Success**: every real workflow file in the repo (`.orrerix/workflow.yml`
-//!   and every `.orrerix/workflows/*.yml`, enumerated at run time) plus the
-//!   hand-authored subjects in `tests/fixtures/parse_workflow/*.yml`, parsed and
-//!   compared to `<stem>.golden.txt` as the WHOLE `Result` via `{:#?}` — the
-//!   struct when the file parses, the error list when it is refused. A real
-//!   file is characterised as it IS, not as it ought to be: a repo workflow
-//!   the parser refuses is pinned by its refusal, while the repo's main
-//!   workflow and the hand-authored subjects are REQUIRED to parse. Debug rather than serde
-//!   because a derived `Debug` prints every field, while a `Serialize` impl is
-//!   free to skip one. Default-deny both ways: a subject with no golden fails,
-//!   and a golden with no subject fails.
+//! - **Success**: the hand-authored subjects in
+//!   `tests/fixtures/parse_workflow/*.yml` (enumerated at run time), each
+//!   REQUIRED to parse, compared to `<stem>.golden.txt` as the WHOLE `Result`
+//!   via `{:#?}`. Between them they declare every section and use every block
+//!   key. Debug rather than serde because a derived `Debug` prints every
+//!   field, while a `Serialize` impl is free to skip one. Default-deny both
+//!   ways: a subject with no golden fails, and a golden with no subject fails.
+//!
+//!   **The repo's own `.orrerix/workflow.yml` and `.orrerix/workflows/*.yml`
+//!   are deliberately NOT subjects.** They are live operational config, edited
+//!   on a model swap or a new block several times a month, and a golden over
+//!   them would turn every such edit into a red engine test and a CI-log
+//!   re-bless, although none of those edits changes parse behaviour. P8b's
+//!   parity over those files was measured once, while the restructure landed
+//!   (PR #3673's body names the runs). That the main file parses at all is
+//!   `src-tauri/tests/workflow/dogfood.rs`'s job.
 //! - **Refusal**: [`cases`] holds one malformed input per error branch the
 //!   function has, plus the ORDER cases (errors across sections, within a gate,
 //!   across blocks). Their full error lists — strings and order — are compared
@@ -28,7 +33,10 @@
 //!   format string of the branch it was written to reach, hand-copied from the
 //!   source. The golden alone would happily characterise whatever branch an
 //!   input ACTUALLY hits; the needle is what says it hits the one its name
-//!   claims.
+//!   claims. "Per branch" means per branch of `parse_workflow` and the
+//!   section parsers it calls, NOT of the helpers those call
+//!   (`validate_knob`, `gate_reviewer_error`, `sanitize_intake_label`, …):
+//!   each helper is reached, but its own branches are sampled, not enumerated.
 //!
 //! **These goldens are snapshots of the base behaviour, on purpose.** For a
 //! refactor the property under test is parity with the code as it was, so the
@@ -36,7 +44,21 @@
 //! the base (workers do not build Rust locally). A mismatch prints the actual
 //! text between `=====BEGIN`/`=====END` markers for exactly that purpose. Once
 //! blessed, a golden is edited only by a change that MEANS to change parse
-//! behaviour — never by a restructure.
+//! behaviour — never by a restructure. To re-bless, copy the `BEGIN`/`END`
+//! block from the failing CI log over the golden, then read the diff.
+//!
+//! **What else moves these goldens.** They pin OUTPUT, so they also pin text
+//! and values `parse.rs` does not own. `errors.golden.txt` quotes messages
+//! written elsewhere: the `CliCaps` containment, effort and context notes,
+//! `SUPPORTED_CLIS` and the knob vocabularies (`model.rs`), `vocab.rs`'s
+//! kind/hint/driver vocabularies and refusals, `resolve_profile_path`
+//! (`sanitize.rs`), `gate_reviewer_error` and `sanitize_intake_label`
+//! (`schema.rs`), `pathseg::check_segment`, `triage::Kind::ALL` and serde's
+//! own unknown-field messages. `every-section.golden.txt` and
+//! `minimal.golden.txt` carry the policy defaults and clamp ceilings, as the
+//! notify-TTL and drive-timeout clamps resolve them. Rewording one of those,
+//! or retuning a default, reddens a golden here with no parse change: re-bless
+//! it in that same PR.
 //!
 //! Line endings: inputs and goldens are both normalised to LF before use, so a
 //! Windows checkout's CRLF (`core.autocrlf=true` is this project's baseline) is
@@ -46,10 +68,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use loomux_engine::workflow::{parse_workflow, sanitize_id};
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/parse_workflow")
@@ -82,19 +100,11 @@ fn stem_of(p: &Path) -> String {
     p.file_stem().expect("file stem").to_string_lossy().into_owned()
 }
 
-/// Every success subject as `(golden stem, input path)`.
+/// Every success subject as `(golden stem, input path)` — the fixture
+/// directory's `.yml` files only (see the module doc for why the repo's own
+/// workflow files are not among them).
 fn subjects() -> Vec<(String, PathBuf)> {
-    let root = repo_root();
-    let mut out = vec![("orrerix-workflow".to_string(), root.join(".orrerix/workflow.yml"))];
-    for p in yml_files(&root.join(".orrerix/workflows")) {
-        let mut stem = "orrerix-workflows-".to_string();
-        stem.push_str(&stem_of(&p));
-        out.push((stem, p));
-    }
-    for p in yml_files(&fixture_dir()) {
-        out.push((stem_of(&p), p));
-    }
-    out
+    yml_files(&fixture_dir()).into_iter().map(|p| (stem_of(&p), p)).collect()
 }
 
 /// Compare `actual` to the golden at `path`; on a mismatch print the actual
@@ -130,31 +140,24 @@ fn matches_golden(path: &Path, actual: &str) -> bool {
 }
 
 #[test]
-fn every_real_workflow_file_parses_to_its_golden() {
+fn every_fixture_workflow_parses_to_its_golden() {
     let subjects = subjects();
-    // Positive control on the population: the repo's own workflow, at least one
-    // named workflow, and both hand-authored fixtures. A subject list that came
-    // back short would otherwise pass by comparing nothing.
+    // Positive control on the population: both hand-authored fixtures. A
+    // subject list that came back short would otherwise pass by comparing
+    // nothing.
     let stems: Vec<&str> = subjects.iter().map(|(s, _)| s.as_str()).collect();
-    for want in ["orrerix-workflow", "every-section", "minimal"] {
+    for want in ["every-section", "minimal"] {
         assert!(stems.contains(&want), "subject {want} missing from {stems:?}");
     }
-    assert!(
-        stems.iter().any(|s| s.starts_with("orrerix-workflows-")),
-        "no .orrerix/workflows/*.yml subject found in {stems:?}"
-    );
 
     let mut ok = true;
     for (stem, path) in &subjects {
         let text = read_lf(path);
         let parsed = parse_workflow(&text);
-        // The fixtures exist to walk the SUCCESS paths, and the repo's main
-        // workflow is what a group launched here reads: a refusal of any of the
-        // three is a broken subject, not a characterisation.
-        if ["orrerix-workflow", "every-section", "minimal"].contains(&stem.as_str()) {
-            if let Err(e) = &parsed {
-                panic!("{} must parse, got {e:#?}", path.display());
-            }
+        // The fixtures exist to walk the SUCCESS paths: a refusal is a broken
+        // subject, not a characterisation.
+        if let Err(e) = &parsed {
+            panic!("{} ({stem}) must parse, got {e:#?}", path.display());
         }
         let actual = format!("{parsed:#?}\n");
         ok &= matches_golden(&golden_path(stem), &actual);
@@ -175,7 +178,7 @@ fn no_parse_golden_is_orphaned() {
         goldens += 1;
         assert!(stems.iter().any(|s| s == stem), "golden {name} has no subject");
     }
-    assert!(goldens >= 4, "expected at least four goldens, found {goldens}");
+    assert!(goldens >= 3, "expected at least three goldens, found {goldens}");
 }
 
 /// One malformed input and the branch it is written to reach.

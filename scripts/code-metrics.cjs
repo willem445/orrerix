@@ -972,11 +972,6 @@ const FILE_BUDGETS = [
     blob: "1669f55d925c7336b5280f303f0acec90048abbe"
   },
   {
-    path: "src-tauri/src/orchestration/mod.rs",
-    ceiling: 30091,
-    blob: "bd106dd3ff5f2c7cc5b53919a2f5dab887539921"
-  },
-  {
     path: "src-tauri/src/orchestration/rdtick.rs",
     ceiling: 6381,
     blob: "f3aa72c058b97d6816d726e0cfa3c69ba91fe6af"
@@ -1077,7 +1072,10 @@ const FILE_BUDGETS = [
     blob: "618348b4b0bfaa2427ce927c13831edd2177dd2e"
   },
 ];
-const MOD_RS = FILE_BUDGETS.find((row) => row.path.endsWith("/orchestration/mod.rs")).path;
+// `mod.rs` left FILE_BUDGETS when #3498 P4 brought it under the class ceiling (a row for a file
+// at or under its ceiling is refused as redundant), so the report names it directly. The row still
+// earns its place: `mod.rs` is the module map now, and a regrowth shows here as a delta.
+const MOD_RS = "src-tauri/src/orchestration/mod.rs";
 
 function buildReport(opts) {
   const repoRoot = opts.repoRoot;

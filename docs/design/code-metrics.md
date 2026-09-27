@@ -292,8 +292,10 @@ Roots, same run:
 One TypeScript import cycle: a single strongly-connected component of 28 modules
 (`pane` ↔ `orchestration` ↔ `workflowmodel` and 25 more). 324 exports have no
 importer in `src/`, `test/` or `e2e/`. The report-only `modRs` row reports only
-`src-tauri/src/orchestration/mod.rs`'s line count and delta. Its path is selected
-from the matching `FILE_BUDGETS` row; the report does not emit the budget table.
+`src-tauri/src/orchestration/mod.rs`'s line count and delta. Its path was selected
+from the matching `FILE_BUDGETS` row until #3498 P4 took `mod.rs` under the class
+ceiling and removed that row; it is now a constant beside the table. The report does
+not emit the budget table.
 
 `unwrap` 27, `expect` 22, `panic!` 10 across the product crates, counted by clippy at
 its lint sites. These are far below #2128 part 3's grep figures (679 / 93 / 53) and

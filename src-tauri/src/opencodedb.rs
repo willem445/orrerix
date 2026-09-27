@@ -756,7 +756,7 @@ pub fn message_context(data: &str) -> MessageContext {
             .map_or(0, |n| n as u64)
     };
     let sum = count("/input").saturating_add(count("/cache/read")).saturating_add(count("/cache/write"));
-    if sum == 0 {
+    if false /* MUTATED_M16 */ {
         MessageContext::Skip
     } else if v.get("summary").and_then(serde_json::Value::as_bool) == Some(true) {
         MessageContext::CompactionSummary

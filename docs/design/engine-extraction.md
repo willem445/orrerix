@@ -461,10 +461,10 @@ from a unit test of product code, agents are banned from running cargo locally
       reject-never-coerce shape — `src-tauri/tests/workflow/`, which drives
       `parse_workflow` through `orchestration::workflow` (i.e. through the new
       re-export) across its whole accept/reject surface;
-    - **`resolve_profile_path`'s traversal refusal** — the same file's escape
+    - **`resolve_profile_path`'s traversal refusal** — `tests/workflow/schema.rs`'s escape
       table (`..`, absolute, drive-letter, both separators), which is security
       behaviour and the one this batch most wanted pinned by a third party;
-    - **`sanitize_allow`** — the same file's hostile-input table;
+    - **`sanitize_allow`** — `tests/workflow/schema.rs`'s hostile-input table;
     - **`ResourcePolicy`** and the lock table — `tests/workflow/blocks.rs`'s default
       pin plus the wired multi-slot path in `tests/orchestration/`;
     - the **`Role` → instructions-file name** mapping, the one item that

@@ -358,6 +358,62 @@ fn a_claude_series_sample_carries_the_current_model_not_the_priced_one() {
 }
 
 #[test]
+fn a_claude_series_sample_carries_effort_from_its_context_signal() {
+    let proj = tempfile::tempdir().unwrap();
+    let (reg, _d) = test_registry();
+    reg.set_claude_projects_dir(proj.path().to_path_buf());
+    reg.set_series_bucket_ms(0);
+    let g = reg.create_group("C:/tmp/repo", rails()).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    let sid = w.session_id.clone().unwrap();
+    write_claude_transcript(proj.path(), &sid, 1000, 500);
+
+    let agent_id = loomux_engine::pathseg::PathSegment::parse(&w.id).unwrap();
+    let snapshot = loomux_lib::orchestration::statusline_snapshot_path(&reg.state_root(), &g.id, &agent_id);
+    fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    fs::write(&snapshot, json!({"session_id": sid, "effort": {"level": "high"}}).to_string()).unwrap();
+
+    reg.group_usage(&g.id);
+    let rows = series_lines(&reg, &g.id);
+    assert_eq!(rows.len(), 1, "the agent's counted usage writes a single sample: {rows:?}");
+    let row: serde_json::Value = serde_json::from_str(&rows[0]).unwrap();
+    assert_eq!(row["effort"], "high", "the sample carries the context signal's live effort");
+}
+
+#[test]
+fn a_pi_series_sample_does_not_persist_the_launch_effort_fallback() {
+    let (reg, _d) = test_registry();
+    reg.set_series_bucket_ms(0);
+    let mut pi_rails = rails();
+    pi_rails.agent_cli = "pi".into();
+    let worker = pi_rails.blocks.iter_mut().find(|block| block.kind == Role::Worker).unwrap();
+    worker.cli = "pi".into();
+    worker.effort = "high".into();
+    let g = reg.create_group("C:/tmp/pi-repo", pi_rails).unwrap();
+    let w = reg.spawn_agent(&g.id, Role::Worker, "w", "task", false, None).unwrap();
+    let sid = w.session_id.clone().expect("pi pre-mints its session id");
+
+    // No thinking_level_change: the only effort in the context signal is the
+    // launch knob fallback, which must not be mistaken for a live reading.
+    let pi_dir = reg.pi_sessions_dir(&g.id);
+    fs::create_dir_all(&pi_dir).unwrap();
+    let header = json!({"type":"session", "version":3, "id":sid, "cwd":"C:/tmp/pi-repo"});
+    let turn = json!({"type":"message", "id":"e1", "parentId":null, "message":{
+        "role":"assistant", "provider":"openrouter", "model":"moonshotai/kimi-k2.6",
+        "usage":{"input":100, "output":5, "cacheRead":0, "cacheWrite":0, "totalTokens":105}
+    }});
+    let path = pi_dir.join(format!("2026-09-03T03-06-45-266Z_{sid}.jsonl"));
+    fs::write(path, format!("{header}\n{turn}\n")).unwrap();
+
+    reg.group_usage(&g.id);
+    let rows = series_lines(&reg, &g.id);
+    assert_eq!(rows.len(), 1, "the usage-bearing pi session writes a sample: {rows:?}");
+    let row: serde_json::Value = serde_json::from_str(&rows[0]).unwrap();
+    assert!(row.as_object().unwrap().contains_key("effort"), "the sample persists the optional field");
+    assert_eq!(row["effort"], Value::Null, "a launch-knob fallback is not a reported effort");
+}
+
+#[test]
 fn a_dead_agents_frozen_snapshot_is_never_resampled() {
     // `merge_usage_snapshots` returns live AND historical rows, so the sampler
     // is handed snapshots whose counters can never move again. Without the

@@ -714,6 +714,44 @@ test("a mark is labelled from the roster the samples actually show either side o
   assert.equal(m.fpPartial, false);
 });
 
+test("an effort change on the same usage key creates a labelled mark", () => {
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "session", effort: "low", in: 0 }),
+    sample({ ts_ms: T0 + BUCKET, key: "session", effort: "low", in: 100 }),
+    sample({ ts_ms: T0 + 2 * BUCKET, key: "session", effort: "high", in: 130 }),
+  ];
+  const [mark] = marks(rows);
+  assert.equal(mark.kind, "effort");
+  assert.equal(mark.tsMs, T0 + 2 * BUCKET);
+  assert.equal(mark.label, "worker-std/pi effort: low → high");
+});
+
+test("unknown effort transitions do not create marks", () => {
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "appears", in: 0 }),
+    sample({ ts_ms: T0 + BUCKET, key: "appears", effort: "high", in: 100 }),
+    sample({ ts_ms: T0, key: "disappears", effort: "high", in: 0 }),
+    sample({ ts_ms: T0 + BUCKET, key: "disappears", effort: null, in: 100 }),
+  ];
+  assert.deepEqual(marks(rows), []);
+});
+
+test("an omitted effort followed by null is still unknown and creates no mark", () => {
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "session", in: 0 }),
+    sample({ ts_ms: T0 + BUCKET, key: "session", effort: null, in: 100 }),
+  ];
+  assert.deepEqual(marks(rows), []);
+});
+
+test("the same effort creates no mark", () => {
+  const rows: SeriesRowLike[] = [
+    sample({ ts_ms: T0, key: "session", effort: "high", in: 0 }),
+    sample({ ts_ms: T0 + BUCKET, key: "session", effort: "high", in: 100 }),
+  ];
+  assert.deepEqual(marks(rows), []);
+});
+
 test("a model change on the same usage key creates a labelled mark at its sample time", () => {
   const rows: SeriesRowLike[] = [
     sample({ ts_ms: T0, key: "session", model: "fable", in: 0 }),

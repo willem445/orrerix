@@ -55,6 +55,7 @@ export interface SeriesSampleLike {
   estimated: boolean;
   source: string;
   model: string | null;
+  effort?: string | null;
 }
 
 /** One `kind: "mark"` row — the repo's agent-facing configuration changed. */
@@ -917,9 +918,17 @@ export interface ModelChange {
   to: string | null;
 }
 
+export interface EffortChange {
+  key: string;
+  block: string;
+  cli: string;
+  from: string | null;
+  to: string | null;
+}
+
 export interface ChartMark {
   tsMs: number;
-  kind: "tuning" | "model";
+  kind: "tuning" | "model" | "effort";
   /** Fingerprint components that moved, as slice B recorded them. */
   changed: string[];
   /** The blocks whose CLI actually changed across this mark, measured from the
@@ -928,6 +937,8 @@ export interface ChartMark {
   roster: RosterChange[];
   /** Per-usage-key model changes; empty for fingerprint marks. */
   modelChanges: ModelChange[];
+  /** Per-usage-key effort changes; empty except on effort marks. */
+  effortChanges: EffortChange[];
   /** The label the vertical carries: the roster diff where there is one
    *  (`worker-std: opencode → pi`), else the component list. */
   label: string;
@@ -1024,6 +1035,7 @@ export function marks(rows: readonly SeriesRowLike[]): ChartMark[] {
       changed,
       roster,
       modelChanges: [],
+      effortChanges: [],
       label,
       fpPartial: m.fp_partial === true,
     };
@@ -1037,32 +1049,58 @@ export function marks(rows: readonly SeriesRowLike[]): ChartMark[] {
     else byKey.set(sample.key, [sample]);
   }
   const modelMarks: ChartMark[] = [];
+  const effortMarks: ChartMark[] = [];
   for (const ordered of byKey.values()) {
     for (let i = 1; i < ordered.length; i++) {
       const before = ordered[i - 1];
       const after = ordered[i];
-      if (before.model === after.model) continue;
-      const modelChange: ModelChange = {
-        key: after.key,
-        block: labelOf(after.block),
-        cli: labelOf(after.cli),
-        from: before.model,
-        to: after.model,
-      };
-      const from = before.model ?? "unknown model";
-      const to = after.model ?? "unknown model";
-      modelMarks.push({
-        tsMs: after.ts_ms,
-        kind: "model",
-        changed: [],
-        roster: [],
-        modelChanges: [modelChange],
-        label: `${modelChange.block}/${modelChange.cli}: ${from} → ${to}`,
-        fpPartial: false,
-      });
+      if (before.model !== after.model) {
+        const modelChange: ModelChange = {
+          key: after.key,
+          block: labelOf(after.block),
+          cli: labelOf(after.cli),
+          from: before.model,
+          to: after.model,
+        };
+        const from = before.model ?? "unknown model";
+        const to = after.model ?? "unknown model";
+        modelMarks.push({
+          tsMs: after.ts_ms,
+          kind: "model",
+          changed: [],
+          roster: [],
+          modelChanges: [modelChange],
+          effortChanges: [],
+          label: `${modelChange.block}/${modelChange.cli}: ${from} → ${to}`,
+          fpPartial: false,
+        });
+      }
+      const beforeEffort = before.effort ?? null;
+      const afterEffort = after.effort ?? null;
+      if (beforeEffort !== null && afterEffort !== null && beforeEffort !== afterEffort) {
+        const effortChange: EffortChange = {
+          key: after.key,
+          block: labelOf(after.block),
+          cli: labelOf(after.cli),
+          from: beforeEffort,
+          to: afterEffort,
+        };
+        const effortFrom = effortChange.from ?? "unknown effort";
+        const effortTo = effortChange.to ?? "unknown effort";
+        effortMarks.push({
+          tsMs: after.ts_ms,
+          kind: "effort",
+          changed: [],
+          roster: [],
+          modelChanges: [],
+          effortChanges: [effortChange],
+          label: `${effortChange.block}/${effortChange.cli} effort: ${effortFrom} → ${effortTo}`,
+          fpPartial: false,
+        });
+      }
     }
   }
-  return [...tuning, ...modelMarks].sort((a, b) => a.tsMs - b.tsMs || a.kind.localeCompare(b.kind));
+  return [...tuning, ...modelMarks, ...effortMarks].sort((a, b) => a.tsMs - b.tsMs || a.kind.localeCompare(b.kind));
 }
 
 // ── the before/after readout ────────────────────────────────────────────────

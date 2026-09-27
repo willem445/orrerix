@@ -382,6 +382,7 @@ pub fn codex_compaction_signal_in(
         window_tokens: reading.window_tokens,
         window_rounded: false,
         effort: reading.effort,
+        effort_is_launch_fallback: false,
         source: ContextSource::CodexRollout,
     })
 }
@@ -517,7 +518,9 @@ pub fn probe_window(program: &str, model: &str) -> Option<ReportedWindow> {
 ///   passed, i.e. the block's clamped effort knob — only when the tail holds
 ///   no `thinking_level_change`. At `v0.84.4` pi writes one for every new
 ///   session (`src/core/sdk.ts`, `appendThinkingLevelChange(thinkingLevel)`),
-///   so the fallback covers a long session whose entry has left the tail.
+///   so the fallback covers a long session whose entry has left the tail. The
+///   returned signal marks this provenance; it is a configuration value, not
+///   a reading of the agent's current effort.
 /// - **window** comes from `window_for(model)`, the cached `--list-models`
 ///   probe in production: the session file records no window. A model the
 ///   probe does not list gets `None`, never a guess.
@@ -533,6 +536,7 @@ pub fn pi_compaction_signal_in(
     let reading = pi_context_signal(&text)?;
     let window = reading.model.as_deref().and_then(window_for);
     let launch_effort = launch_effort.map(str::trim).filter(|e| !e.is_empty()).map(str::to_owned);
+    let effort_is_launch_fallback = reading.effort.is_none() && launch_effort.is_some();
     Some(crate::usage::CompactionSignal {
         tokens: reading.tokens,
         compact_boundary_count: reading.compaction_markers,
@@ -540,6 +544,7 @@ pub fn pi_compaction_signal_in(
         window_tokens: window.map(|w| w.tokens),
         window_rounded: window.is_some_and(|w| w.rounded),
         effort: reading.effort.or(launch_effort),
+        effort_is_launch_fallback,
         source: ContextSource::PiSession,
     })
 }
@@ -578,6 +583,7 @@ pub fn opencode_compaction_signal_in(db: &std::path::Path, session_id: &str) -> 
         window_tokens: None,
         window_rounded: false,
         effort: state.variant,
+        effort_is_launch_fallback: false,
         source: ContextSource::OpencodeDb,
     })
 }
@@ -667,6 +673,7 @@ mod tests {
             window_tokens: None,
             window_rounded: false,
             effort: None,
+            effort_is_launch_fallback: false,
             source: ContextSource::Transcript,
         }
     }

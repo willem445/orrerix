@@ -248,6 +248,10 @@ windows = { version = "0.57", features = [
     # RAII-guarded. That is the whole reason this was NOT a naive `async fn`. See
     # `filemgr::ComApartment` and docs/design/files-pane.md.
     "Win32_System_Com",
+    # SetConsoleCtrlHandler (#3595): clears the inheritable ignore-CTRL+C attribute
+    # an app launched with CREATE_NEW_PROCESS_GROUP (`npx orrerix`) starts with,
+    # before a pane child inherits it. See `pty::allow_ctrl_c_in_children`.
+    "Win32_System_Console",
 ] }
 
 # Voice-prompt prototype (#58): native mic capture via WASAPI. Windows-scoped on
@@ -316,6 +320,14 @@ tauri = { version = "2", features = ["test"] }
 # change this line makes is one word — `"tokio"` joining the `orrerix` package's
 # own dependency list, between `tiny_http` and `windows`.
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
+
+# Ctrl+C inheritance test (#3595): `tests/ctrl_c_inherit.rs` reads a child's
+# ConsoleFlags out of its PEB (NtQueryInformationProcess + ReadProcessMemory).
+# NO NEW PACKAGE: `windows` 0.57 is already a normal dependency above and this
+# line only adds two FEATURES of it, for tests only — resolver 2 (root
+# Cargo.toml) keeps dev-dependency features out of the shipped binary.
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.57", features = ["Wdk_System_Threading", "Win32_System_Diagnostics_Debug"] }
 
 # `[profile.release]` USED TO BE HERE and is now in the workspace-root
 # Cargo.toml (#888 slice A1). Cargo reads profiles from the root manifest only

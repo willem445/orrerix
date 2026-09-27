@@ -1,0 +1,195 @@
+## version-unsupported
+- "version 2 is not supported (this build understands version 1)"
+## serde-unknown-top-level-key
+- "unknown field `blokcs`, expected one of `version`, `name`, `authored_with`, `blocks`, `edges`, `gates`, `intake`, `merge_queue`, `driver`, `triage`, `resources`, `board` at line 3 column 1"
+## serde-error-returns-before-validation
+- "blocks[0]: unknown field `promt`, expected one of `id`, `name`, `kind`, `cli`, `model`, `prompt`, `profile`, `allow`, `role_hint`, `effort`, `context`, `remote`, `driver`, `cache_ttl_minutes` at line 2 column 32"
+## no-blocks
+- "no blocks declared — a workflow needs at least one block"
+## no-blocks-suppressed-by-an-earlier-error
+- "version 2 is not supported (this build understands version 1)"
+## block-id-too-long
+- "blocks[0]: id \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is longer than 48 characters"
+## block-id-no-usable-characters
+- "blocks[0]: id \"!!!\" has no usable characters (allowed: letters, digits, '-', '_')"
+## block-id-path-traversal-refused
+- "blocks[0]: id \"../x\" contains characters that are not allowed (letters, digits, '-', '_')"
+## block-id-space-refused
+- "blocks[0]: id \"rev security\" contains characters that are not allowed (letters, digits, '-', '_')"
+## block-id-duplicate
+- "blocks[1]: duplicate block id \"w\""
+## block-kind-unknown
+- "blocks[0] (w): unknown kind \"boss\" — must be one of orchestrator, worker, reviewer, planner, manager"
+## block-id-reserved-for-another-kind
+- "blocks[0]: id \"planner\" is reserved for planner blocks — a block with kind \"reviewer\" needs a different id"
+## block-cli-cannot-host-class
+- "blocks[0] (p): cli \"pi\" cannot host a planner block: that class runs under ReadOnly containment and pi tops out at NoEdits — --exclude-tools denies built-in tools by name and is applied after every allowlist, which reaches NoEdits — but pi has no bash-command deny and no permission prompts at all, so a ReadOnly class's git-mutation denial has nowhere to be expressed"
+## block-cli-unknown
+- "blocks[0] (w): unknown cli \"vim\" — supported: claude, copilot, gemini, opencode, pi, codex"
+## block-prompt-and-profile
+- "blocks[0] (w): set either prompt: (inline persona) or profile: (a persona file), not both"
+## block-profile-escapes-repo
+- "blocks[0] (w): profile \"../p.md\" must stay inside the repo (no '..')"
+## block-orchestrator-persona
+- "blocks[0] (orchestrator): an orchestrator block may not declare prompt: / allow: — the orchestrator is loomux's trust root and a repo file may not author its prompt or pre-approve its tools. Pin its cli:/model:/effort:/context: if you need to; put personas on the blocks the orchestrator spawns."
+## block-manager-persona
+- "blocks[0] (m): a manager block may not declare profile: — a manager speaks to the human and relays their direction into the trust root, so a repo file authoring its persona could launder its own instructions into what the human is told and what the orchestrator is asked to do. Pin its cli:/model:/effort:/context: if you need to; put personas on the blocks the orchestrator spawns."
+## block-read-only-allow
+- "blocks[0] (p): a planner block cannot declare allow: — its class is read-only, and a pre-approved tool pattern could hand it a shell that writes files. Move the work to a worker block."
+## block-role-hint-unknown
+- "blocks[0] (w): unknown role_hint \"Boss\" — must be one of advisor, process, liaison"
+## block-role-hint-wrong-kind
+- "blocks[0] (w): role_hint \"liaison\" requires kind: reviewer (this block is kind: worker)"
+## block-effort-unknown
+- "blocks[0] (w): unknown effort \"extreme\" — must be one of low, medium, high, xhigh, max"
+## block-effort-cli-cannot-set
+- "blocks[0] (w): cli \"copilot\" cannot set effort \"high\" — copilot reads effortLevel from ~/.copilot/settings.json — its programmatic reference documents no flag and no environment variable, and loomux never writes a user's global settings file. Fix: drop the key (the CLI's own default applies), or give this block a cli: that can set it — claude, pi, codex"
+## block-context-unknown
+- "blocks[0] (w): unknown context \"2m\" — must be one of 1m"
+## block-context-cli-cannot-set
+- "blocks[0] (w): cli \"pi\" cannot set context \"1m\" — pi's context window is model-determined — its --list-models table REPORTS a context column, and no flag, setting or session control selects a variant. Fix: drop the key (the CLI's own default applies), or give this block a cli: that can set it — claude"
+## block-driver-unknown
+- "blocks[0] (w): unknown driver \"pty\" — must be one of structured"
+## block-driver-cli-has-none
+- "blocks[0] (w): cli \"claude\" has no structured driver — driver: structured needs a CLI loomux drives over its structured protocol. Fix: drop the key (the block runs as a PTY pane), or give this block a cli: that has one — pi"
+## block-remote-unusable-label
+- "blocks[0] (w): remote \"../box\" is not a usable label — identifier contains '.'; only [A-Za-z0-9_-] is allowed. A remote label is an abstract name the OPERATOR binds to a host outside this repo, never an address."
+## block-remote-on-orchestrator
+- "blocks[0] (orchestrator): an orchestrator block may not declare remote: — it is loomux-owned and runs on the human's own machine (the orchestrator is the trust root, and orchestration state, the gh operations and the merge gate stay local). Put remote: on the blocks the orchestrator spawns."
+## block-remote-on-manager
+- "blocks[0] (m): a manager block may not declare remote: — it is loomux-owned and runs on the human's own machine (a manager pane is the human's own interface — it is where they type). Put remote: on the blocks the orchestrator spawns."
+## block-remote-cli-inherited
+- "blocks[0] (w): remote: requires cli: claude, spelled out on the block — an omitted cli: inherits the group default, which is picked at launch and cannot be checked here — a remote agent's session has to be identified by an id loomux minted before the spawn, and claude is the only CLI loomux drives remotely today. pi accepts a pre-minted id too (--session-id), but nothing has exercised a remote pi block, so the gate stays claude-only rather than widening on an unvalidated capability. Every other CLI recognizes a session by scanning a local store, which a remote CLI's store is not."
+## block-remote-cli-not-claude
+- "blocks[0] (w): remote: requires cli: claude — a remote agent's session has to be identified by an id loomux minted before the spawn, and claude is the only CLI loomux drives remotely today. pi accepts a pre-minted id too (--session-id), but nothing has exercised a remote pi block, so the gate stays claude-only rather than widening on an unvalidated capability. Every other CLI recognizes a session by scanning a local store, which a remote CLI's store is not."
+## block-cache-ttl-above-ceiling
+- "blocks[0] (w): cache_ttl_minutes 1441 is above the 1440 ceiling; no provider documents a prompt cache longer than a day (use 0 for unknown)"
+## block-first-refusal-wins
+- "blocks[0] (w): unknown kind \"boss\" — must be one of orchestrator, worker, reviewer, planner, manager"
+## block-id-seen-before-kind-check
+- "blocks[0] (x): unknown kind \"boss\" — must be one of orchestrator, worker, reviewer, planner, manager"
+- "blocks[1]: duplicate block id \"x\""
+## block-errors-accumulate-in-block-order
+- "blocks[0]: id \"!!!\" has no usable characters (allowed: letters, digits, '-', '_')"
+- "blocks[1] (w): unknown cli \"vim\" — supported: claude, copilot, gemini, opencode, pi, codex"
+## roster-two-managers
+- "blocks: 2 manager blocks declared (m1, m2) — a workflow may declare at most 1. The manager is the human's single interface to this group: two of them would each hold half a conversation, and everything that says \"the manager\" downstream would have to pick one silently. Keep one and give the others another kind."
+## edge-from-names-no-block
+- "edges[0]: 'from' names no block: \"ghost\""
+## edge-to-names-no-block-each-reported
+- "edges[0]: 'to' names no block: \"g1\""
+- "edges[0]: 'to' names no block: \"g2\""
+## gate-threshold-zero
+- "gates.merge: threshold must be a positive number"
+## gate-require-threshold-without-n
+- "gates.merge: require: threshold needs a threshold: N to go with it"
+## gate-all-pass-with-threshold
+- "gates.merge: require: all-pass takes no threshold — drop it, or use require: threshold"
+## gate-require-unknown
+- "gates.merge: unknown require \"most\" — use 'all-pass', or 'threshold' with threshold: N"
+## gate-require-refusal-short-circuits
+- "gates.merge: unknown require \"most\" — use 'all-pass', or 'threshold' with threshold: N"
+## gate-reviewer-duplicate
+- "gates.merge: reviewer \"r1\" is named more than once — name each reviewer once"
+## gate-reviewer-names-no-block
+- "gates.merge: reviewer \"ghost\" names no block"
+## gate-reviewer-not-a-reviewer
+- "gates.merge: reviewer \"w\" is a worker block, not a reviewer — a gate can only require reviewer verdicts"
+## gate-reviewer-is-manager
+- "gates.merge: reviewer \"m\" is a manager — the manager is the human's interface, not a reviewer: it records no verdict, so a gate naming it could never open. A gate reads REVIEWER verdicts; the human's own sign-off is the merge gate loomux already applies on top of it."
+## gate-reviewer-is-liaison
+- "gates.merge: reviewer \"li\" is a liaison — it is reviewer-kind, but a liaison never records a verdict (it presents the human's questions and relays their answers), so a gate naming it could never open. Name a reviewer that reviews."
+## gate-no-reviewers
+- "gates.merge: no reviewers — a gate with no reviewers gates nothing"
+## gate-threshold-exceeds-reviewers
+- "gates.merge: threshold 3 exceeds the 2 reviewer(s) named — it could never pass"
+## gate-condition-unusable
+- "gates.merge: condition \"ci green\" is not a usable name (letters, digits, '-', '_', '.')"
+## gate-max-diff-lines-zero
+- "gates.merge: max_diff_lines must be a positive number — omit the key to declare no limit"
+## gate-routing-with-threshold
+- "gates.merge: routing: and require: threshold cannot both be declared — a threshold counts passes over a fixed reviewer list, and a routing rule makes that list depend on the diff, so together they would let an extra lane SUPPLY one of the required passes instead of adding one. Use require: all-pass with routing:, and let each rule name the lane its paths need."
+## gate-routing-too-many-rules
+- "gates.merge: 33 routing rules — at most 32. The shim evaluates every rule against every changed file on every merge; past this many lanes the block has stopped routing and started listing."
+## gate-routing-rule-no-paths
+- "gates.merge: routing rule 1 declares no paths — a rule that matches nothing can never require anybody. Omit the rule, or give it a path glob."
+## gate-routing-rule-too-many-paths
+- "gates.merge: routing rule 1 declares 33 paths — at most 32."
+## gate-routing-rule-no-reviewers
+- "gates.merge: routing rule 1 names no reviewers — a rule that requires nobody is not a rule."
+## gate-routing-path-duplicate
+- "gates.merge: routing rule 1 lists the path \"src/**\" more than once — name each glob once."
+## gate-routing-path-unusable
+- "gates.merge: routing rule 1: \"src/\" is not a usable path glob. Use letters, digits, '.', '_', '-', '/' and '*' — and write a file glob, not a directory: 'src/**', never 'src/', '/src/**' or a '..' segment (GitHub reports changed paths repo-relative, so those match nothing at all)."
+## gate-routing-reviewer-duplicate
+- "gates.merge: routing rule 1 names reviewer \"r2\" more than once"
+## gate-routing-reviewer-names-no-block
+- "gates.merge: routing rule 1 reviewer \"ghost\" names no block"
+## gate-errors-accumulate-in-order
+- "gates.merge: reviewer \"r1\" is named more than once — name each reviewer once"
+- "gates.merge: reviewer \"ghost\" names no block"
+- "gates.merge: threshold 5 exceeds the 3 reviewer(s) named — it could never pass"
+- "gates.merge: condition \"a b\" is not a usable name (letters, digits, '-', '_', '.')"
+- "gates.merge: max_diff_lines must be a positive number — omit the key to declare no limit"
+- "gates.merge: routing: and require: threshold cannot both be declared — a threshold counts passes over a fixed reviewer list, and a routing rule makes that list depend on the diff, so together they would let an extra lane SUPPLY one of the required passes instead of adding one. Use require: all-pass with routing:, and let each rule name the lane its paths need."
+- "gates.merge: routing rule 1 declares no paths — a rule that matches nothing can never require anybody. Omit the rule, or give it a path glob."
+- "gates.merge: routing rule 1 names no reviewers — a rule that requires nobody is not a rule."
+## gates-reported-in-name-order
+- "gates.alpha: no reviewers — a gate with no reviewers gates nothing"
+- "gates.zeta: no reviewers — a gate with no reviewers gates nothing"
+## intake-source-unknown
+- "intake.source: unknown source \"jira\" — must be one of github-labels, board, none"
+## intake-errors-in-field-order
+- "intake.source: unknown source \"jira\" — must be one of github-labels, board, none"
+- "intake.labels.ready: \"a b\" is not a usable label (letters, digits, '-', '_'; and it may not begin with '-')"
+- "intake.labels.investigate: \"-x\" is not a usable label (letters, digits, '-', '_'; and it may not begin with '-')"
+- "intake.labels.owned: \"!\" is not a usable label (letters, digits, '-', '_'; and it may not begin with '-')"
+- "intake.labels.prototype: \"p q\" is not a usable label (letters, digits, '-', '_'; and it may not begin with '-')"
+- "intake.labels.hold: \"h h\" is not a usable label (letters, digits, '-', '_'; and it may not begin with '-')"
+## merge-queue-max-batch-zero
+- "merge_queue.max_batch: must be at least 1 — a batch of no PRs could never land anything"
+## driver-counters-out-of-range-in-field-order
+- "driver.max_review_rounds: must be 1..=3 - the drive may not run a looser review loop than the orchestrator template's INVARIANT 9 promises (got 4)"
+- "driver.max_ci_attempts: must be 1..=3 - the drive may not spend more CI attempts than INVARIANT 9 grants the orchestrator itself (got 0)"
+- "driver.max_rebase_attempts: must be 0..=1 - INVARIANT 9 grants one rebase attempt, and a repo may tighten that to none - never loosen it to two (got 2)"
+- "driver.plan_review_minutes: must be 0..=120 - a plan-review window past two hours is a drive nobody is coming back to, and the window costs one orchestrator notice to announce (got 121)"
+- "driver.planner_timeout_minutes: must be 15..=180 - a planner reading a large issue legitimately spends a quarter of an hour before its first tool call, and three hours is the point past which it is not coming back at all (got 14)"
+- "driver.fix_nonblocking_rounds: must be 0..=3 - every non-blocking round is also a review round, so it can never exceed the three INVARIANT 9 grants (got 4)"
+## resources-too-many
+- "resources: 33 declared — at most 32 are allowed (every name is listed in the acquire_lock tool description every agent in the group reads)"
+## resource-name-too-long
+- "resources: name \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" is longer than 48 characters"
+## resource-name-no-usable-characters
+- "resources: name \"!!!\" has no usable characters (allowed: letters, digits, '-', '_')"
+## resource-name-disallowed-characters
+- "resources: name \"heavy build\" contains characters that are not allowed (letters, digits, '-', '_')"
+## resource-slots-zero
+- "resources.build.slots: must be at least 1 — a resource with no slots could never be acquired by anyone"
+## resource-slots-above-max
+- "resources.build.slots: 65 is above the maximum of 64 — past that a declaration serializes nothing, which is not what a `slots:` line means"
+## resource-max-hold-zero
+- "resources.build.max_hold_minutes: must be at least 1 — a hold that expires the moment it is granted serializes nothing"
+## resource-max-hold-above-max
+- "resources.build.max_hold_minutes: 481 is above the maximum of 480 — a hold on a scarce resource has to be bounded by something a working session outlives"
+## resource-first-refusal-wins
+- "resources.b.slots: must be at least 1 — a resource with no slots could never be acquired by anyone"
+## board-wip-zero
+- "board.wip.queued: must be at least 1 — a cap of 0 is a stop, not a work-in-progress limit, and under `enforce` it would wedge the board rather than pace it"
+- "board.wip.review: must be at least 1 — a cap of 0 is a stop, not a work-in-progress limit, and under `enforce` it would wedge the board rather than pace it"
+## triage-provider-not-none
+- "triage.provider: must be \"none\" - this build ships the RULE tier only, and a classifier provider arrives in #3304 S3 (got \"typesafe\")"
+## triage-kind-unknown
+- "triage.kinds: \"bogus\" is not a delivery kind - the set is delegate-progress, delegate-done, reviewer-report, delegate-blocked, drive-gate-satisfied, drive-held, drive-cancelled, run-completed, pr-checks, message-from, planner-exited, agent-exited, watchdog, system-notice, human"
+## triage-max-defer-out-of-range
+- "triage.max_defer_minutes: must be 1..=240 - a notice held longer than four hours is a notice nobody is coming back to, and holding one for less than a minute saves no wake at all (got 0)"
+## order-across-sections
+- "version 2 is not supported (this build understands version 1)"
+- "blocks[0] (w): unknown kind \"boss\" — must be one of orchestrator, worker, reviewer, planner, manager"
+- "edges[0]: 'from' names no block: \"ghost\""
+- "gates.merge: no reviewers — a gate with no reviewers gates nothing"
+- "intake.source: unknown source \"jira\" — must be one of github-labels, board, none"
+- "merge_queue.max_batch: must be at least 1 — a batch of no PRs could never land anything"
+- "driver.max_ci_attempts: must be 1..=3 - the drive may not spend more CI attempts than INVARIANT 9 grants the orchestrator itself (got 9)"
+- "resources: name \"a b\" contains characters that are not allowed (letters, digits, '-', '_')"
+- "board.wip.pr: must be at least 1 — a cap of 0 is a stop, not a work-in-progress limit, and under `enforce` it would wedge the board rather than pace it"
+- "triage.provider: must be \"none\" - this build ships the RULE tier only, and a classifier provider arrives in #3304 S3 (got \"x\")"

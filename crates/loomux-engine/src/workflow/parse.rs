@@ -743,481 +743,584 @@ pub fn workflow_schema_field_facts() -> BTreeMap<String, serde_json::Value> {
 /// just the first: the whole point of a pre-run validation pass is that the
 /// human fixes their file in one pass rather than playing whack-a-mole at spawn
 /// time (which is where Flowise, Langflow and Dify all leave you).
+///
+/// The body is one call per section (#3498 P8b), each validating its own part
+/// of the document and pushing onto the ONE shared error list. The call order
+/// below is therefore the order an author reads their errors in, and it is
+/// pinned — strings and order — by `tests/parse_workflow_golden.rs`. Three
+/// sections read an earlier one's result rather than the raw document: the
+/// roster check, edges and gates all work from the blocks that SURVIVED
+/// validation, so a refused block is reported where it is declared, and an
+/// edge or gate naming it is then reported as naming no block.
 pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
     let raw: RawWorkflow = serde_norway::from_str(text).map_err(|e| vec![e.to_string()])?;
     let mut errs: Vec<String> = Vec::new();
 
-    if raw.version != SCHEMA_VERSION {
+    check_version(raw.version, &mut errs);
+    let blocks = parse_blocks(&raw.blocks, &mut errs);
+    check_roster(&blocks, &mut errs);
+    let edges = parse_edges(raw.edges, &blocks, &mut errs);
+    let gates = parse_gates(raw.gates, &blocks, &mut errs);
+    let intake = parse_intake(raw.intake.as_ref(), &mut errs);
+    let merge_queue = parse_merge_queue(raw.merge_queue.as_ref(), &mut errs);
+    let driver = parse_driver_policy(raw.driver.as_ref(), &mut errs);
+    let resources = parse_resources(&raw.resources, &mut errs);
+    let board = parse_board(raw.board.as_ref(), &mut errs);
+    let triage = parse_triage(raw.triage.as_ref(), &mut errs);
+
+    if !errs.is_empty() {
+        return Err(errs);
+    }
+    Ok(Workflow {
+        version: raw.version,
+        name: sanitize_display(&raw.name),
+        authored_with: sanitize_display(&raw.authored_with),
+        blocks,
+        edges,
+        gates,
+        intake,
+        merge_queue,
+        driver,
+        resources,
+        board,
+        triage,
+    })
+}
+
+/// `version:` — the one schema version this build understands. A mismatch is
+/// reported and validation carries on, so the author sees the rest too.
+fn check_version(version: u32, errs: &mut Vec<String>) {
+    if version != SCHEMA_VERSION {
         errs.push(format!(
             "version {} is not supported (this build understands version {SCHEMA_VERSION})",
-            raw.version
+            version
         ));
     }
+}
 
+// ── blocks ──────────────────────────────────────────────────────────────────
+
+/// `blocks:` — each entry validated on its own by [`parse_block`], which stops
+/// at a block's FIRST refusal: one error per bad block, and the next block is
+/// still read. `seen` spans the whole list, so a duplicate id is caught across
+/// entries.
+fn parse_blocks(raw: &[RawBlock], errs: &mut Vec<String>) -> Vec<Block> {
     let mut blocks: Vec<Block> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    for (i, rb) in raw.blocks.iter().enumerate() {
-        // An id is REJECTED rather than quietly rewritten: an author who wrote
-        // `rev security` must not end up with a block called `revsecurity` that
-        // their own edges and gates can no longer reference.
-        if rb.id.trim().chars().count() > MAX_ID_CHARS {
-            errs.push(format!(
-                "blocks[{i}]: id {:?} is longer than {MAX_ID_CHARS} characters",
-                rb.id
-            ));
-            continue;
+    for (i, rb) in raw.iter().enumerate() {
+        match parse_block(i, rb, &mut seen) {
+            Ok(block) => blocks.push(block),
+            Err(e) => errs.push(e),
         }
-        let Some(id) = sanitize_id(&rb.id) else {
-            errs.push(format!("blocks[{i}]: id {:?} has no usable characters (allowed: letters, digits, '-', '_')", rb.id));
-            continue;
-        };
-        if id != rb.id.trim() {
-            errs.push(format!(
-                "blocks[{i}]: id {:?} contains characters that are not allowed (letters, digits, '-', '_')",
-                rb.id
-            ));
-            continue;
-        }
-        if !seen.insert(id.clone()) {
-            errs.push(format!("blocks[{i}]: duplicate block id {id:?}"));
-            continue;
-        }
-        // The capability class. An unknown kind is REJECTED, never coerced —
-        // see `kind_from_str`.
-        let Some(kind) = kind_from_str(&rb.kind) else {
-            errs.push(format!(
-                "blocks[{i}] ({id}): unknown kind {:?} — must be one of {}",
-                rb.kind,
-                kind_names()
-            ));
-            continue;
-        };
-        // The FIVE class names are RESERVED as ids for their own class (#1161
-        // added `manager`). Without
-        // this, `- id: planner, kind: reviewer` is accepted and then two blocks
-        // collide: `instructions_file()` keys "is this a built-in?" off the id but
-        // names the file from the kind, so that block would write `reviewer.md` —
-        // the real reviewer block's contract file — and whichever spawned last
-        // would win. (`- id: orchestrator, kind: worker` breaks a second way: the
-        // roster has no orchestrator *kind*, so `clamped()` synthesizes one with
-        // the id `orchestrator`, and the duplicate id makes the repo's own block
-        // permanently unreachable.) Coupling the two removes the whole class of
-        // problem, and costs an author nothing: rename the block.
-        //
-        // **Widening `kind_from_str` widens THIS, and that is a breaking change
-        // to already-written workflow files** (#1161): `- id: manager, kind:
-        // worker` parsed clean before the class existed — the id was not a class
-        // name, so it took the custom-id branch and wrote `manager.md` — and is
-        // a parse error now, which fails the whole file and drops the repo back
-        // to the built-in roster. Unavoidable once `manager` names a class (the
-        // alternative is the `worker.md` collision above), and cheap to fix:
-        // rename the block. `Guardrails::clamped` step 2 is the same rule
-        // applied to an already-persisted `group.json`, where it drops the block
-        // rather than the file.
-        if let Some(reserved) = kind_from_str(&id) {
-            if reserved != kind {
-                errs.push(format!(
-                    "blocks[{i}]: id {id:?} is reserved for {} blocks — a block with kind {:?} needs a different id",
-                    reserved.as_str(),
-                    kind.as_str()
-                ));
-                continue;
-            }
-        }
-        let cli = rb.cli.trim().to_string();
-        if !cli.is_empty() {
-            // #267: the containment question comes FIRST, and deliberately so.
-            // A CLI loomux has evaluated and recorded (`CLI_CAPS`) but cannot
-            // let host this class deserves to be told why — "unknown cli" would
-            // be both unhelpful and, for a CLI with a row, untrue. Membership
-            // still catches everything this doesn't: `cli_can_host` returns
-            // `Ok` for a CLI it has never heard of.
-            //
-            // Refused at LOAD time so a repo learns from its own workflow file
-            // rather than from a spawn that fails hours later — the same reason
-            // the CLI name itself is validated here as well as at spawn. Only
-            // checked for an explicit `cli:`; an empty one inherits the group
-            // default, which is not known here (the launcher picks it) and is
-            // re-checked at spawn against the real value.
-            if let Err(e) = cli_can_host(&cli, kind) {
-                errs.push(format!("blocks[{i}] ({id}): {e}"));
-                continue;
-            }
-            if !SUPPORTED_CLIS.contains(&cli.as_str()) {
-                errs.push(format!(
-                    "blocks[{i}] ({id}): unknown cli {cli:?} — supported: {}",
-                    SUPPORTED_CLIS.join(", ")
-                ));
-                continue;
-            }
-        }
-        if rb.prompt.is_some() && rb.profile.is_some() {
-            errs.push(format!(
-                "blocks[{i}] ({id}): set either prompt: (inline persona) or profile: (a persona file), not both"
-            ));
-            continue;
-        }
-        if let Some(path) = rb.profile.as_deref() {
-            // Validate the shape now; the file is read (and its absence
-            // tolerated) at spawn, so a workflow stays usable on a checkout
-            // where the persona file hasn't landed yet.
-            if let Err(e) = resolve_profile_path(".", path) {
-                errs.push(format!("blocks[{i}] ({id}): {e}"));
-                continue;
-            }
-        }
-        // THE ORCHESTRATOR BLOCK IS LOOMUX-OWNED. A repo may pin its `cli`,
-        // `model`, `effort` and `context` (each sanitized/validated like
-        // everywhere else) — but it may not author its persona or pre-approve
-        // its tools.
-        //
-        // The pin list is exactly "picks from a value set loomux ships", which
-        // is why #687's two knobs join it and `prompt:`/`profile:`/`allow:`
-        // never can: a level from a closed enum authors no text and
-        // pre-approves no tool, so it opens no injection seam into the trust
-        // root — the most a hostile repo buys is an orchestrator that thinks
-        // harder or holds more context, both of which the human is shown in
-        // the launcher's roster preview before they opt in.
-        //
-        // This is not a capability question: the orchestrator already holds every
-        // tool, so a repo-authored prompt grants it nothing *new*. It is a TRUST
-        // question. The orchestrator is the group's trust root — it runs
-        // unsupervised under `auto_ops`, in the repo root with no worktree,
-        // holding the privileged MCP surface (`spawn_agent`, `kill_agent`,
-        // `set_state`). Letting `.loomux/workflow.yml` write its system prompt
-        // would hand a cloned repo a direct prompt-injection seam into that root
-        // (the #189 class) — and it would be the one orchestrator path with no
-        // gate, in a feature whose entire security argument is that a repo file
-        // never reconfigures trust. The rest of the model spends real effort
-        // making a *second* orchestrator impossible; leaving the *first* one's
-        // persona repo-writable would make that effort decorative.
-        //
-        // The declared feature ("five reviewers, five prompts") needs none of
-        // this. If app-level orchestrator customization is ever wanted, it can
-        // arrive as an explicit human opt-in — which is a different thing from a
-        // file that arrives with a `git clone`.
-        //
-        // **THE MANAGER BLOCK IS LOOMUX-OWNED FOR THE SAME REASON** (#1161,
-        // decision D1 — human-blessed). The capability-closure table makes
-        // persona text inert for most classes: a repo can say anything it likes
-        // to a reviewer and the reviewer still cannot merge. That argument does
-        // not transfer here, because the manager's entire output surface IS
-        // persuasion — of the human in its pane, and of the orchestrator via
-        // relayed directives that the trust root then acts on as if the human
-        // had said them. A repo-authored persona there is a directive-laundering
-        // seam of the #189 class arriving with a `git clone`, and it is the one
-        // seam no capability table can close.
-        //
-        // A repo loses nothing it was promised: the elicitation method itself
-        // (spec-driven, "grill-me") ships in loomux's own `manager.md`. Pinning
-        // `cli:`/`model:`/`effort:`/`context:`/`name:` stays legal, on the same
-        // "picks from a value set loomux ships" line drawn above. Relaxing this
-        // later as an explicit human opt-in is cheap; tightening it later would
-        // be a breaking change to every workflow file already written.
-        if kind == Role::Orchestrator || kind == Role::Manager {
-            let offenders: Vec<&str> = [
-                rb.prompt.is_some().then_some("prompt:"),
-                rb.profile.is_some().then_some("profile:"),
-                (!rb.allow.is_empty()).then_some("allow:"),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            if !offenders.is_empty() {
-                let why = if kind == Role::Orchestrator {
-                    "the orchestrator is loomux's trust root and a repo file may not author its \
-                     prompt or pre-approve its tools"
-                } else {
-                    "a manager speaks to the human and relays their direction into the trust root, \
-                     so a repo file authoring its persona could launder its own instructions into \
-                     what the human is told and what the orchestrator is asked to do"
-                };
-                errs.push(format!(
-                    "blocks[{i}] ({id}): a{n} {k} block may not declare {offenders} — {why}. Pin \
-                     its cli:/model:/effort:/context: if you need to; put personas on the blocks \
-                     the orchestrator spawns.",
-                    n = if kind == Role::Orchestrator { "n" } else { "" },
-                    k = kind.as_str(),
-                    offenders = offenders.join(" / "),
-                ));
-                continue;
-            }
-        }
-        // CAPABILITY CLOSURE. `allow:` pre-approves tool patterns, and the
-        // read-only class is read-only by *denial of a fixed list* — Edit, Write,
-        // NotebookEdit, `git commit`, `git push` (CLAUDE_EDIT_DENY_TOOLS +
-        // CLAUDE_READONLY_DENY_GIT — #448 dropped `MultiEdit`, which matches no
-        // real Claude Code tool).
-        // Deny beats allow on both CLIs, so an allow pattern cannot re-grant anything on that list…
-        // but it does not have to. `allow: Bash(python *)` (or `cp`, `tee`,
-        // `sed -i`, …) hands a planner a shell that writes files and is named
-        // nowhere in the deny list, and under `auto_ops` nobody approves the call.
-        //
-        // Enumerating every write-capable program is not a thing anyone can do.
-        // So the rule is the other way round: **a read-only block may not declare
-        // `allow:` at all.** That keeps "a workflow file can never grant a
-        // capability" a statement about the code rather than about the deny list's
-        // completeness.
-        //
-        // The ban stays keyed to `is_read_only()` — the FULLY read-only class —
-        // and deliberately did not follow #462's deny flags onto reviewers. The
-        // argument above does not apply to a reviewer: it keeps its shell by
-        // design (running the tests is the job), so an `allow:` pattern names
-        // nothing it could not already run, and the editing tools #462 denies it
-        // cannot be re-granted anyway (deny beats allow on both CLIs). Banning
-        // `allow:` there would cost real expressiveness — a reviewer block that
-        // pre-approves `Bash(npm test *)` — and buy nothing. A worker holds the
-        // whole surface outright, same conclusion.
-        if !rb.allow.is_empty() && kind.is_read_only() {
-            errs.push(format!(
-                "blocks[{i}] ({id}): a {} block cannot declare allow: — its class is read-only, \
-                 and a pre-approved tool pattern could hand it a shell that writes files. \
-                 Move the work to a worker block.",
+    }
+    blocks
+}
+
+/// One `blocks[i]` entry, validated key by key in a fixed order; the first
+/// refusal is the block's error. The order is observable — a block with two
+/// problems reports the earlier one — so the steps below are never reordered
+/// by a restructure.
+fn parse_block(i: usize, rb: &RawBlock, seen: &mut BTreeSet<String>) -> Result<Block, String> {
+    let id = block_id(i, rb, seen)?;
+    let kind = block_kind(i, rb, &id)?;
+    let cli = block_cli(i, &id, rb, kind)?;
+    check_persona_source(i, &id, rb)?;
+    check_loomux_owned_persona(i, &id, rb, kind)?;
+    check_allow_closure(i, &id, rb, kind)?;
+    let role_hint = block_role_hint(i, &id, rb, kind)?;
+    // `effort:` / `context:` (#687). Both are VALUE-SET picks — they author
+    // no text and pre-approve no tool — so the capability-closure argument
+    // is unchanged and they are legal on an orchestrator block too (see
+    // that check above, and `docs/design/workflows.md`). `validate_knob`
+    // carries the whole rule; the CLI half is checked only for an explicit
+    // `cli:`, exactly like `cli_can_host` above.
+    let caps = (!cli.is_empty()).then(|| crate::model::cli_caps(&cli)).flatten();
+    let effort = validate_knob(
+        "effort",
+        &rb.effort,
+        crate::model::EFFORT_LEVELS,
+        &cli,
+        caps.map(|c| (c.effort_levels, c.effort_note)),
+        |c| c.effort_levels,
+    )
+    .map_err(|e| format!("blocks[{i}] ({id}): {e}"))?;
+    let context = validate_knob(
+        "context",
+        &rb.context,
+        crate::model::CONTEXT_VARIANTS,
+        &cli,
+        caps.map(|c| (c.context_variants, c.context_note)),
+        |c| c.context_variants,
+    )
+    .map_err(|e| format!("blocks[{i}] ({id}): {e}"))?;
+    let driver = block_driver(i, &id, rb, &cli, caps)?;
+    let remote = block_remote(i, &id, rb, kind, &cli)?;
+    check_cache_ttl(i, &id, rb)?;
+    let name = sanitize_display(&rb.name);
+    Ok(Block {
+        name: if name.is_empty() { id.clone() } else { name },
+        id,
+        kind,
+        cli,
+        model: crate::model::sanitize_model_opt(&rb.model),
+        prompt: rb.prompt.as_deref().map(sanitize_persona).filter(|s| !s.trim().is_empty()),
+        profile: rb.profile.as_ref().map(|p| p.trim().to_string()),
+        allow: rb.allow.iter().filter_map(|a| crate::profiles::sanitize_allow(a)).collect(),
+        role_hint,
+        effort,
+        context,
+        remote,
+        driver,
+        cache_ttl_minutes: rb.cache_ttl_minutes,
+    })
+}
+
+/// A block's id: the length bound, the character rule, then uniqueness. The id
+/// is recorded in `seen` here, BEFORE its kind is checked, so a later block
+/// reusing the id of one refused for its kind is still a duplicate.
+fn block_id(i: usize, rb: &RawBlock, seen: &mut BTreeSet<String>) -> Result<String, String> {
+    // An id is REJECTED rather than quietly rewritten: an author who wrote
+    // `rev security` must not end up with a block called `revsecurity` that
+    // their own edges and gates can no longer reference.
+    if rb.id.trim().chars().count() > MAX_ID_CHARS {
+        return Err(format!(
+            "blocks[{i}]: id {:?} is longer than {MAX_ID_CHARS} characters",
+            rb.id
+        ));
+    }
+    let Some(id) = sanitize_id(&rb.id) else {
+        return Err(format!("blocks[{i}]: id {:?} has no usable characters (allowed: letters, digits, '-', '_')", rb.id));
+    };
+    if id != rb.id.trim() {
+        return Err(format!(
+            "blocks[{i}]: id {:?} contains characters that are not allowed (letters, digits, '-', '_')",
+            rb.id
+        ));
+    }
+    if !seen.insert(id.clone()) {
+        return Err(format!("blocks[{i}]: duplicate block id {id:?}"));
+    }
+    Ok(id)
+}
+
+/// A block's capability class, and the rule that a class NAME used as an id
+/// belongs to that class.
+fn block_kind(i: usize, rb: &RawBlock, id: &str) -> Result<Role, String> {
+    // The capability class. An unknown kind is REJECTED, never coerced —
+    // see `kind_from_str`.
+    let Some(kind) = kind_from_str(&rb.kind) else {
+        return Err(format!(
+            "blocks[{i}] ({id}): unknown kind {:?} — must be one of {}",
+            rb.kind,
+            kind_names()
+        ));
+    };
+    // The FIVE class names are RESERVED as ids for their own class (#1161
+    // added `manager`). Without
+    // this, `- id: planner, kind: reviewer` is accepted and then two blocks
+    // collide: `instructions_file()` keys "is this a built-in?" off the id but
+    // names the file from the kind, so that block would write `reviewer.md` —
+    // the real reviewer block's contract file — and whichever spawned last
+    // would win. (`- id: orchestrator, kind: worker` breaks a second way: the
+    // roster has no orchestrator *kind*, so `clamped()` synthesizes one with
+    // the id `orchestrator`, and the duplicate id makes the repo's own block
+    // permanently unreachable.) Coupling the two removes the whole class of
+    // problem, and costs an author nothing: rename the block.
+    //
+    // **Widening `kind_from_str` widens THIS, and that is a breaking change
+    // to already-written workflow files** (#1161): `- id: manager, kind:
+    // worker` parsed clean before the class existed — the id was not a class
+    // name, so it took the custom-id branch and wrote `manager.md` — and is
+    // a parse error now, which fails the whole file and drops the repo back
+    // to the built-in roster. Unavoidable once `manager` names a class (the
+    // alternative is the `worker.md` collision above), and cheap to fix:
+    // rename the block. `Guardrails::clamped` step 2 is the same rule
+    // applied to an already-persisted `group.json`, where it drops the block
+    // rather than the file.
+    if let Some(reserved) = kind_from_str(id) {
+        if reserved != kind {
+            return Err(format!(
+                "blocks[{i}]: id {id:?} is reserved for {} blocks — a block with kind {:?} needs a different id",
+                reserved.as_str(),
                 kind.as_str()
             ));
-            continue;
         }
-        // role_hint (#250/#324) is a persona/template MARKER, never a
-        // capability class of its own — it selects which addendum/template
-        // fragment/badge a block gets, and `resolve_persona` keys off `kind`
-        // alone. `mcp::tool_defs` and, since #946 Q4 / #1091 slice H, the
-        // Claude CLI's `AskUserQuestion` deny (`claude_denies_interactive_
-        // question`) DO additionally key off this field for the single
-        // `liaison` hint — in BOTH directions: `tool_defs` GRANTS a plain
-        // `kind: reviewer` block `group_usage`/`ask_human` once it also
-        // carries `liaison` (mcp.rs, `tool_defs`'s liaison arm — a deliberate
-        // widening of that block's tool surface, not a deny), while the
-        // AskUserQuestion deny ADDS a restriction the same hint does not
-        // otherwise carry. What neither direction ever touches is
-        // `Role::containment()` — the edit/git denial tier `kind` alone
-        // sets — so a liaison's containment is exactly a plain reviewer's
-        // (`NoEdits`: the CLI's editing tools denied, the shell intact),
-        // whatever its hint grants or denies elsewhere. What IS enforced
-        // here is that a hint can only sit on the kind it is
-        // meaningless without: an unrecognized value, or one paired with the
-        // wrong kind, is a loud parse error — never coerced, never silently
-        // dropped, the same shape `kind_from_str` itself enforces.
-        let role_hint = match rb.role_hint.as_deref() {
-            None => None,
-            Some(raw) => {
-                let hint = raw.trim().to_ascii_lowercase();
-                let Some(required) = role_hint_requires(&hint) else {
-                    errs.push(format!(
-                        "blocks[{i}] ({id}): unknown role_hint {raw:?} — must be one of {}",
-                        role_hint_names()
-                    ));
-                    continue;
-                };
-                if required != kind {
-                    errs.push(format!(
-                        "blocks[{i}] ({id}): role_hint {hint:?} requires kind: {} (this block is kind: {})",
-                        required.as_str(),
-                        kind.as_str()
-                    ));
-                    continue;
-                }
-                Some(hint)
-            }
-        };
-        // `effort:` / `context:` (#687). Both are VALUE-SET picks — they author
-        // no text and pre-approve no tool — so the capability-closure argument
-        // is unchanged and they are legal on an orchestrator block too (see
-        // that check above, and `docs/design/workflows.md`). `validate_knob`
-        // carries the whole rule; the CLI half is checked only for an explicit
-        // `cli:`, exactly like `cli_can_host` above.
-        let caps = (!cli.is_empty()).then(|| crate::model::cli_caps(&cli)).flatten();
-        let effort = match validate_knob(
-            "effort",
-            &rb.effort,
-            crate::model::EFFORT_LEVELS,
-            &cli,
-            caps.map(|c| (c.effort_levels, c.effort_note)),
-            |c| c.effort_levels,
-        ) {
-            Ok(v) => v,
-            Err(e) => {
-                errs.push(format!("blocks[{i}] ({id}): {e}"));
-                continue;
-            }
-        };
-        let context = match validate_knob(
-            "context",
-            &rb.context,
-            crate::model::CONTEXT_VARIANTS,
-            &cli,
-            caps.map(|c| (c.context_variants, c.context_note)),
-            |c| c.context_variants,
-        ) {
-            Ok(v) => v,
-            Err(e) => {
-                errs.push(format!("blocks[{i}] ({id}): {e}"));
-                continue;
-            }
-        };
-        // `driver:` (#2850) — HOW loomux drives this block's agent. A
-        // VALUE-SET pick like `effort:`/`context:` above — it authors no text
-        // and pre-approves no tool — so it is legal on an orchestrator block
-        // too. Two checks, in the same order and the same postures as the
-        // knobs: the value must be in loomux's closed vocabulary (rejected,
-        // never coerced), and — when the block names an explicit `cli:` —
-        // that CLI's [`CliCaps::structured_driver`] row must carry a driver.
-        // The CLI half is checked only for an explicit `cli:`, exactly like
-        // `cli_can_host` above: an inherited CLI is resolved at launch,
-        // unknowable here, and re-checked at spawn.
-        //
-        // The refusal names the block (this prefix), the CLI, and the CLIs
-        // that CAN take the key — derived from the table, the same remedy
-        // shape `validate_knob` gives the knobs.
-        let driver = match rb.driver.as_deref() {
-            None => None,
-            Some(raw) => {
-                let want = raw.trim().to_ascii_lowercase();
-                if want.is_empty() {
-                    // A bare `driver:` line means the absent key — a PTY
-                    // pane — rather than a refusal about nothing (the
-                    // reasoning `RawBlock::remote` states for `Option`).
-                    None
-                } else if !DRIVER_MODES.contains(&want.as_str()) {
-                    errs.push(format!(
-                        "blocks[{i}] ({id}): unknown driver {raw:?} — must be one of {}",
-                        driver_mode_names()
-                    ));
-                    continue;
-                } else {
-                    // Only for an EXPLICIT `cli:` — `caps` is `None` for an
-                    // inherited one, which is unknowable here. That case is
-                    // not merely deferred, it is genuinely UNREACHABLE from
-                    // this function, and `structured_harness_for` is asked
-                    // again at spawn against the cli `cli_of` resolves (the
-                    // second ask #2850 S3b lands).
-                    if caps.is_some() {
-                        if let Err(refusal) = structured_harness_for(Some(want.as_str()), &cli) {
-                            errs.push(format!("blocks[{i}] ({id}): {refusal}"));
-                            continue;
-                        }
-                    }
-                    Some(want)
-                }
-            }
-        };
-        // `remote:` (#1457) — the label that says this block's agent CLI runs
-        // on another machine over SSH. THREE refusals, all parse errors, all
-        // fail-closed on purpose: this is the one block key whose eventual
-        // effect is "run code somewhere else", so every question it raises is
-        // answered in the file or the file does not load.
-        //
-        // 1. THE LABEL ITSELF is checked with `pathseg::check_segment` — the
-        //    #925 shared validator `GroupId` delegates to — rather than a
-        //    fourth private "is this a safe id" predicate. Refused, never
-        //    rewritten: `sanitize_id` would turn `../buildbox` into
-        //    `buildbox`, and two strings naming one binding is exactly the
-        //    hazard that consolidation exists to prevent.
-        //
-        // 2. NOT ON AN ORCHESTRATOR OR A MANAGER BLOCK. Both are loomux-owned
-        //    (the same pair the persona check above refuses `prompt:`/
-        //    `profile:`/`allow:` on) and both are load-bearing LOCALLY: the
-        //    orchestrator is the trust root that holds orchestration state,
-        //    the `gh` operations and the merge gate, and the manager is the
-        //    human's own interface pane — the thing they type into. Moving
-        //    either onto a machine the repo file named is not a feature with a
-        //    missing implementation; it is the feature this design refuses.
-        //
-        // 3. `cli: claude` MUST BE SPELLED OUT. claude is the only CLI loomux
-        //    drives remotely, and the gate is that fact rather than a
-        //    capability claim. Session identity is what made it TRUE
-        //    originally: loomux pre-mints the id and claude accepts it
-        //    (`--session-id`/`--resume`), while copilot/opencode/gemini
-        //    identify a session by scanning a LOCAL store, which a remote
-        //    CLI's store is not. pi (#2126) accepts a pre-minted id too, so
-        //    that argument no longer separates claude from every other CLI —
-        //    what still does is that no remote pi block has ever been
-        //    exercised, and a gate is only as good as the reason it states.
-        //    An `cli:` omitted inherits the group
-        //    default — picked in the launcher, unknowable here — so a block
-        //    that leaves it blank is refused rather than parsed into a promise
-        //    the spawn would have to break. The asymmetry decides it: relaxing
-        //    this later (accepting an inherited claude) is cheap, tightening it
-        //    later would be a breaking change to every workflow file already
-        //    written.
-        let remote = match rb.remote.as_deref() {
-            None => None,
-            Some(raw) => {
-                if let Err(e) = crate::pathseg::check_segment(raw) {
-                    errs.push(format!(
-                        "blocks[{i}] ({id}): remote {raw:?} is not a usable label — {e}. A \
-                         remote label is an abstract name the OPERATOR binds to a host outside \
-                         this repo, never an address."
-                    ));
-                    continue;
-                }
-                if kind == Role::Orchestrator || kind == Role::Manager {
-                    errs.push(format!(
-                        "blocks[{i}] ({id}): a{n} {k} block may not declare remote: — it is \
-                         loomux-owned and runs on the human's own machine ({why}). Put remote: \
-                         on the blocks the orchestrator spawns.",
-                        n = if kind == Role::Orchestrator { "n" } else { "" },
-                        k = kind.as_str(),
-                        why = if kind == Role::Orchestrator {
-                            "the orchestrator is the trust root, and orchestration state, the \
-                             gh operations and the merge gate stay local"
-                        } else {
-                            "a manager pane is the human's own interface — it is where they type"
-                        },
-                    ));
-                    continue;
-                }
-                if cli != "claude" {
-                    errs.push(format!(
-                        "blocks[{i}] ({id}): remote: requires cli: claude{spelled} — a remote \
-                         agent's session has to be identified by an id loomux minted before the \
-                         spawn, and claude is the only CLI loomux drives remotely today. pi \
-                         accepts a pre-minted id too (--session-id), but nothing has exercised \
-                         a remote pi block, so the gate stays claude-only rather than widening \
-                         on an unvalidated capability. Every other CLI recognizes a session by \
-                         scanning a local store, which a remote CLI's store is not.",
-                        spelled = if cli.is_empty() {
-                            ", spelled out on the block — an omitted cli: inherits the group \
-                             default, which is picked at launch and cannot be checked here"
-                        } else {
-                            ""
-                        },
-                    ));
-                    continue;
-                }
-                Some(raw.to_string())
-            }
-        };
-        // `cache_ttl_minutes:` (#3407) — a bound, refused rather than clamped:
-        // `0` is a legal answer ("unknown"), and no provider documents a cache
-        // longer than a day, so a value above that is a typo, not a wish.
-        if let Some(ttl) = rb.cache_ttl_minutes {
-            if ttl > crate::cacheage::CACHE_TTL_MINUTES_MAX {
-                errs.push(format!(
-                    "blocks[{i}] ({id}): cache_ttl_minutes {ttl} is above the {} ceiling; no provider documents a prompt cache longer than a day (use 0 for unknown)",
-                    crate::cacheage::CACHE_TTL_MINUTES_MAX
-                ));
-                continue;
-            }
-        }
-        let name = sanitize_display(&rb.name);
-        blocks.push(Block {
-            name: if name.is_empty() { id.clone() } else { name },
-            id,
-            kind,
-            cli,
-            model: crate::model::sanitize_model_opt(&rb.model),
-            prompt: rb.prompt.as_deref().map(sanitize_persona).filter(|s| !s.trim().is_empty()),
-            profile: rb.profile.as_ref().map(|p| p.trim().to_string()),
-            allow: rb.allow.iter().filter_map(|a| crate::profiles::sanitize_allow(a)).collect(),
-            role_hint,
-            effort,
-            context,
-            remote,
-            driver,
-            cache_ttl_minutes: rb.cache_ttl_minutes,
-        });
     }
+    Ok(kind)
+}
 
+/// A block's explicit `cli:` (trimmed; empty means "inherit the group
+/// default"), checked for containment and then membership.
+fn block_cli(i: usize, id: &str, rb: &RawBlock, kind: Role) -> Result<String, String> {
+    let cli = rb.cli.trim().to_string();
+    if !cli.is_empty() {
+        // #267: the containment question comes FIRST, and deliberately so.
+        // A CLI loomux has evaluated and recorded (`CLI_CAPS`) but cannot
+        // let host this class deserves to be told why — "unknown cli" would
+        // be both unhelpful and, for a CLI with a row, untrue. Membership
+        // still catches everything this doesn't: `cli_can_host` returns
+        // `Ok` for a CLI it has never heard of.
+        //
+        // Refused at LOAD time so a repo learns from its own workflow file
+        // rather than from a spawn that fails hours later — the same reason
+        // the CLI name itself is validated here as well as at spawn. Only
+        // checked for an explicit `cli:`; an empty one inherits the group
+        // default, which is not known here (the launcher picks it) and is
+        // re-checked at spawn against the real value.
+        if let Err(e) = cli_can_host(&cli, kind) {
+            return Err(format!("blocks[{i}] ({id}): {e}"));
+        }
+        if !SUPPORTED_CLIS.contains(&cli.as_str()) {
+            return Err(format!(
+                "blocks[{i}] ({id}): unknown cli {cli:?} — supported: {}",
+                SUPPORTED_CLIS.join(", ")
+            ));
+        }
+    }
+    Ok(cli)
+}
+
+/// `prompt:` and `profile:` are two spellings of one persona, so at most one
+/// may be declared; a `profile:` path is shape-checked here.
+fn check_persona_source(i: usize, id: &str, rb: &RawBlock) -> Result<(), String> {
+    if rb.prompt.is_some() && rb.profile.is_some() {
+        return Err(format!(
+            "blocks[{i}] ({id}): set either prompt: (inline persona) or profile: (a persona file), not both"
+        ));
+    }
+    if let Some(path) = rb.profile.as_deref() {
+        // Validate the shape now; the file is read (and its absence
+        // tolerated) at spawn, so a workflow stays usable on a checkout
+        // where the persona file hasn't landed yet.
+        if let Err(e) = resolve_profile_path(".", path) {
+            return Err(format!("blocks[{i}] ({id}): {e}"));
+        }
+    }
+    Ok(())
+}
+
+/// The orchestrator and manager blocks are loomux-owned: no repo-authored
+/// persona and no pre-approved tools.
+fn check_loomux_owned_persona(i: usize, id: &str, rb: &RawBlock, kind: Role) -> Result<(), String> {
+    // THE ORCHESTRATOR BLOCK IS LOOMUX-OWNED. A repo may pin its `cli`,
+    // `model`, `effort` and `context` (each sanitized/validated like
+    // everywhere else) — but it may not author its persona or pre-approve
+    // its tools.
+    //
+    // The pin list is exactly "picks from a value set loomux ships", which
+    // is why #687's two knobs join it and `prompt:`/`profile:`/`allow:`
+    // never can: a level from a closed enum authors no text and
+    // pre-approves no tool, so it opens no injection seam into the trust
+    // root — the most a hostile repo buys is an orchestrator that thinks
+    // harder or holds more context, both of which the human is shown in
+    // the launcher's roster preview before they opt in.
+    //
+    // This is not a capability question: the orchestrator already holds every
+    // tool, so a repo-authored prompt grants it nothing *new*. It is a TRUST
+    // question. The orchestrator is the group's trust root — it runs
+    // unsupervised under `auto_ops`, in the repo root with no worktree,
+    // holding the privileged MCP surface (`spawn_agent`, `kill_agent`,
+    // `set_state`). Letting `.loomux/workflow.yml` write its system prompt
+    // would hand a cloned repo a direct prompt-injection seam into that root
+    // (the #189 class) — and it would be the one orchestrator path with no
+    // gate, in a feature whose entire security argument is that a repo file
+    // never reconfigures trust. The rest of the model spends real effort
+    // making a *second* orchestrator impossible; leaving the *first* one's
+    // persona repo-writable would make that effort decorative.
+    //
+    // The declared feature ("five reviewers, five prompts") needs none of
+    // this. If app-level orchestrator customization is ever wanted, it can
+    // arrive as an explicit human opt-in — which is a different thing from a
+    // file that arrives with a `git clone`.
+    //
+    // **THE MANAGER BLOCK IS LOOMUX-OWNED FOR THE SAME REASON** (#1161,
+    // decision D1 — human-blessed). The capability-closure table makes
+    // persona text inert for most classes: a repo can say anything it likes
+    // to a reviewer and the reviewer still cannot merge. That argument does
+    // not transfer here, because the manager's entire output surface IS
+    // persuasion — of the human in its pane, and of the orchestrator via
+    // relayed directives that the trust root then acts on as if the human
+    // had said them. A repo-authored persona there is a directive-laundering
+    // seam of the #189 class arriving with a `git clone`, and it is the one
+    // seam no capability table can close.
+    //
+    // A repo loses nothing it was promised: the elicitation method itself
+    // (spec-driven, "grill-me") ships in loomux's own `manager.md`. Pinning
+    // `cli:`/`model:`/`effort:`/`context:`/`name:` stays legal, on the same
+    // "picks from a value set loomux ships" line drawn above. Relaxing this
+    // later as an explicit human opt-in is cheap; tightening it later would
+    // be a breaking change to every workflow file already written.
+    if kind == Role::Orchestrator || kind == Role::Manager {
+        let offenders: Vec<&str> = [
+            rb.prompt.is_some().then_some("prompt:"),
+            rb.profile.is_some().then_some("profile:"),
+            (!rb.allow.is_empty()).then_some("allow:"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !offenders.is_empty() {
+            let why = if kind == Role::Orchestrator {
+                "the orchestrator is loomux's trust root and a repo file may not author its \
+                 prompt or pre-approve its tools"
+            } else {
+                "a manager speaks to the human and relays their direction into the trust root, \
+                 so a repo file authoring its persona could launder its own instructions into \
+                 what the human is told and what the orchestrator is asked to do"
+            };
+            return Err(format!(
+                "blocks[{i}] ({id}): a{n} {k} block may not declare {offenders} — {why}. Pin \
+                 its cli:/model:/effort:/context: if you need to; put personas on the blocks \
+                 the orchestrator spawns.",
+                n = if kind == Role::Orchestrator { "n" } else { "" },
+                k = kind.as_str(),
+                offenders = offenders.join(" / "),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Capability closure: a read-only block may not declare `allow:` at all.
+fn check_allow_closure(i: usize, id: &str, rb: &RawBlock, kind: Role) -> Result<(), String> {
+    // CAPABILITY CLOSURE. `allow:` pre-approves tool patterns, and the
+    // read-only class is read-only by *denial of a fixed list* — Edit, Write,
+    // NotebookEdit, `git commit`, `git push` (CLAUDE_EDIT_DENY_TOOLS +
+    // CLAUDE_READONLY_DENY_GIT — #448 dropped `MultiEdit`, which matches no
+    // real Claude Code tool).
+    // Deny beats allow on both CLIs, so an allow pattern cannot re-grant anything on that list…
+    // but it does not have to. `allow: Bash(python *)` (or `cp`, `tee`,
+    // `sed -i`, …) hands a planner a shell that writes files and is named
+    // nowhere in the deny list, and under `auto_ops` nobody approves the call.
+    //
+    // Enumerating every write-capable program is not a thing anyone can do.
+    // So the rule is the other way round: **a read-only block may not declare
+    // `allow:` at all.** That keeps "a workflow file can never grant a
+    // capability" a statement about the code rather than about the deny list's
+    // completeness.
+    //
+    // The ban stays keyed to `is_read_only()` — the FULLY read-only class —
+    // and deliberately did not follow #462's deny flags onto reviewers. The
+    // argument above does not apply to a reviewer: it keeps its shell by
+    // design (running the tests is the job), so an `allow:` pattern names
+    // nothing it could not already run, and the editing tools #462 denies it
+    // cannot be re-granted anyway (deny beats allow on both CLIs). Banning
+    // `allow:` there would cost real expressiveness — a reviewer block that
+    // pre-approves `Bash(npm test *)` — and buy nothing. A worker holds the
+    // whole surface outright, same conclusion.
+    if !rb.allow.is_empty() && kind.is_read_only() {
+        return Err(format!(
+            "blocks[{i}] ({id}): a {} block cannot declare allow: — its class is read-only, \
+             and a pre-approved tool pattern could hand it a shell that writes files. \
+             Move the work to a worker block.",
+            kind.as_str()
+        ));
+    }
+    Ok(())
+}
+
+/// `role_hint:` — a persona/template marker that may only sit on the kind it
+/// is meaningless without. Trimmed and lowercased; `None` when absent.
+fn block_role_hint(i: usize, id: &str, rb: &RawBlock, kind: Role) -> Result<Option<String>, String> {
+    // role_hint (#250/#324) is a persona/template MARKER, never a
+    // capability class of its own — it selects which addendum/template
+    // fragment/badge a block gets, and `resolve_persona` keys off `kind`
+    // alone. `mcp::tool_defs` and, since #946 Q4 / #1091 slice H, the
+    // Claude CLI's `AskUserQuestion` deny (`claude_denies_interactive_
+    // question`) DO additionally key off this field for the single
+    // `liaison` hint — in BOTH directions: `tool_defs` GRANTS a plain
+    // `kind: reviewer` block `group_usage`/`ask_human` once it also
+    // carries `liaison` (mcp.rs, `tool_defs`'s liaison arm — a deliberate
+    // widening of that block's tool surface, not a deny), while the
+    // AskUserQuestion deny ADDS a restriction the same hint does not
+    // otherwise carry. What neither direction ever touches is
+    // `Role::containment()` — the edit/git denial tier `kind` alone
+    // sets — so a liaison's containment is exactly a plain reviewer's
+    // (`NoEdits`: the CLI's editing tools denied, the shell intact),
+    // whatever its hint grants or denies elsewhere. What IS enforced
+    // here is that a hint can only sit on the kind it is
+    // meaningless without: an unrecognized value, or one paired with the
+    // wrong kind, is a loud parse error — never coerced, never silently
+    // dropped, the same shape `kind_from_str` itself enforces.
+    let Some(raw) = rb.role_hint.as_deref() else {
+        return Ok(None);
+    };
+    let hint = raw.trim().to_ascii_lowercase();
+    let Some(required) = role_hint_requires(&hint) else {
+        return Err(format!(
+            "blocks[{i}] ({id}): unknown role_hint {raw:?} — must be one of {}",
+            role_hint_names()
+        ));
+    };
+    if required != kind {
+        return Err(format!(
+            "blocks[{i}] ({id}): role_hint {hint:?} requires kind: {} (this block is kind: {})",
+            required.as_str(),
+            kind.as_str()
+        ));
+    }
+    Ok(Some(hint))
+}
+
+/// `driver:` on a block — HOW loomux drives its agent. `caps` is the explicit
+/// `cli:`'s capability row, `None` when the cli is inherited.
+fn block_driver(
+    i: usize,
+    id: &str,
+    rb: &RawBlock,
+    cli: &str,
+    caps: Option<&crate::model::CliCaps>,
+) -> Result<Option<String>, String> {
+    // `driver:` (#2850) — HOW loomux drives this block's agent. A
+    // VALUE-SET pick like `effort:`/`context:` above — it authors no text
+    // and pre-approves no tool — so it is legal on an orchestrator block
+    // too. Two checks, in the same order and the same postures as the
+    // knobs: the value must be in loomux's closed vocabulary (rejected,
+    // never coerced), and — when the block names an explicit `cli:` —
+    // that CLI's [`CliCaps::structured_driver`] row must carry a driver.
+    // The CLI half is checked only for an explicit `cli:`, exactly like
+    // `cli_can_host` above: an inherited CLI is resolved at launch,
+    // unknowable here, and re-checked at spawn.
+    //
+    // The refusal names the block (this prefix), the CLI, and the CLIs
+    // that CAN take the key — derived from the table, the same remedy
+    // shape `validate_knob` gives the knobs.
+    let Some(raw) = rb.driver.as_deref() else {
+        return Ok(None);
+    };
+    let want = raw.trim().to_ascii_lowercase();
+    if want.is_empty() {
+        // A bare `driver:` line means the absent key — a PTY
+        // pane — rather than a refusal about nothing (the
+        // reasoning `RawBlock::remote` states for `Option`).
+        return Ok(None);
+    }
+    if !DRIVER_MODES.contains(&want.as_str()) {
+        return Err(format!(
+            "blocks[{i}] ({id}): unknown driver {raw:?} — must be one of {}",
+            driver_mode_names()
+        ));
+    }
+    // Only for an EXPLICIT `cli:` — `caps` is `None` for an
+    // inherited one, which is unknowable here. That case is
+    // not merely deferred, it is genuinely UNREACHABLE from
+    // this function, and `structured_harness_for` is asked
+    // again at spawn against the cli `cli_of` resolves (the
+    // second ask #2850 S3b lands).
+    if caps.is_some() {
+        if let Err(refusal) = structured_harness_for(Some(want.as_str()), cli) {
+            return Err(format!("blocks[{i}] ({id}): {refusal}"));
+        }
+    }
+    Ok(Some(want))
+}
+
+/// `remote:` — the label saying this block's agent runs on another machine.
+fn block_remote(i: usize, id: &str, rb: &RawBlock, kind: Role, cli: &str) -> Result<Option<String>, String> {
+    // `remote:` (#1457) — the label that says this block's agent CLI runs
+    // on another machine over SSH. THREE refusals, all parse errors, all
+    // fail-closed on purpose: this is the one block key whose eventual
+    // effect is "run code somewhere else", so every question it raises is
+    // answered in the file or the file does not load.
+    //
+    // 1. THE LABEL ITSELF is checked with `pathseg::check_segment` — the
+    //    #925 shared validator `GroupId` delegates to — rather than a
+    //    fourth private "is this a safe id" predicate. Refused, never
+    //    rewritten: `sanitize_id` would turn `../buildbox` into
+    //    `buildbox`, and two strings naming one binding is exactly the
+    //    hazard that consolidation exists to prevent.
+    //
+    // 2. NOT ON AN ORCHESTRATOR OR A MANAGER BLOCK. Both are loomux-owned
+    //    (the same pair the persona check above refuses `prompt:`/
+    //    `profile:`/`allow:` on) and both are load-bearing LOCALLY: the
+    //    orchestrator is the trust root that holds orchestration state,
+    //    the `gh` operations and the merge gate, and the manager is the
+    //    human's own interface pane — the thing they type into. Moving
+    //    either onto a machine the repo file named is not a feature with a
+    //    missing implementation; it is the feature this design refuses.
+    //
+    // 3. `cli: claude` MUST BE SPELLED OUT. claude is the only CLI loomux
+    //    drives remotely, and the gate is that fact rather than a
+    //    capability claim. Session identity is what made it TRUE
+    //    originally: loomux pre-mints the id and claude accepts it
+    //    (`--session-id`/`--resume`), while copilot/opencode/gemini
+    //    identify a session by scanning a LOCAL store, which a remote
+    //    CLI's store is not. pi (#2126) accepts a pre-minted id too, so
+    //    that argument no longer separates claude from every other CLI —
+    //    what still does is that no remote pi block has ever been
+    //    exercised, and a gate is only as good as the reason it states.
+    //    An `cli:` omitted inherits the group
+    //    default — picked in the launcher, unknowable here — so a block
+    //    that leaves it blank is refused rather than parsed into a promise
+    //    the spawn would have to break. The asymmetry decides it: relaxing
+    //    this later (accepting an inherited claude) is cheap, tightening it
+    //    later would be a breaking change to every workflow file already
+    //    written.
+    let Some(raw) = rb.remote.as_deref() else {
+        return Ok(None);
+    };
+    if let Err(e) = crate::pathseg::check_segment(raw) {
+        return Err(format!(
+            "blocks[{i}] ({id}): remote {raw:?} is not a usable label — {e}. A \
+             remote label is an abstract name the OPERATOR binds to a host outside \
+             this repo, never an address."
+        ));
+    }
+    if kind == Role::Orchestrator || kind == Role::Manager {
+        return Err(format!(
+            "blocks[{i}] ({id}): a{n} {k} block may not declare remote: — it is \
+             loomux-owned and runs on the human's own machine ({why}). Put remote: \
+             on the blocks the orchestrator spawns.",
+            n = if kind == Role::Orchestrator { "n" } else { "" },
+            k = kind.as_str(),
+            why = if kind == Role::Orchestrator {
+                "the orchestrator is the trust root, and orchestration state, the \
+                 gh operations and the merge gate stay local"
+            } else {
+                "a manager pane is the human's own interface — it is where they type"
+            },
+        ));
+    }
+    if cli != "claude" {
+        return Err(format!(
+            "blocks[{i}] ({id}): remote: requires cli: claude{spelled} — a remote \
+             agent's session has to be identified by an id loomux minted before the \
+             spawn, and claude is the only CLI loomux drives remotely today. pi \
+             accepts a pre-minted id too (--session-id), but nothing has exercised \
+             a remote pi block, so the gate stays claude-only rather than widening \
+             on an unvalidated capability. Every other CLI recognizes a session by \
+             scanning a local store, which a remote CLI's store is not.",
+            spelled = if cli.is_empty() {
+                ", spelled out on the block — an omitted cli: inherits the group \
+                 default, which is picked at launch and cannot be checked here"
+            } else {
+                ""
+            },
+        ));
+    }
+    Ok(Some(raw.to_string()))
+}
+
+/// `cache_ttl_minutes:` — bounded above, never clamped.
+fn check_cache_ttl(i: usize, id: &str, rb: &RawBlock) -> Result<(), String> {
+    // `cache_ttl_minutes:` (#3407) — a bound, refused rather than clamped:
+    // `0` is a legal answer ("unknown"), and no provider documents a cache
+    // longer than a day, so a value above that is a typo, not a wish.
+    if let Some(ttl) = rb.cache_ttl_minutes {
+        if ttl > crate::cacheage::CACHE_TTL_MINUTES_MAX {
+            return Err(format!(
+                "blocks[{i}] ({id}): cache_ttl_minutes {ttl} is above the {} ceiling; no provider documents a prompt cache longer than a day (use 0 for unknown)",
+                crate::cacheage::CACHE_TTL_MINUTES_MAX
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Roster-level rules over the blocks that survived validation.
+fn check_roster(blocks: &[Block], errs: &mut Vec<String>) {
+    // Reported only when nothing ELSE was: a file whose every block was
+    // refused already says why, and "no blocks" on top would be noise.
     if blocks.is_empty() && errs.is_empty() {
         errs.push("no blocks declared — a workflow needs at least one block".into());
     }
@@ -1242,11 +1345,18 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
             managers.join(", "),
         ));
     }
+}
 
+// ── edges ───────────────────────────────────────────────────────────────────
+
+/// `edges:` — every `from` and `to` must name a block that survived
+/// validation. An unknown `from` is reported alone; otherwise each unknown
+/// `to` is. An edge with any unknown end is dropped.
+fn parse_edges(raw: Vec<RawEdge>, blocks: &[Block], errs: &mut Vec<String>) -> Vec<Edge> {
     let known: BTreeSet<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
 
     let mut edges: Vec<Edge> = Vec::new();
-    for (i, re) in raw.edges.into_iter().enumerate() {
+    for (i, re) in raw.into_iter().enumerate() {
         let from = re.from.trim().to_string();
         let to = re.to.into_vec();
         if !known.contains(from.as_str()) {
@@ -1265,240 +1375,328 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
         }
         edges.push(Edge { from, to: to.iter().map(|t| t.trim().to_string()).collect() });
     }
+    edges
+}
 
+// ── gates ───────────────────────────────────────────────────────────────────
+
+/// `gates:` — read in name order (the map's), each by [`parse_gate`]. A gate
+/// with any refusal is dropped.
+fn parse_gates(raw: BTreeMap<String, RawGate>, blocks: &[Block], errs: &mut Vec<String>) -> BTreeMap<String, Gate> {
     let mut gates: BTreeMap<String, Gate> = BTreeMap::new();
-    for (name, rg) in raw.gates {
-        let require = match (rg.require.as_deref().map(str::trim), rg.threshold) {
-            // `threshold: N` alone implies a threshold gate; spelling `require:
-            // threshold` as well is allowed but redundant.
-            (Some("threshold") | None, Some(n)) if n > 0 => GateRequire::Threshold(n),
-            (Some("threshold") | None, Some(_)) => {
-                errs.push(format!("gates.{name}: threshold must be a positive number"));
-                continue;
-            }
-            (Some("threshold"), None) => {
-                errs.push(format!(
-                    "gates.{name}: require: threshold needs a threshold: N to go with it"
-                ));
-                continue;
-            }
-            (Some("all-pass") | Some("all") | None, None) => GateRequire::AllPass,
-            (Some("all-pass") | Some("all"), Some(_)) => {
-                errs.push(format!(
-                    "gates.{name}: require: all-pass takes no threshold — drop it, or use require: threshold"
-                ));
-                continue;
-            }
-            (Some(other), _) => {
-                errs.push(format!(
-                    "gates.{name}: unknown require {other:?} — use 'all-pass', or 'threshold' with threshold: N"
-                ));
-                continue;
-            }
-        };
-        let mut bad = false;
-        // A gate's reviewer list is a set, not a sequence: `evaluate_merge_gate`
-        // (below) walks it once per verdict lookup, so a name listed twice would
-        // let that reviewer's single PASS count twice toward a `threshold: N`
-        // gate — a gate-integrity gap, not a cosmetic one — and `gate_need`
-        // would inflate the derived minimum the same way block-id duplicates
-        // would. Rejected here, consistent with how a duplicate block id is
-        // handled above, rather than silently deduped: a repo author who wrote
-        // the same name twice most likely meant a different one, and silently
-        // dropping the duplicate would hide that typo instead of surfacing it.
-        let mut seen_reviewers: BTreeSet<String> = BTreeSet::new();
-        for r in &rg.reviewers {
-            let rname = r.trim();
-            if !seen_reviewers.insert(rname.to_string()) {
-                errs.push(format!(
-                    "gates.{name}: reviewer {rname:?} is named more than once — name each reviewer once"
-                ));
-                bad = true;
-                continue;
-            }
-            if let Some(e) = gate_reviewer_error(&name, "reviewer", rname, &blocks) {
-                errs.push(e);
-                bad = true;
-            }
+    for (name, rg) in raw {
+        if let Some(gate) = parse_gate(&name, &rg, blocks, errs) {
+            gates.insert(name, gate);
         }
-        if rg.reviewers.is_empty() {
-            errs.push(format!("gates.{name}: no reviewers — a gate with no reviewers gates nothing"));
-            bad = true;
+    }
+    gates
+}
+
+/// One gate. A bad `require:` ends the gate at once, before its reviewers are
+/// read; every other refusal accumulates, in the order the steps below run,
+/// and `bad` records that one happened.
+fn parse_gate(name: &str, rg: &RawGate, blocks: &[Block], errs: &mut Vec<String>) -> Option<Gate> {
+    let require = match gate_require(name, rg) {
+        Ok(require) => require,
+        Err(e) => {
+            errs.push(e);
+            return None;
         }
-        if let GateRequire::Threshold(n) = require {
-            if n as usize > rg.reviewers.len() {
-                errs.push(format!(
-                    "gates.{name}: threshold {n} exceeds the {} reviewer(s) named — it could never pass",
-                    rg.reviewers.len()
-                ));
-                bad = true;
-            }
-        }
-        // `also:` names extra gate conditions (`ci-green`, …). Sanitized HERE,
-        // at the parse boundary, even though nothing consumes it yet: gate
-        // enforcement lands in sub-PR 3, in the `gh` shim, and a shim is a shell
-        // script. Whatever `parse_workflow` returns will be read there as already
-        // clean — that is the contract every other field in this file already
-        // honors, and the one moment to establish it is before a consumer exists
-        // to assume it. Rejected, not rewritten: an author must be able to
-        // reference the condition they actually wrote.
-        let mut also: Vec<String> = Vec::new();
-        for c in &rg.also {
-            match sanitize_condition(c) {
-                Some(clean) if clean == c.trim() => also.push(clean),
-                _ => {
-                    errs.push(format!(
-                        "gates.{name}: condition {c:?} is not a usable name (letters, digits, '-', '_', '.')"
-                    ));
-                    bad = true;
-                }
-            }
-        }
-        // #1174's small-batch clause. `0` is a parse error, not "unlimited":
-        // the same rule `threshold` follows, and for the same reason — a bound
-        // a repo wrote down must never be read as the absence of one. A
-        // negative or fractional value never reaches here at all; serde refuses
-        // the whole file at `Option<u32>`, which is exactly what `threshold: -1`
-        // already does.
-        if rg.max_diff_lines == Some(0) {
-            errs.push(format!("gates.{name}: max_diff_lines must be a positive number — omit the key to declare no limit"));
-            bad = true;
-        }
-        // #1176's path-based routing. Every refusal below is LOUD — a rule
-        // loomux could not read is never a rule it quietly drops, because the
-        // whole point of a routing rule is to ADD a required reviewer, and the
-        // failure mode of silently dropping one is a merge that skipped a lane
-        // the repo asked for.
-        let mut routing: Vec<RoutingRule> = Vec::new();
-        if !rg.routing.is_empty() {
-            // `threshold: N` counts votes over a FIXED list; routing makes the
-            // list a function of the diff. Together they have no honest meaning:
-            // adding a lane would also add a candidate that could supply one of
-            // the N passes, so declaring a routing rule could make the gate
-            // EASIER to satisfy — the one direction a gate must never move. The
-            // refusal says what to do instead (#782) rather than picking a
-            // reading and hoping the author meant it.
-            if matches!(require, GateRequire::Threshold(_)) {
-                errs.push(format!(
-                    "gates.{name}: routing: and require: threshold cannot both be declared — a \
-                     threshold counts passes over a fixed reviewer list, and a routing rule makes \
-                     that list depend on the diff, so together they would let an extra lane SUPPLY \
-                     one of the required passes instead of adding one. Use require: all-pass with \
-                     routing:, and let each rule name the lane its paths need."
-                ));
-                bad = true;
-            }
-            if rg.routing.len() > ROUTING_RULES_MAX {
-                errs.push(format!(
-                    "gates.{name}: {} routing rules — at most {ROUTING_RULES_MAX}. The shim \
-                     evaluates every rule against every changed file on every merge; past this \
-                     many lanes the block has stopped routing and started listing.",
-                    rg.routing.len()
-                ));
-                bad = true;
-            }
-        }
-        for (i, rr) in rg.routing.iter().enumerate() {
-            // 1-based, matching the position an author counts to in their own
-            // file — and the number every refusal downstream cites.
-            let idx = i + 1;
-            let ctx = format!("routing rule {idx} reviewer");
-            if rr.paths.is_empty() {
-                errs.push(format!(
-                    "gates.{name}: routing rule {idx} declares no paths — a rule that matches \
-                     nothing can never require anybody. Omit the rule, or give it a path glob."
-                ));
-                bad = true;
-            }
-            if rr.paths.len() > ROUTING_PATHS_MAX {
-                errs.push(format!(
-                    "gates.{name}: routing rule {idx} declares {} paths — at most {ROUTING_PATHS_MAX}.",
-                    rr.paths.len()
-                ));
-                bad = true;
-            }
-            if rr.reviewers.is_empty() {
-                errs.push(format!(
-                    "gates.{name}: routing rule {idx} names no reviewers — a rule that requires \
-                     nobody is not a rule."
-                ));
-                bad = true;
-            }
-            let mut paths: Vec<String> = Vec::new();
-            let mut seen_paths: BTreeSet<String> = BTreeSet::new();
-            for p in &rr.paths {
-                // Rejected, never rewritten — the #225 contract. An author must
-                // be able to reference the glob they actually wrote, and a glob
-                // loomux silently narrowed is a lane loomux silently dropped.
-                match sanitize_glob(p) {
-                    Some(clean) if clean == p.trim() => {
-                        if !seen_paths.insert(clean.clone()) {
-                            errs.push(format!(
-                                "gates.{name}: routing rule {idx} lists the path {p:?} more than \
-                                 once — name each glob once."
-                            ));
-                            bad = true;
-                            continue;
-                        }
-                        paths.push(clean);
-                    }
-                    _ => {
-                        errs.push(format!(
-                            "gates.{name}: routing rule {idx}: {p:?} is not a usable path glob. \
-                             Use letters, digits, '.', '_', '-', '/' and '*' — and write a file \
-                             glob, not a directory: 'src/**', never 'src/', '/src/**' or a '..' \
-                             segment (GitHub reports changed paths repo-relative, so those match \
-                             nothing at all)."
-                        ));
-                        bad = true;
-                    }
-                }
-            }
-            let mut reviewers: Vec<BlockId> = Vec::new();
-            let mut seen_routed: BTreeSet<String> = BTreeSet::new();
-            for r in &rr.reviewers {
-                let rname = r.trim();
-                // Same set-not-sequence rule the static list follows, and for a
-                // milder version of the same reason: a name written twice in one
-                // rule is a typo for a second lane, not an emphasis.
-                if !seen_routed.insert(rname.to_string()) {
-                    errs.push(format!(
-                        "gates.{name}: routing rule {idx} names reviewer {rname:?} more than once"
-                    ));
-                    bad = true;
-                    continue;
-                }
-                if let Some(e) = gate_reviewer_error(&name, &ctx, rname, &blocks) {
-                    errs.push(e);
-                    bad = true;
-                    continue;
-                }
-                reviewers.push(rname.to_string());
-            }
-            routing.push(RoutingRule { paths, reviewers });
-        }
-        if bad {
+    };
+    let mut bad = false;
+    check_gate_reviewers(name, rg, require, blocks, errs, &mut bad);
+    let also = gate_also(name, rg, errs, &mut bad);
+    // #1174's small-batch clause. `0` is a parse error, not "unlimited":
+    // the same rule `threshold` follows, and for the same reason — a bound
+    // a repo wrote down must never be read as the absence of one. A
+    // negative or fractional value never reaches here at all; serde refuses
+    // the whole file at `Option<u32>`, which is exactly what `threshold: -1`
+    // already does.
+    if rg.max_diff_lines == Some(0) {
+        errs.push(format!("gates.{name}: max_diff_lines must be a positive number — omit the key to declare no limit"));
+        bad = true;
+    }
+    let routing = gate_routing(name, rg, require, blocks, errs, &mut bad);
+    if bad {
+        return None;
+    }
+    Some(Gate {
+        require,
+        reviewers: rg.reviewers.iter().map(|r| r.trim().to_string()).collect(),
+        also,
+        max_diff_lines: rg.max_diff_lines,
+        routing,
+    })
+}
+
+/// `require:` and `threshold:` read together.
+fn gate_require(name: &str, rg: &RawGate) -> Result<GateRequire, String> {
+    match (rg.require.as_deref().map(str::trim), rg.threshold) {
+        // `threshold: N` alone implies a threshold gate; spelling `require:
+        // threshold` as well is allowed but redundant.
+        (Some("threshold") | None, Some(n)) if n > 0 => Ok(GateRequire::Threshold(n)),
+        (Some("threshold") | None, Some(_)) => Err(format!("gates.{name}: threshold must be a positive number")),
+        (Some("threshold"), None) => Err(format!(
+            "gates.{name}: require: threshold needs a threshold: N to go with it"
+        )),
+        (Some("all-pass") | Some("all") | None, None) => Ok(GateRequire::AllPass),
+        (Some("all-pass") | Some("all"), Some(_)) => Err(format!(
+            "gates.{name}: require: all-pass takes no threshold — drop it, or use require: threshold"
+        )),
+        (Some(other), _) => Err(format!(
+            "gates.{name}: unknown require {other:?} — use 'all-pass', or 'threshold' with threshold: N"
+        )),
+    }
+}
+
+/// The static `reviewers:` list: a set of reviewer blocks, non-empty, and at
+/// least as long as a threshold asks for.
+fn check_gate_reviewers(
+    name: &str,
+    rg: &RawGate,
+    require: GateRequire,
+    blocks: &[Block],
+    errs: &mut Vec<String>,
+    bad: &mut bool,
+) {
+    // A gate's reviewer list is a set, not a sequence: `evaluate_merge_gate`
+    // (in `gate.rs`) walks it once per verdict lookup, so a name listed twice would
+    // let that reviewer's single PASS count twice toward a `threshold: N`
+    // gate — a gate-integrity gap, not a cosmetic one — and `gate_need`
+    // would inflate the derived minimum the same way block-id duplicates
+    // would. Rejected here, consistent with how a duplicate block id is
+    // handled above, rather than silently deduped: a repo author who wrote
+    // the same name twice most likely meant a different one, and silently
+    // dropping the duplicate would hide that typo instead of surfacing it.
+    let mut seen_reviewers: BTreeSet<String> = BTreeSet::new();
+    for r in &rg.reviewers {
+        let rname = r.trim();
+        if !seen_reviewers.insert(rname.to_string()) {
+            errs.push(format!(
+                "gates.{name}: reviewer {rname:?} is named more than once — name each reviewer once"
+            ));
+            *bad = true;
             continue;
         }
-        gates.insert(
-            name,
-            Gate {
-                require,
-                reviewers: rg.reviewers.iter().map(|r| r.trim().to_string()).collect(),
-                also,
-                max_diff_lines: rg.max_diff_lines,
-                routing,
-            },
-        );
+        if let Some(e) = gate_reviewer_error(name, "reviewer", rname, blocks) {
+            errs.push(e);
+            *bad = true;
+        }
     }
+    if rg.reviewers.is_empty() {
+        errs.push(format!("gates.{name}: no reviewers — a gate with no reviewers gates nothing"));
+        *bad = true;
+    }
+    if let GateRequire::Threshold(n) = require {
+        if n as usize > rg.reviewers.len() {
+            errs.push(format!(
+                "gates.{name}: threshold {n} exceeds the {} reviewer(s) named — it could never pass",
+                rg.reviewers.len()
+            ));
+            *bad = true;
+        }
+    }
+}
 
-    // Intake source + label vocabulary (#382 P1). `None` (no `intake:` block
-    // at all) resolves straight to the built-in default; a declared block
-    // resolves field by field, each label falling back to its built-in value
-    // when omitted (`sanitize_intake_label`) so a repo can override one label
-    // without repeating the rest.
+/// `also:` — extra gate conditions, each refused unless already clean.
+fn gate_also(name: &str, rg: &RawGate, errs: &mut Vec<String>, bad: &mut bool) -> Vec<String> {
+    // `also:` names extra gate conditions (`ci-green`, …). Sanitized HERE,
+    // at the parse boundary, even though nothing consumes it yet: gate
+    // enforcement lands in sub-PR 3, in the `gh` shim, and a shim is a shell
+    // script. Whatever `parse_workflow` returns will be read there as already
+    // clean — that is the contract every other field in this file already
+    // honors, and the one moment to establish it is before a consumer exists
+    // to assume it. Rejected, not rewritten: an author must be able to
+    // reference the condition they actually wrote.
+    let mut also: Vec<String> = Vec::new();
+    for c in &rg.also {
+        match sanitize_condition(c) {
+            Some(clean) if clean == c.trim() => also.push(clean),
+            _ => {
+                errs.push(format!(
+                    "gates.{name}: condition {c:?} is not a usable name (letters, digits, '-', '_', '.')"
+                ));
+                *bad = true;
+            }
+        }
+    }
+    also
+}
+
+/// `routing:` (#1176) — the gate-level refusals first, then each rule.
+fn gate_routing(
+    name: &str,
+    rg: &RawGate,
+    require: GateRequire,
+    blocks: &[Block],
+    errs: &mut Vec<String>,
+    bad: &mut bool,
+) -> Vec<RoutingRule> {
+    // #1176's path-based routing. Every refusal below is LOUD — a rule
+    // loomux could not read is never a rule it quietly drops, because the
+    // whole point of a routing rule is to ADD a required reviewer, and the
+    // failure mode of silently dropping one is a merge that skipped a lane
+    // the repo asked for.
+    let mut routing: Vec<RoutingRule> = Vec::new();
+    if !rg.routing.is_empty() {
+        // `threshold: N` counts votes over a FIXED list; routing makes the
+        // list a function of the diff. Together they have no honest meaning:
+        // adding a lane would also add a candidate that could supply one of
+        // the N passes, so declaring a routing rule could make the gate
+        // EASIER to satisfy — the one direction a gate must never move. The
+        // refusal says what to do instead (#782) rather than picking a
+        // reading and hoping the author meant it.
+        if matches!(require, GateRequire::Threshold(_)) {
+            errs.push(format!(
+                "gates.{name}: routing: and require: threshold cannot both be declared — a \
+                 threshold counts passes over a fixed reviewer list, and a routing rule makes \
+                 that list depend on the diff, so together they would let an extra lane SUPPLY \
+                 one of the required passes instead of adding one. Use require: all-pass with \
+                 routing:, and let each rule name the lane its paths need."
+            ));
+            *bad = true;
+        }
+        if rg.routing.len() > ROUTING_RULES_MAX {
+            errs.push(format!(
+                "gates.{name}: {} routing rules — at most {ROUTING_RULES_MAX}. The shim \
+                 evaluates every rule against every changed file on every merge; past this \
+                 many lanes the block has stopped routing and started listing.",
+                rg.routing.len()
+            ));
+            *bad = true;
+        }
+    }
+    for (i, rr) in rg.routing.iter().enumerate() {
+        // 1-based, matching the position an author counts to in their own
+        // file — and the number every refusal downstream cites.
+        let idx = i + 1;
+        routing.push(routing_rule(name, idx, rr, blocks, errs, bad));
+    }
+    routing
+}
+
+/// One routing rule, `idx` 1-based: its shape, then its paths, then its
+/// reviewers.
+fn routing_rule(
+    name: &str,
+    idx: usize,
+    rr: &RawRoutingRule,
+    blocks: &[Block],
+    errs: &mut Vec<String>,
+    bad: &mut bool,
+) -> RoutingRule {
+    if rr.paths.is_empty() {
+        errs.push(format!(
+            "gates.{name}: routing rule {idx} declares no paths — a rule that matches \
+             nothing can never require anybody. Omit the rule, or give it a path glob."
+        ));
+        *bad = true;
+    }
+    if rr.paths.len() > ROUTING_PATHS_MAX {
+        errs.push(format!(
+            "gates.{name}: routing rule {idx} declares {} paths — at most {ROUTING_PATHS_MAX}.",
+            rr.paths.len()
+        ));
+        *bad = true;
+    }
+    if rr.reviewers.is_empty() {
+        errs.push(format!(
+            "gates.{name}: routing rule {idx} names no reviewers — a rule that requires \
+             nobody is not a rule."
+        ));
+        *bad = true;
+    }
+    let paths = routing_rule_paths(name, idx, rr, errs, bad);
+    let reviewers = routing_rule_reviewers(name, idx, rr, blocks, errs, bad);
+    RoutingRule { paths, reviewers }
+}
+
+/// A routing rule's `paths:` — each glob refused unless already clean, and
+/// each named once.
+fn routing_rule_paths(
+    name: &str,
+    idx: usize,
+    rr: &RawRoutingRule,
+    errs: &mut Vec<String>,
+    bad: &mut bool,
+) -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+    let mut seen_paths: BTreeSet<String> = BTreeSet::new();
+    for p in &rr.paths {
+        // Rejected, never rewritten — the #225 contract. An author must
+        // be able to reference the glob they actually wrote, and a glob
+        // loomux silently narrowed is a lane loomux silently dropped.
+        match sanitize_glob(p) {
+            Some(clean) if clean == p.trim() => {
+                if !seen_paths.insert(clean.clone()) {
+                    errs.push(format!(
+                        "gates.{name}: routing rule {idx} lists the path {p:?} more than \
+                         once — name each glob once."
+                    ));
+                    *bad = true;
+                    continue;
+                }
+                paths.push(clean);
+            }
+            _ => {
+                errs.push(format!(
+                    "gates.{name}: routing rule {idx}: {p:?} is not a usable path glob. \
+                     Use letters, digits, '.', '_', '-', '/' and '*' — and write a file \
+                     glob, not a directory: 'src/**', never 'src/', '/src/**' or a '..' \
+                     segment (GitHub reports changed paths repo-relative, so those match \
+                     nothing at all)."
+                ));
+                *bad = true;
+            }
+        }
+    }
+    paths
+}
+
+/// A routing rule's `reviewers:` — the static list's rules, per rule.
+fn routing_rule_reviewers(
+    name: &str,
+    idx: usize,
+    rr: &RawRoutingRule,
+    blocks: &[Block],
+    errs: &mut Vec<String>,
+    bad: &mut bool,
+) -> Vec<BlockId> {
+    let ctx = format!("routing rule {idx} reviewer");
+    let mut reviewers: Vec<BlockId> = Vec::new();
+    let mut seen_routed: BTreeSet<String> = BTreeSet::new();
+    for r in &rr.reviewers {
+        let rname = r.trim();
+        // Same set-not-sequence rule the static list follows, and for a
+        // milder version of the same reason: a name written twice in one
+        // rule is a typo for a second lane, not an emphasis.
+        if !seen_routed.insert(rname.to_string()) {
+            errs.push(format!(
+                "gates.{name}: routing rule {idx} names reviewer {rname:?} more than once"
+            ));
+            *bad = true;
+            continue;
+        }
+        if let Some(e) = gate_reviewer_error(name, &ctx, rname, blocks) {
+            errs.push(e);
+            *bad = true;
+            continue;
+        }
+        reviewers.push(rname.to_string());
+    }
+    reviewers
+}
+
+// ── the policy sections ─────────────────────────────────────────────────────
+
+/// Intake source + label vocabulary (#382 P1). `None` (no `intake:` block
+/// at all) resolves straight to the built-in default; a declared block
+/// resolves field by field, each label falling back to its built-in value
+/// when omitted (`sanitize_intake_label`) so a repo can override one label
+/// without repeating the rest.
+fn parse_intake(raw: Option<&RawIntake>, errs: &mut Vec<String>) -> IntakeProfile {
     let default_intake = builtin_intake_profile();
-    let intake = match &raw.intake {
+    match raw {
         None => default_intake,
         Some(ri) => {
             let source = match intake_source_from_str(&ri.source) {
@@ -1514,42 +1712,44 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
             };
             IntakeProfile {
                 source,
-                ready: sanitize_intake_label("ready", &ri.labels.ready, &default_intake.ready, &mut errs),
+                ready: sanitize_intake_label("ready", &ri.labels.ready, &default_intake.ready, errs),
                 investigate: sanitize_intake_label(
                     "investigate",
                     &ri.labels.investigate,
                     &default_intake.investigate,
-                    &mut errs,
+                    errs,
                 ),
-                owned: sanitize_intake_label("owned", &ri.labels.owned, &default_intake.owned, &mut errs),
+                owned: sanitize_intake_label("owned", &ri.labels.owned, &default_intake.owned, errs),
                 prototype: sanitize_intake_label(
                     "prototype",
                     &ri.labels.prototype,
                     &default_intake.prototype,
-                    &mut errs,
+                    errs,
                 ),
-                hold: sanitize_intake_label("hold", &ri.labels.hold, &default_intake.hold, &mut errs),
+                hold: sanitize_intake_label("hold", &ri.labels.hold, &default_intake.hold, errs),
             }
         }
-    };
+    }
+}
 
-    // Merge-queue policy (#581 §11.2). `None` (no `merge_queue:` block at all)
-    // resolves to the default, which is **disabled** — an absent block means
-    // the feature is off and behavior is byte-for-byte unchanged.
-    //
-    // Two different postures on a bad value, both taken from the note:
-    //
-    // - `max_batch: 0` is a hard **error**. §11.2 says a malformed block never
-    //   degrades to defaults, "because a queue running on silently-substituted
-    //   policy is a queue nobody can reason about"; and it matches how the
-    //   sibling `gates:` block treats a number that could never work
-    //   (`threshold: 0`, `threshold` above the reviewer count).
-    // - `checks_timeout_minutes` is **clamped**, because the note says clamped
-    //   ("default 60, clamped like the notify TTLs") — and it is clamped by the
-    //   notify TTL clamp *itself*, not by a second copy of those bounds. It is
-    //   the same quantity: a bounded wait on a PR's checks. `None` (omitted)
-    //   through the same call is where the 60-minute default comes from.
-    let merge_queue = match &raw.merge_queue {
+/// Merge-queue policy (#581 §11.2). `None` (no `merge_queue:` block at all)
+/// resolves to the default, which is **disabled** — an absent block means
+/// the feature is off and behavior is byte-for-byte unchanged.
+///
+/// Two different postures on a bad value, both taken from the note:
+///
+/// - `max_batch: 0` is a hard **error**. §11.2 says a malformed block never
+///   degrades to defaults, "because a queue running on silently-substituted
+///   policy is a queue nobody can reason about"; and it matches how the
+///   sibling `gates:` block treats a number that could never work
+///   (`threshold: 0`, `threshold` above the reviewer count).
+/// - `checks_timeout_minutes` is **clamped**, because the note says clamped
+///   ("default 60, clamped like the notify TTLs") — and it is clamped by the
+///   notify TTL clamp *itself*, not by a second copy of those bounds. It is
+///   the same quantity: a bounded wait on a PR's checks. `None` (omitted)
+///   through the same call is where the 60-minute default comes from.
+fn parse_merge_queue(raw: Option<&RawMergeQueue>, errs: &mut Vec<String>) -> MergeQueuePolicy {
+    match raw {
         None => MergeQueuePolicy::default(),
         Some(rq) => {
             let max_batch = match rq.max_batch {
@@ -1569,51 +1769,54 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 checks_timeout_minutes: clamp_expires_minutes(rq.checks_timeout_minutes),
             }
         }
-    };
+    }
+}
 
-    // Review-driver policy (#1778 §5.3). `None` (no `driver:` block at all)
-    // resolves to the default, which is **disabled** - an absent block means
-    // the feature is off and behavior is byte-for-byte unchanged.
-    //
-    // Two different postures on a bad value, both taken from the note:
-    //
-    // - the three INVARIANT-9 counters are hard **errors** outside their
-    //   closed ranges, the posture `merge_queue.max_batch: 0` takes - a
-    //   malformed block never degrades to defaults, and §2.3's reason is
-    //   sharper than §11.2's: a repo file may run a *tighter* loop than the
-    //   orchestrator template promises, never a looser one, because the driver
-    //   acts on the orchestrator's authority and a config file that raised the
-    //   bound would be loosening the orchestrator's own INVARIANT 9.
-    // - the three backstops are **clamped**, because the note says "clamped
-    //   like the notify TTLs" - and by the notify TTL clamp *itself*, not by a
-    //   second copy of those bounds. Same quantity as
-    //   `merge_queue.checks_timeout_minutes`: a bounded wait on a fallible
-    //   signal. `drive_timeout_minutes` left that family in #2110: its default
-    //   is twelve hours, above the family's ceiling, so it carries its own
-    //   range and its own clamp (`clamp_drive_timeout_minutes`).
-    /// One INVARIANT-9 counter (#1778 §2.3): refused outside its closed range
-    /// the way `merge_queue.max_batch: 0` is refused, with the design's own
-    /// default standing in when the value was written and refused - an error
-    /// still has to produce a value, and the default is the one the author
-    /// is about to be told the file failed to declare.
-    fn driver_counter(
-        field: &str,
-        raw: Option<u32>,
-        (min, max): (u32, u32),
-        default: u32,
-        why: &str,
-        errs: &mut Vec<String>,
-    ) -> u32 {
-        match raw {
-            None => default,
-            Some(v) if (min..=max).contains(&v) => v,
-            Some(v) => {
-                errs.push(format!("{field}: must be {min}..={max} - {why} (got {v})"));
-                default
-            }
+/// One INVARIANT-9 counter (#1778 §2.3): refused outside its closed range
+/// the way `merge_queue.max_batch: 0` is refused, with the design's own
+/// default standing in when the value was written and refused - an error
+/// still has to produce a value, and the default is the one the author
+/// is about to be told the file failed to declare.
+fn driver_counter(
+    field: &str,
+    raw: Option<u32>,
+    (min, max): (u32, u32),
+    default: u32,
+    why: &str,
+    errs: &mut Vec<String>,
+) -> u32 {
+    match raw {
+        None => default,
+        Some(v) if (min..=max).contains(&v) => v,
+        Some(v) => {
+            errs.push(format!("{field}: must be {min}..={max} - {why} (got {v})"));
+            default
         }
     }
-    let driver = match &raw.driver {
+}
+
+/// Review-driver policy (#1778 §5.3). `None` (no `driver:` block at all)
+/// resolves to the default, which is **disabled** - an absent block means
+/// the feature is off and behavior is byte-for-byte unchanged.
+///
+/// Two different postures on a bad value, both taken from the note:
+///
+/// - the three INVARIANT-9 counters are hard **errors** outside their
+///   closed ranges, the posture `merge_queue.max_batch: 0` takes - a
+///   malformed block never degrades to defaults, and §2.3's reason is
+///   sharper than §11.2's: a repo file may run a *tighter* loop than the
+///   orchestrator template promises, never a looser one, because the driver
+///   acts on the orchestrator's authority and a config file that raised the
+///   bound would be loosening the orchestrator's own INVARIANT 9.
+/// - the three backstops are **clamped**, because the note says "clamped
+///   like the notify TTLs" - and by the notify TTL clamp *itself*, not by a
+///   second copy of those bounds. Same quantity as
+///   `merge_queue.checks_timeout_minutes`: a bounded wait on a fallible
+///   signal. `drive_timeout_minutes` left that family in #2110: its default
+///   is twelve hours, above the family's ceiling, so it carries its own
+///   range and its own clamp (`clamp_drive_timeout_minutes`).
+fn parse_driver_policy(raw: Option<&RawDriver>, errs: &mut Vec<String>) -> DriverPolicy {
+    match raw {
         None => DriverPolicy::default(),
         Some(rd) => DriverPolicy {
             enabled: rd.enabled,
@@ -1624,7 +1827,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 DRIVER_MAX_REVIEW_ROUNDS_MAX,
                 "the drive may not run a looser review loop than the orchestrator template's \
                  INVARIANT 9 promises",
-                &mut errs,
+                errs,
             ),
             max_ci_attempts: driver_counter(
                 "driver.max_ci_attempts",
@@ -1633,7 +1836,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 DRIVER_MAX_CI_ATTEMPTS_MAX,
                 "the drive may not spend more CI attempts than INVARIANT 9 grants the \
                  orchestrator itself",
-                &mut errs,
+                errs,
             ),
             max_rebase_attempts: driver_counter(
                 "driver.max_rebase_attempts",
@@ -1642,7 +1845,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 DRIVER_MAX_REBASE_ATTEMPTS_MAX,
                 "INVARIANT 9 grants one rebase attempt, and a repo may tighten that to none - \
                  never loosen it to two",
-                &mut errs,
+                errs,
             ),
             lane_timeout_minutes: clamp_expires_minutes(rd.lane_timeout_minutes),
             fix_timeout_minutes: clamp_expires_minutes(rd.fix_timeout_minutes),
@@ -1660,7 +1863,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 ),
                 crate::plandrive::PLAN_REVIEW_MINUTES_DEFAULT,
                 "a plan-review window past two hours is a drive nobody is coming back to, and the window costs one orchestrator notice to announce",
-                &mut errs,
+                errs,
             ),
             planner_timeout_minutes: driver_counter(
                 "driver.planner_timeout_minutes",
@@ -1671,7 +1874,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 ),
                 crate::plandrive::PLANNER_TIMEOUT_MINUTES_DEFAULT,
                 "a planner reading a large issue legitimately spends a quarter of an hour before its first tool call, and three hours is the point past which it is not coming back at all",
-                &mut errs,
+                errs,
             ),
             fix_nonblocking_rounds: driver_counter(
                 "driver.fix_nonblocking_rounds",
@@ -1680,107 +1883,116 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                 DRIVER_FIX_NONBLOCKING_ROUNDS_MIN,
                 "every non-blocking round is also a review round, so it can never exceed the \
                  three INVARIANT 9 grants",
-                &mut errs,
+                errs,
             ),
             auto_drive_on_done: rd.auto_drive_on_done,
         },
-    };
+    }
+}
 
-    // Named lock resources (#858). An absent block leaves this empty, which is
-    // what makes the lock tools invisible to the group's agents.
-    //
-    // Every bad value here is a hard ERROR, never a silent substitution — the
-    // same posture `merge_queue.max_batch` takes and for the same reason: a
-    // repo declaring `slots: 0` believes its builds are serialized, and
-    // quietly handing it the default would leave that belief in place while
-    // the behaviour changed underneath it. Names are REJECTED rather than
-    // rewritten (the `blocks[].id` rule): an author who wrote `heavy build`
-    // must not end up with a resource called `heavybuild` that the
-    // `acquire_lock` call in their own worker brief cannot name.
+/// Named lock resources (#858). An absent block leaves this empty, which is
+/// what makes the lock tools invisible to the group's agents.
+///
+/// Every bad value here is a hard ERROR, never a silent substitution — the
+/// same posture `merge_queue.max_batch` takes and for the same reason: a
+/// repo declaring `slots: 0` believes its builds are serialized, and
+/// quietly handing it the default would leave that belief in place while
+/// the behaviour changed underneath it. Names are REJECTED rather than
+/// rewritten (the `blocks[].id` rule): an author who wrote `heavy build`
+/// must not end up with a resource called `heavybuild` that the
+/// `acquire_lock` call in their own worker brief cannot name.
+fn parse_resources(raw: &BTreeMap<String, RawResource>, errs: &mut Vec<String>) -> BTreeMap<String, ResourcePolicy> {
     let mut resources: BTreeMap<String, ResourcePolicy> = BTreeMap::new();
-    if raw.resources.len() > RESOURCES_MAX {
+    if raw.len() > RESOURCES_MAX {
         errs.push(format!(
             "resources: {} declared — at most {RESOURCES_MAX} are allowed (every name is listed \
              in the acquire_lock tool description every agent in the group reads)",
-            raw.resources.len()
+            raw.len()
         ));
     }
-    for (raw_name, rr) in &raw.resources {
-        let trimmed = raw_name.trim();
-        if trimmed.chars().count() > MAX_ID_CHARS {
-            errs.push(format!(
-                "resources: name {raw_name:?} is longer than {MAX_ID_CHARS} characters"
-            ));
-            continue;
+    for (raw_name, rr) in raw {
+        match parse_resource(raw_name, rr) {
+            Ok((name, policy)) => {
+                resources.insert(name, policy);
+            }
+            Err(e) => errs.push(e),
         }
-        let Some(name) = sanitize_id(trimmed) else {
-            errs.push(format!(
-                "resources: name {raw_name:?} has no usable characters (allowed: letters, digits, '-', '_')"
-            ));
-            continue;
-        };
-        if name != trimmed {
-            errs.push(format!(
-                "resources: name {raw_name:?} contains characters that are not allowed (letters, digits, '-', '_')"
-            ));
-            continue;
-        }
-        let slots = match rr.slots {
-            None => RESOURCE_SLOTS_DEFAULT,
-            Some(0) => {
-                errs.push(format!(
-                    "resources.{name}.slots: must be at least 1 — a resource with no slots could \
-                     never be acquired by anyone"
-                ));
-                continue;
-            }
-            Some(n) if n > RESOURCE_SLOTS_MAX => {
-                errs.push(format!(
-                    "resources.{name}.slots: {n} is above the maximum of {RESOURCE_SLOTS_MAX} — \
-                     past that a declaration serializes nothing, which is not what a `slots:` line means"
-                ));
-                continue;
-            }
-            Some(n) => n,
-        };
-        let max_hold_minutes = match rr.max_hold_minutes {
-            None => RESOURCE_MAX_HOLD_MINUTES_DEFAULT,
-            Some(0) => {
-                errs.push(format!(
-                    "resources.{name}.max_hold_minutes: must be at least 1 — a hold that expires \
-                     the moment it is granted serializes nothing"
-                ));
-                continue;
-            }
-            Some(n) if n > RESOURCE_MAX_HOLD_MINUTES_MAX => {
-                errs.push(format!(
-                    "resources.{name}.max_hold_minutes: {n} is above the maximum of \
-                     {RESOURCE_MAX_HOLD_MINUTES_MAX} — a hold on a scarce resource has to be \
-                     bounded by something a working session outlives"
-                ));
-                continue;
-            }
-            Some(n) => n,
-        };
-        resources.insert(name, ResourcePolicy { slots, max_hold_minutes });
     }
+    resources
+}
 
-    // Board policy — per-status WIP limits (#1175). `None` (no `board:` block
-    // at all) resolves to the default, which declares no limits: the feature
-    // is off and behavior is byte-for-byte unchanged.
-    //
-    // A bad value is a hard ERROR, never a silent substitution — the posture
-    // `merge_queue.max_batch` and `resources.slots` take, for the reason §11.2
-    // gives: a repo that wrote `review: 0` believes something about how its
-    // board paces, and quietly handing it "no limit" would leave that belief
-    // in place while the behaviour went the other way.
-    //
-    // The declared caps are read back out THROUGH serde rather than by
-    // matching on `RawWip`'s seven fields here. Hand-listing them a second
-    // time is how the eighth status would arrive parsed-but-unenforced: the
-    // struct is the one place the field set is written down, and this loop
-    // reads whatever that struct accepted.
-    let board = match &raw.board {
+/// One resource: its name, then `slots`, then `max_hold_minutes`; the first
+/// refusal is the resource's error.
+fn parse_resource(raw_name: &str, rr: &RawResource) -> Result<(String, ResourcePolicy), String> {
+    let trimmed = raw_name.trim();
+    if trimmed.chars().count() > MAX_ID_CHARS {
+        return Err(format!(
+            "resources: name {raw_name:?} is longer than {MAX_ID_CHARS} characters"
+        ));
+    }
+    let Some(name) = sanitize_id(trimmed) else {
+        return Err(format!(
+            "resources: name {raw_name:?} has no usable characters (allowed: letters, digits, '-', '_')"
+        ));
+    };
+    if name != trimmed {
+        return Err(format!(
+            "resources: name {raw_name:?} contains characters that are not allowed (letters, digits, '-', '_')"
+        ));
+    }
+    let slots = match rr.slots {
+        None => RESOURCE_SLOTS_DEFAULT,
+        Some(0) => {
+            return Err(format!(
+                "resources.{name}.slots: must be at least 1 — a resource with no slots could \
+                 never be acquired by anyone"
+            ));
+        }
+        Some(n) if n > RESOURCE_SLOTS_MAX => {
+            return Err(format!(
+                "resources.{name}.slots: {n} is above the maximum of {RESOURCE_SLOTS_MAX} — \
+                 past that a declaration serializes nothing, which is not what a `slots:` line means"
+            ));
+        }
+        Some(n) => n,
+    };
+    let max_hold_minutes = match rr.max_hold_minutes {
+        None => RESOURCE_MAX_HOLD_MINUTES_DEFAULT,
+        Some(0) => {
+            return Err(format!(
+                "resources.{name}.max_hold_minutes: must be at least 1 — a hold that expires \
+                 the moment it is granted serializes nothing"
+            ));
+        }
+        Some(n) if n > RESOURCE_MAX_HOLD_MINUTES_MAX => {
+            return Err(format!(
+                "resources.{name}.max_hold_minutes: {n} is above the maximum of \
+                 {RESOURCE_MAX_HOLD_MINUTES_MAX} — a hold on a scarce resource has to be \
+                 bounded by something a working session outlives"
+            ));
+        }
+        Some(n) => n,
+    };
+    Ok((name, ResourcePolicy { slots, max_hold_minutes }))
+}
+
+/// Board policy — per-status WIP limits (#1175). `None` (no `board:` block
+/// at all) resolves to the default, which declares no limits: the feature
+/// is off and behavior is byte-for-byte unchanged.
+///
+/// A bad value is a hard ERROR, never a silent substitution — the posture
+/// `merge_queue.max_batch` and `resources.slots` take, for the reason §11.2
+/// gives: a repo that wrote `review: 0` believes something about how its
+/// board paces, and quietly handing it "no limit" would leave that belief
+/// in place while the behaviour went the other way.
+///
+/// The declared caps are read back out THROUGH serde rather than by
+/// matching on `RawWip`'s seven fields here. Hand-listing them a second
+/// time is how the eighth status would arrive parsed-but-unenforced: the
+/// struct is the one place the field set is written down, and this loop
+/// reads whatever that struct accepted.
+fn parse_board(raw: Option<&RawBoard>, errs: &mut Vec<String>) -> BoardPolicy {
+    match raw {
         None => BoardPolicy::default(),
         Some(rb) => {
             let mut wip: BTreeMap<String, u32> = BTreeMap::new();
@@ -1806,27 +2018,29 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
             }
             BoardPolicy { wip, enforce: rb.enforce }
         }
-    };
+    }
+}
 
-    // Delivery-triage policy (#3304 S1). `None` (no `triage:` block at all)
-    // resolves to the default, which is **disabled** - an absent block means
-    // the feature is off and behavior is byte-for-byte unchanged.
-    //
-    // Every bad value here is a hard ERROR, never a silent substitution, and
-    // the three refusals differ in what they are protecting:
-    //
-    // - `provider` outside the accepted set names the slice that would add it.
-    //   An author who wrote `provider: typesafe` believes agent text is being
-    //   classified by a model; running the rule tier anyway would leave that
-    //   belief in place while the behaviour was something else entirely - and
-    //   the belief in question is about text LEAVING THE MACHINE, so it is the
-    //   one value where a silent substitution is a privacy claim.
-    // - a `kinds` entry that is not one of `triage::Kind::ALL`'s wire
-    //   spellings is a repo that believes it narrowed the gate and did not.
-    // - `max_defer_minutes` outside its closed range is refused rather than
-    //   clamped, on `merge_queue.max_batch`'s argument: the number says how
-    //   long the author is willing to lose sight of their own fleet.
-    let triage = match &raw.triage {
+/// Delivery-triage policy (#3304 S1). `None` (no `triage:` block at all)
+/// resolves to the default, which is **disabled** - an absent block means
+/// the feature is off and behavior is byte-for-byte unchanged.
+///
+/// Every bad value here is a hard ERROR, never a silent substitution, and
+/// the three refusals differ in what they are protecting:
+///
+/// - `provider` outside the accepted set names the slice that would add it.
+///   An author who wrote `provider: typesafe` believes agent text is being
+///   classified by a model; running the rule tier anyway would leave that
+///   belief in place while the behaviour was something else entirely - and
+///   the belief in question is about text LEAVING THE MACHINE, so it is the
+///   one value where a silent substitution is a privacy claim.
+/// - a `kinds` entry that is not one of `triage::Kind::ALL`'s wire
+///   spellings is a repo that believes it narrowed the gate and did not.
+/// - `max_defer_minutes` outside its closed range is refused rather than
+///   clamped, on `merge_queue.max_batch`'s argument: the number says how
+///   long the author is willing to lose sight of their own fleet.
+fn parse_triage(raw: Option<&RawTriage>, errs: &mut Vec<String>) -> TriagePolicy {
+    match raw {
         None => TriagePolicy::default(),
         Some(rt) => {
             let provider = rt
@@ -1874,29 +2088,11 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
                     crate::triage::TRIAGE_MAX_DEFER_MINUTES_DEFAULT,
                     "a notice held longer than four hours is a notice nobody is coming back \
                      to, and holding one for less than a minute saves no wake at all",
-                    &mut errs,
+                    errs,
                 ),
             }
         }
-    };
-
-    if !errs.is_empty() {
-        return Err(errs);
     }
-    Ok(Workflow {
-        version: raw.version,
-        name: sanitize_display(&raw.name),
-        authored_with: sanitize_display(&raw.authored_with),
-        blocks,
-        edges,
-        gates,
-        intake,
-        merge_queue,
-        driver,
-        resources,
-        board,
-        triage,
-    })
 }
 
 /// Whether the repo declares a workflow at all, asked without parsing it.

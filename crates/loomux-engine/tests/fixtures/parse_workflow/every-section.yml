@@ -1,0 +1,137 @@
+# Characterisation subject for `parse_workflow` (#3498 P8b): one VALID file that
+# walks every success path the parser has — every top-level section declared,
+# every block key used at least once, and the value shapes that resolve through a
+# default, a clamp, a fallback or a sanitizer rather than being copied through.
+# Its golden (`every-section.golden.txt`) is the parsed struct via `{:#?}`.
+#
+# Values chosen to make the resolution VISIBLE in the golden: a display name
+# carrying braces (stripped), a persona carrying an apostrophe (curled), an
+# out-of-range timeout (clamped), an empty `driver:` (absent), a structured
+# driver with an inherited cli (accepted, re-checked at spawn), a repeated
+# triage kind (deduplicated), an omitted intake label (built-in fallback).
+version: 1
+name: "Every {section} workflow"
+authored_with: "0.9.0"
+
+blocks:
+  - id: orchestrator
+    name: "Orch {x}"
+    kind: orchestrator
+    cli: claude
+    model: opus
+    effort: HIGH
+    context: 1m
+
+  - id: manager
+    kind: manager
+    cli: claude
+    driver: ""
+
+  - id: planner
+    kind: planner
+    prompt: "Plan carefully.\nIt's fine to ask."
+    role_hint: Advisor
+
+  - id: worker-a
+    name: Worker A
+    kind: worker
+    cli: claude
+    model: sonnet
+    allow: ["Bash(npm test *)", "Bash(npm run build)"]
+    role_hint: process
+    effort: max
+    remote: buildbox
+    cache_ttl_minutes: 60
+
+  - id: worker-pi
+    kind: worker
+    cli: pi
+    effort: low
+    driver: structured
+
+  - id: worker-inherit
+    kind: worker
+    driver: " Structured "
+
+  - id: rev-a
+    kind: reviewer
+    cli: claude
+    profile: personas/rev.md
+    cache_ttl_minutes: 0
+
+  - id: rev-b
+    kind: reviewer
+    cli: copilot
+
+  - id: liaison
+    kind: reviewer
+    role_hint: liaison
+
+edges:
+  - { from: orchestrator, to: [planner, worker-a, worker-pi] }
+  - { from: worker-a, to: rev-a }
+  - { from: " worker-pi ", to: [" rev-a ", rev-b] }
+
+gates:
+  merge:
+    require: all-pass
+    reviewers: [rev-a, " rev-b "]
+    also: [ci-green, body-unchanged]
+    max_diff_lines: 400
+    routing:
+      - paths: ["src/**", "docs/*.md"]
+        reviewers: [rev-b]
+      - paths: ["**/Cargo.toml"]
+        reviewers: [rev-a, rev-b]
+  second:
+    threshold: 1
+    reviewers: [rev-a, rev-b]
+  third:
+    require: all
+    reviewers: [rev-a]
+  fourth:
+    require: threshold
+    threshold: 2
+    reviewers: [rev-a, rev-b]
+
+intake:
+  source: board
+  labels:
+    ready: go
+    owned: mine
+    hold: ""
+
+merge_queue:
+  enabled: true
+  max_batch: 5
+  checks_timeout_minutes: 9999
+
+driver:
+  enabled: true
+  max_review_rounds: 2
+  max_ci_attempts: 1
+  max_rebase_attempts: 0
+  lane_timeout_minutes: 1
+  fix_timeout_minutes: 500
+  drive_timeout_minutes: 99999
+  plan_enabled: true
+  plan_review_minutes: 30
+  planner_timeout_minutes: 20
+  fix_nonblocking_rounds: 2
+  auto_drive_on_done: true
+
+resources:
+  build: { slots: 2, max_hold_minutes: 45 }
+  gpu: {}
+
+board:
+  wip:
+    review: 3
+    in-progress: 5
+  enforce: true
+
+triage:
+  enabled: true
+  provider: " none "
+  kinds: [delegate-done, " pr-checks ", delegate-done]
+  max_defer_minutes: 60

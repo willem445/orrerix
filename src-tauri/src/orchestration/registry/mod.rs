@@ -28,6 +28,7 @@ mod idle;
 mod lockseams;
 mod managermail;
 mod persist;
+mod resourcelocks;
 mod watches;
 
 pub struct OrchRegistry {

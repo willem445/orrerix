@@ -29,7 +29,7 @@
 //!   system_prompt_file`'s doc in `mod.rs`) — the #222 move away from it was
 //!   about `--agents` being newer and native, never about the file-based
 //!   flag having a functional problem, so nothing disqualified it from
-//!   returning as a fallback. See `persona_inject` in `mod.rs`.
+//!   returning as a fallback. See `persona_inject` in `registry/agentfiles.rs`.
 //!
 //! ```markdown
 //! ---
@@ -60,7 +60,7 @@
 //! here now instead of being skipped as "copilot's business".
 //!
 //! What loomux does about it lives in `persona_inject`/`write_copilot_agent_file`
-//! (`mod.rs`): it never edits the user's file (#222), it re-points `--agent` at a
+//! (`registry/agentfiles.rs`): it never edits the user's file (#222), it re-points `--agent` at a
 //! loomux-owned copy carrying the SAME list plus the loomux grant. The grant
 //! spelling is the documented one: *"You can also explicitly enable all tools
 //! from a specific MCP server using `some-mcp-server/*`"*.
@@ -551,7 +551,7 @@ pub fn load_block_profile(
 /// loomux never writes generated personas into the user's `.github/agents/` to
 /// make `--agent` work — that would dirty their git tree with files they didn't
 /// author. A Copilot block with an inline `prompt:` instead falls back to
-/// kickoff-prompt injection (`persona_inject` in `mod.rs`).
+/// kickoff-prompt injection (`persona_inject` in `registry/agentfiles.rs`).
 pub fn is_copilot_native(rel: &str) -> bool {
     let norm = rel.trim().replace('\\', "/");
     norm.starts_with(".github/agents/") && norm.ends_with(".md")

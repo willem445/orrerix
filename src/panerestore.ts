@@ -863,7 +863,7 @@ export function agentFreshCommand(
   return { command: `claude --session-id ${sessionId}` };
 }
 
-/** The CLIs `solo_prepare` (mod.rs:10441) mints a channel identity for — the
+/** The CLIs `solo_prepare` (registry/solo.rs) mints a channel identity for — the
  *  only ones whose recorded command can carry the flags `stripSoloMcpFlags`
  *  below recognizes. Three of them since #2126 added pi; the count is
  *  deliberately not spelled out again below, where `SOLO_MCP_CLI_SET` is the

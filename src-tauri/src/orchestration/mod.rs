@@ -159,7 +159,7 @@ mod triagegate;
 
 /// #2811 S5a: the per-provider spend/usage-limit table the attention scan reads
 /// a pane tail against. Re-exported here beside `workflow` because the two
-/// consumers straddle the seam — `attention_tick` below raises the
+/// consumers straddle the seam — `attention_tick` (`registry/idle.rs`) raises the
 /// `provider-limit` chip from it, and S5b's driver hold reads the same rows.
 pub use loomux_engine::providerlimit;
 

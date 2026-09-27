@@ -750,7 +750,7 @@ fn progress_from_a_lead_child_types_nothing() {
 /// **RESIDUAL, stated rather than implied**: two of the seven consumers have no
 /// seam this binary can reach — the watchdog's eligibility check is inside a
 /// private tick, and `release_driven_pane` is `pub(crate)`. Both read
-/// `a.role.is_fixture()` in `mod.rs` and neither is exercised here, so for those
+/// `a.role.is_fixture()` (in `registry/idle.rs` and `registry/agents.rs`) and neither is exercised here, so for those
 /// two the coverage is the predicate pin plus the compiler, not a behavioural
 /// test. Do not read this test's name as covering them.
 #[test]

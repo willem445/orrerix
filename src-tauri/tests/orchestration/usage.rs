@@ -409,6 +409,7 @@ fn a_pi_series_sample_does_not_persist_the_launch_effort_fallback() {
     let rows = series_lines(&reg, &g.id);
     assert_eq!(rows.len(), 1, "the usage-bearing pi session writes a sample: {rows:?}");
     let row: serde_json::Value = serde_json::from_str(&rows[0]).unwrap();
+    assert!(row.as_object().unwrap().contains_key("effort"), "the sample persists the optional field");
     assert_eq!(row["effort"], Value::Null, "a launch-knob fallback is not a reported effort");
 }
 

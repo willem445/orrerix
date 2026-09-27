@@ -3138,14 +3138,14 @@ point:
   tool-matcher strings `allow:` speaks, so an opencode block also runs with
   its class's baseline and can't be widened — same decision, same reason, as
   gemini's arm.
-- **The compact nudge works; context escalation needs a window override.**
-  orrerix pastes opencode's own `/compact` exactly as it does claude's, and
-  `request_compact` works from an opencode pane. But opencode records how many
-  tokens a session holds and not how large its window is, so the lifecycle
-  panel shows an opencode pane's tokens without a percent, and neither the
-  context threshold nor the timed nudge's context floor will act on it —
-  unless the group sets a context-window override. opencode also compacts on
-  its own when it runs out of room.
+- **`request_compact` works; the timed nudge and escalation need a window
+  override.** orrerix pastes opencode's own `/compact` when an opencode pane
+  asks for one. But opencode records how many tokens a session holds and not
+  how large its window is, so the lifecycle panel shows an opencode pane's
+  tokens without a percent, the context threshold never escalates it, and the
+  timed nudge's context floor refuses it — so the timed nudge skips it while
+  the floor is on — until the group sets a context-window override. opencode
+  also compacts on its own when it runs out of room.
 - **Session history *does* work.** opencode has no `--session-id` to hand a
   pane up front, so orrerix learns which session is the reviewer's after it
   starts rather than minting one — but once bound, that session resumes and
@@ -3175,10 +3175,10 @@ and two of its omissions change what an orrerix block on it means:
 - **Compaction works as it does for claude.** orrerix pastes pi's own
   `/compact`, and the context threshold escalates a pi pane against the window
   pi's `--list-models` reports for the model the pane is running. For a model
-  pi does not list, the lifecycle panel shows tokens without a percent, and
-  neither the threshold nor the timed nudge's context floor acts on it until
-  the group sets a context-window override. pi also auto-compacts on its own
-  by default.
+  pi does not list, the lifecycle panel shows tokens without a percent, the
+  threshold never escalates it, and the timed nudge's context floor refuses it
+  — so the timed nudge skips it while the floor is on — until the group sets a
+  context-window override. pi also auto-compacts on its own by default.
 - **Session history works, the claude way.** pi takes `--session-id` and
   creates the session if it is missing, so orrerix mints the id up front
   rather than learning it after boot — no watcher, and a resume is the same
@@ -3222,9 +3222,10 @@ two things worth knowing before your first run:
 - **Compaction works as it does for claude.** orrerix pastes codex's own
   `/compact`, and the context threshold escalates a codex pane against the
   window codex records in its session log. A session log that records no window
-  shows tokens without a percent, and neither the threshold nor the timed
-  nudge's context floor acts on it until the group sets a context-window
-  override. codex also compacts on its own when it nears its limit.
+  shows tokens without a percent, the threshold never escalates it, and the
+  timed nudge's context floor refuses it — so the timed nudge skips it while the
+  floor is on — until the group sets a context-window override. codex also
+  compacts on its own when it nears its limit.
 - **A `reviewer`, a `planner` and a `manager` block cannot run on codex**, and
   orrerix refuses the file rather than launching one — see *Why not codex for a
   reviewer?* below. All three are classes orrerix denies the editing tools to,
@@ -4042,7 +4043,10 @@ window. opencode never records one. codex and pi record one only once the CLI ha
 Without it orrerix cannot tell a 10%-full pane from a 90%-full one. It skips the timed nudge
 for such a pane rather than pay a whole re-grounding cycle at an unknown fill level. All three
 CLIs compact themselves when they run out of room anyway. Set a context-window override on
-the group to give those panes a window, and the floor then applies to them normally. Setting
+the group to give those panes a window, and the floor then applies to them normally — while
+context escalation is on. With the escalation threshold at 0, orrerix computes no context
+percent for any pane, so the floor has nothing to measure: it still refuses a pane with no
+window, but lets a windowed one through at any fill level, a Claude pane included. Setting
 the floor to `0` also brings them back, on the quiet window alone. `request_compact()` works
 for them either way.
 
@@ -4077,6 +4081,23 @@ re-grounds the pane in its full role instructions (not just a pointer to go re-r
 and prompts it to re-sync live state. Before doing so, orrerix checks that context actually
 shrank (a real signal a compaction ran, not just an ordinary quiet moment) — if it can't
 confirm that, it skips the re-grounding rather than risk delivering it on a loop.
+
+**How orrerix knows a compaction finished depends on the CLI.** Where the CLI says so itself,
+orrerix takes its word over any guess:
+
+- **claude** — orrerix's per-pane `--settings` file adds a `PostCompact` hook beside its
+  `PreCompact`, `SessionStart` and `UserPromptSubmit` ones. When it fires, the re-grounding
+  follows without waiting for the pane to go quiet or for context to shrink. Claude's own
+  `SessionStart` hook re-grounds a compacted session natively; orrerix waits a few seconds
+  for that one first, and never sends a second copy on top of it.
+- **pi and codex** — the session file records the compaction: pi writes a `compaction`
+  entry, codex a `compacted` record. orrerix reads those; it installs no hook. codex runs a
+  hook only after you trust its exact definition in its `/hooks` browser, and orrerix never
+  records that trust for you.
+- **copilot** — its own on-screen "Compaction completed" message; failing that, the pane
+  going quiet after its `preCompact` hook fired.
+- **opencode** — it records no compaction signal orrerix can read, so orrerix relies on the
+  pane's output and context, as above.
 
 **Directive ledger.** Any agent can call `note_directive(text)` to jot down a one-line diary
 entry — a human directive, a scope decision, a piece of feedback — the moment it receives

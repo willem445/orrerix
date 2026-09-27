@@ -32,7 +32,15 @@ their tokens without a percent, and the audit log records one
 stated reason. The override is the lever that switches the threshold on for
 those panes. The floor fails CLOSED for the same panes: a reading with tokens
 and no window never passes it, so the lull nudge skips them too, and the
-override is also what makes them eligible for it. They compact themselves when
+override is also what makes them eligible for it — while the escalation
+threshold is above 0. `agent_context_percents` computes a percent only for a
+group whose threshold is nonzero, and the floor reads that percent, so at 0 an
+overridden pane (like every Claude pane) passes the floor at any fill level;
+only the no-window refusal, read separately through `context_window_unknown`,
+still holds. The threshold gate on the percent predates #413 S4; S4 made the
+no-window input a separate read, and so the asymmetry. Deriving the floor's
+percent independently of the threshold would close it, and would change
+Claude's behaviour too, so it is not done here. They compact themselves when
 they run out of room, and a lull compact at an unmeasured fill level is the
 costly re-grounding the floor exists to stop. A pane with no reading at all
 (copilot, or any pane before its first reading) still fails open. See

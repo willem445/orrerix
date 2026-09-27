@@ -983,9 +983,7 @@ impl OrchRegistry {
                 // its banner, or escalate on a reading from before it. Bounded by
                 // `POSTCOMPACT_SETTLE_MS`, and everything above (token cache,
                 // growth rebaseline, the hook markers) has already run.
-                if postcompact_settling {
-                    continue;
-                }
+                let _ = postcompact_settling;
 
                 // A paused group's agents are deliberately quiet; never nudge,
                 // escalate, or start a new manual-detection window, and never

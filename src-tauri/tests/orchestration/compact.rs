@@ -256,7 +256,7 @@ fn compact_nudge_ignores_subfloor_repaint_growth() {
 /// reads landing in the same millisecond (or a filesystem mtime-write
 /// buffering delay) would otherwise make the product's `ts >= a.started_ms`
 /// gate an intermittent test flake instead of a deterministic pass/fail.
-fn write_hook_marker(path: &Path, base_ms: u64, offset_ms: i64) {
+pub(crate) fn write_hook_marker(path: &Path, base_ms: u64, offset_ms: i64) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let f = fs::File::create(path).unwrap();
     let ms = (base_ms as i64 + offset_ms).max(0) as u64;
@@ -976,7 +976,7 @@ fn ensure_copilot_compact_hook_also_writes_the_promptsubmit_entry() {
 /// `sh` to run a hook script with — `locate_sh_exe`'s absolute Windows path, or a bare `sh`
 /// (a POSIX guarantee) everywhere else. `None` only when Windows genuinely has no `sh.exe`
 /// anywhere (same "skip, don't fail" precedent as the #335 shim tests).
-fn resolve_test_sh() -> Option<String> {
+pub(crate) fn resolve_test_sh() -> Option<String> {
     #[cfg(windows)]
     {
         locate_sh_exe()

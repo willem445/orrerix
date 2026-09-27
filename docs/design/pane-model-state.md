@@ -9,8 +9,8 @@ is read from the CLI's artifact rather than inferred from a model name.
 
 | CLI | Live model | Live effort | Context window | Context used | Compact command loomux may send | Compaction-done signal |
 |---|---|---|---|---|---|---|
-| **claude** (PTY) | Status-line `model.id` / `model.display_name` (S1); transcript `message.model` already exists | Status-line `effort.level` (S1) | Status-line `context_window.context_window_size` (S1) | Status-line `context_window.total_input_tokens` / `used_percentage` (input-token accounting) (S1) | `/compact` (Claude Code [slash commands](https://code.claude.com/docs/en/commands)) | `PreCompact`, `SessionStart(compact)`, transcript `compact_boundary` already exist; `PostCompact` is planned (S5; [hooks reference](https://code.claude.com/docs/en/hooks)) |
-| **codex** (PTY) | Rollout `turn_context.payload.model` already exists | Rollout `turn_context.payload.effort` (S2a; optional `ReasoningEffort`) | Rollout token-count `info.model_context_window` (S2a) | Same event's `info.last_token_usage.input_tokens` (S2a) | `/compact` ("Summarize the visible chat to free tokens"; [CLI command reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli)). `model_auto_compact_token_limit` documents automatic compaction ([config reference](https://learn.chatgpt.com/docs/config-file/config-reference)). | Rollout `compacted`; `PreCompact` / `PostCompact` hooks are documented ([hooks](https://learn.chatgpt.com/docs/hooks)) |
+| **claude** (PTY) | Status-line `model.id` / `model.display_name` (S1); transcript `message.model` already exists | Status-line `effort.level` (S1) | Status-line `context_window.context_window_size` (S1) | Status-line `context_window.total_input_tokens` / `used_percentage` (input-token accounting) (S1) | `/compact` (Claude Code [slash commands](https://code.claude.com/docs/en/commands)) | `PreCompact`, `SessionStart(compact)`, transcript `compact_boundary` already exist; `PostCompact` (S5; [hooks reference](https://code.claude.com/docs/en/hooks)) |
+| **codex** (PTY) | Rollout `turn_context.payload.model` already exists | Rollout `turn_context.payload.effort` (S2a; optional `ReasoningEffort`) | Rollout token-count `info.model_context_window` (S2a) | Same event's `info.last_token_usage.input_tokens` (S2a) | `/compact` ("Summarize the visible chat to free tokens"; [CLI command reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli)). `model_auto_compact_token_limit` documents automatic compaction ([config reference](https://learn.chatgpt.com/docs/config-file/config-reference)). | Rollout `compacted` (read, S2a/S5); `PreCompact` / `PostCompact` hooks are documented ([hooks](https://learn.chatgpt.com/docs/hooks)) but not installed — they run only once the human trusts them (S5) |
 | **pi** (PTY) | Session's latest assistant `provider` / `model`; `model_change` entries | `thinking_level_change`; initial level is the launcher's `--thinking` choice | `--list-models` context column; RPC `get_state.model.contextWindow`; not present in session file (S8) | Latest assistant `usage.input + cacheRead + cacheWrite` | `/compact [prompt]` ([usage guide](https://github.com/earendil-works/pi/tree/v0.84.4/packages/coding-agent/docs/usage.md)) | Session `compaction` entry; RPC `compaction_end` |
 | **opencode** (PTY) | Session `model` column, JSON `{id, providerID, variant}` read as `providerID/id` (S2c) | `variant` in that JSON (S2c) | None: not in the store, and no documented source in the [configuration reference](https://opencode.ai/docs/config/) (S2c) | Newest counted assistant `message.data` `tokens.input + cache.read + cache.write` (S2c) | `/compact` (alias `/summarize`; [TUI guide](https://opencode.ai/docs/tui/)) | No documented signal; token-drop inference only |
 | **copilot** (PTY) | No machine-readable source documented; use launcher's declared model, labelled `declared` | `~/.copilot/settings.json` `effortLevel` is a read-only global setting, labelled `settings` | No documented source | No documented source; `/context` displays a visualization | `/compact [FOCUS-INSTRUCTIONS]` ([CLI command reference](https://docs.github.com/en/copilot/reference/cli-command-reference)) | `preCompact` hook; no documented post-compact hook ([hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference)) |
@@ -536,9 +536,46 @@ each other.
   that carries a command spells it that way today; a row that ever spells it
   differently needs the detector to read the row too.
 
+## S5 — trusted compaction-done signals (#413)
+
+- **claude:** `compact_hook_settings` adds a `PostCompact` hook — only for a
+  Claude Code the probe knows is `2.1.76` or later (review r2; the argument,
+  the CHANGELOG citations and the cold-cache case are in
+  `docs/design/orchestration.md`, "#413 S5"); its script arm
+  touches `<group>/hooks/<agent>.postcompact.json` and drains stdin. A fresh
+  marker settles for `POSTCOMPACT_SETTLE_MS`, then decides loomux's own
+  reinjection, unless a `SessionStart(compact)` marker for the same compaction
+  resolved it natively first. The argument, the pairing rule and the settle
+  window's clock are in `docs/design/orchestration.md`, "#413 S5: the
+  compaction-DONE signal, per CLI".
+- **codex:** no hook. The rollout's `compacted` count (S2a) is the signal.
+  codex runs a non-managed hook only once the human has trusted it, per hook
+  source file, so a profile hook would need orrerix to write the trust record
+  itself. The analysis and the open human decision are in `docs/design/codex.md`,
+  §Compaction-done signal.
+- **pi:** the session file's `compaction` count (S2b) is the signal.
+- **codex and pi, one rule:** the count already feeds `compact_boundary_count`,
+  so `compact_nudge_tick` treats a rise exactly as it treats a claude
+  `compact_boundary`. S5 pins that end to end through `run_compact_nudge`
+  (`compaction_done_*` in `tests/piusage.rs` and `tests/codexusage.rs`) and
+  changes no code for it.
+
+### S5 residuals
+
+- **A codex or pi self-compaction that nothing armed gets no re-grounding.** A
+  count rise confirms an open arm; it never opens one, and neither CLI has a
+  banner or hook orrerix arms on.
+- **A `SessionStart(compact)` later than the settle window is a duplicate
+  re-grounding**, and a wall-clock step can make a genuine marker read as stale.
+  Both are argued in `docs/design/orchestration.md`, "#413 S5".
+- **A claude arm can resolve one fast-poll tick later than before.** While a
+  `PostCompact` marker settles, the busy-then-quiet resolver is held for that
+  agent, so an arm it would have resolved on the first quiet tick waits for the
+  next one.
+
 ## Contract changes
 
-S0, S1, S3, S4, S6 and S8 have shipped. These rows record each contract's owning
+S0, S1, S3, S4, S5, S6 and S8 have shipped. These rows record each contract's owning
 slice:
 
 1. **S3 added** `window_tokens`, `window_source`, `model`, `effort`, `source`,
@@ -555,6 +592,13 @@ slice:
 6. **S4 added** the `compact-escalation-skipped` audit action (`agent`,
    `reason`, `tokens`, `source`) and a `command` key on `compact-nudge`
    audit rows. Both are additive.
+7. **S5 added** a `PostCompact` hook to Claude's `--settings` configuration, the
+   `<group>/hooks/<agent>.postcompact.json` marker (existence-only), the
+   `compact-resolved-postcompact` audit action (`agent`, `reason`,
+   `settle_ms`), and `"postcompact"` as a value of `compact-hook-evidence`'s
+   `event`. All additive. Review r2 added an optional `version` to the
+   `probe_agent_cli` reply, present only for a CLI in `cliprobe::VERSION_PROBES`
+   (claude) whose `--version` could be read.
 
 ## Sources and pins
 

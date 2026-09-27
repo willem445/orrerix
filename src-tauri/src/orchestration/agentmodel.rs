@@ -696,6 +696,18 @@ pub struct AgentEntry {
     /// restarted the session specifically because of one), independent of
     /// whether PreCompact fired/was configured at all.
     pub compact_hook_sessionstart_seen_ms: Option<u64>,
+    /// #413 S5: companion bookkeeping for Claude's `PostCompact` hook marker —
+    /// the freshest one already consumed, in the marker's own (mtime) clock,
+    /// exactly like the two fields above.
+    pub compact_hook_postcompact_seen_ms: Option<u64>,
+    /// #413 S5: the tick `now` at which a fresh, not-yet-consumed `PostCompact`
+    /// marker was FIRST seen — the start of its settle window
+    /// (`POSTCOMPACT_SETTLE_MS`), during which a `SessionStart(compact)` marker
+    /// for the same compaction may still land and resolve it natively. Kept on
+    /// the tick's clock rather than compared against the marker's mtime, so the
+    /// window is bounded even when a marker's mtime is skewed into the future.
+    /// Cleared whenever the marker is consumed or is gone.
+    pub compact_hook_postcompact_first_seen_ms: Option<u64>,
     /// #417: how the CURRENT (or most recently resolved) `compact_pending`
     /// arm was armed — `Some("hook")` for a PreCompact/SessionStart marker
     /// (trusted evidence, no inference gate needed), `None` for the

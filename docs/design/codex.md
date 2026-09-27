@@ -1111,6 +1111,67 @@ and the persistence rule for token-count events in
 at `rust-v0.153.4`. The S1 change owns the shared `CompactionSignal` shape;
 this slice maps Codex readings into it in `agent_context_signals`.
 
+### Compaction-done signal: the `compacted` record, not a hook (#413 S5)
+
+A codex pane's compaction-done signal is the rollout's own `compacted` record.
+The reader above counts those records into `compact_boundary_count`, and
+`compact_nudge_tick` treats a rise in that count exactly as it treats a rise
+in a claude transcript's `compact_boundary`: floor-independent evidence that
+an arm's compaction ran, and confirmation for an inference arm. It is a
+reading of codex's own record, not an inference. Pinned end to end by
+`compaction_done_a_codex_compacted_record_resolves_a_requested_compact_the_pane_never_painted`
+(`tests/codexusage.rs`).
+
+The plan for S5 asked for more: `PreCompact`/`PostCompact` marker hooks in the
+profile orrerix already writes. codex does document both events ("PreCompact
+runs before Codex compacts the chat", "PostCompact runs after Codex compacts
+the chat", each matching `trigger` `manual`/`auto`,
+<https://learn.chatgpt.com/docs/hooks>). **orrerix installs no codex hook, and
+it cannot without deciding something that is the human's.** Read at
+`rust-v0.153.4`:
+
+- **A profile may carry `[hooks]`.** The `-p` profile is a *user* config layer
+  (§Pins, above), and `load_toml_hooks_from_layer`
+  (`hooks/src/engine/discovery.rs`) reads the `hooks` key of every layer it
+  walks. So the table would load.
+- **But a loaded hook does not run until it is trusted.** `discover_handlers`
+  registers a handler only when its `trust_status` is `Managed` or `Trusted`
+  (or the session bypasses trust). For a non-managed hook, `hook_trust_status`
+  is `Trusted` only when the recorded `trusted_hash` equals the hook's
+  current hash; otherwise it is `Untrusted` or `Modified`, and the hook is
+  listed and skipped. The docs say the same: "Codex requires you to review and
+  trust the exact hook definition", recorded "against the hook's current
+  hash, so new or changed hooks are marked for review and skipped until
+  trusted".
+- **The trust record is keyed by the hook's SOURCE FILE.** `hook_key` is
+  `<source path>:<event>:<group index>:<handler index>`, and
+  `hook_states_from_stack` (`hooks/src/config_rules.rs`) reads the
+  `[hooks.state."<key>"]` table, `trusted_hash` included, from every user
+  layer. Every agent's profile is its own file, so every profile hook is a new
+  key the human has never trusted. It would never run, unless orrerix wrote
+  `trusted_hash` into the same profile itself. That is orrerix approving a
+  vendor's trust gate on the human's behalf, which CLAUDE.md constraint 9
+  forbids. The `--dangerously-bypass-hook-trust` flag is the same decision
+  made wider: it runs every enabled hook, the human's untrusted ones included,
+  for the whole session.
+- **The plan's fallback, one global hook file, is not the Copilot shape.**
+  Copilot reads every file in its user hooks DIRECTORY, so orrerix adds one
+  file of its own there (`ensure_copilot_compact_hook`). codex reads ONE
+  `hooks.json` per config folder (`load_hooks_json`: `config_folder?.join("hooks.json")`),
+  so orrerix writing `~/.codex/hooks.json` would replace a human's own file.
+  Merging into it would put orrerix's entries into the human's trust keys:
+  an entry inserted before theirs shifts their group indices, and so unkeys
+  their trust. And the hook would still do nothing until the human trusted it.
+
+So S5 writes nothing into the human's codex configuration for hooks. The
+option left open is the human's: a single `~/.codex/hooks.json` entry, a fixed
+command that no-ops outside an orrerix pane (the env-var-presence idiom
+`COPILOT_PRECOMPACT_HOOK_BASH` uses), which the human trusts once through
+`/hooks`. It would give codex a trusted compaction START (an arm for a
+self-compaction no orrerix path armed), which the `compacted` count cannot:
+that count confirms an arm but never opens one. Listed under §Still for the
+human.
+
 ### The path is a lookup, not a join
 
 A rollout is `rollout-<ts>-<thread>[_<rollout>].jsonl` under a `YYYY/MM/DD`
@@ -1379,3 +1440,9 @@ rather than someone else's source.
     fail `==`, and then the DENY stays with no audit row. Cut one worktree with relative paths and repeat
     item 8. An absolute pointer (git's default) cannot diverge: both sides take
     its text as written.
+11. **A codex compaction-hook entry** (#413 S5, a decision rather than a check).
+    orrerix installs no codex hook: see §Compaction-done signal. If you want
+    codex self-compactions to open an arm, the route that needs no trust write
+    by orrerix is one entry in your own `~/.codex/hooks.json`, a fixed command
+    that no-ops outside an orrerix pane, trusted once through `/hooks`. orrerix
+    does not write it for you, even when the file is absent.

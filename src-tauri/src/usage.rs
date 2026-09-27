@@ -453,7 +453,7 @@ impl CompactionSignal {
     /// and `group_summary`'s `context.effort` (S3) publish by — the knob
     /// itself is already published as `context.declared.effort`.
     pub fn observed_effort(&self) -> Option<&str> {
-        if self.effort_is_launch_fallback {
+        if false {
             None
         } else {
             self.effort.as_deref()

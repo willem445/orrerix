@@ -169,7 +169,7 @@ impl ContextSource {
             | ContextSource::Statusline
             | ContextSource::CodexRollout
             | ContextSource::PiSession => true,
-            ContextSource::OpencodeDb => false,
+            ContextSource::OpencodeDb => true,
         }
     }
 }

@@ -22,6 +22,7 @@ mod channels;
 mod merge;
 mod questions;
 mod tasks;
+mod lockseams;
 
 pub struct OrchRegistry {
     /// Root of persistent state: `<root>/<group>/{group.json,state.json,audit.jsonl,configs/}`.

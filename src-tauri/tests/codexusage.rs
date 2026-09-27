@@ -1328,3 +1328,35 @@ fn escalation_a_codex_orchestrator_under_a_group_override_escalates() {
     assert_eq!(context_of(&reg, &gid, &oid)["window_source"], "override");
     assert_eq!(audited(&reg, &gid, &oid, "compact-escalation-skipped"), 0);
 }
+
+// ---------------------------------------------------------------------------
+// #413 S5: codex's compaction-done signal, through the real tick
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compaction_done_a_codex_compacted_record_resolves_a_requested_compact_the_pane_never_painted() {
+    // loomux installs no codex hook (docs/design/codex.md, "Compaction-done
+    // signal"): codex runs a non-managed hook only once the human has trusted
+    // its exact definition. Codex's compaction-done signal is therefore the
+    // rollout's own `compacted` record, which the S2a reader counts into
+    // `compact_boundary_count`. This drives it through `run_compact_nudge`: a
+    // requested compact is pasted, the pane shows no output growth (no pty),
+    // and the arm resolves only when the rollout records the compaction.
+    let event = token_count_event(Usage { input: 150_000, ..Usage::default() });
+    let (reg, _d, seam, gid, oid) = codex_orchestrator(None, &event);
+    reg.request_compact(&oid).unwrap();
+    const NOW: u64 = 1_000_000_000_000_000;
+    let fired = reg.run_compact_nudge(NOW);
+    assert_eq!(fired, vec![oid.clone()], "positive control: the requested compact is pasted");
+    assert!(reg.agent(&oid).unwrap().compact_pending);
+
+    // The control: the same quiet tick with no `compacted` record leaves the arm open.
+    let _ = reg.run_compact_nudge(NOW + 10_000);
+    let before = audited(&reg, &gid, &oid, "compact-reinjection");
+
+    write_rollout(&seam.codex, &format!("{event}{{\"type\":\"compacted\"}}\n"));
+    let _ = reg.run_compact_nudge(NOW + 20_000);
+    assert_eq!(before, 0, "no compacted record, no evidence: the arm stays open");
+    assert_eq!(audited(&reg, &gid, &oid, "compact-reinjection"), 1, "the compacted record resolved it");
+    assert!(reg.agent(&oid).unwrap().compact_reinject_attempted_ms.is_some());
+}

@@ -356,11 +356,11 @@ test("#255 rev-2 non-blocking #3: MAX_AGENTS_CEILING mirrors the Rust source it'
   // trusting a comment to catch the drift.
   const here = dirname(fileURLToPath(import.meta.url));
   const rustSrc = readFileSync(
-    join(here, "..", "src-tauri", "src", "orchestration", "mod.rs"),
+    join(here, "..", "src-tauri", "src", "orchestration", "guardrails.rs"),
     "utf8"
   );
   const declared = rustSrc.match(/const MAX_AGENTS_CEILING: u32 = (\d+);/);
-  assert.ok(declared, "mod.rs's MAX_AGENTS_CEILING declaration must match this exact pattern — update it here too if that line's wording changes");
+  assert.ok(declared, "guardrails.rs's MAX_AGENTS_CEILING declaration must match this exact pattern — update it here too if that line's wording changes");
   assert.equal(MAX_AGENTS_CEILING, Number(declared![1]), "roster.ts's copy has drifted from the Rust source");
 });
 

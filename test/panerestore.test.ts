@@ -2062,7 +2062,7 @@ test("the lead marker this module strips is the one the backend actually emits (
   // lead's command-line flags. A positive control comes first: if the extraction
   // finds nothing (the function renamed, the file moved), the test must FAIL
   // rather than pass over an empty string.
-  const rust = readFileSync(new URL("../src-tauri/src/orchestration/mod.rs", import.meta.url), "utf8");
+  const rust = readFileSync(new URL("../src-tauri/src/orchestration/solopane.rs", import.meta.url), "utf8");
   const fn = rust.slice(rust.indexOf("fn lead_mcp_args("));
   assert.ok(fn.startsWith("fn lead_mcp_args("), "lead_mcp_args must still exist — this pin has no subject otherwise");
   const claudeArm = fn.slice(fn.indexOf('"claude" =>'), fn.indexOf('"copilot" =>'));
@@ -2134,7 +2134,7 @@ test("LEAD_CLIS is exactly the set `lead_mcp_args` has an arm for (#2519 C2)", (
   // itself an instrument, so it carries its own controls: the function must
   // exist, and the arms it yields must be non-empty and must not include the
   // wildcard.
-  const rust = readFileSync(new URL("../src-tauri/src/orchestration/mod.rs", import.meta.url), "utf8");
+  const rust = readFileSync(new URL("../src-tauri/src/orchestration/solopane.rs", import.meta.url), "utf8");
   const start = rust.indexOf("fn lead_mcp_args(");
   assert.notEqual(start, -1, "lead_mcp_args must still exist — this pin has no subject otherwise");
   const body = rust.slice(start, rust.indexOf("\n}", start));

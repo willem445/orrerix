@@ -237,9 +237,9 @@ test("a typed fork name goes through the pane-name rule: control characters drop
 });
 
 test("sanitizePaneName is the backend's sanitize_agent_name, read off the Rust source", () => {
-  const rs = readFileSync(new URL("../src-tauri/src/orchestration/mod.rs", import.meta.url), "utf8");
+  const rs = readFileSync(new URL("../src-tauri/src/orchestration/agentmodel.rs", import.meta.url), "utf8");
   const body = /fn sanitize_agent_name\(name: &str\) -> String \{\s*([^}]*)\}/.exec(rs)?.[1];
-  assert.ok(body, "sanitize_agent_name was found in mod.rs");
+  assert.ok(body, "sanitize_agent_name was found in agentmodel.rs");
   // The three steps, in the order they run there.
   assert.match(body!, /name\.trim\(\)\.chars\(\)\.filter\(\|c\| !c\.is_control\(\)\)\.take\((\d+)\)/);
   const cap = Number(/\.take\((\d+)\)/.exec(body!)![1]);

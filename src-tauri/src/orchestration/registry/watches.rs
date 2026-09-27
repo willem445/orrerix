@@ -937,7 +937,7 @@ impl OrchRegistry {
             // string per poll rather than per comment, and `capture_raw_inner`
             // reads to end with no cap — there is no truncation path that could
             // silently drop the check-state half of the same response.
-            let pr_argv = intake::pr_list_argv();
+            let pr_argv = intake::pr_list_argv ();
             let pr_args: Vec<&str> = pr_argv.iter().map(String::as_str).collect();
             let prs_raw = self.gh_capture(repo, &pr_args);
             self.intake_last_poll_ms.lock_safe().insert(group.clone(), now);

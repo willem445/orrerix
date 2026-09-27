@@ -8,6 +8,11 @@
 use super::*;
 
 impl OrchRegistry {
+    #[allow(dead_code)]
+    fn planted_long_hold_for_scratch(&self) {
+        let _permit = loomux_engine::lockwatch::LongHoldPermit::new("planted");
+    }
+
     /// Run `f` with the named registry lock held ON THE CALLING THREAD (#1610).
     ///
     /// `None` for a name this does not know.

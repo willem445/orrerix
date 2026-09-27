@@ -140,7 +140,7 @@ impl OrchRegistry {
         // `program` is a literal here; a bulk sweep took this argument once and
         // that guard is what caught it. Two literal calls, not a loop over a
         // slice, so that property stays true by inspection.
-        self.write_refusal_shim(&dir, "orrerix", loomux_shim_sh(), loomux_shim_cmd());
+        self.write_refusal_shim(&dir,  "orrerix", loomux_shim_sh(), loomux_shim_cmd());
         self.write_refusal_shim(&dir, "loomux", loomux_shim_sh(), loomux_shim_cmd());
         // #3477: anything else in this dir shadows a real program on every agent
         // pane's PATH, so drop the shims an earlier build wrote and this one no

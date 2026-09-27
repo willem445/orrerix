@@ -24,6 +24,7 @@ mod questions;
 mod tasks;
 mod agentfiles;
 mod audit;
+mod idle;
 mod lockseams;
 mod managermail;
 mod persist;

@@ -36113,7 +36113,7 @@ impl OrchRegistry {
                 // block's knob, already published as `declared.effort`, and
                 // publishing it here too would pass configuration off as a
                 // reading (the rule S6's samples follow).
-                a.last_context_effort = sig.observed_effort().map(str::to_owned);
+                a.last_context_effort = sig.effort.clone();
                 a.last_context_source = Some(sig.source);
             }
         }

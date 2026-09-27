@@ -11,6 +11,8 @@
 
 use super::*;
 
+mod claude;
+pub use claude::*;
 mod copilot;
 pub use copilot::*;
 

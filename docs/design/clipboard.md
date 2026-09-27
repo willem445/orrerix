@@ -320,17 +320,22 @@ still raised CTRL_C_EVENT, but PowerShell and `npm run dev` ignored it. At the
 prompt nothing looked wrong, because PSReadLine reads ^C as a key rather than
 a signal. That is why the report is specifically about a *running process*.
 
-Fix: `pty::allow_ctrl_c_in_children` calls `SetConsoleCtrlHandler(NULL, FALSE)`
-at the top of `spawn_pane_child`, the one function every pane child goes
-through, before either `CreateProcess`. That restores normal CTRL+C
-processing for the app, and so for every child it spawns afterwards. It needs
+Fix: `pty::allow_ctrl_c_in_children` calls `SetConsoleCtrlHandler(NULL, FALSE)`.
+That restores normal CTRL+C processing for the app, and so for every child it
+spawns afterwards. `run()` calls it at startup, before the app creates any
+child: the attribute is process-wide, and a pane is not the only child that
+inherits it (a console program the files pane opens before the first pane is
+another). `spawn_pane_child`, the one function every pane child goes through,
+calls it again before either `CreateProcess`, as a backstop. It needs
 no console (the app has none), and it changes nothing else for the app itself,
 since with no console nothing can deliver it a CTRL+C. It is the Windows
 counterpart of what portable-pty already does on Unix, where the child's
 `pre_exec` resets SIGINT to `SIG_DFL`. The fix lives in the app rather than
 the launcher so it holds whatever started the app. `tests/ctrl_c_inherit.rs`
 drives `spawn_pane_child` on a real ConPTY from a test process set to ignore
-CTRL+C, and reads the bit the child was born with.
+CTRL+C, and reads the bit the child was born with. That test pins the
+per-spawn call. The startup call in `run()` has no test: `run()` builds and
+runs the Tauri app, so no test can execute it without the runtime.
 
 **2. An off-screen selection still counted (frontend).** An xterm selection
 is anchored to buffer rows, so output carries it out of view while it stays

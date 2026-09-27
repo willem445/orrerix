@@ -138,10 +138,14 @@ pub fn assign_kill_on_close_job(pid: u32) -> Option<JobHandle> {
 /// the shell starts. It changes nothing else for this process: with no console
 /// attached, nothing can deliver it a CTRL+C.
 ///
-/// Called on every pane spawn rather than once at startup, so no spawn path can
-/// run ahead of it. It is one flag write, and it is idempotent. Fail-soft like
-/// the job object: a failure breadcrumbs and the spawn goes on, since a pane
-/// that cannot be interrupted is still better than no pane.
+/// Called twice over. `run()` (lib.rs) calls it at startup, before the app
+/// creates any child: the attribute is process-wide, and a pane is not the only
+/// child that inherits it (a console program the files pane opens is another).
+/// `spawn_pane_child` calls it again before each pane's `CreateProcess`, as a
+/// backstop, and that is the call `tests/ctrl_c_inherit.rs` pins. It is one
+/// flag write, and it is idempotent. Fail-soft like the job object: a failure
+/// breadcrumbs and startup or the spawn goes on, since a child that cannot be
+/// interrupted is still better than no child.
 #[cfg(target_os = "windows")]
 pub fn allow_ctrl_c_in_children() {
     use windows::Win32::System::Console::SetConsoleCtrlHandler;
@@ -1771,7 +1775,8 @@ pub fn spawn_pane_child(
     shell_kind: ShellKind,
 ) -> Result<(Box<dyn portable_pty::Child + Send + Sync>, bool), String> {
     // Before either CreateProcess below: the child inherits the ignore-CTRL+C
-    // attribute as it stands at that call (#3595).
+    // attribute as it stands at that call (#3595). `run()` already cleared it at
+    // startup; this is the backstop, and the call the integration test pins.
     allow_ctrl_c_in_children();
     if let Some(direct) = argv.and_then(try_direct_command) {
         let direct = apply_extra_env(apply_pane_env(direct, cwd), env);

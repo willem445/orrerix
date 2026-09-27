@@ -1046,7 +1046,7 @@ fn no_registry_construction_bypasses_the_test_agent_dir_overrides() {
     let sanctioned: &[(&str, usize)] = &[
         ("groupid.rs", 1),       // registry_at
         ("orchestration/helpers.rs", 1), // relaunch_registry
-        ("workflow/helpers.rs", 1), // relaunch_registry
+        ("workflow.rs", 1), // relaunch_registry
         ("lessonsfile.rs", 1),   // test_registry
         ("prompts.rs", 1),       // test_registry
         ("perf_leaflocks.rs", 1), // test_registry

@@ -209,3 +209,11 @@ test("#3595: Ctrl+Shift+C still copies an off-screen selection — the explicit 
     "copy"
   );
 });
+test("#3595: a zero-row viewport shows nothing, so even a selection spanning it is not live", () => {
+  // Without the guard, bottom = top - 1 and a range straddling `top` still
+  // satisfies `firstRow <= bottom && lastRow >= top`.
+  assert.equal(selectionIsLive("x", range(900, 0, 1100, 4), { top: 1000, rows: 0 }), false);
+  // Control: the same range on the real 24-row screen IS live, so the `false`
+  // above comes from the empty viewport, not from the range.
+  assert.equal(selectionIsLive("x", range(900, 0, 1100, 4), SCREEN), true);
+});

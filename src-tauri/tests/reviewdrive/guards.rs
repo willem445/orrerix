@@ -531,7 +531,7 @@ fn the_kill_scan_permits_exactly_one_release_site_and_no_other_route_to_a_kill()
 #[test]
 fn its_registry_helper_applies_every_override_this_allowlist_row_assumes() {
     let src = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reviewdrive/helpers.rs"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reviewdrive.rs"),
     )
     .expect("this file reads itself");
 

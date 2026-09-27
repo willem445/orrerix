@@ -50,7 +50,7 @@
  *  count as "this pane is doing work", rather than repainting an idle input box.
  *
  *  DUPLICATED from the backend's `DEFAULT_IDLE_ACTIVITY_FLOOR_BYTES`
- *  (`src-tauri/src/orchestration/mod.rs`), where the number was measured: a
+ *  (`src-tauri/src/orchestration/guardrails.rs`), where the number was measured: a
  *  full idle Claude Code input-box repaint is ~164 bytes
  *  (`src-tauri/tests/fixtures/attention/idle-input-box.txt`), so 2048 clears it
  *  by an order of magnitude while still sitting far under any real turn's

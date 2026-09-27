@@ -654,7 +654,6 @@ impl OrchRegistry {
         // `claude_supports_postcompact`). Unknown, including a pane spawned
         // before the startup probe landed, gets none.
         if claude_supports_postcompact(claude_cached_version().as_deref()) {
-            hooks["PostCompact"] = json!([{ "hooks": [{ "type": "command", "command": cmd("postcompact") }] }]);
         }
         Some(ClaudeHookSettings { hooks, status_line: Value::Object(status_line) })
     }

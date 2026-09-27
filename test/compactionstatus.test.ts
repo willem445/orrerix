@@ -1,13 +1,13 @@
 // Compact-nudge lifecycle-panel surfacing (PR #329 round 6) — the pure
 // derivations behind the group lifecycle panel's compaction status line and
-// context-usage badge. What these tests defend: every `CompactionStatus`
+// model/context chip. What these tests defend: every `CompactionStatus`
 // variant the backend can actually send maps to a label (or `null` for
 // "none", so the row is omitted rather than rendered idle every tick), and
-// the context badge never renders a placeholder before the first reading.
+// the chip only shows percentages when both tokens and a window are known.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compactionStatusLabel, compactionStatusTitle, contextUsageLabel } from "../src/compactionstatus.ts";
+import { compactionStatusLabel, compactionStatusTitle, paneModelLabel } from "../src/compactionstatus.ts";
 import type { CompactionStatus } from "../src/orchestration.ts";
 
 test("compactionStatusLabel: none omits the row entirely", () => {
@@ -176,16 +176,18 @@ test("compactionStatusTitle: every non-none status has an explanatory tooltip", 
   }
 });
 
-test("contextUsageLabel: null before the first reading, not a placeholder", () => {
-  assert.equal(contextUsageLabel({ tokens: null, percent: null }), null);
-  assert.equal(contextUsageLabel({ tokens: null, percent: 10 }), null, "half-populated is still no reading");
-  assert.equal(contextUsageLabel({ tokens: 40000, percent: null }), null, "half-populated is still no reading");
+test("paneModelLabel: model, effort and window-backed usage", () => {
+  assert.equal(paneModelLabel({ model: "opus-4.8", effort: "high", tokens: 46_120, window_tokens: 200_000 }), "opus-4.8 · high · ctx 23% of 200,000");
 });
 
-test("contextUsageLabel: formats tokens with separators", () => {
-  assert.equal(contextUsageLabel({ tokens: 46120, percent: 23 }), "ctx 23% (46,120 tok)");
+test("paneModelLabel: tokens without an unknown window", () => {
+  assert.equal(paneModelLabel({ model: "gpt-5", effort: null, tokens: 46_120, window_tokens: null }), "gpt-5 · 46,120 tok");
 });
 
-test("contextUsageLabel: zero is a real reading, not absence", () => {
-  assert.equal(contextUsageLabel({ tokens: 0, percent: 0 }), "ctx 0% (0 tok)");
+test("paneModelLabel: declared pick is explicitly marked", () => {
+  assert.equal(paneModelLabel({ model: null, effort: null, tokens: null, window_tokens: null, declared: { model: "sonnet", effort: "medium" } }), "sonnet · medium (declared)");
+});
+
+test("paneModelLabel: window without tokens never prints a percent", () => {
+  assert.equal(paneModelLabel({ model: "sonnet", effort: "low", tokens: null, window_tokens: 200_000 }), "sonnet · low");
 });

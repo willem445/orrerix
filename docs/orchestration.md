@@ -4064,14 +4064,19 @@ already done or no longer relevant. The ledger lives at
 `<data dir>/orrerix/orchestration/<group>/ledger-<agent-id>.log` — a plain, human-readable
 file, one entry per line, that a human can open directly.
 
-**Lifecycle panel.** The group lifecycle panel (`Alt+O`) shows each Claude agent's current
-context-window usage (tokens + percent) next to its uptime and cost, and — only when there's
-something worth a glance — its compact-nudge phase: armed (waiting to observe the pane go
-busy), awaiting evidence (busy observed, waiting on quiet to resolve), re-grounding (a
-reinjection is in flight, with its attempt count), a recently finished re-grounding (see
-below), or a recent lost outcome (an arm or delivery that didn't resolve in time and was
-released rather than left stuck). An idle agent
-with nothing pending shows neither line. The percent is computed against the context window
+**Lifecycle panel.** The group lifecycle panel (`Alt+O`) shows each agent's detected model,
+effort and context-window usage beside its uptime and cost. It uses the CLI-reported window
+when available; usage percentages are shown only when both tokens and a window are known.
+Before a reading exists, the declared model and effort are labelled as declared.
+The effort shown is always one the CLI reported: a pi pane whose session no longer names its
+thinking level shows no effort rather than passing its configured level off as the live one.
+The panel shows the compact-nudge phase only when there is something worth a
+look: armed (waiting to observe the pane go busy), awaiting evidence (busy
+observed, waiting on quiet to resolve), re-grounding (a reinjection is in
+flight, with its attempt count), a recently finished re-grounding (see below),
+or a recent lost outcome (an arm or delivery that did not resolve in time and
+was released rather than left stuck). An idle agent with nothing pending shows
+neither line. The percent is computed against the context window
 Claude Code itself reports, so a 1M-token session reads correctly on any model. Until a
 session's first report arrives, orrerix falls back to a conservative guess from the model name.
 A group can override the window explicitly if the report is ever wrong for a given deployment.

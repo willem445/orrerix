@@ -825,7 +825,7 @@ fn a_handback_resumes_into_the_live_idle_pane_on_that_session() {
 // ── #2168 E1: a fix push leaves ci-wait on the report, not on green ──────────
 
 /// **#1875's class, through the whole live seam.** The unit tests in
-/// `reviewdrive.rs` pin `decide`'s answer; this pins that the tick, the
+/// the engine's `reviewdrive/` pin `decide`'s answer; this pins that the tick, the
 /// interception, the persisted flag and the lane brief compose into the
 /// property the issue is about — the lane is briefed **once**, at the digest
 /// the receipts left behind, instead of twice.

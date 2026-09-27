@@ -106,6 +106,18 @@
 //! on its own merits, where [`DriveState`], [`transition`] and
 //! [`ReviewDrivesState`] may not: those three are the note's, and changing one
 //! changes `docs/design/review-driver.md` first.
+//!
+//! # Module map (#3498 P7)
+//!
+//! One file per section of the note, each re-exported here whole, so every
+//! `reviewdrive::` path is the one it was when this module was a single file:
+//! `states.rs` (§2.1), `counters.rs` (§2.3), `store.rs` (§5.2's file and its
+//! retention), `bounds.rs` (§2.2's per-state bounds), `entry.rs` (one driven PR),
+//! `facts.rs` and `decision.rs` (§2.4), `findings.rs` (#3367) and `release.rs`
+//! (#2501). Each file's unit tests are its own trailing `#[cfg(test)]` module,
+//! which is the shape every source scan that cuts a file at `#[cfg(test)]`
+//! assumes; the five helpers those modules share are imported at the bottom of
+//! this file, so each still reaches them through its own `use super::*`.
 
 use std::collections::BTreeMap;
 use std::fmt;

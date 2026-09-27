@@ -1,7 +1,7 @@
 //! Integration tests for the engine-driven review driver (#1778 S3/S4).
 //!
 //! Design note: `docs/design/review-driver.md`. The pure core's own properties
-//! are pinned inline in `crates/loomux-engine/src/reviewdrive.rs`; what lives
+//! are pinned inline in `crates/loomux-engine/src/reviewdrive/`; what lives
 //! here is everything that needs a **crate boundary** or the registry — the
 //! tick's wiring, the interception arms, the tools, and the brief rendering.
 //!

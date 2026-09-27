@@ -581,7 +581,7 @@ impl OrchRegistry {
     ///
     /// `review-driver.md` §3.1 item 5 was a closed guarantee — the driver may
     /// never kill a pane — enforced by a default-deny source scan over the
-    /// driver's two files and `rdtick/` that denies `kill_agent` and the reaper entry
+    /// driver's `rddrive.rs`, `reviewdrive/` and `rdtick/` that denies `kill_agent` and the reaper entry
     /// points. #2501 narrows the guarantee to a lane whose verdict is recorded
     /// at the drive's current head and a worker whose `report` the drive has
     /// consumed; #2811 S1 adds either of them at the step that ENDS the drive.

@@ -1062,11 +1062,6 @@ const FILE_BUDGETS = [
     blob: "020c71f09dba0d2301b96465197ea0204d8fd428"
   },
   {
-    path: "src/workflowview.ts",
-    ceiling: 4175,
-    blob: "1ecf5d6d635de7ac9c442d5bfd1c3e73829dcc97"
-  },
-  {
     path: "test/panerestore.test.ts",
     ceiling: 2649,
     blob: "e157ccf9220b7ba891c41444f5550301bb460a6c"

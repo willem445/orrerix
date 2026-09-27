@@ -1,8 +1,10 @@
 // The workflow model's TYPES and CONSTANTS (#222; split out of workflowmodel.ts by #3498 F2):
 // the closed enums, the bounds tables, the schema interfaces, the finding shapes, and the
 // small predicates over them. It imports nothing from the other workflow* modules, and
-// every one of them imports its types and constants from HERE, never from the
-// `workflowmodel.ts` barrel. That is what keeps the module graph a DAG. Design note:
+// they take the shared types and constants from HERE, never from the `workflowmodel.ts`
+// barrel. That is what keeps the module graph a DAG. One type lives elsewhere: `KnobLookup`,
+// the capability seam of the validation pass, is declared in workflowvalidate.ts, and
+// workflowgraph.ts imports it from there. Design note:
 // docs/design/workflows.md; module map: docs/design/architecture.md.
 
 // ---------- the closed enums ----------

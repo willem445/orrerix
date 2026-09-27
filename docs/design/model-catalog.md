@@ -532,7 +532,8 @@ it is in flight for seconds, and a human does things in seconds.
 **Repaint through the live hook, never a captured one.** `renderInspector()` clears
 `repaintBlockKnobs` before rebuilding, precisely so a late `agent_cli_knobs`
 reply cannot paint into a row it has just detached — and `ensureCliKnobs` calls
-`this.repaintBlockKnobs?.()` for that reason. A detect handler holding its own
+`this.view.inspector.repaintBlockKnobs?.()` for that reason (the knob satellite reaching
+the inspector's hook since #3498 F3). A detect handler holding its own
 form's repainter in a closure walks straight around that guard: select another
 block while the ask is in flight and the reply paints the *previous* form's
 detached rows, leaving the one on screen stale (#997 review NB-1). The handler

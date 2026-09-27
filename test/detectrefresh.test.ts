@@ -15,7 +15,7 @@
 // model whose reply says it has no effort setting — the human picks it, the next
 // mutation re-renders the row disabled, and the findings pane flags the block.
 // The editor offered a value its own validator rejects, which is the exact thing
-// `workflowview.ts`'s own comment claims cannot happen.
+// workflow pane's own comments claim cannot happen.
 //
 // **What #1020 changed about the subject, and what it did not.** The reply used
 // to arrive from an `onDetect:` button hook; the button is gone, and a reply now
@@ -216,8 +216,10 @@ function onReportBodies(rawText: string, where: string): string[] {
 }
 
 test("the workflow pane's detection refresh reaches the knobs, the findings and the menu", () => {
-  const text = stripComments(src("workflowview.ts"));
-  const at = text.indexOf("private applyDetection(");
+  // The funnel lives in the pane's knob satellite since #3498 F3 and reaches the rest of the
+  // pane through `this.view`; the call-shape assertions below match either receiver.
+  const text = stripComments(src("workflowcliknobs.ts"));
+  const at = text.indexOf("applyDetection(program: string): void {");
   assert.notEqual(at, -1, "`applyDetection` was renamed — both routes' refresh has lost the thing they funnel into");
   const body = text.slice(at, text.indexOf("\n  }", at));
   assert.ok(body.length > 40, `the extracted method is implausibly short, so this test is not reading it: ${body}`);
@@ -234,13 +236,13 @@ test("the workflow pane's detection refresh reaches the knobs, the findings and 
   assert.match(
     body,
     /repaintBlockKnobs\?\.\(\)/,
-    "the knob repaint must go through the LIVE `this.repaintBlockKnobs?.()`, never a captured closure: " +
+    "the knob repaint must go through the LIVE `this.view.inspector.repaintBlockKnobs?.()`, never a captured closure: " +
       "`renderInspector()` nulls it precisely so a late reply cannot paint into a row it has already detached"
   );
   assert.match(
     body,
     /refreshBlockModels\?\.\(\)/,
-    "and the MENU through the live `this.refreshBlockModels?.()` — same argument, same null-clearing. Without it " +
+    "and the MENU through the live `this.view.inspector.refreshBlockModels?.()` — same argument, same null-clearing. Without it " +
       "a reply that lands while the human is inside the form repaints the knobs and leaves the dropdown stale"
   );
   // The NEGATIVE half, and it is the half that discriminates: naming the
@@ -270,7 +272,7 @@ test("each host's refresh funnel is idempotent per CLI, so the two routes cannot
   //
   // Reachability by name, like everything else in this file — see the header.
   const FUNNELS = [
-    { file: "workflowview.ts", fn: "private applyDetection(" },
+    { file: "workflowcliknobs.ts", fn: "applyDetection(program: string): void {" },
     { file: "launcher.ts", fn: "private refreshRoleFromDetection(" },
   ] as const;
   for (const { file, fn } of FUNNELS) {
@@ -300,17 +302,24 @@ test("the workflow pane's detection refresh never rebuilds the form unconditiona
   // for it: reverting the early-out to a bare rebuild left the whole suite
   // green. This closes that gap: every `renderInspector()` in the refresh must
   // be the `else` of the `contains(document.activeElement)` test, never bare.
-  const text = stripComments(src("workflowview.ts"));
-  const at = text.indexOf("private applyDetection(");
+  const text = stripComments(src("workflowcliknobs.ts"));
+  const at = text.indexOf("applyDetection(program: string): void {");
   const body = text.slice(at, text.indexOf("\n  }", at));
   assert.match(
     body,
     /contains\(document\.activeElement\)/,
     "the refresh has to ASK whether the human is inside the form before it decides how to repaint"
   );
+  // The rebuild is reached through the inspector satellite (#3498 F3). Pinned present first,
+  // so the negative below cannot pass by the receiver changing under it.
+  assert.match(
+    body,
+    /else this\.view\.inspector\.renderInspector\(\)/,
+    "the refresh no longer rebuilds the form through `this.view.inspector`, so the next assertion reads nothing"
+  );
   assert.doesNotMatch(
     body,
-    /(?<!else )this\.renderInspector\(\)/,
+    /(?<!else )this\.view\.inspector\.renderInspector\(\)/,
     "a detection reply must never rebuild the form unconditionally: `replaceChildren` destroys the input under " +
       "the caret. The rebuild is always the `else` of the `contains(document.activeElement)` test"
   );
@@ -376,8 +385,9 @@ test("both hosts DEFER the mid-type menu rebuild rather than dropping it", () =>
   // are two assignments to that field and they are different statements: the
   // null-clearing in `renderInspector`, which is what stops a late reply
   // painting a detached row, and the install. Both are required, so both are
-  // read out rather than whichever `indexOf` happens to reach first.
-  const wf = stripComments(src("workflowview.ts"));
+  // read out rather than whichever `indexOf` happens to reach first. The form, and so the
+  // hook, lives in the pane's inspector satellite since #3498 F3.
+  const wf = stripComments(src("workflowinspector.ts"));
   const assignments: string[] = [];
   const marker = /this\.refreshBlockModels = /g;
   for (let m = marker.exec(wf); m !== null; m = marker.exec(wf)) {
@@ -407,14 +417,15 @@ test("a detection lookup fired from a render path cannot re-enter that render", 
   // stops a barren answer looping (it never sets `report()`, so the other guard
   // would not fire); the `report()` guard stops a good one (it would pass the
   // `models.length` test every time).
-  for (const { body, at } of detectCallSites(src("workflowview.ts"), "workflowview.ts")) {
+  // The picker's lookup is in the block form, in the pane's inspector satellite (#3498 F3).
+  for (const { body, at } of detectCallSites(src("workflowinspector.ts"), "workflowinspector.ts")) {
     assert.match(
       body,
       /\.models\.length/,
       "the handler must return early on an answer that carried nothing — it never sets `report()`, so it would " +
         "otherwise re-enter the render on every repaint"
     );
-    const before = stripComments(src("workflowview.ts")).slice(Math.max(0, at - 400), at);
+    const before = stripComments(src("workflowinspector.ts")).slice(Math.max(0, at - 400), at);
     assert.match(
       before,
       /!\s*modelCatalog\.report\(/,
@@ -476,7 +487,7 @@ test("both hosts take the startup sweep's push, and answer for their own livenes
   // the lookup do the same work rather than merely similar work.
   assert.match(
     onReportBodies(src("workflowview.ts"), "workflowview.ts").join("\n"),
-    /this\.applyDetection\(/,
+    /this\.knobs\.applyDetection\(/,
     "the workflow pane's push must go through the same refresh the lookup does"
   );
   assert.match(

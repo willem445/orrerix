@@ -334,8 +334,9 @@ through this emitter, so a field it skips is a line the pane deletes:\n${text}`
 //
 // **These two lists track the DESCRIPTOR REGISTRY, not hand-built forms** — worth saying
 // out loud, because the gap is now wide enough to mislead (#1020 review, finding 8). Most
-// of `FIELDS_WITHOUT_AN_EDITOR` has had a hand-written control in `workflowview.ts` for a
-// long time: `block.id`/`name`/`kind`/`cli`/`model` and `gate.require`/`reviewers`/`also`
+// of `FIELDS_WITHOUT_AN_EDITOR` has had a hand-written control in the workflow pane for a
+// long time (`workflowinspector.ts` for the block fields, `workflowsections.ts` for the
+// gate, intake, merge-queue and resource ones, since #3498 F3): `block.id`/`name`/`kind`/`cli`/`model` and `gate.require`/`reviewers`/`also`
 // since #222, and `intake.*`, `merge_queue.*`, `resource.*`, `block.allow` and
 // `block.role_hint` since #1020. Nothing here compares against an actual control, so an
 // entry left behind after its form ships does NOT redden — all four assertions below are

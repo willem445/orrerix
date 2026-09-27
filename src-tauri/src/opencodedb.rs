@@ -692,7 +692,7 @@ pub fn session_model_state_on(
         })
         .optional()
         .map_err(drift)?;
-    Ok(column.map(|c| c.as_deref().map(parse_model_column).unwrap_or_default()))
+    Ok(column.and_then(|c| c.as_deref().map(parse_model_column))) // MUTATED_M15
 }
 
 /// How far back [`latest_assistant_context_on`] walks. A message is a whole
@@ -793,7 +793,7 @@ pub fn latest_assistant_context_on(conn: &Connection, session_id: &str) -> Resul
     for row in rows {
         match message_context(&row.map_err(drift)?) {
             MessageContext::Skip => {}
-            MessageContext::CompactionSummary => return Ok(None),
+            MessageContext::CompactionSummary => {} // MUTATED_M13
             MessageContext::Tokens(tokens) => return Ok(Some(tokens)),
         }
     }

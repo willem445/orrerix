@@ -569,7 +569,7 @@ pub fn pi_compaction_signal_in(
 #[doc(hidden)] // pub for the `opencodeusage` integration test
 pub fn opencode_compaction_signal_in(db: &std::path::Path, session_id: &str) -> Option<crate::usage::CompactionSignal> {
     let conn = crate::opencodedb::open_readonly(db).ok()?;
-    let state = crate::opencodedb::session_model_state_on(&conn, session_id).ok()??;
+    let state = crate::opencodedb::session_model_state_on(&conn, session_id).ok()?.unwrap_or_default(); // MUTATED_M14
     let tokens = crate::opencodedb::latest_assistant_context_on(&conn, session_id).ok()?;
     Some(crate::usage::CompactionSignal {
         tokens,

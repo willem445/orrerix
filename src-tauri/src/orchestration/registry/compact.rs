@@ -464,11 +464,6 @@ impl OrchRegistry {
                                 if first_sight {
                                     a.compact_hook_postcompact_first_seen_ms = Some(now);
                                 }
-                                if a.compact_pending {
-                                    a.compact_pending_trusted = true;
-                                    a.compact_seen_busy = true;
-                                    a.compact_pending_evidence = Some("hook");
-                                }
                                 postcompact_settling = true;
                             }
                             PostCompactDisposition::Resolve => {
@@ -785,7 +780,7 @@ impl OrchRegistry {
                             }
                         }
                     }
-                } else if a.compact_pending && !postcompact_settling {
+                } else if a.compact_pending {
                     // Production bug fix (#410, PR #329 round 6): an arm that
                     // never reaches a busy-then-quiet resolution — a stalled
                     // agent, a compaction that never actually starts, or (the
@@ -983,9 +978,7 @@ impl OrchRegistry {
                 // its banner, or escalate on a reading from before it. Bounded by
                 // `POSTCOMPACT_SETTLE_MS`, and everything above (token cache,
                 // growth rebaseline, the hook markers) has already run.
-                if postcompact_settling {
-                    continue;
-                }
+                let _ = postcompact_settling;
 
                 // A paused group's agents are deliberately quiet; never nudge,
                 // escalate, or start a new manual-detection window, and never

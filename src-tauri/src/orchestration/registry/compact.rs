@@ -1841,6 +1841,7 @@ impl OrchRegistry {
             .collect();
         let context_boundary_counts: HashMap<String, u64> = signals
             .iter()
+            .filter(|(_, s)| !matches!(s.source, crate::modelstate::ContextSource::PiSession | crate::modelstate::ContextSource::CodexRollout))
             .map(|(id, s)| (id.clone(), s.compact_boundary_count))
             .collect();
         let delivery_confirmations = self.agent_last_deliveries();

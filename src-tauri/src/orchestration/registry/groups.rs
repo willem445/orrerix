@@ -969,3 +969,14 @@ impl OrchRegistry {
         self.group_dir(group).is_dir()
     }
 }
+
+// scratch plant (#3667 r1): a hook-marker row's site text outside compact.rs.
+#[allow(dead_code)]
+struct PlantedAgent {
+    id: String,
+}
+#[allow(dead_code)]
+fn planted_marker(hooks_dir: &std::path::Path, a: &PlantedAgent) -> std::path::PathBuf {
+    let precompact_marker = hooks_dir.join(format!("{}.precompact.json", a.id));
+    precompact_marker
+}

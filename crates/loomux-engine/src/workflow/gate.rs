@@ -695,3 +695,15 @@ pub fn check_diff_size(gate: &Gate, lines: Option<u64>) -> DiffSizeVerdict {
         Some(_) => DiffSizeVerdict::Ok,
     }
 }
+
+// scratch plant (#3667 r1): the block-id row's site text outside schema.rs.
+#[allow(dead_code)]
+struct PlantedBlock {
+    id: String,
+}
+impl PlantedBlock {
+    #[allow(dead_code)]
+    fn planted_instructions_file(&self) -> String {
+        format!("{}.md", self.id)
+    }
+}

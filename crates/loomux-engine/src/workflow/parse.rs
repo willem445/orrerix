@@ -767,7 +767,7 @@ pub fn parse_workflow(text: &str) -> Result<Workflow, Vec<String>> {
             ));
             continue;
         }
-        let Some(id) = sanitize_id(&rb.id) else {
+        let Some(id) = super::sanitize_id(&rb.id) else {
             errs.push(format!("blocks[{i}]: id {:?} has no usable characters (allowed: letters, digits, '-', '_')", rb.id));
             continue;
         };

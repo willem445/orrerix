@@ -10436,7 +10436,7 @@ pub fn postcompact_marker_disposition(
         return PostCompactDisposition::Absorb;
     }
     match first_seen_ms {
-        Some(first) if now.saturating_sub(first) >= POSTCOMPACT_SETTLE_MS => PostCompactDisposition::Resolve,
+        Some(_first) if now.saturating_sub(marker_ts) >= POSTCOMPACT_SETTLE_MS => PostCompactDisposition::Resolve,
         _ => PostCompactDisposition::Settle,
     }
 }

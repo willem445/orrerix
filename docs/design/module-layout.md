@@ -93,9 +93,12 @@ namespace and the split must not change what any name resolves to:
   `workflow/helpers.rs`. So does the proof test that reads a helper's own
   source: `reviewdrive/guards.rs` reads `tests/reviewdrive/helpers.rs`.
 
-Prose written before a split, in code comments and design notes, still names
-the old single file (`tests/orchestration.rs`, `tests/reviewdrive.rs`,
-`tests/workflow.rs`); read that as the directory target. Tests kept their
+Present-tense pointers to the old single files were re-pointed when the
+campaign closed (#3498). What still names one (`tests/orchestration.rs`,
+`tests/reviewdrive.rs`, `tests/workflow.rs`) is history, such as the
+`split out of the former single-file` module headers, dated narrative in the
+design notes and re-bless logs, or pinned fixture data. Read it as the
+directory target. Tests kept their
 names, so `grep -rn <test name> src-tauri/tests/<target>/` finds the new home.
 
 ### Splitting a source file that carries unit tests

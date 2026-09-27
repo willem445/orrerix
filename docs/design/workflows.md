@@ -705,7 +705,7 @@ to merge manually.
 
 The fix is a periodic background pass — `run_workflow_gate_reload`, on the
 same `start_X`/timer shape as the idle reaper, the watchdog, the disk monitor,
-etc. (`src-tauri/src/orchestration/mod.rs`'s "background loop" section) —
+etc. (`src-tauri/src/orchestration/ticks.rs`, the background loops) —
 that, for every non-paused `advanced_orchestrator` group, re-derives the gate
 from the CURRENT file and re-arms it through the *exact same* `sync_merge_gate`
 call the fresh-launch and live-toggle paths already use. Not a second

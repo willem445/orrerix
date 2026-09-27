@@ -410,8 +410,9 @@ guess about which CLI a block runs:
    dollar figure, never which one), the `cli` on that agent's `agent-spawn` row.
    Verified rather than assumed, and **the load-bearing fact is the two sites,
    not any count**: there are exactly two `agent-spawn` `json!` sites in
-   `src-tauri/src/orchestration/mod.rs`, and the **delegate** one carries `cli`
-   and `block` while the **orchestrator** one carries neither. Every row without
+   `src-tauri/src/orchestration/` (`registry/spawn.rs` for the delegate,
+   `commands/panes.rs` for the orchestrator), and the **delegate** one carries
+   `cli` and `block` while the **orchestrator** one carries neither. Every row without
    `cli` is therefore an orchestrator spawn, and an orchestrator is excluded
    from the delegate side anyway (§4.6), so the rung covers every agent it is
    asked about. A ratio is only an illustration and decays by the hour on a live

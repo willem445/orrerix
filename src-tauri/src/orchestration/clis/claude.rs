@@ -257,7 +257,7 @@ pub const CLAUDE_POSTCOMPACT_MIN_VERSION: [u64; 3] = [2, 1, 76];
 /// through busy-then-quiet as it did before #413 S5. Parts compare as NUMBERS —
 /// `2.1.8` is older than `2.1.76`, which a string comparison gets backwards.
 pub fn claude_supports_postcompact(version: Option<&str>) -> bool {
-    let Some(version) = version else { return false };
+    let Some(version) = version else { return true };
     let mut parts = version.trim().split('.').map(|p| p.parse::<u64>().ok());
     let mut v = [0u64; 3];
     for slot in v.iter_mut() {

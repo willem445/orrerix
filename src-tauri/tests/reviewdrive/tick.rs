@@ -285,7 +285,7 @@ pub(crate) fn lane_brief(reg: &OrchRegistry, agent: &str) -> String {
     lf(&reg.agent(agent).expect("the spawned lane is on the roster").task)
 }
 
-/// Line endings normalised — `workflow.rs`'s own `lf`, for its reason.
+/// Line endings normalised — `tests/workflow/goldens.rs`'s own `lf`, for its reason.
 ///
 /// The brief templates are `include_str!`'d, so they carry whatever line endings
 /// the checkout has. That USED to split by platform — LF on the Linux and macOS

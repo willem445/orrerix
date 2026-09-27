@@ -4,7 +4,7 @@
 //! is testable inline without linking the app (constraint 4 applies to tests
 //! that link the lib; these link nothing but `serde_json`). The impure halves
 //! (finding the files, reading them, caching the result on `AgentEntry`) live
-//! in `orchestration/mod.rs` beside the compact-nudge tick that consumes them.
+//! in `orchestration/registry/compact.rs` beside the compact-nudge tick that consumes them.
 //!
 //! **Read the fact out of the CLI's artifact, never guess it** (the
 //! `agent-cli-reference` rule). S1 adds the Claude Code status-line payload as

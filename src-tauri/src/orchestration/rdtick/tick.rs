@@ -3,7 +3,7 @@
 //! the notice flush with §5.2's retention, and the gate facts (§4).
 //!
 //! Design note: `docs/design/review-driver.md`. Part of `rdtick/`, the driver's
-//! registry wiring, which `tests/reviewdrive.rs` scans whole (see `mod.rs`).
+//! registry wiring, which `tests/reviewdrive/guards.rs` scans whole (see `mod.rs`).
 
 use super::*;
 
@@ -144,7 +144,7 @@ impl OrchRegistry {
     }
 
     /// Drive one group with the `gh` seam injected — the seam
-    /// `tests/reviewdrive.rs` uses to exercise the whole production path
+    /// `tests/reviewdrive/` uses to exercise the whole production path
     /// without spawning a child (CLAUDE.md constraint 3).
     ///
     /// **This is wiring, not logic.** Every state decision is

@@ -1252,7 +1252,7 @@ impl OrchRegistry {
 
     /// The value of the `autonomous idle-tick mode is {…}` clause in the
     /// orchestrator's kickoff config. OFF and plain-autonomous are pinned
-    /// byte-for-byte by `orchestration.rs`: a kickoff is the contract a fresh boot
+    /// byte-for-byte by `tests/orchestration/fullautonomy.rs`: a kickoff is the contract a fresh boot
     /// or resume reads, so a silent wording drift there changes what every existing
     /// group is told, and the full-autonomy branch (#778) must be additive to it.
     fn autonomous_kickoff_clause(&self, group: &GroupId) -> String {

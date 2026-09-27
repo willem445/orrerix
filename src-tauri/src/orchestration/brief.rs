@@ -33,7 +33,7 @@
 /// is the RULE text — every sentence an agent executes — which is what
 /// `the_dod_is_one_copy` scans for.
 ///
-/// `pub` for the golden fixture in `tests/workflow.rs`, which pins these bytes
+/// `pub` for the golden fixture in `tests/workflow/goldens.rs`, which pins these bytes
 /// against a human-blessed copy — the re-bless gate an edit to the definition
 /// of done has to pass. Nothing in the product reads it directly; use
 /// [`dod_body`], which is the value the templates actually substitute.

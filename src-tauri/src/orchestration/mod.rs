@@ -363,7 +363,7 @@ pub use loomux_engine::{queue, queuestate};
 // The re-export is the plain MODULE form, and — as in batch 10 — that is
 // measured rather than stylistic. EVERY consumer spells the module path:
 // `intake::due_intake_polls`, `intake::PendingIntake`, `intake::pr_list_argv`
-// here, `intake::eligible_deltas` in `tests/workflow.rs`, and
+// here, `intake::eligible_deltas` in `tests/workflow/intakeprofile.rs`, and
 // `loomux_lib::orchestration::intake::MAX_INTAKE_POLLS_PER_TICK` in
 // `tests/orchestration/`. Not one flat `orchestration::<item>` spelling
 // exists, so a curated item list (#988) would preserve no call site at all.
@@ -470,7 +470,7 @@ pub use loomux_engine::{rddrive, reviewdrive};
 // forbids deciding from a binding's name, and the design note names an
 // `rd_*` prefix as exactly the scope that fails that test. A FILE is not a
 // name — every landing verb the driver could reach has to be written
-// somewhere, and `tests/reviewdrive.rs` default-denies the whole of this
+// somewhere, and `tests/reviewdrive/guards.rs` default-denies the whole of this
 // one, reading every file under `rdtick/` as one scope.
 mod rdtick;
 pub use rdtick::{

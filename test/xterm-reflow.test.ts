@@ -22,7 +22,7 @@
 //
 // The lever that measurably helps is xterm.js#5234's `reflowCursorLine`
 // option (added in 6.0.0, off by default "because shells usually handle this
-// themselves" -- which conpty's resize-quirk explicitly does not). pane.ts
+// themselves" -- which conpty's resize-quirk explicitly does not). panelifecycle.ts
 // sets it alongside windowsPty, gated to the conpty branch.
 //
 // PRECISE characterization (measured, not assumed -- see #430 follow-up
@@ -76,7 +76,7 @@ async function replay(cols0: number, cols1: number, reflowCursorLine: boolean) {
     allowProposedApi: true,
     reflowCursorLine,
   });
-  // Matches pane.ts's start(): the sideloaded conpty build pty.rs reports.
+  // Matches panelifecycle.ts's start(): the sideloaded conpty build pty.rs reports.
   term.options.windowsPty = { backend: "conpty", buildNumber: 22621 };
 
   await write(term, CONTENT);

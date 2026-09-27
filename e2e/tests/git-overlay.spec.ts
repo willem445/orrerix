@@ -7,7 +7,7 @@
 // supported agent CLIs (src/launcher.ts `ORCH_CLIS`) — forbidden for
 // automated E2E (never spawn real agent CLIs, CLAUDE.md constraint 3). The
 // git-view overlay (Alt+G) is available on any plain shell pane and is built
-// from the exact same `.git-overlay` docking mechanism (src/pane.ts) that the
+// from the exact same `.git-overlay` docking mechanism (src/paneembeds.ts) that the
 // task board, audit log, and group-lifecycle overlays all share, so it
 // exercises the identical z-order/clipping code path safely.
 import { test, expect } from "../fixtures";

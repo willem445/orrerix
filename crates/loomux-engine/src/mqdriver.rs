@@ -264,7 +264,7 @@ impl MqRunner for ProcessRunner {
 // ── the live lookups (§7) ───────────────────────────────────────────────────
 
 /// The argv for the repo default-branch lookup — **the shim's own lookup**
-/// (`orchestration/mod.rs:759`), in Rust.
+/// (`orchestration/ghshim.rs`'s `gh_shim_sh`), in Rust.
 ///
 /// Note #294 by construction: the shim passes the repo **positionally** to
 /// `gh repo view` (`-R` is not a flag it accepts), and this call passes no repo
@@ -448,7 +448,7 @@ pub(crate) fn as_args(v: &[String]) -> Vec<&str> {
 /// Any failure — `gh` missing, a non-zero exit, an empty answer — is
 /// [`TargetRefusal::BaseUnverifiable`], never a default and never an empty
 /// string that flows onward. This mirrors the shim's `unverifiable-base` posture
-/// at `orchestration/mod.rs:761-763`: **unknown is never treated as safe.**
+/// in `orchestration/ghshim.rs`'s `gh_shim_sh`: **unknown is never treated as safe.**
 pub fn resolve_default_branch(r: &dyn MqRunner) -> Result<String, TargetRefusal> {
     resolve_default_branch_detailed(r).map_err(ResolveFailure::into_refusal)
 }
@@ -701,7 +701,7 @@ fn same_branch(a: &str, b: &str) -> bool {
 /// # Which lookup is authoritative
 ///
 /// `base` and `default` must be **live** answers from the real `gh` — the same
-/// two lookups the shim makes at `orchestration/mod.rs:750` and `:759`. They are
+/// two lookups the shim makes in `orchestration/ghshim.rs`'s `gh_shim_sh`. They are
 /// deliberately **not** `git::default_base_ref:631`, despite that being the
 /// obvious reuse: that helper answers "what does local git think the default
 /// base is", derived from local refs after a best-effort fetch, and it falls
@@ -1184,7 +1184,7 @@ fn land_refspec(scratch_sha: &str, target: &str) -> String {
 /// lease. A target that moved under the batch therefore makes the push **fail**
 /// rather than overwrite (§10), and the queue never calls `gh pr merge` at all,
 /// so it cannot reach the shim's default-branch arms and the per-PR human grant
-/// path (`orchestration/mod.rs:943-960`) is untouched.
+/// path (`orchestration/ghshim.rs`'s `gh_shim_sh`) is untouched.
 pub fn land_push_argv(scratch_sha: &str, target: &str) -> Vec<String> {
     vec!["push".into(), REMOTE.into(), land_refspec(scratch_sha, target)]
 }
@@ -1254,7 +1254,7 @@ pub struct Landed {
 ///
 /// `verdicts` is supplied by the caller rather than read here because the
 /// verdict files live in the group dir, which is the registry's business and not
-/// this module's — the same separation that keeps `orchestration/mod.rs`
+/// this module's — the same separation that keeps `orchestration/registry/merge.rs`
 /// wiring-only.
 pub fn land_batch(
     r: &dyn MqRunner,

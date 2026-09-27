@@ -220,7 +220,7 @@ export interface PaneBadge {
 
 /** What `setConnected` needs to render the cross-workspace channel chip/accent
  *  (#271). Built by channel.ts's `channelBadge` from the live `OrchChannel`/
- *  `orch-channel` payload — pane.ts stays a pure renderer of it, same division as
+ *  `orch-channel` payload — panebadges.ts stays a pure renderer of it, same division as
  *  `setBadge`/`PaneBadge` above. */
 export interface PaneChannelBadge {
   channelId: string;
@@ -1342,7 +1342,7 @@ export class Pane implements VoiceTargetPane {
 
   /** Mark genuine human input into this pane (#440 B2, review round 3 B2-R;
    *  #518). Called from `term.onKey` (real keyboard events only) and from both
-   *  `this.term.paste(...)` call sites (`pasteFromClipboard`,
+   *  `this.pane.term.paste(...)` call sites in `panecompose.ts` (`pasteFromClipboard`,
    *  `pasteToTerminal` — loomux owns paste entirely, #402, so these two are
    *  the only paste vectors). Deliberately NEVER called from `term.onData`
    *  — see that handler's comment for why it can't tell a keystroke from

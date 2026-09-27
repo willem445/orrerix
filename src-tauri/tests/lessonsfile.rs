@@ -47,7 +47,7 @@ impl Drop for Repo {
     }
 }
 
-/// The same 4-block built-in roster `orchestration.rs`'s `rails()` uses —
+/// The same 4-block built-in roster `orchestration/helpers.rs`'s `rails()` uses —
 /// duplicated here because integration-test binaries don't share private
 /// helpers across files.
 fn rails() -> Guardrails {

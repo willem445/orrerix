@@ -1,5 +1,5 @@
 // Pure copy/paste keydown gesture decisions for terminal panes (#370).
-// DOM-free so node:test can pin the key matching without a browser; pane.ts
+// DOM-free so node:test can pin the key matching without a browser; panecompose.ts
 // wires the actual keydown handler. (A right-click Copy/Paste context menu
 // lived here briefly — removed in the #402 second live-demo round: its paste
 // path was unreliable and the human chose not to iterate on a second
@@ -14,7 +14,7 @@
 // and got nothing, with no way to tell "wrong key" from "clipboard blocked"
 // apart. The fix: a genuine read failure is a menu item / keystroke that
 // visibly does nothing rather than silently nothing — see clipboard.ts's
-// readClipboard, which pane.ts surfaces via showToast — and plain Ctrl+V
+// readClipboard, which panecompose.ts surfaces via showToast — and plain Ctrl+V
 // pastes TOO, but only when `pasteOnPlainCtrlV` opts in (default true;
 // see settings.ts). It is not a free win: it costs vim's VISUAL BLOCK mode,
 // readline's quoted-insert, and any TUI/agent CLI that wants the raw key —
@@ -43,7 +43,7 @@ export interface PasteKeyEvent {
  *  readline's quoted-insert, and any TUI/agent CLI that wants the raw key
  *  (the exact failure mode `Alt+V` was deliberately left alone for, #155 —
  *  shortcuts.ts). `settings.ts`'s `pasteOnPlainCtrlV` (default true) is the
- *  opt-out; pane.ts reads it and passes the current value in here on every
+ *  opt-out; panecompose.ts reads it and passes the current value in here on every
  *  keydown rather than this module reading global state, so it stays pure
  *  and testable without a settings singleton.
  *
@@ -99,7 +99,7 @@ export function isConditionalCopyKey(e: PasteKeyEvent): boolean {
  *  preventDefault; `"pass"` is the only one that must not — collapsing to
  *  one enum makes forgetting the preventDefault for one branch, but not
  *  another, a one-branch typo instead of independently-fixed call sites. See
- *  pane.ts for the DOM wiring (the preventDefault calls themselves, and the
+ *  panecompose.ts for the DOM wiring (the preventDefault calls themselves, and the
  *  capture-phase native-`"paste"`-event kill switch that backstops paste
  *  regardless of what triggers the browser's native paste).
  *
@@ -110,7 +110,7 @@ export function isConditionalCopyKey(e: PasteKeyEvent): boolean {
  *  `!!term.getSelection()` (#3595) — same discipline as
  *  `plainCtrlVPastes` reading `settings.ts`'s live value. This function is
  *  identical for every pane kind (plain terminal, agent, orchestrator) —
- *  there is no pane-kind branch anywhere in this module or in pane.ts's
+ *  there is no pane-kind branch anywhere in this module or in panecompose.ts's
  *  keydown wiring, deliberately: see the pane-kind/selection matrix in
  *  pasteflow.test.ts, which pins that a terminal pane and an agent pane
  *  produce the SAME disposition for the same (event, selection) input. */

@@ -9,7 +9,7 @@ use super::*;
 // ───────── #255: max_agents recommendation, end to end ─────────
 //
 // The pure derivation (`recommend_capacity`, gate-aware) is pinned in
-// tests/workflow.rs. What these assert is the WIRING: a real `create_group`
+// tests/workflow/gates.rs. What these assert is the WIRING: a real `create_group`
 // records it in the `workflow-loaded` audit, and a cap below the minimum is
 // audited — advisory only, never silently rewritten.
 
@@ -359,7 +359,7 @@ fn a_resumed_group_with_no_declared_workflow_gets_no_capacity_audit_either() {
 
 // ───────── review verdicts + the enforced consensus gate (#222 / #197) ─────────
 //
-// The pure gate semantics live in tests/workflow.rs. These drive the whole stack:
+// The pure gate semantics live in tests/workflow/gates.rs. These drive the whole stack:
 // a repo's `.loomux/workflow.yml` → the `merge_gate` spec file → verdicts recorded
 // through the real MCP dispatch → the real POSIX `gh` shim, executed. Every claim
 // about what the shim refuses is EXECUTED, not asserted against its source text — a

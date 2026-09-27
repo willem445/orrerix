@@ -453,7 +453,7 @@ fn a_hang_is_one_breadcrumb_and_not_one_per_second() {
 /// state on the instance, so a registry built without them falls through to the
 /// REAL `~/.claude/agents` and `~/.copilot/agents` and a spawn against it writes
 /// a generated agent file into the developer's own profile — which is how the
-/// suite once left 1,111 stray files there. `orchestration.rs`'s
+/// suite once left 1,111 stray files there. `orchestration/guards.rs`'s
 /// `no_registry_construction_bypasses_the_test_agent_dir_overrides` scans every
 /// file under `tests/` for raw constructions and permits exactly one per
 /// sanctioned helper, so this file is listed there with a count of 1.

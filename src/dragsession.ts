@@ -1,5 +1,5 @@
 // Shared mousedown→mousemove→mouseup drag-session wiring for every divider
-// drag in this codebase (grid.ts's pane splits, pane.ts's embed-slot and
+// drag in this codebase (grid.ts's pane splits, paneembeds.ts's embed-slot and
 // overlay dividers). Extracted after a #361 review: the embed/overlay
 // dividers' own copy (mirroring grid.ts's own, pre-existing pattern) only
 // cleaned up on `mouseup` — a drag that ends WITHOUT one (Alt-Tab away

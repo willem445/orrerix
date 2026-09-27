@@ -12,7 +12,7 @@
 //! betas, and the reason is a FIXTURE SHAPE rather than a missing assertion.
 //! `attention_tick` deadlocks only when an agent is simultaneously (a) running,
 //! (b) bound to a pty, (c) present in the `by_pty` reverse index and (d) quiet
-//! past the attention window. `attention_setup` in `orchestration.rs` — the
+//! past the attention window. `attention_setup` in `orchestration/attention.rs` — the
 //! helper every attention test uses — spawns agents with NO pty, so `pty_id` is
 //! `None`, the per-agent mask is never reached at all, and the whole class is
 //! unreachable from the suite. The soak lane has the same gap from the other

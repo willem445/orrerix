@@ -375,7 +375,8 @@ function resolveCli(clis) {
 //
 // WHICH SPAWN SITES CARRY IT, verified rather than assumed. THE LOAD-BEARING
 // FACT IS THE TWO SITES, not any count: there are exactly two `agent-spawn`
-// `json!` sites in `src-tauri/src/orchestration/mod.rs`, and the DELEGATE site
+// `json!` sites in `src-tauri/src/orchestration/` (`registry/spawn.rs` for the
+// delegate, `commands/panes.rs` for the orchestrator), and the DELEGATE site
 // carries `cli` (and `block`) while the ORCHESTRATOR site carries neither. So
 // every row without `cli` is an orchestrator spawn, and an orchestrator is
 // excluded from the delegate side anyway (§4.6) — which makes the rung cover

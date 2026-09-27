@@ -814,7 +814,7 @@ fn l1_stale_flips_on_the_clock_while_a_lock_is_held_and_clears_on_the_next_publi
 // `crates/loomux-engine/src/budget.rs` unit-tests `read_budget` and
 // `MutationScope` against a `TrackedMutex` built for the purpose. That proves
 // the mechanism; it does not prove the mechanism survives contact with
-// `orchestration/mod.rs`, and the difference is the whole risk of Phase 2.1:
+// `orchestration/registry/`, and the difference is the whole risk of Phase 2.1:
 // the unwind travels through real registry code, which owns guards, `Drop`
 // impls and (in principle) a `catch_unwind` of its own that could swallow a
 // typed payload it has never heard of.
@@ -1890,7 +1890,7 @@ const L6_CONTROL_FLOOR_MS: u64 = 50;
 ///
 /// The fixture is as much the finding as the assertions are: #1702 survived four
 /// betas because *no test in this repo could build the state that triggers it*.
-/// `attention_setup`, the helper every attention test in `orchestration.rs`
+/// `attention_setup`, the helper every attention test in `orchestration/attention.rs`
 /// uses, spawns agents with no pty, so `pty_id` is `None`, the per-agent mask is
 /// never reached, and the whole class is unreachable from that file however many
 /// cases it adds. The soak lane has the mirror gap: it wedges a lock and probes,

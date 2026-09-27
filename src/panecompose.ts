@@ -153,7 +153,7 @@ export class PaneCompose {
     // native path is never wanted. Capture phase, so this runs BEFORE the
     // event reaches xterm's own listener (bound to a descendant of termEl,
     // in the bubble phase) no matter what triggered it. Our own paste calls
-    // are `this.term.paste(text)` — a direct method call that never
+    // are `this.pane.term.paste(text)` — a direct method call that never
     // dispatches a DOM "paste" event — so this can never block a paste WE
     // intended.
     this.pane.termEl.addEventListener(

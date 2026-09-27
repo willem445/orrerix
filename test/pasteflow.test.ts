@@ -3,7 +3,7 @@
 // pasteOnPlainCtrlV setting allows it, Ctrl+Shift+V always pastes, plain
 // Ctrl+C copies only WITH a selection — else it must stay SIGINT,
 // AltGr/Ctrl+Alt+V is never eaten as a paste) and the keyDisposition enum
-// that drives pane.ts's preventDefault() calls.
+// that drives panecompose.ts's preventDefault() calls.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -111,7 +111,7 @@ test("keyDisposition: an unrelated key is 'pass'", () => {
 // call and MUST produce the exact same disposition — there is no branch
 // left anywhere for the two to diverge on. The bug this exists to catch:
 // copy appearing to work in one pane kind and not another despite there
-// being no pane-kind-aware code in this module or in pane.ts's wiring.
+// being no pane-kind-aware code in this module or in panecompose.ts's wiring.
 
 interface PaneLikeInput {
   label: string;

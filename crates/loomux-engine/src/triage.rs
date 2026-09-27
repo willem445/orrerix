@@ -426,7 +426,7 @@ const GREEN_PATH_MARKERS: [&str; 5] =
 /// exit, so the notice is an FYI. A pane that exited before printing anything
 /// is not a roster update — it is a LOST kickoff, and the orchestrator has to
 /// decide whether to respawn. This text is built by orrerix itself
-/// (`src-tauri/src/orchestration/mod.rs`), not by an agent, so the match is
+/// (`src-tauri/src/orchestration/exits.rs`), not by an agent, so the match is
 /// not reachable by anything a delegate writes.
 const SILENT_EXIT_MARKERS: [&str; 1] = ["produced no output before exiting"];
 

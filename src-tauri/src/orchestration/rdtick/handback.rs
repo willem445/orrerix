@@ -3,7 +3,7 @@
 //! pane take-over, `rd_spawn`, and `rd_handback_failed`.
 //!
 //! Design note: `docs/design/review-driver.md`. Part of `rdtick/`, the driver's
-//! registry wiring, which `tests/reviewdrive.rs` scans whole (see `mod.rs`).
+//! registry wiring, which `tests/reviewdrive/guards.rs` scans whole (see `mod.rs`).
 
 use super::*;
 

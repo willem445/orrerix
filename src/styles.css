@@ -2844,7 +2844,7 @@ button.orch-item:active { transform: translateX(2px) scale(0.995); }
   transition: background 0.15s var(--ease);
 }
 /* Column splitter inside .git-top: a full-height 5px vertical grip. (The base
-   rule's row-resize/height serves the horizontal splitter and pane.ts's
+   rule's row-resize/height serves the horizontal splitter and paneembeds.ts's
    overlay divider.) */
 .git-divider.vertical {
   height: auto; width: 5px; cursor: col-resize; align-self: stretch;

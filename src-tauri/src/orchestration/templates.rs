@@ -462,7 +462,7 @@ pub(super) const LOCKS_ORCH_NOTE: &str = r#"
 /// files, drifts. `manager.md` does not render it: a manager never posts to
 /// GitHub or writes the board.
 ///
-/// `pub` for the golden fixture in `tests/workflow.rs`, which pins these
+/// `pub` for the golden fixture in `tests/workflow/goldens.rs`, which pins these
 /// bytes against a human-blessed copy; use [`writing_body`] for the value.
 #[doc(hidden)]
 pub const WRITING_TPL: &str = include_str!("templates/writing.md");
@@ -489,7 +489,7 @@ pub const PLANNER_TPL: &str = include_str!("templates/planner.md");
 /// declared. It is written by the block loop, for a roster that declares one.
 ///
 /// It is still golden-pinned the same way (`tests/fixtures/pre222/manager.md`
-/// and the `LIVE` pairing in `tests/workflow.rs`) — what it is NOT part of is
+/// and the `LIVE` pairing in `tests/workflow/goldens.rs`) — what it is NOT part of is
 /// the two "what a default group reads" pins, which have nothing to compare it
 /// against.
 #[doc(hidden)]
@@ -503,7 +503,7 @@ pub const MANAGER_TPL: &str = include_str!("templates/manager.md");
 /// launcher's toggle mints.
 ///
 /// **Golden-pinned since slice B**, and the timing was the decision. The pin
-/// (`tests/fixtures/pre222/` + the `LIVE` pairing in `tests/workflow.rs`)
+/// (`tests/fixtures/pre222/` + the `LIVE` pairing in `tests/workflow/goldens.rs`)
 /// exists to make an accidental edit to bytes a shipped pane already reads
 /// fail loudly. Slice A shipped the CLASS and delivered nothing, so there was
 /// no shipped reading to regress and pinning then would have meant a re-bless

@@ -1827,13 +1827,13 @@ impl Drop for DataRoot {
 /// Build a registry with every test-only directory override applied.
 ///
 /// The ONE raw `OrchRegistry::new` this file is sanctioned for in
-/// `orchestration.rs`'s
+/// `orchestration/guards.rs`'s
 /// `no_registry_construction_bypasses_the_test_agent_dir_overrides` allowlist.
 /// It is a real requirement rather than ceremony: a registry built without
 /// these writes a generated agent file into the developer's REAL `~/.claude` /
 /// `~/.copilot` agents dir on its first spawn (#464). Helpers do not cross
 /// integration-test binaries, which is why this cannot call
-/// `orchestration.rs`'s.
+/// `orchestration/helpers.rs`'s.
 fn relaunch_registry(dir: &Path) -> OrchRegistry {
     let reg = OrchRegistry::new(dir.to_path_buf());
     reg.set_port(45993);
@@ -1848,7 +1848,7 @@ fn relaunch_registry(dir: &Path) -> OrchRegistry {
 /// [`relaunch_registry`] applies (#1778's row convention, in the shape
 /// `plandrive.rs` and `piusage.rs` already use it).
 ///
-/// Without it the row in `orchestration.rs` is a claim about this file that
+/// Without it the row in `orchestration/guards.rs` is a claim about this file that
 /// nothing in this file checks — and the property it stands in for (#464: no
 /// generated agent file reaches a developer's real `~/.claude`) is exactly the
 /// kind that fails silently. The four setters are private to the registry's
@@ -1902,7 +1902,7 @@ fn its_registry_helper_applies_every_override_this_allowlist_row_assumes() {
 
 /// Guardrails with room for one pane of every class these tests drive.
 ///
-/// `max_agents: 8` rather than the 2 `orchestration.rs`'s fixture uses: the
+/// `max_agents: 8` rather than the 2 `orchestration/helpers.rs`'s fixture uses: the
 /// per-role sweep below spawns one of each, and a cap refusal mid-fixture would
 /// make a "this role can add a to-do" assertion fail for a reason that has
 /// nothing to do with the to-do list.

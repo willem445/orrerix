@@ -40,13 +40,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// Build a registry against `dir` with every test-only directory override
-/// applied. Duplicated from `orchestration.rs`/`manager_lifecycle.rs` because
+/// applied. Duplicated from `orchestration/helpers.rs`/`manager_lifecycle.rs` because
 /// these are separate integration-test BINARIES and helpers do not cross them —
 /// and it is a real requirement, not ceremony: a registry built without these
 /// overrides writes a generated agent file into the REAL `~/.claude` /
 /// `~/.copilot` agents dir on its first spawn (#464).
 /// `no_registry_construction_bypasses_the_test_agent_dir_overrides` in
-/// `orchestration.rs` enforces that this file has exactly one raw
+/// `orchestration/guards.rs` enforces that this file has exactly one raw
 /// `OrchRegistry::new`, here.
 fn relaunch_registry(dir: &Path) -> OrchRegistry {
     let reg = OrchRegistry::new(dir.to_path_buf());
@@ -835,7 +835,7 @@ fn no_agent_may_kill_a_lead_pane() {
 /// A minimal real git repo (one commit on the default branch), one level below
 /// a private temp root.
 ///
-/// The nesting is not cosmetic and is `orchestration.rs`'s `RealRepo` verbatim
+/// The nesting is not cosmetic and is `orchestration/helpers.rs`'s `RealRepo` verbatim
 /// in intent (#464): `git_worktree_add` cuts a spawned worker's worktree to a
 /// directory SIBLING to the repo, so a repo AT the temp root leaks that sibling
 /// into `%TEMP%` on every passing run. One level down puts both the sibling and

@@ -3,7 +3,7 @@
 //! constants. No `gh`, no locks, no registry state — everything here is a
 //! plain function over plain data, so it is unit-testable with canned `gh
 //! --json` fixtures and no subprocess. See `OrchRegistry`'s `notify_*`
-//! methods (`src-tauri`'s `orchestration/mod.rs` — the impure half, i.e. the
+//! methods (`src-tauri`'s `orchestration/registry/watches.rs` — the impure half, i.e. the
 //! poll thread and the registry state, which has not moved into this crate) and
 //! `docs/design/orchestration.md`'s "Notification backend" section for the
 //! design rationale — in particular why this is a fixed set of structured

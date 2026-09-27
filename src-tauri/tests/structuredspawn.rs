@@ -201,18 +201,20 @@ fn the_argv_the_child_receives_is_the_pty_line_plus_one_flag() {
 
 #[test]
 fn the_structured_launch_line_is_the_pty_arm_plus_mode_rpc() {
-    // The pure half of the parity claim, beside the process half above: the
-    // spec's own argv is the PTY arm's flags with `--mode rpc` in front, in the
-    // PTY arm's order, so a diff of the two lines is one inserted flag rather
-    // than a reordering nobody can read.
+    // The pure half, beside the process half above. What it asserts: the
+    // spec's own argv LEADS with `--mode rpc`, so a diff against the PTY line
+    // opens with one inserted flag. It does not assert the rest of the order,
+    // and it never builds the PTY arm's line to compare against.
     let dir = tempfile::tempdir().unwrap();
     let spec = spec_for(dir.path());
     let argv = full_argv(&[], &spec);
 
     assert_eq!(&argv[..2], &["--mode", "rpc"], "the mode flag must lead: {argv:?}");
 
-    // Built through the SAME helper the spawn path uses, so this compares two
-    // real derivations rather than one derivation against a hand-copied list.
+    // Built through the SAME helper the spawn path uses (`pi_launch_spec`), and
+    // checked against literals: `NoEdits` must give `--no-approve` and the
+    // edit-deny list. Parity with `build_agent_argv_ex` is NOT asserted here; it
+    // is a stated residual (see `pi_launch_spec`'s doc).
     let from_spawn = loomux_lib::orchestration::structured::pi_launch_spec(
         Some("abc123"),
         dir.path(),

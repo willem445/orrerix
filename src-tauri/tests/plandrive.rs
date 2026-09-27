@@ -6,7 +6,7 @@
 //! wiring, the four tools, the planner interception, and the post-time plan
 //! hook.
 //!
-//! A new integration-test *target*, for `tests/reviewdrive.rs`'s two reasons:
+//! A new integration-test *target*, for `tests/reviewdrive/`'s two reasons:
 //! CLAUDE.md constraint 4 (a test executable linking the full lib needs the
 //! comctl32-v6 manifest `build.rs` embeds through `-tests`-scoped link args, and
 //! the reason is the target KIND, not the file name), and the end-of-file append
@@ -296,8 +296,8 @@ fn test_registry() -> (OrchRegistry, tempfile::TempDir) {
 }
 
 /// **The premise of this file's #464 allowlist row**, checked here rather than
-/// asserted there (`tests/orchestration/`,
-/// `only_the_sanctioned_helpers_construct_a_registry`).
+/// asserted there (`tests/orchestration/guards.rs`,
+/// `no_registry_construction_bypasses_the_test_agent_dir_overrides`).
 ///
 /// That row permits exactly one raw `OrchRegistry::new` in this file, on the
 /// stated grounds that it is [`test_registry`] and that [`test_registry`]
@@ -1129,7 +1129,7 @@ fn a_refused_spawn_leaves_no_reservation_behind() {
     // `kill_agent`, which cannot run here at all: it wants a terminal bound
     // (every agent in test mode is "still binding") and then a Tauri app handle
     // to end the process, and there is none. `mark_agent_dead_for_test` is
-    // `tests/reviewdrive.rs`'s own seam for exactly this, and it moves the one
+    // `tests/reviewdrive/`'s own seam for exactly this, and it moves the one
     // thing the cap reads — `AgentStatus::Dead` is what
     // `counts_against_max_agents` stops counting.
     assert!(

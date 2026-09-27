@@ -3,7 +3,7 @@
 // The property under test is the one the hook exists for and the one a
 // hand-check would never catch: a request parked for a view that has not been
 // CONSTRUCTED yet must still be there when it first renders, and must be gone
-// on the render after that. Everything else about the hook is DOM (pane.ts
+// on the render after that. Everything else about the hook is DOM (paneembeds.ts
 // opens the view and the view scrolls a row into sight), validated by hand per
 // this repo's convention. Run with `npm test`.
 import { test } from "node:test";

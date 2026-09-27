@@ -315,7 +315,7 @@ fn a_forced_kill_of_a_driven_worker_holds_the_drive_naming_the_kill() {
 /// list now says which of those rows the advice does not apply to.
 ///
 /// The bystander row is the negative control, and it is byte-for-byte what this
-/// function produced before S2 — which `orchestration.rs`'s existing
+/// function produced before S2 — which `orchestration/reports.rs`'s existing
 /// `(worker, working)` pins already assert from the other side.
 #[test]
 fn the_cap_refusal_roster_marks_a_pane_a_live_drive_is_holding() {

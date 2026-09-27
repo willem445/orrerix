@@ -35,7 +35,7 @@ export interface WatchedPane {
 /** The right-click item's label, which is the toggle's current *action* rather
  *  than its current state — "Watch this pane" on an unwatched pane.
  *
- *  A check-mark prefix (the embed menu's idiom, `pane.ts`'s `"✓ "`) was the
+ *  A check-mark prefix (the embed menu's idiom, `paneembeds.ts`'s `"✓ "`) was the
  *  other candidate and is wrong here: that menu is a radio group of four sides
  *  where the mark says which one is chosen, and this is a single binary item
  *  where a checked "Watch this pane" and an unchecked one read alike at a

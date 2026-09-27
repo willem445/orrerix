@@ -7,7 +7,7 @@
 // it opens with ZERO findings — errors *and* warnings, because a warning here means
 // the graph loomux would draw of its own workflow has a block nothing points at.
 //
-// The backend half of this pin lives in `src-tauri/tests/workflow.rs`
+// The backend half of this pin lives in `src-tauri/tests/workflow/dogfood.rs`
 // (`the_repos_own_workflow_file_parses_clean_against_the_real_parser`). Both halves
 // exist because the two parsers are deliberately separate: the pane's is an editor
 // giving live feedback on text a human is typing, the backend's is the engine. A file

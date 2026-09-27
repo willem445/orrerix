@@ -704,7 +704,7 @@ fn create_orchestration_group_maps_resume_session_onto_the_workflow_pin() {
     use std::sync::Arc;
     // #222 rev-11 F2, at the entry point instead of one layer below it.
     //
-    // `create_group_ex(.., Launch::Resume)` pins the roster, and tests/workflow.rs
+    // `create_group_ex(.., Launch::Resume)` pins the roster, and tests/workflow/goldens.rs
     // asserts that directly. What THIS asserts is the wiring above it — that the two
     // real callers land on the right side of the switch. `create_orchestration`
     // passes no resume session (a human at the launcher, who has just been shown the

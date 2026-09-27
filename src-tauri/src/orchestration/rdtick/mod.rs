@@ -17,7 +17,7 @@
 //! prefix — is stepped over by a landing verb added in a function that does
 //! not carry it". A **file** is not a name. Every landing verb the driver
 //! could reach has to be written down somewhere, and this is the somewhere, so
-//! `tests/reviewdrive.rs` can default-deny the whole of it and a rename cannot
+//! `tests/reviewdrive/guards.rs` can default-deny the whole of it and a rename cannot
 //! move code out from under the guard.
 //!
 //! The residual is stated where the scan is implemented, not here, and it is
@@ -29,7 +29,7 @@
 //! # The files (#3498 P5)
 //!
 //! Split by tick phase, one `impl OrchRegistry` block per file; this file keeps
-//! the types they share. `tests/reviewdrive.rs` reads the whole directory as one
+//! the types they share. `tests/reviewdrive/guards.rs` reads the whole directory as one
 //! scope, so the argument above is about `rdtick/`, and a file added here is
 //! scanned with no edit to the test.
 //!

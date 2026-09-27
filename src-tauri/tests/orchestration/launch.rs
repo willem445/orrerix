@@ -2798,7 +2798,7 @@ fn the_manifests_bounds_are_the_ones_parse_workflow_actually_enforces() {
         ("driver.max_ci_attempts-above-max", format!("version: 1\n{block}driver:\n  max_ci_attempts: 4\n")),
         // `driver.max_rebase_attempts` has no below-range row: its floor is 0,
         // and 0 is a LEGAL value there (#1778 §5.3 - a repo may refuse the
-        // driver any rebase). The floor is exercised in tests/workflow.rs.
+        // driver any rebase). The floor is exercised in tests/workflow/blocks.rs.
         ("driver.max_rebase_attempts-above-max", format!("version: 1\n{block}driver:\n  max_rebase_attempts: 2\n")),
         ("resource.slots", format!("version: 1\n{block}resources:\n  build:\n    slots: 0\n")),
         ("resource.slots-above-max", format!("version: 1\n{block}resources:\n  build:\n    slots: 65\n")),

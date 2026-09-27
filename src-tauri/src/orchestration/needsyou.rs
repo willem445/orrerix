@@ -39,7 +39,7 @@
 //! registries stay apart.
 //!
 //! **Not "attention".** `AttentionItem` is already taken by the pane-chip scan
-//! (`mod.rs`, with a frontend mirror in `src/attention.ts`) — unrelated
+//! (`agentmodel.rs`, with a frontend mirror in `src/attention.ts`) — unrelated
 //! machinery. This module keeps its own vocabulary behind the `needsyou::` path
 //! (`needsyou::Item`, `needsyou::Kind`), following the precedent [`super::humanq`]
 //! set for exactly this reason: pick a distinct word rather than overload one.

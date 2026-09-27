@@ -70,7 +70,7 @@ pub const TOOL_PREVIEW_BYTES: usize = 120;
 /// The line ending every emit site in this module uses — **`CRLF`, not a bare
 /// `LF`**, and it is load-bearing rather than pedantic.
 ///
-/// These bytes end at `this.term.write(chunk)` (`src/pane.ts`) on a `Terminal`
+/// These bytes end at `this.pane.term.write(chunk)` (`src/panelifecycle.ts`) on a `Terminal`
 /// built without `convertEol`, which xterm.js defaults to `false`. With it
 /// false a bare `LF` is an **INDEX** — down one row, column untouched — so
 /// every line staircases rightward and the transcript composes into something

@@ -7,7 +7,7 @@
 // a sibling `settings.json`, not a new storage layer. Pure encode/decode here
 // (DOM-free, unit-tested, mirrors tabstore.ts); main.ts loads it once at boot
 // via pty.ts's loadSettings/saveSettings wrappers and calls setSettings(),
-// after which every reader (pane.ts's keydown handler, synchronously, on
+// after which every reader (panecompose.ts's keydown handler, synchronously, on
 // every keystroke) just calls getSettings().
 //
 // No hot-reload: editing settings.json by hand takes effect on the next
@@ -109,7 +109,7 @@ function throttleMs(v: unknown): number {
 
 // ---------- in-memory singleton ----------
 //
-// The impure half: a module-level cell so pane.ts's keydown handler — deep in
+// The impure half: a module-level cell so panecompose.ts's keydown handler — deep in
 // a hot path with no natural place to thread a settings object through — can
 // read the current value SYNCHRONOUSLY. main.ts is the only writer, once, at
 // boot. Defaults to DEFAULT_SETTINGS before the boot load resolves, which is

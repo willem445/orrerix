@@ -1,5 +1,5 @@
 // Unit tests for the steering-strip attachment logic (#72). Pure helpers only;
-// the DOM wiring in pane.ts is exercised by hand. Run with `npm test`.
+// the DOM wiring in panecompose.ts is exercised by hand. Run with `npm test`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {

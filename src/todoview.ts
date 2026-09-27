@@ -222,7 +222,7 @@ export function projectPane(input: ProjectInput, nowMs: number): PaneProjection 
 }
 
 /** The sentence an empty list shows. A table rather than a ternary chain, so a
- *  sixth view is a row (the reason `CONTENT_KIND_LABEL` is one in `pane.ts`). */
+ *  sixth view is a row (the reason `CONTENT_KIND_LABEL` is one in `paneembeds.ts`). */
 export const EMPTY_TEXT: Record<EmptyReason, string> = {
   filtered: "Nothing matches.",
   myday: "Nothing for today — add one, or pull from Planned.",

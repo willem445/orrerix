@@ -398,7 +398,7 @@ export class GitView {
     // A flex column (top row + bottom strip) with two draggable dividers. The
     // vertical divider moves the graph|diff boundary; the horizontal one moves
     // the top|changes boundary. Same drag mechanics as the overlay divider in
-    // pane.ts (mousedown + window move/up + a `dragging` class), but this only
+    // paneembeds.ts (mousedown + window move/up + a `dragging` class), but this only
     // redistributes space *inside* .pane-git — its outer box keeps its size,
     // so the terminal's PTY is never resized.
     this.topEl = el("div", "git-top");

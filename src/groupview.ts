@@ -1734,7 +1734,7 @@ export class GroupView {
     const repo = this.getRepo?.() ?? null;
     if (!repo) {
       // Names what is wrong, not where else to go (rev-final round 3, premortem
-      // 1). Defensive rather than reachable in the shipped wiring — `pane.ts`
+      // 1). Defensive rather than reachable in the shipped wiring — `paneviews.ts`
       // always supplies `getRepo`, returning the orchestrator pane's cwd — but a
       // message that redirects without saying why is the one thing a human
       // cannot act on, and this arm exists precisely for the case nobody

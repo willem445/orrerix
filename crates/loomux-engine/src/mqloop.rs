@@ -1614,7 +1614,7 @@ pub const MAX_EXAMINED_PER_BUILD: usize = 8;
 /// Returned rather than emitted here for the same reason
 /// [`ReconcileReport::notices`] is: this module owns no registry, and a driver
 /// that reached for one would put the queue's decisions back inside
-/// `src-tauri`'s `orchestration/mod.rs`.
+/// `src-tauri`'s `orchestration/registry/merge.rs`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DriveAudit {
     /// One of §11.5's actions — always a constant from [`audit_action`] or

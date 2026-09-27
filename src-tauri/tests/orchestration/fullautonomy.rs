@@ -386,7 +386,7 @@ fn orchestrator_template_carries_the_full_autonomy_consent_boundary() {
     // contract still name the veto at all"); that it renders to the repo's own
     // spelling — the question a placeholder cannot answer — is pinned by
     // `a_renamed_veto_reaches_the_contract_the_poller_and_the_allow_list_alike`
-    // in tests/workflow.rs, against a real group and a real workflow file.
+    // in tests/workflow/intakeprofile.rs, against a real group and a real workflow file.
     for concept in ["{{HOLD_LABEL}}", "Full autonomy", "triage plan"] {
         assert!(
             ORCHESTRATOR_TPL.contains(concept),
@@ -549,7 +549,7 @@ fn the_orchestrator_contract_carries_the_never_block_question_protocol() {
              way to look at what they are proceeding on (#1091 slice B)",
         ),
     ] {
-        // Exactly once, for the reason `tests/workflow.rs`'s `pinned` helper
+        // Exactly once, for the reason `tests/workflow/goldens.rs`'s `pinned` helper
         // enforces it: an anchor that occurs twice cannot detect the deletion of
         // the rule it names, because the other occurrence rescues it — a pin you
         // cannot make fail is a claim of coverage rather than coverage.
@@ -810,7 +810,7 @@ fn gh_shim_allows_pr_create_and_blocks_merge_for_the_process_pane() {
     // #250/#324 slice D item 2: the process-pro is worker-kind, so it gets
     // the exact same PATH-injected gh/git shim as any worker — the CONTAINMENT
     // path never reads role_hint (the closure proof lives in
-    // `role_hint_grants_no_capability_to_its_block`, workflow.rs), and the
+    // `role_hint_grants_no_capability_to_its_block`, `tests/workflow/schema.rs`), and the
     // shim script itself has no concept of role_hint at all. This pins the
     // specific claim the plan's demo depends on: the process-pro's `gh pr
     // create` passes through untouched, and `gh pr merge` on the default

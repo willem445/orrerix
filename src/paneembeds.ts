@@ -130,7 +130,7 @@ interface EmbedEntry {
    *  slot's own height floor specifically (unchanged from the
    *  pre-multi-slot design). Most views share the generic default
    *  (`EMBED_MIN_PANEL_PX`); the group panel measures its own fixed chrome
-   *  (`Pane.groupFloor`). NOT used for the left/right slots' WIDTH floor —
+   *  (`PaneEmbeds.groupFloor()`). NOT used for the left/right slots' WIDTH floor —
    *  see `EMBED_MIN_PANEL_PX`'s own doc comment in embedsplit.ts for why
    *  that one deliberately stays a fixed constant instead. */
   floorPx: () => number;

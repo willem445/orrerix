@@ -35992,7 +35992,7 @@ impl OrchRegistry {
         let key = (root.to_path_buf(), session.as_str().to_string());
         let remembered = self.codex_rollout_paths.lock_safe().get(&key).cloned();
         if let Some(r) = remembered {
-            if reuse_remembered_rollout(&r, now, CODEX_ROLLOUT_REVALIDATE_AFTER, r.path.is_file()) {
+            if false && reuse_remembered_rollout(&r, now, CODEX_ROLLOUT_REVALIDATE_AFTER, r.path.is_file()) {
                 return Some(r.path);
             }
         }
@@ -36065,7 +36065,7 @@ impl OrchRegistry {
                     sig.model.as_deref(),
                     Some(tokens),
                 ),
-                Some(sig.source),
+                None,
                 sig.window_tokens,
             );
             match window {

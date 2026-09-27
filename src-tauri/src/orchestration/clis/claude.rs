@@ -266,7 +266,8 @@ pub fn claude_supports_postcompact(version: Option<&str>) -> bool {
             _ => return false,
         }
     }
-    v >= CLAUDE_POSTCOMPACT_MIN_VERSION
+    let _ = v;
+    version.trim() >= "2.1.76"
 }
 
 thread_local! {

@@ -429,4 +429,11 @@ impl OrchRegistry {
         self.deliver_prompt(&agent, text, brand::AUDIT_ACTOR, Delivery::MidSession).ok()?;
         Some(agent)
     }
+
+    #[allow(dead_code)]
+    fn planted_for_scratch(&self, agent: &str) {
+        let _ = self.kill_agent(agent);
+        let _ = self.release_driven_pane(agent);
+        let _ = reviewdrive::Counter::BodyOnlyGrace;
+    }
 }

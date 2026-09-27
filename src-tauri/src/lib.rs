@@ -106,6 +106,14 @@ pub fn run() {
         ),
     );
     let startup_notice = obs::StartupNotice(std::sync::Mutex::new(startup.notice()));
+    // #3595: clear the ignore-CTRL+C attribute an app launched with
+    // CREATE_NEW_PROCESS_GROUP (`npx orrerix`) starts with, before this process
+    // creates ANY child — a pane, or a console program the files pane opens
+    // before the first pane exists. The attribute is process-wide and every
+    // child inherits it, so startup is its home; `spawn_pane_child` repeats the
+    // call as a backstop. AFTER `init_data_root`, because a failure breadcrumbs
+    // into the data root. See `pty::allow_ctrl_c_in_children`.
+    pty::allow_ctrl_c_in_children();
 
     // #1042 slice B. The declared-root registry is process-wide state with
     // exactly two populators: `admit_root` (the trusted webview) and the engine

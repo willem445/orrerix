@@ -302,6 +302,64 @@ pane-kind/selection matrix pins this directly: a "plain terminal pane" input
 and an "agent pane" input, built identically, are required to produce the
 identical disposition, proving there is no divergence left to reintroduce.
 
+### Ctrl+C that never interrupted (#3595)
+
+A human report: in a PowerShell pane running a long-lived process, Ctrl+C
+"behaves as copy" and the process keeps running. `keyDisposition` was already
+conditional on a selection, so the cause was outside it. Of the four
+candidates the issue named, two turned out to contribute and two did not.
+
+**1. The child ignored CTRL+C from birth (backend).** Windows keeps an
+inheritable per-process "ignore CTRL+C" attribute (`ConsoleFlags` bit 0 in
+the process parameters), and a process created with `CREATE_NEW_PROCESS_GROUP`
+starts with it set. Node's `spawn(..., { detached: true })` passes that flag on
+Windows, and `npm/bin/orrerix.js` launches the app that way. An app launched
+by `npx orrerix` therefore carried the attribute, and every ConPTY child
+inherited it at `CreateProcess`. The ^C byte still reached ConPTY and ConPTY
+still raised CTRL_C_EVENT, but PowerShell and `npm run dev` ignored it. At the
+prompt nothing looked wrong, because PSReadLine reads ^C as a key rather than
+a signal. That is why the report is specifically about a *running process*.
+
+Fix: `pty::allow_ctrl_c_in_children` calls `SetConsoleCtrlHandler(NULL, FALSE)`.
+That restores normal CTRL+C processing for the app, and so for every child it
+spawns afterwards. `run()` calls it at startup, before the app creates any
+child: the attribute is process-wide, and a pane is not the only child that
+inherits it (a console program the files pane opens before the first pane is
+another). `spawn_pane_child`, the one function every pane child goes through,
+calls it again before either `CreateProcess`, as a backstop. It needs
+no console (the app has none), and it changes nothing else for the app itself,
+since with no console nothing can deliver it a CTRL+C. It is the Windows
+counterpart of what portable-pty already does on Unix, where the child's
+`pre_exec` resets SIGINT to `SIG_DFL`. The fix lives in the app rather than
+the launcher so it holds whatever started the app. `tests/ctrl_c_inherit.rs`
+drives `spawn_pane_child` on a real ConPTY from a test process set to ignore
+CTRL+C, and reads the bit the child was born with. That test pins the
+per-spawn call. The startup call in `run()` has no test: `run()` builds and
+runs the Tauri app, so no test can execute it without the runtime.
+
+**2. An off-screen selection still counted (frontend).** An xterm selection
+is anchored to buffer rows, so output carries it out of view while it stays
+selected, and the wiring asked only `!!term.getSelection()`. In a pane
+running a dev server, a line selected a minute ago made Ctrl+C copy text the
+human could not see. Now `selectionIsLive` (pasteflow.ts) decides: plain
+Ctrl+C copies only a selection with some painted part on screen.
+`Ctrl+Shift+C` does not ask, and still copies an off-screen selection.
+
+Two alternatives were rejected. Dropping the selection on new output would
+turn the commonest copy in a streaming pane (a line of that stream, selected
+while more arrive) into an interrupt of the process being read. Clearing on
+"any other key" is already done by xterm itself: every key that produces
+input fires `onUserInput`, and its `SelectionService` clears the selection on
+that.
+
+**Ruled out.** `isAppShortcut` matches no plain `Ctrl+C` (`matchShortcut`'s
+Ctrl-only block does not exist; its Ctrl+Shift block has no `KeyC`). No other
+keydown listener reaches Ctrl+C in a terminal: the capture-phase ones
+(context menu, git menu, pane drag, notes dialog) are live only while their
+own UI is open and act on Escape, and the document shortcut handler runs after
+xterm has cancelled the event. The ^C byte itself goes from `onData` through
+`write_pty` to `write_all` on the ConPTY input pipe unchanged.
+
 ### WebView2 clipboard permission: dev vs. packaged
 
 Live-testing (`npm run tauri dev`, origin `http://localhost:1420`) surfaced a

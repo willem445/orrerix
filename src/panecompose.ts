@@ -12,7 +12,7 @@
 import { voiceController, type VoicePhase } from "./voicecontrol";
 import { invoke } from "./transport.ts";
 import { parseOsc52, writeClipboard, readClipboard } from "./clipboard";
-import { keyDisposition } from "./pasteflow";
+import { keyDisposition, selectionIsLive } from "./pasteflow";
 import { getSettings } from "./settings";
 import {
   checkAttachment,
@@ -117,8 +117,17 @@ export class PaneCompose {
     this.pane.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
       if (isAppShortcut(e)) return false;
-      const sel = this.pane.term.getSelection();
-      switch (keyDisposition(e, getSettings().pasteOnPlainCtrlV, !!sel)) {
+      const term = this.pane.term;
+      const sel = term.getSelection();
+      // Plain Ctrl+C copies only a VISIBLE selection (#3595): one scrolled off
+      // screen by new output would otherwise swallow the interrupt. The copy
+      // branch below still copies `sel` whenever it is non-empty, which is what
+      // keeps Ctrl+Shift+C copying an off-screen selection too.
+      const live = selectionIsLive(sel, term.getSelectionPosition(), {
+        top: term.buffer.active.viewportY,
+        rows: term.rows,
+      });
+      switch (keyDisposition(e, getSettings().pasteOnPlainCtrlV, live)) {
         case "copy":
           e.preventDefault();
           if (sel) {

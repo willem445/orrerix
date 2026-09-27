@@ -104,9 +104,10 @@ export function isConditionalCopyKey(e: PasteKeyEvent): boolean {
  *  regardless of what triggers the browser's native paste).
  *
  *  `hasSelection` is what makes plain Ctrl+C's copy/interrupt split
- *  possible: it's DOM/xterm runtime state (`term.getSelection()`), not
- *  something derivable from the KeyboardEvent alone, so the caller reads it
- *  once per keydown and passes it in — same discipline as
+ *  possible: it's DOM/xterm runtime state, not something derivable from the
+ *  KeyboardEvent alone, so the caller reads it once per keydown and passes it
+ *  in. It means a LIVE selection — `selectionIsLive` below, never a bare
+ *  `!!term.getSelection()` (#3595) — same discipline as
  *  `plainCtrlVPastes` reading `settings.ts`'s live value. This function is
  *  identical for every pane kind (plain terminal, agent, orchestrator) —
  *  there is no pane-kind branch anywhere in this module or in pane.ts's
@@ -124,4 +125,66 @@ export function keyDisposition(
   if (isConditionalCopyKey(e)) return hasSelection ? "copy" : "pass";
   if (isPasteKey(e, plainCtrlVPastes)) return "paste";
   return "pass";
+}
+
+/** A selection's extent, in xterm's `getSelectionPosition()` coordinates:
+ *  ABSOLUTE buffer rows (scrollback included, 0-based) and columns, with the
+ *  end column EXCLUSIVE — xterm's own `selectionText` reads the last row up to,
+ *  not including, `end.x`. */
+export interface SelectionRange {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+}
+
+/** The rows on screen, in the same absolute-row coordinates:
+ *  `term.buffer.active.viewportY` and `term.rows`. */
+export interface ViewportRows {
+  top: number;
+  rows: number;
+}
+
+/** Does the pane's selection count as "a selection" for plain Ctrl+C (#3595)?
+ *  Only when it is VISIBLE — some painted part of it intersects the rows on
+ *  screen. Ctrl+Shift+C does not ask this: it is the explicit gesture and
+ *  copies whatever is selected.
+ *
+ *  THE BUG THIS EXISTS TO FIX. An xterm selection is anchored to buffer rows,
+ *  so new output or a scroll carries it off screen while it stays selected.
+ *  In a pane running a dev server, a line selected a minute ago is long gone
+ *  from view, and yet `!!term.getSelection()` still called it a selection:
+ *  plain Ctrl+C copied text the human could not see instead of interrupting
+ *  the process, which is exactly the reported symptom. The rule the human
+ *  gets instead is what they can see: a visible highlight means Ctrl+C
+ *  copies, and no visible highlight means it interrupts.
+ *
+ *  Why not also drop the selection when new output arrives: the commonest copy
+ *  in a streaming pane is a line of that stream (an error, a URL), selected
+ *  while more lines keep arriving. Dropping it on output would turn that copy
+ *  into an interrupt of the very process being read. Visibility separates the
+ *  two cases; "output happened since" does not.
+ *
+ *  The rule needs no "a selection is gone once another key is pressed" half:
+ *  xterm already does that itself. Every key that produces
+ *  input fires `onUserInput`, and its SelectionService clears the selection on
+ *  that (`SelectionService` constructor, xterm 6.0).
+ *
+ *  A selection ending at column 0 of a later row paints nothing on that row
+ *  (the end column is exclusive), so that row does not make it visible. */
+export function selectionIsLive(
+  text: string,
+  range: SelectionRange | undefined,
+  viewport: ViewportRows
+): boolean {
+  if (!text || !range || viewport.rows <= 0) return false;
+  // Order the two ends: xterm hands them over ordered today, but a reversed
+  // pair must not read as "nothing painted".
+  const [a, b] =
+    range.start.y < range.end.y || (range.start.y === range.end.y && range.start.x <= range.end.x)
+      ? [range.start, range.end]
+      : [range.end, range.start];
+  const firstRow = a.y;
+  const lastRow = b.x === 0 && b.y > a.y ? b.y - 1 : b.y;
+  const top = viewport.top;
+  const bottom = viewport.top + viewport.rows - 1;
+  return firstRow <= bottom && lastRow >= top;
 }

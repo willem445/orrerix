@@ -116,6 +116,51 @@ pub fn assign_kill_on_close_job(pid: u32) -> Option<JobHandle> {
     }
 }
 
+/// Make sure a pane's child is born able to take Ctrl+C (#3595).
+///
+/// Windows keeps an inheritable per-process "ignore CTRL+C" attribute, and a
+/// process created with `CREATE_NEW_PROCESS_GROUP` starts with it set ("CTRL+C
+/// signals will be disabled for all processes within the new process group" —
+/// Process Creation Flags). Node's `spawn(..., { detached: true })` passes that
+/// flag on Windows, and it is how `npx orrerix` launches the app
+/// (`npm/bin/orrerix.js`). So an app launched that way carries the attribute,
+/// every ConPTY child inherits it at `CreateProcess`, and so does everything
+/// those children run: the ^C byte still reaches ConPTY, ConPTY still raises
+/// CTRL_C_EVENT, and PowerShell's `npm run dev` ignores it. At a prompt nothing
+/// looks wrong, because PSReadLine reads ^C as a key rather than a signal; the
+/// failure shows only once a long-lived process is running.
+///
+/// `SetConsoleCtrlHandler(NULL, FALSE)` "restores normal processing of CTRL+C
+/// input. This attribute of ignoring or processing CTRL+C is inherited by child
+/// processes" (SetConsoleCtrlHandler). It needs no console — this GUI process
+/// has none — and it is the Windows counterpart of what portable-pty already
+/// does on Unix, where the child's `pre_exec` resets SIGINT to `SIG_DFL` before
+/// the shell starts. It changes nothing else for this process: with no console
+/// attached, nothing can deliver it a CTRL+C.
+///
+/// Called twice over. `run()` (lib.rs) calls it at startup, before the app
+/// creates any child: the attribute is process-wide, and a pane is not the only
+/// child that inherits it (a console program the files pane opens is another).
+/// `spawn_pane_child` calls it again before each pane's `CreateProcess`, as a
+/// backstop, and that is the call `tests/ctrl_c_inherit.rs` pins. It is one
+/// flag write, and it is idempotent. Fail-soft like the job object: a failure
+/// breadcrumbs and startup or the spawn goes on, since a child that cannot be
+/// interrupted is still better than no child.
+#[cfg(target_os = "windows")]
+pub fn allow_ctrl_c_in_children() {
+    use windows::Win32::System::Console::SetConsoleCtrlHandler;
+    // SAFETY: a NULL handler registers no callback; it only sets this process's
+    // own inheritable ignore-CTRL+C attribute.
+    if let Err(e) = unsafe { SetConsoleCtrlHandler(None, false) } {
+        crate::obs::breadcrumb("pty-ctrl-c-restore-fail", &format!("err={e}"));
+    }
+}
+
+/// Off Windows there is no attribute to clear: portable-pty resets SIGINT to
+/// `SIG_DFL` in the child itself (see the Windows twin above).
+#[cfg(not(target_os = "windows"))]
+pub fn allow_ctrl_c_in_children() {}
+
 /// A pane's ConPTY master, shared out of the global map (#719). See
 /// [`PtyHandle::writer`] for why these two are `Arc<Mutex<..>>` rather than
 /// plain fields.
@@ -1729,6 +1774,10 @@ pub fn spawn_pane_child(
     env: &[(String, String)],
     shell_kind: ShellKind,
 ) -> Result<(Box<dyn portable_pty::Child + Send + Sync>, bool), String> {
+    // Before either CreateProcess below: the child inherits the ignore-CTRL+C
+    // attribute as it stands at that call (#3595). `run()` already cleared it at
+    // startup; this is the backstop, and the call the integration test pins.
+    allow_ctrl_c_in_children();
     if let Some(direct) = argv.and_then(try_direct_command) {
         let direct = apply_extra_env(apply_pane_env(direct, cwd), env);
         match slave.spawn_command(direct) {

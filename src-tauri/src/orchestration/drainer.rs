@@ -967,3 +967,10 @@ pub(in crate::orchestration) fn run_queue_drainer(
         }
     }
 }
+
+/// Scratch plant for #3498 P4 (never merged): a TrackedMutex built without a
+/// literal name, in a file the P4 move created.
+#[allow(dead_code)]
+fn planted_unnamed_tracked_mutex_for_scratch(name: &'static str) -> TrackedMutex<()> {
+    TrackedMutex::new(name, ())
+}

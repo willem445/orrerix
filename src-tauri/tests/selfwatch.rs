@@ -479,16 +479,14 @@ fn repo_root() -> PathBuf {
 }
 
 /// The text both registry scans below read: `orchestration/mod.rs` plus every
-/// other `.rs` under `orchestration/`, in path order.
+/// `.rs` under `orchestration/registry/`, in path order.
 ///
 /// #3498 P3a moved `OrchRegistry`, its fields and `new()` — where 105 of the
 /// named constructions sit — into `registry/mod.rs`, and the P3 slices after
-/// it move the rest of the impl into sibling files there. #3498 P4 then moved
-/// `mod.rs`'s free code into bare files beside it, and two constructions went
-/// with it (`audit_lock` to `auditlog.rs`, the drainer's per-pane lock to
-/// `drainer.rs`). Reading the whole directory rather than named files keeps the
-/// population these scans had when everything was `mod.rs`, and a later move
-/// inside `orchestration/` stays inside it with no edit here.
+/// it move the rest of the impl into sibling files there. Reading the
+/// directory rather than one named file keeps the population these scans had
+/// when everything was `mod.rs`, and a later move into `registry/` stays
+/// inside it with no edit here.
 fn registry_sources() -> String {
     fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display())) {
@@ -500,13 +498,11 @@ fn registry_sources() -> String {
             }
         }
     }
-    let top = repo_root().join("src-tauri/src/orchestration/mod.rs");
-    let mut files = vec![top.clone()];
-    let mut rest = Vec::new();
-    collect(&repo_root().join("src-tauri/src/orchestration"), &mut rest);
-    rest.retain(|p| *p != top);
-    rest.sort();
-    files.extend(rest);
+    let mut files = vec![repo_root().join("src-tauri/src/orchestration/mod.rs")];
+    let mut registry = Vec::new();
+    collect(&repo_root().join("src-tauri/src/orchestration/registry"), &mut registry);
+    registry.sort();
+    files.extend(registry);
     files
         .iter()
         .map(|p| std::fs::read_to_string(p).unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display())))

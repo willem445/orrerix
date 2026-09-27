@@ -31,6 +31,7 @@ mod lockseams;
 mod managermail;
 mod persist;
 mod resourcelocks;
+mod roster;
 mod solo;
 mod usage;
 mod watches;
